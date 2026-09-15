@@ -1,0 +1,14 @@
+{
+  "name": "@rook/memory",
+  "version": "0.1.0",
+  "description": "In-memory session/conversation store for the Rook meta-harness",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

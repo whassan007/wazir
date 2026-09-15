@@ -1,0 +1,16 @@
+{
+  "name": "@rook/core",
+  "version": "0.1.0",
+  "description": "Core domain types and services for the Rook meta-harness",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@rook/runtimes-interfaces": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

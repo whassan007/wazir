@@ -1,0 +1,13 @@
+{
+  "name": "@rook/policies",
+  "version": "0.1.0",
+  "description": "Policy enforcement for the Rook meta-harness",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@rook/core": "*"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "@rook/database",
+  "version": "0.1.0",
+  "description": "Reference PostgreSQL schema for the Rook meta-harness (local installs use the JSON store in @rook/registry)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build"
+  }
+}

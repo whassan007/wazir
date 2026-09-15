@@ -1,0 +1,18 @@
+{
+  "name": "@rook/agents",
+  "version": "0.1.0",
+  "description": "Agent adapters for the Rook meta-harness (native coding agent + external agent providers)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@rook/core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

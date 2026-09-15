@@ -1,0 +1,27 @@
+{
+  "name": "rook-meta-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local AI meta-harness for orchestrating multiple AI runtimes and models",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run",
+    "lint": "eslint . --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit",
+    "dev": "turbo run dev --filter={./apps/**,**/apps/**}"
+  },
+  "devDependencies": {
+    "@turbo/gen": "^2.15.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.0.0"
+  }
+}

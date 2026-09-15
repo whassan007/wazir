@@ -1,0 +1,45 @@
+# Rook project .gitignore
+
+# Node.js / npm
+node_modules/
+dist/
+build/
+coverage/
+
+# IDE / editors
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Environment and secrets
+.env
+.env.local
+.env.example
+.env.*  # any environment files with extensions
+
+# Logs
+logs/
+npm-debug.log*
+yarn-error.log*
+
+# Temporary files
+tmp/
+temp/
+
+# Build artifacts specific to this project
+*.log
+*.cache
+*.zip
+*.tar.gz
+
+# Other
+.DS_Store
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini

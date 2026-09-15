@@ -1,0 +1,17 @@
+{
+  "name": "@rook/evaluation",
+  "version": "0.1.0",
+  "description": "Post-execution evaluation for the Rook meta-harness",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@rook/core": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

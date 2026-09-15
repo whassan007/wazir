@@ -1,0 +1,37 @@
+{
+  "provider": {
+    "openai": {
+      "models": {
+        "gemma-4-26b-a4b-it-qat": {
+          "limit": {
+            "context": 100000,
+            "output": 8192
+          }
+        },
+        "qwen3-coder-next-80b": {
+          "limit": {
+            "context": 100000,
+            "output": 8192
+          }
+        },
+        "o3": {
+          "limit": {
+            "context": 100000,
+            "output": 16384
+          }
+        }
+      }
+    },
+    "anthropic": {
+      "models": {
+        "claude-opus-4-20250514": {
+          "limit": {
+            "context": 100000,
+            "output": 8192
+          }
+        }
+      }
+    }
+  }
+}
+

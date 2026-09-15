@@ -1,0 +1,119 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import type { Tool, ToolExecutionContext, ToolResult } from '@rook/core';
+import { assertInsideProject } from './paths.js';
+
+const MAX_READ_BYTES = 1024 * 1024;
+
+export const readTool: Tool = {
+  descriptor: {
+    name: 'read',
+    description: 'Read a text file from the project. Supports offset/limit for large files.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path (relative to project root or absolute inside it)' },
+        offset: { type: 'number', description: '1-based line number to start from' },
+        limit: { type: 'number', description: 'Maximum number of lines to return' },
+      },
+      required: ['path'],
+    },
+    permissions: ['filesystem_read'],
+    riskLevel: 'low',
+    environment: 'local',
+  },
+  async execute(input, ctx): Promise<ToolResult> {
+    const started = Date.now();
+    try {
+      const resolved = assertInsideProject(ctx.projectRoot, String(input.path));
+      const stat = await fs.stat(resolved);
+      if (stat.size > MAX_READ_BYTES) {
+        return { ok: false, output: '', error: `file too large (${stat.size} bytes)`, durationMs: Date.now() - started };
+      }
+      const raw = await fs.readFile(resolved, 'utf8');
+      const lines = raw.split('\n');
+      const offset = typeof input.offset === 'number' ? Math.max(1, input.offset) : 1;
+      const limit = typeof input.limit === 'number' ? Math.max(1, input.limit) : lines.length;
+      const slice = lines.slice(offset - 1, offset - 1 + limit);
+      const output = slice.map((line, i) => `${offset + i}: ${line}`).join('\n');
+      return {
+        ok: true,
+        output,
+        durationMs: Date.now() - started,
+        metadata: { totalLines: lines.length, returnedLines: slice.length },
+      };
+    } catch (error) {
+      return { ok: false, output: '', error: errorMessage(error), durationMs: Date.now() - started };
+    }
+  },
+};
+
+export const writeTool: Tool = {
+  descriptor: {
+    name: 'write',
+    description: 'Create or overwrite a file inside the project.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path' },
+        content: { type: 'string', description: 'Full file content' },
+      },
+      required: ['path', 'content'],
+    },
+    permissions: ['filesystem_write'],
+    riskLevel: 'medium',
+    environment: 'local',
+  },
+  async execute(input, ctx): Promise<ToolResult> {
+    const started = Date.now();
+    try {
+      const resolved = assertInsideProject(ctx.projectRoot, String(input.path));
+      await fs.mkdir(path.dirname(resolved), { recursive: true });
+      await fs.writeFile(resolved, String(input.content ?? ''), 'utf8');
+      return { ok: true, output: `wrote ${resolved}`, durationMs: Date.now() - started };
+    } catch (error) {
+      return { ok: false, output: '', error: errorMessage(error), durationMs: Date.now() - started };
+    }
+  },
+};
+
+export const editTool: Tool = {
+  descriptor: {
+    name: 'edit',
+    description: 'Exact string replacement in a file. oldString must match exactly (once, unless replaceAll).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path' },
+        oldString: { type: 'string', description: 'Exact text to replace' },
+        newString: { type: 'string', description: 'Replacement text' },
+        replaceAll: { type: 'boolean', description: 'Replace every occurrence' },
+      },
+      required: ['path', 'oldString', 'newString'],
+    },
+    permissions: ['filesystem_write'],
+    riskLevel: 'medium',
+    environment: 'local',
+  },
+  async execute(input, ctx): Promise<ToolResult> {
+    const started = Date.now();
+    try {
+      const resolved = assertInsideProject(ctx.projectRoot, String(input.path));
+      const raw = await fs.readFile(resolved, 'utf8');
+      const oldString = String(input.oldString ?? '');
+      const newString = String(input.newString ?? '');
+      if (!oldString) {
+        return { ok: false, output: '', error: 'oldString must not be empty', durationMs: Date.now() - started };
+      }
+      const count = raw.split(oldString).length - 1;
+      if (count === 0) {
+        return { ok: false, output: '', error: 'oldString not found in file', durationMs: Date.now() - started };
+      }
+      const next = input.replaceAll === true ? raw.split(oldString).join(newString) : raw.replace(oldString, newString);
+      await fs.writeFile(resolved, next, 'utf8');
+      return { ok: true, output: `edited ${resolved} (${input.replaceAll === true ? count : 1} replacement(s))`, durationMs: Date.now() - started };
+    } catch (error) {
+      return { ok: false, output: '', error: errorMessage(error), durationMs: Date.now() - started };
+    }
+  },
+};

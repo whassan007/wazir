@@ -1,0 +1,43 @@
+import type { ChatMessage } from './conversation.js';
+import type { ToolDefinition } from '@rook/runtimes-interfaces';
+
+export interface WorkerInfo {
+  id: string;
+  computerId: string;
+  version: string;
+  status: 'online' | 'offline';
+  runtimes: string[];
+  models: string[];
+  lastHeartbeat?: Date;
+}
+
+/**
+ * An authorized execution request the control plane sends to a worker.
+ * Workers execute exactly what they are told — they never schedule.
+ */
+export interface WorkerExecutionRequest {
+  executionId: string;
+  requestId: string;
+  modelId: string;
+  messages: ChatMessage[];
+  tools?: ToolDefinition[];
+  maxTokens?: number;
+  temperature?: number;
+  contextTokens?: number;
+  timeoutMs?: number;
+}
+
+export type WorkerEventType =
+  | 'started'
+  | 'token'
+  | 'tool_call'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface WorkerExecutionEvent {
+  executionId: string;
+  type: WorkerEventType;
+  data?: unknown;
+  at: Date;
+}

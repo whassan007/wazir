@@ -1,0 +1,10 @@
+{
+  "name": "@rook/runtimes-interfaces",
+  "version": "0.1.0",
+  "description": "Runtime adapter interfaces for the meta-harness",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build"
+  }
+}
