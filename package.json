@@ -1,27 +1,29 @@
 {
-  "name": "rook-meta-harness",
+  "name": "rook",
   "version": "0.1.0",
+  "description": "Rook is a model- and runtime-agnostic meta-harness that schedules AI agents, models, tools, and compute to execute tasks across local and distributed environments.",
   "private": true,
-  "description": "Local AI meta-harness for orchestrating multiple AI runtimes and models",
   "workspaces": [
     "packages/*",
+    "packages/runtimes/*",
     "apps/*"
   ],
   "scripts": {
-    "build": "tsc --build",
-    "test": "vitest run",
-    "lint": "eslint . --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit",
-    "dev": "turbo run dev --filter={./apps/**,**/apps/**}"
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev --workspace @rook/cli",
+    "test": "npm run build && vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --build --force",
+    "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\""
   },
   "devDependencies": {
-    "@turbo/gen": "^2.15.0",
-    "eslint": "^8.57.0",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "concurrently": "^9.0.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   },
   "engines": {
-    "node": ">=20.0.0",
-    "npm": ">=9.0.0"
+    "node": ">=20.0.0"
   }
 }

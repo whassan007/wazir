@@ -16,11 +16,9 @@ coverage/
 .DS_Store
 Thumbs.db
 
-# Environment and secrets
+# Environment and secrets (keep .env.example tracked)
 .env
 .env.local
-.env.example
-.env.*  # any environment files with extensions
 
 # Logs
 logs/
