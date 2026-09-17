@@ -1,19 +1,19 @@
 {
-  "name": "@rook/workers",
+  "name": "@wazir/workers",
   "version": "0.1.0",
-  "description": "Rook worker: executes authorized requests on a target computer",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "description": "Wazir worker: executes authorized requests on a target computer",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@rook/core": "*",
-    "@rook/runtimes-interfaces": "*",
-    "@rook/runtimes-ollama": "*",
-    "@rook/runtimes-lmstudio": "*",
-    "@rook/shared": "*"
+    "@wazir/core": "*",
+    "@wazir/runtimes-interfaces": "*",
+    "@wazir/runtimes-ollama": "*",
+    "@wazir/runtimes-lmstudio": "*",
+    "@wazir/shared": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

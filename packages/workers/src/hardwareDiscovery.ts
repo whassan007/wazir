@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
-import type { GPUInfo, HardwareInfo, OSInfo } from '@rook/core';
+import type { GPUInfo, HardwareInfo, OSInfo } from '@wazir/core';
 
 export interface HardwareReport {
   hardware: HardwareInfo;

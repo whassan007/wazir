@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Wazir — meta-harness</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --err: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 18px; letter-spacing: 1px; }
+  header .tag { color: var(--muted); font-size: 12px; }
+  main { padding: 20px 24px 60px; max-width: 1280px; margin: 0 auto; }
+  section { margin-bottom: 26px; }
+  h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .stat { display: flex; justify-content: space-between; padding: 3px 0; }
+  .stat .k { color: var(--muted); }
+  .stat .v { }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  tr:last-child td { border-bottom: none; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; }
+  .badge.ok { background: rgba(63,185,80,.15); color: var(--ok); }
+  .badge.warn { background: rgba(210,153,34,.15); color: var(--warn); }
+  .badge.err { background: rgba(248,81,73,.15); color: var(--err); }
+  .badge.muted { background: rgba(139,148,158,.15); color: var(--muted); }
+  .empty { color: var(--muted); padding: 10px 0; }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  button {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  .detail { white-space: pre-wrap; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  a { color: var(--accent); text-decoration: none; cursor: pointer; }
+  .muted { color: var(--muted); }
+  #status { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ROOK</h1>
+  <span class="tag">model- &amp; runtime-agnostic meta-harness</span>
+  <span id="status" class="tag">connecting…</span>
+</header>
+<main>
+  <section>
+    <div class="toolbar">
+      <h2>overview</h2>
+      <button id="refresh">refresh</button>
+    </div>
+    <div class="card" id="overview"><div class="empty">loading…</div></div>
+  </section>
+
+  <section><h2>computers</h2><div class="card" id="computers"><div class="empty">loading…</div></div></section>
+  <section><h2>workers</h2><div class="card" id="workers"><div class="empty">loading…</div></div></section>
+  <section><h2>runtimes</h2><div class="card" id="runtimes"><div class="empty">loading…</div></div></section>
+  <section><h2>models</h2><div class="card" id="models"><div class="empty">loading…</div></div></section>
+  <section><h2>agents</h2><div class="card" id="agents"><div class="empty">loading…</div></div></section>
+  <section><h2>tools</h2><div class="card" id="tools"><div class="empty">loading…</div></div></section>
+  <section><h2>executions</h2><div class="card" id="executions"><div class="empty">loading…</div></div></section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function badge(value, good, bad) {
+  const cls = good?.includes(String(value).toLowerCase()) ? 'ok' : bad?.includes(String(value).toLowerCase()) ? 'err' : 'muted';
+  return `<span class="badge ${cls}">${esc(value)}</span>`;
+}
+
+function table(headers, rows) {
+  if (!rows || rows.length === 0) return '<div class="empty">none</div>';
+  const head = '<tr>' + headers.map((h) => `<th>${esc(h)}</th>`).join('') + '</tr>';
+  const body = rows.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('');
+  return `<table>${head}${body}</table>`;
+}
+
+async function fetchJson(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  return res.json();
+}
+
+async function load() {
+  try {
+    const [overview, computers, workers, runtimes, models, agents, tools, executions] = await Promise.all([
+      fetchJson('/api/v1/overview'),
+      fetchJson('/api/v1/computers'),
+      fetchJson('/api/v1/workers'),
+      fetchJson('/api/v1/runtimes'),
+      fetchJson('/api/v1/models'),
+      fetchJson('/api/v1/agents'),
+      fetchJson('/api/v1/tools'),
+      fetchJson('/api/v1/executions'),
+    ]);
+
+    $('status').textContent = `online · ${new Date().toLocaleTimeString()}`;
+
+    $('overview').innerHTML = `<div class="stat"><span class="k">version</span><span class="v">${esc(overview.version)}</span></div>
+      <div class="stat"><span class="k">computer</span><span class="v">${esc(overview.computerId)}</span></div>
+      <div class="stat"><span class="k">runtimes</span><span class="v">${overview.counts.runtimes}</span></div>
+      <div class="stat"><span class="k">models</span><span class="v">${overview.counts.models}</span></div>
+      <div class="stat"><span class="k">agents</span><span class="v">${overview.counts.agents}</span></div>
+      <div class="stat"><span class="k">tools</span><span class="v">${overview.counts.tools}</span></div>
+      <div class="stat"><span class="k">executions</span><span class="v">${overview.counts.executions}</span></div>`;
+
+    $('computers').innerHTML = table(
+      ['id', 'name', 'os', 'cpu', 'ram', 'gpu', 'status'],
+      computers.computers.map((c) => [
+        esc(c.id), esc(c.name),
+        esc(c.os?.platform ?? '—'),
+        esc(c.hardware?.cpu ?? '—'),
+        c.hardware?.memoryGB ? `${c.hardware.memoryGB}GB` : '—',
+        esc(c.hardware?.gpu?.model ?? 'no GPU'),
+        badge(c.status, 'online|healthy|idle', 'offline|unavailable'),
+      ]),
+    );
+
+    $('workers').innerHTML = table(
+      ['id', 'computer', 'status', 'runtimes', 'models'],
+      workers.workers.map((w) => [
+        esc(w.id), esc(w.computerId),
+        badge(w.status, 'online', 'offline'),
+        esc((w.runtimes ?? []).join(', ') || '—'),
+        String((w.models ?? []).length),
+      ]),
+    );
+
+    $('runtimes').innerHTML = table(
+      ['id', 'name', 'version', 'url', 'health', 'models'],
+      runtimes.runtimes.map((r) => [
+        esc(r.id), esc(r.name), esc(r.version),
+        esc(r.url ?? '—'),
+        badge(r.health, 'healthy', 'unavailable|error'),
+        (r.models ?? []).length
+          ? `<a onclick="showModels('${esc(r.id)}')">${r.models.length}</a>`
+          : '—',
+      ]),
+    );
+
+    $('models').innerHTML = table(
+      ['id', 'provider', 'context', 'toolCalling', 'reasoning', 'vision'],
+      models.models.map((m) => [
+        esc(m.id), esc(m.provider),
+        `${m.contextMax ?? '—'}`,
+        badge(m.toolCalling ? 'yes' : 'no', 'yes', 'no'),
+        badge(m.reasoning ? 'yes' : 'no', 'yes', 'no'),
+        badge(m.vision ? 'yes' : 'no', 'yes', 'no'),
+      ]),
+    );
+
+    $('agents').innerHTML = table(
+      ['name', 'version', 'task types', 'capabilities', 'source'],
+      agents.agents.map((a) => [
+        esc(a.name), esc(a.version),
+        esc((a.taskTypes ?? []).join(', ')),
+        esc((a.capabilities ?? []).join(', ')),
+        esc(a.source),
+      ]),
+    );
+
+    $('tools').innerHTML = table(
+      ['name', 'permissions', 'risk', 'description'],
+      tools.tools.map((t) => [
+        esc(t.name),
+        esc((t.permissions ?? []).join(', ')),
+        badge(t.riskLevel, 'low', 'high'),
+        esc(t.description),
+      ]),
+    );
+
+    const rows = (executions.executions ?? []).slice(0, 30).map((e) => [
+      `<a onclick="showExecution('${esc(e.execution?.id)}')">${esc(e.execution?.id)}</a>`,
+      badge(e.execution?.status, 'completed|ok', 'failed|error'),
+      esc(e.task?.type ?? '—'),
+      esc(e.agentId ?? '—'),
+      esc(e.modelId ?? '—'),
+      new Date(e.execution?.createdAt).toLocaleString(),
+    ]);
+    $('executions').innerHTML = table(
+      ['id', 'status', 'type', 'agent', 'model', 'created'],
+      rows,
+    );
+  } catch (error) {
+    $('status').textContent = `offline — ${error.message}`;
+  }
+}
+
+async function showModels(runtimeId) {
+  const data = await fetchJson('/api/v1/runtimes');
+  const runtime = data.runtimes.find((r) => r.id === runtimeId);
+  const names = (runtime?.models ?? []).map((m) => m.id).join(', ');
+  alert(`${runtimeId}: ${names || 'no models'}`);
+}
+
+async function showExecution(id) {
+  try {
+    const data = await fetchJson(`/api/v1/executions/${encodeURIComponent(id)}`);
+    const e = data.execution;
+    const lines = [
+      `id:        ${e.execution?.id}`,
+      `status:    ${e.execution?.status}`,
+      `task:      ${e.task?.type} — ${e.task?.input}`,
+      `agent:     ${e.agentId ?? '—'}`,
+      `model:     ${e.modelId ?? '—'}`,
+      `runtime:   ${e.runtimeId ?? '—'}`,
+      `computer:  ${e.computerId ?? '—'}`,
+      `result:    ${e.result ?? '—'}`,
+      `usage:     ${e.usage ? `${e.usage.input}+${e.usage.output} tokens` : '—'}`,
+    ];
+    if (e.scheduling) {
+      lines.push('', 'scheduling reasons:');
+      for (const reason of e.scheduling.reasons ?? []) lines.push(`  - ${reason}`);
+    }
+    if (e.context) {
+      lines.push('', `context: required ${e.context.finalRequiredTokens} / available ${e.context.available?.tokens} → ${e.context.fits ? 'PASS' : 'FAIL'}`);
+    }
+    alert(lines.join('\n'));
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+$('refresh').addEventListener('click', load);
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

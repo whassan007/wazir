@@ -68,4 +68,6 @@ export interface ComputerRegistration {
   capabilities?: string[];
   network?: NetworkInfo;
   policyRestrictions?: PolicyRestrictions;
+  runtimes?: string[];
+  models?: string[];
 }

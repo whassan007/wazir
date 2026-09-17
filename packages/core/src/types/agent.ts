@@ -2,7 +2,7 @@ import type { ModelRequirements } from './model.js';
 import type { TaskType } from './task.js';
 import type { ToolPermission } from './tool.js';
 import type { ChatMessage } from './conversation.js';
-import type { GenerationEvent } from '@rook/runtimes-interfaces';
+import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import type { ToolResult } from './tool.js';
 
 export interface AgentDescriptor {

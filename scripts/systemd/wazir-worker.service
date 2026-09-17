@@ -1,0 +1,36 @@
+[Unit]
+Description=Wazir worker daemon (executes tasks dispatched by the control plane)
+Documentation=https://github.com/whassan/wazir
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wazir
+Group=wazir
+WorkingDirectory=/opt/wazir
+# Adjust both paths to match your install location and `which node` output.
+ExecStart=/usr/bin/node /opt/wazir/apps/worker/dist/index.js
+# The worker retries its initial registration against WAZIR_SERVER_URL for
+# ~10s on its own (see packages/workers/src/worker.ts), but Restart=on-failure
+# is still the right backstop if the control plane is down far longer than
+# that, or the process dies for any other reason.
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+# Point this at the control plane to register/heartbeat/receive dispatched
+# tasks. Omit it to run this worker in local-only mode (offline execution
+# only, no distributed dispatch).
+Environment=WAZIR_SERVER_URL=http://localhost:4800
+# Environment=WAZIR_COMPUTER_ID=worker-01
+# Environment=WAZIR_COMPUTER_NAME=worker-01
+# Environment=WAZIR_OLLAMA_URL=http://localhost:11434
+# Environment=WAZIR_LMSTUDIO_URL=http://localhost:1234/v1
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/wazir
+
+[Install]
+WantedBy=multi-user.target

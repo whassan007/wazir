@@ -1,5 +1,5 @@
-import type { ExecutionRecord } from '@rook/core';
-import { MemoryStore, type KeyValueStore } from '@rook/shared';
+import type { ExecutionRecord } from '@wazir/core';
+import { MemoryStore, type KeyValueStore } from '@wazir/shared';
 
 const PREFIX = 'executions/';
 

@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wazir
+      POSTGRES_PASSWORD: wazir
+      POSTGRES_DB: wazir
+    volumes:
+      - wazir-postgres-data:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U wazir']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      WAZIR_COMPUTER_ID: api-host
+      WAZIR_OLLAMA_URL: ${WAZIR_OLLAMA_URL:-http://host.docker.internal:11434}
+      WAZIR_LMSTUDIO_URL: ${WAZIR_LMSTUDIO_URL:-http://host.docker.internal:1234/v1}
+    ports:
+      - '4800:4800'
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      target: worker
+    environment:
+      WAZIR_COMPUTER_ID: worker-host
+      WAZIR_SERVER_URL: http://api:4800
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      target: web
+    environment:
+      WAZIR_API: http://api:4800
+    ports:
+      - '4801:4801'
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # One-off CLI commands against the stack above, e.g.:
+  #   docker compose run --rm cli wazir doctor
+  #   docker compose run --rm cli wazir task run "add a health endpoint"
+  cli:
+    build:
+      context: .
+      target: cli
+    environment:
+      WAZIR_API_URL: http://api:4800
+      WAZIR_DATABASE_URL: postgres://wazir:wazir@postgres:5432/wazir
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    profiles: ['cli'] # excluded from `docker compose up`; run explicitly via `docker compose run`
+
+volumes:
+  wazir-postgres-data:

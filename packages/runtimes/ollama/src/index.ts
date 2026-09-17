@@ -7,7 +7,7 @@ import type {
   RuntimeAdapter,
   RuntimeCapabilities,
   RuntimeInfo,
-} from '@rook/runtimes-interfaces';
+} from '@wazir/runtimes-interfaces';
 
 interface OllamaModelDetails {
   parent_model?: string;
@@ -162,7 +162,7 @@ export class OllamaAdapter implements RuntimeAdapter {
     const bytes = this.modelSizes.get(modelId) ?? this.modelSizes.get(normalizeModelId(modelId));
     if (!bytes) return {};
     const gb = bytes / (1024 ** 3);
-    return { minSystemGB: Math.ceil(gb * 1.5), minGpuGB: undefined };
+    return { minMemoryGB: Math.ceil(gb * 1.5), minGpuGB: undefined };
   }
 
   async *generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {

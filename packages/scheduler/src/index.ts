@@ -6,14 +6,14 @@ import {
   Scheduler,
   type ScheduleInput,
   type SchedulerDeps,
-} from '@rook/core';
-import type { SchedulerDecision, Task } from '@rook/core';
+} from '@wazir/core';
+import type { SchedulerDecision, Task } from '@wazir/core';
 
 export { AgentRegistry, ComputerRegistry, ModelRegistry, RuntimeRegistry, Scheduler };
 export type { ScheduleInput, SchedulerDeps };
 
 /**
- * @rook/scheduler — thin facade over the core two-phase scheduler.
+ * @wazir/scheduler — thin facade over the core two-phase scheduler.
  *
  * Phase 1: MODEL ROUTING  — "which model is appropriate for this task?"
  * Phase 2: COMPUTER SCHEDULING — "where should that model run?"

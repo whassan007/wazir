@@ -2,12 +2,13 @@ import type {
   ComputerRegistration,
   HardwareInfo,
   OSInfo,
+  WorkerEventType,
   WorkerExecutionRequest,
   WorkerInfo,
-} from '@rook/core';
-import { generateId } from '@rook/shared';
-import type { RuntimeAdapter } from '@rook/runtimes-interfaces';
-import { currentLoad, discoverHardware } from './hardwareDiscovery.js';
+} from '@wazir/core';
+import { generateId } from '@wazir/shared';
+import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
+import { currentLoad, discoverHardware, type HardwareReport } from './hardwareDiscovery.js';
 import {
   defaultAdapters,
   discoverRuntimes,
@@ -25,7 +26,7 @@ export interface WorkerOptions {
 }
 
 /**
- * A Rook worker runs on a target computer.
+ * A Wazir worker runs on a target computer.
  *
  * Responsibilities: register, report hardware, discover runtimes and models,
  * report health and utilization, execute authorized requests, stream events,
@@ -39,12 +40,15 @@ export class Worker {
   readonly computerId: string;
   readonly name: string;
   info: WorkerInfo;
+  private _hardware?: HardwareReport;
 
   private readonly serverUrl?: string;
   private readonly heartbeatIntervalMs: number;
   private adapters: DiscoveredRuntime[] = [];
   private heartbeatTimer: NodeJS.Timeout | undefined;
   private running = false;
+  private taskStreamAbort?: AbortController;
+  private taskStreamRetryTimer: NodeJS.Timeout | undefined;
 
   private readonly configuredAdapters?: RuntimeAdapter[];
 
@@ -72,6 +76,12 @@ export class Worker {
   get isRunning(): boolean {
     return this.running;
   }
+  get hardwareReport(): HardwareReport {
+    if (!this._hardware) {
+      this._hardware = discoverHardware() as any;
+    }
+    return this._hardware;
+  }
 
   async start(): Promise<WorkerInfo> {
     if (this.running) {
@@ -81,6 +91,7 @@ export class Worker {
 
     const adapters = this.configuredAdapters ?? defaultAdapters();
     const hardware = await discoverHardware();
+    this._hardware = hardware;
     this.adapters = await discoverRuntimes(adapters);
 
     const runtimeIds = this.adapters.map((r) => r.id);
@@ -97,6 +108,7 @@ export class Worker {
     if (this.serverUrl) {
       await this.register(hardware.os, hardware.hardware);
       this.startHeartbeatLoop();
+      this.connectTaskStream();
     }
 
     return this.info;
@@ -108,6 +120,12 @@ export class Worker {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
     }
+    if (this.taskStreamRetryTimer) {
+      clearTimeout(this.taskStreamRetryTimer);
+      this.taskStreamRetryTimer = undefined;
+    }
+    this.taskStreamAbort?.abort();
+    this.taskStreamAbort = undefined;
     this.info = { ...this.info, status: 'offline' };
   }
 
@@ -182,11 +200,31 @@ export class Worker {
       runtimes: this.info.runtimes,
       models: this.info.models,
     };
-    await fetch(`${this.serverUrl}/computers/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(registration),
-    });
+
+    // The control plane and its workers are typically started together by
+    // an orchestrator (Docker Compose, systemd, Kubernetes) with no
+    // guarantee the API is already accepting connections yet — a bare,
+    // unretried fetch() here would crash the worker on that ordinary
+    // startup race (observed running this for real under `docker compose
+    // up`: the worker exited before the API's listener was ready, and only
+    // came back up because Compose's restart policy masked it).
+    const attempts = 5;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const response = await fetch(`${this.serverUrl}/computers/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(registration),
+        });
+        if (!response.ok) {
+          throw new Error(`registration failed: HTTP ${response.status}`);
+        }
+        return;
+      } catch (error) {
+        if (attempt === attempts) throw error;
+        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+      }
+    }
   }
 
   private startHeartbeatLoop(): void {
@@ -197,6 +235,127 @@ export class Worker {
       void this.heartbeat().catch(() => undefined);
     }, this.heartbeatIntervalMs);
     this.heartbeatTimer.unref?.();
+  }
+
+  /**
+   * Holds an SSE connection open against the control plane and executes each
+   * dispatched `WorkerExecutionRequest` as it arrives. This is the piece that
+   * lets a remote worker actually receive tasks — previously it only
+   * registered and sent heartbeats, with no way to be handed work.
+   */
+  private connectTaskStream(): void {
+    if (!this.serverUrl || !this.running) return;
+    const abort = new AbortController();
+    this.taskStreamAbort = abort;
+
+    void this.runTaskStream(abort.signal)
+      .catch(() => undefined)
+      .finally(() => {
+        if (!this.running || abort.signal.aborted) return;
+        this.taskStreamRetryTimer = setTimeout(() => this.connectTaskStream(), 2_000);
+        this.taskStreamRetryTimer.unref?.();
+      });
+  }
+
+  private async runTaskStream(signal: AbortSignal): Promise<void> {
+    const response = await fetch(
+      `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/tasks/stream`,
+      { signal, headers: { Accept: 'text/event-stream' } },
+    );
+    if (!response.ok || !response.body) {
+      throw new Error(`task stream connect failed: HTTP ${response.status}`);
+    }
+
+    let buffer = '';
+    const decoder = new TextDecoder();
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true });
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf('\n\n');
+        this.handleTaskFrame(frame);
+      }
+    }
+  }
+
+  private handleTaskFrame(frame: string): void {
+    const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
+    if (!dataLine) return;
+    try {
+      const request = JSON.parse(dataLine.slice(5).trim()) as WorkerExecutionRequest;
+      void this.handleDispatchedTask(request);
+    } catch {
+      // malformed frame; ignore rather than killing the stream
+    }
+  }
+
+  /** Executes a control-plane-dispatched request and reports events/outcome back. */
+  private async handleDispatchedTask(request: WorkerExecutionRequest): Promise<void> {
+    await this.reportEvent(request, 'started');
+    try {
+      // `execute()`'s onEvent callback is synchronous (it can't await), but
+      // each call fires an HTTP POST — without chaining them explicitly,
+      // two events emitted back-to-back (e.g. two token events with no
+      // real delay between them) race as independent in-flight requests
+      // and can land at the control plane in the wrong order. Chaining
+      // onto `reportChain` serializes the POSTs without blocking the
+      // generator loop itself.
+      let reportChain: Promise<void> = Promise.resolve();
+      const outcome = await this.execute(request, (event) => {
+        reportChain = reportChain.then(() =>
+          this.reportEvent(request, this.mapStreamEventType(event.type), event),
+        );
+      });
+      await reportChain;
+      await this.reportResult(request, outcome);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.reportEvent(request, 'failed', { error: message });
+      await this.reportResult(request, {
+        ok: false,
+        output: '',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 0,
+        error: message,
+      });
+    }
+  }
+
+  private mapStreamEventType(type: ExecutionStreamEvent['type']): WorkerEventType {
+    if (type === 'completed') return 'completed';
+    if (type === 'error') return 'failed';
+    if (type === 'tool_call') return 'tool_call';
+    return 'token';
+  }
+
+  private async reportEvent(request: WorkerExecutionRequest, type: WorkerEventType, data?: unknown): Promise<void> {
+    if (!this.serverUrl) return;
+    await fetch(
+      `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}/events`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ executionId: request.executionId, type, data }),
+      },
+    ).catch(() => undefined);
+  }
+
+  private async reportResult(
+    request: WorkerExecutionRequest,
+    outcome: { ok: boolean; output: string; inputTokens: number; outputTokens: number; durationMs: number; error?: string },
+  ): Promise<void> {
+    if (!this.serverUrl) return;
+    await fetch(
+      `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}/result`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(outcome),
+      },
+    ).catch(() => undefined);
   }
 }
 

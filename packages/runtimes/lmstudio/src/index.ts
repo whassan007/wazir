@@ -6,7 +6,7 @@ import type {
   RuntimeAdapter,
   RuntimeCapabilities,
   RuntimeInfo,
-} from '@rook/runtimes-interfaces';
+} from '@wazir/runtimes-interfaces';
 
 interface OpenAIModel {
   id: string;

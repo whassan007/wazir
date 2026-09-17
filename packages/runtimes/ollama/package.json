@@ -1,13 +1,13 @@
 {
-  "name": "@rook/runtimes-ollama",
+  "name": "@wazir/runtimes-ollama",
   "version": "0.1.0",
   "description": "Ollama runtime adapter for the meta-harness",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "scripts": {
     "build": "tsc --build"
   },
   "dependencies": {
-    "@rook/runtimes-interfaces": "*"
+    "@wazir/runtimes-interfaces": "*"
   }
 }

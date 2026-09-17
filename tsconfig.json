@@ -1,0 +1,24 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/shared" },
+    { "path": "packages/runtimes/interfaces" },
+    { "path": "packages/runtimes/ollama" },
+    { "path": "packages/runtimes/lmstudio" },
+    { "path": "packages/registry" },
+    { "path": "packages/evaluation" },
+    { "path": "packages/observability" },
+    { "path": "packages/memory" },
+    { "path": "packages/database" },
+    { "path": "packages/tools" },
+    { "path": "packages/agents" },
+    { "path": "packages/workers" },
+    { "path": "packages/scheduler" },
+    { "path": "packages/models" },
+    { "path": "packages/policies" },
+    { "path": "apps/cli" },
+    { "path": "apps/api" },
+    { "path": "apps/worker" }
+  ]
+}

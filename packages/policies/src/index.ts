@@ -3,11 +3,11 @@ import {
   type PolicyActionRequest,
   type PolicyDecision,
   type PolicyEngineOptions,
-} from '@rook/core';
-import type { Task } from '@rook/core';
+} from '@wazir/core';
+import type { Task } from '@wazir/core';
 
 /**
- * @rook/policies — policy enforcement facade over the core PolicyEngine.
+ * @wazir/policies — policy enforcement facade over the core PolicyEngine.
  *
  * Agents propose actions; the policy engine authorizes them; tools execute
  * only what is authorized. Models never bypass this layer.

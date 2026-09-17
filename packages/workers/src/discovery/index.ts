@@ -1,5 +1,5 @@
-import { createOllamaAdapter } from '@rook/runtimes-ollama';
-import { createLMStudioAdapter } from '@rook/runtimes-lmstudio';
+import { createOllamaAdapter } from '@wazir/runtimes-ollama';
+import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 
 export interface HardwareInfo {
   cpu: string;

@@ -1,26 +1,28 @@
 {
-  "name": "@rook/api",
+  "name": "@wazir/api",
   "version": "0.1.0",
   "description": "HTTP API server for the meta-harness",
-  "main": "./dist/index.js",
+  "main": "./dist/main.js",
   "scripts": {
     "build": "tsc --build",
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "start": "node dist/index.js"
+    "dev": "ts-node-dev --respawn --transpile-only src/main.ts",
+    "start": "node dist/main.js"
   },
   "dependencies": {
-    "@rook/core": "*",
-    "@rook/scheduler": "*",
-    "@rook/models": "*",
-    "@rook/policies": "*",
-    "@rook/runtimes-ollama": "*",
-    "@rook/runtimes-lmstudio": "*",
-    "express": "^4.21.0",
-    "cors": "^2.8.5"
+    "@wazir/agents": "*",
+    "@wazir/core": "*",
+    "@wazir/models": "*",
+    "@wazir/policies": "*",
+    "@wazir/runtimes-lmstudio": "*",
+    "@wazir/runtimes-ollama": "*",
+    "@wazir/scheduler": "*",
+    "@wazir/shared": "*",
+    "@wazir/tools": "*",
+    "@wazir/workers": "*",
+    "express": "^4.21.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
-    "@types/cors": "^2.8.0",
     "ts-node-dev": "^2.0.0"
   }
 }

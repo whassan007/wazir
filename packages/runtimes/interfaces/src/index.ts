@@ -97,7 +97,7 @@ export interface ResourceEstimate {
 }
 
 /**
- * The stable provider contract. Rook core never depends on a concrete
+ * The stable provider contract. Wazir core never depends on a concrete
  * runtime — only on this interface. Adapters are replaceable.
  */
 export interface RuntimeAdapter {

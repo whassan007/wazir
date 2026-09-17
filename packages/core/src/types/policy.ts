@@ -10,11 +10,14 @@ export interface PolicyActionRequest {
 export interface PolicyDecision {
   decision: PolicyEffect;
   rule: string;
+  tool?: string;
   reasons: string[];
 }
 
 export interface PolicyRule {
   id: string;
+  scope?: string;
+  pattern?: string;
   description: string;
   effect: PolicyEffect;
 }
@@ -29,7 +32,7 @@ export interface PolicyEngineOptions {
   allowedMcpServers?: string[];
   /**
    * Approves 'ask' decisions interactively. When absent, 'ask' is
-   * escalated to 'deny' — Rook never silently allows.
+   * escalated to 'deny' — Wazir never silently allows.
    */
   approveCallback?: (request: PolicyActionRequest, decision: PolicyDecision) => Promise<boolean>;
 }

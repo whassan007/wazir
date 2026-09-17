@@ -1,14 +1,16 @@
 {
-  "name": "@rook/core",
+  "name": "@wazir/core",
   "version": "0.1.0",
-  "description": "Core domain types and services for the Rook meta-harness",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "description": "Core domain types and services for the Wazir meta-harness",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "scripts": {
     "build": "tsc --build"
   },
   "dependencies": {
-    "@rook/runtimes-interfaces": "*"
+    "@wazir/runtimes-interfaces": "*",
+    "@wazir/shared": "*",
+    "shell-quote": "^1.8.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"

@@ -1,8 +1,8 @@
 import type {
   GenerationRequest,
   RuntimeAdapter,
-} from '@rook/runtimes-interfaces';
-import type { WorkerExecutionRequest } from '@rook/core';
+} from '@wazir/runtimes-interfaces';
+import type { WorkerExecutionRequest } from '@wazir/core';
 
 export interface ExecutionStreamEvent {
   type: 'token' | 'tool_call' | 'completed' | 'error';

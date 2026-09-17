@@ -1,0 +1,34 @@
+[Unit]
+Description=Wazir API server (control plane)
+Documentation=https://github.com/whassan/wazir
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wazir
+Group=wazir
+WorkingDirectory=/opt/wazir
+# Adjust both paths to match your install location and `which node` output.
+ExecStart=/usr/bin/node /opt/wazir/apps/api/dist/main.js
+Restart=on-failure
+RestartSec=2
+# The API defaults to binding 127.0.0.1, which is correct for a bare host
+# but unreachable from other machines — set 0.0.0.0 here for a real control
+# plane deployment, or leave it out (and the default) for a loopback-only,
+# single-machine install.
+Environment=NODE_ENV=production
+Environment=PORT=4800
+Environment=WAZIR_HOST=0.0.0.0
+# Environment=WAZIR_DATABASE_URL=postgres://wazir:wazir@localhost:5432/wazir
+# Environment=WAZIR_OLLAMA_URL=http://localhost:11434
+# Environment=WAZIR_LMSTUDIO_URL=http://localhost:1234/v1
+
+# Basic hardening — loosen if the install path or workload needs it.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/wazir
+
+[Install]
+WantedBy=multi-user.target

@@ -6,7 +6,7 @@ import type {
   AgentRuntime,
   AgentTurn,
   TaskType,
-} from '@rook/core';
+} from '@wazir/core';
 
 export interface ExternalAgentSpec {
   name: string;
@@ -22,7 +22,7 @@ export interface ExternalAgentSpec {
 
 /**
  * Adapter for external agent harnesses (OpenCode, Bionic, ...).
- * External agents are OPTIONAL execution providers — Rook remains the
+ * External agents are OPTIONAL execution providers — Wazir remains the
  * control plane: it schedules the task, selects the model/computer, and
  * records the execution. The external process only provides the reasoning loop.
  */

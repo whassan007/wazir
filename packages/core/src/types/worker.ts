@@ -1,5 +1,5 @@
 import type { ChatMessage } from './conversation.js';
-import type { ToolDefinition } from '@rook/runtimes-interfaces';
+import type { ToolDefinition } from '@wazir/runtimes-interfaces';
 
 export interface WorkerInfo {
   id: string;

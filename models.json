@@ -1,0 +1,69 @@
+{
+  "models": [
+    {
+      "id": "nvidia/nemotron-3-nano-omni",
+      "name": "Nvidia Nemotron 3 Nano Omni",
+      "params": "30B-A3B",
+      "architecture": "nemotron_h_moe",
+      "size": "24.52 GB",
+      "device": "Local"
+    },
+    {
+      "id": "nvidia/nemotron-3-super",
+      "name": "Nvidia Nemotron 3 Super",
+      "params": "120B",
+      "architecture": "nemotron_h_moe",
+      "size": "86.05 GB",
+      "device": "Local"
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "name": "OpenAI GPT-OSS 120B",
+      "params": "120B",
+      "architecture": "gpt-oss",
+      "size": "63.39 GB",
+      "device": "Local"
+    },
+    {
+      "id": "qwen/qwen2.5-coder-32b",
+      "name": "Qwen 2.5 Coder 32B",
+      "params": "32B",
+      "architecture": "Qwen2",
+      "size": "19.85 GB",
+      "device": "Local"
+    },
+    {
+      "id": "qwen/qwen3-coder-next",
+      "name": "Qwen 3 Coder Next",
+      "params": "80B",
+      "architecture": "qwen3next",
+      "size": "48.49 GB",
+      "device": "Local"
+    },
+    {
+      "id": "qwen/qwen3.8-27b",
+      "name": "Qwen 3.8 27B",
+      "params": "27B",
+      "architecture": "qwen35",
+      "size": "17.74 GB",
+      "device": "Local"
+    },
+    {
+      "id": "qwen3.5-122b-a10b",
+      "name": "Qwen 3.5 122B A10B",
+      "params": "122B-A10B",
+      "architecture": "qwen35moe",
+      "size": "73.51 GB",
+      "device": "Local",
+      "loaded": true
+    },
+    {
+      "id": "unsloth/qwen3-coder-next",
+      "name": "Unsloth Qwen 3 Coder Next",
+      "params": "80B",
+      "architecture": "qwen3next",
+      "size": "48.49 GB",
+      "device": "Local"
+    }
+  ]
+}

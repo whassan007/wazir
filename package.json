@@ -1,7 +1,7 @@
 {
-  "name": "rook",
+  "name": "wazir",
   "version": "0.1.0",
-  "description": "Rook is a model- and runtime-agnostic meta-harness that schedules AI agents, models, tools, and compute to execute tasks across local and distributed environments.",
+  "description": "Wazir is a model- and runtime-agnostic meta-harness that schedules AI agents, models, tools, and compute to execute tasks across local and distributed environments.",
   "private": true,
   "workspaces": [
     "packages/*",
@@ -10,10 +10,11 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "dev": "npm run dev --workspace @rook/cli",
+    "dev": "npm run dev --workspace @wazir/cli",
     "test": "npm run build && vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --build --force",
+    "dmg": "bash scripts/build-dmg.sh",
     "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\""
   },
   "devDependencies": {

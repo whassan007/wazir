@@ -7,7 +7,7 @@ export interface ResourceState {
   gpuMemoryAvailableGB?: number;
 }
 
-export type RuntimeHealthStatus = 'healthy' | 'unhealthy' | 'unknown';
+export type RuntimeHealthStatus = 'healthy' | 'unhealthy' | 'unknown' | 'degraded';
 
 export interface RuntimeHealth {
   status: RuntimeHealthStatus;

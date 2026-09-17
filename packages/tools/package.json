@@ -1,15 +1,15 @@
 {
-  "name": "@rook/tools",
+  "name": "@wazir/tools",
   "version": "0.1.0",
-  "description": "Unified tool implementations for the Rook meta-harness",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "description": "Unified tool implementations for the Wazir meta-harness",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@rook/core": "*"
+    "@wazir/core": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

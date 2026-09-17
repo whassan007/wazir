@@ -2,7 +2,7 @@ import {
   effectiveContextTokens,
   type ModelCapability,
   type ModelRecord,
-} from '@rook/core';
+} from '@wazir/core';
 
 export interface ModelRouteInput {
   capabilities?: ModelCapability[];
@@ -19,7 +19,7 @@ export interface ModelRouteDecision {
 }
 
 /**
- * @rook/models — model routing facade over the core model registry.
+ * @wazir/models — model routing facade over the core model registry.
  * Deterministic: highest capability/context score wins, ties break by id.
  */
 export class ModelRouter {

@@ -1,7 +1,10 @@
 import path from 'node:path';
+import { parse as parseShell } from 'shell-quote';
+import type { ParseEntry } from 'shell-quote';
 import type {
   PolicyActionRequest,
   PolicyDecision,
+  PolicyEffect,
   PolicyEngineOptions,
   PolicyRule,
 } from '../types/policy.js';
@@ -11,7 +14,6 @@ const SAFE_SHELL_COMMANDS = new Set([
   'ls', 'pwd', 'cat', 'head', 'tail', 'wc', 'file', 'stat', 'du', 'df',
   'which', 'whoami', 'uname', 'date', 'echo', 'printf', 'env', 'printenv',
   'ps', 'tree', 'rg', 'grep', 'find', 'sort', 'uniq', 'cut', 'column',
-  'node', 'npm', 'npx', 'yarn', 'pnpm', 'bun',
 ]);
 
 const DENY_SHELL_COMMANDS = new Set([
@@ -20,16 +22,109 @@ const DENY_SHELL_COMMANDS = new Set([
   'killall', 'pkill', 'systemctl', 'launchctl', 'eval', 'exec',
 ]);
 
+// Interpreters and package managers can run arbitrary code (node -e, npm scripts),
+// so they are never auto-allowed.
 const ASK_SHELL_COMMANDS = new Set([
   'rm', 'mv', 'cp', 'chmod', 'chown', 'ln', 'touch', 'mkdir', 'rmdir',
-  'git', 'docker', 'kubectl', 'kubectl', 'brew', 'apt', 'apt-get', 'yum',
+  'git', 'docker', 'kubectl', 'brew', 'apt', 'apt-get', 'yum',
   'dnf', 'pacman', 'pip', 'pip3', 'gem', 'cargo', 'make', 'cmake',
+  'node', 'npm', 'npx', 'yarn', 'pnpm', 'bun',
 ]);
 
 const NETWORK_COMMANDS = new Set([
   'curl', 'wget', 'nc', 'ncat', 'ssh', 'scp', 'sftp', 'ping',
   'traceroute', 'nslookup', 'dig', 'telnet',
 ]);
+
+// Commands that execute their trailing arguments as another command.
+const WRAPPER_COMMANDS = new Set(['env', 'nice', 'nohup', 'time', 'timeout', 'xargs', 'command', 'builtin', 'stdbuf', 'ionice']);
+
+const COMMAND_BOUNDARY_OPS = new Set(['&&', '||', ';', ';;', '|', '|&', '&', '(', ')', '<(']);
+const REDIRECT_OPS = new Set(['>', '>>', '>&', '<', '<&', '<<<']);
+
+const EFFECT_RANK: Record<PolicyEffect, number> = { allow: 0, ask: 1, deny: 2 };
+
+interface ShellSegment {
+  words: string[];
+  redirects: Array<{ op: string; target: string }>;
+}
+
+function basename(word: string): string {
+  return word.split('/').pop() ?? word;
+}
+
+function isAssignment(word: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(word);
+}
+
+function stripAssignments(words: string[]): string[] {
+  let i = 0;
+  while (i < words.length && isAssignment(words[i])) i += 1;
+  return words.slice(i);
+}
+
+/** Splits a parsed command line into independent simple commands. */
+function splitSegments(entries: ParseEntry[]): ShellSegment[] {
+  const segments: ShellSegment[] = [];
+  let current: ShellSegment = { words: [], redirects: [] };
+  const flush = () => {
+    if (current.words.length > 0 || current.redirects.length > 0) segments.push(current);
+    current = { words: [], redirects: [] };
+  };
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (typeof entry === 'string') {
+      // `$` immediately before `(` is command substitution, not an argument
+      if (entry !== '$') current.words.push(entry);
+      continue;
+    }
+    if ('comment' in entry) continue;
+    if (entry.op === 'glob') {
+      current.words.push(entry.pattern);
+      continue;
+    }
+    if (REDIRECT_OPS.has(entry.op)) {
+      const next = entries[i + 1];
+      const target = typeof next === 'string' ? next : '';
+      if (typeof next === 'string') i += 1;
+      current.redirects.push({ op: entry.op, target });
+      continue;
+    }
+    if (COMMAND_BOUNDARY_OPS.has(entry.op)) {
+      flush();
+      continue;
+    }
+    flush();
+  }
+  flush();
+  return segments;
+}
+
+/** Unwraps env/nice/xargs/... to find the command that will actually run. */
+function resolveCommand(words: string[]): { name: string; args: string[] } {
+  let rest = stripAssignments(words);
+  for (let depth = 0; depth < 5 && rest.length > 0; depth++) {
+    const name = basename(rest[0]);
+    if (!WRAPPER_COMMANDS.has(name)) return { name, args: rest.slice(1) };
+    let j = 1;
+    while (j < rest.length && rest[j].startsWith('-')) j += 1;
+    if (name === 'timeout') j += 1;
+    const inner = stripAssignments(rest.slice(j));
+    if (inner.length === 0) return { name, args: rest.slice(1) };
+    rest = inner;
+  }
+  return rest.length > 0 ? { name: basename(rest[0]), args: rest.slice(1) } : { name: '', args: [] };
+}
+
+function mostRestrictive(decisions: PolicyDecision[]): PolicyDecision {
+  let winner = decisions[0];
+  for (const d of decisions) {
+    if (EFFECT_RANK[d.decision] > EFFECT_RANK[winner.decision]) winner = d;
+  }
+  const reasons = Array.from(new Set(decisions.flatMap((d) => d.reasons)));
+  return { decision: winner.decision, rule: winner.rule, reasons };
+}
 
 const GIT_ALLOW = new Set(['status', 'diff', 'log', 'show', 'branch', 'remote', 'ls-files', 'rev-parse', 'describe', 'config', 'shortlog', 'blame']);
 const GIT_ASK = new Set(['add', 'commit', 'checkout', 'switch', 'restore', 'merge', 'rebase', 'stash', 'reset', 'cherry-pick', 'tag', 'am']);
@@ -42,11 +137,6 @@ function isInside(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(target);
   return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + path.sep);
-}
-
-function firstToken(command: string): string {
-  const match = command.trim().split(/\s+/)[0];
-  return match ? match.split('/').pop() ?? match : '';
 }
 
 export class PolicyEngine {
@@ -65,9 +155,9 @@ export class PolicyEngine {
       { id: 'filesystem-project-allow', description: 'Filesystem access inside the project root is allowed', effect: 'allow' },
       { id: 'filesystem-outside-deny', description: 'Filesystem access outside the project root is denied', effect: 'deny' },
       { id: 'network-default-deny', description: 'Network commands are denied unless networkAccess is enabled', effect: 'deny' },
-      { id: 'shell-safe-allow', description: `Read-only and package-manager commands are allowed (${[...SAFE_SHELL_COMMANDS].join(', ')})`, effect: 'allow' },
+      { id: 'shell-safe-allow', description: `Read-only commands are allowed; every sub-command, pipe and substitution must qualify (${[...SAFE_SHELL_COMMANDS].join(', ')})`, effect: 'allow' },
       { id: 'shell-dangerous-deny', description: `System-level destructive commands are denied (${[...DENY_SHELL_COMMANDS].join(', ')})`, effect: 'deny' },
-      { id: 'shell-unknown-ask', description: 'Other shell commands require approval (deny when non-interactive)', effect: 'ask' },
+      { id: 'shell-unknown-ask', description: 'Interpreters, package managers and other shell commands require approval (deny when non-interactive)', effect: 'ask' },
       { id: 'git-read-allow', description: `Read-only git commands are allowed (${[...GIT_ALLOW].join(', ')})`, effect: 'allow' },
       { id: 'git-write-ask', description: `Local git write commands require approval (${[...GIT_ASK].join(', ')})`, effect: 'ask' },
       { id: 'git-push-deny', description: `Publishing git commands are denied by default (${[...GIT_DENY].join(', ')})`, effect: 'deny' },
@@ -123,6 +213,7 @@ export class PolicyEngine {
       return {
         ...decision,
         decision: 'deny',
+        rule: `${decision.rule}+escalated-from-ask`,
         reasons: [...decision.reasons, 'approval required but no interactive approver is available; denying (never silently allowed)'],
       };
     }
@@ -131,18 +222,21 @@ export class PolicyEngine {
       const approved = await approver(request, decision);
       if (approved) {
         return {
+          ...decision,
           decision: 'allow',
           rule: `${decision.rule}+user-approved`,
           reasons: [...decision.reasons, 'approved by user'],
         };
       }
       return {
+        ...decision,
         decision: 'deny',
         rule: decision.rule,
         reasons: [...decision.reasons, 'denied by user'],
       };
     } catch {
       return {
+        ...decision,
         decision: 'deny',
         rule: decision.rule,
         reasons: [...decision.reasons, 'approval callback failed; denying'],
@@ -151,6 +245,12 @@ export class PolicyEngine {
   }
 
   classify(request: PolicyActionRequest): PolicyDecision {
+    const decision = this.doClassify(request);
+    decision.tool = request.tool;
+    return decision;
+  }
+
+  private doClassify(request: PolicyActionRequest): PolicyDecision {
     const tool = request.tool;
     const projectRoot = request.projectRoot ?? this.options.projectRoot;
     const lower = tool.toLowerCase();
@@ -188,7 +288,10 @@ export class PolicyEngine {
       if (!rawPath) {
         return { decision: 'deny', rule: 'filesystem-outside-deny', reasons: [`tool '${tool}' requires a path argument`] };
       }
-      if (isInside(projectRoot, rawPath)) {
+      // A relative rawPath must resolve against the project root, not the
+      // process's cwd (path.resolve(rawPath) alone would use cwd) — those
+      // only coincide when the CLI happens to be invoked from projectRoot.
+      if (isInside(projectRoot, path.resolve(projectRoot, rawPath))) {
         return {
           decision: 'allow',
           rule: 'filesystem-project-allow',
@@ -257,13 +360,95 @@ export class PolicyEngine {
       return { decision: 'deny', rule: 'shell-unknown-ask', reasons: ['empty shell command'] };
     }
 
-    const cmd = firstToken(command);
+    // shell-quote does not understand backtick substitution; rewrite it to $(...) so it is inspected too.
+    const normalized = command.replace(/`([^`]*)`/g, '$($1)');
 
-    if (this.options.denyCommands?.some((d) => command.startsWith(d))) {
-      return { decision: 'deny', rule: 'shell-dangerous-deny', reasons: [`command matches operator deny list: ${command}`] };
+    let entries: ParseEntry[];
+    try {
+      entries = parseShell(normalized);
+    } catch (error) {
+      return {
+        decision: 'deny',
+        rule: 'shell-unknown-ask',
+        reasons: [`shell command could not be parsed: ${error instanceof Error ? error.message : String(error)}`],
+      };
     }
-    if (this.options.allowCommands?.some((a) => command.startsWith(a))) {
-      return { decision: 'allow', rule: 'shell-safe-allow', reasons: [`command matches operator allow list: ${command}`] };
+
+    const segments = splitSegments(entries);
+    if (segments.length === 0) {
+      return { decision: 'deny', rule: 'shell-unknown-ask', reasons: ['shell command contains no executable command'] };
+    }
+
+    const projectRoot = request.projectRoot ?? this.options.projectRoot;
+    const decisions: PolicyDecision[] = [];
+    for (const segment of segments) {
+      decisions.push(...this.classifyShellSegment(segment, projectRoot));
+    }
+
+    const merged = mostRestrictive(decisions);
+    if (segments.length > 1) {
+      merged.reasons.unshift(`command line contains ${segments.length} sub-commands; each was classified and the most restrictive decision applies`);
+    }
+    return merged;
+  }
+
+  private classifyShellSegment(segment: ShellSegment, projectRoot: string): PolicyDecision[] {
+    const decisions: PolicyDecision[] = [];
+    const text = segment.words.join(' ');
+
+    for (const redirect of segment.redirects) {
+      const decision = this.classifyRedirect(redirect, projectRoot);
+      if (decision) decisions.push(decision);
+    }
+
+    if (segment.words.length === 0) {
+      return decisions;
+    }
+
+    if (this.options.denyCommands?.some((d) => text.startsWith(d))) {
+      decisions.push({ decision: 'deny', rule: 'shell-dangerous-deny', reasons: [`command matches operator deny list: ${text}`] });
+      return decisions;
+    }
+    if (this.options.allowCommands?.some((a) => text.startsWith(a))) {
+      decisions.push({ decision: 'allow', rule: 'shell-safe-allow', reasons: [`command matches operator allow list: ${text}`] });
+      return decisions;
+    }
+
+    const { name, args } = resolveCommand(segment.words);
+    decisions.push(this.classifyCommandName(name));
+
+    if (name === 'find') {
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === '-delete') {
+          decisions.push({ decision: 'ask', rule: 'shell-unknown-ask', reasons: ['find -delete removes files and requires approval'] });
+        }
+        if (/^-(exec|execdir|ok|okdir)$/.test(args[i]) && args[i + 1]) {
+          decisions.push(this.classifyCommandName(basename(args[i + 1])));
+        }
+      }
+    }
+
+    return decisions;
+  }
+
+  private classifyRedirect(redirect: { op: string; target: string }, projectRoot: string): PolicyDecision | null {
+    if (redirect.op === '<' || redirect.op === '<&' || redirect.op === '<<<') return null;
+    if (redirect.op === '>&' && /^\d+$/.test(redirect.target)) return null;
+    if (!redirect.target) {
+      return { decision: 'ask', rule: 'shell-unknown-ask', reasons: ['output redirection with an undetermined target requires approval'] };
+    }
+    if (redirect.target === '/dev/null') return null;
+    if (isInside(projectRoot, path.resolve(projectRoot, redirect.target))) return null;
+    return {
+      decision: 'deny',
+      rule: 'filesystem-outside-deny',
+      reasons: [`output redirection to '${redirect.target}' is outside project root '${projectRoot}'`],
+    };
+  }
+
+  private classifyCommandName(cmd: string): PolicyDecision {
+    if (!cmd) {
+      return { decision: 'ask', rule: 'shell-unknown-ask', reasons: ['could not determine the command to execute; approval required'] };
     }
 
     if (NETWORK_COMMANDS.has(cmd)) {

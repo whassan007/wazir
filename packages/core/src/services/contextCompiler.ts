@@ -8,7 +8,7 @@ import type {
 
 /**
  * Deterministic token estimator: 1 token per 4 characters.
- * Conservative enough to keep Rook within llama.cpp `n_ctx` limits;
+ * Conservative enough to keep Wazir within llama.cpp `n_ctx` limits;
  * never silently truncates — it only feeds the budget calculation.
  */
 export function estimateTokens(text: string): number {

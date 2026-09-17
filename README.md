@@ -1,4 +1,4 @@
-# Rook Meta-Harness
+# Wazir Meta-Harness
 
 A production-quality local AI meta-harness that orchestrates multiple AI runtimes, models, tools, and target computers.
 
@@ -49,12 +49,64 @@ npm run build
 
 # Run tests
 npm test
+
+# Generate macOS Apple DMG installer
+npm run dmg
+```
+
+## Deployment
+
+### Docker / Docker Compose
+
+`Dockerfile` builds four targets from one multi-stage build: `api`, `worker`, `web`, and `cli`.
+
+```bash
+# One service
+docker build --target api -t wazir-api .
+
+# The full stack (API + worker + web dashboard + Postgres), wired together
+# on one Docker network so the worker actually registers with the API and
+# the dashboard proxies to it:
+docker compose up -d api worker web
+
+# One-off CLI commands against that stack:
+docker compose run --rm cli wazir doctor
+```
+
+Set `WAZIR_OLLAMA_URL`/`WAZIR_LMSTUDIO_URL` in the environment (or a `.env`
+file — see `.env.example`) to point the `api` service at runtimes reachable
+from inside the container (e.g. `http://host.docker.internal:11434` to reach
+an Ollama instance running on the Docker host itself).
+
+### systemd (Linux)
+
+Unit files for running the API and/or a worker as persistent background
+services live in `scripts/systemd/`. Copy them to `/etc/systemd/system/`,
+edit the `ExecStart` node/install paths for your machine, then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now wazir-api
+sudo systemctl enable --now wazir-worker
+```
+
+### launchd (macOS)
+
+`scripts/launchd/ai.wazir.worker.plist` runs a worker unattended in the
+background with no dashboard — for using a Mac purely as a compute target.
+This is distinct from the GUI `Wazir.app` produced by `npm run dmg`, which
+starts the API + web dashboard and opens a browser. Install as a
+LaunchAgent (runs as your user, can reach your own Ollama/LM Studio):
+
+```bash
+cp scripts/launchd/ai.wazir.worker.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/ai.wazir.worker.plist
 ```
 
 ## Directory Structure
 
 ```
-meta-harness/
+wazir/
 ├── apps/
 │   ├── api/      # API server
 │   ├── web/      # Web UI
@@ -114,16 +166,16 @@ interface RuntimeAdapter {
 
 ```bash
 # Run task with automatic selection
-mh ask "Analyze this codebase"
+wazir ask "Analyze this codebase"
 
 # Force specific computer
-mh ask "Explain this" --computer dgx-primary
+wazir ask "Explain this" --computer dgx-primary
 
 # Force specific model
-mh ask "Solve this" --model qwen3-coder
+wazir ask "Solve this" --model qwen3-coder
 
 # Dry run to see scheduling decision
-mh task plan "Review this document"
+wazir task plan "Review this document"
 ```
 
 ## Configuration
@@ -139,7 +191,7 @@ workers:
   heartbeatSeconds: 10
 
 database:
-  url: postgresql://localhost/meta_harness
+  url: postgresql://localhost/wazir
 ```
 
 ## Next Steps
