@@ -101,6 +101,55 @@ export class MemoryStore implements KeyValueStore {
  * slightly stale value if another process just wrote; that's an accepted
  * trade-off for a local-first store — only writes need strict ordering.
  */
+/**
+ * Matches what `Date.prototype.toJSON`/`JSON.stringify` produce for a Date —
+ * used to revive Dates on the way back in, since JSON itself has no Date
+ * type. Without this, every `Date` field in anything stored here (Block,
+ * ExecutionRecord, Job, ...) silently becomes a plain string the moment a
+ * process restarts and reloads from disk — code that calls `.getTime()` or
+ * similar on it without re-wrapping in `new Date(...)` first then crashes,
+ * only in the "reloaded from a previous run" case, never in the same
+ * process that wrote it. Found via `wa executions list` and `wa explain
+ * @job:x` both crashing on `b.execution.createdAt.getTime is not a
+ * function` after a restart.
+ */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+function reviveDates(_key: string, value: unknown): unknown {
+  return typeof value === 'string' && ISO_DATE_RE.test(value) ? new Date(value) : value;
+}
+
+/**
+ * Same date revival as `reviveDates` above, but as a post-hoc recursive walk
+ * instead of a `JSON.parse` reviver hook — for backends like `PostgresStore`
+ * whose JSONB values arrive already parsed by the driver (`pg` calls
+ * `JSON.parse` internally with no reviver option), so there's no hook to
+ * intercept during parsing itself.
+ */
+export function reviveDatesDeep<T>(value: T): T {
+  if (typeof value === 'string') {
+    return (ISO_DATE_RE.test(value) ? new Date(value) : value) as unknown as T;
+  }
+  if (value instanceof Date) {
+    // Already a real Date (e.g. a value that never left this process) — a
+    // Date's data lives internally, not as enumerable own properties, so
+    // falling through to the generic object branch below would destructure
+    // it into `{}`.
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => reviveDatesDeep(item)) as unknown as T;
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = reviveDatesDeep(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
 export class JsonFileStore implements KeyValueStore {
   private readonly file: string;
   private readonly lockFile: string;
@@ -121,7 +170,7 @@ export class JsonFileStore implements KeyValueStore {
   private async reloadFromDisk(): Promise<void> {
     try {
       const raw = await fs.readFile(this.file, 'utf8');
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const parsed = JSON.parse(raw, reviveDates) as Record<string, unknown>;
       this.data = new Map(Object.entries(parsed));
     } catch {
       // Missing or corrupt file: start empty on first load. If we'd already
@@ -140,6 +189,12 @@ export class JsonFileStore implements KeyValueStore {
   }
 
   private async withLock(mutate: () => void): Promise<void> {
+    // The lock file lives next to the data file, which may not exist yet on
+    // a fresh install (e.g. the first-ever write to ~/.wazir/wazir.json) —
+    // `persist()` below creates this directory too, but that's too late:
+    // acquiring the lock itself needs it to exist first, or `fs.open(lockFile,
+    // 'wx')` fails with ENOENT before `persist()` ever runs.
+    await fs.mkdir(path.dirname(this.file), { recursive: true });
     await withFileLock(this.lockFile, async () => {
       await this.reloadFromDisk();
       mutate();

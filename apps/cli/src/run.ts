@@ -13,6 +13,7 @@ import type {
   WorkerExecutionEvent,
   WorkerExecutionRequest,
 } from '@wazir/core';
+import { buildContextPartsFromActive } from './commands.js';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import { buildSystemPrompt } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
@@ -79,11 +80,11 @@ const OUTPUT_RESERVE_TOKENS = 4096;
 const MINIMUM_CONTEXT_TOKENS = 8192;
 
 /** Policy check, context budget, two-phase scheduling and agent resolution — no side effects. */
-export function planTask(
+export async function planTask(
   engine: RookEngine,
   description: string,
   options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent'> = {},
-): PlanResult {
+): Promise<PlanResult> {
   const task: Task = {
     id: generateId('task-'),
     type: options.type ?? 'coding',
@@ -101,10 +102,13 @@ export function planTask(
     return { ok: false, reasons: taskPolicy.reasons };
   }
 
-  const parts: ContextPart[] = [
+  const baseParts: ContextPart[] = [
     { kind: 'system', label: 'system prompt', content: buildSystemPrompt(engine.projectRoot, engine.tools.forModel()), priority: 'critical' },
     { kind: 'task', label: 'task', content: description, priority: 'critical' },
   ];
+
+  const activeContextParts = await buildContextPartsFromActive(engine);
+  const parts = [...baseParts, ...activeContextParts];
   const budget = engine.compiler.budget(parts, OUTPUT_RESERVE_TOKENS);
 
   let scheduling: SchedulerDecision;
@@ -150,7 +154,7 @@ export async function executeTask(
 
   await engine.executions.ready;
 
-  const planned = planTask(engine, description, options);
+  const planned = await planTask(engine, description, options);
   if (planned.ok === false) {
     return { success: false, reasons: planned.reasons, filesChanged: [], executionId: '—', errors: [] };
   }

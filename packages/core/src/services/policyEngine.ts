@@ -208,6 +208,33 @@ export class PolicyEngine {
       return decision;
     }
 
+    if (this.options.approvalQueue) {
+      try {
+        const approved = await this.options.approvalQueue.enqueue(request, decision);
+        if (approved) {
+          return {
+            ...decision,
+            decision: 'allow',
+            rule: `${decision.rule}+user-approved`,
+            reasons: [...decision.reasons, 'approved by user via approval queue'],
+          };
+        }
+        return {
+          ...decision,
+          decision: 'deny',
+          rule: decision.rule,
+          reasons: [...decision.reasons, 'denied by user via approval queue'],
+        };
+      } catch {
+        return {
+          ...decision,
+          decision: 'deny',
+          rule: decision.rule,
+          reasons: [...decision.reasons, 'approval queue resolution failed; denying'],
+        };
+      }
+    }
+
     const approver = this.options.approveCallback;
     if (!approver) {
       return {

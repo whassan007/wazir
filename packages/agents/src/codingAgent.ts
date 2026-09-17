@@ -300,6 +300,11 @@ export class CodingAgent implements AgentAdapter {
     yield { kind: 'phase', phase: 'implement' as AgentPhase };
     while (turnsUsed < maxTurns && !modelSummary) {
       if (request.isCancelled?.()) break;
+      const steering = request.getSteeringInstruction?.();
+      if (steering) {
+        yield { kind: 'message', content: `[steered] ${steering}` };
+        pushContinue(`User follow-up instruction: ${steering}`);
+      }
       const raw = await modelTurn();
       turnsUsed += 1;
       const action = readAction(raw);
@@ -394,6 +399,11 @@ export class CodingAgent implements AgentAdapter {
       const repairLimit = Math.min(8, Math.max(4, maxTurns - turnsUsed));
       for (let i = 0; i < repairLimit; i++) {
         if (request.isCancelled?.()) break;
+        const steering = request.getSteeringInstruction?.();
+        if (steering) {
+          yield { kind: 'message', content: `[steered] ${steering}` };
+          pushContinue(`User follow-up instruction: ${steering}`);
+        }
         const raw = await modelTurn();
         turnsUsed += 1;
         const action = readAction(raw);

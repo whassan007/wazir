@@ -1,5 +1,6 @@
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
+import { createBlock } from './blocks.js';
 
 export type DoctorStatus = 'PASS' | 'WARN' | 'FAIL' | 'NOT INSTALLED' | 'UNAVAILABLE';
 
@@ -261,10 +262,13 @@ export function doctor(engine: RookEngine): DoctorReport {
 
 export function doctorCommand(): Promise<{ code: number; output: string }> {
   return new Promise(async (resolve) => {
+    let finish: Awaited<ReturnType<typeof createBlock>>['finish'] | undefined;
     try {
       const { createEngine } = require('./engine.js');
       const engine = await createEngine();
-      
+
+      ({ finish } = await createBlock(engine, 'doctor', []));
+
       const report = doctor(engine);
     
     const lines: string[] = [];
@@ -321,9 +325,11 @@ export function doctorCommand(): Promise<{ code: number; output: string }> {
     
     const hasIssues = report.summary.fail > 0 || report.summary.warn > 0;
     
+    await finish?.(hasIssues ? 'failed' : 'success', { stdout: lines.join('\n'), exitCode: hasIssues ? 1 : 0 });
     resolve({ code: hasIssues ? 1 : 0, output: lines.join('\n') });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    await finish?.('failed', { stdout: color.red(`doctor failed: ${message}`), exitCode: 2 });
     resolve({ code: 2, output: color.red(`doctor failed: ${message}`) });
   }
 });

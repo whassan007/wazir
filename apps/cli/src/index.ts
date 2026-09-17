@@ -171,7 +171,7 @@ taskCmd
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { planTaskCommand } = await import('./commands.js');
-    const result = planTaskCommand(engine, prompt, {
+    const result = await planTaskCommand(engine, prompt, {
       type: options.type as any,
       model: options.model,
       agent: options.agent,
@@ -231,6 +231,95 @@ execCmd
   });
 
 program.addCommand(execCmd);
+
+// history command
+const historyCmd = new Command()
+  .name('history')
+  .description('View command history (blocks)');
+
+historyCmd
+  .command('list')
+  .description('List recent blocks')
+  .option('--status <status>', 'Filter by status: running, success, failed, cancelled')
+  .option('--command <substring>', 'Filter by command substring')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listHistory } = await import('./commands.js');
+    console.log(await listHistory(engine, options));
+  });
+
+historyCmd
+  .command('inspect')
+  .argument('<id>', 'Block ID')
+  .description('Inspect block details')
+  .option('--json', 'Output in JSON format')
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { inspectHistory } = await import('./commands.js');
+    console.log(await inspectHistory(engine, id, options.json ?? false));
+  });
+
+program.addCommand(historyCmd);
+
+// context command
+const contextCmd = new Command()
+  .name('context')
+  .description('Manage active context blocks');
+
+contextCmd
+  .command('add')
+  .argument('<blockId>', 'Block ID to add to context')
+  .description('Add a block to the active context')
+  .action(async (blockId) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { addContext } = await import('./commands.js');
+    const result = await addContext(engine, blockId);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+contextCmd
+  .command('remove')
+  .argument('<blockId>', 'Block ID to remove from context')
+  .description('Remove a block from the active context')
+  .action(async (blockId) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { removeContext } = await import('./commands.js');
+    const result = await removeContext(engine, blockId);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+contextCmd
+  .command('list')
+  .description('List active context blocks with token estimate')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listContext } = await import('./commands.js');
+    const result = await listContext(engine);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+contextCmd
+  .command('clear')
+  .description('Clear all active context blocks')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { clearContextCommand } = await import('./commands.js');
+    const result = await clearContextCommand(engine);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+program.addCommand(contextCmd);
 
 // benchmark command
 const benchCmd = new Command()
@@ -357,4 +446,85 @@ program
     console.log('\n' + chalk.cyan(response.answer));
   });
 
+// chat command — interactive fleet coding agent TUI
+program
+  .command('chat')
+  .alias('fleet')
+  .description('Open interactive fleet-scale coding agent TUI session')
+  .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
+  .option('--no-worktrees', 'Disable git worktree isolation')
+  .option('--auto-merge', 'Automatically merge completed agent branches into main')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { FleetTui } = await import('./tui/index.js');
+    const tui = new FleetTui({
+      engine,
+      concurrencyLimit: options.concurrency ? Number(options.concurrency) : 4,
+      useWorktrees: options.worktrees !== false,
+      autoMerge: options.autoMerge === true,
+    });
+    await tui.start();
+    await tui.waitForExit();
+  });
+
+// jobs command — manage distributed fleet jobs
+const jobsCmd = new Command()
+  .name('jobs')
+  .alias('job')
+  .description('Manage fleet jobs and DAGs');
+
+jobsCmd
+  .command('list')
+  .description('List all jobs')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listJobs } = await import('./commands.js');
+    console.log(listJobs(engine));
+  });
+
+jobsCmd
+  .command('inspect')
+  .argument('<id>', 'Job ID')
+  .description('Inspect a job and its usage rollup')
+  .action(async (id) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { inspectJob } = await import('./commands.js');
+    console.log(await inspectJob(engine, id));
+  });
+
+jobsCmd
+  .command('merge')
+  .argument('<id>', 'Job ID')
+  .option('--target <branch>', 'Target branch to merge into')
+  .description('Merge all task branches for a job into the target branch')
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { mergeJob } = await import('./commands.js');
+    console.log(await mergeJob(engine, id, options.target));
+  });
+
+program.addCommand(jobsCmd);
+
+// explain command — accepts a bare execution id, a block ref (@123), or a
+// job ref (@job:x), and renders the scheduling decision already recorded
+// at execution time.
+program
+  .command('explain')
+  .argument('<ref>', 'Execution id, @<blockId>, or @job:<id>')
+  .option('--json', 'Output in JSON format')
+  .description('Explain the scheduling decision behind an execution, block, or job')
+  .action(async (ref, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { explainCommand } = await import('./commands.js');
+    const result = await explainCommand(engine, ref, options.json);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
 program.parse();
+

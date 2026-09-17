@@ -1,13 +1,18 @@
 import os from 'node:os';
 import {
   AgentRegistry,
+  ApprovalQueue,
   ComputerRegistry,
   ContextCompiler,
   ExecutionEngine,
+  Job,
+  JobManager,
+  JobOrchestrator,
   ModelRegistry,
   PolicyEngine,
   RuntimeRegistry,
   Scheduler,
+  WorktreeManager,
 } from '@wazir/core';
 import type {
   ComputerRegistration,
@@ -48,10 +53,14 @@ export interface RookEngine {
   policy: PolicyEngine;
   scheduler: Scheduler;
   compiler: ContextCompiler;
-  executions: ExecutionEngine;
+  executions: ExecutionEngine & { store?: KeyValueStore };
+  approvalQueue: ApprovalQueue;
+  orchestrator: JobOrchestrator & { store?: KeyValueStore };
+  worktrees: WorktreeManager;
   adapters: Map<string, RuntimeAdapter>;
   discovered: DiscoveredRuntime[];
   worker: Worker;
+  store: KeyValueStore;
 }
 
 function guessFamily(id: string, provider: string): ModelRecord['family'] {
@@ -94,7 +103,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
       const entries = await store.list('execution/');
       return entries.map((e) => e.value as never);
     },
-  });
+  }) as any;
+  executions.store = store; // Attach store for Block persistence
 
   // ---- local computer + runtimes + models ------------------------------
   const adapterList: RuntimeAdapter[] = [
@@ -191,13 +201,15 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // ---- agents -----------------------------------------------------------
   agents.register(createCodingAgent(), 'native');
 
-  // ---- policy ------------------------------------------------------------
+  // ---- approval queue & policy -------------------------------------------
+  const approvalQueue = new ApprovalQueue();
   const policy = new PolicyEngine({
     projectRoot,
     networkAllowed: config.networkAllowed,
     allowCommands: config.allowCommands,
     denyCommands: config.denyCommands,
     allowedMcpServers: config.allowedMcpServers,
+    approvalQueue,
     approveCallback: async (request, decision) => {
       const { createApprover } = await import('./approve.js');
       return createApprover(request, decision);
@@ -212,6 +224,29 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     agents,
   });
 
+  // ---- jobs & orchestration -----------------------------------------------
+  const jobManager = new JobManager({
+    persist: (job) => store.put(`job/${job.id}`, job),
+    load: async () => {
+      const entries = await store.list('job/');
+      return entries.map((e) => e.value as Job);
+    },
+  });
+
+  const orchestrator = new JobOrchestrator({
+    scheduler,
+    executionEngine: executions,
+    policy,
+    agents,
+    models,
+    runtimes,
+    computers,
+    jobManager,
+  }) as any;
+  orchestrator.store = store; // Attach store for Block persistence
+
+  const worktrees = new WorktreeManager();
+
   return {
     config,
     projectRoot,
@@ -225,9 +260,13 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     scheduler,
     compiler,
     executions,
+    approvalQueue,
+    orchestrator,
+    worktrees,
     adapters: adapterById,
     discovered,
     worker,
+    store,
   };
 }
 

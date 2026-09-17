@@ -13,6 +13,7 @@ export * from './scheduler.js';
 export * from './execution.js';
 export * from './worker.js';
 export * from './benchmark.js';
+export * from './block.js';
 
 export type { OSInfo } from './computer.js';
 export { effectiveContextTokens } from './model.js';

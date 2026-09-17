@@ -11,3 +11,19 @@ export { PolicyEngine, createPolicyEngine } from './policyEngine.js';
 export { RuntimeRegistry } from './runtimeRegistry.js';
 export { Scheduler, createScheduler } from './scheduler.js';
 export type { SchedulerDeps, ScheduleInput } from './scheduler.js';
+export { JobManager, createJobManager } from './jobManager.js';
+export type { JobManagerOptions, JobTaskInput } from './jobManager.js';
+export { JobOrchestrator, createJobOrchestrator } from './jobOrchestrator.js';
+export type { JobOrchestratorOptions, OrchestratorTaskAssignment } from './jobOrchestrator.js';
+export { ApprovalQueue, createApprovalQueue } from './approvalQueue.js';
+export type { ApprovalQueueOptions, PendingApprovalRequest } from './approvalQueue.js';
+export { WorktreeManager, createWorktreeManager } from './worktreeManager.js';
+export type {
+  WorktreeCommitResult,
+  WorktreeInfo,
+  WorktreeManagerOptions,
+  WorktreeMergeResult,
+} from './worktreeManager.js';
+
+
+

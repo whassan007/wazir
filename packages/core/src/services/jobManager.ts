@@ -50,6 +50,12 @@ export class JobManager {
     const now = new Date();
     const jobId = nextJobId();
 
+    for (let i = 0; i < params.tasks.length; i++) {
+      if (!params.tasks[i].task.id) {
+        params.tasks[i].task.id = `task-${jobId}-${i}`;
+      }
+    }
+
     const graph = this.buildGraph(params.tasks);
     const tasks: Task[] = params.tasks.map((t, i) => ({
       id: t.task.id ?? `task-${jobId}-${i}`,
@@ -248,18 +254,32 @@ export class JobManager {
     return { nodes, edges };
   }
 
-  private dependenciesSatisfied(job: Job, taskId: string): boolean {
+  dependenciesSatisfied(job: Job, taskId: string): boolean {
     const node = job.graph.nodes.find((n) => n.taskId === taskId || n.id === taskId);
     if (!node) return true;
 
     for (const dep of node.dependencies) {
-      const depNode = job.graph.nodes.find((n) => n.id === dep);
+      const depNode = job.graph.nodes.find((n) => n.id === dep || n.taskId === dep);
       if (depNode && depNode.state !== 'completed') {
         return false;
       }
     }
 
     return true;
+  }
+
+  hasFailedDependency(job: Job, taskId: string): boolean {
+    const node = job.graph.nodes.find((n) => n.taskId === taskId || n.id === taskId);
+    if (!node) return false;
+
+    for (const dep of node.dependencies) {
+      const depNode = job.graph.nodes.find((n) => n.id === dep || n.taskId === dep);
+      if (depNode && (depNode.state === 'failed' || depNode.state === 'cancelled')) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private updateNodeState(
@@ -269,12 +289,13 @@ export class JobManager {
     result?: unknown,
     error?: string,
   ): void {
-    const node = job.graph.nodes.find((n) => n.id === nodeId);
+    const node = job.graph.nodes.find((n) => n.id === nodeId || n.taskId === nodeId);
     if (node) {
       node.state = state;
       if (result !== undefined) node.result = result;
       if (error !== undefined) node.error = error;
-      if (state === 'completed') node.completedAt = new Date();
+      if (state === 'running' && !node.executedAt) node.executedAt = new Date();
+      if (state === 'completed' || state === 'failed') node.completedAt = new Date();
     }
   }
 

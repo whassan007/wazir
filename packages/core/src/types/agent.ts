@@ -54,6 +54,8 @@ export interface AgentRunRequest {
   maxTurns?: number;
   /** Set to true by the host when the user requested cancellation. */
   isCancelled?: () => boolean;
+  /** Returns any pending mid-run user instruction, drained once per turn. */
+  getSteeringInstruction?: () => string | undefined;
 }
 
 /**

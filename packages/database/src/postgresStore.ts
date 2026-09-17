@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { KeyValueStore, StoreEntry } from '@wazir/shared';
+import { reviveDatesDeep, type KeyValueStore, type StoreEntry } from '@wazir/shared';
 
 /**
  * A `KeyValueStore` backed by Postgres instead of a local JSON file — the
@@ -25,7 +25,10 @@ export class PostgresStore implements KeyValueStore {
 
   async get<T>(key: string): Promise<T | undefined> {
     const result = await this.pool.query<{ value: T }>('SELECT value FROM wazir_kv_store WHERE key = $1', [key]);
-    return result.rows[0]?.value;
+    const value = result.rows[0]?.value;
+    // `pg` parses JSONB with its own internal JSON.parse (no reviver hook),
+    // so Date fields need reviving after the fact — see reviveDatesDeep's doc.
+    return value === undefined ? undefined : reviveDatesDeep(value);
   }
 
   async list(prefix: string): Promise<StoreEntry[]> {
@@ -33,7 +36,7 @@ export class PostgresStore implements KeyValueStore {
       'SELECT key, value FROM wazir_kv_store WHERE key LIKE $1 ORDER BY key',
       [`${escapeLike(prefix)}%`],
     );
-    return result.rows.map((row) => ({ key: row.key, value: row.value }));
+    return result.rows.map((row) => ({ key: row.key, value: reviveDatesDeep(row.value) }));
   }
 
   async delete(key: string): Promise<void> {

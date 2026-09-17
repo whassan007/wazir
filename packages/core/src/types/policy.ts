@@ -35,4 +35,8 @@ export interface PolicyEngineOptions {
    * escalated to 'deny' — Wazir never silently allows.
    */
   approveCallback?: (request: PolicyActionRequest, decision: PolicyDecision) => Promise<boolean>;
+  /** Non-blocking approval queue for multi-agent execution. */
+  approvalQueue?: {
+    enqueue: (request: PolicyActionRequest, decision: PolicyDecision) => Promise<boolean>;
+  };
 }

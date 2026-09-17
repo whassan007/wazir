@@ -131,3 +131,98 @@ export interface AgentAssignment {
   assignedAt: Date;
   policy: PolicyDecision[];
 }
+
+export interface JobRollup {
+  jobId: string;
+  taskCount: number;
+  completedTasks: number;
+  failedTasks: number;
+  runningTasks: number;
+  queuedTasks: number;
+  tokens: {
+    input: number;
+    output: number;
+    total: number;
+  };
+  durationMs: number;
+  estimatedCostUsd: number;
+  computersUsed: string[];
+  modelsUsed: string[];
+  filesChanged: string[];
+}
+
+export interface JobTaskProgressEvent {
+  kind: string;
+  phase?: string;
+  content?: string;
+  tool?: string;
+  error?: string;
+  usage?: { input: number; output: number; total: number };
+}
+
+export interface JobTaskExecutionContext {
+  jobId: string;
+  taskId: string;
+  node: JobNode;
+  assignment: AgentAssignment;
+  signal?: AbortSignal;
+  onProgress?: (event: JobTaskProgressEvent) => void;
+  getSteeringInstruction?: () => string | undefined;
+}
+
+export interface JobTaskOutcome {
+  success: boolean;
+  result?: unknown;
+  error?: string;
+  reasons?: string[];
+  filesChanged?: string[];
+  usage?: { input: number; output: number; total: number };
+}
+
+export type JobTaskExecutor = (
+  task: Task,
+  context: JobTaskExecutionContext
+) => Promise<JobTaskOutcome>;
+
+export type JobOrchestratorEventType =
+  | 'job:started'
+  | 'job:completed'
+  | 'job:failed'
+  | 'job:cancelled'
+  | 'job:paused'
+  | 'job:resumed'
+  | 'task:scheduled'
+  | 'task:started'
+  | 'task:progress'
+  | 'task:completed'
+  | 'task:failed'
+  | 'task:retry'
+  | 'task:cancelled'
+  | 'task:steered';
+
+export interface JobOrchestratorEvent {
+  type: JobOrchestratorEventType;
+  jobId: string;
+  taskId?: string;
+  agentId?: string;
+  computerId?: string;
+  modelId?: string;
+  phase?: string;
+  event?: unknown;
+  result?: unknown;
+  error?: string;
+  retryCount?: number;
+  maxRetries?: number;
+  instruction?: string;
+  filesChanged?: string[];
+  usage?: { input: number; output: number; total: number };
+  timestamp?: Date;
+}
+
+export interface JobRunOptions {
+  concurrencyLimit?: number;
+  taskExecutor?: JobTaskExecutor;
+  signal?: AbortSignal;
+  onEvent?: (event: JobOrchestratorEvent) => void;
+}
+

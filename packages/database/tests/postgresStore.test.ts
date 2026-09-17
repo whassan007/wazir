@@ -49,6 +49,23 @@ describe.skipIf(!connectionString)('PostgresStore (real Postgres)', () => {
     expect(await store.get('exec/abc')).toEqual(value);
   });
 
+  it('revives Date fields (including nested ones) after a real round trip through Postgres JSONB', async () => {
+    // `pg` parses JSONB with its own internal JSON.parse and no reviver hook
+    // — without PostgresStore's reviveDatesDeep post-processing, this comes
+    // back as plain ISO strings, same class of bug as JsonFileStore's.
+    const now = new Date('2026-01-15T10:30:00.000Z');
+    await store.put('exec/with-dates', { createdAt: now, nested: { at: now }, events: [{ timestamp: now }] });
+
+    const reloaded = await store.get<{ createdAt: Date; nested: { at: Date }; events: Array<{ timestamp: Date }> }>(
+      'exec/with-dates',
+    );
+
+    expect(reloaded?.createdAt).toBeInstanceOf(Date);
+    expect(reloaded?.createdAt.getTime()).toBe(now.getTime());
+    expect(reloaded?.nested.at).toBeInstanceOf(Date);
+    expect(reloaded?.events[0].timestamp).toBeInstanceOf(Date);
+  });
+
   it('overwrites an existing key on a second put (upsert, not duplicate rows)', async () => {
     await store.put('exec/dup', { v: 1 });
     await store.put('exec/dup', { v: 2 });

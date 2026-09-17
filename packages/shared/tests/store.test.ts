@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { JsonFileStore, MemoryStore } from '../src/store.js';
+import { JsonFileStore, MemoryStore, reviveDatesDeep } from '../src/store.js';
 
 const execFileAsync = promisify(execFile);
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,10 +54,79 @@ describe('JsonFileStore — basic contract', () => {
     expect(await reopened.get('k')).toEqual({ hello: 'world' });
   });
 
+  it('creates its parent directory on the very first write (fresh install, e.g. ~/.wazir not created yet)', async () => {
+    // Deliberately do NOT mkdtemp/mkdir this path — `tempFile()` above always
+    // pre-creates its directory, which is exactly why this bug (a real
+    // ENOENT crash on `wa`'s actual first-ever run on a machine, caught by
+    // running the CLI for real rather than only via tests) went unnoticed:
+    // acquiring the cross-process lock tried to open a lock file inside a
+    // directory that didn't exist yet, and only `persist()` — reached too
+    // late — created it.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-store-fresh-'));
+    file = path.join(root, 'nested', 'does', 'not', 'exist', 'wazir.json');
+
+    await expect(new JsonFileStore(file).put('k', { hello: 'world' })).resolves.toBeUndefined();
+    expect(await new JsonFileStore(file).get('k')).toEqual({ hello: 'world' });
+  });
+
   it('does not leave a lock file behind after a successful write', async () => {
     file = await tempFile();
     await new JsonFileStore(file).put('k', 1);
     await expect(fs.access(`${file}.lock`)).rejects.toThrow();
+  });
+
+  it('revives Date fields (including nested ones) after reloading from a fresh instance', async () => {
+    // Regression test: found via `wa executions list` and `wa explain @job:x`
+    // both crashing with "b.execution.createdAt.getTime is not a function"
+    // after a process restart — a Date, once round-tripped through
+    // JSON.stringify/parse, silently became a plain ISO string, and nothing
+    // downstream re-wrapped it before calling a Date method on it.
+    file = await tempFile();
+    const now = new Date('2026-01-15T10:30:00.000Z');
+    await new JsonFileStore(file).put('record', {
+      id: 'x',
+      createdAt: now,
+      nested: { completedAt: now },
+      events: [{ timestamp: now }],
+      notADate: '2026-01-15', // date-*like* but not a full ISO timestamp — must NOT be revived
+      plainString: 'hello world',
+    });
+
+    const reloaded = await new JsonFileStore(file).get<{
+      createdAt: Date;
+      nested: { completedAt: Date };
+      events: Array<{ timestamp: Date }>;
+      notADate: string;
+      plainString: string;
+    }>('record');
+
+    expect(reloaded?.createdAt).toBeInstanceOf(Date);
+    expect(reloaded?.createdAt.getTime()).toBe(now.getTime());
+    expect(reloaded?.nested.completedAt).toBeInstanceOf(Date);
+    expect(reloaded?.events[0].timestamp).toBeInstanceOf(Date);
+    expect(reloaded?.notADate).toBe('2026-01-15');
+    expect(reloaded?.plainString).toBe('hello world');
+  });
+});
+
+describe('reviveDatesDeep (post-hoc revival for backends like PostgresStore)', () => {
+  it('revives ISO date strings at any depth without touching non-date strings', () => {
+    const now = new Date('2026-01-15T10:30:00.000Z');
+    const input = {
+      top: now.toISOString(),
+      nested: { deep: [{ at: now.toISOString(), label: 'not-a-date' }] },
+      alreadyADate: now, // Date instances (not strings) must pass through unchanged
+      number: 42,
+    };
+
+    const revived = reviveDatesDeep(input);
+
+    expect(revived.top).toBeInstanceOf(Date);
+    expect((revived.top as Date).getTime()).toBe(now.getTime());
+    expect(revived.nested.deep[0].at).toBeInstanceOf(Date);
+    expect(revived.nested.deep[0].label).toBe('not-a-date');
+    expect(revived.alreadyADate).toBeInstanceOf(Date);
+    expect(revived.number).toBe(42);
   });
 });
 
