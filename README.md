@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/brand/logo.jpeg" alt="Wazir — a local AI fleet counselor" width="480">
+</p>
+
 # Wazir Meta-Harness
 
 A production-quality local and fleet-scale AI meta-harness that orchestrates multiple AI runtimes, models, tools, and target computers — with an OpenCode-style interactive terminal UI capable of running dozens of agents concurrently across distributed infrastructure, and a persistent command history/context system that lets you reason about what actually ran, on which model, with which scheduling decision, and why.
@@ -49,7 +53,7 @@ A production-quality local and fleet-scale AI meta-harness that orchestrates mul
 - **Context you can actually attach** (`wa context add/remove/list/clear`): pull a prior Block's output into a task's context budget, verified to actually change the `ContextCompiler`'s token accounting, not just be stored and ignored.
 - **Deterministic references** (`@123`, `@job:x`, `@agent:x`, `@model:x`, `@computer:x`, `@file:x`, or a bare execution id): no LLM involved in resolution — every reference is a direct registry/store lookup.
 - **Explainable scheduling** (`wa explain <ref>`): renders the actual `SchedulerDecision` recorded at execution time — which model/computer/runtime was chosen and why — never recomputes one after the fact.
-- **Runtime-agnostic**: Ollama, LM Studio, and OpenAI-compatible endpoints as interchangeable backends, auto-discovered.
+- **Runtime-agnostic**: a standardized `RuntimeAdapter` interface with implementations for Ollama and LM Studio today, auto-discovered on their local ports; no OpenAI-compatible adapter exists yet (see `PROGRESS.md`).
 - **Pluggable persistence**: local JSON file store by default, or point `WAZIR_DATABASE_URL` at Postgres for a shared, multi-machine deployment — same `KeyValueStore` interface either way.
 
 ---
@@ -299,6 +303,12 @@ Postgres-backed tests are skipped automatically unless `WAZIR_TEST_DATABASE_URL`
 docker run --rm -d -e POSTGRES_PASSWORD=wazir -e POSTGRES_DB=wazir_test -p 5432:5432 postgres:16-alpine
 WAZIR_TEST_DATABASE_URL=postgres://postgres:wazir@localhost:5432/wazir_test npm test
 ```
+
+---
+
+## Brand
+
+Logo and full corporate visual identity guidelines (typography, color palette, voice) are in [`assets/brand/`](./assets/brand/); see [`Wazir_CVI_Guidelines.pdf`](./assets/brand/Wazir_CVI_Guidelines.pdf).
 
 ---
 

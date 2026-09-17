@@ -1,4 +1,6 @@
 import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   AgentRegistry,
   ApprovalQueue,
@@ -27,7 +29,7 @@ import {
   type KeyValueStore,
 } from '@wazir/shared';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
-import { createCodingAgent } from '@wazir/agents';
+import { createCodingAgent, ExternalAgentAdapter } from '@wazir/agents';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
@@ -78,6 +80,16 @@ function guessFamily(id: string, provider: string): ModelRecord['family'] {
 }
 
 const DEFAULT_CONTEXT = 32_768;
+const execFileAsync = promisify(execFile);
+
+async function detectOpenCode(): Promise<boolean> {
+  try {
+    await execFileAsync('opencode', ['--version'], { timeout: 3_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export async function createEngine(options: EngineOptions = {}): Promise<RookEngine> {
   const config = loadConfig();
@@ -200,6 +212,29 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
 
   // ---- agents -----------------------------------------------------------
   agents.register(createCodingAgent(), 'native');
+
+  // OpenCode is an optional external execution provider: Wazir still owns
+  // scheduling, policy, and history — OpenCode only supplies the reasoning
+  // loop for a task that explicitly asks for it (`wa task run --agent
+  // opencode` / `wa ask --agent opencode`). `taskTypes: []` means it is
+  // never auto-selected by `AgentRegistry.resolveForTask`, so installing the
+  // `opencode` binary can't silently change where an un-pinned task lands.
+  // Only registered when the binary is actually reachable, mirroring how
+  // Ollama/LM Studio runtimes are auto-discovered rather than assumed.
+  if (await detectOpenCode()) {
+    agents.register(
+      new ExternalAgentAdapter({
+        name: 'opencode',
+        version: 'external',
+        description: 'OpenCode terminal coding agent, invoked as an external process',
+        command: 'opencode',
+        args: ['run'],
+        taskTypes: [],
+        capabilities: ['coding'],
+      }),
+      'external',
+    );
+  }
 
   // ---- approval queue & policy -------------------------------------------
   const approvalQueue = new ApprovalQueue();

@@ -66,6 +66,17 @@ see "Open work" below.
 - Fleet TUI (`wa chat` / `wa fleet`) and DAG-aware concurrent job execution
   with retries, cancellation, and steering (`packages/core/src/services/jobOrchestrator.ts`).
 
+**External agents**
+- `ExternalAgentAdapter` (`packages/agents/src/externalAgent.ts`) is now wired
+  in: `apps/cli/src/engine.ts` registers an `opencode` agent when the
+  `opencode` binary is detected on `PATH`, reachable only via explicit
+  selection (`wa task run "..." --agent opencode`) — `taskTypes: []` keeps it
+  out of automatic routing, so installing OpenCode can't silently change
+  where an un-pinned task lands. Not exercised against a real OpenCode
+  session in this pass (would require live provider credentials); the
+  invocation shape (`opencode run <message>`) is verified against
+  `opencode --help`, not a live run.
+
 **Licensing & docs**
 - Relicensed MIT → AGPL-3.0 (network-use copyleft).
 - Root `README.md` rewritten for accuracy (e.g. `apps/api` is Express, not
@@ -84,6 +95,15 @@ cross-cutting hardening, not new features:
 - **Observability** — in-memory ring buffer only; no OpenTelemetry traces or
   Prometheus metrics.
 - **CI** — nothing enforces `build`/`typecheck`/`test` on pull requests yet.
+- **MCP is policy-only** — `MCPClient` (`packages/core/src/services/mcpClient.ts`)
+  is fully implemented but never instantiated or called anywhere; the only
+  real MCP behavior today is that unapproved MCP servers are denied by the
+  policy engine (`allowedMcpServers`). No task can currently reach an actual
+  MCP server through it.
+- **No OpenAI-compatible runtime adapter** — only `@wazir/runtimes-ollama` and
+  `@wazir/runtimes-lmstudio` exist; despite the `RuntimeAdapter` interface
+  being provider-agnostic, nothing implements it against an OpenAI-compatible
+  HTTP API yet.
 - Two dead fields need a design decision, not a mechanical fix:
   `ComputerRegistry`'s per-computer `health: 'degraded'` (nothing sets it) and
   `ModelRecord.runtimeCompatibility` (not read by the Scheduler).

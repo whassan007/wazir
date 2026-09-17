@@ -1,5 +1,5 @@
 # Wazir: Features and Ecosystem Comparison
-*(Comparison with Bionic, OpenCode, Antigravity, and Codex)*
+*(Comparison with OpenCode, Antigravity, and Codex)*
 
 ---
 
@@ -25,8 +25,13 @@
              │                              │
       Runtime Adapter (Ollama/LM Studio)    Runtime Adapter
              │                              │
-       Worker / Coding Agent          Worker / External Agent (OpenCode)
+    Agent: native CodingAgent, or        Agent: native CodingAgent, or
+    OpenCode (`--agent opencode`)        OpenCode (`--agent opencode`)
 ```
+
+Agent choice is per-task, not per-computer: `--agent opencode` opts a task into
+running through the installed `opencode` CLI as its reasoning loop instead of
+the native agent, on whichever computer the Scheduler places it on.
 
 ---
 
@@ -43,7 +48,7 @@
 
 3. **Runtime-Agnostic Model Routing**:
    - Implements a standardized `RuntimeAdapter` interface.
-   - Out-of-the-box support for local runtimes like **Ollama** and **LM Studio**, as well as OpenAI-compatible API backends.
+   - Out-of-the-box support for local runtimes **Ollama** and **LM Studio**. The `RuntimeAdapter` interface is provider-agnostic, but no OpenAI-compatible adapter exists yet.
    - Features dynamic model discovery, health checks, and fallback mechanisms.
 
 4. **Strict Policy Engine & Sandboxing**:
@@ -56,10 +61,10 @@
 
 5. **Dual-Agent Execution Paradigm**:
    - **Native Coding Agent**: Built-in turn-based agent loop with test/lint/typecheck repair cycles and configurable limits (`maxTurns`, `maxRepairCycles`).
-   - **External Agent Adapter (`externalAgent.ts`)**: Allows invoking external CLI harnesses (such as **OpenCode** or **Bionic**) as downstream reasoning engines while Wazir retains control-plane governance, scheduling, and logging.
+   - **External Agent Adapter (`externalAgent.ts`)**: Invokes an external CLI harness — currently **OpenCode**, auto-detected on `PATH` — as the reasoning engine for a task that explicitly opts in via `--agent opencode`, while Wazir retains control-plane governance, scheduling, and logging. Never auto-selected, so installing OpenCode can't silently change where an un-pinned task lands.
 
-6. **Model Context Protocol (MCP) Integration**:
-   - Built-in MCP client and registry, allowing standardized tools, prompts, and context servers to be mounted and governed under policy.
+6. **Model Context Protocol (MCP) — policy only, not yet wired**:
+   - `MCPClient` is implemented (`packages/core/src/services/mcpClient.ts`) but nothing in the task-execution path calls it yet. The only real MCP behavior today is that unapproved MCP servers are denied by the policy engine's `allowedMcpServers` list — no task can currently reach an actual MCP server through it.
 
 7. **Multi-Interface Delivery**:
    - Accessible via Command Line Interface (CLI: `wa ask`, `wa task plan`), REST API server, Web UI, and packaged desktop builds (macOS DMG).
@@ -68,11 +73,8 @@
 
 ## 3. Comparative Analysis
 
-- **Wazir vs. Bionic (Bionic GPT)**:
-  Bionic is an enterprise-oriented generative AI platform focusing on privacy-preserving document RAG, team collaboration, and RBAC behind corporate firewalls. Wazir, conversely, is an engineering-oriented meta-harness and task scheduler designed to orchestrate local coding agents, runtimes, and worker machines across developer infrastructure.
-
 - **Wazir vs. OpenCode**:
-  OpenCode is a terminal-based coding agent focused on multi-provider LLM coding assistance and autonomous code modification. Wazir operates at a higher abstraction level: Wazir includes adapters specifically designed to run OpenCode as a downstream execution worker while Wazir handles cluster routing, hardware resource allocation, and organizational policies.
+  OpenCode is a terminal-based coding agent focused on multi-provider LLM coding assistance and autonomous code modification. Wazir operates at a higher abstraction level: a task can opt into running OpenCode as its reasoning engine (`--agent opencode`) while Wazir still handles cluster routing, hardware resource allocation, and policy — or it can use Wazir's own native coding agent instead.
 
 - **Wazir vs. Antigravity (Google DeepMind)**:
   Antigravity is an enterprise-grade agentic development platform integrating deeply with IDEs, terminal workflows, subagent task trees (`research`, `self`), skills, and cloud frontier reasoning models. Wazir focuses on orchestrating local compute clusters, open-weight models, and local runtimes across multiple self-hosted machines.
@@ -84,15 +86,15 @@
 
 ## 4. Comprehensive Comparison Table
 
-| Feature / Dimension | Wazir | Bionic (Bionic GPT) | OpenCode | Antigravity (AGY) | Codex / Copilot |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Primary Category** | Local AI Meta-Harness & Distributed Control Plane | Enterprise Generative AI & Knowledge RAG Platform | Terminal / Repository Coding Agent | Agentic Pair Programming & Developer IDE/CLI Platform | Cloud Code Generation Model & Autocomplete Engine |
-| **Architectural Role** | Meta-orchestrator across multiple machines & runtimes | Enterprise application server for team chat & RAG | Autonomous task runner & code editing agent | Full-lifecycle agentic dev environment with subagents | Token-level code generation & inline assistant |
-| **Execution Topology** | **Distributed**: Central control plane + remote workers (DGX, Mac, PC) | **Server-Client**: Centralized server with web clients | **Local Single-Node**: Runs directly in local terminal/repo | **Host Environment**: Local CLI/IDE with cloud model orchestration | **Cloud SaaS**: Hosted API connected to IDE extensions |
-| **Model / Runtime Backends** | Pluggable local runtimes (Ollama, LM Studio) + cloud APIs | Local engines (vLLM, Ollama) & enterprise cloud APIs | Pluggable cloud/local providers (OpenAI, Anthropic, Ollama) | Frontier multimodal models (e.g. Gemini 3.8/2.0 series) | OpenAI cloud-hosted models (Codex / GPT-4o / o-series) |
-| **Resource & Hardware Scheduling** | **Yes**: VRAM, GPU, platform-aware scheduler with explainability | Basic load balancing across model endpoints | No (relies on provider API or single host) | Cloud-managed compute & resource scaling | Cloud-managed infrastructure |
-| **Agent Capabilities** | Native coding agent loop + external agent adapters | Conversational RAG agent, Q&A workflows | Autonomous multi-step code editing, bash tool execution | Multi-tier subagent delegation, persistent sessions, skills | Autocomplete, code fill-in-middle, single-turn/chat edits |
-| **Tool Ecosystem & Extensibility** | Native tool registry + **MCP (Model Context Protocol)** client | Document loaders, vector databases, search connectors | Shell commands, file tools, git tools | Custom Skills (`SKILL.md`), Rules, MCP sidecars, bash tools | Fixed IDE integrations, limited function calling / plugins |
-| **Security & Sandboxing** | Strict 3-tier policy engine (`safe`/`ask`/`deny`), local-only mode | Enterprise RBAC, multi-tenancy, data-at-rest encryption | Developer discretion / prompt confirmation | Permission prompts, workspace boundaries, secure telemetry | Enterprise privacy filters, copyright checkers |
-| **User Interfaces** | CLI (`wa`), REST API, Web UI, macOS DMG app | Responsive Web Chat UI & Admin Console | Terminal TUI / CLI | IDE extension (VS Code/JetBrains), standalone IDE, CLI (`agy`) | IDE plugins (VS Code, JetBrains, Visual Studio, Neovim) |
-| **Ideal Use Case** | Teams managing heterogeneous local GPUs, private compute, and multi-runtime pipelines | Companies needing private, on-premise ChatGPT/RAG for enterprise knowledge | Developers wanting a lightweight CLI coding agent in terminal | Developers needing deep autonomous agentic pair programming | Fast inline code completions and snippet generation |
+| Feature / Dimension | Wazir | OpenCode | Antigravity (AGY) | Codex / Copilot |
+| :--- | :--- | :--- | :--- | :--- |
+| **Primary Category** | Local AI Meta-Harness & Distributed Control Plane | Terminal / Repository Coding Agent | Agentic Pair Programming & Developer IDE/CLI Platform | Cloud Code Generation Model & Autocomplete Engine |
+| **Architectural Role** | Meta-orchestrator across multiple machines & runtimes | Autonomous task runner & code editing agent | Full-lifecycle agentic dev environment with subagents | Token-level code generation & inline assistant |
+| **Execution Topology** | **Distributed**: Central control plane + remote workers (DGX, Mac, PC) | **Local Single-Node**: Runs directly in local terminal/repo | **Host Environment**: Local CLI/IDE with cloud model orchestration | **Cloud SaaS**: Hosted API connected to IDE extensions |
+| **Model / Runtime Backends** | Pluggable local runtimes (Ollama, LM Studio); no OpenAI-compatible adapter yet | Pluggable cloud/local providers (OpenAI, Anthropic, Ollama) | Frontier multimodal models (e.g. Gemini 3.8/2.0 series) | OpenAI cloud-hosted models (Codex / GPT-4o / o-series) |
+| **Resource & Hardware Scheduling** | **Yes**: VRAM, GPU, platform-aware scheduler with explainability | No (relies on provider API or single host) | Cloud-managed compute & resource scaling | Cloud-managed infrastructure |
+| **Agent Capabilities** | Native coding agent loop; can delegate a task to OpenCode instead (`--agent opencode`) | Autonomous multi-step code editing, bash tool execution | Multi-tier subagent delegation, persistent sessions, skills | Autocomplete, code fill-in-middle, single-turn/chat edits |
+| **Tool Ecosystem & Extensibility** | Native tool registry; an MCP client exists but isn't wired into task execution yet (policy can only deny unapproved MCP servers) | Shell commands, file tools, git tools | Custom Skills (`SKILL.md`), Rules, MCP sidecars, bash tools | Fixed IDE integrations, limited function calling / plugins |
+| **Security & Sandboxing** | Strict 3-tier policy engine (`safe`/`ask`/`deny`), local-only mode | Developer discretion / prompt confirmation | Permission prompts, workspace boundaries, secure telemetry | Enterprise privacy filters, copyright checkers |
+| **User Interfaces** | CLI (`wa`), REST API, Web UI, macOS DMG app | Terminal TUI / CLI | IDE extension (VS Code/JetBrains), standalone IDE, CLI (`agy`) | IDE plugins (VS Code, JetBrains, Visual Studio, Neovim) |
+| **Ideal Use Case** | Teams managing heterogeneous local GPUs, private compute, and multi-runtime pipelines | Developers wanting a lightweight CLI coding agent in terminal | Developers needing deep autonomous agentic pair programming | Fast inline code completions and snippet generation |
