@@ -6,8 +6,8 @@ import chalk from 'chalk';
 const program = new Command();
 
 program
-  .name('mh')
-  .description('Rook Meta-Harness CLI')
+  .name('wa')
+  .description('Wazir CLI — control plane command line')
   .version('0.1.0');
 
 // computers command
@@ -18,10 +18,11 @@ const computersCmd = new Command()
 computersCmd
   .command('list')
   .description('List all registered computers')
-  .action(() => {
-    console.log(chalk.green('Computers:'));
-    console.log('  - dgx-primary (online)');
-    console.log('  - mac-m4max (online)');
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listComputers } = await import('./commands.js');
+    console.log(listComputers(engine));
   });
 
 computersCmd
@@ -30,10 +31,26 @@ computersCmd
   .description('Inspect a specific computer')
   .action((id) => {
     console.log(chalk.green(`Computer: ${id}`));
-    // Implementation will query API
   });
 
 program.addCommand(computersCmd);
+
+// workers command
+const workersCmd = new Command()
+  .name('workers')
+  .description('Manage workers');
+
+workersCmd
+  .command('list')
+  .description('List all workers')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listWorkers } = await import('./commands.js');
+    console.log(listWorkers(engine));
+  });
+
+program.addCommand(workersCmd);
 
 // runtimes command
 const runtimesCmd = new Command()
@@ -43,10 +60,11 @@ const runtimesCmd = new Command()
 runtimesCmd
   .command('list')
   .description('List available runtimes')
-  .action(() => {
-    console.log(chalk.green('Runtimes:'));
-    console.log('  - ollama (healthy)');
-    console.log('  - lmstudio (healthy)');
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listRuntimes } = await import('./commands.js');
+    console.log(listRuntimes(engine));
   });
 
 program.addCommand(runtimesCmd);
@@ -59,14 +77,48 @@ const modelsCmd = new Command()
 modelsCmd
   .command('list')
   .description('List available models')
-  .action(() => {
-    console.log(chalk.green('Models:'));
-    console.log('  - qwen3-coder (loaded)');
-    console.log('  - gemma-7b (loaded)');
-    console.log('  - nemotron-mini (available)');
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listModels } = await import('./commands.js');
+    console.log(listModels(engine));
   });
 
 program.addCommand(modelsCmd);
+
+// init command
+program
+  .command('init')
+  .description('Initialize Wazir control plane')
+  .option('--force', 'Force re-initialization')
+  .action(async (options) => {
+    const { initCommand } = await import('./init.js');
+    const result = await initCommand(options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+// doctor command
+program
+  .command('doctor')
+  .description('Check system health')
+  .action(async () => {
+    const { doctorCommand } = await import('./doctor.js');
+    const result = await doctorCommand();
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+// status command
+program
+  .command('status')
+  .description('Show system status')
+  .action(async () => {
+    const { statusCommand } = await import('./status.js');
+    const result = await statusCommand();
+    console.log(result.output);
+    process.exit(result.code);
+  });
 
 // task command
 const taskCmd = new Command()
@@ -79,46 +131,54 @@ taskCmd
   .option('--computer <id>', 'Target specific computer')
   .option('--model <name>', 'Use specific model')
   .option('--runtime <name>', 'Use specific runtime')
-  .option('--priority <level>', 'Priority: low, normal, high, critical', 'normal')
-  .option('--local-only', 'Only run on local computers')
+  .option('--agent <name>', 'Use specific agent')
+  .option('--max-turns <number>', 'Maximum turns per task')
+  .option('--type <type>', 'Task type: chat, coding, research, etc.')
+  .option('--expected-files <files>', 'Expected changed files (comma-separated)')
+  .option('--json', 'Output in JSON format')
   .description('Run a new task')
   .action(async (prompt, options) => {
-    console.log(chalk.green('Submitting task...'));
-    
-    // Implementation will call API
-    const task = {
-      input: prompt,
-      priority: options.priority,
-      execution: {
-        targetComputer: options.computer,
-        targetModel: options.model,
-        targetRuntime: options.runtime
-      }
-    };
-
-    console.log(JSON.stringify(task, null, 2));
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { runTaskCommand } = await import('./commands.js');
+    const result = await runTaskCommand(
+      engine,
+      prompt,
+      {
+        type: options.type as any,
+        model: options.model,
+        agent: options.agent,
+        maxTurns: options.maxTurns ? Number(options.maxTurns) : undefined,
+        expectedFiles: options.expectedFiles
+          ? options.expectedFiles.split(',').map((s) => s.trim())
+          : undefined,
+        json: options.json,
+      },
+    );
+    console.log(result.output);
+    process.exit(result.code);
   });
 
 taskCmd
   .command('plan')
   .argument('<prompt>', 'Task prompt or description')
+  .option('--model <name>', 'Use specific model')
+  .option('--agent <name>', 'Use specific agent')
+  .option('--type <type>', 'Task type: chat, coding, research, etc.')
+  .option('--json', 'Output in JSON format')
   .description('Show scheduling decision without executing')
-  .action(async (prompt) => {
-    console.log(chalk.green('Planning task execution...'));
-    
-    // Implementation will call API /tasks/plan endpoint
-    console.log(`Task: ${prompt}`);
-    console.log('');
-    console.log('Selected computer: dgx-primary');
-    console.log('Selected runtime: ollama');
-    console.log('Selected model: qwen3-coder');
-    console.log('');
-    console.log('Reasons:');
-    console.log('  ✓ required reasoning capability');
-    console.log('  ✓ required coding capability');
-    console.log('  ✓ sufficient GPU memory');
-    console.log('  ✓ local-only policy satisfied');
-    console.log('  ✓ model already loaded');
+  .action(async (prompt, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { planTaskCommand } = await import('./commands.js');
+    const result = await planTaskCommand(engine, prompt, {
+      type: options.type as any,
+      model: options.model,
+      agent: options.agent,
+      json: options.json,
+    });
+    console.log(result.output);
+    process.exit(result.code);
   });
 
 taskCmd
@@ -139,24 +199,127 @@ const execCmd = new Command()
 execCmd
   .command('list')
   .description('List recent executions')
-  .action(() => {
-    console.log(chalk.green('Executions:'));
-    console.log('  - exec-001 completed in 42s');
-    console.log('  - exec-002 failed (timeout)');
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listExecutions } = await import('./commands.js');
+    console.log(await listExecutions(engine, options.json ?? false));
   });
 
 execCmd
   .command('inspect')
   .argument('<id>', 'Execution ID')
   .description('Inspect execution details')
-  .action((id) => {
-    console.log(chalk.green(`Execution ${id}:`));
-    console.log('  Status: completed');
-    console.log('  Duration: 42315ms');
-    console.log('  Tokens/sec: 28.7');
+  .option('--json', 'Output in JSON format')
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { inspectExecution } = await import('./commands.js');
+    console.log(await inspectExecution(engine, id, options.json ?? false));
+  });
+
+execCmd
+  .command('replay')
+  .argument('<id>', 'Execution ID')
+  .description('Replay an execution from recorded events')
+  .action(async (id) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { replayExecution } = await import('./commands.js');
+    console.log(await replayExecution(engine, id));
   });
 
 program.addCommand(execCmd);
+
+// history command
+const historyCmd = new Command()
+  .name('history')
+  .description('View command history (blocks)');
+
+historyCmd
+  .command('list')
+  .description('List recent blocks')
+  .option('--status <status>', 'Filter by status: running, success, failed, cancelled')
+  .option('--command <substring>', 'Filter by command substring')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listHistory } = await import('./commands.js');
+    console.log(await listHistory(engine, options));
+  });
+
+historyCmd
+  .command('inspect')
+  .argument('<id>', 'Block ID')
+  .description('Inspect block details')
+  .option('--json', 'Output in JSON format')
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { inspectHistory } = await import('./commands.js');
+    console.log(await inspectHistory(engine, id, options.json ?? false));
+  });
+
+program.addCommand(historyCmd);
+
+// context command
+const contextCmd = new Command()
+  .name('context')
+  .description('Manage active context blocks');
+
+contextCmd
+  .command('add')
+  .argument('<blockId>', 'Block ID to add to context')
+  .description('Add a block to the active context')
+  .action(async (blockId) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { addContext } = await import('./commands.js');
+    const result = await addContext(engine, blockId);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+contextCmd
+  .command('remove')
+  .argument('<blockId>', 'Block ID to remove from context')
+  .description('Remove a block from the active context')
+  .action(async (blockId) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { removeContext } = await import('./commands.js');
+    const result = await removeContext(engine, blockId);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+contextCmd
+  .command('list')
+  .description('List active context blocks with token estimate')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listContext } = await import('./commands.js');
+    const result = await listContext(engine);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+contextCmd
+  .command('clear')
+  .description('Clear all active context blocks')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { clearContextCommand } = await import('./commands.js');
+    const result = await clearContextCommand(engine);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+program.addCommand(contextCmd);
 
 // benchmark command
 const benchCmd = new Command()
@@ -166,14 +329,100 @@ const benchCmd = new Command()
 benchCmd
   .command('run')
   .argument('[model]', 'Model to benchmark (all if not specified)')
+  .option('--prompt <text>', 'Custom prompt for benchmark')
   .description('Run benchmarks on available models')
-  .action(async (model) => {
-    console.log(chalk.green(`Benchmarking ${model || 'all models'}...`));
-    
-    // Implementation will call API
+  .action(async (model, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { runBenchmark } = await import('./commands.js');
+    console.log(await runBenchmark(engine, model, options.prompt));
   });
 
 program.addCommand(benchCmd);
+
+// discover command
+const discoverCmd = new Command()
+  .name('discover')
+  .description('Discover runtimes and models');
+
+discoverCmd
+  .command('all')
+  .description('Run full discovery')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { discover } = await import('./commands.js');
+    console.log(await discover(engine));
+  });
+
+program.addCommand(discoverCmd);
+
+// agents command
+const agentsCmd = new Command()
+  .name('agents')
+  .description('Manage agents');
+
+agentsCmd
+  .command('list')
+  .description('List registered agents')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listAgents } = await import('./commands.js');
+    console.log(listAgents(engine));
+  });
+
+program.addCommand(agentsCmd);
+
+// tools command
+const toolsCmd = new Command()
+  .name('tools')
+  .description('Manage tools');
+
+toolsCmd
+  .command('list')
+  .description('List available tools')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listTools } = await import('./commands.js');
+    console.log(listTools(engine));
+  });
+
+program.addCommand(toolsCmd);
+
+// policy command
+const policyCmd = new Command()
+  .name('policy')
+  .description('Manage and inspect policies');
+
+policyCmd
+  .command('inspect')
+  .description('Inspect current policy rules')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { inspectPolicy } = await import('./commands.js');
+    console.log(inspectPolicy(engine));
+  });
+
+program.addCommand(policyCmd);
+
+// config command
+const configCmd = new Command()
+  .name('config')
+  .description('Show configuration');
+
+configCmd
+  .command('show')
+  .description('Display current configuration')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    console.log(JSON.stringify(engine.config, null, 2));
+  });
+
+program.addCommand(configCmd);
 
 // ask command - simplified interface
 program
@@ -186,7 +435,6 @@ program
   .action(async (prompt, options) => {
     console.log(chalk.green(`Asking: ${prompt}`));
     
-    // Implementation will call API
     const response = {
       answer: '[Response from selected model]',
       metadata: {
@@ -198,4 +446,85 @@ program
     console.log('\n' + chalk.cyan(response.answer));
   });
 
+// chat command — interactive fleet coding agent TUI
+program
+  .command('chat')
+  .alias('fleet')
+  .description('Open interactive fleet-scale coding agent TUI session')
+  .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
+  .option('--no-worktrees', 'Disable git worktree isolation')
+  .option('--auto-merge', 'Automatically merge completed agent branches into main')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { FleetTui } = await import('./tui/index.js');
+    const tui = new FleetTui({
+      engine,
+      concurrencyLimit: options.concurrency ? Number(options.concurrency) : 4,
+      useWorktrees: options.worktrees !== false,
+      autoMerge: options.autoMerge === true,
+    });
+    await tui.start();
+    await tui.waitForExit();
+  });
+
+// jobs command — manage distributed fleet jobs
+const jobsCmd = new Command()
+  .name('jobs')
+  .alias('job')
+  .description('Manage fleet jobs and DAGs');
+
+jobsCmd
+  .command('list')
+  .description('List all jobs')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listJobs } = await import('./commands.js');
+    console.log(listJobs(engine));
+  });
+
+jobsCmd
+  .command('inspect')
+  .argument('<id>', 'Job ID')
+  .description('Inspect a job and its usage rollup')
+  .action(async (id) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { inspectJob } = await import('./commands.js');
+    console.log(await inspectJob(engine, id));
+  });
+
+jobsCmd
+  .command('merge')
+  .argument('<id>', 'Job ID')
+  .option('--target <branch>', 'Target branch to merge into')
+  .description('Merge all task branches for a job into the target branch')
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { mergeJob } = await import('./commands.js');
+    console.log(await mergeJob(engine, id, options.target));
+  });
+
+program.addCommand(jobsCmd);
+
+// explain command — accepts a bare execution id, a block ref (@123), or a
+// job ref (@job:x), and renders the scheduling decision already recorded
+// at execution time.
+program
+  .command('explain')
+  .argument('<ref>', 'Execution id, @<blockId>, or @job:<id>')
+  .option('--json', 'Output in JSON format')
+  .description('Explain the scheduling decision behind an execution, block, or job')
+  .action(async (ref, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { explainCommand } = await import('./commands.js');
+    const result = await explainCommand(engine, ref, options.json);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
 program.parse();
+

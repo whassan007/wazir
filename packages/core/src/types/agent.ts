@@ -2,7 +2,7 @@ import type { ModelRequirements } from './model.js';
 import type { TaskType } from './task.js';
 import type { ToolPermission } from './tool.js';
 import type { ChatMessage } from './conversation.js';
-import type { GenerationEvent } from '@rook/runtimes-interfaces';
+import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import type { ToolResult } from './tool.js';
 
 export interface AgentDescriptor {
@@ -54,6 +54,8 @@ export interface AgentRunRequest {
   maxTurns?: number;
   /** Set to true by the host when the user requested cancellation. */
   isCancelled?: () => boolean;
+  /** Returns any pending mid-run user instruction, drained once per turn. */
+  getSteeringInstruction?: () => string | undefined;
 }
 
 /**

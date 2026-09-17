@@ -1,4 +1,4 @@
-import type { CheckRunRecord, EvaluationResult, ExecutionRecord } from '@rook/core';
+import type { CheckRunRecord, EvaluationResult, ExecutionRecord } from '@wazir/core';
 
 export interface EvaluationOptions {
   /** If set, the task is only successful when each of these files changed. */

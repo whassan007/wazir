@@ -1,27 +1,28 @@
 {
-  "name": "@rook/cli",
+  "name": "@wazir/cli",
   "version": "0.1.0",
-  "description": "Rook CLI — the control plane command line",
+  "description": "Wazir CLI — control plane command line",
   "main": "./dist/index.js",
   "bin": {
-    "rook": "./dist/index.js"
+    "wa": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc --build",
     "dev": "tsc --build && node dist/index.js"
   },
   "dependencies": {
-    "@rook/agents": "*",
-    "@rook/core": "*",
-    "@rook/evaluation": "*",
-    "@rook/registry": "*",
-    "@rook/runtimes-interfaces": "*",
-    "@rook/runtimes-lmstudio": "*",
-    "@rook/runtimes-ollama": "*",
-    "@rook/scheduler": "*",
-    "@rook/shared": "*",
-    "@rook/tools": "*",
-    "@rook/workers": "*",
+    "@wazir/agents": "*",
+    "@wazir/core": "*",
+    "@wazir/database": "*",
+    "@wazir/evaluation": "*",
+    "@wazir/registry": "*",
+    "@wazir/runtimes-interfaces": "*",
+    "@wazir/runtimes-lmstudio": "*",
+    "@wazir/runtimes-ollama": "*",
+    "@wazir/scheduler": "*",
+    "@wazir/shared": "*",
+    "@wazir/tools": "*",
+    "@wazir/workers": "*",
     "chalk": "^5.3.0",
     "commander": "^12.0.0"
   },

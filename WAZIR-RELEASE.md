@@ -1,26 +1,26 @@
-Rook source directory:
-/home/wael/Code/Rook
+Wazir source directory:
+/home/wael/Code/Wazir
 
 Git repository:
-/home/wael/Code/Rook (local)
+/home/wael/Code/Wazir (local)
 
 Git commit SHA:
-2c94dd4
+6cd51c3
 
 Git branch:
 master
 
 Git tag:
-(initial)
+initial
 
 GitHub repository:
 Not applicable / none created yet
 
 Hugging Face repository:
-whassan/rook
+whassan/wazir
 
 Hugging Face revision:
-2c94dd4
+6cd51c3
 
 Deployment target:
 Not deployed (pending)

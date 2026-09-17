@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.github
+docs
+Docs
+tests
+**/tests
+scripts
+*.md
+*.dmg
+.env
+.env.local

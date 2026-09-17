@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { Tool, ToolExecutionContext, ToolResult } from '@rook/core';
+import type { Tool, ToolExecutionContext, ToolResult } from '@wazir/core';
 import { assertInsideProject, errorMessage, IGNORED_DIRECTORIES } from './paths.js';
 
 const MAX_FILE_BYTES = 1024 * 1024;
@@ -67,7 +67,7 @@ export const globTool: Tool = {
   async execute(input, ctx): Promise<ToolResult> {
     const started = Date.now();
     try {
-      const searchRoot = assertInsideProject(ctx.projectRoot, String(input.path ?? '.'));
+      const searchRoot = await assertInsideProject(ctx.projectRoot, String(input.path ?? '.'));
       const regex = globToRegExp(String(input.pattern));
       const matches: string[] = [];
       for await (const file of walkFiles(searchRoot, '')) {

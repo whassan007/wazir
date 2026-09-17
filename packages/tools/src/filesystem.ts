@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { Tool, ToolExecutionContext, ToolResult } from '@rook/core';
-import { assertInsideProject } from './paths.js';
+import type { Tool, ToolExecutionContext, ToolResult } from '@wazir/core';
+import { assertInsideProject, errorMessage } from './paths.js';
 
 const MAX_READ_BYTES = 1024 * 1024;
 
@@ -25,7 +25,7 @@ export const readTool: Tool = {
   async execute(input, ctx): Promise<ToolResult> {
     const started = Date.now();
     try {
-      const resolved = assertInsideProject(ctx.projectRoot, String(input.path));
+      const resolved = await assertInsideProject(ctx.projectRoot, String(input.path));
       const stat = await fs.stat(resolved);
       if (stat.size > MAX_READ_BYTES) {
         return { ok: false, output: '', error: `file too large (${stat.size} bytes)`, durationMs: Date.now() - started };
@@ -67,7 +67,7 @@ export const writeTool: Tool = {
   async execute(input, ctx): Promise<ToolResult> {
     const started = Date.now();
     try {
-      const resolved = assertInsideProject(ctx.projectRoot, String(input.path));
+      const resolved = await assertInsideProject(ctx.projectRoot, String(input.path));
       await fs.mkdir(path.dirname(resolved), { recursive: true });
       await fs.writeFile(resolved, String(input.content ?? ''), 'utf8');
       return { ok: true, output: `wrote ${resolved}`, durationMs: Date.now() - started };
@@ -98,7 +98,7 @@ export const editTool: Tool = {
   async execute(input, ctx): Promise<ToolResult> {
     const started = Date.now();
     try {
-      const resolved = assertInsideProject(ctx.projectRoot, String(input.path));
+      const resolved = await assertInsideProject(ctx.projectRoot, String(input.path));
       const raw = await fs.readFile(resolved, 'utf8');
       const oldString = String(input.oldString ?? '');
       const newString = String(input.newString ?? '');

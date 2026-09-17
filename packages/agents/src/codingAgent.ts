@@ -6,7 +6,7 @@ import type {
   AgentRuntime,
   AgentTurn,
   ChatMessage,
-} from '@rook/core';
+} from '@wazir/core';
 
 export interface CodingAgentOptions {
   maxTurns?: number;
@@ -20,7 +20,7 @@ export interface CodingAgentOptions {
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
 const FILE_TOOLS = new Set(['write', 'edit']);
 
-interface ParsedAction {
+export interface ParsedAction {
   action: string;
   content?: string;
   tool?: string;
@@ -28,38 +28,100 @@ interface ParsedAction {
   summary?: string;
 }
 
-function parseAction(text: string): ParsedAction | null {
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0;
+/**
+ * Re-balances brackets outside of string literals. Local models frequently
+ * emit `{"content":["a","b"}` or `{"content":["a","b"}]`; this closes what
+ * is still open and drops closers that do not match.
+ */
+function repairBrackets(text: string): string {
+  const stack: string[] = [];
+  let out = '';
   let inString = false;
   let escape = false;
-  for (let i = start; i < text.length; i++) {
-    const char = text[i];
+  for (const char of text) {
     if (inString) {
+      out += char;
       if (escape) escape = false;
       else if (char === '\\') escape = true;
       else if (char === '"') inString = false;
       continue;
     }
-    if (char === '"') inString = true;
-    else if (char === '{') depth += 1;
-    else if (char === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        try {
-          const obj = JSON.parse(text.slice(start, i + 1)) as Record<string, unknown>;
-          if (obj && typeof obj.action === 'string') {
-            return obj as unknown as ParsedAction;
-          }
-        } catch {
-          return null;
+    if (char === '"') {
+      inString = true;
+      out += char;
+    } else if (char === '{' || char === '[') {
+      stack.push(char === '{' ? '}' : ']');
+      out += char;
+    } else if (char === '}' || char === ']') {
+      if (stack.length === 0) continue;
+      const expected = stack[stack.length - 1];
+      if (char !== expected) {
+        out += expected;
+        stack.pop();
+        if (stack.length > 0 && stack[stack.length - 1] === char) {
+          stack.pop();
+          out += char;
         }
-        return null;
+        continue;
       }
+      stack.pop();
+      out += char;
+    } else {
+      out += char;
+    }
+  }
+  if (inString) out += '"';
+  while (stack.length > 0) out += stack.pop();
+  return out;
+}
+
+function tryParseObject(candidate: string): Record<string, unknown> | null {
+  for (const attempt of [candidate, repairBrackets(candidate)]) {
+    try {
+      const obj = JSON.parse(attempt) as unknown;
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        return obj as Record<string, unknown>;
+      }
+    } catch {
+      // try the next candidate
     }
   }
   return null;
+}
+
+export function parseAction(text: string): ParsedAction | null {
+  const unfenced = text.replace(/```(?:json)?/gi, '');
+  const start = unfenced.indexOf('{');
+  const end = unfenced.lastIndexOf('}');
+  if (start === -1 || end <= start) return null;
+
+  const obj = tryParseObject(unfenced.slice(start, end + 1));
+  if (!obj || typeof obj.action !== 'string') return null;
+
+  if (Array.isArray(obj.content)) {
+    obj.content = obj.content.map((item) => String(item).trim()).filter(Boolean).join('\n');
+  }
+  if (Array.isArray(obj.summary)) {
+    obj.summary = obj.summary.map((item) => String(item).trim()).filter(Boolean).join('\n');
+  }
+  return obj as unknown as ParsedAction;
+}
+
+/** Accepts `{"action":"read",...}` as shorthand for `{"action":"tool","tool":"read",...}`. */
+export function normalizeAction(action: ParsedAction | null, toolNames: Set<string>): ParsedAction | null {
+  if (!action) return null;
+  if (action.action === 'tool') {
+    const alias = (action as unknown as { name?: unknown }).name;
+    if (!action.tool && typeof alias === 'string') {
+      action.tool = alias;
+    }
+    return action;
+  }
+  if (toolNames.has(action.action)) {
+    const { action: tool, input, ...rest } = action as ParsedAction & Record<string, unknown>;
+    return { action: 'tool', tool, input: input ?? (rest as Record<string, unknown>) };
+  }
+  return action;
 }
 
 export function buildSystemPrompt(projectRoot: string, tools: AgentRuntime['tools'], extra?: string): string {
@@ -67,7 +129,7 @@ export function buildSystemPrompt(projectRoot: string, tools: AgentRuntime['tool
     .map((t) => `- ${t.name}: ${t.description} input: ${JSON.stringify(t.inputSchema).slice(0, 240)}`)
     .join('\n');
   return [
-    "You are Rook's native coding agent, executing inside a sandboxed project.",
+    "You are Wazir's native coding agent, executing inside a sandboxed project.",
     'You act in phases: plan, inspect, implement, test, debug, repair, verify, complete.',
     'Each turn you MUST output exactly one JSON object and nothing else. No markdown fences, no commentary.',
     'Allowed shapes:',
@@ -90,21 +152,21 @@ export function buildSystemPrompt(projectRoot: string, tools: AgentRuntime['tool
 }
 
 /**
- * Native Rook coding agent.
+ * Native Wazir coding agent.
  *
  * Loop: PLAN → INSPECT → IMPLEMENT → TEST → DEBUG → REPAIR → VERIFY → COMPLETE
  *
  * - The model proposes one JSON action per turn (tool call, plan, or done).
  * - Every tool call is executed through the policy-gated runtime — the model
  *   can never bypass policy.
- * - Verification is deterministic: Rook itself re-runs the checks after the
+ * - Verification is deterministic: Wazir itself re-runs the checks after the
  *   model reports done, and drives bounded repair cycles on failure.
  */
 export class CodingAgent implements AgentAdapter {
   readonly descriptor: AgentDescriptor = {
-    name: 'rook-coding',
+    name: 'wazir-coding',
     version: '0.1.0',
-    description: 'Native Rook coding agent: plan, inspect, implement, test, repair, verify.',
+    description: 'Native Wazir coding agent: plan, inspect, implement, test, repair, verify.',
     capabilities: ['coding', 'agenticExecution', 'codeAnalysis'],
     requiredTools: ['read', 'write', 'edit', 'search', 'glob', 'shell', 'git', 'test', 'lint', 'typecheck', 'build'],
     modelRequirements: {
@@ -141,6 +203,10 @@ export class CodingAgent implements AgentAdapter {
     request: AgentRunRequest,
     runtime: AgentRuntime,
   ): AsyncIterable<AgentTurn> {
+    // A caller-supplied per-task limit overrides the agent's own default —
+    // `this.maxTurns` must stay untouched since one CodingAgent instance is
+    // shared across many concurrent/sequential runs.
+    const maxTurns = request.maxTurns ?? this.maxTurns;
     const messages: ChatMessage[] = [
       { role: 'system', content: buildSystemPrompt(request.projectRoot, runtime.tools, this.systemPromptExtra) },
       {
@@ -174,8 +240,17 @@ export class CodingAgent implements AgentAdapter {
       return content;
     };
 
+    const toolNames = new Set(runtime.tools.map((t) => t.name));
+    const readAction = (raw: string): ParsedAction | null => normalizeAction(parseAction(raw), toolNames);
+
     const pushAssistant = (content: string): void => {
       messages.push({ role: 'assistant', content });
+    };
+
+    // Chat templates treat a trailing assistant message as finished, so every
+    // model turn must be preceded by a user message or the model replies with nothing.
+    const pushContinue = (content: string): void => {
+      messages.push({ role: 'user', content: `${content} Respond with exactly one JSON object.` });
     };
 
     const pushToolResult = (tool: string, result: { ok: boolean; output: string; error?: string }): void => {
@@ -192,7 +267,7 @@ export class CodingAgent implements AgentAdapter {
       if (request.isCancelled?.()) break;
       const raw = await modelTurn();
       turnsUsed += 1;
-      const action = parseAction(raw);
+      const action = readAction(raw);
       if (!action) {
         correctionCount += 1;
         messages.push({ role: 'user', content: 'Invalid response. Respond with exactly one JSON object as specified.' });
@@ -202,6 +277,7 @@ export class CodingAgent implements AgentAdapter {
       if (action.action === 'plan' && action.content) {
         plan = action.content;
         yield { kind: 'message', content: `Plan: ${plan}` };
+        pushContinue('Plan accepted. Execute it now, one tool call per turn.');
         break;
       }
       if (action.action === 'done' || action.action === 'answer') {
@@ -222,11 +298,16 @@ export class CodingAgent implements AgentAdapter {
 
     // ==================== WORK (inspect → implement → test → debug → repair) ====================
     yield { kind: 'phase', phase: 'implement' as AgentPhase };
-    while (turnsUsed < this.maxTurns && !modelSummary) {
+    while (turnsUsed < maxTurns && !modelSummary) {
       if (request.isCancelled?.()) break;
+      const steering = request.getSteeringInstruction?.();
+      if (steering) {
+        yield { kind: 'message', content: `[steered] ${steering}` };
+        pushContinue(`User follow-up instruction: ${steering}`);
+      }
       const raw = await modelTurn();
       turnsUsed += 1;
-      const action = parseAction(raw);
+      const action = readAction(raw);
 
       if (!action) {
         correctionCount += 1;
@@ -250,6 +331,7 @@ export class CodingAgent implements AgentAdapter {
       }
       if (action.action === 'plan') {
         plan = action.content ?? plan;
+        pushContinue('Plan noted. Execute it now, one tool call per turn.');
         continue;
       }
       if (action.action === 'tool' && action.tool) {
@@ -314,12 +396,17 @@ export class CodingAgent implements AgentAdapter {
       });
 
       // bounded repair loop
-      const repairLimit = Math.min(8, Math.max(4, this.maxTurns - turnsUsed));
+      const repairLimit = Math.min(8, Math.max(4, maxTurns - turnsUsed));
       for (let i = 0; i < repairLimit; i++) {
         if (request.isCancelled?.()) break;
+        const steering = request.getSteeringInstruction?.();
+        if (steering) {
+          yield { kind: 'message', content: `[steered] ${steering}` };
+          pushContinue(`User follow-up instruction: ${steering}`);
+        }
         const raw = await modelTurn();
         turnsUsed += 1;
-        const action = parseAction(raw);
+        const action = readAction(raw);
         if (!action) {
           messages.push({ role: 'user', content: 'Invalid response. Respond with exactly one JSON object as specified.' });
           continue;

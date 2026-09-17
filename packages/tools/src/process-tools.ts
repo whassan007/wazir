@@ -1,4 +1,6 @@
-import type { Tool, ToolExecutionContext, ToolResult } from '@rook/core';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import type { Tool, ToolResult } from '@wazir/core';
 import { errorMessage } from './paths.js';
 import { runFile, runShell } from './process.js';
 
@@ -69,11 +71,23 @@ export const gitTool: Tool = {
 };
 
 interface CheckToolInput {
-  command?: string;
+  script?: string;
   timeoutMs?: number;
 }
 
-function makeCheckTool(name: string, description: string, defaultCommand: string, permission: 'test_run' | 'build_run'): Tool {
+async function readProjectScripts(projectRoot: string): Promise<Record<string, string>> {
+  try {
+    const raw = await fs.readFile(path.join(projectRoot, 'package.json'), 'utf8');
+    const pkg = JSON.parse(raw) as { scripts?: unknown };
+    return pkg.scripts && typeof pkg.scripts === 'object' ? (pkg.scripts as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+// Check tools are auto-allowed by policy, so they must never run caller-supplied
+// shell text: only a script name that already exists in package.json is accepted.
+function makeCheckTool(name: string, description: string, defaultScript: string, permission: 'test_run' | 'build_run'): Tool {
   return {
     descriptor: {
       name,
@@ -81,7 +95,10 @@ function makeCheckTool(name: string, description: string, defaultCommand: string
       inputSchema: {
         type: 'object',
         properties: {
-          command: { type: 'string', description: `Override command (default: ${defaultCommand})` },
+          script: {
+            type: 'string',
+            description: `npm script name from package.json to run instead of '${defaultScript}'. Must already be defined in the project; arbitrary commands are rejected.`,
+          },
           timeoutMs: { type: 'number', description: 'Timeout in milliseconds (default 300000)' },
         },
       },
@@ -90,10 +107,20 @@ function makeCheckTool(name: string, description: string, defaultCommand: string
       environment: 'local',
     },
     async execute(input: CheckToolInput, ctx): Promise<ToolResult> {
-      const command = typeof input.command === 'string' && input.command.trim() ? input.command.trim() : defaultCommand;
       const started = Date.now();
+      const script = typeof input.script === 'string' && input.script.trim() ? input.script.trim() : defaultScript;
+      const scripts = await readProjectScripts(ctx.projectRoot);
+      if (!Object.prototype.hasOwnProperty.call(scripts, script)) {
+        return {
+          ok: false,
+          output: '',
+          error: `missing script: '${script}' is not defined in package.json scripts; refusing to run an arbitrary command`,
+          durationMs: Date.now() - started,
+        };
+      }
+      const command = `npm run ${script}`;
       try {
-        const result = await runShell(command, {
+        const result = await runFile('npm', ['run', script], {
           cwd: ctx.projectRoot,
           timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : 300_000,
           env: ctx.env,
@@ -108,28 +135,28 @@ function makeCheckTool(name: string, description: string, defaultCommand: string
 
 export const testTool = makeCheckTool(
   'test',
-  'Run the project test suite (default: npm test).',
-  'npm test',
+  'Run the project test suite (npm script "test").',
+  'test',
   'test_run',
 );
 
 export const lintTool = makeCheckTool(
   'lint',
-  'Run the project linter (default: npm run lint).',
-  'npm run lint',
+  'Run the project linter (npm script "lint").',
+  'lint',
   'build_run',
 );
 
 export const typecheckTool = makeCheckTool(
   'typecheck',
-  'Run the project type checker (default: npm run typecheck).',
-  'npm run typecheck',
+  'Run the project type checker (npm script "typecheck").',
+  'typecheck',
   'build_run',
 );
 
 export const buildTool = makeCheckTool(
   'build',
-  'Build the project (default: npm run build).',
-  'npm run build',
+  'Build the project (npm script "build").',
+  'build',
   'build_run',
 );

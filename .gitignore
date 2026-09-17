@@ -1,10 +1,20 @@
-# Rook project .gitignore
+# Wazir project .gitignore
 
 # Node.js / npm
 node_modules/
 dist/
 build/
 coverage/
+*.tsbuildinfo
+# TS output has occasionally leaked into src/ instead of dist/ from a stale
+# tsconfig (found and cleaned up in packages/shared) — no package here hand-
+# writes .js/.d.ts under src/, so these are always compiled output. Leading
+# **/ is required so this matches at any depth (packages/*/src/...), not
+# just a top-level ./src/.
+**/src/**/*.js
+**/src/**/*.js.map
+**/src/**/*.d.ts
+**/src/**/*.d.ts.map
 
 # IDE / editors
 .vscode/
@@ -34,6 +44,7 @@ temp/
 *.cache
 *.zip
 *.tar.gz
+*.dmg
 
 # Other
 .DS_Store

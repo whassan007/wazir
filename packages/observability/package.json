@@ -1,9 +1,9 @@
 {
-  "name": "@rook/observability",
+  "name": "@wazir/observability",
   "version": "0.1.0",
-  "description": "Structured logging and metrics for the Rook meta-harness",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "description": "Structured logging and metrics for the Wazir meta-harness",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit"

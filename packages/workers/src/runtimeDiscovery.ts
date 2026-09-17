@@ -4,9 +4,9 @@ import type {
   RuntimeAdapter,
   RuntimeCapabilities,
   RuntimeInfo,
-} from '@rook/runtimes-interfaces';
-import { createOllamaAdapter } from '@rook/runtimes-ollama';
-import { createLMStudioAdapter } from '@rook/runtimes-lmstudio';
+} from '@wazir/runtimes-interfaces';
+import { createOllamaAdapter } from '@wazir/runtimes-ollama';
+import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 
 export interface DiscoveredRuntime {
   id: string;

@@ -1,4 +1,4 @@
-import type { Tool, ToolDescriptor, ToolResult } from '@rook/core';
+import type { Tool, ToolDescriptor, ToolResult } from '@wazir/core';
 import { editTool, readTool, writeTool } from './filesystem.js';
 import { globTool, searchTool } from './search.js';
 import { buildTool, gitTool, lintTool, shellTool, testTool, typecheckTool } from './process-tools.js';

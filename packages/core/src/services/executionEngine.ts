@@ -40,15 +40,17 @@ export class ExecutionEngine {
   private readonly records = new Map<string, ExecutionRecord>();
   private readonly persist?: (record: ExecutionRecord) => void | Promise<void>;
   private readonly idPrefix: string;
+  readonly ready: Promise<void>;
 
   constructor(options: ExecutionEngineOptions = {}) {
     this.persist = options.persist;
     this.idPrefix = options.idPrefix ?? 'exec';
-    void options.load?.().then((loaded) => {
+    this.ready = Promise.resolve(options.load?.()).then((loaded) => {
+      if (!loaded) return;
       for (const record of loaded) {
         this.records.set(record.execution.id, record);
       }
-    });
+    }).catch(() => {});
   }
 
   async create(params: {
@@ -234,7 +236,8 @@ export class ExecutionEngine {
   }
 
   async listByTask(taskId: string): Promise<ExecutionRecord[]> {
-    return this.list().filter((r) => r.execution.taskId === taskId);
+    const records = await this.list();
+    return records.filter((r) => r.execution.taskId === taskId);
   }
 
   async events(executionId: string): Promise<ExecutionEvent[]> {

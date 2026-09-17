@@ -1,0 +1,236 @@
+import { describe, it, expect, afterEach } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  AgentRegistry,
+  ComputerRegistry,
+  ContextCompiler,
+  ExecutionEngine,
+  ModelRegistry,
+  PolicyEngine,
+  RuntimeRegistry,
+  Scheduler,
+} from '@wazir/core';
+import { ToolRegistry, defaultTools } from '@wazir/tools';
+import { createCodingAgent } from '@wazir/agents';
+import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
+import type { Worker } from '@wazir/workers';
+import { executeTask } from '../src/run.js';
+import type { RookEngine } from '../src/engine.js';
+
+/**
+ * Real "Task -> Result" end-to-end test, replacing the placeholder that
+ * used to live at tests/integration/endToEnd.test.ts (`expect(true).toBe
+ * (true)`, with a comment saying full coverage "would require mocking all
+ * dependencies"). This builds an actual RookEngine (real PolicyEngine, real
+ * Scheduler, real ExecutionEngine, real ToolRegistry running real
+ * filesystem/check tools against a scratch project directory) and only
+ * fakes the one thing that's genuinely external: the model itself.
+ */
+async function buildTestEngine(projectRoot: string): Promise<RookEngine> {
+  const computers = new ComputerRegistry();
+  const runtimes = new RuntimeRegistry();
+  const models = new ModelRegistry();
+  const agents = new AgentRegistry();
+  const tools = new ToolRegistry(defaultTools);
+  const compiler = new ContextCompiler();
+  const executions = new ExecutionEngine();
+
+  computers.register({
+    id: 'local',
+    name: 'test-computer',
+    type: 'workstation',
+    local: true,
+    os: { platform: os.platform(), architecture: os.arch(), version: os.release() },
+    hardware: { cpu: 'test-cpu', cpuCores: 4, memoryGB: 16 },
+    capabilities: ['localExecution'],
+  });
+
+  runtimes.register({
+    id: 'fake',
+    type: 'other',
+    name: 'fake-runtime',
+    version: '1.0',
+    computerId: 'local',
+    capabilities: {
+      chat: true,
+      streaming: true,
+      toolCalling: false,
+      structuredOutput: false,
+      vision: false,
+      embeddings: false,
+      reasoning: false,
+      modelLoad: false,
+      modelUnload: false,
+      modelDownload: false,
+      statefulChat: false,
+      mcp: false,
+    },
+  });
+
+  models.register({
+    id: 'fake-model',
+    name: 'fake-model',
+    provider: 'fake',
+    family: 'other',
+    contextMax: 32_768,
+    capabilities: ['generalChat', 'coding'],
+    toolCalling: false,
+    structuredOutput: false,
+    vision: false,
+    audio: false,
+    embedding: false,
+    reasoning: false,
+    runtimeCompatibility: 'any',
+    local: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  models.upsertInstance({
+    id: 'fake-model::local::fake',
+    modelId: 'fake-model',
+    computerId: 'local',
+    runtimeId: 'fake',
+    runtimeModelId: 'fake-model',
+    loaded: true,
+    health: 'healthy',
+    contextTokens: 32_768,
+  });
+
+  agents.register(createCodingAgent(), 'native');
+
+  const policy = new PolicyEngine({ projectRoot, networkAllowed: false });
+  const scheduler = new Scheduler({ computers, runtimes, models, agents });
+
+  let callCount = 0;
+  const fakeAdapter: RuntimeAdapter = {
+    id: 'fake',
+    type: 'other',
+    async discover() {
+      return { id: 'fake', name: 'fake', version: '1.0' };
+    },
+    async healthCheck() {
+      return { status: 'healthy' };
+    },
+    async listModels() {
+      return [{ id: 'fake-model', name: 'fake-model' }];
+    },
+    async getCapabilities() {
+      return {
+        chat: true,
+        streaming: true,
+        toolCalling: false,
+        structuredOutput: false,
+        vision: false,
+        embeddings: false,
+        reasoning: false,
+        modelLoad: false,
+        modelUnload: false,
+        modelDownload: false,
+        statefulChat: false,
+        mcp: false,
+      };
+    },
+    // The only faked part of the whole pipeline: turn 1 writes a file
+    // through the real `write` tool, turn 2 reports done. Everything else
+    // (policy authorization, scheduling, the tool call, execution
+    // recording, verification) is the genuine production code path.
+    async *generate() {
+      const replies = [
+        '{"action":"tool","tool":"write","input":{"path":"hello.txt","content":"hi from the fake model"}}',
+        '{"action":"done","summary":"wrote hello.txt"}',
+      ];
+      const reply = replies[Math.min(callCount, replies.length - 1)];
+      callCount += 1;
+      yield { type: 'token' as const, content: reply };
+      yield { type: 'completed' as const, content: reply, usage: { inputTokens: 5, outputTokens: 5 } };
+    },
+  };
+
+  const fakeWorker = {
+    id: 'worker-local',
+    computerId: 'local',
+    adapterForModel: (modelId: string) => (modelId === 'fake-model' ? fakeAdapter : undefined),
+  } as unknown as Worker;
+
+  return {
+    config: { modelContext: {}, modelCapabilities: {}, networkAllowed: false, allowCommands: [], denyCommands: [], allowedMcpServers: [] },
+    projectRoot,
+    configDir: path.join(projectRoot, '.wazir'),
+    computers,
+    runtimes,
+    models,
+    agents,
+    tools,
+    policy,
+    scheduler,
+    compiler,
+    executions,
+    adapters: new Map([['fake', fakeAdapter]]),
+    discovered: [],
+    worker: fakeWorker,
+  };
+}
+
+describe('executeTask — real end-to-end Task -> Result flow', () => {
+  let projectRoot: string;
+
+  afterEach(async () => {
+    if (projectRoot) await fs.rm(projectRoot, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  it('plans, schedules, runs the agent loop through real policy-gated tools, and evaluates the result', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-'));
+    const engine = await buildTestEngine(projectRoot);
+
+    const outcome = await executeTask(engine, 'write a hello file', { quiet: true });
+
+    expect(outcome.success).toBe(true);
+    expect(outcome.errors).toEqual([]);
+    expect(outcome.filesChanged).toContain('hello.txt');
+    expect(outcome.result).toContain('hello.txt');
+
+    // The real `write` tool actually ran against the real filesystem.
+    const written = await fs.readFile(path.join(projectRoot, 'hello.txt'), 'utf8');
+    expect(written).toBe('hi from the fake model');
+
+    // The real ExecutionEngine actually recorded the run.
+    const record = engine.executions.require(outcome.executionId);
+    expect(record.execution.status).toBe('completed');
+    expect(record.execution.computerId).toBe('local');
+    expect(record.execution.modelId).toBe('fake-model');
+    expect(record.toolCalls.some((c) => c.tool === 'write' && c.ok)).toBe(true);
+    // Every tool call went through real policy authorization, not a bypass.
+    expect(record.toolCalls.every((c) => c.policyEffect === 'allow')).toBe(true);
+  });
+
+  it('denies a tool call whose target path escapes the project root, end to end', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-'));
+    const engine = await buildTestEngine(projectRoot);
+    const adapter = engine.worker.adapterForModel('fake-model')!;
+
+    // Override the scripted replies for this test: try to escape the
+    // project root, then give up.
+    let callCount = 0;
+    adapter.generate = async function* () {
+      const replies = [
+        '{"action":"tool","tool":"write","input":{"path":"../../etc/escape.txt","content":"pwned"}}',
+        '{"action":"done","summary":"gave up after the write was denied"}',
+      ];
+      const reply = replies[Math.min(callCount, replies.length - 1)];
+      callCount += 1;
+      yield { type: 'token' as const, content: reply };
+      yield { type: 'completed' as const, content: reply, usage: { inputTokens: 5, outputTokens: 5 } };
+    };
+
+    const outcome = await executeTask(engine, 'try to write outside the project', { quiet: true });
+
+    expect(outcome.filesChanged).toEqual([]);
+    const record = engine.executions.require(outcome.executionId);
+    const writeCall = record.toolCalls.find((c) => c.tool === 'write');
+    expect(writeCall?.ok).toBe(false);
+    expect(writeCall?.policyEffect).toBe('deny');
+    await expect(fs.access(path.join(projectRoot, '..', 'etc', 'escape.txt'))).rejects.toThrow();
+  });
+});

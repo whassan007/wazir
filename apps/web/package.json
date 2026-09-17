@@ -1,1 +1,11 @@
-{"name": "@rook/web", "version": "0.1.0", "type": "module", "scripts": {"build": "tsc", "start": "node dist/index.js", "dev": "ts-node src/index.ts"}, "dependencies": {"@rook/core": "*"}}
+{
+  "name": "@wazir/web",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "true",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@wazir/core": "*"
+  }
+}

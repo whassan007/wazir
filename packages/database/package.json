@@ -1,10 +1,17 @@
 {
-  "name": "@rook/database",
+  "name": "@wazir/database",
   "version": "0.1.0",
-  "description": "Reference PostgreSQL schema for the Rook meta-harness (local installs use the JSON store in @rook/registry)",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "description": "Reference PostgreSQL schema for the Wazir meta-harness (local installs use the JSON store in @wazir/registry)",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "scripts": {
     "build": "tsc --build"
+  },
+  "dependencies": {
+    "@wazir/shared": "*",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0"
   }
 }
