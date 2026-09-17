@@ -1,42 +1,58 @@
 # Wazir Meta-Harness
 
-A production-quality local AI meta-harness that orchestrates multiple AI runtimes, models, tools, and target computers.
+A production-quality local and fleet-scale AI meta-harness that orchestrates multiple AI runtimes, models, tools, and target computers — with an OpenCode-style interactive terminal UI capable of running dozens of agents concurrently across distributed infrastructure, and a persistent command history/context system that lets you reason about what actually ran, on which model, with which scheduling decision, and why.
 
 ## Architecture
 
 ```
-                    META-HARNESS
-                         │
-                     Task Engine
-                         │
-                    Requirements
-                         │
-                    Policy Engine
-                         │
-                     Scheduler
-                         │
-                 Capability Matching
-                         │
-                ┌────────┴────────┐
-                │                 │
-             Model             Runtime
-                │                 │
-                └────────┬────────┘
-                         │
-                  Target Computer
-                         │
-                      Worker
-                         │
-                      Result
+                       Wazir CLI / TUI
+              (wa ask, wa task run, wa chat, wa jobs)
+                              │
+                ┌─────────────┼─────────────┐
+                ▼             ▼             ▼
+          PolicyEngine   JobOrchestrator  Blocks / History
+        (allow/ask/deny)     (DAG)        (wa history)
+                │             │                │
+                │   ┌─────────┼─────────┐      ▼
+                │   ▼         ▼         ▼   Context (wa context)
+                │ Approval  Worktree  Fleet     │
+                │  Queue    Manager   Runner     ▼
+                │ (non-      (git     (worker  References (@x)
+                │ blocking) isolation) dispatch)    │
+                │                        │          ▼
+                └───────────┬────────────┘     wa explain <ref>
+                            ▼
+                       Scheduler
+              (capability match + hardware placement)
+                            │
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+        Local Worker                Remote Computer
+        (CodingAgent)              (SSE task-pull loop)
+              │                           │
+              └─────────────┬─────────────┘
+                            ▼
+                Execution & Verification
+             (Plan → Implement → Test → Repair → Verify)
+                            │
+                            ▼
+              Persistence (JsonFileStore / PostgresStore)
 ```
 
 ## Features
 
-- **Runtime Agnostic**: Ollama, LM Studio, and future runtimes as interchangeable backends
-- **Intelligent Scheduling**: Selects best computer/model based on capabilities, resources, policies
-- **Distributed Architecture**: Support for multiple target computers with workers
-- **Policy Enforcement**: Data classification, local-only mode, tool access control
-- **Observability**: Complete execution traces and explainable scheduling decisions
+- **Fleet-scale interactive agent TUI** (`wa chat` / `wa fleet`): an OpenCode-style terminal UI that runs many coding agents concurrently across distributed scheduler infrastructure instead of a single local process — live dashboard, per-agent tail view, non-blocking approval queue, worktree pane.
+- **Distributed scheduling & dispatch**: two-phase model routing (capability match, then hardware-aware placement) across local and remote fleet computers via an SSE task-pull loop; `wa ask`/`wa task run` transparently dispatch to whichever computer the Scheduler picks.
+- **Git worktree isolation**: concurrent fleet agents each work in an isolated git worktree/branch, avoiding dirty-tree collisions; `wa jobs merge` reviews and merges completed branches back.
+- **Non-blocking, 3-tier policy engine** (`allow` / `ask` / `deny`): every tool call — shell, git, filesystem — is authorized before it runs; an `ask` decision suspends only the requesting agent, not its siblings.
+- **Command history as first-class data** (`wa history`): every `doctor`/`status`/`task run`/`task plan` invocation is persisted as a `Block` — command, status, stdout, exit code, linked execution — queryable by id, status, or command substring, and it survives process restarts.
+- **Context you can actually attach** (`wa context add/remove/list/clear`): pull a prior Block's output into a task's context budget, verified to actually change the `ContextCompiler`'s token accounting, not just be stored and ignored.
+- **Deterministic references** (`@123`, `@job:x`, `@agent:x`, `@model:x`, `@computer:x`, `@file:x`, or a bare execution id): no LLM involved in resolution — every reference is a direct registry/store lookup.
+- **Explainable scheduling** (`wa explain <ref>`): renders the actual `SchedulerDecision` recorded at execution time — which model/computer/runtime was chosen and why — never recomputes one after the fact.
+- **Runtime-agnostic**: Ollama, LM Studio, and OpenAI-compatible endpoints as interchangeable backends, auto-discovered.
+- **Pluggable persistence**: local JSON file store by default, or point `WAZIR_DATABASE_URL` at Postgres for a shared, multi-machine deployment — same `KeyValueStore` interface either way.
+
+---
 
 ## Quick Start
 
@@ -44,45 +60,179 @@ A production-quality local AI meta-harness that orchestrates multiple AI runtime
 # Install dependencies
 npm install
 
-# Build the project
+# Build all packages and the CLI
 npm run build
 
-# Run tests
+# Run the test suite
 npm test
 
-# Generate macOS Apple DMG installer
-npm run dmg
+# Put `wa` on your PATH
+npm link --workspace @wazir/cli
 ```
+
+Then, with Ollama or LM Studio running locally:
+
+```bash
+wa doctor          # confirm runtimes/models are reachable
+wa models list     # see what's discovered
+wa ask "explain what this repository does"
+```
+
+---
+
+## CLI command reference
+
+| Command | What it does |
+| --- | --- |
+| `wa init` | Initialize the local Wazir control plane / config directory |
+| `wa doctor` | Health check across config, persistence, runtimes, models, scheduler, policy |
+| `wa status` | Concise operational snapshot |
+| `wa ask <prompt>` | One-shot task with automatic model/computer selection |
+| `wa task plan <prompt>` | Show the scheduling decision without executing (no execution record is created) |
+| `wa task run <prompt>` | Run a task end-to-end through the real agent loop, policy-gated |
+| `wa task status <id>` | Show a task's current status |
+| `wa executions list` / `inspect <id>` / `replay <id>` | Inspect or replay a past execution's recorded event stream |
+| `wa history` / `list` / `inspect <id>` | Browse persisted command history (Blocks) — see below |
+| `wa context add/remove/list/clear <blockId>` | Manage what prior output feeds into the next task's context budget |
+| `wa explain <ref>` | Explain the scheduling decision behind an execution, block, or job — see below |
+| `wa chat` / `wa fleet` | Interactive fleet-scale multi-agent TUI |
+| `wa jobs list` / `inspect <id>` / `merge <id>` | Manage fleet jobs, DAGs, and worktree merge-back |
+| `wa computers list` / `inspect <id>` | Registered target computers (local + remote fleet) |
+| `wa workers list` | Local worker daemon status |
+| `wa runtimes list` / `inspect <id>` | Discovered Ollama/LM Studio runtimes and their health |
+| `wa models list` / `inspect <id>` | Discovered models, capabilities, context window, instances |
+| `wa agents list` | Registered coding agents |
+| `wa tools list` | Registered tool implementations and their risk level |
+| `wa policy inspect` | Current policy rules and configuration |
+| `wa discover` | Force a fresh runtime/model discovery pass |
+| `wa benchmark run` | Run a model benchmark |
+| `wa config show` | Print effective configuration |
+
+Most listing/inspection commands accept `--json` for machine-readable output.
+
+---
+
+## Command history, context & references
+
+Every `doctor`, `status`, `task run`, and `task plan` invocation is persisted as a **Block** — a record of the command, its status, stdout, exit code, and (when applicable) the execution or job it created. Blocks survive process restarts, backed by the same `KeyValueStore` as everything else.
+
+```bash
+wa doctor                    # runs, and is recorded as block #7
+wa history list               # id  command  status   age
+                               # 7   doctor   success  just now
+wa history inspect 7          # full detail: stdout, exit code, duration
+wa history list --status failed --json
+```
+
+Pull a prior Block's output into the next task's context budget:
+
+```bash
+wa context add 7
+wa context list               # shows block #7, ~152 tok estimate
+wa task plan "continue from the last doctor run"   # context budget genuinely
+                                                    # includes block #7's output
+wa context clear
+```
+
+Reference anything deterministically — no LLM involved in resolution, every form is a direct lookup:
+
+```
+@123              a Block by id
+@job:<id>         a fleet job
+@agent:<name>     a registered agent
+@model:<id>       a registered model
+@computer:<id>    a registered computer
+@file:<path>      resolved against the project root, existence-checked
+exec-abc123       a bare execution id
+```
+
+```bash
+wa explain exec-abc123        # the actual recorded SchedulerDecision:
+                               # selected model/computer/runtime and why,
+                               # plus any non-'allow' policy decisions
+wa explain @job:job-xyz       # aggregate rollup (tokens, duration, cost)
+                               # plus per-task scheduling reasons
+```
+
+---
+
+## Fleet coding agent TUI (`wa chat` / `wa fleet`)
+
+```bash
+wa chat                                 # default concurrency limit of 4
+wa chat --concurrency 8 --auto-merge    # higher concurrency, auto-merge on completion
+wa chat --no-worktrees                  # run in-place, no git isolation
+```
+
+### Keyboard navigation
+
+| Key | Action |
+| --- | --- |
+| `Tab` | Cycle views: Fleet Dashboard → Tail → Approval Queue → Worktrees → Help |
+| `Up` / `Down` | Navigate agents in the fleet table |
+| `Enter` | Tail the highlighted agent (live stream of turns/tool calls) |
+| `Esc` | Return to the Fleet Dashboard |
+| `y` / `n` | Approve / Deny the current pending policy request |
+| `a` / `d` | Approve All / Deny All pending requests |
+
+### In-TUI commands
+
+- `/fanout t1; t2; t3` — decompose into N sub-tasks and run them concurrently, up to the concurrency limit
+- `/steer <instruction>` — inject a mid-run instruction into the selected agent (or the whole fleet)
+- `/cancel [taskId]` — cancel one agent, or the whole job if none is selected
+- `/exit` or `q` — shut down the TUI
+
+---
+
+## Fleet job management (`wa jobs`)
+
+```bash
+wa jobs list
+wa jobs inspect <job-id>              # per-task status + usage rollup
+wa jobs merge <job-id> --target main  # merge completed worktree branches
+```
+
+---
+
+## Distributed mode
+
+By default the CLI only knows about the machine it's running on. Point it at a control-plane API to schedule across a real fleet:
+
+```bash
+export WAZIR_API_URL=http://control-plane-host:4800
+wa ask "refactor the auth module" --computer dgx-primary
+```
+
+On startup, the CLI pulls the API's known computers/runtimes/models/instances into its own `Scheduler` registries (skipping anything matching its own local computer id), so a task can genuinely be placed on — and dispatched to — a remote machine over the API's SSE task-pull loop. See `Dockerfile`'s `api`/`worker` targets and `docker-compose.yml` for running the control plane itself.
+
+---
+
+## Persistence
+
+The default backend is a local JSON file at `~/.wazir/wazir.json` (`JsonFileStore`), safe for concurrent writers across processes via a cross-process file lock. Two other backends are available, checked in this order:
+
+1. `WAZIR_DATABASE_URL=postgres://...` — `PostgresStore`, for a shared, multi-machine deployment. Run `docker compose up -d` to get one, or point at an existing instance.
+2. `WAZIR_IN_MEMORY=1` — nothing persisted, useful for tests/CI.
+3. Otherwise, the default local JSON file.
+
+---
 
 ## Deployment
 
 ### Docker / Docker Compose
 
-`Dockerfile` builds four targets from one multi-stage build: `api`, `worker`, `web`, and `cli`.
+`Dockerfile` builds four targets from one multi-stage build: `api`, `worker`, `web`, `cli`.
 
 ```bash
-# One service
-docker build --target api -t wazir-api .
-
-# The full stack (API + worker + web dashboard + Postgres), wired together
-# on one Docker network so the worker actually registers with the API and
-# the dashboard proxies to it:
-docker compose up -d api worker web
-
-# One-off CLI commands against that stack:
-docker compose run --rm cli wa doctor
+docker compose up -d api worker web       # control plane + a worker + the dashboard
+docker compose run --rm cli wa doctor     # one-off CLI commands against that stack
 ```
 
-Set `WAZIR_OLLAMA_URL`/`WAZIR_LMSTUDIO_URL` in the environment (or a `.env`
-file — see `.env.example`) to point the `api` service at runtimes reachable
-from inside the container (e.g. `http://host.docker.internal:11434` to reach
-an Ollama instance running on the Docker host itself).
+Set `WAZIR_OLLAMA_URL` / `WAZIR_LMSTUDIO_URL` in `.env` (see `.env.example`) so the `api`/`worker` containers can reach runtimes on the Docker host, e.g. `http://host.docker.internal:11434`.
 
 ### systemd (Linux)
 
-Unit files for running the API and/or a worker as persistent background
-services live in `scripts/systemd/`. Copy them to `/etc/systemd/system/`,
-edit the `ExecStart` node/install paths for your machine, then:
+Unit files in `scripts/systemd/`. Copy to `/etc/systemd/system/`, adjust the node/install paths, then:
 
 ```bash
 sudo systemctl daemon-reload
@@ -92,113 +242,66 @@ sudo systemctl enable --now wazir-worker
 
 ### launchd (macOS)
 
-`scripts/launchd/ai.wazir.worker.plist` runs a worker unattended in the
-background with no dashboard — for using a Mac purely as a compute target.
-This is distinct from the GUI `Wazir.app` produced by `npm run dmg`, which
-starts the API + web dashboard and opens a browser. Install as a
-LaunchAgent (runs as your user, can reach your own Ollama/LM Studio):
+For a headless compute worker (no dashboard) — distinct from the GUI `Wazir.app` produced by `npm run dmg`:
 
 ```bash
 cp scripts/launchd/ai.wazir.worker.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/ai.wazir.worker.plist
 ```
 
-## Directory Structure
+---
+
+## Directory structure
 
 ```
 wazir/
 ├── apps/
-│   ├── api/      # API server
-│   ├── web/      # Web UI
-│   └── cli/      # Command-line interface
+│   ├── api/        # REST control plane (Express) — inventory + SSE task-pull dispatch
+│   ├── web/         # Static dashboard, proxies to the API
+│   ├── worker/       # Standalone worker daemon binary
+│   └── cli/          # `wa` — commands, engine wiring, and the fleet TUI (src/tui/)
 │
 ├── packages/
-│   ├── core/             # Core domain types
-│   ├── scheduler/        # Task scheduling logic
-│   ├── models/           # Model routing
-│   ├── policies/         # Policy enforcement
-│   ├── runtimes/         # Runtime adapters
-│   │   ├── interfaces/
-│   │   ├── ollama/
-│   │   └── lmstudio/
-│   ├── workers/          # Worker agent
-│   ├── tools/            # Tool registry
-│   ├── evaluation/       # Model evaluation
-│   └── observability/    # Logging & metrics
+│   ├── core/               # Domain types, Scheduler, PolicyEngine, ExecutionEngine,
+│   │                        # JobOrchestrator, ApprovalQueue, WorktreeManager, registries
+│   ├── agents/              # CodingAgent turn loop (plan → implement → test → repair → verify)
+│   ├── workers/             # Worker daemon: registration, heartbeat, SSE task-pull, remote dispatch
+│   ├── runtimes/            # Runtime adapters: interfaces, Ollama, LM Studio
+│   ├── scheduler/           # Deterministic, explainable task scheduling
+│   ├── policies/            # Policy enforcement
+│   ├── tools/                # Filesystem/shell/git/check tool implementations
+│   ├── database/             # PostgresStore (KeyValueStore over Postgres) + reference SQL schema
+│   ├── registry/              # Durable repository helpers over a KeyValueStore
+│   ├── observability/         # Structured logging & metrics
+│   ├── evaluation/            # Deterministic post-execution evaluation
+│   ├── memory/                 # In-memory session/conversation store
+│   └── shared/                  # KeyValueStore implementations (JSON file / in-memory), utils
 │
-├── config/
-├── migrations/
-├── tests/
-└── docs/
+├── scripts/            # macOS DMG builder, systemd units, launchd plist
+├── docs/                # Feature/comparison notes
+└── tests/                # Cross-cutting integration tests (package-local tests live in each package's own tests/)
 ```
 
-## Core Concepts
+---
 
-### Task → Requirements → Capabilities → Model → Runtime → Target → Execution
-
-The system determines:
-
-1. **Requirements**: What capabilities does the task need?
-2. **Policy**: Are there constraints (local-only, allowed computers)?
-3. **Model Router**: Which model best matches requirements?
-4. **Scheduler**: Which computer has resources and is available?
-5. **Runtime**: Which runtime adapter to use?
-
-## Runtime Adapters
-
-Implementations must conform to `RuntimeAdapter` interface:
-
-```typescript
-interface RuntimeAdapter {
-  id: string;
-  
-  discover(): Promise<RuntimeInfo>;
-  listModels(): Promise<ModelInfo[]>;
-  getCapabilities(): Promise<RuntimeCapabilities>;
-  healthCheck(): Promise<HealthStatus>;
-  generate(request: GenerationRequest): AsyncIterable<GenerationEvent>;
-  
-  cancel?(executionId: string): Promise<void>;
-}
-```
-
-## Example Usage
+## Development
 
 ```bash
-# Run task with automatic selection
-wa ask "Analyze this codebase"
-
-# Force specific computer
-wa ask "Explain this" --computer dgx-primary
-
-# Force specific model
-wa ask "Solve this" --model qwen3-coder
-
-# Dry run to see scheduling decision
-wa task plan "Review this document"
+npm run build       # build every workspace
+npm run typecheck   # tsc --build --force, no emit
+npm test            # build + full vitest suite
+npm run test:watch  # vitest in watch mode
 ```
 
-## Configuration
+Postgres-backed tests are skipped automatically unless `WAZIR_TEST_DATABASE_URL` is set:
 
-```yaml
-harness:
-  name: local-meta-harness
-
-scheduler:
-  strategy: weighted
-
-workers:
-  heartbeatSeconds: 10
-
-database:
-  url: postgresql://localhost/wazir
+```bash
+docker run --rm -d -e POSTGRES_PASSWORD=wazir -e POSTGRES_DB=wazir_test -p 5432:5432 postgres:16-alpine
+WAZIR_TEST_DATABASE_URL=postgres://postgres:wazir@localhost:5432/wazir_test npm test
 ```
 
-## Next Steps
+---
 
-1. Implement API server (`apps/api`)
-2. Build web UI (`apps/web`)
-3. Create CLI (`apps/cli`)
-4. Complete runtime adapters
-5. Add database persistence
-6. Run end-to-end tests
+## License
+
+MIT — see [LICENSE](./LICENSE).
