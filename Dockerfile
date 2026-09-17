@@ -46,7 +46,7 @@ ENV PORT=4801
 EXPOSE 4801
 CMD ["node", "apps/web/server.js"]
 
-# ---- CLI (run one-off commands: `docker compose run --rm cli wazir ...`) --
+# ---- CLI (run one-off commands: `docker compose run --rm cli wa ...`) ----
 FROM builder AS cli
 ENV NODE_ENV=production
 ENTRYPOINT ["node", "apps/cli/dist/index.js"]

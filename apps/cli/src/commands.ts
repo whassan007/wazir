@@ -417,7 +417,7 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   }
   if (outcome.executionId !== '—') {
     lines.push('');
-    lines.push(color.gray(`  inspect: wazir executions inspect ${outcome.executionId}`));
+    lines.push(color.gray(`  inspect: wa executions inspect ${outcome.executionId}`));
   }
   return { code: outcome.success ? 0 : 1, output: lines.join('\n') };
 }

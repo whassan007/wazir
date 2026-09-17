@@ -62,7 +62,7 @@
    - Built-in MCP client and registry, allowing standardized tools, prompts, and context servers to be mounted and governed under policy.
 
 7. **Multi-Interface Delivery**:
-   - Accessible via Command Line Interface (CLI: `wazir ask`, `wazir task plan`), REST API server, Web UI, and packaged desktop builds (macOS DMG).
+   - Accessible via Command Line Interface (CLI: `wa ask`, `wa task plan`), REST API server, Web UI, and packaged desktop builds (macOS DMG).
 
 ---
 
@@ -94,5 +94,5 @@
 | **Agent Capabilities** | Native coding agent loop + external agent adapters | Conversational RAG agent, Q&A workflows | Autonomous multi-step code editing, bash tool execution | Multi-tier subagent delegation, persistent sessions, skills | Autocomplete, code fill-in-middle, single-turn/chat edits |
 | **Tool Ecosystem & Extensibility** | Native tool registry + **MCP (Model Context Protocol)** client | Document loaders, vector databases, search connectors | Shell commands, file tools, git tools | Custom Skills (`SKILL.md`), Rules, MCP sidecars, bash tools | Fixed IDE integrations, limited function calling / plugins |
 | **Security & Sandboxing** | Strict 3-tier policy engine (`safe`/`ask`/`deny`), local-only mode | Enterprise RBAC, multi-tenancy, data-at-rest encryption | Developer discretion / prompt confirmation | Permission prompts, workspace boundaries, secure telemetry | Enterprise privacy filters, copyright checkers |
-| **User Interfaces** | CLI (`wazir`), REST API, Web UI, macOS DMG app | Responsive Web Chat UI & Admin Console | Terminal TUI / CLI | IDE extension (VS Code/JetBrains), standalone IDE, CLI (`agy`) | IDE plugins (VS Code, JetBrains, Visual Studio, Neovim) |
+| **User Interfaces** | CLI (`wa`), REST API, Web UI, macOS DMG app | Responsive Web Chat UI & Admin Console | Terminal TUI / CLI | IDE extension (VS Code/JetBrains), standalone IDE, CLI (`agy`) | IDE plugins (VS Code, JetBrains, Visual Studio, Neovim) |
 | **Ideal Use Case** | Teams managing heterogeneous local GPUs, private compute, and multi-runtime pipelines | Companies needing private, on-premise ChatGPT/RAG for enterprise knowledge | Developers wanting a lightweight CLI coding agent in terminal | Developers needing deep autonomous agentic pair programming | Fast inline code completions and snippet generation |

@@ -4,7 +4,10 @@ Companion to `WAZIR_PRODUCTION_READINESS_REVIEW.md` (the audit). That document's
 and gate matrix have been updated in place to match what's actually in the tree; this file is
 the narrative version — what changed, why, and what's genuinely still open.
 
-**Status: nothing has been committed.** Everything below is in the working tree only.
+**Status**: the Phase 1-3 work below was committed (`63d32e0`, then rewritten to `61a0ac9` to
+use a GitHub noreply commit email) and is open as PR #1 (`rename-to-wazir` → `main`) at
+https://github.com/whassan007/wazir/pull/1. The CLI rename in the section below this line is
+uncommitted, on top of that PR branch.
 
 ---
 
@@ -386,9 +389,41 @@ before starting rather than assuming an approach, same as before.
 
 ---
 
+## CLI binary renamed: `wazir` → `wa`
+
+Per explicit user request, replacing (not aliasing alongside) the invokable CLI command name.
+The product/brand name ("Wazir"), the npm package scope (`@wazir/*`), and env var prefixes
+(`WAZIR_*`) are all unchanged — only the thing you actually type at a shell prompt changed.
+
+- `apps/cli/package.json`: `bin` field `"wazir"` → `"wa"`.
+- `apps/cli/src/index.ts`: Commander `.name('wazir')` → `.name('wa')` (changes the `Usage:`
+  line in `--help` output).
+- `apps/cli/src/commands.ts` and `apps/cli/src/status.ts`: two hardcoded suggestion strings
+  (`wazir executions inspect ...`, `run wazir doctor for details`) updated to say `wa`.
+- `README.md`, `docker-compose.yml`, `Dockerfile` (comment only), `docs/
+  wazir_features_and_comparison.md`, `scripts/build-dmg.sh` (alias, installed binary name,
+  Terminal launcher, install script, generated README.txt) — every user-facing CLI invocation
+  example updated.
+- Deliberately **not** touched: `WAZIR_PRODUCTION_READINESS_REVIEW.md` and this file's own
+  earlier sections — they're a historical record of what the CLI was called *at the time*,
+  not living usage docs; rewriting past audit prose to match a later rename would misrepresent
+  history. `mcpClient.ts`'s MCP `clientInfo.name: 'wazir'` and `server.ts`'s `/api/v1/overview`
+  `name: 'wazir'` field are product self-identification, not the CLI command — left alone.
+- **Found and fixed while verifying this**: after editing `package.json`, `npm install` alone
+  left a stale `node_modules/.bin/wazir` symlink (and an even older stale `node_modules/.bin/
+  rook` from before the original Rook→Wazir rename) — npm didn't prune the old bin symlink for
+  a workspace package on its own. Had to `rm` both stale symlinks and reinstall for `wa` to
+  actually appear. Confirmed working after: `node_modules/.bin/wa --help` shows `Usage: wa
+  [options] [command]`, and the Docker `cli` target rebuilt and run standalone (`docker run
+  --rm wazir-cli --help`) shows the same.
+- `tsc --build --force` clean; `vitest run` still 20 files / 125 tests passing.
+
+---
+
 ## How to continue
 
-1. Run `git status` / `git diff --stat` first — nothing here is committed yet.
+1. Run `git status` / `git diff --stat` first to see the uncommitted CLI-rename changes on top
+   of the already-merged-into-PR Phase 1-3 work.
 2. Cross-check `WAZIR_PRODUCTION_READINESS_REVIEW.md`'s checkboxes, gate matrix, and scorecard
    against the current code before trusting them; they were updated to match this session's
    changes but can drift again once more edits land.

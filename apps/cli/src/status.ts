@@ -122,7 +122,7 @@ export function statusCommand(): Promise<{ code: number; output: string }> {
       if (status.computers.online > 0 && status.runtimes.healthy > 0) {
         lines.push(color.green('System is operational'));
       } else {
-        lines.push(color.yellow('System has issues - run wazir doctor for details'));
+        lines.push(color.yellow('System has issues - run wa doctor for details'));
       }
       
       resolve({ code: 0, output: lines.join('\n') });

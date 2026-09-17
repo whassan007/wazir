@@ -6,7 +6,7 @@ import chalk from 'chalk';
 const program = new Command();
 
 program
-  .name('wazir')
+  .name('wa')
   .description('Wazir CLI — control plane command line')
   .version('0.1.0');
 

@@ -51,8 +51,8 @@ services:
     restart: unless-stopped
 
   # One-off CLI commands against the stack above, e.g.:
-  #   docker compose run --rm cli wazir doctor
-  #   docker compose run --rm cli wazir task run "add a health endpoint"
+  #   docker compose run --rm cli wa doctor
+  #   docker compose run --rm cli wa task run "add a health endpoint"
   cli:
     build:
       context: .

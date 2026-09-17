@@ -70,7 +70,7 @@ docker build --target api -t wazir-api .
 docker compose up -d api worker web
 
 # One-off CLI commands against that stack:
-docker compose run --rm cli wazir doctor
+docker compose run --rm cli wa doctor
 ```
 
 Set `WAZIR_OLLAMA_URL`/`WAZIR_LMSTUDIO_URL` in the environment (or a `.env`
@@ -166,16 +166,16 @@ interface RuntimeAdapter {
 
 ```bash
 # Run task with automatic selection
-wazir ask "Analyze this codebase"
+wa ask "Analyze this codebase"
 
 # Force specific computer
-wazir ask "Explain this" --computer dgx-primary
+wa ask "Explain this" --computer dgx-primary
 
 # Force specific model
-wazir ask "Solve this" --model qwen3-coder
+wa ask "Solve this" --model qwen3-coder
 
 # Dry run to see scheduling decision
-wazir task plan "Review this document"
+wa task plan "Review this document"
 ```
 
 ## Configuration

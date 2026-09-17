@@ -242,21 +242,21 @@ fi
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-alias wazir="node \"$APP_DIR/apps/cli/dist/index.js\""
+alias wa="node \"$APP_DIR/apps/cli/dist/index.js\""
 
 clear
 echo "=========================================================="
 echo "                WAZIR META-HARNESS CLI                     "
 echo "=========================================================="
-echo "  'wazir' alias is loaded and ready!"
+echo "  'wa' alias is loaded and ready!"
 echo ""
 node "$APP_DIR/apps/cli/dist/index.js" --help
 echo ""
 echo "=========================================================="
 echo "Quick Commands:"
-echo "  wazir discover        - Scan local runtimes (Ollama, LM Studio)"
-echo "  wazir models list     - List available AI models"
-echo "  wazir task plan \"...\" - Plan task scheduling"
+echo "  wa discover        - Scan local runtimes (Ollama, LM Studio)"
+echo "  wa models list     - List available AI models"
+echo "  wa task plan \"...\" - Plan task scheduling"
 echo "=========================================================="
 echo ""
 
@@ -293,7 +293,7 @@ if [ ! -w "$INSTALL_DIR" ]; then
   fi
 fi
 
-echo "Installing 'wazir' CLI launcher into $INSTALL_DIR..."
+echo "Installing 'wa' CLI launcher into $INSTALL_DIR..."
 
 WRAPPER="#!/usr/bin/env bash
 export PATH=\"/opt/homebrew/bin:/usr/local/bin:\$PATH\"
@@ -309,22 +309,22 @@ echo "$WRAPPER" > "$TMP_FILE"
 chmod +x "$TMP_FILE"
 
 if [ "$USE_SUDO" = true ]; then
-  sudo cp "$TMP_FILE" "$INSTALL_DIR/wazir"
-  sudo chmod +x "$INSTALL_DIR/wazir"
+  sudo cp "$TMP_FILE" "$INSTALL_DIR/wa"
+  sudo chmod +x "$INSTALL_DIR/wa"
 else
-  cp "$TMP_FILE" "$INSTALL_DIR/wazir"
-  chmod +x "$INSTALL_DIR/wazir"
+  cp "$TMP_FILE" "$INSTALL_DIR/wa"
+  chmod +x "$INSTALL_DIR/wa"
 fi
 rm -f "$TMP_FILE"
 
-echo "✓ Successfully installed 'wazir' into $INSTALL_DIR"
+echo "✓ Successfully installed 'wa' into $INSTALL_DIR"
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   echo ""
   echo "Note: Ensure $INSTALL_DIR is in your PATH in ~/.zshrc:"
   echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
 fi
 echo ""
-echo "Try running: wazir --help"
+echo "Try running: wa --help"
 EOF
 chmod +x "$STAGE_DIR/install-cli.sh"
 
@@ -349,12 +349,12 @@ HOW TO INSTALL & RUN:
 USING THE CLI:
 --------------
 Option 1: Double-click 'Wazir Terminal.command'
-  - Opens a Terminal session with 'wazir' ready to run.
+  - Opens a Terminal session with 'wa' ready to run.
 
 Option 2: Install CLI globally
   - In Terminal, run:
       ./install-cli.sh
-  - Then run 'wazir --help' or 'wazir discover' anywhere!
+  - Then run 'wa --help' or 'wa discover' anywhere!
 
 SYSTEM REQUIREMENTS:
 --------------------
