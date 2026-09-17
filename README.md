@@ -304,4 +304,4 @@ WAZIR_TEST_DATABASE_URL=postgres://postgres:wazir@localhost:5432/wazir_test npm 
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+AGPL-3.0 — see [LICENSE](./LICENSE). If you run a modified version of Wazir as a network service, the AGPL requires you to make your modified source available to users of that service.
