@@ -11,6 +11,8 @@ export interface WazirConfig {
   apiUrl?: string;
   /** Operator bearer token for the control-plane API (`WAZIR_API_TOKEN`). */
   apiToken?: string;
+  /** Cluster registration token for workers (`WAZIR_REGISTRATION_TOKEN`). */
+  registrationToken?: string;
   /** Per-model context window overrides (tokens). */
   modelContext: Record<string, number>;
   /** Per-model extra capability tags. */
@@ -66,6 +68,7 @@ export function loadConfig(): WazirConfig {
   }
   if (apiUrl) config.apiUrl = apiUrl;
   if (process.env.WAZIR_API_TOKEN) config.apiToken = process.env.WAZIR_API_TOKEN;
+  if (process.env.WAZIR_REGISTRATION_TOKEN) config.registrationToken = process.env.WAZIR_REGISTRATION_TOKEN;
 
   try {
     const raw = readFileSync(configFile(), 'utf8');
@@ -74,6 +77,7 @@ export function loadConfig(): WazirConfig {
     config.lmstudioUrl = fileConfig.lmstudioUrl ?? config.lmstudioUrl;
     config.apiUrl = fileConfig.apiUrl ?? config.apiUrl;
     config.apiToken = fileConfig.apiToken ?? config.apiToken;
+    config.registrationToken = fileConfig.registrationToken ?? config.registrationToken;
     config.modelContext = { ...config.modelContext, ...(fileConfig.modelContext ?? {}) };
     config.modelCapabilities = { ...config.modelCapabilities, ...(fileConfig.modelCapabilities ?? {}) };
     config.networkAllowed = fileConfig.networkAllowed ?? config.networkAllowed;

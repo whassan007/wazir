@@ -13,7 +13,7 @@ import type {
   TokenUsage,
   ToolCallRecord,
 } from '../types/index.js';
-import { sanitizeUntrustedOutput } from '@wazir/shared';
+import { sanitizeUntrustedOutput, appendAuditEvent } from '@wazir/shared';
 
 export interface ExecutionEngineOptions {
   /** Persists a record after every mutation. */
@@ -145,6 +145,17 @@ export class ExecutionEngine {
     const record = this.require(executionId);
     record.policyDecisions.push(decision);
     this.pushEvent(record, 'policy.decision', decision);
+    void appendAuditEvent({
+      type: 'policy_decision',
+      tool: decision.tool,
+      decision: decision.decision,
+      rule: decision.rule,
+      reasons: decision.reasons,
+      command: decision.command,
+      executionId,
+      taskId: record.task.id,
+      agentId: record.execution.agentId,
+    }).catch(() => {});
     await this.flush(record);
   }
 

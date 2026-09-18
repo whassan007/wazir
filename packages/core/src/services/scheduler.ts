@@ -268,9 +268,22 @@ export class Scheduler {
         continue;
       }
 
+      if (record.runtimeCompatibility && record.runtimeCompatibility !== 'any' && Array.isArray(record.runtimeCompatibility)) {
+        const runtimeType = runtime?.type ?? instance.runtimeId;
+        if (!record.runtimeCompatibility.includes(runtimeType as any)) {
+          failures.push(`${computer.id}: runtime type '${runtimeType}' incompatible with model runtimeCompatibility`);
+          continue;
+        }
+      }
+
       const requiredSystemGB = record.memory?.minSystemGB ?? 0;
       if (requiredSystemGB > computer.hardware.memoryGB) {
         failures.push(`${computer.id}: memory ${computer.hardware.memoryGB}GB < required ${requiredSystemGB}GB`);
+        continue;
+      }
+
+      if (!instance.loaded && computer.load?.memoryAvailableGB !== undefined && requiredSystemGB > computer.load.memoryAvailableGB) {
+        failures.push(`${computer.id}: available memory ${computer.load.memoryAvailableGB}GB < required ${requiredSystemGB}GB`);
         continue;
       }
 
@@ -297,6 +310,13 @@ export class Scheduler {
       score += Math.max(0, 1 - cpuPercent / 100);
       reasons.push(`current CPU load ${Math.round(cpuPercent)}%`);
 
+      if (computer.load?.memoryAvailableGB !== undefined) {
+        reasons.push(`available RAM ${computer.load.memoryAvailableGB}GB`);
+        if (requiredSystemGB > 0 && computer.load.memoryAvailableGB >= requiredSystemGB * 2) {
+          score += 0.5;
+        }
+      }
+
       if (computer.local) {
         score += 1;
         reasons.push('local computer (lowest latency)');
@@ -316,8 +336,9 @@ export class Scheduler {
     }
 
     if (placements.length === 0) {
+      const details = failures.length > 0 ? ` ${failures.join('; ')}.` : '';
       throw new SchedulingError(
-        `No computer can host model '${record.id}'. No silent fallback will be performed.`,
+        `No computer can host model '${record.id}'.${details} No silent fallback will be performed.`,
         [],
         failures,
       );

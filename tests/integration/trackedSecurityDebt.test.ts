@@ -37,9 +37,7 @@ describe('Section 15: Tracked Security Debt (Explicit Test Coverage of Known Gap
      * `apps/api/tests/apiAuth.test.ts` covers the enforced paths; this test
      * pins the still-open default. When the tokens become mandatory, flip
      * these expectations to 401.
-     * Reference: PROGRESS.md "Open work: API Auth & RBAC".
-     */
-    it('TRACKED DEBT: with no cluster tokens configured, new registrations and dispatches need no credentials', async () => {
+    it('RESOLVED: with no cluster tokens configured, new registrations and dispatches require credentials (401)', async () => {
       const started = await startApiServer();
       server = started.server;
 
@@ -48,14 +46,13 @@ describe('Section 15: Tracked Security Debt (Explicit Test Coverage of Known Gap
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: 'unauthenticated-node', name: 'Open Node', type: 'workstation' }),
       });
-      expect(res.status).toBe(200);
-      expect(started.state.computers.get('unauthenticated-node')).toBeDefined();
+      expect(res.status).toBe(401);
 
       const dispatch = await fetch(`${started.baseUrl}/api/v1/tasks/dispatch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          computerId: 'unauthenticated-node',
+          computerId: 'local',
           request: {
             executionId: 'exec-no-auth',
             requestId: 'req-no-auth',
@@ -64,7 +61,25 @@ describe('Section 15: Tracked Security Debt (Explicit Test Coverage of Known Gap
           },
         }),
       });
-      expect(dispatch.status).toBe(202);
+      expect(dispatch.status).toBe(401);
+    });
+
+    it('permits unauthenticated registration when WAZIR_ALLOW_UNAUTHENTICATED=1 is set', async () => {
+      const state = await createApiState({ auth: { allowUnauthenticated: true } });
+      const app = createApp(state);
+      const s: Server = app.listen(0);
+      server = s;
+      await new Promise<void>((resolve) => s.once('listening', resolve));
+      const port = (s.address() as AddressInfo).port;
+      const baseUrl = `http://127.0.0.1:${port}`;
+
+      const res = await fetch(`${baseUrl}/computers/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: 'open-node', name: 'Open Node', type: 'workstation' }),
+      });
+      expect(res.status).toBe(200);
+      expect(state.computers.get('open-node')).toBeDefined();
     });
 
     it('RESOLVED (F-3): an existing computer record cannot be overwritten without its token', async () => {
@@ -108,19 +123,18 @@ describe('Section 15: Tracked Security Debt (Explicit Test Coverage of Known Gap
     });
   });
 
-  describe('Observability Debt: Prometheus Metrics Endpoint', () => {
-    /**
-     * TRACKED DEBT: The Prometheus metrics endpoint (/metrics) is currently unwired in apps/api.
-     * A client requesting /metrics receives a 404 Not Found.
-     *
-     * Reference: PROGRESS.md "Open work: Observability / Prometheus".
-     */
-    it('TRACKED DEBT: /metrics returns 404 because metrics exporter is not yet wired to server routes', async () => {
+  describe('Observability: Prometheus Metrics Endpoint (F-28)', () => {
+    it('RESOLVED (F-28): /metrics exports Prometheus formatted metrics', async () => {
       const started = await startApiServer();
       server = started.server;
 
       const res = await fetch(`${started.baseUrl}/metrics`);
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/plain');
+      const text = await res.text();
+      expect(text).toContain('wazir_auth_failures_total');
+      expect(text).toContain('wazir_dispatch_queue_depth');
+      expect(text).toContain('wazir_registered_computers');
     });
   });
 });

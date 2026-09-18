@@ -44,7 +44,7 @@ function fakeAdapter(): RuntimeAdapter {
 }
 
 async function startServer() {
-  const state = await createApiState();
+  const state = await createApiState({ auth: { allowUnauthenticated: true } });
   const app = createApp(state);
   const server: Server = app.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));

@@ -1,3 +1,5 @@
+import https from 'node:https';
+import fs from 'node:fs';
 import { createApiState, createApp } from './server.js';
 import { isLoopbackHost } from './auth.js';
 
@@ -19,11 +21,24 @@ async function main(): Promise<void> {
     console.warn('wazir-api: WAZIR_REGISTRATION_TOKEN not set; any client may register new computers');
   }
   const app = createApp(state);
-  const server = app.listen(port, host, () => {
-    console.log(`wazir-api listening on http://localhost:${port}`);
-    console.log(`  health: http://localhost:${port}/health`);
-    console.log(`  api:    http://localhost:${port}/api/v1/overview`);
-  });
+  const tlsCert = process.env.WAZIR_TLS_CERT;
+  const tlsKey = process.env.WAZIR_TLS_KEY;
+  const isTls = Boolean(tlsCert && tlsKey);
+
+  const server = isTls
+    ? https.createServer({
+        cert: fs.readFileSync(tlsCert!),
+        key: fs.readFileSync(tlsKey!),
+      }, app).listen(port, host, () => {
+        console.log(`wazir-api listening securely on https://${host}:${port}`);
+        console.log(`  health: https://${host}:${port}/health`);
+        console.log(`  api:    https://${host}:${port}/api/v1/overview`);
+      })
+    : app.listen(port, host, () => {
+        console.log(`wazir-api listening on http://${host}:${port}`);
+        console.log(`  health: http://${host}:${port}/health`);
+        console.log(`  api:    http://${host}:${port}/api/v1/overview`);
+      });
 
   const shutdown = () => {
     server.close(() => process.exit(0));

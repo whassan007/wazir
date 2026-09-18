@@ -1,4 +1,5 @@
 import type { PolicyActionRequest, PolicyDecision } from '../types/policy.js';
+import { appendAuditEvent } from '@wazir/shared';
 
 export interface PendingApprovalRequest {
   id: string;
@@ -92,6 +93,18 @@ export class ApprovalQueue {
           item.status = approved ? 'approved' : 'denied';
           this.pending.delete(id);
           this.notify();
+          void appendAuditEvent({
+            type: 'approval_resolution',
+            tool: item.tool,
+            decision: approved ? 'allow' : 'deny',
+            rule: item.rule,
+            reasons: item.reasons,
+            executionId: item.executionId,
+            taskId: item.taskId,
+            agentId: item.agentId,
+            resolvedBy: approved ? 'approver' : 'policy_or_timeout',
+            details: { input: item.input, approvalId: item.id },
+          }).catch(() => {});
           resolve(approved);
         },
       };

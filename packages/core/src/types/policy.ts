@@ -11,6 +11,7 @@ export interface PolicyDecision {
   decision: PolicyEffect;
   rule: string;
   tool?: string;
+  command?: string;
   reasons: string[];
 }
 

@@ -17,7 +17,7 @@ import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
-import { generateId, sanitizeUntrustedOutput } from '@wazir/shared';
+import { generateId, sanitizeUntrustedOutput, type KeyValueStore } from '@wazir/shared';
 import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
 
 // Bounds on in-memory state so an unauthenticated peer (or a runaway client)
@@ -58,6 +58,16 @@ export class TaskDispatcher {
 
   isConnected(computerId: string): boolean {
     return this.streams.has(computerId);
+  }
+
+  get totalQueued(): number {
+    let count = 0;
+    for (const q of this.queues.values()) count += q.length;
+    return count;
+  }
+
+  get activeStreamsCount(): number {
+    return this.streams.size;
   }
 
   /**
@@ -186,13 +196,17 @@ export interface ApiState {
 
 export interface ApiStateOptions {
   auth?: ApiAuthOptions;
+  store?: KeyValueStore;
 }
 
 export async function createApiState(options: ApiStateOptions = {}): Promise<ApiState> {
   const auth = new ApiAuth(options.auth ?? {
     operatorToken: process.env.WAZIR_API_TOKEN,
+    viewerToken: process.env.WAZIR_API_VIEWER_TOKEN,
     registrationToken: process.env.WAZIR_REGISTRATION_TOKEN,
+    store: options.store,
   });
+  await auth.init();
   const computers = new ComputerRegistry();
   const runtimes = new RuntimeRegistry();
   const models = new ModelRegistry();
@@ -315,13 +329,73 @@ export function createApp(state: ApiState) {
   const localId = process.env.WAZIR_COMPUTER_ID ?? 'local';
   const { auth } = state;
 
+  const metrics = {
+    tasksDispatched: 0,
+    tasksCompleted: 0,
+    tasksFailed: 0,
+  };
+
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', name: 'wazir-api', version: '0.1.0', auth: { operatorToken: auth.operatorTokenRequired, registrationToken: auth.registrationToken !== undefined } });
+    res.json({
+      status: 'ok',
+      name: 'wazir-api',
+      version: '0.1.0',
+      auth: {
+        operatorToken: auth.operatorTokenRequired,
+        viewerToken: auth.viewerTokenRequired,
+        registrationToken: auth.registrationToken !== undefined,
+      },
+    });
   });
 
-  // Everything that reads inventory/history or dispatches work is operator
-  // territory. `/computers/*` (the worker protocol) authenticates per computer.
-  app.use('/api/v1', auth.requireOperator);
+  app.get('/metrics', (_req, res) => {
+    const onlineComputers = state.computers.listOnline().length;
+    const totalComputers = state.computers.list().length;
+    const queueDepth = state.dispatcher.totalQueued;
+    const activeStreams = state.dispatcher.activeStreamsCount;
+
+    const lines = [
+      '# HELP wazir_auth_failures_total Total number of authentication failures (401/403).',
+      '# TYPE wazir_auth_failures_total counter',
+      `wazir_auth_failures_total ${auth.authFailures}`,
+      '',
+      '# HELP wazir_dispatched_tasks_total Total number of tasks dispatched.',
+      '# TYPE wazir_dispatched_tasks_total counter',
+      `wazir_dispatched_tasks_total ${metrics.tasksDispatched}`,
+      '',
+      '# HELP wazir_completed_tasks_total Total number of completed tasks.',
+      '# TYPE wazir_completed_tasks_total counter',
+      `wazir_completed_tasks_total ${metrics.tasksCompleted}`,
+      '',
+      '# HELP wazir_failed_tasks_total Total number of failed tasks.',
+      '# TYPE wazir_failed_tasks_total counter',
+      `wazir_failed_tasks_total ${metrics.tasksFailed}`,
+      '',
+      '# HELP wazir_dispatch_queue_depth Current number of tasks waiting in computer queues.',
+      '# TYPE wazir_dispatch_queue_depth gauge',
+      `wazir_dispatch_queue_depth ${queueDepth}`,
+      '',
+      '# HELP wazir_registered_computers Total number of registered computers.',
+      '# TYPE wazir_registered_computers gauge',
+      `wazir_registered_computers ${totalComputers}`,
+      '',
+      '# HELP wazir_online_computers Number of online computers.',
+      '# TYPE wazir_online_computers gauge',
+      `wazir_online_computers ${onlineComputers}`,
+      '',
+      '# HELP wazir_active_sse_streams Number of active SSE task streams from workers.',
+      '# TYPE wazir_active_sse_streams gauge',
+      `wazir_active_sse_streams ${activeStreams}`,
+      '',
+    ];
+
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    res.send(lines.join('\n'));
+  });
+
+  // Read-only control routes allow viewer or operator tokens.
+  // Mutating endpoints (dispatch, executions) explicitly enforce operator scope.
+  app.use('/api/v1', auth.requireViewerOrOperator);
   app.use('/executions', auth.requireOperator);
 
   app.get('/api/v1/overview', (_req, res) => {
@@ -436,10 +510,12 @@ export function createApp(state: ApiState) {
     const byComputerToken = exists && auth.isComputerToken(registration.id, presented);
     const byRegistrationToken = auth.isRegistrationToken(presented);
     if (exists && !byComputerToken && !byRegistrationToken) {
+      auth.recordAuthFailure();
       res.status(403).json({ error: `computer '${registration.id}' is already registered; present its token or the registration token to replace it` });
       return;
     }
-    if (!exists && auth.registrationToken !== undefined && !byRegistrationToken) {
+    if (!exists && !byRegistrationToken && (auth.registrationToken !== undefined || !auth.isAllowedUnauthenticated)) {
+      auth.recordAuthFailure();
       res.status(401).json({ error: 'registration token required (Authorization: Bearer <WAZIR_REGISTRATION_TOKEN>)' });
       return;
     }
@@ -503,7 +579,7 @@ export function createApp(state: ApiState) {
 
   // Dispatch an authorized execution request to a specific computer's worker.
   // Pass ?wait=<ms> to block until the worker reports a result (or time out).
-  app.post('/api/v1/tasks/dispatch', async (req, res) => {
+  app.post('/api/v1/tasks/dispatch', auth.requireOperator, async (req, res) => {
     const { computerId, request } = req.body as { computerId?: string; request?: WorkerExecutionRequest };
     if (!computerId || !state.computers.get(computerId)) {
       res.status(404).json({ error: `computer '${computerId ?? ''}' unknown — register first` });
@@ -523,6 +599,7 @@ export function createApp(state: ApiState) {
       res.status(429).json({ error: dispatched.reason, requestId: request.requestId });
       return;
     }
+    metrics.tasksDispatched++;
 
     const waitMs = Math.min(Math.max(Number(req.query.wait ?? 0) || 0, 0), 10 * 60_000);
     if (!waitMs) {
@@ -558,6 +635,7 @@ export function createApp(state: ApiState) {
       return false;
     }
     if (owner !== computerId) {
+      auth.recordAuthFailure();
       res.status(403).json({ error: `request '${requestId}' was not dispatched to computer '${computerId}'` });
       return false;
     }
@@ -598,6 +676,11 @@ export function createApp(state: ApiState) {
       error: outcome.error,
       usage: { input: outcome.inputTokens, output: outcome.outputTokens },
     });
+    if (outcome.ok) {
+      metrics.tasksCompleted++;
+    } else {
+      metrics.tasksFailed++;
+    }
     res.json({ ok: true });
   });
 

@@ -16,6 +16,7 @@ interface OpenAIModel {
 
 interface StreamDelta {
   content?: string;
+  reasoning_content?: string;
   tool_calls?: Array<{
     index: number;
     id?: string;
@@ -204,9 +205,10 @@ export class LMStudioAdapter implements RuntimeAdapter {
           const chunk = JSON.parse(payload) as StreamChunk;
 
           const delta = chunk.choices?.[0]?.delta;
-          if (delta?.content) {
-            full += delta.content;
-            yield { type: 'token', content: delta.content };
+          const text = delta?.content || delta?.reasoning_content;
+          if (text) {
+            full += text;
+            yield { type: 'token', content: text };
           }
           for (const call of delta?.tool_calls ?? []) {
             const entry = pendingToolCalls.get(call.index) ?? { arguments: '' };
@@ -241,13 +243,11 @@ export class LMStudioAdapter implements RuntimeAdapter {
         };
       }
 
-      if (full.length > 0 || pendingToolCalls.size > 0) {
-        yield {
-          type: 'completed',
-          content: full,
-          usage: usage ?? { inputTokens: 0, outputTokens: 0 },
-        };
-      }
+      yield {
+        type: 'completed',
+        content: full,
+        usage: usage ?? { inputTokens: 0, outputTokens: 0 },
+      };
     } catch (error) {
       if (controller.signal.aborted) {
         yield { type: 'completed', content: full, usage: usage ?? { inputTokens: 0, outputTokens: 0 } };

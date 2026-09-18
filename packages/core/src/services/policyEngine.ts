@@ -9,6 +9,7 @@ import type {
   PolicyRule,
 } from '../types/policy.js';
 import type { Task } from '../types/task.js';
+import { appendAuditEvent } from '@wazir/shared';
 
 // `env`/`printenv` are deliberately absent: they dump the operator's whole
 // environment (API keys, database URLs) into an execution record that is
@@ -364,6 +365,16 @@ export class PolicyEngine {
 
     try {
       const approved = await approver(request, decision);
+      void appendAuditEvent({
+        type: 'approval_resolution',
+        tool: request.tool,
+        decision: approved ? 'allow' : 'deny',
+        rule: decision.rule,
+        reasons: decision.reasons,
+        executionId: request.executionId,
+        resolvedBy: 'interactive_approver',
+        details: { input: request.input },
+      }).catch(() => {});
       if (approved) {
         return {
           ...decision,
@@ -386,6 +397,22 @@ export class PolicyEngine {
         reasons: [...decision.reasons, 'approval callback failed; denying'],
       };
     }
+  }
+
+  /**
+   * Explains how a shell command would be classified by policy without executing it.
+   * Useful for operators inspecting policy rules and command security.
+   */
+  explainCommand(command: string, projectRoot?: string): PolicyDecision {
+    const root = projectRoot ?? this.options.projectRoot;
+    const request: PolicyActionRequest = {
+      tool: 'shell',
+      input: { command },
+      projectRoot: root,
+    };
+    const decision = this.classify(request);
+    decision.command = command;
+    return decision;
   }
 
   classify(request: PolicyActionRequest): PolicyDecision {

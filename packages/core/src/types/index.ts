@@ -16,7 +16,7 @@ export * from './benchmark.js';
 export * from './block.js';
 
 export type { OSInfo } from './computer.js';
-export { effectiveContextTokens } from './model.js';
+export { effectiveContextTokens, estimateModelMemory } from './model.js';
 export type { AgentAdapter, AgentRuntime } from './agent.js';
 export type { ToolExecutionContext, Tool } from './tool.js';
 export * from './job.js';

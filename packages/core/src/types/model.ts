@@ -79,3 +79,50 @@ export interface ModelRequirements {
 export function effectiveContextTokens(model: Pick<ModelRecord, 'contextMax' | 'configuredContext'>): number {
   return model.configuredContext ?? model.contextMax;
 }
+
+/**
+ * Estimates minimum system RAM needed to host a model based on parameter size,
+ * quantization, and context/runtime overhead.
+ */
+export function estimateModelMemory(
+  parameters?: string,
+  modelId?: string,
+  quantization?: string,
+): { minSystemGB: number; minGpuGB?: number } {
+  let paramBillion: number | undefined;
+  if (parameters) {
+    const match = parameters.trim().match(/^([0-9.]+)\s*([bBmM])?$/);
+    if (match) {
+      const num = parseFloat(match[1]);
+      const unit = (match[2] ?? 'B').toUpperCase();
+      if (unit === 'M') {
+        paramBillion = num / 1000;
+      } else {
+        paramBillion = num;
+      }
+    }
+  }
+
+  if (paramBillion === undefined && modelId) {
+    const match = modelId.match(/[:\-_]([0-9.]+)b(?::|[\-_]|$)/i);
+    if (match) {
+      paramBillion = parseFloat(match[1]);
+    }
+  }
+
+  if (paramBillion !== undefined && !isNaN(paramBillion) && paramBillion > 0) {
+    const is8Bit = quantization?.toLowerCase().includes('q8') || quantization?.toLowerCase().includes('8bit');
+    const is16Bit = quantization?.toLowerCase().includes('16') || quantization?.toLowerCase().includes('f16');
+    const bytesPerParam = is16Bit ? 2.2 : is8Bit ? 1.2 : 0.75;
+    const estimatedGB = Math.max(1, Math.ceil(paramBillion * bytesPerParam + 1.5));
+    return {
+      minSystemGB: estimatedGB,
+      minGpuGB: undefined,
+    };
+  }
+
+  return {
+    minSystemGB: 8,
+    minGpuGB: undefined,
+  };
+}

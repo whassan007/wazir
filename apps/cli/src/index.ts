@@ -406,7 +406,31 @@ policyCmd
     console.log(inspectPolicy(engine));
   });
 
+policyCmd
+  .command('explain <command>')
+  .description('Explain policy classification and decision for a shell command')
+  .option('--json', 'Output decision as JSON')
+  .action(async (command: string, opts: { json?: boolean }) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { explainPolicyCommand } = await import('./commands.js');
+    console.log(explainPolicyCommand(engine, command, opts));
+  });
+
 program.addCommand(policyCmd);
+
+// audit command
+program
+  .command('audit')
+  .description('Inspect the append-only security and policy audit log')
+  .option('-n, --limit <number>', 'Maximum number of events to show', (val) => parseInt(val, 10), 50)
+  .option('--tool <name>', 'Filter by tool name')
+  .option('--decision <allow|ask|deny>', 'Filter by policy decision')
+  .option('--json', 'Output audit events as JSON')
+  .action(async (opts: { limit?: number; tool?: string; decision?: 'allow' | 'ask' | 'deny'; json?: boolean }) => {
+    const { auditCommand } = await import('./commands.js');
+    console.log(await auditCommand(opts));
+  });
 
 // config command
 const configCmd = new Command()

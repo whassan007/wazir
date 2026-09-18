@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { ModelRegistry, ComputerRegistry, RuntimeRegistry } from '@wazir/core';
+import { ModelRegistry, ComputerRegistry, RuntimeRegistry, estimateModelMemory } from '@wazir/core';
 import type { DiscoveredModel, RuntimeInfo } from '@wazir/runtimes-interfaces';
 import { createMockOllamaServer, createMockLMStudioServer, type MockServerHandle } from '../runtime/mockRuntimeServer.js';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
@@ -19,6 +19,7 @@ function registerDiscoveredModel(
   discovered: DiscoveredModel,
   computerId: string,
   config: MockEngineConfig,
+  isLoaded: boolean = false,
 ): void {
   const provider = runtime.id;
   const configured = config.modelContext[discovered.id];
@@ -38,10 +39,7 @@ function registerDiscoveredModel(
     audio: false,
     embedding: false,
     reasoning: false,
-    memory: {
-      minSystemGB: 8, // Tracked gap F4: hardcoded 8GB
-      minGpuGB: undefined,
-    },
+    memory: estimateModelMemory(discovered.parameters, discovered.id, discovered.quantization),
     runtimeCompatibility: 'any',
     local: true,
     createdAt: new Date(),
@@ -54,7 +52,7 @@ function registerDiscoveredModel(
     computerId,
     runtimeId: provider,
     runtimeModelId: discovered.id,
-    loaded: false, // Tracked gap F1: always false
+    loaded: isLoaded,
     health: runtime.health === 'healthy' ? 'healthy' : 'degraded',
     contextTokens: contextMax,
   });
@@ -153,8 +151,8 @@ describe('Section 3 & 8b: Discovery and Model Registries (model_cycle.md)', () =
     });
   });
 
-  describe('Section 0 / F4 Regression Test: Memory Awareness is Static 8GB', () => {
-    it('asserts every newly discovered ModelRecord currently hardcodes minSystemGB === 8 regardless of size', () => {
+  describe('Section 0 / F4 Regression Test: Memory Awareness is Sized Dynamically', () => {
+    it('asserts model memory is sized according to model parameters (M0)', () => {
       const models = new ModelRegistry();
 
       // Small embedding model (e.g. 100MB)
@@ -180,15 +178,15 @@ describe('Section 3 & 8b: Discovery and Model Registries (model_cycle.md)', () =
       const embedRecord = models.get('nomic-embed:latest');
       const giantRecord = models.get('deepseek-v3:120b');
 
-      // Tracked Gap F4: both get 8GB minSystemGB
-      expect(embedRecord?.memory?.minSystemGB).toBe(8);
-      expect(giantRecord?.memory?.minSystemGB).toBe(8);
+      // M0: dynamic memory estimation distinguishes small embedding vs giant model
+      expect(embedRecord?.memory?.minSystemGB).toBe(2);
+      expect(giantRecord?.memory?.minSystemGB).toBe(92);
       expect(embedRecord?.memory?.minGpuGB).toBeUndefined();
     });
   });
 
-  describe('Section 0 / F1 Regression Test: ModelInstance.loaded is Dead State', () => {
-    it('asserts every ModelInstance has loaded === false after discovery even if runtime reports resident', async () => {
+  describe('Section 0 / F1 Regression Test: ModelInstance.loaded State & setInstanceLoaded', () => {
+    it('asserts ModelInstance reflects resident state and setInstanceLoaded works (M0)', async () => {
       const models = new ModelRegistry();
       const ollama = createOllamaAdapter(ollamaServer.url);
 
@@ -196,7 +194,7 @@ describe('Section 3 & 8b: Discovery and Model Registries (model_cycle.md)', () =
       const residentModels = await ollama.getLoadedModels();
       expect(residentModels).toContain('qwen2.5:latest');
 
-      // Discover and register
+      // Discover and register with resident status
       const discovered: DiscoveredModel = { id: 'qwen2.5:latest' };
       registerDiscoveredModel(
         models,
@@ -204,12 +202,20 @@ describe('Section 3 & 8b: Discovery and Model Registries (model_cycle.md)', () =
         discovered,
         'local-machine',
         { modelCapabilities: {}, modelContext: {} },
+        residentModels.includes('qwen2.5:latest'),
       );
 
       const instances = models.instancesOf('qwen2.5:latest');
       expect(instances.length).toBe(1);
-      // Tracked Gap F1: loaded is hardcoded to false regardless of getLoadedModels()
-      expect(instances[0].loaded).toBe(false);
+      expect(instances[0].loaded).toBe(true);
+
+      // Verify setInstanceLoaded allows changing loaded state
+      const flipped = models.setInstanceLoaded(instances[0].id, false);
+      expect(flipped).toBe(true);
+      expect(models.instancesOf('qwen2.5:latest')[0].loaded).toBe(false);
+
+      models.setInstanceLoaded(instances[0].id, true);
+      expect(models.instancesOf('qwen2.5:latest')[0].loaded).toBe(true);
     });
   });
 

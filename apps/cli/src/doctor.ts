@@ -236,6 +236,67 @@ function checkSchedulerReadiness(engine: RookEngine): DoctorCheck {
   }
 }
 
+function checkSecurity(engine: RookEngine): DoctorCheck {
+  try {
+    const allowUnauthenticated = process.env.WAZIR_ALLOW_UNAUTHENTICATED === '1';
+    const hasApiToken = Boolean(process.env.WAZIR_API_TOKEN ?? engine.config.apiToken);
+    const hasRegToken = Boolean(process.env.WAZIR_REGISTRATION_TOKEN ?? engine.config.registrationToken);
+    const childEnv = process.env.WAZIR_CHILD_ENV;
+
+    const details: string[] = [];
+    if (childEnv) {
+      details.push(`WAZIR_CHILD_ENV: configured (${childEnv.split(',').filter(Boolean).length} additional variable(s) passed to tool processes)`);
+    } else {
+      details.push('WAZIR_CHILD_ENV: not set (tool processes inherit minimal default environment: PATH, HOME, TMPDIR, USER)');
+    }
+
+    if (allowUnauthenticated) {
+      return {
+        name: 'api security & tokens',
+        status: 'WARN',
+        message: 'unauthenticated access enabled (WAZIR_ALLOW_UNAUTHENTICATED=1)',
+        details: [
+          ...details,
+          'Warning: cluster accepts unauthenticated requests from loopback/local clients.',
+          'For production deployments, unset WAZIR_ALLOW_UNAUTHENTICATED and configure WAZIR_API_TOKEN and WAZIR_REGISTRATION_TOKEN.',
+        ].join('\n'),
+      };
+    }
+
+    if (!hasApiToken && !hasRegToken) {
+      return {
+        name: 'api security & tokens',
+        status: 'WARN',
+        message: 'no cluster tokens configured',
+        details: [
+          ...details,
+          'Neither WAZIR_API_TOKEN nor WAZIR_REGISTRATION_TOKEN is set.',
+          'API endpoints and worker registrations will reject unauthenticated calls.',
+          'Set WAZIR_API_TOKEN (operator), WAZIR_API_VIEWER_TOKEN (viewer), and WAZIR_REGISTRATION_TOKEN in your environment.',
+        ].join('\n'),
+      };
+    }
+
+    return {
+      name: 'api security & tokens',
+      status: 'PASS',
+      message: 'cluster tokens configured',
+      details: [
+        ...details,
+        `API operator token: ${hasApiToken ? 'configured' : 'not set'}`,
+        `Registration token: ${hasRegToken ? 'configured' : 'not set'}`,
+      ].join('\n'),
+    };
+  } catch (error) {
+    return {
+      name: 'api security & tokens',
+      status: 'FAIL',
+      message: 'security check error',
+      details: (error as Error).message,
+    };
+  }
+}
+
 export function doctor(engine: RookEngine): DoctorReport {
   const checks: DoctorCheck[] = [
     checkConfig(engine),
@@ -247,6 +308,7 @@ export function doctor(engine: RookEngine): DoctorReport {
     checkModelAvailability(engine),
     checkRequiredPermissions(engine),
     checkSchedulerReadiness(engine),
+    checkSecurity(engine),
   ];
   
   const summary = {

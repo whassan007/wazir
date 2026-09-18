@@ -93,31 +93,44 @@ plane, loopback-only Compose with required tokens, policy engine hardened
 against newline injection / host reads / exec & output flags / git config
 tricks / protected-path writes, approval queue timeout and env-gating, minimal
 child env + secret redaction + escape stripping, `0600` store, crypto ids,
-`npm run check-dist` in CI. 47 test files / 461 tests green.
+`npm run check-dist` in CI. 48 test files / 470 tests green.
 
 ## Open work
 
-Nothing structural is missing relative to the architecture — what's left is
-cross-cutting hardening, not new features.
+Remaining work centers on runtime isolation and second-pass verification.
+
+### Completed Hardening Steps
+
+1. **Mandatory API Tokens & Worker Token Persistence** (Done).
+   - Tokens are required on API endpoints unless `WAZIR_ALLOW_UNAUTHENTICATED=1` is explicitly set.
+   - Worker token hashes (SHA-256) are persisted via `KeyValueStore` under `auth:computer:<id>` so workers survive API restarts without re-registration.
+   - `wa doctor` inspects cluster tokens and warns if running unauthenticated.
+   - `tests/integration/trackedSecurityDebt.test.ts` asserts 401 on unauthenticated access.
+2. **RBAC Operator vs Viewer Scopes** (Done).
+   - Scopes split into `operator` (dispatch, write) and `viewer` (read inventory, history, metrics).
+   - `WAZIR_API_VIEWER_TOKEN` configured and enforced; viewer tokens are rejected with 403 on task dispatch.
+3. **Native TLS** (Done).
+   - Native HTTPS support in `apps/api/src/main.ts` via `WAZIR_TLS_CERT` and `WAZIR_TLS_KEY`.
+4. **Append-Only JSONL Audit Log & Policy Command** (Done).
+   - `appendAuditEvent` and `readAuditEvents` in `@wazir/shared` enforcing file mode `0600` and directory mode `0700`.
+   - Wired into `ExecutionEngine.recordPolicy()`, `ApprovalQueue`, and `PolicyEngine` interactive approver.
+   - Added `wa audit` command to CLI (`--limit`, `--tool`, `--decision`, `--json`).
+5. **Observability: Prometheus `/metrics` Exporter** (Done).
+   - Prometheus exporter on `GET /metrics` reporting `wazir_auth_failures_total`, `wazir_dispatched_tasks_total`, `wazir_completed_tasks_total`, `wazir_failed_tasks_total`, `wazir_dispatch_queue_depth`, `wazir_registered_computers`, `wazir_online_computers`, `wazir_active_sse_streams`.
+6. **Policy UX Follow-ups** (Done).
+   - Added `wa policy explain "<command>"` sub-command and `PolicyEngine.explainCommand()` displaying decision, rule, and reasons.
+   - Added `WAZIR_CHILD_ENV` documentation and token check in `wa doctor`.
+7. **Model Cycle M0 Implementation** (Done).
+   - `ModelRegistry.setInstanceLoaded()` added.
+   - `apps/cli/src/engine.ts` queries `adapter.getLoadedModels()` to mark resident instances `loaded: true` instead of dead state `loaded: false`.
+   - Dynamic memory sizing `estimateModelMemory()` implemented based on parameter scale (e.g. 137M -> 2GB, 120B -> 92GB) rather than hardcoded 8GB.
+   - `Scheduler.scheduleComputer()` honors `computer.load?.memoryAvailableGB` and rejects under-resourced nodes when free memory is insufficient.
+   - `Scheduler.scheduleComputer()` reads and enforces `ModelRecord.runtimeCompatibility`.
+   - LM Studio reasoning streaming support (`reasoning_content` delta parsing).
 
 ### Next steps (planned order)
 
-1. **Make API tokens mandatory & persist worker identity** (S). Today both
-   cluster tokens are optional on a loopback dev instance (tracked in
-   `trackedSecurityDebt.test.ts`) and per-computer tokens live in API memory,
-   so an API restart forces workers to re-register with the cluster secret.
-   Plan: require tokens unless `WAZIR_ALLOW_UNAUTHENTICATED=1`; store SHA-256
-   token hashes in the `KeyValueStore` so they survive restarts; add
-   `wa doctor` checks for missing tokens. Flip the tracked-debt test to 401.
-2. **RBAC on the operator token** (M). Split into `operator` (dispatch, write)
-   and `viewer` (read inventory/history) scopes; the web dashboard should
-   hold only a viewer token. Add `WAZIR_API_VIEWER_TOKEN`; deny dispatch
-   with it.
-3. **TLS / proxy story** (S). Document an nginx/Caddy example in
-   `docker-compose.yml` (profile `tls`) so tokens never travel in clear text
-   off-box; optionally native `https` in `apps/api/src/main.ts` via
-   `WAZIR_TLS_CERT`/`WAZIR_TLS_KEY`.
-4. **Container/namespace sandbox for tool execution — F-27** (L). The
+1. **Container/namespace sandbox for tool execution — F-27** (L). The
    remaining structural risk: `shell` still runs `sh -c` on the host, so the
    safe-binary flag tables are a deny list by nature. Plan: `bwrap` (Linux)
    / `sandbox-exec` (macOS) wrapper in `packages/tools/src/process.ts` with
@@ -125,27 +138,13 @@ cross-cutting hardening, not new features.
    `networkAllowed`, and the already-minimal env. Keep host mode as an
    explicit fallback (`WAZIR_SANDBOX=none`) and pin the mode in the
    execution record. Then shrink the policy tables to "allow inside sandbox".
-5. **Audit log & policy event export** (M). Every `PolicyDecision` and
-   approval resolution already lands in the execution record; expose them as
-   an append-only JSONL audit file (`~/.wazir/audit.jsonl`, `0600`) and a
-   `wa audit` command, so an operator can answer "what did agent X run and
-   who approved it" without parsing the store.
-6. **Observability** (M). Wire the metrics exporter (`/metrics`, tracked
-   debt F-28) with per-route auth failures, dispatch queue depth, approval
-   wait time; OpenTelemetry traces optional.
-7. **Second-pass security review** (S). Re-run the `sec_review.md` Part 3
+2. **Second-pass security review** (S). Re-run the `sec_review.md` Part 3
    prompt against the remediated tree with a different model, focused on the
    new surface: `apps/api/src/auth.ts`, the safe-command argument classifier,
-   redaction false negatives, and the sandbox once (4) lands.
-8. **Policy UX follow-ups** (S). `allowCommands` prefix whitelist for the
-   new path-containment denials (`ls /`, `df /`), a `wa policy explain
-   "<command>"` command that prints the classification and reasons, and
-   `WAZIR_CHILD_ENV` documentation in `wa doctor` output.
+   redaction false negatives, and the sandbox once (1) lands.
 
 ### Other open items
 
-- **Observability** — in-memory ring buffer only; no OpenTelemetry traces or
-  Prometheus metrics (see step 6).
 - **CI** — `.github/workflows/ci.yml` runs build/typecheck/check-dist/test on
   push and PR; branch protection on `main` is not yet enabled in GitHub.
 - **MCP is policy-only** — `MCPClient` (`packages/core/src/services/mcpClient.ts`)
@@ -157,11 +156,9 @@ cross-cutting hardening, not new features.
   `@wazir/runtimes-lmstudio` exist; despite the `RuntimeAdapter` interface
   being provider-agnostic, nothing implements it against an OpenAI-compatible
   HTTP API yet.
-- Two dead fields need a design decision, not a mechanical fix:
-  `ComputerRegistry`'s per-computer `health: 'degraded'` (nothing sets it) and
-  `ModelRecord.runtimeCompatibility` (not read by the Scheduler).
 - macOS DMG packaging (`scripts/build-dmg.sh`) is branding-correct and
   syntax-checked but has never actually been run on macOS — everything else
   in this file was verified by running it, this one path was not.
 - Shell UX spec phases D (`--json` everywhere) and E (session export) were
   never started (only A–C above are done).
+

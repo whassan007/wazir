@@ -15,6 +15,7 @@ import {
   RuntimeRegistry,
   Scheduler,
   WorktreeManager,
+  estimateModelMemory,
 } from '@wazir/core';
 import type {
   ComputerRegistration,
@@ -189,6 +190,16 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
         runtimeHealth: { [discoveredRuntime.id]: { status: discoveredRuntime.health === "healthy" ? "healthy" : "unhealthy" } },
       });
 
+      let loadedModelIds = new Set<string>();
+      try {
+        if (discoveredRuntime.adapter?.getLoadedModels) {
+          const loaded = await discoveredRuntime.adapter.getLoadedModels();
+          loadedModelIds = new Set(loaded);
+        }
+      } catch {
+        // Best effort query for resident models
+      }
+
       for (const discoveredModel of discoveredRuntime.models) {
         registerModel(
           models,
@@ -196,6 +207,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
           discoveredModel,
           localComputer.id,
           config,
+          loadedModelIds,
         );
       }
     }
@@ -320,6 +332,7 @@ function registerModel(
   discovered: DiscoveredModel,
   computerId: string,
   config: WazirConfig,
+  loadedModelIds: Set<string> = new Set(),
 ): void {
   const provider = runtime.id;
   const capabilities: ModelCapability[] = dedupe([
@@ -354,10 +367,7 @@ function registerModel(
     embedding: discovered.embedding ?? false,
     reasoning: discovered.reasoning ?? false,
     quantization: discovered.quantization,
-    memory: {
-      minSystemGB: 8,
-      minGpuGB: undefined,
-    },
+    memory: estimateModelMemory(discovered.parameters, discovered.id, discovered.quantization),
     runtimeCompatibility: provider === 'ollama' ? ['ollama'] : provider === 'lmstudio' ? ['lmstudio'] : 'any',
     local: true,
     createdAt: new Date(),
@@ -366,13 +376,18 @@ function registerModel(
 
   models.register(record);
 
+  const isLoaded =
+    loadedModelIds.has(discovered.id) ||
+    (discovered.name ? loadedModelIds.has(discovered.name) : false) ||
+    Array.from(loadedModelIds).some((id) => id.startsWith(discovered.id) || discovered.id.startsWith(id));
+
   models.upsertInstance({
     id: `${discovered.id}::${computerId}::${provider}`,
     modelId: discovered.id,
     computerId,
     runtimeId: provider,
     runtimeModelId: discovered.id,
-    loaded: false,
+    loaded: isLoaded,
     health: runtime.health === 'healthy' ? 'healthy' : 'degraded',
     contextTokens: contextMax,
   });

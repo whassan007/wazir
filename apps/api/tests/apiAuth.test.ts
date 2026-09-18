@@ -4,13 +4,16 @@ import type { Server } from 'node:http';
 import { createApiState, createApp } from '../src/server.js';
 import type { WorkerExecutionRequest } from '@wazir/core';
 
+import { MemoryStore } from '@wazir/shared';
+
 /**
  * Security review F-1, F-2, F-3, F-15, F-17, F-18, F-19: control-plane
  * authentication and bounds. Each test is the deterministic remediation
  * check from sec_review_results.md §14 for that finding.
  */
-async function startServer(auth?: { operatorToken?: string; registrationToken?: string }) {
-  const state = await createApiState({ auth: auth ?? {} });
+async function startServer(auth?: { operatorToken?: string; registrationToken?: string; viewerToken?: string; allowUnauthenticated?: boolean; store?: any }) {
+  const authOpts = auth ? { ...auth } : { allowUnauthenticated: true };
+  const state = await createApiState({ auth: authOpts, store: auth?.store });
   const app = createApp(state);
   const server: Server = app.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -257,5 +260,113 @@ describe('control-plane authentication', () => {
     }
     await fetch(`${started.baseUrl}/executions`, json({ input: 'x' }));
     expect(started.state.executions.length).toBe(5_000);
+  });
+
+  it('RBAC: viewer token can read inventory and history but is denied dispatch and mutations (403)', async () => {
+    const started = await startServer({
+      operatorToken: 'op-secret',
+      viewerToken: 'view-secret',
+      allowUnauthenticated: false,
+    });
+    servers.push(started.server);
+
+    // Read routes: viewer token succeeds
+    const overview = await fetch(`${started.baseUrl}/api/v1/overview`, { headers: { Authorization: 'Bearer view-secret' } });
+    expect(overview.status).toBe(200);
+
+    const computers = await fetch(`${started.baseUrl}/api/v1/computers`, { headers: { Authorization: 'Bearer view-secret' } });
+    expect(computers.status).toBe(200);
+
+    const executions = await fetch(`${started.baseUrl}/api/v1/executions`, { headers: { Authorization: 'Bearer view-secret' } });
+    expect(executions.status).toBe(200);
+
+    // Mutation / dispatch: viewer token returns 403 Forbidden
+    const dispatch = await fetch(`${started.baseUrl}/api/v1/tasks/dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer view-secret' },
+      body: JSON.stringify({ computerId: 'local', request: request('req-view-denied') }),
+    });
+    expect(dispatch.status).toBe(403);
+    const dispatchBody = await dispatch.json();
+    expect(dispatchBody.error).toContain('operator scope required');
+
+    const execMutation = await fetch(`${started.baseUrl}/executions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer view-secret' },
+      body: JSON.stringify({ input: 'mutation test' }),
+    });
+    expect(execMutation.status).toBe(403);
+
+    // Operator token succeeds on mutation and dispatch
+    const execOp = await fetch(`${started.baseUrl}/executions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer op-secret' },
+      body: JSON.stringify({ input: 'operator mutation' }),
+    });
+    expect(execOp.status).toBe(201);
+  });
+
+  it('Token persistence: computer token hash in KeyValueStore survives restart and worker authenticates without re-registering', async () => {
+    const store = new MemoryStore();
+
+    // Start instance 1 with the shared store
+    const server1 = await startServer({ allowUnauthenticated: true, store });
+    servers.push(server1.server);
+
+    const reg = await register(server1.baseUrl, 'comp-persistent');
+    expect(reg.status).toBe(200);
+    const token = reg.token!;
+    expect(token).toBeDefined();
+
+    // Heartbeat works on server 1
+    const hb1 = await fetch(`${server1.baseUrl}/computers/comp-persistent/heartbeat`, json({}, token));
+    expect(hb1.status).toBe(200);
+
+    // Close server 1
+    await new Promise<void>((resolve) => server1.server.close(() => resolve()));
+
+    // Start instance 2 with the SAME store — plaintext in memory is gone, but hash survives
+    const server2 = await startServer({ allowUnauthenticated: true, store });
+    servers.push(server2.server);
+
+    // Re-register local computer record on server 2's registry for routing lookup
+    server2.state.computers.register({
+      id: 'comp-persistent',
+      name: 'Persistent Node',
+      type: 'workstation',
+      local: false,
+    });
+
+    // Heartbeat on server 2 succeeds with the SAME worker token without re-registration!
+    const hb2 = await fetch(`${server2.baseUrl}/computers/comp-persistent/heartbeat`, json({}, token));
+    expect(hb2.status).toBe(200);
+
+    // Wrong token still rejected
+    const badHb = await fetch(`${server2.baseUrl}/computers/comp-persistent/heartbeat`, json({}, 'wrong-token-abc'));
+    expect(badHb.status).toBe(401);
+  });
+
+  it('Prometheus metrics: /metrics exports counters and gauges', async () => {
+    const started = await startServer({ allowUnauthenticated: true });
+    servers.push(started.server);
+
+    const metricsRes = await fetch(`${started.baseUrl}/metrics`);
+    expect(metricsRes.status).toBe(200);
+    const text = await metricsRes.text();
+    expect(text).toContain('wazir_auth_failures_total');
+    expect(text).toContain('wazir_dispatch_queue_depth');
+    expect(text).toContain('wazir_registered_computers');
+    expect(text).toContain('wazir_online_computers');
+  });
+
+  it('Mandatory tokens: when allowUnauthenticated is false, registrations and dispatches without credentials return 401', async () => {
+    const started = await startServer({ allowUnauthenticated: false });
+    servers.push(started.server);
+
+    const reg = await fetch(`${started.baseUrl}/computers/register`, json({ id: 'no-auth', name: 'No Auth', type: 'workstation' }));
+    expect(reg.status).toBe(401);
+
+    const dispatch = await fetch(`${started.baseUrl}/api/v1/tasks/dispatch`, json({ computerId: 'local', request: request('no-auth') }));
+    expect(dispatch.status).toBe(401);
   });
 });

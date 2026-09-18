@@ -3,7 +3,7 @@ import { writeFileSync, readFileSync } from 'node:fs';
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
 import { configFile, loadConfig, type WazirConfig } from './config.js';
-import type { ComputerRegistration } from '@wazir/core';
+import { estimateModelMemory, type ComputerRegistration } from '@wazir/core';
 
 export interface InitOptions {
   force?: boolean;
@@ -210,7 +210,7 @@ export async function init(engine: RookEngine, options: InitOptions = {}): Promi
             embedding: model.embedding ?? false,
             reasoning: model.reasoning ?? false,
             quantization: model.quantization,
-            memory: { minSystemGB: 8, minGpuGB: undefined },
+            memory: estimateModelMemory(model.parameters, model.id, model.quantization),
             runtimeCompatibility: discovered.id === 'ollama' ? ['ollama'] : discovered.id === 'lmstudio' ? ['lmstudio'] : 'any',
             local: true,
             createdAt: new Date(),

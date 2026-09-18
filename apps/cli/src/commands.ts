@@ -2,7 +2,7 @@ import type { TaskType } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
 import { executeTask, planTask } from './run.js';
-import { tokensPerSecond } from '@wazir/shared';
+import { tokensPerSecond, readAuditEvents, type AuditEvent } from '@wazir/shared';
 
 function table(headers: string[], rows: string[][]): string {
   const widths = headers.map((h, i) =>
@@ -872,4 +872,79 @@ export async function explainCommand(engine: RookEngine, ref: string, json?: boo
     ),
   };
 }
+
+export interface AuditCommandOptions {
+  limit?: number;
+  tool?: string;
+  decision?: 'allow' | 'ask' | 'deny';
+  json?: boolean;
+}
+
+export async function auditCommand(options: AuditCommandOptions = {}): Promise<string> {
+  const events = await readAuditEvents({
+    limit: options.limit ?? 50,
+    tool: options.tool,
+    decision: options.decision,
+  });
+
+  if (events.length === 0) {
+    return options.json ? '[]' : color.yellow('no audit events recorded yet');
+  }
+
+  if (options.json) {
+    return JSON.stringify(events, null, 2);
+  }
+
+  const rows = events.map((e) => {
+    const time = e.timestamp.replace('T', ' ').slice(0, 19);
+    const decColor =
+      e.decision === 'allow' ? color.green :
+      e.decision === 'ask' ? color.yellow :
+      e.decision === 'deny' ? color.red :
+      color.gray;
+    const decisionStr = e.decision ? decColor(e.decision) : '—';
+    const detail = e.command
+      ? e.command.slice(0, 40)
+      : (e.reasons?.[0] ?? e.rule ?? '—').slice(0, 40);
+    return [
+      time,
+      e.type,
+      e.tool ?? '—',
+      decisionStr,
+      e.executionId ?? e.taskId ?? '—',
+      detail,
+    ];
+  });
+
+  return table(['timestamp', 'type', 'tool', 'decision', 'target', 'detail'], rows);
+}
+
+export interface ExplainPolicyOptions {
+  json?: boolean;
+}
+
+export function explainPolicyCommand(engine: RookEngine, command: string, options: ExplainPolicyOptions = {}): string {
+  const decision = engine.policy.explainCommand(command);
+  if (options.json) {
+    return JSON.stringify(decision, null, 2);
+  }
+
+  const lines: string[] = [];
+  lines.push(color.bold('Policy Explanation'));
+  lines.push(`  Command:   ${command}`);
+  const decColor =
+    decision.decision === 'allow' ? color.green :
+    decision.decision === 'ask' ? color.yellow :
+    color.red;
+  lines.push(`  Decision:  ${decColor(decision.decision.toUpperCase())}`);
+  lines.push(`  Rule:      ${decision.rule}`);
+  if (decision.reasons && decision.reasons.length > 0) {
+    lines.push(color.bold('  Reasons:'));
+    for (const r of decision.reasons) {
+      lines.push(`    - ${r}`);
+    }
+  }
+  return lines.join('\n');
+}
+
 

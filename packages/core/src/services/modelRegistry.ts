@@ -39,6 +39,11 @@ export class ModelRegistry {
     return updated;
   }
 
+  setInstanceLoaded(instanceId: string, loaded: boolean): boolean {
+    const updated = this.setInstanceHealth(instanceId, { loaded });
+    return updated !== undefined;
+  }
+
   get(id: string): ModelRecord | undefined {
     return this.records.get(id);
   }
