@@ -1,11 +1,15 @@
 import { spawn } from 'node:child_process';
 
+import { sandboxDegraded, sandboxStatus, wrapInSandbox, type SandboxMode } from './sandbox.js';
+
 export interface CommandResult {
   code: number;
   stdout: string;
   stderr: string;
   durationMs: number;
   timedOut: boolean;
+  /** How the process was isolated from the host (`none` = plain host execution). */
+  sandbox: SandboxMode;
 }
 
 export interface RunOptions {
@@ -13,7 +17,18 @@ export interface RunOptions {
   timeoutMs?: number;
   env?: Record<string, string>;
   maxBuffer?: number;
+  /**
+   * Directory the command may write to. Defaults to `cwd`. Set explicitly
+   * when `cwd` is a subdirectory of the project.
+   */
+  projectRoot?: string;
+  /** Allow outbound network from the child (default false). */
+  networkAllowed?: boolean;
+  /** Skip the OS sandbox for this call (e.g. orchestrator-internal git). */
+  unsandboxed?: boolean;
 }
+
+let warnedDegraded = false;
 
 // Variables a child needs to behave like a normal shell session. Everything
 // else in the operator's environment (API keys, database URLs, cloud
@@ -66,14 +81,29 @@ function runProcess(
   const started = Date.now();
   const maxBuffer = options.maxBuffer ?? 1024 * 1024;
 
+  const wrapped = options.unsandboxed
+    ? { file, args, mode: 'none' as SandboxMode }
+    : wrapInSandbox(file, args, {
+        projectRoot: options.projectRoot ?? options.cwd,
+        cwd: options.cwd,
+        networkAllowed: options.networkAllowed ?? false,
+      });
+  if (!options.unsandboxed && wrapped.mode === 'none' && !warnedDegraded && sandboxDegraded()) {
+    warnedDegraded = true;
+    console.error(`[wazir] tool sandbox unavailable — running tool processes directly on the host (${sandboxStatus().reason ?? 'no backend'})`);
+  }
+  // bwrap sets the working directory itself (--chdir) and the host cwd may
+  // not exist inside the sandbox mount tree in the same form.
+  const spawnCwd = wrapped.mode === 'bwrap' ? undefined : options.cwd;
+
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
     let settled = false;
     let timedOut = false;
 
-    const child = spawn(file, args, {
-      cwd: options.cwd,
+    const child = spawn(wrapped.file, wrapped.args, {
+      cwd: spawnCwd,
       env: childEnvironment(options.env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -87,7 +117,7 @@ function runProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code, stdout, stderr, durationMs: Date.now() - started, timedOut });
+      resolve({ code, stdout, stderr, durationMs: Date.now() - started, timedOut, sandbox: wrapped.mode });
     };
 
     child.stdout.on('data', (chunk: Buffer) => {

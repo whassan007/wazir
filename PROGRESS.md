@@ -128,20 +128,32 @@ Remaining work centers on runtime isolation and second-pass verification.
    - `Scheduler.scheduleComputer()` reads and enforces `ModelRecord.runtimeCompatibility`.
    - LM Studio reasoning streaming support (`reasoning_content` delta parsing).
 
+**Tool sandbox — F-27 (2026-09-18)** — `packages/tools/src/sandbox.ts` wraps
+every `shell`/`git`/check-tool subprocess in `bwrap` (Linux) or `sandbox-exec`
+(macOS): read-only host filesystem, project directory the only writable tree,
+private `/tmp`, `$HOME` masked except toolchain dirs (`~/.nvm`, `~/.cargo`,
+…) and package caches, `/run` sockets hidden, own PID/IPC/UTS namespaces,
+network only when policy allows. Backend is probed at startup; `WAZIR_SANDBOX=
+auto|bwrap|sandbox-exec|none`. The effective mode is recorded on every tool
+call (`ToolCallRecord.sandbox`) and shown by `wa doctor`. Live enforcement
+tests (`packages/tools/tests/sandbox.test.ts`) run wherever user namespaces
+are available and skip elsewhere — verified end-to-end on Ubuntu with
+`kernel.apparmor_restrict_unprivileged_userns=0`. The policy tables were
+deliberately **not** loosened: the sandbox is defence in depth, `none` is
+still a permitted fallback on hosts without user namespaces.
+
 ### Next steps (planned order)
 
-1. **Container/namespace sandbox for tool execution — F-27** (L). The
-   remaining structural risk: `shell` still runs `sh -c` on the host, so the
-   safe-binary flag tables are a deny list by nature. Plan: `bwrap` (Linux)
-   / `sandbox-exec` (macOS) wrapper in `packages/tools/src/process.ts` with
-   project-only writable mount, read-only `/usr`, no network unless
-   `networkAllowed`, and the already-minimal env. Keep host mode as an
-   explicit fallback (`WAZIR_SANDBOX=none`) and pin the mode in the
-   execution record. Then shrink the policy tables to "allow inside sandbox".
-2. **Second-pass security review** (S). Re-run the `sec_review.md` Part 3
+1. **Second-pass security review** (S). Re-run the `sec_review.md` Part 3
    prompt against the remediated tree with a different model, focused on the
    new surface: `apps/api/src/auth.ts`, the safe-command argument classifier,
-   redaction false negatives, and the sandbox once (1) lands.
+   redaction false negatives, and the sandbox mount table
+   (`bwrapArgs`/`seatbeltProfile`).
+2. **Sandbox hardening follow-ups** (M). Ship an AppArmor profile / docs for
+   enabling user namespaces on Ubuntu ≥ 23.10; consider making `none` an
+   error rather than a warning when `WAZIR_SANDBOX=required`; seccomp filter
+   for bwrap (`--seccomp`) to block `ptrace`/`mount`; per-tool read-only
+   exposure of runtime model caches instead of the whole read-only root.
 
 ### Other open items
 

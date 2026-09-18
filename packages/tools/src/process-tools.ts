@@ -11,7 +11,7 @@ function toToolResult(command: string, result: Awaited<ReturnType<typeof runShel
     output,
     error: result.code === 0 ? undefined : `${command} exited with code ${result.code}${result.timedOut ? ' (timed out)' : ''}`,
     durationMs: result.durationMs,
-    metadata: { exitCode: result.code, timedOut: result.timedOut },
+    metadata: { exitCode: result.code, timedOut: result.timedOut, sandbox: result.sandbox },
   };
 }
 
@@ -40,6 +40,7 @@ export const shellTool: Tool = {
       cwd: ctx.projectRoot,
       timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : 120_000,
       env: ctx.env,
+      networkAllowed: ctx.networkAllowed,
     });
     return toToolResult(command, result);
   },
@@ -65,7 +66,7 @@ export const gitTool: Tool = {
     if (args.length === 0) {
       return { ok: false, output: '', error: 'git requires arguments', durationMs: 0 };
     }
-    const result = await runFile('git', args, { cwd: ctx.projectRoot, timeoutMs: 60_000, env: ctx.env });
+    const result = await runFile('git', args, { cwd: ctx.projectRoot, timeoutMs: 60_000, env: ctx.env, networkAllowed: ctx.networkAllowed });
     return toToolResult(`git ${args.join(' ')}`, result);
   },
 };
@@ -124,6 +125,7 @@ function makeCheckTool(name: string, description: string, defaultScript: string,
           cwd: ctx.projectRoot,
           timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : 300_000,
           env: ctx.env,
+          networkAllowed: ctx.networkAllowed,
         });
         return toToolResult(command, result);
       } catch (error) {

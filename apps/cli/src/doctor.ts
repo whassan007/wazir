@@ -1,6 +1,7 @@
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
 import { createBlock } from './blocks.js';
+import { sandboxStatus } from '@wazir/tools';
 
 export type DoctorStatus = 'PASS' | 'WARN' | 'FAIL' | 'NOT INSTALLED' | 'UNAVAILABLE';
 
@@ -297,6 +298,36 @@ function checkSecurity(engine: RookEngine): DoctorCheck {
   }
 }
 
+function checkSandbox(): DoctorCheck {
+  try {
+    const status = sandboxStatus();
+    if (status.mode !== 'none') {
+      return {
+        name: 'tool sandbox',
+        status: 'PASS',
+        message: `tool processes run under ${status.mode}`,
+        details: 'Project directory writable, home directory masked (toolchains only), private /tmp, network per policy.',
+      };
+    }
+    if (status.requested === 'none') {
+      return {
+        name: 'tool sandbox',
+        status: 'WARN',
+        message: 'disabled (WAZIR_SANDBOX=none)',
+        details: 'Tool processes run directly on the host. Unset WAZIR_SANDBOX to use bwrap/sandbox-exec when available.',
+      };
+    }
+    return {
+      name: 'tool sandbox',
+      status: 'WARN',
+      message: 'unavailable — tool processes run directly on the host',
+      details: status.reason,
+    };
+  } catch (error) {
+    return { name: 'tool sandbox', status: 'FAIL', message: 'sandbox probe error', details: (error as Error).message };
+  }
+}
+
 export function doctor(engine: RookEngine): DoctorReport {
   const checks: DoctorCheck[] = [
     checkConfig(engine),
@@ -309,6 +340,7 @@ export function doctor(engine: RookEngine): DoctorReport {
     checkRequiredPermissions(engine),
     checkSchedulerReadiness(engine),
     checkSecurity(engine),
+    checkSandbox(),
   ];
   
   const summary = {

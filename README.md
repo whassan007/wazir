@@ -223,6 +223,10 @@ Registration returns a per-computer token that the worker then sends on its hear
 
 `docker-compose.yml` requires both cluster tokens and publishes every port on `127.0.0.1` only; put a TLS reverse proxy in front if other hosts must reach the API.
 
+### Tool sandbox
+
+Beyond the policy engine's allow/ask/deny decision, every `shell`, `git` and check-tool subprocess runs inside an OS sandbox when the host supports one: `bwrap` (bubblewrap) on Linux, `sandbox-exec` on macOS. Inside it the host filesystem is read-only, only the project directory and a private `/tmp` are writable, `$HOME` is hidden except for toolchain directories (`~/.nvm`, `~/.cargo`, package caches), runtime sockets under `/run` are masked, and the network is unreachable unless the policy's `networkAccess` allows it. `WAZIR_SANDBOX=auto|bwrap|sandbox-exec|none` selects the backend; the effective mode is stored on every tool call record and reported by `wa doctor`. On Ubuntu ≥ 23.10, bubblewrap needs `kernel.apparmor_restrict_unprivileged_userns=0` or an AppArmor profile — otherwise Wazir warns once and runs tools directly on the host.
+
 ---
 
 ## Persistence

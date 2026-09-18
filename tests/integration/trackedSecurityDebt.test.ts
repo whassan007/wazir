@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createApiState, createApp } from '../../apps/api/src/server.js';
-import { shellTool } from '@wazir/tools';
+import { shellTool, sandboxStatus } from '@wazir/tools';
 import os from 'node:os';
 
 async function startApiServer() {
@@ -109,8 +109,12 @@ describe('Section 15: Tracked Security Debt (Explicit Test Coverage of Known Gap
      * This test documents that bash tools see the host PID and host environment directly.
      * Reference: PROGRESS.md "Open work: Container Sandboxing".
      */
-    it('TRACKED DEBT: tool execution runs directly in host process/namespace without container isolation', async () => {
-      // Execute a bash tool inspecting the current process environment and host identifiers
+    it('F-27: tool results always state which OS sandbox (if any) they ran under', async () => {
+      // `packages/tools/src/sandbox.ts` wraps tool processes in bwrap /
+      // sandbox-exec when the host allows it and reports `none` otherwise
+      // (see `packages/tools/tests/sandbox.test.ts` for enforcement checks).
+      // What remains tracked debt: `none` is a permitted fallback, so on a
+      // host without user namespaces tools still run directly on the host.
       const result = await shellTool.execute(
         { command: 'echo HOST_PID=$$; uname -s' },
         { projectRoot: os.tmpdir(), taskId: 'test-sandboxing', executionId: 'test-sandboxing' } as any,
@@ -118,8 +122,8 @@ describe('Section 15: Tracked Security Debt (Explicit Test Coverage of Known Gap
 
       expect(result.ok).toBe(true);
       expect(result.output).toContain('HOST_PID=');
-      // Proves host OS kernel is directly exposed without hypervisor/container abstraction
-      expect(result.output).toContain(os.type() === 'Linux' ? 'Linux' : os.type());
+      expect(['bwrap', 'sandbox-exec', 'none']).toContain(result.metadata?.sandbox);
+      expect(result.metadata?.sandbox).toBe(sandboxStatus().mode);
     });
   });
 

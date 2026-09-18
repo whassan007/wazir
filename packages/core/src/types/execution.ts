@@ -44,6 +44,8 @@ export interface ToolCallRecord {
   policyRule: string;
   durationMs: number;
   at: Date;
+  /** OS isolation the tool process ran under (`bwrap`, `sandbox-exec`, `none`); absent for in-process tools. */
+  sandbox?: string;
 }
 
 export interface CheckRunRecord {

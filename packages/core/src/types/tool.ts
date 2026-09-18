@@ -33,6 +33,8 @@ export interface ToolExecutionContext {
   projectRoot: string;
   executionId?: string;
   env?: Record<string, string>;
+  /** Policy's network decision for this execution; the OS sandbox enforces it. */
+  networkAllowed?: boolean;
 }
 
 export interface Tool {

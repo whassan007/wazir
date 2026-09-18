@@ -287,7 +287,11 @@ export async function executeTask(
       }
 
       await engine.executions.recordToolStart(executionId, name, input);
-      const result = await runRegisteredTool(engine.tools, name, input, { projectRoot: engine.projectRoot, executionId });
+      const result = await runRegisteredTool(engine.tools, name, input, {
+        projectRoot: engine.projectRoot,
+        executionId,
+        networkAllowed: engine.config.networkAllowed,
+      });
       await engine.executions.recordToolCall(executionId, {
         id: generateId('call-'),
         tool: name,
@@ -299,6 +303,7 @@ export async function executeTask(
         policyRule: decision.rule,
         durationMs: result.durationMs,
         at: new Date(),
+        sandbox: typeof result.metadata?.sandbox === 'string' ? result.metadata.sandbox : undefined,
       });
 
       if (CHECK_TOOLS.has(name)) {

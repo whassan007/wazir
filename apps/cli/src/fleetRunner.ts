@@ -232,6 +232,7 @@ export function createFleetTaskExecutor(
         const result = await runRegisteredTool(engine.tools, name, input, {
           projectRoot: taskRoot,
           executionId,
+          networkAllowed: engine.config.networkAllowed,
         });
 
         await engine.executions.recordToolCall(executionId, {
@@ -245,6 +246,7 @@ export function createFleetTaskExecutor(
           policyRule: decision.rule,
           durationMs: result.durationMs,
           at: new Date(),
+          sandbox: typeof result.metadata?.sandbox === 'string' ? result.metadata.sandbox : undefined,
         });
 
         if (CHECK_TOOLS.has(name)) {
