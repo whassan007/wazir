@@ -89,4 +89,39 @@ export class ComputerRegistry {
   listOnline(): Computer[] {
     return this.list().filter((c) => c.status === 'online');
   }
+
+  checkHeartbeats(thresholds: { staleMs?: number; offlineMs?: number } = {}): {
+    healthy: string[];
+    stale: string[];
+    offline: string[];
+  } {
+    const staleMs = thresholds.staleMs ?? 30_000;
+    const offlineMs = thresholds.offlineMs ?? 60_000;
+    const now = Date.now();
+
+    const result = { healthy: [] as string[], stale: [] as string[], offline: [] as string[] };
+
+    for (const [id, comp] of this.computers.entries()) {
+      const last = comp.lastHeartbeat ? comp.lastHeartbeat.getTime() : comp.createdAt.getTime();
+      const elapsed = now - last;
+
+      if (elapsed >= offlineMs) {
+        comp.status = 'offline';
+        comp.health = 'unavailable';
+        comp.updatedAt = new Date(now);
+        result.offline.push(id);
+      } else if (elapsed >= staleMs) {
+        comp.status = 'online';
+        comp.health = 'degraded';
+        comp.updatedAt = new Date(now);
+        result.stale.push(id);
+      } else {
+        comp.status = 'online';
+        comp.health = 'healthy';
+        result.healthy.push(id);
+      }
+    }
+
+    return result;
+  }
 }

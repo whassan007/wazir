@@ -125,6 +125,11 @@ export class JobOrchestrator {
   }
 
   steerTask(jobId: string, taskId: string, instruction: string): void {
+    const job = this.jobManager.get(jobId);
+    const task = job?.tasks.find((t) => t.id === taskId);
+    if (task && (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled')) {
+      return;
+    }
     let queue = this.steeringQueues.get(taskId);
     if (!queue) {
       queue = [];
@@ -264,8 +269,8 @@ export class JobOrchestrator {
       throw new Error(`Job '${jobId}' not found`);
     }
 
-    if (job.status === 'completed' || job.status === 'cancelled') {
-      return job;
+    if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+      throw new Error(`Cannot run job in status '${job.status}'`);
     }
 
     const executor = options.taskExecutor ?? this.taskExecutor;
@@ -304,6 +309,9 @@ export class JobOrchestrator {
 
       const finishJob = (finalStatus: 'completed' | 'failed' | 'cancelled') => {
         if (isFinished) return;
+        if (job.status === 'cancelled' || jobAbortController.signal.aborted) {
+          finalStatus = 'cancelled';
+        }
         isFinished = true;
         job.status = finalStatus;
         job.completedAt = new Date();
@@ -320,7 +328,28 @@ export class JobOrchestrator {
         resolve(job);
       };
 
+      let isPumping = false;
+      let scheduledPump = false;
+
       const pump = async () => {
+        if (isFinished) return;
+        if (isPumping) {
+          scheduledPump = true;
+          return;
+        }
+        isPumping = true;
+        try {
+          while (!isFinished) {
+            scheduledPump = false;
+            await doPump();
+            if (!scheduledPump) break;
+          }
+        } finally {
+          isPumping = false;
+        }
+      };
+
+      const doPump = async () => {
         if (isFinished) return;
 
         if (jobAbortController.signal.aborted || job.status === 'cancelled') {
@@ -328,16 +357,21 @@ export class JobOrchestrator {
           return;
         }
 
-        // 1. Check for failed dependencies and fail blocked nodes
-        for (const node of job.graph.nodes) {
-          if (node.state === 'idle') {
-            const taskId = node.taskId ?? node.id;
-            if (this.jobManager.hasFailedDependency(job, taskId)) {
-              node.state = 'failed';
-              node.error = 'Dependency failed';
-              await this.jobManager.updateAgentState(job.id, node.id, 'failed', undefined, 'Dependency failed');
-              await this.jobManager.updateTaskStatus(job.id, taskId, 'failed');
-              this.emit(jobId, { type: 'task:failed', jobId, taskId, error: 'Dependency failed' });
+        // 1. Check for failed dependencies and fail blocked nodes (cascade until fixed point)
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const node of job.graph.nodes) {
+            if (node.state === 'idle') {
+              const taskId = node.taskId ?? node.id;
+              if (this.jobManager.hasFailedDependency(job, taskId)) {
+                node.state = 'failed';
+                node.error = 'Dependency failed';
+                await this.jobManager.updateAgentState(job.id, node.id, 'failed', undefined, 'Dependency failed');
+                await this.jobManager.updateTaskStatus(job.id, taskId, 'failed');
+                this.emit(jobId, { type: 'task:failed', jobId, taskId, error: 'Dependency failed' });
+                changed = true;
+              }
             }
           }
         }
@@ -355,10 +389,14 @@ export class JobOrchestrator {
           const task = job.tasks.find((t) => t.id === taskId);
           if (!task) continue;
 
+          const taskAbort = new AbortController();
+          activeTasks.set(taskId, taskAbort);
+
           let assignment: OrchestratorTaskAssignment | null = null;
           try {
             assignment = await this.assignTask(job.id, taskId);
           } catch (err) {
+            activeTasks.delete(taskId);
             const errMessage = err instanceof Error ? err.message : String(err);
             node.state = 'failed';
             node.error = errMessage;
@@ -370,6 +408,8 @@ export class JobOrchestrator {
 
           if (!assignment) {
             // Placement unavailable right now; wait for free resources
+            activeTasks.delete(taskId);
+            readyNodes.unshift(node);
             break;
           }
 
@@ -377,9 +417,6 @@ export class JobOrchestrator {
           node.executedAt = new Date();
           await this.jobManager.updateAgentState(job.id, node.id, 'running');
           await this.jobManager.updateTaskStatus(job.id, taskId, 'running');
-
-          const taskAbort = new AbortController();
-          activeTasks.set(taskId, taskAbort);
 
           this.emit(jobId, {
             type: 'task:started',
@@ -440,8 +477,11 @@ export class JobOrchestrator {
                   usage: outcome.usage,
                 });
               } else {
+                const isPolicyDenial = outcome.error?.toLowerCase().includes('policy') ||
+                  outcome.error?.toLowerCase().includes('denied') ||
+                  outcome.reasons?.some((r) => r.toLowerCase().includes('policy') || r.toLowerCase().includes('deny'));
                 const retries = retryCounts.get(taskId) ?? 0;
-                const maxRetries = job.maxRetries ?? 3;
+                const maxRetries = isPolicyDenial ? 0 : (job.maxRetries ?? 3);
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.state = 'idle';
@@ -455,7 +495,9 @@ export class JobOrchestrator {
                     maxRetries,
                   });
                 } else {
-                  await this.failTask(job.id, taskId, outcome.error ?? 'Task failed', retries);
+                  node.state = 'failed';
+                  node.error = outcome.error ?? 'Task failed';
+                  await this.failTask(job.id, taskId, outcome.error ?? 'Task failed', Infinity);
                   this.emit(jobId, {
                     type: 'task:failed',
                     jobId,
@@ -471,8 +513,9 @@ export class JobOrchestrator {
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
               } else {
+                const isPolicyDenial = errMessage.toLowerCase().includes('policy') || errMessage.toLowerCase().includes('denied');
                 const retries = retryCounts.get(taskId) ?? 0;
-                const maxRetries = job.maxRetries ?? 3;
+                const maxRetries = isPolicyDenial ? 0 : (job.maxRetries ?? 3);
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.state = 'idle';
@@ -486,7 +529,9 @@ export class JobOrchestrator {
                     maxRetries,
                   });
                 } else {
-                  await this.failTask(job.id, taskId, errMessage, retries);
+                  node.state = 'failed';
+                  node.error = errMessage;
+                  await this.failTask(job.id, taskId, errMessage, Infinity);
                   this.emit(jobId, {
                     type: 'task:failed',
                     jobId,
@@ -497,13 +542,15 @@ export class JobOrchestrator {
               }
             } finally {
               activeTasks.delete(taskId);
+              this.steeringQueues.delete(taskId);
               void pump();
             }
           })();
         }
 
         // 4. Check termination: no active tasks running
-        if (activeTasks.size === 0 && !isFinished) {
+        const anyRunning = job.graph.nodes.some((n) => n.state === 'running');
+        if (activeTasks.size === 0 && !anyRunning && !isFinished) {
           const allFinished = job.graph.nodes.every(
             (n) => n.state === 'completed' || n.state === 'failed' || n.state === 'cancelled',
           );
@@ -517,8 +564,9 @@ export class JobOrchestrator {
           const remainingIdle = job.graph.nodes.filter((n) => n.state === 'idle');
           if (remainingIdle.length > 0 && readyNodes.length === 0) {
             for (const deadNode of remainingIdle) {
+              const hasFailedDep = this.jobManager.hasFailedDependency(job, deadNode.taskId ?? deadNode.id);
               deadNode.state = 'failed';
-              deadNode.error = 'Unresolvable dependencies / deadlock';
+              deadNode.error = hasFailedDep ? 'Dependency failed' : 'Unresolvable dependencies / deadlock';
               await this.jobManager.updateAgentState(job.id, deadNode.id, 'failed', undefined, deadNode.error);
               await this.jobManager.updateTaskStatus(job.id, deadNode.taskId ?? deadNode.id, 'failed');
               this.emit(jobId, {

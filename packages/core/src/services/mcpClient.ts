@@ -124,19 +124,18 @@ export class MCPClient {
     return this.initialized;
   }
 
-  private waitForResponse(): Promise<Response | null> {
-    let resolve: (value: Response | null) => void;
-    const promise = new Promise<Response | null>((res) => {
-      resolve = res as any;
+  private async waitForResponse(): Promise<Response | null> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), this.timeoutMs);
     });
 
-    setTimeout(() => {
-      resolve(null);
-    }, this.timeoutMs);
-
-    // In a real implementation, we'd listen for the response on the transport
-    // This is a simplified version
-    return promise as unknown as Promise<Response | null>;
+    try {
+      const response = await Promise.race([this.transport.receive(), timeoutPromise]);
+      return (response as Response | null) ?? null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }
 

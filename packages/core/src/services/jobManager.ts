@@ -27,15 +27,15 @@ function nextJobId(): string {
 export class JobManager {
   private readonly jobs = new Map<string, Job>();
   private readonly persist?: (job: Job) => void | Promise<void>;
+  readonly ready: Promise<void>;
 
   constructor(options: JobManagerOptions = {}) {
     this.persist = options.persist;
-    (async () => {
-      const loaded = await Promise.resolve(options.load?.() ?? []);
+    this.ready = Promise.resolve(options.load?.() ?? []).then((loaded) => {
       for (const job of loaded) {
         this.jobs.set(job.id, job);
       }
-    })();
+    }).catch(() => {});
   }
 
   create(params: {
@@ -50,8 +50,15 @@ export class JobManager {
     const now = new Date();
     const jobId = nextJobId();
 
+    const seenIds = new Set<string>();
     for (let i = 0; i < params.tasks.length; i++) {
-      if (!params.tasks[i].task.id) {
+      const explicitId = params.tasks[i].task.id;
+      if (explicitId) {
+        if (seenIds.has(explicitId)) {
+          throw new Error(`Duplicate task id '${explicitId}' in job`);
+        }
+        seenIds.add(explicitId);
+      } else {
         params.tasks[i].task.id = `task-${jobId}-${i}`;
       }
     }
@@ -122,6 +129,9 @@ export class JobManager {
 
   async cancel(jobId: string): Promise<void> {
     const job = this.require(jobId);
+    if (job.status === 'completed' || job.status === 'failed') {
+      throw new Error(`Cannot cancel job in terminal status '${job.status}'`);
+    }
     job.status = 'cancelled';
     for (const task of job.tasks) {
       if (task.status === 'pending' || task.status === 'running') {
@@ -174,7 +184,7 @@ export class JobManager {
       task.status = 'pending';
     } else {
       task.status = 'failed';
-      this.updateNodeState(job, taskId, 'failed', error);
+      this.updateNodeState(job, taskId, 'failed', undefined, error);
     }
     await this.flush(job);
   }
@@ -226,6 +236,40 @@ export class JobManager {
     const nodes: JobNode[] = [];
     const edges: TaskGraphEdge[] = [];
 
+    const knownIds = new Set(tasks.map((t, i) => t.task.id ?? `task-${i}`));
+    for (const taskInput of tasks) {
+      const currentId = taskInput.task.id;
+      for (const dep of taskInput.dependencies ?? []) {
+        if (!knownIds.has(dep)) {
+          throw new Error(`Task '${currentId}' references nonexistent dependency '${dep}'`);
+        }
+      }
+    }
+
+    // Cycle detection via DFS
+    const visited = new Set<string>();
+    const recursionStack = new Set<string>();
+    const checkCycle = (nodeId: string, trace: string[]) => {
+      visited.add(nodeId);
+      recursionStack.add(nodeId);
+      const currentInput = tasks.find((t) => (t.task.id ?? '') === nodeId);
+      for (const dep of currentInput?.dependencies ?? []) {
+        if (!visited.has(dep)) {
+          checkCycle(dep, [...trace, dep]);
+        } else if (recursionStack.has(dep)) {
+          throw new Error(`Cycle detected in task dependencies: ${[...trace, dep].join(' -> ')}`);
+        }
+      }
+      recursionStack.delete(nodeId);
+    };
+
+    for (const taskInput of tasks) {
+      const id = taskInput.task.id!;
+      if (!visited.has(id)) {
+        checkCycle(id, [id]);
+      }
+    }
+
     for (let i = 0; i < tasks.length; i++) {
       const taskInput = tasks[i];
       const nodeId = taskInput.task.id ?? `task-${i}`;
@@ -274,7 +318,11 @@ export class JobManager {
 
     for (const dep of node.dependencies) {
       const depNode = job.graph.nodes.find((n) => n.id === dep || n.taskId === dep);
-      if (depNode && (depNode.state === 'failed' || depNode.state === 'cancelled')) {
+      const depTask = job.tasks.find((t) => t.id === dep);
+      if (
+        (depNode && (depNode.state === 'failed' || depNode.state === 'cancelled')) ||
+        (depTask && (depTask.status === 'failed' || depTask.status === 'cancelled'))
+      ) {
         return true;
       }
     }

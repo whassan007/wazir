@@ -63,6 +63,7 @@ export class AgentRegistry {
     const required = task.requirements.capabilities ?? [];
     if (required.length > 0) {
       const byCapability = sorted.find((a) =>
+        a.descriptor.taskTypes.length > 0 &&
         required.some((c) => a.descriptor.capabilities.includes(c)),
       );
       if (byCapability) {
