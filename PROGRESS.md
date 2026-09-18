@@ -5,10 +5,12 @@ Single source of truth for where the project stands. Supersedes the old
 `WAZIR-RELEASE.md` (all deleted — their content is folded in below; full detail
 is still in git history if needed: `git log --all --full-history -- '*READINESS_REVIEW*' '*REMEDIATION_PROGRESS*'`).
 
-**Status as of 2026-09-17**: Beta / internal-deployment ready. Safe for a
-single trusted operator or internal team on hardware they already control.
-**Not** safe for untrusted multi-tenant use or public-internet exposure yet —
-see "Open work" below.
+**Status as of 2026-09-18**: Beta / internal-deployment ready. Safe for a
+single trusted operator or internal team on hardware they already control,
+and — after the security remediation pass (`sec_review_results.md`, Part 4)
+— for a distributed deployment behind a TLS proxy with `WAZIR_API_TOKEN` and
+`WAZIR_REGISTRATION_TOKEN` set. **Not** safe for untrusted multi-tenant use
+or public-internet exposure yet — see "Open work" below.
 
 ## Done
 
@@ -84,17 +86,68 @@ see "Open work" below.
   per-package READMEs for `apps/api`, `apps/cli`, `apps/worker`,
   `packages/agents`, `packages/core`, `packages/database`, `packages/workers`.
 
+**Security remediation (2026-09-18)** — `sec_review.md` → `sec_review_results.md`
+(28 findings, 2 CRITICAL) → all fixed/hardened/accepted; results in Part 4 of
+that file. Highlights: per-computer + operator bearer tokens on the control
+plane, loopback-only Compose with required tokens, policy engine hardened
+against newline injection / host reads / exec & output flags / git config
+tricks / protected-path writes, approval queue timeout and env-gating, minimal
+child env + secret redaction + escape stripping, `0600` store, crypto ids,
+`npm run check-dist` in CI. 47 test files / 461 tests green.
+
 ## Open work
 
 Nothing structural is missing relative to the architecture — what's left is
-cross-cutting hardening, not new features:
+cross-cutting hardening, not new features.
 
-- **API authentication & RBAC** — no API keys/JWT, permissive CORS.
-- **Container sandboxing** — agent tools run directly on the host, not in an
-  ephemeral container or namespace.
+### Next steps (planned order)
+
+1. **Make API tokens mandatory & persist worker identity** (S). Today both
+   cluster tokens are optional on a loopback dev instance (tracked in
+   `trackedSecurityDebt.test.ts`) and per-computer tokens live in API memory,
+   so an API restart forces workers to re-register with the cluster secret.
+   Plan: require tokens unless `WAZIR_ALLOW_UNAUTHENTICATED=1`; store SHA-256
+   token hashes in the `KeyValueStore` so they survive restarts; add
+   `wa doctor` checks for missing tokens. Flip the tracked-debt test to 401.
+2. **RBAC on the operator token** (M). Split into `operator` (dispatch, write)
+   and `viewer` (read inventory/history) scopes; the web dashboard should
+   hold only a viewer token. Add `WAZIR_API_VIEWER_TOKEN`; deny dispatch
+   with it.
+3. **TLS / proxy story** (S). Document an nginx/Caddy example in
+   `docker-compose.yml` (profile `tls`) so tokens never travel in clear text
+   off-box; optionally native `https` in `apps/api/src/main.ts` via
+   `WAZIR_TLS_CERT`/`WAZIR_TLS_KEY`.
+4. **Container/namespace sandbox for tool execution — F-27** (L). The
+   remaining structural risk: `shell` still runs `sh -c` on the host, so the
+   safe-binary flag tables are a deny list by nature. Plan: `bwrap` (Linux)
+   / `sandbox-exec` (macOS) wrapper in `packages/tools/src/process.ts` with
+   project-only writable mount, read-only `/usr`, no network unless
+   `networkAllowed`, and the already-minimal env. Keep host mode as an
+   explicit fallback (`WAZIR_SANDBOX=none`) and pin the mode in the
+   execution record. Then shrink the policy tables to "allow inside sandbox".
+5. **Audit log & policy event export** (M). Every `PolicyDecision` and
+   approval resolution already lands in the execution record; expose them as
+   an append-only JSONL audit file (`~/.wazir/audit.jsonl`, `0600`) and a
+   `wa audit` command, so an operator can answer "what did agent X run and
+   who approved it" without parsing the store.
+6. **Observability** (M). Wire the metrics exporter (`/metrics`, tracked
+   debt F-28) with per-route auth failures, dispatch queue depth, approval
+   wait time; OpenTelemetry traces optional.
+7. **Second-pass security review** (S). Re-run the `sec_review.md` Part 3
+   prompt against the remediated tree with a different model, focused on the
+   new surface: `apps/api/src/auth.ts`, the safe-command argument classifier,
+   redaction false negatives, and the sandbox once (4) lands.
+8. **Policy UX follow-ups** (S). `allowCommands` prefix whitelist for the
+   new path-containment denials (`ls /`, `df /`), a `wa policy explain
+   "<command>"` command that prints the classification and reasons, and
+   `WAZIR_CHILD_ENV` documentation in `wa doctor` output.
+
+### Other open items
+
 - **Observability** — in-memory ring buffer only; no OpenTelemetry traces or
-  Prometheus metrics.
-- **CI** — nothing enforces `build`/`typecheck`/`test` on pull requests yet.
+  Prometheus metrics (see step 6).
+- **CI** — `.github/workflows/ci.yml` runs build/typecheck/check-dist/test on
+  push and PR; branch protection on `main` is not yet enabled in GitHub.
 - **MCP is policy-only** — `MCPClient` (`packages/core/src/services/mcpClient.ts`)
   is fully implemented but never instantiated or called anywhere; the only
   real MCP behavior today is that unapproved MCP servers are denied by the
