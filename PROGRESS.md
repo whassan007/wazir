@@ -151,14 +151,29 @@ sandbox, `--disable-userns` — all fixed with regression tests; 4 accepted
 (id enumeration via 404/401, operator-chosen worker tokens, TLS defaults,
 symlink writes without sandbox). 49 files / 486 tests green.
 
+**Sandbox hardening (2026-09-18)** — `docs/sandbox.md`. `WAZIR_SANDBOX=required`
+fails closed (`SandboxUnavailableError` from `runShell`/`runFile`; an
+explicitly named backend that cannot start behaves the same; `wa doctor`
+reports FAIL). bwrap children get a hand-assembled classic-BPF **seccomp
+denylist** (`seccompFilter()` in `sandbox.ts`, fed on fd 3): mount family,
+`setns`/`unshare`/`clone(CLONE_NEW*)`, `ptrace`/`process_vm_*`, modules,
+kexec/reboot/swap, `bpf`, `perf_event_open`, `userfaultfd`, keyrings, clock
+setting → `EPERM`; `clone3` → `ENOSYS`. Verified against the kernel via
+`prctl(PR_SET_SECCOMP)` (install accepted; `unshare`/`setns`/`ptrace` EPERM;
+fork/exec, threads, Node workers, `git commit` unaffected). x86_64 + aarch64
+tables; `WAZIR_SANDBOX_SECCOMP=0` disables. `/home`, `/Users`, `/root`,
+`/mnt`, `/media`, `/srv` are now masked. Shipped `scripts/apparmor/bwrap`
+(grants `userns` to `/usr/bin/bwrap` only) instead of recommending the
+host-wide sysctl. Live suite gained fleet-mode `git commit` in a worktree and
+seccomp refusal checks; still skipped where user namespaces are blocked.
+
 ### Next steps (planned order)
 
-1. **Sandbox hardening follow-ups** (M). `WAZIR_SANDBOX=required` (fail
-   closed instead of warning); ship an AppArmor profile / docs for enabling
-   user namespaces on Ubuntu >= 23.10; seccomp filter for bwrap (`--seccomp`)
-   to block `ptrace`/`mount`; per-tool read-only exposure of runtime model
-   caches instead of the whole read-only root; live fleet-mode `git commit`
-   case in `sandbox.test.ts`; verify the seatbelt profile on macOS.
+1. **Sandbox follow-ups** (S). Verify the seatbelt profile on macOS; run the
+   live suite on an Ubuntu host with the AppArmor profile installed (this
+   dev host is aarch64 with userns restricted, so the live cases are
+   skipped); consider exposing runtime model caches read-only per tool
+   instead of relying on the read-only root.
 2. **mTLS / worker transport identity** (M). Optional client certificates on
    the native TLS listener so worker identity is bound at the transport
    layer, not only by bearer token.

@@ -1,0 +1,28 @@
+# AppArmor profile that lets bubblewrap create unprivileged user namespaces
+# on Ubuntu >= 23.10 (kernel.apparmor_restrict_unprivileged_userns=1).
+#
+# Wazir's tool sandbox (packages/tools/src/sandbox.ts) runs every tool
+# subprocess under `bwrap --unshare-user ...`. With the restriction enabled
+# and no profile, bwrap fails with "setting up uid map: Permission denied"
+# and Wazir falls back to host execution (or refuses, with
+# WAZIR_SANDBOX=required). This profile grants exactly the `userns`
+# permission to /usr/bin/bwrap and otherwise leaves it unconfined — the same
+# shape Ubuntu ships for its own bwrap users (e.g. /etc/apparmor.d/bwrap-userns-restrict).
+#
+# Install:
+#   sudo install -m 644 scripts/apparmor/bwrap /etc/apparmor.d/bwrap
+#   sudo apparmor_parser -r /etc/apparmor.d/bwrap
+#   wa doctor            # "tool sandbox: tool processes run under bwrap + seccomp"
+#
+# This is narrower than `sysctl kernel.apparmor_restrict_unprivileged_userns=0`,
+# which re-enables user namespaces for every binary on the host.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  # Site-specific overrides.
+  include if exists <local/bwrap>
+}

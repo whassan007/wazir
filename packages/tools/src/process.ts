@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 
-import { sandboxDegraded, sandboxStatus, wrapInSandbox, type SandboxMode } from './sandbox.js';
+import { sandboxDegraded, sandboxStatus, wrapInSandbox, type SandboxMode, type WrappedCommand } from './sandbox.js';
 
 export interface CommandResult {
   code: number;
@@ -81,13 +81,19 @@ function runProcess(
   const started = Date.now();
   const maxBuffer = options.maxBuffer ?? 1024 * 1024;
 
-  const wrapped = options.unsandboxed
-    ? { file, args, mode: 'none' as SandboxMode }
-    : wrapInSandbox(file, args, {
-        projectRoot: options.projectRoot ?? options.cwd,
-        cwd: options.cwd,
-        networkAllowed: options.networkAllowed ?? false,
-      });
+  let wrapped: WrappedCommand;
+  try {
+    wrapped = options.unsandboxed
+      ? { file, args, mode: 'none' }
+      : wrapInSandbox(file, args, {
+          projectRoot: options.projectRoot ?? options.cwd,
+          cwd: options.cwd,
+          networkAllowed: options.networkAllowed ?? false,
+        });
+  } catch (error) {
+    // WAZIR_SANDBOX=required with no usable backend: refuse rather than run on the host.
+    return Promise.reject(error);
+  }
   if (!options.unsandboxed && wrapped.mode === 'none' && !warnedDegraded && sandboxDegraded()) {
     warnedDegraded = true;
     console.error(`[wazir] tool sandbox unavailable — running tool processes directly on the host (${sandboxStatus().reason ?? 'no backend'})`);
@@ -105,8 +111,14 @@ function runProcess(
     const child = spawn(wrapped.file, wrapped.args, {
       cwd: spawnCwd,
       env: childEnvironment(options.env),
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // fd 3 carries the seccomp program to bwrap (`--seccomp 3`).
+      stdio: wrapped.seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
     });
+    if (wrapped.seccomp) {
+      const feed = child.stdio[3] as NodeJS.WritableStream;
+      feed.on('error', () => undefined); // bwrap exiting early closes the pipe; the exit code tells the story
+      feed.end(wrapped.seccomp);
+    }
 
     const timer = setTimeout(() => {
       timedOut = true;

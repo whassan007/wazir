@@ -305,8 +305,16 @@ function checkSandbox(): DoctorCheck {
       return {
         name: 'tool sandbox',
         status: 'PASS',
-        message: `tool processes run under ${status.mode}`,
+        message: `tool processes run under ${status.mode}${status.mode === 'bwrap' ? (status.seccomp ? ' + seccomp' : ' (seccomp off)') : ''}`,
         details: 'Project directory writable, home directory masked (toolchains only), private /tmp, network per policy.',
+      };
+    }
+    if (status.required) {
+      return {
+        name: 'tool sandbox',
+        status: 'FAIL',
+        message: `required (WAZIR_SANDBOX=${status.requested}) but unavailable — tool processes will be refused`,
+        details: `${status.reason ?? 'no backend'}. See docs/sandbox.md.`,
       };
     }
     if (status.requested === 'none') {
@@ -321,7 +329,7 @@ function checkSandbox(): DoctorCheck {
       name: 'tool sandbox',
       status: 'WARN',
       message: 'unavailable — tool processes run directly on the host',
-      details: status.reason,
+      details: `${status.reason ?? 'no backend'}. See docs/sandbox.md; set WAZIR_SANDBOX=required to fail closed instead.`,
     };
   } catch (error) {
     return { name: 'tool sandbox', status: 'FAIL', message: 'sandbox probe error', details: (error as Error).message };
