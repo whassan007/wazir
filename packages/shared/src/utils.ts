@@ -24,3 +24,13 @@ export function formatBytes(bytes: number, decimals = 2): string {
 export function calculateDurationMs(start: Date, end: Date): number {
   return end.getTime() - start.getTime();
 }
+
+/**
+ * Calculate tokens per second from output tokens and duration in milliseconds.
+ * Returns 0 if duration is 0 to avoid division by zero.
+ */
+export function tokensPerSecond(outputTokens: number, durationMs: number): number {
+  if (durationMs === 0) return 0;
+  const seconds = durationMs / 1000;
+  return outputTokens / seconds;
+}

@@ -2,6 +2,7 @@ import type { TaskType } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
 import { executeTask, planTask } from './run.js';
+import { tokensPerSecond } from '@wazir/shared';
 
 function table(headers: string[], rows: string[][]): string {
   const widths = headers.map((h, i) =>
@@ -419,13 +420,12 @@ export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?
   }
 
   const elapsedMs = Date.now() - started;
-  const tokPerSec = outputTokens > 0 ? (outputTokens / elapsedMs) * 1000 : 0;
 
   lines.push(`  first token: ${firstTokenMs !== undefined ? `${firstTokenMs}ms` : '—'}`);
   lines.push(`  total time:  ${elapsedMs}ms`);
   lines.push(`  input:       ${inputTokens} tokens`);
   lines.push(`  output:      ${outputTokens} tokens`);
-  lines.push(`  throughput:  ${tokPerSec.toFixed(1)} tok/s`);
+  lines.push(`  throughput:  ${tokensPerSecond(outputTokens, elapsedMs).toFixed(1)} tok/s`);
   if (error) {
     lines.push(color.red(`  error: ${error}`));
   }
@@ -552,7 +552,7 @@ export async function inspectJob(engine: RookEngine, id: string): Promise<string
     `  concurrency:  ${job.concurrencyLimit ?? 4}`,
     `  duration:     ${(rollup.durationMs / 1000).toFixed(1)}s`,
     `  tokens:       ${rollup.tokens.input} in + ${rollup.tokens.output} out = ${rollup.tokens.total} total`,
-    `  est. cost:    $${rollup.estimatedCostUsd.toFixed(4)}`,
+    `  est. cost:    $${rollup.estimatedCostUsd.toFixed(4)}  ${rollup.tokensPerSecond.toFixed(1)} tok/s`,
     `  computers:    ${rollup.computersUsed.join(', ') || '—'}`,
     `  models:       ${rollup.modelsUsed.join(', ') || '—'}`,
   ];
@@ -803,7 +803,7 @@ async function renderJobExplain(engine: RookEngine, job: Job, json?: boolean): P
   lines.push(
     `Tasks: ${rollup.taskCount}  Completed: ${rollup.completedTasks}  Failed: ${rollup.failedTasks}  Running: ${rollup.runningTasks}  Queued: ${rollup.queuedTasks}`,
   );
-  lines.push(`Tokens: ${rollup.tokens.total}  Duration: ${(rollup.durationMs / 1000).toFixed(1)}s  Est. cost: $${rollup.estimatedCostUsd.toFixed(4)}`);
+  lines.push(`Tokens: ${rollup.tokens.total}  Duration: ${(rollup.durationMs / 1000).toFixed(1)}s  Est. cost: $${rollup.estimatedCostUsd.toFixed(4)}  ${rollup.tokensPerSecond.toFixed(1)} tok/s`);
   lines.push(`Computers used: ${rollup.computersUsed.join(', ') || '(none)'}`);
   lines.push(`Models used: ${rollup.modelsUsed.join(', ') || '(none)'}`);
   lines.push('');

@@ -11,6 +11,7 @@ import type {
   Task,
   TokenUsage,
 } from '../types/index.js';
+import { tokensPerSecond } from '@wazir/shared';
 import { JobManager, type JobTaskInput } from './jobManager.js';
 import type { Scheduler, ScheduleInput } from './scheduler.js';
 import type { ExecutionEngine } from './executionEngine.js';
@@ -579,6 +580,7 @@ export class JobOrchestrator {
 
     // Rough cost estimate: $0.002 / 1k tokens for cloud/API fallback, 0 for local
     const estimatedCostUsd = (totalUsage.total / 1000) * 0.002;
+    const jobTokensPerSecond = tokensPerSecond(totalUsage.output, durationMs);
 
     return {
       jobId,
@@ -590,6 +592,7 @@ export class JobOrchestrator {
       tokens: totalUsage,
       durationMs,
       estimatedCostUsd,
+      tokensPerSecond: jobTokensPerSecond,
       computersUsed: Array.from(computersUsed),
       modelsUsed: Array.from(modelsUsed),
       filesChanged: Array.from(filesChanged),

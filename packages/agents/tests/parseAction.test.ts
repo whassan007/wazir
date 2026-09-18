@@ -50,6 +50,21 @@ describe('parseAction', () => {
     expect(action?.content).toBe('inspect greet.js\nadd shout');
   });
 
+  it('escapes raw newlines left unescaped inside a string value', () => {
+    const action = parseAction('{"action":"plan","content":["1. inspect\n2. edit\n3. verify"}');
+    expect(action?.action).toBe('plan');
+    expect(action?.content).toBe('1. inspect\n2. edit\n3. verify');
+  });
+
+  it('takes only the first object when the model stacks several in one turn', () => {
+    const action = parseAction(
+      '{"action":"tool","tool":"read","input":{"path":"a.ts"}}\n' +
+        '{"action":"tool","tool":"read","input":{"path":"b.ts"}}\n' +
+        '{"action":"tool","tool":"read","input":{"path":"c.ts"}}',
+    );
+    expect(action).toEqual({ action: 'tool', tool: 'read', input: { path: 'a.ts' } });
+  });
+
   it('joins array summaries on done', () => {
     const action = parseAction('{"action":"done","summary":["added shout","tests pass"]}');
     expect(action?.summary).toBe('added shout\ntests pass');

@@ -28,10 +28,14 @@ export interface ParsedAction {
   summary?: string;
 }
 
+const CONTROL_ESCAPES: Record<string, string> = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+
 /**
  * Re-balances brackets outside of string literals. Local models frequently
  * emit `{"content":["a","b"}` or `{"content":["a","b"}]`; this closes what
- * is still open and drops closers that do not match.
+ * is still open and drops closers that do not match. It also escapes raw
+ * control characters (unescaped newlines/tabs) that models sometimes leave
+ * inside multi-line string values, which JSON.parse otherwise rejects.
  */
 function repairBrackets(text: string): string {
   const stack: string[] = [];
@@ -40,10 +44,26 @@ function repairBrackets(text: string): string {
   let escape = false;
   for (const char of text) {
     if (inString) {
+      if (escape) {
+        out += char;
+        escape = false;
+        continue;
+      }
+      if (char === '\\') {
+        escape = true;
+        out += char;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+        out += char;
+        continue;
+      }
+      if (char < ' ') {
+        out += CONTROL_ESCAPES[char] ?? `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
+        continue;
+      }
       out += char;
-      if (escape) escape = false;
-      else if (char === '\\') escape = true;
-      else if (char === '"') inString = false;
       continue;
     }
     if (char === '"') {
@@ -89,13 +109,45 @@ function tryParseObject(candidate: string): Record<string, unknown> | null {
   return null;
 }
 
+/**
+ * Slices out the first balanced `{...}` object starting at `text`'s first
+ * `{`. Local models sometimes ignore the "exactly one JSON object" rule and
+ * emit several objects back to back (e.g. one `read` per line); scanning to
+ * the *last* `}` in the text would swallow all of them into one invalid
+ * blob, so this stops at the first object's matching close brace instead.
+ * If the object never balances (e.g. an unterminated array), it falls back
+ * to everything from `start` onward so repairBrackets can still attempt it.
+ */
+function extractFirstObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const char = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (char === '\\') escape = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return text.slice(start);
+}
+
 export function parseAction(text: string): ParsedAction | null {
   const unfenced = text.replace(/```(?:json)?/gi, '');
-  const start = unfenced.indexOf('{');
-  const end = unfenced.lastIndexOf('}');
-  if (start === -1 || end <= start) return null;
+  const candidate = extractFirstObject(unfenced);
+  if (!candidate) return null;
 
-  const obj = tryParseObject(unfenced.slice(start, end + 1));
+  const obj = tryParseObject(candidate);
   if (!obj || typeof obj.action !== 'string') return null;
 
   if (Array.isArray(obj.content)) {

@@ -146,6 +146,7 @@ export interface JobRollup {
   };
   durationMs: number;
   estimatedCostUsd: number;
+  tokensPerSecond: number;
   computersUsed: string[];
   modelsUsed: string[];
   filesChanged: string[];
