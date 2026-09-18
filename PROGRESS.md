@@ -165,15 +165,15 @@ tables; `WAZIR_SANDBOX_SECCOMP=0` disables. `/home`, `/Users`, `/root`,
 `/mnt`, `/media`, `/srv` are now masked. Shipped `scripts/apparmor/bwrap`
 (grants `userns` to `/usr/bin/bwrap` only) instead of recommending the
 host-wide sysctl. Live suite gained fleet-mode `git commit` in a worktree and
-seccomp refusal checks; still skipped where user namespaces are blocked.
+seccomp refusal checks — all 6 live cases verified green on this Ubuntu
+aarch64 host after installing the AppArmor profile (skipped elsewhere).
 
 ### Next steps (planned order)
 
 1. **Sandbox follow-ups** (S). Verify the seatbelt profile on macOS; run the
-   live suite on an Ubuntu host with the AppArmor profile installed (this
-   dev host is aarch64 with userns restricted, so the live cases are
-   skipped); consider exposing runtime model caches read-only per tool
-   instead of relying on the read-only root.
+   live suite on x86_64 (only aarch64 has been exercised); consider exposing
+   runtime model caches read-only per tool instead of relying on the
+   read-only root.
 2. **mTLS / worker transport identity** (M). Optional client certificates on
    the native TLS listener so worker identity is bound at the transport
    layer, not only by bearer token.

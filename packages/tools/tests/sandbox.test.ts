@@ -278,19 +278,29 @@ describe.skipIf(!live)('sandbox enforcement (live backend)', () => {
     expect(commit.sandbox).not.toBe('none');
     const log = await git('log --oneline feature', main);
     expect(log.stdout).toContain('sandboxed');
-    // ...but the rest of the main repository's working tree is still read-only.
-    const escape = await runShell(`echo pwned > ${path.join(main, 'README')}`, { cwd: worktree, projectRoot: worktree });
-    expect(escape.code).not.toBe(0);
+    // ...but the main repository's working tree is not reachable: a write
+    // there either fails or lands in the sandbox's private tmpfs, never on the host.
+    await fs.writeFile(path.join(main, 'README'), 'original');
+    await runShell(`echo pwned > ${path.join(main, 'README')}`, { cwd: worktree, projectRoot: worktree });
+    expect(await fs.readFile(path.join(main, 'README'), 'utf8')).toBe('original');
   });
 
   it.skipIf(process.platform !== 'linux')('seccomp: mount, ptrace and namespace creation are refused', async () => {
     if (!sandboxStatus().seccomp) return;
-    const mount = await runShell('mount -t tmpfs none /tmp 2>&1; echo "exit=$?"', { cwd: project, projectRoot: project });
-    expect(mount.stdout).toMatch(/exit=[1-9]/);
-    expect(mount.stdout).toMatch(/not permitted|Operation not permitted|permission/i);
+    // mount(8) checks for root before calling mount(2), so go through the
+    // syscall directly. ptrace(PTRACE_TRACEME) succeeds for any user without
+    // the filter and is EPERM with it — the clearest seccomp-specific signal.
+    const syscalls = await runShell(
+      `python3 -c "import ctypes,os;l=ctypes.CDLL(None,use_errno=True);r=l.ptrace(0,0,0,0);print('ptrace',r,os.strerror(ctypes.get_errno()));r=l.mount(b'none',b'/tmp',b'tmpfs',0,None);print('mount',r,os.strerror(ctypes.get_errno()))"`,
+      { cwd: project, projectRoot: project },
+    );
+    if (syscalls.code === 127) return; // no python3 on this host
+    expect(syscalls.stdout).toContain('ptrace -1 Operation not permitted');
+    expect(syscalls.stdout).toContain('mount -1 Operation not permitted');
     // unshare(1) uses unshare(2)/clone with CLONE_NEW*: both paths are EPERM
     const ns = await runShell('unshare -U true 2>&1; echo "exit=$?"', { cwd: project, projectRoot: project });
     expect(ns.stdout).toMatch(/exit=[1-9]/);
+    expect(ns.stdout).toMatch(/Operation not permitted/);
     // threads (clone without namespace flags, or clone3 → ENOSYS → clone) still work
     const threads = await runShell('node -e "require(\'node:worker_threads\'); new (require(\'node:worker_threads\').Worker)(\'process.exit(0)\', { eval: true }).on(\'exit\', (c) => console.log(\'worker\', c))"', { cwd: project, projectRoot: project });
     expect(threads.stdout.trim()).toBe('worker 0');
