@@ -8,13 +8,22 @@ services:
     volumes:
       - wazir-postgres-data:/var/lib/postgresql/data
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U wazir']
       interval: 5s
       timeout: 3s
       retries: 10
 
+  # The API has no built-in TLS and its tokens are the only thing standing
+  # between the network and the operator's machine (a forged worker result is
+  # fed to the operator's agent loop as a model reply). Both tokens are
+  # therefore required here — `docker compose up` fails fast if they are
+  # unset — and the port is published on loopback only. Put a TLS reverse
+  # proxy in front of it and change the bind if other hosts must reach it.
+  #
+  #   WAZIR_API_TOKEN=$(openssl rand -hex 32) \
+  #   WAZIR_REGISTRATION_TOKEN=$(openssl rand -hex 32) docker compose up
   api:
     build:
       context: .
@@ -23,8 +32,10 @@ services:
       WAZIR_COMPUTER_ID: api-host
       WAZIR_OLLAMA_URL: ${WAZIR_OLLAMA_URL:-http://host.docker.internal:11434}
       WAZIR_LMSTUDIO_URL: ${WAZIR_LMSTUDIO_URL:-http://host.docker.internal:1234/v1}
+      WAZIR_API_TOKEN: ${WAZIR_API_TOKEN:?set WAZIR_API_TOKEN (operator token for /api/v1)}
+      WAZIR_REGISTRATION_TOKEN: ${WAZIR_REGISTRATION_TOKEN:?set WAZIR_REGISTRATION_TOKEN (worker registration secret)}
     ports:
-      - '4800:4800'
+      - '127.0.0.1:4800:4800'
     restart: unless-stopped
 
   worker:
@@ -34,6 +45,7 @@ services:
     environment:
       WAZIR_COMPUTER_ID: worker-host
       WAZIR_SERVER_URL: http://api:4800
+      WAZIR_REGISTRATION_TOKEN: ${WAZIR_REGISTRATION_TOKEN:?set WAZIR_REGISTRATION_TOKEN (worker registration secret)}
     depends_on:
       - api
     restart: unless-stopped
@@ -44,8 +56,9 @@ services:
       target: web
     environment:
       WAZIR_API: http://api:4800
+      WAZIR_API_TOKEN: ${WAZIR_API_TOKEN:?set WAZIR_API_TOKEN (operator token for /api/v1)}
     ports:
-      - '4801:4801'
+      - '127.0.0.1:4801:4801'
     depends_on:
       - api
     restart: unless-stopped
@@ -59,6 +72,7 @@ services:
       target: cli
     environment:
       WAZIR_API_URL: http://api:4800
+      WAZIR_API_TOKEN: ${WAZIR_API_TOKEN:?set WAZIR_API_TOKEN (operator token for /api/v1)}
       WAZIR_DATABASE_URL: postgres://wazir:wazir@postgres:5432/wazir
     depends_on:
       postgres:

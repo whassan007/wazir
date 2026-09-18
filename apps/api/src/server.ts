@@ -17,7 +17,16 @@ import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
-import { generateId } from '@wazir/shared';
+import { generateId, sanitizeUntrustedOutput } from '@wazir/shared';
+import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
+
+// Bounds on in-memory state so an unauthenticated peer (or a runaway client)
+// cannot grow the control plane without limit (security review F-19).
+const MAX_QUEUED_PER_COMPUTER = 100;
+const MAX_CHANNELS = 5_000;
+const MAX_EXECUTION_RECORDS = 5_000;
+const MAX_EVENTS_PER_CHANNEL = 10_000;
+const MAX_OUTPUT_CHARS = 1_000_000;
 
 interface ExecutionOutcome {
   ok: boolean;
@@ -42,7 +51,7 @@ interface ExecutionChannel {
  * bridge that lets the control plane push tasks to a remote worker — the
  * worker previously had no way to receive dispatched work at all.
  */
-class TaskDispatcher {
+export class TaskDispatcher {
   private readonly streams = new Map<string, Response>();
   private readonly queues = new Map<string, WorkerExecutionRequest[]>();
   private readonly channels = new Map<string, ExecutionChannel>();
@@ -51,7 +60,17 @@ class TaskDispatcher {
     return this.streams.has(computerId);
   }
 
+  /**
+   * Attaches the (already authenticated) worker's response as the live
+   * stream for `computerId`. A previous stream for the same computer is
+   * closed: the caller proved it holds the computer's token, so it is the
+   * legitimate worker reconnecting, and the old socket is stale.
+   */
   subscribe(computerId: string, res: Response): void {
+    const previous = this.streams.get(computerId);
+    if (previous && previous !== res) {
+      previous.end();
+    }
     this.streams.set(computerId, res);
     const queued = this.queues.get(computerId);
     if (queued && queued.length > 0) {
@@ -60,27 +79,62 @@ class TaskDispatcher {
     }
   }
 
+  /** Ends the live stream of a computer whose token was rotated; queued work stays for the new holder. */
+  disconnect(computerId: string): void {
+    const stream = this.streams.get(computerId);
+    if (stream) {
+      stream.end();
+      this.streams.delete(computerId);
+    }
+  }
+
+  ownerOf(requestId: string): string | undefined {
+    return this.channels.get(requestId)?.computerId;
+  }
+
   unsubscribe(computerId: string, res: Response): void {
     if (this.streams.get(computerId) === res) {
       this.streams.delete(computerId);
     }
   }
 
-  dispatch(computerId: string, request: WorkerExecutionRequest): void {
-    this.channels.set(request.requestId, { computerId, events: [], waiters: [] });
+  /** Returns false when the target computer's queue or the channel table is full. */
+  dispatch(computerId: string, request: WorkerExecutionRequest): { ok: true } | { ok: false; reason: string } {
+    if (this.channels.has(request.requestId)) {
+      return { ok: false, reason: `request '${request.requestId}' was already dispatched` };
+    }
     const stream = this.streams.get(computerId);
+    const queue = this.queues.get(computerId) ?? [];
+    if (!stream && queue.length >= MAX_QUEUED_PER_COMPUTER) {
+      return { ok: false, reason: `computer '${computerId}' has ${queue.length} queued requests and no connected worker` };
+    }
+    if (this.channels.size >= MAX_CHANNELS && !this.evictResolvedChannel()) {
+      return { ok: false, reason: `control plane is tracking ${this.channels.size} unresolved requests` };
+    }
+    this.channels.set(request.requestId, { computerId, events: [], waiters: [] });
     if (stream) {
       this.writeTask(stream, request);
     } else {
-      const queue = this.queues.get(computerId) ?? [];
       queue.push(request);
       this.queues.set(computerId, queue);
     }
+    return { ok: true };
+  }
+
+  private evictResolvedChannel(): boolean {
+    for (const [requestId, channel] of this.channels) {
+      if (channel.outcome) {
+        this.channels.delete(requestId);
+        return true;
+      }
+    }
+    return false;
   }
 
   recordEvent(requestId: string, event: WorkerExecutionEvent): boolean {
     const channel = this.channels.get(requestId);
     if (!channel) return false;
+    if (channel.events.length >= MAX_EVENTS_PER_CHANNEL) channel.events.shift();
     channel.events.push(event);
     return true;
   }
@@ -127,9 +181,18 @@ export interface ApiState {
   discovered: DiscoveredRuntime[];
   executions: Array<Record<string, unknown>>;
   dispatcher: TaskDispatcher;
+  auth: ApiAuth;
 }
 
-export async function createApiState(): Promise<ApiState> {
+export interface ApiStateOptions {
+  auth?: ApiAuthOptions;
+}
+
+export async function createApiState(options: ApiStateOptions = {}): Promise<ApiState> {
+  const auth = new ApiAuth(options.auth ?? {
+    operatorToken: process.env.WAZIR_API_TOKEN,
+    registrationToken: process.env.WAZIR_REGISTRATION_TOKEN,
+  });
   const computers = new ComputerRegistry();
   const runtimes = new RuntimeRegistry();
   const models = new ModelRegistry();
@@ -154,6 +217,9 @@ export async function createApiState(): Promise<ApiState> {
     hardware: hardware.hardware,
     capabilities: ['localExecution'],
   });
+  // The in-process computer holds a token nobody else knows, so a network
+  // peer cannot re-register `local` and take over its record (F-3).
+  auth.issueComputerToken(localId);
 
   for (const discoveredRuntime of discovered) {
     runtimes.register({
@@ -214,18 +280,49 @@ export async function createApiState(): Promise<ApiState> {
     discovered,
     executions: [],
     dispatcher: new TaskDispatcher(),
+    auth,
+  };
+}
+
+function recordExecution(state: ApiState, record: Record<string, unknown>): void {
+  state.executions.push(record);
+  if (state.executions.length > MAX_EXECUTION_RECORDS) {
+    state.executions.splice(0, state.executions.length - MAX_EXECUTION_RECORDS);
+  }
+}
+
+/** Coerces a worker-reported outcome into the shape the CLI feeds back into the agent loop. */
+function parseOutcome(body: unknown): ExecutionOutcome | undefined {
+  if (!body || typeof body !== 'object') return undefined;
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.ok !== 'boolean') return undefined;
+  const output = typeof raw.output === 'string' ? raw.output : '';
+  const num = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+  return {
+    ok: raw.ok,
+    output: sanitizeUntrustedOutput(output.slice(0, MAX_OUTPUT_CHARS)),
+    inputTokens: num(raw.inputTokens),
+    outputTokens: num(raw.outputTokens),
+    durationMs: num(raw.durationMs),
+    error: typeof raw.error === 'string' ? sanitizeUntrustedOutput(raw.error.slice(0, 10_000)) : undefined,
   };
 }
 
 export function createApp(state: ApiState) {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '1mb' }));
 
   const localId = process.env.WAZIR_COMPUTER_ID ?? 'local';
+  const { auth } = state;
 
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', name: 'wazir-api', version: '0.1.0' });
+    res.json({ status: 'ok', name: 'wazir-api', version: '0.1.0', auth: { operatorToken: auth.operatorTokenRequired, registrationToken: auth.registrationToken !== undefined } });
   });
+
+  // Everything that reads inventory/history or dispatches work is operator
+  // territory. `/computers/*` (the worker protocol) authenticates per computer.
+  app.use('/api/v1', auth.requireOperator);
+  app.use('/executions', auth.requireOperator);
 
   app.get('/api/v1/overview', (_req, res) => {
     res.json({
@@ -305,9 +402,9 @@ export function createApp(state: ApiState) {
   });
 
   app.get('/api/v1/executions/:id', (req, res) => {
-    const execution = state.executions.find(
-      (e) => (e.execution as { id?: string })?.id === req.params.id || (e.execution as { id?: string })?.id?.includes(req.params.id),
-    );
+    // Exact match only: a substring match let `GET /executions/a` return an
+    // arbitrary record (F-18).
+    const execution = state.executions.find((e) => (e.execution as { id?: string })?.id === req.params.id);
     if (!execution) {
       res.status(404).json({ error: `execution '${req.params.id}' not found` });
       return;
@@ -315,24 +412,64 @@ export function createApp(state: ApiState) {
     res.json({ execution });
   });
 
-  // Worker protocol (registration + heartbeat)
+  // Worker protocol (registration + heartbeat).
+  //
+  // Registration returns the per-computer bearer token every later
+  // `/computers/:id/*` call must carry. A new id needs the cluster
+  // registration token when one is configured; replacing an existing
+  // registration needs either that computer's current token or the
+  // registration token (a worker restarting without persisted state). An
+  // unauthenticated peer can therefore never overwrite a live worker's
+  // record or take over its task stream (F-1, F-3).
   app.post('/computers/register', (req, res) => {
-    const registration = req.body as Parameters<ComputerRegistry['register']>[0];
-    if (!registration?.id) {
+    const registration = req.body as Parameters<ComputerRegistry['register']>[0] & { token?: unknown };
+    if (!registration?.id || typeof registration.id !== 'string') {
       res.status(400).json({ error: 'registration.id is required' });
       return;
     }
-    state.computers.register(registration);
-    res.json({ ok: true, id: registration.id });
-  });
-
-  app.post('/computers/:id/heartbeat', (req, res) => {
-    const computer = state.computers.get(req.params.id);
-    if (!computer) {
-      res.status(404).json({ error: `computer '${req.params.id}' unknown — register first` });
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(registration.id)) {
+      res.status(400).json({ error: 'registration.id must be 1-128 characters of [A-Za-z0-9._-]' });
       return;
     }
-    state.computers.heartbeat(req.params.id, {
+    const presented = bearerToken(req);
+    const exists = state.computers.get(registration.id) !== undefined || auth.hasComputerToken(registration.id);
+    const byComputerToken = exists && auth.isComputerToken(registration.id, presented);
+    const byRegistrationToken = auth.isRegistrationToken(presented);
+    if (exists && !byComputerToken && !byRegistrationToken) {
+      res.status(403).json({ error: `computer '${registration.id}' is already registered; present its token or the registration token to replace it` });
+      return;
+    }
+    if (!exists && auth.registrationToken !== undefined && !byRegistrationToken) {
+      res.status(401).json({ error: 'registration token required (Authorization: Bearer <WAZIR_REGISTRATION_TOKEN>)' });
+      return;
+    }
+
+    const preferred = typeof registration.token === 'string' ? registration.token : undefined;
+    delete (registration as { token?: unknown }).token;
+    // Anything registering over HTTP is by definition not this process;
+    // `local` is derived from the transport, never trusted from the payload
+    // (F-15) — otherwise a `localOnly` task could be routed off-machine.
+    const computer = state.computers.register({ ...registration, local: false });
+    let token: string;
+    if (byComputerToken && !preferred) {
+      token = presented as string; // re-registration with the current token keeps it
+    } else {
+      // Fresh registration or replacement: rotate the token so any stream a
+      // previous holder still has open stops receiving work.
+      state.dispatcher.disconnect(registration.id);
+      token = auth.issueComputerToken(registration.id, preferred);
+    }
+    res.json({ ok: true, id: computer.id, token });
+  });
+
+  app.post('/computers/:id/heartbeat', auth.requireComputer, (req, res) => {
+    const computerId = String(req.params.id);
+    const computer = state.computers.get(computerId);
+    if (!computer) {
+      res.status(404).json({ error: `computer '${computerId}' unknown — register first` });
+      return;
+    }
+    state.computers.heartbeat(computerId, {
       load: req.body?.load,
       runtimeHealth: req.body?.runtimeHealth,
       modelHealth: req.body?.modelHealth,
@@ -343,8 +480,8 @@ export function createApp(state: ApiState) {
   // Worker task-pull loop: a worker holds this SSE connection open and receives
   // dispatched WorkerExecutionRequests as `event: task` frames. This is the
   // channel that lets the control plane push work to a remote worker.
-  app.get('/computers/:id/tasks/stream', (req, res) => {
-    const computerId = req.params.id;
+  app.get('/computers/:id/tasks/stream', auth.requireComputer, (req, res) => {
+    const computerId = String(req.params.id);
     if (!state.computers.get(computerId)) {
       res.status(404).json({ error: `computer '${computerId}' unknown — register first` });
       return;
@@ -377,9 +514,17 @@ export function createApp(state: ApiState) {
       return;
     }
 
-    state.dispatcher.dispatch(computerId, request);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/.test(request.requestId)) {
+      res.status(400).json({ error: 'request.requestId must be 1-256 characters of [A-Za-z0-9._-]' });
+      return;
+    }
+    const dispatched = state.dispatcher.dispatch(computerId, request);
+    if (dispatched.ok === false) {
+      res.status(429).json({ error: dispatched.reason, requestId: request.requestId });
+      return;
+    }
 
-    const waitMs = Number(req.query.wait ?? 0);
+    const waitMs = Math.min(Math.max(Number(req.query.wait ?? 0) || 0, 0), 10 * 60_000);
     if (!waitMs) {
       res.status(202).json({ accepted: true, requestId: request.requestId, connected: state.dispatcher.isConnected(computerId) });
       return;
@@ -401,33 +546,54 @@ export function createApp(state: ApiState) {
     res.json(status);
   });
 
+  // Only the computer a request was dispatched to may report on it. The
+  // result is fed straight back into the operator's agent loop as the model
+  // reply, so a forged outcome from any other peer is code execution (F-2).
+  const requireChannelOwner = (req: express.Request, res: Response): boolean => {
+    const requestId = String(req.params.requestId);
+    const computerId = String(req.params.id);
+    const owner = state.dispatcher.ownerOf(requestId);
+    if (owner === undefined) {
+      res.status(404).json({ error: `request '${requestId}' unknown` });
+      return false;
+    }
+    if (owner !== computerId) {
+      res.status(403).json({ error: `request '${requestId}' was not dispatched to computer '${computerId}'` });
+      return false;
+    }
+    return true;
+  };
+
   // Worker → control plane: stream a lifecycle event for a dispatched request.
-  app.post('/computers/:id/executions/:requestId/events', (req, res) => {
+  app.post('/computers/:id/executions/:requestId/events', auth.requireComputer, (req, res) => {
+    if (!requireChannelOwner(req, res)) return;
     const event: WorkerExecutionEvent = {
       executionId: String(req.body?.executionId ?? ''),
       type: (req.body?.type as WorkerEventType) ?? 'started',
       data: req.body?.data,
       at: new Date(),
     };
-    const known = state.dispatcher.recordEvent(req.params.requestId, event);
-    if (!known) {
-      res.status(404).json({ error: `request '${req.params.requestId}' unknown` });
-      return;
-    }
+    state.dispatcher.recordEvent(String(req.params.requestId), event);
     res.json({ ok: true });
   });
 
   // Worker → control plane: final outcome of a dispatched request.
-  app.post('/computers/:id/executions/:requestId/result', (req, res) => {
-    const outcome = req.body as ExecutionOutcome;
-    const known = state.dispatcher.resolve(req.params.requestId, outcome);
-    if (!known) {
-      res.status(404).json({ error: `request '${req.params.requestId}' unknown` });
+  app.post('/computers/:id/executions/:requestId/result', auth.requireComputer, (req, res) => {
+    if (!requireChannelOwner(req, res)) return;
+    const outcome = parseOutcome(req.body);
+    if (!outcome) {
+      res.status(400).json({ error: 'outcome must include boolean `ok` and string `output`' });
       return;
     }
-    state.executions.push({
-      execution: { id: req.params.requestId, status: outcome.ok ? 'completed' : 'failed', createdAt: new Date() },
-      computerId: req.params.id,
+    const requestId = String(req.params.requestId);
+    const known = state.dispatcher.resolve(requestId, outcome);
+    if (!known) {
+      res.status(404).json({ error: `request '${requestId}' unknown` });
+      return;
+    }
+    recordExecution(state, {
+      execution: { id: requestId, status: outcome.ok ? 'completed' : 'failed', createdAt: new Date() },
+      computerId: String(req.params.id),
       result: outcome.output,
       error: outcome.error,
       usage: { input: outcome.inputTokens, output: outcome.outputTokens },
@@ -444,10 +610,10 @@ export function createApp(state: ApiState) {
       modelId: req.body?.modelId,
       computerId: req.body?.computerId,
       runtimeId: req.body?.runtimeId,
-      result: req.body?.result,
+      result: typeof req.body?.result === 'string' ? sanitizeUntrustedOutput(req.body.result.slice(0, MAX_OUTPUT_CHARS)) : req.body?.result,
       usage: req.body?.usage,
     };
-    state.executions.push(record);
+    recordExecution(state, record);
     res.status(201).json({ id, record });
   });
 

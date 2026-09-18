@@ -17,7 +17,7 @@ import { buildContextPartsFromActive } from './commands.js';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import { buildSystemPrompt } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
-import { generateId } from '@wazir/shared';
+import { generateId, stripTerminalEscapes } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
 import { dispatchRemote } from '@wazir/workers';
 import { color } from './colors.js';
@@ -151,6 +151,9 @@ export async function executeTask(
   const log = (line: string): void => {
     if (!options.quiet) console.error(line);
   };
+  // Model and tool text is interpolated into log lines; never let it drive
+  // the operator's terminal (cursor moves, title/clipboard writes) (F-23).
+  const untrusted = (text: string): string => stripTerminalEscapes(text);
 
   await engine.executions.ready;
 
@@ -232,7 +235,7 @@ export async function executeTask(
           contextTokens: context.available.tokens,
         };
         try {
-          for await (const event of dispatchRemote(engine.config.apiUrl, scheduling.computerId, workerRequest)) {
+          for await (const event of dispatchRemote(engine.config.apiUrl, scheduling.computerId, workerRequest, { token: engine.config.apiToken })) {
             const generationEvent = toGenerationEvent(event);
             if (!generationEvent) continue;
             if (generationEvent.type === 'completed' && generationEvent.usage) {
@@ -279,7 +282,7 @@ export async function executeTask(
           durationMs: 0,
           at: new Date(),
         });
-        log(`    ${color.red('denied')} ${name} ${color.gray(decision.reasons[0] ?? decision.rule)}`);
+        log(`    ${color.red('denied')} ${name} ${color.gray(untrusted(decision.reasons[0] ?? decision.rule))}`);
         return result;
       }
 
@@ -352,7 +355,7 @@ export async function executeTask(
           log(color.cyan(`  [${turn.phase}]`));
           break;
         case 'message':
-          if (turn.content) log(color.gray(`    ${turn.content.split('\n')[0].slice(0, 160)}`));
+          if (turn.content) log(color.gray(`    ${untrusted(turn.content.split('\n')[0].slice(0, 160))}`));
           break;
         case 'done':
           summary = turn.content;
@@ -361,7 +364,7 @@ export async function executeTask(
           if (turn.error) {
             errors.push(turn.error);
             await engine.executions.recordError(executionId, turn.error);
-            log(color.red(`    ${turn.error.split('\n')[0].slice(0, 200)}`));
+            log(color.red(`    ${untrusted(turn.error.split('\n')[0].slice(0, 200))}`));
           }
           break;
         default:
@@ -372,7 +375,7 @@ export async function executeTask(
     const message = error instanceof Error ? error.message : String(error);
     errors.push(message);
     await engine.executions.recordError(executionId, message);
-    log(color.red(`    ${message}`));
+    log(color.red(`    ${untrusted(message)}`));
   } finally {
     process.off('SIGINT', onSigint);
   }

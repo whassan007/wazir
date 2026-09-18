@@ -12,7 +12,9 @@
     "build": "npm run build --workspaces --if-present",
     "dev": "npm run dev --workspace @wazir/cli",
     "test": "npm run build && vitest run",
+    "check-dist": "node scripts/check-dist-fresh.mjs",
     "test:watch": "vitest",
+    "test:matrix": "vitest run tests/runtime/liveModelMatrix.test.ts",
     "typecheck": "tsc --build --force",
     "dmg": "bash scripts/build-dmg.sh",
     "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\""

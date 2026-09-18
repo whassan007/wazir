@@ -47,6 +47,14 @@ export interface WorktreeManagerOptions {
  *   - 'auto': Attempts clean merge-back sequentially, aborting and flagging conflicts
  *     if git encounters merge conflicts.
  */
+/**
+ * Orchestrator git invocations run without policy authorization, so they
+ * must not execute repository hooks: a model that gets a file into
+ * `.git/hooks/` (now an 'ask' path, but defence in depth) would otherwise run
+ * it on the next `worktree add`/`commit` (security review F-11).
+ */
+const GIT_NO_HOOKS = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+
 export class WorktreeManager {
   private readonly rootOverride?: string;
 
@@ -56,7 +64,7 @@ export class WorktreeManager {
 
   async isGitRepo(projectRoot: string): Promise<boolean> {
     try {
-      const { stdout } = await execFileAsync('git', ['rev-parse', '--is-inside-work-tree'], {
+      const { stdout } = await execFileAsync('git', [...GIT_NO_HOOKS, 'rev-parse', '--is-inside-work-tree'], {
         cwd: projectRoot,
       });
       return stdout.trim() === 'true';
@@ -67,7 +75,7 @@ export class WorktreeManager {
 
   async getCurrentBranch(projectRoot: string): Promise<string> {
     try {
-      const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      const { stdout } = await execFileAsync('git', [...GIT_NO_HOOKS, 'rev-parse', '--abbrev-ref', 'HEAD'], {
         cwd: projectRoot,
       });
       return stdout.trim();
@@ -85,11 +93,18 @@ export class WorktreeManager {
     jobId: string,
     taskId: string,
   ): Promise<WorktreeInfo> {
+    assertSafeId('jobId', jobId);
+    assertSafeId('taskId', taskId);
     const isGit = await this.isGitRepo(projectRoot);
-    const rootDir = this.getWorktreeRootDir(projectRoot);
+    const rootDir = path.resolve(this.getWorktreeRootDir(projectRoot));
     await fs.mkdir(rootDir, { recursive: true });
 
     const worktreeDir = path.resolve(rootDir, `${jobId}-${taskId}`);
+    // Belt and braces: the ids are validated above, but the directory that
+    // gets `rm -rf`'d below must never be anything but a child of rootDir.
+    if (!worktreeDir.startsWith(rootDir + path.sep)) {
+      throw new Error(`worktree path '${worktreeDir}' escapes '${rootDir}'`);
+    }
     const branch = `wazir/${jobId}/${taskId}`;
     const baseBranch = isGit ? await this.getCurrentBranch(projectRoot) : 'none';
 
@@ -132,7 +147,7 @@ export class WorktreeManager {
       // Create new branch and worktree from HEAD
       await execFileAsync(
         'git',
-        ['worktree', 'add', '-b', branch, worktreeDir, 'HEAD'],
+        [...GIT_NO_HOOKS, 'worktree', 'add', '-b', branch, worktreeDir, 'HEAD'],
         { cwd: projectRoot },
       );
     } catch (error) {
@@ -175,7 +190,7 @@ export class WorktreeManager {
     try {
       const { stdout: status } = await execFileAsync(
         'git',
-        ['status', '--porcelain'],
+        [...GIT_NO_HOOKS, 'status', '--porcelain'],
         { cwd: info.worktreeDir },
       );
 
@@ -186,14 +201,14 @@ export class WorktreeManager {
 
       const files = lines.map((l) => l.slice(3).trim());
 
-      await execFileAsync('git', ['add', '-A'], { cwd: info.worktreeDir });
-      await execFileAsync('git', ['commit', '-m', commitMessage], {
+      await execFileAsync('git', [...GIT_NO_HOOKS, 'add', '-A'], { cwd: info.worktreeDir });
+      await execFileAsync('git', [...GIT_NO_HOOKS, 'commit', '-m', commitMessage], {
         cwd: info.worktreeDir,
       });
 
       const { stdout: sha } = await execFileAsync(
         'git',
-        ['rev-parse', 'HEAD'],
+        [...GIT_NO_HOOKS, 'rev-parse', 'HEAD'],
         { cwd: info.worktreeDir },
       );
 
@@ -217,13 +232,13 @@ export class WorktreeManager {
     try {
       const { stdout } = await execFileAsync(
         'git',
-        ['diff', 'HEAD~1..HEAD'],
+        [...GIT_NO_HOOKS, 'diff', 'HEAD~1..HEAD'],
         { cwd: info.worktreeDir },
       );
       return stdout;
     } catch {
       try {
-        const { stdout } = await execFileAsync('git', ['diff'], { cwd: info.worktreeDir });
+        const { stdout } = await execFileAsync('git', [...GIT_NO_HOOKS, 'diff'], { cwd: info.worktreeDir });
         return stdout;
       } catch {
         return '';
@@ -239,12 +254,12 @@ export class WorktreeManager {
     const target = targetBranch ?? (await this.getCurrentBranch(projectRoot));
     try {
       // Checkout target branch
-      await execFileAsync('git', ['checkout', target], { cwd: projectRoot });
+      await execFileAsync('git', [...GIT_NO_HOOKS, 'checkout', target], { cwd: projectRoot });
 
       // Merge branch
       await execFileAsync(
         'git',
-        ['merge', '--no-ff', branch, '-m', `Merge branch '${branch}' into ${target}`],
+        [...GIT_NO_HOOKS, 'merge', '--no-ff', branch, '-m', `Merge branch '${branch}' into ${target}`],
         { cwd: projectRoot },
       );
 
@@ -257,7 +272,7 @@ export class WorktreeManager {
       // Check for conflict
       let conflicts: string[] = [];
       try {
-        const { stdout: status } = await execFileAsync('git', ['status', '--porcelain'], {
+        const { stdout: status } = await execFileAsync('git', [...GIT_NO_HOOKS, 'status', '--porcelain'], {
           cwd: projectRoot,
         });
         conflicts = status
@@ -267,7 +282,7 @@ export class WorktreeManager {
           .map((l) => l.slice(3).trim());
 
         // Abort failed merge to leave repo clean
-        await execFileAsync('git', ['merge', '--abort'], { cwd: projectRoot });
+        await execFileAsync('git', [...GIT_NO_HOOKS, 'merge', '--abort'], { cwd: projectRoot });
       } catch {
         // ignore cleanup error
       }
@@ -298,11 +313,29 @@ export class WorktreeManager {
   }
 
   private async cleanupDirectory(targetPath: string): Promise<void> {
+    // Only ever delete inside a `.wazir/worktrees` tree (or the configured
+    // override); never a path handed in from elsewhere.
+    const resolved = path.resolve(targetPath);
+    const allowedRoot = this.rootOverride ? path.resolve(this.rootOverride) : undefined;
+    const underOverride = allowedRoot !== undefined && resolved.startsWith(allowedRoot + path.sep);
+    const underDefault = resolved.split(path.sep).includes('worktrees') && resolved.split(path.sep).includes('.wazir');
+    if (!underOverride && !underDefault) {
+      throw new Error(`refusing to remove '${resolved}': not a Wazir worktree directory`);
+    }
     try {
-      await fs.rm(targetPath, { recursive: true, force: true });
+      await fs.rm(resolved, { recursive: true, force: true });
     } catch {
       // ignore
     }
+  }
+}
+
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** Ids become path segments and git branch names; keep them boring. */
+function assertSafeId(label: string, value: string): void {
+  if (!SAFE_ID.test(value) || value.includes('..')) {
+    throw new Error(`invalid ${label} '${value}': must match ${SAFE_ID}`);
   }
 }
 

@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
 
 export function isInside(root: string, target: string): boolean {
@@ -47,6 +47,66 @@ export async function assertInsideProject(root: string, target: string): Promise
     throw new PathEscapeError(target, root);
   }
   return resolved;
+}
+
+/**
+ * Like `assertInsideProject`, but also returns the canonical path so I/O can
+ * be done on a name that contained no symlinks at check time.
+ */
+export async function resolveInsideProject(root: string, target: string): Promise<{ resolved: string; real: string }> {
+  const resolved = path.resolve(root, target);
+  if (!isInside(root, resolved)) {
+    throw new PathEscapeError(target, root);
+  }
+  const realRoot = await fs.realpath(root);
+  const real = await canonicalize(resolved);
+  if (!isInside(realRoot, real)) {
+    throw new PathEscapeError(target, root);
+  }
+  return { resolved, real };
+}
+
+/**
+ * Reads a project file without following a symlink planted between the
+ * containment check and the open (TOCTOU, security review F-20): the open
+ * targets the canonical path with `O_NOFOLLOW`, and the descriptor is
+ * checked to still be the inode that was verified.
+ */
+export async function readProjectFile(root: string, target: string): Promise<{ resolved: string; content: string; size: number }> {
+  const { resolved, real } = await resolveInsideProject(root, target);
+  const handle = await fs.open(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    await assertSameInode(root, target, real, stat);
+    const content = await handle.readFile('utf8');
+    return { resolved, content, size: stat.size };
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Write counterpart of `readProjectFile`; creates parent directories inside the project. */
+export async function writeProjectFile(root: string, target: string, content: string): Promise<string> {
+  const { resolved, real } = await resolveInsideProject(root, target);
+  await fs.mkdir(path.dirname(real), { recursive: true });
+  const handle = await fs.open(real, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o644);
+  try {
+    const stat = await handle.stat();
+    await assertSameInode(root, target, real, stat);
+    await handle.writeFile(content, 'utf8');
+    return resolved;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assertSameInode(root: string, target: string, real: string, opened: { ino: bigint | number; dev: bigint | number }): Promise<void> {
+  const now = await fs.stat(real);
+  const realRoot = await fs.realpath(root);
+  const recheck = await canonicalize(real);
+  if (!isInside(realRoot, recheck) || now.ino !== opened.ino || now.dev !== opened.dev) {
+    throw new PathEscapeError(target, root);
+  }
 }
 
 export class PathEscapeError extends Error {

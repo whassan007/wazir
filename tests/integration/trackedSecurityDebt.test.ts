@@ -1,0 +1,126 @@
+import { describe, it, expect, afterEach } from 'vitest';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { createApiState, createApp } from '../../apps/api/src/server.js';
+import { shellTool } from '@wazir/tools';
+import os from 'node:os';
+
+async function startApiServer() {
+  const state = await createApiState();
+  const app = createApp(state);
+  const server: Server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const port = (server.address() as AddressInfo).port;
+  return { state, server, baseUrl: `http://127.0.0.1:${port}` };
+}
+
+describe('Section 15: Tracked Security Debt (Explicit Test Coverage of Known Gaps)', () => {
+  let server: Server | undefined;
+
+  afterEach(async () => {
+    if (server) {
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = undefined;
+    }
+  });
+
+  describe('API Authentication / RBAC Debt', () => {
+    /**
+     * TRACKED DEBT (narrowed): the control plane now has per-computer bearer
+     * tokens on the worker protocol and an optional operator token
+     * (`WAZIR_API_TOKEN`) / registration token (`WAZIR_REGISTRATION_TOKEN`).
+     * What remains open is that both cluster-level tokens are *optional*: a
+     * server started with neither still accepts new registrations and
+     * dispatches from anyone (the loopback development default). There is
+     * also no RBAC — one operator token grants everything.
+     *
+     * `apps/api/tests/apiAuth.test.ts` covers the enforced paths; this test
+     * pins the still-open default. When the tokens become mandatory, flip
+     * these expectations to 401.
+     * Reference: PROGRESS.md "Open work: API Auth & RBAC".
+     */
+    it('TRACKED DEBT: with no cluster tokens configured, new registrations and dispatches need no credentials', async () => {
+      const started = await startApiServer();
+      server = started.server;
+
+      const res = await fetch(`${started.baseUrl}/computers/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: 'unauthenticated-node', name: 'Open Node', type: 'workstation' }),
+      });
+      expect(res.status).toBe(200);
+      expect(started.state.computers.get('unauthenticated-node')).toBeDefined();
+
+      const dispatch = await fetch(`${started.baseUrl}/api/v1/tasks/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          computerId: 'unauthenticated-node',
+          request: {
+            executionId: 'exec-no-auth',
+            requestId: 'req-no-auth',
+            modelId: 'any-model',
+            messages: [{ role: 'user', content: 'Arbitrary dispatch' }],
+          },
+        }),
+      });
+      expect(dispatch.status).toBe(202);
+    });
+
+    it('RESOLVED (F-3): an existing computer record cannot be overwritten without its token', async () => {
+      const started = await startApiServer();
+      server = started.server;
+
+      await fetch(`${started.baseUrl}/computers/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: 'victim-node', name: 'Victim', type: 'workstation', hardware: { gpus: [] } }),
+      });
+      const overwrite = await fetch(`${started.baseUrl}/computers/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: 'victim-node', name: 'Attacker', type: 'workstation' }),
+      });
+      expect(overwrite.status).toBe(403);
+      expect(started.state.computers.get('victim-node')?.name).toBe('Victim');
+    });
+  });
+
+  describe('Container Sandboxing Debt', () => {
+    /**
+     * TRACKED DEBT: Tools execute directly within the host process and host namespace.
+     * There is no container/sandbox boundary (Docker/gVisor/firecracker) isolating tool runs.
+     *
+     * This test documents that bash tools see the host PID and host environment directly.
+     * Reference: PROGRESS.md "Open work: Container Sandboxing".
+     */
+    it('TRACKED DEBT: tool execution runs directly in host process/namespace without container isolation', async () => {
+      // Execute a bash tool inspecting the current process environment and host identifiers
+      const result = await shellTool.execute(
+        { command: 'echo HOST_PID=$$; uname -s' },
+        { projectRoot: os.tmpdir(), taskId: 'test-sandboxing', executionId: 'test-sandboxing' } as any,
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.output).toContain('HOST_PID=');
+      // Proves host OS kernel is directly exposed without hypervisor/container abstraction
+      expect(result.output).toContain(os.type() === 'Linux' ? 'Linux' : os.type());
+    });
+  });
+
+  describe('Observability Debt: Prometheus Metrics Endpoint', () => {
+    /**
+     * TRACKED DEBT: The Prometheus metrics endpoint (/metrics) is currently unwired in apps/api.
+     * A client requesting /metrics receives a 404 Not Found.
+     *
+     * Reference: PROGRESS.md "Open work: Observability / Prometheus".
+     */
+    it('TRACKED DEBT: /metrics returns 404 because metrics exporter is not yet wired to server routes', async () => {
+      const started = await startApiServer();
+      server = started.server;
+
+      const res = await fetch(`${started.baseUrl}/metrics`);
+      expect(res.status).toBe(404);
+    });
+  });
+});

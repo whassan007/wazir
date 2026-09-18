@@ -242,3 +242,46 @@ describe('JsonFileStore — concurrent writers do not lose updates', () => {
     expect(entries.length).toBe(45);
   });
 });
+
+describe('security review F-12 / F-14 / F-21: store hardening', () => {
+  it('F-12: creates the data file and its .wazir directory owner-only', async () => {
+    if (process.platform === 'win32') return;
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-store-mode-'));
+    const dir = path.join(base, '.wazir');
+    const store = new JsonFileStore(path.join(dir, 'wazir.json'));
+    await store.put('k', { v: 1 });
+    const fileMode = (await fs.stat(path.join(dir, 'wazir.json'))).mode & 0o777;
+    const dirMode = (await fs.stat(dir)).mode & 0o777;
+    expect(fileMode).toBe(0o600);
+    expect(dirMode).toBe(0o700);
+    await fs.rm(base, { recursive: true, force: true });
+  });
+
+  it('F-14: reviveDatesDeep drops prototype-reaching keys', () => {
+    const hostile = JSON.parse('{"__proto__":{"polluted":true},"constructor":{"x":1},"ok":"2024-01-01T00:00:00.000Z"}');
+    const revived = reviveDatesDeep(hostile) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(revived)).toBe(Object.prototype);
+    expect((revived as { polluted?: boolean }).polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(revived, 'constructor')).toBe(false);
+    expect(revived.ok).toBeInstanceOf(Date);
+  });
+
+  it('F-21: a stale lock is stolen by exactly one of two concurrent writers', async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-store-lock-'));
+    const file = path.join(base, 'data.json');
+    const lock = `${file}.lock`;
+    await fs.writeFile(lock, 'dead\n');
+    const stale = new Date(Date.now() - 60_000);
+    await fs.utimes(lock, stale, stale);
+
+    const a = new JsonFileStore(file);
+    const b = new JsonFileStore(file);
+    await Promise.all([a.put('a', 1), b.put('b', 2)]);
+
+    const fresh = new JsonFileStore(file);
+    expect(await fresh.get('a')).toBe(1);
+    expect(await fresh.get('b')).toBe(2);
+    await expect(fs.stat(lock)).rejects.toThrow();
+    await fs.rm(base, { recursive: true, force: true });
+  });
+});

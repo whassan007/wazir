@@ -10,10 +10,71 @@ import type {
 } from '../types/policy.js';
 import type { Task } from '../types/task.js';
 
+// `env`/`printenv` are deliberately absent: they dump the operator's whole
+// environment (API keys, database URLs) into an execution record that is
+// persisted and can be shipped to a control plane (security review F-13).
 const SAFE_SHELL_COMMANDS = new Set([
   'ls', 'pwd', 'cat', 'head', 'tail', 'wc', 'file', 'stat', 'du', 'df',
-  'which', 'whoami', 'uname', 'date', 'echo', 'printf', 'env', 'printenv',
+  'which', 'whoami', 'uname', 'date', 'echo', 'printf',
   'ps', 'tree', 'rg', 'grep', 'find', 'sort', 'uniq', 'cut', 'column',
+]);
+
+// Safe commands that open the files named by their arguments. Their path
+// arguments get the same project containment as the `read` tool, otherwise
+// `cat /etc/passwd` is a zero-approval host read (F-5).
+const PATH_READING_COMMANDS = new Set([
+  'ls', 'cat', 'head', 'tail', 'wc', 'file', 'stat', 'du', 'df',
+  'tree', 'rg', 'grep', 'find', 'sort', 'uniq', 'cut', 'column',
+]);
+
+// Flags that make an otherwise read-only binary execute another program.
+// Matched exactly or as `flag=value` (F-6).
+const EXEC_FLAGS: Record<string, string[]> = {
+  rg: ['--pre', '--hostname-bin'],
+  sort: ['--compress-program'],
+  find: ['-exec', '-execdir', '-ok', '-okdir'],
+};
+
+// Flags that write to the file named by their value; the value must stay
+// inside the project like a `>` redirect would (F-8).
+const OUTPUT_FLAGS: Record<string, string[]> = {
+  sort: ['-o', '--output', '-T', '--temporary-directory'],
+  find: ['-fprint', '-fprint0', '-fprintf', '-fls'],
+  tree: ['-o'],
+};
+
+// Flags whose following argument is a value that is *not* a path (a pattern,
+// a count, a delimiter) and must not be containment-checked.
+const NON_PATH_VALUE_FLAGS: Record<string, string[]> = {
+  grep: ['-e', '--regexp', '-m', '--max-count', '-A', '-B', '-C', '--after-context', '--before-context', '--context', '--include', '--exclude', '--exclude-dir', '--label', '-d', '-D'],
+  rg: ['-e', '--regexp', '-g', '--glob', '--iglob', '-t', '--type', '-T', '--type-not', '--type-add', '-m', '--max-count', '-A', '-B', '-C', '--after-context', '--before-context', '--context', '-M', '--max-columns', '-j', '--threads', '--max-depth', '--max-filesize', '--color', '--colors', '--sort', '--sortr', '-r', '--replace', '--context-separator', '--field-context-separator', '--field-match-separator', '--path-separator', '--dfa-size-limit', '--regex-size-limit', '--engine'],
+  find: ['-name', '-iname', '-path', '-ipath', '-regex', '-iregex', '-wholename', '-iwholename', '-lname', '-ilname', '-maxdepth', '-mindepth', '-mtime', '-mmin', '-atime', '-amin', '-ctime', '-cmin', '-size', '-type', '-user', '-group', '-perm', '-newer', '-printf', '-newermt', '-links', '-inum', '-uid', '-gid', '-regextype', '-fstype', '-used', '-xtype', '-context'],
+  cut: ['-d', '--delimiter', '-f', '--fields', '-c', '--characters', '-b', '--bytes', '--output-delimiter'],
+  head: ['-n', '-c', '--lines', '--bytes'],
+  tail: ['-n', '-c', '--lines', '--bytes', '-s', '--sleep-interval', '--pid'],
+  sort: ['-k', '--key', '-t', '--field-separator', '-S', '--buffer-size', '--parallel'],
+  uniq: ['-f', '--skip-fields', '-s', '--skip-chars', '-w', '--check-chars'],
+  column: ['-s', '-c', '-o', '-N', '-R', '-T', '-H', '-W', '-E', '-l', '-O'],
+  ls: ['-w', '--width', '-I', '--ignore', '--hide', '--time-style', '--format', '--color', '--sort', '--time', '--indicator-style', '--quoting-style', '-T', '--tabsize', '--block-size'],
+  tree: ['-L', '-P', '-I', '-H', '-T', '--charset', '--filelimit', '--timefmt', '--sort'],
+  du: ['-d', '--max-depth', '-B', '--block-size', '-t', '--threshold', '--exclude', '--time-style'],
+  df: ['-B', '--block-size', '-t', '--type', '-x', '--exclude-type', '--output'],
+  stat: ['-c', '--format', '--printf'],
+  wc: [],
+  file: ['-e', '--exclude', '-m', '--magic-file', '-F', '--separator', '-P', '--parameter'],
+};
+
+// Commands whose first positional argument is a pattern rather than a file.
+const PATTERN_FIRST_COMMANDS = new Set(['grep', 'rg']);
+
+// Paths a write to which can change what runs on the operator's machine
+// (git hooks, Wazir's own state, npm scripts and lifecycle hooks, package
+// resolution). Still project-local, but a model may not touch them without
+// a human seeing it (F-10, F-11).
+const PROTECTED_DIRS = new Set(['.git', '.wazir', '.rook', '.husky', '.githooks', 'node_modules', '.github']);
+const PROTECTED_FILES = new Set([
+  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb',
+  '.npmrc', '.yarnrc', '.yarnrc.yml', '.pnpmfile.cjs', 'pnpm-workspace.yaml', '.envrc',
 ]);
 
 const DENY_SHELL_COMMANDS = new Set([
@@ -126,9 +187,29 @@ function mostRestrictive(decisions: PolicyDecision[]): PolicyDecision {
   return { decision: winner.decision, rule: winner.rule, reasons };
 }
 
-const GIT_ALLOW = new Set(['status', 'diff', 'log', 'show', 'branch', 'remote', 'ls-files', 'rev-parse', 'describe', 'config', 'shortlog', 'blame']);
+// Verbs that only read repository state. `branch`, `remote` and `config`
+// are read-only for some argument shapes and writes for others, so they are
+// classified by `classifyGitConditionalVerb` instead of appearing here (F-7).
+const GIT_ALLOW = new Set([
+  'status', 'diff', 'log', 'show', 'ls-files', 'ls-tree', 'rev-parse', 'describe', 'shortlog', 'blame',
+  'cat-file', 'rev-list', 'for-each-ref', 'show-ref', 'diff-tree', 'diff-files', 'diff-index', 'name-rev',
+  'count-objects', 'check-ignore', 'check-attr', 'merge-base', 'ls-remote', 'reflog', 'var', 'version', 'help',
+]);
+const GIT_CONDITIONAL = new Set(['branch', 'remote', 'config']);
 const GIT_ASK = new Set(['add', 'commit', 'checkout', 'switch', 'restore', 'merge', 'rebase', 'stash', 'reset', 'cherry-pick', 'tag', 'am']);
 const GIT_DENY = new Set(['push', 'clean', 'gc', 'filter-branch', 'update-ref']);
+
+// Global options (before the verb) that redirect git at another repository,
+// inject configuration (`-c core.fsmonitor=...` runs a command on `status`)
+// or change which binaries git executes.
+const GIT_GLOBAL_DENY_FLAGS = ['-c', '-C', '--git-dir', '--work-tree', '--exec-path', '--namespace', '--config-env', '--super-prefix', '--bare'];
+// Options on read verbs that write a file or run an external program.
+const GIT_READ_VERB_DENY_FLAGS = ['--output', '--ext-diff', '--textconv', '--exec'];
+// Options that turn `branch`/`remote`/`config` into writes.
+const GIT_BRANCH_READ_FLAGS = new Set(['-a', '-r', '-v', '-vv', '-l', '--list', '--all', '--remotes', '--verbose', '--show-current', '--contains', '--no-contains', '--merged', '--no-merged', '--points-at', '--sort', '--format', '--color', '--no-color', '--column', '--no-column', '-i', '--ignore-case', '--abbrev', '--no-abbrev']);
+const GIT_REMOTE_READ_SUBCOMMANDS = new Set(['show', 'get-url']);
+const GIT_CONFIG_GET_FLAGS = new Set(['--get', '--get-all', '--get-regexp', '--get-urlmatch', '--list', '-l', '--show-origin', '--show-scope', '--type', '--bool', '--int', '--path', '--null', '-z', '--name-only', '--global', '--system', '--local', '--worktree', '--includes', '--no-includes', '--default']);
+const GIT_CONFIG_WRITE_FLAGS = ['--edit', '-e', '--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section', '--file', '-f', '--blob'];
 
 const FILE_TOOLS_READ = new Set(['read', 'search', 'glob']);
 const FILE_TOOLS_WRITE = new Set(['write', 'edit']);
@@ -137,6 +218,36 @@ function isInside(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(target);
   return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + path.sep);
+}
+
+/**
+ * Why a project-local path is protected (git internals, Wazir state, npm
+ * manifests/lockfiles...), or null when it is an ordinary project file.
+ * Callers pass an absolute path already known to be inside `projectRoot`.
+ */
+export function protectedPathReason(projectRoot: string, absolute: string): string | null {
+  const relative = path.relative(path.resolve(projectRoot), path.resolve(absolute));
+  if (!relative || relative.startsWith('..')) return null;
+  const segments = relative.split(path.sep);
+  if (PROTECTED_DIRS.has(segments[0])) {
+    return `'${segments[0]}/' holds hooks, tooling or Wazir state that can change what runs on this machine`;
+  }
+  const base = segments[segments.length - 1];
+  if (PROTECTED_FILES.has(base)) {
+    return `'${base}' controls package scripts, lifecycle hooks or dependency resolution`;
+  }
+  return null;
+}
+
+function flagMatches(arg: string, flag: string): boolean {
+  return arg === flag || arg.startsWith(`${flag}=`);
+}
+
+/** The value carried by `--flag=value` / `-fvalue`, if any. */
+function attachedValue(arg: string, flag: string): string | undefined {
+  if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+  if (!flag.startsWith('--') && flag.length === 2 && arg.length > 2 && arg.startsWith(flag)) return arg.slice(2);
+  return undefined;
 }
 
 export class PolicyEngine {
@@ -154,6 +265,7 @@ export class PolicyEngine {
       { id: 'mcp-explicit-approval', description: 'MCP servers require explicit approval in policy', effect: 'deny' },
       { id: 'filesystem-project-allow', description: 'Filesystem access inside the project root is allowed', effect: 'allow' },
       { id: 'filesystem-outside-deny', description: 'Filesystem access outside the project root is denied', effect: 'deny' },
+      { id: 'filesystem-protected-ask', description: `Writes to protected project paths require approval (${[...PROTECTED_DIRS].map((d) => `${d}/`).join(', ')}, ${[...PROTECTED_FILES].join(', ')})`, effect: 'ask' },
       { id: 'network-default-deny', description: 'Network commands are denied unless networkAccess is enabled', effect: 'deny' },
       { id: 'shell-safe-allow', description: `Read-only commands are allowed; every sub-command, pipe and substitution must qualify (${[...SAFE_SHELL_COMMANDS].join(', ')})`, effect: 'allow' },
       { id: 'shell-dangerous-deny', description: `System-level destructive commands are denied (${[...DENY_SHELL_COMMANDS].join(', ')})`, effect: 'deny' },
@@ -208,9 +320,14 @@ export class PolicyEngine {
       return decision;
     }
 
-    if (this.options.approvalQueue) {
+    // The queue is only useful when something is subscribed to answer it (the
+    // fleet TUI). A plain `wa run` in a terminal has no subscriber, so route
+    // the question to the interactive approver instead of parking it forever.
+    const queue = this.options.approvalQueue;
+    const useQueue = queue && (queue.hasSubscribers === undefined || queue.hasSubscribers || !this.options.approveCallback);
+    if (queue && useQueue) {
       try {
-        const approved = await this.options.approvalQueue.enqueue(request, decision);
+        const approved = await queue.enqueue(request, decision);
         if (approved) {
           return {
             ...decision,
@@ -284,15 +401,22 @@ export class PolicyEngine {
 
     // 1. MCP — explicit approval only
     if (lower.startsWith('mcp:')) {
-      const server = tool.slice(4).split(':')[0];
+      // `mcp:<server>` or `mcp:<server>:<tool>`. An allow-list entry is either a
+      // bare server name (every tool on it) or `server:tool` (that tool only), so
+      // an operator can expose one tool of a server without the rest (F-25).
+      const [server, ...toolParts] = tool.slice(4).split(':');
+      const toolName = toolParts.join(':');
       const allowed = this.options.allowedMcpServers ?? [];
-      if (allowed.includes(server)) {
-        return { decision: 'allow', rule: 'mcp-explicit-approval', reasons: [`MCP server '${server}' is explicitly approved`] };
+      if (allowed.includes(server) || allowed.includes(`${server}:*`)) {
+        return { decision: 'allow', rule: 'mcp-explicit-approval', reasons: [`MCP server '${server}' is explicitly approved for all tools`] };
+      }
+      if (toolName && allowed.includes(`${server}:${toolName}`)) {
+        return { decision: 'allow', rule: 'mcp-explicit-approval', reasons: [`MCP tool '${server}:${toolName}' is explicitly approved`] };
       }
       return {
         decision: 'deny',
         rule: 'mcp-explicit-approval',
-        reasons: [`MCP server '${server}' is not in the allowed MCP list (explicit approval required)`],
+        reasons: [`MCP ${toolName ? `tool '${server}:${toolName}'` : `server '${server}'`} is not in the allowed MCP list (explicit approval required)`],
       };
     }
 
@@ -318,7 +442,14 @@ export class PolicyEngine {
       // A relative rawPath must resolve against the project root, not the
       // process's cwd (path.resolve(rawPath) alone would use cwd) — those
       // only coincide when the CLI happens to be invoked from projectRoot.
-      if (isInside(projectRoot, path.resolve(projectRoot, rawPath))) {
+      const absolute = path.resolve(projectRoot, rawPath);
+      if (isInside(projectRoot, absolute)) {
+        if (FILE_TOOLS_WRITE.has(lower)) {
+          const protectedReason = protectedPathReason(projectRoot, absolute);
+          if (protectedReason) {
+            return { decision: 'ask', rule: 'filesystem-protected-ask', reasons: [`write to protected path '${rawPath}': ${protectedReason}`] };
+          }
+        }
         return {
           decision: 'allow',
           rule: 'filesystem-project-allow',
@@ -354,14 +485,40 @@ export class PolicyEngine {
     const args = Array.isArray(request.input.args)
       ? (request.input.args as unknown[]).map((a) => String(a))
       : [];
-    const verb = args.find((a) => !a.startsWith('-')) ?? '';
+    if (args.some((a) => /[\r\n]/.test(a))) {
+      return { decision: 'deny', rule: 'git-push-deny', reasons: ['git arguments may not contain line breaks'] };
+    }
+    const verbIndex = args.findIndex((a) => !a.startsWith('-'));
+    const verb = verbIndex === -1 ? '' : args[verbIndex];
+    const globalOptions = verbIndex === -1 ? args : args.slice(0, verbIndex);
+    const verbArgs = verbIndex === -1 ? [] : args.slice(verbIndex + 1);
+
+    // Global options come before the verb and can point git at another
+    // repository or inject config that executes commands (`-c core.fsmonitor`,
+    // `-c alias.status=!sh`), so a "read-only" verb is no longer read-only.
+    for (const option of globalOptions) {
+      if (GIT_GLOBAL_DENY_FLAGS.some((flag) => flagMatches(option, flag))) {
+        return { decision: 'deny', rule: 'git-push-deny', reasons: [`git global option '${option}' can redirect git or inject executable configuration; denied`] };
+      }
+    }
 
     if (verb === 'reset' && args.includes('--hard')) {
       return { decision: 'deny', rule: 'git-push-deny', reasons: ['git reset --hard is destructive and denied'] };
     }
 
+    if (GIT_ALLOW.has(verb) || GIT_CONDITIONAL.has(verb)) {
+      for (const arg of verbArgs) {
+        if (GIT_READ_VERB_DENY_FLAGS.some((flag) => flagMatches(arg, flag))) {
+          return { decision: 'deny', rule: 'git-push-deny', reasons: [`git ${verb} ${arg} writes a file or runs an external program; denied`] };
+        }
+      }
+    }
+
     if (GIT_ALLOW.has(verb)) {
       return { decision: 'allow', rule: 'git-read-allow', reasons: [`git ${verb} is a read-only command`] };
+    }
+    if (GIT_CONDITIONAL.has(verb)) {
+      return this.classifyGitConditionalVerb(verb, verbArgs);
     }
     if (GIT_DENY.has(verb)) {
       return {
@@ -381,18 +538,65 @@ export class PolicyEngine {
     return { decision: 'ask', rule: 'git-write-ask', reasons: [`git ${verb || '(unknown)'} requires approval`] };
   }
 
+  /** `branch` / `remote` / `config` are reads only for specific argument shapes. */
+  private classifyGitConditionalVerb(verb: string, verbArgs: string[]): PolicyDecision {
+    const ask = (why: string): PolicyDecision => ({ decision: 'ask', rule: 'git-write-ask', reasons: [`git ${verb} ${why}`] });
+    const flags = verbArgs.filter((a) => a.startsWith('-'));
+    const positionals = verbArgs.filter((a) => !a.startsWith('-'));
+
+    if (verb === 'branch') {
+      const unknownFlag = flags.find((f) => !GIT_BRANCH_READ_FLAGS.has(f.split('=')[0]));
+      if (unknownFlag) return ask(`with '${unknownFlag}' modifies branches and requires approval`);
+      const listing = flags.some((f) => ['--list', '-l', '--contains', '--no-contains', '--merged', '--no-merged', '--points-at', '--show-current', '-a', '-r', '--all', '--remotes'].includes(f.split('=')[0]));
+      if (positionals.length > 0 && !listing) return ask(`'${positionals[0]}' creates a branch and requires approval`);
+      return { decision: 'allow', rule: 'git-read-allow', reasons: ['git branch (listing form) is read-only'] };
+    }
+
+    if (verb === 'remote') {
+      if (verbArgs.length === 0 || (positionals.length === 0 && flags.every((f) => f === '-v' || f === '--verbose'))) {
+        return { decision: 'allow', rule: 'git-read-allow', reasons: ['git remote (listing form) is read-only'] };
+      }
+      if (GIT_REMOTE_READ_SUBCOMMANDS.has(positionals[0] ?? '') && !flags.some((f) => f === '--push' && positionals[0] !== 'get-url')) {
+        return { decision: 'allow', rule: 'git-read-allow', reasons: [`git remote ${positionals[0]} is read-only`] };
+      }
+      return ask(`${positionals[0] ?? flags[0] ?? ''} modifies remotes and requires approval`);
+    }
+
+    // config
+    if (flags.some((f) => GIT_CONFIG_WRITE_FLAGS.some((w) => flagMatches(f, w)))) {
+      return ask('with a write/edit/file option modifies configuration and requires approval');
+    }
+    const reading = flags.some((f) => GIT_CONFIG_GET_FLAGS.has(f.split('=')[0]) && /^(--get|--get-all|--get-regexp|--get-urlmatch|--list|-l)$/.test(f.split('=')[0]));
+    const unknownFlag = flags.find((f) => !GIT_CONFIG_GET_FLAGS.has(f.split('=')[0]));
+    if (!reading || unknownFlag || positionals.length > 1) {
+      return ask('sets a configuration value (hooks, aliases and fsmonitor can execute commands) and requires approval');
+    }
+    return { decision: 'allow', rule: 'git-read-allow', reasons: ['git config (get/list form) is read-only'] };
+  }
+
   private classifyShell(request: PolicyActionRequest): PolicyDecision {
     const command = typeof request.input.command === 'string' ? request.input.command.trim() : '';
     if (!command) {
       return { decision: 'deny', rule: 'shell-unknown-ask', reasons: ['empty shell command'] };
     }
 
+    // `sh -c` runs each line as its own command, but shell-quote treats a line
+    // break as plain whitespace, so `ls\nrm -rf ~` would be classified as one
+    // `ls` invocation (F-4). Multi-line command text is never auto-classified.
+    if (/[\r\n]/.test(command)) {
+      return { decision: 'deny', rule: 'shell-dangerous-deny', reasons: ['shell command contains a line break; chain commands with && or ; instead'] };
+    }
+
     // shell-quote does not understand backtick substitution; rewrite it to $(...) so it is inspected too.
-    const normalized = command.replace(/`([^`]*)`/g, '$($1)');
+    let normalized = command.replace(/\\`([^`\\]+)\\`/g, '$($1)');
+    normalized = normalized.replace(/`([^`]*)`/g, '$($1)');
 
     let entries: ParseEntry[];
     try {
-      entries = parseShell(normalized);
+      // Keep `$VAR` as a visible marker instead of expanding it to '' so a
+      // path such as `$HOME/.ssh` is recognised as unverifiable rather than
+      // silently becoming the project-relative `/.ssh`.
+      entries = parseShell(normalized, (key: string) => `$${key}`);
     } catch (error) {
       return {
         decision: 'deny',
@@ -432,6 +636,14 @@ export class PolicyEngine {
       return decisions;
     }
 
+    // Inspect any command substitutions embedded inside quoted words (e.g. "outer $(reboot)")
+    for (const word of segment.words) {
+      const match = word.match(/\$\((.+)\)/);
+      if (match) {
+        decisions.push(this.classifyShell({ tool: 'shell', input: { command: match[1] }, projectRoot }));
+      }
+    }
+
     if (this.options.denyCommands?.some((d) => text.startsWith(d))) {
       decisions.push({ decision: 'deny', rule: 'shell-dangerous-deny', reasons: [`command matches operator deny list: ${text}`] });
       return decisions;
@@ -443,19 +655,137 @@ export class PolicyEngine {
 
     const { name, args } = resolveCommand(segment.words);
     decisions.push(this.classifyCommandName(name));
-
-    if (name === 'find') {
-      for (let i = 0; i < args.length; i++) {
-        if (args[i] === '-delete') {
-          decisions.push({ decision: 'ask', rule: 'shell-unknown-ask', reasons: ['find -delete removes files and requires approval'] });
-        }
-        if (/^-(exec|execdir|ok|okdir)$/.test(args[i]) && args[i + 1]) {
-          decisions.push(this.classifyCommandName(basename(args[i + 1])));
-        }
-      }
+    if (SAFE_SHELL_COMMANDS.has(name)) {
+      decisions.push(...this.classifySafeCommandArgs(name, args, projectRoot));
     }
 
     return decisions;
+  }
+
+  /**
+   * A binary on the safe list is only safe for its read-only argument shapes.
+   * This checks the flags that make it execute a program or write a file, and
+   * applies project containment to every path it would read.
+   */
+  private classifySafeCommandArgs(name: string, args: string[], projectRoot: string): PolicyDecision[] {
+    const decisions: PolicyDecision[] = [];
+    const execFlags = EXEC_FLAGS[name] ?? [];
+    const outputFlags = OUTPUT_FLAGS[name] ?? [];
+    const valueFlags = NON_PATH_VALUE_FLAGS[name] ?? [];
+    const pathValueFlags = ['--files0-from', '-f', '--file'];
+    let positionalIndex = 0;
+    const patternGiven = PATTERN_FIRST_COMMANDS.has(name) && args.some((a) => ['-e', '--regexp', '-f', '--file'].some((f) => flagMatches(a, f)));
+
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+
+      if (arg === '--') {
+        for (const rest of args.slice(i + 1)) decisions.push(...this.classifyReadPath(name, rest, projectRoot));
+        break;
+      }
+
+      if (name === 'find' && arg === '-delete') {
+        decisions.push({ decision: 'ask', rule: 'shell-unknown-ask', reasons: ['find -delete removes files and requires approval'] });
+        continue;
+      }
+
+      const execFlag = execFlags.find((f) => flagMatches(arg, f));
+      if (execFlag) {
+        if (name === 'find' && args[i + 1]) {
+          // `find -exec <cmd>` is as safe as <cmd> itself; the rest of the -exec
+          // clause is that command's own arguments.
+          decisions.push(this.classifyCommandName(basename(args[i + 1])));
+          const end = args.indexOf(';', i + 1);
+          i = end === -1 ? args.length : end;
+          continue;
+        }
+        decisions.push({ decision: 'deny', rule: 'shell-dangerous-deny', reasons: [`'${name} ${execFlag}' executes an arbitrary program under a read-only command; denied`] });
+        continue;
+      }
+
+      const outputFlag = outputFlags.find((f) => flagMatches(arg, f) || attachedValue(arg, f) !== undefined);
+      if (outputFlag) {
+        const target = attachedValue(arg, outputFlag) ?? args[++i] ?? '';
+        decisions.push(this.classifyWriteTarget(`${name} ${outputFlag}`, target, projectRoot));
+        continue;
+      }
+
+      if (arg.startsWith('-') && arg.length > 1) {
+        // Flags whose value is a file the command reads (`grep -f FILE`,
+        // `wc --files0-from=FILE`); `sort -f` is "fold case", not a file.
+        const takesPath = pathValueFlags.includes(arg) && !(name === 'sort' && arg === '-f') && !(name === 'cut' && arg === '-f') && !(name === 'uniq' && arg === '-f');
+        if (takesPath) {
+          const target = args[++i];
+          if (target !== undefined) decisions.push(...this.classifyReadPath(name, target, projectRoot));
+          continue;
+        }
+        if (valueFlags.includes(arg)) {
+          i += 1; // the next argument is this flag's non-path value
+          continue;
+        }
+        const eq = arg.indexOf('=');
+        if (eq > 0) {
+          if (!valueFlags.includes(arg.slice(0, eq))) {
+            decisions.push(...this.classifyReadPath(name, arg.slice(eq + 1), projectRoot));
+          }
+        } else if (!arg.startsWith('--') && !valueFlags.includes(arg.slice(0, 2))) {
+          // `-f/etc/passwd`-style attached values: anything from the first
+          // path character on is treated as a path.
+          const pathStart = arg.search(/[/~]/);
+          if (pathStart > 0) decisions.push(...this.classifyReadPath(name, arg.slice(pathStart), projectRoot));
+        }
+        continue;
+      }
+
+      if (PATTERN_FIRST_COMMANDS.has(name) && positionalIndex === 0 && !patternGiven) {
+        positionalIndex += 1; // the pattern, not a file
+        continue;
+      }
+      positionalIndex += 1;
+      decisions.push(...this.classifyReadPath(name, arg, projectRoot));
+    }
+    return decisions;
+  }
+
+  /**
+   * Containment check for a path a safe command would read. Only arguments
+   * that can actually leave the project (absolute, `~`, or containing `..`)
+   * are resolved; everything else is project-relative by construction.
+   */
+  private classifyReadPath(name: string, candidate: string, projectRoot: string): PolicyDecision[] {
+    if (!PATH_READING_COMMANDS.has(name)) return [];
+    if (!candidate || candidate === '-' || candidate === '/dev/null' || candidate.startsWith('/dev/std')) return [];
+    if (candidate.includes('$')) {
+      return [{ decision: 'ask', rule: 'shell-unknown-ask', reasons: [`'${name}' argument '${candidate}' depends on shell expansion and cannot be verified to stay inside the project`] }];
+    }
+    const mayEscape = candidate.startsWith('~') || candidate.startsWith('/') || candidate.split('/').includes('..');
+    if (!mayEscape) return [];
+    if (!candidate.startsWith('~') && isInside(projectRoot, path.resolve(projectRoot, candidate))) return [];
+    return [{
+      decision: 'deny',
+      rule: 'filesystem-outside-deny',
+      reasons: [`'${name}' would read '${candidate}', which is outside project root '${projectRoot}'`],
+    }];
+  }
+
+  /** A file written by an output flag is held to the same rules as a `>` redirect. */
+  private classifyWriteTarget(what: string, target: string, projectRoot: string): PolicyDecision {
+    if (!target) {
+      return { decision: 'ask', rule: 'shell-unknown-ask', reasons: [`'${what}' with an undetermined output target requires approval`] };
+    }
+    if (target === '/dev/null') return { decision: 'allow', rule: 'shell-safe-allow', reasons: [`'${what}' discards output`] };
+    if (target.includes('$') || target.startsWith('~')) {
+      return { decision: 'ask', rule: 'shell-unknown-ask', reasons: [`'${what} ${target}' output path cannot be verified to stay inside the project`] };
+    }
+    const absolute = path.resolve(projectRoot, target);
+    if (!isInside(projectRoot, absolute)) {
+      return { decision: 'deny', rule: 'filesystem-outside-deny', reasons: [`'${what} ${target}' writes outside project root '${projectRoot}'`] };
+    }
+    const protectedReason = protectedPathReason(projectRoot, absolute);
+    if (protectedReason) {
+      return { decision: 'ask', rule: 'filesystem-protected-ask', reasons: [`'${what} ${target}' writes a protected path: ${protectedReason}`] };
+    }
+    return { decision: 'allow', rule: 'shell-safe-allow', reasons: [`'${what} ${target}' writes inside the project`] };
   }
 
   private classifyRedirect(redirect: { op: string; target: string }, projectRoot: string): PolicyDecision | null {
@@ -465,7 +795,17 @@ export class PolicyEngine {
       return { decision: 'ask', rule: 'shell-unknown-ask', reasons: ['output redirection with an undetermined target requires approval'] };
     }
     if (redirect.target === '/dev/null') return null;
-    if (isInside(projectRoot, path.resolve(projectRoot, redirect.target))) return null;
+    if (redirect.target.includes('$') || redirect.target.startsWith('~')) {
+      return { decision: 'ask', rule: 'shell-unknown-ask', reasons: [`output redirection to '${redirect.target}' depends on shell expansion and cannot be verified to stay inside the project`] };
+    }
+    const absolute = path.resolve(projectRoot, redirect.target);
+    if (isInside(projectRoot, absolute)) {
+      const protectedReason = protectedPathReason(projectRoot, absolute);
+      if (protectedReason) {
+        return { decision: 'ask', rule: 'filesystem-protected-ask', reasons: [`output redirection to protected path '${redirect.target}': ${protectedReason}`] };
+      }
+      return null;
+    }
     return {
       decision: 'deny',
       rule: 'filesystem-outside-deny',

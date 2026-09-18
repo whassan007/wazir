@@ -30,9 +30,12 @@ export async function syncRemoteInventory(
   apiUrl: string,
   localComputerId: string,
   registries: { computers: ComputerRegistry; runtimes: RuntimeRegistry; models: ModelRegistry },
+  options: { token?: string } = {},
 ): Promise<RemoteInventorySyncResult> {
   const base = apiUrl.replace(/\/+$/, '');
   const result: RemoteInventorySyncResult = { computers: 0, runtimes: 0, models: 0, instances: 0, errors: [] };
+  const headers: Record<string, string> = options.token ? { Authorization: `Bearer ${options.token}` } : {};
+  const fetchJson = <T>(url: string, errors: string[]) => fetchJsonWith<T>(url, headers, errors);
 
   const computersResponse = await fetchJson<{ computers: ComputerRegistration[] }>(`${base}/api/v1/computers`, result.errors);
   for (const computer of computersResponse?.computers ?? []) {
@@ -69,9 +72,9 @@ export async function syncRemoteInventory(
   return result;
 }
 
-async function fetchJson<T>(url: string, errors: string[]): Promise<T | undefined> {
+async function fetchJsonWith<T>(url: string, headers: Record<string, string>, errors: string[]): Promise<T | undefined> {
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { headers });
     if (!response.ok) {
       errors.push(`${url}: HTTP ${response.status}`);
       return undefined;

@@ -96,3 +96,60 @@ describe('ApprovalQueue — non-blocking multi-agent policy authorization', () =
     expect(queue.count).toBe(0);
   });
 });
+
+describe('F-9: the ask tier never hangs and cannot be elevated by the environment', () => {
+  const askRequest: PolicyActionRequest = { tool: 'shell', input: { command: 'npm install' }, executionId: 'exec-ask' };
+
+  it('denies an unanswered request after defaultTimeoutMs', async () => {
+    const queue = new ApprovalQueue({ defaultTimeoutMs: 30 });
+    const policy = new PolicyEngine({ projectRoot: '/test', approvalQueue: queue });
+    const decision = await policy.authorize(askRequest);
+    expect(decision.decision).toBe('deny');
+    expect(queue.count).toBe(0);
+  });
+
+  it('denies immediately when nobody is subscribed and autoDenyNonInteractive is set', async () => {
+    const queue = new ApprovalQueue({ autoDenyNonInteractive: true });
+    await expect(queue.enqueue(askRequest, { decision: 'ask', rule: 'shell-unknown-ask', reasons: [] })).resolves.toBe(false);
+  });
+
+  it('ignores WAZIR_AUTO_APPROVE=1 unless the host opted in', async () => {
+    const previous = process.env.WAZIR_AUTO_APPROVE;
+    process.env.WAZIR_AUTO_APPROVE = '1';
+    try {
+      const gated = new ApprovalQueue({ defaultTimeoutMs: 20 });
+      await expect(gated.enqueue(askRequest, { decision: 'ask', rule: 'shell-unknown-ask', reasons: [] })).resolves.toBe(false);
+
+      const optedIn = new ApprovalQueue({ allowEnvAutoApprove: true });
+      await expect(optedIn.enqueue(askRequest, { decision: 'ask', rule: 'shell-unknown-ask', reasons: [] })).resolves.toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.WAZIR_AUTO_APPROVE;
+      else process.env.WAZIR_AUTO_APPROVE = previous;
+    }
+  });
+
+  it('routes to the interactive approver when the queue has no subscriber', async () => {
+    const queue = new ApprovalQueue();
+    let asked = 0;
+    const policy = new PolicyEngine({
+      projectRoot: '/test',
+      approvalQueue: queue,
+      approveCallback: async () => {
+        asked += 1;
+        return true;
+      },
+    });
+    const decision = await policy.authorize(askRequest);
+    expect(asked).toBe(1);
+    expect(decision.decision).toBe('allow');
+    expect(queue.count).toBe(0);
+
+    // Once a TUI subscribes, the queue takes over again.
+    queue.subscribe(() => undefined);
+    const pending = policy.authorize(askRequest);
+    expect(queue.count).toBe(1);
+    queue.denyAll();
+    expect((await pending).decision).toBe('deny');
+    expect(asked).toBe(1);
+  });
+});

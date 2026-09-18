@@ -29,7 +29,10 @@ ENV PORT=4800
 # The API defaults to binding 127.0.0.1, which is correct for a bare-metal
 # install but unreachable from outside a container (Docker's port mapping
 # forwards to the container's external interface, not its loopback) — must
-# bind all interfaces here.
+# bind all interfaces here. Because of that, `apps/api/src/main.ts` refuses
+# to start on a non-loopback bind unless WAZIR_API_TOKEN is set (or
+# WAZIR_ALLOW_UNAUTHENTICATED=1 is passed explicitly); docker-compose.yml
+# supplies the token and publishes the port on the host's loopback only.
 ENV WAZIR_HOST=0.0.0.0
 EXPOSE 4800
 CMD ["node", "apps/api/dist/main.js"]

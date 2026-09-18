@@ -37,7 +37,7 @@ async function withFileLock<T>(lockFile: string, fn: () => Promise<T>): Promise<
   const deadline = Date.now() + LOCK_MAX_WAIT_MS;
   for (;;) {
     try {
-      const handle = await fs.open(lockFile, 'wx');
+      const handle = await fs.open(lockFile, 'wx', 0o600);
       await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`);
       await handle.close();
       break;
@@ -45,8 +45,17 @@ async function withFileLock<T>(lockFile: string, fn: () => Promise<T>): Promise<
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       const staleSince = await fs.stat(lockFile).then((s) => s.mtimeMs).catch(() => undefined);
       if (staleSince !== undefined && Date.now() - staleSince > LOCK_STALE_AFTER_MS) {
-        await fs.unlink(lockFile).catch(() => undefined);
-        continue; // retry immediately now that the stale lock is cleared
+        // Steal the stale lock with an atomic rename rather than unlink: if
+        // two waiters both observe the same stale lock, only one rename can
+        // succeed, so only one of them proceeds to re-acquire — a bare
+        // `unlink` let both clear it and both win `open('wx')` back to back.
+        const stolen = `${lockFile}.stale.${process.pid}.${Date.now()}`;
+        const won = await fs.rename(lockFile, stolen).then(() => true).catch(() => false);
+        if (won) {
+          await fs.unlink(stolen).catch(() => undefined);
+          continue; // retry immediately now that the stale lock is cleared
+        }
+        // Another process stole it first; fall through and wait our turn.
       }
       if (Date.now() > deadline) {
         throw new Error(`timed out waiting for lock '${lockFile}' (held for over ${LOCK_MAX_WAIT_MS}ms)`);
@@ -59,6 +68,23 @@ async function withFileLock<T>(lockFile: string, fn: () => Promise<T>): Promise<
     return await fn();
   } finally {
     await fs.unlink(lockFile).catch(() => undefined);
+  }
+}
+
+/**
+ * Creates `dir` owner-only (0700). An existing directory is only tightened
+ * when it is Wazir's own home (`~/.wazir` / legacy `~/.rook`): callers may
+ * point a store at a shared location such as a temp dir, and chmod-ing that
+ * would be a surprising side effect.
+ */
+async function ensurePrivateDir(dir: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  if (process.platform === 'win32') return;
+  const base = path.basename(dir);
+  if (base !== '.wazir' && base !== '.rook') return;
+  const stat = await fs.stat(dir).catch(() => undefined);
+  if (stat && (stat.mode & 0o077) !== 0) {
+    await fs.chmod(dir, 0o700).catch(() => undefined);
   }
 }
 
@@ -143,6 +169,9 @@ export function reviveDatesDeep<T>(value: T): T {
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
+      // `out['__proto__'] = ...` would re-parent `out` instead of adding a
+      // field; keys that reach into the prototype chain are dropped.
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
       out[k] = reviveDatesDeep(v);
     }
     return out as T;
@@ -182,10 +211,13 @@ export class JsonFileStore implements KeyValueStore {
 
   private async persist(): Promise<void> {
     const dir = path.dirname(this.file);
-    await fs.mkdir(dir, { recursive: true });
+    await ensurePrivateDir(dir);
+    // The store holds prompts, tool output and policy decisions for every
+    // execution — owner-only from the first byte, not the umask default.
     const tmp = `${this.file}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(Object.fromEntries(this.data), null, 2), 'utf8');
+    await fs.writeFile(tmp, JSON.stringify(Object.fromEntries(this.data), null, 2), { encoding: 'utf8', mode: 0o600 });
     await fs.rename(tmp, this.file);
+    await fs.chmod(this.file, 0o600).catch(() => undefined);
   }
 
   private async withLock(mutate: () => void): Promise<void> {
@@ -194,7 +226,7 @@ export class JsonFileStore implements KeyValueStore {
     // `persist()` below creates this directory too, but that's too late:
     // acquiring the lock itself needs it to exist first, or `fs.open(lockFile,
     // 'wx')` fails with ENOENT before `persist()` ever runs.
-    await fs.mkdir(path.dirname(this.file), { recursive: true });
+    await ensurePrivateDir(path.dirname(this.file));
     await withFileLock(this.lockFile, async () => {
       await this.reloadFromDisk();
       mutate();

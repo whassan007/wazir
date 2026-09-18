@@ -16,9 +16,23 @@ export interface PendingApprovalRequest {
 }
 
 export interface ApprovalQueueOptions {
+  /**
+   * Deny immediately when nobody is subscribed to the queue (no TUI, no
+   * approver loop). Without this a headless `wa run` would block forever on
+   * its first 'ask' decision.
+   */
   autoDenyNonInteractive?: boolean;
+  /** Pending requests nobody answers within this window are denied. */
   defaultTimeoutMs?: number;
+  /**
+   * Honour `WAZIR_AUTO_APPROVE=1`. Off by default: an environment variable
+   * must not be able to silently promote every 'ask' to 'allow' (F-9); the
+   * host has to opt in explicitly (e.g. `wa run --yes` for a trusted batch).
+   */
+  allowEnvAutoApprove?: boolean;
 }
+
+let warnedIgnoredAutoApprove = false;
 
 /**
  * Non-blocking policy approval queue for fleet-scale execution.
@@ -44,12 +58,22 @@ export class ApprovalQueue {
       return Promise.resolve(false);
     }
     if (process.env.WAZIR_AUTO_APPROVE === '1') {
-      return Promise.resolve(true);
+      if (this.options.allowEnvAutoApprove) {
+        return Promise.resolve(true);
+      }
+      if (!warnedIgnoredAutoApprove) {
+        warnedIgnoredAutoApprove = true;
+        console.error('[wazir] WAZIR_AUTO_APPROVE=1 is set but auto-approval is not enabled for this session; approvals still require a human');
+      }
+    }
+    if (this.options.autoDenyNonInteractive && this.listeners.size === 0) {
+      return Promise.resolve(false);
     }
 
     return new Promise<boolean>((resolve) => {
       this.counter++;
       const id = `appr-${Date.now().toString(36)}-${this.counter.toString(36)}`;
+      let timer: NodeJS.Timeout | undefined;
       const item: PendingApprovalRequest = {
         id,
         jobId: metadata.jobId,
@@ -63,6 +87,8 @@ export class ApprovalQueue {
         createdAt: new Date(),
         status: 'pending',
         resolve: (approved: boolean) => {
+          if (item.status !== 'pending') return;
+          if (timer) clearTimeout(timer);
           item.status = approved ? 'approved' : 'denied';
           this.pending.delete(id);
           this.notify();
@@ -70,9 +96,20 @@ export class ApprovalQueue {
         },
       };
 
+      const timeoutMs = this.options.defaultTimeoutMs;
+      if (timeoutMs !== undefined && timeoutMs > 0) {
+        timer = setTimeout(() => item.resolve(false), timeoutMs);
+        timer.unref?.();
+      }
+
       this.pending.set(id, item);
       this.notify();
     });
+  }
+
+  /** True when something (a TUI, an approver loop) can answer requests. */
+  get hasSubscribers(): boolean {
+    return this.listeners.size > 0;
   }
 
   approve(id: string): boolean {

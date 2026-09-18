@@ -21,6 +21,18 @@ export interface WorkerOptions {
   name?: string;
   /** Control plane URL. Omit to run the worker in local (in-process) mode. */
   serverUrl?: string;
+  /**
+   * Cluster registration secret (`WAZIR_REGISTRATION_TOKEN` on the API).
+   * Required to register when the control plane has one configured, and
+   * lets a restarted worker re-claim its computer id.
+   */
+  registrationToken?: string;
+  /**
+   * Pre-shared per-computer token. When set it is used as this computer's
+   * bearer token instead of a server-minted one, so identity survives
+   * restarts without a registration token.
+   */
+  token?: string;
   adapters?: RuntimeAdapter[];
   heartbeatIntervalMs?: number;
 }
@@ -43,6 +55,9 @@ export class Worker {
   private _hardware?: HardwareReport;
 
   private readonly serverUrl?: string;
+  private readonly registrationToken?: string;
+  /** Bearer token proving this process owns `computerId` on the control plane. */
+  private token?: string;
   private readonly heartbeatIntervalMs: number;
   private adapters: DiscoveredRuntime[] = [];
   private heartbeatTimer: NodeJS.Timeout | undefined;
@@ -57,6 +72,8 @@ export class Worker {
     this.id = options.computerId ? generateId(`worker-${options.computerId}-`) : generateId('worker-');
     this.name = options.name ?? `worker-${process.env.HOSTNAME ?? 'local'}`;
     this.serverUrl = options.serverUrl ? options.serverUrl.replace(/\/+$/, '') : undefined;
+    this.registrationToken = options.registrationToken || undefined;
+    this.token = options.token || undefined;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
     this.configuredAdapters = options.adapters;
     this.info = {
@@ -176,7 +193,7 @@ export class Worker {
     }
     await fetch(`${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/heartbeat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         load: currentLoad(),
         runtimes: Object.keys(runtimeHealth),
@@ -190,16 +207,24 @@ export class Worker {
 
   private async register(os: OSInfo, hardware: HardwareInfo): Promise<void> {
     if (!this.serverUrl) return;
-    const registration: ComputerRegistration = {
+    // `local` is decided by the control plane from the transport (an HTTP
+    // registration is never local); a self-reported `true` would let a
+    // `localOnly` task be routed to this machine over the network.
+    const registration: ComputerRegistration & { token?: string } = {
       id: this.computerId,
       name: this.name,
       type: 'workstation',
-      local: true,
+      local: false,
       os,
       hardware,
       runtimes: this.info.runtimes,
       models: this.info.models,
+      token: this.token,
     };
+    // Re-registration proves ownership with the token we already hold;
+    // first registration (or a restart without state) uses the cluster
+    // registration token when one is configured.
+    const credential = this.token ?? this.registrationToken;
 
     // The control plane and its workers are typically started together by
     // an orchestrator (Docker Compose, systemd, Kubernetes) with no
@@ -213,18 +238,32 @@ export class Worker {
       try {
         const response = await fetch(`${this.serverUrl}/computers/register`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: credential
+            ? { 'Content-Type': 'application/json', Authorization: `Bearer ${credential}` }
+            : { 'Content-Type': 'application/json' },
           body: JSON.stringify(registration),
         });
         if (!response.ok) {
-          throw new Error(`registration failed: HTTP ${response.status}`);
+          const body = (await response.json().catch(() => ({}))) as { error?: string };
+          const error = new Error(`registration failed: HTTP ${response.status}${body.error ? ` (${body.error})` : ''}`);
+          // Auth failures are not transient; retrying only delays the report.
+          if (response.status === 401 || response.status === 403) throw Object.assign(error, { fatal: true });
+          throw error;
+        }
+        const body = (await response.json()) as { token?: string };
+        if (typeof body.token === 'string' && body.token) {
+          this.token = body.token;
         }
         return;
       } catch (error) {
-        if (attempt === attempts) throw error;
+        if (attempt === attempts || (error as { fatal?: boolean }).fatal) throw error;
         await new Promise((resolve) => setTimeout(resolve, attempt * 500));
       }
     }
+  }
+
+  private authHeaders(base: Record<string, string> = {}): Record<string, string> {
+    return this.token ? { ...base, Authorization: `Bearer ${this.token}` } : base;
   }
 
   private startHeartbeatLoop(): void {
@@ -260,7 +299,7 @@ export class Worker {
   private async runTaskStream(signal: AbortSignal): Promise<void> {
     const response = await fetch(
       `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/tasks/stream`,
-      { signal, headers: { Accept: 'text/event-stream' } },
+      { signal, headers: this.authHeaders({ Accept: 'text/event-stream' }) },
     );
     if (!response.ok || !response.body) {
       throw new Error(`task stream connect failed: HTTP ${response.status}`);
@@ -337,7 +376,7 @@ export class Worker {
       `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}/events`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ executionId: request.executionId, type, data }),
       },
     ).catch(() => undefined);
@@ -352,7 +391,7 @@ export class Worker {
       `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}/result`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(outcome),
       },
     ).catch(() => undefined);

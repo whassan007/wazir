@@ -14,6 +14,8 @@ export interface DispatchOptions {
   timeoutMs?: number;
   /** How often to poll the control plane for new events/outcome (default 300ms). */
   pollIntervalMs?: number;
+  /** Operator token (`WAZIR_API_TOKEN`) when the control plane requires one. */
+  token?: string;
 }
 
 /**
@@ -35,10 +37,11 @@ export async function* dispatchRemote(
   const timeoutMs = options.timeoutMs ?? 120_000;
   const pollIntervalMs = options.pollIntervalMs ?? 300;
   const base = apiUrl.replace(/\/+$/, '');
+  const authHeaders: Record<string, string> = options.token ? { Authorization: `Bearer ${options.token}` } : {};
 
   const dispatchRes = await fetch(`${base}/api/v1/tasks/dispatch`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
     body: JSON.stringify({ computerId, request }),
   });
   if (!dispatchRes.ok) {
@@ -53,7 +56,7 @@ export async function* dispatchRemote(
       throw new Error(`timed out waiting for computer '${computerId}' to report a result for '${request.requestId}'`);
     }
 
-    const statusRes = await fetch(`${base}/api/v1/tasks/${encodeURIComponent(request.requestId)}/status`);
+    const statusRes = await fetch(`${base}/api/v1/tasks/${encodeURIComponent(request.requestId)}/status`, { headers: authHeaders });
     if (statusRes.ok) {
       const status = (await statusRes.json()) as { events: WorkerExecutionEvent[]; outcome?: RemoteExecutionOutcome };
       for (; seen < status.events.length; seen++) {

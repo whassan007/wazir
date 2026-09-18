@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { AgentAdapter, Block, Computer, ExecutionRecord, Job, ModelRecord } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 import { getBlock } from './blocks.js';
+import { assertInsideProject } from '@wazir/tools';
 
 export interface ResolvedBlockRef {
   kind: 'block';
@@ -87,6 +88,14 @@ export async function resolveReference(engine: RookEngine, raw: string): Promise
         return { kind: 'computer', id: value, computer: engine.computers.get(value) };
       case 'file': {
         const absolutePath = path.resolve(engine.projectRoot, value);
+        // Same containment as the file tools: a reference may not probe or
+        // pull in anything outside the project (F-22).
+        const contained = await assertInsideProject(engine.projectRoot, value)
+          .then(() => true)
+          .catch(() => false);
+        if (!contained) {
+          return { kind: 'file', path: value, absolutePath, exists: false };
+        }
         const exists = await fs
           .access(absolutePath)
           .then(() => true)

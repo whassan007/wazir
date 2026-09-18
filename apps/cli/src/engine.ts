@@ -41,6 +41,10 @@ import path from 'node:path';
 export interface EngineOptions {
   projectRoot?: string;
   quiet?: boolean;
+  /** How long an unanswered policy approval waits before it is denied (default 5 minutes). */
+  approvalTimeoutMs?: number;
+  /** Opt in to honouring `WAZIR_AUTO_APPROVE=1`; never on by default. */
+  allowEnvAutoApprove?: boolean;
 }
 
 export interface RookEngine {
@@ -203,7 +207,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // its known computers/runtimes/models/instances in so a task can be placed
   // on — and later dispatched to — a remote machine.
   if (config.apiUrl) {
-    const sync = await syncRemoteInventory(config.apiUrl, localComputer.id, { computers, runtimes, models });
+    const sync = await syncRemoteInventory(config.apiUrl, localComputer.id, { computers, runtimes, models }, { token: config.apiToken });
     if (sync.errors.length > 0 && !options.quiet) {
       console.error(`[wazir] remote inventory sync from ${config.apiUrl} had errors:`);
       for (const error of sync.errors) console.error(`  - ${error}`);
@@ -237,7 +241,12 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   }
 
   // ---- approval queue & policy -------------------------------------------
-  const approvalQueue = new ApprovalQueue();
+  // Questions nobody answers are denied after a bounded wait, and
+  // `WAZIR_AUTO_APPROVE` is only honoured when the caller explicitly opts in.
+  const approvalQueue = new ApprovalQueue({
+    defaultTimeoutMs: options.approvalTimeoutMs ?? 5 * 60_000,
+    allowEnvAutoApprove: options.allowEnvAutoApprove ?? false,
+  });
   const policy = new PolicyEngine({
     projectRoot,
     networkAllowed: config.networkAllowed,

@@ -116,3 +116,41 @@ describe('WorktreeManager — git worktree isolation per agent', () => {
     await manager.removeWorktree(wt2);
   });
 });
+
+describe('F-14: worktree ids are validated before they become paths', () => {
+  it.each(['../../escape', 'x/../../y', 'a;b', 'a b', '--force', '', 'x\ny', '.hidden'])('rejects id %j', async (id) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-wt-ids-'));
+    try {
+      const manager = new WorktreeManager();
+      await expect(manager.createWorktree(dir, 'job-1', id)).rejects.toThrow(/invalid taskId/);
+      await expect(manager.createWorktree(dir, id, 'task-1')).rejects.toThrow(/invalid jobId/);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('F-11: orchestrator git runs with hooks disabled', async () => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-wt-hooks-'));
+    try {
+      await execFileAsync('git', ['init', '-b', 'main'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.email', 't@t'], { cwd: repo });
+      await fs.writeFile(path.join(repo, 'README.md'), 'x\n');
+      await execFileAsync('git', ['add', 'README.md'], { cwd: repo });
+      await execFileAsync('git', ['commit', '-m', 'init'], { cwd: repo });
+
+      // A planted hook that would run on `git worktree add`.
+      const marker = path.join(repo, 'HOOK_RAN');
+      await fs.mkdir(path.join(repo, '.git', 'hooks'), { recursive: true });
+      await fs.writeFile(path.join(repo, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+
+      const manager = new WorktreeManager();
+      const info = await manager.createWorktree(repo, 'job-h', 'task-h');
+      expect(info.isGit).toBe(true);
+      await expect(fs.access(marker)).rejects.toThrow();
+      await manager.removeWorktree(info);
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true });
+    }
+  });
+});

@@ -13,6 +13,7 @@ import type {
   TokenUsage,
   ToolCallRecord,
 } from '../types/index.js';
+import { sanitizeUntrustedOutput } from '@wazir/shared';
 
 export interface ExecutionEngineOptions {
   /** Persists a record after every mutation. */
@@ -149,7 +150,14 @@ export class ExecutionEngine {
 
   async recordToolCall(executionId: string, call: ToolCallRecord): Promise<void> {
     const record = this.require(executionId);
-    record.toolCalls.push(call);
+    // Tool output is persisted for the life of the record and may be shipped
+    // to a control plane; scrub terminal escapes and credential-shaped
+    // material before it lands anywhere durable (F-13, F-23).
+    record.toolCalls.push({
+      ...call,
+      output: call.output === undefined ? undefined : sanitizeUntrustedOutput(call.output),
+      error: call.error === undefined ? undefined : sanitizeUntrustedOutput(call.error),
+    });
     this.pushEvent(record, 'tool.completed', {
       tool: call.tool,
       ok: call.ok,
@@ -167,8 +175,9 @@ export class ExecutionEngine {
 
   async recordCheck(executionId: string, check: CheckRunRecord): Promise<void> {
     const record = this.require(executionId);
-    record.checks.push(check);
-    this.pushEvent(record, 'check.completed', check);
+    const sanitized = { ...check, output: sanitizeUntrustedOutput(check.output) };
+    record.checks.push(sanitized);
+    this.pushEvent(record, 'check.completed', sanitized);
     await this.flush(record);
   }
 
@@ -206,7 +215,7 @@ export class ExecutionEngine {
 
   async setResult(executionId: string, result: string): Promise<void> {
     const record = this.require(executionId);
-    record.result = result;
+    record.result = sanitizeUntrustedOutput(result);
     await this.flush(record);
   }
 

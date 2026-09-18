@@ -209,6 +209,20 @@ wa ask "refactor the auth module" --computer dgx-primary
 
 On startup, the CLI pulls the API's known computers/runtimes/models/instances into its own `Scheduler` registries (skipping anything matching its own local computer id), so a task can genuinely be placed on — and dispatched to — a remote machine over the API's SSE task-pull loop. See `Dockerfile`'s `api`/`worker` targets and `docker-compose.yml` for running the control plane itself.
 
+### Control-plane authentication
+
+A worker's reported result is fed straight back into the operator's agent loop as the model reply, so the control plane authenticates both sides:
+
+| Variable | Where | Purpose |
+| :-- | :-- | :-- |
+| `WAZIR_API_TOKEN` | API, CLI, web | Operator bearer token for every `/api/v1/*` route and `/executions`. Optional on a loopback bind; the API refuses to bind any other address without it (override with `WAZIR_ALLOW_UNAUTHENTICATED=1`). |
+| `WAZIR_REGISTRATION_TOKEN` | API, worker | Cluster secret a worker must present to register a new computer id or re-claim one after a restart. |
+| `WAZIR_WORKER_TOKEN` | worker | Optional pre-shared per-computer token so a worker keeps a stable identity without the registration secret. |
+
+Registration returns a per-computer token that the worker then sends on its heartbeat, task stream and result routes — only the process that registered a computer can receive its tasks or report on them. `local` is decided by the API from the transport, never from the registration payload, so `localOnly` tasks are never routed off-machine.
+
+`docker-compose.yml` requires both cluster tokens and publishes every port on `127.0.0.1` only; put a TLS reverse proxy in front if other hosts must reach the API.
+
 ---
 
 ## Persistence

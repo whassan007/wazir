@@ -1,5 +1,13 @@
+import { randomBytes } from 'node:crypto';
+
+/**
+ * Unpredictable identifier: 128 bits from the CSPRNG. `requestId`s and
+ * `executionId`s double as the only handle on a dispatched task's status and
+ * result routes, so they must not be enumerable from a timestamp plus
+ * `Math.random()` (security review F-17).
+ */
 export function generateId(prefix: string = ''): string {
-  return `${prefix}${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+  return `${prefix}${randomBytes(16).toString('hex')}`;
 }
 
 export function deepClone<T>(value: T): T {

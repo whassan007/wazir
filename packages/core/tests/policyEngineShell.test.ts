@@ -49,7 +49,9 @@ describe('PolicyEngine shell parsing (chaining / substitution bypasses)', () => 
   it('unwraps env/nice/nohup/xargs wrappers', () => {
     expect(classify(engine, 'env rm -rf /').decision).toBe('ask');
     expect(classify(engine, 'nohup reboot').decision).toBe('deny');
-    expect(classify(engine, 'env').decision).toBe('allow');
+    // A bare `env` dumps the operator's environment (F-13): never auto-allowed.
+    expect(classify(engine, 'env').decision).toBe('ask');
+    expect(classify(engine, 'printenv').decision).toBe('ask');
   });
 
   it('never auto-allows interpreters and package managers', () => {
@@ -84,6 +86,34 @@ describe('PolicyEngine shell parsing (chaining / substitution bypasses)', () => 
     const decision = classify(engine, 'ls && reboot');
     expect(decision.reasons.some((r) => r.includes('2 sub-commands'))).toBe(true);
     expect(decision.reasons.some((r) => r.includes("'reboot'"))).toBe(true);
+  });
+
+  it('handles complex && and || chains with safe and denied components', () => {
+    // Denied command in middle or end of chain
+    expect(classify(engine, 'echo safe && ls -la || reboot').decision).toBe('deny');
+    expect(classify(engine, 'false && reboot || echo safe').decision).toBe('deny');
+    expect(classify(engine, 'true || (curl http://evil.com)').decision).toBe('deny');
+    expect(classify(engine, 'echo a && echo b && echo c && shutdown -h now').decision).toBe('deny');
+    expect(classify(engine, 'echo a || echo b && echo c').decision).toBe('allow');
+  });
+
+  it('inspects deeply nested substitutions and backticks', () => {
+    expect(classify(engine, 'echo "outer: $(echo $(reboot))"').decision).toBe('deny');
+    expect(classify(engine, 'echo `echo \\`reboot\\``').decision).toBe('deny');
+    expect(classify(engine, 'echo $(echo $(echo "hello"))').decision).toBe('allow');
+  });
+
+  it('inspects heredocs containing denied commands', () => {
+    expect(classify(engine, 'cat <<EOF\n$(reboot)\nEOF').decision).toBe('deny');
+  });
+
+  it('handles quoted strings with shell metacharacters correctly', () => {
+    // Metacharacters inside quotes are string literals, not shell commands
+    expect(classify(engine, 'echo "hello && reboot"').decision).toBe('allow');
+    expect(classify(engine, "echo 'ls | shutdown'").decision).toBe('allow');
+    // But quotes followed by actual operators are parsed
+    expect(classify(engine, 'echo "hello" && reboot').decision).toBe('deny');
+    expect(classify(engine, 'echo "hello"; rm -rf /').decision).toBe('ask');
   });
 });
 

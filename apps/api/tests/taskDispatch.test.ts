@@ -114,10 +114,21 @@ describe('worker task dispatch loop', () => {
 
     // Register the computer first (normally done by worker.start()) so the
     // dispatch target exists, but dispatch BEFORE the worker opens its stream.
-    await fetch(`${started.baseUrl}/computers/register`, {
+    // The registration mints the computer's bearer token; hand it to the
+    // worker so its own start() re-registers as the same identity.
+    const registerRes = await fetch(`${started.baseUrl}/computers/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: 'wrk-queued', name: 'queued-worker', type: 'workstation', local: true }),
+    });
+    const { token } = (await registerRes.json()) as { token: string };
+    worker = new Worker({
+      computerId: 'wrk-queued',
+      name: 'queued-worker',
+      serverUrl: started.baseUrl,
+      adapters: [fakeAdapter()],
+      heartbeatIntervalMs: 60_000,
+      token,
     });
 
     const request: WorkerExecutionRequest = {

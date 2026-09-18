@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-and-test:
+    name: Build, Typecheck, and Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages and apps
+        run: npm run build
+
+      - name: Typecheck TypeScript code
+        run: npm run typecheck
+
+      # The CLI and API run from dist/; make sure what ships is what was built
+      # from this commit (security review F-16).
+      - name: Verify dist is fresh
+        run: npm run check-dist -- --quiet
+
+      - name: Run test suite
+        run: npm test

@@ -8,6 +8,11 @@ const path = require('node:path');
 
 const PORT = Number(process.env.PORT ?? 4801);
 const API = (process.env.WAZIR_API ?? 'http://localhost:4800').replace(/\/+$/, '');
+// Operator token for the API. The dashboard holds it server-side and attaches
+// it to proxied requests, so it never reaches the browser — which also means
+// anyone who can reach this port can act as the operator: bind it to
+// loopback (docker-compose.yml does) or put it behind your own auth.
+const API_TOKEN = process.env.WAZIR_API_TOKEN;
 const PUBLIC = path.join(__dirname, 'public');
 
 const MIME = {
@@ -27,7 +32,11 @@ function proxy(req, res) {
     port: url.port || (url.protocol === 'https:' ? 443 : 80),
     path: req.url,
     method: req.method,
-    headers: { ...req.headers, host: url.host },
+    headers: {
+      ...req.headers,
+      host: url.host,
+      ...(API_TOKEN && !req.headers.authorization ? { authorization: `Bearer ${API_TOKEN}` } : {}),
+    },
   };
   const upstream = lib.request(options, (upstreamRes) => {
     res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);

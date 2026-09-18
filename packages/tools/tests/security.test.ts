@@ -69,6 +69,35 @@ describe('check tools cannot run arbitrary commands', () => {
     expect(result.ok).toBe(true);
     expect(result.output).toContain('ran-unit');
   });
+
+  it('runs a script whose package.json body contains shell metacharacters because gate is by name, not content', async () => {
+    await fs.writeFile(
+      path.join(project, 'package.json'),
+      JSON.stringify({ scripts: { 'audit:full': 'echo start && echo finished' } }),
+      'utf8',
+    );
+
+    const result = await testTool.execute({ script: 'audit:full' }, { projectRoot: project });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain('start');
+    expect(result.output).toContain('finished');
+  });
+
+  it('rejects script names supplied with indirection or traversal', async () => {
+    await fs.writeFile(
+      path.join(project, 'package.json'),
+      JSON.stringify({ scripts: { test: 'echo test' } }),
+      'utf8',
+    );
+
+    const result1 = await testTool.execute({ script: '../test' }, { projectRoot: project });
+    expect(result1.ok).toBe(false);
+    expect(result1.error).toMatch(/missing script/);
+
+    const result2 = await testTool.execute({ script: '$TEST_SCRIPT' }, { projectRoot: project });
+    expect(result2.ok).toBe(false);
+    expect(result2.error).toMatch(/missing script/);
+  });
 });
 
 describe('project containment resolves symlinks', () => {
@@ -134,5 +163,83 @@ describe('project containment resolves symlinks', () => {
 
     expect(result.ok).toBe(true);
     expect(await fs.readFile(path.join(project, 'new', 'dir', 'file.txt'), 'utf8')).toBe('created');
+  });
+
+  it('rejects a symlink chain where the terminal target escapes the project', async () => {
+    // Chain: linkA -> linkB -> outside/secret.txt
+    const linkB = path.join(project, 'linkB.txt');
+    const linkA = path.join(project, 'linkA.txt');
+    await fs.symlink(path.join(outside, 'secret.txt'), linkB);
+    await fs.symlink(linkB, linkA);
+
+    await expect(assertInsideProject(project, 'linkA.txt')).rejects.toBeInstanceOf(PathEscapeError);
+
+    const result = await readTool.execute({ path: 'linkA.txt' }, { projectRoot: project });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/escapes the project root/);
+  });
+
+  it('rejects relative path traversal combined with an internal symlink', async () => {
+    // parentlink points to parent dir ('..')
+    // Lexically, 'parentlink/outside/secret.txt' is inside project/parentlink/...
+    // But canonically, it resolves to outside/secret.txt
+    await fs.symlink('..', path.join(project, 'parentlink'));
+
+    await expect(assertInsideProject(project, 'parentlink/outside/secret.txt')).rejects.toBeInstanceOf(PathEscapeError);
+
+    const result = await readTool.execute({ path: 'parentlink/outside/secret.txt' }, { projectRoot: project });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/escapes the project root/);
+  });
+});
+
+describe('F-13: tool subprocesses get a minimal environment', () => {
+  it('does not inherit credential-bearing variables from the operator process', async () => {
+    const { shellTool } = await import('../src/process-tools.js');
+    const { childEnvironment } = await import('../src/process.js');
+    process.env.WAZIR_TEST_SECRET_TOKEN = 'do-not-leak';
+    process.env.WAZIR_TEST_PASSTHROUGH = 'visible';
+    process.env.WAZIR_CHILD_ENV = 'WAZIR_TEST_PASSTHROUGH';
+    try {
+      const env = childEnvironment();
+      expect(env.WAZIR_TEST_SECRET_TOKEN).toBeUndefined();
+      expect(env.WAZIR_TEST_PASSTHROUGH).toBe('visible');
+      expect(env.PATH).toBe(process.env.PATH);
+
+      const result = await shellTool.execute(
+        { command: 'echo "secret=${WAZIR_TEST_SECRET_TOKEN:-unset} pass=${WAZIR_TEST_PASSTHROUGH:-unset}"' },
+        { projectRoot: project, taskId: 't', executionId: 'e' } as never,
+      );
+      expect(result.ok).toBe(true);
+      expect(result.output.trim()).toBe('secret=unset pass=visible');
+    } finally {
+      delete process.env.WAZIR_TEST_SECRET_TOKEN;
+      delete process.env.WAZIR_TEST_PASSTHROUGH;
+      delete process.env.WAZIR_CHILD_ENV;
+    }
+  });
+});
+
+describe('F-20: file tools do not follow a symlink swapped in after the containment check', () => {
+  it('read and write refuse a final-component symlink that points outside the project', async () => {
+    const link = path.join(project, 'link.txt');
+    await fs.symlink(path.join(outside, 'secret.txt'), link);
+    const read = await readTool.execute({ path: 'link.txt' }, { projectRoot: project, taskId: 't', executionId: 'e' } as never);
+    expect(read.ok).toBe(false);
+    const write = await writeTool.execute({ path: 'link.txt', content: 'pwned' }, { projectRoot: project, taskId: 't', executionId: 'e' } as never);
+    expect(write.ok).toBe(false);
+    expect(await fs.readFile(path.join(outside, 'secret.txt'), 'utf8')).toBe('top secret');
+  });
+
+  it('opens with O_NOFOLLOW so even an in-project symlink is not followed at open time', async () => {
+    const { readProjectFile, writeProjectFile } = await import('../src/paths.js');
+    await fs.symlink(path.join(project, 'inside.txt'), path.join(project, 'alias.txt'));
+    // A symlink whose target is inside the project passes the lexical/realpath
+    // check, but I/O happens on the canonical target, never through the link.
+    const read = await readProjectFile(project, 'alias.txt');
+    expect(read.content).toBe('hello');
+    await writeProjectFile(project, 'alias.txt', 'updated');
+    expect(await fs.readFile(path.join(project, 'inside.txt'), 'utf8')).toBe('updated');
+    expect((await fs.lstat(path.join(project, 'alias.txt'))).isSymbolicLink()).toBe(true);
   });
 });

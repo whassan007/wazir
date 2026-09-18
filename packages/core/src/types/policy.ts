@@ -38,5 +38,7 @@ export interface PolicyEngineOptions {
   /** Non-blocking approval queue for multi-agent execution. */
   approvalQueue?: {
     enqueue: (request: PolicyActionRequest, decision: PolicyDecision) => Promise<boolean>;
+    /** When false, 'ask' falls through to `approveCallback` (if any) instead of waiting on the queue. */
+    hasSubscribers?: boolean;
   };
 }

@@ -9,6 +9,8 @@ export interface WazirConfig {
    * into its registries so the Scheduler can place tasks on them, and dispatches non-local
    * tasks through the API's task-pull loop instead of running everything in-process. */
   apiUrl?: string;
+  /** Operator bearer token for the control-plane API (`WAZIR_API_TOKEN`). */
+  apiToken?: string;
   /** Per-model context window overrides (tokens). */
   modelContext: Record<string, number>;
   /** Per-model extra capability tags. */
@@ -63,6 +65,7 @@ export function loadConfig(): WazirConfig {
     console.warn('[DEPRECATION] ROOK_API_URL is deprecated; use WAZIR_API_URL.');
   }
   if (apiUrl) config.apiUrl = apiUrl;
+  if (process.env.WAZIR_API_TOKEN) config.apiToken = process.env.WAZIR_API_TOKEN;
 
   try {
     const raw = readFileSync(configFile(), 'utf8');
@@ -70,6 +73,7 @@ export function loadConfig(): WazirConfig {
     config.ollamaUrl = fileConfig.ollamaUrl ?? config.ollamaUrl;
     config.lmstudioUrl = fileConfig.lmstudioUrl ?? config.lmstudioUrl;
     config.apiUrl = fileConfig.apiUrl ?? config.apiUrl;
+    config.apiToken = fileConfig.apiToken ?? config.apiToken;
     config.modelContext = { ...config.modelContext, ...(fileConfig.modelContext ?? {}) };
     config.modelCapabilities = { ...config.modelCapabilities, ...(fileConfig.modelCapabilities ?? {}) };
     config.networkAllowed = fileConfig.networkAllowed ?? config.networkAllowed;

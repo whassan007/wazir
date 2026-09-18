@@ -20,6 +20,8 @@ async function main(): Promise<void> {
     computerId: args.computer ?? process.env.WAZIR_COMPUTER_ID ?? 'local',
     name: args.name ?? process.env.WAZIR_COMPUTER_NAME ?? 'local',
     serverUrl,
+    registrationToken: process.env.WAZIR_REGISTRATION_TOKEN,
+    token: process.env.WAZIR_WORKER_TOKEN,
   });
 
   const info = await worker.start();

@@ -169,7 +169,7 @@ export function createFleetTaskExecutor(
             contextTokens: contextDecision.available.tokens,
           };
           try {
-            for await (const event of dispatchRemote(engine.config.apiUrl, assignment.computerId, workerRequest)) {
+            for await (const event of dispatchRemote(engine.config.apiUrl, assignment.computerId, workerRequest, { token: engine.config.apiToken })) {
               const generationEvent = toGenerationEvent(event);
               if (!generationEvent) continue;
               if (generationEvent.type === 'token' && generationEvent.content) {
