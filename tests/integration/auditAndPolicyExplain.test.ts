@@ -391,3 +391,58 @@ describe('Audit Logging & Policy Explain & Model Cycle M0 (PROGRESS.md Next Step
     });
   });
 });
+
+describe('second-pass review S-9: audit log sanitisation and timeout attribution', () => {
+  it('strips terminal escapes and redacts secrets before a line is appended', async () => {
+    const { appendAuditEvent, readAuditEvents } = await import('@wazir/shared');
+    const fs = await import('node:fs/promises');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-audit-s9-'));
+    const auditPath = path.join(dir, 'audit.jsonl');
+    const ESC = String.fromCharCode(27);
+    const BEL = String.fromCharCode(7);
+    try {
+      await appendAuditEvent(
+        { type: 'policy_decision', tool: 'shell', decision: 'deny', rule: 'x', reasons: [`${ESC}]0;pwned${BEL}bad`], command: 'echo AWS_SECRET_ACCESS_KEY=abcd1234', details: { input: { command: 'db_password: hunter2' } } },
+        { auditPath },
+      );
+      const raw = await fs.readFile(auditPath, 'utf8');
+      expect(raw).not.toContain(ESC);
+      expect(raw).not.toContain('abcd1234');
+      expect(raw).not.toContain('hunter2');
+      const [event] = await readAuditEvents({ auditPath });
+      expect(event.reasons?.[0]).toBe('bad');
+      expect(event.command).toBe('echo AWS_SECRET_ACCESS_KEY=[REDACTED]');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('records a timed-out approval as resolvedBy=timeout, distinct from a human denial', async () => {
+    const { ApprovalQueue } = await import('@wazir/core');
+    const { readAuditEvents } = await import('@wazir/shared');
+    const fs = await import('node:fs/promises');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-audit-s9b-'));
+    const previous = process.env.WAZIR_CONFIG_DIR;
+    process.env.WAZIR_CONFIG_DIR = dir;
+    try {
+      const queue = new ApprovalQueue({ defaultTimeoutMs: 20 });
+      const request = { tool: 'shell', input: { command: 'npm install' }, executionId: 'exec-s9' };
+      await queue.enqueue(request, { decision: 'ask', rule: 'shell-unknown-ask', reasons: [] });
+      const human = queue.enqueue(request, { decision: 'ask', rule: 'shell-unknown-ask', reasons: [] });
+      queue.denyAll();
+      await human;
+      await new Promise((r) => setTimeout(r, 30));
+      const events = await readAuditEvents({ auditPath: path.join(dir, 'audit.jsonl'), type: 'approval_resolution' });
+      const by = events.map((e) => e.resolvedBy).sort();
+      expect(by).toEqual(['approver_denied', 'timeout']);
+    } finally {
+      if (previous === undefined) delete process.env.WAZIR_CONFIG_DIR;
+      else process.env.WAZIR_CONFIG_DIR = previous;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

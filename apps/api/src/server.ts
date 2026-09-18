@@ -348,7 +348,9 @@ export function createApp(state: ApiState) {
     });
   });
 
-  app.get('/metrics', (_req, res) => {
+  // Metrics reveal topology and auth-failure counts: viewer scope, like the
+  // rest of the read-only surface (Prometheus: `authorization: credentials`).
+  app.get('/metrics', auth.requireViewerOrOperator, (_req, res) => {
     const onlineComputers = state.computers.listOnline().length;
     const totalComputers = state.computers.list().length;
     const queueDepth = state.dispatcher.totalQueued;

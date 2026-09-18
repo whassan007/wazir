@@ -49,7 +49,7 @@ const OUTPUT_FLAGS: Record<string, string[]> = {
 const NON_PATH_VALUE_FLAGS: Record<string, string[]> = {
   grep: ['-e', '--regexp', '-m', '--max-count', '-A', '-B', '-C', '--after-context', '--before-context', '--context', '--include', '--exclude', '--exclude-dir', '--label', '-d', '-D'],
   rg: ['-e', '--regexp', '-g', '--glob', '--iglob', '-t', '--type', '-T', '--type-not', '--type-add', '-m', '--max-count', '-A', '-B', '-C', '--after-context', '--before-context', '--context', '-M', '--max-columns', '-j', '--threads', '--max-depth', '--max-filesize', '--color', '--colors', '--sort', '--sortr', '-r', '--replace', '--context-separator', '--field-context-separator', '--field-match-separator', '--path-separator', '--dfa-size-limit', '--regex-size-limit', '--engine'],
-  find: ['-name', '-iname', '-path', '-ipath', '-regex', '-iregex', '-wholename', '-iwholename', '-lname', '-ilname', '-maxdepth', '-mindepth', '-mtime', '-mmin', '-atime', '-amin', '-ctime', '-cmin', '-size', '-type', '-user', '-group', '-perm', '-newer', '-printf', '-newermt', '-links', '-inum', '-uid', '-gid', '-regextype', '-fstype', '-used', '-xtype', '-context'],
+  find: ['-name', '-iname', '-path', '-ipath', '-regex', '-iregex', '-wholename', '-iwholename', '-lname', '-ilname', '-maxdepth', '-mindepth', '-mtime', '-mmin', '-atime', '-amin', '-ctime', '-cmin', '-size', '-type', '-user', '-group', '-perm', '-printf', '-newermt', '-newerat', '-newerct', '-links', '-inum', '-uid', '-gid', '-regextype', '-fstype', '-used', '-xtype', '-context'],
   cut: ['-d', '--delimiter', '-f', '--fields', '-c', '--characters', '-b', '--bytes', '--output-delimiter'],
   head: ['-n', '-c', '--lines', '--bytes'],
   tail: ['-n', '-c', '--lines', '--bytes', '-s', '--sleep-interval', '--pid'],
@@ -100,6 +100,8 @@ const NETWORK_COMMANDS = new Set([
 
 // Commands that execute their trailing arguments as another command.
 const WRAPPER_COMMANDS = new Set(['env', 'nice', 'nohup', 'time', 'timeout', 'xargs', 'command', 'builtin', 'stdbuf', 'ionice']);
+
+const WRAPPER_VALUE_FLAGS = new Set(['-n', '--adjustment', '-c', '--class', '-p', '-s', '--signal', '-k', '--kill-after', '-o', '-e', '-i', '-P', '--max-procs', '-L', '-I', '-d', '--delimiter', '-a', '--arg-file']);
 
 const COMMAND_BOUNDARY_OPS = new Set(['&&', '||', ';', ';;', '|', '|&', '&', '(', ')', '<(']);
 const REDIRECT_OPS = new Set(['>', '>>', '>&', '<', '<&', '<<<']);
@@ -170,7 +172,11 @@ function resolveCommand(words: string[]): { name: string; args: string[] } {
     const name = basename(rest[0]);
     if (!WRAPPER_COMMANDS.has(name)) return { name, args: rest.slice(1) };
     let j = 1;
-    while (j < rest.length && rest[j].startsWith('-')) j += 1;
+    while (j < rest.length && rest[j].startsWith('-')) {
+      // `nice -n 5`, `ionice -c 2 -n 7`, `timeout -s KILL`: the value is a separate word.
+      if (WRAPPER_VALUE_FLAGS.has(rest[j])) j += 1;
+      j += 1;
+    }
     if (name === 'timeout') j += 1;
     const inner = stripAssignments(rest.slice(j));
     if (inner.length === 0) return { name, args: rest.slice(1) };
@@ -205,7 +211,11 @@ const GIT_DENY = new Set(['push', 'clean', 'gc', 'filter-branch', 'update-ref'])
 // or change which binaries git executes.
 const GIT_GLOBAL_DENY_FLAGS = ['-c', '-C', '--git-dir', '--work-tree', '--exec-path', '--namespace', '--config-env', '--super-prefix', '--bare'];
 // Options on read verbs that write a file or run an external program.
-const GIT_READ_VERB_DENY_FLAGS = ['--output', '--ext-diff', '--textconv', '--exec'];
+// `--no-index` turns `git diff` into a host-wide file reader; `help -w`
+// launches a browser via xdg-open (second-pass S-3/S-5).
+const GIT_READ_VERB_DENY_FLAGS = ['--output', '--ext-diff', '--textconv', '--exec', '--no-index', '--web', '-w', '--open-files-in-pager', '-O'];
+// Read-only verbs that contact a remote: allowed only when network access is on (S-4).
+const GIT_NETWORK_READ_VERBS = new Set(['ls-remote']);
 // Options that turn `branch`/`remote`/`config` into writes.
 const GIT_BRANCH_READ_FLAGS = new Set(['-a', '-r', '-v', '-vv', '-l', '--list', '--all', '--remotes', '--verbose', '--show-current', '--contains', '--no-contains', '--merged', '--no-merged', '--points-at', '--sort', '--format', '--color', '--no-color', '--column', '--no-column', '-i', '--ignore-case', '--abbrev', '--no-abbrev']);
 const GIT_REMOTE_READ_SUBCOMMANDS = new Set(['show', 'get-url']);
@@ -541,6 +551,9 @@ export class PolicyEngine {
       }
     }
 
+    if (GIT_NETWORK_READ_VERBS.has(verb) && !this.options.networkAllowed) {
+      return { decision: 'deny', rule: 'network-default-deny', reasons: [`git ${verb} contacts a remote and network access is disabled by default policy`] };
+    }
     if (GIT_ALLOW.has(verb)) {
       return { decision: 'allow', rule: 'git-read-allow', reasons: [`git ${verb} is a read-only command`] };
     }
@@ -684,6 +697,12 @@ export class PolicyEngine {
     decisions.push(this.classifyCommandName(name));
     if (SAFE_SHELL_COMMANDS.has(name)) {
       decisions.push(...this.classifySafeCommandArgs(name, args, projectRoot));
+      // `echo /etc/passwd | xargs cat`: the paths xargs hands to `cat` come
+      // from stdin, so nothing above could inspect them (second-pass S-2).
+      const viaXargs = stripAssignments(segment.words).some((w, i) => i < segment.words.length - 1 && basename(w) === 'xargs');
+      if (viaXargs && PATH_READING_COMMANDS.has(name)) {
+        decisions.push({ decision: 'ask', rule: 'shell-unknown-ask', reasons: [`'${name}' via xargs receives its file arguments from stdin, which cannot be checked against the project root`] });
+      }
     }
 
     return decisions;
@@ -699,7 +718,7 @@ export class PolicyEngine {
     const execFlags = EXEC_FLAGS[name] ?? [];
     const outputFlags = OUTPUT_FLAGS[name] ?? [];
     const valueFlags = NON_PATH_VALUE_FLAGS[name] ?? [];
-    const pathValueFlags = ['--files0-from', '-f', '--file'];
+    const pathValueFlags = ['--files0-from', '-f', '--file', ...(name === 'find' ? ['-newer', '-anewer', '-cnewer', '-samefile', '-newerBB', '-newermm', '-newerBm', '-newermB'] : [])];
     let positionalIndex = 0;
     const patternGiven = PATTERN_FIRST_COMMANDS.has(name) && args.some((a) => ['-e', '--regexp', '-f', '--file'].some((f) => flagMatches(a, f)));
 
@@ -816,7 +835,13 @@ export class PolicyEngine {
   }
 
   private classifyRedirect(redirect: { op: string; target: string }, projectRoot: string): PolicyDecision | null {
-    if (redirect.op === '<' || redirect.op === '<&' || redirect.op === '<<<') return null;
+    if (redirect.op === '<&' || redirect.op === '<<<') return null;
+    if (redirect.op === '<') {
+      // `cat < /etc/passwd` reads the file exactly like `cat /etc/passwd`
+      // (second-pass review S-1): same containment as a path argument.
+      if (!redirect.target) return { decision: 'ask', rule: 'shell-unknown-ask', reasons: ['input redirection with an undetermined source requires approval'] };
+      return this.classifyReadPath('cat', redirect.target, projectRoot)[0] ?? null;
+    }
     if (redirect.op === '>&' && /^\d+$/.test(redirect.target)) return null;
     if (!redirect.target) {
       return { decision: 'ask', rule: 'shell-unknown-ask', reasons: ['output redirection with an undetermined target requires approval'] };

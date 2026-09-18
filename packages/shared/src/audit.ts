@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { generateId } from './utils.js';
+import { sanitizeUntrustedOutput } from './sanitize.js';
 
 export interface AuditEvent {
   id: string;
@@ -27,8 +28,20 @@ export interface ReadAuditOptions {
   type?: AuditEvent['type'];
 }
 
+function sanitizeDeep<T>(value: T): T {
+  if (typeof value === 'string') return sanitizeUntrustedOutput(value) as unknown as T;
+  if (Array.isArray(value)) return value.map((item) => sanitizeDeep(item)) as unknown as T;
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = sanitizeDeep(v);
+    return out as T;
+  }
+  return value;
+}
+
 export function getDefaultAuditLogPath(): string {
-  const dir = process.env.WAZIR_CONFIG_DIR ?? path.join(os.homedir(), '.wazir');
+  // Same resolution as the CLI's configDir(): WAZIR_HOME wins, then ~/.wazir.
+  const dir = process.env.WAZIR_CONFIG_DIR ?? process.env.WAZIR_HOME ?? path.join(os.homedir(), '.wazir');
   return path.join(dir, 'audit.jsonl');
 }
 
@@ -61,7 +74,11 @@ export async function appendAuditEvent(
     details: event.details,
   };
 
-  const line = `${JSON.stringify(record)}\n`;
+  // The log is read back by `wa audit` and shipped elsewhere; model-supplied
+  // text (reasons, commands, inputs) must not carry terminal escapes or
+  // credentials into it. Scrub the values, not the serialized line:
+  // JSON.stringify would spell ESC as the six characters `\u001b`.
+  const line = `${JSON.stringify(sanitizeDeep(record))}\n`;
   await fs.appendFile(auditPath, line, { mode: 0o600 });
   await fs.chmod(auditPath, 0o600).catch(() => undefined);
 

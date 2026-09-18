@@ -28,6 +28,11 @@ const ENV_SECRET_RE =
 // quoted value requirement keeps ordinary code (`const token = parse(x)`) intact.
 const CONFIG_SECRET_RE =
   /\b((?:api[_-]?key|apikey|secret|password|passwd|token|access[_-]?token|refresh[_-]?token|private[_-]?key|client[_-]?secret|auth[_-]?token)["']?)(\s*[=:]\s*)(["'])([^"'\n]{4,})\3/gi;
+// `aws_secret_access_key = value` / `db-password: value` — ini/yaml-style
+// snake- or kebab-case keys with an unquoted value. The separator inside the
+// key is what keeps plain code (`token = parse(x)`) out of scope.
+const INI_SECRET_RE =
+  /(^|[\s,;{("'])((?=[A-Za-z0-9]+[_-])(?:[A-Za-z0-9]+[_-])*?(?:secret|password|passwd|token|api[_-]?key|apikey|private[_-]?key|access[_-]?key)(?:[_-][A-Za-z0-9]+)*)(\s*[=:]\s*)([^\s"'`,;]{4,})/gi;
 const BEARER_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/g;
 const URL_CREDS_RE = /(\b[a-z][a-z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+)@/gi;
 const PEM_RE = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
@@ -52,6 +57,7 @@ export function redactSecrets(text: string): string {
     .replace(BEARER_RE, `$1 ${REDACTED}`)
     .replace(ENV_SECRET_RE, (_m, key: string, sep: string, quote: string) => `${key}${sep}${quote}${REDACTED}${quote}`)
     .replace(CONFIG_SECRET_RE, (_m, key: string, sep: string, quote: string) => `${key}${sep}${quote}${REDACTED}${quote}`)
+    .replace(INI_SECRET_RE, (_m, pre: string, key: string, sep: string) => `${pre}${key}${sep}${REDACTED}`)
     .replace(KNOWN_TOKEN_RE, REDACTED);
 }
 

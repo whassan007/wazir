@@ -13,7 +13,7 @@ export interface PendingApprovalRequest {
   reasons: string[];
   createdAt: Date;
   status: 'pending' | 'approved' | 'denied';
-  resolve: (approved: boolean) => void;
+  resolve: (approved: boolean, resolvedBy?: string) => void;
 }
 
 export interface ApprovalQueueOptions {
@@ -87,7 +87,7 @@ export class ApprovalQueue {
         reasons: decision.reasons,
         createdAt: new Date(),
         status: 'pending',
-        resolve: (approved: boolean) => {
+        resolve: (approved: boolean, resolvedBy?: string) => {
           if (item.status !== 'pending') return;
           if (timer) clearTimeout(timer);
           item.status = approved ? 'approved' : 'denied';
@@ -102,7 +102,7 @@ export class ApprovalQueue {
             executionId: item.executionId,
             taskId: item.taskId,
             agentId: item.agentId,
-            resolvedBy: approved ? 'approver' : 'policy_or_timeout',
+            resolvedBy: resolvedBy ?? (approved ? 'approver' : 'approver_denied'),
             details: { input: item.input, approvalId: item.id },
           }).catch(() => {});
           resolve(approved);
@@ -111,7 +111,7 @@ export class ApprovalQueue {
 
       const timeoutMs = this.options.defaultTimeoutMs;
       if (timeoutMs !== undefined && timeoutMs > 0) {
-        timer = setTimeout(() => item.resolve(false), timeoutMs);
+        timer = setTimeout(() => item.resolve(false, 'timeout'), timeoutMs);
         timer.unref?.();
       }
 

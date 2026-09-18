@@ -628,3 +628,66 @@ The plan was model-generated and marked unreviewed; the following items were imp
 
 - The two BLOCKED qualifications from Section 15 are lifted: (1) distributed mode now authenticates every worker-protocol route per computer and every control route with an operator token, the shipped Compose configuration requires both and binds loopback only, so AP-1 (remote → operator RCE) no longer has an unauthenticated entry point; (2) every reproduced `allow`-tier bypass (F-4, F-5, F-6, F-7, F-8, F-10, F-11, F-13) now classifies `deny` or `ask`, so the "compromised model" threat model in the README is delivered by the policy perimeter for the tool surface Wazir ships (AP-2 requires human approval at every step).
 - Remaining items are the tracked architectural debts (F-27 sandbox, optional-tokens-on-loopback, no RBAC/TLS) listed in Section 19; none is exploitable under the documented deployment (loopback bind, or TLS proxy + tokens).
+
+
+---
+---
+
+# Part 5 — Second-pass review (2026-09-18)
+
+Scope: the surface added or changed since Part 4 — `apps/api/src/auth.ts`
+(RBAC, persisted computer-token hashes, mandatory tokens), `server.ts`
+(`/metrics`, viewer scope), TLS in `main.ts`, the audit log
+(`packages/shared/src/audit.ts`, `wa audit`), `wa policy explain`, the
+safe-command argument classifier and git verb rules from Part 4, the redaction
+patterns, and the bwrap/seatbelt sandbox (`packages/tools/src/sandbox.ts`).
+Method: code reading plus `vite-node` probes against the TypeScript source
+(28 classifier cases, 6 redaction cases). Findings are numbered **S-n**; every
+FIXED item has a regression test named after it.
+
+## 21. Findings
+
+| ID | Sev. | Component | Finding | Evidence (before) | Status / fix | Pinned by |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| S-1 | **HIGH** | `policyEngine.ts` `classifyRedirect` | Input redirection bypassed F-5 containment: `cat < /etc/passwd`, `wc -l < ~/.ssh/id_rsa`, `sort < ../../.env` → `allow`. `<` was treated as harmless because only output redirects were checked. | probe: `allow shell-safe-allow` ×3 | **FIXED** — `<` targets get `classifyReadPath` (outside → deny, `$`/`~` → ask); `<<<`/`<&` unchanged. | `policyEngineHardening.test.ts` "S-1" |
+| S-2 | **HIGH** | `resolveCommand` / `classifyShellSegment` | `xargs` unwrapping made the inner command's *arguments* invisible: `echo /etc/passwd \| xargs cat` → `allow` (paths arrive on stdin). | probe ×2 | **FIXED** — a path-reading safe command reached via `xargs` → `ask`; non-path commands (`xargs echo`) stay allowed. | "S-2" |
+| S-3 | **HIGH** | `classifyGit` | `git diff --no-index /etc/passwd /dev/null` → `allow`: `--no-index` makes `diff` a host-wide file reader. | probe | **FIXED** — `--no-index` added to `GIT_READ_VERB_DENY_FLAGS`. | "S-3/S-4/S-5" |
+| S-4 | MEDIUM | `classifyGit` | `git ls-remote <url>` allowed as read-only although it contacts the network regardless of `networkAllowed` (sandbox would block it, policy would not). | probe | **FIXED** — `ls-remote` → `network-default-deny` unless `networkAllowed`. | same |
+| S-5 | MEDIUM | `classifyGit` | `git help --web/-w <topic>` allowed; git spawns `xdg-open`/browser. Also `-O`/`--open-files-in-pager`. | probe ×2 | **FIXED** — `--web`, `-w`, `-O`, `--open-files-in-pager` denied on read verbs. | same |
+| S-6 | LOW | `NON_PATH_VALUE_FLAGS.find` | `find . -newer /etc/shadow` skipped `-newer`'s value → existence/mtime oracle on any host path (`-anewer`, `-cnewer` likewise). | probe | **FIXED** — the `-newer` family and `-samefile` are path-value flags for `find`; `-newermt`/`-newerat`/`-newerct` (time strings) still skipped. | "S-6" |
+| S-7 | MEDIUM | `sanitize.ts` `redactSecrets` | Lowercase ini/yaml-style secrets with unquoted values were not redacted: `aws_secret_access_key = …`, `db_password: …`, `api-key: …` passed through to execution records and the audit log (a model reading a project `.aws`-style config or `settings.ini` persists the value). | probe ×3 | **FIXED** — `INI_SECRET_RE`: snake/kebab keys whose *segment* is a secret word; single bare words (`password=…`) and code (`token = parse(x)`, `max_tokens: 4096`) are deliberately left alone and pinned. | `sanitize.test.ts` "S-7" |
+| S-8 | LOW | `server.ts` `/metrics` | Metrics were served before the auth middleware: anonymous scrape of topology (computer counts, queue depth, active streams) and `wazir_auth_failures_total`. | route order | **FIXED** — `/metrics` requires viewer or operator scope (Prometheus `authorization.credentials`). | `apiAuth.test.ts` "S-8"; `trackedSecurityDebt.test.ts` F-28 updated |
+| S-9 | LOW | `audit.ts`, `wa audit` | (a) Audit lines stored model-supplied `reasons`/`command`/`details.input` raw — terminal escapes and secrets reach `~/.wazir/audit.jsonl` and `wa audit` printed `command`/`reasons` unstripped (an F-23 sink that post-dates the F-23 fix); (b) `resolvedBy` could not distinguish a human denial from a timeout (`policy_or_timeout`); (c) the log path honoured `WAZIR_CONFIG_DIR` but not `WAZIR_HOME`, unlike `configDir()`. | code | **FIXED** — fields scrubbed (`sanitizeDeep`) *before* `JSON.stringify` (stringify would spell ESC as a six-character escape sequence, invisible to a post-hoc strip); `wa audit` strips escapes on output; `resolve(approved, resolvedBy)` records `approver` / `approver_denied` / `timeout`; path resolution mirrors `configDir()`. | `auditAndPolicyExplain.test.ts` "S-9" ×2 |
+| S-10 | MEDIUM (functional, security-adjacent) | `sandbox.ts` | In fleet mode the tool `projectRoot` is a worktree under `<repo>/.wazir/worktrees/…`; its `.git` is a *file* pointing at `<repo>/.git/worktrees/<name>`, which the read-only root left unwritable → `git add`/`commit` inside the sandbox would fail and push operators to `WAZIR_SANDBOX=none`. | code reading (bwrap unavailable on this host after the sysctl was restored) | **FIXED** — `worktreeGitDir()` parses `gitdir:` and binds the main `.git` read-write. | argument-level only; live check requires userns (see §23) |
+| S-11 | LOW | `sandbox.ts` | bwrap ran without `--disable-userns`: a sandboxed process could create a nested user namespace and remount its own view. Not an escape, but unnecessary capability. | code | **FIXED** — `--unshare-user --disable-userns` (the probe uses the same flags so hosts with bwrap < 0.8 fall back cleanly). | `sandbox.test.ts` arg assertions |
+| S-12 | LOW | `resolveCommand` | `nice -n 5 cat /etc/passwd` classified the literal `5` as the command → `ask` (false positive, not a bypass; `nice -n 5 ls` also asked). | probe | **FIXED** — wrapper flags that take a value (`-n`, `-c`, `-s`, `-k`, …) skip their value. | "wrapper flags with values" |
+| S-13 | LOW | `auth.ts` | `requireComputer` answers 404 for unknown ids and 401 for wrong tokens → registered computer ids are enumerable without a token. The same ids are listed by the viewer route, so the information value is small; kept for operator ergonomics. | code | **ACCEPTED** | — |
+| S-14 | LOW | `auth.ts` | A worker-supplied `token` (`WAZIR_WORKER_TOKEN`) is accepted verbatim if ≥ 16 chars and stored as an unsalted SHA-256; a weak operator-chosen value is brute-forceable from the store. Server-minted tokens are 256-bit random. | code | **ACCEPTED** — operator-controlled; recommend ≥ 32 random bytes. | — |
+| S-15 | INFO | `main.ts` | Native TLS uses Node defaults (TLS ≥ 1.2, no client-cert option). Adequate; mTLS is the follow-up if workers must be authenticated at transport level. | code | **ACCEPTED** | — |
+| S-16 | INFO | shell tools without sandbox | Writes to an in-project path that is a symlink to an outside file (`sort -o link.txt`, `echo x > link.txt`) follow the link on the host when `WAZIR_SANDBOX=none`; the policy layer is lexical by design. Under bwrap/seatbelt the read-only root blocks it. | reasoning | **ACCEPTED** — the sandbox is the control; `WAZIR_SANDBOX=required` remains the follow-up. | — |
+
+Everything else probed held: `--`-terminated arguments, attached `-f/path`
+forms, `.//..//` normalisation, `/proc/self/environ`, `--files0-from`,
+`tree --fromfile`, `grep --directories`, wrapper unwrapping (`time`,
+`command`, `env`), `df --output`, `stat --printf`, `git log --pretty`,
+`git show HEAD:file`; RBAC split (viewer 403 on dispatch), persisted token
+hashes across restart, mandatory tokens (401 with none configured),
+registration-token gating, PEM/bearer/URL-credential/known-prefix redaction.
+
+## 22. Verification
+
+| Check | Result |
+| :-- | :-- |
+| `npm run build` / `npm run typecheck` / `npm run check-dist` | clean |
+| `npx vitest run` | **49 files, 486 passed, 15 skipped, 0 failed** (+16 assertions for S-1..S-9; 4 live sandbox tests skipped on this host) |
+| Re-probe of the 28 classifier cases after the fixes | all bypass cases now `deny`/`ask`; all benign cases still `allow` |
+
+## 23. Residual items after the second pass
+
+1. S-10 is verified at the argument level only; run `packages/tools/tests/sandbox.test.ts` on a host with user namespaces (or with `kernel.apparmor_restrict_unprivileged_userns=0`) to exercise the worktree bind live. A fleet-mode `git commit` case in the live suite is the natural next test.
+2. The `sandbox-exec` (macOS) profile is still untested on real hardware.
+3. Redaction remains pattern-based: base64/hex secrets with no key context are not caught. The minimal child environment and the `env`/`printenv` `ask` are the primary controls.
+4. Single-word lowercase `password=…` is intentionally not redacted (too many false positives in code); `.env`-style uppercase keys are.
+5. `WAZIR_SANDBOX=required` (fail closed instead of warning) and a shipped AppArmor profile for bubblewrap remain the sandbox follow-ups from Part 4.
+
+**Verdict after second pass: PASSED.** Three high-severity classifier gaps (S-1, S-2, S-3) were found and closed in the same pass; none required a change to the trust-boundary design from Part 4.

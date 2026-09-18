@@ -128,11 +128,17 @@ describe('Section 15: Tracked Security Debt (Explicit Test Coverage of Known Gap
   });
 
   describe('Observability: Prometheus Metrics Endpoint (F-28)', () => {
-    it('RESOLVED (F-28): /metrics exports Prometheus formatted metrics', async () => {
-      const started = await startApiServer();
-      server = started.server;
+    it('RESOLVED (F-28): /metrics exports Prometheus formatted metrics (viewer scope)', async () => {
+      const state = await createApiState({ auth: { viewerToken: 'scraper' } });
+      const app = createApp(state);
+      server = app.listen(0);
+      await new Promise<void>((resolve) => server!.once('listening', resolve));
+      const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
-      const res = await fetch(`${started.baseUrl}/metrics`);
+      // Metrics sit behind the viewer/operator token like every other read
+      // route (second-pass review S-8); anonymous scrapes get 401.
+      expect((await fetch(`${baseUrl}/metrics`)).status).toBe(401);
+      const res = await fetch(`${baseUrl}/metrics`, { headers: { Authorization: 'Bearer scraper' } });
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toContain('text/plain');
       const text = await res.text();

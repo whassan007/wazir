@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants as fsConstants, existsSync, lstatSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -92,7 +92,7 @@ function probeBwrap(): { ok: boolean; reason?: string } {
   if (process.platform !== 'linux') return { ok: false, reason: 'bwrap is Linux-only' };
   const bin = onPath('bwrap');
   if (!bin) return { ok: false, reason: 'bwrap (bubblewrap) is not installed' };
-  const result = spawnSync(bin, ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--unshare-pid', '--die-with-parent', '--', '/bin/true'], {
+  const result = spawnSync(bin, ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--unshare-user', '--unshare-pid', '--disable-userns', '--die-with-parent', '--', '/bin/true'], {
     stdio: ['ignore', 'ignore', 'pipe'],
     timeout: 5_000,
   });
@@ -164,6 +164,21 @@ export function sandboxDegraded(status: SandboxStatus = sandboxStatus()): boolea
   return status.mode === 'none' && status.requested !== 'none';
 }
 
+/** For a git worktree, the main repository's `.git` directory that holds its metadata. */
+function worktreeGitDir(project: string): string | undefined {
+  const dotGit = path.join(project, '.git');
+  try {
+    if (!lstatSync(dotGit).isFile()) return undefined;
+    const match = /^gitdir:\s*(.+)\s*$/m.exec(readFileSync(dotGit, 'utf8'));
+    if (!match) return undefined;
+    const gitdir = path.resolve(project, match[1].trim()); // <main>/.git/worktrees/<name>
+    const common = path.resolve(gitdir, '..', '..'); // <main>/.git
+    return path.basename(common) === '.git' && existsSync(common) ? common : gitdir;
+  } catch {
+    return undefined;
+  }
+}
+
 function isRealDirectory(target: string): boolean {
   try {
     return lstatSync(target).isDirectory();
@@ -212,6 +227,11 @@ export function bwrapArgs(options: SandboxOptions, home: string = os.homedir(), 
   // The project is the only writable tree besides /tmp; it must come after the
   // home mask because it usually lives under $HOME.
   args.push('--bind', project, project);
+  // A git worktree keeps its index/HEAD under the main repository's .git
+  // (`.git` is a file with `gitdir: ...`); expose just that slice read-write
+  // so `git add`/`commit` inside the worktree keep working.
+  const gitCommon = worktreeGitDir(project);
+  if (gitCommon && !isInside(project, gitCommon)) args.push('--bind', gitCommon, gitCommon);
   for (const dir of options.readWritePaths ?? []) if (existsSync(dir)) args.push('--bind', dir, dir);
 
   // Temp dirs outside /tmp (macOS-style or TMPDIR overrides) stay writable.
@@ -221,7 +241,10 @@ export function bwrapArgs(options: SandboxOptions, home: string = os.homedir(), 
   const cwd = path.resolve(options.cwd);
   args.push(
     '--chdir', isInside(project, cwd) || isInside(tmp, cwd) ? cwd : project,
-    '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
+    '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
+    // No nested user namespaces: blocks the mount/setns tricks a process
+    // could otherwise use to rearrange its own view (bwrap ≥ 0.8).
+    '--disable-userns',
     ...(options.networkAllowed ? [] : ['--unshare-net']),
     '--die-with-parent',
     '--new-session',

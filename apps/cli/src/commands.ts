@@ -2,7 +2,7 @@ import type { TaskType } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
 import { executeTask, planTask } from './run.js';
-import { tokensPerSecond, readAuditEvents, type AuditEvent } from '@wazir/shared';
+import { tokensPerSecond, readAuditEvents, stripTerminalEscapes, type AuditEvent } from '@wazir/shared';
 
 function table(headers: string[], rows: string[][]): string {
   const widths = headers.map((h, i) =>
@@ -903,9 +903,10 @@ export async function auditCommand(options: AuditCommandOptions = {}): Promise<s
       e.decision === 'deny' ? color.red :
       color.gray;
     const decisionStr = e.decision ? decColor(e.decision) : '—';
-    const detail = e.command
+    // Audit text originates from the model; keep it from driving the terminal.
+    const detail = stripTerminalEscapes(e.command
       ? e.command.slice(0, 40)
-      : (e.reasons?.[0] ?? e.rule ?? '—').slice(0, 40);
+      : (e.reasons?.[0] ?? e.rule ?? '—').slice(0, 40));
     return [
       time,
       e.type,

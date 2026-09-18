@@ -359,6 +359,14 @@ describe('control-plane authentication', () => {
     expect(text).toContain('wazir_online_computers');
   });
 
+  it('second-pass S-8: /metrics needs viewer scope when tokens are configured', async () => {
+    const started = await startServer({ operatorToken: 'op', viewerToken: 'view' });
+    servers.push(started.server);
+    expect((await fetch(`${started.baseUrl}/metrics`)).status).toBe(401);
+    expect((await fetch(`${started.baseUrl}/metrics`, { headers: { Authorization: 'Bearer view' } })).status).toBe(200);
+    expect((await fetch(`${started.baseUrl}/metrics`, { headers: { Authorization: 'Bearer op' } })).status).toBe(200);
+  });
+
   it('Mandatory tokens: when allowUnauthenticated is false, registrations and dispatches without credentials return 401', async () => {
     const started = await startServer({ allowUnauthenticated: false });
     servers.push(started.server);

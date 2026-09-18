@@ -142,18 +142,29 @@ are available and skip elsewhere — verified end-to-end on Ubuntu with
 deliberately **not** loosened: the sandbox is defence in depth, `none` is
 still a permitted fallback on hosts without user namespaces.
 
+**Second-pass security review (2026-09-18)** — `sec_review_results.md` Part 5.
+16 findings on the post-remediation surface; 3 HIGH classifier gaps (input
+redirection `<`, `xargs`-fed reads, `git diff --no-index`) plus `ls-remote`
+network, `help --web`, `find -newer` oracle, ini-style secret redaction,
+unauthenticated `/metrics`, unsanitised audit log, worktree git under the
+sandbox, `--disable-userns` — all fixed with regression tests; 4 accepted
+(id enumeration via 404/401, operator-chosen worker tokens, TLS defaults,
+symlink writes without sandbox). 49 files / 486 tests green.
+
 ### Next steps (planned order)
 
-1. **Second-pass security review** (S). Re-run the `sec_review.md` Part 3
-   prompt against the remediated tree with a different model, focused on the
-   new surface: `apps/api/src/auth.ts`, the safe-command argument classifier,
-   redaction false negatives, and the sandbox mount table
-   (`bwrapArgs`/`seatbeltProfile`).
-2. **Sandbox hardening follow-ups** (M). Ship an AppArmor profile / docs for
-   enabling user namespaces on Ubuntu ≥ 23.10; consider making `none` an
-   error rather than a warning when `WAZIR_SANDBOX=required`; seccomp filter
-   for bwrap (`--seccomp`) to block `ptrace`/`mount`; per-tool read-only
-   exposure of runtime model caches instead of the whole read-only root.
+1. **Sandbox hardening follow-ups** (M). `WAZIR_SANDBOX=required` (fail
+   closed instead of warning); ship an AppArmor profile / docs for enabling
+   user namespaces on Ubuntu >= 23.10; seccomp filter for bwrap (`--seccomp`)
+   to block `ptrace`/`mount`; per-tool read-only exposure of runtime model
+   caches instead of the whole read-only root; live fleet-mode `git commit`
+   case in `sandbox.test.ts`; verify the seatbelt profile on macOS.
+2. **mTLS / worker transport identity** (M). Optional client certificates on
+   the native TLS listener so worker identity is bound at the transport
+   layer, not only by bearer token.
+3. **Third-party review** (S). Have a different model or a human re-run
+   `sec_review.md` Part 3 against the current tree; two in-house passes
+   share blind spots by construction.
 
 ### Other open items
 

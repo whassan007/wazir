@@ -49,3 +49,17 @@ describe('F-17: generateId', () => {
     expect(a.slice(4, 12)).not.toBe(b.slice(4, 12));
   });
 });
+
+describe('second-pass review S-7: ini/yaml-style secrets with unquoted values', () => {
+  it('redacts snake/kebab-case secret keys without quotes', () => {
+    expect(redactSecrets('aws_secret_access_key = wJalrXUtnFEMI/K7MDENG')).toBe('aws_secret_access_key = [REDACTED]');
+    expect(redactSecrets('db_password: hunter2')).toBe('db_password: [REDACTED]');
+    expect(redactSecrets('api-key: abcdefgh12345678')).toBe('api-key: [REDACTED]');
+    expect(redactSecrets('client_secret=zzzz1234')).toBe('client_secret=[REDACTED]');
+  });
+  it('still leaves code and prose alone', () => {
+    for (const text of ['const token = parse(x)', 'password = input()', 'the secret: nobody knows', 'max_tokens: 4096', 'tokenizer: gpt2']) {
+      expect(redactSecrets(text)).toBe(text);
+    }
+  });
+});

@@ -197,3 +197,42 @@ describe('F-25: MCP tool-level allow list', () => {
     expect(scoped.classify({ tool: 'mcp:search:anything', input: {} }).decision).toBe('allow');
   });
 });
+
+describe('second-pass review (S-1..S-6): classifier gaps found after the first remediation', () => {
+  it('S-1: input redirection gets the same containment as a path argument', () => {
+    expect(shell('cat < /etc/passwd').decision).toBe('deny');
+    expect(shell('wc -l < ~/.ssh/id_rsa').decision).toBe('deny');
+    expect(shell('sort < ../../.env').decision).toBe('deny');
+    expect(shell('cat < $HOME/x').decision).toBe('ask');
+    expect(shell('cat < README.md').decision).toBe('allow');
+    expect(shell('cat <<< "literal"').decision).toBe('allow');
+  });
+
+  it('S-2: a path-reading command fed by xargs asks, since its arguments come from stdin', () => {
+    expect(shell('echo /etc/passwd | xargs cat').decision).toBe('ask');
+    expect(shell('printf ~/.ssh/id_rsa | xargs -n1 head').decision).toBe('ask');
+    expect(shell('ls | xargs echo').decision).toBe('allow');
+  });
+
+  it('S-3/S-4/S-5: git diff --no-index, ls-remote and help --web are not read-only', () => {
+    expect(git('diff', '--no-index', '/etc/passwd', '/dev/null').decision).toBe('deny');
+    expect(git('ls-remote', 'https://example.invalid/x.git').rule).toBe('network-default-deny');
+    expect(new PolicyEngine({ projectRoot, networkAllowed: true }).classify({ tool: 'git', input: { args: ['ls-remote', 'origin'] } }).decision).toBe('allow');
+    expect(git('help', '--web', 'config').decision).toBe('deny');
+    expect(git('help', '-w', 'config').decision).toBe('deny');
+    expect(git('help', 'config').decision).toBe('allow');
+  });
+
+  it('S-6: find -newer/-samefile compare against a path and are contained', () => {
+    expect(shell('find . -newer /etc/shadow').decision).toBe('deny');
+    expect(shell('find . -samefile /etc/passwd').decision).toBe('deny');
+    expect(shell('find . -newer package.json').decision).toBe('allow');
+    expect(shell('find . -newermt "2024-01-01"').decision).toBe('allow');
+  });
+
+  it('wrapper flags with values are skipped, not mistaken for the command', () => {
+    expect(shell('nice -n 5 cat /etc/passwd').decision).toBe('deny');
+    expect(shell('nice -n 5 ls').decision).toBe('allow');
+    expect(shell('timeout -s KILL 5 reboot').decision).toBe('deny');
+  });
+});
