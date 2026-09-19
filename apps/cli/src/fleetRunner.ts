@@ -224,7 +224,10 @@ export function createFleetTaskExecutor(
             durationMs: 0,
             at: new Date(),
           });
-          context.onProgress?.({ kind: 'tool', tool: name, error: result.error });
+          // No onProgress() here — executeTool()'s only caller (CodingAgent) already
+          // yields a 'tool_call' turn right after every call, forwarded by the main loop
+          // below. Reporting it here too meant every single tool call (including denials)
+          // logged twice in the Tail view.
           return result;
         }
 
@@ -271,12 +274,9 @@ export function createFleetTaskExecutor(
           await engine.executions.recordFilesChanged(executionId, [relative]);
         }
 
-        context.onProgress?.({
-          kind: 'tool',
-          tool: name,
-          content: result.ok ? 'ok' : result.error,
-        });
-
+        // No onProgress() here either — see the comment on the denied-decision branch
+        // above; CodingAgent's own 'tool_call' turn (forwarded by the main loop) already
+        // reports this exact call.
         return result;
       },
     };
@@ -298,20 +298,28 @@ export function createFleetTaskExecutor(
         },
         runtime,
       )) {
+        // A 'tool_call' turn carries its outcome nested in toolResult (ok/output/error),
+        // not in the turn's own top-level content/error — CodingAgent never sets those
+        // for this turn kind. The removed duplicate onProgress() inside executeTool() did
+        // read toolResult directly, so folding it in here (rather than just dropping it)
+        // keeps the same error-reporting detail without reporting every tool call twice.
+        const turnContent = turn.content ?? (turn.kind === 'tool_call' && turn.toolResult?.ok ? turn.toolResult.output : undefined);
+        const turnError = turn.error ?? (turn.kind === 'tool_call' && turn.toolResult && !turn.toolResult.ok ? turn.toolResult.error : undefined);
+
         await engine.executions.recordEvent(executionId, 'agent.turn', {
           kind: turn.kind,
           phase: turn.phase,
           tool: turn.tool,
-          content: turn.content?.slice(0, 500),
-          error: turn.error,
+          content: turnContent?.slice(0, 500),
+          error: turnError,
         });
 
         context.onProgress?.({
           kind: turn.kind,
           phase: turn.phase,
-          content: turn.content,
+          content: turnContent,
           tool: turn.tool,
-          error: turn.error,
+          error: turnError,
         });
 
         if (turn.kind === 'done') {
