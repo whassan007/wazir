@@ -61,6 +61,19 @@ const OUTPUT_FLAGS: Record<string, string[]> = {
   javac: ['-d'],
 };
 
+// Native compilers whose output is a directly-executable file (unlike javac, whose
+// output is run via `java <ClassName>`, not `./<path>` — so it's excluded here even
+// though it's in SAFE_SHELL_COMMANDS/OUTPUT_FLAGS for the compile step itself). Used to
+// track "this task just compiled this exact binary" so a later attempt to run it can be
+// auto-approved too — see trackCompiledOutput/isTrackedCompiledOutput.
+const NATIVE_COMPILER_COMMANDS = new Set(['gcc', 'g++', 'cc', 'c++', 'clang', 'clang++', 'rustc']);
+
+// Per-execution memory of binaries an already-approved compile step just produced, so
+// running one to verify it works isn't a second, unrelated "arbitrary command" decision
+// — it's the natural next step of a compile we already scrutinized. Capped so a very
+// long-running session can't grow this unboundedly.
+const MAX_TRACKED_EXECUTIONS = 200;
+
 // Flags whose following argument is a value that is *not* a path (a pattern,
 // a count, a delimiter) and must not be containment-checked.
 const NON_PATH_VALUE_FLAGS: Record<string, string[]> = {
@@ -281,10 +294,30 @@ function attachedValue(arg: string, flag: string): string | undefined {
 export class PolicyEngine {
   readonly options: PolicyEngineOptions;
   readonly rules: PolicyRule[];
+  private readonly compiledOutputsByExecution = new Map<string, Set<string>>();
 
   constructor(options: PolicyEngineOptions) {
     this.options = options;
     this.rules = this.buildRules();
+  }
+
+  private trackCompiledOutput(executionId: string | undefined, absolutePath: string): void {
+    if (!executionId) return;
+    let set = this.compiledOutputsByExecution.get(executionId);
+    if (!set) {
+      if (this.compiledOutputsByExecution.size >= MAX_TRACKED_EXECUTIONS) {
+        const oldest = this.compiledOutputsByExecution.keys().next().value;
+        if (oldest !== undefined) this.compiledOutputsByExecution.delete(oldest);
+      }
+      set = new Set();
+      this.compiledOutputsByExecution.set(executionId, set);
+    }
+    set.add(absolutePath);
+  }
+
+  private isTrackedCompiledOutput(executionId: string | undefined, absolutePath: string): boolean {
+    if (!executionId) return false;
+    return this.compiledOutputsByExecution.get(executionId)?.has(absolutePath) ?? false;
   }
 
   private buildRules(): PolicyRule[] {
@@ -670,7 +703,7 @@ export class PolicyEngine {
     const projectRoot = request.projectRoot ?? this.options.projectRoot;
     const decisions: PolicyDecision[] = [];
     for (const segment of segments) {
-      decisions.push(...this.classifyShellSegment(segment, projectRoot));
+      decisions.push(...this.classifyShellSegment(segment, projectRoot, request.executionId));
     }
 
     const merged = mostRestrictive(decisions);
@@ -680,7 +713,7 @@ export class PolicyEngine {
     return merged;
   }
 
-  private classifyShellSegment(segment: ShellSegment, projectRoot: string): PolicyDecision[] {
+  private classifyShellSegment(segment: ShellSegment, projectRoot: string, executionId?: string): PolicyDecision[] {
     const decisions: PolicyDecision[] = [];
     const text = segment.words.join(' ');
 
@@ -697,7 +730,7 @@ export class PolicyEngine {
     for (const word of segment.words) {
       const match = word.match(/\$\((.+)\)/);
       if (match) {
-        decisions.push(this.classifyShell({ tool: 'shell', input: { command: match[1] }, projectRoot }));
+        decisions.push(this.classifyShell({ tool: 'shell', input: { command: match[1] }, projectRoot, executionId }));
       }
     }
 
@@ -711,9 +744,31 @@ export class PolicyEngine {
     }
 
     const { name, args } = resolveCommand(segment.words);
+
+    // Running a binary this exact task already compiled via an already-approved compile
+    // step isn't really "an arbitrary unknown command" — the source that produced it was
+    // already scrutinized when the compile itself was allowed. Narrower than trusting any
+    // executable: only ones this task's own compile output is tracked under (see
+    // trackCompiledOutput), and only a bare `./path`/absolute-path invocation, not e.g.
+    // `bash -c "$(cat ./hello)"` trying to launder it through another command.
+    // resolveCommand() basenames its result (so `wrapper` unwrapping works uniformly),
+    // which strips the very `./`/`/` prefix this check needs — read it off the raw word.
+    const rawFirstWord = stripAssignments(segment.words)[0] ?? '';
+    if ((rawFirstWord.startsWith('./') || rawFirstWord.startsWith('/')) && !rawFirstWord.includes('..')) {
+      const absolute = path.resolve(projectRoot, rawFirstWord);
+      if (this.isTrackedCompiledOutput(executionId, absolute)) {
+        decisions.push({
+          decision: 'allow',
+          rule: 'shell-compiled-binary-allow',
+          reasons: [`'${rawFirstWord}' is a binary this task already compiled via an approved compile step`],
+        });
+        return decisions;
+      }
+    }
+
     decisions.push(this.classifyCommandName(name));
     if (SAFE_SHELL_COMMANDS.has(name)) {
-      decisions.push(...this.classifySafeCommandArgs(name, args, projectRoot));
+      decisions.push(...this.classifySafeCommandArgs(name, args, projectRoot, executionId));
       // `echo /etc/passwd | xargs cat`: the paths xargs hands to `cat` come
       // from stdin, so nothing above could inspect them (second-pass S-2).
       const viaXargs = stripAssignments(segment.words).some((w, i) => i < segment.words.length - 1 && basename(w) === 'xargs');
@@ -730,7 +785,7 @@ export class PolicyEngine {
    * This checks the flags that make it execute a program or write a file, and
    * applies project containment to every path it would read.
    */
-  private classifySafeCommandArgs(name: string, args: string[], projectRoot: string): PolicyDecision[] {
+  private classifySafeCommandArgs(name: string, args: string[], projectRoot: string, executionId?: string): PolicyDecision[] {
     const decisions: PolicyDecision[] = [];
     const execFlags = EXEC_FLAGS[name] ?? [];
     const outputFlags = OUTPUT_FLAGS[name] ?? [];
@@ -769,7 +824,11 @@ export class PolicyEngine {
       const outputFlag = outputFlags.find((f) => flagMatches(arg, f) || attachedValue(arg, f) !== undefined);
       if (outputFlag) {
         const target = attachedValue(arg, outputFlag) ?? args[++i] ?? '';
-        decisions.push(this.classifyWriteTarget(`${name} ${outputFlag}`, target, projectRoot));
+        const writeDecision = this.classifyWriteTarget(`${name} ${outputFlag}`, target, projectRoot);
+        decisions.push(writeDecision);
+        if (writeDecision.decision === 'allow' && NATIVE_COMPILER_COMMANDS.has(name) && target) {
+          this.trackCompiledOutput(executionId, path.resolve(projectRoot, target));
+        }
         continue;
       }
 

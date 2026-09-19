@@ -3,8 +3,8 @@ import { PolicyEngine } from '../src/services/policyEngine.js';
 
 const PROJECT = '/test/project';
 
-function classify(engine: PolicyEngine, command: string) {
-  return engine.classify({ tool: 'shell', input: { command } });
+function classify(engine: PolicyEngine, command: string, executionId?: string) {
+  return engine.classify({ tool: 'shell', input: { command }, executionId });
 }
 
 describe('PolicyEngine shell parsing (chaining / substitution bypasses)', () => {
@@ -155,11 +155,39 @@ describe('PolicyEngine auto-allows compilers with contained output (unlike inter
     expect(classify(engine, 'javac -d /tmp/out Hello.java').decision).toBe('deny');
   });
 
-  it('does not extend the same trust to running the compiled binary', () => {
-    // Compiling is low-risk (turns source into a file); running arbitrary freshly
-    // compiled native code is not, and stays behind approval like any unknown command.
+  it('does not extend the same trust to running an arbitrary/untracked binary', () => {
+    // Running a binary is only auto-allowed when THIS execution already compiled it
+    // itself (see the executionId-scoped tests below) — an arbitrary or pre-existing
+    // binary nobody's task compiled stays behind approval like any unknown command.
     expect(classify(engine, './hello').decision).toBe('ask');
+    // No executionId given here, so nothing was ever tracked for this call to find.
     expect(classify(engine, 'clang++ hello.cpp -o hello && ./hello').decision).toBe('ask');
+  });
+
+  it('auto-approves running a binary this exact execution already compiled', () => {
+    classify(engine, 'clang++ hello.cpp -o hello', 'exec-A');
+    const runDecision = classify(engine, './hello', 'exec-A');
+    expect(runDecision.decision).toBe('allow');
+    expect(runDecision.rule).toBe('shell-compiled-binary-allow');
+
+    // Both in one command line works the same way (compile segment tracks it, run
+    // segment in the same classify() call sees it under the same executionId).
+    const chained = classify(engine, 'g++ other.cpp -o other && ./other', 'exec-B');
+    expect(chained.decision).toBe('allow');
+  });
+
+  it('does not let one execution\'s compiled binary authorize another execution running it', () => {
+    classify(engine, 'clang++ isolated.cpp -o isolated', 'exec-isolated-1');
+    // A different execution id never saw that compile — still ask, not a global allowlist.
+    expect(classify(engine, './isolated', 'exec-isolated-2').decision).toBe('ask');
+  });
+
+  it('does not auto-approve a differently-named or relocated binary from a real compile', () => {
+    classify(engine, 'gcc real.c -o real', 'exec-C');
+    // Only the exact compiled path is trusted — not a same-named binary elsewhere, and
+    // not laundering the trusted path through a wrapper command.
+    expect(classify(engine, './fake', 'exec-C').decision).toBe('ask');
+    expect(classify(engine, 'bash -c ./real', 'exec-C').decision).toBe('ask');
   });
 
   it('leaves interpreters and build-script runners exactly as ask-gated as before', () => {
