@@ -10,7 +10,7 @@ class Wazir < Formula
 
   def install
     system "npm", "install"
-    system "npm", "run", "bundle"
+    system "npm", "run", "build"
     system "node", "scripts/setup-env.mjs"
     bin.install "bin/wa.js" => "wa"
   end
