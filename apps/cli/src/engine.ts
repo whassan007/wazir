@@ -292,6 +292,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
       const entries = await store.list('job/');
       return entries.map((e) => e.value as Job);
     },
+    remove: (jobId) => store.delete(`job/${jobId}`),
   });
 
   const orchestrator = new JobOrchestrator({

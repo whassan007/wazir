@@ -15,6 +15,7 @@ import type {
 export interface JobManagerOptions {
   persist?: (job: Job) => void | Promise<void>;
   load?: () => Job[] | Promise<Job[]>;
+  remove?: (jobId: string) => void | Promise<void>;
 }
 
 let jobCounter = 0;
@@ -27,16 +28,30 @@ function nextJobId(): string {
 export class JobManager {
   private readonly jobs = new Map<string, Job>();
   private readonly persist?: (job: Job) => void | Promise<void>;
+  private readonly remove?: (jobId: string) => void | Promise<void>;
   readonly ready: Promise<void>;
 
   constructor(options: JobManagerOptions = {}) {
     this.persist = options.persist;
+    this.remove = options.remove;
     this.ready = Promise.resolve(options.load?.() ?? []).then(async (loaded) => {
       for (const job of loaded) {
         this.jobs.set(job.id, job);
         await this.reconcileStaleStatus(job);
       }
     }).catch(() => {});
+  }
+
+  /** Removes a job from memory and the backing store. Refuses a job that's still active. */
+  async delete(jobId: string): Promise<boolean> {
+    const job = this.jobs.get(jobId);
+    if (!job) return false;
+    if (job.status === 'running' || job.status === 'ready' || job.status === 'planning') {
+      throw new Error(`Cannot delete job '${jobId}' while it is still active (status '${job.status}')`);
+    }
+    this.jobs.delete(jobId);
+    if (this.remove) await this.remove(jobId);
+    return true;
   }
 
   /**

@@ -19,21 +19,24 @@ import { tokensPerSecond } from '@wazir/shared';
 // this terminal assumed Braille glyphs were unsafe (they'd caused ghosting twice), but an
 // objective cursor-position measurement (glyph-width-test.mjs, using the ANSI Device
 // Status Report) proved every candidate set below renders at exactly 1 column here — so
-// the ghosting was never a per-glyph width problem. These were picked per the user's own
-// choice from that verified-safe set: square corners for job/task activity, dots/growth
-// for runtime activity. ASCII stays the default for categories nobody asked to change.
+// the ghosting was never a per-glyph width problem, and Braille is back in as the default
+// per later request. These were picked from that verified-safe set: square corners for
+// job/task activity, dots/growth for runtime activity (slowed to 1 frame/sec — the shared
+// 250ms redraw tick made it look frantic at 4 frames/sec), Braille for everything else.
 const JOB_SPINNER_FRAMES = ['◴', '◷', '◶', '◵'] as const;
 const RUNTIME_SPINNER_FRAMES = ['·', '•', '●', '•'] as const;
-const DEFAULT_SPINNER_FRAMES = ['|', '/', '-', '\\'] as const;
+const RUNTIME_SPINNER_TICKS_PER_FRAME = 4; // 4 * 250ms redraw tick = 1 frame/sec
+const DEFAULT_SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
 
 function getCategorySpinnerFrame(category: NavCategory | undefined, tick: number): string {
-  const frames =
-    category === 'JOBS' || category === 'EXECUTIONS'
-      ? JOB_SPINNER_FRAMES
-      : category === 'RUNTIMES'
-        ? RUNTIME_SPINNER_FRAMES
-        : DEFAULT_SPINNER_FRAMES;
-  return frames[Math.abs(Math.floor(tick)) % frames.length];
+  if (category === 'JOBS' || category === 'EXECUTIONS') {
+    return JOB_SPINNER_FRAMES[Math.abs(Math.floor(tick)) % JOB_SPINNER_FRAMES.length];
+  }
+  if (category === 'RUNTIMES') {
+    const slowTick = Math.floor(Math.abs(Math.floor(tick)) / RUNTIME_SPINNER_TICKS_PER_FRAME);
+    return RUNTIME_SPINNER_FRAMES[slowTick % RUNTIME_SPINNER_FRAMES.length];
+  }
+  return DEFAULT_SPINNER_FRAMES[Math.abs(Math.floor(tick)) % DEFAULT_SPINNER_FRAMES.length];
 }
 
 // Job ids are `job-<base36 timestamp>-<counter>` — every one starts with the same
@@ -802,7 +805,13 @@ export class FleetTui {
         // Enter to inspect currently selected item or block
         const all = this.getFlatNavItems();
         const current = all[this.navSelectionIndex];
-        if (current?.category === 'EXECUTIONS' || this.getAgents().length > 0) {
+        if (current?.category === 'JOBS') {
+          // A job's title/tasks/output/rollup are already shown in the main pane the
+          // moment it's highlighted (see updateNavSelection) — there's nothing further
+          // for Enter to open. This used to fall through to the `else if` below and pop
+          // up an unrelated, most-recently-run history block (e.g. a `doctor` command)
+          // instead, since a finished job has no live agent card left in `this.agents`.
+        } else if (current?.category === 'EXECUTIONS' || this.getAgents().length > 0) {
           this.selectedTaskId =
             current?.category === 'EXECUTIONS' ? current.id : (this.selectedTaskId ?? this.getAgents()[0]?.taskId);
           this.currentView = 'tail';
@@ -813,6 +822,18 @@ export class FleetTui {
       }
       this.draw();
       return;
+    }
+
+    // 16.5. Delete key on a selected JOBS nav item removes that job's record. Only the
+    // dedicated forward-Delete key does this (not Backspace), and only when the prompt
+    // is empty, so it can never collide with editing text.
+    if ((keyName === 'delete' || keyStr === '\x1b[3~') && this.inputBuffer.length === 0) {
+      const all = this.getFlatNavItems();
+      const current = all[this.navSelectionIndex];
+      if (current?.category === 'JOBS') {
+        void this.deleteSelectedJob(current.id);
+        return;
+      }
     }
 
     // 17. Backspace / Delete Handling (§2):
@@ -916,6 +937,24 @@ export class FleetTui {
       // Job may have been created without a store-backed rollup path (e.g. tests) — leave
       // whatever was cached (or nothing) rather than showing an error for a cosmetic field.
     }
+  }
+
+  private async deleteSelectedJob(jobId: string): Promise<void> {
+    try {
+      const deleted = await this.engine.orchestrator.deleteJob(jobId);
+      if (deleted) {
+        this.jobRollups.delete(jobId);
+        if (this.currentJob?.id === jobId) this.currentJob = undefined;
+        const all = this.getFlatNavItems();
+        this.navSelectionIndex = Math.min(this.navSelectionIndex, Math.max(0, all.length - 1));
+        const next = all[this.navSelectionIndex];
+        if (next) this.updateNavSelection(next);
+        this.statusMessage = `Deleted job ${jobId}`;
+      }
+    } catch (err) {
+      this.statusMessage = `Could not delete job: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    this.draw();
   }
 
   private checkReferencePicker(): void {
@@ -1927,6 +1966,11 @@ export class FleetTui {
               width,
             ),
           );
+          if (rollup.filesChanged.length > 0 && lines.length < maxRows) {
+            lines.push(
+              this.padRightTo(color.gray(`  Files changed: ${rollup.filesChanged.join(', ')}`), width),
+            );
+          }
         } else {
           void this.refreshJobRollup(job.id);
         }
@@ -2302,6 +2346,7 @@ export class FleetTui {
       '    Tab          Cycle through views (Shift-Tab for reverse traversal)',
       '    Up / Down       Navigate categories and items across entire left index',
       '    Enter           Drill down into highlighted agent stream (Tail view)',
+      '    Delete          Delete the selected job (JOBS list; not while it is running)',
       '    Esc             Dismiss modal dialogs / return to fleet dashboard',
       '    ?               Toggle this help screen (when prompt empty)',
       '    Ctrl+R          Force state refresh across blocks and agents',

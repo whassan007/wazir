@@ -498,4 +498,46 @@ describe('JobOrchestrator — fleet-scale graph walk & concurrent execution', ()
     // The correction itself must be flushed too, or it's healed only until the next reload
     expect(flushedCorrections.some((j) => j.id === job.id && j.status === 'completed')).toBe(true);
   });
+
+  it('deleteJob removes a finished job from memory and the store, and refuses one still running', async () => {
+    const backingStore = new Map<string, Job>();
+    const removedIds: string[] = [];
+    const jobManager = new JobManager({
+      persist: (j) => backingStore.set(j.id, structuredClone(j)),
+      remove: (id) => {
+        removedIds.push(id);
+        backingStore.delete(id);
+      },
+    });
+
+    let releaseTask: (() => void) | undefined;
+    const executor: JobTaskExecutor = async () => {
+      await new Promise<void>((resolve) => {
+        releaseTask = resolve;
+      });
+      return { success: true, result: 'ok' };
+    };
+    const { orchestrator } = setupTestOrchestrator(executor, jobManager);
+
+    const job = await orchestrator.createJob({
+      title: 'Deletable Job',
+      tasks: [{ task: { id: 'only-task', input: 'do the thing' } }],
+    });
+
+    const runPromise = orchestrator.runJob(job.id);
+    await new Promise((r) => setTimeout(r, 20)); // let it reach 'running'
+
+    await expect(orchestrator.deleteJob(job.id)).rejects.toThrow(/still running/);
+    expect(backingStore.has(job.id)).toBe(true);
+
+    releaseTask?.();
+    const finished = await runPromise;
+    expect(finished.status).toBe('completed');
+
+    const deleted = await orchestrator.deleteJob(job.id);
+    expect(deleted).toBe(true);
+    expect(orchestrator.getJob(job.id)).toBeUndefined();
+    expect(backingStore.has(job.id)).toBe(false);
+    expect(removedIds).toContain(job.id);
+  });
 });

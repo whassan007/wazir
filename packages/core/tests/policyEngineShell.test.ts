@@ -134,3 +134,39 @@ describe('PolicyEngine operator allow/deny lists apply per sub-command', () => {
     expect(classify(engine, 'ls && rm -rf /tmp').decision).toBe('deny');
   });
 });
+
+describe('PolicyEngine auto-allows compilers with contained output (unlike interpreters)', () => {
+  const engine = new PolicyEngine({ projectRoot: PROJECT, networkAllowed: false });
+
+  it('allows a plain compile with a project-relative output path', () => {
+    expect(classify(engine, 'gcc hello.c -o hello').decision).toBe('allow');
+    expect(classify(engine, 'g++ hello.cpp -o hello').decision).toBe('allow');
+    expect(classify(engine, 'clang++ hello.cpp -o hello').decision).toBe('allow');
+    expect(classify(engine, 'clang hello.c -o hello').decision).toBe('allow');
+    expect(classify(engine, 'rustc main.rs -o main').decision).toBe('allow');
+    expect(classify(engine, 'javac Hello.java').decision).toBe('allow');
+  });
+
+  it('still denies a compiler output path that escapes the project root', () => {
+    const decision = classify(engine, 'clang++ hello.cpp -o /etc/evil');
+    expect(decision.decision).toBe('deny');
+    expect(decision.rule).toBe('filesystem-outside-deny');
+    expect(classify(engine, 'gcc hello.c -o /tmp/evil').decision).toBe('deny');
+    expect(classify(engine, 'javac -d /tmp/out Hello.java').decision).toBe('deny');
+  });
+
+  it('does not extend the same trust to running the compiled binary', () => {
+    // Compiling is low-risk (turns source into a file); running arbitrary freshly
+    // compiled native code is not, and stays behind approval like any unknown command.
+    expect(classify(engine, './hello').decision).toBe('ask');
+    expect(classify(engine, 'clang++ hello.cpp -o hello && ./hello').decision).toBe('ask');
+  });
+
+  it('leaves interpreters and build-script runners exactly as ask-gated as before', () => {
+    expect(classify(engine, 'make').decision).toBe('ask');
+    expect(classify(engine, 'cmake .').decision).toBe('ask');
+    expect(classify(engine, 'cargo build').decision).toBe('ask');
+    expect(classify(engine, 'python3 hello.py').decision).toBe('ask');
+    expect(classify(engine, 'node hello.js').decision).toBe('ask');
+  });
+});

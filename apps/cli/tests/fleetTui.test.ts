@@ -309,6 +309,42 @@ describe('FleetTui — interactive terminal UI harness', () => {
     const jobBuf = harness.getScreenBuffer();
     expect(jobBuf).toMatch(/Rollup: Tokens: In \d+ \/ Out \d+ \(\d+ total\)/);
 
+    // Pressing Enter on a JOBS nav item used to fall through to "expand the most
+    // recently run history block" (since a finished job has no live agent card left
+    // for the EXECUTIONS/agents check above it), popping open something completely
+    // unrelated (e.g. a `doctor` command block) instead of the job you actually
+    // selected. It should now be a no-op — the job's detail is already on screen.
+    harness.sendKey('\r');
+    expect(harness.tui.getCurrentView()).toBe('fleet');
+
+    harness.stop();
+  });
+
+  it('deletes a completed job from the JOBS list via the Delete key', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    await harness.start();
+
+    harness.sendLine('solo job');
+    await new Promise((r) => setTimeout(r, 100));
+    const job = harness.tui.getCurrentJob();
+    expect(job).toBeDefined();
+
+    // Navigate up to the JOBS entry (first in the flat nav list)
+    for (let i = 0; i < 5; i++) harness.sendKey('\u001b[A');
+    const before = harness.tui.getFlatNavItems();
+    expect(before.some((i) => i.category === 'JOBS' && i.id === job!.id)).toBe(true);
+
+    harness.sendKey('\x1b[3~'); // forward-Delete
+    await new Promise((r) => setTimeout(r, 10)); // deleteJob() is async
+
+    const after = harness.tui.getFlatNavItems();
+    expect(after.some((i) => i.category === 'JOBS' && i.id === job!.id)).toBe(false);
+    expect(harness.tui.getStatusMessage()).toContain(`Deleted job ${job!.id}`);
+    expect(engine.orchestrator.getJob(job!.id)).toBeUndefined();
+
     harness.stop();
   });
 

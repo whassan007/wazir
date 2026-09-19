@@ -259,6 +259,16 @@ export class JobOrchestrator {
     this.emit(jobId, { type: 'job:resumed', jobId });
   }
 
+  /** Permanently removes a job's record. Throws if it's still running/ready/planning. */
+  async deleteJob(jobId: string): Promise<boolean> {
+    if (this.activeJobs.has(jobId)) {
+      throw new Error(`Cannot delete job '${jobId}' while it is still running — cancel it first`);
+    }
+    const deleted = await this.jobManager.delete(jobId);
+    this.listeners.delete(jobId);
+    return deleted;
+  }
+
   /**
    * Runs the full Job DAG, respecting concurrency limits, dependency edges,
    * hardware capacity, and retry bounds.

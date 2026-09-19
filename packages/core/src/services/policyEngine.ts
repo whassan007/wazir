@@ -18,6 +18,15 @@ const SAFE_SHELL_COMMANDS = new Set([
   'ls', 'pwd', 'cat', 'head', 'tail', 'wc', 'file', 'stat', 'du', 'df',
   'which', 'whoami', 'uname', 'date', 'echo', 'printf',
   'ps', 'tree', 'rg', 'grep', 'find', 'sort', 'uniq', 'cut', 'column',
+  // Compilers: unlike interpreters/package managers (ASK_SHELL_COMMANDS), a plain
+  // compile invocation doesn't execute arbitrary model-supplied code — it only turns
+  // source into an artifact. That artifact's own execution (`./a.out`, `java Foo`) is a
+  // separate, still-ask-gated command. Without these, every single compile step in a
+  // coding task requires a human to click Approve, which made basic "write and compile
+  // a program" workflows unusable unattended. Their output path is still containment-
+  // checked below (OUTPUT_FLAGS) exactly like sort/tree's `-o`, so this doesn't allow
+  // writing outside the project.
+  'gcc', 'g++', 'cc', 'c++', 'clang', 'clang++', 'rustc', 'javac',
 ]);
 
 // Safe commands that open the files named by their arguments. Their path
@@ -42,6 +51,14 @@ const OUTPUT_FLAGS: Record<string, string[]> = {
   sort: ['-o', '--output', '-T', '--temporary-directory'],
   find: ['-fprint', '-fprint0', '-fprintf', '-fls'],
   tree: ['-o'],
+  gcc: ['-o'],
+  'g++': ['-o'],
+  cc: ['-o'],
+  'c++': ['-o'],
+  clang: ['-o'],
+  'clang++': ['-o'],
+  rustc: ['-o', '--out-dir'],
+  javac: ['-d'],
 };
 
 // Flags whose following argument is a value that is *not* a path (a pattern,
