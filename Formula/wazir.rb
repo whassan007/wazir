@@ -1,8 +1,8 @@
 class Wazir < Formula
   desc "Model- and runtime-agnostic AI agent harness and control plane"
   homepage "https://github.com/whassan007/wazir"
-  url "https://github.com/whassan007/wazir/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "17b6e32f3b4a3fee2301048a3a5c12295ef842f1ac66970a480b23aefb9dacae"
+  url "https://github.com/whassan007/wazir/archive/refs/tags/v0.1.1.tar.gz"
+  sha256 "3bec1d10d16134c2bb071997c7900f6144d584a8630aa7076568b9a089d11453"
   head "https://github.com/whassan007/wazir.git", branch: "main"
   license "Apache-2.0"
 
@@ -15,9 +15,8 @@ class Wazir < Formula
     bin.install "bin/wa.js" => "wa"
   end
 
-
   test do
-    assert_match "0.1.0", shell_output("#{bin}/wa --version")
+    assert_match "0.1.1", shell_output("#{bin}/wa --version")
     assert_match "Wazir CLI", shell_output("#{bin}/wa --help")
   end
 end
