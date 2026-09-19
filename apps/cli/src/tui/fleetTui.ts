@@ -13,7 +13,16 @@ import { createFleetTaskExecutor } from '../fleetRunner.js';
 import { TerminalScreen, type TerminalSize } from './screen.js';
 import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } from '../blocks.js';
 import { resolveReference, type ResolvedReference } from '../references.js';
-import { getBrailleFrame } from './spinner.js';
+// ASCII-only spinner frames for the persistent full-screen renderer (unlike the standalone
+// StatusLoader in spinner.ts, this glyph is redrawn every 250ms inside fixed-width columns
+// across the whole screen — some terminals (Apple Terminal.app included) don't reliably
+// give Unicode Braille Pattern glyphs a single-column width, and any per-character width
+// error here compounds into whole-screen misalignment on every tick, not just a one-line
+// wobble. Plain ASCII guarantees a single column on every terminal.
+const ASCII_SPINNER_FRAMES = ['|', '/', '-', '\\'] as const;
+function getAsciiSpinnerFrame(tick: number): string {
+  return ASCII_SPINNER_FRAMES[Math.abs(Math.floor(tick)) % ASCII_SPINNER_FRAMES.length];
+}
 
 export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'help';
 
@@ -1472,7 +1481,7 @@ export class FleetTui {
 
     // Region 1: Header Bar (Line 0) + Divider (Line 1)
     lines.push(this.renderHeader(size.columns));
-    lines.push(color.gray('─'.repeat(size.columns)));
+    lines.push(color.gray('-'.repeat(size.columns)));
 
     // Region 2: Persistent Split Content or Collapsed Pane
     const contentHeight = Math.max(5, size.rows - 6);
@@ -1488,7 +1497,7 @@ export class FleetTui {
       for (let i = 0; i < contentHeight; i++) {
         const l = leftLines[i] ?? ' '.repeat(leftWidth);
         const m = mainLines[i] ?? ' '.repeat(mainWidth);
-        lines.push(`${l}${color.gray('│')}${m}`);
+        lines.push(`${l}${color.gray('|')}${m}`);
       }
     } else {
       // Collapsed single pane layout
@@ -1525,7 +1534,7 @@ export class FleetTui {
     lines.push(this.renderHistoryStrip(size.columns));
 
     // Region 4: Status Bar Divider & Line (Lines size.rows - 3 & size.rows - 2)
-    lines.push(color.gray('─'.repeat(size.columns)));
+    lines.push(color.gray('-'.repeat(size.columns)));
     lines.push(this.renderStatusBar(size.columns));
 
     // Region 5: Command Input Bar (Line size.rows - 1)
@@ -1551,7 +1560,7 @@ export class FleetTui {
     // (input bar, status bar, worktrees/approval/help panes) don't pad/truncate themselves.
     // A line even one character wider than the terminal causes it to soft-wrap, which
     // desyncs every following \r\n from the absolute \x1b[H cursor reset used in render()
-    // and can scroll the alt-screen buffer — producing exactly the ghosting/overlay and
+    // and can scroll the alt-screen buffer - producing exactly the ghosting/overlay and
     // "backspace does nothing" symptoms once the input line (or status bar) gets long.
     // Clamping every line here, once, guarantees no row can ever exceed the terminal width.
     const clampedLines = lines.map((line) => this.padRightTo(line, size.columns));
@@ -1562,7 +1571,7 @@ export class FleetTui {
 
   /**
    * Region 1: Header Reconfiguration
-   * Format: WAZIR • CONTROL • WORKER | 3 COMPUTERS 7 AGENTS 14 MODELS    Agents 2/4 • AVAILABLE
+   * Format: WAZIR - CONTROL - WORKER: 3 COMPUTERS 7 AGENTS 14 MODELS    Agents 2/4 - AVAILABLE
    */
   private renderHeader(cols: number): string {
     const compCount = this.engine.computers.list().length;
@@ -1572,7 +1581,7 @@ export class FleetTui {
     const activeCount = Array.from(this.agents.values()).filter((a) => a.status === 'running').length;
     const workerStatus = activeCount >= this.concurrencyLimit ? 'BUSY' : 'AVAILABLE';
 
-    // §3: View Title Indicator — fully overwritten on state changes using fixed-width padding
+    // §3: View Title Indicator - fully overwritten on state changes using fixed-width padding
     // to prevent concatenation artifacts (e.g., [View: FLEET]EES clipping bug)
     const viewName = this.currentView.toUpperCase();
     const viewTag = `[View: ${viewName}]`;
@@ -1580,16 +1589,16 @@ export class FleetTui {
     const viewTagPadded = viewTag.padEnd(20);
 
     // Semantic Colors (§25): cyan = identity / active context, green = ok/success, yellow = waiting
-    const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('•')} ${color.bold('CONTROL')} ${color.gray('•')} ${color.bold('WORKER')} ${color.gray('|')} ${compCount} COMPUTERS ${agentCount} AGENTS ${modelCount} MODELS`;
+    const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('-')} ${color.bold('CONTROL')} ${color.gray('-')} ${color.bold('WORKER:')} ${compCount} COMPUTERS ${agentCount} AGENTS ${modelCount} MODELS`;
     const viewPart = color.bold(color.cyan(viewTagPadded));
-    const agentPart = `Agents ${activeCount}/${this.concurrencyLimit} ${color.gray('•')} ${workerStatus === 'AVAILABLE' ? color.green('AVAILABLE') : color.yellow('BUSY')}`;
+    const agentPart = `Agents ${activeCount}/${this.concurrencyLimit} ${color.gray('-')} ${workerStatus === 'AVAILABLE' ? color.green('AVAILABLE') : color.yellow('BUSY')}`;
 
     const pendingCount = this.pendingApprovals.length;
     const alert = pendingCount > 0 ? color.bold(color.yellow(` [! ${pendingCount} APPROVALS]`)) : '';
 
-    const titlePlain = `WAZIR • CONTROL • WORKER | ${compCount} COMPUTERS ${agentCount} AGENTS ${modelCount} MODELS`;
+    const titlePlain = `WAZIR - CONTROL - WORKER: ${compCount} COMPUTERS ${agentCount} AGENTS ${modelCount} MODELS`;
     const viewPlain = viewTagPadded;
-    const agentPlain = `Agents ${activeCount}/${this.concurrencyLimit} • ${workerStatus}${pendingCount > 0 ? ` [! ${pendingCount} APPROVALS]` : ''}`;
+    const agentPlain = `Agents ${activeCount}/${this.concurrencyLimit} - ${workerStatus}${pendingCount > 0 ? ` [! ${pendingCount} APPROVALS]` : ''}`;
 
     const spaces = Math.max(1, cols - titlePlain.length - viewPlain.length - agentPlain.length - 4);
     const headerLine = ` ${titlePart} ${viewPart}${' '.repeat(spaces)}${agentPart}${alert}`;
@@ -1597,7 +1606,7 @@ export class FleetTui {
   }
 
   /**
-   * Region 2: Left Nav Pane — Categorized Section Index
+   * Region 2: Left Nav Pane - Categorized Section Index
    * Semantic Colors (§25): blue = selected/highlighted, cyan = running, green = completed, yellow = pending
    */
   private renderLeftNav(width: number, maxRows: number): string[] {
@@ -1623,16 +1632,16 @@ export class FleetTui {
             currentSelected && currentSelected.category === item.category && currentSelected.id === item.id;
 
           // Semantic Colors (§25): blue = selected / highlighted
-          const cursor = isSelected ? color.blue('▶ ') : '  ';
+          const cursor = isSelected ? color.blue('> ') : '  ';
 
-          let glyph = color.yellow('◯');
-          if (item.status === 'running') glyph = color.cyan(getBrailleFrame(this.spinnerTick));
-          else if (item.status === 'completed') glyph = color.green('✓');
-          else if (item.status === 'failed') glyph = color.red('✕');
+          let glyph = color.yellow('o');
+          if (item.status === 'running') glyph = color.cyan(getAsciiSpinnerFrame(this.spinnerTick));
+          else if (item.status === 'completed') glyph = color.green('+');
+          else if (item.status === 'failed') glyph = color.red('x');
 
           const maxLabelLen = Math.max(6, width - 8);
           const labelStr = item.label || item.id || 'item';
-          const label = labelStr.length > maxLabelLen ? labelStr.slice(0, maxLabelLen - 1) + '…' : labelStr;
+          const label = labelStr.length > maxLabelLen ? labelStr.slice(0, maxLabelLen - 1) + '.' : labelStr;
           const text = `${cursor}${glyph} ${isSelected ? color.blue(color.bold(label)) : label}`;
           lines.push(this.padRightTo(` ${text}`, width));
         }
@@ -1647,7 +1656,7 @@ export class FleetTui {
   }
 
   /**
-   * Region 2: Main Pane — Routing Info & Event-Stream Activity Pane (§11)
+   * Region 2: Main Pane - Routing Info & Event-Stream Activity Pane (§11)
    * Tracks chronological lines for PLAN, ROUTE, TOOL, TEST, and COMPLETE states.
    */
   private renderMainPane(width: number, maxRows: number): string[] {
@@ -1690,23 +1699,23 @@ export class FleetTui {
       const modelId = card?.modelId ?? selected.routing?.modelId ?? 'evaluating...';
       const runtimeId = selected.routing?.runtimeId ?? 'fake';
       const computerId = card?.computerId ?? selected.routing?.computerId ?? 'local';
-      routingLine = `  ${color.bold('Routing:')} Agent [${color.cyan(agentId)}] ${color.gray('•')} Model [${color.cyan(modelId)}] ${color.gray('•')} Runtime [${color.cyan(runtimeId)}] ${color.gray('•')} Computer [${color.cyan(computerId)}]`;
+      routingLine = `  ${color.bold('Routing:')} Agent [${color.cyan(agentId)}] ${color.gray('-')} Model [${color.cyan(modelId)}] ${color.gray('-')} Runtime [${color.cyan(runtimeId)}] ${color.gray('-')} Computer [${color.cyan(computerId)}]`;
     } else if (selected.category === 'JOBS') {
       const job = this.engine.orchestrator.getJob(selected.id) ?? this.currentJob;
-      routingLine = `  ${color.bold('Routing:')} Job [${color.cyan(selected.id)}] ${color.gray('•')} Priority [${color.cyan(job?.priority ?? 'normal')}] ${color.gray('•')} Limit [${color.cyan(String(job?.concurrencyLimit ?? this.concurrencyLimit))}]`;
+      routingLine = `  ${color.bold('Routing:')} Job [${color.cyan(selected.id)}] ${color.gray('-')} Priority [${color.cyan(job?.priority ?? 'normal')}] ${color.gray('-')} Limit [${color.cyan(String(job?.concurrencyLimit ?? this.concurrencyLimit))}]`;
     } else if (selected.category === 'AGENTS') {
       const agent = this.engine.agents.get(selected.id);
-      routingLine = `  ${color.bold('Routing:')} Agent [${color.cyan(selected.id)}] ${color.gray('•')} Type [${color.cyan('native')}] ${color.gray('•')} Caps [${color.cyan(agent?.descriptor?.capabilities?.join(',') ?? 'generalChat,coding')}]`;
+      routingLine = `  ${color.bold('Routing:')} Agent [${color.cyan(selected.id)}] ${color.gray('-')} Type [${color.cyan('native')}] ${color.gray('-')} Caps [${color.cyan(agent?.descriptor?.capabilities?.join(',') ?? 'generalChat,coding')}]`;
     } else if (selected.category === 'COMPUTERS') {
       const comp = this.engine.computers.get(selected.id);
-      routingLine = `  ${color.bold('Routing:')} Computer [${color.cyan(selected.id)}] ${color.gray('•')} OS [${color.cyan(comp?.os?.platform ?? 'linux')}] ${color.gray('•')} Cores [${color.cyan(String(comp?.hardware?.cpuCores ?? 8))}]`;
+      routingLine = `  ${color.bold('Routing:')} Computer [${color.cyan(selected.id)}] ${color.gray('-')} OS [${color.cyan(comp?.os?.platform ?? 'linux')}] ${color.gray('-')} Cores [${color.cyan(String(comp?.hardware?.cpuCores ?? 8))}]`;
     } else if (selected.category === 'RUNTIMES') {
       const runtime = this.engine.runtimes.get(selected.id);
-      routingLine = `  ${color.bold('Routing:')} Runtime [${color.cyan(selected.id)}] ${color.gray('•')} Type [${color.cyan(runtime?.type ?? 'other')}] ${color.gray('•')} Computer [${color.cyan(runtime?.computerId ?? 'local')}]`;
+      routingLine = `  ${color.bold('Routing:')} Runtime [${color.cyan(selected.id)}] ${color.gray('-')} Type [${color.cyan(runtime?.type ?? 'other')}] ${color.gray('-')} Computer [${color.cyan(runtime?.computerId ?? 'local')}]`;
     }
 
     lines.push(this.padRightTo(routingLine, width));
-    lines.push(this.padRightTo(color.gray('  ' + '─'.repeat(Math.max(10, width - 4))), width));
+    lines.push(this.padRightTo(color.gray('  ' + '-'.repeat(Math.max(10, width - 4))), width));
 
     // 2. Details & Scrollable Event Stream (§11)
     if (selected.category === 'EXECUTIONS') {
@@ -1719,7 +1728,7 @@ export class FleetTui {
             : card.status === 'failed'
               ? color.red('[FAILED]')
               : card.status === 'running'
-                ? color.cyan(`[RUNNING ${getBrailleFrame(this.spinnerTick)}]`)
+                ? color.cyan(`[RUNNING ${getAsciiSpinnerFrame(this.spinnerTick)}]`)
                 : color.yellow(`[${card.status.toUpperCase()}]`);
 
         lines.push(
@@ -1728,13 +1737,13 @@ export class FleetTui {
             width,
           ),
         );
-        lines.push(this.padRightTo(color.gray('  ' + '─'.repeat(Math.max(10, width - 4))), width));
+        lines.push(this.padRightTo(color.gray('  ' + '-'.repeat(Math.max(10, width - 4))), width));
 
         // Display scroll indicator if scrolled up
         if (this.eventScrollOffset > 0) {
           lines.push(
             this.padRightTo(
-              color.yellow(`  [↑ SCROLLED +${this.eventScrollOffset} lines — PageDown or Esc to return to tail]`),
+              color.yellow(`  [^ SCROLLED +${this.eventScrollOffset} lines - PageDown or Esc to return to tail]`),
               width,
             ),
           );
@@ -1761,7 +1770,7 @@ export class FleetTui {
             const cleanText = log.text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
             const maxTextLen = Math.max(10, width - 28);
             const truncatedText =
-              cleanText.length > maxTextLen ? cleanText.slice(0, maxTextLen - 1) + '…' : cleanText;
+              cleanText.length > maxTextLen ? cleanText.slice(0, maxTextLen - 1) + '.' : cleanText;
 
             let contentText = truncatedText;
 
@@ -1864,10 +1873,10 @@ export class FleetTui {
 
     const chips: string[] = [];
     for (const b of this.recentBlocks.slice(0, 5)) {
-      let glyph = color.yellow('◯');
-      if (b.status === 'success') glyph = color.green('✓');
+      let glyph = color.yellow('o');
+      if (b.status === 'success') glyph = color.green('+');
       else if (b.status === 'running') glyph = color.cyan('*');
-      else if (b.status === 'failed') glyph = color.red('✕');
+      else if (b.status === 'failed') glyph = color.red('x');
 
       chips.push(`[#${b.id} ${glyph} ${b.command.slice(0, 16)}]`);
     }
@@ -1885,15 +1894,15 @@ export class FleetTui {
     const maxK = Math.round(max / 1024);
 
     // Semantic colors (§25): cyan = identity / active context
-    const contextIndicator = color.cyan(`Context ${usedK}K/${maxK}K ∆`);
-    const contextPlain = `Context ${usedK}K/${maxK}K ∆`;
+    const contextIndicator = color.cyan(`Context ${usedK}K/${maxK}K ~`);
+    const contextPlain = `Context ${usedK}K/${maxK}K ~`;
 
     const anyRunning =
       Array.from(this.agents.values()).some((a) => a.status === 'running') ||
       this.statusMessage.includes('Planning') ||
       this.statusMessage.includes('Retrying') ||
       this.statusMessage.includes('Executing');
-    const spinnerPrefix = anyRunning ? `${color.cyan(getBrailleFrame(this.spinnerTick))} ` : '';
+    const spinnerPrefix = anyRunning ? `${color.cyan(getAsciiSpinnerFrame(this.spinnerTick))} ` : '';
 
     const statusText = `  ${color.gray('Status:')} ${spinnerPrefix}${this.statusMessage}`;
     const statusPlain = this.stripAnsi(statusText);
@@ -1908,7 +1917,7 @@ export class FleetTui {
     const available = Math.max(0, cols - prefixLen);
 
     // Scroll to show the tail (active cursor position) instead of letting the line
-    // grow past the terminal width — an overlong line here soft-wraps in the real
+    // grow past the terminal width - an overlong line here soft-wraps in the real
     // terminal, which desyncs the absolute-cursor redraw and looks like ghosting,
     // and makes it look like backspace stopped working once typed text got long.
     const visibleInput =
@@ -1990,7 +1999,7 @@ export class FleetTui {
     for (let i = 0; i < this.quickActions.length; i++) {
       const a = this.quickActions[i];
       const isSel = i === this.quickActionIndex;
-      const cursor = isSel ? color.blue('▶ ') : '  ';
+      const cursor = isSel ? color.blue('> ') : '  ';
       const label = `${cursor}${i + 1}. ${a.title} ${color.gray(`(${a.cmd})`)}`;
       body.push(isSel ? color.blue(color.bold(label)) : label);
     }
@@ -2047,25 +2056,25 @@ export class FleetTui {
     // Top border
     const titleStr = ` ${title} `;
     const topDashes = Math.max(0, innerWidth - titleStr.length);
-    result.push(color.bold(borderPaint(`┌──${titleStr}${'─'.repeat(topDashes)}┐`)));
+    result.push(color.bold(borderPaint(`+--${titleStr}${'-'.repeat(topDashes)}+`)));
 
     // Body lines
     for (const line of bodyLines) {
       const plain = this.stripAnsi(line);
       const pad = Math.max(0, innerWidth - plain.length);
-      result.push(`${color.bold(borderPaint('│'))}  ${line}${' '.repeat(pad)}${color.bold(borderPaint('│'))}`);
+      result.push(`${color.bold(borderPaint('|'))}  ${line}${' '.repeat(pad)}${color.bold(borderPaint('|'))}`);
     }
 
     // Separator
-    result.push(color.bold(borderPaint(`├──${'─'.repeat(innerWidth)}──┤`)));
+    result.push(color.bold(borderPaint(`+--${'-'.repeat(innerWidth)}--+`)));
 
     // Actions line
     const actionPlain = this.stripAnsi(actionsLine);
     const actPad = Math.max(0, innerWidth - actionPlain.length);
-    result.push(`${color.bold(borderPaint('│'))}  ${actionsLine}${' '.repeat(actPad)}${color.bold(borderPaint('│'))}`);
+    result.push(`${color.bold(borderPaint('|'))}  ${actionsLine}${' '.repeat(actPad)}${color.bold(borderPaint('|'))}`);
 
     // Bottom border
-    result.push(color.bold(borderPaint(`└──${'─'.repeat(innerWidth)}──┘`)));
+    result.push(color.bold(borderPaint(`+--${'-'.repeat(innerWidth)}--+`)));
 
     return result;
   }
@@ -2075,22 +2084,22 @@ export class FleetTui {
     const result: string[] = [];
     const title = ' References (@) ';
     const topDashes = Math.max(0, innerWidth - title.length);
-    result.push(color.cyan(`┌──${title}${'─'.repeat(topDashes)}┐`));
+    result.push(color.cyan(`+--${title}${'-'.repeat(topDashes)}+`));
 
     const visibleCandidates = candidates.slice(0, 6);
     for (let i = 0; i < visibleCandidates.length; i++) {
       const c = visibleCandidates[i];
       const isSel = i === selectedIdx;
-      const prefix = isSel ? color.blue('▶ ') : '  ';
+      const prefix = isSel ? color.blue('> ') : '  ';
       const maxTextLen = innerWidth - 4;
-      const truncated = c.length > maxTextLen ? c.slice(0, maxTextLen - 1) + '…' : c;
+      const truncated = c.length > maxTextLen ? c.slice(0, maxTextLen - 1) + '.' : c;
       const plain = `${prefix}${truncated}`;
       const plainLen = this.stripAnsi(plain).length;
       const pad = Math.max(0, innerWidth - plainLen);
-      result.push(`${color.cyan('│')}  ${prefix}${isSel ? color.blue(color.bold(truncated)) : truncated}${' '.repeat(pad - 2)}${color.cyan('│')}`);
+      result.push(`${color.cyan('|')}  ${prefix}${isSel ? color.blue(color.bold(truncated)) : truncated}${' '.repeat(pad - 2)}${color.cyan('|')}`);
     }
 
-    result.push(color.cyan(`└──${'─'.repeat(innerWidth)}──┘`));
+    result.push(color.cyan(`+--${'-'.repeat(innerWidth)}--+`));
     return result;
   }
 
@@ -2144,7 +2153,7 @@ export class FleetTui {
     lines.push('');
 
     if (this.pendingApprovals.length === 0) {
-      lines.push(color.green('  ✓ No pending approval requests.'));
+      lines.push(color.green('  + No pending approval requests.'));
       lines.push('');
       lines.push(color.gray('  All tool invocations are passing current policy rules.'));
     } else {
@@ -2171,7 +2180,7 @@ export class FleetTui {
     const lines: string[] = [
       color.bold('  WAZIR FLEET TUI SHORTCUTS & COMMANDS'),
       '',
-      '  Navigation (§3):',
+      '  Navigation:',
       '    Tab          Cycle through views (Shift-Tab for reverse traversal)',
       '    Up / Down       Navigate categories and items across entire left index',
       '    Enter           Drill down into highlighted agent stream (Tail view)',
@@ -2181,12 +2190,12 @@ export class FleetTui {
       '    Ctrl+L          Force immediate screen repaint',
       '    Ctrl+P          Open Quick Actions palette',
       '',
-      '  Event-Stream Activity Pane (§11):',
+      '  Event-Stream Activity Pane:',
       '    PageUp / PgDn   Scroll chronological activity logs',
       '    Up / Down       Scroll activity lines when main pane focused',
       '',
-      '  Telemetry & Approvals (§20, §29):',
-      '    Context ∆       Real-time token budget display in status bar',
+      '  Telemetry & Approvals:',
+      '    Context ~       Real-time token budget display in status bar',
       '    [A] / [D]       Approve / Deny pending policy ask (overlaid modal card)',
       '    [V] / [I]       View full details / Inspect & snooze policy ask',
       '    [R]             Retry failed task when error card is open',
@@ -2230,7 +2239,7 @@ export class FleetTui {
           result += char;
           visibleCount++;
         } else {
-          result += '…\x1b[0m';
+          result += '.\x1b[0m';
           break;
         }
       }

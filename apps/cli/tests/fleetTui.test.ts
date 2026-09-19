@@ -214,7 +214,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // 1. Initial screen render
     const initialBuf = harness.getScreenBuffer();
-    expect(initialBuf).toContain('WAZIR • CONTROL • WORKER');
+    expect(initialBuf).toContain('WAZIR - CONTROL - WORKER');
     expect(initialBuf).toContain('[View: FLEET]');
     expect(initialBuf).toContain('AVAILABLE');
     expect(initialBuf).toContain('wa> ');
@@ -380,7 +380,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // 1. Initial 120 cols >= 100: 2-pane split with separator '│'
     const splitBuf = harness.getScreenBuffer();
-    expect(splitBuf).toContain('│');
+    expect(splitBuf).toContain('|');
     expect(splitBuf).toContain('JOBS');
     expect(splitBuf).toContain('EXECUTIONS');
     expect(splitBuf).toContain('AGENTS');
@@ -393,13 +393,13 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.screen.onResize();
 
     const collapsedBuf = harness.getScreenBuffer();
-    expect(collapsedBuf).not.toContain('│');
+    expect(collapsedBuf).not.toContain('|');
     expect(collapsedBuf).toContain('Routing:');
 
     // 3. Restore columns >= 100
     harness.outStream.columns = 120;
     harness.screen.onResize();
-    expect(harness.getScreenBuffer()).toContain('│');
+    expect(harness.getScreenBuffer()).toContain('|');
 
     harness.stop();
   });
@@ -411,27 +411,27 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     await harness.start();
 
-    // Initially cursor ▶ points to wazir-coding in AGENTS
+    // Initially cursor > points to wazir-coding in AGENTS
     let buf = harness.getScreenBuffer();
-    expect(buf).toContain('▶ ◯ wazir-coding');
+    expect(buf).toContain('> o wazir-coding');
     expect(buf).toContain('Routing: Agent [wazir-coding]');
 
     // Navigate Down to COMPUTERS (test-computer)
     harness.sendKey('\u001b[B');
     buf = harness.getScreenBuffer();
-    expect(buf).toContain('▶ ✓ test-computer');
+    expect(buf).toContain('> + test-computer');
     expect(buf).toContain('Routing: Computer [local]');
 
     // Navigate Down to RUNTIMES (fake-runtime)
     harness.sendKey('\u001b[B');
     buf = harness.getScreenBuffer();
-    expect(buf).toContain('▶ ✓ fake-runtime');
+    expect(buf).toContain('> + fake-runtime');
     expect(buf).toContain('Routing: Runtime [fake]');
 
     // Navigate Up back to COMPUTERS
     harness.sendKey('\u001b[A');
     buf = harness.getScreenBuffer();
-    expect(buf).toContain('▶ ✓ test-computer');
+    expect(buf).toContain('> + test-computer');
 
     harness.stop();
   });
@@ -605,7 +605,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
     let buf = harness.getScreenBuffer();
     expect(buf).toContain('QUICK ACTIONS (Ctrl+P)');
     expect(buf).toContain('Fanout Concurrent Tasks');
-    expect(buf).toContain('▶ ');
+    expect(buf).toContain('> ');
 
     // 2. Down arrow navigates items
     harness.sendKey('\u001b[B');
@@ -763,8 +763,8 @@ describe('FleetTui — interactive terminal UI harness', () => {
     await harness.start();
 
     const buf = harness.getScreenBuffer();
-    // Context indicator format: Context <used>K/<max>K ∆
-    expect(buf).toMatch(/Context \d+(\.\d+)?K\/\d+K ∆/);
+    // Context indicator format: Context <used>K/<max>K ~
+    expect(buf).toMatch(/Context \d+(\.\d+)?K\/\d+K ~/);
 
     const metrics = harness.tui.getContextMetrics();
     expect(metrics.used).toBeGreaterThan(0);
