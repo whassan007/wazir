@@ -801,4 +801,93 @@ describe('FleetTui — interactive terminal UI harness', () => {
     screen.leave();
     expect(screen.isAltScreenActive()).toBe(false);
   });
+
+  it('intercepts Tab key without leaking control characters or literal \\t into the input buffer', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // Type some text into the prompt
+    harness.sendKeys('status check');
+    expect(harness.getScreenBuffer()).toContain('wa> status check');
+
+    // Press Tab via structured key object
+    harness.tui.handleKey('\t', { name: 'tab', ctrl: false, meta: false, shift: false, sequence: '\t' });
+
+    // Verify view transitioned to 'tail'
+    expect(harness.tui.getCurrentView()).toBe('tail');
+
+    // Verify input buffer did NOT have '\t' appended or corrupted
+    expect(harness.getScreenBuffer()).toContain('wa> status check');
+    expect(harness.getScreenBuffer()).not.toContain('wa> status check\t');
+
+    // Press Shift-Tab to reverse traverse back to 'fleet'
+    harness.tui.handleKey('\x1b[Z', { name: 'tab', ctrl: false, meta: false, shift: true, sequence: '\x1b[Z' });
+    expect(harness.tui.getCurrentView()).toBe('fleet');
+    expect(harness.getScreenBuffer()).toContain('wa> status check');
+    expect(harness.getScreenBuffer()).not.toContain('\x1b[Z');
+
+    harness.stop();
+  });
+
+  it('correctly handles backspace and delete key events, slicing buffer and re-rendering prompt immediately', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // Type 'hello world'
+    harness.sendKeys('hello world');
+    expect(harness.getScreenBuffer()).toContain('wa> hello world');
+
+    // Send backspace as structured key object
+    harness.tui.handleKey('\x7f', { name: 'backspace', ctrl: false, meta: false, shift: false, sequence: '\x7f' });
+    expect(harness.getScreenBuffer()).toContain('wa> hello worl');
+    expect(harness.getScreenBuffer()).not.toContain('wa> hello world');
+
+    // Send delete as structured key object
+    harness.tui.handleKey('\x1b[3~', { name: 'delete', ctrl: false, meta: false, shift: false, sequence: '\x1b[3~' });
+    expect(harness.getScreenBuffer()).toContain('wa> hello wor');
+
+    // Send backspace down to empty buffer
+    for (let i = 0; i < 20; i++) {
+      harness.tui.handleKey('\x7f', { name: 'backspace', ctrl: false, meta: false, shift: false, sequence: '\x7f' });
+    }
+    expect(harness.getScreenBuffer()).toContain('wa> ');
+
+    harness.stop();
+  });
+
+  it('verifies raw mode and keypress binding on TerminalScreen', async () => {
+    const mockIn = {
+      isTTY: true,
+      rawMode: false,
+      setRawMode: function (val: boolean) {
+        this.rawMode = val;
+        return this;
+      },
+      resume: () => {},
+      pause: () => {},
+      on: () => {},
+    } as any;
+    const mockOut = {
+      isTTY: true,
+      columns: 100,
+      rows: 30,
+      write: () => true,
+    } as any;
+
+    const screen = new TerminalScreen(mockIn, mockOut);
+    screen.enter();
+
+    expect(screen.isRawMode()).toBe(true);
+    expect(mockIn.rawMode).toBe(true);
+
+    screen.leave();
+    expect(screen.isRawMode()).toBe(false);
+    expect(mockIn.rawMode).toBe(false);
+  });
 });

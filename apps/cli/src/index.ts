@@ -526,6 +526,46 @@ program
     await tui.waitForExit();
   });
 
+// dashboard command — launch web dashboard & control plane
+program
+  .command('dashboard')
+  .alias('web')
+  .alias('ui')
+  .description('Launch the Wazir web control plane & dashboard')
+  .option('-p, --port <port>', 'Port to listen on', '4801')
+  .option('-H, --host <host>', 'Host to bind to', '127.0.0.1')
+  .option('--no-open', 'Do not automatically open the dashboard in browser')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { startDashboardServer, openBrowser } = await import('./dashboardServer.js');
+    const { color } = await import('./colors.js');
+    const port = Number(options.port ?? 4801);
+    const host = options.host ?? '127.0.0.1';
+    const server = await startDashboardServer(engine, { port, host });
+    const url = `http://${host}:${port}`;
+
+    console.log();
+    console.log(`  ✦ ${color.bold(color.cyan('Wazir Control Plane & Web Dashboard'))}`);
+    console.log(`  Dashboard: ${color.bold(color.green(url))}`);
+    console.log(`  API:       ${color.gray(`${url}/api/v1/overview`)}`);
+    console.log(`  Health:    ${color.gray(`${url}/health`)}`);
+    console.log();
+    console.log(`  Press ${color.bold('Ctrl+C')} to stop.`);
+    console.log();
+
+    if (options.open !== false) {
+      openBrowser(url);
+    }
+
+    const shutdown = () => {
+      console.log('\n  Shutting down Wazir dashboard...');
+      server.close(() => process.exit(0));
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  });
+
 // jobs command — manage distributed fleet jobs
 const jobsCmd = new Command()
   .name('jobs')

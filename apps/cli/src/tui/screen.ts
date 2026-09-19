@@ -8,6 +8,7 @@ export interface TerminalSize {
 export class TerminalScreen {
   private inAltScreen = false;
   private rawModeActive = false;
+  private keypressBound = false;
   private lastBuffer = '';
   private resizeListeners: Array<(size: TerminalSize) => void> = [];
 
@@ -33,13 +34,27 @@ export class TerminalScreen {
   }
 
   enter(): void {
-    if ((this.inStream as any).isTTY && typeof (this.inStream as any).setRawMode === 'function') {
+    // 3. Raw Mode & Keypress Binding Check:
+    // Verify that stdin is correctly running in raw mode so structured key objects are passed
+    if (typeof (this.inStream as any).setRawMode === 'function') {
       try {
         (this.inStream as any).setRawMode(true);
         this.rawModeActive = true;
-        this.inStream.resume();
+        if (typeof (this.inStream as any).resume === 'function') {
+          (this.inStream as any).resume();
+        }
       } catch {
         // Ignore in headless/pipe mode
+      }
+    }
+
+    // Bind readline keypress event emitter so structured key objects are emitted
+    if (!this.keypressBound) {
+      try {
+        readline.emitKeypressEvents(this.inStream);
+        this.keypressBound = true;
+      } catch {
+        // Ignore in mock streams without readline support
       }
     }
 
@@ -84,6 +99,10 @@ export class TerminalScreen {
     return this.inAltScreen;
   }
 
+  isRawMode(): boolean {
+    return this.rawModeActive;
+  }
+
   render(buffer: string): void {
     if (buffer === this.lastBuffer) return;
     this.lastBuffer = buffer;
@@ -94,6 +113,13 @@ export class TerminalScreen {
       const lines = buffer.split('\n');
       const cleared = lines.map((l) => l + '\x1b[K').join('\r\n') + '\x1b[K\x1b[J';
       this.outStream.write('\x1b[H' + cleared);
+
+      // Explicitly position the hardware cursor at the active prompt line
+      const lastLine = lines[lines.length - 1] ?? '';
+      const strippedLast = lastLine.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      const cursorCol = strippedLast.length + 1;
+      const cursorRow = lines.length;
+      this.outStream.write(`\x1b[${cursorRow};${cursorCol}H`);
     } else {
       // Non-TTY & unattached fallback (§23): write clean text
       this.outStream.write(buffer + '\n');

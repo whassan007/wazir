@@ -1,3 +1,4 @@
+import readline from 'node:readline';
 import {
   type Job,
   type JobOrchestratorEvent,
@@ -63,6 +64,76 @@ export interface FleetTuiOptions {
   concurrencyLimit?: number;
   useWorktrees?: boolean;
   autoMerge?: boolean;
+}
+
+/**
+ * Resolves structured key objects from raw strings or readline key events.
+ */
+function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
+  if (keyObj && keyObj.name) return keyObj;
+
+  if (keyStr === '\t') {
+    return { name: 'tab', ctrl: false, meta: false, shift: false, sequence: '\t' };
+  }
+  if (keyStr === '\x1b[Z') {
+    return { name: 'tab', ctrl: false, meta: false, shift: true, sequence: '\x1b[Z' };
+  }
+  if (keyStr === '\x7f' || keyStr === '\b' || keyStr === '\u0008') {
+    return { name: 'backspace', ctrl: false, meta: false, shift: false, sequence: keyStr };
+  }
+  if (keyStr === '\x1b[3~') {
+    return { name: 'delete', ctrl: false, meta: false, shift: false, sequence: keyStr };
+  }
+  if (keyStr === '\x1b' || keyStr === '\u001b') {
+    return { name: 'escape', ctrl: false, meta: false, shift: false, sequence: '\x1b' };
+  }
+  if (keyStr === '\r' || keyStr === '\n') {
+    return { name: 'return', ctrl: false, meta: false, shift: false, sequence: keyStr };
+  }
+  if (keyStr === '\u001b[A') {
+    return { name: 'up', ctrl: false, meta: false, shift: false, sequence: keyStr };
+  }
+  if (keyStr === '\u001b[B') {
+    return { name: 'down', ctrl: false, meta: false, shift: false, sequence: keyStr };
+  }
+  if (keyStr === '\u001b[C') {
+    return { name: 'right', ctrl: false, meta: false, shift: false, sequence: keyStr };
+  }
+  if (keyStr === '\u001b[D') {
+    return { name: 'left', ctrl: false, meta: false, shift: false, sequence: keyStr };
+  }
+  if (keyStr === '\x10' || keyStr === '\u0010') {
+    return { name: 'p', ctrl: true, meta: false, shift: false, sequence: '\x10' };
+  }
+  if (keyStr === '\x0c' || keyStr === '\u000c') {
+    return { name: 'l', ctrl: true, meta: false, shift: false, sequence: '\x0c' };
+  }
+  if (keyStr === '\x12' || keyStr === '\u0012') {
+    return { name: 'r', ctrl: true, meta: false, shift: false, sequence: '\x12' };
+  }
+  if (keyStr === '\u0003') {
+    return { name: 'c', ctrl: true, meta: false, shift: false, sequence: '\u0003' };
+  }
+  if (keyStr === '\u0015') {
+    return { name: 'u', ctrl: true, meta: false, shift: false, sequence: '\u0015' };
+  }
+  if (keyStr === '\u0017') {
+    return { name: 'w', ctrl: true, meta: false, shift: false, sequence: '\u0017' };
+  }
+  if (keyStr === '\x1b[5~') {
+    return { name: 'pageup', ctrl: false, meta: false, shift: false, sequence: keyStr };
+  }
+  if (keyStr === '\x1b[6~') {
+    return { name: 'pagedown', ctrl: false, meta: false, shift: false, sequence: keyStr };
+  }
+
+  return {
+    name: keyStr.length === 1 ? keyStr : (undefined as any),
+    ctrl: false,
+    meta: false,
+    shift: false,
+    sequence: keyStr,
+  };
 }
 
 export class FleetTui {
@@ -200,7 +271,8 @@ export class FleetTui {
 
   private exitPromise?: Promise<void>;
   private exitResolver?: () => void;
-  private inputListener?: (data: Buffer) => void;
+  private keypressListener?: (ch: string | undefined, key?: readline.Key) => void;
+  private inputListener?: (data: Buffer | string) => void;
 
   waitForExit(): Promise<void> {
     if (!this.exitPromise) {
@@ -212,10 +284,13 @@ export class FleetTui {
   }
 
   /**
-   * Initializes and starts the interactive TUI session.
+   * Starts the TUI render loop and input listeners.
    */
   async start(): Promise<void> {
     this.isRunning = true;
+
+    // 3. Raw Mode & Keypress Binding Check:
+    // Verify that stdin is correctly running in raw mode so structured key objects are passed
     this.screen.enter();
 
     this.waitForExit();
@@ -234,11 +309,23 @@ export class FleetTui {
     // Load initial recent blocks
     void this.refreshRecentBlocks();
 
-    // Listen to keypresses via screen input stream
-    this.inputListener = (data: Buffer) => {
-      this.onInputData(data);
+    // Listen to structured keypress events via screen input stream
+    const inStream = this.screen.getInputStream();
+    this.keypressListener = (ch: string | undefined, key?: readline.Key) => {
+      this.handleKey(ch ?? key?.sequence ?? '', key);
     };
-    this.screen.getInputStream().on('data', this.inputListener);
+    inStream.on('keypress', this.keypressListener);
+
+    // Fallback data listener for mock streams or environments that don't emit keypress
+    this.inputListener = (data: Buffer | string) => {
+      // Avoid duplicate handling if keypress listener is firing
+      if ((inStream as any).listenerCount && (inStream as any).listenerCount('keypress') > 0) {
+        return;
+      }
+      const str = typeof data === 'string' ? data : data.toString('utf8');
+      this.handleKey(str);
+    };
+    inStream.on('data', this.inputListener);
 
     // Refresh display periodically for live duration counters
     this.renderTimer = setInterval(() => {
@@ -255,6 +342,11 @@ export class FleetTui {
     if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
     if (this.unsubscribeResize) this.unsubscribeResize();
 
+    if (this.keypressListener) {
+      this.screen.getInputStream().off('keypress', this.keypressListener);
+      this.keypressListener = undefined;
+    }
+
     if (this.inputListener) {
       this.screen.getInputStream().off('data', this.inputListener);
       this.inputListener = undefined;
@@ -265,17 +357,16 @@ export class FleetTui {
     this.exitResolver?.();
   }
 
-  private onInputData = (data: Buffer): void => {
-    const str = data.toString('utf8');
-    this.handleKey(str);
-  };
-
   /**
    * Dispatches input keys across navigation, modals, and input buffer.
    */
-  handleKey(key: string): void {
+  handleKey(key: string, rawKeyObj?: readline.Key): void {
+    const keyObj = resolveKeyObject(key, rawKeyObj);
+    const keyName = keyObj.name ?? '';
+    const keyStr = keyObj.sequence ?? key;
+
     // 1. Ctrl+C: exit
-    if (key === '\u0003') {
+    if ((keyObj.ctrl && (keyName === 'c' || keyName === 'C')) || keyStr === '\u0003') {
       this.stop();
       process.exit(0);
     }
@@ -410,7 +501,7 @@ export class FleetTui {
 
     // 8. Structured Error Card Actions
     if (this.currentError) {
-      if (key === 'r' || key === 'R') {
+      if (keyStr === 'r' || keyStr === 'R') {
         const retryTask = this.currentError.taskId;
         this.currentError = undefined;
         if (retryTask) {
@@ -419,7 +510,7 @@ export class FleetTui {
         this.draw();
         return;
       }
-      if (key === 'd' || key === 'D') {
+      if (keyStr === 'd' || keyStr === 'D') {
         this.currentError = undefined;
         void this.submitCommand('/doctor');
         return;
@@ -459,17 +550,24 @@ export class FleetTui {
 
     // 10. Picker navigation when @ fuzzy picker is active
     if (this.isPickerActive && this.pickerCandidates.length > 0) {
-      if (key === '\u001b[A') {
+      if (keyName === 'up' || keyStr === '\u001b[A') {
         this.pickerIndex = Math.max(0, this.pickerIndex - 1);
         this.draw();
         return;
       }
-      if (key === '\u001b[B') {
+      if (keyName === 'down' || keyStr === '\u001b[B') {
         this.pickerIndex = Math.min(this.pickerCandidates.length - 1, this.pickerIndex + 1);
         this.draw();
         return;
       }
-      if (key === '\t' || key === '\r' || key === '\n') {
+      if (
+        keyName === 'tab' ||
+        keyName === 'return' ||
+        keyName === 'enter' ||
+        keyStr === '\t' ||
+        keyStr === '\r' ||
+        keyStr === '\n'
+      ) {
         const chosen = this.pickerCandidates[this.pickerIndex];
         this.inputBuffer = this.inputBuffer.replace(/@([a-zA-Z0-9_:./-]*)$/, chosen + ' ');
         this.isPickerActive = false;
@@ -479,18 +577,22 @@ export class FleetTui {
       }
     }
 
-    // 11. Shift-Tab: Reverse pane traversal (§3)
-    if (key === '\x1b[Z') {
-      const views: TuiView[] = ['fleet', 'tail', 'approval', 'worktrees'];
-      const idx = views.indexOf(this.currentView);
-      this.currentView = views[(idx - 1 + views.length) % views.length];
-      this.focusedPane = this.currentView === 'fleet' ? 'nav' : 'main';
-      this.draw();
-      return;
-    }
+    // 11. Tab Key Interception (§1):
+    // In the keypress event listener, explicitly check if key.name === 'tab'.
+    // Execute the pane-switching / focus-cycling logic and immediately return early
+    // to prevent the literal tab character (\t) from appending to the active input text buffer.
+    if (keyName === 'tab' || keyStr === '\t' || keyStr === '\x1b[Z') {
+      if (keyObj.shift || keyStr === '\x1b[Z') {
+        // Shift-Tab: Reverse pane traversal (§3)
+        const views: TuiView[] = ['fleet', 'tail', 'approval', 'worktrees'];
+        const idx = views.indexOf(this.currentView);
+        this.currentView = views[(idx - 1 + views.length) % views.length];
+        this.focusedPane = this.currentView === 'fleet' ? 'nav' : 'main';
+        this.draw();
+        return;
+      }
 
-    // 12. Tab: Pane navigation / cycle views (§3)
-    if (key === '\t') {
+      // Tab: Forward pane traversal / cycle views (§3)
       const views: TuiView[] = ['fleet', 'tail', 'approval', 'worktrees'];
       const idx = views.indexOf(this.currentView);
       this.currentView = views[(idx + 1) % views.length];
@@ -499,27 +601,27 @@ export class FleetTui {
       return;
     }
 
-    // 13. '?' for Help (§3) when input buffer is empty
-    if (key === '?' && this.inputBuffer.length === 0) {
+    // 12. '?' for Help (§3) when input buffer is empty
+    if ((keyName === '?' || keyStr === '?') && this.inputBuffer.length === 0) {
       this.currentView = this.currentView === 'help' ? 'fleet' : 'help';
       this.draw();
       return;
     }
 
-    // 14. Event-Stream Activity Scrolling: PageUp (\x1b[5~) / PageDown (\x1b[6~)
-    if (key === '\x1b[5~') {
+    // 13. Event-Stream Activity Scrolling: PageUp (\x1b[5~) / PageDown (\x1b[6~)
+    if (keyName === 'pageup' || keyStr === '\x1b[5~') {
       this.eventScrollOffset += 5;
       this.draw();
       return;
     }
-    if (key === '\x1b[6~') {
+    if (keyName === 'pagedown' || keyStr === '\x1b[6~') {
       this.eventScrollOffset = Math.max(0, this.eventScrollOffset - 5);
       this.draw();
       return;
     }
 
-    // 15. Arrow keys: Generalized Navigation or Event Scrolling
-    if (key === '\u001b[A') {
+    // 14. Arrow keys: Generalized Navigation or Event Scrolling
+    if (keyName === 'up' || keyStr === '\u001b[A') {
       // Up
       if (this.focusedPane === 'main' && this.inputBuffer.length === 0) {
         this.eventScrollOffset += 1;
@@ -534,7 +636,7 @@ export class FleetTui {
       this.draw();
       return;
     }
-    if (key === '\u001b[B') {
+    if (keyName === 'down' || keyStr === '\u001b[B') {
       // Down
       if (this.focusedPane === 'main' && this.inputBuffer.length === 0 && this.eventScrollOffset > 0) {
         this.eventScrollOffset = Math.max(0, this.eventScrollOffset - 1);
@@ -550,11 +652,11 @@ export class FleetTui {
       return;
     }
 
-    // 16. Left/Right: navigate highlighted items
-    if (key === '\u001b[D' || key === '\u001b[C') {
+    // 15. Left/Right: navigate highlighted items
+    if (keyName === 'left' || keyStr === '\u001b[D' || keyName === 'right' || keyStr === '\u001b[C') {
       const list = this.getAgents();
       if (list.length > 0) {
-        if (key === '\u001b[D') {
+        if (keyName === 'left' || keyStr === '\u001b[D') {
           this.highlightedIndex = Math.max(0, this.highlightedIndex - 1);
         } else {
           this.highlightedIndex = Math.min(list.length - 1, this.highlightedIndex + 1);
@@ -565,8 +667,8 @@ export class FleetTui {
       return;
     }
 
-    // 17. Enter key: submit command or inspect item (§3)
-    if (key === '\r' || key === '\n') {
+    // 16. Enter key: submit command or inspect item (§3)
+    if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
       if (this.inputBuffer.trim().length > 0) {
         const command = this.inputBuffer.trim();
         this.inputBuffer = '';
@@ -590,28 +692,28 @@ export class FleetTui {
       return;
     }
 
-    // 18. Backspace / Delete
-    if (key === '\u0008' || key === '\x7f' || key === '\x1b[3~') {
+    // 17. Backspace / Delete Handling (§2):
+    // Ensure key.name === 'backspace' or key.name === 'delete' correctly checks active buffer length,
+    // removes final character via slicing (inputBuffer.slice(0, -1)), and triggers immediate prompt re-render.
+    if (
+      keyName === 'backspace' ||
+      keyName === 'delete' ||
+      keyStr === '\u0008' ||
+      keyStr === '\x7f' ||
+      keyStr === '\x1b[3~' ||
+      /^[\x7f\u0008]+$/.test(keyStr)
+    ) {
       if (this.inputBuffer.length > 0) {
-        this.inputBuffer = this.inputBuffer.slice(0, -1);
+        const count = /^[\x7f\u0008]+$/.test(keyStr) ? keyStr.length : 1;
+        this.inputBuffer = this.inputBuffer.slice(0, Math.max(0, this.inputBuffer.length - count));
         this.checkReferencePicker();
         this.draw();
       }
       return;
     }
 
-    // 19. Repeated backspace / delete sequence
-    if (/^[\x7f\u0008]+$/.test(key)) {
-      if (this.inputBuffer.length > 0) {
-        this.inputBuffer = this.inputBuffer.slice(0, Math.max(0, this.inputBuffer.length - key.length));
-        this.checkReferencePicker();
-        this.draw();
-      }
-      return;
-    }
-
-    // 20. Ctrl+U: Clear entire input line
-    if (key === '\u0015') {
+    // 18. Ctrl+U: Clear entire input line
+    if ((keyObj.ctrl && (keyName === 'u' || keyName === 'U')) || keyStr === '\u0015') {
       this.inputBuffer = '';
       this.isPickerActive = false;
       this.pickerCandidates = [];
@@ -619,17 +721,43 @@ export class FleetTui {
       return;
     }
 
-    // 21. Ctrl+W: Delete word backward
-    if (key === '\u0017') {
+    // 19. Ctrl+W: Delete word backward
+    if ((keyObj.ctrl && (keyName === 'w' || keyName === 'W')) || keyStr === '\u0017') {
       this.inputBuffer = this.inputBuffer.replace(/\s*\S*\s*$/, '');
       this.checkReferencePicker();
       this.draw();
       return;
     }
 
-    // 22. Printable characters
-    if (!key.startsWith('\x1b') && !key.startsWith('\u001b') && !/[\x00-\x1f\x7f]/.test(key)) {
-      this.inputBuffer += key;
+    // 20. Control & Navigation Key Leak Guard:
+    // Prevent any non-printable or control keys from ever reaching text buffer
+    if (
+      keyObj.ctrl ||
+      keyObj.meta ||
+      keyName === 'tab' ||
+      keyName === 'backspace' ||
+      keyName === 'delete' ||
+      keyName === 'escape' ||
+      keyName === 'return' ||
+      keyName === 'enter' ||
+      keyName === 'up' ||
+      keyName === 'down' ||
+      keyName === 'left' ||
+      keyName === 'right' ||
+      keyName === 'pageup' ||
+      keyName === 'pagedown'
+    ) {
+      return;
+    }
+
+    // 21. Printable characters
+    if (
+      !keyStr.startsWith('\x1b') &&
+      !keyStr.startsWith('\u001b') &&
+      !/[\x00-\x1f\x7f]/.test(keyStr) &&
+      keyStr.length > 0
+    ) {
+      this.inputBuffer += keyStr;
       this.focusedPane = 'prompt';
       this.checkReferencePicker();
       this.draw();
