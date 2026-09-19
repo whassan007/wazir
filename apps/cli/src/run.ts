@@ -22,6 +22,7 @@ import { executeTool as runRegisteredTool } from '@wazir/tools';
 import { dispatchRemote } from '@wazir/workers';
 import { color } from './colors.js';
 import type { RookEngine } from './engine.js';
+import { StatusLoader } from './spinner.js';
 
 /** Maps a control-plane-reported worker event onto the local `GenerationEvent` shape,
  * so a remotely-dispatched task streams through the same agent loop as a local one. */
@@ -155,8 +156,14 @@ export async function executeTask(
     }
   };
 
+  const loader = new StatusLoader({
+    stream: process.stderr,
+    isTTY: !options.json && !options.quiet && Boolean(process.stderr.isTTY),
+  });
+
   const log = (line: string): void => {
     if (options.json) return;
+    loader.clear();
     if (isPiped) {
       // Non-TTY / piped stream fallback (§23): clean plain streaming lines
       const plain = stripTerminalEscapes(line).trim();
@@ -211,68 +218,78 @@ export async function executeTask(
     tools: engine.tools.forModel(),
 
     async *generate(request) {
+      loader.start(`Waiting for model response (${request.modelId})...`);
       await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
 
-      if (scheduling.computerId === engine.worker.computerId) {
-        const adapter = engine.worker.adapterForModel(request.modelId);
-        if (!adapter) {
-          yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
-          return;
-        }
-        for await (const event of adapter.generate({
-          modelId: request.modelId,
-          messages: request.messages,
-          maxTokens: request.maxTokens,
-          temperature: request.temperature,
-          contextTokens: context.available.tokens,
-          stream: true,
-        })) {
-          if (event.type === 'completed' && event.usage) {
-            await engine.executions.recordUsage(executionId, {
-              input: event.usage.inputTokens,
-              output: event.usage.outputTokens,
-              total: event.usage.totalTokens,
-            });
+      try {
+        if (scheduling.computerId === engine.worker.computerId) {
+          const adapter = engine.worker.adapterForModel(request.modelId);
+          if (!adapter) {
+            yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
+            return;
           }
-          yield event;
-        }
-      } else if (engine.config.apiUrl) {
-        // The scheduler placed this task on a different computer: hand it to
-        // that computer's worker through the control plane's task-pull loop
-        // instead of running it in-process.
-        const workerRequest: WorkerExecutionRequest = {
-          executionId,
-          requestId: generateId('req-'),
-          modelId: request.modelId,
-          messages: request.messages,
-          maxTokens: request.maxTokens,
-          temperature: request.temperature,
-          contextTokens: context.available.tokens,
-        };
-        try {
-          for await (const event of dispatchRemote(engine.config.apiUrl, scheduling.computerId, workerRequest, { token: engine.config.apiToken })) {
-            const generationEvent = toGenerationEvent(event);
-            if (!generationEvent) continue;
-            if (generationEvent.type === 'completed' && generationEvent.usage) {
+          for await (const event of adapter.generate({
+            modelId: request.modelId,
+            messages: request.messages,
+            maxTokens: request.maxTokens,
+            temperature: request.temperature,
+            contextTokens: context.available.tokens,
+            stream: true,
+          })) {
+            if (event.type === 'token') {
+              loader.setText(`Generating response from ${request.modelId}...`);
+            }
+            if (event.type === 'completed' && event.usage) {
               await engine.executions.recordUsage(executionId, {
-                input: generationEvent.usage.inputTokens,
-                output: generationEvent.usage.outputTokens,
-                total: generationEvent.usage.totalTokens,
+                input: event.usage.inputTokens,
+                output: event.usage.outputTokens,
+                total: event.usage.totalTokens,
               });
             }
-            yield generationEvent;
+            yield event;
           }
-        } catch (error) {
-          yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
+        } else if (engine.config.apiUrl) {
+          // The scheduler placed this task on a different computer: hand it to
+          // that computer's worker through the control plane's task-pull loop
+          // instead of running it in-process.
+          const workerRequest: WorkerExecutionRequest = {
+            executionId,
+            requestId: generateId('req-'),
+            modelId: request.modelId,
+            messages: request.messages,
+            maxTokens: request.maxTokens,
+            temperature: request.temperature,
+            contextTokens: context.available.tokens,
+          };
+          try {
+            for await (const event of dispatchRemote(engine.config.apiUrl, scheduling.computerId, workerRequest, { token: engine.config.apiToken })) {
+              const generationEvent = toGenerationEvent(event);
+              if (!generationEvent) continue;
+              if (generationEvent.type === 'token') {
+                loader.setText(`Generating response from ${request.modelId}...`);
+              }
+              if (generationEvent.type === 'completed' && generationEvent.usage) {
+                await engine.executions.recordUsage(executionId, {
+                  input: generationEvent.usage.inputTokens,
+                  output: generationEvent.usage.outputTokens,
+                  total: generationEvent.usage.totalTokens,
+                });
+              }
+              yield generationEvent;
+            }
+          } catch (error) {
+            yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
+          }
+        } else {
+          yield {
+            type: 'error',
+            error: `task scheduled on remote computer '${scheduling.computerId}' but no control-plane API URL is configured (set WAZIR_API_URL)`,
+          };
         }
-      } else {
-        yield {
-          type: 'error',
-          error: `task scheduled on remote computer '${scheduling.computerId}' but no control-plane API URL is configured (set WAZIR_API_URL)`,
-        };
+      } finally {
+        loader.stop();
+        await engine.executions.recordEvent(executionId, 'generation.completed');
       }
-
-      await engine.executions.recordEvent(executionId, 'generation.completed');
     },
 
     async executeTool(name, input): Promise<ToolResult> {
@@ -301,12 +318,34 @@ export async function executeTask(
         return result;
       }
 
+      // Bind spinner activation to active execution phases (§3)
+      let activityText = `Executing ${name}...`;
+      const inp = input as Record<string, unknown> | undefined;
+      if (name === 'read_file' || name === 'view_file') {
+        const p = inp?.path ?? inp?.AbsolutePath ?? inp?.file;
+        activityText = p ? `Reading file ${path.basename(String(p))}...` : 'Reading file...';
+      } else if (name === 'write_to_file' || name === 'replace_file_content') {
+        const p = inp?.path ?? inp?.TargetFile ?? inp?.file;
+        activityText = p ? `Writing file ${path.basename(String(p))}...` : 'Writing file...';
+      } else if (name === 'run_command' || name === 'execute_command' || name === 'bash') {
+        const cmd = inp?.CommandLine ?? inp?.command;
+        activityText = cmd ? `Running ${String(cmd).slice(0, 35)}...` : 'Running command...';
+      } else if (CHECK_TOOLS.has(name)) {
+        activityText = `Running check (${name})...`;
+      }
+      loader.start(activityText);
+
       await engine.executions.recordToolStart(executionId, name, input);
-      const result = await runRegisteredTool(engine.tools, name, input, {
-        projectRoot: engine.projectRoot,
-        executionId,
-        networkAllowed: engine.config.networkAllowed,
-      });
+      let result: ToolResult;
+      try {
+        result = await runRegisteredTool(engine.tools, name, input, {
+          projectRoot: engine.projectRoot,
+          executionId,
+          networkAllowed: engine.config.networkAllowed,
+        });
+      } finally {
+        loader.stop();
+      }
       await engine.executions.recordToolCall(executionId, {
         id: generateId('call-'),
         tool: name,
@@ -403,6 +442,7 @@ export async function executeTask(
     emitJson({ type: 'error', error: message, executionId });
     log(color.red(`    ${untrusted(message)}`));
   } finally {
+    loader.stop();
     process.off('SIGINT', onSigint);
   }
 

@@ -13,6 +13,7 @@ import { createFleetTaskExecutor } from '../fleetRunner.js';
 import { TerminalScreen, type TerminalSize } from './screen.js';
 import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } from '../blocks.js';
 import { resolveReference, type ResolvedReference } from '../references.js';
+import { getBrailleFrame } from './spinner.js';
 
 export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'help';
 
@@ -203,6 +204,7 @@ export class FleetTui {
   private inputBuffer = '';
   private statusMessage = 'Ready. Type a task or /fanout <t1; t2; ...> to begin.';
   private renderTimer?: NodeJS.Timeout;
+  private spinnerTick = 0;
 
   private unsubscribeApprovals?: () => void;
   private unsubscribeJobEvents?: () => void;
@@ -1313,6 +1315,7 @@ export class FleetTui {
   };
 
   private updateAgentDurations(): void {
+    this.spinnerTick++;
     const now = Date.now();
     for (const agent of this.agents.values()) {
       if (agent.status === 'running' && agent.startedAt) {
@@ -1600,7 +1603,7 @@ export class FleetTui {
           const cursor = isSelected ? color.blue('▶ ') : '  ';
 
           let glyph = color.yellow('◯');
-          if (item.status === 'running') glyph = color.cyan('*');
+          if (item.status === 'running') glyph = color.cyan(getBrailleFrame(this.spinnerTick));
           else if (item.status === 'completed') glyph = color.green('✓');
           else if (item.status === 'failed') glyph = color.red('✕');
 
@@ -1690,7 +1693,7 @@ export class FleetTui {
             : card.status === 'failed'
               ? color.red('[FAILED]')
               : card.status === 'running'
-                ? color.cyan('[RUNNING]')
+                ? color.cyan(`[RUNNING ${getBrailleFrame(this.spinnerTick)}]`)
                 : color.yellow(`[${card.status.toUpperCase()}]`);
 
         lines.push(
@@ -1859,7 +1862,14 @@ export class FleetTui {
     const contextIndicator = color.cyan(`Context ${usedK}K/${maxK}K ∆`);
     const contextPlain = `Context ${usedK}K/${maxK}K ∆`;
 
-    const statusText = `  ${color.gray('Status:')} ${this.statusMessage}`;
+    const anyRunning =
+      Array.from(this.agents.values()).some((a) => a.status === 'running') ||
+      this.statusMessage.includes('Planning') ||
+      this.statusMessage.includes('Retrying') ||
+      this.statusMessage.includes('Executing');
+    const spinnerPrefix = anyRunning ? `${color.cyan(getBrailleFrame(this.spinnerTick))} ` : '';
+
+    const statusText = `  ${color.gray('Status:')} ${spinnerPrefix}${this.statusMessage}`;
     const statusPlain = this.stripAnsi(statusText);
 
     const spaces = Math.max(2, cols - statusPlain.length - contextPlain.length - 2);
