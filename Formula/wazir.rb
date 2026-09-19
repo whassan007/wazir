@@ -15,9 +15,6 @@ class Wazir < Formula
     bin.install "bin/wa.js" => "wa"
   end
 
-  def post_install
-    system "node", "scripts/setup-env.mjs" rescue nil
-  end
 
   test do
     assert_match "0.1.0", shell_output("#{bin}/wa --version")
