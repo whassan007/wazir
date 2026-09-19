@@ -1901,12 +1901,19 @@ export class FleetTui {
           lines.push(this.padRightTo(`    [${t.status}] ${t.id} - ${t.title || t.input.slice(0, 30)}`, width));
           if (lines.length >= maxRows - 1) break;
           const node = job.graph.nodes.find((n) => n.taskId === t.id || n.id === t.id);
-          if (node?.error) {
-            lines.push(this.padRightTo(color.red(`      -> ${node.error.slice(0, width - 12)}`), width));
-          } else if (node?.result !== undefined) {
-            const resultText = typeof node.result === 'string' ? node.result : JSON.stringify(node.result);
-            const oneLine = resultText.replace(/\s+/g, ' ').trim();
-            lines.push(this.padRightTo(color.gray(`      -> ${oneLine.slice(0, width - 12)}`), width));
+          const rawOutput = node?.error ?? (node?.result !== undefined
+            ? typeof node.result === 'string' ? node.result : JSON.stringify(node.result)
+            : undefined);
+          if (rawOutput) {
+            const flat = rawOutput.replace(/\s+/g, ' ').trim();
+            const remainingRows = Math.max(1, maxRows - lines.length - 1);
+            const wrapped = this.wrapText(flat, Math.max(10, width - 10), Math.min(6, remainingRows));
+            const paint = node?.error ? color.red : color.gray;
+            wrapped.forEach((wline, i) => {
+              if (lines.length >= maxRows - 1) return;
+              const prefix = i === 0 ? '      -> ' : '         ';
+              lines.push(this.padRightTo(paint(`${prefix}${wline}`), width));
+            });
           }
         }
         const rollup = this.jobRollups.get(job.id);
@@ -2325,6 +2332,38 @@ export class FleetTui {
 
   private stripAnsi(str: string): string {
     return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+  }
+
+  /**
+   * Greedily wraps plain text (no ANSI — callers colorize each returned line themselves)
+   * to maxWidth, splitting on whitespace, up to maxLines. Used for task output previews
+   * that were previously cut to a single truncated line — a several-sentence result was
+   * unreadable as "...The projec" with no way to see the rest.
+   */
+  private wrapText(text: string, maxWidth: number, maxLines: number): string[] {
+    const words = text.split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let current = '';
+    let wordIndex = 0;
+    while (wordIndex < words.length && lines.length < maxLines) {
+      const word = words[wordIndex];
+      const candidate = current ? `${current} ${word}` : word;
+      if (candidate.length > maxWidth && current) {
+        lines.push(current);
+        current = '';
+      } else {
+        current = candidate;
+        wordIndex++;
+      }
+    }
+    if (wordIndex >= words.length) {
+      if (current) lines.push(current);
+    } else if (lines.length > 0) {
+      // Ran out of lines with words still left over — mark the truncation.
+      const last = lines[lines.length - 1];
+      lines[lines.length - 1] = last.length >= maxWidth ? `${last.slice(0, maxWidth - 1)}.` : `${last}.`;
+    }
+    return lines;
   }
 
   private truncateAnsi(str: string, maxLen: number): string {

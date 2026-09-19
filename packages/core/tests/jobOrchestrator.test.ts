@@ -461,4 +461,41 @@ describe('JobOrchestrator — fleet-scale graph walk & concurrent execution', ()
     await reloadedManager.ready;
     expect(reloadedManager.get(job.id)?.status).toBe('completed');
   });
+
+  it('self-heals job records already stuck at running from before the persistence fix', async () => {
+    // Reproduces exactly what pre-fix data looks like: task-level completion always
+    // persisted correctly (completeTask flushes immediately), but the job's own status
+    // field was never flushed on the terminal transition, so it's stuck at 'running'
+    // forever in the store even though the only task finished long ago. New code can't
+    // un-write already-persisted bad data — this has to be healed on load instead.
+    const backingStore = new Map<string, Job>();
+    const staleWriteManager = new JobManager({
+      persist: (job) => backingStore.set(job.id, structuredClone(job)),
+    });
+
+    const job = staleWriteManager.create({
+      title: 'Pre-fix Job',
+      tasks: [{ task: { id: 'only-task', input: 'which models are installed' } }],
+    });
+    // completeTask correctly marks the task AND graph node completed and flushes — this
+    // part of the old code always worked. job.status is left at its initial 'running'
+    // (set by createJob's caller in the old runJob(), never corrected afterward), which
+    // is exactly the stale shape sitting in real job stores today.
+    job.status = 'running';
+    await staleWriteManager.completeTask(job.id, 'only-task', 'gemma-4-12b, llama-3-8b');
+    expect(backingStore.get(job.id)?.status).toBe('running');
+
+    const flushedCorrections: Job[] = [];
+    const healedManager = new JobManager({
+      load: () => Array.from(backingStore.values()),
+      persist: (j) => flushedCorrections.push(structuredClone(j)),
+    });
+    await healedManager.ready;
+
+    const healed = healedManager.get(job.id);
+    expect(healed?.status).toBe('completed');
+    expect(healed?.completedAt).toBeDefined();
+    // The correction itself must be flushed too, or it's healed only until the next reload
+    expect(flushedCorrections.some((j) => j.id === job.id && j.status === 'completed')).toBe(true);
+  });
 });

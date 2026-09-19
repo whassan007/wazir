@@ -8,7 +8,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — control plane command line')
-  .version('0.1.8');
+  .version('0.1.9');
 
 // computers command
 const computersCmd = new Command()

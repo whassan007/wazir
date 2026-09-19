@@ -31,11 +31,46 @@ export class JobManager {
 
   constructor(options: JobManagerOptions = {}) {
     this.persist = options.persist;
-    this.ready = Promise.resolve(options.load?.() ?? []).then((loaded) => {
+    this.ready = Promise.resolve(options.load?.() ?? []).then(async (loaded) => {
       for (const job of loaded) {
         this.jobs.set(job.id, job);
+        await this.reconcileStaleStatus(job);
       }
     }).catch(() => {});
+  }
+
+  /**
+   * Self-heals job records written before job-level status was persisted correctly
+   * (runJob() used to mutate job.status in memory without ever flushing the terminal
+   * transition — see setJobStatus). Those records are stuck at 'running'/'pending'
+   * forever even though every task actually finished; the fix to runJob() only stops
+   * *new* writes from being wrong, so anything already on disk needs correcting once
+   * on load, inferred from the tasks' own (correctly persisted) statuses.
+   */
+  private async reconcileStaleStatus(job: Job): Promise<void> {
+    const nonTerminal = job.status === 'pending' || job.status === 'planning' || job.status === 'ready' || job.status === 'running' || job.status === 'paused';
+    if (!nonTerminal || job.tasks.length === 0) return;
+
+    const allTerminal = job.tasks.every(
+      (t) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled',
+    );
+    if (!allTerminal) return;
+
+    const anyFailed = job.tasks.some((t) => t.status === 'failed');
+    const anyCancelled = job.tasks.some((t) => t.status === 'cancelled');
+    const corrected: Job['status'] = anyFailed ? 'failed' : anyCancelled ? 'cancelled' : 'completed';
+
+    job.status = corrected;
+    if (!job.completedAt) {
+      // The job-level completedAt was never recorded (that's the bug being healed), but
+      // each graph node already got a real completedAt at the moment it actually finished
+      // (see updateNodeState) — use the latest of those instead of a rough guess.
+      const latest = job.graph.nodes.reduce<Date | undefined>((acc, n) => {
+        return n.completedAt && (!acc || n.completedAt > acc) ? n.completedAt : acc;
+      }, undefined);
+      job.completedAt = latest ?? job.createdAt;
+    }
+    await this.flush(job);
   }
 
   create(params: {
