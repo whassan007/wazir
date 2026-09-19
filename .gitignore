@@ -19,6 +19,7 @@ coverage/
 # IDE / editors
 .vscode/
 .idea/
+.claude/
 *.sublime-workspace
 *.sublime-project
 
