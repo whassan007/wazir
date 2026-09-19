@@ -277,7 +277,10 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.sendKey('\r');
     expect(harness.tui.getCurrentView()).toBe('tail');
     const tailBuf = harness.getScreenBuffer();
-    expect(tailBuf).toContain('Tail: task-1');
+    // Task ids are job-scoped (task-<jobId>-<n>), not the fixed "task-1", "task-2", ... a
+    // single job used to always assign — see the job-scoped-task-id fix in
+    // launchJobFromPrompt for why that was actually a real cross-job data-leak bug.
+    expect(tailBuf).toContain(`Tail: ${agents[0].taskId}`);
 
     // Escape returns to fleet dashboard
     harness.sendKey('\x1b');
@@ -412,6 +415,72 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.sendKey('x');
     await new Promise((r) => setTimeout(r, 10));
     expect(engine.orchestrator.getJob(orphanJob.id)).toBeUndefined();
+
+    harness.stop();
+  });
+
+  it('pressing c on an already-finished job reports an error instead of crashing the process', async () => {
+    // cancelJob() throws for a job already in a terminal status. The 'c' keybinding
+    // called it fire-and-forget with no .catch() — an unhandled promise rejection, which
+    // is a real Node process crash by default, not just a TUI-level error. This test's
+    // entire purpose is to prove that no longer happens; if the fix regresses, this test
+    // process itself would crash rather than fail an assertion.
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    await harness.start();
+
+    harness.sendLine('quick job');
+    await new Promise((r) => setTimeout(r, 100));
+    const job = harness.tui.getCurrentJob();
+    expect(job?.status).toBe('completed');
+
+    for (let i = 0; i < 5; i++) harness.sendKey('\u001b[A'); // up to the JOBS entry
+    expect(harness.tui.getFlatNavItems()[harness.tui.getFlatNavItems().findIndex((it) => it.id === job!.id)]).toBeDefined();
+
+    harness.sendKey('c');
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(harness.tui.getStatusMessage()).toContain('Could not cancel job');
+    expect(engine.orchestrator.getJob(job!.id)?.status).toBe('completed'); // unchanged
+
+    harness.stop();
+  });
+
+  it('does not leak tokens between jobs that would otherwise share the same default task id', async () => {
+    // Every single-task job used to get the task id "task-1" regardless of which job it
+    // was, and ExecutionEngine.listByTask(taskId) filters by task id alone with no job
+    // scoping — so getJobRollup() for one job silently summed in execution records from
+    // every other job that happened to reuse the same task id, which was effectively all
+    // of them. Task ids are now job-scoped (task-<jobId>-<n>) via JobManager's own
+    // auto-id assignment instead of the TUI hardcoding "task-<n>".
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    await harness.start();
+
+    harness.sendLine('first job');
+    await new Promise((r) => setTimeout(r, 100));
+    const jobA = harness.tui.getCurrentJob();
+    expect(jobA?.status).toBe('completed');
+
+    harness.sendLine('second job');
+    await new Promise((r) => setTimeout(r, 100));
+    const jobB = harness.tui.getCurrentJob();
+    expect(jobB?.status).toBe('completed');
+
+    expect(jobA!.tasks[0].id).not.toBe(jobB!.tasks[0].id);
+
+    const rollupA = await engine.orchestrator.getJobRollup(jobA!.id);
+    const rollupB = await engine.orchestrator.getJobRollup(jobB!.id);
+    // Each task makes two model turns (plan, then done), and the fake adapter reports a
+    // fixed 25-token usage per turn, so 50 is each job's own legitimate total. If task ids
+    // collided, each job's rollup would pull in the OTHER job's execution too and double
+    // to 100 instead.
+    expect(rollupA.tokens.total).toBe(50);
+    expect(rollupB.tokens.total).toBe(50);
 
     harness.stop();
   });
@@ -1186,7 +1255,8 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     await harness.start();
 
-    // Launch a multi-task job to produce realistic job and task IDs (e.g., job-mu7ybxyu-1, task-1)
+    // Launch a multi-task job to produce realistic job and task IDs (e.g.,
+    // job-mu7ybxyu-1, task-job-mu7ybxyu-1-0 — job-scoped, not the fixed "task-1")
     harness.sendLine('/fanout build frontend; run tests');
 
     // Wait for job to register
@@ -1194,11 +1264,12 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     const job = harness.tui.getCurrentJob();
     expect(job).toBeDefined();
+    const firstTaskId = job!.tasks[0].id;
 
     // Verify initial fleet view contains clean rendering
     let buf = harness.getScreenBuffer();
     expect(buf).toContain('WAZIR');
-    expect(buf).toContain('task-1');
+    expect(buf).toContain(firstTaskId);
 
     // Switch view via Tab to 'tail'
     harness.sendKey('\t');
@@ -1207,7 +1278,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // The main pane is now the active event stream activity pane
     buf = harness.getScreenBuffer();
-    expect(buf).toContain('Tail: task-1');
+    expect(buf).toContain(`Tail: ${firstTaskId}`);
     expect(buf).toContain('PLAN');
 
     // Ensure no broken ANSI fragments or residual chopped strings exist
@@ -1231,7 +1302,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // Verify screen buffer after view transitions is clean
     const tailBuf = harness.getScreenBuffer();
-    expect(tailBuf).toContain('Tail: task-1');
+    expect(tailBuf).toContain(`Tail: ${firstTaskId}`);
     expect(tailBuf).toContain('wa> ');
 
     harness.stop();

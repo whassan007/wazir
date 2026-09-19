@@ -255,6 +255,7 @@ export class FleetTui {
   private unsubscribeApprovals?: () => void;
   private unsubscribeJobEvents?: () => void;
   private unsubscribeResize?: () => void;
+  private unhandledRejectionHandler?: (reason: unknown) => void;
 
   constructor(options: FleetTuiOptions) {
     this.engine = options.engine;
@@ -391,6 +392,19 @@ export class FleetTui {
   async start(): Promise<void> {
     this.isRunning = true;
 
+    // Safety net (found the hard way): a fire-and-forget action here (`void this.foo()`,
+    // used throughout for keypress handlers so they can stay synchronous) that rejects
+    // without its own .catch() is an unhandled promise rejection — Node's default is to
+    // crash the entire process for that, taking the whole interactive session down over
+    // what should have been a status-bar error message (e.g. pressing 'c' to cancel a job
+    // that already finished). Individual call sites are being fixed as found, but this
+    // keeps any other one we haven't found yet from killing the app outright.
+    this.unhandledRejectionHandler = (reason) => {
+      this.statusMessage = `Internal error (recovered): ${reason instanceof Error ? reason.message : String(reason)}`;
+      this.draw();
+    };
+    process.on('unhandledRejection', this.unhandledRejectionHandler);
+
     // 3. Raw Mode & Keypress Binding Check:
     // Verify that stdin is correctly running in raw mode so structured key objects are passed
     this.screen.enter();
@@ -469,6 +483,10 @@ export class FleetTui {
     if (this.unsubscribeApprovals) this.unsubscribeApprovals();
     if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
     if (this.unsubscribeResize) this.unsubscribeResize();
+    if (this.unhandledRejectionHandler) {
+      process.off('unhandledRejection', this.unhandledRejectionHandler);
+      this.unhandledRejectionHandler = undefined;
+    }
 
     if (this.keypressListener) {
       this.screen.getInputStream().off('keypress', this.keypressListener);
@@ -888,10 +906,19 @@ export class FleetTui {
       const all = this.getFlatNavItems();
       const current = all[this.navSelectionIndex];
       if (current?.category === 'JOBS') {
-        void this.engine.orchestrator.cancelJob(current.id).then(() => {
-          this.statusMessage = `Cancelled job ${current.id}`;
-          this.draw();
-        });
+        // Cancelling a job already in a terminal status (completed/failed) throws — with
+        // no .catch() that was an unhandled promise rejection, which crashes the whole
+        // Node process by default (not just the TUI), taking the app down on what should
+        // be a harmless no-op if you press 'c' on a job that already finished.
+        void this.engine.orchestrator
+          .cancelJob(current.id)
+          .then(() => {
+            this.statusMessage = `Cancelled job ${current.id}`;
+          })
+          .catch((err) => {
+            this.statusMessage = `Could not cancel job: ${err instanceof Error ? err.message : String(err)}`;
+          })
+          .finally(() => this.draw());
         return;
       }
     }
@@ -1158,41 +1185,44 @@ export class FleetTui {
     }
 
     if (trimmed.startsWith('/cancel')) {
-      const parts = trimmed.split(/\s+/);
-      const arg = parts[1];
+      // cancelJob()/cancelTask() throw for an invalid state transition (e.g. the job is
+      // already completed/failed) — submitCommand() is always invoked fire-and-forget
+      // (`void this.submitCommand(...)`), so an uncaught throw here is an unhandled
+      // promise rejection, which crashes the whole Node process by default, not just the
+      // TUI. Everything below is wrapped so a bad /cancel is a status message, not a crash.
+      try {
+        const parts = trimmed.split(/\s+/);
+        const arg = parts[1];
 
-      // A job id (e.g. one picked from the nav, possibly from a past session — /cancel
-      // previously only ever worked against `this.currentJob`, the job launched in *this*
-      // session, so cancelling an older/reloaded job from the JOBS list did nothing at all).
-      const argJob = arg ? this.engine.orchestrator.getJob(arg) : undefined;
-      if (argJob) {
-        await this.engine.orchestrator.cancelJob(argJob.id);
-        this.statusMessage = `Cancelled job ${argJob.id}`;
-        this.draw();
-        return;
-      }
-
-      if (arg && this.currentJob) {
-        await this.engine.orchestrator.cancelTask(this.currentJob.id, arg);
-        this.statusMessage = `Cancelled task ${arg}`;
-        this.draw();
-        return;
-      }
-
-      // No argument: cancel whatever's highlighted in the nav if it's a job.
-      const all = this.getFlatNavItems();
-      const selected = all[this.navSelectionIndex];
-      if (selected?.category === 'JOBS') {
-        await this.engine.orchestrator.cancelJob(selected.id);
-        this.statusMessage = `Cancelled job ${selected.id}`;
-      } else if (this.currentJob && this.selectedTaskId) {
-        await this.engine.orchestrator.cancelTask(this.currentJob.id, this.selectedTaskId);
-        this.statusMessage = `Cancelled task ${this.selectedTaskId}`;
-      } else if (this.currentJob) {
-        await this.engine.orchestrator.cancelJob(this.currentJob.id);
-        this.statusMessage = `Cancelled job ${this.currentJob.id}`;
-      } else {
-        this.statusMessage = `No job selected to cancel`;
+        // A job id (e.g. one picked from the nav, possibly from a past session — /cancel
+        // previously only ever worked against `this.currentJob`, the job launched in
+        // *this* session, so cancelling an older/reloaded job did nothing at all).
+        const argJob = arg ? this.engine.orchestrator.getJob(arg) : undefined;
+        if (argJob) {
+          await this.engine.orchestrator.cancelJob(argJob.id);
+          this.statusMessage = `Cancelled job ${argJob.id}`;
+        } else if (arg && this.currentJob) {
+          await this.engine.orchestrator.cancelTask(this.currentJob.id, arg);
+          this.statusMessage = `Cancelled task ${arg}`;
+        } else {
+          // No argument: cancel whatever's highlighted in the nav if it's a job.
+          const all = this.getFlatNavItems();
+          const selected = all[this.navSelectionIndex];
+          if (selected?.category === 'JOBS') {
+            await this.engine.orchestrator.cancelJob(selected.id);
+            this.statusMessage = `Cancelled job ${selected.id}`;
+          } else if (this.currentJob && this.selectedTaskId) {
+            await this.engine.orchestrator.cancelTask(this.currentJob.id, this.selectedTaskId);
+            this.statusMessage = `Cancelled task ${this.selectedTaskId}`;
+          } else if (this.currentJob) {
+            await this.engine.orchestrator.cancelJob(this.currentJob.id);
+            this.statusMessage = `Cancelled job ${this.currentJob.id}`;
+          } else {
+            this.statusMessage = `No job selected to cancel`;
+          }
+        }
+      } catch (err) {
+        this.statusMessage = `Could not cancel: ${err instanceof Error ? err.message : String(err)}`;
       }
       this.draw();
       return;
@@ -1259,10 +1289,15 @@ export class FleetTui {
       taskDescriptions = [prompt];
     }
 
-    // Build tasks with dependency edges
-    const jobTasks = taskDescriptions.map((desc, i) => ({
+    // Build tasks with dependency edges. Deliberately no explicit `id` here — every job
+    // used to get task ids `task-1`, `task-2`, ... regardless of which job it was, and
+    // ExecutionEngine.listByTask(taskId) filters by task id ALONE with no job scoping, so
+    // getJobRollup() for one job was silently pulling in tokens/filesChanged from every
+    // OTHER job that happened to reuse the same task id (which is nearly all of them,
+    // since any single-task job got "task-1"). JobManager.create() auto-assigns a
+    // globally unique `task-<jobId>-<i>` id when none is given — exactly what's needed.
+    const jobTasks = taskDescriptions.map((desc) => ({
       task: {
-        id: `task-${i + 1}`,
         type: 'coding',
         title: desc.slice(0, 50),
         input: desc,
