@@ -14,16 +14,25 @@ import { TerminalScreen, type TerminalSize } from './screen.js';
 import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } from '../blocks.js';
 import { resolveReference, type ResolvedReference } from '../references.js';
 
-// ASCII-only spinner frames for the persistent full-screen renderer. Braille dots look
-// nicer but were tried twice in this codebase's history and confirmed both times to
-// reintroduce ghosting/flicker on Apple Terminal.app: it doesn't reliably give Braille
-// Pattern glyphs a stable single-column width, and since this glyph redraws every 250ms
-// on its own timer (independent of any keypress), a width mismatch here is a continuous,
-// self-reinforcing desync source, not a one-off. Plain ASCII is the one thing that has
-// measurably fixed this — keep it, even though it's visually plainer.
-const SPINNER_FRAMES = ['|', '/', '-', '\\'] as const;
-function getSpinnerFrame(tick: number): string {
-  return SPINNER_FRAMES[Math.abs(Math.floor(tick)) % SPINNER_FRAMES.length];
+// Per-category spinner frames for the persistent full-screen renderer. Earlier rounds on
+// this terminal assumed Braille glyphs were unsafe (they'd caused ghosting twice), but an
+// objective cursor-position measurement (glyph-width-test.mjs, using the ANSI Device
+// Status Report) proved every candidate set below renders at exactly 1 column here — so
+// the ghosting was never a per-glyph width problem. These were picked per the user's own
+// choice from that verified-safe set: square corners for job/task activity, dots/growth
+// for runtime activity. ASCII stays the default for categories nobody asked to change.
+const JOB_SPINNER_FRAMES = ['◴', '◷', '◶', '◵'] as const;
+const RUNTIME_SPINNER_FRAMES = ['·', '•', '●', '•'] as const;
+const DEFAULT_SPINNER_FRAMES = ['|', '/', '-', '\\'] as const;
+
+function getCategorySpinnerFrame(category: NavCategory | undefined, tick: number): string {
+  const frames =
+    category === 'JOBS' || category === 'EXECUTIONS'
+      ? JOB_SPINNER_FRAMES
+      : category === 'RUNTIMES'
+        ? RUNTIME_SPINNER_FRAMES
+        : DEFAULT_SPINNER_FRAMES;
+  return frames[Math.abs(Math.floor(tick)) % frames.length];
 }
 
 export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'help';
@@ -1453,11 +1462,12 @@ export class FleetTui {
     // 5. RUNTIMES
     const runtimes = this.engine.runtimes.list();
     for (const rt of runtimes) {
+      const isRunning = agentCards.some((a) => a.computerId === rt.computerId && a.status === 'running');
       items.push({
         category: 'RUNTIMES',
         id: rt.id,
         label: rt.name || rt.id,
-        status: 'completed',
+        status: isRunning ? 'running' : 'completed',
         routing: {
           runtimeId: rt.id,
           computerId: rt.computerId,
@@ -1667,7 +1677,7 @@ export class FleetTui {
           const cursor = isSelected ? color.blue('> ') : '  ';
 
           let glyph = color.yellow('o');
-          if (item.status === 'running') glyph = color.cyan(getSpinnerFrame(this.spinnerTick));
+          if (item.status === 'running') glyph = color.cyan(getCategorySpinnerFrame(item.category, this.spinnerTick));
           else if (item.status === 'completed') glyph = color.green('+');
           else if (item.status === 'failed') glyph = color.red('x');
 
@@ -1760,7 +1770,7 @@ export class FleetTui {
             : card.status === 'failed'
               ? color.red('[FAILED]')
               : card.status === 'running'
-                ? color.cyan(`[RUNNING ${getSpinnerFrame(this.spinnerTick)}]`)
+                ? color.cyan(`[RUNNING ${getCategorySpinnerFrame('EXECUTIONS', this.spinnerTick)}]`)
                 : color.yellow(`[${card.status.toUpperCase()}]`);
 
         lines.push(
@@ -1934,7 +1944,7 @@ export class FleetTui {
       this.statusMessage.includes('Planning') ||
       this.statusMessage.includes('Retrying') ||
       this.statusMessage.includes('Executing');
-    const spinnerPrefix = anyRunning ? `${color.cyan(getSpinnerFrame(this.spinnerTick))} ` : '';
+    const spinnerPrefix = anyRunning ? `${color.cyan(getCategorySpinnerFrame('JOBS', this.spinnerTick))} ` : '';
 
     const statusText = `  ${color.gray('Status:')} ${spinnerPrefix}${this.statusMessage}`;
     const statusPlain = this.stripAnsi(statusText);
