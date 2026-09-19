@@ -233,4 +233,40 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     expect(writeCall?.policyEffect).toBe('deny');
     await expect(fs.access(path.join(projectRoot, '..', 'etc', 'escape.txt'))).rejects.toThrow();
   });
+
+  it('emits newline-delimited JSON stream events when json option is provided', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-json-'));
+    const engine = await buildTestEngine(projectRoot);
+
+    const emittedLines: string[] = [];
+    const origWrite = process.stdout.write;
+    process.stdout.write = function (str: any) {
+      if (typeof str === 'string') {
+        emittedLines.push(str);
+      }
+      return true;
+    } as any;
+
+    try {
+      const outcome = await executeTask(engine, 'create hello.txt containing "hi from json"', {
+        json: true,
+        quiet: true,
+      });
+
+      expect(outcome.success).toBe(true);
+
+      const parsed = emittedLines
+        .flatMap((l) => l.split('\n'))
+        .filter((l) => l.trim().startsWith('{'))
+        .map((l) => JSON.parse(l));
+
+      const types = parsed.map((p) => p.type);
+      expect(types).toContain('start');
+      expect(types).toContain('done');
+      expect(parsed.some((p) => p.type === 'start' && p.taskId)).toBe(true);
+      expect(parsed.some((p) => p.type === 'done' && p.executionId)).toBe(true);
+    } finally {
+      process.stdout.write = origWrite;
+    }
+  });
 });

@@ -191,6 +191,43 @@ taskCmd
 
 program.addCommand(taskCmd);
 
+// top-level run command alias (wa run <prompt>)
+program
+  .command('run')
+  .argument('<prompt>', 'Task prompt or description')
+  .option('--computer <id>', 'Target specific computer')
+  .option('--model <name>', 'Use specific model')
+  .option('--runtime <name>', 'Use specific runtime')
+  .option('--agent <name>', 'Use specific agent')
+  .option('--max-turns <number>', 'Maximum turns per task')
+  .option('--type <type>', 'Task type: chat, coding, research, etc.')
+  .option('--expected-files <files>', 'Expected changed files (comma-separated)')
+  .option('--json', 'Output in JSON format')
+  .description('Run a new task (alias for wa task run)')
+  .action(async (prompt, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { runTaskCommand } = await import('./commands.js');
+    const result = await runTaskCommand(
+      engine,
+      prompt,
+      {
+        type: options.type as any,
+        model: options.model,
+        agent: options.agent,
+        maxTurns: options.maxTurns ? Number(options.maxTurns) : undefined,
+        expectedFiles: options.expectedFiles
+          ? options.expectedFiles.split(',').map((s) => s.trim())
+          : undefined,
+        json: options.json,
+      },
+    );
+    if (!options.json || result.output) {
+      console.log(result.output);
+    }
+    process.exit(result.code);
+  });
+
 // executions command
 const execCmd = new Command()
   .name('executions')

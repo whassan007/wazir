@@ -20,8 +20,10 @@ import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import type { Worker } from '@wazir/workers';
+import { MemoryStore } from '@wazir/shared';
 import type { RookEngine } from '../src/engine.js';
 import { TuiTestHarness } from '../src/tui/inputHarness.js';
+import { TerminalScreen } from '../src/tui/screen.js';
 
 async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
   const computers = new ComputerRegistry();
@@ -190,6 +192,7 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
     adapters: new Map([['fake', fakeAdapter]]),
     discovered: [],
     worker: fakeWorker,
+    store: new MemoryStore() as any,
   };
 }
 
@@ -211,7 +214,8 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // 1. Initial screen render
     const initialBuf = harness.getScreenBuffer();
-    expect(initialBuf).toContain('WAZIR FLEET ENGINE');
+    expect(initialBuf).toContain('WAZIR • CONTROL • WORKER');
+    expect(initialBuf).toContain('AVAILABLE');
     expect(initialBuf).toContain('wa> ');
     expect(harness.tui.getCurrentView()).toBe('fleet');
 
@@ -364,5 +368,437 @@ describe('FleetTui — interactive terminal UI harness', () => {
     expect(harness.getScreenBuffer()).not.toContain('wa> hello');
 
     harness.stop();
+  });
+
+  it('renders persistent 2-pane layout when columns >= 100 and collapses when < 100', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // 1. Initial 120 cols >= 100: 2-pane split with separator '│'
+    const splitBuf = harness.getScreenBuffer();
+    expect(splitBuf).toContain('│');
+    expect(splitBuf).toContain('JOBS');
+    expect(splitBuf).toContain('EXECUTIONS');
+    expect(splitBuf).toContain('AGENTS');
+    expect(splitBuf).toContain('COMPUTERS');
+    expect(splitBuf).toContain('RUNTIMES');
+    expect(splitBuf).toContain('Routing:');
+
+    // 2. Responsive collapse: resize below 100 columns
+    harness.outStream.columns = 80;
+    harness.screen.onResize();
+
+    const collapsedBuf = harness.getScreenBuffer();
+    expect(collapsedBuf).not.toContain('│');
+    expect(collapsedBuf).toContain('Routing:');
+
+    // 3. Restore columns >= 100
+    harness.outStream.columns = 120;
+    harness.screen.onResize();
+    expect(harness.getScreenBuffer()).toContain('│');
+
+    harness.stop();
+  });
+
+  it('supports generalized Up/Down navigation across categories with status glyphs and cursor', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // Initially cursor ▶ points to wazir-coding in AGENTS
+    let buf = harness.getScreenBuffer();
+    expect(buf).toContain('▶ ◯ wazir-coding');
+    expect(buf).toContain('Routing: Agent [wazir-coding]');
+
+    // Navigate Down to COMPUTERS (test-computer)
+    harness.sendKey('\u001b[B');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('▶ ✓ test-computer');
+    expect(buf).toContain('Routing: Computer [local]');
+
+    // Navigate Down to RUNTIMES (fake-runtime)
+    harness.sendKey('\u001b[B');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('▶ ✓ fake-runtime');
+    expect(buf).toContain('Routing: Runtime [fake]');
+
+    // Navigate Up back to COMPUTERS
+    harness.sendKey('\u001b[A');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('▶ ✓ test-computer');
+
+    harness.stop();
+  });
+
+  it('renders history strip wired to blocks and expands block details modal', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // Launch a task prompt which records a block
+    harness.sendLine('verify system health');
+    await new Promise((r) => setTimeout(r, 60));
+
+    // History strip should show the recorded block
+    const buf = harness.getScreenBuffer();
+    expect(buf).toContain('History:');
+    expect(buf).toContain('[#1 ');
+
+    // Open block modal via /block 1
+    harness.sendLine('/block 1');
+    await new Promise((r) => setTimeout(r, 20));
+
+    const modalBuf = harness.getScreenBuffer();
+    expect(modalBuf).toContain('BLOCK DETAILS #1');
+    expect(modalBuf).toContain('verify system health');
+
+    // Dismiss with Escape key
+    harness.sendKey('\x1b');
+    const closedBuf = harness.getScreenBuffer();
+    expect(closedBuf).not.toContain('BLOCK DETAILS #1');
+
+    harness.stop();
+  });
+
+  it('triggers @ reference fuzzy picker and completes candidate on Tab', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // Type @ to trigger popup
+    harness.sendKeys('@');
+    let buf = harness.getScreenBuffer();
+    expect(buf).toContain('References (@)');
+    expect(buf).toContain('@agent:wazir-coding');
+
+    // Type filter query 'comp'
+    harness.sendKeys('comp');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('@computer:local');
+
+    // Press Tab to autocomplete into prompt
+    harness.sendKey('\t');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('wa> @computer:local ');
+
+    // Submit command and verify reference resolution
+    harness.sendKey('\r');
+    await new Promise((r) => setTimeout(r, 40));
+
+    const resolved = harness.tui.getLastResolvedReferences();
+    expect(resolved.length).toBeGreaterThan(0);
+    expect(resolved[0].kind).toBe('computer');
+    expect((resolved[0] as any).id).toBe('local');
+
+    harness.stop();
+  });
+
+  it('displays overlaid policy approval modal with [A], [D], [V], [I] actions', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+
+    await harness.start();
+
+    // Enqueue approval request
+    let resolvedStatus: boolean | undefined;
+    const authPromise = engine.approvalQueue.enqueue(
+      { tool: 'shell', input: { command: 'rm -rf /tmp/test' }, executionId: 'exec-sec' },
+      { decision: 'ask', rule: 'dangerous-rm', reasons: ['deletes directory recursively'] },
+      { taskId: 'task-sec' },
+    ).then((res) => {
+      resolvedStatus = res;
+      return res;
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Overlaid modal is visible with action buttons
+    const modalBuf = harness.getScreenBuffer();
+    expect(modalBuf).toContain('POLICY APPROVAL QUEUE');
+    expect(modalBuf).toContain('[A] Approve');
+    expect(modalBuf).toContain('[D] Deny');
+    expect(modalBuf).toContain('[V] Details');
+    expect(modalBuf).toContain('[I] Inspect');
+
+    // Press 'V' to toggle detail view
+    harness.sendKey('v');
+    expect(harness.tui.getStatusMessage()).toContain('Showing expanded approval details');
+
+    // Press 'I' to inspect and snooze
+    harness.sendKey('i');
+    expect(harness.tui.getStatusMessage()).toContain('Inspected and snoozed');
+
+    // Press 'A' to approve
+    harness.sendKey('a');
+    await authPromise;
+
+    expect(resolvedStatus).toBe(true);
+    expect(harness.tui.getPendingApprovals()).toHaveLength(0);
+
+    harness.stop();
+  });
+
+  it('supports Tier 2 navigation keybindings: Shift-Tab reverse traversal, Ctrl+L repaint, Ctrl+R refresh, and ? help toggle', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // 1. Initial view is 'fleet'
+    expect(harness.tui.getCurrentView()).toBe('fleet');
+
+    // 2. Shift-Tab (\x1b[Z) reverse traversal: fleet -> worktrees -> approval -> tail -> fleet
+    harness.sendKey('\x1b[Z');
+    expect(harness.tui.getCurrentView()).toBe('worktrees');
+
+    harness.sendKey('\x1b[Z');
+    expect(harness.tui.getCurrentView()).toBe('approval');
+
+    harness.sendKey('\x1b[Z');
+    expect(harness.tui.getCurrentView()).toBe('tail');
+
+    harness.sendKey('\x1b[Z');
+    expect(harness.tui.getCurrentView()).toBe('fleet');
+
+    // 3. '?' toggles help screen when input buffer is empty
+    harness.sendKey('?');
+    expect(harness.tui.getCurrentView()).toBe('help');
+    expect(harness.getScreenBuffer()).toContain('WAZIR FLEET TUI SHORTCUTS');
+
+    harness.sendKey('?');
+    expect(harness.tui.getCurrentView()).toBe('fleet');
+
+    // 4. Ctrl+R (\x12) forces state refresh
+    harness.sendKey('\x12');
+    expect(harness.tui.getStatusMessage()).toContain('Refreshed fleet state');
+
+    // 5. Ctrl+L (\x0c) triggers screen repaint
+    const initialBuf = harness.getScreenBuffer();
+    harness.sendKey('\x0c');
+    expect(harness.getScreenBuffer()).toBe(initialBuf);
+
+    harness.stop();
+  });
+
+  it('supports Ctrl+P quick actions palette modal navigation, filtering, and selection', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // 1. Press Ctrl+P (\x10) to open palette
+    harness.sendKey('\x10');
+    expect(harness.tui.isQuickActionsOpen()).toBe(true);
+    let buf = harness.getScreenBuffer();
+    expect(buf).toContain('QUICK ACTIONS (Ctrl+P)');
+    expect(buf).toContain('Fanout Concurrent Tasks');
+    expect(buf).toContain('▶ ');
+
+    // 2. Down arrow navigates items
+    harness.sendKey('\u001b[B');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('QUICK ACTIONS (Ctrl+P)');
+
+    // 3. Esc dismisses modal
+    harness.sendKey('\x1b');
+    expect(harness.tui.isQuickActionsOpen()).toBe(false);
+    expect(harness.getScreenBuffer()).not.toContain('QUICK ACTIONS (Ctrl+P)');
+
+    // 4. Reopen with Ctrl+P and execute direct numeric shortcut '6' (/doctor)
+    harness.sendKey('\x10');
+    expect(harness.tui.isQuickActionsOpen()).toBe(true);
+    harness.sendKey('6');
+    expect(harness.tui.isQuickActionsOpen()).toBe(false);
+    expect(harness.tui.getStatusMessage()).toContain('System diagnostics healthy');
+
+    harness.stop();
+  });
+
+  it('renders scrollable event-stream activity pane with typed lifecycle states (PLAN, ROUTE, TOOL, TEST, COMPLETE, ERROR)', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    await harness.start();
+
+    // Launch a task prompt
+    harness.sendLine('verify service integration');
+    await new Promise((r) => setTimeout(r, 60));
+
+    const job = harness.tui.getCurrentJob()!;
+    const jobId = job.id;
+    const taskId = harness.tui.getAgents()[0].taskId;
+
+    // Emit typed lifecycle events
+    (engine.orchestrator as any).emit(jobId, {
+      type: 'task:progress',
+      taskId,
+      jobId,
+      event: { tool: 'shell_exec' },
+      timestamp: new Date(),
+    });
+    (engine.orchestrator as any).emit(jobId, {
+      type: 'task:progress',
+      taskId,
+      jobId,
+      event: { phase: 'test', content: 'Running test verification suite' },
+      timestamp: new Date(),
+    });
+    (engine.orchestrator as any).emit(jobId, {
+      type: 'task:completed',
+      taskId,
+      jobId,
+      filesChanged: ['test.ts'],
+      timestamp: new Date(),
+    });
+
+    // Activity pane shows badges
+    let buf = harness.getScreenBuffer();
+    expect(buf).toContain('PLAN');
+    expect(buf).toContain('ROUTE');
+    expect(buf).toContain('TOOL');
+    expect(buf).toContain('TEST');
+    expect(buf).toContain('COMPLETE');
+
+    // Add multiple events to test PageUp/PageDown scrolling
+    for (let i = 0; i < 20; i++) {
+      (engine.orchestrator as any).emit(jobId, {
+        type: 'task:progress',
+        taskId,
+        jobId,
+        event: { content: `Event stream log item ${i}` },
+        timestamp: new Date(),
+      });
+    }
+
+    // Scroll up with PageUp (\x1b[5~)
+    harness.sendKey('\x1b[5~');
+    expect(harness.tui.getEventScrollOffset()).toBe(5);
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('SCROLLED +5 lines');
+
+    // Scroll down with PageDown (\x1b[6~)
+    harness.sendKey('\x1b[6~');
+    expect(harness.tui.getEventScrollOffset()).toBe(0);
+
+    harness.stop();
+  });
+
+  it('renders structured error card with phase, reason, required, available, and suggested resolution steps', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    await harness.start();
+
+    // Set a structured error
+    harness.tui.setStructuredError({
+      phase: 'model_inference',
+      reason: 'VRAM capacity exceeded during generation',
+      required: '16GB VRAM available',
+      available: '8GB VRAM allocated',
+      suggestedSteps: [
+        '1. Inspect active processes in activity pane',
+        '2. Run "wa doctor" to verify runtime health',
+        '3. Select a smaller model quantization profile',
+      ],
+      taskId: 'task-err-1',
+      timestamp: new Date(),
+    });
+
+    let buf = harness.getScreenBuffer();
+    expect(buf).toContain('EXECUTION FAILURE');
+    expect(buf).toContain('Phase:');
+    expect(buf).toContain('model_inference');
+    expect(buf).toContain('Reason:');
+    expect(buf).toContain('VRAM capacity exceeded');
+    expect(buf).toContain('Required:');
+    expect(buf).toContain('Available:');
+    expect(buf).toContain('Suggested Resolution Steps:');
+    expect(buf).toContain('Select a smaller model quantization profile');
+    expect(buf).toContain('[Esc] Dismiss');
+    expect(buf).toContain('[R] Retry Task');
+
+    // Test retry action [R]
+    harness.sendKey('r');
+    expect(harness.tui.getCurrentError()).toBeUndefined();
+    expect(harness.tui.getStatusMessage()).toContain('Retrying task task-err-1');
+
+    // Re-set error and test dismiss [Esc]
+    harness.tui.setStructuredError({
+      phase: 'tool_execution',
+      reason: 'Command not permitted by policy',
+      required: 'Policy allow rule',
+      available: 'Strict policy denial',
+      suggestedSteps: ['Update policy in wazir.json'],
+      taskId: 'task-err-2',
+      timestamp: new Date(),
+    });
+
+    expect(harness.tui.getCurrentError()).toBeDefined();
+    harness.sendKey('\x1b');
+    expect(harness.tui.getCurrentError()).toBeUndefined();
+
+    harness.stop();
+  });
+
+  it('wires up real-time token budget context indicator in status bar', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    const buf = harness.getScreenBuffer();
+    // Context indicator format: Context <used>K/<max>K ∆
+    expect(buf).toMatch(/Context \d+(\.\d+)?K\/\d+K ∆/);
+
+    const metrics = harness.tui.getContextMetrics();
+    expect(metrics.used).toBeGreaterThan(0);
+    expect(metrics.max).toBeGreaterThanOrEqual(metrics.used);
+
+    harness.stop();
+  });
+
+  it('provides non-TTY and stream fallback in TerminalScreen', async () => {
+    const chunks: string[] = [];
+    const mockOut = {
+      isTTY: false,
+      columns: 80,
+      rows: 24,
+      write: (data: string) => {
+        chunks.push(data);
+        return true;
+      },
+    } as any;
+    const mockIn = {
+      isTTY: false,
+      resume: () => {},
+      pause: () => {},
+    } as any;
+
+    const screen = new TerminalScreen(mockIn, mockOut);
+    expect(screen.isTTY()).toBe(false);
+
+    screen.enter();
+    expect(screen.isAltScreenActive()).toBe(false);
+
+    screen.render('plain streaming line');
+    expect(chunks).toContain('plain streaming line\n');
+
+    screen.leave();
+    expect(screen.isAltScreenActive()).toBe(false);
   });
 });

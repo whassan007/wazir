@@ -148,8 +148,22 @@ export async function executeTask(
   description: string,
   options: ExecuteTaskOptions = {},
 ): Promise<TaskOutcome> {
+  const isPiped = !process.stdout.isTTY;
+  const emitJson = (event: Record<string, unknown>): void => {
+    if (options.json) {
+      process.stdout.write(JSON.stringify(event) + '\n');
+    }
+  };
+
   const log = (line: string): void => {
-    if (!options.quiet) console.error(line);
+    if (options.json) return;
+    if (isPiped) {
+      // Non-TTY / piped stream fallback (§23): clean plain streaming lines
+      const plain = stripTerminalEscapes(line).trim();
+      if (plain) process.stdout.write(plain + '\n');
+    } else if (!options.quiet) {
+      console.error(line);
+    }
   };
   // Model and tool text is interpolated into log lines; never let it drive
   // the operator's terminal (cursor moves, title/clipboard writes) (F-23).
@@ -174,6 +188,7 @@ export async function executeTask(
     context,
   });
   const executionId = record.execution.id;
+  emitJson({ type: 'start', executionId, taskId: task.id, modelId: scheduling.modelId, agent: agent.descriptor.name });
 
   log('');
   log(color.bold(`  Execution ${executionId}`));
@@ -325,6 +340,7 @@ export async function executeTask(
         await engine.executions.recordFilesChanged(executionId, [relative]);
       }
 
+      emitJson({ type: 'tool', tool: name, ok: result.ok, durationMs: result.durationMs, executionId });
       log(`    ${result.ok ? color.green('ok') : color.red('failed')} ${name} ${color.gray(`${result.durationMs}ms`)}`);
       return result;
     },
@@ -357,18 +373,22 @@ export async function executeTask(
       switch (turn.kind) {
         case 'phase':
           await engine.executions.recordEvent(executionId, 'agent.phase', { phase: turn.phase });
+          emitJson({ type: 'phase', phase: turn.phase, executionId });
           log(color.cyan(`  [${turn.phase}]`));
           break;
         case 'message':
+          emitJson({ type: 'message', content: turn.content, executionId });
           if (turn.content) log(color.gray(`    ${untrusted(turn.content.split('\n')[0].slice(0, 160))}`));
           break;
         case 'done':
           summary = turn.content;
+          emitJson({ type: 'done', content: turn.content, executionId });
           break;
         case 'error':
           if (turn.error) {
             errors.push(turn.error);
             await engine.executions.recordError(executionId, turn.error);
+            emitJson({ type: 'error', error: turn.error, executionId });
             log(color.red(`    ${untrusted(turn.error.split('\n')[0].slice(0, 200))}`));
           }
           break;
@@ -380,6 +400,7 @@ export async function executeTask(
     const message = error instanceof Error ? error.message : String(error);
     errors.push(message);
     await engine.executions.recordError(executionId, message);
+    emitJson({ type: 'error', error: message, executionId });
     log(color.red(`    ${untrusted(message)}`));
   } finally {
     process.off('SIGINT', onSigint);
@@ -396,6 +417,15 @@ export async function executeTask(
     executionId,
     cancelled ? 'cancelled' : evaluation.success ? 'completed' : 'failed',
   );
+
+  emitJson({
+    type: 'complete',
+    success: evaluation.success && !cancelled,
+    executionId,
+    filesChanged: evaluation.filesChanged,
+    result: summary,
+    errors,
+  });
 
   return {
     success: evaluation.success && !cancelled,

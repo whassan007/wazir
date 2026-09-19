@@ -76,6 +76,14 @@ export class TerminalScreen {
     }
   }
 
+  isTTY(): boolean {
+    return Boolean((this.outStream as any).isTTY);
+  }
+
+  isAltScreenActive(): boolean {
+    return this.inAltScreen;
+  }
+
   render(buffer: string): void {
     if (buffer === this.lastBuffer) return;
     this.lastBuffer = buffer;
@@ -86,6 +94,23 @@ export class TerminalScreen {
       const lines = buffer.split('\n');
       const cleared = lines.map((l) => l + '\x1b[K').join('\r\n') + '\x1b[K\x1b[J';
       this.outStream.write('\x1b[H' + cleared);
+    } else {
+      // Non-TTY & unattached fallback (§23): write clean text
+      this.outStream.write(buffer + '\n');
+    }
+  }
+
+  /**
+   * Clears the terminal display and forces full repaint (Ctrl+L).
+   */
+  repaint(): void {
+    if (this.inAltScreen) {
+      this.outStream.write('\x1b[2J\x1b[H');
+    }
+    const last = this.lastBuffer;
+    this.lastBuffer = '';
+    if (last) {
+      this.render(last);
     }
   }
 
