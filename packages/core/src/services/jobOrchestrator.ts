@@ -283,8 +283,7 @@ export class JobOrchestrator {
     }
 
     const concurrencyLimit = Math.max(1, options.concurrencyLimit ?? job.concurrencyLimit ?? 4);
-    job.status = 'running';
-    job.startedAt = job.startedAt ?? new Date();
+    await this.jobManager.setJobStatus(job.id, 'running', { startedAt: job.startedAt ?? new Date() });
 
     const jobAbortController = new AbortController();
     if (options.signal) {
@@ -307,14 +306,14 @@ export class JobOrchestrator {
 
       let isFinished = false;
 
-      const finishJob = (finalStatus: 'completed' | 'failed' | 'cancelled') => {
+      const finishJob = async (finalStatus: 'completed' | 'failed' | 'cancelled') => {
         if (isFinished) return;
         if (job.status === 'cancelled' || jobAbortController.signal.aborted) {
           finalStatus = 'cancelled';
         }
         isFinished = true;
-        job.status = finalStatus;
-        job.completedAt = new Date();
+        const completedAt = new Date();
+        await this.jobManager.setJobStatus(job.id, finalStatus, { completedAt });
         this.activeJobs.delete(jobId);
 
         if (finalStatus === 'completed') {
@@ -353,7 +352,7 @@ export class JobOrchestrator {
         if (isFinished) return;
 
         if (jobAbortController.signal.aborted || job.status === 'cancelled') {
-          finishJob('cancelled');
+          await finishJob('cancelled');
           return;
         }
 
@@ -556,7 +555,7 @@ export class JobOrchestrator {
           );
           if (allFinished) {
             const anyFailed = job.graph.nodes.some((n) => n.state === 'failed');
-            finishJob(anyFailed ? 'failed' : 'completed');
+            await finishJob(anyFailed ? 'failed' : 'completed');
             return;
           }
 
@@ -576,7 +575,7 @@ export class JobOrchestrator {
                 error: deadNode.error,
               });
             }
-            finishJob('failed');
+            await finishJob('failed');
           }
         }
       };

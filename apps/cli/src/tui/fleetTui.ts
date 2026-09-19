@@ -35,6 +35,15 @@ function getCategorySpinnerFrame(category: NavCategory | undefined, tick: number
   return frames[Math.abs(Math.floor(tick)) % frames.length];
 }
 
+// Job ids are `job-<base36 timestamp>-<counter>` — every one starts with the same
+// redundant "job-" prefix (already implied by the JOBS category header) and the
+// timestamp chunk isn't human-meaningful anyway, so the nav list shows just the
+// last few characters instead of the full id, leaving more room for the title.
+function shortJobId(id: string): string {
+  const stripped = id.replace(/^job-/, '');
+  return stripped.length > 8 ? `..${stripped.slice(-8)}` : stripped;
+}
+
 export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'help';
 
 export type NavCategory = 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
@@ -1392,7 +1401,7 @@ export class FleetTui {
       items.push({
         category: 'JOBS',
         id: j.id,
-        label: `${j.id} (${j.title.slice(0, 16)})`,
+        label: `${shortJobId(j.id)} ${j.title.slice(0, 22)}`,
         status:
           j.status === 'running'
             ? 'running'
@@ -1849,8 +1858,21 @@ export class FleetTui {
       if (job) {
         lines.push(this.padRightTo(`  Title: ${color.bold(job.title)} | Status: ${job.status}`, width));
         lines.push(this.padRightTo(`  Tasks (${job.tasks.length}):`, width));
-        for (const t of job.tasks.slice(0, maxRows - lines.length - 1)) {
+        // The agent's actual output lives on the graph node (set via completeTask/failTask),
+        // not on the Task itself — this view previously only showed status/title and never
+        // surfaced what the job actually produced, even though the data was already there.
+        for (const t of job.tasks) {
+          if (lines.length >= maxRows - 1) break;
           lines.push(this.padRightTo(`    [${t.status}] ${t.id} - ${t.title || t.input.slice(0, 30)}`, width));
+          if (lines.length >= maxRows - 1) break;
+          const node = job.graph.nodes.find((n) => n.taskId === t.id || n.id === t.id);
+          if (node?.error) {
+            lines.push(this.padRightTo(color.red(`      -> ${node.error.slice(0, width - 12)}`), width));
+          } else if (node?.result !== undefined) {
+            const resultText = typeof node.result === 'string' ? node.result : JSON.stringify(node.result);
+            const oneLine = resultText.replace(/\s+/g, ' ').trim();
+            lines.push(this.padRightTo(color.gray(`      -> ${oneLine.slice(0, width - 12)}`), width));
+          }
         }
         if (this.currentRollup) {
           lines.push(

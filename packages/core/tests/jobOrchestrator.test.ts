@@ -3,6 +3,8 @@ import {
   AgentRegistry,
   ComputerRegistry,
   ExecutionEngine,
+  Job,
+  JobManager,
   JobOrchestrator,
   JobTaskExecutor,
   ModelRegistry,
@@ -11,7 +13,10 @@ import {
   Task,
 } from '../src/index.js';
 
-function setupTestOrchestrator(taskExecutor?: JobTaskExecutor): {
+function setupTestOrchestrator(
+  taskExecutor?: JobTaskExecutor,
+  jobManager?: JobManager,
+): {
   orchestrator: JobOrchestrator;
   computers: ComputerRegistry;
   runtimes: RuntimeRegistry;
@@ -117,6 +122,7 @@ function setupTestOrchestrator(taskExecutor?: JobTaskExecutor): {
     models,
     agents,
     taskExecutor,
+    jobManager,
   });
 
   return { orchestrator, computers, runtimes, models, agents, executions, scheduler };
@@ -419,5 +425,40 @@ describe('JobOrchestrator — fleet-scale graph walk & concurrent execution', ()
     expect(rollup.filesChanged).toContain('src/t-2.ts');
     expect(rollup.computersUsed).toContain('local');
     expect(rollup.modelsUsed).toContain('fake-model');
+  });
+
+  it('persists the job-level terminal status, not just task status, so it survives a process restart', async () => {
+    // Simulates a real KV store: runJob() must not just mutate job.status in memory —
+    // it has to flush that change through JobManager, or the last thing ever written
+    // to disk stays 'running' from job start, and every job looks stuck running
+    // forever once reloaded in a fresh process (JobManager's constructor rehydrates
+    // from `load()` exactly like a new `wa chat` invocation would).
+    const backingStore = new Map<string, Job>();
+    const jobManager = new JobManager({
+      persist: (job) => {
+        backingStore.set(job.id, structuredClone(job));
+      },
+    });
+
+    const executor: JobTaskExecutor = async () => ({ success: true, result: 'the answer' });
+    const { orchestrator } = setupTestOrchestrator(executor, jobManager);
+
+    const job = await orchestrator.createJob({
+      title: 'Persistence Test',
+      tasks: [{ task: { id: 'only-task', input: 'do the thing' } }],
+    });
+
+    const finished = await orchestrator.runJob(job.id);
+    expect(finished.status).toBe('completed');
+
+    // What actually got flushed to the backing store, independent of the in-memory job
+    const persisted = backingStore.get(job.id);
+    expect(persisted?.status).toBe('completed');
+    expect(persisted?.completedAt).toBeDefined();
+
+    // Simulate a fresh process: a brand new JobManager reloading from the same store
+    const reloadedManager = new JobManager({ load: () => Array.from(backingStore.values()) });
+    await reloadedManager.ready;
+    expect(reloadedManager.get(job.id)?.status).toBe('completed');
   });
 });

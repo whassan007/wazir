@@ -206,6 +206,27 @@ export class JobManager {
     return job?.graph;
   }
 
+  /**
+   * Persists a job-level status transition (running/completed/failed/cancelled).
+   * Task-level updates (completeTask, updateTaskStatus, ...) already flush the job,
+   * but nothing previously persisted the job's *own* status field — the orchestrator
+   * was mutating `job.status` directly on the in-memory object without going through
+   * the manager, so the last thing ever written to disk was 'running' from job start.
+   * Reloading in a new process then showed every past job as still running forever,
+   * even ones that completed cleanly before the process exited.
+   */
+  async setJobStatus(
+    jobId: string,
+    status: Job['status'],
+    extra?: { startedAt?: Date; completedAt?: Date },
+  ): Promise<void> {
+    const job = this.require(jobId);
+    job.status = status;
+    if (extra?.startedAt) job.startedAt = extra.startedAt;
+    if (extra?.completedAt) job.completedAt = extra.completedAt;
+    await this.flush(job);
+  }
+
   async updateTaskStatus(
     jobId: string,
     taskId: string,
