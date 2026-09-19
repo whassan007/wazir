@@ -8,266 +8,1420 @@
   :root {
     --bg: #0d1117;
     --panel: #161b22;
+    --panel-hover: #1c2128;
     --border: #30363d;
+    --border-subtle: #21262d;
     --text: #e6edf3;
     --muted: #8b949e;
     --accent: #58a6ff;
+    --accent-hover: #79b8ff;
     --ok: #3fb950;
     --warn: #d29922;
     --err: #f85149;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font: 14px/1.5 var(--font-mono);
   }
-  header {
-    padding: 18px 24px;
+
+  /* Sticky Header */
+  .app-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(13, 17, 23, 0.95);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .header-left {
     display: flex;
     align-items: baseline;
     gap: 14px;
     flex-wrap: wrap;
   }
-  header h1 { margin: 0; font-size: 18px; letter-spacing: 1px; }
-  header .tag { color: var(--muted); font-size: 12px; }
-  main { padding: 20px 24px 60px; max-width: 1280px; margin: 0 auto; }
-  section { margin-bottom: 26px; }
-  h2 {
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: var(--accent);
-    margin: 0 0 10px;
+  .header-left h1 {
+    margin: 0;
+    font-size: 18px;
+    letter-spacing: 1px;
+    color: var(--text);
   }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
-  .card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 14px 16px;
+  .header-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
   }
-  .stat { display: flex; justify-content: space-between; padding: 3px 0; }
-  .stat .k { color: var(--muted); }
-  .stat .v { }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
-  tr:last-child td { border-bottom: none; }
-  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; }
-  .badge.ok { background: rgba(63,185,80,.15); color: var(--ok); }
-  .badge.warn { background: rgba(210,153,34,.15); color: var(--warn); }
-  .badge.err { background: rgba(248,81,73,.15); color: var(--err); }
-  .badge.muted { background: rgba(139,148,158,.15); color: var(--muted); }
-  .empty { color: var(--muted); padding: 10px 0; }
-  .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  button {
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  /* Buttons & Inputs */
+  button, select, input {
     background: var(--panel);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 6px 12px;
     font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  button:hover:not(:disabled), select:hover {
+    border-color: var(--accent);
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  input[type="search"] {
+    cursor: text;
+  }
+  input[type="search"]:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  a {
+    color: var(--accent);
+    text-decoration: none;
     cursor: pointer;
   }
-  button:hover { border-color: var(--accent); }
-  .detail { white-space: pre-wrap; font-size: 12px; color: var(--muted); margin-top: 8px; }
-  a { color: var(--accent); text-decoration: none; cursor: pointer; }
-  .muted { color: var(--muted); }
-  #status { font-size: 12px; color: var(--muted); }
+  a:hover {
+    text-decoration: underline;
+  }
+
+  /* Badges & Tags */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+  .badge.ok { background: rgba(63,185,80,.15); color: var(--ok); border: 1px solid rgba(63,185,80,.3); }
+  .badge.warn { background: rgba(210,153,34,.15); color: var(--warn); border: 1px solid rgba(210,153,34,.3); }
+  .badge.err { background: rgba(248,81,73,.15); color: var(--err); border: 1px solid rgba(248,81,73,.3); }
+  .badge.muted { background: rgba(139,148,158,.15); color: var(--muted); border: 1px solid rgba(139,148,158,.3); }
+  .tag { color: var(--muted); font-size: 12px; }
+
+  /* Main Layout */
+  main {
+    padding: 20px 24px 60px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* Horizontal KPI Row */
+  .kpi-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+  }
+  .kpi-card {
+    flex: 1 1 120px;
+    min-width: 110px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .kpi-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+  }
+  .kpi-value {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Tabs Navigation */
+  .tabs-nav {
+    display: flex;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+    overflow-x: auto;
+  }
+  .tab-btn {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 10px 18px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+  .tab-btn:hover {
+    color: var(--text);
+    border-bottom-color: var(--border-subtle);
+  }
+  .tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .tab-badge {
+    background: rgba(139,148,158,.15);
+    color: var(--muted);
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 11px;
+  }
+  .tab-btn.active .tab-badge {
+    background: rgba(88,166,255,.15);
+    color: var(--accent);
+  }
+
+  /* Section Styling */
+  section {
+    margin-bottom: 26px;
+  }
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+    margin: 0;
+  }
+  .section-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .inline-error {
+    background: rgba(248,81,73,.1);
+    border: 1px solid rgba(248,81,73,.3);
+    color: var(--err);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    margin-bottom: 10px;
+    display: none;
+  }
+
+  /* Card & Tables */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .table-scroll {
+    overflow-x: auto;
+    max-height: 580px;
+    overflow-y: auto;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  th {
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    z-index: 2;
+    white-space: nowrap;
+  }
+  tr:last-child td {
+    border-bottom: none;
+  }
+  tr:hover td {
+    background: rgba(255, 255, 255, 0.02);
+  }
+  td.num, th.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .empty {
+    color: var(--muted);
+    padding: 16px;
+    text-align: center;
+  }
+  .mono-id {
+    font-family: var(--font-mono);
+    color: var(--accent);
+  }
+  .truncate {
+    display: inline-block;
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+
+  /* Executions Activity Toolbar */
+  .activity-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .filter-group {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .filter-pill {
+    background: var(--panel);
+    border: none;
+    color: var(--muted);
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 0;
+  }
+  .filter-pill:not(:last-child) {
+    border-right: 1px solid var(--border);
+  }
+  .filter-pill:hover {
+    color: var(--text);
+    background: var(--panel-hover);
+  }
+  .filter-pill.active {
+    background: rgba(88, 166, 255, 0.15);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .exec-search {
+    flex: 1 1 240px;
+    max-width: 400px;
+  }
+  .exec-counter {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .load-more-bar {
+    padding: 12px;
+    text-align: center;
+    border-top: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  /* Slide-Over Drawer */
+  .drawer-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    z-index: 1000;
+    display: flex;
+    justify-content: flex-end;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+  }
+  .drawer-overlay.open {
+    opacity: 1;
+    visibility: visible;
+  }
+  .drawer {
+    width: 100%;
+    max-width: 600px;
+    height: 100%;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.6);
+    transform: translateX(100%);
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .drawer-overlay.open .drawer {
+    transform: translateX(0);
+  }
+  .drawer-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(0, 0, 0, 0.1);
+  }
+  .drawer-header h3 {
+    margin: 0;
+    font-size: 15px;
+    color: var(--text);
+  }
+  .drawer-close-btn {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    line-height: 1;
+  }
+  .drawer-close-btn:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .drawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+  }
+  .drawer-dl {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 8px 16px;
+    margin: 0 0 20px;
+    font-size: 13px;
+  }
+  .drawer-dl dt {
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .drawer-dl dd {
+    margin: 0;
+    word-break: break-word;
+  }
+  .drawer-section {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .drawer-section h4 {
+    margin: 0 0 10px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--accent);
+  }
+  .reason-list {
+    margin: 0;
+    padding-left: 20px;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .reason-list li {
+    margin-bottom: 6px;
+  }
+
+  /* Responsive Adjustments (<900px) */
+  @media (max-width: 900px) {
+    .app-header {
+      padding: 12px 16px;
+    }
+    .header-status {
+      order: 3;
+      width: 100%;
+      margin-top: 4px;
+    }
+    .header-controls {
+      margin-left: auto;
+    }
+    main {
+      padding: 16px;
+    }
+    .kpi-card {
+      flex: 1 1 calc(50% - 12px);
+    }
+    .activity-toolbar {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .filter-group {
+      width: 100%;
+    }
+    .filter-pill {
+      flex: 1;
+      text-align: center;
+    }
+    .exec-search {
+      max-width: 100%;
+    }
+    .drawer {
+      max-width: 100%;
+    }
+    .drawer-dl {
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
+    .drawer-dl dt {
+      margin-top: 8px;
+    }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>WAZIR</h1>
-  <span class="tag">model- &amp; runtime-agnostic meta-harness</span>
-  <span id="status" class="tag">connecting…</span>
-</header>
-<main>
-  <section>
-    <div class="toolbar">
-      <h2>overview</h2>
-      <button id="refresh">refresh</button>
-    </div>
-    <div class="card" id="overview"><div class="empty">loading…</div></div>
-  </section>
 
-  <section><h2>computers</h2><div class="card" id="computers"><div class="empty">loading…</div></div></section>
-  <section><h2>workers</h2><div class="card" id="workers"><div class="empty">loading…</div></div></section>
-  <section><h2>runtimes</h2><div class="card" id="runtimes"><div class="empty">loading…</div></div></section>
-  <section><h2>models</h2><div class="card" id="models"><div class="empty">loading…</div></div></section>
-  <section><h2>agents</h2><div class="card" id="agents"><div class="empty">loading…</div></div></section>
-  <section><h2>tools</h2><div class="card" id="tools"><div class="empty">loading…</div></div></section>
-  <section><h2>executions</h2><div class="card" id="executions"><div class="empty">loading…</div></div></section>
+<header class="app-header">
+  <div class="header-left">
+    <h1>WAZIR</h1>
+    <span class="tag">meta-harness</span>
+  </div>
+
+  <div class="header-status">
+    <span id="global-status-pill" class="badge muted">connecting…</span>
+    <span id="last-refresh-text" class="tag">never</span>
+    <span id="countdown-text" class="tag"></span>
+  </div>
+
+  <div class="header-controls">
+    <div class="control-group">
+      <label for="interval-select">Auto-refresh:</label>
+      <select id="interval-select" aria-label="Auto-refresh interval">
+        <option value="5">5s</option>
+        <option value="15">15s</option>
+        <option value="60">60s</option>
+        <option value="0">Off</option>
+      </select>
+    </div>
+    <button id="refresh-btn" title="Refresh all sections now">↻ Refresh</button>
+  </div>
+</header>
+
+<main>
+  <!-- KPI Row: Overview stats as horizontal bar -->
+  <div class="kpi-row" id="kpi-row">
+    <div class="kpi-card">
+      <span class="kpi-label">version</span>
+      <span class="kpi-value" id="kpi-version">—</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">computer</span>
+      <span class="kpi-value" id="kpi-computer" title="">—</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">computers</span>
+      <span class="kpi-value num" id="kpi-computers">—</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">workers</span>
+      <span class="kpi-value num" id="kpi-workers">—</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">runtimes</span>
+      <span class="kpi-value num" id="kpi-runtimes">—</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">models</span>
+      <span class="kpi-value num" id="kpi-models">—</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">agents</span>
+      <span class="kpi-value num" id="kpi-agents">—</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">tools</span>
+      <span class="kpi-value num" id="kpi-tools">—</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">executions</span>
+      <span class="kpi-value num" id="kpi-executions">—</span>
+    </div>
+  </div>
+
+  <!-- Navigation Tabs -->
+  <nav class="tabs-nav" role="tablist">
+    <button class="tab-btn active" role="tab" data-tab="activity" id="tab-activity">
+      Activity <span class="tab-badge" id="badge-activity">0</span>
+    </button>
+    <button class="tab-btn" role="tab" data-tab="infrastructure" id="tab-infrastructure">
+      Infrastructure <span class="tab-badge" id="badge-infrastructure">0</span>
+    </button>
+    <button class="tab-btn" role="tab" data-tab="catalog" id="tab-catalog">
+      Catalog <span class="tab-badge" id="badge-catalog">0</span>
+    </button>
+  </nav>
+
+  <!-- TAB PANE: Activity (Primary Working View) -->
+  <div id="pane-activity" class="tab-pane">
+    <section>
+      <div class="section-header">
+        <h2>executions</h2>
+        <div class="section-meta">
+          <span class="tag" id="updated-executions">—</span>
+        </div>
+      </div>
+      <div class="inline-error" id="error-executions"></div>
+
+      <div class="activity-toolbar">
+        <div class="filter-group" role="group" aria-label="Filter executions by status">
+          <button class="filter-pill active" data-status-filter="all">All</button>
+          <button class="filter-pill" data-status-filter="completed">Completed</button>
+          <button class="filter-pill" data-status-filter="failed">Failed</button>
+          <button class="filter-pill" data-status-filter="running">Running</button>
+        </div>
+        <input type="search" id="exec-search" class="exec-search" placeholder="Search executions (id, type, agent, model)..." />
+        <span class="exec-counter" id="exec-counter">Showing 0 of 0</span>
+      </div>
+
+      <div class="card">
+        <div class="table-scroll" id="executions">
+          <div class="empty">loading…</div>
+        </div>
+        <div class="load-more-bar" id="load-more-container" style="display:none;">
+          <button id="load-more-btn">Load more executions</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- TAB PANE: Infrastructure -->
+  <div id="pane-infrastructure" class="tab-pane" style="display:none;">
+    <section>
+      <div class="section-header">
+        <h2>computers</h2>
+        <div class="section-meta"><span class="tag" id="updated-computers">—</span></div>
+      </div>
+      <div class="inline-error" id="error-computers"></div>
+      <div class="card"><div class="table-scroll" id="computers"><div class="empty">loading…</div></div></div>
+    </section>
+
+    <section>
+      <div class="section-header">
+        <h2>workers</h2>
+        <div class="section-meta"><span class="tag" id="updated-workers">—</span></div>
+      </div>
+      <div class="inline-error" id="error-workers"></div>
+      <div class="card"><div class="table-scroll" id="workers"><div class="empty">loading…</div></div></div>
+    </section>
+
+    <section>
+      <div class="section-header">
+        <h2>runtimes</h2>
+        <div class="section-meta"><span class="tag" id="updated-runtimes">—</span></div>
+      </div>
+      <div class="inline-error" id="error-runtimes"></div>
+      <div class="card"><div class="table-scroll" id="runtimes"><div class="empty">loading…</div></div></div>
+    </section>
+  </div>
+
+  <!-- TAB PANE: Catalog -->
+  <div id="pane-catalog" class="tab-pane" style="display:none;">
+    <section>
+      <div class="section-header">
+        <h2>models</h2>
+        <div class="section-meta"><span class="tag" id="updated-models">—</span></div>
+      </div>
+      <div class="inline-error" id="error-models"></div>
+      <div class="card"><div class="table-scroll" id="models"><div class="empty">loading…</div></div></div>
+    </section>
+
+    <section>
+      <div class="section-header">
+        <h2>agents</h2>
+        <div class="section-meta"><span class="tag" id="updated-agents">—</span></div>
+      </div>
+      <div class="inline-error" id="error-agents"></div>
+      <div class="card"><div class="table-scroll" id="agents"><div class="empty">loading…</div></div></div>
+    </section>
+
+    <section>
+      <div class="section-header">
+        <h2>tools</h2>
+        <div class="section-meta"><span class="tag" id="updated-tools">—</span></div>
+      </div>
+      <div class="inline-error" id="error-tools"></div>
+      <div class="card"><div class="table-scroll" id="tools"><div class="empty">loading…</div></div></div>
+    </section>
+  </div>
 </main>
 
+<!-- Slide-Over Drawer Panel (Replacing alert) -->
+<div id="drawer-overlay" class="drawer-overlay" aria-hidden="true">
+  <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+    <div class="drawer-header">
+      <h3 id="drawer-title">Details</h3>
+      <button id="drawer-close" class="drawer-close-btn" aria-label="Close panel (Esc)">✕</button>
+    </div>
+    <div id="drawer-body" class="drawer-body">
+      <!-- Dynamic detail content -->
+    </div>
+  </aside>
+</div>
+
 <script>
+// DOM & Escaping Utilities
 const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
+}[c]));
 
 function badge(value, good, bad) {
-  const cls = good?.includes(String(value).toLowerCase()) ? 'ok' : bad?.includes(String(value).toLowerCase()) ? 'err' : 'muted';
-  return `<span class="badge ${cls}">${esc(value)}</span>`;
+  const v = String(value ?? '').toLowerCase();
+  const cls = good?.toLowerCase().split('|').includes(v)
+    ? 'ok'
+    : bad?.toLowerCase().split('|').includes(v)
+      ? 'err'
+      : (v === 'running' || v === 'connecting') ? 'warn' : 'muted';
+  return `<span class="badge ${cls}">${esc(value || '—')}</span>`;
 }
 
-function table(headers, rows) {
+function table(headers, rows, numericColIndices = []) {
   if (!rows || rows.length === 0) return '<div class="empty">none</div>';
-  const head = '<tr>' + headers.map((h) => `<th>${esc(h)}</th>`).join('') + '</tr>';
-  const body = rows.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('');
+  const head = '<tr>' + headers.map((h, i) => {
+    const isNum = numericColIndices.includes(i);
+    return `<th class="${isNum ? 'num' : ''}">${esc(h)}</th>`;
+  }).join('') + '</tr>';
+
+  const body = rows.map((r) => '<tr>' + r.map((c, i) => {
+    const isNum = numericColIndices.includes(i);
+    return `<td class="${isNum ? 'num' : ''}">${c}</td>`;
+  }).join('') + '</tr>').join('');
+
   return `<table>${head}${body}</table>`;
 }
 
-async function fetchJson(path) {
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(`${path} → ${res.status}`);
-  return res.json();
+function timeAgo(dateInput) {
+  if (!dateInput) return '—';
+  const date = new Date(dateInput);
+  if (isNaN(date.getTime())) return '—';
+  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (diffSec < 0) return 'just now';
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 30) return `${diffDay}d ago`;
+  return date.toLocaleDateString();
 }
 
-async function load() {
+function truncateCell(text, maxLen = 32) {
+  const str = String(text ?? '');
+  if (!str || str === '—') return '—';
+  if (str.length <= maxLen) return esc(str);
+  return `<span class="truncate" title="${esc(str)}">${esc(str.slice(0, maxLen))}…</span>`;
+}
+
+function monoId(id) {
+  const raw = String(id ?? '');
+  if (!raw || raw === '—') return '—';
+  return `<span class="mono-id" title="${esc(raw)}">${esc(raw)}</span>`;
+}
+
+// State & Registries
+const ENDPOINTS = [
+  { id: 'overview', url: '/api/v1/overview' },
+  { id: 'computers', url: '/api/v1/computers' },
+  { id: 'workers', url: '/api/v1/workers' },
+  { id: 'runtimes', url: '/api/v1/runtimes' },
+  { id: 'models', url: '/api/v1/models' },
+  { id: 'agents', url: '/api/v1/agents' },
+  { id: 'tools', url: '/api/v1/tools' },
+  { id: 'executions', url: '/api/v1/executions' },
+];
+
+const sectionState = {};
+for (const ep of ENDPOINTS) {
+  sectionState[ep.id] = {
+    snapshot: '',
+    data: null,
+    lastUpdated: null,
+    error: null,
+  };
+}
+
+let autoRefreshInterval = parseInt(localStorage.getItem('wazir_refresh_interval') || '5', 10);
+let activeTab = localStorage.getItem('wazir_active_tab') || 'activity';
+let inFlight = false;
+let consecutiveErrors = 0;
+let refreshTimerId = null;
+let countdownTimerId = null;
+let nextRefreshTime = 0;
+
+// Executions filtering & pagination state
+let executionsRawList = [];
+let executionsFilterStatus = 'all';
+let executionsSearchText = '';
+let executionsDisplayLimit = 30;
+
+// Persistent drawer cache for quick lookup
+let latestRuntimesData = [];
+
+// Timeout-wrapped fetch
+async function fetchJsonWithTimeout(url, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const [overview, computers, workers, runtimes, models, agents, tools, executions] = await Promise.all([
-      fetchJson('/api/v1/overview'),
-      fetchJson('/api/v1/computers'),
-      fetchJson('/api/v1/workers'),
-      fetchJson('/api/v1/runtimes'),
-      fetchJson('/api/v1/models'),
-      fetchJson('/api/v1/agents'),
-      fetchJson('/api/v1/tools'),
-      fetchJson('/api/v1/executions'),
-    ]);
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return await res.json();
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-    $('status').textContent = `online · ${new Date().toLocaleTimeString()}`;
+// Core Load Loop
+async function load() {
+  if (inFlight) return;
+  inFlight = true;
 
-    $('overview').innerHTML = `<div class="stat"><span class="k">version</span><span class="v">${esc(overview.version)}</span></div>
-      <div class="stat"><span class="k">computer</span><span class="v">${esc(overview.computerId)}</span></div>
-      <div class="stat"><span class="k">runtimes</span><span class="v">${overview.counts.runtimes}</span></div>
-      <div class="stat"><span class="k">models</span><span class="v">${overview.counts.models}</span></div>
-      <div class="stat"><span class="k">agents</span><span class="v">${overview.counts.agents}</span></div>
-      <div class="stat"><span class="k">tools</span><span class="v">${overview.counts.tools}</span></div>
-      <div class="stat"><span class="k">executions</span><span class="v">${overview.counts.executions}</span></div>`;
+  // Clear pending timers
+  if (refreshTimerId) clearTimeout(refreshTimerId);
+  if (countdownTimerId) clearInterval(countdownTimerId);
 
-    $('computers').innerHTML = table(
-      ['id', 'name', 'os', 'cpu', 'ram', 'gpu', 'status'],
-      computers.computers.map((c) => [
-        esc(c.id), esc(c.name),
-        esc(c.os?.platform ?? '—'),
-        esc(c.hardware?.cpu ?? '—'),
-        c.hardware?.memoryGB ? `${c.hardware.memoryGB}GB` : '—',
-        esc(c.hardware?.gpu?.model ?? 'no GPU'),
-        badge(c.status, 'online|healthy|idle', 'offline|unavailable'),
-      ]),
-    );
+  // Update UI indicators
+  $('refresh-btn').disabled = true;
+  $('global-status-pill').textContent = 'refreshing…';
+  $('global-status-pill').className = 'badge warn';
+  $('countdown-text').textContent = '';
 
-    $('workers').innerHTML = table(
-      ['id', 'computer', 'status', 'runtimes', 'models'],
-      workers.workers.map((w) => [
-        esc(w.id), esc(w.computerId),
-        badge(w.status, 'online', 'offline'),
-        esc((w.runtimes ?? []).join(', ') || '—'),
-        String((w.models ?? []).length),
-      ]),
-    );
+  const promises = ENDPOINTS.map((ep) =>
+    fetchJsonWithTimeout(ep.url, 8000).then(
+      (data) => ({ id: ep.id, data }),
+      (err) => Promise.reject({ id: ep.id, error: err }),
+    )
+  );
 
-    $('runtimes').innerHTML = table(
-      ['id', 'name', 'version', 'url', 'health', 'models'],
-      runtimes.runtimes.map((r) => [
-        esc(r.id), esc(r.name), esc(r.version),
-        esc(r.url ?? '—'),
-        badge(r.health, 'healthy', 'unavailable|error'),
-        (r.models ?? []).length
-          ? `<a onclick="showModels('${esc(r.id)}')">${r.models.length}</a>`
-          : '—',
-      ]),
-    );
+  const results = await Promise.allSettled(promises);
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString();
 
-    $('models').innerHTML = table(
-      ['id', 'provider', 'context', 'toolCalling', 'reasoning', 'vision'],
-      models.models.map((m) => [
-        esc(m.id), esc(m.provider),
-        `${m.contextMax ?? '—'}`,
-        badge(m.toolCalling ? 'yes' : 'no', 'yes', 'no'),
-        badge(m.reasoning ? 'yes' : 'no', 'yes', 'no'),
-        badge(m.vision ? 'yes' : 'no', 'yes', 'no'),
-      ]),
-    );
+  let successCount = 0;
+  let failCount = 0;
 
-    $('agents').innerHTML = table(
-      ['name', 'version', 'task types', 'capabilities', 'source'],
-      agents.agents.map((a) => [
-        esc(a.name), esc(a.version),
-        esc((a.taskTypes ?? []).join(', ')),
-        esc((a.capabilities ?? []).join(', ')),
-        esc(a.source),
-      ]),
-    );
+  for (const res of results) {
+    if (res.status === 'fulfilled') {
+      successCount++;
+      const { id, data } = res.value;
+      const state = sectionState[id];
+      state.lastUpdated = now;
+      state.error = null;
 
-    $('tools').innerHTML = table(
-      ['name', 'permissions', 'risk', 'description'],
-      tools.tools.map((t) => [
-        esc(t.name),
-        esc((t.permissions ?? []).join(', ')),
-        badge(t.riskLevel, 'low', 'high'),
-        esc(t.description),
-      ]),
-    );
+      // Hide inline error banner
+      const errEl = $(`error-${id}`);
+      if (errEl) errEl.style.display = 'none';
 
-    const rows = (executions.executions ?? []).slice(0, 30).map((e) => [
-      `<a onclick="showExecution('${esc(e.execution?.id)}')">${esc(e.execution?.id)}</a>`,
+      // Update section timestamp
+      const updatedEl = $(`updated-${id}`);
+      if (updatedEl) updatedEl.textContent = `updated ${timeStr}`;
+
+      // Only update DOM if snapshot changed
+      const snap = JSON.stringify(data);
+      if (snap !== state.snapshot) {
+        state.snapshot = snap;
+        state.data = data;
+        renderSection(id, data);
+      }
+    } else {
+      failCount++;
+      const { id, error } = res.reason;
+      const state = sectionState[id];
+      state.error = error.message || 'Unknown network error';
+
+      // Show inline error banner for this section
+      const errEl = $(`error-${id}`);
+      if (errEl) {
+        errEl.textContent = `⚠️ Failed to update ${id}: ${state.error}`;
+        errEl.style.display = 'block';
+      }
+
+      // Update section updated indicator
+      const updatedEl = $(`updated-${id}`);
+      if (updatedEl) {
+        if (state.lastUpdated) {
+          updatedEl.textContent = `error (cached ${state.lastUpdated.toLocaleTimeString()})`;
+        } else {
+          updatedEl.textContent = 'failed to load';
+        }
+      }
+
+      // If section was never rendered and failed on first try, show empty state
+      if (!state.data) {
+        const container = $(id);
+        if (container) {
+          container.innerHTML = `<div class="empty">Unable to load ${esc(id)}: ${esc(state.error)}</div>`;
+        }
+      }
+    }
+  }
+
+  // Determine global connection status
+  if (failCount === 0) {
+    consecutiveErrors = 0;
+    $('global-status-pill').textContent = 'online';
+    $('global-status-pill').className = 'badge ok';
+  } else if (successCount > 0) {
+    consecutiveErrors++;
+    $('global-status-pill').textContent = `degraded (${failCount} failing)`;
+    $('global-status-pill').className = 'badge warn';
+  } else {
+    consecutiveErrors++;
+    $('global-status-pill').textContent = 'offline';
+    $('global-status-pill').className = 'badge err';
+  }
+
+  $('last-refresh-text').textContent = `Last check: ${timeStr}`;
+  inFlight = false;
+  $('refresh-btn').disabled = false;
+
+  // Schedule next refresh if not hidden and auto-refresh is active
+  scheduleNextRefresh();
+}
+
+function scheduleNextRefresh() {
+  if (refreshTimerId) clearTimeout(refreshTimerId);
+  if (countdownTimerId) clearInterval(countdownTimerId);
+
+  if (document.hidden) {
+    $('countdown-text').textContent = '(paused · tab hidden)';
+    return;
+  }
+
+  if (autoRefreshInterval <= 0) {
+    $('countdown-text').textContent = '(auto-refresh off)';
+    return;
+  }
+
+  let delayMs = autoRefreshInterval * 1000;
+  if (consecutiveErrors > 0) {
+    // Exponential backoff: 5s -> 10s -> 20s -> 40s -> cap 60s
+    delayMs = Math.min(60000, delayMs * Math.pow(2, Math.min(consecutiveErrors, 4)));
+  }
+
+  nextRefreshTime = Date.now() + delayMs;
+
+  const updateCountdown = () => {
+    const remainMs = nextRefreshTime - Date.now();
+    if (remainMs <= 0) {
+      $('countdown-text').textContent = 'refreshing…';
+    } else {
+      const sec = Math.ceil(remainMs / 1000);
+      const backoffNote = consecutiveErrors > 0 ? ` [backoff ${sec}s]` : `in ${sec}s`;
+      $('countdown-text').textContent = `(next ${backoffNote})`;
+    }
+  };
+
+  updateCountdown();
+  countdownTimerId = setInterval(updateCountdown, 1000);
+  refreshTimerId = setTimeout(load, delayMs);
+}
+
+// Section Rendering
+function renderSection(id, data) {
+  switch (id) {
+    case 'overview':
+      renderOverview(data);
+      break;
+    case 'computers':
+      renderComputers(data);
+      break;
+    case 'workers':
+      renderWorkers(data);
+      break;
+    case 'runtimes':
+      renderRuntimes(data);
+      break;
+    case 'models':
+      renderModels(data);
+      break;
+    case 'agents':
+      renderAgents(data);
+      break;
+    case 'tools':
+      renderTools(data);
+      break;
+    case 'executions':
+      renderExecutions(data);
+      break;
+  }
+}
+
+function renderOverview(overview) {
+  $('kpi-version').textContent = overview.version ?? '—';
+  $('kpi-computer').textContent = overview.computerId ?? '—';
+  $('kpi-computer').title = overview.hostname ? `Hostname: ${overview.hostname}` : '';
+  $('kpi-computers').textContent = overview.counts?.computers ?? '0';
+  $('kpi-workers').textContent = overview.counts?.workers ?? (sectionState.workers.data?.workers?.length ?? '—');
+  $('kpi-runtimes').textContent = overview.counts?.runtimes ?? '0';
+  $('kpi-models').textContent = overview.counts?.models ?? '0';
+  $('kpi-agents').textContent = overview.counts?.agents ?? '0';
+  $('kpi-tools').textContent = overview.counts?.tools ?? '0';
+  $('kpi-executions').textContent = overview.counts?.executions ?? '0';
+
+  updateTabBadges();
+}
+
+function updateTabBadges() {
+  const infraCount = (sectionState.computers.data?.computers?.length ?? 0) +
+                     (sectionState.workers.data?.workers?.length ?? 0) +
+                     (sectionState.runtimes.data?.runtimes?.length ?? 0);
+  const catalogCount = (sectionState.models.data?.models?.length ?? 0) +
+                       (sectionState.agents.data?.agents?.length ?? 0) +
+                       (sectionState.tools.data?.tools?.length ?? 0);
+  const activityCount = sectionState.executions.data?.executions?.length ?? 0;
+
+  $('badge-infrastructure').textContent = String(infraCount);
+  $('badge-catalog').textContent = String(catalogCount);
+  $('badge-activity').textContent = String(activityCount);
+}
+
+function renderComputers(data) {
+  const list = data.computers ?? [];
+  $('computers').innerHTML = table(
+    ['id', 'name', 'os', 'cpu', 'ram', 'gpu', 'status'],
+    list.map((c) => [
+      monoId(c.id),
+      esc(c.name),
+      esc(c.os?.platform ?? '—'),
+      esc(c.hardware?.cpu ?? '—'),
+      c.hardware?.memoryGB ? `${c.hardware.memoryGB}GB` : '—',
+      esc(c.hardware?.gpu?.model ?? 'no GPU'),
+      badge(c.status, 'online|healthy|idle', 'offline|unavailable'),
+    ]),
+  );
+  updateTabBadges();
+}
+
+function renderWorkers(data) {
+  const list = data.workers ?? [];
+  $('workers').innerHTML = table(
+    ['id', 'computer', 'status', 'runtimes', 'models'],
+    list.map((w) => [
+      monoId(w.id),
+      monoId(w.computerId),
+      badge(w.status, 'online', 'offline'),
+      truncateCell((w.runtimes ?? []).join(', ') || '—'),
+      String((w.models ?? []).length),
+    ]),
+    [4],
+  );
+  updateTabBadges();
+}
+
+function renderRuntimes(data) {
+  const list = data.runtimes ?? [];
+  latestRuntimesData = list;
+  $('runtimes').innerHTML = table(
+    ['id', 'name', 'version', 'url', 'health', 'models'],
+    list.map((r) => [
+      monoId(r.id),
+      esc(r.name),
+      esc(r.version ?? '—'),
+      truncateCell(r.url ?? '—'),
+      badge(r.health, 'healthy', 'unavailable|error'),
+      (r.models ?? []).length
+        ? `<a href="#" class="view-models-link" data-runtime-id="${esc(r.id)}">${r.models.length} models</a>`
+        : '—',
+    ]),
+    [5],
+  );
+  updateTabBadges();
+}
+
+function renderModels(data) {
+  const list = data.models ?? [];
+  $('models').innerHTML = table(
+    ['id', 'provider', 'context', 'toolCalling', 'reasoning', 'vision'],
+    list.map((m) => [
+      monoId(m.id),
+      esc(m.provider),
+      `${m.contextMax ?? '—'}`,
+      badge(m.toolCalling ? 'yes' : 'no', 'yes', 'no'),
+      badge(m.reasoning ? 'yes' : 'no', 'yes', 'no'),
+      badge(m.vision ? 'yes' : 'no', 'yes', 'no'),
+    ]),
+    [2],
+  );
+  updateTabBadges();
+}
+
+function renderAgents(data) {
+  const list = data.agents ?? [];
+  $('agents').innerHTML = table(
+    ['name', 'version', 'task types', 'capabilities', 'source'],
+    list.map((a) => [
+      esc(a.name),
+      esc(a.version),
+      truncateCell((a.taskTypes ?? []).join(', '), 30),
+      truncateCell((a.capabilities ?? []).join(', '), 30),
+      esc(a.source),
+    ]),
+  );
+  updateTabBadges();
+}
+
+function renderTools(data) {
+  const list = data.tools ?? [];
+  $('tools').innerHTML = table(
+    ['name', 'permissions', 'risk', 'description'],
+    list.map((t) => [
+      monoId(t.name),
+      truncateCell((t.permissions ?? []).join(', '), 24),
+      badge(t.riskLevel, 'low', 'high'),
+      truncateCell(t.description, 45),
+    ]),
+  );
+  updateTabBadges();
+}
+
+function renderExecutions(data) {
+  executionsRawList = data.executions ?? [];
+  applyExecutionsFilter();
+  updateTabBadges();
+}
+
+function applyExecutionsFilter() {
+  const all = executionsRawList;
+  const filtered = all.filter((e) => {
+    // 1. Status Filter
+    if (executionsFilterStatus !== 'all') {
+      const st = String(e.execution?.status ?? '').toLowerCase();
+      if (executionsFilterStatus === 'completed' && !['completed', 'ok'].includes(st)) return false;
+      if (executionsFilterStatus === 'failed' && !['failed', 'error'].includes(st)) return false;
+      if (executionsFilterStatus === 'running' && !['running', 'active', 'queued'].includes(st)) return false;
+    }
+    // 2. Text Search Query
+    if (executionsSearchText) {
+      const q = executionsSearchText.toLowerCase();
+      const match =
+        String(e.execution?.id ?? '').toLowerCase().includes(q) ||
+        String(e.task?.type ?? '').toLowerCase().includes(q) ||
+        String(e.task?.input ?? '').toLowerCase().includes(q) ||
+        String(e.agentId ?? '').toLowerCase().includes(q) ||
+        String(e.modelId ?? '').toLowerCase().includes(q) ||
+        String(e.runtimeId ?? '').toLowerCase().includes(q) ||
+        String(e.result ?? '').toLowerCase().includes(q);
+      if (!match) return false;
+    }
+    return true;
+  });
+
+  const total = filtered.length;
+  const sliced = filtered.slice(0, executionsDisplayLimit);
+
+  $('exec-counter').textContent = `Showing ${sliced.length} of ${total}${total !== all.length ? ` (filtered from ${all.length})` : ''}`;
+
+  if (sliced.length === 0) {
+    $('executions').innerHTML = '<div class="empty">No executions match current filters</div>';
+    $('load-more-container').style.display = 'none';
+    return;
+  }
+
+  const rows = sliced.map((e) => {
+    const fullDate = e.execution?.createdAt ? new Date(e.execution.createdAt).toLocaleString() : '—';
+    const relDate = timeAgo(e.execution?.createdAt);
+    return [
+      `<a href="#" class="view-execution-link" data-exec-id="${esc(e.execution?.id)}">${esc(e.execution?.id ?? '—')}</a>`,
       badge(e.execution?.status, 'completed|ok', 'failed|error'),
       esc(e.task?.type ?? '—'),
       esc(e.agentId ?? '—'),
-      esc(e.modelId ?? '—'),
-      new Date(e.execution?.createdAt).toLocaleString(),
-    ]);
-    $('executions').innerHTML = table(
-      ['id', 'status', 'type', 'agent', 'model', 'created'],
-      rows,
-    );
-  } catch (error) {
-    $('status').textContent = `offline — ${error.message}`;
-  }
-}
-
-async function showModels(runtimeId) {
-  const data = await fetchJson('/api/v1/runtimes');
-  const runtime = data.runtimes.find((r) => r.id === runtimeId);
-  const names = (runtime?.models ?? []).map((m) => m.id).join(', ');
-  alert(`${runtimeId}: ${names || 'no models'}`);
-}
-
-async function showExecution(id) {
-  try {
-    const data = await fetchJson(`/api/v1/executions/${encodeURIComponent(id)}`);
-    const e = data.execution;
-    const lines = [
-      `id:        ${e.execution?.id}`,
-      `status:    ${e.execution?.status}`,
-      `task:      ${e.task?.type} — ${e.task?.input}`,
-      `agent:     ${e.agentId ?? '—'}`,
-      `model:     ${e.modelId ?? '—'}`,
-      `runtime:   ${e.runtimeId ?? '—'}`,
-      `computer:  ${e.computerId ?? '—'}`,
-      `result:    ${e.result ?? '—'}`,
-      `usage:     ${e.usage ? `${e.usage.input}+${e.usage.output} tokens` : '—'}`,
+      truncateCell(e.modelId ?? '—', 28),
+      `<span title="${esc(fullDate)}">${esc(relDate)}</span>`,
     ];
-    if (e.scheduling) {
-      lines.push('', 'scheduling reasons:');
-      for (const reason of e.scheduling.reasons ?? []) lines.push(`  - ${reason}`);
-    }
-    if (e.context) {
-      lines.push('', `context: required ${e.context.finalRequiredTokens} / available ${e.context.available?.tokens} → ${e.context.fits ? 'PASS' : 'FAIL'}`);
-    }
-    alert(lines.join('\n'));
-  } catch (error) {
-    alert(error.message);
+  });
+
+  $('executions').innerHTML = table(
+    ['id', 'status', 'type', 'agent', 'model', 'created'],
+    rows,
+  );
+
+  // Load More control
+  if (sliced.length < total) {
+    $('load-more-container').style.display = 'block';
+    $('load-more-btn').textContent = `Load more (${sliced.length} of ${total})`;
+  } else {
+    $('load-more-container').style.display = 'none';
   }
 }
 
-$('refresh').addEventListener('click', load);
-load();
-setInterval(load, 5000);
+// Drawer: Open / Close / Render
+function openDrawer(title, contentHtml) {
+  $('drawer-title').textContent = title;
+  $('drawer-body').innerHTML = contentHtml;
+  const overlay = $('drawer-overlay');
+  overlay.setAttribute('aria-hidden', 'false');
+  overlay.classList.add('open');
+}
+
+function closeDrawer() {
+  const overlay = $('drawer-overlay');
+  overlay.classList.remove('open');
+  overlay.setAttribute('aria-hidden', 'true');
+}
+
+async function showExecutionDrawer(execId) {
+  openDrawer(`Execution: ${execId}`, '<div class="empty">Loading execution details…</div>');
+  try {
+    const data = await fetchJsonWithTimeout(`/api/v1/executions/${encodeURIComponent(execId)}`, 8000);
+    const e = data.execution;
+    if (!e) {
+      $('drawer-body').innerHTML = `<div class="empty">Execution '${esc(execId)}' not found</div>`;
+      return;
+    }
+
+    const ex = e.execution ?? {};
+    const task = e.task ?? {};
+    const createdStr = ex.createdAt ? new Date(ex.createdAt).toLocaleString() : '—';
+    const startedStr = ex.startedAt ? new Date(ex.startedAt).toLocaleString() : '—';
+    const finishedStr = ex.finishedAt ? new Date(ex.finishedAt).toLocaleString() : '—';
+
+    let html = `
+      <dl class="drawer-dl">
+        <dt>ID</dt><dd>${monoId(ex.id ?? execId)}</dd>
+        <dt>Status</dt><dd>${badge(ex.status, 'completed|ok', 'failed|error')}</dd>
+        <dt>Task Type</dt><dd>${esc(task.type ?? '—')}</dd>
+        <dt>Task Input</dt><dd>${esc(task.input ?? '—')}</dd>
+        <dt>Agent</dt><dd>${esc(e.agentId ?? '—')}</dd>
+        <dt>Model</dt><dd>${esc(e.modelId ?? '—')}</dd>
+        <dt>Runtime</dt><dd>${esc(e.runtimeId ?? '—')}</dd>
+        <dt>Computer</dt><dd>${esc(e.computerId ?? '—')}</dd>
+        <dt>Result</dt><dd><div class="detail">${esc(e.result ?? '—')}</div></dd>
+        <dt>Usage</dt><dd>${e.usage ? `${esc(e.usage.input)} input + ${esc(e.usage.output)} output tokens` : '—'}</dd>
+        <dt>Created</dt><dd>${esc(createdStr)}</dd>
+        <dt>Started</dt><dd>${esc(startedStr)}</dd>
+        <dt>Finished</dt><dd>${esc(finishedStr)}</dd>
+      </dl>
+    `;
+
+    // Subsection: Scheduling reasons
+    if (e.scheduling) {
+      const reasons = e.scheduling.reasons ?? [];
+      html += `
+        <div class="drawer-section">
+          <h4>Scheduling Decision</h4>
+          ${reasons.length > 0
+            ? `<ul class="reason-list">${reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`
+            : '<div class="tag">No specific reasons recorded.</div>'}
+        </div>
+      `;
+    }
+
+    // Subsection: Context Fit Check
+    if (e.context) {
+      const ctx = e.context;
+      const fitBadge = ctx.fits
+        ? '<span class="badge ok">PASS</span>'
+        : '<span class="badge err">FAIL</span>';
+      html += `
+        <div class="drawer-section">
+          <h4>Context Budget Verification</h4>
+          <dl class="drawer-dl">
+            <dt>Required</dt><dd>${esc(ctx.finalRequiredTokens ?? '—')} tokens</dd>
+            <dt>Available</dt><dd>${esc(ctx.available?.tokens ?? '—')} tokens</dd>
+            <dt>Check</dt><dd>${fitBadge}</dd>
+          </dl>
+        </div>
+      `;
+    }
+
+    $('drawer-body').innerHTML = html;
+  } catch (err) {
+    $('drawer-body').innerHTML = `<div class="empty err">Failed to load execution details: ${esc(err.message)}</div>`;
+  }
+}
+
+function showModelsDrawer(runtimeId) {
+  const runtime = latestRuntimesData.find((r) => r.id === runtimeId);
+  const models = runtime?.models ?? [];
+  const title = `Runtime Models: ${runtime?.name || runtimeId}`;
+
+  if (!models || models.length === 0) {
+    openDrawer(title, `<div class="empty">No models loaded in runtime '${esc(runtimeId)}'.</div>`);
+    return;
+  }
+
+  const rows = models.map((m) => [
+    monoId(m.id),
+    m.contextMax ? String(m.contextMax) : '—',
+    badge(m.toolCalling ? 'yes' : 'no', 'yes', 'no'),
+    badge(m.reasoning ? 'yes' : 'no', 'yes', 'no'),
+    badge(m.vision ? 'yes' : 'no', 'yes', 'no'),
+  ]);
+
+  const tableHtml = table(
+    ['Model ID', 'Context', 'Tool Calling', 'Reasoning', 'Vision'],
+    rows,
+    [1],
+  );
+
+  openDrawer(title, `<div class="card" style="margin-top:4px;"><div class="table-scroll">${tableHtml}</div></div>`);
+}
+
+// Tab Switching
+function switchTab(tabId) {
+  activeTab = tabId;
+  localStorage.setItem('wazir_active_tab', tabId);
+
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === tabId);
+    btn.setAttribute('aria-selected', btn.dataset.tab === tabId ? 'true' : 'false');
+  });
+
+  document.querySelectorAll('.tab-pane').forEach((pane) => {
+    pane.style.display = pane.id === `pane-${tabId}` ? 'block' : 'none';
+  });
+}
+
+// Event Listeners Initialization
+document.addEventListener('DOMContentLoaded', () => {
+  // Restore preferences
+  $('interval-select').value = String(autoRefreshInterval);
+  switchTab(activeTab);
+
+  // Manual Refresh
+  $('refresh-btn').addEventListener('click', () => {
+    load();
+  });
+
+  // Interval Change
+  $('interval-select').addEventListener('change', (e) => {
+    autoRefreshInterval = parseInt(e.target.value, 10);
+    localStorage.setItem('wazir_refresh_interval', String(autoRefreshInterval));
+    scheduleNextRefresh();
+  });
+
+  // Tab Clicking
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      switchTab(btn.dataset.tab);
+    });
+  });
+
+  // Executions Status Filters
+  document.querySelectorAll('[data-status-filter]').forEach((pill) => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('[data-status-filter]').forEach((p) => p.classList.remove('active'));
+      pill.classList.add('active');
+      executionsFilterStatus = pill.dataset.statusFilter;
+      executionsDisplayLimit = 30; // reset pagination on filter change
+      applyExecutionsFilter();
+    });
+  });
+
+  // Executions Search Filter
+  $('exec-search').addEventListener('input', (e) => {
+    executionsSearchText = e.target.value.trim();
+    executionsDisplayLimit = 30; // reset pagination on search
+    applyExecutionsFilter();
+  });
+
+  // Load More Button
+  $('load-more-btn').addEventListener('click', () => {
+    executionsDisplayLimit += 30;
+    applyExecutionsFilter();
+  });
+
+  // Delegated Clicks for Links (No inline onclick for security)
+  document.addEventListener('click', (e) => {
+    const execLink = e.target.closest('.view-execution-link');
+    if (execLink) {
+      e.preventDefault();
+      const id = execLink.dataset.execId;
+      if (id) showExecutionDrawer(id);
+      return;
+    }
+
+    const runtimeLink = e.target.closest('.view-models-link');
+    if (runtimeLink) {
+      e.preventDefault();
+      const rId = runtimeLink.dataset.runtimeId;
+      if (rId) showModelsDrawer(rId);
+      return;
+    }
+
+    // Click outside drawer to close
+    if (e.target === $('drawer-overlay')) {
+      closeDrawer();
+    }
+  });
+
+  // Drawer Close Button
+  $('drawer-close').addEventListener('click', closeDrawer);
+
+  // Keyboard Shortcuts: Esc to close drawer
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeDrawer();
+    }
+  });
+
+  // Page Visibility Change (pause on hidden, resume & load on visible)
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (refreshTimerId) clearTimeout(refreshTimerId);
+      if (countdownTimerId) clearInterval(countdownTimerId);
+      $('countdown-text').textContent = '(paused · tab hidden)';
+    } else {
+      load();
+    }
+  });
+
+  // Initial Load
+  load();
+});
 </script>
 </body>
 </html>
