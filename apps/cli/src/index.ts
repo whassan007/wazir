@@ -457,17 +457,14 @@ program
   .option('--model <name>', 'Use specific model')
   .option('--local-only', 'Only run on local computers')
   .action(async (prompt, options) => {
-    console.log(chalk.green(`Asking: ${prompt}`));
-    
-    const response = {
-      answer: '[Response from selected model]',
-      metadata: {
-        computer: options.computer || 'auto-selected',
-        model: options.model || 'auto-selected'
-      }
-    };
-    
-    console.log('\n' + chalk.cyan(response.answer));
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { askCommand } = await import('./commands.js');
+    const result = await askCommand(engine, prompt, options);
+    if (result.output) {
+      console.log(result.output);
+    }
+    process.exit(result.code);
   });
 
 // chat command — interactive fleet coding agent TUI

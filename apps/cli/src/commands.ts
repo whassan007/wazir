@@ -1314,3 +1314,69 @@ export async function verifyStatusCommand(
 function allPassed(results: { passed: boolean }[]): boolean {
   return results.every(r => r.passed);
 }
+
+export async function askCommand(
+  engine: RookEngine,
+  prompt: string,
+  options: { model?: string; computer?: string } = {},
+): Promise<{ code: number; output: string }> {
+  const models = engine.models.list();
+  if (models.length === 0) {
+    return {
+      code: 1,
+      output: color.yellow('no models registered — start LM Studio or Ollama to enable completions'),
+    };
+  }
+
+  const target = options.model
+    ? models.find((m) => m.id === options.model || m.id.toLowerCase().includes(options.model!.toLowerCase()))
+    : models.find((m) => !m.id.toLowerCase().includes('embed')) || models[0];
+
+  if (!target) {
+    return {
+      code: 1,
+      output: color.red(`model '${options.model}' not found. Available models:\n${models.map((m) => `  - ${m.id}`).join('\n')}`),
+    };
+  }
+
+  const adapter = engine.worker.adapterForModel(target.id);
+  if (!adapter) {
+    return {
+      code: 1,
+      output: color.red(`no runtime adapter available to serve model '${target.id}'`),
+    };
+  }
+
+  process.stdout.write(color.bold(`[${target.id}]\n`));
+
+  let fullResponse = '';
+  try {
+    for await (const event of adapter.generate({
+      modelId: target.id,
+      messages: [{ role: 'user', content: prompt }],
+      maxTokens: 1024,
+      temperature: 0.7,
+      stream: true,
+    })) {
+      if (event.type === 'token' && event.content) {
+        process.stdout.write(event.content);
+        fullResponse += event.content;
+      } else if (event.type === 'completed' && event.content && !fullResponse) {
+        process.stdout.write(event.content);
+        fullResponse = event.content;
+      } else if (event.type === 'error') {
+        return {
+          code: 1,
+          output: `\n${color.red(`error: ${event.error}`)}`,
+        };
+      }
+    }
+    process.stdout.write('\n');
+    return { code: 0, output: '' };
+  } catch (err: any) {
+    return {
+      code: 1,
+      output: color.red(`inference failed: ${err?.message || err}`),
+    };
+  }
+}
