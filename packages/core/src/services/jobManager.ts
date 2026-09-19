@@ -55,12 +55,24 @@ export class JobManager {
   }
 
   /**
-   * Self-heals job records written before job-level status was persisted correctly
-   * (runJob() used to mutate job.status in memory without ever flushing the terminal
-   * transition — see setJobStatus). Those records are stuck at 'running'/'pending'
-   * forever even though every task actually finished; the fix to runJob() only stops
-   * *new* writes from being wrong, so anything already on disk needs correcting once
-   * on load, inferred from the tasks' own (correctly persisted) statuses.
+   * Self-heals job records that can't reflect reality anymore now that they're being
+   * loaded fresh: nothing in a brand-new JobManager has called runJob() on anything yet,
+   * so any job still in a non-terminal status is stale one way or another. Two distinct
+   * cases, both inferred from the tasks' own (correctly persisted) statuses:
+   *
+   * 1. Every task already reached a terminal status, but the job's own status wasn't
+   *    updated to match — the old bug where runJob() mutated job.status in memory
+   *    without ever flushing the terminal transition (see setJobStatus). The fix to
+   *    runJob() only stops *new* writes from being wrong; anything already on disk needs
+   *    correcting here. Job status is inferred from the tasks and corrected to match.
+   *
+   * 2. A task is still genuinely non-terminal (status 'running') — the process actually
+   *    driving it (model turns, tool calls, ...) no longer exists, most commonly because
+   *    the terminal was closed or the process crashed mid-task. Left alone this is
+   *    indistinguishable from something still genuinely in progress (same status, and
+   *    duration climbs forever since completedAt is never set) — marked failed instead,
+   *    as "orphaned". A job/task that's merely 'pending' (queued, never started) is left
+   *    alone — that's a legitimate resumable state, not an orphan.
    */
   private async reconcileStaleStatus(job: Job): Promise<void> {
     const nonTerminal = job.status === 'pending' || job.status === 'planning' || job.status === 'ready' || job.status === 'running' || job.status === 'paused';
@@ -69,22 +81,42 @@ export class JobManager {
     const allTerminal = job.tasks.every(
       (t) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled',
     );
-    if (!allTerminal) return;
 
-    const anyFailed = job.tasks.some((t) => t.status === 'failed');
-    const anyCancelled = job.tasks.some((t) => t.status === 'cancelled');
-    const corrected: Job['status'] = anyFailed ? 'failed' : anyCancelled ? 'cancelled' : 'completed';
-
-    job.status = corrected;
-    if (!job.completedAt) {
-      // The job-level completedAt was never recorded (that's the bug being healed), but
-      // each graph node already got a real completedAt at the moment it actually finished
-      // (see updateNodeState) — use the latest of those instead of a rough guess.
-      const latest = job.graph.nodes.reduce<Date | undefined>((acc, n) => {
-        return n.completedAt && (!acc || n.completedAt > acc) ? n.completedAt : acc;
-      }, undefined);
-      job.completedAt = latest ?? job.createdAt;
+    if (allTerminal) {
+      const anyFailed = job.tasks.some((t) => t.status === 'failed');
+      const anyCancelled = job.tasks.some((t) => t.status === 'cancelled');
+      job.status = anyFailed ? 'failed' : anyCancelled ? 'cancelled' : 'completed';
+      if (!job.completedAt) {
+        // The job-level completedAt was never recorded (that's the bug being healed),
+        // but each graph node already got a real completedAt when it actually finished
+        // (see updateNodeState) — use the latest of those instead of a rough guess.
+        const latest = job.graph.nodes.reduce<Date | undefined>((acc, n) => {
+          return n.completedAt && (!acc || n.completedAt > acc) ? n.completedAt : acc;
+        }, undefined);
+        job.completedAt = latest ?? job.createdAt;
+      }
+      await this.flush(job);
+      return;
     }
+
+    // Some task is still non-terminal. Only 'running' means orphaned — 'pending'/
+    // 'ready'/etc with an unstarted task is just a legitimately queued job.
+    if (job.status !== 'running') return;
+
+    for (const task of job.tasks) {
+      if (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled') {
+        task.status = 'failed';
+      }
+    }
+    for (const node of job.graph.nodes) {
+      if (node.state !== 'completed' && node.state !== 'failed' && node.state !== 'cancelled') {
+        node.state = 'failed';
+        node.error = node.error ?? 'Orphaned: the process running this task ended before it finished';
+        node.completedAt = node.completedAt ?? new Date();
+      }
+    }
+    job.status = 'failed';
+    if (!job.completedAt) job.completedAt = new Date();
     await this.flush(job);
   }
 

@@ -499,6 +499,59 @@ describe('JobOrchestrator — fleet-scale graph walk & concurrent execution', ()
     expect(flushedCorrections.some((j) => j.id === job.id && j.status === 'completed')).toBe(true);
   });
 
+  it('marks a genuinely orphaned running task as failed on load, instead of stuck running forever', async () => {
+    // Different from the previous test: there, the task had actually finished and only
+    // the job-level status flush was missing. Here the task itself never finished either
+    // — simulating a process that started the task (task + job both flip to 'running')
+    // and then died (crash, closed terminal) before it ever reached a terminal status.
+    // Nothing in a freshly-constructed JobManager could still be running it, so this must
+    // be treated as failed, not left indistinguishable from something still in progress.
+    const backingStore = new Map<string, Job>();
+    const staleWriteManager = new JobManager({
+      persist: (job) => backingStore.set(job.id, structuredClone(job)),
+    });
+
+    const job = staleWriteManager.create({
+      title: 'Orphaned Job',
+      tasks: [{ task: { id: 'stuck-task', input: 'write a c++ program' } }],
+    });
+    await staleWriteManager.updateTaskStatus(job.id, 'stuck-task', 'running');
+    job.status = 'running';
+    await staleWriteManager.updateTaskStatus(job.id, 'stuck-task', 'running'); // re-flush with job.status now set
+    expect(backingStore.get(job.id)?.status).toBe('running');
+    expect(backingStore.get(job.id)?.tasks[0].status).toBe('running');
+
+    const healedManager = new JobManager({ load: () => Array.from(backingStore.values()) });
+    await healedManager.ready;
+
+    const healed = healedManager.get(job.id);
+    expect(healed?.status).toBe('failed');
+    expect(healed?.completedAt).toBeDefined();
+    expect(healed?.tasks[0].status).toBe('failed');
+    const node = healed?.graph.nodes.find((n) => n.taskId === 'stuck-task');
+    expect(node?.state).toBe('failed');
+    expect(node?.error).toContain('Orphaned');
+  });
+
+  it('leaves a merely pending (never started) job alone on load — that is not an orphan', async () => {
+    const backingStore = new Map<string, Job>();
+    const manager = new JobManager({
+      persist: (job) => backingStore.set(job.id, structuredClone(job)),
+    });
+    const job = manager.create({
+      title: 'Queued Job',
+      tasks: [{ task: { id: 'not-started', input: 'do something later' } }],
+    });
+    expect(job.status).toBe('pending');
+
+    const reloadedManager = new JobManager({ load: () => Array.from(backingStore.values()) });
+    await reloadedManager.ready;
+
+    const reloaded = reloadedManager.get(job.id);
+    expect(reloaded?.status).toBe('pending');
+    expect(reloaded?.tasks[0].status).toBe('pending');
+  });
+
   it('deleteJob removes a finished job from memory and the store, and refuses one still running', async () => {
     const backingStore = new Map<string, Job>();
     const removedIds: string[] = [];
