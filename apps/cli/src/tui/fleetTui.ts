@@ -189,7 +189,12 @@ export class FleetTui {
   private readonly agents = new Map<string, AgentCardState>();
   private readonly agentLogs = new Map<
     string,
-    Array<{ text: string; time: string; kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' }>
+    Array<{
+      text: string;
+      time: string;
+      kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info';
+      streaming?: boolean;
+    }>
   >();
   private pendingApprovals: PendingApprovalRequest[] = [];
   private approvalShowDetails = false;
@@ -1232,6 +1237,23 @@ export class FleetTui {
         if (p.content) agent.lastMessage = p.content.slice(0, 60);
         if (p.tool) agent.lastMessage = `Tool: ${p.tool}`;
         if (p.error) agent.lastMessage = `Error: ${p.error.slice(0, 60)}`;
+
+        // Raw model output streams in one token/word at a time (§11): appending each token
+        // as its own log line turned the tail view into one fragment per word. Coalesce
+        // consecutive stream tokens into the single open streaming line instead, and only
+        // start a new line once a tool call, phase change, or error interrupts the stream.
+        if (p.kind === 'token' && !p.tool && !p.error) {
+          const last = logs[logs.length - 1];
+          if (last?.streaming) {
+            last.text += p.content ?? '';
+          } else {
+            logs.push({ time: timeStr, text: p.content ?? '', kind: 'plan', streaming: true });
+          }
+          if (logs.length > 500) logs.shift();
+          this.agentLogs.set(taskId, logs);
+          this.draw();
+          return;
+        }
 
         let eventKind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' = 'info';
         let eventText = p.content ?? (p.tool ? `tool: ${p.tool}` : `phase: ${p.phase}`);

@@ -108,14 +108,17 @@ export class TerminalScreen {
     this.lastBuffer = buffer;
 
     if (this.inAltScreen) {
-      // Hard-clear before every frame (§2): relying on per-line \x1b[K alone to erase
-      // shrinking content (e.g. a character removed by backspace) is not reliable on
-      // every terminal/multiplexer — some leave the old glyph on screen even though
-      // \x1b[K was sent, since this is already a full repaint every frame (not an
-      // incremental diff), an explicit \x1b[2J removes any dependency on that.
+      // Move cursor to top-left and write lines with \x1b[K (erase to line end) so leftover
+      // characters from a previous, longer frame never linger. This used to be paired with
+      // a full \x1b[2J on every frame as a defensive belt-and-suspenders measure, but that
+      // blanked and repainted the whole screen on every single redraw (every keystroke,
+      // every 250ms spinner tick, every streamed token) which is a visible flicker on real
+      // terminals. It's unnecessary now that every line is clamped to the exact terminal
+      // width before reaching here (see FleetTui.draw()) — a fully space-padded row already
+      // overwrites any stale trailing glyphs on its own, so per-line \x1b[K is enough.
       const lines = buffer.split('\n');
       const cleared = lines.map((l) => l + '\x1b[K').join('\r\n') + '\x1b[K\x1b[J';
-      this.outStream.write('\x1b[H\x1b[2J' + cleared);
+      this.outStream.write('\x1b[H' + cleared);
 
       // Explicitly position the hardware cursor at the active prompt line
       const lastLine = lines[lines.length - 1] ?? '';
