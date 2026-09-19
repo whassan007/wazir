@@ -354,6 +354,32 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.stop();
   });
 
+  it('gives feedback instead of silently no-oping when x/Delete is pressed on a non-JOBS item', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    await harness.start();
+
+    harness.sendLine('solo job');
+    await new Promise((r) => setTimeout(r, 100));
+    const job = harness.tui.getCurrentJob();
+    expect(job).toBeDefined();
+
+    // Selection starts on the EXECUTIONS item (task-1) right after a job launches —
+    // exactly the item easy to mistake for "the job" itself, one row below it in the nav.
+    const flat = harness.tui.getFlatNavItems();
+    expect(flat.some((i) => i.category === 'EXECUTIONS')).toBe(true);
+
+    harness.sendKey('x');
+    expect(harness.tui.getStatusMessage()).toContain('only deletes items in the JOBS section');
+    expect(harness.tui.getStatusMessage()).toContain('EXECUTIONS');
+    // Nothing was actually deleted
+    expect(engine.orchestrator.getJob(job!.id)).toBeDefined();
+
+    harness.stop();
+  });
+
   it('handles in-TUI non-blocking approval queue and mid-run steering', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);

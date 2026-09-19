@@ -764,6 +764,11 @@ export class FleetTui {
       if (all.length > 0) {
         this.navSelectionIndex = Math.max(0, this.navSelectionIndex - 1);
         this.updateNavSelection(all[this.navSelectionIndex]);
+        // Enter's command-submit path never resets focus back off 'prompt' — without this,
+        // arrowing down to a job after typing+submitting a task leaves focusedPane stuck at
+        // 'prompt', so the 'x' delete shortcut (which requires nav focus) silently no-ops
+        // and 'x' gets typed into the (already-submitted, invisible) prompt buffer instead.
+        this.focusedPane = 'nav';
       }
       this.draw();
       return;
@@ -779,6 +784,7 @@ export class FleetTui {
       if (all.length > 0) {
         this.navSelectionIndex = Math.min(all.length - 1, this.navSelectionIndex + 1);
         this.updateNavSelection(all[this.navSelectionIndex]);
+        this.focusedPane = 'nav';
       }
       this.draw();
       return;
@@ -806,6 +812,11 @@ export class FleetTui {
         this.inputBuffer = '';
         this.isPickerActive = false;
         this.pickerCandidates = [];
+        // Nothing previously reset focus off 'prompt' after submitting, so any key that
+        // requires nav focus (e.g. the 'x' job-delete shortcut) silently no-op'd — or, for
+        // a printable key like 'x', got typed right back into the now-empty prompt buffer
+        // — until the user happened to press an arrow key first.
+        this.focusedPane = 'nav';
         void this.submitCommand(command);
       } else {
         // Enter to inspect currently selected item or block
@@ -852,6 +863,15 @@ export class FleetTui {
         void this.deleteSelectedJob(current.id);
         return;
       }
+      // Previously silent no-op when the highlighted item wasn't a JOBS entry — from the
+      // outside that's indistinguishable from the key not registering at all. EXECUTIONS
+      // items sit directly below JOBS in the nav and look similar, so it's an easy item
+      // to be on by mistake; say so instead of doing nothing.
+      this.statusMessage = current
+        ? `'${keyStr === 'x' || keyStr === 'X' ? 'x' : 'Delete'}' only deletes items in the JOBS section (currently on ${current.category})`
+        : `Select a job in the JOBS section first`;
+      this.draw();
+      return;
     }
 
     // 17. Backspace / Delete Handling (§2):
