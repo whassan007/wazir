@@ -549,6 +549,82 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.stop();
   });
 
+  it('supports Ctrl+A / Ctrl+D to approve or deny all queued policy requests at once', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+
+    await harness.start();
+
+    const results: boolean[] = [];
+    const enqueue = (command: string, taskId: string) =>
+      engine.approvalQueue
+        .enqueue(
+          { tool: 'shell', input: { command }, executionId: `exec-${taskId}` },
+          { decision: 'ask', rule: 'shell-unknown-ask', reasons: ['not on the safe command list'] },
+          { taskId },
+        )
+        .then((res) => {
+          results.push(res);
+          return res;
+        });
+
+    const p1 = enqueue('clang++ hello.cpp -o hello', 'task-a');
+    const p2 = enqueue('ls -F', 'task-b');
+    const p3 = enqueue('rm -rf build', 'task-c');
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(harness.tui.getPendingApprovals()).toHaveLength(3);
+
+    // Multi-request modal offers batch actions
+    const buf = harness.getScreenBuffer();
+    expect(buf).toContain('[^A] All');
+    expect(buf).toContain('[^D] None');
+
+    // Ctrl+A approves every queued request in one keypress
+    harness.sendKey('\u0001');
+    await Promise.all([p1, p2, p3]);
+
+    expect(results).toEqual([true, true, true]);
+    expect(harness.tui.getPendingApprovals()).toHaveLength(0);
+    expect(harness.tui.getStatusMessage()).toContain('Approved all 3 pending policy requests');
+
+    // Ctrl+D denies every queued request in one keypress
+    const denyResults: boolean[] = [];
+    const d1 = engine.approvalQueue
+      .enqueue(
+        { tool: 'shell', input: { command: 'sudo reboot' }, executionId: 'exec-d1' },
+        { decision: 'ask', rule: 'shell-unknown-ask', reasons: ['not on the safe command list'] },
+        { taskId: 'task-d1' },
+      )
+      .then((res) => {
+        denyResults.push(res);
+        return res;
+      });
+    const d2 = engine.approvalQueue
+      .enqueue(
+        { tool: 'shell', input: { command: 'curl evil.example' }, executionId: 'exec-d2' },
+        { decision: 'ask', rule: 'shell-unknown-ask', reasons: ['not on the safe command list'] },
+        { taskId: 'task-d2' },
+      )
+      .then((res) => {
+        denyResults.push(res);
+        return res;
+      });
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(harness.tui.getPendingApprovals()).toHaveLength(2);
+
+    harness.sendKey('\u0004');
+    await Promise.all([d1, d2]);
+
+    expect(denyResults).toEqual([false, false]);
+    expect(harness.tui.getPendingApprovals()).toHaveLength(0);
+    expect(harness.tui.getStatusMessage()).toContain('Denied all 2 pending policy requests');
+
+    harness.stop();
+  });
+
   it('supports Tier 2 navigation keybindings: Shift-Tab reverse traversal, Ctrl+L repaint, Ctrl+R refresh, and ? help toggle', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);

@@ -13,16 +13,7 @@ import { createFleetTaskExecutor } from '../fleetRunner.js';
 import { TerminalScreen, type TerminalSize } from './screen.js';
 import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } from '../blocks.js';
 import { resolveReference, type ResolvedReference } from '../references.js';
-// ASCII-only spinner frames for the persistent full-screen renderer (unlike the standalone
-// StatusLoader in spinner.ts, this glyph is redrawn every 250ms inside fixed-width columns
-// across the whole screen — some terminals (Apple Terminal.app included) don't reliably
-// give Unicode Braille Pattern glyphs a single-column width, and any per-character width
-// error here compounds into whole-screen misalignment on every tick, not just a one-line
-// wobble. Plain ASCII guarantees a single column on every terminal.
-const ASCII_SPINNER_FRAMES = ['|', '/', '-', '\\'] as const;
-function getAsciiSpinnerFrame(tick: number): string {
-  return ASCII_SPINNER_FRAMES[Math.abs(Math.floor(tick)) % ASCII_SPINNER_FRAMES.length];
-}
+import { getBrailleFrame } from './spinner.js';
 
 export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'help';
 
@@ -193,7 +184,6 @@ export class FleetTui {
       text: string;
       time: string;
       kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info';
-      streaming?: boolean;
     }>
   >();
   private pendingApprovals: PendingApprovalRequest[] = [];
@@ -623,9 +613,22 @@ export class FleetTui {
       }
     }
 
-    // 9. Overlaid Approval Modal Actions ([A] Approve, [D] Deny, [V] View details, [I] Inspect)
+    // 9. Overlaid Approval Modal Actions ([A] Approve, [D] Deny, [V] View details, [I] Inspect,
+    // Ctrl+A Approve All, Ctrl+D Deny All)
     if (this.pendingApprovals.length > 0) {
       const first = this.pendingApprovals[0];
+      if (key === '\u0001') {
+        const count = this.engine.approvalQueue.approveAll();
+        this.statusMessage = `Approved all ${count} pending policy request${count === 1 ? '' : 's'}`;
+        this.draw();
+        return;
+      }
+      if (key === '\u0004') {
+        const count = this.engine.approvalQueue.denyAll();
+        this.statusMessage = `Denied all ${count} pending policy request${count === 1 ? '' : 's'}`;
+        this.draw();
+        return;
+      }
       if (key === 'a' || key === 'A' || key === 'y' || key === 'Y') {
         this.engine.approvalQueue.approve(first.id);
         this.statusMessage = `Approved policy request for ${first.tool}`;
@@ -1233,27 +1236,23 @@ export class FleetTui {
         });
       } else if (ev.type === 'task:progress') {
         const p = ev.event as { kind?: string; phase?: string; content?: string; tool?: string; error?: string };
+
+        // Raw model output streams in one token/JSON-fragment at a time as the model
+        // generates its structured action (fleetRunner.ts forwards every runtime.generate
+        // token as kind:'token' before the agent loop has parsed it). For non-narrative
+        // actions this is literally unparsed protocol JSON, e.g. `{"action":"shell",
+        // "command":"ls -F"}` — showing it leaks internal wire format onto the screen.
+        // The agent loop (codingAgent.ts) already emits a separate, fully-parsed turn
+        // event (message/tool_call/phase/done/error) once each turn's JSON is complete,
+        // which is what the tail view shows instead, so raw tokens are ignored here.
+        if (p.kind === 'token') {
+          return;
+        }
+
         if (p.phase) agent.phase = p.phase;
         if (p.content) agent.lastMessage = p.content.slice(0, 60);
         if (p.tool) agent.lastMessage = `Tool: ${p.tool}`;
         if (p.error) agent.lastMessage = `Error: ${p.error.slice(0, 60)}`;
-
-        // Raw model output streams in one token/word at a time (§11): appending each token
-        // as its own log line turned the tail view into one fragment per word. Coalesce
-        // consecutive stream tokens into the single open streaming line instead, and only
-        // start a new line once a tool call, phase change, or error interrupts the stream.
-        if (p.kind === 'token' && !p.tool && !p.error) {
-          const last = logs[logs.length - 1];
-          if (last?.streaming) {
-            last.text += p.content ?? '';
-          } else {
-            logs.push({ time: timeStr, text: p.content ?? '', kind: 'plan', streaming: true });
-          }
-          if (logs.length > 500) logs.shift();
-          this.agentLogs.set(taskId, logs);
-          this.draw();
-          return;
-        }
 
         let eventKind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' = 'info';
         let eventText = p.content ?? (p.tool ? `tool: ${p.tool}` : `phase: ${p.phase}`);
@@ -1657,7 +1656,7 @@ export class FleetTui {
           const cursor = isSelected ? color.blue('> ') : '  ';
 
           let glyph = color.yellow('o');
-          if (item.status === 'running') glyph = color.cyan(getAsciiSpinnerFrame(this.spinnerTick));
+          if (item.status === 'running') glyph = color.cyan(getBrailleFrame(this.spinnerTick));
           else if (item.status === 'completed') glyph = color.green('+');
           else if (item.status === 'failed') glyph = color.red('x');
 
@@ -1750,7 +1749,7 @@ export class FleetTui {
             : card.status === 'failed'
               ? color.red('[FAILED]')
               : card.status === 'running'
-                ? color.cyan(`[RUNNING ${getAsciiSpinnerFrame(this.spinnerTick)}]`)
+                ? color.cyan(`[RUNNING ${getBrailleFrame(this.spinnerTick)}]`)
                 : color.yellow(`[${card.status.toUpperCase()}]`);
 
         lines.push(
@@ -1924,7 +1923,7 @@ export class FleetTui {
       this.statusMessage.includes('Planning') ||
       this.statusMessage.includes('Retrying') ||
       this.statusMessage.includes('Executing');
-    const spinnerPrefix = anyRunning ? `${color.cyan(getAsciiSpinnerFrame(this.spinnerTick))} ` : '';
+    const spinnerPrefix = anyRunning ? `${color.cyan(getBrailleFrame(this.spinnerTick))} ` : '';
 
     const statusText = `  ${color.gray('Status:')} ${spinnerPrefix}${this.statusMessage}`;
     const statusPlain = this.stripAnsi(statusText);
@@ -1976,7 +1975,10 @@ export class FleetTui {
       body.push(`Args: ${color.gray(inputStr.slice(0, modalWidth - 14))}`);
     }
 
-    const actions = `${color.bold('[A]')} Approve  ${color.bold('[D]')} Deny  ${color.bold('[V]')} Details  ${color.bold('[I]')} Inspect`;
+    const actions =
+      count > 1
+        ? `${color.bold('[A]')} Approve  ${color.bold('[D]')} Deny  ${color.bold('[V]')} Details  ${color.bold('[I]')} Skip  ${color.bold('[^A]')} All  ${color.bold('[^D]')} None`
+        : `${color.bold('[A]')} Approve  ${color.bold('[D]')} Deny  ${color.bold('[V]')} Details  ${color.bold('[I]')} Inspect`;
     return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
   }
 
@@ -2080,20 +2082,25 @@ export class FleetTui {
     const topDashes = Math.max(0, innerWidth - titleStr.length);
     result.push(color.bold(borderPaint(`+--${titleStr}${'-'.repeat(topDashes)}+`)));
 
-    // Body lines
-    for (const line of bodyLines) {
-      const plain = this.stripAnsi(line);
+    // Body lines (clamped to innerWidth so a long value can never push the right border
+    // past the box, which would otherwise re-introduce the same wrap/misalignment class
+    // of bug fixed elsewhere in draw())
+    for (const rawLine of bodyLines) {
+      const clamped = this.stripAnsi(rawLine).length > innerWidth ? this.truncateAnsi(rawLine, innerWidth) : rawLine;
+      const plain = this.stripAnsi(clamped);
       const pad = Math.max(0, innerWidth - plain.length);
-      result.push(`${color.bold(borderPaint('|'))}  ${line}${' '.repeat(pad)}${color.bold(borderPaint('|'))}`);
+      result.push(`${color.bold(borderPaint('|'))}  ${clamped}${' '.repeat(pad)}${color.bold(borderPaint('|'))}`);
     }
 
     // Separator
     result.push(color.bold(borderPaint(`+--${'-'.repeat(innerWidth)}--+`)));
 
     // Actions line
-    const actionPlain = this.stripAnsi(actionsLine);
+    const clampedActions =
+      this.stripAnsi(actionsLine).length > innerWidth ? this.truncateAnsi(actionsLine, innerWidth) : actionsLine;
+    const actionPlain = this.stripAnsi(clampedActions);
     const actPad = Math.max(0, innerWidth - actionPlain.length);
-    result.push(`${color.bold(borderPaint('|'))}  ${actionsLine}${' '.repeat(actPad)}${color.bold(borderPaint('|'))}`);
+    result.push(`${color.bold(borderPaint('|'))}  ${clampedActions}${' '.repeat(actPad)}${color.bold(borderPaint('|'))}`);
 
     // Bottom border
     result.push(color.bold(borderPaint(`+--${'-'.repeat(innerWidth)}--+`)));
