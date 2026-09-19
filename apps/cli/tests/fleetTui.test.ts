@@ -313,9 +313,15 @@ describe('FleetTui — interactive terminal UI harness', () => {
     // recently run history block" (since a finished job has no live agent card left
     // for the EXECUTIONS/agents check above it), popping open something completely
     // unrelated (e.g. a `doctor` command block) instead of the job you actually
-    // selected. It should now be a no-op — the job's detail is already on screen.
+    // selected. It should now open a full, untruncated output modal for that job.
     harness.sendKey('\r');
     expect(harness.tui.getCurrentView()).toBe('fleet');
+    const modalBuf = harness.getScreenBuffer();
+    expect(modalBuf).toContain('JOB OUTPUT');
+    expect(modalBuf).not.toContain('BLOCK DETAILS');
+
+    harness.sendKey('\x1b');
+    expect(harness.getScreenBuffer()).not.toContain('JOB OUTPUT');
 
     harness.stop();
   });

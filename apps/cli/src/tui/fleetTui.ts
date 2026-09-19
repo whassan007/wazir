@@ -226,6 +226,7 @@ export class FleetTui {
   // History & Blocks
   private recentBlocks: Block[] = [];
   private expandedBlock?: Block;
+  private expandedJobId?: string;
   private currentBlockTracker?: { finish: (status: BlockStatus, patch?: Partial<Block>) => Promise<void> };
 
   // @ Reference fuzzy picker
@@ -524,6 +525,11 @@ export class FleetTui {
         this.draw();
         return;
       }
+      if (this.expandedJobId) {
+        this.expandedJobId = undefined;
+        this.draw();
+        return;
+      }
       if (this.isPickerActive) {
         this.isPickerActive = false;
         this.pickerCandidates = [];
@@ -806,11 +812,14 @@ export class FleetTui {
         const all = this.getFlatNavItems();
         const current = all[this.navSelectionIndex];
         if (current?.category === 'JOBS') {
-          // A job's title/tasks/output/rollup are already shown in the main pane the
-          // moment it's highlighted (see updateNavSelection) — there's nothing further
-          // for Enter to open. This used to fall through to the `else if` below and pop
-          // up an unrelated, most-recently-run history block (e.g. a `doctor` command)
-          // instead, since a finished job has no live agent card left in `this.agents`.
+          // Opens the full, untruncated output modal — the main pane's inline preview
+          // (see updateNavSelection) only wraps to 6 lines per task so a long result
+          // doesn't crowd out the rest of the dashboard. This used to fall through to
+          // the `else if` below and pop up an unrelated, most-recently-run history block
+          // (e.g. a `doctor` command) instead, since a finished job has no live agent
+          // card left in `this.agents`.
+          this.expandedJobId = current.id;
+          void this.refreshJobRollup(current.id);
         } else if (current?.category === 'EXECUTIONS' || this.getAgents().length > 0) {
           this.selectedTaskId =
             current?.category === 'EXECUTIONS' ? current.id : (this.selectedTaskId ?? this.getAgents()[0]?.taskId);
@@ -824,10 +833,19 @@ export class FleetTui {
       return;
     }
 
-    // 16.5. Delete key on a selected JOBS nav item removes that job's record. Only the
-    // dedicated forward-Delete key does this (not Backspace), and only when the prompt
-    // is empty, so it can never collide with editing text.
-    if ((keyName === 'delete' || keyStr === '\x1b[3~') && this.inputBuffer.length === 0) {
+    // 16.5. Delete key (or 'x' while nav is focused) on a selected JOBS nav item removes
+    // that job's record. Forward-Delete only fires when the prompt is empty, so it can
+    // never collide with editing text. 'x' additionally requires the nav pane itself to
+    // be focused (not just an empty prompt) since it's a letter someone could otherwise
+    // legitimately want to type — most Mac keyboards only send Backspace for the plain
+    // "Delete" key; true forward-delete needs Fn+Delete, which is easy to miss, so this
+    // gives an alternate that doesn't depend on that.
+    if (
+      !this.expandedJobId &&
+      !this.expandedBlock &&
+      (((keyName === 'delete' || keyStr === '\x1b[3~') && this.inputBuffer.length === 0) ||
+        ((keyStr === 'x' || keyStr === 'X') && this.focusedPane === 'nav'))
+    ) {
       const all = this.getFlatNavItems();
       const current = all[this.navSelectionIndex];
       if (current?.category === 'JOBS') {
@@ -1642,6 +1660,17 @@ export class FleetTui {
       const modalLines = this.renderBlockModal(this.expandedBlock, size.columns);
       const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
+    } else if (this.expandedJobId) {
+      // E. Full Job Output Modal — the compact JOBS detail view only shows a 6-line
+      // wrapped preview of each task's result; this shows the whole thing.
+      const job = this.engine.orchestrator.getJob(this.expandedJobId);
+      if (job) {
+        const modalLines = this.renderJobOutputModal(job, this.jobRollups.get(job.id), size.columns);
+        const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+        this.overlayModal(lines, modalLines, size.columns, startY);
+      } else {
+        this.expandedJobId = undefined;
+      }
     }
 
     // Region 3: History Strip (Line size.rows - 4)
@@ -2189,6 +2218,52 @@ export class FleetTui {
 
     const actions = `${color.bold('[Esc]')} Close`;
     return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
+  }
+
+  /**
+   * Full, untruncated job output modal (Enter on a JOBS nav item). The compact JOBS
+   * detail view only shows a 6-line wrapped preview per task so the fleet dashboard
+   * doesn't get crowded out by one long result — this shows everything.
+   */
+  private renderJobOutputModal(job: Job, rollup: JobRollup | undefined, cols: number): string[] {
+    const modalWidth = Math.min(cols - 4, 100);
+    const innerWidth = modalWidth - 4;
+    const title = `JOB OUTPUT: ${job.title.slice(0, 50)} [${job.status.toUpperCase()}]`;
+
+    const body: string[] = [];
+    for (const t of job.tasks) {
+      body.push(`${color.bold(`[${t.status}]`)} ${t.id}${t.title ? ` - ${t.title}` : ''}`);
+      const node = job.graph.nodes.find((n) => n.taskId === t.id || n.id === t.id);
+      const raw = node?.error ?? (node?.result !== undefined
+        ? typeof node.result === 'string' ? node.result : JSON.stringify(node.result)
+        : undefined);
+      if (raw) {
+        const flat = raw.replace(/\s+/g, ' ').trim();
+        const wrapped = this.wrapText(flat, innerWidth, 20);
+        const paint = node?.error ? color.red : color.gray;
+        for (const line of wrapped) body.push(paint(line));
+      } else {
+        body.push(color.gray('(no output captured for this task)'));
+      }
+      body.push('');
+    }
+
+    if (rollup) {
+      const tps = rollup.tokensPerSecond > 0 ? rollup.tokensPerSecond.toFixed(1) : '0.0';
+      body.push(
+        color.gray(
+          `Tokens: In ${rollup.tokens.input} / Out ${rollup.tokens.output} (${rollup.tokens.total} total) | Duration: ${(rollup.durationMs / 1000).toFixed(1)}s | Speed: ${tps} tok/s`,
+        ),
+      );
+      if (rollup.filesChanged.length > 0) {
+        body.push(color.gray(`Files changed: ${rollup.filesChanged.join(', ')}`));
+      }
+    } else {
+      void this.refreshJobRollup(job.id);
+    }
+
+    const actions = `${color.bold('[Esc]')} Close`;
+    return this.buildModalBox(title, body, actions, modalWidth, job.status === 'failed' ? 'red' : 'cyan');
   }
 
   private buildModalBox(
