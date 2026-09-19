@@ -380,6 +380,42 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.stop();
   });
 
+  it('cancels a selected job via the c key and /cancel, even one not launched this session', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    await harness.start();
+
+    // Created directly (never run) — pending, not launched via this TUI session, exactly
+    // like a job reloaded from a past session's store. /cancel used to only ever act on
+    // `this.currentJob`, so this job had no way to be stopped from the TUI at all.
+    const orphanJob = await engine.orchestrator.createJob({
+      title: 'orphaned job',
+      tasks: [{ task: { id: 'orphan-task', input: 'never actually run' } }],
+    });
+    expect(orphanJob.status).toBe('pending');
+    expect(harness.tui.getCurrentJob()).toBeUndefined();
+
+    // Fresh engine, no job launched through the TUI itself — this orphan job (created
+    // directly, as a reloaded-from-store job would appear) is the only nav item, so it's
+    // already the default selection (navSelectionIndex starts at 0) without navigating.
+    const flat = harness.tui.getFlatNavItems();
+    expect(flat[0]).toMatchObject({ category: 'JOBS', id: orphanJob.id });
+
+    harness.sendKey('c');
+    await new Promise((r) => setTimeout(r, 10)); // cancelJob() is async
+    expect(engine.orchestrator.getJob(orphanJob.id)?.status).toBe('cancelled');
+    expect(harness.tui.getStatusMessage()).toContain(`Cancelled job ${orphanJob.id}`);
+
+    // Now deletable, since it's no longer active
+    harness.sendKey('x');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(engine.orchestrator.getJob(orphanJob.id)).toBeUndefined();
+
+    harness.stop();
+  });
+
   it('handles in-TUI non-blocking approval queue and mid-run steering', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);

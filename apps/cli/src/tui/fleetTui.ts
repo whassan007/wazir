@@ -874,6 +874,28 @@ export class FleetTui {
       return;
     }
 
+    // 16.6. 'c' while nav is focused on a JOBS item cancels that job directly — the only
+    // prior way to stop a running job was the /cancel command, and it only ever worked
+    // against `this.currentJob` (the one launched this session), so cancelling an older
+    // job picked from the nav (e.g. one reloaded from a past, possibly crashed session)
+    // silently did nothing. This also unblocks deletion, which refuses an active job.
+    if (
+      !this.expandedJobId &&
+      !this.expandedBlock &&
+      (keyStr === 'c' || keyStr === 'C') &&
+      this.focusedPane === 'nav'
+    ) {
+      const all = this.getFlatNavItems();
+      const current = all[this.navSelectionIndex];
+      if (current?.category === 'JOBS') {
+        void this.engine.orchestrator.cancelJob(current.id).then(() => {
+          this.statusMessage = `Cancelled job ${current.id}`;
+          this.draw();
+        });
+        return;
+      }
+    }
+
     // 17. Backspace / Delete Handling (§2):
     // Ensure key.name === 'backspace' or key.name === 'delete' correctly checks active buffer length,
     // removes final character via slicing (inputBuffer.slice(0, -1)), and triggers immediate prompt re-render.
@@ -990,7 +1012,10 @@ export class FleetTui {
         this.statusMessage = `Deleted job ${jobId}`;
       }
     } catch (err) {
-      this.statusMessage = `Could not delete job: ${err instanceof Error ? err.message : String(err)}`;
+      const reason = err instanceof Error ? err.message : String(err);
+      this.statusMessage = /still active|still running/i.test(reason)
+        ? `${reason} — press 'c' to cancel it first, then delete`
+        : `Could not delete job: ${reason}`;
     }
     this.draw();
   }
@@ -1134,13 +1159,40 @@ export class FleetTui {
 
     if (trimmed.startsWith('/cancel')) {
       const parts = trimmed.split(/\s+/);
-      const targetTaskId = parts[1] ?? this.selectedTaskId;
-      if (this.currentJob && targetTaskId) {
-        await this.engine.orchestrator.cancelTask(this.currentJob.id, targetTaskId);
-        this.statusMessage = `Cancelled task ${targetTaskId}`;
+      const arg = parts[1];
+
+      // A job id (e.g. one picked from the nav, possibly from a past session — /cancel
+      // previously only ever worked against `this.currentJob`, the job launched in *this*
+      // session, so cancelling an older/reloaded job from the JOBS list did nothing at all).
+      const argJob = arg ? this.engine.orchestrator.getJob(arg) : undefined;
+      if (argJob) {
+        await this.engine.orchestrator.cancelJob(argJob.id);
+        this.statusMessage = `Cancelled job ${argJob.id}`;
+        this.draw();
+        return;
+      }
+
+      if (arg && this.currentJob) {
+        await this.engine.orchestrator.cancelTask(this.currentJob.id, arg);
+        this.statusMessage = `Cancelled task ${arg}`;
+        this.draw();
+        return;
+      }
+
+      // No argument: cancel whatever's highlighted in the nav if it's a job.
+      const all = this.getFlatNavItems();
+      const selected = all[this.navSelectionIndex];
+      if (selected?.category === 'JOBS') {
+        await this.engine.orchestrator.cancelJob(selected.id);
+        this.statusMessage = `Cancelled job ${selected.id}`;
+      } else if (this.currentJob && this.selectedTaskId) {
+        await this.engine.orchestrator.cancelTask(this.currentJob.id, this.selectedTaskId);
+        this.statusMessage = `Cancelled task ${this.selectedTaskId}`;
       } else if (this.currentJob) {
         await this.engine.orchestrator.cancelJob(this.currentJob.id);
         this.statusMessage = `Cancelled job ${this.currentJob.id}`;
+      } else {
+        this.statusMessage = `No job selected to cancel`;
       }
       this.draw();
       return;
@@ -2441,7 +2493,8 @@ export class FleetTui {
       '    Tab          Cycle through views (Shift-Tab for reverse traversal)',
       '    Up / Down       Navigate categories and items across entire left index',
       '    Enter           Drill down into highlighted agent stream (Tail view)',
-      '    Delete          Delete the selected job (JOBS list; not while it is running)',
+      '    c               Cancel the selected running job (JOBS list)',
+      '    Delete / x      Delete the selected job (JOBS list; not while it is running)',
       '    Esc             Dismiss modal dialogs / return to fleet dashboard',
       '    ?               Toggle this help screen (when prompt empty)',
       '    Ctrl+R          Force state refresh across blocks and agents',
