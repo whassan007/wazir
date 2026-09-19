@@ -14,6 +14,7 @@ export * from './execution.js';
 export * from './worker.js';
 export * from './benchmark.js';
 export * from './block.js';
+export * from './artifact.js';
 
 export type { OSInfo } from './computer.js';
 export { effectiveContextTokens, estimateModelMemory } from './model.js';

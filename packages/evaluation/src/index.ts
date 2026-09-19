@@ -1,5 +1,8 @@
 import type { CheckRunRecord, EvaluationResult, ExecutionRecord } from '@wazir/core';
 
+export * from './types/verification.js';
+export * from './continuousVerification.js';
+
 export interface EvaluationOptions {
   /** If set, the task is only successful when each of these files changed. */
   expectedFiles?: string[];

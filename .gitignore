@@ -52,3 +52,6 @@ temp/
 .Trashes
 ehthumbs.db
 Desktop.ini
+# esbuild bundle output (scripts/bundle.mjs)
+bin/wa.js
+bin/wa.js.map

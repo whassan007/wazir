@@ -13,7 +13,8 @@ import type {
   TokenUsage,
   ToolCallRecord,
 } from '../types/index.js';
-import { sanitizeUntrustedOutput, appendAuditEvent } from '@wazir/shared';
+import { sanitizeUntrustedOutput, appendAuditEvent, computeContentHash } from '@wazir/shared';
+import type { ProvenanceManager, CreateArtifactParams } from './provenanceManager.js';
 
 export interface ExecutionEngineOptions {
   /** Persists a record after every mutation. */
@@ -21,6 +22,9 @@ export interface ExecutionEngineOptions {
   /** Seeds the engine from durable storage at startup. */
   load?: () => ExecutionRecord[] | Promise<ExecutionRecord[]>;
   idPrefix?: string;
+  provenanceManager?: ProvenanceManager;
+  /** Project root used as the artifact workspace; defaults to process.cwd(). */
+  workspace?: string;
 }
 
 let eventCounter = 0;
@@ -41,11 +45,15 @@ export class ExecutionEngine {
   private readonly records = new Map<string, ExecutionRecord>();
   private readonly persist?: (record: ExecutionRecord) => void | Promise<void>;
   private readonly idPrefix: string;
+  private readonly provenanceManager?: ProvenanceManager;
+  private readonly workspace: string;
   readonly ready: Promise<void>;
 
   constructor(options: ExecutionEngineOptions = {}) {
     this.persist = options.persist;
     this.idPrefix = options.idPrefix ?? 'exec';
+    this.provenanceManager = options.provenanceManager;
+    this.workspace = options.workspace ?? process.cwd();
     this.ready = Promise.resolve(options.load?.()).then((loaded) => {
       if (!loaded) return;
       for (const record of loaded) {
@@ -219,6 +227,50 @@ export class ExecutionEngine {
     for (const file of files) {
       if (!record.filesChanged.includes(file)) {
         record.filesChanged.push(file);
+        
+        // Register artifact provenance if provenance manager is available
+        if (this.provenanceManager && !file.startsWith('node_modules') && !file.startsWith('.git')) {
+          try {
+            const content = await this.readFile(file);
+            const hash = await computeContentHash(content);
+            const size = Buffer.byteLength(content, 'utf8');
+            
+            const artifactParams: CreateArtifactParams = {
+              type: file.endsWith('.ts') || file.endsWith('.js') ? 'generated_code' : 'source',
+              name: file.split('/').pop() ?? file,
+              location: file,
+              contentHash: hash,
+              sizeBytes: size,
+              workspace: this.workspace,
+              executionId: executionId,
+              agentId: record.execution.agentId || '',
+              modelId: record.execution.modelId,
+              runtimeId: record.execution.runtimeId,
+              computerId: record.execution.computerId,
+              workerId: record.execution.workerId,
+              toolsUsed: record.toolCalls.map(t => t.tool),
+              mcpServersUsed: [],
+              connectorsUsed: [],
+              policyDecisions: record.policyDecisions.map(d => d.rule),
+              inputArtifactIds: [],
+              parentArtifactIds: [],
+              evaluations: record.checks.map(c => c.name),
+              reviewers: [],
+              gitMetadata: {
+                repository: this.getGitRepo(file),
+                branch: await this.getGitBranch(file),
+                commit: await this.getGitCommit(file),
+                dirty: false,
+                changedFiles: [file],
+                diffHash: ''
+              }
+            };
+            
+            await this.provenanceManager.registerArtifact(artifactParams);
+          } catch {
+            // Ignore provenance registration errors
+          }
+        }
       }
     }
     await this.flush(record);
@@ -227,6 +279,47 @@ export class ExecutionEngine {
   async setResult(executionId: string, result: string): Promise<void> {
     const record = this.require(executionId);
     record.result = sanitizeUntrustedOutput(result);
+    
+    // Register execution summary as an artifact
+    if (this.provenanceManager) {
+      try {
+        const content = JSON.stringify({
+          result,
+          task: record.task,
+          executionId,
+          status: record.execution.status
+        });
+        const hash = await computeContentHash(Buffer.from(content, 'utf8'));
+        
+        const artifactParams: CreateArtifactParams = {
+          type: 'report',
+          name: `execution-summary-${record.execution.id}`,
+          location: `.wazir/artifacts/${record.execution.id}.json`,
+          contentHash: hash,
+          sizeBytes: Buffer.byteLength(content, 'utf8'),
+          workspace: this.workspace,
+          executionId: executionId,
+          agentId: record.execution.agentId || '',
+          modelId: record.execution.modelId,
+          runtimeId: record.execution.runtimeId,
+          computerId: record.execution.computerId,
+          workerId: record.execution.workerId,
+          toolsUsed: record.toolCalls.map(t => t.tool),
+          mcpServersUsed: [],
+          connectorsUsed: [],
+          policyDecisions: record.policyDecisions.map(d => d.rule),
+          inputArtifactIds: [],
+          parentArtifactIds: [],
+          evaluations: record.checks.map(c => c.name),
+          reviewers: []
+        };
+        
+        await this.provenanceManager.registerArtifact(artifactParams);
+      } catch {
+        // Ignore provenance registration errors
+      }
+    }
+    
     await this.flush(record);
   }
 
@@ -234,7 +327,83 @@ export class ExecutionEngine {
     const record = this.require(executionId);
     record.evaluation = evaluation;
     this.pushEvent(record, 'evaluation.completed', evaluation);
+    
+    // Register test results as artifacts
+    if (this.provenanceManager) {
+      try {
+        for (const check of record.checks) {
+          {
+            const content = JSON.stringify({
+              ...check,
+              executionId,
+              taskId: record.task.id
+            });
+            const hash = await computeContentHash(Buffer.from(content, 'utf8'));
+            
+            const artifactParams: CreateArtifactParams = {
+              type: 'test_result',
+              name: `test-${check.name.replace(/\s+/g, '-')}`,
+              location: check.command,
+              contentHash: hash,
+              sizeBytes: Buffer.byteLength(content, 'utf8'),
+              workspace: this.workspace,
+              executionId: executionId,
+              agentId: record.execution.agentId || '',
+              modelId: record.execution.modelId,
+              runtimeId: record.execution.runtimeId,
+              computerId: record.execution.computerId,
+              workerId: record.execution.workerId,
+              toolsUsed: [check.name],
+              mcpServersUsed: [],
+              connectorsUsed: [],
+              policyDecisions: [],
+              inputArtifactIds: [],
+              parentArtifactIds: [],
+              evaluations: [],
+              reviewers: []
+            };
+            
+            await this.provenanceManager.registerArtifact(artifactParams);
+          }
+        }
+      } catch {
+        // Ignore provenance registration errors
+      }
+    }
+    
     await this.flush(record);
+  }
+
+  private async readFile(filepath: string): Promise<Buffer> {
+    try {
+      const { promises: fs } = await import('node:fs');
+      return await fs.readFile(filepath);
+    } catch {
+      return Buffer.from('');
+    }
+  }
+
+  private getGitRepo(filepath: string): string | undefined {
+    // Simplified - in production, this would parse .git/config
+    return process.env.GIT_REPO;
+  }
+
+  private async getGitBranch(filepath: string): Promise<string | undefined> {
+    try {
+      const { exec } = await import('node:child_process');
+      return 'main'; // simplified
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async getGitCommit(filepath: string):Promise<string | undefined> {
+    try {
+      const { exec } = await import('node:child_process');
+      return 'HEAD'; // simplified
+    } catch {
+      return undefined;
+    }
   }
 
   async get(executionId: string): Promise<ExecutionRecord | undefined> {

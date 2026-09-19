@@ -8,6 +8,8 @@ export { ExecutionEngine, createExecutionEngine } from './executionEngine.js';
 export type { ExecutionEngineOptions } from './executionEngine.js';
 export { ModelRegistry } from './modelRegistry.js';
 export { PolicyEngine, createPolicyEngine, protectedPathReason } from './policyEngine.js';
+export { ProvenanceManager } from './provenanceManager.js';
+export type { CreateArtifactParams } from './provenanceManager.js';
 export { RuntimeRegistry } from './runtimeRegistry.js';
 export { Scheduler, createScheduler } from './scheduler.js';
 export type { SchedulerDeps, ScheduleInput } from './scheduler.js';

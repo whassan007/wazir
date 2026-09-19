@@ -61,18 +61,15 @@ A production-quality local and fleet-scale AI meta-harness that orchestrates mul
 ## Quick Start
 
 ```bash
-# Install dependencies
-npm install
-
-# Build all packages and the CLI
-npm run build
-
-# Run the test suite
-npm test
-
-# Put `wa` on your PATH
-npm link --workspace @wazir/cli
+git clone <this-repo> ~/Code/Wazir
+bash ~/Code/Wazir/scripts/install.sh
 ```
+
+The script works from any directory: it finds the repository from its own path, checks for Node.js ≥ 20, runs `npm install` and `npm run build`, then installs a `wa` launcher at `~/.local/bin/wa` (override with `WAZIR_BIN_DIR`) and adds that directory to your PATH if needed. The launcher pins the Node binary used at install time, so `wa` keeps working in shells where a different Node is active (conda, another nvm version). Avoid `npm link` — it only registers `wa` for the currently active Node, which is why it can show up as `wa: command not found` in another shell.
+
+If you install by hand, run `npm install` / `npm run build` **from the repository root** — running `npm install` elsewhere fails with `ENOENT: Could not read package.json`.
+
+To run the test suite afterwards: `npm test`.
 
 Then, with Ollama or LM Studio running locally:
 

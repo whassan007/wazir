@@ -533,6 +533,46 @@ jobsCmd
 
 program.addCommand(jobsCmd);
 
+// artifacts command
+const artifactsCmd = new Command()
+  .name('artifacts')
+  .description('Inspect artifact provenance');
+
+artifactsCmd
+  .command('list')
+  .description('List registered artifacts')
+  .option('--execution <id>', 'Filter by execution id')
+  .option('--job <id>', 'Filter by job id')
+  .option('--type <type>', 'Filter by artifact type')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listArtifacts } = await import('./commands.js');
+    console.log(await listArtifacts(engine, options));
+  });
+
+for (const [name, fn, description] of [
+  ['inspect', 'inspectArtifact', 'Inspect an artifact and its provenance record'],
+  ['lineage', 'showArtifactLineage', 'Show the lineage graph from root inputs to the artifact'],
+  ['why', 'showArtifactWhy', 'Explain the execution, policy and check context behind an artifact'],
+  ['inputs', 'showArtifactInputs', 'List the input artifacts an artifact was derived from'],
+] as const) {
+  artifactsCmd
+    .command(name)
+    .argument('<id>', 'Artifact ID')
+    .description(description)
+    .option('--json', 'Output in JSON format')
+    .action(async (id, options) => {
+      const { createEngine } = await import('./engine.js');
+      const engine = await createEngine();
+      const commands = await import('./commands.js');
+      console.log(await commands[fn](engine, id, options.json ?? false));
+    });
+}
+
+program.addCommand(artifactsCmd);
+
 // explain command — accepts a bare execution id, a block ref (@123), or a
 // job ref (@job:x), and renders the scheduling decision already recorded
 // at execution time.

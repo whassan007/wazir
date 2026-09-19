@@ -7,6 +7,7 @@ import {
   ComputerRegistry,
   ContextCompiler,
   ExecutionEngine,
+  ProvenanceManager,
   Job,
   JobManager,
   JobOrchestrator,
@@ -61,6 +62,7 @@ export interface RookEngine {
   scheduler: Scheduler;
   compiler: ContextCompiler;
   executions: ExecutionEngine & { store?: KeyValueStore };
+  provenance: ProvenanceManager;
   approvalQueue: ApprovalQueue;
   orchestrator: JobOrchestrator & { store?: KeyValueStore };
   worktrees: WorktreeManager;
@@ -114,7 +116,10 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const store: KeyValueStore = await createStore();
   const engineConfigDir = configDir();
 
+  const provenance = new ProvenanceManager(store);
   const executions = new ExecutionEngine({
+    provenanceManager: provenance,
+    workspace: projectRoot,
     persist: (record) => store.put(`execution/${record.execution.id}`, record),
     load: async () => {
       const entries = await store.list('execution/');
@@ -308,6 +313,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     projectRoot,
     configDir: engineConfigDir,
     computers,
+    provenance,
     runtimes,
     models,
     agents,
