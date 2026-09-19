@@ -34,7 +34,10 @@ if (( NODE_MAJOR < 20 )); then
 fi
 echo "==> Using Node $("$NODE_BIN" -v) at $NODE_BIN"
 
-CLI_ENTRY="$REPO_ROOT/apps/cli/dist/index.js"
+CLI_ENTRY="$REPO_ROOT/bin/wa.js"
+if [[ ! -f "$CLI_ENTRY" && -f "$REPO_ROOT/apps/cli/dist/index.js" ]]; then
+  CLI_ENTRY="$REPO_ROOT/apps/cli/dist/index.js"
+fi
 BUILD_LOG="${TMPDIR:-/tmp}/wazir-install-build.log"
 BUILD_STATUS="ok"
 
@@ -84,6 +87,9 @@ if [[ "$BUILD_STATUS" == "failed" ]]; then
   echo
 fi
 
+echo "==> Configuring environment files and shell profiles"
+"$NODE_BIN" "$REPO_ROOT/scripts/setup-env.mjs"
+
 echo "==> Installing 'wa' launcher to $BIN_DIR/wa"
 mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/wa" <<SHIM
@@ -102,6 +108,15 @@ if [[ ! -f "\$CLI" ]]; then
   echo "wa: Wazir build missing at \$CLI. Re-run: bash $REPO_ROOT/scripts/install.sh" >&2
   exit 127
 fi
+
+# Automatically source Wazir environment if available
+ENV_FILE="\${WAZIR_HOME:-\$HOME/.wazir}/.env"
+if [[ -f "\$ENV_FILE" ]]; then
+  set -a
+  source "\$ENV_FILE" 2>/dev/null || true
+  set +a
+fi
+
 exec "\$NODE_BIN" "\$CLI" "\$@"
 SHIM
 chmod +x "$BIN_DIR/wa"

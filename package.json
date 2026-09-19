@@ -8,8 +8,20 @@
     "packages/runtimes/*",
     "apps/*"
   ],
+  "bin": {
+    "wa": "./bin/wa.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "bundle": "node scripts/bundle.mjs",
+    "setup:env": "node scripts/setup-env.mjs",
+    "postinstall": "node scripts/setup-env.mjs || true",
+    "build": "npm run build --workspaces --if-present && npm run bundle",
+    "build:binary": "bash scripts/build-binary.sh",
     "dev": "npm run dev --workspace @wazir/cli",
     "test": "npm run build && vitest run",
     "check-dist": "node scripts/check-dist-fresh.mjs",

@@ -38,7 +38,38 @@ export function configFile(): string {
   return path.join(configDir(), 'config.json');
 }
 
+export function loadEnvFiles(): void {
+  const envPaths = [
+    path.join(configDir(), '.env'),
+    path.join(process.cwd(), '.env'),
+  ];
+
+  for (const envPath of envPaths) {
+    if (!existsSync(envPath)) continue;
+    try {
+      const content = readFileSync(envPath, 'utf8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx === -1) continue;
+        const key = trimmed.slice(0, eqIdx).trim();
+        let val = trimmed.slice(eqIdx + 1).trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        if (process.env[key] === undefined) {
+          process.env[key] = val;
+        }
+      }
+    } catch {
+      // ignore read errors
+    }
+  }
+}
+
 export function loadConfig(): WazirConfig {
+  loadEnvFiles();
   const defaults: WazirConfig = {
     modelContext: {},
     modelCapabilities: {},

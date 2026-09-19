@@ -65,11 +65,45 @@ git clone <this-repo> ~/Code/Wazir
 bash ~/Code/Wazir/scripts/install.sh
 ```
 
-The script works from any directory: it finds the repository from its own path, checks for Node.js ≥ 20, runs `npm install` and `npm run build`, then installs a `wa` launcher at `~/.local/bin/wa` (override with `WAZIR_BIN_DIR`) and adds that directory to your PATH if needed. The launcher pins the Node binary used at install time, so `wa` keeps working in shells where a different Node is active (conda, another nvm version). Avoid `npm link` — it only registers `wa` for the currently active Node, which is why it can show up as `wa: command not found` in another shell.
+The script works from any directory: it finds the repository from its own path, checks for Node.js ≥ 20, runs `npm install` and `npm run build`, creates a self-contained CLI bundle (`bin/wa.js`), and installs the `wa` launcher into `~/.local/bin/wa` (override with `WAZIR_BIN_DIR`), ensuring it is on your PATH.
 
-If you install by hand, run `npm install` / `npm run build` **from the repository root** — running `npm install` elsewhere fails with `ENOENT: Could not read package.json`.
+### Alternative Installation & Packaging Methods
 
-To run the test suite afterwards: `npm test`.
+#### 1. NPM Global Install / Link
+Because the CLI is now bundled into `bin/wa.js`, you can install or link it globally via npm:
+```bash
+# Link the current build globally
+npm run build
+npm link
+
+# Or install globally from checkout
+npm install -g .
+
+# Or build an npm package tarball for distribution
+npm pack
+npm install -g wazir-0.1.0.tgz
+```
+
+#### 2. Homebrew (macOS / Linux)
+You can install using Homebrew directly from the local formula or tap:
+```bash
+# Install from source checkout
+brew install --build-from-source Formula/wazir.rb
+
+# Or via Homebrew tap (when hosted on GitHub)
+brew tap whassan007/wazir https://github.com/whassan007/wazir
+brew install wazir
+```
+
+#### 3. Standalone Native Binary (Zero-dependency)
+Package Wazir into a self-contained native binary using Node Single Executable Application (SEA):
+```bash
+npm run build:binary
+# Standalone binary is produced at dist/wa (runs with no external Node.js required)
+sudo cp dist/wa /usr/local/bin/wa
+```
+
+To run the test suite: `npm test`.
 
 Then, with Ollama or LM Studio running locally:
 

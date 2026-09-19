@@ -26,9 +26,6 @@ try {
     target: 'node20',
     format: 'cjs',
     outfile: outFile,
-    banner: {
-      js: '#!/usr/bin/env node\n',
-    },
     external: ['pg-native'],
     sourcemap: true,
     minify: false,

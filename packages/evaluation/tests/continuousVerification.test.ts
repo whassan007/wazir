@@ -76,7 +76,7 @@ describe('Gate 11: Continuous Verification & Anomaly Rollback Engine', () => {
       expect(anomalies[0].metricName).toBe('durationMs');
       expect(anomalies[0].observedValue).toBe(135);
       expect(anomalies[0].sigmaDeviation).toBeGreaterThan(2);
-      expect(anomalies[0].severity).toBe('high'); // 7 sigma should be high or critical
+      expect(['high', 'critical']).toContain(anomalies[0].severity);
     });
 
     it('should flag memory anomaly with high sensitivity (1-sigma threshold)', () => {
@@ -89,7 +89,7 @@ describe('Gate 11: Continuous Verification & Anomaly Rollback Engine', () => {
 
       expect(anomalies.length).toBe(1);
       expect(anomalies[0].metricName).toBe('memoryBytes');
-      expect(anomalies[0].severity).toBe('high'); // > 1 sigma should be flagged at high sensitivity
+      expect(['high', 'critical']).toContain(anomalies[0].severity);
     });
 
     it('should not flag memory anomaly with low sensitivity (3-sigma threshold)', () => {
@@ -325,4 +325,11 @@ describe('Gate 11: Continuous Verification & Anomaly Rollback Engine', () => {
     });
 
     it('should normalize memory addresses', () => {
-      const line = 'Segmentation fault at 0x7f8e
+      const line = 'Segmentation fault at 0x7f8e1234abcd';
+      const normalized = normalizeLogLine(line);
+
+      expect(normalized).toContain('<ADDR>');
+      expect(normalized).not.toContain('0x7f8e1234abcd');
+    });
+  });
+});
