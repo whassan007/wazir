@@ -329,4 +329,40 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     harness.stop();
   });
+
+  it('correctly handles backspace, delete, Ctrl+W, and Ctrl+U in the input buffer', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // Type text
+    harness.sendKeys('hello world');
+    expect(harness.getScreenBuffer()).toContain('wa> hello world');
+
+    // Single backspace (\x7f)
+    harness.sendKey('\x7f');
+    expect(harness.getScreenBuffer()).toContain('wa> hello worl');
+    expect(harness.getScreenBuffer()).not.toContain('wa> hello world');
+
+    // Repeated backspaces (\x7f\x7f)
+    harness.sendKey('\x7f\x7f');
+    expect(harness.getScreenBuffer()).toContain('wa> hello wo');
+
+    // Delete key (\x1b[3~)
+    harness.sendKey('\x1b[3~');
+    expect(harness.getScreenBuffer()).toContain('wa> hello w');
+
+    // Ctrl+W: delete word backward
+    harness.sendKey('\u0017');
+    expect(harness.getScreenBuffer()).toContain('wa> hello');
+
+    // Ctrl+U: clear entire line
+    harness.sendKey('\u0015');
+    expect(harness.getScreenBuffer()).toContain('wa> ');
+    expect(harness.getScreenBuffer()).not.toContain('wa> hello');
+
+    harness.stop();
+  });
 });

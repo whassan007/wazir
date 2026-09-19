@@ -265,15 +265,40 @@ export class FleetTui {
       return;
     }
 
-    // Backspace
-    if (key === '\u0008' || key === '\x7f') {
-      this.inputBuffer = this.inputBuffer.slice(0, -1);
+    // Backspace / Delete
+    if (key === '\u0008' || key === '\x7f' || key === '\x1b[3~') {
+      if (this.inputBuffer.length > 0) {
+        this.inputBuffer = this.inputBuffer.slice(0, -1);
+        this.draw();
+      }
+      return;
+    }
+
+    // Repeated backspace / delete sequence in a single chunk (fast backspacing)
+    if (/^[\x7f\u0008]+$/.test(key)) {
+      if (this.inputBuffer.length > 0) {
+        this.inputBuffer = this.inputBuffer.slice(0, Math.max(0, this.inputBuffer.length - key.length));
+        this.draw();
+      }
+      return;
+    }
+
+    // Ctrl+U: Clear entire input line
+    if (key === '\u0015') {
+      this.inputBuffer = '';
       this.draw();
       return;
     }
 
-    // Printable characters
-    if (key.length === 1 && key >= ' ') {
+    // Ctrl+W: Delete word backward
+    if (key === '\u0017') {
+      this.inputBuffer = this.inputBuffer.replace(/\s*\S*\s*$/, '');
+      this.draw();
+      return;
+    }
+
+    // Printable characters (single char or pasted text, ignoring other escape sequences)
+    if (!key.startsWith('\x1b') && !key.startsWith('\u001b') && !/[\x00-\x1f\x7f]/.test(key)) {
       this.inputBuffer += key;
       this.draw();
     }

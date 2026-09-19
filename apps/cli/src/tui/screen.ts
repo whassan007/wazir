@@ -44,8 +44,8 @@ export class TerminalScreen {
     }
 
     if ((this.outStream as any).isTTY) {
-      // Enter alternate screen buffer, clear screen, hide cursor
-      this.outStream.write('\x1b[?1049h\x1b[H\x1b[2J\x1b[?25l');
+      // Enter alternate screen buffer, clear screen, ensure cursor visible
+      this.outStream.write('\x1b[?1049h\x1b[H\x1b[2J\x1b[?25h');
       this.inAltScreen = true;
     }
 
@@ -81,8 +81,11 @@ export class TerminalScreen {
     this.lastBuffer = buffer;
 
     if (this.inAltScreen) {
-      // Move cursor to top-left and write buffer
-      this.outStream.write('\x1b[H' + buffer);
+      // Move cursor to top-left and write lines with \x1b[K (erase to line end)
+      // to ensure erased characters from previous frames do not linger on screen
+      const lines = buffer.split('\n');
+      const cleared = lines.map((l) => l + '\x1b[K').join('\r\n') + '\x1b[K\x1b[J';
+      this.outStream.write('\x1b[H' + cleared);
     }
   }
 
