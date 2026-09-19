@@ -2,6 +2,7 @@ class Wazir < Formula
   desc "Model- and runtime-agnostic AI agent harness and control plane"
   homepage "https://github.com/whassan007/wazir"
   url "https://github.com/whassan007/wazir/archive/refs/tags/v0.1.0.tar.gz"
+  sha256 "17b6e32f3b4a3fee2301048a3a5c12295ef842f1ac66970a480b23aefb9dacae"
   head "https://github.com/whassan007/wazir.git", branch: "main"
   license "Apache-2.0"
 
