@@ -1547,7 +1547,16 @@ export class FleetTui {
       }
     }
 
-    const frame = lines.slice(0, size.rows).join('\n');
+    // Final width clamp (§1, §2): every region above assembles its own lines and some
+    // (input bar, status bar, worktrees/approval/help panes) don't pad/truncate themselves.
+    // A line even one character wider than the terminal causes it to soft-wrap, which
+    // desyncs every following \r\n from the absolute \x1b[H cursor reset used in render()
+    // and can scroll the alt-screen buffer — producing exactly the ghosting/overlay and
+    // "backspace does nothing" symptoms once the input line (or status bar) gets long.
+    // Clamping every line here, once, guarantees no row can ever exceed the terminal width.
+    const clampedLines = lines.map((line) => this.padRightTo(line, size.columns));
+
+    const frame = clampedLines.slice(0, size.rows).join('\n');
     this.screen.render(frame);
   }
 
@@ -1895,7 +1904,17 @@ export class FleetTui {
 
   private renderInputBar(cols: number): string {
     const promptPrefix = color.cyan('wa> ');
-    return `${promptPrefix}${this.inputBuffer}`;
+    const prefixLen = 4; // visible width of 'wa> '
+    const available = Math.max(0, cols - prefixLen);
+
+    // Scroll to show the tail (active cursor position) instead of letting the line
+    // grow past the terminal width — an overlong line here soft-wraps in the real
+    // terminal, which desyncs the absolute-cursor redraw and looks like ghosting,
+    // and makes it look like backspace stopped working once typed text got long.
+    const visibleInput =
+      this.inputBuffer.length > available ? this.inputBuffer.slice(this.inputBuffer.length - available) : this.inputBuffer;
+
+    return `${promptPrefix}${visibleInput}`;
   }
 
   // ==========================================

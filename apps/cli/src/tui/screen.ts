@@ -108,11 +108,14 @@ export class TerminalScreen {
     this.lastBuffer = buffer;
 
     if (this.inAltScreen) {
-      // Move cursor to top-left and write lines with \x1b[K (erase to line end)
-      // to ensure erased characters from previous frames do not linger on screen
+      // Hard-clear before every frame (§2): relying on per-line \x1b[K alone to erase
+      // shrinking content (e.g. a character removed by backspace) is not reliable on
+      // every terminal/multiplexer — some leave the old glyph on screen even though
+      // \x1b[K was sent, since this is already a full repaint every frame (not an
+      // incremental diff), an explicit \x1b[2J removes any dependency on that.
       const lines = buffer.split('\n');
       const cleared = lines.map((l) => l + '\x1b[K').join('\r\n') + '\x1b[K\x1b[J';
-      this.outStream.write('\x1b[H' + cleared);
+      this.outStream.write('\x1b[H\x1b[2J' + cleared);
 
       // Explicitly position the hardware cursor at the active prompt line
       const lastLine = lines[lines.length - 1] ?? '';
