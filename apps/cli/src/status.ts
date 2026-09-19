@@ -43,7 +43,7 @@ export function getStatus(engine: RookEngine): StatusSummary {
   }
   
   return {
-    version: '0.1.0',
+    version: '0.1.1',
     configDir: engine.configDir,
     projectRoot: engine.projectRoot,
     computers: {
