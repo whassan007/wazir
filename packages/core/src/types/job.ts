@@ -225,5 +225,7 @@ export interface JobRunOptions {
   taskExecutor?: JobTaskExecutor;
   signal?: AbortSignal;
   onEvent?: (event: JobOrchestratorEvent) => void;
+  /** Overrides job.timeoutSeconds for this run; falls back to a built-in default if neither is set. */
+  timeoutSeconds?: number;
 }
 

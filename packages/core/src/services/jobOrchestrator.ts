@@ -51,6 +51,13 @@ interface ActiveJobHandle {
   reject: (err: Error) => void;
 }
 
+// A job's own timeoutSeconds (or JobRunOptions.timeoutSeconds) is honored when set; this
+// is the floor for one that was never given a timeout at all. Coding tasks that hang
+// (a model stuck looping on a fix, waiting on something that will never arrive) used to
+// run forever with no way to notice besides someone happening to look at the duration —
+// this bounds that automatically instead of relying on a human to catch it and cancel it.
+const DEFAULT_JOB_TIMEOUT_SECONDS = 300;
+
 export class JobOrchestrator {
   private readonly scheduler: Scheduler;
   private readonly executionEngine: ExecutionEngine;
@@ -305,6 +312,9 @@ export class JobOrchestrator {
 
     this.emit(jobId, { type: 'job:started', jobId });
 
+    const timeoutSeconds = options.timeoutSeconds ?? job.timeoutSeconds ?? DEFAULT_JOB_TIMEOUT_SECONDS;
+    let timedOut = false;
+
     return new Promise<Job>((resolve, reject) => {
       const handle: ActiveJobHandle = {
         abort: jobAbortController,
@@ -314,11 +324,41 @@ export class JobOrchestrator {
       };
       this.activeJobs.set(jobId, handle);
 
+      // Reuses cancelJob() rather than aborting jobAbortController directly, so a timeout
+      // gets exactly the same cleanup a manual cancel already gets — every active task's
+      // own AbortController is aborted too, not just the top-level job one.
+      const timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        void this.cancelJob(jobId);
+      }, Math.max(1, timeoutSeconds) * 1000);
+      timeoutTimer.unref?.();
+
       let isFinished = false;
 
       const finishJob = async (finalStatus: 'completed' | 'failed' | 'cancelled') => {
         if (isFinished) return;
-        if (job.status === 'cancelled' || jobAbortController.signal.aborted) {
+        clearTimeout(timeoutTimer);
+        if (timedOut) {
+          finalStatus = 'failed';
+          // The per-task abort handler above (see taskAbort.signal.aborted) already marks
+          // an in-flight task/node 'cancelled' as a mechanical side effect of reusing
+          // cancelJob() to actually stop it — that's not a genuine user cancellation, so
+          // it's overridden here too (unlike the ordinary non-timeout path below, which
+          // leaves a real cancellation as 'cancelled').
+          const reason = `Task exceeded the ${timeoutSeconds}s timeout and was automatically stopped`;
+          for (const node of job.graph.nodes) {
+            if (node.state !== 'completed' && node.state !== 'failed') {
+              node.state = 'failed';
+              node.error = node.error ?? reason;
+              node.completedAt = node.completedAt ?? new Date();
+            }
+          }
+          for (const task of job.tasks) {
+            if (task.status !== 'completed' && task.status !== 'failed') {
+              task.status = 'failed';
+            }
+          }
+        } else if (job.status === 'cancelled' || jobAbortController.signal.aborted) {
           finalStatus = 'cancelled';
         }
         isFinished = true;
@@ -328,6 +368,8 @@ export class JobOrchestrator {
 
         if (finalStatus === 'completed') {
           this.emit(jobId, { type: 'job:completed', jobId });
+        } else if (timedOut) {
+          this.emit(jobId, { type: 'job:failed', jobId, error: `Timed out after ${timeoutSeconds}s` });
         } else if (finalStatus === 'cancelled') {
           this.emit(jobId, { type: 'job:cancelled', jobId });
         } else {

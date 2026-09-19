@@ -342,6 +342,50 @@ describe('JobOrchestrator — fleet-scale graph walk & concurrent execution', ()
     expect(completed).toContain('task-sibling');
   });
 
+  it('automatically stops a task that runs past its timeout, marking it failed with a clear reason', async () => {
+    // A task that hangs (a model stuck looping, waiting on something that never arrives)
+    // used to run forever with no way to notice besides a human happening to look at the
+    // duration. This is the actual, automatic kill switch.
+    let sawAbort = false;
+    const executor: JobTaskExecutor = async (task, ctx) => {
+      return new Promise<JobTaskOutcome>((resolve) => {
+        ctx.signal?.addEventListener('abort', () => {
+          sawAbort = true;
+          resolve({ success: false, error: 'aborted' });
+        });
+      });
+    };
+
+    const { orchestrator } = setupTestOrchestrator(executor);
+    const job = await orchestrator.createJob({
+      title: 'Timeout Test',
+      tasks: [{ task: { id: 'hangs-forever', input: 'this never finishes on its own' } }],
+    });
+
+    const finished = await orchestrator.runJob(job.id, { timeoutSeconds: 1 });
+
+    expect(sawAbort).toBe(true);
+    expect(finished.status).toBe('failed');
+    const node = finished.graph.nodes.find((n) => n.taskId === 'hangs-forever');
+    expect(node?.state).toBe('failed');
+    expect(node?.error).toContain('exceeded the 1s timeout');
+  });
+
+  it('does not touch a job that finishes comfortably within its timeout', async () => {
+    const executor: JobTaskExecutor = async () => ({ success: true, result: 'done quickly' });
+    const { orchestrator } = setupTestOrchestrator(executor);
+    const job = await orchestrator.createJob({
+      title: 'Fast Job',
+      tasks: [{ task: { id: 'quick-task', input: 'finishes immediately' } }],
+    });
+
+    const finished = await orchestrator.runJob(job.id, { timeoutSeconds: 60 });
+
+    expect(finished.status).toBe('completed');
+    const node = finished.graph.nodes.find((n) => n.taskId === 'quick-task');
+    expect(node?.error).toBeUndefined();
+  });
+
   it('supports mid-run steering injection into a running task', async () => {
     let capturedSteering: string | undefined;
 
