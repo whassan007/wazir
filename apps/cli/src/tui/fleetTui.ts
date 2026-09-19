@@ -71,6 +71,9 @@ export interface FleetTuiOptions {
  */
 function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
   if (keyObj && keyObj.name) return keyObj;
+  if (typeof keyStr !== 'string') {
+    return { name: undefined as any, ctrl: false, meta: false, shift: false, sequence: '' };
+  }
 
   if (keyStr === '\t') {
     return { name: 'tab', ctrl: false, meta: false, shift: false, sequence: '\t' };
@@ -274,6 +277,54 @@ export class FleetTui {
   private keypressListener?: (ch: string | undefined, key?: readline.Key) => void;
   private inputListener?: (data: Buffer | string) => void;
 
+  /**
+   * Isolates and consumes Tab / Shift-Tab key events cleanly (§1).
+   * Toggles target focus, transitions views, and redraws screen without buffer leakage.
+   */
+  consumeTabKey(isShift = false): void {
+    // If @ fuzzy reference picker is active, Tab completes the selected candidate into prompt
+    if (this.isPickerActive && this.pickerCandidates.length > 0) {
+      const chosen = this.pickerCandidates[this.pickerIndex];
+      this.inputBuffer = this.inputBuffer.replace(/@([a-zA-Z0-9_:./-]*)$/, chosen + ' ');
+      this.isPickerActive = false;
+      this.pickerCandidates = [];
+      this.draw();
+      return;
+    }
+
+    // Toggle target focus and cycle view (§1, §3)
+    const views: TuiView[] = ['fleet', 'tail', 'approval', 'worktrees'];
+    const idx = views.indexOf(this.currentView);
+    if (isShift) {
+      this.currentView = views[(idx - 1 + views.length) % views.length];
+    } else {
+      this.currentView = views[(idx + 1) % views.length];
+    }
+
+    // Toggle target focus cleanly:
+    this.focusedPane = this.currentView === 'fleet' ? 'nav' : 'main';
+
+    // In 'tail' view: ensure active execution is selected in nav so the event stream displays immediately
+    if (this.currentView === 'tail') {
+      const all = this.getFlatNavItems();
+      const execItem =
+        all.find((it) => it.category === 'EXECUTIONS' && it.id === this.selectedTaskId) ??
+        all.find((it) => it.category === 'EXECUTIONS');
+      if (execItem) {
+        this.selectedCategory = 'EXECUTIONS';
+        this.selectedNavId = execItem.id;
+        this.selectedTaskId = execItem.id;
+        const itemIdx = all.findIndex((it) => it.id === execItem.id && it.category === 'EXECUTIONS');
+        if (itemIdx !== -1) {
+          this.navSelectionIndex = itemIdx;
+        }
+      }
+    }
+
+    // Clean View Transition: cleanly trigger a screen redraw without residual buffer characters
+    this.draw();
+  }
+
   waitForExit(): Promise<void> {
     if (!this.exitPromise) {
       this.exitPromise = new Promise<void>((resolve) => {
@@ -312,6 +363,28 @@ export class FleetTui {
     // Listen to structured keypress events via screen input stream
     const inStream = this.screen.getInputStream();
     this.keypressListener = (ch: string | undefined, key?: readline.Key) => {
+      // 1. Isolate Tab Key Events (§1):
+      // In the global keypress/keydown listener, ensure that when key.name === 'tab' (or key.sequence === '\t'),
+      // the event is completely consumed, target focus is toggled, and execution explicitly returns early.
+      const isTab =
+        key?.name === 'tab' ||
+        key?.sequence === '\t' ||
+        ch === '\t' ||
+        ch === '\x1b[Z' ||
+        key?.sequence === '\x1b[Z';
+
+      if (isTab) {
+        if (typeof (key as any)?.preventDefault === 'function') {
+          (key as any).preventDefault();
+        }
+        if (typeof (key as any)?.stopPropagation === 'function') {
+          (key as any).stopPropagation();
+        }
+        const isShift = Boolean(key?.shift || ch === '\x1b[Z' || key?.sequence === '\x1b[Z');
+        this.consumeTabKey(isShift);
+        return;
+      }
+
       this.handleKey(ch ?? key?.sequence ?? '', key);
     };
     inStream.on('keypress', this.keypressListener);
@@ -323,6 +396,10 @@ export class FleetTui {
         return;
       }
       const str = typeof data === 'string' ? data : data.toString('utf8');
+      if (str === '\t' || str === '\x1b[Z') {
+        this.consumeTabKey(str === '\x1b[Z');
+        return;
+      }
       this.handleKey(str);
     };
     inStream.on('data', this.inputListener);
@@ -369,6 +446,15 @@ export class FleetTui {
     if ((keyObj.ctrl && (keyName === 'c' || keyName === 'C')) || keyStr === '\u0003') {
       this.stop();
       process.exit(0);
+    }
+
+    // 2. Isolate Tab Key Events (§1):
+    // In the global keypress/keydown handler, ensure when key.name === 'tab' (or key.sequence === '\t'),
+    // the event is completely consumed, target focus is toggled, and execution explicitly returns early.
+    if (keyName === 'tab' || keyStr === '\t' || keyStr === '\x1b[Z') {
+      const isShift = Boolean(keyObj.shift || keyStr === '\x1b[Z');
+      this.consumeTabKey(isShift);
+      return;
     }
 
     // 2. Escape: dismiss active overlay modals, reset scroll, or return to fleet
@@ -577,31 +663,7 @@ export class FleetTui {
       }
     }
 
-    // 11. Tab Key Interception (§1):
-    // In the keypress event listener, explicitly check if key.name === 'tab'.
-    // Execute the pane-switching / focus-cycling logic and immediately return early
-    // to prevent the literal tab character (\t) from appending to the active input text buffer.
-    if (keyName === 'tab' || keyStr === '\t' || keyStr === '\x1b[Z') {
-      if (keyObj.shift || keyStr === '\x1b[Z') {
-        // Shift-Tab: Reverse pane traversal (§3)
-        const views: TuiView[] = ['fleet', 'tail', 'approval', 'worktrees'];
-        const idx = views.indexOf(this.currentView);
-        this.currentView = views[(idx - 1 + views.length) % views.length];
-        this.focusedPane = this.currentView === 'fleet' ? 'nav' : 'main';
-        this.draw();
-        return;
-      }
-
-      // Tab: Forward pane traversal / cycle views (§3)
-      const views: TuiView[] = ['fleet', 'tail', 'approval', 'worktrees'];
-      const idx = views.indexOf(this.currentView);
-      this.currentView = views[(idx + 1) % views.length];
-      this.focusedPane = this.currentView === 'fleet' ? 'nav' : 'main';
-      this.draw();
-      return;
-    }
-
-    // 12. '?' for Help (§3) when input buffer is empty
+    // 11. '?' for Help (§3) when input buffer is empty
     if ((keyName === '?' || keyStr === '?') && this.inputBuffer.length === 0) {
       this.currentView = this.currentView === 'help' ? 'fleet' : 'help';
       this.draw();
@@ -729,8 +791,9 @@ export class FleetTui {
       return;
     }
 
-    // 20. Control & Navigation Key Leak Guard:
-    // Prevent any non-printable or control keys from ever reaching text buffer
+    // 20. Control & Navigation Key Leak Guard (§2):
+    // Prevent any non-printable, control, or navigation keys (Tab, Arrows, PageUp/Down)
+    // from ever reaching text buffer or log streams.
     if (
       keyObj.ctrl ||
       keyObj.meta ||
@@ -745,17 +808,22 @@ export class FleetTui {
       keyName === 'left' ||
       keyName === 'right' ||
       keyName === 'pageup' ||
-      keyName === 'pagedown'
+      keyName === 'pagedown' ||
+      keyStr === '\t' ||
+      keyStr === '\x1b[Z' ||
+      keyStr.startsWith('\x1b') ||
+      keyStr.startsWith('\u001b') ||
+      /^[\[O][A-Za-z0-9~]/.test(keyStr) ||
+      /^\[[0-9;]*[a-zA-Z~]/.test(keyStr)
     ) {
       return;
     }
 
-    // 21. Printable characters
+    // 21. Printable characters (§2):
+    // Must be a single valid printable character (never an unparsed multi-byte sequence)
     if (
-      !keyStr.startsWith('\x1b') &&
-      !keyStr.startsWith('\u001b') &&
-      !/[\x00-\x1f\x7f]/.test(keyStr) &&
-      keyStr.length > 0
+      keyStr.length === 1 &&
+      !/[\x00-\x1f\x7f-\x9f]/.test(keyStr)
     ) {
       this.inputBuffer += keyStr;
       this.focusedPane = 'prompt';
@@ -1559,7 +1627,7 @@ export class FleetTui {
   private renderMainPane(width: number, maxRows: number): string[] {
     const lines: string[] = [];
     const flatItems = this.getFlatNavItems();
-    const selected = flatItems[this.navSelectionIndex];
+    let selected = flatItems[this.navSelectionIndex];
 
     // Handle view overrides (help, worktrees)
     if (this.currentView === 'help') {
@@ -1567,6 +1635,16 @@ export class FleetTui {
     }
     if (this.currentView === 'worktrees') {
       return this.renderWorktreesPane(width, maxRows);
+    }
+
+    // In 'tail' view: ensure we render the execution event-stream activity pane (§11)
+    if (this.currentView === 'tail') {
+      const execItem =
+        flatItems.find((it) => it.category === 'EXECUTIONS' && it.id === this.selectedTaskId) ??
+        flatItems.find((it) => it.category === 'EXECUTIONS');
+      if (execItem) {
+        selected = execItem;
+      }
     }
 
     if (!selected) {
@@ -1649,34 +1727,38 @@ export class FleetTui {
           for (const log of visibleLogs) {
             const timePrefix = color.gray(`[${log.time}]`);
             let badge = color.gray('INFO    ');
-            let contentText = log.text;
 
-            // Semantic typed states (§11): PLAN, ROUTE, TOOL, TEST, COMPLETE
+            // Sanitize log text: strip unprintable control characters and truncate before coloring
+            const cleanText = log.text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+            const maxTextLen = Math.max(10, width - 28);
+            const truncatedText =
+              cleanText.length > maxTextLen ? cleanText.slice(0, maxTextLen - 1) + '…' : cleanText;
+
+            let contentText = truncatedText;
+
+            // Semantic typed states (§11): PLAN, ROUTE, TOOL, TEST, COMPLETE, ERROR
             const k = (log.kind || '').toLowerCase();
             if (k === 'plan') {
               badge = color.cyan('PLAN    ');
-              contentText = color.cyan(log.text);
+              contentText = color.cyan(truncatedText);
             } else if (k === 'route') {
               badge = color.blue('ROUTE   ');
-              contentText = color.blue(log.text);
+              contentText = color.blue(truncatedText);
             } else if (k === 'tool') {
               badge = color.yellow('TOOL    ');
-              contentText = color.yellow(log.text);
+              contentText = color.yellow(truncatedText);
             } else if (k === 'test') {
               badge = color.cyan('TEST    ');
-              contentText = log.text;
+              contentText = truncatedText;
             } else if (k === 'complete' || k === 'done') {
               badge = color.green('COMPLETE');
-              contentText = color.green(log.text);
+              contentText = color.green(truncatedText);
             } else if (k === 'error' || k === 'fail') {
               badge = color.red('ERROR   ');
-              contentText = color.red(log.text);
+              contentText = color.red(truncatedText);
             }
 
-            const maxTextLen = Math.max(10, width - 26);
-            const textTrunc =
-              contentText.length > maxTextLen ? contentText.slice(0, maxTextLen - 1) + '…' : contentText;
-            lines.push(this.padRightTo(`  ${timePrefix} ${badge} ${textTrunc}`, width));
+            lines.push(this.padRightTo(`  ${timePrefix} ${badge} ${contentText}`, width));
           }
         }
       } else {
@@ -2045,11 +2127,42 @@ export class FleetTui {
     return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
   }
 
+  private truncateAnsi(str: string, maxLen: number): string {
+    const plain = this.stripAnsi(str);
+    if (plain.length <= maxLen) return str;
+
+    let visibleCount = 0;
+    let result = '';
+    let inEscape = false;
+
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i];
+      if (char === '\x1b') {
+        inEscape = true;
+        result += char;
+      } else if (inEscape) {
+        result += char;
+        if (/[a-zA-Z~]/.test(char)) {
+          inEscape = false;
+        }
+      } else {
+        if (visibleCount < maxLen - 1) {
+          result += char;
+          visibleCount++;
+        } else {
+          result += '…\x1b[0m';
+          break;
+        }
+      }
+    }
+    return result.endsWith('\x1b[0m') ? result : result + '\x1b[0m';
+  }
+
   private padRightTo(str: string, targetWidth: number): string {
     const visible = this.stripAnsi(str).length;
-    if (visible >= targetWidth) {
-      return str.slice(0, targetWidth);
+    if (visible > targetWidth) {
+      return this.truncateAnsi(str, targetWidth);
     }
-    return str + ' '.repeat(targetWidth - visible);
+    return str + ' '.repeat(Math.max(0, targetWidth - visible));
   }
 }

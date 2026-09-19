@@ -890,4 +890,149 @@ describe('FleetTui — interactive terminal UI harness', () => {
     expect(screen.isRawMode()).toBe(false);
     expect(mockIn.rawMode).toBe(false);
   });
+
+  it('isolates Tab key events in global keypress listener and toggles target focus with early return', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // Initial state: focus is 'nav', view is 'fleet'
+    expect(harness.tui.getCurrentView()).toBe('fleet');
+    expect(harness.tui.getFocusedPane()).toBe('nav');
+
+    // Type text into prompt to ensure it is not corrupted or appended to
+    harness.sendKeys('active query');
+    expect(harness.getScreenBuffer()).toContain('wa> active query');
+
+    let prevented = false;
+    let stopped = false;
+    const tabKeyEvent = {
+      name: 'tab',
+      ctrl: false,
+      meta: false,
+      shift: false,
+      sequence: '\t',
+      preventDefault: () => {
+        prevented = true;
+      },
+      stopPropagation: () => {
+        stopped = true;
+      },
+    };
+
+    // Emit keypress event on inStream directly (global keypress listener)
+    harness.inStream.emit('keypress', '\t', tabKeyEvent);
+
+    // Verify Tab event was consumed and preventDefault/stopPropagation invoked
+    expect(prevented).toBe(true);
+    expect(stopped).toBe(true);
+
+    // Target focus toggled to 'main' and view transitioned to 'tail'
+    expect(harness.tui.getCurrentView()).toBe('tail');
+    expect(harness.tui.getFocusedPane()).toBe('main');
+
+    // Verify input buffer was completely untouched (no '\t' or corruption)
+    expect(harness.getScreenBuffer()).toContain('wa> active query');
+    expect(harness.getScreenBuffer()).not.toContain('wa> active query\t');
+
+    harness.stop();
+  });
+
+  it('prevents stream echo: navigation keys and unparsed ANSI codes never bind into input buffer or log streams', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // Initial buffer empty
+    expect(harness.getScreenBuffer()).toContain('wa> ');
+
+    // Send array of navigation keys and unparsed ANSI escape fragments
+    const testKeys = ['\t', '\x1b[A', '\x1b[B', '\x1b[C', '\x1b[D', '\x1b[Z', '[A', '[B', '[Z', '[3~', '\x1b[5~'];
+    for (const k of testKeys) {
+      harness.sendKey(k);
+    }
+
+    const buf = harness.getScreenBuffer();
+    // Prompt line must still be empty 'wa> ' (none of these keys or sequences leaked into inputBuffer)
+    const promptLine = buf.split('\n').find((l) => l.includes('wa> '));
+    expect(promptLine?.trim()).toBe('wa>');
+
+    // Send valid printable characters
+    harness.sendKeys('run test');
+    expect(harness.getScreenBuffer()).toContain('wa> run test');
+
+    // Send more navigation keys in the middle
+    harness.sendKey('\u001b[A'); // Up arrow
+    harness.sendKey('\u001b[B'); // Down arrow
+    harness.sendKey('\x1b[Z');   // Shift-Tab
+    harness.sendKey('\t');       // Tab
+
+    // Verify input buffer still strictly contains 'run test' without sequence echo
+    const promptLineAfter = harness.getScreenBuffer().split('\n').find((l) => l.includes('wa> '));
+    expect(promptLineAfter?.trim()).toBe('wa> run test');
+
+    harness.stop();
+  });
+
+  it('clean view transition: Tab triggers clean redraw without leaking job ID fragments or residual buffer characters into active log pane', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // Launch a multi-task job to produce realistic job and task IDs (e.g., job-mu7ybxyu-1, task-1)
+    harness.sendLine('/fanout build frontend; run tests');
+
+    // Wait for job to register
+    await new Promise((r) => setTimeout(r, 80));
+
+    const job = harness.tui.getCurrentJob();
+    expect(job).toBeDefined();
+
+    // Verify initial fleet view contains clean rendering
+    let buf = harness.getScreenBuffer();
+    expect(buf).toContain('WAZIR');
+    expect(buf).toContain('task-1');
+
+    // Switch view via Tab to 'tail'
+    harness.sendKey('\t');
+    expect(harness.tui.getCurrentView()).toBe('tail');
+    expect(harness.tui.getFocusedPane()).toBe('main');
+
+    // The main pane is now the active event stream activity pane
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('Tail: task-1');
+    expect(buf).toContain('PLAN');
+
+    // Ensure no broken ANSI fragments or residual chopped strings exist
+    expect(buf).not.toContain('\x1b[3\n');
+    expect(buf).not.toContain('\x1b[\n');
+
+    // Cycle through all views (tail -> approval -> worktrees -> fleet -> tail)
+    harness.sendKey('\t'); // approval
+    expect(harness.tui.getCurrentView()).toBe('approval');
+
+    harness.sendKey('\t'); // worktrees
+    expect(harness.tui.getCurrentView()).toBe('worktrees');
+
+    harness.sendKey('\t'); // fleet
+    expect(harness.tui.getCurrentView()).toBe('fleet');
+    expect(harness.tui.getFocusedPane()).toBe('nav');
+
+    harness.sendKey('\t'); // back to tail
+    expect(harness.tui.getCurrentView()).toBe('tail');
+    expect(harness.tui.getFocusedPane()).toBe('main');
+
+    // Verify screen buffer after view transitions is clean
+    const tailBuf = harness.getScreenBuffer();
+    expect(tailBuf).toContain('Tail: task-1');
+    expect(tailBuf).toContain('wa> ');
+
+    harness.stop();
+  });
 });
