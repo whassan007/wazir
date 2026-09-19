@@ -289,6 +289,26 @@ describe('FleetTui — interactive terminal UI harness', () => {
     const job = harness.tui.getCurrentJob();
     expect(job).toBeDefined();
 
+    // Completed tasks carry the model's token usage (input/output/total) forwarded from
+    // the task:completed event — the Tail view should show it, not just status/duration.
+    const completedAgent = harness.tui.getAgents().find((a) => a.status === 'completed');
+    expect(completedAgent?.usage?.total).toBeGreaterThan(0);
+
+    harness.sendKey('\r');
+    expect(harness.tui.getCurrentView()).toBe('tail');
+    const usageBuf = harness.getScreenBuffer();
+    expect(usageBuf).toMatch(/Tokens: In \d+ \/ Out \d+ \(\d+ total\)/);
+    expect(usageBuf).toMatch(/Speed: [\d.]+ tok\/s/);
+    harness.sendKey('\x1b');
+
+    // Navigate up to the JOBS entry (it's first in the flat nav list) and confirm the
+    // rollup line — previously stuck showing whatever job last ran, not the selected one
+    // — now shows this job's own input/output token breakdown.
+    for (let i = 0; i < 5; i++) harness.sendKey('\u001b[A');
+    await new Promise((r) => setTimeout(r, 30));
+    const jobBuf = harness.getScreenBuffer();
+    expect(jobBuf).toMatch(/Rollup: Tokens: In \d+ \/ Out \d+ \(\d+ total\)/);
+
     harness.stop();
   });
 

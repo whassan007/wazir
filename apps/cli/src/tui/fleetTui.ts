@@ -13,6 +13,7 @@ import { createFleetTaskExecutor } from '../fleetRunner.js';
 import { TerminalScreen, type TerminalSize } from './screen.js';
 import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } from '../blocks.js';
 import { resolveReference, type ResolvedReference } from '../references.js';
+import { tokensPerSecond } from '@wazir/shared';
 
 // Per-category spinner frames for the persistent full-screen renderer. Earlier rounds on
 // this terminal assumed Braille glyphs were unsafe (they'd caused ghosting twice), but an
@@ -86,6 +87,7 @@ export interface AgentCardState {
   completedAt?: Date;
   durationMs: number;
   filesChanged: string[];
+  usage?: { input: number; output: number; total: number };
 }
 
 export interface FleetTuiOptions {
@@ -231,6 +233,13 @@ export class FleetTui {
 
   private currentJob?: Job;
   private currentRollup?: JobRollup;
+  // Rollup (tokens, duration, tok/s) per job id, fetched on demand when a JOBS nav item
+  // is selected — getJobRollup() is async (it reads execution records per task), so this
+  // caches the last-fetched result per job rather than blocking the render loop on it.
+  // Without this, the JOBS detail view fell back to `currentRollup`, which only ever
+  // reflected whichever job was most recently launched in this session — selecting a
+  // different (especially older, reloaded-from-disk) job showed stale or wrong numbers.
+  private readonly jobRollups = new Map<string, JobRollup>();
   private isRunning = false;
   private shouldExit = false;
 
@@ -893,6 +902,19 @@ export class FleetTui {
       const list = this.getAgents();
       const idx = list.findIndex((a) => a.taskId === item.id);
       if (idx !== -1) this.highlightedIndex = idx;
+    } else if (item.category === 'JOBS') {
+      void this.refreshJobRollup(item.id);
+    }
+  }
+
+  private async refreshJobRollup(jobId: string): Promise<void> {
+    try {
+      const rollup = await this.engine.orchestrator.getJobRollup(jobId);
+      this.jobRollups.set(jobId, rollup);
+      this.draw();
+    } catch {
+      // Job may have been created without a store-backed rollup path (e.g. tests) — leave
+      // whatever was cached (or nothing) rather than showing an error for a cosmetic field.
     }
   }
 
@@ -1178,7 +1200,8 @@ export class FleetTui {
           });
 
           this.currentRollup = await this.engine.orchestrator.getJobRollup(job.id);
-          this.statusMessage = `Job ${job.id} ${job.status}! Tokens: ${this.currentRollup.tokens.total}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
+          this.jobRollups.set(job.id, this.currentRollup);
+          this.statusMessage = `Job ${job.id} ${job.status}! Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
 
           if (this.currentBlockTracker) {
             await this.currentBlockTracker.finish(job.status === 'completed' ? 'success' : 'failed', {
@@ -1311,6 +1334,7 @@ export class FleetTui {
         agent.phase = 'complete';
         agent.lastMessage = 'Task completed';
         if (ev.filesChanged) agent.filesChanged = ev.filesChanged;
+        if (ev.usage) agent.usage = ev.usage;
 
         logs.push({
           time: timeStr,
@@ -1788,6 +1812,17 @@ export class FleetTui {
             width,
           ),
         );
+        if (card.usage) {
+          const tps = tokensPerSecond(card.usage.output, card.durationMs).toFixed(1);
+          lines.push(
+            this.padRightTo(
+              color.gray(
+                `  Tokens: In ${card.usage.input} / Out ${card.usage.output} (${card.usage.total} total) | Speed: ${tps} tok/s`,
+              ),
+              width,
+            ),
+          );
+        }
         lines.push(this.padRightTo(color.gray('  ' + '-'.repeat(Math.max(10, width - 4))), width));
 
         // Display scroll indicator if scrolled up
@@ -1874,15 +1909,19 @@ export class FleetTui {
             lines.push(this.padRightTo(color.gray(`      -> ${oneLine.slice(0, width - 12)}`), width));
           }
         }
-        if (this.currentRollup) {
+        const rollup = this.jobRollups.get(job.id);
+        if (rollup) {
+          const tps = rollup.tokensPerSecond > 0 ? rollup.tokensPerSecond.toFixed(1) : '0.0';
           lines.push(
             this.padRightTo(
               color.gray(
-                `  Rollup: Tokens: ${this.currentRollup.tokens.total} | Duration: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`,
+                `  Rollup: Tokens: In ${rollup.tokens.input} / Out ${rollup.tokens.output} (${rollup.tokens.total} total) | Duration: ${(rollup.durationMs / 1000).toFixed(1)}s | Speed: ${tps} tok/s`,
               ),
               width,
             ),
           );
+        } else {
+          void this.refreshJobRollup(job.id);
         }
       }
     } else if (selected.category === 'AGENTS') {
