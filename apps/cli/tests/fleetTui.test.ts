@@ -215,6 +215,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
     // 1. Initial screen render
     const initialBuf = harness.getScreenBuffer();
     expect(initialBuf).toContain('WAZIR • CONTROL • WORKER');
+    expect(initialBuf).toContain('[View: FLEET]');
     expect(initialBuf).toContain('AVAILABLE');
     expect(initialBuf).toContain('wa> ');
     expect(harness.tui.getCurrentView()).toBe('fleet');
@@ -1032,6 +1033,105 @@ describe('FleetTui — interactive terminal UI harness', () => {
     const tailBuf = harness.getScreenBuffer();
     expect(tailBuf).toContain('Tail: task-1');
     expect(tailBuf).toContain('wa> ');
+
+    harness.stop();
+  });
+
+  it('clears screen on view switch to prevent text ghosting, renders independent view templates, and updates view title without clipping', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+
+    await harness.start();
+
+    // 1. Initial state: [View: FLEET] indicator in header
+    let buf = harness.getScreenBuffer();
+    expect(buf).toContain('[View: FLEET]');
+    expect(buf).not.toContain('[View: FLEET]EES');
+    expect(buf).not.toContain('[View: FLEET]TREES');
+
+    // 2. Tab to TAIL view: header updates cleanly
+    harness.sendKey('\t');
+    expect(harness.tui.getCurrentView()).toBe('tail');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('[View: TAIL]');
+    // Verify no residual text from FLEET view leaks through
+    expect(buf).not.toContain('[View: FLEET]');
+
+    // 3. Tab to APPROVAL view: independent template renders
+    harness.sendKey('\t');
+    expect(harness.tui.getCurrentView()).toBe('approval');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('[View: APPROVAL]');
+    expect(buf).toContain('POLICY APPROVAL QUEUE');
+    // When no approvals pending, shows clean empty state
+    expect(buf).toContain('No pending approval requests');
+    // Verify no table column headers from fleet/execution view bleed through
+    expect(buf).not.toContain('Routing:');
+
+    // 4. Tab to WORKTREES view: independent template
+    harness.sendKey('\t');
+    expect(harness.tui.getCurrentView()).toBe('worktrees');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('[View: WORKTREES]');
+    expect(buf).toContain('GIT WORKTREE ISOLATION');
+    // No clipping from shorter previous view names
+    expect(buf).not.toContain('[View: APPROVAL]');
+
+    // 5. Tab back to FLEET: full cycle clean
+    harness.sendKey('\t');
+    expect(harness.tui.getCurrentView()).toBe('fleet');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('[View: FLEET]');
+    expect(buf).not.toContain('[View: WORKTREES]');
+
+    // 6. Verify Escape also cleanly transitions
+    harness.sendKey('\t'); // go to tail
+    expect(harness.tui.getCurrentView()).toBe('tail');
+    harness.sendKey('\x1b'); // escape back to fleet
+    expect(harness.tui.getCurrentView()).toBe('fleet');
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('[View: FLEET]');
+    expect(buf).not.toContain('[View: TAIL]');
+
+    harness.stop();
+  });
+
+  it('renders approval view with dedicated layout template that does not collide with execution table columns', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+
+    await harness.start();
+
+    // Navigate to approval view
+    harness.sendKey('\t'); // tail
+    harness.sendKey('\t'); // approval
+    expect(harness.tui.getCurrentView()).toBe('approval');
+
+    // With no pending approvals: clean empty state
+    let buf = harness.getScreenBuffer();
+    expect(buf).toContain('POLICY APPROVAL QUEUE');
+    expect(buf).toContain('No pending approval requests');
+
+    // Enqueue an approval to test populated state
+    const authPromise = engine.approvalQueue.enqueue(
+      { tool: 'write_file', input: { path: '/tmp/test.txt' }, executionId: 'exec-ui' },
+      { decision: 'ask', rule: 'write-guard', reasons: ['writes to filesystem'] },
+      { taskId: 'task-ui' },
+    );
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Approval view should show populated entries
+    buf = harness.getScreenBuffer();
+    expect(buf).toContain('POLICY APPROVAL QUEUE');
+    expect(buf).toContain('write_file');
+    expect(buf).toContain('write-guard');
+
+    // Approve to clean up
+    harness.sendKey('a');
+    await authPromise;
 
     harness.stop();
   });

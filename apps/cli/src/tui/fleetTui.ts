@@ -323,7 +323,10 @@ export class FleetTui {
       }
     }
 
-    // Clean View Transition: cleanly trigger a screen redraw without residual buffer characters
+    // Clean View Transition (§1, §3):
+    // Full screen/container clear before rendering the new view to eliminate
+    // text ghosting, overlapping headers, and residual buffer characters.
+    this.screen.clearLastBuffer();
     this.draw();
   }
 
@@ -489,6 +492,7 @@ export class FleetTui {
       }
       this.currentView = 'fleet';
       this.focusedPane = 'nav';
+      this.screen.clearLastBuffer();
       this.draw();
       return;
     }
@@ -1559,18 +1563,28 @@ export class FleetTui {
     const activeCount = Array.from(this.agents.values()).filter((a) => a.status === 'running').length;
     const workerStatus = activeCount >= this.concurrencyLimit ? 'BUSY' : 'AVAILABLE';
 
+    // §3: View Title Indicator — fully overwritten on state changes using fixed-width padding
+    // to prevent concatenation artifacts (e.g., [View: FLEET]EES clipping bug)
+    const viewName = this.currentView.toUpperCase();
+    const viewTag = `[View: ${viewName}]`;
+    // Pad to fixed 20 chars so switching between FLEET/TAIL/APPROVAL/WORKTREES/HELP never leaves residual chars
+    const viewTagPadded = viewTag.padEnd(20);
+
     // Semantic Colors (§25): cyan = identity / active context, green = ok/success, yellow = waiting
     const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('•')} ${color.bold('CONTROL')} ${color.gray('•')} ${color.bold('WORKER')} ${color.gray('|')} ${compCount} COMPUTERS ${agentCount} AGENTS ${modelCount} MODELS`;
+    const viewPart = color.bold(color.cyan(viewTagPadded));
     const agentPart = `Agents ${activeCount}/${this.concurrencyLimit} ${color.gray('•')} ${workerStatus === 'AVAILABLE' ? color.green('AVAILABLE') : color.yellow('BUSY')}`;
 
     const pendingCount = this.pendingApprovals.length;
     const alert = pendingCount > 0 ? color.bold(color.yellow(` [! ${pendingCount} APPROVALS]`)) : '';
 
     const titlePlain = `WAZIR • CONTROL • WORKER | ${compCount} COMPUTERS ${agentCount} AGENTS ${modelCount} MODELS`;
+    const viewPlain = viewTagPadded;
     const agentPlain = `Agents ${activeCount}/${this.concurrencyLimit} • ${workerStatus}${pendingCount > 0 ? ` [! ${pendingCount} APPROVALS]` : ''}`;
 
-    const spaces = Math.max(2, cols - titlePlain.length - agentPlain.length - 2);
-    return ` ${titlePart}${' '.repeat(spaces)}${agentPart}${alert}`;
+    const spaces = Math.max(1, cols - titlePlain.length - viewPlain.length - agentPlain.length - 4);
+    const headerLine = ` ${titlePart} ${viewPart}${' '.repeat(spaces)}${agentPart}${alert}`;
+    return this.padRightTo(headerLine, cols);
   }
 
   /**
@@ -1638,6 +1652,9 @@ export class FleetTui {
     }
     if (this.currentView === 'worktrees') {
       return this.renderWorktreesPane(width, maxRows);
+    }
+    if (this.currentView === 'approval') {
+      return this.renderApprovalPane(width, maxRows);
     }
 
     // In 'tail' view: ensure we render the execution event-stream activity pane (§11)
@@ -2093,6 +2110,40 @@ export class FleetTui {
 
     lines.push('');
     lines.push(color.gray('  Merge-back story: Changes are verified on isolated branches before merge into target.'));
+    while (lines.length < maxRows) lines.push('');
+    return lines;
+  }
+
+  /**
+   * Independent View Layout Template: APPROVAL (§2)
+   * Dedicated layout so approval view never collides with table columns from other views.
+   */
+  private renderApprovalPane(cols: number, maxRows: number): string[] {
+    const lines: string[] = [];
+    lines.push(color.bold(color.yellow('  POLICY APPROVAL QUEUE')));
+    lines.push(color.gray('  Review and act on pending tool approval requests:'));
+    lines.push('');
+
+    if (this.pendingApprovals.length === 0) {
+      lines.push(color.green('  ✓ No pending approval requests.'));
+      lines.push('');
+      lines.push(color.gray('  All tool invocations are passing current policy rules.'));
+    } else {
+      for (let i = 0; i < this.pendingApprovals.length && lines.length < maxRows - 2; i++) {
+        const req = this.pendingApprovals[i];
+        const idx = `[${i + 1}/${this.pendingApprovals.length}]`;
+        lines.push(`  ${color.yellow(idx)} Tool: ${color.bold(req.tool)} | Rule: ${color.cyan(req.rule)}`);
+        if (req.taskId) {
+          lines.push(`    Task: ${color.gray(req.taskId)}`);
+        }
+        for (const reason of req.reasons.slice(0, 2)) {
+          lines.push(`    ${color.gray(reason)}`);
+        }
+        lines.push('');
+      }
+    }
+
+    lines.push(color.gray('  Actions: [A] Approve  [D] Deny  [Y] Yes  [N] No  [V] Details'));
     while (lines.length < maxRows) lines.push('');
     return lines;
   }

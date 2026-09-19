@@ -144,6 +144,14 @@ export class TerminalScreen {
     return this.lastBuffer;
   }
 
+  /**
+   * Invalidates the diff cache so the next render() writes all lines.
+   * Use on view transitions to prevent stale content from the previous view.
+   */
+  clearLastBuffer(): void {
+    this.lastBuffer = '';
+  }
+
   onResize = (): void => {
     const size = this.getSize();
     for (const listener of this.resizeListeners) {
