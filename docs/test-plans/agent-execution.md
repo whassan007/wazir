@@ -63,6 +63,8 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 | AGT-005 | a flat shell command missing the `input` wrapper is rescued instead of dropped | parseAction: `rescues a flat shell command when the model forgets the input wrapper` | L1 | B |
 | AGT-006 | arguments under `parameters`/`arguments`/`args` are rescued into `input` | parseAction: `rescues arguments from a parameters/arguments/args container` | L1 | R |
 | AGT-007 | JSON action parsing tolerates markdown fences, unbalanced brackets, raw newlines, stacked objects | parseAction.test.ts (whole file) | L1 | R |
+| AGT-008 | a turn that streams a lot of prose without ever opening its JSON object is cancelled early, instead of running to the timeout/token budget | codingAgent.proseBailout: `cancels a turn that streams a lot of prose without ever opening a JSON object` | L2 | B |
+| AGT-009 | a short, normal preamble before the JSON action does not trigger the bailout | codingAgent.proseBailout: `does not bail on a short, normal preamble before the JSON action` | L2 | R |
 
 ### B. Stuck-loop detection
 | ID | Case | Entry | Level | Pri |
@@ -124,7 +126,7 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 ## 7. Acceptance criteria
 
 An agent-loop, orchestrator, policy, or sandbox change is mergeable when:
-1. `node scripts/agent-execution-test-plan.mjs` exits 0 (all 36 cases PASS or SKIP; no FAIL/MISSING)
+1. `node scripts/agent-execution-test-plan.mjs` exits 0 (all 38 cases PASS or SKIP; no FAIL/MISSING)
 2. All priority-B cases PASS (a job must never hang past its own timeout, loop on an identical failing action, overflow its context window, silently drop a malformed-but-recoverable tool call, misreport its terminal status, leak data across jobs, or crash the host process)
 3. A newly-fixed bug ships with a new case added to §6 and the runner matrix in the same change — that is the whole point of this plan; a fix without a regression case is not done
 4. No case may be deleted to make the plan green; it is renamed or retired with a reason in the commit

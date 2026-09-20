@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const TURN_TIMEOUT = 'packages/agents/tests/codingAgent.turnTimeout.test.ts';
+const PROSE_BAILOUT = 'packages/agents/tests/codingAgent.proseBailout.test.ts';
 const CIRCUIT_BREAKER = 'packages/agents/tests/codingAgent.circuitBreaker.test.ts';
 const CONTEXT_COMPACTION = 'packages/agents/tests/codingAgent.contextCompaction.test.ts';
 const MAX_TURNS = 'packages/agents/tests/codingAgent.maxTurns.test.ts';
@@ -46,6 +47,8 @@ const CASES = [
   { id: 'AGT-005', section: 'A', name: 'a flat shell command missing the input wrapper is rescued', file: PARSE_ACTION, test: 'rescues a flat shell command when the model forgets the input wrapper', level: 'L1', priority: 'B' },
   { id: 'AGT-006', section: 'A', name: 'arguments under parameters/arguments/args are rescued into input', file: PARSE_ACTION, test: 'rescues arguments from a parameters/arguments/args container', level: 'L1', priority: 'R' },
   { id: 'AGT-007', section: 'A', name: 'JSON action parsing tolerates fences, unbalanced brackets, raw newlines, stacked objects', file: PARSE_ACTION, level: 'L1', priority: 'R' },
+  { id: 'AGT-008', section: 'A', name: 'a turn that streams a lot of prose without ever opening its JSON object is cancelled early', file: PROSE_BAILOUT, test: 'cancels a turn that streams a lot of prose without ever opening a JSON object', level: 'L2', priority: 'B' },
+  { id: 'AGT-009', section: 'A', name: 'a short, normal preamble before the JSON action does not trigger the bailout', file: PROSE_BAILOUT, test: 'does not bail on a short, normal preamble before the JSON action', level: 'L2', priority: 'R' },
 
   // B. Stuck-loop detection
   { id: 'AGT-010', section: 'B', name: 'circuit breaker trips after the same tool call repeats toolRepeatLimit times', file: CIRCUIT_BREAKER, test: 'stops after the same tool call repeats toolRepeatLimit times, instead of grinding to maxTurns', level: 'L2', priority: 'B' },

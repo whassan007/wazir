@@ -35,6 +35,17 @@ export interface CodingAgentOptions {
    * overflowing before it hits `maxTurns`.
    */
   contextCompactionRatio?: number;
+  /**
+   * If a turn accumulates this many characters of streamed output without
+   * ever opening its one required JSON object, it is cancelled immediately
+   * instead of running to `modelTurnTimeoutMs` or `maxTokensPerTurn`.
+   * Observed on a local model: it re-derived an entire file's source as
+   * prose "thinking" (5000+ chars, no `{` in sight) before ever producing
+   * an action — well inside both the time and token budget, just wastefully
+   * slow. `parseAction` only ever looks for the first `{...}` anyway, so
+   * prose this long with none yet is a strong, cheap "not converging" signal.
+   */
+  maxProseBeforeActionChars?: number;
   /** Extra instructions appended to the system prompt. */
   systemPromptExtra?: string;
 }
@@ -324,6 +335,7 @@ export class CodingAgent implements AgentAdapter {
   private readonly modelTurnTimeoutMs: number;
   private readonly toolRepeatLimit: number;
   private readonly contextCompactionRatio: number;
+  private readonly maxProseBeforeActionChars: number;
   private readonly systemPromptExtra?: string;
 
   constructor(options: CodingAgentOptions = {}) {
@@ -334,6 +346,7 @@ export class CodingAgent implements AgentAdapter {
     this.modelTurnTimeoutMs = options.modelTurnTimeoutMs ?? 90_000;
     this.toolRepeatLimit = options.toolRepeatLimit ?? 3;
     this.contextCompactionRatio = options.contextCompactionRatio ?? 0.7;
+    this.maxProseBeforeActionChars = options.maxProseBeforeActionChars ?? 2_000;
     this.systemPromptExtra = options.systemPromptExtra;
   }
 
@@ -427,7 +440,13 @@ export class CodingAgent implements AgentAdapter {
           maxTokens: this.maxTokensPerTurn,
           temperature: this.temperature,
         })) {
-          if (event.type === 'token' && event.content) content += event.content;
+          if (event.type === 'token' && event.content) {
+            content += event.content;
+            if (!timedOut && content.length > this.maxProseBeforeActionChars && !content.includes('{')) {
+              timedOut = true;
+              runtime.cancelCurrentTurn?.();
+            }
+          }
           if (event.type === 'error' && event.error) error = event.error;
         }
       } finally {

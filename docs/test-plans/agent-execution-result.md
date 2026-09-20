@@ -1,6 +1,6 @@
 # Agent Execution & Orchestration Safety Test Plan — Execution Result
 
-Plan: `docs/test-plans/agent-execution.md` · Executed: 2026-09-20 05:01 UTC
+Plan: `docs/test-plans/agent-execution.md` · Executed: 2026-09-20 22:20 UTC
 
 ## Run metadata
 
@@ -9,15 +9,15 @@ Plan: `docs/test-plans/agent-execution.md` · Executed: 2026-09-20 05:01 UTC
 | Command | `node scripts/agent-execution-test-plan.mjs` |
 | Exit code | 0 (green) |
 | Environment | Linux x64 · Node v22.22.3 · vitest 2.1.9 |
-| Commit | 1eb0c75 (main) |
+| Commit | e348c9e (main) |
 
 ## Result
 
-**36/36 cases PASS — FAIL 0 · SKIP 0 · MISSING 0**
+**38/38 cases PASS — FAIL 0 · SKIP 0 · MISSING 0**
 
 | Section | Cases | PASS | FAIL |
 |---|---|---|---|
-| A. Model turn safety (timeouts, malformed action recovery) | 7 | 7 | 0 |
+| A. Model turn safety (timeouts, malformed action recovery, prose bailout) | 9 | 9 | 0 |
 | B. Stuck-loop detection | 3 | 3 | 0 |
 | C. Context management | 2 | 2 | 0 |
 | D. Job orchestration (timeout, cancellation, persistence) | 13 | 13 | 0 |
@@ -37,6 +37,8 @@ Plan: `docs/test-plans/agent-execution.md` · Executed: 2026-09-20 05:01 UTC
 | AGT-005 | B | L1 | PASS | a flat shell command missing the input wrapper is rescued | 0.3ms |
 | AGT-006 | R | L1 | PASS | arguments under parameters/arguments/args are rescued into input | 0.3ms |
 | AGT-007 | R | L1 | PASS | JSON action parsing tolerates fences, unbalanced brackets, raw newlines, stacked objects | 17 tests |
+| AGT-008 | B | L2 | PASS | a turn that streams a lot of prose without ever opening its JSON object is cancelled early | 1.4ms |
+| AGT-009 | R | L2 | PASS | a short, normal preamble before the JSON action does not trigger the bailout | 0.3ms |
 | AGT-010 | B | L2 | PASS | circuit breaker trips after the same tool call repeats toolRepeatLimit times | 1.4ms |
 | AGT-011 | R | L2 | PASS | circuit breaker does not false-positive on varying tool input | 0.4ms |
 | AGT-012 | B | L2 | PASS | maxTurns hard-caps the loop regardless of constructor vs per-request override | 4 tests |
