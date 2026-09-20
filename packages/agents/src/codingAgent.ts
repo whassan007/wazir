@@ -21,6 +21,20 @@ export interface CodingAgentOptions {
    * invalid-response retry logic ever gets a second attempt.
    */
   modelTurnTimeoutMs?: number;
+  /**
+   * Number of consecutive tool calls with identical name+input that trips
+   * the circuit breaker. A model stuck retrying the exact same shell
+   * command or write is a much stronger and cheaper "stuck" signal than
+   * waiting for a timeout or the turn cap.
+   */
+  toolRepeatLimit?: number;
+  /**
+   * Fraction of `contextTokens` (when the host provides it) at which older
+   * turns are collapsed into one deterministic summary message. Keeps a
+   * long-running task on a small local context window from silently
+   * overflowing before it hits `maxTurns`.
+   */
+  contextCompactionRatio?: number;
   /** Extra instructions appended to the system prompt. */
   systemPromptExtra?: string;
 }
@@ -250,6 +264,8 @@ export class CodingAgent implements AgentAdapter {
   private readonly maxTokensPerTurn: number;
   private readonly temperature: number;
   private readonly modelTurnTimeoutMs: number;
+  private readonly toolRepeatLimit: number;
+  private readonly contextCompactionRatio: number;
   private readonly systemPromptExtra?: string;
 
   constructor(options: CodingAgentOptions = {}) {
@@ -258,6 +274,8 @@ export class CodingAgent implements AgentAdapter {
     this.maxTokensPerTurn = options.maxTokensPerTurn ?? 4096;
     this.temperature = options.temperature ?? 0.2;
     this.modelTurnTimeoutMs = options.modelTurnTimeoutMs ?? 90_000;
+    this.toolRepeatLimit = options.toolRepeatLimit ?? 3;
+    this.contextCompactionRatio = options.contextCompactionRatio ?? 0.7;
     this.systemPromptExtra = options.systemPromptExtra;
   }
 
@@ -285,6 +303,56 @@ export class CodingAgent implements AgentAdapter {
     let modelSummary: string | undefined;
     const checkOutputs: Array<{ name: string; ok: boolean; output: string }> = [];
     let correctionCount = 0;
+
+    // ---- circuit breaker: same tool + same input called back to back ----
+    let lastToolSignature: string | null = null;
+    let repeatedToolCount = 0;
+    const toolCallCounts = new Map<string, number>();
+    const filesChangedSet = new Set<string>();
+    const recordToolExecution = (tool: string, input: Record<string, unknown>): void => {
+      toolCallCounts.set(tool, (toolCallCounts.get(tool) ?? 0) + 1);
+      if (FILE_TOOLS.has(tool) && typeof input.path === 'string') filesChangedSet.add(input.path);
+    };
+    /** Returns an error message once the same tool call repeats `toolRepeatLimit` times in a row, else null. */
+    const checkCircuitBreaker = (tool: string, input: Record<string, unknown>): string | null => {
+      const signature = `${tool}:${JSON.stringify(input)}`;
+      repeatedToolCount = signature === lastToolSignature ? repeatedToolCount + 1 : 1;
+      lastToolSignature = signature;
+      if (repeatedToolCount < this.toolRepeatLimit) return null;
+      return `circuit breaker: model called ${tool} with identical input ${repeatedToolCount} times in a row without making progress`;
+    };
+
+    // ---- context compaction: keep `messages` under the model's context window ----
+    const estimateTokens = (msgs: ChatMessage[]): number =>
+      Math.ceil(msgs.reduce((sum, m) => sum + m.content.length, 0) / 4);
+    const compactIfNeeded = (): string | null => {
+      const contextTokens = request.contextTokens;
+      const KEEP_RECENT = 6;
+      const KEEP_HEAD = 2; // system prompt + initial task message
+      if (!contextTokens || messages.length <= KEEP_HEAD + KEEP_RECENT) return null;
+      const budget = Math.floor(contextTokens * this.contextCompactionRatio) - this.maxTokensPerTurn;
+      const before = estimateTokens(messages);
+      if (before <= budget) return null;
+      const head = messages.slice(0, KEEP_HEAD);
+      const tail = messages.slice(-KEEP_RECENT);
+      const collapsedCount = messages.length - head.length - tail.length;
+      if (collapsedCount <= 0) return null;
+      const summary: ChatMessage = {
+        role: 'user',
+        content:
+          `[context compacted: ${collapsedCount} earlier turn(s) summarized to stay under the context window]\n` +
+          `Tool calls so far: ${[...toolCallCounts.entries()].map(([n, c]) => `${n}×${c}`).join(', ') || 'none'}\n` +
+          `Files changed: ${[...filesChangedSet].join(', ') || 'none'}\n` +
+          `Checks run: ${checkOutputs.map((c) => `${c.name}=${c.ok ? 'pass' : 'fail'}`).join(', ') || 'none'}\n` +
+          (plan ? `Plan: ${plan}\n` : '') +
+          'Continue the task from exactly where you left off.',
+      };
+      messages.length = 0;
+      messages.push(...head, summary, ...tail);
+      const after = estimateTokens(messages);
+      const reduction = before > 0 ? Math.round((1 - after / before) * 100) : 0;
+      return `context compacted: ${collapsedCount} turn(s) -> 1 summary (~${before}->~${after} tokens, ${reduction}% smaller)`;
+    };
 
     const modelTurn = async (): Promise<{ content: string; timedOut: boolean }> => {
       let content = '';
@@ -342,6 +410,8 @@ export class CodingAgent implements AgentAdapter {
     yield { kind: 'phase', phase: 'plan' as AgentPhase };
     for (let i = 0; i < 3 && !plan; i++) {
       if (request.isCancelled?.()) break;
+      const compactionNote = compactIfNeeded();
+      if (compactionNote) yield { kind: 'message', content: compactionNote };
       const { content: raw, timedOut } = await modelTurn();
       // A cancel (manual or timeout) that lands during the model turn must not let
       // this turn's action run anyway — the check at the top of the loop already passed.
@@ -365,6 +435,7 @@ export class CodingAgent implements AgentAdapter {
         break;
       }
       if (action.action === 'tool' && action.tool) {
+        recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
         yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result };
         if (CHECK_TOOLS.has(action.tool)) {
@@ -385,6 +456,8 @@ export class CodingAgent implements AgentAdapter {
         yield { kind: 'message', content: `[steered] ${steering}` };
         pushContinue(`User follow-up instruction: ${steering}`);
       }
+      const compactionNote = compactIfNeeded();
+      if (compactionNote) yield { kind: 'message', content: compactionNote };
       const { content: raw, timedOut } = await modelTurn();
       // A cancel (manual or timeout) that lands during the model turn must not let
       // this turn's action run anyway — the check at the top of the loop already passed.
@@ -418,6 +491,12 @@ export class CodingAgent implements AgentAdapter {
         continue;
       }
       if (action.action === 'tool' && action.tool) {
+        const breakerError = checkCircuitBreaker(action.tool, action.input ?? {});
+        if (breakerError) {
+          yield { kind: 'error', error: breakerError };
+          break;
+        }
+        recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
         yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result };
         if (CHECK_TOOLS.has(action.tool)) {
@@ -487,6 +566,8 @@ export class CodingAgent implements AgentAdapter {
           yield { kind: 'message', content: `[steered] ${steering}` };
           pushContinue(`User follow-up instruction: ${steering}`);
         }
+        const compactionNote = compactIfNeeded();
+        if (compactionNote) yield { kind: 'message', content: compactionNote };
         const { content: raw, timedOut } = await modelTurn();
         // A cancel (manual or timeout) that lands during the model turn must not let
         // this turn's action run anyway — the check at the top of the loop already passed.
@@ -503,6 +584,12 @@ export class CodingAgent implements AgentAdapter {
           break;
         }
         if (action.action === 'tool' && action.tool) {
+          const breakerError = checkCircuitBreaker(action.tool, action.input ?? {});
+          if (breakerError) {
+            yield { kind: 'error', error: breakerError };
+            break;
+          }
+          recordToolExecution(action.tool, action.input ?? {});
           const result = await runtime.executeTool(action.tool, action.input ?? {});
           yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result };
           pushToolResult(action.tool, result);

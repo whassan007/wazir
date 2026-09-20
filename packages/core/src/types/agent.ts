@@ -52,6 +52,8 @@ export interface AgentRunRequest {
   taskType: TaskType;
   projectRoot: string;
   maxTurns?: number;
+  /** The model's context window, when known — enables mid-run compaction. */
+  contextTokens?: number;
   /** Set to true by the host when the user requested cancellation. */
   isCancelled?: () => boolean;
   /** Returns any pending mid-run user instruction, drained once per turn. */

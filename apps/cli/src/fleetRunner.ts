@@ -135,6 +135,12 @@ export function createFleetTaskExecutor(
 
       async *generate(request) {
         await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
+        // The `agent.turn` event below only records `content.slice(0, 500)` of the
+        // *parsed* action — the model's raw completion (including any reasoning
+        // prose before/around the JSON action) is otherwise never durably stored,
+        // only streamed transiently to the TUI. Captured here so a finished or
+        // crashed job's exact model output is still inspectable afterward.
+        let completedContent = '';
 
         if (assignment.computerId === engine.worker.computerId) {
           const adapter = engine.worker.adapterForModel(request.modelId);
@@ -156,17 +162,20 @@ export function createFleetTaskExecutor(
             if (event.type === 'token' && event.content) {
               context.onProgress?.({ kind: 'token', content: event.content });
             }
-            if (event.type === 'completed' && event.usage) {
-              const usage = {
-                input: event.usage.inputTokens,
-                output: event.usage.outputTokens,
-                total: event.usage.totalTokens ?? event.usage.inputTokens + event.usage.outputTokens,
-              };
-              await engine.executions.recordUsage(executionId, usage);
-              // Per-turn usage, not the cumulative execution total: `input` here is the
-              // size of the prompt the model was just sent, i.e. the real context-window
-              // occupancy right now — the only honest number for a "Context N/M" gauge.
-              context.onProgress?.({ kind: 'usage', usage });
+            if (event.type === 'completed') {
+              completedContent = event.content ?? '';
+              if (event.usage) {
+                const usage = {
+                  input: event.usage.inputTokens,
+                  output: event.usage.outputTokens,
+                  total: event.usage.totalTokens ?? event.usage.inputTokens + event.usage.outputTokens,
+                };
+                await engine.executions.recordUsage(executionId, usage);
+                // Per-turn usage, not the cumulative execution total: `input` here is the
+                // size of the prompt the model was just sent, i.e. the real context-window
+                // occupancy right now — the only honest number for a "Context N/M" gauge.
+                context.onProgress?.({ kind: 'usage', usage });
+              }
             }
             yield event;
           }
@@ -189,14 +198,17 @@ export function createFleetTaskExecutor(
               if (generationEvent.type === 'token' && generationEvent.content) {
                 context.onProgress?.({ kind: 'token', content: generationEvent.content });
               }
-              if (generationEvent.type === 'completed' && generationEvent.usage) {
-                const usage = {
-                  input: generationEvent.usage.inputTokens,
-                  output: generationEvent.usage.outputTokens,
-                  total: generationEvent.usage.totalTokens ?? generationEvent.usage.inputTokens + generationEvent.usage.outputTokens,
-                };
-                await engine.executions.recordUsage(executionId, usage);
-                context.onProgress?.({ kind: 'usage', usage });
+              if (generationEvent.type === 'completed') {
+                completedContent = generationEvent.content ?? '';
+                if (generationEvent.usage) {
+                  const usage = {
+                    input: generationEvent.usage.inputTokens,
+                    output: generationEvent.usage.outputTokens,
+                    total: generationEvent.usage.totalTokens ?? generationEvent.usage.inputTokens + generationEvent.usage.outputTokens,
+                  };
+                  await engine.executions.recordUsage(executionId, usage);
+                  context.onProgress?.({ kind: 'usage', usage });
+                }
               }
               yield generationEvent;
             }
@@ -210,7 +222,9 @@ export function createFleetTaskExecutor(
           };
         }
 
-        await engine.executions.recordEvent(executionId, 'generation.completed');
+        await engine.executions.recordEvent(executionId, 'generation.completed', {
+          content: completedContent.slice(0, 16_000),
+        });
       },
 
       async executeTool(name, input): Promise<ToolResult> {
@@ -316,6 +330,7 @@ export function createFleetTaskExecutor(
           taskType: task.type,
           projectRoot: taskRoot,
           maxTurns: runnerOptions.maxTurns,
+          contextTokens: contextDecision.available.tokens,
           isCancelled: () => signal?.aborted ?? false,
           getSteeringInstruction: () => context.getSteeringInstruction?.(),
         },
