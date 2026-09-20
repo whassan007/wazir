@@ -1466,23 +1466,67 @@ export class FleetTui {
     const tool = action.tool ?? (action.action === 'tool' ? undefined : action.action);
     switch (action.action) {
       case 'plan':
-        return `plan: ${action.content ?? ''}`;
+        return `Plan: ${action.content ?? ''}`;
       case 'done':
       case 'answer':
-        return `${action.action}: ${action.summary ?? action.content ?? ''}`;
+        return `${action.action === 'done' ? 'Done' : 'Answer'}: ${action.summary ?? action.content ?? ''}`;
     }
-    if (tool === 'shell') return `shell: ${String(input.command ?? '')}`;
-    if (tool === 'write' || tool === 'edit') {
-      const content = typeof input.content === 'string' ? input.content : '';
-      return `${tool} ${String(input.path ?? '')} (${content.length} chars)`;
+    // Narrated, present-tense phrasing for the common tools — reads like what
+    // a person would say they're doing, not a raw {tool, args} dump.
+    switch (tool) {
+      case 'shell':
+        return `Running: ${String(input.command ?? '')}`;
+      case 'write':
+        return `Writing ${String(input.path ?? '')} (${typeof input.content === 'string' ? input.content.length : 0} chars)`;
+      case 'edit':
+        return `Editing ${String(input.path ?? '')}`;
+      case 'read':
+        return `Reading ${String(input.path ?? '')}`;
+      case 'glob':
+        return `Looking for files matching ${String(input.pattern ?? '')}`;
+      case 'search':
+        return `Searching code for ${String(input.pattern ?? '')}`;
+      case 'git':
+        return `Running: git ${Array.isArray(input.args) ? input.args.join(' ') : ''}`.trim();
+      case 'test':
+      case 'lint':
+      case 'typecheck':
+      case 'build':
+        return `Running ${tool}`;
     }
     if (tool) {
       const args = obj.input && typeof obj.input === 'object'
         ? obj.input
         : Object.fromEntries(Object.entries(obj).filter(([k]) => k !== 'action' && k !== 'tool'));
-      return `${tool} ${JSON.stringify(args)}`;
+      return `Using ${tool}: ${JSON.stringify(args)}`;
     }
     return flat;
+  }
+
+  /**
+   * Translates internal error strings (policy rule ids, circuit-breaker
+   * wording, raw parser messages) into something a person reads without
+   * needing to know how the policy engine or agent loop works. Anything
+   * that doesn't match a known shape is returned unchanged rather than
+   * hidden — never silently swallow information the user might need.
+   */
+  private humanizeError(raw: string): string {
+    const policyMatch = raw.match(/^policy (deny|ask) \(([^)]+)\): (.+)$/);
+    if (policyMatch) {
+      const [, decision, , reasons] = policyMatch;
+      return decision === 'deny' ? `Blocked: ${reasons}` : `Needs your approval: ${reasons}`;
+    }
+    const breakerMatch = raw.match(/^circuit breaker: model called (\S+) with identical input (\d+) times in a row without making progress$/);
+    if (breakerMatch) {
+      const [, tool, count] = breakerMatch;
+      return `Stopped — called ${tool} the same way ${count} times in a row with no progress`;
+    }
+    const parseMatch = raw.match(/^shell command could not be parsed: (.+)$/);
+    if (parseMatch) return `Couldn't understand that shell command: ${parseMatch[1]}`;
+    if (raw === 'model repeatedly failed to produce valid JSON actions') {
+      return 'The model kept responding in a way I could not act on';
+    }
+    return raw;
   }
 
   private onJobEvent = (ev: JobOrchestratorEvent): void => {
@@ -1550,14 +1594,24 @@ export class FleetTui {
         if (p.phase) agent.phase = p.phase;
         if (p.content) agent.lastMessage = p.content.slice(0, 60);
         if (p.tool) agent.lastMessage = `Tool: ${p.tool}`;
-        if (p.error) agent.lastMessage = `Error: ${p.error.slice(0, 60)}`;
+        if (p.error) agent.lastMessage = `Error: ${this.humanizeError(p.error).slice(0, 60)}`;
 
         let eventKind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' = 'info';
         let eventText = p.content ?? (p.tool ? `tool: ${p.tool}` : `phase: ${p.phase}`);
 
         if (p.tool) {
-          eventKind = 'tool';
-          eventText = `Tool call executed: ${p.tool}`;
+          // A tool_call turn's outcome (ok/error) rides in the same progress event —
+          // it used to be silently dropped here, so a failed tool call showed only
+          // "Tool call executed: shell" with no indication anything went wrong, and
+          // the real reason surfaced (if at all) only via the model quoting the raw
+          // internal string back in its own reasoning several turns later.
+          if (p.error) {
+            eventKind = 'error';
+            eventText = `${p.tool} failed — ${this.humanizeError(p.error)}`;
+          } else {
+            eventKind = 'tool';
+            eventText = `${p.tool} succeeded`;
+          }
         } else if (p.phase === 'test' || p.phase === 'verify') {
           eventKind = 'test';
           eventText = `Verification checks running (${p.phase})`;
@@ -1565,7 +1619,7 @@ export class FleetTui {
           eventKind = 'plan';
         } else if (p.error) {
           eventKind = 'error';
-          eventText = `Step error: ${p.error}`;
+          eventText = this.humanizeError(p.error);
         }
 
         logs.push({
@@ -1593,18 +1647,19 @@ export class FleetTui {
         agent.status = 'failed';
         agent.completedAt = now;
         agent.phase = 'failed';
-        agent.lastMessage = ev.error ?? 'Task failed';
+        const failureReason = ev.error ? this.humanizeError(ev.error) : 'Task failed';
+        agent.lastMessage = failureReason;
 
         logs.push({
           time: timeStr,
-          text: `Task failed: ${ev.error ?? 'Execution failure'}`,
+          text: `Task failed: ${failureReason}`,
           kind: 'error',
         });
 
         // Structured Error Component (§29)
         this.currentError = {
           phase: agent.phase || 'execution',
-          reason: ev.error ?? 'Task execution encountered error',
+          reason: ev.error ? this.humanizeError(ev.error) : 'Task execution encountered error',
           required: 'Clean tool execution and passing tests',
           available: 'Uncaught failure or policy denial',
           suggestedSteps: [

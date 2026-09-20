@@ -90,6 +90,7 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 | TUI-026 | x/Delete on non-JOBS item gives feedback instead of no-op | fleetTui: `gives feedback instead of silently no-oping when x/Delete is pressed on a non-JOBS item` | L2 | F |
 | TUI-027 | worktrees pane shows per-agent isolated branch names | tuiSessionLifecycle: `renders the worktrees view with per-agent isolated branch names` | L2 | F |
 | TUI-028 | event-stream pane with typed lifecycle states (PLAN/ROUTE/TOOL/TEST/COMPLETE/ERROR) | fleetTui: `renders scrollable event-stream activity pane with typed lifecycle states (PLAN, ROUTE, TOOL, TEST, COMPLETE, ERROR)` | L2 | F |
+| TUI-029 | a failed tool call shows a plain-language reason, not the raw policy rule id | fleetTui: `shows a failed tool call with a plain-language reason, not the raw policy rule id` | L2 | F |
 
 ### D. Approvals & policy
 | ID | Case | Entry | Level | Pri |
@@ -138,7 +139,7 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 ## 7. Acceptance criteria
 
 A terminal-interface change is mergeable when:
-1. `node scripts/tui-test-plan.mjs` exits 0 (all 45 cases PASS or SKIP; no FAIL/MISSING)
+1. `node scripts/tui-test-plan.mjs` exits 0 (all 46 cases PASS or SKIP; no FAIL/MISSING)
 2. All priority-B cases PASS (session safety: exit paths, cleanup, no buffer leakage, non-TTY fallback, approval flow, single progress emission, one-shot task path)
 3. New interactive behavior ships with a new TC added to §6 and the runner matrix (same-day)
 4. No case may be deleted to make the plan green; it is renamed or retired with a reason in the commit

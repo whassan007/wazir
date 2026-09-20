@@ -58,6 +58,7 @@ const CASES = [
   { id: 'TUI-026', section: 'C', name: 'x/Delete on non-JOBS item gives feedback', file: FLEET, test: 'gives feedback instead of silently no-oping when x/Delete is pressed on a non-JOBS item', level: 'L2', priority: 'F' },
   { id: 'TUI-027', section: 'C', name: 'worktrees pane shows per-agent branch names', file: LIFECYCLE, test: 'renders the worktrees view with per-agent isolated branch names', level: 'L2', priority: 'F' },
   { id: 'TUI-028', section: 'C', name: 'event-stream pane with typed lifecycle states', file: FLEET, test: 'renders scrollable event-stream activity pane with typed lifecycle states (PLAN, ROUTE, TOOL, TEST, COMPLETE, ERROR)', level: 'L2', priority: 'F' },
+  { id: 'TUI-029', section: 'C', name: 'failed tool call shows a plain-language reason, not the raw policy rule id', file: FLEET, test: 'shows a failed tool call with a plain-language reason, not the raw policy rule id', level: 'L2', priority: 'F' },
 
   // D. Approvals & policy
   { id: 'TUI-030', section: 'D', name: 'non-blocking approval queue + mid-run steering', file: FLEET, test: 'handles in-TUI non-blocking approval queue and mid-run steering', level: 'L2', priority: 'B' },

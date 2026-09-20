@@ -1,6 +1,6 @@
 # Terminal Interface Test Plan — Execution Result
 
-Plan: `docs/test-plans/terminal-interface.md` · Executed: 2026-09-20 03:08 UTC
+Plan: `docs/test-plans/terminal-interface.md` · Executed: 2026-09-20 22:55 UTC
 
 ## Run metadata
 
@@ -9,18 +9,17 @@ Plan: `docs/test-plans/terminal-interface.md` · Executed: 2026-09-20 03:08 UTC
 | Command | `node scripts/tui-test-plan.mjs` |
 | Exit code | 0 (green) |
 | Environment | Linux x64 · Node v22.22.3 · vitest 2.1.9 |
-| Commit | 115d5fa (main) |
-| Underlying vitest tests | 81 run, 81 passed, 0 failed |
+| Commit | 9917b2e (main) |
 
 ## Result
 
-**45/45 cases PASS — FAIL 0 · SKIP 0 · MISSING 0**
+**46/46 cases PASS — FAIL 0 · SKIP 0 · MISSING 0**
 
 | Section | Cases | PASS | FAIL |
 |---|---|---|---|
 | A. Session lifecycle & terminal hygiene | 6 | 6 | 0 |
 | B. Navigation & view management | 6 | 6 | 0 |
-| C. Job & agent management | 9 | 9 | 0 |
+| C. Job & agent management | 10 | 10 | 0 |
 | D. Approvals & policy | 4 | 4 | 0 |
 | E. Input & text editing | 4 | 4 | 0 |
 | F. Layout & rendering fidelity | 6 | 6 | 0 |
@@ -52,6 +51,7 @@ Plan: `docs/test-plans/terminal-interface.md` · Executed: 2026-09-20 03:08 UTC
 | TUI-026 | F | L2 | PASS | x/Delete on non-JOBS item gives feedback | 103.3ms |
 | TUI-027 | F | L2 | PASS | worktrees pane shows per-agent branch names | 84.0ms |
 | TUI-028 | F | L2 | PASS | event-stream pane with typed lifecycle states | 65.3ms |
+| TUI-029 | F | L2 | PASS | failed tool call shows a plain-language reason, not the raw policy rule id | 45.1ms |
 | TUI-030 | B | L2 | PASS | non-blocking approval queue + mid-run steering | 56.7ms |
 | TUI-031 | B | L2 | PASS | policy modal with A/D/V/I actions | 22.4ms |
 | TUI-032 | R | L2 | PASS | Ctrl+A / Ctrl+D approve-deny all | 45.9ms |
@@ -81,4 +81,4 @@ Plan: `docs/test-plans/terminal-interface.md` · Executed: 2026-09-20 03:08 UTC
 
 - Priority: B = blocking, R = regression, F = feature. Levels: L1 primitive, L2 TUI harness, L3 e2e terminal path, L4 CLI surface.
 - Machine-readable report: `test-plan-report.json` (gitignored; regenerate with the command above).
-- Context: repo-wide `npm test` on the same tree — 573 passed, 17 skipped, 2 pre-existing failures unrelated to this plan: `tests/integration/jobRecovery.test.ts` (status assertion) and `tests/runtime/liveModelMatrix.test.ts` (live LM Studio daemon unavailable → 5s timeout). Both fail identically on clean main.
+- Context: `apps/cli`, `packages/core`, `packages/agents`, `packages/tools` (excluding the untracked `tuiSessionLifecycle.test.ts`, run separately — see its own notes) — 31 files, 372 passed, 7 skipped, 0 failed on this same tree.

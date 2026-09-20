@@ -536,10 +536,48 @@ describe('FleetTui — interactive terminal UI harness', () => {
     expect(after).not.toContain('MODEL is generating');
     // Folded into the history as one readable line, in causal order before the parsed
     // "Plan:" event that resulted from it.
-    expect(after).toMatch(/MODEL\s+plan: first inspect the repo, then write the module/);
+    expect(after).toMatch(/MODEL\s+Plan: first inspect the repo, then write the module/);
     expect(after.indexOf('MODEL')).toBeLessThan(after.indexOf('Plan: first inspect'));
     // Context gauge reflects the last turn's actual prompt size, not a cumulative total.
     expect(harness.tui.getContextMetrics().used).toBe(7);
+
+    harness.stop();
+  });
+
+  it('shows a failed tool call with a plain-language reason, not the raw policy rule id', async () => {
+    // Real transcript: a policy denial showed up in the log only as
+    // "Tool call executed: shell" (the error was silently dropped), and the
+    // raw "policy deny (shell-unknown-ask): empty shell command" string only
+    // ever reached the user via the model quoting it back in its own prose
+    // several turns later. The log line itself should say what happened.
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    let call = 0;
+    const adapter = engine.worker.adapterForModel('fake-model')!;
+    adapter.generate = async function* () {
+      call += 1;
+      const reply =
+        call === 1
+          ? '{"action":"tool","tool":"shell","input":{"command":""}}'
+          : '{"action":"done","summary":"done"}';
+      yield { type: 'token' as const, content: reply };
+      yield { type: 'completed' as const, content: reply, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+    };
+
+    await harness.start();
+    harness.sendLine('run a command');
+    for (let i = 0; i < 60 && harness.tui.getCurrentJob()?.status !== 'completed'; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    harness.sendKey('\r');
+
+    const screen = harness.getScreenBuffer();
+    expect(screen).toContain('shell failed');
+    expect(screen).toContain('Blocked: empty shell command');
+    expect(screen).not.toContain('shell-unknown-ask');
+    expect(screen).not.toContain('Tool call executed');
 
     harness.stop();
   });
