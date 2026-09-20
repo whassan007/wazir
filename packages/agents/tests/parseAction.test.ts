@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { normalizeAction, parseAction } from '../src/codingAgent.js';
 
 describe('normalizeAction', () => {
-  const tools = new Set(['read', 'write', 'test']);
+  const tools = new Set(['read', 'write', 'test', 'shell']);
 
   it('rewrites a tool name used as the action into a tool call', () => {
     const action = normalizeAction(parseAction('{"action":"read","input":{"path":"greet.js"}}'), tools);
@@ -23,6 +23,35 @@ describe('normalizeAction', () => {
     expect(normalizeAction(parseAction('{"action":"plan","content":"x"}'), tools)?.action).toBe('plan');
     expect(normalizeAction(parseAction('{"action":"frobnicate"}'), tools)?.action).toBe('frobnicate');
     expect(normalizeAction(null, tools)).toBeNull();
+  });
+
+  // Real transcript: a local model kept sending `{"action":"tool","tool":"shell",...}`
+  // with the command in a shape the policy engine's `typeof input.command === 'string'`
+  // check rejects, producing a confusing "empty shell command" denial every retry.
+  it('joins an argv-array shell command into a single quoted string', () => {
+    const action = normalizeAction(
+      parseAction('{"action":"tool","tool":"shell","input":{"command":["mkdir","-p","sort array"]}}'),
+      tools,
+    );
+    expect(action?.input).toEqual({ command: "mkdir -p 'sort array'" });
+  });
+
+  it('accepts cmd as an alias for command on the shell tool', () => {
+    const action = normalizeAction(parseAction('{"action":"tool","tool":"shell","input":{"cmd":"ls -la"}}'), tools);
+    expect((action?.input as { command: string }).command).toBe('ls -la');
+  });
+
+  it('rescues a flat shell command when the model forgets the input wrapper', () => {
+    const action = normalizeAction(parseAction('{"action":"tool","tool":"shell","command":"g++ main.cpp -o a.out"}'), tools);
+    expect(action?.input).toEqual({ command: 'g++ main.cpp -o a.out' });
+  });
+
+  it('rescues arguments from a parameters/arguments/args container', () => {
+    const action = normalizeAction(
+      parseAction('{"action":"tool","tool":"shell","parameters":{"command":"ls"}}'),
+      tools,
+    );
+    expect(action?.input).toEqual({ command: 'ls' });
   });
 });
 

@@ -181,6 +181,57 @@ export function parseAction(text: string): ParsedAction | null {
   return obj as unknown as ParsedAction;
 }
 
+/**
+ * Quotes a single shell argument the POSIX-safe way: wrap in single quotes,
+ * escaping any embedded single quote as `'\''`. Anything made only of
+ * shell-safe characters is left bare for readability.
+ */
+function quoteShellArg(arg: string): string {
+  if (/^[A-Za-z0-9_.\-/=:@%,]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Local/small models frequently send the `shell` tool's command as an argv
+ * array (`{"command":["mkdir","-p","x"]}`) — the shape many other
+ * tool-calling conventions use — instead of the single string the policy
+ * engine and the tool itself require (`typeof input.command === 'string'`).
+ * An array silently becomes `''` downstream, producing a confusing
+ * "empty shell command" denial that repeats every retry since the model
+ * has no reason to change its formatting. Coercing it here, once, fixes
+ * every consumer instead of teaching each one to tolerate the array shape.
+ */
+function coerceShellCommand(input: Record<string, unknown>): Record<string, unknown> {
+  if (typeof input.command === 'string') return input;
+  if (Array.isArray(input.command)) {
+    return { ...input, command: input.command.map((part) => quoteShellArg(String(part))).join(' ') };
+  }
+  // Some models use `cmd` despite the schema naming the field `command`.
+  if (typeof input.cmd === 'string' && input.command === undefined) {
+    return { ...input, command: input.cmd };
+  }
+  return input;
+}
+
+/**
+ * When a tool action has no `input` object, the model either flattened the
+ * arguments as sibling fields (`{"action":"tool","tool":"shell","command":"..."}`,
+ * forgetting the `input` wrapper) or used a differently-named container from
+ * another tool-calling convention (`parameters`/`arguments`/`args`). Either
+ * way the real arguments still exist on the object — without this, every
+ * call site's `action.input ?? {}` silently drops them, and the tool runs
+ * with no arguments at all instead of the ones the model actually gave it.
+ */
+function collectStrayInput(action: ParsedAction): Record<string, unknown> | undefined {
+  const record = action as unknown as Record<string, unknown>;
+  const altContainer = record.parameters ?? record.arguments ?? record.args;
+  if (altContainer && typeof altContainer === 'object' && !Array.isArray(altContainer)) {
+    return altContainer as Record<string, unknown>;
+  }
+  const { action: _action, tool: _tool, name: _name, content: _content, summary: _summary, ...rest } = record;
+  return Object.keys(rest).length > 0 ? (rest as Record<string, unknown>) : undefined;
+}
+
 /** Accepts `{"action":"read",...}` as shorthand for `{"action":"tool","tool":"read",...}`. */
 export function normalizeAction(action: ParsedAction | null, toolNames: Set<string>): ParsedAction | null {
   if (!action) return null;
@@ -189,11 +240,18 @@ export function normalizeAction(action: ParsedAction | null, toolNames: Set<stri
     if (!action.tool && typeof alias === 'string') {
       action.tool = alias;
     }
+    if (!action.input) {
+      action.input = collectStrayInput(action);
+    }
+    if (action.tool === 'shell' && action.input) {
+      action.input = coerceShellCommand(action.input);
+    }
     return action;
   }
   if (toolNames.has(action.action)) {
     const { action: tool, input, ...rest } = action as ParsedAction & Record<string, unknown>;
-    return { action: 'tool', tool, input: input ?? (rest as Record<string, unknown>) };
+    const normalizedInput = (input ?? (rest as Record<string, unknown>)) as Record<string, unknown>;
+    return { action: 'tool', tool, input: tool === 'shell' ? coerceShellCommand(normalizedInput) : normalizedInput };
   }
   return action;
 }
