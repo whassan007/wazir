@@ -73,6 +73,13 @@ export interface AgentRuntime {
   ): AsyncIterable<GenerationEvent>;
   executeTool(toolName: string, input: Record<string, unknown>): Promise<ToolResult>;
   readonly tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+  /**
+   * Best-effort abort of whichever `generate()` call is currently in flight.
+   * Lets the agent enforce a per-turn wall-clock budget independent of the
+   * overall job timeout — a model that rambles without ever emitting a
+   * parseable action would otherwise burn the whole job on one turn.
+   */
+  cancelCurrentTurn?(): void;
 }
 
 export interface AgentAdapter {

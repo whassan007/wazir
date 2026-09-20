@@ -56,3 +56,7 @@ Desktop.ini
 # esbuild bundle output (scripts/bundle.mjs)
 bin/wa.js
 bin/wa.js.map
+
+# test plan runner artifacts (scripts/tui-test-plan.mjs)
+test-plan-report.json
+.test-plan-vitest.json

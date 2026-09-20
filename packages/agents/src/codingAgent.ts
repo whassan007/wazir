@@ -13,6 +13,14 @@ export interface CodingAgentOptions {
   maxRepairCycles?: number;
   maxTokensPerTurn?: number;
   temperature?: number;
+  /**
+   * Wall-clock budget for a single model turn, independent of the overall
+   * job timeout. Small/local models can ramble in prose for minutes without
+   * ever emitting the required JSON action; without this, one bad turn can
+   * consume the entire job's timeout budget before the normal
+   * invalid-response retry logic ever gets a second attempt.
+   */
+  modelTurnTimeoutMs?: number;
   /** Extra instructions appended to the system prompt. */
   systemPromptExtra?: string;
 }
@@ -241,6 +249,7 @@ export class CodingAgent implements AgentAdapter {
   private readonly maxRepairCycles: number;
   private readonly maxTokensPerTurn: number;
   private readonly temperature: number;
+  private readonly modelTurnTimeoutMs: number;
   private readonly systemPromptExtra?: string;
 
   constructor(options: CodingAgentOptions = {}) {
@@ -248,6 +257,7 @@ export class CodingAgent implements AgentAdapter {
     this.maxRepairCycles = options.maxRepairCycles ?? 2;
     this.maxTokensPerTurn = options.maxTokensPerTurn ?? 4096;
     this.temperature = options.temperature ?? 0.2;
+    this.modelTurnTimeoutMs = options.modelTurnTimeoutMs ?? 90_000;
     this.systemPromptExtra = options.systemPromptExtra;
   }
 
@@ -276,24 +286,39 @@ export class CodingAgent implements AgentAdapter {
     const checkOutputs: Array<{ name: string; ok: boolean; output: string }> = [];
     let correctionCount = 0;
 
-    const modelTurn = async (): Promise<string> => {
+    const modelTurn = async (): Promise<{ content: string; timedOut: boolean }> => {
       let content = '';
       let error: string | undefined;
-      for await (const event of runtime.generate({
-        modelId: request.modelId,
-        messages,
-        maxTokens: this.maxTokensPerTurn,
-        temperature: this.temperature,
-      })) {
-        if (event.type === 'token' && event.content) content += event.content;
-        if (event.type === 'error' && event.error) error = event.error;
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        runtime.cancelCurrentTurn?.();
+      }, this.modelTurnTimeoutMs);
+      try {
+        for await (const event of runtime.generate({
+          modelId: request.modelId,
+          messages,
+          maxTokens: this.maxTokensPerTurn,
+          temperature: this.temperature,
+        })) {
+          if (event.type === 'token' && event.content) content += event.content;
+          if (event.type === 'error' && event.error) error = event.error;
+        }
+      } finally {
+        clearTimeout(timer);
       }
-      if (error) throw new Error(error);
-      return content;
+      // A cancel-induced 'completed' with partial content is not an error —
+      // only surface `error` when the turn didn't just hit its own timeout.
+      if (error && !timedOut) throw new Error(error);
+      return { content, timedOut };
     };
 
     const toolNames = new Set(runtime.tools.map((t) => t.name));
     const readAction = (raw: string): ParsedAction | null => normalizeAction(parseAction(raw), toolNames);
+    const correctionMessage = (timedOut: boolean): string =>
+      timedOut
+        ? 'Your previous response took too long and was cut off before it produced a JSON action. Stop reasoning in prose — respond immediately with exactly one JSON object.'
+        : 'Invalid response. Respond with exactly one JSON object as specified.';
 
     const pushAssistant = (content: string): void => {
       messages.push({ role: 'assistant', content });
@@ -317,7 +342,7 @@ export class CodingAgent implements AgentAdapter {
     yield { kind: 'phase', phase: 'plan' as AgentPhase };
     for (let i = 0; i < 3 && !plan; i++) {
       if (request.isCancelled?.()) break;
-      const raw = await modelTurn();
+      const { content: raw, timedOut } = await modelTurn();
       // A cancel (manual or timeout) that lands during the model turn must not let
       // this turn's action run anyway — the check at the top of the loop already passed.
       if (request.isCancelled?.()) break;
@@ -325,7 +350,7 @@ export class CodingAgent implements AgentAdapter {
       const action = readAction(raw);
       if (!action) {
         correctionCount += 1;
-        messages.push({ role: 'user', content: 'Invalid response. Respond with exactly one JSON object as specified.' });
+        messages.push({ role: 'user', content: correctionMessage(timedOut) });
         continue;
       }
       pushAssistant(raw);
@@ -360,7 +385,7 @@ export class CodingAgent implements AgentAdapter {
         yield { kind: 'message', content: `[steered] ${steering}` };
         pushContinue(`User follow-up instruction: ${steering}`);
       }
-      const raw = await modelTurn();
+      const { content: raw, timedOut } = await modelTurn();
       // A cancel (manual or timeout) that lands during the model turn must not let
       // this turn's action run anyway — the check at the top of the loop already passed.
       if (request.isCancelled?.()) break;
@@ -373,7 +398,7 @@ export class CodingAgent implements AgentAdapter {
           yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions' };
           break;
         }
-        messages.push({ role: 'user', content: 'Invalid response. Respond with exactly one JSON object as specified.' });
+        messages.push({ role: 'user', content: correctionMessage(timedOut) });
         continue;
       }
 
@@ -462,14 +487,14 @@ export class CodingAgent implements AgentAdapter {
           yield { kind: 'message', content: `[steered] ${steering}` };
           pushContinue(`User follow-up instruction: ${steering}`);
         }
-        const raw = await modelTurn();
+        const { content: raw, timedOut } = await modelTurn();
         // A cancel (manual or timeout) that lands during the model turn must not let
         // this turn's action run anyway — the check at the top of the loop already passed.
         if (request.isCancelled?.()) break;
         turnsUsed += 1;
         const action = readAction(raw);
         if (!action) {
-          messages.push({ role: 'user', content: 'Invalid response. Respond with exactly one JSON object as specified.' });
+          messages.push({ role: 'user', content: correctionMessage(timedOut) });
           continue;
         }
         pushAssistant(raw);

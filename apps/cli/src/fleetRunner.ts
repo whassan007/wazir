@@ -125,8 +125,13 @@ export function createFleetTaskExecutor(
     }
 
     // 5. Build AgentRuntime
+    let currentTurn: { adapter: import('@wazir/runtimes-interfaces').RuntimeAdapter; requestId: string } | undefined;
     const runtime: AgentRuntime = {
       tools: engine.tools.forModel(),
+
+      cancelCurrentTurn(): void {
+        void currentTurn?.adapter.cancel?.(currentTurn.requestId);
+      },
 
       async *generate(request) {
         await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
@@ -137,6 +142,8 @@ export function createFleetTaskExecutor(
             yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
             return;
           }
+          const requestId = generateId('req-');
+          currentTurn = { adapter, requestId };
           for await (const event of adapter.generate({
             modelId: request.modelId,
             messages: request.messages,
@@ -144,6 +151,7 @@ export function createFleetTaskExecutor(
             temperature: request.temperature,
             contextTokens: contextDecision.available.tokens,
             stream: true,
+            requestId,
           })) {
             if (event.type === 'token' && event.content) {
               context.onProgress?.({ kind: 'token', content: event.content });
@@ -162,6 +170,7 @@ export function createFleetTaskExecutor(
             }
             yield event;
           }
+          currentTurn = undefined;
         } else if (engine.config.apiUrl) {
           // Remote dispatch to another computer in the fleet
           const workerRequest: WorkerExecutionRequest = {
