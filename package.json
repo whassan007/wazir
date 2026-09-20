@@ -31,6 +31,8 @@
     "test:watch": "vitest",
     "test:tui": "npm run build && vitest run apps/cli/tests/fleetTui.test.ts apps/cli/tests/tuiSessionLifecycle.test.ts apps/cli/tests/fleetRunner.e2e.test.ts apps/cli/tests/spinner.test.ts apps/cli/tests/doctor.test.ts apps/cli/tests/executeTask.e2e.test.ts",
     "test:plan:tui": "node scripts/tui-test-plan.mjs",
+    "test:agent": "npm run build && vitest run packages/agents/tests/codingAgent.turnTimeout.test.ts packages/agents/tests/codingAgent.circuitBreaker.test.ts packages/agents/tests/codingAgent.contextCompaction.test.ts packages/agents/tests/codingAgent.maxTurns.test.ts packages/agents/tests/parseAction.test.ts packages/core/tests/jobOrchestrator.test.ts packages/core/tests/jobLifecycleAndValidation.test.ts packages/core/tests/policyEngineShell.test.ts packages/core/tests/policyEngineHardening.test.ts packages/tools/tests/sandbox.test.ts apps/cli/tests/fleetTui.test.ts",
+    "test:plan:agent": "node scripts/agent-execution-test-plan.mjs",
     "test:matrix": "vitest run tests/runtime/liveModelMatrix.test.ts",
     "typecheck": "tsc --build --force",
     "dmg": "bash scripts/build-dmg.sh",

@@ -60,3 +60,7 @@ bin/wa.js.map
 # test plan runner artifacts (scripts/tui-test-plan.mjs)
 test-plan-report.json
 .test-plan-vitest.json
+
+# test plan runner artifacts (scripts/agent-execution-test-plan.mjs)
+agent-execution-test-plan-report.json
+.test-plan-vitest-agent.json
