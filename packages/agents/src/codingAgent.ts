@@ -318,6 +318,9 @@ export class CodingAgent implements AgentAdapter {
     for (let i = 0; i < 3 && !plan; i++) {
       if (request.isCancelled?.()) break;
       const raw = await modelTurn();
+      // A cancel (manual or timeout) that lands during the model turn must not let
+      // this turn's action run anyway — the check at the top of the loop already passed.
+      if (request.isCancelled?.()) break;
       turnsUsed += 1;
       const action = readAction(raw);
       if (!action) {
@@ -358,6 +361,9 @@ export class CodingAgent implements AgentAdapter {
         pushContinue(`User follow-up instruction: ${steering}`);
       }
       const raw = await modelTurn();
+      // A cancel (manual or timeout) that lands during the model turn must not let
+      // this turn's action run anyway — the check at the top of the loop already passed.
+      if (request.isCancelled?.()) break;
       turnsUsed += 1;
       const action = readAction(raw);
 
@@ -457,6 +463,9 @@ export class CodingAgent implements AgentAdapter {
           pushContinue(`User follow-up instruction: ${steering}`);
         }
         const raw = await modelTurn();
+        // A cancel (manual or timeout) that lands during the model turn must not let
+        // this turn's action run anyway — the check at the top of the loop already passed.
+        if (request.isCancelled?.()) break;
         turnsUsed += 1;
         const action = readAction(raw);
         if (!action) {

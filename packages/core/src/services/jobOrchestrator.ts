@@ -47,6 +47,9 @@ export interface OrchestratorTaskAssignment {
 interface ActiveJobHandle {
   abort: AbortController;
   activeTasks: Map<string, AbortController>;
+  /** Tasks whose task:cancelled has already been emitted (by cancelJob/cancelTask), so the
+   *  post-executor abort branch doesn't announce the same cancellation a second time. */
+  cancelledTaskIds: Set<string>;
   resolve: (job: Job) => void;
   reject: (err: Error) => void;
 }
@@ -238,6 +241,7 @@ export class JobOrchestrator {
         taskAbort.abort();
         handle.activeTasks.delete(taskId);
       }
+      handle.cancelledTaskIds.add(taskId);
     }
     const job = this.jobManager.get(jobId);
     if (job) {
@@ -247,18 +251,24 @@ export class JobOrchestrator {
     this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
   }
 
-  async cancelJob(jobId: string): Promise<void> {
+  /**
+   * @param reason Set when the system (not a person) is doing the cancelling — e.g. the
+   *   job timeout — so subscribers can say "stopped: exceeded the 300s timeout" instead
+   *   of the misleading "cancelled by operator".
+   */
+  async cancelJob(jobId: string, reason?: string): Promise<void> {
     const handle = this.activeJobs.get(jobId);
     if (handle) {
       handle.abort.abort();
       for (const [taskId, taskAbort] of handle.activeTasks.entries()) {
         taskAbort.abort();
-        this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
+        handle.cancelledTaskIds.add(taskId);
+        this.emit(jobId, { type: 'task:cancelled', jobId, taskId, error: reason });
       }
       handle.activeTasks.clear();
     }
     await this.jobManager.cancel(jobId);
-    this.emit(jobId, { type: 'job:cancelled', jobId });
+    this.emit(jobId, { type: 'job:cancelled', jobId, error: reason });
   }
 
   async resumeJob(jobId: string): Promise<void> {
@@ -319,6 +329,7 @@ export class JobOrchestrator {
       const handle: ActiveJobHandle = {
         abort: jobAbortController,
         activeTasks,
+        cancelledTaskIds: new Set(),
         resolve,
         reject,
       };
@@ -329,7 +340,7 @@ export class JobOrchestrator {
       // own AbortController is aborted too, not just the top-level job one.
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
-        void this.cancelJob(jobId);
+        void this.cancelJob(jobId, `exceeded the ${timeoutSeconds}s timeout`);
       }, Math.max(1, timeoutSeconds) * 1000);
       timeoutTimer.unref?.();
 
@@ -516,7 +527,13 @@ export class JobOrchestrator {
               if (taskAbort.signal.aborted) {
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
-                this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
+                // cancelJob()/cancelTask() already emitted this task's cancellation (with
+                // the reason, when there was one) at the moment it happened; emitting
+                // again here when the executor finally returns produced a second,
+                // reason-less "cancelled by operator" line for every cancel/timeout.
+                if (!handle.cancelledTaskIds.has(taskId)) {
+                  this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
+                }
               } else if (outcome.success) {
                 await this.completeTask(job.id, taskId, outcome.result);
                 this.emit(jobId, {

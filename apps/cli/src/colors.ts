@@ -27,6 +27,7 @@ export const color = {
   green: (t: string) => paint(t, 'green'),
   yellow: (t: string) => paint(t, 'yellow'),
   blue: (t: string) => paint(t, 'blue'),
+  magenta: (t: string) => paint(t, 'magenta'),
   cyan: (t: string) => paint(t, 'cyan'),
   gray: (t: string) => paint(t, 'gray'),
 };

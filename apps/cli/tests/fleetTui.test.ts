@@ -485,6 +485,111 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.stop();
   });
 
+  it('shows the model output live while a turn streams, then folds it into the log as a MODEL line', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    // First turn streams half a plan and then waits until released, so the TUI can be
+    // observed mid-generation. Later turns finish immediately.
+    let release: (() => void) | undefined;
+    let call = 0;
+    const adapter = engine.worker.adapterForModel('fake-model')!;
+    adapter.generate = async function* () {
+      call += 1;
+      if (call === 1) {
+        yield { type: 'token' as const, content: '{"action":"plan","content":"first inspect the repo, then ' };
+        await new Promise<void>((r) => { release = r; });
+        const rest = 'write the module"}';
+        yield { type: 'token' as const, content: rest };
+        yield { type: 'completed' as const, content: '', usage: { inputTokens: 42, outputTokens: 9, totalTokens: 51 } };
+        return;
+      }
+      const done = '{"action":"done","summary":"module written"}';
+      yield { type: 'token' as const, content: done };
+      yield { type: 'completed' as const, content: done, usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } };
+    };
+
+    await harness.start();
+    harness.sendLine('build the module');
+    // Wait for the first token to arrive (scheduling + first model call are async).
+    for (let i = 0; i < 40 && !harness.tui.getAgents().some((a) => a.status === 'running'); i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    await new Promise((r) => setTimeout(r, 60));
+
+    // Open the Tail view for the running task and look at the live block.
+    harness.sendKey('\r');
+    expect(harness.tui.getCurrentView()).toBe('tail');
+    const live = harness.getScreenBuffer();
+    expect(live).toContain('MODEL is generating');
+    expect(live).toContain('first inspect the repo, then');
+    // Not yet a log line: the turn hasn't finished.
+    expect(live).not.toMatch(/MODEL\s+plan:/);
+
+    release!();
+    for (let i = 0; i < 60 && harness.tui.getCurrentJob()?.status !== 'completed'; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const after = harness.getScreenBuffer();
+    expect(after).not.toContain('MODEL is generating');
+    // Folded into the history as one readable line, in causal order before the parsed
+    // "Plan:" event that resulted from it.
+    expect(after).toMatch(/MODEL\s+plan: first inspect the repo, then write the module/);
+    expect(after.indexOf('MODEL')).toBeLessThan(after.indexOf('Plan: first inspect'));
+    // Context gauge reflects the last turn's actual prompt size, not a cumulative total.
+    expect(harness.tui.getContextMetrics().used).toBe(7);
+
+    harness.stop();
+  });
+
+  it('reports a timed-out job as stopped by the timeout, not "cancelled by operator"', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false, timeoutSeconds: 1 });
+
+    // A model turn that outlives the job timeout. Cancellation is cooperative (checked
+    // between turns), so the turn is released after the timeout fires and the agent must
+    // then stop without running the action it produced.
+    let release: (() => void) | undefined;
+    let call = 0;
+    const adapter = engine.worker.adapterForModel('fake-model')!;
+    adapter.generate = async function* () {
+      call += 1;
+      if (call === 1) {
+        await new Promise<void>((r) => { release = r; });
+      }
+      const reply = '{"action":"tool","tool":"write","input":{"path":"late.txt","content":"should never be written"}}';
+      yield { type: 'token' as const, content: reply };
+      yield { type: 'completed' as const, content: reply, usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
+    };
+
+    await harness.start();
+    harness.sendLine('slow task');
+    await new Promise((r) => setTimeout(r, 1200)); // past the 1s timeout
+    release!();
+    // Everything after release is async (agent unwinds, evaluation, rollup) and slows
+    // down under parallel test load — wait for the outcome rather than a fixed sleep.
+    for (let i = 0; i < 60 && !/exceeded the 1s timeout/.test(harness.tui.getStatusMessage()); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const job = harness.tui.getCurrentJob();
+    expect(job?.status).toBe('failed');
+    expect(harness.tui.getStatusMessage()).toContain('exceeded the 1s timeout');
+    expect(harness.tui.getStatusMessage()).not.toContain('cancelled');
+
+    harness.sendKey('\r');
+    const tail = harness.getScreenBuffer();
+    expect(tail).toContain('Task stopped automatically: exceeded the 1s timeout');
+    expect(tail).not.toContain('cancelled by operator');
+    // The action the model produced after the cancel landed must not have run.
+    await expect(fs.access(path.join(projectRoot, 'late.txt'))).rejects.toThrow();
+
+    harness.stop();
+  });
+
   it('handles in-TUI non-blocking approval queue and mid-run steering', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);
@@ -1035,8 +1140,19 @@ describe('FleetTui — interactive terminal UI harness', () => {
     // Context indicator format: Context <used>K/<max>K ~
     expect(buf).toMatch(/Context \d+(\.\d+)?K\/\d+K ~/);
 
+    // Idle: no model turn has completed, so nothing is measured. This used to fake 8.4K
+    // (and otherwise summed cumulative job tokens + log-text estimates, which produced
+    // "106.6K/32K" for a 32K model) — only a real measurement is shown now.
+    expect(harness.tui.getContextMetrics()).toEqual({ used: 0, max: 32_768 });
+
+    harness.sendLine('measure context');
+    await new Promise((r) => setTimeout(r, 100));
+
+    // After a run: the prompt size of the last model turn (the fake adapter reports
+    // inputTokens: 10 on every turn), i.e. actual context-window occupancy — not the
+    // job's cumulative total (which would be 20 here across the two turns).
     const metrics = harness.tui.getContextMetrics();
-    expect(metrics.used).toBeGreaterThan(0);
+    expect(metrics.used).toBe(10);
     expect(metrics.max).toBeGreaterThanOrEqual(metrics.used);
 
     harness.stop();

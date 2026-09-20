@@ -8,7 +8,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — control plane command line')
-  .version('0.1.18');
+  .version('0.1.19');
 
 // computers command
 const computersCmd = new Command()
@@ -512,15 +512,22 @@ program
   .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
   .option('--no-worktrees', 'Disable git worktree isolation')
   .option('--auto-merge', 'Automatically merge completed agent branches into main')
+  .option('--timeout <seconds>', 'Stop a job automatically after this many seconds (default: 300)')
   .action(async (options) => {
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { FleetTui } = await import('./tui/index.js');
+    const timeout = options.timeout !== undefined ? Number(options.timeout) : undefined;
+    if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+      console.error(`--timeout must be a positive number of seconds, got '${options.timeout}'`);
+      process.exit(2);
+    }
     const tui = new FleetTui({
       engine,
       concurrencyLimit: options.concurrency ? Number(options.concurrency) : 4,
       useWorktrees: options.worktrees !== false,
       autoMerge: options.autoMerge === true,
+      timeoutSeconds: timeout,
     });
     await tui.start();
     await tui.waitForExit();

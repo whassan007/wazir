@@ -149,11 +149,16 @@ export function createFleetTaskExecutor(
               context.onProgress?.({ kind: 'token', content: event.content });
             }
             if (event.type === 'completed' && event.usage) {
-              await engine.executions.recordUsage(executionId, {
+              const usage = {
                 input: event.usage.inputTokens,
                 output: event.usage.outputTokens,
-                total: event.usage.totalTokens,
-              });
+                total: event.usage.totalTokens ?? event.usage.inputTokens + event.usage.outputTokens,
+              };
+              await engine.executions.recordUsage(executionId, usage);
+              // Per-turn usage, not the cumulative execution total: `input` here is the
+              // size of the prompt the model was just sent, i.e. the real context-window
+              // occupancy right now — the only honest number for a "Context N/M" gauge.
+              context.onProgress?.({ kind: 'usage', usage });
             }
             yield event;
           }
@@ -176,11 +181,13 @@ export function createFleetTaskExecutor(
                 context.onProgress?.({ kind: 'token', content: generationEvent.content });
               }
               if (generationEvent.type === 'completed' && generationEvent.usage) {
-                await engine.executions.recordUsage(executionId, {
+                const usage = {
                   input: generationEvent.usage.inputTokens,
                   output: generationEvent.usage.outputTokens,
-                  total: generationEvent.usage.totalTokens,
-                });
+                  total: generationEvent.usage.totalTokens ?? generationEvent.usage.inputTokens + generationEvent.usage.outputTokens,
+                };
+                await engine.executions.recordUsage(executionId, usage);
+                context.onProgress?.({ kind: 'usage', usage });
               }
               yield generationEvent;
             }
@@ -198,6 +205,13 @@ export function createFleetTaskExecutor(
       },
 
       async executeTool(name, input): Promise<ToolResult> {
+        // The agent loop only checks for cancellation between turns, and a model turn can
+        // take a long time — so a cancel (manual or timeout) that lands mid-turn used to
+        // be followed by that turn's tool call still executing (a `shell` ran 9s after
+        // "Task was cancelled" in one real log). Refuse at the choke point instead.
+        if (signal?.aborted) {
+          return { ok: false, output: '', error: 'cancelled before the tool ran', durationMs: 0 };
+        }
         const decision = await engine.policy.authorize({
           tool: name,
           input,

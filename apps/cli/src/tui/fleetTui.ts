@@ -14,6 +14,7 @@ import { TerminalScreen, type TerminalSize } from './screen.js';
 import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } from '../blocks.js';
 import { resolveReference, type ResolvedReference } from '../references.js';
 import { tokensPerSecond } from '@wazir/shared';
+import { parseAction } from '@wazir/agents';
 
 // Per-category spinner frames for the persistent full-screen renderer. Earlier rounds on
 // this terminal assumed Braille glyphs were unsafe (they'd caused ghosting twice), but an
@@ -91,6 +92,14 @@ export interface AgentCardState {
   durationMs: number;
   filesChanged: string[];
   usage?: { input: number; output: number; total: number };
+  /** Prompt size of the most recent model turn — the real context-window occupancy. */
+  lastTurnInputTokens?: number;
+}
+
+export interface AgentLogEntry {
+  text: string;
+  time: string;
+  kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'model';
 }
 
 export interface FleetTuiOptions {
@@ -99,6 +108,8 @@ export interface FleetTuiOptions {
   concurrencyLimit?: number;
   useWorktrees?: boolean;
   autoMerge?: boolean;
+  /** Per-job wall-clock limit; the orchestrator's built-in default applies when unset. */
+  timeoutSeconds?: number;
 }
 
 /**
@@ -180,6 +191,7 @@ export class FleetTui {
   private readonly concurrencyLimit: number;
   private readonly useWorktrees: boolean;
   private readonly autoMerge: boolean;
+  private readonly timeoutSeconds?: number;
 
   private currentView: TuiView = 'fleet';
   private focusedPane: FocusPane = 'nav';
@@ -212,14 +224,14 @@ export class FleetTui {
   ];
 
   private readonly agents = new Map<string, AgentCardState>();
-  private readonly agentLogs = new Map<
-    string,
-    Array<{
-      text: string;
-      time: string;
-      kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info';
-    }>
-  >();
+  private readonly agentLogs = new Map<string, AgentLogEntry[]>();
+  // The model's raw output for the turn currently being generated, per task. This is
+  // the closest thing to "watching the model think" this protocol has: the model is
+  // prompted to answer with one JSON action per turn, so the stream is its reasoning
+  // for `plan` actions and the literal command/file content for tool actions. Shown
+  // live in the Tail view while it streams, then folded into the log as one MODEL line
+  // once the turn completes (see flushStreaming).
+  private readonly streamingBuffers = new Map<string, string>();
   private pendingApprovals: PendingApprovalRequest[] = [];
   private approvalShowDetails = false;
 
@@ -263,6 +275,7 @@ export class FleetTui {
     this.concurrencyLimit = options.concurrencyLimit ?? 4;
     this.useWorktrees = options.useWorktrees ?? true;
     this.autoMerge = options.autoMerge ?? false;
+    this.timeoutSeconds = options.timeoutSeconds;
   }
 
   getCurrentView(): TuiView {
@@ -1361,11 +1374,16 @@ export class FleetTui {
           await this.engine.orchestrator.runJob(job.id, {
             concurrencyLimit: this.concurrencyLimit,
             taskExecutor: executor,
+            timeoutSeconds: this.timeoutSeconds,
           });
 
           this.currentRollup = await this.engine.orchestrator.getJobRollup(job.id);
           this.jobRollups.set(job.id, this.currentRollup);
-          this.statusMessage = `Job ${job.id} ${job.status}! Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
+          // A timeout is reported as 'failed' with the reason on the task node; say so
+          // here rather than a bare "failed!" that hides why.
+          const timeoutNode = job.graph.nodes.find((n) => /timeout/i.test(n.error ?? ''));
+          const outcome = timeoutNode ? `failed (${timeoutNode.error})` : `${job.status}!`;
+          this.statusMessage = `Job ${job.id} ${outcome} Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
 
           if (this.currentBlockTracker) {
             await this.currentBlockTracker.finish(job.status === 'completed' ? 'success' : 'failed', {
@@ -1421,6 +1439,52 @@ export class FleetTui {
     }
   }
 
+  /** Folds a task's in-progress streamed model text into its log as one MODEL entry. */
+  private flushStreaming(taskId: string, logs: AgentLogEntry[], timeStr: string): void {
+    const raw = this.streamingBuffers.get(taskId);
+    this.streamingBuffers.delete(taskId);
+    if (!raw || !raw.trim()) return;
+    logs.push({ time: timeStr, text: this.summarizeModelOutput(raw), kind: 'model' });
+    if (logs.length > 500) logs.shift();
+  }
+
+  /**
+   * One-line, human-readable form of a raw model turn. The model answers with one JSON
+   * action per turn; the interesting part of that JSON differs by action, so this pulls
+   * out the part a person actually wants to see (the plan text, the shell command, the
+   * file being written) rather than logging the raw envelope verbatim. Falls back to the
+   * raw text when it isn't parseable — a model going off-protocol is itself worth seeing.
+   */
+  private summarizeModelOutput(raw: string): string {
+    const flat = raw.replace(/\s+/g, ' ').trim();
+    const action = parseAction(raw);
+    if (!action) return flat;
+    const obj = action as unknown as Record<string, unknown>;
+    // `{"action":"tool","tool":"shell","input":{...}}` and the shorthand
+    // `{"action":"shell","command":"..."}` both occur; read args from whichever is present.
+    const input = (obj.input && typeof obj.input === 'object' ? obj.input : obj) as Record<string, unknown>;
+    const tool = action.tool ?? (action.action === 'tool' ? undefined : action.action);
+    switch (action.action) {
+      case 'plan':
+        return `plan: ${action.content ?? ''}`;
+      case 'done':
+      case 'answer':
+        return `${action.action}: ${action.summary ?? action.content ?? ''}`;
+    }
+    if (tool === 'shell') return `shell: ${String(input.command ?? '')}`;
+    if (tool === 'write' || tool === 'edit') {
+      const content = typeof input.content === 'string' ? input.content : '';
+      return `${tool} ${String(input.path ?? '')} (${content.length} chars)`;
+    }
+    if (tool) {
+      const args = obj.input && typeof obj.input === 'object'
+        ? obj.input
+        : Object.fromEntries(Object.entries(obj).filter(([k]) => k !== 'action' && k !== 'tool'));
+      return `${tool} ${JSON.stringify(args)}`;
+    }
+    return flat;
+  }
+
   private onJobEvent = (ev: JobOrchestratorEvent): void => {
     const taskId = ev.taskId;
     const now = new Date();
@@ -1451,17 +1515,35 @@ export class FleetTui {
           kind: 'route',
         });
       } else if (ev.type === 'task:progress') {
-        const p = ev.event as { kind?: string; phase?: string; content?: string; tool?: string; error?: string };
+        const p = ev.event as {
+          kind?: string;
+          phase?: string;
+          content?: string;
+          tool?: string;
+          error?: string;
+          usage?: { input: number; output: number; total: number };
+        };
 
-        // Raw model output streams in one token/JSON-fragment at a time as the model
-        // generates its structured action (fleetRunner.ts forwards every runtime.generate
-        // token as kind:'token' before the agent loop has parsed it). For non-narrative
-        // actions this is literally unparsed protocol JSON, e.g. `{"action":"shell",
-        // "command":"ls -F"}` — showing it leaks internal wire format onto the screen.
-        // The agent loop (codingAgent.ts) already emits a separate, fully-parsed turn
-        // event (message/tool_call/phase/done/error) once each turn's JSON is complete,
-        // which is what the tail view shows instead, so raw tokens are ignored here.
+        // Raw model output, one token at a time. Accumulated into a per-task buffer that
+        // the Tail view renders live (the "thinking" pane), then folded into the log as
+        // a single MODEL line when the turn ends. Not drawn per token on purpose — a fast
+        // local model can emit dozens a second; the 250ms render tick picks it up.
         if (p.kind === 'token') {
+          const prev = this.streamingBuffers.get(taskId) ?? '';
+          const next = prev + (p.content ?? '');
+          this.streamingBuffers.set(taskId, next.length > 12_000 ? next.slice(-12_000) : next);
+          return;
+        }
+
+        // The model turn just finished (its usage is known): fold the streamed text into
+        // the log before the resulting tool/phase event lands, so the log reads in causal
+        // order — what the model said, then what happened because of it.
+        this.flushStreaming(taskId, logs, timeStr);
+
+        if (p.kind === 'usage') {
+          if (p.usage) agent.lastTurnInputTokens = p.usage.input;
+          this.agentLogs.set(taskId, logs);
+          this.draw();
           return;
         }
 
@@ -1493,6 +1575,7 @@ export class FleetTui {
         });
         if (logs.length > 500) logs.shift();
       } else if (ev.type === 'task:completed') {
+        this.flushStreaming(taskId, logs, timeStr);
         agent.status = 'completed';
         agent.completedAt = now;
         agent.phase = 'complete';
@@ -1506,6 +1589,7 @@ export class FleetTui {
           kind: 'complete',
         });
       } else if (ev.type === 'task:failed') {
+        this.flushStreaming(taskId, logs, timeStr);
         agent.status = 'failed';
         agent.completedAt = now;
         agent.phase = 'failed';
@@ -1542,14 +1626,18 @@ export class FleetTui {
           kind: 'test',
         });
       } else if (ev.type === 'task:cancelled') {
+        this.flushStreaming(taskId, logs, timeStr);
         agent.status = 'cancelled';
         agent.phase = 'cancelled';
-        agent.lastMessage = 'Cancelled';
+        // ev.error is set when the system did the cancelling (the job timeout) — without
+        // distinguishing it, a timed-out task read as "cancelled by operator", which
+        // blames a person for something they didn't do and hides the real cause.
+        agent.lastMessage = ev.error ? `Stopped: ${ev.error}` : 'Cancelled';
 
         logs.push({
           time: timeStr,
-          text: 'Task was cancelled by operator',
-          kind: 'info',
+          text: ev.error ? `Task stopped automatically: ${ev.error}` : 'Task was cancelled by operator',
+          kind: ev.error ? 'error' : 'info',
         });
       } else if (ev.type === 'task:steered') {
         agent.lastMessage = `Steered: ${ev.instruction?.slice(0, 40)}`;
@@ -1678,33 +1766,24 @@ export class FleetTui {
   // ==========================================
   // Context Indicator Metrics (§20)
   // ==========================================
+  /**
+   * Context-window occupancy: the prompt size of the most recent model turn, taken from
+   * the running (else most recently started) agent. This used to sum the job's
+   * cumulative tokens plus rough estimates of every log line and block on screen, and
+   * fake 8.4K when idle — which is how it displayed "106.6K/32K" for a 32K model. Only a
+   * measured number is shown now; 0 means no model turn has completed yet.
+   */
   getContextMetrics(): { used: number; max: number } {
-    let used = 0;
-    // 1. Rollup token usage if available
-    if (this.currentRollup?.tokens?.total) {
-      used += this.currentRollup.tokens.total;
-    }
-    // 2. Active context blocks tokens estimate (~1 token per 4 chars)
-    for (const b of this.recentBlocks) {
-      const len = (b.stdout?.length || 0) + (b.stderr?.length || 0);
-      used += Math.ceil(len / 4);
-    }
-    // 3. Stream event activity tokens estimate
-    for (const logs of this.agentLogs.values()) {
-      for (const l of logs) {
-        used += Math.ceil(l.text.length / 4);
-      }
-    }
+    const agents = Array.from(this.agents.values());
+    const byRecency = (a: AgentCardState, b: AgentCardState) =>
+      (b.startedAt?.getTime() ?? 0) - (a.startedAt?.getTime() ?? 0);
+    const source =
+      agents.filter((a) => a.status === 'running' && a.lastTurnInputTokens !== undefined).sort(byRecency)[0] ??
+      agents.filter((a) => a.lastTurnInputTokens !== undefined).sort(byRecency)[0];
+    const used = source?.lastTurnInputTokens ?? 0;
 
-    // Context max from registered models
     const models = this.engine.models.list();
     const max = models[0]?.contextMax ?? 32768;
-
-    // Minimum sensible display budget if idle (~8.4K as specified)
-    if (used < 1000) {
-      used = 8400;
-    }
-
     return { used, max };
   }
 
@@ -2011,7 +2090,13 @@ export class FleetTui {
         }
 
         const logs = this.agentLogs.get(card.taskId) ?? [];
-        const remainingRows = Math.max(1, maxRows - lines.length);
+        // While a model turn is streaming, reserve the bottom few rows for it — this is
+        // the live "what is the model thinking right now" view; the log above it is the
+        // history of completed turns.
+        const streaming = this.streamingBuffers.get(card.taskId) ?? '';
+        const showLive = card.status === 'running' && streaming.trim().length > 0;
+        const liveRows = showLive ? Math.min(7, Math.max(3, Math.floor((maxRows - lines.length) / 3))) : 0;
+        const remainingRows = Math.max(1, maxRows - lines.length - liveRows);
 
         // Apply eventScrollOffset
         const maxScroll = Math.max(0, logs.length - remainingRows);
@@ -2055,9 +2140,31 @@ export class FleetTui {
             } else if (k === 'error' || k === 'fail') {
               badge = color.red('ERROR   ');
               contentText = color.red(truncatedText);
+            } else if (k === 'model') {
+              badge = color.magenta('MODEL   ');
+              contentText = color.magenta(truncatedText);
             }
 
             lines.push(this.padRightTo(`  ${timePrefix} ${badge} ${contentText}`, width));
+          }
+        }
+
+        if (showLive) {
+          const spinner = getCategorySpinnerFrame('EXECUTIONS', this.spinnerTick);
+          lines.push(
+            this.padRightTo(
+              color.magenta(`  ${spinner} MODEL is generating (${streaming.length} chars so far)`),
+              width,
+            ),
+          );
+          // Show the most recent text, not the beginning: wrap the tail of the buffer and
+          // keep the last rows so it reads like a terminal scrolling as the model types.
+          const innerWidth = Math.max(10, width - 6);
+          const bodyRows = liveRows - 1;
+          const tail = streaming.slice(-(innerWidth * bodyRows * 2)).replace(/\s+/g, ' ');
+          const wrapped = this.wrapText(tail, innerWidth, 10_000).slice(-bodyRows);
+          for (const wline of wrapped) {
+            lines.push(this.padRightTo(color.magenta(`    ${wline}`), width));
           }
         }
       } else {
