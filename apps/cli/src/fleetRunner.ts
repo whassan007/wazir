@@ -318,6 +318,14 @@ export function createFleetTaskExecutor(
       },
     };
 
+    // A job/task cancel or timeout only sets `signal.aborted` — the agent loop
+    // checks that cooperatively at the top of each turn, which does nothing
+    // for a turn already in flight. Without this, a job whose timeout fires
+    // mid-generation keeps running until that turn hits its own (longer)
+    // per-turn timeout or finishes naturally — observed as a job reporting
+    // "exceeded the 300s timeout" while its actual duration was 338.8s.
+    signal?.addEventListener('abort', () => runtime.cancelCurrentTurn?.(), { once: true });
+
     // 6. Run agent loop
     let summary: string | undefined;
     const errors: string[] = [];

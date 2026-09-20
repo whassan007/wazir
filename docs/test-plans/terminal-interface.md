@@ -66,7 +66,7 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 | TUI-003 | bare `q` at the prompt exits; `q` mid-word does not | tuiSessionLifecycle: `exits the session on a bare q at the prompt` | L2 | R |
 | TUI-004 | Ctrl+C terminates with exit code 0 after full teardown | tuiSessionLifecycle: `terminates cleanly on Ctrl+C with exit code 0 and full cleanup` | L2 | B |
 | TUI-005 | `stop()` clears render timer, resize listeners, rejection guard | tuiSessionLifecycle: `stop() clears the render timer, resize and event subscriptions, and the rejection guard` | L2 | B |
-| TUI-006 | raw mode + keypress binding on TerminalScreen | fleetTui: `verifies raw mode and keypress binding on TerminalScreen` | L1 | R |
+| TUI-006 | raw mode + keypress binding + explicit steady-box cursor (DECSCUSR) on enter, reset on leave | fleetTui: `verifies raw mode and keypress binding on TerminalScreen` | L1 | R |
 
 ### B. Navigation & view management
 | ID | Case | Entry | Level | Pri |
@@ -99,6 +99,8 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 | TUI-031 | policy modal with A/D/V/I actions | fleetTui: `displays overlaid policy approval modal with [A], [D], [V], [I] actions` | L2 | B |
 | TUI-032 | Ctrl+A / Ctrl+D approve/deny all queued at once | fleetTui: `supports Ctrl+A / Ctrl+D to approve or deny all queued policy requests at once` | L2 | R |
 | TUI-033 | approval view has its own layout, no column collision | fleetTui: `renders approval view with dedicated layout template that does not collide with execution table columns` | L2 | F |
+| TUI-034 | a pending `edit` approval shows a line diff instead of raw JSON args | fleetTui: `shows a line diff for a pending edit approval instead of a raw JSON args blob` | L2 | F |
+| TUI-035 | a pending `write` approval shows a labeled content preview, not a diff (no reliable on-disk path to diff against) | fleetTui: `shows a labeled content preview (not a diff) for a pending write approval` | L2 | F |
 
 ### E. Input & text editing
 | ID | Case | Entry | Level | Pri |
@@ -139,7 +141,7 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 ## 7. Acceptance criteria
 
 A terminal-interface change is mergeable when:
-1. `node scripts/tui-test-plan.mjs` exits 0 (all 46 cases PASS or SKIP; no FAIL/MISSING)
+1. `node scripts/tui-test-plan.mjs` exits 0 (all 48 cases PASS or SKIP; no FAIL/MISSING)
 2. All priority-B cases PASS (session safety: exit paths, cleanup, no buffer leakage, non-TTY fallback, approval flow, single progress emission, one-shot task path)
 3. New interactive behavior ships with a new TC added to §6 and the runner matrix (same-day)
 4. No case may be deleted to make the plan green; it is renamed or retired with a reason in the commit

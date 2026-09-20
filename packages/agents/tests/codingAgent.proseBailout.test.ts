@@ -62,6 +62,36 @@ describe('CodingAgent.run — prose-before-action bailout', () => {
     expect(turns.some((t) => t.kind === 'error' && t.error?.includes('repeatedly failed'))).toBe(true);
   });
 
+  it('still bails when the rambling prose is full of literal braces (quoted C++/Java/JS code)', async () => {
+    // Real transcript: a model debugging a C++ compile error rambled for 57+
+    // seconds re-deriving the source file in its reasoning. A bare `{` check
+    // never caught it, because C-family source code is full of literal `{`
+    // characters that have nothing to do with the JSON action it still
+    // hasn't emitted — the heuristic must look for the action's actual
+    // opening shape, not just any brace.
+    let cancelCalls = 0;
+    const runtime: AgentRuntime = {
+      tools: [],
+      cancelCurrentTurn() {
+        cancelCalls += 1;
+      },
+      async *generate() {
+        const chunk = 'void quickSort(int a[], int low, int high) { if (low < high) { int pivot = a[high]; } } ';
+        for (let i = 0; i < 40; i++) {
+          yield { type: 'token' as const, content: chunk };
+        }
+        yield { type: 'completed' as const, content: 'cut off mid-ramble' };
+      },
+      async executeTool(): Promise<ToolResult> {
+        return { ok: true, output: 'ok', durationMs: 0 };
+      },
+    };
+
+    await drain(createCodingAgent({ maxProseBeforeActionChars: 2_000 }).run(baseRequest, runtime));
+
+    expect(cancelCalls).toBeGreaterThan(0);
+  });
+
   it('does not bail on a short, normal preamble before the JSON action', async () => {
     let cancelCalls = 0;
     const runtime: AgentRuntime = {

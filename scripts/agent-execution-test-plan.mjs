@@ -49,6 +49,7 @@ const CASES = [
   { id: 'AGT-007', section: 'A', name: 'JSON action parsing tolerates fences, unbalanced brackets, raw newlines, stacked objects', file: PARSE_ACTION, level: 'L1', priority: 'R' },
   { id: 'AGT-008', section: 'A', name: 'a turn that streams a lot of prose without ever opening its JSON object is cancelled early', file: PROSE_BAILOUT, test: 'cancels a turn that streams a lot of prose without ever opening a JSON object', level: 'L2', priority: 'B' },
   { id: 'AGT-009', section: 'A', name: 'a short, normal preamble before the JSON action does not trigger the bailout', file: PROSE_BAILOUT, test: 'does not bail on a short, normal preamble before the JSON action', level: 'L2', priority: 'R' },
+  { id: 'AGT-013', section: 'A', name: 'the prose bailout still fires when rambling is full of literal braces (quoted C/C++/Java code)', file: PROSE_BAILOUT, test: 'still bails when the rambling prose is full of literal braces (quoted C++/Java/JS code)', level: 'L2', priority: 'B' },
 
   // B. Stuck-loop detection
   { id: 'AGT-010', section: 'B', name: 'circuit breaker trips after the same tool call repeats toolRepeatLimit times', file: CIRCUIT_BREAKER, test: 'stops after the same tool call repeats toolRepeatLimit times, instead of grinding to maxTurns', level: 'L2', priority: 'B' },
@@ -61,6 +62,7 @@ const CASES = [
 
   // D. Job orchestration — timeout, cancellation, persistence
   { id: 'AGT-030', section: 'D', name: 'a task that runs past its timeout is auto-stopped with a clear reason', file: JOB_ORCHESTRATOR, test: 'automatically stops a task that runs past its timeout, marking it failed with a clear reason', level: 'L2', priority: 'B' },
+  { id: 'AGT-043', section: 'D', name: 'an in-flight model turn is cancelled as soon as the job timeout fires, not just at the turn\'s own longer timeout', file: FLEET_TUI, test: 'cancels an in-flight model turn as soon as the job timeout fires, not just at the turn\'s own longer timeout', level: 'L2', priority: 'B' },
   { id: 'AGT-031', section: 'D', name: 'a job finishing within its timeout is left untouched', file: JOB_ORCHESTRATOR, test: 'does not touch a job that finishes comfortably within its timeout', level: 'L2', priority: 'R' },
   { id: 'AGT-032', section: 'D', name: 'cancelling one task does not terminate sibling tasks', file: JOB_ORCHESTRATOR, test: 'supports single-task cancellation without terminating sibling tasks', level: 'L2', priority: 'B' },
   { id: 'AGT-033', section: 'D', name: 'job-level terminal status persists, surviving a process restart', file: JOB_ORCHESTRATOR, test: 'persists the job-level terminal status, not just task status, so it survives a process restart', level: 'L2', priority: 'B' },
@@ -82,6 +84,7 @@ const CASES = [
   // F. Shell policy safety
   { id: 'AGT-060', section: 'F', name: 'shell classification: chaining/substitution/redirection bypass attempts, compiled-binary trust scoping', file: POLICY_SHELL, level: 'L1', priority: 'B' },
   { id: 'AGT-061', section: 'F', name: 'policy hardening review items (newline injection, host reads, code-exec flags, output flags, git verbs, protected paths, env dumps, MCP allow-list)', file: POLICY_HARDENING, level: 'L1', priority: 'B' },
+  { id: 'AGT-062', section: 'F', name: 'glob/search default to the project root when path is omitted, matching their own schema', file: POLICY_HARDENING, test: 'allows glob and search with no path argument', level: 'L1', priority: 'B' },
 
   // G. Sandbox isolation
   { id: 'AGT-070', section: 'G', name: 'bwrap masks the home directory but re-exposes toolchain/cache dirs (incl. macOS Library/Caches)', file: SANDBOX, test: 'bwrap: read-only root, masked home with toolchains re-exposed, writable project, no network by default', level: 'L1', priority: 'B' },

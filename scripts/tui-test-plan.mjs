@@ -65,6 +65,8 @@ const CASES = [
   { id: 'TUI-031', section: 'D', name: 'policy modal with A/D/V/I actions', file: FLEET, test: 'displays overlaid policy approval modal with [A], [D], [V], [I] actions', level: 'L2', priority: 'B' },
   { id: 'TUI-032', section: 'D', name: 'Ctrl+A / Ctrl+D approve-deny all', file: FLEET, test: 'supports Ctrl+A / Ctrl+D to approve or deny all queued policy requests at once', level: 'L2', priority: 'R' },
   { id: 'TUI-033', section: 'D', name: 'approval view dedicated layout', file: FLEET, test: 'renders approval view with dedicated layout template that does not collide with execution table columns', level: 'L2', priority: 'F' },
+  { id: 'TUI-034', section: 'D', name: 'edit approval shows a line diff instead of raw JSON args', file: FLEET, test: 'shows a line diff for a pending edit approval instead of a raw JSON args blob', level: 'L2', priority: 'F' },
+  { id: 'TUI-035', section: 'D', name: 'write approval shows a labeled content preview, not a diff', file: FLEET, test: 'shows a labeled content preview (not a diff) for a pending write approval', level: 'L2', priority: 'F' },
 
   // E. Input & text editing
   { id: 'TUI-040', section: 'E', name: 'backspace, Ctrl+W, Ctrl+U buffer editing', file: FLEET, test: 'correctly handles backspace, delete, Ctrl+W, and Ctrl+U in the input buffer', level: 'L2', priority: 'R' },

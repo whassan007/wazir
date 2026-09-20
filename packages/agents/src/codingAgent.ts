@@ -52,6 +52,14 @@ export interface CodingAgentOptions {
 
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
 const FILE_TOOLS = new Set(['write', 'edit']);
+/**
+ * Matches the start of the one required JSON action, e.g. `{"action":`.
+ * Used (not a bare `{` check) so the prose-bailout heuristic below isn't
+ * defeated by curly-brace languages: a model discussing/quoting C++/Java/JS
+ * source in its reasoning will contain plenty of literal `{` characters
+ * that have nothing to do with the action object it still hasn't emitted.
+ */
+const ACTION_START_RE = /\{\s*"action"\s*:/;
 
 export interface ParsedAction {
   action: string;
@@ -442,7 +450,7 @@ export class CodingAgent implements AgentAdapter {
         })) {
           if (event.type === 'token' && event.content) {
             content += event.content;
-            if (!timedOut && content.length > this.maxProseBeforeActionChars && !content.includes('{')) {
+            if (!timedOut && content.length > this.maxProseBeforeActionChars && !ACTION_START_RE.test(content)) {
               timedOut = true;
               runtime.cancelCurrentTurn?.();
             }

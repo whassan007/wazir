@@ -129,6 +129,9 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
     async healthCheck() {
       return { status: 'healthy' };
     },
+    async cancel() {
+      // Overridden per-test (like `generate`) when a test needs to observe cancellation.
+    },
     async listModels() {
       return [{ id: 'fake-model', name: 'fake-model' }];
     },
@@ -628,6 +631,50 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.stop();
   });
 
+  it('cancels an in-flight model turn as soon as the job timeout fires, not just at the turn\'s own longer timeout', async () => {
+    // Real transcript: a job reported "exceeded the 300s timeout" but actually
+    // ran 338.8s — cancelJob()/timeout only set the abort signal, which the
+    // agent loop checks cooperatively between turns and does nothing for a
+    // turn already streaming. It had to run until it hit its own (much
+    // longer, 90s default) per-turn timeout before anything actually stopped it.
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false, timeoutSeconds: 1 });
+
+    const adapter = engine.worker.adapterForModel('fake-model')!;
+    let cancelCalls = 0;
+    let release: (() => void) | undefined;
+    adapter.cancel = async () => {
+      cancelCalls += 1;
+      release?.();
+    };
+    adapter.generate = async function* () {
+      yield { type: 'token' as const, content: 'still reasoning, no action yet' };
+      await new Promise<void>((r) => {
+        release = r;
+      });
+      yield { type: 'completed' as const, content: 'cut off', usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
+    };
+
+    await harness.start();
+    harness.sendLine('slow task');
+
+    // The job's own 1s timeout, not the turn's ~90s default, must be what
+    // triggers this — a short poll window that a real per-turn timeout could
+    // never reach in time.
+    for (let i = 0; i < 60 && cancelCalls === 0; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(cancelCalls).toBeGreaterThan(0);
+
+    for (let i = 0; i < 60 && harness.tui.getCurrentJob()?.status !== 'failed'; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(harness.tui.getCurrentJob()?.status).toBe('failed');
+
+    harness.stop();
+  });
+
   it('handles in-TUI non-blocking approval queue and mid-run steering', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);
@@ -882,6 +929,71 @@ describe('FleetTui — interactive terminal UI harness', () => {
     expect(resolvedStatus).toBe(true);
     expect(harness.tui.getPendingApprovals()).toHaveLength(0);
 
+    harness.stop();
+  });
+
+  it('shows a line diff for a pending edit approval instead of a raw JSON args blob', async () => {
+    // Approving an edit used to mean approving `Args: {"path":...,"oldString":"...","newString":"..."}`
+    // as one long escaped JSON string — unreadable for anything beyond a one-line change.
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+
+    await harness.start();
+
+    const authPromise = engine.approvalQueue.enqueue(
+      {
+        tool: 'edit',
+        input: {
+          path: 'src/greet.ts',
+          oldString: 'function greet() {\n  return "hi";\n}',
+          newString: 'function greet(name: string) {\n  return `hi ${name}`;\n}',
+        },
+        executionId: 'exec-diff',
+      },
+      { decision: 'ask', rule: 'protected-path-ask', reasons: ['touches a protected path'] },
+      { taskId: 'task-diff' },
+    );
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    const buf = harness.getScreenBuffer();
+    expect(buf).toContain('File: src/greet.ts');
+    expect(buf).toContain('- function greet() {');
+    expect(buf).toContain('+ function greet(name: string) {');
+    expect(buf).not.toContain('oldString');
+    expect(buf).not.toContain('newString');
+
+    harness.sendKey('a');
+    await authPromise;
+    harness.stop();
+  });
+
+  it('shows a labeled content preview (not a diff) for a pending write approval', async () => {
+    // No reliable on-disk path resolution from the TUI (worktrees put tasks in
+    // different directories) — a write must never claim to diff against a file
+    // it can't be sure it's reading, so it gets a clearly-labeled preview instead.
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+
+    await harness.start();
+
+    const authPromise = engine.approvalQueue.enqueue(
+      { tool: 'write', input: { path: 'src/new-file.ts', content: 'export const x = 1;\nexport const y = 2;' }, executionId: 'exec-write' },
+      { decision: 'ask', rule: 'protected-path-ask', reasons: ['touches a protected path'] },
+      { taskId: 'task-write' },
+    );
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    const buf = harness.getScreenBuffer();
+    expect(buf).toContain('File: src/new-file.ts');
+    expect(buf).toContain('New content (2 line(s)):');
+    expect(buf).toContain('+ export const x = 1;');
+
+    harness.sendKey('a');
+    await authPromise;
     harness.stop();
   });
 
@@ -1297,11 +1409,15 @@ describe('FleetTui — interactive terminal UI harness', () => {
       pause: () => {},
       on: () => {},
     } as any;
+    const written: string[] = [];
     const mockOut = {
       isTTY: true,
       columns: 100,
       rows: 30,
-      write: () => true,
+      write: (chunk: string) => {
+        written.push(chunk);
+        return true;
+      },
     } as any;
 
     const screen = new TerminalScreen(mockIn, mockOut);
@@ -1309,10 +1425,18 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     expect(screen.isRawMode()).toBe(true);
     expect(mockIn.rawMode).toBe(true);
+    // Explicit steady-box cursor (DECSCUSR) — nothing set a cursor shape before
+    // this, so the hardware cursor just inherited whatever style/blink state
+    // was left over from before `wa` started, which read as invisible on some
+    // terminals.
+    expect(written.join('')).toContain('\x1b[2 q');
 
     screen.leave();
     expect(screen.isRawMode()).toBe(false);
     expect(mockIn.rawMode).toBe(false);
+    // Cursor style reset to the terminal's own default on exit — `wa` must not
+    // leave the user's terminal permanently forced into a block cursor.
+    expect(written.join('')).toContain('\x1b[0 q');
   });
 
   it('isolates Tab key events in global keypress listener and toggles target focus with early return', async () => {

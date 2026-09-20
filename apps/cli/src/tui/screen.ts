@@ -5,6 +5,15 @@ export interface TerminalSize {
   rows: number;
 }
 
+// DECSCUSR cursor-style codes. Nothing in this file ever set one before, so the
+// hardware cursor just kept whatever shape/blink state was left over from
+// whatever ran in the terminal immediately before `wa` — on some terminals
+// that's a thin bar, or blinking in a way that reads as invisible against a
+// dark background. Setting it explicitly makes the cursor a real, chunky box
+// regardless of what came before.
+const CURSOR_STEADY_BLOCK = '\x1b[2 q';
+const CURSOR_DEFAULT = '\x1b[0 q';
+
 export class TerminalScreen {
   private inAltScreen = false;
   private rawModeActive = false;
@@ -59,8 +68,8 @@ export class TerminalScreen {
     }
 
     if ((this.outStream as any).isTTY) {
-      // Enter alternate screen buffer, clear screen, ensure cursor visible
-      this.outStream.write('\x1b[?1049h\x1b[H\x1b[2J\x1b[?25h');
+      // Enter alternate screen buffer, clear screen, ensure cursor visible as a steady box
+      this.outStream.write(`\x1b[?1049h\x1b[H\x1b[2J\x1b[?25h${CURSOR_STEADY_BLOCK}`);
       this.inAltScreen = true;
     }
 
@@ -85,8 +94,9 @@ export class TerminalScreen {
     }
 
     if (this.inAltScreen) {
-      // Show cursor, leave alternate screen buffer
-      this.outStream.write('\x1b[?25h\x1b[?1049l');
+      // Restore the terminal's own default cursor style (don't leave it stuck
+      // as a forced block after `wa` exits), show cursor, leave alt screen
+      this.outStream.write(`${CURSOR_DEFAULT}\x1b[?25h\x1b[?1049l`);
       this.inAltScreen = false;
     }
   }
@@ -137,7 +147,7 @@ export class TerminalScreen {
    */
   repaint(): void {
     if (this.inAltScreen) {
-      this.outStream.write('\x1b[2J\x1b[H');
+      this.outStream.write(`\x1b[2J\x1b[H${CURSOR_STEADY_BLOCK}`);
     }
     const last = this.lastBuffer;
     this.lastBuffer = '';

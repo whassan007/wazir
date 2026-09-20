@@ -524,6 +524,16 @@ export class PolicyEngine {
           ? request.input.file
           : undefined;
       if (!rawPath) {
+        // glob/search document `path` as optional, defaulting to the project
+        // root — but this check used to deny both of them outright whenever
+        // the model (correctly, per their own schema) omitted it, with a
+        // message ("requires a path argument") that flatly contradicts what
+        // the tool told the model. `read` has no such default (there's no
+        // sensible "read the project root" as a single file), so it still
+        // requires an explicit path.
+        if (lower === 'glob' || lower === 'search') {
+          return { decision: 'allow', rule: 'filesystem-project-root-allow', reasons: [`'${tool}' with no path defaults to the project root`] };
+        }
         return { decision: 'deny', rule: 'filesystem-outside-deny', reasons: [`tool '${tool}' requires a path argument`] };
       }
       // A relative rawPath must resolve against the project root, not the

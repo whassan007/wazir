@@ -65,6 +65,7 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 | AGT-007 | JSON action parsing tolerates markdown fences, unbalanced brackets, raw newlines, stacked objects | parseAction.test.ts (whole file) | L1 | R |
 | AGT-008 | a turn that streams a lot of prose without ever opening its JSON object is cancelled early, instead of running to the timeout/token budget | codingAgent.proseBailout: `cancels a turn that streams a lot of prose without ever opening a JSON object` | L2 | B |
 | AGT-009 | a short, normal preamble before the JSON action does not trigger the bailout | codingAgent.proseBailout: `does not bail on a short, normal preamble before the JSON action` | L2 | R |
+| AGT-013 | the prose bailout still fires when rambling is full of literal braces (a bare `{` check is defeated by quoted C/C++/Java source) | codingAgent.proseBailout: `still bails when the rambling prose is full of literal braces (quoted C++/Java/JS code)` | L2 | B |
 
 ### B. Stuck-loop detection
 | ID | Case | Entry | Level | Pri |
@@ -83,6 +84,7 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 | ID | Case | Entry | Level | Pri |
 |----|------|-------|-------|-----|
 | AGT-030 | a task that runs past its timeout is auto-stopped with a clear reason | jobOrchestrator: `automatically stops a task that runs past its timeout, marking it failed with a clear reason` | L2 | B |
+| AGT-043 | an in-flight model turn is cancelled the moment the job timeout fires, not just at the turn's own (much longer) timeout | fleetTui: `cancels an in-flight model turn as soon as the job timeout fires, not just at the turn's own longer timeout` | L2 | B |
 | AGT-031 | a job finishing within its timeout is left untouched | jobOrchestrator: `does not touch a job that finishes comfortably within its timeout` | L2 | R |
 | AGT-032 | cancelling one task does not terminate sibling tasks | jobOrchestrator: `supports single-task cancellation without terminating sibling tasks` | L2 | B |
 | AGT-033 | job-level terminal status persists, surviving a process restart | jobOrchestrator: `persists the job-level terminal status, not just task status, so it survives a process restart` | L2 | B |
@@ -108,6 +110,7 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 |----|------|-------|-------|-----|
 | AGT-060 | shell classification: chaining/substitution/redirection bypass attempts, compiled-binary trust scoping | policyEngineShell.test.ts (whole file) | L1 | B |
 | AGT-061 | policy hardening review items (newline injection, host reads, code-exec flags, output flags, git verbs, protected paths, env dumps, MCP allow-list) | policyEngineHardening.test.ts (whole file) | L1 | B |
+| AGT-062 | `glob`/`search` default to the project root when `path` is omitted, matching their own schema (previously denied with a message contradicting the tool's own contract) | policyEngineHardening: `allows glob and search with no path argument` | L1 | B |
 
 ### G. Sandbox isolation
 | ID | Case | Entry | Level | Pri |
@@ -126,7 +129,7 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 ## 7. Acceptance criteria
 
 An agent-loop, orchestrator, policy, or sandbox change is mergeable when:
-1. `node scripts/agent-execution-test-plan.mjs` exits 0 (all 38 cases PASS or SKIP; no FAIL/MISSING)
+1. `node scripts/agent-execution-test-plan.mjs` exits 0 (all 41 cases PASS or SKIP; no FAIL/MISSING)
 2. All priority-B cases PASS (a job must never hang past its own timeout, loop on an identical failing action, overflow its context window, silently drop a malformed-but-recoverable tool call, misreport its terminal status, leak data across jobs, or crash the host process)
 3. A newly-fixed bug ships with a new case added to §6 and the runner matrix in the same change — that is the whole point of this plan; a fix without a regression case is not done
 4. No case may be deleted to make the plan green; it is renamed or retired with a reason in the commit

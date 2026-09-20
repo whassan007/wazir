@@ -49,6 +49,63 @@ function shortJobId(id: string): string {
   return stripped.length > 8 ? `..${stripped.slice(-8)}` : stripped;
 }
 
+interface DiffLine {
+  type: 'ctx' | 'add' | 'del';
+  text: string;
+}
+
+/**
+ * Minimal LCS-based line diff for the approval modal's edit preview. Not a
+ * full diff algorithm (no move detection, etc.) — just enough to show which
+ * lines of a proposed string replacement actually changed instead of a flat
+ * "everything removed, everything added" block, for the common case of a
+ * small, mostly-unchanged snippet. `oldString`/`newString` come straight
+ * from the model's `edit` tool call, so both are already known synchronously
+ * with no file read needed.
+ */
+function diffLines(oldText: string, newText: string): DiffLine[] {
+  const a = oldText.split('\n');
+  const b = newText.split('\n');
+  const n = a.length;
+  const m = b.length;
+  // The O(n*m) LCS table would be too large/slow for a pathologically big
+  // replacement — fall back to a flat before/after view rather than risk it.
+  if (n * m > 200_000) {
+    return [...a.map((text): DiffLine => ({ type: 'del', text })), ...b.map((text): DiffLine => ({ type: 'add', text }))];
+  }
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const result: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      result.push({ type: 'ctx', text: a[i] });
+      i++;
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      result.push({ type: 'del', text: a[i] });
+      i++;
+    } else {
+      result.push({ type: 'add', text: b[j] });
+      j++;
+    }
+  }
+  while (i < n) {
+    result.push({ type: 'del', text: a[i] });
+    i++;
+  }
+  while (j < m) {
+    result.push({ type: 'add', text: b[j] });
+    j++;
+  }
+  return result;
+}
+
 export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'help';
 
 export type NavCategory = 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
@@ -492,6 +549,10 @@ export class FleetTui {
   }
 
   stop(): void {
+    // Idempotent: stop() can be triggered more than once (e.g. the user types /exit
+    // and stdin also hits EOF in pipe mode, or a stray second caller). Guard on
+    // isRunning so double-stops are a no-op instead of re-running unsubscribe/leave.
+    if (!this.isRunning) return;
     if (this.renderTimer) clearInterval(this.renderTimer);
     if (this.unsubscribeApprovals) this.unsubscribeApprovals();
     if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
@@ -2398,12 +2459,17 @@ export class FleetTui {
       body.push(`Why:  ${color.gray(reason)}`);
     }
 
-    const inputStr = JSON.stringify(first.input);
-    if (this.approvalShowDetails) {
-      body.push(`Args: ${color.gray(inputStr)}`);
-      if (first.executionId) body.push(`Exec: ${color.gray(first.executionId)}`);
+    if (first.tool === 'edit' || first.tool === 'write') {
+      body.push('');
+      body.push(...this.renderDiffPreview(first, modalWidth - 4));
     } else {
-      body.push(`Args: ${color.gray(inputStr.slice(0, modalWidth - 14))}`);
+      const inputStr = JSON.stringify(first.input);
+      if (this.approvalShowDetails) {
+        body.push(`Args: ${color.gray(inputStr)}`);
+        if (first.executionId) body.push(`Exec: ${color.gray(first.executionId)}`);
+      } else {
+        body.push(`Args: ${color.gray(inputStr.slice(0, modalWidth - 14))}`);
+      }
     }
 
     const actions =
@@ -2411,6 +2477,52 @@ export class FleetTui {
         ? `${color.bold('[A]')} Approve  ${color.bold('[D]')} Deny  ${color.bold('[V]')} Details  ${color.bold('[I]')} Skip  ${color.bold('[^A]')} All  ${color.bold('[^D]')} None`
         : `${color.bold('[A]')} Approve  ${color.bold('[D]')} Deny  ${color.bold('[V]')} Details  ${color.bold('[I]')} Inspect`;
     return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
+  }
+
+  /**
+   * Renders what a pending `edit`/`write` approval will actually do to the
+   * file, instead of the raw `{"path":...,"content":"..."}` JSON blob that
+   * used to be the only thing shown here — approving an edit meant approving
+   * a wall of escaped text you couldn't realistically read.
+   *
+   * `edit` gets a real line diff: `oldString`/`newString` are already both
+   * known from the tool call itself, no file read needed. `write` cannot be
+   * diffed safely from here — this TUI has no reliable way to resolve which
+   * on-disk file a task's `path` refers to (worktrees put different tasks in
+   * different directories), and reading the wrong file would be actively
+   * misleading for an approve/deny decision — so it's shown as a clearly
+   * labeled content preview instead of a diff.
+   */
+  private renderDiffPreview(req: PendingApprovalRequest, innerWidth: number): string[] {
+    const path = typeof req.input.path === 'string' ? req.input.path : '(unknown path)';
+    const maxLines = this.approvalShowDetails ? 40 : 8;
+    const lines: string[] = [`File: ${color.cyan(path)}`];
+
+    if (req.tool === 'edit') {
+      const oldStr = typeof req.input.oldString === 'string' ? req.input.oldString : '';
+      const newStr = typeof req.input.newString === 'string' ? req.input.newString : '';
+      const diff = diffLines(oldStr, newStr);
+      const shown = diff.slice(0, maxLines);
+      for (const d of shown) {
+        const text = this.truncateAnsi(d.text, Math.max(1, innerWidth - 2));
+        if (d.type === 'add') lines.push(color.green(`+ ${text}`));
+        else if (d.type === 'del') lines.push(color.red(`- ${text}`));
+        else lines.push(color.gray(`  ${text}`));
+      }
+      if (diff.length > shown.length) {
+        lines.push(color.gray(`  ... ${diff.length - shown.length} more line(s) — press [V] for details`));
+      }
+    } else {
+      const content = typeof req.input.content === 'string' ? req.input.content : '';
+      const contentLines = content.split('\n');
+      const shown = contentLines.slice(0, maxLines);
+      lines.push(color.gray(`New content (${contentLines.length} line(s)):`));
+      for (const l of shown) lines.push(color.green(`+ ${this.truncateAnsi(l, Math.max(1, innerWidth - 2))}`));
+      if (contentLines.length > shown.length) {
+        lines.push(color.gray(`  ... ${contentLines.length - shown.length} more line(s) — press [V] for details`));
+      }
+    }
+    return lines;
   }
 
   /**

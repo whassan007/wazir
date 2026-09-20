@@ -1,6 +1,6 @@
 # Agent Execution & Orchestration Safety Test Plan — Execution Result
 
-Plan: `docs/test-plans/agent-execution.md` · Executed: 2026-09-20 22:20 UTC
+Plan: `docs/test-plans/agent-execution.md` · Executed: 2026-09-20 23:34 UTC
 
 ## Run metadata
 
@@ -9,20 +9,20 @@ Plan: `docs/test-plans/agent-execution.md` · Executed: 2026-09-20 22:20 UTC
 | Command | `node scripts/agent-execution-test-plan.mjs` |
 | Exit code | 0 (green) |
 | Environment | Linux x64 · Node v22.22.3 · vitest 2.1.9 |
-| Commit | e348c9e (main) |
+| Commit | 7d045ab (main) |
 
 ## Result
 
-**38/38 cases PASS — FAIL 0 · SKIP 0 · MISSING 0**
+**41/41 cases PASS — FAIL 0 · SKIP 0 · MISSING 0**
 
 | Section | Cases | PASS | FAIL |
 |---|---|---|---|
-| A. Model turn safety (timeouts, malformed action recovery, prose bailout) | 9 | 9 | 0 |
+| A. Model turn safety (timeouts, malformed action recovery, prose bailout) | 10 | 10 | 0 |
 | B. Stuck-loop detection | 3 | 3 | 0 |
 | C. Context management | 2 | 2 | 0 |
-| D. Job orchestration (timeout, cancellation, persistence) | 13 | 13 | 0 |
+| D. Job orchestration (timeout, cancellation, persistence) | 14 | 14 | 0 |
 | E. Cross-job / cross-task isolation | 3 | 3 | 0 |
-| F. Shell policy safety | 2 | 2 | 0 |
+| F. Shell policy safety | 3 | 3 | 0 |
 | G. Sandbox isolation | 3 | 3 | 0 |
 | H. Retry / graph correctness | 3 | 3 | 0 |
 
@@ -39,12 +39,14 @@ Plan: `docs/test-plans/agent-execution.md` · Executed: 2026-09-20 22:20 UTC
 | AGT-007 | R | L1 | PASS | JSON action parsing tolerates fences, unbalanced brackets, raw newlines, stacked objects | 17 tests |
 | AGT-008 | B | L2 | PASS | a turn that streams a lot of prose without ever opening its JSON object is cancelled early | 1.4ms |
 | AGT-009 | R | L2 | PASS | a short, normal preamble before the JSON action does not trigger the bailout | 0.3ms |
+| AGT-013 | B | L2 | PASS | the prose bailout still fires when rambling is full of literal braces (quoted C/C++/Java code) | 0.8ms |
 | AGT-010 | B | L2 | PASS | circuit breaker trips after the same tool call repeats toolRepeatLimit times | 1.4ms |
 | AGT-011 | R | L2 | PASS | circuit breaker does not false-positive on varying tool input | 0.4ms |
 | AGT-012 | B | L2 | PASS | maxTurns hard-caps the loop regardless of constructor vs per-request override | 4 tests |
 | AGT-020 | B | L2 | PASS | context compaction bounds prompt growth once the ratio threshold is crossed | 2.4ms |
 | AGT-021 | R | L2 | PASS | compaction never activates when the host reports no contextTokens ceiling | 0.8ms |
 | AGT-030 | B | L2 | PASS | a task that runs past its timeout is auto-stopped with a clear reason | 1002.2ms |
+| AGT-043 | B | L2 | PASS | an in-flight model turn is cancelled as soon as the job timeout fires, not just at the turn's own longer timeout | 1012.3ms |
 | AGT-031 | R | L2 | PASS | a job finishing within its timeout is left untouched | 0.9ms |
 | AGT-032 | B | L2 | PASS | cancelling one task does not terminate sibling tasks | 60.6ms |
 | AGT-033 | B | L2 | PASS | job-level terminal status persists, surviving a process restart | 1.1ms |
@@ -61,7 +63,8 @@ Plan: `docs/test-plans/agent-execution.md` · Executed: 2026-09-20 22:20 UTC
 | AGT-051 | B | L2 | PASS | no token leakage between jobs that would otherwise share a default task id | 206.9ms |
 | AGT-052 | B | L2 | PASS | cancelling an already-finished job errors instead of crashing the process | 115.3ms |
 | AGT-060 | B | L1 | PASS | shell classification: chaining/substitution/redirection bypass attempts, compiled-binary trust scoping | 25 tests |
-| AGT-061 | B | L1 | PASS | policy hardening review items | 88 tests |
+| AGT-061 | B | L1 | PASS | policy hardening review items | 91 tests |
+| AGT-062 | B | L1 | PASS | glob/search default to the project root when path is omitted, matching their own schema | 0.1ms |
 | AGT-070 | B | L1 | PASS | bwrap masks the home directory but re-exposes toolchain/cache dirs (incl. macOS Library/Caches) | 7.5ms |
 | AGT-071 | B | L1 | PASS | seatbelt denies home except project/tmp/toolchain-cache allowlist (incl. macOS Library/Caches) | 6.5ms |
 | AGT-072 | B | L2 | PASS | sandbox fails closed under WAZIR_SANDBOX=required when no backend is usable | 8.3ms |

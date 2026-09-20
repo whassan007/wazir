@@ -236,3 +236,22 @@ describe('second-pass review (S-1..S-6): classifier gaps found after the first r
     expect(shell('timeout -s KILL 5 reboot').decision).toBe('deny');
   });
 });
+
+// Real transcript: `glob({"pattern":"**/*"})` with no `path` — exactly what
+// glob's own schema documents as valid ("Directory to search in (default:
+// project root)") — was denied with "tool 'glob' requires a path argument",
+// contradicting the tool's own contract on every single retry.
+describe('glob/search default to the project root when path is omitted', () => {
+  it('allows glob and search with no path argument', () => {
+    expect(engine.classify({ tool: 'glob', input: { pattern: '**/*' } }).decision).toBe('allow');
+    expect(engine.classify({ tool: 'search', input: { pattern: 'TODO' } }).decision).toBe('allow');
+  });
+
+  it('still denies read with no path — there is no sensible default for a single file', () => {
+    expect(engine.classify({ tool: 'read', input: {} }).decision).toBe('deny');
+  });
+
+  it('an explicit path is still checked for containment as before', () => {
+    expect(engine.classify({ tool: 'glob', input: { pattern: '*', path: '../outside' } }).decision).not.toBe('allow');
+  });
+});
