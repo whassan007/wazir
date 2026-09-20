@@ -18,6 +18,7 @@ describe('sandbox argument construction (pure)', () => {
     await fs.mkdir(path.join(home, '.nvm'), { recursive: true });
     await fs.mkdir(path.join(home, '.npm'), { recursive: true });
     await fs.mkdir(path.join(home, '.ssh'), { recursive: true });
+    await fs.mkdir(path.join(home, 'Library', 'Caches'), { recursive: true });
   });
   afterEach(async () => {
     await fs.rm(home, { recursive: true, force: true });
@@ -30,6 +31,9 @@ describe('sandbox argument construction (pure)', () => {
     expect(joined).toContain(`--tmpfs ${home}`);
     expect(joined).toContain(`--ro-bind ${path.join(home, '.nvm')} ${path.join(home, '.nvm')}`);
     expect(joined).toContain(`--bind ${path.join(home, '.npm')} ${path.join(home, '.npm')}`);
+    // macOS's clang/Xcode toolchain keeps its module cache under Library/Caches — without
+    // it, a sandboxed compile can fail outright with "Operation not permitted".
+    expect(joined).toContain(`--bind ${path.join(home, 'Library', 'Caches')} ${path.join(home, 'Library', 'Caches')}`);
     expect(joined).not.toContain('.ssh');
     expect(joined).toContain('--tmpfs /run');
     expect(joined).toContain('--tmpfs /tmp');
@@ -59,6 +63,7 @@ describe('sandbox argument construction (pure)', () => {
     expect(profile).toContain(`(deny file-read* file-write* (subpath "${home}"))`);
     expect(profile).toContain(`(allow file-read* (subpath "${path.join(home, '.nvm')}"))`);
     expect(profile).toContain(`(allow file-write* (subpath "${project}"))`);
+    expect(profile).toContain(`(allow file-read* file-write* (subpath "${path.join(home, 'Library', 'Caches')}"))`);
     expect(profile).toContain('(deny file-write*)');
     expect(profile).toContain('(deny network*)');
     expect(profile).not.toContain('.ssh');

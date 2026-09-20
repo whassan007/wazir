@@ -86,8 +86,17 @@ const HOME_TOOLCHAIN_DIRS = [
   '.nvm', '.volta', '.fnm', '.n', '.bun', '.deno', '.local/bin', '.local/share/pnpm', '.local/share/mise', '.asdf',
   '.cargo', '.rustup', '.go', 'go', '.pyenv', '.rbenv', '.sdkman', '.gradle', '.m2', '.yarn', '.config/yarn',
 ];
-// Caches under $HOME that package managers write to.
-const HOME_CACHE_DIRS = ['.npm', '.cache/pnpm', '.cache/yarn', '.cache/pip', '.cache/go-build', '.cargo/registry', '.bun/install/cache'];
+// Caches under $HOME that package managers write to. `Library/Caches` is macOS's
+// general-purpose per-user cache directory — notably where Apple's clang/Xcode
+// toolchain keeps its module cache (`~/Library/Caches/org.llvm.clang.<id>/ModuleCache`,
+// among others). Without it, a sandboxed `g++`/`clang++` invocation on macOS can fail
+// outright with "Operation not permitted" trying to touch its own cache, even compiling
+// a trivial file with no explicit module usage. Cache data is disposable and non-
+// sensitive by definition (unlike `Library/Preferences` or `Application Support`, which
+// hold real app state), so exposing the whole directory — rather than guessing the exact
+// versioned/hashed subpath a given clang build uses — is the safe, robust version of this
+// fix. No-op on Linux: `existingDirs()` only binds paths that actually exist.
+const HOME_CACHE_DIRS = ['.npm', '.cache/pnpm', '.cache/yarn', '.cache/pip', '.cache/go-build', '.cargo/registry', '.bun/install/cache', 'Library/Caches'];
 // Host directories with no legitimate use for a tool process: other users'
 // homes, removable media, mounted shares, service data. Masked entirely
 // (the project and the operator's toolchains are re-bound afterwards).
