@@ -1,6 +1,6 @@
 {
   "name": "@wazir/api",
-  "version": "0.1.0",
+  "version": "0.1.28",
   "description": "HTTP API server for the meta-harness",
   "main": "./dist/main.js",
   "scripts": {

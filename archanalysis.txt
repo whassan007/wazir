@@ -1,0 +1,342 @@
+I have completed a rigorous, ground-truth audit of the Wazir repository mounted at `/home/wael/Code/Wazir`. Every finding below is strictly derived from the actual source code with explicit path and line-level evidence. I have not inferred or invented any architectural components.
+
+---
+
+# PHASE 0: PROVE THAT YOU HAVE THE REPOSITORY
+
+To verify the repository's identity, language, and structure, I executed the following inspection commands:
+
+```bash
+pwd
+git status
+find . -maxdepth 2 -type f
+cat package.json
+```
+
+**Results:**
+1. **Working Directory:** `/home/wael/Code/Wazir`
+2. **Repository Root:** `/home/wael/Code/Wazir`
+3. **Git Status:** Branch `main`, up to date, clean working tree.
+4. **Tooling & Language:** Node.js monorepo using `pnpm` workspaces (evidence: `pnpm-workspace.yaml`, `package.json`, `tsconfig.json`). Written entirely in **TypeScript**.
+5. **Top-level Manifests:** Defines workspaces `packages/*` and `apps/*`.
+6. **Core Packages:** `apps/cli`, `packages/core`, `packages/agents`, `packages/tools`, `packages/policies`.
+
+---
+
+# PHASE 1: BUILD AN EVIDENCE INVENTORY
+
+| Component | Actual path | Symbol | Evidence | Used by | Status |
+| --------- | ----------- | ------ | -------- | ------- | ------ |
+| **CLI Entry** | `apps/cli/src/index.ts` | `program.command('chat')` | Lines 50-70 define the `wa chat` command | Operator | ACTIVE |
+| **TUI Controller** | `apps/cli/src/tui/fleetTui.ts` | `FleetTui` | Event ingestion, rendering, `humanizeError` | CLI `chat` cmd | ACTIVE |
+| **Task Executor** | `apps/cli/src/fleetRunner.ts` | `createFleetRunner()` | Tool authorization (`engine.policy.authorize`) and `agent.run()` invocation | JobOrchestrator | ACTIVE |
+| **Agent Controller** | `packages/agents/src/codingAgent.ts` | `CodingAgent` | The actual model invocation loop (`async *run`) | fleetRunner | ACTIVE |
+| **Job Controller** | `packages/core/src/services/jobOrchestrator.ts`| `JobOrchestrator` | Node state machine, `task:retry` emission | Engine setup | ACTIVE |
+| **Policy Engine** | `packages/core/src/services/policyEngine.ts` | `PolicyEngine` | Intercepts tool calls before execution | fleetRunner | ACTIVE |
+| **Evaluator** | `packages/evaluation/src/index.ts` | `evaluateExecution` | Scans `record.errors` to determine success | fleetRunner | ACTIVE |
+
+---
+
+# PHASE 2: FIND THE REAL ENTRY POINT
+
+When a task is submitted to Wazir via the `wa chat` (or `fleet`) command, the call chain is precisely:
+
+```text
+USER
+ ↓
+[apps/cli/src/index.ts] - Commander.js action handler
+ ↓
+[apps/cli/src/tui/index.ts] - instantiates FleetTui
+ ↓
+[apps/cli/src/tui/fleetTui.ts] - `tui.start()` initializes the dashboard and queues the root job
+ ↓
+[packages/core/src/services/jobOrchestrator.ts] - `startJob()` creates task nodes and loops via `pump()`
+ ↓
+[apps/cli/src/fleetRunner.ts] - `createFleetRunner()` (the executor) creates an `AgentRuntime` and invokes the agent
+ ↓
+[packages/agents/src/codingAgent.ts] - `CodingAgent.run()` begins the model loop
+```
+
+---
+
+# PHASE 3: FIND THE REAL MODEL LOOP
+
+**MODEL LOOP:**
+**file:** `packages/agents/src/codingAgent.ts`
+**function:** `async *run(...)`
+**starting line:** 322 (`async *run(request, runtime)`)
+**ending line:** 694
+
+### Answers from code:
+1. **What enters the loop?** System prompt and user task `[file: packages/agents/src/codingAgent.ts, L329]`.
+2. **What exits the loop?** Either a `done` action payload, an `answer` action payload, an `error` yield (e.g. timeout, circuit breaker), or it reaches `maxTurns`.
+3. **What causes another model call?** Any parsed tool call (`action.tool`) being executed, or an invalid response (up to 3 times).
+4. **What state is carried between calls?** The `messages: ChatMessage[]` array is mutated in-place and persists across iterations.
+5. **What messages are sent to the model?** The full rolling context of `assistant` outputs and `user` injected tool results.
+6. **Are previous tool calls preserved?** Yes, both the model's generated JSON string and the tool result are pushed.
+7. **Are tool errors preserved?** Yes, as `[tool result for ... (ok=false)]\nERROR: ...`.
+8. **Are tool results preserved?** Yes, truncated to 12,000 characters.
+9. **Is the model given the tool schema every turn?** No, the system prompt containing the schema is inserted once at the top of the `messages` array.
+10. **Is the model given the previous failed action?** Yes, the previous action remains in the context, and the tool error directly follows it.
+
+---
+
+# PHASE 4: FIND THE REAL TOOL LOOP
+
+The sequence where a model-generated action becomes a tool execution:
+
+```text
+MODEL RESPONSE (yielded by `runtime.generate` in `codingAgent.ts`)
+ ↓
+PARSER (`readAction(raw)` in `codingAgent.ts`)
+ ↓
+TOOL CALL REPRESENTATION (`ParsedAction` interface)
+ ↓
+POLICY (`engine.policy.authorize(...)` in `apps/cli/src/fleetRunner.ts`)
+ ↓
+EXECUTION (`runRegisteredTool` in `apps/cli/src/fleetRunner.ts`)
+ ↓
+RESULT (`ToolResult` returned back to `CodingAgent`)
+ ↓
+MODEL (`pushToolResult(action.tool, result)` inside `CodingAgent.run`)
+```
+
+---
+
+# PHASE 5: TRACE ONE ACTUAL TOOL CALL (`shell`)
+
+**Code Path:** `packages/tools/src/process-tools.ts` -> `shellTool.execute`
+
+### What happens if command == ""?
+It is blocked by the **Policy Engine** before the tool is even executed.
+`packages/core/src/services/policyEngine.ts`:
+```typescript
+    const command = typeof request.input.command === 'string' ? request.input.command.trim() : '';
+    if (!command) {
+      return { decision: 'deny', rule: 'shell-unknown-ask', reasons: ['empty shell command'] };
+    }
+```
+### What happens if command is invalid or execution returns non-zero?
+`runShell` executes it, returning `ok: false` and the stderr output in `error`.
+### What happens after each failure?
+`fleetRunner.ts` wraps the policy denial or tool error into a `ToolResult` (with `ok: false`) and returns it to `CodingAgent`. `CodingAgent` pushes the error text into the context array, and the loop naturally continues to the next model turn.
+
+---
+
+# PHASE 6: TRACE THE WRITE TOOL
+
+**Code Path:** `packages/tools/src/filesystem.ts` -> `writeTool.execute`
+
+* **How missing path is handled:** The **Policy Engine** intercepts it. `packages/core/src/services/policyEngine.ts` explicitly denies `write` without a path:
+  ```typescript
+  return { decision: 'deny', rule: 'filesystem-outside-deny', reasons: [`tool '${tool}' requires a path argument`] };
+  ```
+* **How empty content is handled:** Passes through as an empty string to `writeProjectFile` (via `String(input.content ?? '')`).
+* **Where filesystem policy is applied:** `packages/core/src/services/policyEngine.ts` inside `isInside(projectRoot, absolute)`.
+* **What error reaches the model:** `[tool result for write (ok=false)]\nERROR: policy deny (filesystem-outside-deny): tool 'write' requires a path argument`.
+* **Whether another model turn occurs:** Yes.
+* **Who decides another turn occurs:** `CodingAgent.run` inherently loops whenever it receives a tool action, regardless of success or failure.
+
+---
+
+# PHASE 7: TRACE SEARCH AND GLOB
+
+1. **Which tool generated this?** `searchTool` inside `packages/tools/src/search.ts`.
+2. **Which function interpreted `*.cpp`?** `new RegExp(String(input.pattern))` inside `searchTool.execute`.
+3. **Why was it interpreted as regex?** The tool explicitly documents `pattern` as "Regular expression" in its JSON schema, and evaluates it natively as a JS `RegExp`.
+4. **Where did the error originate?** The Javascript runtime throws a `SyntaxError: Invalid regular expression`.
+5. **What exact error object/message was returned?** `{ ok: false, output: '', error: 'invalid regex: SyntaxError...', durationMs: ... }`.
+6. **What exact data was sent back to the model?** `[tool result for search (ok=false)]\nERROR: invalid regex: SyntaxError...`
+7. **Why did another model call occur?** `CodingAgent.run` continues looping.
+8. **Why did the same operation occur again?** The model hallucinates or stubbornly persists with the invalid format until the `CodingAgent`'s built-in **circuit breaker** trips (default 3 repeats).
+
+---
+
+# PHASE 8: RECONSTRUCT THE ACTUAL STATE MACHINE
+
+The definitive state machine lives inside `packages/core/src/services/jobOrchestrator.ts` and applies to the `node.state` property.
+
+```text
+ACTUAL STATE MACHINE
+[pending]
+ ↓ [jobOrchestrator.ts: L507 - when assigned resources]
+[running]
+ │
+ ├─> [jobOrchestrator.ts: L535 - outcome.success === true]
+ │    ↓
+ │   [completed]
+ │
+ ├─> [jobOrchestrator.ts: L545 - taskAbort.signal.aborted]
+ │    ↓
+ │   [cancelled]
+ │
+ ├─> [jobOrchestrator.ts: L556 - outcome.success === false && retries < maxRetries]
+ │    ↓
+ │   [idle]  (then subsequently re-queued as [pending])
+ │
+ └─> [jobOrchestrator.ts: L565 - outcome.success === false && retries >= maxRetries]
+      ↓
+     [failed]
+```
+*(Note: There is also an internal `agent.phase` tracked in `fleetTui.ts` for rendering, but it does not control execution.)*
+
+---
+
+# PHASE 9: FIND EVERY RETRY MECHANISM
+
+There are **multiple independent retry/repair loops** stacked on top of each other. This causes potential retry multiplication.
+
+| Mechanism | File | Function | Trigger | Limit | Reset condition |
+| --------- | ---- | -------- | ------- | ----- | --------------- |
+| **Agent Prompt Corrections** | `codingAgent.ts` | `run()` | Action parses to null/invalid | `3` | Emits `error` |
+| **Agent Tool Loop** | `codingAgent.ts` | `run()` | Tool executes | `maxTurns` (30) | Success/Done |
+| **Agent Circuit Breaker** | `codingAgent.ts` | `run()` | Exact same tool+input | `3` | Emits `error` |
+| **Agent Repair Cycles** | `codingAgent.ts` | `run()` | Checks (lint/test) fail | `2` | Emits `error` |
+| **Task Retry** | `jobOrchestrator.ts` | `pump()` | `outcome.success === false` | `maxRetries` (3)| State set to `idle/pending` |
+
+---
+
+# PHASE 10: TRACE THE OBSERVED FAILURE EXACTLY
+
+| Timestamp/Event | Producer | Source | Trigger | Consumer | State |
+| --------------- | -------- | ------ | ------- | -------- | ----- |
+| `MODEL Writing (0 chars)` | TUI | `fleetTui.ts` | `task:progress` (tool intent) | Operator | `running` / `plan` |
+| `ERROR write failed — Blocked: ...` | TUI | `fleetTui.ts` | `task:progress` (policy deny result) | Operator | `running` / `plan` |
+| `MODEL We got an error...` | Model | `codingAgent.ts`| Next turn context injection | Model | `running` / `implement` |
+| `phase: complete` | Agent | `codingAgent.ts`| `failures.length === 0` | TUI / Executor | `running` / `complete`|
+| `Task completed. Verification checks passed.` | Agent | `codingAgent.ts`| Yields `done` | TUI / Executor | `running` / `complete`|
+| `TEST Repair turn initiated` | Orchestrator | `jobOrchestrator.ts`| `outcome.success === false` -> emits `task:retry` | TUI | `retry` / `repair` |
+| `PLAN Agent started execution` | Orchestrator | `jobOrchestrator.ts`| Queue picks up task -> emits `task:started` | TUI | `running` / `plan` |
+| `MODEL Searching for files...` | Agent | `codingAgent.ts`| New model turn in fresh loop | Model | `running` / `implement`|
+| `ERROR search failed — invalid regex` | Tool | `search.ts` | Invalid JS `RegExp` execution | Agent -> TUI| `running` / `implement`|
+
+---
+
+# PHASE 11: MOST IMPORTANT QUESTION
+
+**Conclusion A: The code explicitly permits it.**
+
+**Here is exactly how this happens:**
+1. During the agent's `implement` loop, the model repeats an invalid tool call 3 times.
+2. `codingAgent.ts` (Lines 582-585) triggers `checkCircuitBreaker()`.
+3. The agent yields `{ kind: 'error', error: breakerError }` and executes a `break;`.
+4. **THE BUG:** This `break` exits the `while (turnsUsed < maxTurns)` loop, but execution naturally falls through into the subsequent `VERIFY (deterministic, host-side)` loop on Line 600.
+5. The `VERIFY` loop runs `test`, `lint`, and `typecheck`. Since the code isn't actually broken (the model just failed to write anything), the checks pass (`failures.length === 0`).
+6. `CodingAgent` blissfully yields `{ phase: 'complete' }` and `{ kind: 'done', content: 'Task completed. Verification checks passed.' }` and returns.
+7. Back in `fleetRunner.ts` (Line 374), the earlier circuit breaker `error` was recorded into `engine.executions.recordError()`.
+8. `evaluateExecution` (in `evaluator.ts`) checks `record.errors.length`. Because the circuit breaker logged an error, it returns `success: false`.
+9. `jobOrchestrator.ts` gets `success: false`. Because "circuit breaker" is not a policy denial, the orchestrator triggers a full task retry, emitting the `task:retry` and `task:started` events.
+
+---
+
+# PHASE 12: DETERMINE CONTROL AUTHORITY
+
+| Decision                 | Actual owner | Source |
+| ------------------------ | ------------ | ------ |
+| Select model             | JobOrchestrator / Scheduler | `packages/core/src/services/jobOrchestrator.ts` |
+| Generate action          | CodingAgent | `packages/agents/src/codingAgent.ts` |
+| Parse action             | CodingAgent | `packages/agents/src/codingAgent.ts` |
+| Validate tool call       | CodingAgent | `packages/agents/src/codingAgent.ts` |
+| Apply policy             | FleetRunner | `apps/cli/src/fleetRunner.ts` |
+| Execute tool             | FleetRunner | `apps/cli/src/fleetRunner.ts` |
+| Handle tool error        | CodingAgent | `packages/agents/src/codingAgent.ts` |
+| Start another model turn | CodingAgent | `packages/agents/src/codingAgent.ts` |
+| Retry                    | JobOrchestrator | `packages/core/src/services/jobOrchestrator.ts` |
+| Repair                   | CodingAgent | `packages/agents/src/codingAgent.ts` |
+| Verify                   | CodingAgent & Evaluator | `codingAgent.ts` & `packages/evaluation/src/index.ts` |
+| Declare success          | Evaluator | `packages/evaluation/src/index.ts` |
+| Terminate execution      | JobOrchestrator / FleetRunner | `fleetRunner.ts` (abort signal) |
+
+---
+
+# PHASE 13: DETECT MULTIPLE CONTROL LOOPS
+
+```text
+                ┌──────────────────────────────┐
+                │ JobOrchestrator Task Loop    │
+                │ (Retries entire agent run)   │
+                └────────┬─────────────────────┘
+                         │
+                         ▼
+                ┌──────────────────────────────┐
+                │ CodingAgent WORK Loop        │
+                │ (while turnsUsed < maxTurns) │
+                └────────┬─────────────────────┘
+                         │ (Sequential Fall-through)
+                         ▼
+                ┌──────────────────────────────┐
+                │ CodingAgent VERIFY Loop      │
+                │ (for cycle <= maxRepairCycles)│
+                └────────┬─────────────────────┘
+                         │
+                         ▼
+                ┌──────────────────────────────┐
+                │ Bounded Repair Loop          │
+                │ (for i < repairLimit)        │
+                └──────────────────────────────┘
+```
+
+---
+
+# PHASE 14: DETERMINE ERROR PROPAGATION
+
+1. **Empty shell command:** `fleetRunner.ts` -> `policyEngine.ts` denies execution -> returns `ok: false` -> Model context pushed.
+2. **Missing write path:** `fleetRunner.ts` -> `policyEngine.ts` denies (`filesystem-outside-deny`) -> returns `ok: false` -> Model context pushed.
+3. **Filesystem policy denial:** Same as above.
+4. **Invalid regex:** `searchTool.execute` throws JS `SyntaxError` -> caught -> returns `ok: false, error: 'invalid regex...'` -> Model context pushed.
+5. **Verification failure:** `VERIFY` runs `CHECK_TOOLS` -> `result.ok === false` -> initiates Bounded Repair Loop in `CodingAgent`.
+6. **Model malformed response:** `readAction` returns `null` -> `CodingAgent` increments `correctionCount`. At 3, yields `kind: 'error'` -> breaks `WORK` loop -> falls through to `VERIFY` -> Evaluator marks `success: false` -> Orchestrator retries entire task.
+7. **Model timeout:** Handled identically to malformed response (yields `error` -> breaks `WORK` loop -> falls through to `VERIFY`).
+
+---
+
+# PHASE 15: CONTEXT MUTATION
+
+The model receives a **true conversation history**.
+The `messages` array in `CodingAgent.run` is mutated in-place.
+**Exception:** When tokens exceed limits, `compactIfNeeded()` slices the middle out of the array and replaces it with a `[context compacted...]` summary user message containing a list of `toolCallCounts` and `filesChangedSet`.
+
+---
+
+# PHASE 16: FINAL ARCHITECTURE
+
+```mermaid
+flowchart TD
+    UI[apps/cli/src/tui/fleetTui.ts] -->|Queues Job| JO[packages/core/src/services/jobOrchestrator.ts]
+    
+    subgraph JobOrchestrator
+        JO -->|task:started| FR[apps/cli/src/fleetRunner.ts]
+        FR -->|outcome.success === false| JO_RETRY{retries < maxRetries?}
+        JO_RETRY -->|Yes| JO
+    end
+    
+    subgraph FleetRunner
+        FR -->|Invokes| CA[packages/agents/src/codingAgent.ts]
+        CA -->|Tool Intention| PE[packages/core/src/services/policyEngine.ts]
+        PE -->|Allow| TE[packages/tools/src/*]
+        PE -->|Deny| CA_RESULT[Inject Error Context]
+        TE --> CA_RESULT
+        CA_RESULT --> CA
+        CA -->|done/error| EVAL[packages/evaluation/src/index.ts]
+    end
+    
+    EVAL -->|record.errors.length > 0| EVAL_FAIL[success: false]
+    EVAL -->|No Errors| EVAL_PASS[success: true]
+    EVAL_FAIL --> FR
+    EVAL_PASS --> FR
+```
+
+### ACTUAL ARCHITECTURE
+An event-driven task DAG orchestrator wrapping an iterative conversational coding agent, separated by a rigorous intercepting policy engine and deterministic post-execution evaluator.
+
+### CONTROL LOOPS
+`JobOrchestrator` handles node dependency and task-level retries. `CodingAgent` sequentially runs an implementation `WORK` loop followed by a `VERIFY` loop (which contains its own nested bounded repair loop).
+
+### ERROR PATHS
+Execution errors (policy, shell, regex) are **non-fatal** and injected as context for the model. Agent failures (circuit breaker, timeout) break the current phase, but logic incorrectly bleeds into the verify phase before ultimately failing the evaluation check.
+
+### RETRY PATHS
+Local corrections (up to 3), circuit breaking (limit 3), verification repair cycles (default 2), and orchestrator task retries (default 3).
+
+### TERMINAL CONDITIONS
+Job orchestrator runs out of idle tasks, reaches `maxRetries`, detects deadlock, or is manually aborted via user SIGINT / task timeout controller.

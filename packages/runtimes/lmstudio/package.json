@@ -1,6 +1,6 @@
 {
   "name": "@wazir/runtimes-lmstudio",
-  "version": "0.1.0",
+  "version": "0.1.28",
   "description": "LM Studio runtime adapter for the meta-harness",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",

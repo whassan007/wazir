@@ -1,6 +1,6 @@
 {
   "name": "@wazir/database",
-  "version": "0.1.0",
+  "version": "0.1.28",
   "description": "Reference PostgreSQL schema for the Wazir meta-harness (local installs use the JSON store in @wazir/registry)",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
