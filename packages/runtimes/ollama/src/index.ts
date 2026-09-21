@@ -158,6 +158,30 @@ export class OllamaAdapter implements RuntimeAdapter {
     }
   }
 
+  async loadModel(modelId: string): Promise<void> {
+    const response = await fetch(`${this.baseURL}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelId, keep_alive: -1 }),
+    });
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`Failed to load model '${modelId}' via Ollama: HTTP ${response.status} ${errText}`);
+    }
+  }
+
+  async unloadModel(modelId: string): Promise<void> {
+    const response = await fetch(`${this.baseURL}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelId, keep_alive: 0 }),
+    });
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`Failed to unload model '${modelId}' via Ollama: HTTP ${response.status} ${errText}`);
+    }
+  }
+
   async estimateResources(modelId: string): Promise<ResourceEstimate> {
     const bytes = this.modelSizes.get(modelId) ?? this.modelSizes.get(normalizeModelId(modelId));
     if (!bytes) return {};

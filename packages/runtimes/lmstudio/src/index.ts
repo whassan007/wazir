@@ -1,12 +1,28 @@
+import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
 import type {
   DiscoveredModel,
   GenerationEvent,
   GenerationRequest,
   HealthStatus,
+  ResourceEstimate,
   RuntimeAdapter,
   RuntimeCapabilities,
   RuntimeInfo,
 } from '@wazir/runtimes-interfaces';
+
+const execFileAsync = promisify(execFile);
+
+function resolveLmsBin(): string {
+  if (process.env.WAZIR_LMS_BIN && existsSync(process.env.WAZIR_LMS_BIN)) return process.env.WAZIR_LMS_BIN;
+  if (process.env.LMS_BIN && existsSync(process.env.LMS_BIN)) return process.env.LMS_BIN;
+  const homeLms = path.join(os.homedir(), '.lmstudio/bin/lms');
+  if (existsSync(homeLms)) return homeLms;
+  return 'lms';
+}
 
 interface OpenAIModel {
   id: string;
@@ -87,21 +103,64 @@ export class LMStudioAdapter implements RuntimeAdapter {
   }
 
   async listModels(): Promise<DiscoveredModel[]> {
+    // 1. Try LM Studio v0 API which returns rich metadata for all installed models
     try {
-      const response = await fetch(`${this.baseURL}/models`);
+      const host = this.baseURL.replace(/\/v1\/?$/, '');
+      const response = await fetch(`${host}/api/v0/models`, { signal: AbortSignal.timeout(3000) });
+      if (response.ok) {
+        const data = (await response.json()) as {
+          data?: Array<{
+            id: string;
+            type?: string;
+            arch?: string;
+            quantization?: string;
+            max_context_length?: number;
+            capabilities?: string[];
+          }>;
+        };
+        if (Array.isArray(data.data) && data.data.length > 0) {
+          return data.data.map((model) => {
+            const capabilities = inferCapabilities(model.id);
+            const isEmbedding = model.type === 'embeddings' || /embed|bert|nomic/.test(model.id.toLowerCase());
+            const hasToolUse = (model.capabilities ?? []).includes('tool_use') || capabilities.toolCalling;
+            return {
+              id: model.id,
+              name: model.id,
+              architecture: model.arch,
+              quantization: model.quantization,
+              contextWindow: model.max_context_length,
+              capabilities: ['generalChat'],
+              toolCalling: isEmbedding ? false : hasToolUse,
+              structuredOutput: true,
+              vision: model.type === 'vlm' || capabilities.vision,
+              audio: false,
+              embedding: isEmbedding,
+              reasoning: capabilities.reasoning,
+            };
+          });
+        }
+      }
+    } catch {
+      // fallback to OpenAI compatible /models
+    }
+
+    // 2. Fallback to /models
+    try {
+      const response = await fetch(`${this.baseURL}/models`, { signal: AbortSignal.timeout(3000) });
       if (!response.ok) return [];
       const data = (await response.json()) as { data?: OpenAIModel[] };
       return (data.data ?? []).map((model) => {
         const capabilities = inferCapabilities(model.id);
+        const isEmbedding = /embed|bert|nomic/.test(model.id.toLowerCase());
         return {
           id: model.id,
           name: model.id,
           capabilities: ['generalChat'],
-          toolCalling: capabilities.toolCalling,
+          toolCalling: isEmbedding ? false : capabilities.toolCalling,
           structuredOutput: true,
           vision: capabilities.vision,
           audio: false,
-          embedding: /embed|bert|nomic/.test(model.id.toLowerCase()),
+          embedding: isEmbedding,
           reasoning: capabilities.reasoning,
         };
       });
@@ -119,8 +178,8 @@ export class LMStudioAdapter implements RuntimeAdapter {
       vision: true,
       embeddings: false,
       reasoning: true,
-      modelLoad: false,
-      modelUnload: false,
+      modelLoad: true,
+      modelUnload: true,
       modelDownload: false,
       statefulChat: true,
       mcp: false,
@@ -128,8 +187,86 @@ export class LMStudioAdapter implements RuntimeAdapter {
   }
 
   async getLoadedModels(): Promise<string[]> {
-    const models = await this.listModels();
-    return models.map((m) => m.id);
+    // 1. Check /api/v0/models
+    try {
+      const host = this.baseURL.replace(/\/v1\/?$/, '');
+      const response = await fetch(`${host}/api/v0/models`, { signal: AbortSignal.timeout(2000) });
+      if (response.ok) {
+        const data = (await response.json()) as { data?: Array<{ id: string; state?: string }> };
+        if (Array.isArray(data.data)) {
+          return data.data.filter((m) => m.state === 'loaded').map((m) => m.id);
+        }
+      }
+    } catch {
+      // fallback to next strategy
+    }
+
+    // 2. If pointing to local default LM Studio (port 1234 or no custom port), check lms ps --json
+    const isDefaultLms =
+      /:(1234)(\/|$)/.test(this.baseURL) ||
+      (!/:[0-9]+/.test(this.baseURL) && /localhost|127\.0\.0\.1/.test(this.baseURL));
+    if (isDefaultLms) {
+      try {
+        const lmsBin = resolveLmsBin();
+        const { stdout } = await execFileAsync(lmsBin, ['ps', '--json'], { timeout: 3000 });
+        const parsed = JSON.parse(stdout) as Array<{ identifier?: string; modelKey?: string; path?: string }>;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((m) => m.identifier || m.modelKey || m.path || '').filter(Boolean);
+        }
+      } catch {
+        // CLI not available or errored
+      }
+    }
+
+    // 3. Fallback: in OpenAI-compatible endpoints or mock servers, models returned by /models are resident
+    try {
+      const response = await fetch(`${this.baseURL}/models`, { signal: AbortSignal.timeout(2000) });
+      if (response.ok) {
+        const data = (await response.json()) as { data?: Array<{ id: string }> };
+        if (Array.isArray(data.data) && data.data.length > 0) {
+          return data.data.map((m) => m.id);
+        }
+      }
+    } catch {
+      // fallback failed
+    }
+
+    return [];
+  }
+
+  async loadModel(modelId: string): Promise<void> {
+    const lmsBin = resolveLmsBin();
+    try {
+      await execFileAsync(lmsBin, ['load', modelId, '-y'], { timeout: 120_000 });
+    } catch (err: any) {
+      throw new Error(`Failed to load model '${modelId}' via LM Studio: ${err.message || String(err)}`);
+    }
+  }
+
+  async unloadModel(modelId: string): Promise<void> {
+    const lmsBin = resolveLmsBin();
+    try {
+      await execFileAsync(lmsBin, ['unload', modelId], { timeout: 30_000 });
+    } catch (err: any) {
+      throw new Error(`Failed to unload model '${modelId}' via LM Studio: ${err.message || String(err)}`);
+    }
+  }
+
+  async estimateResources(modelId: string): Promise<ResourceEstimate> {
+    try {
+      const lmsBin = resolveLmsBin();
+      const { stdout } = await execFileAsync(lmsBin, ['load', modelId, '--estimate-only'], { timeout: 5000 });
+      const match = stdout.match(/Estimated Total Memory:\s*([0-9.]+)\s*([GgMm][iI]?[Bb])/);
+      if (match) {
+        const val = parseFloat(match[1]);
+        const unit = match[2].toUpperCase();
+        const gb = unit.startsWith('M') ? val / 1024 : val;
+        return { minMemoryGB: Math.ceil(gb) };
+      }
+    } catch {
+      // CLI not available or estimate not provided
+    }
+    return {};
   }
 
   async *generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {

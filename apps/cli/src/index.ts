@@ -77,11 +77,74 @@ const modelsCmd = new Command()
 modelsCmd
   .command('list')
   .description('List available models')
-  .action(async () => {
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { listModels } = await import('./commands.js');
-    console.log(listModels(engine));
+    console.log(listModels(engine, options));
+  });
+
+modelsCmd
+  .command('loaded')
+  .description('List resident/loaded models in memory')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { listLoadedModels } = await import('./commands.js');
+    console.log(listLoadedModels(engine, options));
+  });
+
+modelsCmd
+  .command('discover')
+  .description('Discover and reconcile runtimes and installed models')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { discoverModelsCommand } = await import('./commands.js');
+    console.log(await discoverModelsCommand(engine, options));
+  });
+
+modelsCmd
+  .command('load <modelId>')
+  .description('Load an installed model into memory')
+  .option('--wait', 'Wait for residency verification')
+  .option('--json', 'Output in JSON format')
+  .action(async (modelId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { loadModelCommand } = await import('./commands.js');
+    const result = await loadModelCommand(engine, modelId, options);
+    console.log(result.message);
+    if (!result.ok) process.exit(1);
+  });
+
+modelsCmd
+  .command('unload <modelId>')
+  .description('Unload a resident model from memory')
+  .option('--json', 'Output in JSON format')
+  .action(async (modelId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { unloadModelCommand } = await import('./commands.js');
+    const result = await unloadModelCommand(engine, modelId, options);
+    console.log(result.message);
+    if (!result.ok) process.exit(1);
+  });
+
+modelsCmd
+  .command('startup')
+  .description('Launch interactive Model Startup Selector')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { FleetTui } = await import('./tui/index.js');
+    const tui = new FleetTui({ engine });
+    tui.openModelStartupSelector();
+    await tui.start();
+    await tui.waitForExit();
   });
 
 program.addCommand(modelsCmd);

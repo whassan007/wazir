@@ -273,8 +273,8 @@ describe('Section 3 & 8b: Discovery and Model Registries (model_cycle.md)', () =
 
     it('F2 Gap: explicit unload/reclaim API does not exist on adapters or scheduler', async () => {
       const lmstudio = createLMStudioAdapter(lmstudioServer.url);
-      // LM Studio adapter correctly lacks unloadModel
-      expect((lmstudio as any).unloadModel).toBeUndefined();
+      // LM Studio adapter now provides unloadModel
+      expect(typeof (lmstudio as any).unloadModel).toBe('function');
     });
 
     it('F6 Gap: execution event schema includes model.loading/model.loaded but no emitter produces them', () => {

@@ -10,6 +10,11 @@ import {
   type BlockStatus,
   type JobTaskInput,
   type Task,
+  type ModelRecord,
+  type ModelReadiness,
+  type ResourceAssessment,
+  type ModelLifecycleEvent,
+  ModelLifecycleService,
 } from '@wazir/core';
 import type { RookEngine } from '../engine.js';
 import { refreshRuntime } from '../engine.js';
@@ -129,6 +134,29 @@ export interface StructuredError {
   suggestedSteps: string[];
   taskId?: string;
   timestamp: Date;
+}
+
+export interface StartupSelectorState {
+  mode: 'select' | 'loading' | 'failure' | 'recovery_no_models' | 'recovery_runtime';
+  allInstalledModels: ModelRecord[];
+  eligibleModels: ModelRecord[];
+  recommendedModelIds: Set<string>;
+  selectedModelIds: Set<string>;
+  selectedIndex: number;
+  resourceAssessments: Map<string, ResourceAssessment>;
+  loadStatuses: Map<string, 'PENDING' | 'LOADING' | 'READY' | 'FAILED'>;
+  loadErrors: Map<string, string>;
+  inspectedModelId?: string;
+  statusBanner?: string;
+}
+
+export interface TaskTimeModelRequiredState {
+  pendingPrompt: string;
+  requiredCapabilities: string[];
+  eligibleModels: ModelRecord[];
+  selectedIndex: number;
+  loading: boolean;
+  statusText?: string;
 }
 
 export interface NavItem {
@@ -273,6 +301,24 @@ function isCtrlEnter(keyStr: string, keyObj: readline.Key): boolean {
 }
 
 /**
+ * True only for a chunk with a genuine internal line break — multiple real
+ * lines, not just a single command chunk terminated by one trailing \r/\n.
+ *
+ * Node's readline keypress decoder doesn't always deliver input one
+ * character at a time: under some conditions (observed live, following a
+ * burst of bracketed-paste keypresses) it can hand back a short, unbracketed
+ * multi-character chunk like "/exit\r" as a single event. Treating any
+ * trailing \r/\n as "this must be a paste" swallows that legitimate command
+ * into PASTE review mode instead of executing it. Stripping exactly one
+ * trailing terminator before checking distinguishes "one line, submitted in
+ * one chunk" from "actually multiple lines" (a real paste).
+ */
+function hasInternalLineBreak(text: string): boolean {
+  const withoutTrailingTerminator = text.replace(/(\r\n|\r|\n)$/, '');
+  return withoutTrailingTerminator.includes('\n') || withoutTrailingTerminator.includes('\r');
+}
+
+/**
  * Resolves structured key objects from raw strings or readline key events.
  */
 function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
@@ -380,6 +426,11 @@ export class FleetTui {
   // Structured Error Card state
   private currentError?: StructuredError;
 
+  // Model Readiness & Startup Selector state
+  private startupSelector?: StartupSelectorState;
+  private taskTimeModelRequired?: TaskTimeModelRequiredState;
+  private unsubscribeModelLifecycle?: () => void;
+
   // Quick actions palette state
   private quickActionsOpen = false;
   private quickActionIndex = 0;
@@ -464,6 +515,16 @@ export class FleetTui {
 
   constructor(options: FleetTuiOptions) {
     this.engine = options.engine;
+    if (!this.engine.lifecycle && this.engine.models) {
+      this.engine.lifecycle = new ModelLifecycleService({
+        models: this.engine.models,
+        runtimes: this.engine.runtimes,
+        computers: this.engine.computers,
+        agents: this.engine.agents,
+        adapters: this.engine.adapters ?? new Map(),
+        store: this.engine.store,
+      });
+    }
     this.screen = options.screen ?? new TerminalScreen();
     this.concurrencyLimit = options.concurrencyLimit ?? 4;
     this.useWorktrees = options.useWorktrees ?? true;
@@ -742,6 +803,16 @@ export class FleetTui {
       this.draw();
     }, 250);
 
+    // Subscribe to model lifecycle events
+    if (this.engine.lifecycle) {
+      this.unsubscribeModelLifecycle = this.engine.lifecycle.subscribe((event) => {
+        this.handleModelLifecycleEvent(event);
+      });
+
+      // Check startup model readiness according to config mode
+      await this.handleStartupModelReadiness();
+    }
+
     this.draw();
   }
 
@@ -754,6 +825,7 @@ export class FleetTui {
     if (this.unsubscribeApprovals) this.unsubscribeApprovals();
     if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
     if (this.unsubscribeResize) this.unsubscribeResize();
+    if (this.unsubscribeModelLifecycle) this.unsubscribeModelLifecycle();
     if (this.unhandledRejectionHandler) {
       process.off('unhandledRejection', this.unhandledRejectionHandler);
       this.unhandledRejectionHandler = undefined;
@@ -825,8 +897,12 @@ export class FleetTui {
       return;
     }
 
-    // Check if an unbracketed multiline string chunk arrived (e.g. from stream or mock)
-    if (!keyStr.startsWith('\x1b') && keyStr.length > 1 && (keyStr.includes('\n') || keyStr.includes('\r'))) {
+    // Check if an unbracketed multiline string chunk arrived (e.g. from stream or mock).
+    // A single command chunk ending in one \r/\n (e.g. "/exit\r" delivered as one
+    // event) is NOT a paste — only route through PASTE review for a chunk that's
+    // either genuinely multi-line or long enough to match the bracketed-paste
+    // size threshold (see handlePastedText's isLarge check).
+    if (!keyStr.startsWith('\x1b') && keyStr.length > 1 && (hasInternalLineBreak(keyStr) || keyStr.length >= 200)) {
       this.handlePastedText(keyStr);
       return;
     }
@@ -835,6 +911,37 @@ export class FleetTui {
     if ((keyObj.ctrl && (keyName === 'c' || keyName === 'C')) || keyStr === '\u0003') {
       this.stop();
       process.exit(0);
+    }
+
+    // Model Startup Selector key routing
+    if (this.startupSelector) {
+      if (keyObj.ctrl && (keyName === 'p' || keyName === 'P' || keyStr === '\x10')) {
+        this.startupSelector = undefined;
+        this.quickActionsOpen = true;
+        this.quickActionIndex = 0;
+        this.draw();
+        return;
+      }
+      if (keyStr.startsWith('/') || (keyStr === '/' && this.inputBuffer === '')) {
+        this.startupSelector = undefined;
+        this.focusedPane = 'prompt';
+        this.inputBuffer = keyStr;
+        this.inputCursor = keyStr.length;
+        this.draw();
+        return;
+      }
+      if (this.inputBuffer === '' && (keyStr === 'q' || keyStr === 'Q')) {
+        this.stop();
+        process.exit(0);
+      }
+      void this.handleStartupSelectorKey(keyStr, keyObj);
+      return;
+    }
+
+    // Task-Time Model Required modal key routing
+    if (this.taskTimeModelRequired) {
+      void this.handleTaskTimeModalKey(keyStr, keyObj);
+      return;
     }
 
     // PASTE review mode handling
@@ -1389,6 +1496,7 @@ export class FleetTui {
       return;
     }
 
+
     // 17. Backspace / Delete Handling (§2):
     // Backspace removes the character(s) immediately before the cursor and moves the
     // cursor back; forward-delete (the 'delete' key/\x1b[3~) removes the character at
@@ -1698,6 +1806,11 @@ export class FleetTui {
       return;
     }
 
+    if (trimmed === '/models' || trimmed === '/model-manager') {
+      this.openModelStartupSelector();
+      return;
+    }
+
     if (trimmed.startsWith('/launch')) {
       const parts = trimmed.split(/\s+/);
       const target = (parts[1] ?? 'lmstudio').toLowerCase();
@@ -1863,6 +1976,44 @@ export class FleetTui {
    * Decomposes or parses a user prompt and launches concurrent execution.
    */
   async launchJobFromPrompt(prompt: string): Promise<void> {
+    // Task-Time Safety Net: if 0 models are ready, do NOT create a failing execution
+    const readiness = this.engine.lifecycle.getReadiness();
+    if (readiness.readyCount === 0) {
+      if (readiness.unloadedEligibleModels.length > 0) {
+        this.taskTimeModelRequired = {
+          pendingPrompt: prompt,
+          requiredCapabilities: ['coding', 'toolCalling'],
+          eligibleModels: readiness.unloadedEligibleModels,
+          selectedIndex: 0,
+          loading: false,
+        };
+        this.statusMessage = 'No ready models available to execute task. Select a model to load.';
+        this.draw();
+        return;
+      } else {
+        this.statusMessage = 'No models available. Install models in LM Studio or Ollama.';
+        this.openModelRecoveryModal();
+        return;
+      }
+    }
+
+    if (this.selectedModelId && !this.engine.lifecycle.isModelReady(this.selectedModelId)) {
+      const rec = this.engine.models.get(this.selectedModelId);
+      if (rec) {
+        this.taskTimeModelRequired = {
+          pendingPrompt: prompt,
+          requiredCapabilities: ['coding', 'toolCalling'],
+          eligibleModels: [rec],
+          selectedIndex: 0,
+          loading: false,
+          statusText: `Pinned model '${this.selectedModelId}' is not loaded.`,
+        };
+        this.statusMessage = `Pinned model '${this.selectedModelId}' is not loaded. Press [L] to load it.`;
+        this.draw();
+        return;
+      }
+    }
+
     this.statusMessage = 'Planning & scheduling job...';
     this.draw();
 
@@ -2569,8 +2720,15 @@ export class FleetTui {
     }
 
     // Overlays over content region:
-    // A. Policy Approval Modal Card
-    if (this.pendingApprovals.length > 0) {
+    if (this.startupSelector) {
+      const modalLines = this.renderStartupSelectorModal(size.columns);
+      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      this.overlayModal(lines, modalLines, size.columns, startY);
+    } else if (this.taskTimeModelRequired) {
+      const modalLines = this.renderTaskTimeModelRequiredModal(size.columns);
+      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      this.overlayModal(lines, modalLines, size.columns, startY);
+    } else if (this.pendingApprovals.length > 0) {
       const modalLines = this.renderApprovalModal(size.columns);
       const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
@@ -2658,7 +2816,10 @@ export class FleetTui {
   private renderHeader(cols: number): string {
     const compCount = this.engine.computers.list().length;
     const agentCount = this.engine.agents.list().length;
-    const modelCount = this.engine.models.list().length;
+    const readiness = this.engine.lifecycle.getReadiness();
+    const readyColored = readiness.readyCount > 0 ? color.green(`${readiness.readyCount} READY`) : color.yellow(`0 READY`);
+    const modelTagColored = `${readyColored} / ${readiness.installedCount} MODELS`;
+    const modelTagPlain = `${readiness.readyCount} READY / ${readiness.installedCount} MODELS`;
 
     const activeCount = Array.from(this.agents.values()).filter((a) => a.status === 'running').length;
     const workerStatus = activeCount >= this.concurrencyLimit ? 'BUSY' : 'AVAILABLE';
@@ -2671,14 +2832,14 @@ export class FleetTui {
     const viewTagPadded = viewTag.padEnd(20);
 
     // Semantic Colors (§25): cyan = identity / active context, green = ok/success, yellow = waiting
-    const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('-')} ${color.bold('CONTROL')} ${color.gray('-')} ${color.bold('WORKER:')} ${compCount} COMPUTERS ${agentCount} AGENTS ${modelCount} MODELS`;
+    const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('-')} ${color.bold('CONTROL')} ${color.gray('-')} ${color.bold('WORKER:')} ${compCount} COMPUTERS ${agentCount} AGENTS ${modelTagColored}`;
     const viewPart = color.bold(color.cyan(viewTagPadded));
     const agentPart = `Agents ${activeCount}/${this.concurrencyLimit} ${color.gray('-')} ${workerStatus === 'AVAILABLE' ? color.green('AVAILABLE') : color.yellow('BUSY')}`;
 
     const pendingCount = this.pendingApprovals.length;
     const alert = pendingCount > 0 ? color.bold(color.yellow(` [! ${pendingCount} APPROVALS]`)) : '';
 
-    const titlePlain = `WAZIR - CONTROL - WORKER: ${compCount} COMPUTERS ${agentCount} AGENTS ${modelCount} MODELS`;
+    const titlePlain = `WAZIR - CONTROL - WORKER: ${compCount} COMPUTERS ${agentCount} AGENTS ${modelTagPlain}`;
     const viewPlain = viewTagPadded;
     const agentPlain = `Agents ${activeCount}/${this.concurrencyLimit} - ${workerStatus}${pendingCount > 0 ? ` [! ${pendingCount} APPROVALS]` : ''}`;
 
@@ -3211,6 +3372,639 @@ export class FleetTui {
       }
     }
     return lines;
+  }
+
+  openModelStartupSelector(): void {
+    const readiness = this.engine.lifecycle.getReadiness();
+    const eligible = this.engine.lifecycle.getEligibleModels();
+    const allInstalled = this.engine.models.listInstalled();
+    const recommended = this.engine.lifecycle.getRecommendedModels();
+    const recommendedIds = new Set(recommended.map((r) => r.model.id));
+
+    // Pre-check recommended models
+    const selectedIds = new Set<string>();
+    for (const r of recommended) {
+      selectedIds.add(r.model.id);
+    }
+    if (selectedIds.size === 0 && eligible.length > 0) {
+      selectedIds.add(eligible[0].id);
+    }
+
+    const assessments = new Map<string, ResourceAssessment>();
+    for (const m of allInstalled) {
+      assessments.set(m.id, this.engine.lifecycle.assessModelSync(m.id));
+    }
+
+    this.startupSelector = {
+      mode: 'select',
+      allInstalledModels: allInstalled,
+      eligibleModels: eligible,
+      recommendedModelIds: recommendedIds,
+      selectedModelIds: selectedIds,
+      selectedIndex: 0,
+      resourceAssessments: assessments,
+      loadStatuses: new Map(),
+      loadErrors: new Map(),
+    };
+    this.draw();
+  }
+
+  openModelRecoveryModal(): void {
+    this.startupSelector = {
+      mode: 'recovery_no_models',
+      allInstalledModels: [],
+      eligibleModels: [],
+      recommendedModelIds: new Set(),
+      selectedModelIds: new Set(),
+      selectedIndex: 0,
+      resourceAssessments: new Map(),
+      loadStatuses: new Map(),
+      loadErrors: new Map(),
+    };
+    this.draw();
+  }
+
+  openRuntimeRecoveryModal(): void {
+    this.startupSelector = {
+      mode: 'recovery_runtime',
+      allInstalledModels: [],
+      eligibleModels: [],
+      recommendedModelIds: new Set(),
+      selectedModelIds: new Set(),
+      selectedIndex: 0,
+      resourceAssessments: new Map(),
+      loadStatuses: new Map(),
+      loadErrors: new Map(),
+    };
+    this.draw();
+  }
+
+  private async handleStartupModelReadiness(): Promise<void> {
+    const mode = this.engine.config.models?.startup?.mode ?? 'prompt';
+    if (mode === 'none') {
+      return;
+    }
+    if (mode === 'restore') {
+      this.statusMessage = 'Restoring last ready model set...';
+      this.draw();
+      await this.engine.lifecycle.restoreLastModelSet({ initiator: 'startup' });
+      return;
+    }
+    if (mode === 'recommended') {
+      this.statusMessage = 'Loading recommended models...';
+      this.draw();
+      await this.engine.lifecycle.loadRecommendedModels({ initiator: 'startup' });
+      return;
+    }
+
+    // Default: 'prompt'
+    const readiness = this.engine.lifecycle.getReadiness();
+    if (readiness.readyCount > 0) {
+      if (readiness.unloadedEligibleModels.length > 0) {
+        this.statusMessage = `Ready: ${readiness.readyCount} model(s) loaded. Press [M] to manage models.`;
+      }
+      return;
+    }
+
+    if (readiness.installedCount > 0) {
+      this.openModelStartupSelector();
+      return;
+    }
+
+    const runtimeEntries = Object.entries(readiness.runtimeHealth);
+    const allUnavailable =
+      runtimeEntries.length > 0 &&
+      runtimeEntries.every(([, h]: [string, any]) => h.status === 'unavailable' || h.status === 'unhealthy');
+    if (allUnavailable) {
+      this.openRuntimeRecoveryModal();
+    } else {
+      this.openModelRecoveryModal();
+    }
+  }
+
+  private handleModelLifecycleEvent(event: ModelLifecycleEvent): void {
+    if (this.startupSelector) {
+      if (event.type === 'MODEL_LOADING') {
+        this.startupSelector.loadStatuses.set(event.modelId, 'LOADING');
+      } else if (event.type === 'MODEL_READY') {
+        this.startupSelector.loadStatuses.set(event.modelId, 'READY');
+      } else if (event.type === 'MODEL_LOAD_FAILED') {
+        this.startupSelector.loadStatuses.set(event.modelId, 'FAILED');
+        const err = event.error ?? (event.data?.error as string | undefined);
+        if (err) {
+          this.startupSelector.loadErrors.set(event.modelId, err);
+        }
+      }
+      this.draw();
+    }
+  }
+
+  private async executeModelLoads(modelIds: string[]): Promise<void> {
+    if (!this.startupSelector) return;
+    this.startupSelector.mode = 'loading';
+    for (const id of modelIds) {
+      this.startupSelector.loadStatuses.set(id, 'LOADING');
+    }
+    this.draw();
+
+    const failedIds: string[] = [];
+    for (const id of modelIds) {
+      const ok = await this.engine.lifecycle.loadModel(id, { initiator: 'startup' });
+      if (!ok) {
+        failedIds.push(id);
+        if (this.startupSelector) {
+          this.startupSelector.loadStatuses.set(id, 'FAILED');
+        }
+      } else if (this.startupSelector) {
+        this.startupSelector.loadStatuses.set(id, 'READY');
+      }
+      this.draw();
+    }
+
+    if (failedIds.length > 0) {
+      if (this.startupSelector) {
+        this.startupSelector.mode = 'failure';
+        this.draw();
+      }
+    } else {
+      const loadedCount = modelIds.length;
+      this.startupSelector = undefined;
+      this.statusMessage = `Ready: ${loadedCount} model(s) loaded successfully.`;
+      this.draw();
+
+      if (this.taskTimeModelRequired) {
+        const prompt = this.taskTimeModelRequired.pendingPrompt;
+        this.taskTimeModelRequired = undefined;
+        await this.launchJobFromPrompt(prompt);
+      }
+    }
+  }
+
+  private async handleStartupSelectorKey(keyStr: string, keyObj?: readline.Key): Promise<void> {
+    if (!this.startupSelector) return;
+    const keyName = keyObj?.name;
+
+    if (this.startupSelector.mode === 'select') {
+      const models = this.startupSelector.allInstalledModels;
+      if (this.startupSelector.inspectedModelId) {
+        if (keyName === 'escape' || keyStr === '\x1b' || keyStr === 'i' || keyStr === 'I') {
+          this.startupSelector.inspectedModelId = undefined;
+          this.draw();
+        }
+        return;
+      }
+
+      if (keyName === 'up' || keyStr === '\u001b[A') {
+        this.startupSelector.selectedIndex = Math.max(0, this.startupSelector.selectedIndex - 1);
+        this.draw();
+        return;
+      }
+      if (keyName === 'down' || keyStr === '\u001b[B') {
+        this.startupSelector.selectedIndex = Math.min(Math.max(0, models.length - 1), this.startupSelector.selectedIndex + 1);
+        this.draw();
+        return;
+      }
+      if (keyStr === ' ') {
+        const m = models[this.startupSelector.selectedIndex];
+        if (m) {
+          const isEligible = this.startupSelector.eligibleModels.some((e) => e.id === m.id);
+          if (isEligible) {
+            if (this.startupSelector.selectedModelIds.has(m.id)) {
+              this.startupSelector.selectedModelIds.delete(m.id);
+            } else {
+              this.startupSelector.selectedModelIds.add(m.id);
+            }
+            this.draw();
+          }
+        }
+        return;
+      }
+      if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+        const toLoad = Array.from(this.startupSelector.selectedModelIds);
+        if (toLoad.length === 0) {
+          const m = models[this.startupSelector.selectedIndex];
+          if (m && this.startupSelector.eligibleModels.some((e) => e.id === m.id)) {
+            toLoad.push(m.id);
+          }
+        }
+        if (toLoad.length > 0) {
+          await this.executeModelLoads(toLoad);
+        } else {
+          this.startupSelector.statusBanner = 'No models selected. Press Space to select or [A] to load recommended.';
+          this.draw();
+        }
+        return;
+      }
+      if (keyStr === 'a' || keyStr === 'A') {
+        const recommended = this.engine.lifecycle.getRecommendedModels();
+        const recIds = recommended.map((r) => r.model.id);
+        if (recIds.length > 0) {
+          await this.executeModelLoads(recIds);
+        } else {
+          const eligible = this.startupSelector.eligibleModels;
+          if (eligible.length > 0) {
+            await this.executeModelLoads([eligible[0].id]);
+          }
+        }
+        return;
+      }
+      if (keyStr === 'l' || keyStr === 'L') {
+        const eligible = this.startupSelector.eligibleModels.map((m) => m.id);
+        if (eligible.length > 0) {
+          await this.executeModelLoads(eligible);
+        }
+        return;
+      }
+      if (keyStr === 'r' || keyStr === 'R') {
+        this.startupSelector.statusBanner = 'Refreshing discovery...';
+        this.draw();
+        await this.engine.lifecycle.discoverAndReconcile();
+        this.openModelStartupSelector();
+        return;
+      }
+      if (keyStr === 'i' || keyStr === 'I') {
+        const m = models[this.startupSelector.selectedIndex];
+        if (m) {
+          this.startupSelector.inspectedModelId = m.id;
+          this.draw();
+        }
+        return;
+      }
+      if (keyStr === 's' || keyStr === 'S' || keyName === 'escape' || keyStr === '\x1b') {
+        this.startupSelector = undefined;
+        this.statusMessage = 'Skipped model loading. 0 models ready.';
+        this.draw();
+        return;
+      }
+    } else if (this.startupSelector.mode === 'failure') {
+      if (keyStr === 'r' || keyStr === 'R') {
+        const failedIds = Array.from(this.startupSelector.loadStatuses.entries())
+          .filter(([, status]) => status === 'FAILED')
+          .map(([id]) => id);
+        if (failedIds.length > 0) {
+          await this.executeModelLoads(failedIds);
+        }
+        return;
+      }
+      if (keyStr === 'c' || keyStr === 'C') {
+        this.startupSelector = undefined;
+        const readiness = this.engine.lifecycle.getReadiness();
+        this.statusMessage = `Continuing with ${readiness.readyCount} ready model(s).`;
+        this.draw();
+        if (this.taskTimeModelRequired && readiness.readyCount > 0) {
+          const prompt = this.taskTimeModelRequired.pendingPrompt;
+          this.taskTimeModelRequired = undefined;
+          await this.launchJobFromPrompt(prompt);
+        }
+        return;
+      }
+      if (keyStr === 'b' || keyStr === 'B' || keyName === 'escape' || keyStr === '\x1b') {
+        this.startupSelector.mode = 'select';
+        this.draw();
+        return;
+      }
+    } else if (this.startupSelector.mode === 'recovery_no_models') {
+      if (keyStr === 'q' || keyStr === 'Q') {
+        this.stop();
+        process.exit(0);
+      }
+      if (keyStr === 'r' || keyStr === 'R') {
+        await this.engine.lifecycle.discoverAndReconcile();
+        await this.handleStartupModelReadiness();
+        return;
+      }
+      if (keyStr === 's' || keyStr === 'S' || keyStr === 'c' || keyStr === 'C' || keyName === 'escape' || keyStr === '\x1b') {
+        this.startupSelector = undefined;
+        this.statusMessage = 'No models loaded. Control plane offline.';
+        this.draw();
+        return;
+      }
+      if (keyStr === 'd' || keyStr === 'D') {
+        this.startupSelector = undefined;
+        void this.submitCommand('/doctor');
+        return;
+      }
+    } else if (this.startupSelector.mode === 'recovery_runtime') {
+      if (keyStr === 'q' || keyStr === 'Q') {
+        this.stop();
+        process.exit(0);
+      }
+      if (keyStr === 'l' || keyStr === 'L') {
+        this.startupSelector = undefined;
+        void this.submitCommand('/launch lmstudio');
+        return;
+      }
+      if (keyStr === 'r' || keyStr === 'R') {
+        await this.engine.lifecycle.discoverAndReconcile();
+        await this.handleStartupModelReadiness();
+        return;
+      }
+      if (keyStr === 's' || keyStr === 'S' || keyStr === 'c' || keyStr === 'C' || keyName === 'escape' || keyStr === '\x1b') {
+        this.startupSelector = undefined;
+        this.statusMessage = 'Offline mode.';
+        this.draw();
+        return;
+      }
+    }
+  }
+
+  private async handleTaskTimeModalKey(keyStr: string, keyObj?: readline.Key): Promise<void> {
+    if (!this.taskTimeModelRequired) return;
+    const keyName = keyObj?.name;
+    const modal = this.taskTimeModelRequired;
+
+    if (modal.loading) {
+      return;
+    }
+
+    if (keyName === 'up' || keyStr === '\u001b[A') {
+      modal.selectedIndex = Math.max(0, modal.selectedIndex - 1);
+      this.draw();
+      return;
+    }
+    if (keyName === 'down' || keyStr === '\u001b[B') {
+      modal.selectedIndex = Math.min(Math.max(0, modal.eligibleModels.length - 1), modal.selectedIndex + 1);
+      this.draw();
+      return;
+    }
+    if (keyStr === 'l' || keyStr === 'L' || keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+      const m = modal.eligibleModels[modal.selectedIndex];
+      if (m) {
+        modal.loading = true;
+        modal.statusText = `Loading ${m.id}...`;
+        this.draw();
+        const ok = await this.engine.lifecycle.loadModel(m.id, { initiator: 'task_safety_net' });
+        if (ok) {
+          const prompt = modal.pendingPrompt;
+          this.taskTimeModelRequired = undefined;
+          this.statusMessage = `Model '${m.id}' ready. Resuming task...`;
+          await this.launchJobFromPrompt(prompt);
+        } else {
+          modal.loading = false;
+          modal.statusText = `Failed to load ${m.id}. Try another model or press [M].`;
+          this.draw();
+        }
+      }
+      return;
+    }
+    if (keyStr === 'a' || keyStr === 'A') {
+      const rec = this.engine.lifecycle.getRecommendedModels();
+      const targetModel = rec[0]?.model ?? modal.eligibleModels[0];
+      if (targetModel) {
+        modal.loading = true;
+        modal.statusText = `Loading recommended model ${targetModel.id}...`;
+        this.draw();
+        const ok = await this.engine.lifecycle.loadModel(targetModel.id, { initiator: 'task_safety_net' });
+        if (ok) {
+          const prompt = modal.pendingPrompt;
+          this.taskTimeModelRequired = undefined;
+          this.statusMessage = `Model '${targetModel.id}' ready. Resuming task...`;
+          await this.launchJobFromPrompt(prompt);
+        } else {
+          modal.loading = false;
+          modal.statusText = `Failed to load ${targetModel.id}. Try another model or press [M].`;
+          this.draw();
+        }
+      }
+      return;
+    }
+    if (keyStr === 'm' || keyStr === 'M') {
+      this.openModelStartupSelector();
+      return;
+    }
+    if (keyStr === 'd' || keyStr === 'D') {
+      this.taskTimeModelRequired = undefined;
+      void this.submitCommand('/doctor');
+      return;
+    }
+    if (keyName === 'escape' || keyStr === '\x1b' || keyStr === 'c' || keyStr === 'C') {
+      this.taskTimeModelRequired = undefined;
+      this.statusMessage = 'Task cancelled. No models loaded.';
+      this.draw();
+      return;
+    }
+  }
+
+  private renderStartupSelectorModal(cols: number): string[] {
+    if (!this.startupSelector) return [];
+    const selector = this.startupSelector;
+    const modalWidth = Math.min(cols - 4, 88);
+
+    if (selector.inspectedModelId) {
+      const m = selector.allInstalledModels.find((it) => it.id === selector.inspectedModelId);
+      if (!m) {
+        selector.inspectedModelId = undefined;
+        return this.renderStartupSelectorModal(cols);
+      }
+      const title = ` MODEL INSPECTION: ${m.id} `;
+      const assessment = selector.resourceAssessments.get(m.id);
+      const isReady = this.engine.lifecycle.isModelReady(m.id);
+      const body: string[] = [
+        `${color.bold('ID:')}            ${m.id}`,
+        `${color.bold('Name:')}          ${m.name}`,
+        `${color.bold('Provider:')}      ${m.provider}`,
+        `${color.bold('Family:')}        ${m.family}`,
+        `${color.bold('Architecture:')}  ${m.architecture ?? '—'}`,
+        `${color.bold('Parameters:')}    ${m.parameters ?? '—'}`,
+        `${color.bold('Quantization:')}  ${m.quantization ?? '—'}`,
+        `${color.bold('Context Max:')}   ${m.contextMax.toLocaleString()} tokens`,
+        `${color.bold('Capabilities:')}  ${m.capabilities.join(', ')}`,
+        `${color.bold('Tool Calling:')}  ${m.toolCalling ? color.green('yes') : color.gray('no')}`,
+        `${color.bold('Reasoning:')}     ${m.reasoning ? color.green('yes') : color.gray('no')}`,
+        `${color.bold('Vision:')}        ${m.vision ? color.green('yes') : color.gray('no')}`,
+        `${color.bold('State:')}         ${isReady ? color.green('READY') : color.yellow(this.engine.lifecycle.getModelState(m.id))}`,
+        '',
+        color.bold('Resource Assessment:'),
+        `  Estimated Memory: ${assessment?.estimatedMemoryGB.toFixed(1) ?? '—'} GB [${assessment?.classification ?? 'UNKNOWN'}]`,
+        `  Status:           ${assessment?.message ?? '—'}`,
+      ];
+      const actions = `${color.bold('[Esc]')} Back to Model Selection`;
+      return this.buildModalBox(title, body, actions, modalWidth, 'cyan');
+    }
+
+    if (selector.mode === 'select') {
+      const title = ' WAZIR - MODEL READINESS & STARTUP ';
+      const readiness = this.engine.lifecycle.getReadiness();
+      const healthyRuntimes = this.engine.runtimes.list().map((r) => r.name || r.id);
+      const localComp = this.engine.computers.list().find((c) => c.local)?.name || 'local';
+
+      const body: string[] = [
+        `Runtime: ${color.bold(healthyRuntimes.join(', ') || 'none')}    Computer: ${color.bold(localComp)}`,
+        `Status: ${color.green(`${readiness.readyCount} READY`)} / ${color.bold(`${readiness.installedCount} INSTALLED`)}`,
+      ];
+      if (selector.statusBanner) {
+        body.push(color.yellow(`* ${selector.statusBanner}`));
+      }
+      body.push(color.gray('-'.repeat(modalWidth - 8)));
+      body.push(color.bold(`Installed Models (${readiness.readyCount} loaded / ${readiness.installedCount} installed):`));
+      body.push('');
+
+      const models = selector.allInstalledModels;
+      for (let i = 0; i < models.length; i++) {
+        const m = models[i];
+        const isSel = selector.selectedModelIds.has(m.id);
+        const isEligible = selector.eligibleModels.some((e) => e.id === m.id);
+        const isRec = selector.recommendedModelIds.has(m.id);
+        const isHighlighted = i === selector.selectedIndex;
+        const assessment = selector.resourceAssessments.get(m.id);
+        const isReady = this.engine.lifecycle.isModelReady(m.id);
+
+        const checkMark = isReady
+          ? color.green('[✓]')
+          : isSel
+            ? color.cyan('[x]')
+            : '[ ]';
+        const cursor = isHighlighted ? color.blue('> ') : '  ';
+        const namePart = isHighlighted ? color.blue(color.bold(m.id)) : color.bold(m.id);
+
+        let badge = '';
+        if (isReady) {
+          badge = ` ${color.green('(ALREADY LOADED)')}`;
+        } else if (isRec) {
+          badge = ` ${color.cyan('[RECOMMENDED]')}`;
+        } else if (!isEligible) {
+          badge = ` ${color.gray('(non-generative)')}`;
+        }
+
+        body.push(`${cursor}${checkMark} ${i + 1}. ${namePart}${badge}`);
+
+        const arch = m.architecture ? `Architecture: ${m.architecture}  ` : '';
+        const params = m.parameters ? `Params: ${m.parameters}  ` : '';
+        const ctx = `Context: ${Math.round(m.contextMax / 1024)}K`;
+        body.push(`       ${color.gray(`${arch}${params}${ctx}`)}`);
+
+        if (assessment) {
+          let classTag = color.gray(`[${assessment.classification}]`);
+          if (assessment.classification === 'SAFE') classTag = color.green('[SAFE]');
+          else if (assessment.classification === 'WARNING') classTag = color.yellow('[WARNING]');
+          else if (assessment.classification === 'INSUFFICIENT') classTag = color.red('[INSUFFICIENT]');
+          body.push(`       ${color.gray(`Memory: ~${assessment.estimatedMemoryGB.toFixed(1)} GB`)} ${classTag}`);
+        }
+
+        if (isRec) {
+          const recPurpose = m.toolCalling ? 'coding / tool execution' : 'planning / reasoning';
+          body.push(`       ${color.cyan(`RECOMMENDED for ${recPurpose}`)}`);
+        }
+        body.push('');
+      }
+
+      const actions = `${color.bold('[Enter]')} Load Selected   ${color.bold('[A]')} Recommended   ${color.bold('[L]')} All   ${color.bold('[R]')} Refresh   ${color.bold('[I]')} Inspect   ${color.bold('[S]')} Skip`;
+      return this.buildModalBox(title, body, actions, modalWidth, 'cyan');
+    }
+
+    if (selector.mode === 'loading') {
+      const title = ' WAZIR - LOADING MODELS ';
+      const body: string[] = [
+        color.bold('Loading selected models into runtime memory:'),
+        '',
+      ];
+      for (const id of selector.selectedModelIds) {
+        const st = selector.loadStatuses.get(id) ?? 'LOADING';
+        if (st === 'READY') {
+          body.push(`  ${color.green('✓')} ${color.bold(id)} .......... ${color.green('READY')}`);
+        } else if (st === 'FAILED') {
+          const err = selector.loadErrors.get(id) ?? 'load failed';
+          body.push(`  ${color.red('✕')} ${color.bold(id)} .......... ${color.red('FAILED')} (${err})`);
+        } else {
+          const frame = getCategorySpinnerFrame('JOBS', this.spinnerTick);
+          body.push(`  ${color.cyan(frame)} ${color.bold(id)} ... ${color.yellow('LOADING')}`);
+        }
+      }
+      body.push('');
+      body.push(color.gray('Please wait while weights are placed into memory...'));
+      const actions = color.gray('Loading in progress...');
+      return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
+    }
+
+    if (selector.mode === 'failure') {
+      const title = ' WAZIR - MODEL LOAD FAILURE ';
+      const body: string[] = [
+        color.bold(color.red('One or more models failed to load:')),
+        '',
+      ];
+      for (const [id, st] of selector.loadStatuses.entries()) {
+        if (st === 'READY') {
+          body.push(`  ${color.green('✓')} ${id} ... READY`);
+        } else if (st === 'FAILED') {
+          const err = selector.loadErrors.get(id) ?? 'failed';
+          body.push(`  ${color.red('✕')} ${id} ... ${color.red('FAILED')} (${err})`);
+        }
+      }
+      body.push('');
+      body.push(color.gray('Choose how to proceed:'));
+      const actions = `${color.bold('[R]')} Retry failed   ${color.bold('[C]')} Continue with available   ${color.bold('[B]')} Back to selection`;
+      return this.buildModalBox(title, body, actions, modalWidth, 'red');
+    }
+
+    if (selector.mode === 'recovery_no_models') {
+      const title = ' WAZIR - MODEL SETUP & RECOVERY ';
+      const body: string[] = [
+        color.bold(color.yellow('0 models discovered across all runtimes.')),
+        '',
+        'No models are currently installed in Ollama or LM Studio.',
+        '',
+        color.bold('Next steps:'),
+        '  1. In LM Studio: Download a model (e.g. google/gemma-4-12b-qat or qwen/qwen3.8-27b).',
+        '  2. In Ollama: Run \'ollama pull qwen2.5-coder\' in terminal.',
+        '  3. Ensure the runtime server is running.',
+      ];
+      const actions = `${color.bold('[R]')} Refresh Discovery   ${color.bold('[S]')} Skip to Fleet   ${color.bold('[D]')} Run wa doctor`;
+      return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
+    }
+
+    if (selector.mode === 'recovery_runtime') {
+      const title = ' WAZIR - RUNTIME RECOVERY ';
+      const body: string[] = [
+        color.bold(color.red('All local model runtimes are currently unavailable.')),
+        '',
+        '  - LM Studio: http://localhost:1234 (OFFLINE / UNREACHABLE)',
+        '  - Ollama:    http://localhost:11434 (OFFLINE / UNREACHABLE)',
+        '',
+        color.bold('Recovery options:'),
+        '  - Press [L] to start LM Studio server automatically via CLI',
+        '  - Ensure LM Studio or Ollama is started in your environment',
+      ];
+      const actions = `${color.bold('[L]')} Launch LM Studio   ${color.bold('[R]')} Refresh Detection   ${color.bold('[S]')} Skip to Fleet`;
+      return this.buildModalBox(title, body, actions, modalWidth, 'red');
+    }
+
+    return [];
+  }
+
+  private renderTaskTimeModelRequiredModal(cols: number): string[] {
+    if (!this.taskTimeModelRequired) return [];
+    const modal = this.taskTimeModelRequired;
+    const modalWidth = Math.min(cols - 4, 82);
+    const title = ' TASK-TIME MODEL REQUIRED ';
+
+    const body: string[] = [
+      color.bold(color.yellow('No ready models are available to execute this task.')),
+      `${color.bold('Task:')} "${modal.pendingPrompt.slice(0, 50)}"`,
+      `${color.bold('Required capability:')} ${modal.requiredCapabilities.join(', ')}`,
+      '',
+      color.bold('Eligible installed models:'),
+    ];
+
+    const recommended = this.engine.lifecycle.getRecommendedModels();
+    const recIds = new Set(recommended.map((r) => r.model.id));
+
+    for (let i = 0; i < modal.eligibleModels.length; i++) {
+      const m = modal.eligibleModels[i];
+      const isSel = i === modal.selectedIndex;
+      const cursor = isSel ? color.blue('> ') : '  ';
+      const namePart = isSel ? color.blue(color.bold(m.id)) : color.bold(m.id);
+      const isRec = recIds.has(m.id);
+      const recBadge = isRec ? color.cyan(' [RECOMMENDED]') : '';
+      body.push(`${cursor}${i + 1}. ${namePart} (${m.provider})${recBadge}`);
+    }
+
+    if (modal.statusText) {
+      body.push('');
+      body.push(color.yellow(`Status: ${modal.statusText}`));
+    }
+
+    const actions = `${color.bold('[L]')} Load Model   ${color.bold('[A]')} Load Recommended   ${color.bold('[M]')} Manage Models   ${color.bold('[Esc]')} Cancel`;
+    return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
   }
 
   /**

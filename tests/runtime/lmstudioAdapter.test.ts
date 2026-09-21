@@ -59,11 +59,13 @@ describe('LM Studio Adapter: Failure Injection & Wire Semantics', () => {
     expect(req.context_window).toBeUndefined();
   });
 
-  it('Section 0 / F2: getCapabilities() accurately reports modelLoad: false and modelUnload: false', async () => {
+  it('Section 0 / F2: getCapabilities() accurately reports modelLoad: true and modelUnload: true', async () => {
     const adapter = createLMStudioAdapter(mockServer.url);
     const caps = await adapter.getCapabilities();
-    expect(caps.modelLoad).toBe(false);
-    expect(caps.modelUnload).toBe(false);
+    expect(caps.modelLoad).toBe(true);
+    expect(caps.modelUnload).toBe(true);
+    expect(typeof (adapter as any).loadModel).toBe('function');
+    expect(typeof (adapter as any).unloadModel).toBe('function');
   });
 
   it('Section 8a: getLoadedModels() returns discovered models', async () => {

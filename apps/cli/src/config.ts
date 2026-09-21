@@ -2,6 +2,16 @@ import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+export type ModelStartupMode = 'prompt' | 'recommended' | 'restore' | 'none';
+
+export interface ModelStartupConfig {
+  mode?: ModelStartupMode;
+}
+
+export interface ModelsConfig {
+  startup?: ModelStartupConfig;
+}
+
 export interface WazirConfig {
   ollamaUrl?: string;
   lmstudioUrl?: string;
@@ -17,6 +27,8 @@ export interface WazirConfig {
   modelContext: Record<string, number>;
   /** Per-model extra capability tags. */
   modelCapabilities: Record<string, string[]>;
+  /** Model readiness and startup behavior. */
+  models?: ModelsConfig;
   networkAllowed: boolean;
   allowCommands: string[];
   denyCommands: string[];
@@ -101,6 +113,11 @@ export function loadConfig(): WazirConfig {
   if (process.env.WAZIR_API_TOKEN) config.apiToken = process.env.WAZIR_API_TOKEN;
   if (process.env.WAZIR_REGISTRATION_TOKEN) config.registrationToken = process.env.WAZIR_REGISTRATION_TOKEN;
 
+  const envStartupMode = (process.env.WAZIR_MODEL_STARTUP_MODE || process.env.ROOK_MODEL_STARTUP_MODE) as ModelStartupMode | undefined;
+  if (envStartupMode) {
+    config.models = { startup: { mode: envStartupMode } };
+  }
+
   try {
     const raw = readFileSync(configFile(), 'utf8');
     const fileConfig = JSON.parse(raw) as Partial<WazirConfig>;
@@ -111,12 +128,32 @@ export function loadConfig(): WazirConfig {
     config.registrationToken = fileConfig.registrationToken ?? config.registrationToken;
     config.modelContext = { ...config.modelContext, ...(fileConfig.modelContext ?? {}) };
     config.modelCapabilities = { ...config.modelCapabilities, ...(fileConfig.modelCapabilities ?? {}) };
+    if (fileConfig.models) {
+      config.models = {
+        ...config.models,
+        startup: {
+          ...config.models?.startup,
+          ...fileConfig.models.startup,
+        },
+      };
+    }
     config.networkAllowed = fileConfig.networkAllowed ?? config.networkAllowed;
     config.allowCommands = fileConfig.allowCommands ?? config.allowCommands;
     config.denyCommands = fileConfig.denyCommands ?? config.denyCommands;
     config.allowedMcpServers = fileConfig.allowedMcpServers ?? config.allowedMcpServers;
   } catch {
     // no config file — defaults + env win
+  }
+
+  // Ensure default mode is 'prompt' if not set
+  if (!config.models?.startup?.mode) {
+    config.models = {
+      ...config.models,
+      startup: {
+        ...config.models?.startup,
+        mode: 'prompt',
+      },
+    };
   }
 
   return config;

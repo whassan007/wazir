@@ -11,6 +11,7 @@ import {
   JobManager,
   JobOrchestrator,
   ModelRegistry,
+  ModelLifecycleService,
   PolicyEngine,
   RuntimeRegistry,
   Scheduler,
@@ -185,6 +186,14 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
     computers,
     runtimes,
     models,
+    lifecycle: new ModelLifecycleService({
+      models,
+      runtimes,
+      computers,
+      agents,
+      adapters: new Map([['fake', fakeAdapter]]),
+      store: new MemoryStore() as any,
+    }),
     agents,
     tools,
     policy,
@@ -1350,7 +1359,9 @@ describe('FleetTui — interactive terminal UI harness', () => {
     expect(harness.tui.getContextMetrics()).toEqual({ used: 0, max: 32_768 });
 
     harness.sendLine('measure context');
-    await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 80 && harness.tui.getContextMetrics().used === 0; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
 
     // After a run: the prompt size of the last model turn (the fake adapter reports
     // inputTokens: 10 on every turn), i.e. actual context-window occupancy — not the

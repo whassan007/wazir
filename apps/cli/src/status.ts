@@ -114,6 +114,13 @@ export function statusCommand(): Promise<{ code: number; output: string }> {
       lines.push(`  models:    ${status.workers.modelsDiscovered} discovered`);
       
       lines.push('');
+      lines.push(color.bold('Models'));
+      const readiness = engine.lifecycle.getReadiness();
+      lines.push(`  installed: ${readiness.installedCount}`);
+      lines.push(`  ready:     ${readiness.readyCount > 0 ? color.green(String(readiness.readyCount)) : color.yellow('0')}`);
+      lines.push(`  loading:   ${readiness.loadingCount}`);
+
+      lines.push('');
       lines.push(color.bold('Executions'));
       lines.push(`  active:    ${status.executions.active}`);
       lines.push(`  queued:    ${status.executions.queued}`);

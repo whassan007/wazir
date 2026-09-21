@@ -68,13 +68,13 @@ describe('Ollama Adapter: Failure Injection & Wire Semantics', () => {
     expect(loaded).toEqual(['qwen2.5:latest']);
   });
 
-  it('Section 0 / F2 Tracked Gap: reports modelLoad and modelUnload capabilities but lacks methods', async () => {
+  it('Section 0 / F2 Tracked Gap: reports modelLoad and modelUnload capabilities and provides methods', async () => {
     const adapter = createOllamaAdapter(mockServer.url);
     const caps = await adapter.getCapabilities();
     expect(caps.modelLoad).toBe(true);
     expect(caps.modelUnload).toBe(true);
-    // Method implementations are missing (tracked gap F2)
-    expect((adapter as any).loadModel).toBeUndefined();
-    expect((adapter as any).unloadModel).toBeUndefined();
+    // Method implementations are provided
+    expect(typeof (adapter as any).loadModel).toBe('function');
+    expect(typeof (adapter as any).unloadModel).toBe('function');
   });
 });

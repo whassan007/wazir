@@ -166,26 +166,40 @@ function checkRuntimeConnectivity(engine: RookEngine): DoctorCheck {
 
 function checkModelAvailability(engine: RookEngine): DoctorCheck {
   try {
-    const models = engine.models.list();
-    
-    if (models.length === 0) {
-      return { name: 'model availability', status: 'NOT INSTALLED', message: 'no models registered' };
+    if (engine.lifecycle) {
+      const readiness = engine.lifecycle.getReadiness();
+      if (readiness.installedCount === 0) {
+        return { name: 'model availability', status: 'NOT INSTALLED', message: 'no models registered' };
+      }
+      const status = readiness.readyCount > 0 ? 'PASS' : 'WARN';
+      return {
+        name: 'model availability',
+        status,
+        message: `${readiness.installedCount} model(s) registered (${readiness.readyCount} ready)`,
+        details: `${readiness.readyGenerativeModels.length} ready generative models, ${readiness.unloadedEligibleModels.length} unloaded eligible`,
+      };
     }
-    
-    const instances = engine.models.listInstances();
-    const loadedCount = instances.filter((i) => i.loaded).length;
-    
+
+    const models = engine.models ? engine.models.list() : [];
+    if (models.length === 0) {
+      return {
+        name: 'model availability',
+        status: 'NOT INSTALLED',
+        message: 'no models registered',
+      };
+    }
+
     return {
       name: 'model availability',
       status: 'PASS',
-      message: `${models.length} model(s), ${loadedCount} loaded`,
-      details: `total instances: ${instances.length}`,
+      message: `${models.length} model(s) registered`,
+      details: models.map((m) => `  ${m.id} (${m.provider})`).join('\n'),
     };
   } catch (error) {
     return {
       name: 'model availability',
       status: 'FAIL',
-      message: 'availability check error',
+      message: 'model availability check error',
       details: (error as Error).message,
     };
   }

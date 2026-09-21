@@ -49,6 +49,40 @@ export interface ModelRecord {
   updatedAt: Date;
 }
 
+export type ModelLifecycleState =
+  | 'DISCOVERED'
+  | 'INSTALLED'
+  | 'LOADING'
+  | 'LOADED'
+  | 'READY'
+  | 'UNLOADING'
+  | 'FAILED'
+  | 'UNAVAILABLE';
+
+export type ModelLifecycleEventType =
+  | 'MODEL_DISCOVERED'
+  | 'MODEL_LOAD_REQUESTED'
+  | 'MODEL_LOADING'
+  | 'MODEL_READY'
+  | 'MODEL_LOAD_FAILED'
+  | 'MODEL_UNLOAD_REQUESTED'
+  | 'MODEL_UNLOADED'
+  | 'MODEL_RESTORE_STARTED'
+  | 'MODEL_RESTORE_COMPLETED';
+
+export interface ModelLifecycleEvent {
+  type: ModelLifecycleEventType;
+  modelId: string;
+  runtimeId?: string;
+  computerId?: string;
+  workerId?: string;
+  initiator?: string;
+  timestamp: Date;
+  reason?: string;
+  error?: string;
+  data?: Record<string, unknown>;
+}
+
 /** A concrete serving of a model on a computer via a runtime. */
 export interface ModelInstance {
   id: string;
@@ -57,11 +91,13 @@ export interface ModelInstance {
   runtimeId: string;
   runtimeModelId: string;
   loaded: boolean;
+  state?: ModelLifecycleState;
   health: 'healthy' | 'degraded' | 'unavailable';
   contextTokens?: number;
   loadTimeMs?: number;
   lastUsedAt?: Date;
   lastCheckedAt?: Date;
+  error?: string;
 }
 
 export interface ModelRequirements {

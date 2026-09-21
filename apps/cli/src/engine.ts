@@ -12,6 +12,7 @@ import {
   JobManager,
   JobOrchestrator,
   ModelRegistry,
+  ModelLifecycleService,
   PolicyEngine,
   RuntimeRegistry,
   Scheduler,
@@ -23,6 +24,7 @@ import {
 import type {
   ComputerRegistration,
   ModelCapability,
+  ModelLifecycleState,
   ModelRecord,
   RuntimeType,
 } from '@wazir/core';
@@ -58,6 +60,7 @@ export interface RookEngine {
   computers: ComputerRegistry;
   runtimes: RuntimeRegistry;
   models: ModelRegistry;
+  lifecycle: ModelLifecycleService;
   agents: AgentRegistry;
   tools: ToolRegistry;
   policy: PolicyEngine;
@@ -259,6 +262,15 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const worktrees = new WorktreeManager();
   const planner = createTaskPlanner();
 
+  const lifecycle = new ModelLifecycleService({
+    models,
+    runtimes,
+    computers,
+    agents,
+    adapters: adapterById,
+    store,
+  });
+
   return {
     config,
     projectRoot,
@@ -267,6 +279,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     provenance,
     runtimes,
     models,
+    lifecycle,
     agents,
     tools,
     policy,
@@ -340,6 +353,13 @@ async function applyDiscoveredRuntime(
     for (const discoveredModel of discoveredRuntime.models) {
       registerModel(models, discoveredRuntime, discoveredModel, computerId, config, loadedModelIds);
     }
+  } else {
+    computers.heartbeat(computerId, {
+      runtimeHealth: { [discoveredRuntime.id]: { status: 'unhealthy' } },
+    });
+    for (const inst of models.instancesForRuntime(discoveredRuntime.id)) {
+      models.setInstanceState(inst.id, 'UNAVAILABLE', { health: 'unavailable' });
+    }
   }
 }
 
@@ -357,6 +377,7 @@ export async function refreshRuntime(engine: RookEngine, runtimeId: string): Pro
   const idx = engine.discovered.findIndex((d) => d.id === runtimeId);
   if (idx !== -1) engine.discovered[idx] = refreshed;
   else engine.discovered.push(refreshed);
+  engine.adapters.set(refreshed.id, refreshed.adapter);
 
   await applyDiscoveredRuntime(refreshed, {
     runtimes: engine.runtimes,
@@ -427,6 +448,13 @@ function registerModel(
     (discovered.name ? loadedModelIds.has(discovered.name) : false) ||
     Array.from(loadedModelIds).some((id) => id.startsWith(discovered.id) || discovered.id.startsWith(id));
 
+  const state: ModelLifecycleState =
+    runtime.health === 'unavailable'
+      ? 'UNAVAILABLE'
+      : isLoaded
+      ? 'READY'
+      : 'INSTALLED';
+
   models.upsertInstance({
     id: `${discovered.id}::${computerId}::${provider}`,
     modelId: discovered.id,
@@ -434,6 +462,7 @@ function registerModel(
     runtimeId: provider,
     runtimeModelId: discovered.id,
     loaded: isLoaded,
+    state,
     health: runtime.health === 'healthy' ? 'healthy' : 'degraded',
     contextTokens: contextMax,
   });

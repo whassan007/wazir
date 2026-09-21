@@ -36,8 +36,36 @@ export function listAgents(engine: RookEngine): string {
   );
 }
 
-export function listModels(engine: RookEngine): string {
+export function listModels(engine: RookEngine, options: { json?: boolean } = {}): string {
   const models = engine.models.list();
+  if (options.json) {
+    return JSON.stringify(
+      models.map((m) => {
+        const state = engine.lifecycle.getModelState(m.id);
+        const instances = engine.models.instancesOf(m.id);
+        return {
+          id: m.id,
+          name: m.name,
+          provider: m.provider,
+          family: m.family,
+          state,
+          contextMax: m.contextMax,
+          toolCalling: m.toolCalling,
+          reasoning: m.reasoning,
+          instances: instances.map((i) => ({
+            id: i.id,
+            runtimeId: i.runtimeId,
+            loaded: i.loaded,
+            state: i.state,
+            health: i.health,
+          })),
+        };
+      }),
+      null,
+      2,
+    );
+  }
+
   if (models.length === 0) {
     const lines = [color.yellow('no models registered')];
     for (const runtime of engine.discovered) {
@@ -54,10 +82,19 @@ export function listModels(engine: RookEngine): string {
   }
   const rows = models.map((m) => {
     const instances = engine.models.instancesOf(m.id);
+    const state = engine.lifecycle.getModelState(m.id);
+    let stateLabel: string = state;
+    if (state === 'READY') stateLabel = color.green('READY');
+    else if (state === 'LOADING') stateLabel = color.yellow('LOADING');
+    else if (state === 'FAILED') stateLabel = color.red('FAILED');
+    else if (state === 'UNAVAILABLE') stateLabel = color.red('UNAVAIL');
+    else stateLabel = color.gray('INSTALLED');
+
     return [
       m.id,
       m.provider,
       m.family,
+      stateLabel,
       String(m.contextMax),
       m.toolCalling ? 'yes' : 'no',
       m.reasoning ? 'yes' : 'no',
@@ -65,9 +102,112 @@ export function listModels(engine: RookEngine): string {
     ];
   });
   return table(
-    ['model', 'provider', 'family', 'context', 'toolCalling', 'reasoning', 'instances'],
+    ['model', 'provider', 'family', 'state', 'context', 'toolCalling', 'reasoning', 'instances'],
     rows,
   );
+}
+
+export function listLoadedModels(engine: RookEngine, options: { json?: boolean } = {}): string {
+  const readyModels = engine.models.listReady();
+  if (options.json) {
+    return JSON.stringify(readyModels, null, 2);
+  }
+  if (readyModels.length === 0) {
+    return color.yellow('No models are currently loaded in memory.');
+  }
+  const rows = readyModels.map((m) => {
+    const instances = engine.models.instancesOf(m.id);
+    return [
+      m.id,
+      m.provider,
+      m.family,
+      color.green('READY'),
+      String(m.contextMax),
+      m.toolCalling ? 'yes' : 'no',
+      m.reasoning ? 'yes' : 'no',
+      `${instances.length}`,
+    ];
+  });
+  return table(
+    ['model', 'provider', 'family', 'state', 'context', 'toolCalling', 'reasoning', 'instances'],
+    rows,
+  );
+}
+
+export async function discoverModelsCommand(engine: RookEngine, options: { json?: boolean } = {}): Promise<string> {
+  const result = await engine.lifecycle.discoverAndReconcile();
+  if (options.json) {
+    return JSON.stringify(
+      {
+        ...result,
+        readiness: engine.lifecycle.getReadiness(),
+      },
+      null,
+      2,
+    );
+  }
+  const readiness = engine.lifecycle.getReadiness();
+  const lines = [
+    color.bold('Model Discovery & Reconciliation'),
+    `  Total discovered across runtimes: ${result.totalDiscovered}`,
+    `  Newly registered:                 ${result.newlyRegistered}`,
+    `  Installed models:                 ${readiness.installedCount}`,
+    `  Ready in memory:                  ${readiness.readyCount}`,
+    '',
+    listModels(engine),
+  ];
+  return lines.join('\n');
+}
+
+export async function loadModelCommand(
+  engine: RookEngine,
+  modelId: string,
+  options: { wait?: boolean; json?: boolean } = {},
+): Promise<{ ok: boolean; message: string }> {
+  const record = engine.models.get(modelId);
+  if (!record) {
+    const msg = `Model '${modelId}' not found in registry. Run 'wa models list' or 'wa models discover'.`;
+    return { ok: false, message: options.json ? JSON.stringify({ ok: false, error: msg }) : color.red(msg) };
+  }
+
+  const ok = await engine.lifecycle.loadModel(modelId, { initiator: 'cli', timeoutMs: options.wait ? 60_000 : 25_000 });
+  if (ok) {
+    const assessment = engine.lifecycle.assessModelSync(modelId);
+    const msg = `Model '${modelId}' loaded successfully (state: READY, ~${assessment.estimatedMemoryGB.toFixed(1)} GB allocated).`;
+    return {
+      ok: true,
+      message: options.json ? JSON.stringify({ ok: true, modelId, state: 'READY', assessment }) : color.green(msg),
+    };
+  } else {
+    const instances = engine.models.instancesOf(modelId);
+    const err = instances[0]?.error ?? 'Load verification failed or timed out';
+    const msg = `Failed to load model '${modelId}': ${err}`;
+    return {
+      ok: false,
+      message: options.json ? JSON.stringify({ ok: false, modelId, state: 'FAILED', error: err }) : color.red(msg),
+    };
+  }
+}
+
+export async function unloadModelCommand(
+  engine: RookEngine,
+  modelId: string,
+  options: { json?: boolean } = {},
+): Promise<{ ok: boolean; message: string }> {
+  const ok = await engine.lifecycle.unloadModel(modelId, { initiator: 'cli' });
+  if (ok) {
+    const msg = `Model '${modelId}' unloaded successfully (state: INSTALLED).`;
+    return {
+      ok: true,
+      message: options.json ? JSON.stringify({ ok: true, modelId, state: 'INSTALLED' }) : color.green(msg),
+    };
+  } else {
+    const msg = `Failed to unload model '${modelId}'.`;
+    return {
+      ok: false,
+      message: options.json ? JSON.stringify({ ok: false, modelId, error: msg }) : color.red(msg),
+    };
+  }
 }
 
 export function listRuntimes(engine: RookEngine): string {
