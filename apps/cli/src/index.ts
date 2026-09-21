@@ -529,6 +529,15 @@ program
       autoMerge: options.autoMerge === true,
       timeoutSeconds: timeout,
     });
+    // A closed/dead controlling terminal (the pty itself going away — distinct from
+    // stdin's own 'end' event, which FleetTui already handles) delivers SIGHUP. With
+    // no handler, Node's default disposition kills the process outside of any of our
+    // graceful-exit paths: tui.stop()'s cleanup (terminal restore, listener teardown)
+    // never runs, and the process exits by signal instead of code 0.
+    process.on('SIGHUP', () => {
+      tui.stop();
+      process.exit(0);
+    });
     await tui.start();
     await tui.waitForExit();
   });
