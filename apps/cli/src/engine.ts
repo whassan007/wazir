@@ -159,63 +159,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   computers.register(localComputer);
 
   for (const discoveredRuntime of discovered) {
-    const runtimeType: RuntimeType =
-      discoveredRuntime.id === 'ollama'
-        ? 'ollama'
-        : discoveredRuntime.id === 'lmstudio'
-          ? 'lmstudio'
-          : 'other';
-
-    const existing = runtimes.get(discoveredRuntime.id);
-    runtimes.register({
-      id: existing?.id ?? discoveredRuntime.id,
-      type: runtimeType,
-      name: discoveredRuntime.info.name,
-      version: discoveredRuntime.info.version,
-      url: discoveredRuntime.info.url,
-      computerId: localComputer.id,
-      capabilities: {
-        chat: discoveredRuntime.capabilities.chat,
-        streaming: discoveredRuntime.capabilities.streaming,
-        toolCalling: discoveredRuntime.capabilities.toolCalling,
-        structuredOutput: discoveredRuntime.capabilities.structuredOutput,
-        vision: discoveredRuntime.capabilities.vision,
-        embeddings: discoveredRuntime.capabilities.embeddings,
-        reasoning: discoveredRuntime.capabilities.reasoning,
-        modelLoad: discoveredRuntime.capabilities.modelLoad,
-        modelUnload: discoveredRuntime.capabilities.modelUnload,
-        modelDownload: discoveredRuntime.capabilities.modelDownload,
-        statefulChat: discoveredRuntime.capabilities.statefulChat,
-        mcp: discoveredRuntime.capabilities.mcp,
-      },
-    });
-
-    if (discoveredRuntime.health !== 'unavailable') {
-      computers.heartbeat(localComputer.id, {
-        runtimeHealth: { [discoveredRuntime.id]: { status: discoveredRuntime.health === "healthy" ? "healthy" : "unhealthy" } },
-      });
-
-      let loadedModelIds = new Set<string>();
-      try {
-        if (discoveredRuntime.adapter?.getLoadedModels) {
-          const loaded = await discoveredRuntime.adapter.getLoadedModels();
-          loadedModelIds = new Set(loaded);
-        }
-      } catch {
-        // Best effort query for resident models
-      }
-
-      for (const discoveredModel of discoveredRuntime.models) {
-        registerModel(
-          models,
-          discoveredRuntime,
-          discoveredModel,
-          localComputer.id,
-          config,
-          loadedModelIds,
-        );
-      }
-    }
+    await applyDiscoveredRuntime(discoveredRuntime, { runtimes, computers, models, config, computerId: localComputer.id });
   }
 
   // ---- remote inventory (optional distributed mode) ---------------------
@@ -331,6 +275,94 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     worker,
     store,
   };
+}
+
+/**
+ * Registers one discovered runtime (and, if reachable, its models) into the engine's
+ * live registries. Shared by createEngine()'s initial discovery pass and refreshRuntime()
+ * so re-probing a runtime after the fact (e.g. the operator starts LM Studio's server
+ * from within the TUI) goes through the exact same registration logic, not a copy of it.
+ */
+async function applyDiscoveredRuntime(
+  discoveredRuntime: DiscoveredRuntime,
+  deps: { runtimes: RuntimeRegistry; computers: ComputerRegistry; models: ModelRegistry; config: WazirConfig; computerId: string },
+): Promise<void> {
+  const { runtimes, computers, models, config, computerId } = deps;
+  const runtimeType: RuntimeType =
+    discoveredRuntime.id === 'ollama' ? 'ollama' : discoveredRuntime.id === 'lmstudio' ? 'lmstudio' : 'other';
+
+  const existing = runtimes.get(discoveredRuntime.id);
+  runtimes.register({
+    id: existing?.id ?? discoveredRuntime.id,
+    type: runtimeType,
+    name: discoveredRuntime.info.name,
+    version: discoveredRuntime.info.version,
+    url: discoveredRuntime.info.url,
+    computerId,
+    capabilities: {
+      chat: discoveredRuntime.capabilities.chat,
+      streaming: discoveredRuntime.capabilities.streaming,
+      toolCalling: discoveredRuntime.capabilities.toolCalling,
+      structuredOutput: discoveredRuntime.capabilities.structuredOutput,
+      vision: discoveredRuntime.capabilities.vision,
+      embeddings: discoveredRuntime.capabilities.embeddings,
+      reasoning: discoveredRuntime.capabilities.reasoning,
+      modelLoad: discoveredRuntime.capabilities.modelLoad,
+      modelUnload: discoveredRuntime.capabilities.modelUnload,
+      modelDownload: discoveredRuntime.capabilities.modelDownload,
+      statefulChat: discoveredRuntime.capabilities.statefulChat,
+      mcp: discoveredRuntime.capabilities.mcp,
+    },
+  });
+
+  if (discoveredRuntime.health !== 'unavailable') {
+    computers.heartbeat(computerId, {
+      runtimeHealth: { [discoveredRuntime.id]: { status: discoveredRuntime.health === 'healthy' ? 'healthy' : 'unhealthy' } },
+    });
+
+    let loadedModelIds = new Set<string>();
+    try {
+      if (discoveredRuntime.adapter?.getLoadedModels) {
+        const loaded = await discoveredRuntime.adapter.getLoadedModels();
+        loadedModelIds = new Set(loaded);
+      }
+    } catch {
+      // Best effort query for resident models
+    }
+
+    for (const discoveredModel of discoveredRuntime.models) {
+      registerModel(models, discoveredRuntime, discoveredModel, computerId, config, loadedModelIds);
+    }
+  }
+}
+
+/**
+ * Re-probes one runtime (e.g. after the operator starts LM Studio's server from within
+ * `wa chat`) and updates the engine's live registries in place — no engine/process
+ * restart needed. Only refreshes a runtime that was already configured at startup.
+ */
+export async function refreshRuntime(engine: RookEngine, runtimeId: string): Promise<{ ok: boolean; message: string }> {
+  const refreshed = await engine.worker.refreshRuntime(runtimeId);
+  if (!refreshed) {
+    return { ok: false, message: `runtime '${runtimeId}' is not configured` };
+  }
+
+  const idx = engine.discovered.findIndex((d) => d.id === runtimeId);
+  if (idx !== -1) engine.discovered[idx] = refreshed;
+  else engine.discovered.push(refreshed);
+
+  await applyDiscoveredRuntime(refreshed, {
+    runtimes: engine.runtimes,
+    computers: engine.computers,
+    models: engine.models,
+    config: engine.config,
+    computerId: process.env.WAZIR_COMPUTER_ID ?? 'local',
+  });
+
+  if (refreshed.health === 'unavailable') {
+    return { ok: false, message: refreshed.healthMessage ?? `${runtimeId} is unreachable` };
+  }
+  return { ok: true, message: `${refreshed.id}: ${refreshed.health}, ${refreshed.models.length} model(s) available` };
 }
 
 function registerModel(
