@@ -648,14 +648,6 @@ export class CodingAgent implements AgentAdapter {
       kind: 'error',
       error: `verification failed:\n${failures.join('\n---\n')}`,
     };
-    return;
-
-    if (!modelSummary) {
-      yield {
-        kind: 'error',
-        error: 'agent stopped without completing the task (turn budget or cancellation)',
-      };
-    }
   }
 }
 
