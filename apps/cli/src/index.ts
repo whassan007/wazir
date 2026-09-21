@@ -8,7 +8,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version('0.1.30');
+  .version('0.1.31');
 
 // computers command
 const computersCmd = new Command()
