@@ -12,6 +12,7 @@ import type {
   Priority,
   JobNode,
   ExecutionPreferences,
+  WorkspaceMode,
 } from '../types/index.js';
 
 export interface JobManagerOptions {
@@ -171,6 +172,9 @@ export class JobManager {
       },
       capabilities: t.task.capabilities,
       expectedEvidence: t.task.expectedEvidence,
+      expectedArtifacts: t.task.expectedArtifacts ?? t.task.requirements?.expectedArtifacts,
+      mutationRequired: t.task.mutationRequired ?? t.task.requirements?.mutationRequired,
+      workspaceMode: t.task.workspaceMode,
       contextFrom: t.task.contextFrom,
       policy: t.task.policy,
       execution: {
@@ -378,6 +382,9 @@ export class JobManager {
         },
         capabilities: input.task.capabilities,
         expectedEvidence: input.task.expectedEvidence,
+        expectedArtifacts: input.task.expectedArtifacts ?? input.task.requirements?.expectedArtifacts,
+        mutationRequired: input.task.mutationRequired ?? input.task.requirements?.mutationRequired,
+        workspaceMode: input.task.workspaceMode,
         contextFrom: input.task.contextFrom,
         policy: input.task.policy,
         execution: {
@@ -595,6 +602,9 @@ export interface JobTaskInput {
     requirements?: Partial<TaskRequirements>;
     capabilities?: string[];
     expectedEvidence?: string[];
+    expectedArtifacts?: string[];
+    mutationRequired?: boolean;
+    workspaceMode?: WorkspaceMode;
     contextFrom?: string[];
     policy?: Task['policy'];
     priority?: 'low' | 'normal' | 'high' | 'critical';

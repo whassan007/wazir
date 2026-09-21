@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
 import {
   effectiveContextTokens,
   type AgentAdapter,
@@ -61,13 +62,21 @@ export function createFleetTaskExecutor(
   return async (task: Task, context: JobTaskExecutionContext): Promise<JobTaskOutcome> => {
     const { jobId, taskId, assignment, signal } = context;
 
-    // 1. Git Worktree Isolation
+    // 1. Workspace Isolation
     let taskRoot = engine.projectRoot;
     let worktreeInfo: WorktreeInfo | undefined;
     const isGit = await engine.worktrees.isGitRepo(engine.projectRoot);
+    const mode = context.workspaceMode ?? task.workspaceMode;
 
     if (context.worktreeDir) {
       taskRoot = context.worktreeDir;
+    } else if (mode === 'clean') {
+      try {
+        worktreeInfo = await engine.worktrees.createCleanWorkspace(engine.projectRoot, jobId, taskId);
+        taskRoot = worktreeInfo.worktreeDir;
+      } catch {
+        taskRoot = engine.projectRoot;
+      }
     } else if (runnerOptions.useWorktrees !== false && isGit) {
       try {
         worktreeInfo = runnerOptions.shareJobWorktree !== false
@@ -79,6 +88,10 @@ export function createFleetTaskExecutor(
         taskRoot = engine.projectRoot;
       }
     }
+
+    await fs.mkdir(path.join(taskRoot, '.wazir', 'tmp'), { recursive: true }).catch(() => {});
+    await fs.mkdir(path.join(taskRoot, '.wazir', 'home'), { recursive: true }).catch(() => {});
+    await fs.mkdir(path.join(taskRoot, '.wazir', 'cache'), { recursive: true }).catch(() => {});
 
     // 2. Fetch or create execution record
     const existingRecords = await engine.executions.listByTask(taskId);
@@ -279,6 +292,11 @@ export function createFleetTaskExecutor(
           projectRoot: taskRoot,
           executionId,
           networkAllowed: engine.config.networkAllowed,
+          env: {
+            TMPDIR: path.join(taskRoot, '.wazir', 'tmp'),
+            HOME: path.join(taskRoot, '.wazir', 'home'),
+            XDG_CACHE_HOME: path.join(taskRoot, '.wazir', 'cache'),
+          },
         });
 
         await engine.executions.recordToolCall(executionId, {
@@ -348,6 +366,9 @@ export function createFleetTaskExecutor(
           contextTokens: contextDecision.available.tokens,
           isCancelled: () => signal?.aborted ?? false,
           getSteeringInstruction: () => context.getSteeringInstruction?.(),
+          mutationRequired: context.mutationRequired ?? task.mutationRequired ?? task.requirements?.mutationRequired,
+          expectedArtifacts: task.expectedArtifacts ?? task.requirements?.expectedArtifacts,
+          expectedEvidence: task.expectedEvidence,
         },
         runtime,
       )) {

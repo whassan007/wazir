@@ -6,12 +6,22 @@ import { runFile, runShell } from './process.js';
 
 function toToolResult(command: string, result: Awaited<ReturnType<typeof runShell>>): ToolResult {
   const output = [result.stdout, result.stderr].filter(Boolean).join('\n').slice(0, 100_000);
+  const details = (result.stderr.trim() || result.stdout.trim() || '').slice(0, 4000);
+  const error = result.code === 0
+    ? undefined
+    : `${command} exited with code ${result.code}${result.timedOut ? ' (timed out)' : ''}${details ? `:\n${details}` : ''}`;
   return {
     ok: result.code === 0,
     output,
-    error: result.code === 0 ? undefined : `${command} exited with code ${result.code}${result.timedOut ? ' (timed out)' : ''}`,
+    error,
     durationMs: result.durationMs,
-    metadata: { exitCode: result.code, timedOut: result.timedOut, sandbox: result.sandbox },
+    metadata: {
+      exitCode: result.code,
+      timedOut: result.timedOut,
+      sandbox: result.sandbox,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    },
   };
 }
 

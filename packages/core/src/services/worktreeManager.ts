@@ -131,6 +131,9 @@ export class WorktreeManager {
         recursive: true,
         filter: (source) => !source.includes('.wazir') && !source.includes('node_modules'),
       });
+      await fs.mkdir(path.join(worktreeDir, '.wazir', 'tmp'), { recursive: true });
+      await fs.mkdir(path.join(worktreeDir, '.wazir', 'home'), { recursive: true });
+      await fs.mkdir(path.join(worktreeDir, '.wazir', 'cache'), { recursive: true });
       return {
         jobId,
         taskId,
@@ -184,6 +187,10 @@ export class WorktreeManager {
       }
     }
 
+    await fs.mkdir(path.join(worktreeDir, '.wazir', 'tmp'), { recursive: true });
+    await fs.mkdir(path.join(worktreeDir, '.wazir', 'home'), { recursive: true });
+    await fs.mkdir(path.join(worktreeDir, '.wazir', 'cache'), { recursive: true });
+
     return {
       jobId,
       taskId,
@@ -191,6 +198,44 @@ export class WorktreeManager {
       branch,
       baseBranch,
       isGit: true,
+      createdAt: new Date(),
+    };
+  }
+
+  /**
+   * Creates a pristine, initially empty workspace for clean test/execution runs.
+   * Free of any dirty artifacts from prior runs or repository contents.
+   */
+  async createCleanWorkspace(
+    projectRoot: string,
+    jobId: string,
+    taskId?: string,
+  ): Promise<WorktreeInfo> {
+    assertSafeId('jobId', jobId);
+    if (taskId !== undefined) assertSafeId('taskId', taskId);
+    const rootDir = path.resolve(this.getWorktreeRootDir(projectRoot));
+    await fs.mkdir(rootDir, { recursive: true });
+
+    const worktreeDir = path.resolve(rootDir, taskId ? `clean-${jobId}-${taskId}` : `clean-${jobId}`);
+    if (!worktreeDir.startsWith(rootDir + path.sep)) {
+      throw new Error(`workspace path '${worktreeDir}' escapes '${rootDir}'`);
+    }
+
+    await this.cleanupDirectory(worktreeDir);
+    await fs.mkdir(worktreeDir, { recursive: true });
+
+    // Initialize environment subdirectories: .wazir/tmp, .wazir/home, .wazir/cache
+    await fs.mkdir(path.join(worktreeDir, '.wazir', 'tmp'), { recursive: true });
+    await fs.mkdir(path.join(worktreeDir, '.wazir', 'home'), { recursive: true });
+    await fs.mkdir(path.join(worktreeDir, '.wazir', 'cache'), { recursive: true });
+
+    return {
+      jobId,
+      taskId,
+      worktreeDir,
+      branch: taskId ? `wazir/clean/${jobId}/${taskId}` : `wazir/clean/${jobId}`,
+      baseBranch: 'none',
+      isGit: false,
       createdAt: new Date(),
     };
   }

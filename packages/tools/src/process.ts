@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 
 import { sandboxDegraded, sandboxStatus, wrapInSandbox, type SandboxMode, type WrappedCommand } from './sandbox.js';
 
@@ -108,9 +110,21 @@ function runProcess(
     let settled = false;
     let timedOut = false;
 
+    const project = path.resolve(options.projectRoot ?? options.cwd);
+    const wazirTmp = path.join(project, '.wazir', 'tmp');
+    const wazirHome = path.join(project, '.wazir', 'home');
+    const wazirCache = path.join(project, '.wazir', 'cache');
+
+    const normalizedEnv: Record<string, string> = {};
+    if (existsSync(wazirTmp)) normalizedEnv.TMPDIR = wazirTmp;
+    if (existsSync(wazirHome)) normalizedEnv.HOME = wazirHome;
+    if (existsSync(wazirCache)) normalizedEnv.XDG_CACHE_HOME = wazirCache;
+
+    const childEnv = childEnvironment({ ...normalizedEnv, ...(options.env ?? {}) });
+
     const child = spawn(wrapped.file, wrapped.args, {
       cwd: spawnCwd,
-      env: childEnvironment(options.env),
+      env: childEnv,
       // fd 3 carries the seccomp program to bwrap (`--seccomp 3`).
       stdio: wrapped.seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
     });

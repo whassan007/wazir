@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import type {
   AgentAdapter,
   AgentDescriptor,
@@ -6,6 +8,7 @@ import type {
   AgentRuntime,
   AgentTurn,
   ChatMessage,
+  ModelProtocolMetrics,
 } from '@wazir/core';
 
 export interface CodingAgentOptions {
@@ -582,6 +585,19 @@ export class CodingAgent implements AgentAdapter {
       });
     };
 
+    let actionAttempts = 0;
+    let validActions = 0;
+    let validationErrors = 0;
+    let malformedActions = 0;
+
+    const currentMetrics = (): ModelProtocolMetrics => ({
+      actionAttempts,
+      validActions,
+      validationErrors,
+      malformedActions,
+      adherenceRate: actionAttempts > 0 ? Number((validActions / actionAttempts).toFixed(3)) : 1.0,
+    });
+
     // ==================== PLAN ====================
     yield { kind: 'phase', phase: 'plan' as AgentPhase };
     for (let i = 0; i < 3 && !plan; i++) {
@@ -593,31 +609,37 @@ export class CodingAgent implements AgentAdapter {
       // this turn's action run anyway — the check at the top of the loop already passed.
       if (request.isCancelled?.()) return;
       turnsUsed += 1;
+      actionAttempts += 1;
       const action = readAction(raw);
       if (!action) {
         correctionCount += 1;
+        malformedActions += 1;
         yield { kind: 'message', content: 'INVALID_JSON_ACTION: model response did not parse as a JSON action', raw };
         messages.push({ role: 'user', content: correctionMessage(timedOut) });
         continue;
       }
       pushAssistant(raw);
       if (action.action === 'plan' && action.content) {
+        validActions += 1;
         plan = action.content;
         yield { kind: 'message', content: `Plan: ${plan}`, raw };
         pushContinue('Plan accepted. Execute it now, one tool call per turn.');
         break;
       }
       if (action.action === 'done' || action.action === 'answer') {
+        validActions += 1;
         modelSummary = action.summary ?? action.content;
         break;
       }
       if (action.action === 'tool' && action.tool) {
         const missingFields = missingRequiredFields(action.tool, action.input ?? {});
         if (missingFields.length > 0) {
+          validationErrors += 1;
           yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' missing ${missingFields.join(', ')}`, tool: action.tool, raw };
           pushToolResult(action.tool, validationFailureMessage(action.tool, missingFields));
           continue;
         }
+        validActions += 1;
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
         yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result, raw };
@@ -646,12 +668,14 @@ export class CodingAgent implements AgentAdapter {
       // this turn's action run anyway — the check at the top of the loop already passed.
       if (request.isCancelled?.()) return;
       turnsUsed += 1;
+      actionAttempts += 1;
       const action = readAction(raw);
 
       if (!action) {
         correctionCount += 1;
+        malformedActions += 1;
         if (correctionCount >= 3) {
-          yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions', errorKind: 'protocol', raw };
+          yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions', errorKind: 'protocol', raw, protocolMetrics: currentMetrics() };
           return;
         }
         yield { kind: 'message', content: 'INVALID_JSON_ACTION: model response did not parse as a JSON action', raw };
@@ -662,14 +686,17 @@ export class CodingAgent implements AgentAdapter {
       pushAssistant(raw);
 
       if (action.action === 'done') {
+        validActions += 1;
         modelSummary = action.summary ?? 'completed';
         break;
       }
       if (action.action === 'answer') {
+        validActions += 1;
         modelSummary = action.content ?? 'completed';
         break;
       }
       if (action.action === 'plan') {
+        validActions += 1;
         plan = action.content ?? plan;
         pushContinue('Plan noted. Execute it now, one tool call per turn.');
         continue;
@@ -677,6 +704,7 @@ export class CodingAgent implements AgentAdapter {
       if (action.action === 'tool' && action.tool) {
         const breakerError = checkCircuitBreaker(action.tool, action.input ?? {});
         if (breakerError) {
+          validationErrors += 1;
           yield { kind: 'message', content: `ACTION_BLOCKED_DUPLICATE: '${action.tool}' repeated ${this.toolRepeatLimit} times`, tool: action.tool, raw };
           pushToolResult(action.tool, {
             ok: false,
@@ -686,10 +714,12 @@ export class CodingAgent implements AgentAdapter {
         }
         const missingFields = missingRequiredFields(action.tool, action.input ?? {});
         if (missingFields.length > 0) {
+          validationErrors += 1;
           yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' missing ${missingFields.join(', ')}`, tool: action.tool, raw };
           pushToolResult(action.tool, validationFailureMessage(action.tool, missingFields));
           continue;
         }
+        validActions += 1;
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
         yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result, raw };
@@ -711,9 +741,19 @@ export class CodingAgent implements AgentAdapter {
     yield { kind: 'phase', phase: 'verify' as AgentPhase };
 
     const failures: string[] = [];
-    
-    if (filesChangedSet.size === 0) {
+
+    const mutationRequired = request.mutationRequired ?? true;
+    if (mutationRequired && filesChangedSet.size === 0) {
       failures.push('Agent declared completion but produced no code modifications.');
+    }
+
+    if (request.expectedArtifacts && request.expectedArtifacts.length > 0) {
+      for (const artifact of request.expectedArtifacts) {
+        const fullPath = path.resolve(request.projectRoot, artifact);
+        if (!existsSync(fullPath)) {
+          failures.push(`Expected artifact '${artifact}' was not created.`);
+        }
+      }
     }
 
     for (const check of ['test', 'lint', 'typecheck']) {
@@ -734,6 +774,7 @@ export class CodingAgent implements AgentAdapter {
       yield {
         kind: 'done',
         content: modelSummary ?? 'Task completed. Verification checks passed.',
+        protocolMetrics: currentMetrics(),
       };
       return;
     }
@@ -742,6 +783,7 @@ export class CodingAgent implements AgentAdapter {
       kind: 'error',
       error: `verification failed:\n${failures.join('\n---\n')}`,
       errorKind: 'verification',
+      protocolMetrics: currentMetrics(),
     };
   }
 }

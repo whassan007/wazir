@@ -15,6 +15,7 @@ import {
   RuntimeRegistry,
   Scheduler,
   WorktreeManager,
+  createTaskPlanner,
 } from '@wazir/core';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
@@ -193,6 +194,7 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
     approvalQueue,
     orchestrator,
     worktrees,
+    planner: createTaskPlanner(),
     adapters: new Map([['fake', fakeAdapter]]),
     discovered: [],
     worker: fakeWorker,

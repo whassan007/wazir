@@ -46,6 +46,14 @@ export type AgentPhase =
  */
 export type AgentErrorKind = 'protocol' | 'verification' | 'policy' | 'cancelled' | 'other';
 
+export interface ModelProtocolMetrics {
+  actionAttempts: number;
+  validActions: number;
+  validationErrors: number;
+  malformedActions: number;
+  adherenceRate: number;
+}
+
 export interface AgentTurn {
   kind: 'message' | 'tool_call' | 'tool_result' | 'phase' | 'done' | 'error';
   content?: string;
@@ -62,6 +70,8 @@ export interface AgentTurn {
    *  inspect what the model actually said instead of reconstructing it from the parsed
    *  action alone. */
   raw?: string;
+  /** Model protocol adherence metrics for capability catalog tracking. */
+  protocolMetrics?: ModelProtocolMetrics;
 }
 
 export interface AgentRunRequest {
@@ -77,6 +87,10 @@ export interface AgentRunRequest {
   isCancelled?: () => boolean;
   /** Returns any pending mid-run user instruction, drained once per turn. */
   getSteeringInstruction?: () => string | undefined;
+  /** Whether the task requires creating or modifying code/files. If false, zero file changes is valid. */
+  mutationRequired?: boolean;
+  expectedArtifacts?: string[];
+  expectedEvidence?: string[];
 }
 
 /**

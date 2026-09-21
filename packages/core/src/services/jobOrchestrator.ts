@@ -517,6 +517,8 @@ export class JobOrchestrator {
                     event: ev,
                   });
                 },
+                workspaceMode: task.workspaceMode,
+                mutationRequired: task.mutationRequired,
                 getSteeringInstruction: () => {
                   const queue = this.steeringQueues.get(taskId);
                   return queue && queue.length > 0 ? queue.shift() : undefined;

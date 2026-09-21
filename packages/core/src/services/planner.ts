@@ -1,4 +1,4 @@
-import type { Priority, Task, TaskType } from '../types/index.js';
+import type { Priority, Task, TaskType, WorkspaceMode } from '../types/index.js';
 import type { JobTaskInput } from './jobManager.js';
 
 export interface PlanStep {
@@ -9,6 +9,9 @@ export interface PlanStep {
   capabilities?: string[];
   dependencies: string[];
   expectedEvidence?: string[];
+  expectedArtifacts?: string[];
+  mutationRequired?: boolean;
+  workspaceMode?: WorkspaceMode;
 }
 
 export interface ExecutionPlan {
@@ -17,6 +20,9 @@ export interface ExecutionPlan {
     language?: string;
     capabilities?: string[];
   };
+  workspaceMode?: WorkspaceMode;
+  mutationRequired?: boolean;
+  expectedArtifacts?: string[];
   steps: PlanStep[];
   successCriteria?: string[];
 }
@@ -58,6 +64,52 @@ export class TaskPlanner {
   }
 
   /**
+   * Pre-execution task analyzer. Categorizes intent (build vs inspect),
+   * required evidence, expected artifacts, and workspace isolation mode.
+   */
+  analyze(input: string): {
+    mutationRequired: boolean;
+    workspaceMode: WorkspaceMode;
+    expectedArtifacts: string[];
+    language?: string;
+    capabilities: string[];
+  } {
+    const lower = input.toLowerCase();
+    const isBuildOrWrite = /\b(build|write|create|implement|add|code|make|generate|scaffold)\b/i.test(input);
+    const isCheckOrInspect = /\b(check|inspect|verify|test|read|examine|review|explain|does\b.*work)\b/i.test(input);
+    const isFix = /\b(fix|patch|repair|resolve|update)\b/i.test(input);
+
+    const mutationRequired = isBuildOrWrite || isFix || (!isCheckOrInspect);
+    const isFromScratch = /\b(from scratch|new program|new project|empty workspace)\b/i.test(input) || (isBuildOrWrite && !isFix);
+    const workspaceMode: WorkspaceMode = isFromScratch ? 'clean' : 'repository';
+
+    const artifacts: string[] = [];
+    const filenameMatch = input.match(/\b([A-Za-z0-9_-]+\.(?:cpp|cc|cxx|c|py|js|ts|go|rs|java))\b/i);
+    if (filenameMatch) {
+      artifacts.push(filenameMatch[1]);
+    } else if (lower.includes('c++') || lower.includes('.cpp') || lower.includes('sort')) {
+      artifacts.push('main.cpp');
+    }
+
+    let language: string | undefined;
+    if (lower.includes('c++') || lower.includes('.cpp') || lower.includes('g++') || lower.includes('clang++')) language = 'C++';
+    else if (lower.includes('python') || lower.includes('.py')) language = 'Python';
+    else if (lower.includes('typescript') || lower.includes('.ts')) language = 'TypeScript';
+
+    const capabilities: string[] = ['filesystem_read', 'shell'];
+    if (mutationRequired) capabilities.push('filesystem_write');
+    if (language === 'C++') capabilities.push('compiler');
+
+    return {
+      mutationRequired,
+      workspaceMode,
+      expectedArtifacts: artifacts,
+      language,
+      capabilities,
+    };
+  }
+
+  /**
    * Converts an ExecutionPlan into an array of JobTaskInputs ready for JobManager.createJob.
    */
   planToJobTaskInputs(
@@ -76,6 +128,9 @@ export class TaskPlanner {
               : ''),
           capabilities: step.capabilities,
           expectedEvidence: step.expectedEvidence,
+          expectedArtifacts: step.expectedArtifacts ?? plan.expectedArtifacts,
+          mutationRequired: step.mutationRequired ?? (step.id === 'implement' ? true : plan.mutationRequired ?? baseTaskProps.mutationRequired),
+          workspaceMode: step.workspaceMode ?? plan.workspaceMode ?? baseTaskProps.workspaceMode,
           priority: baseTaskProps.priority ?? ('normal' as Priority),
           requirements: {
             capabilities: [],
@@ -86,6 +141,8 @@ export class TaskPlanner {
             minimumMemoryGB: 4,
             minimumGPUMemoryGB: 0,
             localOnly: false,
+            mutationRequired: step.mutationRequired ?? plan.mutationRequired ?? baseTaskProps.mutationRequired,
+            expectedArtifacts: step.expectedArtifacts ?? plan.expectedArtifacts,
             ...(baseTaskProps.requirements ?? {}),
           },
           execution: baseTaskProps.execution,
@@ -152,6 +209,7 @@ export class TaskPlanner {
   }
 
   private heuristicPlan(task: string): ExecutionPlan {
+    const analysis = this.analyze(task);
     const lower = task.toLowerCase();
 
     // Check for C/C++ compilation workflow
@@ -163,6 +221,9 @@ export class TaskPlanner {
 
       return {
         objective: task,
+        workspaceMode: analysis.workspaceMode,
+        mutationRequired: true,
+        expectedArtifacts: [filename, binName],
         requirements: {
           language: 'C++',
           capabilities: ['filesystem_read', 'filesystem_write', 'shell'],
@@ -176,6 +237,7 @@ export class TaskPlanner {
             capabilities: ['filesystem_read'],
             dependencies: [],
             expectedEvidence: ['no_errors'],
+            mutationRequired: false,
           },
           {
             id: 'implement',
@@ -185,6 +247,8 @@ export class TaskPlanner {
             capabilities: ['filesystem_write'],
             dependencies: ['inspect'],
             expectedEvidence: [`file_exists: ${filename}`],
+            expectedArtifacts: [filename],
+            mutationRequired: true,
           },
           {
             id: 'compile',
@@ -194,6 +258,8 @@ export class TaskPlanner {
             capabilities: ['shell'],
             dependencies: ['implement'],
             expectedEvidence: [`file_exists: ${binName}`, 'no_errors'],
+            expectedArtifacts: [binName],
+            mutationRequired: true,
           },
           {
             id: 'verify',
@@ -203,6 +269,7 @@ export class TaskPlanner {
             capabilities: ['shell'],
             dependencies: ['compile'],
             expectedEvidence: ['exit_code_zero', 'no_errors'],
+            mutationRequired: false,
           },
         ],
         successCriteria: [`file_exists: ${filename}`, `file_exists: ${binName}`, 'exit_code_zero'],
@@ -212,6 +279,9 @@ export class TaskPlanner {
     // Default 3-stage plan: inspect -> implement -> verify
     return {
       objective: task,
+      workspaceMode: analysis.workspaceMode,
+      mutationRequired: analysis.mutationRequired,
+      expectedArtifacts: analysis.expectedArtifacts,
       requirements: {
         capabilities: ['filesystem_read', 'filesystem_write', 'shell'],
       },

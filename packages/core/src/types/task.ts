@@ -25,6 +25,8 @@ export type TaskStatus =
   | 'cancelled'
   | 'blocked';
 
+export type WorkspaceMode = 'clean' | 'repository' | 'continue' | 'shared';
+
 export interface TaskRequirements {
   capabilities?: ModelCapability[];
   reasoning?: 'low' | 'medium' | 'high';
@@ -34,6 +36,8 @@ export interface TaskRequirements {
   minimumMemoryGB?: number;
   minimumGPUMemoryGB?: number;
   localOnly?: boolean;
+  mutationRequired?: boolean;
+  expectedArtifacts?: string[];
 }
 
 export interface PolicyRequirements {
@@ -64,6 +68,9 @@ export interface Task {
   requirements: TaskRequirements;
   capabilities?: string[];
   expectedEvidence?: string[];
+  expectedArtifacts?: string[];
+  mutationRequired?: boolean;
+  workspaceMode?: WorkspaceMode;
   contextFrom?: string[];
   policy?: PolicyRequirements;
   execution?: ExecutionPreferences;

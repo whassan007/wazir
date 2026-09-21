@@ -12,6 +12,8 @@ export interface EvaluationOptions {
   expectedEvidence?: string[];
   /** Project or worktree root for verifying file existence on disk. */
   projectRoot?: string;
+  /** Whether code modification is explicitly required for success. */
+  mutationRequired?: boolean;
 }
 
 /**
@@ -32,6 +34,11 @@ export function evaluateExecution(
   const checks: CheckRunRecord[] = [...record.checks];
 
   let success = true;
+
+  if (options.mutationRequired === true && record.filesChanged.length === 0) {
+    success = false;
+    reasons.push('mutation required: task requires code modification but no files changed');
+  }
 
   if (options.expectedFiles && options.expectedFiles.length > 0) {
     const changed = record.filesChanged.map((f) => f.replace(/\\/g, '/'));
@@ -102,6 +109,30 @@ export function evaluateExecution(
           reasons.push(`evidence missing: checks failed: ${failedChecks.map((c) => c.name).join(', ')}`);
         } else {
           reasons.push('evidence verified: all checks passed');
+        }
+      } else if (trimmed === 'mutation_required' || trimmed === 'requires_mutation') {
+        if (record.filesChanged.length === 0) {
+          success = false;
+          reasons.push('evidence missing: mutation required but no files were changed');
+        } else {
+          reasons.push(`evidence verified: files were changed (${record.filesChanged.length})`);
+        }
+      } else if (trimmed === 'source_contains_cpp') {
+        const cppFile = changed.find((f) => f.endsWith('.cpp') || f.endsWith('.cc') || f.endsWith('.cxx'))
+          ?? (options.projectRoot && fs.existsSync(path.resolve(options.projectRoot, 'main.cpp')) ? 'main.cpp' : undefined);
+        if (!cppFile) {
+          success = false;
+          reasons.push('evidence missing: no C++ source file found');
+        } else {
+          reasons.push(`evidence verified: C++ source file '${cppFile}' exists`);
+        }
+      } else if (trimmed === 'compilation_succeeds') {
+        const buildCheck = checks.find((c) => c.name === 'build' || (c.name as string) === 'compile' || c.name === 'typecheck');
+        if (buildCheck && !buildCheck.ok) {
+          success = false;
+          reasons.push('evidence missing: compilation did not succeed');
+        } else {
+          reasons.push('evidence verified: compilation succeeded');
         }
       }
     }

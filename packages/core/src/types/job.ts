@@ -1,6 +1,6 @@
-import type { Task, TaskStatus } from './task.js';
+import type { Task, TaskStatus, WorkspaceMode } from './task.js';
 
-export type { Task, TaskStatus };
+export type { Task, TaskStatus, WorkspaceMode };
 import type { PolicyDecision } from './policy.js';
 import type { ExecutionRecord } from './execution.js';
 import type { AgentErrorKind } from './agent.js';
@@ -175,6 +175,8 @@ export interface JobTaskExecutionContext {
   getSteeringInstruction?: () => string | undefined;
   projectRoot?: string;
   worktreeDir?: string;
+  workspaceMode?: WorkspaceMode;
+  mutationRequired?: boolean;
   previousOutcomes?: Map<string, JobTaskOutcome>;
 }
 

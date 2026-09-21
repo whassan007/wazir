@@ -149,6 +149,9 @@ export interface AgentCardState {
   computerId: string;
   modelId: string;
   phase: string;
+  stage?: string;
+  attempt?: number;
+  maxAttempts?: number;
   lastMessage: string;
   status: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'retry';
   startedAt?: Date;
@@ -163,7 +166,7 @@ export interface AgentCardState {
 export interface AgentLogEntry {
   text: string;
   time: string;
-  kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'model' | 'validate';
+  kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'model' | 'validate' | 'recover' | 'policy';
   /** Raw model response text this entry came from, when available (view with 'r'
    *  on the Tail view). */
   raw?: string;
@@ -1544,6 +1547,13 @@ export class FleetTui {
     this.statusMessage = 'Planning & scheduling job...';
     this.draw();
 
+    const analysis = this.engine.planner?.analyze(prompt) ?? {
+      mutationRequired: true,
+      workspaceMode: 'clean' as const,
+      expectedArtifacts: [],
+      capabilities: [],
+    };
+
     let taskDescriptions: string[] = [];
     let jobTasks: JobTaskInput[];
 
@@ -1556,6 +1566,8 @@ export class FleetTui {
           targetAgentId: 'wazir-step',
           targetModelId: this.selectedModelId,
         },
+        mutationRequired: analysis.mutationRequired,
+        workspaceMode: analysis.workspaceMode,
       });
     } else if (prompt.startsWith('/fanout ')) {
       const raw = prompt.slice(8).trim();
@@ -1565,6 +1577,10 @@ export class FleetTui {
           type: 'coding',
           title: desc.slice(0, 50),
           input: desc,
+          mutationRequired: analysis.mutationRequired,
+          workspaceMode: analysis.workspaceMode,
+          expectedArtifacts: analysis.expectedArtifacts,
+          capabilities: analysis.capabilities,
           execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
         },
       }));
@@ -1575,6 +1591,10 @@ export class FleetTui {
           type: 'coding',
           title: desc.slice(0, 50),
           input: desc,
+          mutationRequired: analysis.mutationRequired,
+          workspaceMode: analysis.workspaceMode,
+          expectedArtifacts: analysis.expectedArtifacts,
+          capabilities: analysis.capabilities,
           execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
         },
       }));
@@ -1585,6 +1605,10 @@ export class FleetTui {
           type: 'coding',
           title: desc.slice(0, 50),
           input: desc,
+          mutationRequired: analysis.mutationRequired,
+          workspaceMode: analysis.workspaceMode,
+          expectedArtifacts: analysis.expectedArtifacts,
+          capabilities: analysis.capabilities,
           execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
         },
       }));
@@ -1608,7 +1632,10 @@ export class FleetTui {
           agentId: t.execution?.targetAgentId ?? (this.enablePlanner ? 'wazir-step' : 'wazir-coding'),
           computerId: 'evaluating...',
           modelId: 'evaluating...',
+          stage: 'EXECUTION',
           phase: 'queued',
+          attempt: 1,
+          maxAttempts: (job.maxRetries ?? 3) + 1,
           lastMessage: 'Waiting for scheduler slot',
           status: 'idle',
           durationMs: 0,
@@ -1813,6 +1840,9 @@ export class FleetTui {
 
       if (ev.type === 'task:started') {
         agent.status = 'running';
+        agent.stage = agent.stage ?? 'EXECUTION';
+        agent.attempt = agent.attempt ?? 1;
+        agent.maxAttempts = agent.maxAttempts ?? 4;
         agent.startedAt = agent.startedAt ?? now;
         if (ev.computerId) agent.computerId = ev.computerId;
         if (ev.modelId) agent.modelId = ev.modelId;
@@ -1870,7 +1900,7 @@ export class FleetTui {
         if (p.tool) agent.lastMessage = `Tool: ${p.tool}`;
         if (p.error) agent.lastMessage = `Error: ${this.humanizeError(p.error).slice(0, 60)}`;
 
-        let eventKind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'validate' = 'info';
+        let eventKind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'validate' | 'recover' | 'policy' = 'info';
         let eventText = p.content ?? (p.tool ? `tool: ${p.tool}` : `phase: ${p.phase}`);
 
         // Protocol/validation corrections (a locally-rejected malformed tool call, a
@@ -1959,13 +1989,16 @@ export class FleetTui {
         };
       } else if (ev.type === 'task:retry') {
         agent.status = 'retry';
-        agent.phase = 'repair';
-        agent.lastMessage = `Retry ${ev.retryCount}/${ev.maxRetries}`;
+        agent.stage = 'REPAIR';
+        agent.phase = 'plan';
+        agent.attempt = (ev.retryCount ?? 1) + 1;
+        agent.maxAttempts = (ev.maxRetries ?? 3) + 1;
+        agent.lastMessage = `Repair ${ev.retryCount}/${ev.maxRetries}`;
 
         logs.push({
           time: timeStr,
-          text: `Repair turn initiated (retry ${ev.retryCount}/${ev.maxRetries})`,
-          kind: 'test',
+          text: `Repair initiated (${ev.retryCount}/${ev.maxRetries})`,
+          kind: 'recover',
         });
       } else if (ev.type === 'task:cancelled') {
         this.flushStreaming(taskId, logs, timeStr);
@@ -2418,7 +2451,7 @@ export class FleetTui {
 
         lines.push(
           this.padRightTo(
-            `  Tail: ${color.bold(card.taskId)} (${card.title}) | Phase: ${color.cyan(card.phase)} | Status: ${statusBadge} | Dur: ${durStr}`,
+            `  Tail: ${color.bold(card.taskId)} (${card.title}) | Stage: ${color.magenta(card.stage ?? 'EXECUTION')} | Phase: ${color.cyan(card.phase)} | Attempt: ${card.attempt ?? 1}/${card.maxAttempts ?? 1} | Status: ${statusBadge} | Dur: ${durStr}`,
             width,
           ),
         );
@@ -2502,6 +2535,12 @@ export class FleetTui {
             } else if (k === 'validate') {
               badge = color.bold(color.yellow('VALIDATE'));
               contentText = color.yellow(truncatedText);
+            } else if (k === 'recover' || k === 'repair') {
+              badge = color.magenta('RECOVER ');
+              contentText = color.magenta(truncatedText);
+            } else if (k === 'policy') {
+              badge = color.red('POLICY  ');
+              contentText = color.red(truncatedText);
             }
 
             lines.push(this.padRightTo(`  ${timePrefix} ${badge} ${contentText}`, width));
