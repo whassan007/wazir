@@ -111,4 +111,53 @@ describe('StepAgent — Narrow Plan Step Executor', () => {
     expect(errorTurn).toBeDefined();
     expect(errorTurn?.error).toContain('circuit breaker');
   });
+
+  it('yields a protocol error after 3 consecutive unparseable responses', async () => {
+    const agent = createStepAgent();
+    const runtime: AgentRuntime = {
+      tools: [{ name: 'read', description: 'read file', inputSchema: {} }],
+      async *generate() {
+        const content = 'I am thinking about this step but not producing JSON.';
+        yield { type: 'token', content };
+        yield { type: 'completed', content };
+      },
+      async executeTool(): Promise<ToolResult> {
+        return { ok: true, output: '', durationMs: 1 };
+      },
+    };
+
+    const turns = await drain(agent.run(baseRequest, runtime));
+    const errorTurn = turns.find((t) => t.kind === 'error');
+    expect(errorTurn).toBeDefined();
+    expect(errorTurn?.error).toContain('repeatedly failed to produce valid JSON action');
+    expect(errorTurn?.errorKind).toBe('protocol');
+  });
+
+  it('asks the model to fill missing required tool fields instead of executing the tool', async () => {
+    const agent = createStepAgent({ maxTurns: 5 });
+    let turnCount = 0;
+    const executed: Array<Record<string, unknown>> = [];
+    const runtime: AgentRuntime = {
+      tools: [{ name: 'write', description: 'write file', inputSchema: {} }],
+      async *generate() {
+        turnCount += 1;
+        const content = turnCount === 1
+          ? '{"action":"tool","tool":"write","input":{"path":"out.txt"}}'
+          : '{"action":"done","summary":"done"}';
+        yield { type: 'token', content };
+        yield { type: 'completed', content };
+      },
+      async executeTool(name, input): Promise<ToolResult> {
+        executed.push(input);
+        return { ok: true, output: 'wrote', durationMs: 1 };
+      },
+    };
+
+    const turns = await drain(agent.run(baseRequest, runtime));
+
+    // The tool must never have been executed with the incomplete input.
+    expect(executed.length).toBe(0);
+    expect(turns.some((t) => t.kind === 'tool_call')).toBe(false);
+    expect(turns.find((t) => t.kind === 'done')).toBeDefined();
+  });
 });

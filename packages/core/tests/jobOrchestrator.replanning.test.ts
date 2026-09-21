@@ -197,4 +197,56 @@ describe('JobOrchestrator — Dynamic Replanning on Failure', () => {
     // The job as a whole completes successfully because the repair plan rescued it
     expect(resultJob.status).toBe('completed');
   });
+
+  it('fails the job and never runs dependent tasks when the replanner declines to repair', async () => {
+    const executedTaskIds: string[] = [];
+    const taskExecutor: JobTaskExecutor = async (task: Task): Promise<JobTaskOutcome> => {
+      executedTaskIds.push(task.id);
+
+      if (task.id === 'step-build') {
+        return {
+          success: false,
+          error: 'compiler syntax error in main.cpp: missing semicolon',
+        };
+      }
+
+      return {
+        success: true,
+        result: `Task ${task.id} succeeded`,
+      };
+    };
+
+    const { orchestrator } = setupTestOrchestrator(taskExecutor);
+
+    const initialTasks = [
+      {
+        task: { id: 'step-build', type: 'coding', title: 'Build Project', input: 'build' },
+        dependencies: [],
+      },
+      {
+        task: { id: 'step-verify', type: 'coding', title: 'Verify Project', input: 'verify' },
+        dependencies: ['step-build'],
+      },
+    ];
+
+    const job = await orchestrator.createJob({
+      title: 'Declined Replan Test',
+      tasks: initialTasks as any,
+    });
+
+    // Replanner explicitly declines to repair (returns null).
+    const replanner = async () => null;
+
+    const resultJob = await orchestrator.runJob(job.id, {
+      taskExecutor,
+      replanner,
+      onEvent: () => {},
+    });
+
+    // step-build may be retried (default maxRetries), but the dependent task
+    // must never run off the back of an unrepaired failure.
+    expect(executedTaskIds.every((id) => id === 'step-build')).toBe(true);
+    expect(executedTaskIds).not.toContain('step-verify');
+    expect(resultJob.status).toBe('failed');
+  });
 });

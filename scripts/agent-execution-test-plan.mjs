@@ -35,6 +35,10 @@ const POLICY_SHELL = 'packages/core/tests/policyEngineShell.test.ts';
 const POLICY_HARDENING = 'packages/core/tests/policyEngineHardening.test.ts';
 const SANDBOX = 'packages/tools/tests/sandbox.test.ts';
 const FLEET_TUI = 'apps/cli/tests/fleetTui.test.ts';
+const PLANNER = 'packages/core/tests/planner.test.ts';
+const STEP_AGENT = 'packages/agents/tests/stepAgent.test.ts';
+const EXPECTED_EVIDENCE = 'packages/evaluation/tests/expectedEvidence.test.ts';
+const JOB_REPLANNING = 'packages/core/tests/jobOrchestrator.replanning.test.ts';
 
 // level: L1 unit (pure function) | L2 component (fake runtime/engine) | L3 e2e
 // priority: B = blocking (a stuck/crashed/corrupted job), R = regression, F = feature
@@ -95,6 +99,20 @@ const CASES = [
   { id: 'AGT-080', section: 'H', name: 'a policy denial never triggers a retry attempt', file: JOB_LIFECYCLE, test: 'policy denial never triggers a retry attempt', level: 'L2', priority: 'B' },
   { id: 'AGT-081', section: 'H', name: 'the retry loop stops at maxRetries instead of looping forever', file: JOB_LIFECYCLE, test: 'stops after reaching maxRetries without infinite loop', level: 'L2', priority: 'B' },
   { id: 'AGT-082', section: 'H', name: 'cyclical/duplicate/dangling task graphs are rejected before they can run', file: JOB_LIFECYCLE, level: 'L2', priority: 'R' },
+
+  // I. Planner-Supervisor-Executor architecture (decomposition, step execution, evidence, replanning)
+  { id: 'AGT-090', section: 'I', name: 'planner falls back to the deterministic heuristic plan when the model caller throws', file: PLANNER, test: 'falls back to the deterministic heuristic plan when the model caller throws', level: 'L1', priority: 'B' },
+  { id: 'AGT-091', section: 'I', name: 'planner falls back to the deterministic heuristic plan when the model returns an empty step list', file: PLANNER, test: 'falls back to the deterministic heuristic plan when the model returns an empty step list', level: 'L1', priority: 'B' },
+  { id: 'AGT-092', section: 'I', name: 'planner falls back to the deterministic heuristic plan when the model response has no parseable JSON', file: PLANNER, test: 'falls back to the deterministic heuristic plan when the model response has no parseable JSON', level: 'L1', priority: 'B' },
+  { id: 'AGT-093', section: 'I', name: 'planner analyze() does not require mutation for inspection-only requests', file: PLANNER, test: 'analyze() detects inspection-only intent as not requiring mutation', level: 'L1', priority: 'R' },
+  { id: 'AGT-094', section: 'I', name: 'planner analyze() marks from-scratch build requests as mutation-required with a clean workspace', file: PLANNER, test: 'analyze() detects build/write intent as requiring mutation with a clean workspace for from-scratch requests', level: 'L1', priority: 'R' },
+  { id: 'AGT-095', section: 'I', name: 'step agent yields a protocol error after repeated unparseable responses', file: STEP_AGENT, test: 'yields a protocol error after 3 consecutive unparseable responses', level: 'L2', priority: 'B' },
+  { id: 'AGT-096', section: 'I', name: 'step agent never executes a tool call missing required arguments', file: STEP_AGENT, test: 'asks the model to fill missing required tool fields instead of executing the tool', level: 'L2', priority: 'B' },
+  { id: 'AGT-097', section: 'I', name: 'expected-evidence evaluator verifies file_changed against filesChanged, not disk state', file: EXPECTED_EVIDENCE, test: 'verifies file_changed evidence against filesChanged only (not disk existence)', level: 'L1', priority: 'B' },
+  { id: 'AGT-098', section: 'I', name: 'expected-evidence evaluator verifies exit_code_zero / checks_pass against check results', file: EXPECTED_EVIDENCE, test: 'verifies exit_code_zero / checks_pass evidence against check results', level: 'L1', priority: 'B' },
+  { id: 'AGT-099', section: 'I', name: 'expected-evidence evaluator verifies compilation_succeeds against a named build/compile check', file: EXPECTED_EVIDENCE, test: 'verifies compilation_succeeds evidence against a named build/compile/typecheck check', level: 'L1', priority: 'B' },
+  { id: 'AGT-100', section: 'I', name: 'expected-evidence evaluator fails on mutationRequired with zero files changed, independent of evidence list', file: EXPECTED_EVIDENCE, test: 'fails when mutationRequired is set but no files changed, independent of any evidence list', level: 'L1', priority: 'B' },
+  { id: 'AGT-101', section: 'I', name: 'a task whose replanner declines to repair fails the job and never runs its dependents', file: JOB_REPLANNING, test: 'fails the job and never runs dependent tasks when the replanner declines to repair', level: 'L2', priority: 'B' },
 ];
 
 const argv = process.argv.slice(2);

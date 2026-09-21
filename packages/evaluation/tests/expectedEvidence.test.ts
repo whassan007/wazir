@@ -76,4 +76,75 @@ describe('evaluateExecution with expectedEvidence', () => {
     );
     expect(failRes.success).toBe(false);
   });
+
+  it('verifies file_changed evidence against filesChanged only (not disk existence)', () => {
+    const okRes = evaluateExecution(
+      { filesChanged: ['src/app.ts'], checks: [], errors: [] },
+      { expectedEvidence: ['file_changed: src/app.ts'] },
+    );
+    expect(okRes.success).toBe(true);
+    expect(okRes.reasons.some((r) => r.includes("file 'src/app.ts' was changed"))).toBe(true);
+
+    const failRes = evaluateExecution(
+      { filesChanged: [], checks: [], errors: [] },
+      { expectedEvidence: ['file_changed: src/app.ts'] },
+    );
+    expect(failRes.success).toBe(false);
+    expect(failRes.reasons.some((r) => r.includes("evidence missing: file 'src/app.ts' was not changed"))).toBe(true);
+  });
+
+  it('verifies exit_code_zero / checks_pass evidence against check results', () => {
+    const okRes = evaluateExecution(
+      {
+        filesChanged: ['bin/sort'],
+        checks: [{ name: 'run', command: './sort', ok: true, durationMs: 5 }],
+        errors: [],
+      },
+      { expectedEvidence: ['exit_code_zero'] },
+    );
+    expect(okRes.success).toBe(true);
+
+    const failRes = evaluateExecution(
+      {
+        filesChanged: ['bin/sort'],
+        checks: [{ name: 'run', command: './sort', ok: false, durationMs: 5 }],
+        errors: [],
+      },
+      { expectedEvidence: ['checks_pass'] },
+    );
+    expect(failRes.success).toBe(false);
+    expect(failRes.reasons.some((r) => r.includes('evidence missing: checks failed: run'))).toBe(true);
+  });
+
+  it('verifies compilation_succeeds evidence against a named build/compile/typecheck check', () => {
+    const okRes = evaluateExecution(
+      {
+        filesChanged: ['src/main.cpp'],
+        checks: [{ name: 'build', command: 'g++ -o main src/main.cpp', ok: true, durationMs: 500 }],
+        errors: [],
+      },
+      { expectedEvidence: ['compilation_succeeds'] },
+    );
+    expect(okRes.success).toBe(true);
+
+    const failRes = evaluateExecution(
+      {
+        filesChanged: ['src/main.cpp'],
+        checks: [{ name: 'build', command: 'g++ -o main src/main.cpp', ok: false, durationMs: 500 }],
+        errors: [],
+      },
+      { expectedEvidence: ['compilation_succeeds'] },
+    );
+    expect(failRes.success).toBe(false);
+    expect(failRes.reasons.some((r) => r.includes('evidence missing: compilation did not succeed'))).toBe(true);
+  });
+
+  it('fails when mutationRequired is set but no files changed, independent of any evidence list', () => {
+    const res = evaluateExecution(
+      { filesChanged: [], checks: [], errors: [] },
+      { mutationRequired: true },
+    );
+    expect(res.success).toBe(false);
+    expect(res.reasons.some((r) => r.includes('mutation required: task requires code modification but no files changed'))).toBe(true);
+  });
 });

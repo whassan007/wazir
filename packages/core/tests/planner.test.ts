@@ -81,4 +81,61 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
     expect(plan.steps[0].id).toBe('setup');
     expect(plan.steps[1].dependencies).toEqual(['setup']);
   });
+
+  it('falls back to the deterministic heuristic plan when the model caller throws', async () => {
+    const planner = createTaskPlanner();
+    const throwingModelCaller = {
+      generate: async () => {
+        throw new Error('model host unreachable');
+      },
+    };
+
+    const plan = await planner.plan('add error handling to user service', { modelCaller: throwingModelCaller });
+
+    // Should silently recover into the same deterministic 3-stage plan as no-modelCaller.
+    const stepIds = plan.steps.map((s) => s.id);
+    expect(stepIds).toEqual(['inspect', 'implement', 'verify']);
+  });
+
+  it('falls back to the deterministic heuristic plan when the model returns an empty step list', async () => {
+    const planner = createTaskPlanner();
+    const emptyStepsModelCaller = {
+      generate: async () => JSON.stringify({ objective: 'nothing to do here', steps: [] }),
+    };
+
+    const plan = await planner.plan('write a C++ program to sort an array', { modelCaller: emptyStepsModelCaller });
+
+    // Empty steps must not be accepted as a valid plan — falls back to the C++ heuristic.
+    expect(plan.requirements?.language).toBe('C++');
+    expect(plan.steps.length).toBe(4);
+  });
+
+  it('falls back to the deterministic heuristic plan when the model response has no parseable JSON', async () => {
+    const planner = createTaskPlanner();
+    const garbageModelCaller = {
+      generate: async () => 'Sure, I can help with that! Let me think about the steps...',
+    };
+
+    const plan = await planner.plan('add error handling to user service', { modelCaller: garbageModelCaller });
+
+    const stepIds = plan.steps.map((s) => s.id);
+    expect(stepIds).toEqual(['inspect', 'implement', 'verify']);
+  });
+
+  it('analyze() detects inspection-only intent as not requiring mutation', () => {
+    const planner = createTaskPlanner();
+    const analysis = planner.analyze('check whether the login flow works and explain why it fails');
+
+    expect(analysis.mutationRequired).toBe(false);
+    expect(analysis.capabilities).not.toContain('filesystem_write');
+  });
+
+  it('analyze() detects build/write intent as requiring mutation with a clean workspace for from-scratch requests', () => {
+    const planner = createTaskPlanner();
+    const analysis = planner.analyze('write a new program from scratch to reverse a string');
+
+    expect(analysis.mutationRequired).toBe(true);
+    expect(analysis.workspaceMode).toBe('clean');
+    expect(analysis.capabilities).toContain('filesystem_write');
+  });
 });
