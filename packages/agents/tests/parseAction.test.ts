@@ -143,6 +143,31 @@ describe('parseAction', () => {
     expect((action?.input as { content: string }).content).toBe('const x = [1, {a: 2}');
   });
 
+  // Live repro on qwen/qwen3.8-27b: the model's own reasoning prose quoted the task
+  // ("sorts the array {5,3,1,4,2}") before its real action. Grabbing the *first* brace
+  // in the whole response — as opposed to the first one that actually starts
+  // `{"action":...` — picked up `{5,3,1,4,2}` instead, which isn't valid JSON, so every
+  // turn was read as "no JSON action produced" even though the model's plan was
+  // perfectly well-formed a few characters later. Confirmed via the raw response
+  // captured on the resulting turn (AgentTurn.raw) in a real job.
+  it('skips a brace inside preceding prose that quotes the task, not just brackets inside JSON strings', () => {
+    const raw =
+      'The user is asking for a C++ program that sorts the array {5,3,1,4,2} and outputs the sorted result.\n\n' +
+      'First, let\'s start with a plan.\n\n' +
+      '{"action":"plan","content":"1) Write main.cpp. 2) Compile with g++."}';
+    const action = parseAction(raw);
+    expect(action?.action).toBe('plan');
+    expect(action?.content).toBe('1) Write main.cpp. 2) Compile with g++.');
+  });
+
+  it('still finds the action after several unrelated braces of plain prose, not just one', () => {
+    const raw =
+      'Notes: {draft}, {todo}, and {a: {nested: true}} are not the action.\n' +
+      '{"action":"done","summary":"ok"}';
+    const action = parseAction(raw);
+    expect(action).toEqual({ action: 'done', summary: 'ok' });
+  });
+
   it('returns null when there is no action object', () => {
     expect(parseAction('I will now read the file.')).toBeNull();
     expect(parseAction('{"foo":"bar"}')).toBeNull();

@@ -151,16 +151,25 @@ function tryParseObject(candidate: string): Record<string, unknown> | null {
 }
 
 /**
- * Slices out the first balanced `{...}` object starting at `text`'s first
- * `{`. Local models sometimes ignore the "exactly one JSON object" rule and
- * emit several objects back to back (e.g. one `read` per line); scanning to
- * the *last* `}` in the text would swallow all of them into one invalid
- * blob, so this stops at the first object's matching close brace instead.
- * If the object never balances (e.g. an unterminated array), it falls back
- * to everything from `start` onward so repairBrackets can still attempt it.
+ * Slices out the first balanced `{...}` object starting at `text`'s first `{"action":`
+ * (falling back to its first bare `{` if that never appears). Local models routinely
+ * preface the real action with a sentence of prose reasoning first — and when that prose
+ * itself contains a brace (quoting the task, e.g. "sorts the array {5,3,1,4,2}", or a code
+ * snippet), starting from the *first* `{` in the whole text grabs that unrelated brace
+ * instead — `{5,3,1,4,2}` is not valid JSON, so the real action a few lines later was
+ * never even attempted, and every turn read as "model produced no JSON action" even
+ * though it plainly had, every time (confirmed live: raw model output captured via
+ * AgentTurn.raw showed a well-formed `{"action":"plan",...}` on every single "invalid"
+ * turn). Local models frequently ignore the "exactly one JSON object" rule too, emitting
+ * several back to back (e.g. one `read` per line); scanning to the *last* `}` in the text
+ * would swallow all of them into one invalid blob, so this stops at the first object's
+ * matching close brace instead. If the object never balances (e.g. an unterminated
+ * array), it falls back to everything from `start` onward so repairBrackets can still
+ * attempt it.
  */
 function extractFirstObject(text: string): string | null {
-  const start = text.indexOf('{');
+  const actionMatch = text.search(ACTION_START_RE);
+  const start = actionMatch !== -1 ? actionMatch : text.indexOf('{');
   if (start === -1) return null;
   let depth = 0;
   let inString = false;
@@ -549,17 +558,27 @@ export class CodingAgent implements AgentAdapter {
       messages.push({ role: 'assistant', content });
     };
 
+    // Compact, deterministic execution state — turn budget, files actually touched, what
+    // the last action was — appended to every "continue" message so the model can track
+    // progress from one line instead of re-deriving it from the full conversation history.
+    // Previously this only ever appeared once, inside compactIfNeeded()'s summary, and
+    // only once the context had already grown past the compaction threshold; most tasks
+    // never got it at all.
+    const stateLine = (lastAction?: string): string =>
+      `[state] turn ${turnsUsed}/${maxTurns} | files changed: ${[...filesChangedSet].join(', ') || 'none'}` +
+      (lastAction ? ` | last action: ${lastAction}` : '');
+
     // Chat templates treat a trailing assistant message as finished, so every
     // model turn must be preceded by a user message or the model replies with nothing.
     const pushContinue = (content: string): void => {
-      messages.push({ role: 'user', content: `${content} Respond with exactly one JSON object.` });
+      messages.push({ role: 'user', content: `${content} ${stateLine()}\nRespond with exactly one JSON object.` });
     };
 
     const pushToolResult = (tool: string, result: { ok: boolean; output: string; error?: string }): void => {
       const body = result.ok ? result.output : `ERROR: ${[result.error, result.output].filter(Boolean).join('\n')}`;
       messages.push({
         role: 'user',
-        content: `[tool result for ${tool} (ok=${result.ok})]\n${body.slice(0, 12000)}\nContinue. Respond with exactly one JSON object.`,
+        content: `[tool result for ${tool} (ok=${result.ok})]\n${body.slice(0, 12000)}\n${stateLine(`${tool}(${result.ok ? 'ok' : 'failed'})`)}\nContinue. Respond with exactly one JSON object.`,
       });
     };
 
