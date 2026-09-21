@@ -52,7 +52,7 @@ const CASES = [
   { id: 'AGT-013', section: 'A', name: 'the prose bailout still fires when rambling is full of literal braces (quoted C/C++/Java code)', file: PROSE_BAILOUT, test: 'still bails when the rambling prose is full of literal braces (quoted C++/Java/JS code)', level: 'L2', priority: 'B' },
 
   // B. Stuck-loop detection
-  { id: 'AGT-010', section: 'B', name: 'circuit breaker trips after the same tool call repeats toolRepeatLimit times', file: CIRCUIT_BREAKER, test: 'stops after the same tool call repeats toolRepeatLimit times, instead of grinding to maxTurns', level: 'L2', priority: 'B' },
+  { id: 'AGT-010', section: 'B', name: 'circuit breaker trips after the same tool call repeats toolRepeatLimit times', file: CIRCUIT_BREAKER, test: 'suppresses further real execution and corrects the model instead of erroring the whole run, after the same tool call repeats toolRepeatLimit times', level: 'L2', priority: 'B' },
   { id: 'AGT-011', section: 'B', name: 'circuit breaker does not false-positive on varying tool input', file: CIRCUIT_BREAKER, test: 'does not trip when consecutive tool calls use different input', level: 'L2', priority: 'R' },
   { id: 'AGT-012', section: 'B', name: 'maxTurns hard-caps the loop regardless of constructor vs per-request override', file: MAX_TURNS, level: 'L2', priority: 'B' },
 
