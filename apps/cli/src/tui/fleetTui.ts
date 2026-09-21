@@ -161,7 +161,10 @@ export interface AgentCardState {
 export interface AgentLogEntry {
   text: string;
   time: string;
-  kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'model';
+  kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'model' | 'validate';
+  /** Raw model response text this entry came from, when available (view with 'r'
+   *  on the Tail view). */
+  raw?: string;
 }
 
 export interface FleetTuiOptions {
@@ -288,6 +291,9 @@ export class FleetTui {
 
   private readonly agents = new Map<string, AgentCardState>();
   private readonly agentLogs = new Map<string, AgentLogEntry[]>();
+  /** Most recent raw model response text per task — press 'r' on the Tail view to inspect it. */
+  private readonly lastRawResponse = new Map<string, string>();
+  private rawResponseModalOpen = false;
   // The model's raw output for the turn currently being generated, per task. This is
   // the closest thing to "watching the model think" this protocol has: the model is
   // prompted to answer with one JSON action per turn, so the stream is its reasoning
@@ -651,6 +657,11 @@ export class FleetTui {
     if (key === '\u001b' || key === '\x1b') {
       if (this.quickActionsOpen) {
         this.quickActionsOpen = false;
+        this.draw();
+        return;
+      }
+      if (this.rawResponseModalOpen) {
+        this.rawResponseModalOpen = false;
         this.draw();
         return;
       }
@@ -1069,6 +1080,27 @@ export class FleetTui {
           .finally(() => this.draw());
         return;
       }
+    }
+
+    // 16.7. 'r' on the Tail view opens the selected task's most recent raw model
+    // response — the exact text the model produced, before parsing. Previously
+    // reconstructable only by hand from `wa executions inspect --json`.
+    if (
+      (keyStr === 'r' || keyStr === 'R') &&
+      this.currentView === 'tail' &&
+      this.inputBuffer.length === 0 &&
+      !this.expandedJobId &&
+      !this.expandedBlock
+    ) {
+      const taskId = this.selectedTaskId ?? this.getAgents()[this.highlightedIndex]?.taskId;
+      if (taskId && this.lastRawResponse.has(taskId)) {
+        this.rawResponseModalOpen = true;
+        this.draw();
+      } else {
+        this.statusMessage = 'No raw model response recorded yet for this task.';
+        this.draw();
+      }
+      return;
     }
 
     // 17. Backspace / Delete Handling (§2):
@@ -1783,6 +1815,7 @@ export class FleetTui {
           tool?: string;
           error?: string;
           usage?: { input: number; output: number; total: number };
+          raw?: string;
         };
 
         // Raw model output, one token at a time. Accumulated into a per-task buffer that
@@ -1813,10 +1846,21 @@ export class FleetTui {
         if (p.tool) agent.lastMessage = `Tool: ${p.tool}`;
         if (p.error) agent.lastMessage = `Error: ${this.humanizeError(p.error).slice(0, 60)}`;
 
-        let eventKind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' = 'info';
+        let eventKind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'validate' = 'info';
         let eventText = p.content ?? (p.tool ? `tool: ${p.tool}` : `phase: ${p.phase}`);
 
-        if (p.tool) {
+        // Protocol/validation corrections (a locally-rejected malformed tool call, a
+        // repeated-action circuit-breaker trip, an unparseable response) — these used to
+        // be entirely invisible: silently patched into the model's next prompt with no
+        // trace in the log at all. Checked ahead of the generic `p.tool` handling below
+        // since these DO carry a `tool` name (which action was rejected), and would
+        // otherwise be mislabeled as an ordinary tool result.
+        const VALIDATION_PREFIXES = ['ACTION_VALIDATION_FAILED:', 'ACTION_BLOCKED_DUPLICATE:', 'INVALID_JSON_ACTION:'];
+        const validationPrefix = VALIDATION_PREFIXES.find((prefix) => p.content?.startsWith(prefix));
+        if (validationPrefix) {
+          eventKind = 'validate';
+          eventText = p.content!.slice(validationPrefix.length).trim() || validationPrefix.replace(/:$/, '');
+        } else if (p.tool) {
           // A tool_call turn's outcome (ok/error) rides in the same progress event —
           // it used to be silently dropped here, so a failed tool call showed only
           // "Tool call executed: shell" with no indication anything went wrong, and
@@ -1843,7 +1887,9 @@ export class FleetTui {
           time: timeStr,
           text: eventText,
           kind: eventKind,
+          raw: p.raw,
         });
+        if (p.raw) this.lastRawResponse.set(taskId, p.raw);
         if (logs.length > 500) logs.shift();
       } else if (ev.type === 'task:completed') {
         this.flushStreaming(taskId, logs, timeStr);
@@ -2122,6 +2168,16 @@ export class FleetTui {
       const modalLines = this.renderBlockModal(this.expandedBlock, size.columns);
       const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
+    } else if (this.rawResponseModalOpen) {
+      // D.5 Raw Model Response Modal ('r' on Tail view)
+      const taskId = this.selectedTaskId ?? this.getAgents()[this.highlightedIndex]?.taskId;
+      if (taskId) {
+        const modalLines = this.renderRawResponseModal(taskId, size.columns);
+        const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+        this.overlayModal(lines, modalLines, size.columns, startY);
+      } else {
+        this.rawResponseModalOpen = false;
+      }
     } else if (this.expandedJobId) {
       // E. Full Job Output Modal — the compact JOBS detail view only shows a 6-line
       // wrapped preview of each task's result; this shows the whole thing.
@@ -2419,6 +2475,9 @@ export class FleetTui {
             } else if (k === 'model') {
               badge = color.magenta('MODEL   ');
               contentText = color.magenta(truncatedText);
+            } else if (k === 'validate') {
+              badge = color.bold(color.yellow('VALIDATE'));
+              contentText = color.yellow(truncatedText);
             }
 
             lines.push(this.padRightTo(`  ${timePrefix} ${badge} ${contentText}`, width));
@@ -2778,6 +2837,22 @@ export class FleetTui {
   }
 
   /**
+   * The exact raw text the model produced for its most recent turn on the tailed task,
+   * before any parsing — 'r' on the Tail view. Previously the only way to see this was
+   * reconstructing it by hand from `wa executions inspect --json`'s recorded events; this
+   * is exactly the trace that diagnosed today's argument-wrapping and brace-parsing bugs.
+   */
+  private renderRawResponseModal(taskId: string, cols: number): string[] {
+    const modalWidth = Math.min(cols - 4, 100);
+    const innerWidth = modalWidth - 4;
+    const raw = this.lastRawResponse.get(taskId) ?? '(none recorded)';
+    const title = `RAW MODEL RESPONSE — ${taskId}`;
+    const body = this.wrapText(raw, innerWidth, 30);
+    const actions = `${color.bold('[Esc]')} Close`;
+    return this.buildModalBox(title, body, actions, modalWidth, 'cyan');
+  }
+
+  /**
    * Full, untruncated job output modal (Enter on a JOBS nav item). The compact JOBS
    * detail view only shows a 6-line wrapped preview per task so the fleet dashboard
    * doesn't get crowded out by one long result — this shows everything.
@@ -2995,6 +3070,7 @@ export class FleetTui {
       '    [A] / [D]       Approve / Deny pending policy ask (overlaid modal card)',
       '    [V] / [I]       View full details / Inspect & snooze policy ask',
       '    [R]             Retry failed task when error card is open',
+      '    [R] (Tail view) View the selected task\'s raw model response',
       '',
       '  Commands & Quick Actions:',
       '    /fanout <t1;t2> Decompose and run concurrent subtasks',

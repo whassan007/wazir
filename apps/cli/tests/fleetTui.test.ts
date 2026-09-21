@@ -1875,3 +1875,99 @@ describe('FleetTui — runtime health visibility and model selection', () => {
     harness.stop();
   });
 });
+
+describe('FleetTui — protocol/validation visibility and raw response viewer', () => {
+  let projectRoot: string;
+
+  afterEach(async () => {
+    if (projectRoot) {
+      await fs.rm(projectRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it('tags a locally-rejected malformed tool call as VALIDATE, not a silent no-op', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    let call = 0;
+    const adapter = engine.worker.adapterForModel('fake-model')!;
+    adapter.generate = async function* () {
+      call += 1;
+      const reply =
+        call === 1
+          ? '{"action":"plan","content":"write it"}'
+          : call === 2
+            ? '{"action":"tool","tool":"write","input":{}}' // malformed: no path/content
+            : call === 3
+              ? '{"action":"tool","tool":"write","input":{"path":"main.cpp","content":"int main(){}"}}'
+              : '{"action":"done","summary":"done"}';
+      yield { type: 'token' as const, content: reply };
+      yield { type: 'completed' as const, content: reply, usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
+    };
+
+    await harness.start();
+    harness.sendLine('build something');
+    for (let i = 0; i < 60 && harness.tui.getCurrentJob()?.status !== 'completed'; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    const taskId = harness.tui.getAgents()[0]?.taskId;
+    const logs = (harness.tui as any).agentLogs.get(taskId) as Array<{ kind: string; text: string }>;
+    const validateEntry = logs.find((l) => l.kind === 'validate');
+    expect(validateEntry).toBeDefined();
+    expect(validateEntry!.text).toContain("'write' missing path, content");
+
+    // Also visible on screen with its distinct badge, not folded into a generic line.
+    harness.sendKey('\r'); // enter Tail view
+    const buf = harness.getScreenBuffer();
+    expect(buf).toContain('VALIDATE');
+
+    harness.stop();
+  });
+
+  it("'r' on the Tail view shows the task's raw model response", async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    // Must actually succeed (write a file, so VERIFY passes) — a failed/retrying task
+    // pops the structured error card, whose own 'r' binding (retry) would otherwise
+    // shadow the Tail view's raw-response 'r' binding tested here.
+    let call = 0;
+    const adapter = engine.worker.adapterForModel('fake-model')!;
+    adapter.generate = async function* () {
+      call += 1;
+      const reply =
+        call === 1
+          ? '{"action":"plan","content":"write it"}'
+          : call === 2
+            ? '{"action":"tool","tool":"write","input":{"path":"a-very-distinctive-marker.cpp","content":"int main(){}"}}'
+            : '{"action":"done","summary":"done"}';
+      yield { type: 'token' as const, content: reply };
+      yield { type: 'completed' as const, content: reply, usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
+    };
+
+    await harness.start();
+    harness.sendLine('build something');
+    for (let i = 0; i < 60 && harness.tui.getCurrentJob()?.status !== 'completed'; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(harness.tui.getCurrentJob()?.status).toBe('completed');
+
+    harness.sendKey('\r'); // enter Tail view, selects the (only) execution
+    expect(harness.tui.getCurrentView()).toBe('tail');
+
+    harness.sendKey('r');
+    const buf = harness.getScreenBuffer();
+    expect(buf).toContain('RAW MODEL RESPONSE');
+    // 'done' never yields with `raw` attached, so the write tool_call's raw response
+    // (the last turn that did) is what should still be showing.
+    expect(buf).toContain('a-very-distinctive-marker.cpp');
+
+    harness.sendKey('\x1b');
+    expect(harness.getScreenBuffer()).not.toContain('RAW MODEL RESPONSE');
+
+    harness.stop();
+  });
+});
