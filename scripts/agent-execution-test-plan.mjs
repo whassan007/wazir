@@ -113,6 +113,8 @@ const CASES = [
   { id: 'AGT-099', section: 'I', name: 'expected-evidence evaluator verifies compilation_succeeds against a named build/compile check', file: EXPECTED_EVIDENCE, test: 'verifies compilation_succeeds evidence against a named build/compile/typecheck check', level: 'L1', priority: 'B' },
   { id: 'AGT-100', section: 'I', name: 'expected-evidence evaluator fails on mutationRequired with zero files changed, independent of evidence list', file: EXPECTED_EVIDENCE, test: 'fails when mutationRequired is set but no files changed, independent of any evidence list', level: 'L1', priority: 'B' },
   { id: 'AGT-101', section: 'I', name: 'a task whose replanner declines to repair fails the job and never runs its dependents', file: JOB_REPLANNING, test: 'fails the job and never runs dependent tasks when the replanner declines to repair', level: 'L2', priority: 'B' },
+  { id: 'AGT-102', section: 'I', name: 'expected-evidence evaluator verifies mutation_required / requires_mutation evidence strings', file: EXPECTED_EVIDENCE, test: 'verifies the mutation_required / requires_mutation evidence strings against filesChanged', level: 'L1', priority: 'B' },
+  { id: 'AGT-103', section: 'I', name: 'expected-evidence evaluator verifies source_contains_cpp against changed files or disk', file: EXPECTED_EVIDENCE, test: 'verifies source_contains_cpp against changed files or a main.cpp on disk', level: 'L1', priority: 'B' },
 ];
 
 const argv = process.argv.slice(2);

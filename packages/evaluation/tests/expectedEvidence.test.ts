@@ -147,4 +147,35 @@ describe('evaluateExecution with expectedEvidence', () => {
     expect(res.success).toBe(false);
     expect(res.reasons.some((r) => r.includes('mutation required: task requires code modification but no files changed'))).toBe(true);
   });
+
+  it('verifies the mutation_required / requires_mutation evidence strings against filesChanged', () => {
+    const okRes = evaluateExecution(
+      { filesChanged: ['src/app.ts'], checks: [], errors: [] },
+      { expectedEvidence: ['mutation_required'] },
+    );
+    expect(okRes.success).toBe(true);
+
+    const failRes = evaluateExecution(
+      { filesChanged: [], checks: [], errors: [] },
+      { expectedEvidence: ['requires_mutation'] },
+    );
+    expect(failRes.success).toBe(false);
+    expect(failRes.reasons.some((r) => r.includes('evidence missing: mutation required but no files were changed'))).toBe(true);
+  });
+
+  it('verifies source_contains_cpp against changed files or a main.cpp on disk', () => {
+    const changedRes = evaluateExecution(
+      { filesChanged: ['src/sort.cpp'], checks: [], errors: [] },
+      { expectedEvidence: ['source_contains_cpp'] },
+    );
+    expect(changedRes.success).toBe(true);
+    expect(changedRes.reasons.some((r) => r.includes("C++ source file 'src/sort.cpp' exists"))).toBe(true);
+
+    const missingRes = evaluateExecution(
+      { filesChanged: ['README.md'], checks: [], errors: [] },
+      { expectedEvidence: ['source_contains_cpp'] },
+    );
+    expect(missingRes.success).toBe(false);
+    expect(missingRes.reasons.some((r) => r.includes('evidence missing: no C++ source file found'))).toBe(true);
+  });
 });
