@@ -129,6 +129,70 @@
         30
       ],
       "prerequisiteGateId": "G8"
+    },
+    {
+      "id": "G10",
+      "order": 10,
+      "name": "ToolDepth",
+      "title": "G10 Tool Depth",
+      "description": "Deeper tool-execution correctness: subprocess timeout enforcement, edit-tool uniqueness guards, windowed read boundaries, and search truncation signaling",
+      "testIds": [
+        31,
+        32,
+        33,
+        34
+      ],
+      "prerequisiteGateId": "G9"
+    },
+    {
+      "id": "G11",
+      "order": 11,
+      "name": "Interop",
+      "title": "G11 Interop",
+      "description": "Structured JSON output enforcement and MCP tool discovery/policy gating exercised end-to-end inside real job execution, not just in isolated unit contracts",
+      "testIds": [
+        35,
+        36,
+        37
+      ],
+      "prerequisiteGateId": "G10"
+    },
+    {
+      "id": "G12",
+      "order": 12,
+      "name": "SessionHardening",
+      "title": "G12 Session Hardening",
+      "description": "Empty-completion recovery, multi-round context-compaction fidelity, and fleet worktree merge-conflict safety",
+      "testIds": [
+        38,
+        39,
+        40
+      ],
+      "prerequisiteGateId": "G11"
+    },
+    {
+      "id": "G13",
+      "order": 13,
+      "name": "TerminalDepth",
+      "title": "G13 Terminal Depth",
+      "description": "Composer history recall and Escape-key cancellation during active streaming, beyond the existing paste/burst safety coverage",
+      "testIds": [
+        41,
+        42
+      ],
+      "prerequisiteGateId": "G12"
+    },
+    {
+      "id": "G14",
+      "order": 14,
+      "name": "Performance",
+      "title": "G14 Performance",
+      "description": "PTY throughput/latency integrity and multi-turn orchestration overhead growth bounds",
+      "testIds": [
+        43,
+        44
+      ],
+      "prerequisiteGateId": "G13"
     }
   ],
   "foundationalSequence": [
@@ -1264,6 +1328,483 @@
         "end-to-end",
         "gate-9",
         "flagship"
+      ]
+    },
+    "31": {
+      "id": 31,
+      "gateId": "G10",
+      "priority": "P0",
+      "title": "Subprocess Timeout Enforcement",
+      "purpose": "Verify a shell command exceeding its timeoutMs budget is forcibly terminated rather than hanging the turn or the job.",
+      "prompt": "Run a shell command that sleeps far longer than the configured timeout, e.g. `sleep 30` with timeoutMs=1000.\nDo not report success. Report the termination signal and elapsed time.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "SHELL(sleep 30, timeoutMs=1000) -> TIMEOUT DETECTED -> SIGKILL CHILD -> TOOL RESULT: TIMED_OUT",
+      "verificationCriteria": [
+        "Command is killed at or shortly after timeoutMs elapses, not at its natural completion time",
+        "Tool result reports a timeout/killed status rather than a hung turn",
+        "No orphaned child process remains after the kill",
+        "Job continues to the next step or fails cleanly instead of stalling"
+      ],
+      "expectedArtifacts": [],
+      "expectedProvenance": [
+        "timeout-budget-ms",
+        "kill-signal",
+        "elapsed-ms"
+      ],
+      "associatedSuites": [
+        "packages/tools/tests/sandbox.test.ts",
+        "packages/tools/tests/processTimeout.test.ts"
+      ],
+      "tags": [
+        "tool-depth",
+        "timeout",
+        "shell",
+        "runtime"
+      ]
+    },
+    "32": {
+      "id": 32,
+      "gateId": "G10",
+      "priority": "P0",
+      "title": "Exact-Match Edit Uniqueness Guard",
+      "purpose": "Verify the edit tool refuses an ambiguous non-unique oldString when replaceAll is not set, rather than silently patching only the first occurrence.",
+      "prompt": "Create a file containing the string 'TODO' on three separate lines.\nAttempt to edit only one specific TODO using oldString='TODO' without replaceAll. The tool must refuse due to ambiguity.\nRetry with enough surrounding context to make oldString unique, and verify only the intended line changes.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "WRITE(file with 3x TODO) -> EDIT(ambiguous oldString) -> REJECTED -> EDIT(unique oldString+context) -> SUCCESS",
+      "verificationCriteria": [
+        "First edit attempt with a non-unique oldString and no replaceAll is rejected with an explicit ambiguity error",
+        "File content is unchanged after the rejected attempt",
+        "Second edit attempt with unique context succeeds and modifies exactly one line",
+        "The two untouched TODO occurrences remain byte-identical to their original content"
+      ],
+      "expectedArtifacts": [
+        "todo_list.txt"
+      ],
+      "expectedProvenance": [
+        "edit-rejection-reason:non-unique-match",
+        "edit-success-line-range"
+      ],
+      "associatedSuites": [
+        "packages/tools/tests/security.test.ts",
+        "packages/tools/tests/editUniqueness.test.ts"
+      ],
+      "tags": [
+        "tool-depth",
+        "edit",
+        "correctness",
+        "filesystem"
+      ]
+    },
+    "33": {
+      "id": 33,
+      "gateId": "G10",
+      "priority": "P1",
+      "title": "Windowed Read Boundaries on Large Files",
+      "purpose": "Verify offset/limit reads return exact line slices from a large generated file without loading or echoing the full file.",
+      "prompt": "Generate a file with 5,000 numbered lines.\nRead only lines 2001-2010 using offset/limit.\nVerify the returned slice is exactly those 10 lines and that total line count is reported separately from the returned slice.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "SHELL(generate 5000-line file) -> READ(offset=2001, limit=10) -> VERIFY SLICE",
+      "verificationCriteria": [
+        "Returned output contains exactly lines 2001 through 2010, in order",
+        "Reported total line count equals 5000 while returned line count equals 10",
+        "No lines outside the requested window appear in the tool output",
+        "Read completes without truncation/size errors despite the file exceeding a single-window read"
+      ],
+      "expectedArtifacts": [
+        "large_generated.txt"
+      ],
+      "expectedProvenance": [
+        "read-offset:2001",
+        "read-limit:10",
+        "file-total-lines:5000"
+      ],
+      "associatedSuites": [
+        "packages/tools/tests/security.test.ts",
+        "packages/tools/tests/windowedRead.test.ts"
+      ],
+      "tags": [
+        "tool-depth",
+        "read",
+        "large-file",
+        "filesystem"
+      ]
+    },
+    "34": {
+      "id": 34,
+      "gateId": "G10",
+      "priority": "P1",
+      "title": "Search Result Truncation Signaling",
+      "purpose": "Verify that when a regex search hits the result cap, the tool result explicitly signals truncation instead of silently returning a partial list as if it were complete.",
+      "prompt": "Create 250 files each containing a matching pattern.\nRun a search that matches all of them.\nVerify the tool reports it hit the result cap and how many files were scanned, rather than implying the capped count is the whole truth.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "GENERATE(250 matching files) -> SEARCH(pattern) -> CAPPED AT MAX_RESULTS -> TRUNCATION SIGNAL",
+      "verificationCriteria": [
+        "Search returns at most the configured result cap (200) matches",
+        "Tool result metadata explicitly flags that results were truncated",
+        "filesScanned metadata reflects files actually scanned, not just files matched",
+        "Model is able to distinguish a truncated result set from a complete one using only tool output"
+      ],
+      "expectedArtifacts": [],
+      "expectedProvenance": [
+        "search-truncated:true",
+        "search-cap:200",
+        "files-scanned"
+      ],
+      "associatedSuites": [
+        "packages/tools/tests/security.test.ts",
+        "packages/tools/tests/searchTruncation.test.ts"
+      ],
+      "tags": [
+        "tool-depth",
+        "search",
+        "truncation",
+        "filesystem"
+      ]
+    },
+    "35": {
+      "id": 35,
+      "gateId": "G11",
+      "priority": "P1",
+      "title": "Structured JSON Schema Enforcement",
+      "purpose": "Verify a runtime advertising structuredOutput=true actually constrains model output to a declared JSON schema, and that routing accounts for runtimes that do not support it.",
+      "prompt": "Request a task whose final answer must conform to a fixed JSON schema (fields: summary:string, riskLevel:enum[low,medium,high]).\nRoute only to a runtime/model combination that declares structuredOutput=true.\nVerify the raw response parses as valid JSON matching the schema on the first attempt.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "TASK(schema-constrained output) -> ROUTER(filter structuredOutput=true) -> MODEL -> JSON RESPONSE -> SCHEMA VALIDATE",
+      "verificationCriteria": [
+        "Router only selects a runtime/model pair whose descriptor declares structuredOutput=true",
+        "Response is valid JSON on first attempt with no repair loop needed",
+        "Parsed JSON matches every required field and the riskLevel enum constraint",
+        "A runtime lacking structuredOutput (e.g. Ollama) is either excluded from this task or explicitly downgraded to a best-effort parse-and-repair path with that fact recorded"
+      ],
+      "expectedArtifacts": [
+        "risk_summary.json"
+      ],
+      "expectedProvenance": [
+        "runtime-structuredOutput:true",
+        "schema-validation:PASS"
+      ],
+      "associatedSuites": [
+        "tests/runtime/lmstudioAdapter.test.ts",
+        "tests/runtime/ollamaAdapter.test.ts",
+        "packages/core/tests/scheduler.test.ts"
+      ],
+      "tags": [
+        "protocol",
+        "structured-output",
+        "json-schema",
+        "routing"
+      ]
+    },
+    "36": {
+      "id": 36,
+      "gateId": "G11",
+      "priority": "P2",
+      "title": "MCP Dynamic Tool Discovery & Invocation (End-to-End)",
+      "purpose": "Verify a job task can discover and invoke an approved MCP server's tools end-to-end inside real execution, not just in the isolated unit contract tests. MCPClient exists but is currently unwired from the live agent tool-call loop; this test defines the target invariant for when it is wired.",
+      "prompt": "Configure one approved MCP server exposing a documentation-lookup tool.\nTask: answer a question that requires calling that MCP tool.\nVerify Wazir discovers the tool via MCP initialize/tools-list, invokes it during the job, and records the MCP call in provenance alongside native tool calls.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "MCP HANDSHAKE -> TOOLS/LIST -> TASK -> MODEL invokes mcp:tool -> RESULT -> PROVENANCE",
+      "verificationCriteria": [
+        "MCPClient handshake and tools/list complete before the task begins execution",
+        "The discovered MCP tool appears in the agent's available tool set alongside native tools",
+        "The model successfully invokes the MCP tool and receives its output content inline",
+        "Provenance records the MCP call with the same rigor as a native shell/write/read call"
+      ],
+      "expectedArtifacts": [
+        "mcp_answer.md"
+      ],
+      "expectedProvenance": [
+        "mcp-server-id",
+        "mcp-tool-call-id",
+        "mcp-handshake-protocolVersion"
+      ],
+      "associatedSuites": [
+        "packages/core/tests/mcpClient.unwired.test.ts",
+        "packages/core/tests/mcpClient.e2e.test.ts"
+      ],
+      "tags": [
+        "protocol",
+        "mcp",
+        "discovery",
+        "not-yet-wired"
+      ]
+    },
+    "37": {
+      "id": 37,
+      "gateId": "G11",
+      "priority": "P1",
+      "title": "MCP Policy Gate Under Live Execution",
+      "purpose": "Verify a task referencing a non-allowlisted MCP server is denied end-to-end inside a real job, not just at the isolated PolicyEngine.classify() unit level, and the job fails cleanly with a policy-denied status.",
+      "prompt": "Configure Wazir with an empty allowedMcpServers list.\nTask: attempt to call a tool on an MCP server not in the allowlist.\nVerify the job halts with a policy denial before any MCP network call is attempted, and the denial is audited.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "TASK -> MCP TOOL REQUEST -> POLICY GATE -> DENIED -> HALT (no transport opened)",
+      "verificationCriteria": [
+        "The job never opens a transport connection to the non-allowlisted MCP server",
+        "Policy denial occurs before the model turn completes, not as a late verification failure",
+        "Job status transitions to policy-blocked/failed, matching the pattern used by Test 16",
+        "Audit log records the denied MCP server id and the policy rule that triggered the denial"
+      ],
+      "expectedArtifacts": [],
+      "expectedProvenance": [
+        "policy-decision:DENIED",
+        "mcp-server-id:untrusted",
+        "audit-timestamp"
+      ],
+      "associatedSuites": [
+        "packages/core/tests/policyEngine.test.ts",
+        "packages/core/tests/mcpClient.unwired.test.ts"
+      ],
+      "tags": [
+        "protocol",
+        "mcp",
+        "policy",
+        "governance"
+      ]
+    },
+    "38": {
+      "id": 38,
+      "gateId": "G12",
+      "priority": "P0",
+      "title": "Empty/Whitespace Completion Recovery",
+      "purpose": "Verify Wazir detects an empty or whitespace-only model completion and automatically retries with an adjusted prompt, instead of treating it as a valid (but vacuous) turn or silently stalling the job.",
+      "prompt": "Simulate a model turn that returns an empty string / whitespace-only response.\nVerify Wazir detects this, retries the turn with a corrective nudge, and the job proceeds rather than completing on a blank response or hanging.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "TURN -> EMPTY COMPLETION DETECTED -> CORRECTIVE RETRY -> VALID TURN -> CONTINUE",
+      "verificationCriteria": [
+        "An empty or whitespace-only completion is never accepted as a valid final assistant turn",
+        "Wazir automatically retries with an adjusted prompt within the same turn budget",
+        "Retry count and reason are recorded in provenance",
+        "Job either recovers and proceeds, or fails explicitly after exhausting retries — it never silently completes on emptiness"
+      ],
+      "expectedArtifacts": [],
+      "expectedProvenance": [
+        "empty-completion-detected",
+        "retry-count",
+        "retry-reason"
+      ],
+      "associatedSuites": [
+        "packages/agents/tests/codingAgent.emptyCompletion.test.ts",
+        "packages/agents/tests/parseAction.test.ts"
+      ],
+      "tags": [
+        "session",
+        "resilience",
+        "retry"
+      ]
+    },
+    "39": {
+      "id": 39,
+      "gateId": "G12",
+      "priority": "P1",
+      "title": "Context Compaction Fidelity Under Repeated Rounds",
+      "purpose": "Verify the original task instructions and the most recent turns survive multiple successive compaction rounds in a long job without loss or duplication, extending the existing single-trigger compaction test to a multi-round scenario.",
+      "prompt": "Run a job long enough to trigger context compaction at least twice (e.g. 15+ turns with a small context ceiling).\nAfter each compaction, verify the original task prompt and the most recent turns are still present and not duplicated in the summarized history.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "TURNS 1-N -> COMPACT #1 -> TURNS N+1-M -> COMPACT #2 -> VERIFY FIDELITY",
+      "verificationCriteria": [
+        "Context compaction triggers at least twice during the job",
+        "The original task instructions remain identifiable in context after every compaction round",
+        "The most recent turns are never summarized away before older ones",
+        "No turn appears duplicated across a summary boundary",
+        "Total context size stays under the configured ceiling after each round"
+      ],
+      "expectedArtifacts": [],
+      "expectedProvenance": [
+        "compaction-round-count",
+        "context-size-before",
+        "context-size-after"
+      ],
+      "associatedSuites": [
+        "packages/agents/tests/codingAgent.contextCompaction.test.ts"
+      ],
+      "tags": [
+        "session",
+        "compaction",
+        "context",
+        "long-running"
+      ]
+    },
+    "40": {
+      "id": 40,
+      "gateId": "G12",
+      "priority": "P0",
+      "title": "Fleet Worktree Merge-Conflict Safety",
+      "purpose": "Verify that when two concurrent fan-out branches modify overlapping files in independent git worktrees, the fan-in/merge step detects the conflict safely and never silently corrupts or drops either branch's work.",
+      "prompt": "Run two branches concurrently, each modifying the same file (utils.h) in incompatible ways in independent worktrees.\nAt fan-in, Wazir must detect the conflict, halt automatic merge, and surface both versions for repair/resolution rather than silently picking one or corrupting the file.",
+      "modelRequirements": {
+        "toolCalling": true,
+        "distinctModels": true
+      },
+      "expectedDag": "[Branch A: edit utils.h] || [Branch B: edit utils.h] -> FAN-IN MERGE -> CONFLICT DETECTED -> HALT & SURFACE",
+      "verificationCriteria": [
+        "Both branches complete independently in isolated worktrees before merge is attempted",
+        "Merge step detects the overlapping edit as a conflict rather than auto-resolving silently",
+        "Neither branch's original changes are lost or corrupted by the failed merge attempt",
+        "Conflict is surfaced with enough detail (file, both versions) to drive a repair task"
+      ],
+      "expectedArtifacts": [
+        "utils.h.branch-a",
+        "utils.h.branch-b"
+      ],
+      "expectedProvenance": [
+        "merge-conflict-detected",
+        "branch-a-worktree-id",
+        "branch-b-worktree-id"
+      ],
+      "associatedSuites": [
+        "packages/core/tests/worktreeManager.test.ts",
+        "packages/core/tests/jobOrchestrator.test.ts"
+      ],
+      "tags": [
+        "session",
+        "worktree",
+        "fleet",
+        "merge-safety"
+      ]
+    },
+    "41": {
+      "id": 41,
+      "gateId": "G13",
+      "priority": "P1",
+      "title": "Composer History Recall via Up/Down Arrows",
+      "purpose": "Verify Up/Down arrow history recall in the composer retrieves previously submitted commands without corrupting the current draft or triggering accidental submission, distinct from the paste-triggered COMPOSER mode already covered by Test 27.",
+      "prompt": "Submit three distinct commands in sequence.\nStart typing a new, unsubmitted draft.\nPress Up twice, then Down once, and verify the composer shows the correct historical entries at each step.\nThen verify pressing Down past the most recent history entry restores the original in-progress draft untouched.",
+      "modelRequirements": {},
+      "expectedDag": "SUBMIT x3 -> DRAFT (unsent) -> UP -> UP -> DOWN -> VERIFY DRAFT RESTORED",
+      "verificationCriteria": [
+        "Each Up press steps one entry further back through submitted history, most recent first",
+        "Down steps forward through history symmetrically",
+        "Pressing Down past the newest history entry restores the exact unsent draft, not an empty buffer",
+        "History navigation never auto-submits a job"
+      ],
+      "expectedArtifacts": [],
+      "expectedProvenance": [
+        "history-cursor-position",
+        "draft-preserved:true"
+      ],
+      "associatedSuites": [
+        "apps/cli/tests/fleetTui.test.ts",
+        "apps/cli/tests/pasteBarrier.test.ts"
+      ],
+      "tags": [
+        "terminal",
+        "history",
+        "composer",
+        "tui"
+      ]
+    },
+    "42": {
+      "id": 42,
+      "gateId": "G13",
+      "priority": "P0",
+      "title": "Escape Cancellation During Active Model Streaming",
+      "purpose": "Verify pressing Escape while a model turn is actively streaming aborts generation immediately, distinct from the existing timeout-triggered cancellation path (Test 23), and leaves no partial/corrupted job state.",
+      "prompt": "Start a job with a long-running model turn.\nWhile tokens are actively streaming to the terminal, press Escape.\nVerify generation stops immediately (not at the next tool boundary), the job transitions to a clean cancelled state, and no partial tool call is left pending.",
+      "modelRequirements": {},
+      "expectedDag": "STREAMING -> ESC PRESSED -> ABORT CONTROLLER -> JOB CANCELLED (user-initiated, not timeout)",
+      "verificationCriteria": [
+        "Escape during active streaming aborts the turn faster than waiting for natural completion or job timeout",
+        "Cancellation reason is recorded as user-initiated (Escape), distinct from timeout-triggered cancellation",
+        "No dangling tool call or child process remains after the abort",
+        "TUI returns to an interactive, responsive state immediately after cancellation"
+      ],
+      "expectedArtifacts": [],
+      "expectedProvenance": [
+        "cancellation-reason:\"Escape key\"",
+        "terminal-state:CANCELLED"
+      ],
+      "associatedSuites": [
+        "apps/cli/tests/fleetTui.test.ts"
+      ],
+      "tags": [
+        "terminal",
+        "cancellation",
+        "streaming",
+        "tui"
+      ]
+    },
+    "43": {
+      "id": 43,
+      "gateId": "G14",
+      "priority": "P1",
+      "title": "PTY High-Throughput Streaming Latency & Zero Byte Loss",
+      "purpose": "Verify the PTY terminal driver handles a high-throughput output burst (e.g. compiler warnings flood, large diff render) without dropped bytes or unbounded frame latency, extending ptyDriver.py's existing functional-only usage to a throughput/latency assertion.",
+      "prompt": "Run a shell command that emits several megabytes of output in a tight loop through the TUI's PTY.\nMeasure total bytes rendered versus bytes emitted, and measure time-to-last-byte.",
+      "modelRequirements": {},
+      "expectedDag": "SHELL(high-volume output) -> PTY STREAM -> MEASURE outputBytes & timing -> VERIFY zero loss & bounded latency",
+      "verificationCriteria": [
+        "outputBytes reported by the PTY driver equals bytes actually emitted by the child process (zero silent drops)",
+        "Time-to-last-byte stays within a defined ceiling for the given payload size",
+        "Terminal remains responsive to input (e.g. Ctrl+C) during the burst, not frozen",
+        "No PTY buffer overflow errors or truncated ANSI escape sequences in the tail output"
+      ],
+      "expectedArtifacts": [],
+      "expectedProvenance": [
+        "pty-output-bytes",
+        "pty-time-to-last-byte-ms"
+      ],
+      "associatedSuites": [
+        "apps/cli/tests/sessionEof.test.ts",
+        "apps/cli/tests/ptyThroughput.test.ts"
+      ],
+      "tags": [
+        "performance",
+        "pty",
+        "terminal",
+        "throughput"
+      ]
+    },
+    "44": {
+      "id": 44,
+      "gateId": "G14",
+      "priority": "P1",
+      "title": "Multi-Turn Latency Growth Bound",
+      "purpose": "Verify per-turn orchestration overhead across a long multi-turn job does not grow unbounded (e.g. from an accidental O(n) context rebuild), catching latency regressions before they reach production.",
+      "prompt": "Run a job that executes 20 consecutive model turns with tool calls.\nRecord wall-clock overhead (excluding model inference time) for each turn.\nVerify overhead growth across turns stays within a small bounded percentage rather than scaling linearly or worse with turn count.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "TASK -> 20x [TURN -> MEASURE non-inference overhead] -> VERIFY BOUNDED GROWTH",
+      "verificationCriteria": [
+        "Per-turn orchestration overhead (excluding model inference latency) is recorded for all 20 turns",
+        "Overhead growth from turn 1 to turn 20 stays under a defined bound (e.g. < 5% per turn)",
+        "No single turn shows a step-function latency spike indicative of an unbounded rebuild",
+        "Memory usage across the 20 turns does not grow monotonically without bound"
+      ],
+      "expectedArtifacts": [
+        "turn_latency_report.json"
+      ],
+      "expectedProvenance": [
+        "per-turn-overhead-ms",
+        "growth-rate-percent"
+      ],
+      "associatedSuites": [
+        "packages/agents/tests/codingAgent.maxTurns.test.ts",
+        "packages/agents/tests/codingAgent.turnLatency.test.ts"
+      ],
+      "tags": [
+        "performance",
+        "latency",
+        "multi-turn",
+        "regression"
       ]
     }
   }

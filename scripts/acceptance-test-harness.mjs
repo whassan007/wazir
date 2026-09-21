@@ -3,18 +3,18 @@
  * Wazir Acceptance Test Harness
  *
  * Drives the Wazir Acceptance Test Library:
- * 30 acceptance use cases structured into 10 progressive release gates (G0..G9).
+ * 44 acceptance use cases structured into 15 progressive release gates (G0..G14).
  *
  * Strict Release Rule:
- * Gates must be passed progressively (G0 -> G1 -> ... -> G9).
+ * Gates must be passed progressively (G0 -> G1 -> ... -> G14).
  * A later gate CANNOT compensate for a failure in an earlier prerequisite gate.
  *
  * Usage:
  *   node scripts/acceptance-test-harness.mjs                 # interactive selector (or foundational if non-interactive)
  *   node scripts/acceptance-test-harness.mjs --foundational  # run foundational sequence (20, 17, 18, 1, 9, 3, 4, 2)
- *   node scripts/acceptance-test-harness.mjs --gate G0       # run specific gate (G0..G9)
- *   node scripts/acceptance-test-harness.mjs --test 20       # run specific test ID (1..30)
- *   node scripts/acceptance-test-harness.mjs --all          # run all gates G0..G9 in progressive order
+ *   node scripts/acceptance-test-harness.mjs --gate G0       # run specific gate (G0..G14)
+ *   node scripts/acceptance-test-harness.mjs --test 20       # run specific test ID (1..44)
+ *   node scripts/acceptance-test-harness.mjs --all          # run all gates G0..G14 in progressive order
  *   node scripts/acceptance-test-harness.mjs --interactive  # force interactive menu
  *   node scripts/acceptance-test-harness.mjs --live         # enable live runtime/model probing
  *   node scripts/acceptance-test-harness.mjs --skip-build   # skip dist freshness check
@@ -47,9 +47,9 @@ Usage:
 
 Options:
   --foundational        Run foundational sequence: 20 -> 17 -> 18 -> 1 -> 9 -> 3 -> 4 -> 2
-  --gate <G0..G9>       Run all tests in specified gate
-  --test <1..30>        Run specific test by ID
-  --all                 Run all 10 progressive release gates (fail-fast prerequisite order)
+  --gate <G0..G14>      Run all tests in specified gate
+  --test <1..44>        Run specific test by ID
+  --all                 Run all 15 progressive release gates (fail-fast prerequisite order)
   --interactive         Prompt interactively to choose what to test
   --live                Probe and execute against live local models (LM Studio / Ollama)
   --skip-build          Skip dist freshness check and build
@@ -57,16 +57,21 @@ Options:
   --help, -h            Show this help text
 
 Gates:
-  G0 Protocol     Test 20          Models can reliably operate Wazir
-  G1 Runtime      Tests 1, 17-19   Tools/workspaces actually work
-  G2 Agent        Tests 8, 9       Coding + repair works
-  G3 Routing      Tests 3, 4, 14, 29 Capability-based routing works
-  G4 Fleet        Tests 2, 5, 6, 7 DAG / concurrency / fan-in works
-  G5 Multi-Agent  Tests 10-13      Review / delegation / handoff works
-  G6 Governance   Tests 15, 16, 24 Policy / audit works
-  G7 Resilience   Tests 21-23      Failover / recovery works
-  G8 Terminal     Tests 25-28      TUI / history / context are safe
-  G9 Golden       Test 30          Full end-to-end Wazir golden path
+  G0  Protocol          Test 20          Models can reliably operate Wazir
+  G1  Runtime           Tests 1, 17-19   Tools/workspaces actually work
+  G2  Agent             Tests 8, 9       Coding + repair works
+  G3  Routing           Tests 3, 4, 14, 29 Capability-based routing works
+  G4  Fleet             Tests 2, 5, 6, 7 DAG / concurrency / fan-in works
+  G5  Multi-Agent       Tests 10-13      Review / delegation / handoff works
+  G6  Governance        Tests 15, 16, 24 Policy / audit works
+  G7  Resilience        Tests 21-23      Failover / recovery works
+  G8  Terminal          Tests 25-28      TUI / history / context are safe
+  G9  Golden            Test 30          Full end-to-end Wazir golden path
+  G10 Tool Depth        Tests 31-34      Timeout, edit uniqueness, windowed reads, search truncation
+  G11 Interop           Tests 35-37      Structured output + MCP discovery/policy, exercised live
+  G12 Session Hardening Tests 38-40      Empty completions, compaction fidelity, worktree merge safety
+  G13 Terminal Depth    Tests 41-42      Composer history recall, Escape cancellation mid-stream
+  G14 Performance       Tests 43-44      PTY throughput/latency, multi-turn overhead growth bounds
 `);
 }
 
@@ -180,9 +185,9 @@ async function resolveExecutionSelection() {
     console.log('=============================================================');
     console.log('Each time there is an upgrade, select what to test:\n');
     console.log('  1) Foundational Sequence (20, 17, 18, 1, 9, 3, 4, 2) [Recommended]');
-    console.log('  2) Release Gate (G0 Protocol, G1 Runtime, G2 Agent, ... G9 Golden)');
-    console.log('  3) Specific Acceptance Test (Test 1 through 30)');
-    console.log('  4) Full Progressive Acceptance Suite (G0 through G9)');
+    console.log('  2) Release Gate (G0 Protocol, G1 Runtime, G2 Agent, ... G14 Performance)');
+    console.log('  3) Specific Acceptance Test (Test 1 through 44)');
+    console.log('  4) Full Progressive Acceptance Suite (G0 through G14)');
     console.log('  5) Probe Local Models & Runtimes');
     console.log('  q) Quit\n');
 
@@ -195,14 +200,14 @@ async function resolveExecutionSelection() {
       for (const g of GATES) {
         console.log(`  ${g.id}) ${g.title}: ${g.description}`);
       }
-      const gateChoice = await promptUser('\nEnter Gate ID (e.g. G0, G1, ... G9): ');
+      const gateChoice = await promptUser('\nEnter Gate ID (e.g. G0, G1, ... G14): ');
       targetGate = gateChoice.trim().toUpperCase();
       if (!GATES.some((g) => g.id === targetGate)) {
         console.error(`Unknown gate ${targetGate}`);
         process.exit(1);
       }
     } else if (choice === '3') {
-      const testChoice = await promptUser('\nEnter Test ID (1 to 30): ');
+      const testChoice = await promptUser('\nEnter Test ID (1 to 44): ');
       targetTestId = parseInt(testChoice.trim(), 10);
       if (!TESTS[targetTestId]) {
         console.error(`Unknown test ${targetTestId}`);
@@ -254,7 +259,7 @@ async function main() {
   } else if (targetGate) {
     const g = GATES.find((g) => g.id === targetGate);
     if (!g) {
-      console.error(`Gate ${targetGate} not found. Valid gates: G0..G9`);
+      console.error(`Gate ${targetGate} not found. Valid gates: G0..G14`);
       process.exit(2);
     }
     testQueue = g.testIds.map((id) => TESTS[id]);
@@ -265,7 +270,7 @@ async function main() {
       const gateOrderB = GATES.find((g) => g.id === b.gateId)?.order ?? 0;
       return gateOrderA !== gateOrderB ? gateOrderA - gateOrderB : a.id - b.id;
     });
-    executionPlanDescription = `Full Progressive Suite (All 10 Gates, ${testQueue.length} tests)`;
+    executionPlanDescription = `Full Progressive Suite (All ${GATES.length} Gates, ${testQueue.length} tests)`;
   } else {
     // Foundational
     testQueue = FOUNDATIONAL.map((id) => TESTS[id]);
