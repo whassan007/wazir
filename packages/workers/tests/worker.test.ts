@@ -143,3 +143,60 @@ describe('Worker — adapter selection and cancellation', () => {
     await expect(worker.cancel('req-1')).resolves.toBeUndefined();
   });
 });
+
+describe('Worker — refreshRuntime', () => {
+  it('re-probes a known runtime and picks up newly available models without a full restart', async () => {
+    let healthy = false;
+    const lmstudio: RuntimeAdapter = {
+      id: 'lmstudio',
+      type: 'other',
+      async discover() {
+        return { id: 'lmstudio', name: 'lmstudio', version: '1.0' };
+      },
+      async healthCheck() {
+        return healthy ? { status: 'healthy' } : { status: 'unavailable', message: 'connection refused' };
+      },
+      async listModels() {
+        return healthy ? [{ id: 'gemma-4', name: 'gemma-4' }] : [];
+      },
+      async getCapabilities() {
+        return {
+          chat: true,
+          streaming: true,
+          toolCalling: false,
+          structuredOutput: false,
+          vision: false,
+          embeddings: false,
+          reasoning: false,
+          modelLoad: false,
+          modelUnload: false,
+          modelDownload: false,
+          statefulChat: false,
+          mcp: false,
+        };
+      },
+      async *generate() {
+        yield { type: 'completed' as const, content: 'ok' };
+      },
+    };
+    const worker = new Worker({ computerId: 'c1', name: 'w1', adapters: [lmstudio] });
+    await worker.start();
+
+    expect(worker.discovered.find((r) => r.id === 'lmstudio')?.health).toBe('unavailable');
+    expect(worker.adapterForModel('gemma-4')).toBeUndefined();
+
+    healthy = true;
+    const refreshed = await worker.refreshRuntime('lmstudio');
+
+    expect(refreshed?.health).toBe('healthy');
+    expect(refreshed?.models.map((m) => m.id)).toEqual(['gemma-4']);
+    expect(worker.discovered.find((r) => r.id === 'lmstudio')?.health).toBe('healthy');
+    expect(worker.adapterForModel('gemma-4')).toBe(lmstudio);
+  });
+
+  it('returns undefined for a runtime id the worker was never configured with', async () => {
+    const worker = new Worker({ computerId: 'c1', name: 'w1', adapters: [] });
+    await worker.start();
+    expect(await worker.refreshRuntime('nonexistent')).toBeUndefined();
+  });
+});

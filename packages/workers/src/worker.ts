@@ -146,6 +146,24 @@ export class Worker {
     this.info = { ...this.info, status: 'offline' };
   }
 
+  /**
+   * Re-probes one already-known runtime adapter (e.g. after the operator starts LM
+   * Studio's server from within the TUI) without a full worker restart. Only re-checks
+   * a runtime `start()` already discovered — it can't add one that was never configured.
+   */
+  async refreshRuntime(id: string): Promise<DiscoveredRuntime | undefined> {
+    const existing = this.adapters.find((runtime) => runtime.id === id);
+    if (!existing) return undefined;
+    const [refreshed] = await discoverRuntimes([existing.adapter]);
+    this.adapters = this.adapters.map((runtime) => (runtime.id === id ? refreshed : runtime));
+    this.info = {
+      ...this.info,
+      runtimes: this.adapters.map((r) => r.id),
+      models: this.adapters.flatMap((r) => r.models.map((m) => m.id)),
+    };
+    return refreshed;
+  }
+
   adapterForModel(modelId: string): RuntimeAdapter | undefined {
     const discovered = this.adapters.find((runtime) =>
       runtime.models.some((model) => model.id === modelId),
