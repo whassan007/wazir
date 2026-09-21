@@ -7,7 +7,7 @@ const program = new Command();
 
 program
   .name('wa')
-  .description('Wazir CLI — control plane command line')
+  .description('Wazir CLI — meta-harness for local and distributed AI execution')
   .version('0.1.30');
 
 // computers command
@@ -541,6 +541,7 @@ program
   .option('--no-worktrees', 'Disable git worktree isolation')
   .option('--auto-merge', 'Automatically merge completed agent branches into main')
   .option('--timeout <seconds>', 'Stop a job automatically after this many seconds (default: no limit)')
+  .option('--planner', 'Enable 3-layer Planner-Supervisor-Executor architecture (pre-execution DAG planning)')
   .action(async (options) => {
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
@@ -556,6 +557,7 @@ program
       useWorktrees: options.worktrees !== false,
       autoMerge: options.autoMerge === true,
       timeoutSeconds: timeout,
+      enablePlanner: options.planner === true,
     });
     // A closed/dead controlling terminal (the pty itself going away — distinct from
     // stdin's own 'end' event, which FleetTui already handles) delivers SIGHUP. With

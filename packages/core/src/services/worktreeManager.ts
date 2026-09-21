@@ -7,7 +7,7 @@ const execFileAsync = promisify(execFile);
 
 export interface WorktreeInfo {
   jobId: string;
-  taskId: string;
+  taskId?: string;
   worktreeDir: string;
   branch: string;
   baseBranch: string;
@@ -38,14 +38,15 @@ export interface WorktreeManagerOptions {
  * Git Worktree Isolation per Agent.
  *
  * Provides dedicated filesystem and branch isolation for concurrent agents:
- * - Every agent receives an isolated worktree (`.wazir/worktrees/<jobId>-<taskId>`)
- *   on a dedicated branch (`wazir/<jobId>/<taskId>`).
+ * - Every agent receives an isolated worktree (`.wazir/worktrees/<jobId>-<taskId>`
+ *   or `.wazir/worktrees/<jobId>` for shared-job execution)
+ *   on a dedicated branch (`wazir/<jobId>/<taskId>` or `wazir/<jobId>`).
  * - Concurrent file writes never collide.
  * - Merge-back story:
  *   - 'review' (default): Agent commits verified changes to its branch; the TUI/CLI
- *     surfaces diffs and lets the user review/merge without risky auto-overwrites.
- *   - 'auto': Attempts clean merge-back sequentially, aborting and flagging conflicts
- *     if git encounters merge conflicts.
+ *     reports the branch name and commit sha for human review/merge.
+ *   - 'auto' (optional flag): Merges successfully completed worktrees back into
+ *     the target branch automatically.
  */
 /**
  * Orchestrator git invocations run without policy authorization, so they
@@ -57,6 +58,7 @@ const GIT_NO_HOOKS = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=fa
 
 export class WorktreeManager {
   private readonly rootOverride?: string;
+  private readonly jobWorktrees = new Map<string, WorktreeInfo>();
 
   constructor(options: WorktreeManagerOptions = {}) {
     this.rootOverride = options.worktreeRootDir;
@@ -88,24 +90,38 @@ export class WorktreeManager {
     return this.rootOverride ?? path.join(projectRoot, '.wazir', 'worktrees');
   }
 
+  async getOrCreateJobWorktree(
+    projectRoot: string,
+    jobId: string,
+  ): Promise<WorktreeInfo> {
+    const existing = this.jobWorktrees.get(jobId);
+    if (existing) {
+      const exists = await fs.access(existing.worktreeDir).then(() => true).catch(() => false);
+      if (exists) return existing;
+    }
+    const info = await this.createWorktree(projectRoot, jobId);
+    this.jobWorktrees.set(jobId, info);
+    return info;
+  }
+
   async createWorktree(
     projectRoot: string,
     jobId: string,
-    taskId: string,
+    taskId?: string,
   ): Promise<WorktreeInfo> {
     assertSafeId('jobId', jobId);
-    assertSafeId('taskId', taskId);
+    if (taskId !== undefined) assertSafeId('taskId', taskId);
     const isGit = await this.isGitRepo(projectRoot);
     const rootDir = path.resolve(this.getWorktreeRootDir(projectRoot));
     await fs.mkdir(rootDir, { recursive: true });
 
-    const worktreeDir = path.resolve(rootDir, `${jobId}-${taskId}`);
+    const worktreeDir = path.resolve(rootDir, taskId ? `${jobId}-${taskId}` : jobId);
     // Belt and braces: the ids are validated above, but the directory that
     // gets `rm -rf`'d below must never be anything but a child of rootDir.
     if (!worktreeDir.startsWith(rootDir + path.sep)) {
       throw new Error(`worktree path '${worktreeDir}' escapes '${rootDir}'`);
     }
-    const branch = `wazir/${jobId}/${taskId}`;
+    const branch = taskId ? `wazir/${jobId}/${taskId}` : `wazir/${jobId}`;
     const baseBranch = isGit ? await this.getCurrentBranch(projectRoot) : 'none';
 
     if (!isGit) {

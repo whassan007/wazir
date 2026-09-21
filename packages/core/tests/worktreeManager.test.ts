@@ -85,6 +85,26 @@ describe('WorktreeManager — git worktree isolation per agent', () => {
     await expect(fs.access(wt2.worktreeDir)).rejects.toThrow();
   });
 
+  it('shares job-level worktree across tasks when getOrCreateJobWorktree is used', async () => {
+    tmpRepo = await initGitRepo();
+    const manager = new WorktreeManager();
+
+    const wtA = await manager.getOrCreateJobWorktree(tmpRepo, 'job-shared');
+    const wtB = await manager.getOrCreateJobWorktree(tmpRepo, 'job-shared');
+
+    expect(wtA.worktreeDir).toBe(wtB.worktreeDir);
+    expect(wtA.branch).toBe('wazir/job-shared');
+
+    // Task 1 writes a file
+    await fs.writeFile(path.join(wtA.worktreeDir, 'shared-file.txt'), 'written by step 1\n');
+
+    // Task 2 immediately sees the file written by step 1
+    const content = await fs.readFile(path.join(wtB.worktreeDir, 'shared-file.txt'), 'utf8');
+    expect(content).toBe('written by step 1\n');
+
+    await manager.removeWorktree(wtA);
+  });
+
   it('detects merge conflicts safely without corrupting the working tree', async () => {
     tmpRepo = await initGitRepo();
     const manager = new WorktreeManager();

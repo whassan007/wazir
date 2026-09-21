@@ -8,6 +8,7 @@ import type {
   Task,
   TaskStatus,
   TaskType,
+  TaskRequirements,
   Priority,
   JobNode,
   ExecutionPreferences,
@@ -105,12 +106,18 @@ export class JobManager {
     if (job.status !== 'running') return;
 
     for (const task of job.tasks) {
-      if (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled') {
+      if (task.status === 'running') {
         task.status = 'failed';
+        const node = job.graph.nodes.find((n) => n.taskId === task.id || n.id === task.id);
+        if (node && node.state !== 'completed' && node.state !== 'failed' && node.state !== 'cancelled') {
+          node.state = 'failed';
+          node.error = node.error ?? 'Orphaned: the process running this task ended before it finished';
+          node.completedAt = node.completedAt ?? new Date();
+        }
       }
     }
     for (const node of job.graph.nodes) {
-      if (node.state !== 'completed' && node.state !== 'failed' && node.state !== 'cancelled') {
+      if (node.state === 'running') {
         node.state = 'failed';
         node.error = node.error ?? 'Orphaned: the process running this task ended before it finished';
         node.completedAt = node.completedAt ?? new Date();
@@ -153,16 +160,19 @@ export class JobManager {
       title: t.task.title,
       input: t.task.input,
       requirements: {
-        capabilities: [],
-        reasoning: 'low' as const,
-        vision: false,
-        toolCalling: false,
-        minimumContext: 1024,
-        minimumMemoryGB: 4,
-        minimumGPUMemoryGB: 0,
-        localOnly: false,
+        capabilities: t.task.requirements?.capabilities ?? [],
+        reasoning: t.task.requirements?.reasoning ?? ('low' as const),
+        vision: t.task.requirements?.vision ?? false,
+        toolCalling: t.task.requirements?.toolCalling ?? false,
+        minimumContext: t.task.requirements?.minimumContext ?? 1024,
+        minimumMemoryGB: t.task.requirements?.minimumMemoryGB ?? 4,
+        minimumGPUMemoryGB: t.task.requirements?.minimumGPUMemoryGB ?? 0,
+        localOnly: t.task.requirements?.localOnly ?? false,
       },
-      policy: undefined,
+      capabilities: t.task.capabilities,
+      expectedEvidence: t.task.expectedEvidence,
+      contextFrom: t.task.contextFrom,
+      policy: t.task.policy,
       execution: {
         targetComputerId: t.task.execution?.targetComputerId,
         targetRuntimeId: t.task.execution?.targetRuntimeId,
@@ -335,6 +345,117 @@ export class JobManager {
     await this.flush(job);
   }
 
+  async addTasksToJob(
+    jobId: string,
+    newTasks: JobTaskInput[],
+    rewireOptions?: {
+      replacesTaskId?: string;
+    },
+  ): Promise<Task[]> {
+    const job = this.require(jobId);
+    const now = new Date();
+    const createdTasks: Task[] = [];
+
+    for (let i = 0; i < newTasks.length; i++) {
+      const input = newTasks[i];
+      const taskId = input.task.id ?? `task-${jobId}-dyn-${Date.now().toString(36)}-${i}`;
+      input.task.id = taskId;
+
+      const task: Task = {
+        id: taskId,
+        type: (input.task.type as TaskType) ?? 'coding',
+        title: input.task.title,
+        input: input.task.input ?? '',
+        requirements: {
+          capabilities: input.task.requirements?.capabilities ?? [],
+          reasoning: input.task.requirements?.reasoning ?? ('low' as const),
+          vision: input.task.requirements?.vision ?? false,
+          toolCalling: input.task.requirements?.toolCalling ?? false,
+          minimumContext: input.task.requirements?.minimumContext ?? 1024,
+          minimumMemoryGB: input.task.requirements?.minimumMemoryGB ?? 4,
+          minimumGPUMemoryGB: input.task.requirements?.minimumGPUMemoryGB ?? 0,
+          localOnly: input.task.requirements?.localOnly ?? false,
+        },
+        capabilities: input.task.capabilities,
+        expectedEvidence: input.task.expectedEvidence,
+        contextFrom: input.task.contextFrom,
+        policy: input.task.policy,
+        execution: {
+          targetComputerId: input.task.execution?.targetComputerId,
+          targetRuntimeId: input.task.execution?.targetRuntimeId,
+          targetModelId: input.task.execution?.targetModelId,
+          targetAgentId: input.task.execution?.targetAgentId,
+          executionMode: input.task.execution?.executionMode ?? ('automatic' as const),
+        },
+        priority: (input.task.priority ?? 'normal') as Priority,
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      job.tasks.push(task);
+      createdTasks.push(task);
+
+      const node: JobNode = {
+        id: taskId,
+        type: input.type ?? 'task',
+        taskId,
+        agentId: input.agentId,
+        state: 'idle',
+        dependencies: input.dependencies ?? [],
+        children: [],
+      };
+
+      job.graph.nodes.push(node);
+
+      for (const dep of input.dependencies ?? []) {
+        job.graph.edges.push({ from: dep, to: taskId });
+        const parentNode = job.graph.nodes.find((n) => n.id === dep || n.taskId === dep);
+        if (parentNode && !parentNode.children.includes(taskId)) {
+          parentNode.children.push(taskId);
+        }
+      }
+    }
+
+    if (rewireOptions?.replacesTaskId && createdTasks.length > 0) {
+      const oldId = rewireOptions.replacesTaskId;
+      const newIds = new Set(createdTasks.map((t) => t.id));
+      const oldNode = job.graph.nodes.find((n) => n.id === oldId || n.taskId === oldId);
+      const firstNewNode = job.graph.nodes.find((n) => n.id === createdTasks[0].id);
+
+      if (firstNewNode) {
+        firstNewNode.dependencies = firstNewNode.dependencies
+          .filter((d) => d !== oldId)
+          .concat(oldNode ? oldNode.dependencies : []);
+        job.graph.edges = job.graph.edges.filter((e) => !(e.from === oldId && e.to === firstNewNode.id));
+        for (const dep of oldNode?.dependencies ?? []) {
+          if (!job.graph.edges.some((e) => e.from === dep && e.to === firstNewNode.id)) {
+            job.graph.edges.push({ from: dep, to: firstNewNode.id });
+          }
+        }
+      }
+
+      const finalNewId = createdTasks[createdTasks.length - 1].id;
+
+      for (const edge of job.graph.edges) {
+        if (edge.from === oldId && !newIds.has(edge.to)) {
+          edge.from = finalNewId;
+        }
+      }
+      for (const node of job.graph.nodes) {
+        if (!newIds.has(node.id) && !newIds.has(node.taskId ?? '')) {
+          const depIdx = node.dependencies.indexOf(oldId);
+          if (depIdx !== -1) {
+            node.dependencies[depIdx] = finalNewId;
+          }
+        }
+      }
+    }
+
+    await this.flush(job);
+    return createdTasks;
+  }
+
   private buildGraph(tasks: JobTaskInput[]): JobGraph {
     const nodes: JobNode[] = [];
     const edges: TaskGraphEdge[] = [];
@@ -471,7 +592,11 @@ export interface JobTaskInput {
     type?: string;
     title?: string;
     input: string;
-    requirements?: Record<string, unknown>;
+    requirements?: Partial<TaskRequirements>;
+    capabilities?: string[];
+    expectedEvidence?: string[];
+    contextFrom?: string[];
+    policy?: Task['policy'];
     priority?: 'low' | 'normal' | 'high' | 'critical';
     /** Pins this task to a specific model/computer/runtime/agent instead of letting
      *  the scheduler auto-route it — e.g. wa run --model, or /model in wa chat. */

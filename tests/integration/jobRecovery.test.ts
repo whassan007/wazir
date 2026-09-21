@@ -138,22 +138,23 @@ describe('Section 10: Job-Level Restart & Recovery mid-execution', () => {
     await jobManager2.ready;
     await executionEngine2.ready;
 
-    // 4. Assert Job recovery & state survival
+    // 4. Assert Job recovery & state survival (orphaned task healed on crash restart per v0.1.17)
     const recoveredJob = jobManager2.get(job1.id);
     expect(recoveredJob).toBeDefined();
     expect(recoveredJob?.id).toBe(job1.id);
     expect(recoveredJob?.title).toBe('Crash-Recovery Job');
-    expect(recoveredJob?.status).toBe('running');
+    expect(recoveredJob?.status).toBe('failed');
     expect(recoveredJob?.priority).toBe('high');
 
     // 5. Assert Task and DAG state survival
     const step1 = recoveredJob?.tasks.find((t) => t.id === 'step-1');
     const step2 = recoveredJob?.tasks.find((t) => t.id === 'step-2');
-    expect(step1?.status).toBe('running');
+    expect(step1?.status).toBe('failed');
     expect(step2?.status).toBe('pending');
 
     const step1Node = recoveredJob?.graph.nodes.find((n) => n.id === 'step-1');
-    expect(step1Node?.state).toBe('running');
+    expect(step1Node?.state).toBe('failed');
+    expect(step1Node?.error).toContain('Orphaned');
 
     // 6. Assert Date revival across process reboot
     expect(recoveredJob?.createdAt).toBeInstanceOf(Date);

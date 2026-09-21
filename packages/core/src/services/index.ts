@@ -26,6 +26,5 @@ export type {
   WorktreeManagerOptions,
   WorktreeMergeResult,
 } from './worktreeManager.js';
-
-
-
+export { TaskPlanner, createTaskPlanner } from './planner.js';
+export type { ExecutionPlan, PlanStep, PlanOptions, PlannerModelCaller } from './planner.js';

@@ -62,6 +62,9 @@ export interface Task {
   title?: string;
   input: string;
   requirements: TaskRequirements;
+  capabilities?: string[];
+  expectedEvidence?: string[];
+  contextFrom?: string[];
   policy?: PolicyRequirements;
   execution?: ExecutionPreferences;
   priority: Priority;

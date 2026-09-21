@@ -173,6 +173,9 @@ export interface JobTaskExecutionContext {
   signal?: AbortSignal;
   onProgress?: (event: JobTaskProgressEvent) => void;
   getSteeringInstruction?: () => string | undefined;
+  projectRoot?: string;
+  worktreeDir?: string;
+  previousOutcomes?: Map<string, JobTaskOutcome>;
 }
 
 export interface JobTaskOutcome {
@@ -208,6 +211,7 @@ export type JobOrchestratorEventType =
   | 'task:completed'
   | 'task:failed'
   | 'task:retry'
+  | 'task:replan'
   | 'task:cancelled'
   | 'task:steered';
 
@@ -230,6 +234,16 @@ export interface JobOrchestratorEvent {
   timestamp?: Date;
 }
 
+import type { JobTaskInput } from '../services/jobManager.js';
+export type { JobTaskInput };
+
+export type TaskReplanner = (context: {
+  job: Job;
+  failedTask: Task;
+  node: JobNode;
+  outcome: JobTaskOutcome;
+}) => Promise<{ repairTasks: JobTaskInput[] } | null | undefined>;
+
 export interface JobRunOptions {
   concurrencyLimit?: number;
   taskExecutor?: JobTaskExecutor;
@@ -237,5 +251,6 @@ export interface JobRunOptions {
   onEvent?: (event: JobOrchestratorEvent) => void;
   /** Overrides job.timeoutSeconds for this run; falls back to a built-in default if neither is set. */
   timeoutSeconds?: number;
+  replanner?: TaskReplanner;
 }
 

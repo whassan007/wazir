@@ -16,6 +16,8 @@ import {
   RuntimeRegistry,
   Scheduler,
   WorktreeManager,
+  TaskPlanner,
+  createTaskPlanner,
   estimateModelMemory,
 } from '@wazir/core';
 import type {
@@ -31,7 +33,7 @@ import {
   type KeyValueStore,
 } from '@wazir/shared';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
-import { createCodingAgent, ExternalAgentAdapter } from '@wazir/agents';
+import { createCodingAgent, createStepAgent, ExternalAgentAdapter } from '@wazir/agents';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
@@ -66,6 +68,7 @@ export interface RookEngine {
   approvalQueue: ApprovalQueue;
   orchestrator: JobOrchestrator & { store?: KeyValueStore };
   worktrees: WorktreeManager;
+  planner: TaskPlanner;
   adapters: Map<string, RuntimeAdapter>;
   discovered: DiscoveredRuntime[];
   worker: Worker;
@@ -177,6 +180,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
 
   // ---- agents -----------------------------------------------------------
   agents.register(createCodingAgent(), 'native');
+  agents.register(createStepAgent(), 'native');
 
   // OpenCode is an optional external execution provider: Wazir still owns
   // scheduling, policy, and history — OpenCode only supplies the reasoning
@@ -252,6 +256,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   orchestrator.store = store; // Attach store for Block persistence
 
   const worktrees = new WorktreeManager();
+  const planner = createTaskPlanner();
 
   return {
     config,
@@ -270,6 +275,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     approvalQueue,
     orchestrator,
     worktrees,
+    planner,
     adapters: adapterById,
     discovered,
     worker,

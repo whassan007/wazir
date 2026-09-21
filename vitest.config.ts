@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
@@ -10,5 +10,6 @@ export default defineConfig({
     // in-flight assertion. The rest of the suite is fast and has no shared
     // external state, so serializing files costs little.
     fileParallelism: false,
+    exclude: [...configDefaults.exclude, '**/.wazir/**'],
   },
 });

@@ -49,6 +49,7 @@ const OUTPUT_RESERVE_TOKENS = 4096;
 
 export interface FleetRunnerOptions {
   useWorktrees?: boolean;
+  shareJobWorktree?: boolean;
   autoMerge?: boolean;
   maxTurns?: number;
 }
@@ -65,9 +66,13 @@ export function createFleetTaskExecutor(
     let worktreeInfo: WorktreeInfo | undefined;
     const isGit = await engine.worktrees.isGitRepo(engine.projectRoot);
 
-    if (runnerOptions.useWorktrees !== false && isGit) {
+    if (context.worktreeDir) {
+      taskRoot = context.worktreeDir;
+    } else if (runnerOptions.useWorktrees !== false && isGit) {
       try {
-        worktreeInfo = await engine.worktrees.createWorktree(engine.projectRoot, jobId, taskId);
+        worktreeInfo = runnerOptions.shareJobWorktree !== false
+          ? await engine.worktrees.getOrCreateJobWorktree(engine.projectRoot, jobId)
+          : await engine.worktrees.createWorktree(engine.projectRoot, jobId, taskId);
         taskRoot = worktreeInfo.worktreeDir;
       } catch (err) {
         // Fallback to project root if worktree creation fails
@@ -388,7 +393,10 @@ export function createFleetTaskExecutor(
 
     // 7. Deterministic evaluation
     const finalRecord = engine.executions.require(executionId);
-    const evaluation = evaluateExecution(finalRecord);
+    const evaluation = evaluateExecution(finalRecord, {
+      expectedEvidence: task.expectedEvidence,
+      projectRoot: taskRoot,
+    });
     await engine.executions.setEvaluation(executionId, evaluation);
     if (summary) {
       await engine.executions.setResult(executionId, summary);

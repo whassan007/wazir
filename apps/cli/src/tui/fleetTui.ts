@@ -8,6 +8,8 @@ import {
   type PendingApprovalRequest,
   type Block,
   type BlockStatus,
+  type JobTaskInput,
+  type Task,
 } from '@wazir/core';
 import type { RookEngine } from '../engine.js';
 import { refreshRuntime } from '../engine.js';
@@ -175,6 +177,7 @@ export interface FleetTuiOptions {
   autoMerge?: boolean;
   /** Per-job wall-clock limit; the orchestrator's built-in default applies when unset. */
   timeoutSeconds?: number;
+  enablePlanner?: boolean;
 }
 
 /**
@@ -257,6 +260,7 @@ export class FleetTui {
   private readonly useWorktrees: boolean;
   private readonly autoMerge: boolean;
   private readonly timeoutSeconds?: number;
+  private readonly enablePlanner: boolean;
 
   private currentView: TuiView = 'fleet';
   private focusedPane: FocusPane = 'nav';
@@ -354,6 +358,7 @@ export class FleetTui {
     this.useWorktrees = options.useWorktrees ?? true;
     this.autoMerge = options.autoMerge ?? false;
     this.timeoutSeconds = options.timeoutSeconds;
+    this.enablePlanner = options.enablePlanner ?? false;
   }
 
   getCurrentView(): TuiView {
@@ -1540,31 +1545,50 @@ export class FleetTui {
     this.draw();
 
     let taskDescriptions: string[] = [];
+    let jobTasks: JobTaskInput[];
 
-    if (prompt.startsWith('/fanout ')) {
+    if (this.enablePlanner && !prompt.startsWith('/fanout ') && !prompt.startsWith('/parallel ') && !prompt.startsWith('/p ')) {
+      this.statusMessage = 'Planning task execution DAG...';
+      this.draw();
+      const plan = await this.engine.planner.plan(prompt);
+      jobTasks = this.engine.planner.planToJobTaskInputs(plan, {
+        execution: {
+          targetAgentId: 'wazir-step',
+          targetModelId: this.selectedModelId,
+        },
+      });
+    } else if (prompt.startsWith('/fanout ')) {
       const raw = prompt.slice(8).trim();
       taskDescriptions = raw.split(';').map((s) => s.trim()).filter(Boolean);
+      jobTasks = taskDescriptions.map((desc) => ({
+        task: {
+          type: 'coding',
+          title: desc.slice(0, 50),
+          input: desc,
+          execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
+        },
+      }));
     } else if (prompt.includes('\n- ') || prompt.includes('\n* ')) {
       taskDescriptions = prompt.split(/\n[-*]\s+/).map((s) => s.trim()).filter(Boolean);
+      jobTasks = taskDescriptions.map((desc) => ({
+        task: {
+          type: 'coding',
+          title: desc.slice(0, 50),
+          input: desc,
+          execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
+        },
+      }));
     } else {
       taskDescriptions = [prompt];
+      jobTasks = taskDescriptions.map((desc) => ({
+        task: {
+          type: 'coding',
+          title: desc.slice(0, 50),
+          input: desc,
+          execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
+        },
+      }));
     }
-
-    // Build tasks with dependency edges. Deliberately no explicit `id` here — every job
-    // used to get task ids `task-1`, `task-2`, ... regardless of which job it was, and
-    // ExecutionEngine.listByTask(taskId) filters by task id ALONE with no job scoping, so
-    // getJobRollup() for one job was silently pulling in tokens/filesChanged from every
-    // OTHER job that happened to reuse the same task id (which is nearly all of them,
-    // since any single-task job got "task-1"). JobManager.create() auto-assigns a
-    // globally unique `task-<jobId>-<i>` id when none is given — exactly what's needed.
-    const jobTasks = taskDescriptions.map((desc) => ({
-      task: {
-        type: 'coding',
-        title: desc.slice(0, 50),
-        input: desc,
-        execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
-      },
-    }));
 
     try {
       const job = await this.engine.orchestrator.createJob({
@@ -1581,7 +1605,7 @@ export class FleetTui {
         const card: AgentCardState = {
           taskId: t.id,
           title: t.title ?? t.input.slice(0, 40),
-          agentId: 'wazir-coding',
+          agentId: t.execution?.targetAgentId ?? (this.enablePlanner ? 'wazir-step' : 'wazir-coding'),
           computerId: 'evaluating...',
           modelId: 'evaluating...',
           phase: 'queued',

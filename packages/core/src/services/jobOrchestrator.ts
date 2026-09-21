@@ -312,6 +312,7 @@ export class JobOrchestrator {
 
     const activeTasks = new Map<string, AbortController>();
     const retryCounts = new Map<string, number>();
+    const supersededTaskIds = new Set<string>();
 
     this.emit(jobId, { type: 'job:started', jobId });
 
@@ -555,6 +556,40 @@ export class JobOrchestrator {
                       outcome.error?.toLowerCase().includes('denied') ||
                       outcome.reasons?.some((r) => r.toLowerCase().includes('policy') || r.toLowerCase().includes('deny')),
                     );
+
+                if (options.replanner && !isPolicyDenial) {
+                  try {
+                    const replanResult = await options.replanner({
+                      job,
+                      failedTask: task,
+                      node,
+                      outcome,
+                    });
+                    if (replanResult?.repairTasks && replanResult.repairTasks.length > 0) {
+                      node.state = 'failed';
+                      node.error = `Superseded by repair plan: ${outcome.error ?? 'Task failed'}`;
+                      await this.jobManager.updateAgentState(job.id, node.id, 'failed', undefined, node.error);
+                      await this.jobManager.updateTaskStatus(job.id, taskId, 'failed');
+                      supersededTaskIds.add(taskId);
+
+                      const added = await this.jobManager.addTasksToJob(job.id, replanResult.repairTasks, {
+                        replacesTaskId: taskId,
+                      });
+
+                      this.emit(jobId, {
+                        type: 'task:replan',
+                        jobId,
+                        taskId,
+                        error: outcome.error,
+                        event: { repairTaskIds: added.map((t) => t.id) },
+                      });
+                      return;
+                    }
+                  } catch {
+                    // Fall back to standard retry on replanner failure
+                  }
+                }
+
                 const retries = retryCounts.get(taskId) ?? 0;
                 const maxRetries = isPolicyDenial ? 0 : (job.maxRetries ?? 3);
                 if (retries < maxRetries) {
@@ -652,7 +687,9 @@ export class JobOrchestrator {
             (n) => n.state === 'completed' || n.state === 'failed' || n.state === 'cancelled',
           );
           if (allFinished) {
-            const anyFailed = job.graph.nodes.some((n) => n.state === 'failed');
+            const anyFailed = job.graph.nodes.some(
+              (n) => n.state === 'failed' && !supersededTaskIds.has(n.taskId ?? n.id),
+            );
             await finishJob(anyFailed ? 'failed' : 'completed');
             return;
           }
