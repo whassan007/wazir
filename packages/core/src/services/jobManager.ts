@@ -10,6 +10,7 @@ import type {
   TaskType,
   Priority,
   JobNode,
+  ExecutionPreferences,
 } from '../types/index.js';
 
 export interface JobManagerOptions {
@@ -163,12 +164,11 @@ export class JobManager {
       },
       policy: undefined,
       execution: {
-        targetComputerId: undefined,
-        targetRuntimeId: undefined,
-        targetModelId: undefined,
-        targetAgentId: undefined,
-        executionMode: 'automatic' as const,
-        maxTurns: undefined,
+        targetComputerId: t.task.execution?.targetComputerId,
+        targetRuntimeId: t.task.execution?.targetRuntimeId,
+        targetModelId: t.task.execution?.targetModelId,
+        targetAgentId: t.task.execution?.targetAgentId,
+        executionMode: t.task.execution?.executionMode ?? ('automatic' as const),
       },
       priority: (t.task.priority ?? 'normal') as Priority,
       status: 'pending' as TaskStatus,
@@ -473,6 +473,9 @@ export interface JobTaskInput {
     input: string;
     requirements?: Record<string, unknown>;
     priority?: 'low' | 'normal' | 'high' | 'critical';
+    /** Pins this task to a specific model/computer/runtime/agent instead of letting
+     *  the scheduler auto-route it — e.g. wa run --model, or /model in wa chat. */
+    execution?: Partial<ExecutionPreferences>;
   };
   agentId?: string;
   dependencies?: string[];
