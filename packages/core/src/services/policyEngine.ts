@@ -333,7 +333,9 @@ export class PolicyEngine {
       { id: 'shell-unknown-ask', description: 'Interpreters, package managers and other shell commands require approval (deny when non-interactive)', effect: 'ask' },
       { id: 'git-read-allow', description: `Read-only git commands are allowed (${[...GIT_ALLOW].join(', ')})`, effect: 'allow' },
       { id: 'git-write-ask', description: `Local git write commands require approval (${[...GIT_ASK].join(', ')})`, effect: 'ask' },
-      { id: 'git-push-deny', description: `Publishing git commands are denied by default (${[...GIT_DENY].join(', ')})`, effect: 'deny' },
+      { id: 'shell-compiled-binary-allow', description: 'Binaries compiled by this task via approved steps are allowed', effect: 'allow' },
+      { id: 'shell-workspace-artifact-allow', description: 'Executable artifacts inside the isolated project workspace are allowed', effect: 'allow' },
+      { id: 'shell-workspace-artifact-ask', description: 'Executable artifacts in protected project paths require approval', effect: 'ask' },
       { id: 'project-checks-allow', description: 'test / lint / typecheck / build run inside the project', effect: 'allow' },
     ];
     return rules;
@@ -771,6 +773,23 @@ export class PolicyEngine {
           decision: 'allow',
           rule: 'shell-compiled-binary-allow',
           reasons: [`'${rawFirstWord}' is a binary this task already compiled via an approved compile step`],
+        });
+        return decisions;
+      }
+      if (this.options.allowWorkspaceArtifactExecution === true && isInside(projectRoot, absolute)) {
+        const protectedReason = protectedPathReason(projectRoot, absolute);
+        if (protectedReason) {
+          decisions.push({
+            decision: 'ask',
+            rule: 'shell-workspace-artifact-ask',
+            reasons: [`execution of workspace artifact in protected path '${rawFirstWord}': ${protectedReason}`],
+          });
+          return decisions;
+        }
+        decisions.push({
+          decision: 'allow',
+          rule: 'shell-workspace-artifact-allow',
+          reasons: [`'${rawFirstWord}' is an executable artifact inside the isolated workspace`],
         });
         return decisions;
       }

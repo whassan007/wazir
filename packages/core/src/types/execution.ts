@@ -46,6 +46,14 @@ export interface ToolCallRecord {
   at: Date;
   /** OS isolation the tool process ran under (`bwrap`, `sandbox-exec`, `none`); absent for in-process tools. */
   sandbox?: string;
+  /** Unique ID assigned to this shell/process invocation for tracing. */
+  shellInvocationId?: string;
+  /** Effective working directory the tool executed in. */
+  cwd?: string;
+  /** Effective project root for containment. */
+  projectRoot?: string;
+  /** Process exit code when applicable. */
+  exitCode?: number;
 }
 
 export interface CheckRunRecord {

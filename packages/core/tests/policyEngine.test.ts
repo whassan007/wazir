@@ -204,5 +204,51 @@ describe('PolicyEngine', () => {
       expect(decision.decision).toBe('allow');
       expect(decision.rule).toContain('user-approved');
     });
+
+    it('contextual workspace artifact execution auto-allows binaries inside projectRoot without global whitelisting', async () => {
+      const engineWithArtifacts = new PolicyEngine({
+        projectRoot: '/test/project',
+        allowWorkspaceArtifactExecution: true,
+      });
+
+      // Executing ./main inside projectRoot is auto-allowed
+      const mainDecision = engineWithArtifacts.classify({
+        tool: 'shell',
+        input: { command: './main' },
+      });
+      expect(mainDecision.decision).toBe('allow');
+      expect(mainDecision.rule).toBe('shell-workspace-artifact-allow');
+
+      // Executing with arguments
+      const argsDecision = engineWithArtifacts.classify({
+        tool: 'shell',
+        input: { command: './build/test --arg 123' },
+      });
+      expect(argsDecision.decision).toBe('allow');
+      expect(argsDecision.rule).toBe('shell-workspace-artifact-allow');
+
+      // Traversal outside project root is rejected
+      const outsideDecision = engineWithArtifacts.classify({
+        tool: 'shell',
+        input: { command: './../outside_bin' },
+      });
+      expect(outsideDecision.decision).toBe('ask');
+      expect(outsideDecision.rule).not.toBe('shell-workspace-artifact-allow');
+
+      // Executable inside protected paths (node_modules, .git) requires approval
+      const protectedDecision = engineWithArtifacts.classify({
+        tool: 'shell',
+        input: { command: './node_modules/.bin/foo' },
+      });
+      expect(protectedDecision.decision).toBe('ask');
+      expect(protectedDecision.rule).toBe('shell-workspace-artifact-ask');
+
+      const gitHookDecision = engineWithArtifacts.classify({
+        tool: 'shell',
+        input: { command: './.git/hooks/pre-commit' },
+      });
+      expect(gitHookDecision.decision).toBe('ask');
+      expect(gitHookDecision.rule).toBe('shell-workspace-artifact-ask');
+    });
   });
 });

@@ -93,7 +93,7 @@ async function buildTestEngine(projectRoot: string, reply: string): Promise<Rook
       };
     },
     async *generate() {
-      const replies = [reply, '{"action":"done","summary":"done"}'];
+      const replies = ['{"action":"plan","content":"write hello"}', reply, '{"action":"done","summary":"done"}'];
       const r = replies[Math.min(callCount, replies.length - 1)];
       callCount += 1;
       yield { type: 'token' as const, content: r };

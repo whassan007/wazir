@@ -163,6 +163,7 @@ export interface JobTaskProgressEvent {
   usage?: { input: number; output: number; total: number };
   /** Raw model response text this progress event was produced from, when available. */
   raw?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface JobTaskExecutionContext {

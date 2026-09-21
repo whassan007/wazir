@@ -1,10 +1,19 @@
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Tool, ToolResult } from '@wazir/core';
 import { errorMessage } from './paths.js';
 import { runFile, runShell } from './process.js';
 
-function toToolResult(command: string, result: Awaited<ReturnType<typeof runShell>>): ToolResult {
+function generateId(prefix: string = ''): string {
+  return `${prefix}${randomBytes(8).toString('hex')}`;
+}
+
+function toToolResult(
+  command: string,
+  result: Awaited<ReturnType<typeof runShell>>,
+  extraMetadata?: Record<string, unknown>,
+): ToolResult {
   const output = [result.stdout, result.stderr].filter(Boolean).join('\n').slice(0, 100_000);
   const details = (result.stderr.trim() || result.stdout.trim() || '').slice(0, 4000);
   const error = result.code === 0
@@ -21,6 +30,9 @@ function toToolResult(command: string, result: Awaited<ReturnType<typeof runShel
       sandbox: result.sandbox,
       stdout: result.stdout,
       stderr: result.stderr,
+      command,
+      durationMs: result.durationMs,
+      ...extraMetadata,
     },
   };
 }
@@ -46,13 +58,19 @@ export const shellTool: Tool = {
     if (!command) {
       return { ok: false, output: '', error: 'empty command', durationMs: 0 };
     }
+    const shellInvocationId = generateId('sh-');
     const result = await runShell(command, {
       cwd: ctx.projectRoot,
+      projectRoot: ctx.projectRoot,
       timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : 120_000,
       env: ctx.env,
       networkAllowed: ctx.networkAllowed,
     });
-    return toToolResult(command, result);
+    return toToolResult(command, result, {
+      shellInvocationId,
+      cwd: ctx.projectRoot,
+      projectRoot: ctx.projectRoot,
+    });
   },
 };
 
@@ -76,8 +94,17 @@ export const gitTool: Tool = {
     if (args.length === 0) {
       return { ok: false, output: '', error: 'git requires arguments', durationMs: 0 };
     }
-    const result = await runFile('git', args, { cwd: ctx.projectRoot, timeoutMs: 60_000, env: ctx.env, networkAllowed: ctx.networkAllowed });
-    return toToolResult(`git ${args.join(' ')}`, result);
+    const result = await runFile('git', args, {
+      cwd: ctx.projectRoot,
+      projectRoot: ctx.projectRoot,
+      timeoutMs: 60_000,
+      env: ctx.env,
+      networkAllowed: ctx.networkAllowed,
+    });
+    return toToolResult(`git ${args.join(' ')}`, result, {
+      cwd: ctx.projectRoot,
+      projectRoot: ctx.projectRoot,
+    });
   },
 };
 
@@ -133,11 +160,15 @@ function makeCheckTool(name: string, description: string, defaultScript: string,
       try {
         const result = await runFile('npm', ['run', script], {
           cwd: ctx.projectRoot,
+          projectRoot: ctx.projectRoot,
           timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : 300_000,
           env: ctx.env,
           networkAllowed: ctx.networkAllowed,
         });
-        return toToolResult(command, result);
+        return toToolResult(command, result, {
+          cwd: ctx.projectRoot,
+          projectRoot: ctx.projectRoot,
+        });
       } catch (error) {
         return { ok: false, output: '', error: errorMessage(error), durationMs: Date.now() - started };
       }

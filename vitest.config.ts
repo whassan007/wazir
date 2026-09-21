@@ -10,6 +10,10 @@ export default defineConfig({
     // in-flight assertion. The rest of the suite is fast and has no shared
     // external state, so serializing files costs little.
     fileParallelism: false,
-    exclude: [...configDefaults.exclude, '**/.wazir/**'],
+    // buildcpp.e2e.test.ts drives a full live multi-turn agentic loop against
+    // whatever model LM Studio has loaded (minutes, non-reproducible run to
+    // run) — deliberately excluded from the default sweep; run it explicitly
+    // via `npm run test:buildcpp`.
+    exclude: [...configDefaults.exclude, '**/.wazir/**', '**/buildcpp.e2e.test.ts'],
   },
 });

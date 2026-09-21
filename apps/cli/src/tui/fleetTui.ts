@@ -2191,7 +2191,21 @@ export class FleetTui {
     const source =
       agents.filter((a) => a.status === 'running' && a.lastTurnInputTokens !== undefined).sort(byRecency)[0] ??
       agents.filter((a) => a.lastTurnInputTokens !== undefined).sort(byRecency)[0];
-    const used = source?.lastTurnInputTokens ?? 0;
+    let used = source?.lastTurnInputTokens ?? 0;
+
+    // If no live agent turn tokens (e.g. inspecting a past or selected job, or after job deletion),
+    // check the selected or current job's rollup tokens.
+    if (used === 0) {
+      const all = this.getFlatNavItems();
+      const current = all[this.navSelectionIndex];
+      const jobId = current?.category === 'JOBS' ? current.id : this.currentJob?.id;
+      if (jobId) {
+        const rollup = this.jobRollups.get(jobId) ?? (this.currentJob?.id === jobId ? this.currentRollup : undefined);
+        if (rollup && rollup.tokens.input > 0) {
+          used = rollup.tokens.input;
+        }
+      }
+    }
 
     const models = this.engine.models.list();
     const max = models[0]?.contextMax ?? 32768;

@@ -25,7 +25,10 @@ function fakeRuntime(toolName = 'read'): { runtime: AgentRuntime; counters: { ge
     async *generate() {
       counters.generateCalls += 1;
       const input = toolName === 'write' ? '{"path":"x.txt","content":"x"}' : '{"path":"x.txt"}';
-      const reply = `{"action":"tool","tool":"${toolName}","input":${input}}`;
+      const reply =
+        counters.generateCalls === 1 && toolName === 'write'
+          ? '{"action":"plan","content":"plan"}'
+          : `{"action":"tool","tool":"${toolName}","input":${input}}`;
       yield { type: 'token', content: reply };
       yield { type: 'completed', content: reply };
     },

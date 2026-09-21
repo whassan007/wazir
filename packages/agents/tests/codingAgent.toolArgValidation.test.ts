@@ -207,4 +207,44 @@ describe('CodingAgent.run — tool argument validation', () => {
     expect(toolTurns.length).toBe(1);
     expect(toolTurns[0].tool).toBe('shell');
   });
+
+  it('forbids mutating file tools (write, edit) during the PLAN phase, but permits them once IMPLEMENT phase starts', async () => {
+    let calls = 0;
+    const executedTools: Array<{ name: string; input: unknown }> = [];
+    const runtime: AgentRuntime = {
+      tools: [
+        { name: 'read', description: 'read a file', inputSchema: {} },
+        { name: 'write', description: 'write a file', inputSchema: {} },
+      ],
+      async *generate() {
+        calls += 1;
+        const reply =
+          calls === 1
+            ? '{"action":"tool","tool":"write","input":{"path":"main.cpp","content":"premature write"}}'
+            : calls === 2
+              ? '{"action":"plan","content":"1. write main.cpp 2. compile"}'
+              : calls === 3
+                ? '{"action":"tool","tool":"write","input":{"path":"main.cpp","content":"legitimate write"}}'
+                : '{"action":"done","summary":"done"}';
+        yield { type: 'token', content: reply };
+        yield { type: 'completed', content: reply };
+      },
+      async executeTool(name, input): Promise<ToolResult> {
+        if (name === 'write') executedTools.push({ name, input });
+        return { ok: true, output: 'ok', durationMs: 1 };
+      },
+    };
+
+    const turns = await drain(createCodingAgent({ maxTurns: 10 }).run(baseRequest, runtime));
+
+    // The premature write in PLAN phase was blocked; only the write in IMPLEMENT phase executed
+    expect(executedTools.length).toBe(1);
+    expect(executedTools[0].input).toEqual({ path: 'main.cpp', content: 'legitimate write' });
+
+    // Verify warning message was emitted for premature write
+    const validationMessage = turns.find(
+      (t) => t.kind === 'message' && t.content?.includes("'write' is not permitted during the planning phase"),
+    );
+    expect(validationMessage).toBeDefined();
+  });
 });

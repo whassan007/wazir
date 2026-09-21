@@ -218,6 +218,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     allowCommands: config.allowCommands,
     denyCommands: config.denyCommands,
     allowedMcpServers: config.allowedMcpServers,
+    allowWorkspaceArtifactExecution: true,
     approvalQueue,
     approveCallback: async (request, decision) => {
       const { createApprover } = await import('./approve.js');

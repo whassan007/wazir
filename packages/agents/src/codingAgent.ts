@@ -61,6 +61,7 @@ export interface CodingAgentOptions {
 
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
 const FILE_TOOLS = new Set(['write', 'edit']);
+const MUTATING_FILE_TOOLS = new Set(['write', 'edit', 'write_to_file', 'replace_file_content']);
 /**
  * Matches the start of the one required JSON action, e.g. `{"action":`.
  * Used (not a bare `{` check) so the prose-bailout heuristic below isn't
@@ -631,7 +632,7 @@ export class CodingAgent implements AgentAdapter {
       const body = result.ok ? result.output : `ERROR: ${[result.error, result.output].filter(Boolean).join('\n')}`;
       messages.push({
         role: 'user',
-        content: `[tool result for ${tool} (ok=${result.ok})]\n${body.slice(0, 12000)}\n${stateLine(`${tool}(${result.ok ? 'ok' : 'failed'})`)}\nContinue. Respond with exactly one JSON object.`,
+        content: `[tool result for ${tool} (ok=${result.ok})]\n${body.slice(0, 4000)}\n${stateLine(`${tool}(${result.ok ? 'ok' : 'failed'})`)}\nContinue. Respond with exactly one JSON object.`,
       });
     };
 
@@ -728,6 +729,22 @@ export class CodingAgent implements AgentAdapter {
         break;
       }
       if (action.action === 'tool' && action.tool) {
+        if (MUTATING_FILE_TOOLS.has(action.tool)) {
+          validationErrors += 1;
+          yield {
+            kind: 'message',
+            content: `ACTION_VALIDATION_FAILED: '${action.tool}' is not permitted during the planning phase. Establish a plan or inspect the repository first with read/glob/search tools.`,
+            tool: action.tool,
+            raw,
+          };
+          pushToolResult(action.tool, {
+            ok: false,
+            output: '',
+            error: `'${action.tool}' is not permitted during the planning phase. You must inspect the workspace (read, glob, search) or establish a plan ({"action":"plan","content":"..."}) before modifying files.`,
+          });
+          continue;
+        }
+
         const val = validateAction(action.tool, action.input ?? {});
         if (val.ok === false) {
           validationErrors += 1;

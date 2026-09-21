@@ -390,6 +390,10 @@ export async function executeTask(
         durationMs: result.durationMs,
         at: new Date(),
         sandbox: typeof result.metadata?.sandbox === 'string' ? result.metadata.sandbox : undefined,
+        shellInvocationId: typeof result.metadata?.shellInvocationId === 'string' ? result.metadata.shellInvocationId : undefined,
+        cwd: typeof result.metadata?.cwd === 'string' ? result.metadata.cwd : undefined,
+        projectRoot: typeof result.metadata?.projectRoot === 'string' ? result.metadata.projectRoot : undefined,
+        exitCode: typeof result.metadata?.exitCode === 'number' ? result.metadata.exitCode : undefined,
       });
 
       if (CHECK_TOOLS.has(name)) {

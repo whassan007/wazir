@@ -138,6 +138,7 @@ async function buildTestEngine(projectRoot: string): Promise<RookEngine> {
     // recording, verification) is the genuine production code path.
     async *generate() {
       const replies = [
+        '{"action":"plan","content":"write hello file"}',
         '{"action":"tool","tool":"write","input":{"path":"hello.txt","content":"hi from the fake model"}}',
         '{"action":"done","summary":"wrote hello.txt"}',
       ];
@@ -215,6 +216,7 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     let callCount = 0;
     adapter.generate = async function* () {
       const replies = [
+        '{"action":"plan","content":"try to write outside"}',
         '{"action":"tool","tool":"write","input":{"path":"../../etc/escape.txt","content":"pwned"}}',
         '{"action":"done","summary":"gave up after the write was denied"}',
       ];

@@ -32,6 +32,11 @@ export interface PolicyEngineOptions {
   denyCommands?: string[];
   allowedMcpServers?: string[];
   /**
+   * Whether executable artifacts inside the project root (e.g. ./main, ./build/app)
+   * can be executed without requiring interactive approval. Defaults to true.
+   */
+  allowWorkspaceArtifactExecution?: boolean;
+  /**
    * Approves 'ask' decisions interactively. When absent, 'ask' is
    * escalated to 'deny' — Wazir never silently allows.
    */

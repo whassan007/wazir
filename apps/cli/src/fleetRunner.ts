@@ -349,6 +349,10 @@ export function createFleetTaskExecutor(
           durationMs: result.durationMs,
           at: new Date(),
           sandbox: typeof result.metadata?.sandbox === 'string' ? result.metadata.sandbox : undefined,
+          shellInvocationId: typeof result.metadata?.shellInvocationId === 'string' ? result.metadata.shellInvocationId : undefined,
+          cwd: typeof result.metadata?.cwd === 'string' ? result.metadata.cwd : undefined,
+          projectRoot: typeof result.metadata?.projectRoot === 'string' ? result.metadata.projectRoot : undefined,
+          exitCode: typeof result.metadata?.exitCode === 'number' ? result.metadata.exitCode : undefined,
         });
 
         if (CHECK_TOOLS.has(name)) {
@@ -417,6 +421,7 @@ export function createFleetTaskExecutor(
         // keeps the same error-reporting detail without reporting every tool call twice.
         const turnContent = turn.content ?? (turn.kind === 'tool_call' && turn.toolResult?.ok ? turn.toolResult.output : undefined);
         const turnError = turn.error ?? (turn.kind === 'tool_call' && turn.toolResult && !turn.toolResult.ok ? turn.toolResult.error : undefined);
+        const turnMeta = turn.kind === 'tool_call' && turn.toolResult?.metadata ? turn.toolResult.metadata : undefined;
 
         await engine.executions.recordEvent(executionId, 'agent.turn', {
           kind: turn.kind,
@@ -425,6 +430,9 @@ export function createFleetTaskExecutor(
           content: turnContent?.slice(0, 500),
           error: turnError,
           raw: turn.raw?.slice(0, 4000),
+          shellInvocationId: typeof turnMeta?.shellInvocationId === 'string' ? turnMeta.shellInvocationId : undefined,
+          cwd: typeof turnMeta?.cwd === 'string' ? turnMeta.cwd : undefined,
+          exitCode: typeof turnMeta?.exitCode === 'number' ? turnMeta.exitCode : undefined,
         });
 
         context.onProgress?.({
@@ -434,6 +442,7 @@ export function createFleetTaskExecutor(
           tool: turn.tool,
           error: turnError,
           raw: turn.raw,
+          metadata: turnMeta,
         });
 
         if (turn.kind === 'done') {

@@ -30,9 +30,11 @@ function growingRuntime(): { runtime: AgentRuntime; messageLengthsSeen: number[]
       messageLengthsSeen.push(request.messages.reduce((sum, m) => sum + m.content.length, 0));
       n += 1;
       const reply =
-        n <= 8
-          ? `{"action":"tool","tool":"write","input":{"path":"file${n}.txt","content":"${'x'.repeat(300)}"}}`
-          : '{"action":"done","summary":"ok"}';
+        n === 1
+          ? '{"action":"plan","content":"write files"}'
+          : n <= 9
+            ? `{"action":"tool","tool":"write","input":{"path":"file${n}.txt","content":"${'x'.repeat(300)}"}}`
+            : '{"action":"done","summary":"ok"}';
       yield { type: 'token', content: reply };
       yield { type: 'completed', content: reply };
     },
@@ -61,7 +63,7 @@ describe('CodingAgent.run — context compaction', () => {
     // the real proof it's working is that per-turn growth collapses from
     // "every turn's full write+tool-result body" to "roughly break-even"
     // once it kicks in, instead of growing by the same amount forever.
-    const earlyGrowth = messageLengthsSeen[1] - messageLengthsSeen[0];
+    const earlyGrowth = messageLengthsSeen[2] - messageLengthsSeen[1];
     const lateGrowth = messageLengthsSeen.at(-1)! - messageLengthsSeen.at(-2)!;
     expect(lateGrowth).toBeLessThan(earlyGrowth / 4);
   });
