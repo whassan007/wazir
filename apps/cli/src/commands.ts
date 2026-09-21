@@ -1,8 +1,12 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { ArtifactProvenance, ArtifactType, TaskType } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
 import { executeTask, planTask } from './run.js';
 import { tokensPerSecond, readAuditEvents, stripTerminalEscapes, type AuditEvent } from '@wazir/shared';
+import { parseAction, normalizeAction, missingRequiredFields, REQUIRED_TOOL_FIELDS } from '@wazir/agents';
 
 function table(headers: string[], rows: string[][]): string {
   const widths = headers.map((h, i) =>
@@ -1389,5 +1393,171 @@ export async function askCommand(
       code: 1,
       output: color.red(`inference failed: ${err?.message || err}`),
     };
+  }
+}
+
+interface ActionProtocolCase {
+  description: string;
+  raw: string;
+  expected: 'VALID' | 'INVALID';
+}
+
+// Real-world cases: `write`'s own `content` field is a plain string (never the sole key,
+// never itself an object) so it's exempt from the content-wrapper case; the brace-in-prose
+// case reproduces the exact live transcript that exposed extractFirstObject()'s bug
+// (quoting "the array {5,3,1,4,2}" before the real action).
+const ACTION_PROTOCOL_CASES: ActionProtocolCase[] = [
+  { description: 'read(path="src/main.cpp")', raw: '{"action":"tool","tool":"read","input":{"path":"src/main.cpp"}}', expected: 'VALID' },
+  { description: 'read(path="") — blank path', raw: '{"action":"tool","tool":"read","input":{"path":""}}', expected: 'VALID' },
+  { description: 'read({}) — missing path', raw: '{"action":"tool","tool":"read","input":{}}', expected: 'INVALID' },
+  { description: 'write(path, content)', raw: '{"action":"tool","tool":"write","input":{"path":"main.cpp","content":"int main(){}"}}', expected: 'VALID' },
+  { description: 'write(path, content="") — legitimate empty file', raw: '{"action":"tool","tool":"write","input":{"path":"empty.txt","content":""}}', expected: 'VALID' },
+  { description: 'write(path) — missing content', raw: '{"action":"tool","tool":"write","input":{"path":"main.cpp"}}', expected: 'INVALID' },
+  { description: 'write(content) — missing path', raw: '{"action":"tool","tool":"write","input":{"content":"x"}}', expected: 'INVALID' },
+  { description: 'write({}) — missing both', raw: '{"action":"tool","tool":"write","input":{}}', expected: 'INVALID' },
+  { description: 'shell(command="ls")', raw: '{"action":"tool","tool":"shell","input":{"command":"ls"}}', expected: 'VALID' },
+  { description: 'shell({}) — missing command', raw: '{"action":"tool","tool":"shell","input":{}}', expected: 'INVALID' },
+  { description: 'glob(pattern="*.cpp")', raw: '{"action":"tool","tool":"glob","input":{"pattern":"*.cpp"}}', expected: 'VALID' },
+  { description: 'glob({}) — missing pattern', raw: '{"action":"tool","tool":"glob","input":{}}', expected: 'INVALID' },
+  {
+    description: 'real bug: shell args wrapped one level too deep under "content"',
+    raw: '{"action":"tool","tool":"shell","input":{"content":{"command":"ls -la"}}}',
+    expected: 'VALID',
+  },
+  {
+    description: 'real bug: task prose quotes a brace before the real action',
+    raw: 'The user asked to sort the array {5,3,1,4,2}.\n{"action":"plan","content":"go"}',
+    expected: 'VALID',
+  },
+  { description: 'not JSON at all', raw: 'I will now think about this for a while.', expected: 'INVALID' },
+];
+
+/**
+ * `wa test action-protocol` — the parser/validator matrix from the follow-up architecture
+ * review's "test I would run right now", made real: never invokes a model, only exercises
+ * parseAction -> normalizeAction -> missingRequiredFields exactly as the live agent loop
+ * does, and asserts the deterministic pipeline (§10 there): INVALID never reaches Policy or
+ * the tool executor. Fast enough for CI; the companion `wa test model-protocol` is the one
+ * that needs a real runtime.
+ */
+export function actionProtocolTestCommand(): { code: number; output: string } {
+  const toolNames = new Set(Object.keys(REQUIRED_TOOL_FIELDS));
+  const rows: string[][] = [];
+  let failures = 0;
+
+  for (const c of ACTION_PROTOCOL_CASES) {
+    const action = normalizeAction(parseAction(c.raw), toolNames);
+    let actual: 'VALID' | 'INVALID';
+    let detail = '';
+    if (!action) {
+      actual = 'INVALID';
+      detail = 'unparseable';
+    } else if (action.action === 'tool' && action.tool) {
+      const missing = missingRequiredFields(action.tool, action.input ?? {});
+      actual = missing.length === 0 ? 'VALID' : 'INVALID';
+      detail = missing.length > 0 ? `missing: ${missing.join(', ')}` : '';
+    } else {
+      actual = 'VALID';
+      detail = `action=${action.action}`;
+    }
+
+    const status = actual === c.expected ? color.green('PASS') : color.red('FAIL');
+    if (actual !== c.expected) failures += 1;
+    rows.push([c.description, c.expected, actual, status, detail]);
+  }
+
+  const lines = [
+    color.bold('Action protocol matrix (no model invoked)'),
+    '',
+    table(['case', 'expected', 'actual', 'status', 'detail'], rows),
+    '',
+    `${rows.length - failures}/${rows.length} passed`,
+  ];
+  return { code: failures === 0 ? 0 : 1, output: lines.join('\n') };
+}
+
+/**
+ * `wa test model-protocol --model <id>` — runs one deterministic, easily-verified task
+ * (write a known file with known content) through the real agent loop against a real
+ * model/runtime, in an isolated throwaway project directory, and reports:
+ *   - a per-turn trace (kind, tool, whether a locally-rejected/duplicate action fired)
+ *   - whether the file actually ended up with the exact expected content on disk
+ *   - the task's own deterministic evaluation (evaluateExecution)
+ * This is the live counterpart to actionProtocolTestCommand() — comparing two models'
+ * output here (`wa test model-protocol --model A` vs `--model B`) is exactly the
+ * "if both fail identically, Wazir is the problem; if only one fails, it's a model/
+ * protocol compatibility problem" comparison the architecture review asked for.
+ */
+export async function modelProtocolTestCommand(modelId: string): Promise<{ code: number; output: string }> {
+  const { createEngine } = await import('./engine.js');
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-model-protocol-'));
+  const targetFile = 'wazir-protocol-check.txt';
+  const marker = 'WAZIR_OK';
+
+  const lines: string[] = [
+    color.bold(`Model protocol test — ${modelId}`),
+    color.gray(`  task: create ${targetFile} containing exactly "${marker}"`),
+    color.gray(`  workspace: ${projectRoot}`),
+    '',
+  ];
+
+  try {
+    const engine = await createEngine({ projectRoot, quiet: true });
+    const description =
+      `Create a file named ${targetFile} in the project root containing exactly the text ` +
+      `${marker} and nothing else, then respond with the done action.`;
+
+    const outcome = await executeTask(engine, description, {
+      type: 'coding',
+      model: modelId,
+      maxTurns: 15,
+      expectedFiles: [targetFile],
+      quiet: true,
+    });
+
+    const record = engine.executions.require(outcome.executionId);
+    const turnEvents = record.events.filter((e) => e.type === 'agent.turn') as Array<{
+      data?: { kind?: string; tool?: string; content?: string; error?: string };
+    }>;
+    const PROTOCOL_PREFIXES = ['ACTION_VALIDATION_FAILED', 'ACTION_BLOCKED_DUPLICATE', 'INVALID_JSON_ACTION'];
+    const isProtocolNote = (content?: string) => PROTOCOL_PREFIXES.some((p) => content?.startsWith(p));
+
+    const rows = turnEvents.map((e, i) => {
+      const d = e.data ?? {};
+      const note = isProtocolNote(d.content) ? color.yellow('REJECTED') : d.error ? color.red('failed') : d.tool ? 'ok' : '';
+      const summary = (d.content ?? d.error ?? '').slice(0, 70);
+      return [String(i + 1), d.kind ?? '', d.tool ?? '', note, summary];
+    });
+    lines.push(table(['#', 'kind', 'tool', 'note', 'summary'], rows));
+
+    const protocolCorrections = turnEvents.filter((e) => isProtocolNote(e.data?.content)).length;
+    lines.push('');
+    lines.push(`Protocol corrections needed: ${protocolCorrections}`);
+
+    let actualContent = '';
+    let fileOk = false;
+    try {
+      actualContent = (await fs.readFile(path.join(projectRoot, targetFile), 'utf8')).trim();
+      fileOk = actualContent === marker;
+    } catch {
+      fileOk = false;
+    }
+
+    lines.push(
+      `File has exact expected content: ${fileOk ? color.green('PASS') : color.red('FAIL')}` +
+        (fileOk ? '' : ` (got ${JSON.stringify(actualContent.slice(0, 80))})`),
+    );
+    lines.push(`Task-level evaluation: ${outcome.success ? color.green('PASS') : color.red('FAIL')} (${outcome.reasons.join('; ')})`);
+
+    const passed = fileOk && outcome.success;
+    lines.push('');
+    lines.push(passed ? color.green('RESULT: PASS') : color.red('RESULT: FAIL'));
+
+    return { code: passed ? 0 : 1, output: lines.join('\n') };
+  } catch (err) {
+    lines.push(color.red(`error: ${err instanceof Error ? err.message : String(err)}`));
+    return { code: 1, output: lines.join('\n') };
+  } finally {
+    await fs.rm(projectRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 }

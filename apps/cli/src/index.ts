@@ -109,6 +109,34 @@ program
     process.exit(result.code);
   });
 
+// test command — action/model protocol diagnostics
+const testCmd = new Command()
+  .name('test')
+  .description('Protocol diagnostics: does the model/parser boundary actually work?');
+
+testCmd
+  .command('action-protocol')
+  .description('Run the tool-argument validation matrix (no model invoked)')
+  .action(async () => {
+    const { actionProtocolTestCommand } = await import('./commands.js');
+    const result = actionProtocolTestCommand();
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+testCmd
+  .command('model-protocol')
+  .description('Run one deterministic file-write task through a real model and verify the result')
+  .requiredOption('--model <id>', 'Model id to test, e.g. nvidia/nemotron-3-nano-omni')
+  .action(async (options) => {
+    const { modelProtocolTestCommand } = await import('./commands.js');
+    const result = await modelProtocolTestCommand(options.model);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+program.addCommand(testCmd);
+
 // status command
 program
   .command('status')

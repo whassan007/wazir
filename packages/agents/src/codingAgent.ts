@@ -322,14 +322,14 @@ export function normalizeAction(action: ParsedAction | null, toolNames: Set<stri
 // validation), and only a genuinely *missing* (undefined/null) value counts — a present
 // but blank value (e.g. `command: ""`) is left to the policy engine's own handling, which
 // already gives it a deliberate plain-language translation in the TUI.
-const REQUIRED_TOOL_FIELDS: Record<string, string[]> = {
+export const REQUIRED_TOOL_FIELDS: Record<string, string[]> = {
   read: ['path'],
   write: ['path', 'content'],
   shell: ['command'],
   glob: ['pattern'],
 };
 
-function missingRequiredFields(tool: string, input: Record<string, unknown>): string[] {
+export function missingRequiredFields(tool: string, input: Record<string, unknown>): string[] {
   const required = REQUIRED_TOOL_FIELDS[tool];
   if (!required) return [];
   return required.filter((field) => input[field] === undefined || input[field] === null);

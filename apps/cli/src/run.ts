@@ -162,13 +162,13 @@ export async function executeTask(
   });
 
   const log = (line: string): void => {
-    if (options.json) return;
+    if (options.json || options.quiet) return;
     loader.clear();
     if (isPiped) {
       // Non-TTY / piped stream fallback (§23): clean plain streaming lines
       const plain = stripTerminalEscapes(line).trim();
       if (plain) process.stdout.write(plain + '\n');
-    } else if (!options.quiet) {
+    } else {
       console.error(line);
     }
   };
