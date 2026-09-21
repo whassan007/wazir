@@ -12,15 +12,20 @@ import type { AgentRunRequest, AgentRuntime, AgentTurn, ToolResult } from '@wazi
  * only its own constructor-time default regardless of what the caller asks
  * for? The check tools ('test'/'lint'/'typecheck') always pass, so once the
  * turn loop ends the deterministic VERIFY phase completes in one cycle.
+ *
+ * `toolName` defaults to 'read' (most tests here only care about the turn
+ * count). VERIFY now also fails outright when zero files were ever changed
+ * — pass 'write' for a test that needs the run to actually reach 'done'.
  */
-function fakeRuntime(): { runtime: AgentRuntime; counters: { generateCalls: number }; toolCalls: string[] } {
+function fakeRuntime(toolName = 'read'): { runtime: AgentRuntime; counters: { generateCalls: number }; toolCalls: string[] } {
   const counters = { generateCalls: 0 };
   const toolCalls: string[] = [];
   const runtime: AgentRuntime = {
-    tools: [{ name: 'read', description: 'read a file', inputSchema: {} }],
+    tools: [{ name: toolName, description: `${toolName} a file`, inputSchema: {} }],
     async *generate() {
       counters.generateCalls += 1;
-      const reply = '{"action":"tool","tool":"read","input":{"path":"x.txt"}}';
+      const input = toolName === 'write' ? '{"path":"x.txt","content":"x"}' : '{"path":"x.txt"}';
+      const reply = `{"action":"tool","tool":"${toolName}","input":${input}}`;
       yield { type: 'token', content: reply };
       yield { type: 'completed', content: reply };
     },
@@ -48,14 +53,14 @@ const baseRequest: Omit<AgentRunRequest, 'maxTurns'> = {
 describe('CodingAgent.run — maxTurns', () => {
   it('caps the number of model turns at the per-request maxTurns, overriding a larger constructor default', async () => {
     const agent = createCodingAgent({ maxTurns: 30 }); // constructor default is intentionally larger
-    const { runtime, counters } = fakeRuntime();
+    const { runtime, counters } = fakeRuntime('write');
 
     const turns = await drain(agent.run({ ...baseRequest, maxTurns: 5 }, runtime));
 
     // Before the fix, `run()` only ever read `this.maxTurns` (the
     // constructor value, 30), so this would be 30 instead of 5.
     expect(counters.generateCalls).toBe(5);
-    expect(turns.at(-1)?.kind).toBe('done'); // verification passed immediately, so it still completes cleanly
+    expect(turns.at(-1)?.kind).toBe('done'); // files were changed and checks pass, so it still completes cleanly
   });
 
   it('falls back to the constructor default when the request specifies no maxTurns', async () => {

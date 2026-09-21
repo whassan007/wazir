@@ -200,6 +200,33 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
   };
 }
 
+/**
+ * Overrides the engine's default fake model with one that actually performs a `write`
+ * before declaring done. CodingAgent's VERIFY phase now fails outright when zero files
+ * were changed ("Agent declared completion but produced no code modifications") — the
+ * engine's default plan-then-done-only script no longer reaches 'completed' on its own,
+ * which is fine for tests that don't care about final job status but breaks any test
+ * that needs a genuinely successful job. Cycles plan -> write -> done every 3 calls, so
+ * it also self-heals under concurrent fanout (each task's own turns may interleave with
+ * others', but plan/tool actions are handled gracefully regardless of position).
+ */
+function useSuccessfulFakeModel(engine: RookEngine): void {
+  const adapter = engine.worker.adapterForModel('fake-model')!;
+  let call = 0;
+  adapter.generate = async function* () {
+    call += 1;
+    const step = call % 3;
+    const reply =
+      step === 1
+        ? '{"action":"plan","content":"inspecting codebase and implementing task"}'
+        : step === 2
+          ? '{"action":"tool","tool":"write","input":{"path":"output.txt","content":"result"}}'
+          : '{"action":"done","summary":"all checks passed and task verified"}';
+    yield { type: 'token' as const, content: reply };
+    yield { type: 'completed' as const, content: reply, usage: { inputTokens: 10, outputTokens: 15, totalTokens: 25 } };
+  };
+}
+
 describe('FleetTui — interactive terminal UI harness', () => {
   let projectRoot: string;
 
@@ -254,6 +281,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
   it('submits a multi-agent fanout job, displays live agent states, and tails an agent stream', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);
+    useSuccessfulFakeModel(engine);
     const harness = new TuiTestHarness({
       engine,
       concurrencyLimit: 2,
@@ -431,6 +459,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
     // process itself would crash rather than fail an assertion.
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);
+    useSuccessfulFakeModel(engine);
     const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
 
     await harness.start();
@@ -461,6 +490,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
     // auto-id assignment instead of the TUI hardcoding "task-<n>".
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);
+    useSuccessfulFakeModel(engine);
     const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
 
     await harness.start();
@@ -479,12 +509,12 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     const rollupA = await engine.orchestrator.getJobRollup(jobA!.id);
     const rollupB = await engine.orchestrator.getJobRollup(jobB!.id);
-    // Each task makes two model turns (plan, then done), and the fake adapter reports a
-    // fixed 25-token usage per turn, so 50 is each job's own legitimate total. If task ids
-    // collided, each job's rollup would pull in the OTHER job's execution too and double
-    // to 100 instead.
-    expect(rollupA.tokens.total).toBe(50);
-    expect(rollupB.tokens.total).toBe(50);
+    // Each task makes three model turns (plan, write, then done), and the fake adapter
+    // reports a fixed 25-token usage per turn, so 75 is each job's own legitimate total.
+    // If task ids collided, each job's rollup would pull in the OTHER job's execution
+    // too and double to 150 instead.
+    expect(rollupA.tokens.total).toBe(75);
+    expect(rollupB.tokens.total).toBe(75);
 
     harness.stop();
   });
@@ -507,6 +537,14 @@ describe('FleetTui — interactive terminal UI harness', () => {
         const rest = 'write the module"}';
         yield { type: 'token' as const, content: rest };
         yield { type: 'completed' as const, content: '', usage: { inputTokens: 42, outputTokens: 9, totalTokens: 51 } };
+        return;
+      }
+      if (call === 2) {
+        // VERIFY now fails outright when zero files changed, so a real write has to
+        // happen somewhere before 'done' for this job to actually reach 'completed'.
+        const write = '{"action":"tool","tool":"write","input":{"path":"module.txt","content":"x"}}';
+        yield { type: 'token' as const, content: write };
+        yield { type: 'completed' as const, content: write, usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
         return;
       }
       const done = '{"action":"done","summary":"module written"}';
@@ -834,6 +872,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
   it('renders history strip wired to blocks and expands block details modal', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);
+    useSuccessfulFakeModel(engine);
     const harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
 
     await harness.start();
@@ -1166,6 +1205,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
   it('renders scrollable event-stream activity pane with typed lifecycle states (PLAN, ROUTE, TOOL, TEST, COMPLETE, ERROR)', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);
+    useSuccessfulFakeModel(engine);
     const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
 
     await harness.start();
