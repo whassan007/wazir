@@ -317,6 +317,11 @@ export class FleetTui {
   private shouldExit = false;
 
   private inputBuffer = '';
+  /** Index into inputBuffer where typed/deleted characters land; 0..inputBuffer.length. */
+  private inputCursor = 0;
+  /** 1-based terminal column the hardware cursor belongs at, set by renderInputBar()'s
+   *  most recent call and consumed by draw() right after. */
+  private inputCursorScreenCol = 1;
   private statusMessage = 'Ready. Type a task or /fanout <t1; t2; ...> to begin.';
   private renderTimer?: NodeJS.Timeout;
   private spinnerTick = 0;
@@ -395,6 +400,8 @@ export class FleetTui {
   private exitResolver?: () => void;
   private keypressListener?: (ch: string | undefined, key?: readline.Key) => void;
   private inputListener?: (data: Buffer | string) => void;
+  private stdinEndListener?: () => void;
+  private outErrorHandler?: (err: Error) => void;
 
   /**
    * Isolates and consumes Tab / Shift-Tab key events cleanly (§1).
@@ -405,6 +412,7 @@ export class FleetTui {
     if (this.isPickerActive && this.pickerCandidates.length > 0) {
       const chosen = this.pickerCandidates[this.pickerIndex];
       this.inputBuffer = this.inputBuffer.replace(/@([a-zA-Z0-9_:./-]*)$/, chosen + ' ');
+      this.inputCursor = this.inputBuffer.length;
       this.isPickerActive = false;
       this.pickerCandidates = [];
       this.draw();
@@ -539,6 +547,24 @@ export class FleetTui {
     };
     inStream.on('data', this.inputListener);
 
+    // stdin EOF: when input is piped (`printf '/doctor\r' | wa chat`) or the parent
+    // process closes the pipe, stdin emits 'end' and no further input can ever arrive.
+    // Without this the TUI sat in waitForExit() forever — a piped command hung until
+    // killed. Graceful exit here mirrors what Ctrl+C / 'q' / /exit do on a TTY.
+    this.stdinEndListener = () => {
+      if (this.isRunning) this.stop();
+    };
+    inStream.once('end', this.stdinEndListener);
+
+    // Output stream (dead) terminal / closed pipe: a failed write surfaces as an
+    // asynchronous 'error' event (EIO/EPIPE). With no listener that crashes the
+    // process (exit 1) in the middle of the graceful-exit path. The session is
+    // ending anyway — the stdin-EOF handler drives the exit — so swallow it.
+    this.outErrorHandler = () => {
+      /* terminal or pipe reader gone: nothing to recover, exit path handles it */
+    };
+    this.screen.getOutputStream().on('error', this.outErrorHandler);
+
     // Refresh display periodically for live duration counters
     this.renderTimer = setInterval(() => {
       this.updateAgentDurations();
@@ -571,6 +597,17 @@ export class FleetTui {
       this.screen.getInputStream().off('data', this.inputListener);
       this.inputListener = undefined;
     }
+
+    if (this.stdinEndListener) {
+      this.screen.getInputStream().off('end', this.stdinEndListener);
+      this.stdinEndListener = undefined;
+    }
+
+    // NOTE: outErrorHandler is deliberately NOT removed here. screen.leave() below
+    // performs an outStream write whose EIO/EPIPE error arrives asynchronously on a
+    // later tick — removing the handler first (or even immediately after) leaves that
+    // error unhandled and crashes the process (exit 1) on the exact path we're trying
+    // to exit gracefully. The handler is a no-op and harmless for the process lifetime.
 
     this.screen.leave();
     this.isRunning = false;
@@ -699,6 +736,7 @@ export class FleetTui {
         }
         if (chosen.cmd.endsWith(' ')) {
           this.inputBuffer = chosen.cmd;
+          this.inputCursor = this.inputBuffer.length;
           this.focusedPane = 'prompt';
           this.draw();
           return;
@@ -724,6 +762,7 @@ export class FleetTui {
           }
           if (chosen.cmd.endsWith(' ')) {
             this.inputBuffer = chosen.cmd;
+            this.inputCursor = this.inputBuffer.length;
             this.focusedPane = 'prompt';
             this.draw();
             return;
@@ -818,6 +857,7 @@ export class FleetTui {
       ) {
         const chosen = this.pickerCandidates[this.pickerIndex];
         this.inputBuffer = this.inputBuffer.replace(/@([a-zA-Z0-9_:./-]*)$/, chosen + ' ');
+        this.inputCursor = this.inputBuffer.length;
         this.isPickerActive = false;
         this.pickerCandidates = [];
         this.draw();
@@ -882,8 +922,19 @@ export class FleetTui {
       return;
     }
 
-    // 15. Left/Right: navigate highlighted items
+    // 15. Left/Right: move the text cursor within a non-empty prompt (mirrors Up/Down's
+    // own inputBuffer.length === 0 gating just above); only navigate highlighted items
+    // once the prompt is empty and there's no text cursor to move.
     if (keyName === 'left' || keyStr === '\u001b[D' || keyName === 'right' || keyStr === '\u001b[C') {
+      if (this.inputBuffer.length > 0) {
+        if (keyName === 'left' || keyStr === '\u001b[D') {
+          this.inputCursor = Math.max(0, this.inputCursor - 1);
+        } else {
+          this.inputCursor = Math.min(this.inputBuffer.length, this.inputCursor + 1);
+        }
+        this.draw();
+        return;
+      }
       const list = this.getAgents();
       if (list.length > 0) {
         if (keyName === 'left' || keyStr === '\u001b[D') {
@@ -897,11 +948,24 @@ export class FleetTui {
       return;
     }
 
+    // 15.5. Home/End: jump the text cursor to the start/end of the prompt.
+    if (keyName === 'home' || keyStr === '\x1b[H' || keyStr === '\x1bOH') {
+      this.inputCursor = 0;
+      this.draw();
+      return;
+    }
+    if (keyName === 'end' || keyStr === '\x1b[F' || keyStr === '\x1bOF') {
+      this.inputCursor = this.inputBuffer.length;
+      this.draw();
+      return;
+    }
+
     // 16. Enter key: submit command or inspect item (§3)
     if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
       if (this.inputBuffer.trim().length > 0) {
         const command = this.inputBuffer.trim();
         this.inputBuffer = '';
+        this.inputCursor = 0;
         this.isPickerActive = false;
         this.pickerCandidates = [];
         // Nothing previously reset focus off 'prompt' after submitting, so any key that
@@ -998,19 +1062,29 @@ export class FleetTui {
     }
 
     // 17. Backspace / Delete Handling (§2):
-    // Ensure key.name === 'backspace' or key.name === 'delete' correctly checks active buffer length,
-    // removes final character via slicing (inputBuffer.slice(0, -1)), and triggers immediate prompt re-render.
+    // Backspace removes the character(s) immediately before the cursor and moves the
+    // cursor back; forward-delete (the 'delete' key/\x1b[3~) removes the character at
+    // the cursor and leaves it in place. These used to be identical (both always chopped
+    // off the end of the buffer) because there was no interior cursor to distinguish
+    // "before" from "at" — now that Left/Right actually move one, they diverge.
     if (
       keyName === 'backspace' ||
-      keyName === 'delete' ||
       keyStr === '\u0008' ||
       keyStr === '\x7f' ||
-      keyStr === '\x1b[3~' ||
       /^[\x7f\u0008]+$/.test(keyStr)
     ) {
-      if (this.inputBuffer.length > 0) {
-        const count = /^[\x7f\u0008]+$/.test(keyStr) ? keyStr.length : 1;
-        this.inputBuffer = this.inputBuffer.slice(0, Math.max(0, this.inputBuffer.length - count));
+      if (this.inputCursor > 0) {
+        const count = Math.min(this.inputCursor, /^[\x7f\u0008]+$/.test(keyStr) ? keyStr.length : 1);
+        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor - count) + this.inputBuffer.slice(this.inputCursor);
+        this.inputCursor -= count;
+        this.checkReferencePicker();
+        this.draw();
+      }
+      return;
+    }
+    if (keyName === 'delete' || keyStr === '\x1b[3~') {
+      if (this.inputCursor < this.inputBuffer.length) {
+        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(this.inputCursor + 1);
         this.checkReferencePicker();
         this.draw();
       }
@@ -1020,15 +1094,20 @@ export class FleetTui {
     // 18. Ctrl+U: Clear entire input line
     if ((keyObj.ctrl && (keyName === 'u' || keyName === 'U')) || keyStr === '\u0015') {
       this.inputBuffer = '';
+      this.inputCursor = 0;
       this.isPickerActive = false;
       this.pickerCandidates = [];
       this.draw();
       return;
     }
 
-    // 19. Ctrl+W: Delete word backward
+    // 19. Ctrl+W: Delete word backward from the cursor, leaving anything after it intact.
     if ((keyObj.ctrl && (keyName === 'w' || keyName === 'W')) || keyStr === '\u0017') {
-      this.inputBuffer = this.inputBuffer.replace(/\s*\S*\s*$/, '');
+      const before = this.inputBuffer.slice(0, this.inputCursor);
+      const after = this.inputBuffer.slice(this.inputCursor);
+      const trimmed = before.replace(/\s*\S*\s*$/, '');
+      this.inputBuffer = trimmed + after;
+      this.inputCursor = trimmed.length;
       this.checkReferencePicker();
       this.draw();
       return;
@@ -1068,7 +1147,8 @@ export class FleetTui {
       keyStr.length === 1 &&
       !/[\x00-\x1f\x7f-\x9f]/.test(keyStr)
     ) {
-      this.inputBuffer += keyStr;
+      this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + keyStr + this.inputBuffer.slice(this.inputCursor);
+      this.inputCursor += keyStr.length;
       this.focusedPane = 'prompt';
       this.checkReferencePicker();
       this.draw();
@@ -2011,7 +2091,7 @@ export class FleetTui {
     const clampedLines = lines.map((line) => this.padRightTo(line, size.columns));
 
     const frame = clampedLines.slice(0, size.rows).join('\n');
-    this.screen.render(frame);
+    this.screen.render(frame, this.inputCursorScreenCol);
   }
 
   /**
@@ -2429,12 +2509,15 @@ export class FleetTui {
     const prefixLen = 4; // visible width of 'wa> '
     const available = Math.max(0, cols - prefixLen);
 
-    // Scroll to show the tail (active cursor position) instead of letting the line
-    // grow past the terminal width - an overlong line here soft-wraps in the real
-    // terminal, which desyncs the absolute-cursor redraw and looks like ghosting,
-    // and makes it look like backspace stopped working once typed text got long.
-    const visibleInput =
-      this.inputBuffer.length > available ? this.inputBuffer.slice(this.inputBuffer.length - available) : this.inputBuffer;
+    // Scroll to keep the cursor in view instead of always pinning the window to the
+    // buffer's tail - an overlong line here soft-wraps in the real terminal, which
+    // desyncs the absolute-cursor redraw and looks like ghosting, and (before the
+    // cursor could move at all) made it look like backspace stopped working once typed
+    // text got long. Now that Left/Right can walk the cursor back into a long line,
+    // pinning to the tail would also hide the cursor's real position off-window.
+    const start = this.inputCursor > available ? this.inputCursor - available : 0;
+    const visibleInput = this.inputBuffer.slice(start, start + available);
+    this.inputCursorScreenCol = prefixLen + (this.inputCursor - start) + 1;
 
     return `${promptPrefix}${visibleInput}`;
   }

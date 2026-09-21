@@ -19,6 +19,7 @@ export class TerminalScreen {
   private rawModeActive = false;
   private keypressBound = false;
   private lastBuffer = '';
+  private lastCursorCol?: number;
   private resizeListeners: Array<(size: TerminalSize) => void> = [];
 
   constructor(
@@ -113,33 +114,52 @@ export class TerminalScreen {
     return this.rawModeActive;
   }
 
-  render(buffer: string): void {
-    if (buffer === this.lastBuffer) return;
-    this.lastBuffer = buffer;
+  /**
+   * @param cursorCol 1-based column the hardware cursor belongs at on the last line
+   *   (e.g. wherever the input prompt's text cursor is). Callers that know this should
+   *   always pass it: every line reaching here is padded to the full terminal width
+   *   (see FleetTui.draw()), so the fallback below — measuring the last line's own
+   *   length — always lands on the last *column*, not wherever the cursor actually is.
+   *   That's the "cursor doesn't visibly track typed/deleted/arrow-moved text" bug: the
+   *   hardware cursor was permanently pinned to the terminal's bottom-right corner.
+   */
+  render(buffer: string, cursorCol?: number): void {
+    const bufferChanged = buffer !== this.lastBuffer;
+    // Moving the text cursor with no other edit (e.g. a bare Left/Right arrow) never
+    // changes the rendered buffer text itself, only where the cursor belongs on it — so
+    // dedupe on both, not just the buffer, or the cursor visibly stops moving the moment
+    // the frame text stops changing.
+    if (!bufferChanged && cursorCol === this.lastCursorCol) return;
 
     if (this.inAltScreen) {
-      // Move cursor to top-left and write lines with \x1b[K (erase to line end) so leftover
-      // characters from a previous, longer frame never linger. This used to be paired with
-      // a full \x1b[2J on every frame as a defensive belt-and-suspenders measure, but that
-      // blanked and repainted the whole screen on every single redraw (every keystroke,
-      // every 250ms spinner tick, every streamed token) which is a visible flicker on real
-      // terminals. It's unnecessary now that every line is clamped to the exact terminal
-      // width before reaching here (see FleetTui.draw()) — a fully space-padded row already
-      // overwrites any stale trailing glyphs on its own, so per-line \x1b[K is enough.
-      const lines = buffer.split('\n');
-      const cleared = lines.map((l) => l + '\x1b[K').join('\r\n') + '\x1b[K\x1b[J';
-      this.outStream.write('\x1b[H' + cleared);
+      if (bufferChanged) {
+        // Move cursor to top-left and write lines with \x1b[K (erase to line end) so leftover
+        // characters from a previous, longer frame never linger. This used to be paired with
+        // a full \x1b[2J on every frame as a defensive belt-and-suspenders measure, but that
+        // blanked and repainted the whole screen on every single redraw (every keystroke,
+        // every 250ms spinner tick, every streamed token) which is a visible flicker on real
+        // terminals. It's unnecessary now that every line is clamped to the exact terminal
+        // width before reaching here (see FleetTui.draw()) — a fully space-padded row already
+        // overwrites any stale trailing glyphs on its own, so per-line \x1b[K is enough.
+        const lines = buffer.split('\n');
+        const cleared = lines.map((l) => l + '\x1b[K').join('\r\n') + '\x1b[K\x1b[J';
+        this.outStream.write('\x1b[H' + cleared);
+      }
 
-      // Explicitly position the hardware cursor at the active prompt line
+      // Explicitly position the hardware cursor at the active prompt line.
+      const lines = buffer.split('\n');
       const lastLine = lines[lines.length - 1] ?? '';
       const strippedLast = lastLine.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-      const cursorCol = strippedLast.length + 1;
-      const cursorRow = lines.length;
-      this.outStream.write(`\x1b[${cursorRow};${cursorCol}H`);
-    } else {
+      const col = cursorCol ?? strippedLast.length + 1;
+      const row = lines.length;
+      this.outStream.write(`\x1b[${row};${col}H`);
+    } else if (bufferChanged) {
       // Non-TTY & unattached fallback (§23): write clean text
       this.outStream.write(buffer + '\n');
     }
+
+    this.lastBuffer = buffer;
+    this.lastCursorCol = cursorCol;
   }
 
   /**
@@ -150,9 +170,11 @@ export class TerminalScreen {
       this.outStream.write(`\x1b[2J\x1b[H${CURSOR_STEADY_BLOCK}`);
     }
     const last = this.lastBuffer;
+    const lastCol = this.lastCursorCol;
     this.lastBuffer = '';
+    this.lastCursorCol = undefined;
     if (last) {
-      this.render(last);
+      this.render(last, lastCol);
     }
   }
 

@@ -738,9 +738,20 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.sendKey('\x7f\x7f');
     expect(harness.getScreenBuffer()).toContain('wa> hello wo');
 
-    // Delete key (\x1b[3~)
+    // Delete key (\x1b[3~) with the cursor at the end of the line (nothing after it to
+    // remove) is now correctly a no-op — before the input line had a real cursor
+    // position, forward-delete and backspace were indistinguishable and both always
+    // chopped the last character regardless of where "the cursor" conceptually was.
+    harness.sendKey('\x1b[3~');
+    expect(harness.getScreenBuffer()).toContain('wa> hello wo');
+
+    // Move left once so the cursor sits right before the trailing 'o', then
+    // forward-delete removes that 'o' *at* the cursor (cursor position/index is
+    // unchanged by a forward-delete — it now points at the new, shorter end).
+    harness.sendKey('\u001b[D');
     harness.sendKey('\x1b[3~');
     expect(harness.getScreenBuffer()).toContain('wa> hello w');
+    expect(harness.getScreenBuffer()).not.toContain('wa> hello wo');
 
     // Ctrl+W: delete word backward
     harness.sendKey('\u0017');

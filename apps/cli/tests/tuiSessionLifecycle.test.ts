@@ -375,3 +375,94 @@ describe('FleetTui — session lifecycle & terminal hygiene', () => {
     expect(harness.tui.getStatusMessage()).toContain(`Cancelled job ${orphanJob.id}`);
   });
 });
+
+/**
+ * Regression coverage for the input-line text cursor: it used to always report its
+ * position as the terminal's rightmost column (every line, including the input bar,
+ * is padded to the full terminal width before reaching TerminalScreen.render() — see
+ * FleetTui.draw() — so the old "cursor sits at the end of the last line's own length"
+ * heuristic in screen.ts always measured the padding, not the typed text). On top of
+ * that, Left/Right were unconditionally wired to agent-list navigation with no concept
+ * of an interior cursor position at all, so arrow keys never moved anything in the text.
+ */
+describe('FleetTui — input line text cursor', () => {
+  let projectRoot: string;
+  let harness: TuiTestHarness | undefined;
+
+  afterEach(async () => {
+    harness?.stop();
+    harness = undefined;
+    if (projectRoot) {
+      await fs.rm(projectRoot, { recursive: true, force: true }).catch(() => undefined);
+      projectRoot = '';
+    }
+  });
+
+  /** The most recent absolute cursor-position escape sequence written to the terminal. */
+  function lastCursorPosition(output: string): { row: number; col: number } | undefined {
+    const matches = [...output.matchAll(/\x1b\[(\d+);(\d+)H/g)];
+    const last = matches[matches.length - 1];
+    return last ? { row: Number(last[1]), col: Number(last[2]) } : undefined;
+  }
+
+  it('positions the hardware cursor right after the typed text, not at the padded line\'s far edge', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-cursor-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+    await harness.start();
+
+    harness.outStream.clearOutput();
+    harness.sendKeys('hi');
+
+    const pos = lastCursorPosition(harness.outStream.getOutput());
+    expect(pos).toBeDefined();
+    // 'wa> ' (4 cols) + 'hi' (2 chars) + 1 (cursor sits just past the last character).
+    expect(pos!.col).toBe(7);
+    // The old heuristic measured the input line *after* it was padded to the full
+    // terminal width (120 in MockTerminalStream), landing on column 121 every time
+    // regardless of what was typed — the exact bug this guards against.
+    expect(pos!.col).not.toBe(harness.outStream.columns + 1);
+  });
+
+  it('moves the text cursor left/right instead of the agent-highlight index while the prompt has text', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-cursor-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+    await harness.start();
+
+    harness.sendKeys('hi');
+    expect((harness.tui as any).inputCursor).toBe(2);
+
+    harness.outStream.clearOutput();
+    harness.sendKey('\u001b[D'); // Left
+
+    expect((harness.tui as any).inputCursor).toBe(1);
+    expect((harness.tui as any).highlightedIndex).toBe(0); // untouched — not hijacked for nav
+    const pos = lastCursorPosition(harness.outStream.getOutput());
+    expect(pos?.col).toBe(6); // 'wa> ' + 1 char ('h') + 1
+
+    harness.sendKey('\u001b[C'); // Right
+    expect((harness.tui as any).inputCursor).toBe(2);
+  });
+
+  it('inserts and deletes at the cursor position instead of always at the end of the buffer', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-cursor-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+    await harness.start();
+
+    harness.sendKeys('helo');
+    harness.sendKey('\u001b[D');
+    harness.sendKey('\u001b[D');
+    harness.sendKeys('l'); // insert between 'e' and 'l' -> "hello"
+
+    expect((harness.tui as any).inputBuffer).toBe('hello');
+    expect((harness.tui as any).inputCursor).toBe(3);
+
+    // Backspace removes the character before the cursor (the 'l' just inserted),
+    // not whatever happens to be at the end of the buffer ('o').
+    harness.sendKey('\x7f');
+    expect((harness.tui as any).inputBuffer).toBe('helo');
+    expect((harness.tui as any).inputCursor).toBe(2);
+  });
+});
