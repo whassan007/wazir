@@ -44,6 +44,7 @@ export interface JobNode {
   children: string[];
   result?: unknown;
   error?: string;
+  attempts?: Array<{ state: AgentState; error?: string; executedAt?: Date; completedAt?: Date }>;
   executedAt?: Date;
   completedAt?: Date;
 }

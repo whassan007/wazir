@@ -96,11 +96,12 @@ export const searchTool: Tool = {
     inputSchema: {
       type: 'object',
       properties: {
-        pattern: { type: 'string', description: 'Regular expression' },
+        pattern: { type: 'string', description: 'Regular expression (legacy, use regex or glob instead)' },
+        regex: { type: 'string', description: 'Regular expression pattern' },
+        glob: { type: 'string', description: 'Glob pattern (e.g., "*.cpp")' },
         path: { type: 'string', description: 'Directory to search in (default: project root)' },
         include: { type: 'string', description: 'File glob filter, e.g. "*.ts"' },
       },
-      required: ['pattern'],
     },
     permissions: ['filesystem_read'],
     riskLevel: 'low',
@@ -111,7 +112,15 @@ export const searchTool: Tool = {
     try {
       let regex: RegExp;
       try {
-        regex = new RegExp(String(input.pattern));
+        if (input.glob) {
+          regex = globToRegExp(String(input.glob));
+        } else if (input.regex) {
+          regex = new RegExp(String(input.regex));
+        } else if (input.pattern) {
+          regex = new RegExp(String(input.pattern));
+        } else {
+          return { ok: false, output: '', error: 'Must provide regex or glob', durationMs: Date.now() - started };
+        }
       } catch (error) {
         return { ok: false, output: '', error: `invalid regex: ${errorMessage(error)}`, durationMs: Date.now() - started };
       }

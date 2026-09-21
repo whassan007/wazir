@@ -392,9 +392,21 @@ export class CodingAgent implements AgentAdapter {
       toolCallCounts.set(tool, (toolCallCounts.get(tool) ?? 0) + 1);
       if (FILE_TOOLS.has(tool) && typeof input.path === 'string') filesChangedSet.add(input.path);
     };
+    
+    const canonicalize = (obj: any): any => {
+      if (Array.isArray(obj)) return obj.map(canonicalize);
+      if (obj && typeof obj === 'object') {
+        return Object.keys(obj).sort().reduce((result: any, key) => {
+          result[key] = canonicalize(obj[key]);
+          return result;
+        }, {});
+      }
+      return obj;
+    };
+
     /** Returns an error message once the same tool call repeats `toolRepeatLimit` times in a row, else null. */
     const checkCircuitBreaker = (tool: string, input: Record<string, unknown>): string | null => {
-      const signature = `${tool}:${JSON.stringify(input)}`;
+      const signature = `${tool}:${JSON.stringify(canonicalize(input))}`;
       repeatedToolCount = signature === lastToolSignature ? repeatedToolCount + 1 : 1;
       lastToolSignature = signature;
       if (repeatedToolCount < this.toolRepeatLimit) return null;
@@ -494,13 +506,13 @@ export class CodingAgent implements AgentAdapter {
     // ==================== PLAN ====================
     yield { kind: 'phase', phase: 'plan' as AgentPhase };
     for (let i = 0; i < 3 && !plan; i++) {
-      if (request.isCancelled?.()) break;
+      if (request.isCancelled?.()) return;
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
       const { content: raw, timedOut } = await modelTurn();
       // A cancel (manual or timeout) that lands during the model turn must not let
       // this turn's action run anyway — the check at the top of the loop already passed.
-      if (request.isCancelled?.()) break;
+      if (request.isCancelled?.()) return;
       turnsUsed += 1;
       const action = readAction(raw);
       if (!action) {
@@ -535,7 +547,7 @@ export class CodingAgent implements AgentAdapter {
     // ==================== WORK (inspect → implement → test → debug → repair) ====================
     yield { kind: 'phase', phase: 'implement' as AgentPhase };
     while (turnsUsed < maxTurns && !modelSummary) {
-      if (request.isCancelled?.()) break;
+      if (request.isCancelled?.()) return;
       const steering = request.getSteeringInstruction?.();
       if (steering) {
         yield { kind: 'message', content: `[steered] ${steering}` };
@@ -546,7 +558,7 @@ export class CodingAgent implements AgentAdapter {
       const { content: raw, timedOut } = await modelTurn();
       // A cancel (manual or timeout) that lands during the model turn must not let
       // this turn's action run anyway — the check at the top of the loop already passed.
-      if (request.isCancelled?.()) break;
+      if (request.isCancelled?.()) return;
       turnsUsed += 1;
       const action = readAction(raw);
 
@@ -554,7 +566,7 @@ export class CodingAgent implements AgentAdapter {
         correctionCount += 1;
         if (correctionCount >= 3) {
           yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions' };
-          break;
+          return;
         }
         messages.push({ role: 'user', content: correctionMessage(timedOut) });
         continue;
@@ -578,8 +590,11 @@ export class CodingAgent implements AgentAdapter {
       if (action.action === 'tool' && action.tool) {
         const breakerError = checkCircuitBreaker(action.tool, action.input ?? {});
         if (breakerError) {
-          yield { kind: 'error', error: breakerError };
-          break;
+          pushToolResult(action.tool, { 
+            ok: false, 
+            output: `ACTION_BLOCKED_DUPLICATE: You have attempted this exact action ${this.toolRepeatLimit} times. You must use a different tool or different arguments.` 
+          });
+          continue;
         }
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
@@ -598,91 +613,42 @@ export class CodingAgent implements AgentAdapter {
     }
 
     // ==================== VERIFY (deterministic, host-side) ====================
-    for (let cycle = 0; cycle <= this.maxRepairCycles; cycle++) {
-      if (request.isCancelled?.()) break;
-      yield { kind: 'phase', phase: (cycle === 0 ? 'verify' : 'repair') as AgentPhase };
+    if (request.isCancelled?.()) return;
+    yield { kind: 'phase', phase: 'verify' as AgentPhase };
 
-      const failures: string[] = [];
-      for (const check of ['test', 'lint', 'typecheck']) {
-        if (request.isCancelled?.()) break;
-        const result = await runtime.executeTool(check, {});
-        const output = result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n');
-        if (output && /missing script|no such file|not found/i.test(output) && !result.ok) {
-          // project does not define this check — not applicable, not a failure
-          continue;
-        }
-        if (!result.ok) {
-          failures.push(`${check}: ${output.slice(0, 4000)}`);
-        }
+    const failures: string[] = [];
+    
+    if (filesChangedSet.size === 0) {
+      failures.push('Agent declared completion but produced no code modifications.');
+    }
+
+    for (const check of ['test', 'lint', 'typecheck']) {
+      if (request.isCancelled?.()) return;
+      const result = await runtime.executeTool(check, {});
+      const output = result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n');
+      if (output && /missing script|no such file|not found/i.test(output) && !result.ok) {
+        // project does not define this check — not applicable, not a failure
+        continue;
       }
-
-      if (failures.length === 0) {
-        yield { kind: 'phase', phase: 'complete' as AgentPhase };
-        yield {
-          kind: 'done',
-          content: modelSummary ?? 'Task completed. Verification checks passed.',
-        };
-        return;
-      }
-
-      if (cycle === this.maxRepairCycles) {
-        yield {
-          kind: 'error',
-          error: `verification failed after ${this.maxRepairCycles} repair cycle(s):\n${failures.join('\n---\n')}`,
-        };
-        return;
-      }
-
-      yield { kind: 'message', content: `Verification failed:\n${failures.join('\n---\n')}` };
-      messages.push({
-        role: 'user',
-        content:
-          `Verification of the current state FAILED:\n${failures.join('\n---\n')}\n\n` +
-          'Debug the failures, repair the code with edit/write tools, re-run the checks, ' +
-          'and when everything passes respond with {"action":"done","summary":"..."}.',
-      });
-
-      // bounded repair loop
-      const repairLimit = Math.min(8, Math.max(4, maxTurns - turnsUsed));
-      for (let i = 0; i < repairLimit; i++) {
-        if (request.isCancelled?.()) break;
-        const steering = request.getSteeringInstruction?.();
-        if (steering) {
-          yield { kind: 'message', content: `[steered] ${steering}` };
-          pushContinue(`User follow-up instruction: ${steering}`);
-        }
-        const compactionNote = compactIfNeeded();
-        if (compactionNote) yield { kind: 'message', content: compactionNote };
-        const { content: raw, timedOut } = await modelTurn();
-        // A cancel (manual or timeout) that lands during the model turn must not let
-        // this turn's action run anyway — the check at the top of the loop already passed.
-        if (request.isCancelled?.()) break;
-        turnsUsed += 1;
-        const action = readAction(raw);
-        if (!action) {
-          messages.push({ role: 'user', content: correctionMessage(timedOut) });
-          continue;
-        }
-        pushAssistant(raw);
-        if (action.action === 'done' || action.action === 'answer') {
-          modelSummary = action.summary ?? action.content ?? modelSummary;
-          break;
-        }
-        if (action.action === 'tool' && action.tool) {
-          const breakerError = checkCircuitBreaker(action.tool, action.input ?? {});
-          if (breakerError) {
-            yield { kind: 'error', error: breakerError };
-            break;
-          }
-          recordToolExecution(action.tool, action.input ?? {});
-          const result = await runtime.executeTool(action.tool, action.input ?? {});
-          yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result };
-          pushToolResult(action.tool, result);
-          continue;
-        }
-        messages.push({ role: 'user', content: 'Respond with exactly one JSON object as specified.' });
+      if (!result.ok) {
+        failures.push(`${check}: ${output.slice(0, 4000)}`);
       }
     }
+
+    if (failures.length === 0) {
+      yield { kind: 'phase', phase: 'complete' as AgentPhase };
+      yield {
+        kind: 'done',
+        content: modelSummary ?? 'Task completed. Verification checks passed.',
+      };
+      return;
+    }
+
+    yield {
+      kind: 'error',
+      error: `verification failed:\n${failures.join('\n---\n')}`,
+    };
+    return;
 
     if (!modelSummary) {
       yield {

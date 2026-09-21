@@ -552,6 +552,17 @@ export class JobOrchestrator {
                 const maxRetries = isPolicyDenial ? 0 : (job.maxRetries ?? 3);
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
+                  if (!node.attempts) node.attempts = [];
+                  node.attempts.push({
+                    state: 'failed',
+                    error: outcome.error,
+                    executedAt: node.executedAt,
+                    completedAt: new Date()
+                  });
+                  node.executedAt = undefined;
+                  node.completedAt = undefined;
+                  node.error = undefined;
+                  node.result = undefined;
                   node.state = 'idle';
                   await this.jobManager.updateAgentState(job.id, node.id, 'idle');
                   await this.jobManager.updateTaskStatus(job.id, taskId, 'pending');
@@ -586,6 +597,17 @@ export class JobOrchestrator {
                 const maxRetries = isPolicyDenial ? 0 : (job.maxRetries ?? 3);
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
+                  if (!node.attempts) node.attempts = [];
+                  node.attempts.push({
+                    state: 'failed',
+                    error: errMessage,
+                    executedAt: node.executedAt,
+                    completedAt: new Date()
+                  });
+                  node.executedAt = undefined;
+                  node.completedAt = undefined;
+                  node.error = undefined;
+                  node.result = undefined;
                   node.state = 'idle';
                   await this.jobManager.updateAgentState(job.id, node.id, 'idle');
                   await this.jobManager.updateTaskStatus(job.id, taskId, 'pending');
