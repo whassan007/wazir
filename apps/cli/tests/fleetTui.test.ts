@@ -167,6 +167,7 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
     id: 'worker-local',
     computerId: 'local',
     adapterForModel: (modelId: string) => (modelId === 'fake-model' ? fakeAdapter : undefined),
+    refreshRuntime: async () => undefined,
   } as unknown as Worker;
 
   return {
@@ -1692,6 +1693,144 @@ describe('FleetTui — interactive terminal UI harness', () => {
     // Approve to clean up
     harness.sendKey('a');
     await authPromise;
+
+    harness.stop();
+  });
+});
+
+describe('FleetTui — runtime health visibility and model selection', () => {
+  let projectRoot: string;
+
+  afterEach(async () => {
+    if (projectRoot) {
+      await fs.rm(projectRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it('marks an unreachable runtime failed instead of idle/active — previously indistinguishable', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    // Simulate LM Studio's server being down: discovery ran, found nothing reachable.
+    engine.discovered.push({
+      id: 'fake',
+      info: { id: 'fake', name: 'fake-runtime', version: '1.0' },
+      capabilities: {} as any,
+      health: 'unavailable',
+      healthMessage: 'connection refused',
+      models: [],
+      adapter: {} as any,
+    });
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+    await harness.start();
+
+    const items = (harness.tui as any).getFlatNavItems() as Array<{ category: string; id: string; status: string }>;
+    const runtimeItem = items.find((i) => i.category === 'RUNTIMES' && i.id === 'fake');
+    expect(runtimeItem?.status).toBe('failed');
+
+    harness.stop();
+  });
+
+  it('does not mark a healthy runtime as failed just because no agent is currently running on it', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    engine.discovered.push({
+      id: 'fake',
+      info: { id: 'fake', name: 'fake-runtime', version: '1.0' },
+      capabilities: {} as any,
+      health: 'healthy',
+      models: [],
+      adapter: {} as any,
+    });
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+    await harness.start();
+
+    const items = (harness.tui as any).getFlatNavItems() as Array<{ category: string; id: string; status: string }>;
+    const runtimeItem = items.find((i) => i.category === 'RUNTIMES' && i.id === 'fake');
+    expect(runtimeItem?.status).not.toBe('failed');
+
+    harness.stop();
+  });
+
+  it('/model pins subsequently submitted tasks to the chosen model instead of auto-routing', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+    await harness.start();
+
+    harness.sendLine('/model fake-model');
+    expect(harness.tui.getStatusMessage()).toContain("Pinned model to 'fake-model'");
+    expect((harness.tui as any).selectedModelId).toBe('fake-model');
+
+    harness.sendLine('build something');
+    await new Promise((r) => setTimeout(r, 30));
+
+    const job = harness.tui.getCurrentJob();
+    expect(job?.tasks[0]?.execution?.targetModelId).toBe('fake-model');
+
+    harness.stop();
+  });
+
+  it('/model with no id reports the current pin and available models; /model auto clears it', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+    await harness.start();
+
+    harness.sendLine('/model fake-model');
+    harness.sendLine('/model');
+    expect(harness.tui.getStatusMessage()).toContain('Model: fake-model');
+    expect(harness.tui.getStatusMessage()).toContain('fake-model');
+
+    harness.sendLine('/model auto');
+    expect((harness.tui as any).selectedModelId).toBeUndefined();
+    expect(harness.tui.getStatusMessage()).toContain('Cleared model pin');
+
+    harness.stop();
+  });
+
+  it('/model rejects an id that is not registered instead of silently pinning to nothing', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+    await harness.start();
+
+    harness.sendLine('/model nonexistent-model');
+    expect((harness.tui as any).selectedModelId).toBeUndefined();
+    expect(harness.tui.getStatusMessage()).toContain("No registered model 'nonexistent-model'");
+
+    harness.stop();
+  });
+
+  it('/launch lmstudio reports a clear error when the configured lms binary cannot be found', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+    await harness.start();
+
+    // Point at a path guaranteed not to exist so this never touches a real local LM
+    // Studio install, regardless of what's on the machine actually running this test.
+    const previous = process.env.WAZIR_LMS_BIN;
+    process.env.WAZIR_LMS_BIN = '/nonexistent/definitely-missing-lms-binary';
+    try {
+      harness.sendLine('/launch lmstudio');
+      await new Promise((r) => setTimeout(r, 50));
+      expect(harness.tui.getStatusMessage()).toContain("'lms' CLI not found on PATH");
+    } finally {
+      if (previous === undefined) delete process.env.WAZIR_LMS_BIN;
+      else process.env.WAZIR_LMS_BIN = previous;
+    }
+
+    harness.stop();
+  });
+
+  it('/launch rejects an unsupported runtime name without attempting to run anything', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+    await harness.start();
+
+    harness.sendLine('/launch ollama');
+    expect(harness.tui.getStatusMessage()).toContain("Don't know how to launch 'ollama'");
 
     harness.stop();
   });

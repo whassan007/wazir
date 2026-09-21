@@ -1,4 +1,6 @@
 import readline from 'node:readline';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   type Job,
   type JobOrchestratorEvent,
@@ -8,6 +10,7 @@ import {
   type BlockStatus,
 } from '@wazir/core';
 import type { RookEngine } from '../engine.js';
+import { refreshRuntime } from '../engine.js';
 import { color } from '../colors.js';
 import { createFleetTaskExecutor } from '../fleetRunner.js';
 import { TerminalScreen, type TerminalSize } from './screen.js';
@@ -15,6 +18,8 @@ import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } fro
 import { resolveReference, type ResolvedReference } from '../references.js';
 import { tokensPerSecond } from '@wazir/shared';
 import { parseAction } from '@wazir/agents';
+
+const execFileAsync = promisify(execFile);
 
 // Per-category spinner frames for the persistent full-screen renderer. Earlier rounds on
 // this terminal assumed Braille glyphs were unsafe (they'd caused ghosting twice), but an
@@ -276,6 +281,7 @@ export class FleetTui {
     { id: 'block', title: 'Inspect Recent Block', cmd: '/block' },
     { id: 'clear-context', title: 'Clear Active Context', cmd: '/clear-context' },
     { id: 'doctor', title: 'System Health Diagnostics', cmd: '/doctor' },
+    { id: 'launch-lmstudio', title: 'Launch LM Studio Server', cmd: '/launch lmstudio' },
     { id: 'help', title: 'Toggle Help & Shortcuts', cmd: '/help' },
     { id: 'repaint', title: 'Force Screen Repaint', cmd: '/repaint' },
   ];
@@ -315,6 +321,10 @@ export class FleetTui {
   private readonly jobRollups = new Map<string, JobRollup>();
   private isRunning = false;
   private shouldExit = false;
+
+  /** Set via /model <id>; pins every subsequently submitted task to this model instead
+   *  of letting the scheduler auto-route it. Undefined means auto-routed (the default). */
+  private selectedModelId?: string;
 
   private inputBuffer = '';
   /** Index into inputBuffer where typed/deleted characters land; 0..inputBuffer.length. */
@@ -744,7 +754,7 @@ export class FleetTui {
         void this.submitCommand(chosen.cmd);
         return;
       }
-      if (/^[1-8]$/.test(key)) {
+      if (/^[1-9]$/.test(key)) {
         const idx = parseInt(key, 10) - 1;
         if (idx >= 0 && idx < this.quickActions.length) {
           this.quickActionIndex = idx;
@@ -1329,6 +1339,71 @@ export class FleetTui {
       return;
     }
 
+    if (trimmed.startsWith('/launch')) {
+      const parts = trimmed.split(/\s+/);
+      const target = (parts[1] ?? 'lmstudio').toLowerCase();
+      if (target !== 'lmstudio') {
+        this.statusMessage =
+          `Don't know how to launch '${target}' — only 'lmstudio' is supported (LM Studio ships an ` +
+          `'lms' CLI for this; Ollama is normally already running as a background service).`;
+        this.draw();
+        return;
+      }
+      this.statusMessage = 'Launching LM Studio server (lms server start)...';
+      this.draw();
+      try {
+        await execFileAsync(process.env.WAZIR_LMS_BIN ?? 'lms', ['server', 'start'], { timeout: 15_000 });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.statusMessage = /ENOENT/.test(message)
+          ? `'lms' CLI not found on PATH — install LM Studio (lmstudio.ai) or add its CLI to PATH`
+          : `Failed to start LM Studio server: ${message.split('\n')[0]}`;
+        this.draw();
+        return;
+      }
+      // The server needs a moment to bind its port after `lms server start` returns —
+      // poll briefly instead of reporting a false "still unreachable" on the first try.
+      let result = await refreshRuntime(this.engine, 'lmstudio');
+      for (let attempt = 0; !result.ok && attempt < 4; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        result = await refreshRuntime(this.engine, 'lmstudio');
+      }
+      this.statusMessage = result.ok
+        ? `LM Studio started — ${result.message}`
+        : `LM Studio server started, but still not reachable: ${result.message}`;
+      this.draw();
+      return;
+    }
+
+    if (trimmed === '/model' || trimmed.startsWith('/model ')) {
+      const arg = trimmed.slice(6).trim();
+      const available = this.engine.models.list();
+      if (!arg) {
+        const current = this.selectedModelId ?? 'auto (scheduler picks)';
+        const ids = available.map((m) => m.id).join(', ') || '(none registered)';
+        this.statusMessage = `Model: ${current}. Available: ${ids}. Use /model <id> to pin, /model auto to clear.`;
+        this.draw();
+        return;
+      }
+      if (arg === 'auto' || arg === 'clear') {
+        this.selectedModelId = undefined;
+        this.statusMessage = 'Cleared model pin — new tasks will be auto-routed by the scheduler again.';
+        this.draw();
+        return;
+      }
+      const match = available.find((m) => m.id === arg);
+      if (!match) {
+        const ids = available.map((m) => m.id).join(', ') || '(none registered)';
+        this.statusMessage = `No registered model '${arg}'. Available: ${ids}.`;
+        this.draw();
+        return;
+      }
+      this.selectedModelId = match.id;
+      this.statusMessage = `Pinned model to '${match.id}' — new tasks will use it instead of auto-routing.`;
+      this.draw();
+      return;
+    }
+
     if (trimmed.startsWith('/block')) {
       const parts = trimmed.split(/\s+/);
       const targetId = parts[1] ?? this.recentBlocks[0]?.id;
@@ -1455,6 +1530,7 @@ export class FleetTui {
         type: 'coding',
         title: desc.slice(0, 50),
         input: desc,
+        execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
       },
     }));
 
@@ -1944,11 +2020,15 @@ export class FleetTui {
     const runtimes = this.engine.runtimes.list();
     for (const rt of runtimes) {
       const isRunning = agentCards.some((a) => a.computerId === rt.computerId && a.status === 'running');
+      // A runtime that failed discovery (LM Studio's server not started, Ollama not
+      // running, ...) was previously indistinguishable from an idle-but-fine one — both
+      // just showed the same decorative activity dot. Surface its real health instead.
+      const health = this.engine.discovered.find((d) => d.id === rt.id)?.health;
       items.push({
         category: 'RUNTIMES',
         id: rt.id,
         label: rt.name || rt.id,
-        status: isRunning ? 'running' : 'completed',
+        status: health === 'unavailable' ? 'failed' : isRunning ? 'running' : 'completed',
         routing: {
           runtimeId: rt.id,
           computerId: rt.computerId,
@@ -2438,9 +2518,18 @@ export class FleetTui {
       }
     } else if (selected.category === 'RUNTIMES') {
       const runtime = this.engine.runtimes.get(selected.id);
+      const discovered = this.engine.discovered.find((d) => d.id === selected.id);
       if (runtime) {
         lines.push(this.padRightTo(`  Runtime: ${color.bold(runtime.name || runtime.id)} v${runtime.version}`, width));
         lines.push(this.padRightTo(`  Computer: ${runtime.computerId}`, width));
+        if (discovered?.health === 'unavailable') {
+          lines.push(this.padRightTo(`  Status: ${color.red('UNAVAILABLE')} — ${discovered.healthMessage ?? 'unreachable'}`, width));
+          if (selected.id === 'lmstudio') {
+            lines.push(this.padRightTo(`  ${color.gray("Run /launch lmstudio to start LM Studio's server from here.")}`, width));
+          }
+        } else if (discovered) {
+          lines.push(this.padRightTo(`  Status: ${color.green(discovered.health.toUpperCase())}`, width));
+        }
         const caps = Object.entries(runtime.capabilities)
           .filter(([, v]) => v)
           .map(([k]) => k);
@@ -2487,6 +2576,10 @@ export class FleetTui {
     const maxK = Math.round(max / 1024);
 
     // Semantic colors (§25): cyan = identity / active context
+    // Only shown once a model is pinned via /model — otherwise this bar stays as it
+    // was, since "auto-routed" is the common case and not worth a permanent label.
+    const modelPlain = this.selectedModelId ? `Model ${this.selectedModelId} ~ ` : '';
+    const modelIndicator = this.selectedModelId ? `${color.magenta(modelPlain.trimEnd())} ` : '';
     const contextIndicator = color.cyan(`Context ${usedK}K/${maxK}K ~`);
     const contextPlain = `Context ${usedK}K/${maxK}K ~`;
 
@@ -2500,8 +2593,8 @@ export class FleetTui {
     const statusText = `  ${color.gray('Status:')} ${spinnerPrefix}${this.statusMessage}`;
     const statusPlain = this.stripAnsi(statusText);
 
-    const spaces = Math.max(2, cols - statusPlain.length - contextPlain.length - 2);
-    return `${statusText}${' '.repeat(spaces)}${contextIndicator} `;
+    const spaces = Math.max(2, cols - statusPlain.length - modelPlain.length - contextPlain.length - 2);
+    return `${statusText}${' '.repeat(spaces)}${modelIndicator}${contextIndicator} `;
   }
 
   private renderInputBar(cols: number): string {
@@ -2654,7 +2747,7 @@ export class FleetTui {
       body.push(isSel ? color.blue(color.bold(label)) : label);
     }
 
-    const actions = `${color.bold('[Enter]')} Select   ${color.bold('[Esc]')} Dismiss   ${color.bold('[1-8]')} Direct Execute`;
+    const actions = `${color.bold('[Enter]')} Select   ${color.bold('[Esc]')} Dismiss   ${color.bold('[1-9]')} Direct Execute`;
     return this.buildModalBox(title, body, actions, modalWidth, 'cyan');
   }
 
@@ -2908,6 +3001,8 @@ export class FleetTui {
       '    /steer <msg>    Inject mid-run follow-up instruction to agent',
       '    /cancel <id>    Cancel one agent or all agents',
       '    /doctor         Execute system diagnostics',
+      '    /launch lmstudio  Start LM Studio\'s server when its runtime shows unavailable',
+      '    /model [id]     Show or set the model new tasks are pinned to',
       '    /clear-context  Clear active context blocks',
       '    /exit or q      Exit TUI and restore terminal',
     ];
