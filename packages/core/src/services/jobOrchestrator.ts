@@ -545,9 +545,16 @@ export class JobOrchestrator {
                   usage: outcome.usage,
                 });
               } else {
-                const isPolicyDenial = outcome.error?.toLowerCase().includes('policy') ||
-                  outcome.error?.toLowerCase().includes('denied') ||
-                  outcome.reasons?.some((r) => r.toLowerCase().includes('policy') || r.toLowerCase().includes('deny'));
+                // Prefer the executor's own structured classification when it set one —
+                // falls back to sniffing the free-text error/reasons for executors (or
+                // thrown-exception paths) that don't.
+                const isPolicyDenial = outcome.errorKind
+                  ? outcome.errorKind === 'policy'
+                  : Boolean(
+                      outcome.error?.toLowerCase().includes('policy') ||
+                      outcome.error?.toLowerCase().includes('denied') ||
+                      outcome.reasons?.some((r) => r.toLowerCase().includes('policy') || r.toLowerCase().includes('deny')),
+                    );
                 const retries = retryCounts.get(taskId) ?? 0;
                 const maxRetries = isPolicyDenial ? 0 : (job.maxRetries ?? 3);
                 if (retries < maxRetries) {

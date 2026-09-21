@@ -2,6 +2,7 @@ import path from 'node:path';
 import {
   effectiveContextTokens,
   type AgentAdapter,
+  type AgentErrorKind,
   type AgentRuntime,
   type CheckRunRecord,
   type ContextPart,
@@ -329,6 +330,7 @@ export function createFleetTaskExecutor(
     // 6. Run agent loop
     let summary: string | undefined;
     const errors: string[] = [];
+    let errorKind: AgentErrorKind | undefined;
 
     try {
       for await (const turn of agent.run(
@@ -358,6 +360,7 @@ export function createFleetTaskExecutor(
           tool: turn.tool,
           content: turnContent?.slice(0, 500),
           error: turnError,
+          raw: turn.raw?.slice(0, 4000),
         });
 
         context.onProgress?.({
@@ -366,12 +369,14 @@ export function createFleetTaskExecutor(
           content: turnContent,
           tool: turn.tool,
           error: turnError,
+          raw: turn.raw,
         });
 
         if (turn.kind === 'done') {
           summary = turn.content;
         } else if (turn.kind === 'error' && turn.error) {
           errors.push(turn.error);
+          if (errorKind === undefined) errorKind = turn.errorKind;
           await engine.executions.recordError(executionId, turn.error);
         }
       }
@@ -411,6 +416,7 @@ export function createFleetTaskExecutor(
       success: evaluation.success && !wasCancelled,
       result: summary ?? (evaluation.success ? 'completed' : 'failed'),
       error: errors[0],
+      errorKind,
       reasons: evaluation.reasons,
       filesChanged: finalRecord.filesChanged,
       usage: finalRecord.usage

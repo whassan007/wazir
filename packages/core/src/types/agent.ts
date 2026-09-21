@@ -35,6 +35,17 @@ export type AgentPhase =
   | 'verify'
   | 'complete';
 
+/**
+ * Coarse classification of why a turn/run failed, independent of the free-text `error`
+ * message. Lets a consumer (retry policy, TUI, `wa executions inspect`) tell "the model
+ * never produced a parseable/complete action" apart from "a real check failed" apart from
+ * "policy said no" without parsing prose — previously all three surfaced as an
+ * indistinguishable string, which is why a policy denial and a genuine test failure both
+ * got the same retry treatment until jobOrchestrator's own separate `isPolicyDenial`
+ * string-sniff was added.
+ */
+export type AgentErrorKind = 'protocol' | 'verification' | 'policy' | 'cancelled' | 'other';
+
 export interface AgentTurn {
   kind: 'message' | 'tool_call' | 'tool_result' | 'phase' | 'done' | 'error';
   content?: string;
@@ -43,6 +54,14 @@ export interface AgentTurn {
   toolResult?: ToolResult;
   phase?: AgentPhase;
   error?: string;
+  /** Coarse failure class; only meaningful when `kind === 'error'`. */
+  errorKind?: AgentErrorKind;
+  /** The exact raw model response text this turn was produced from, when applicable —
+   *  e.g. for `tool_call` (what the model said before it was parsed into the tool call)
+   *  and for a `message`/`error` turn reporting an unparseable response. Lets an operator
+   *  inspect what the model actually said instead of reconstructing it from the parsed
+   *  action alone. */
+  raw?: string;
 }
 
 export interface AgentRunRequest {

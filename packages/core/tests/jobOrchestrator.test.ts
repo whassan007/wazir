@@ -294,6 +294,31 @@ describe('JobOrchestrator — fleet-scale graph walk & concurrent execution', ()
     expect(node.result).toBe('recovered on 3rd attempt');
   });
 
+  it('never retries a task whose outcome sets errorKind "policy", even when the error text gives no hint', async () => {
+    // The structured errorKind must be what actually decides this — not a string-sniff of
+    // "policy"/"denied" in the text — so the message here deliberately says neither.
+    let attempts = 0;
+    const executor: JobTaskExecutor = async () => {
+      attempts++;
+      return { success: false, error: 'not allowed here', errorKind: 'policy' };
+    };
+
+    const { orchestrator } = setupTestOrchestrator(executor);
+    const job = await orchestrator.createJob({
+      title: 'Policy Denial Test',
+      maxRetries: 3,
+      tasks: [{ task: { id: 'denied-task', input: 'this will be denied' } }],
+    });
+
+    const finished = await orchestrator.runJob(job.id);
+
+    expect(finished.status).toBe('failed');
+    expect(attempts).toBe(1); // no retry at all
+    const node = finished.graph.nodes[0];
+    expect(node.state).toBe('failed');
+    expect(node.error).toBe('not allowed here');
+  });
+
   it('supports single-task cancellation without terminating sibling tasks', async () => {
     const started: string[] = [];
     const completed: string[] = [];

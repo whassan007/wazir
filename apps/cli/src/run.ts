@@ -408,6 +408,7 @@ export async function executeTask(
         tool: turn.tool,
         content: turn.content?.slice(0, 500),
         error: turn.error,
+        raw: turn.raw?.slice(0, 4000),
       });
       switch (turn.kind) {
         case 'phase':

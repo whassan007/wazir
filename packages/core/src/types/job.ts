@@ -3,6 +3,7 @@ import type { Task, TaskStatus } from './task.js';
 export type { Task, TaskStatus };
 import type { PolicyDecision } from './policy.js';
 import type { ExecutionRecord } from './execution.js';
+import type { AgentErrorKind } from './agent.js';
 
 export type JobStatus =
   | 'pending'
@@ -160,6 +161,8 @@ export interface JobTaskProgressEvent {
   tool?: string;
   error?: string;
   usage?: { input: number; output: number; total: number };
+  /** Raw model response text this progress event was produced from, when available. */
+  raw?: string;
 }
 
 export interface JobTaskExecutionContext {
@@ -176,6 +179,12 @@ export interface JobTaskOutcome {
   success: boolean;
   result?: unknown;
   error?: string;
+  /** Coarse classification of `error`, when the executor can tell — e.g. distinguishing
+   *  "the model never produced a parseable action" (protocol) from "a real check failed"
+   *  (verification) from "policy said no" (policy). Retry decisions currently still fall
+   *  back to sniffing `error`/`reasons` text when this is absent (not every executor sets
+   *  it), but a structured kind is preferred wherever one is available. */
+  errorKind?: AgentErrorKind;
   reasons?: string[];
   filesChanged?: string[];
   usage?: { input: number; output: number; total: number };
