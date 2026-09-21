@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { sandboxDegraded, sandboxStatus, wrapInSandbox, type SandboxMode, type WrappedCommand } from './sandbox.js';
@@ -114,6 +114,14 @@ function runProcess(
     const wazirTmp = path.join(project, '.wazir', 'tmp');
     const wazirHome = path.join(project, '.wazir', 'home');
     const wazirCache = path.join(project, '.wazir', 'cache');
+
+    try {
+      if (!existsSync(wazirTmp)) mkdirSync(wazirTmp, { recursive: true });
+      if (!existsSync(wazirHome)) mkdirSync(wazirHome, { recursive: true });
+      if (!existsSync(wazirCache)) mkdirSync(wazirCache, { recursive: true });
+    } catch {
+      // Best effort in case project directory is read-only
+    }
 
     const normalizedEnv: Record<string, string> = {};
     if (existsSync(wazirTmp)) normalizedEnv.TMPDIR = wazirTmp;

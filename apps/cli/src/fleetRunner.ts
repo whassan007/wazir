@@ -21,7 +21,7 @@ import { buildSystemPrompt } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
-import { dispatchRemote } from '@wazir/workers';
+import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
 import type { RookEngine } from './engine.js';
 
 function toGenerationEvent(event: WorkerExecutionEvent): GenerationEvent | undefined {
@@ -93,7 +93,44 @@ export function createFleetTaskExecutor(
     await fs.mkdir(path.join(taskRoot, '.wazir', 'home'), { recursive: true }).catch(() => {});
     await fs.mkdir(path.join(taskRoot, '.wazir', 'cache'), { recursive: true }).catch(() => {});
 
-    // 2. Fetch or create execution record
+    // 2. Worker Preflight Infrastructure Verification
+    const preflight = await runWorkerPreflight({
+      workspace: taskRoot,
+      taskPrompt: task.input,
+      capabilities: task.capabilities,
+      requiredTools: ['read', 'write', 'shell', 'glob'],
+      skipCompilerProbe: runnerOptions.useWorktrees === false && !process.env.WAZIR_PROBE_COMPILER,
+    });
+
+    if (!preflight.ok) {
+      const preflightErr = `[PREFLIGHT_FAILED: ${preflight.code}] ${preflight.reason}`;
+      context.onProgress?.({
+        kind: 'infra',
+        phase: 'plan',
+        error: preflightErr,
+      });
+
+      const existingRecs = await engine.executions.listByTask(taskId);
+      const rec = existingRecs.length > 0 ? existingRecs[0] : await engine.executions.create({
+        task,
+        agentId: assignment.agentId,
+        computerId: assignment.computerId,
+        runtimeId: assignment.runtimeId,
+        modelId: assignment.modelId,
+        workerId: engine.worker.id,
+      });
+      await engine.executions.recordError(rec.execution.id, preflightErr);
+      await engine.executions.setStatus(rec.execution.id, 'failed');
+
+      return {
+        success: false,
+        error: preflightErr,
+        errorKind: 'infrastructure',
+        reasons: [preflightErr],
+      };
+    }
+
+    // 3. Fetch or create execution record
     const existingRecords = await engine.executions.listByTask(taskId);
     let executionId: string;
 

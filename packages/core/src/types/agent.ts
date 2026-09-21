@@ -44,7 +44,7 @@ export type AgentPhase =
  * got the same retry treatment until jobOrchestrator's own separate `isPolicyDenial`
  * string-sniff was added.
  */
-export type AgentErrorKind = 'protocol' | 'verification' | 'policy' | 'cancelled' | 'other';
+export type AgentErrorKind = 'protocol' | 'verification' | 'policy' | 'cancelled' | 'infrastructure' | 'other';
 
 export interface ModelProtocolMetrics {
   actionAttempts: number;

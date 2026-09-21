@@ -19,7 +19,7 @@ import { buildSystemPrompt } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, stripTerminalEscapes } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
-import { dispatchRemote } from '@wazir/workers';
+import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
 import { color } from './colors.js';
 import type { RookEngine } from './engine.js';
 import { StatusLoader } from './spinner.js';
@@ -204,6 +204,37 @@ export async function executeTask(
   log(color.gray(`    context:  ${context.finalRequiredTokens} / ${context.available.tokens} tokens`));
   for (const reason of scheduling.reasons) {
     log(color.gray(`    - ${reason}`));
+  }
+
+  // Preflight Infrastructure Verification
+  if (scheduling.computerId === engine.worker.computerId) {
+    const preflight = await runWorkerPreflight({
+      workspace: engine.projectRoot,
+      taskPrompt: description,
+      requiredTools: ['read', 'write', 'shell', 'glob'],
+      skipCompilerProbe: !process.env.WAZIR_PROBE_COMPILER,
+    });
+    if (!preflight.ok) {
+      const preflightErr = `[PREFLIGHT_FAILED: ${preflight.code}] ${preflight.reason}`;
+      log(color.red(`    ${preflightErr}`));
+      await engine.executions.recordError(executionId, preflightErr);
+      await engine.executions.setStatus(executionId, 'failed');
+      emitJson({ type: 'error', error: preflightErr, executionId });
+      emitJson({
+        type: 'complete',
+        success: false,
+        executionId,
+        filesChanged: [],
+        errors: [preflightErr],
+      });
+      return {
+        success: false,
+        reasons: [preflightErr],
+        filesChanged: [],
+        executionId,
+        errors: [preflightErr],
+      };
+    }
   }
 
   // ---- policy-gated runtime handed to the agent ---------------------------

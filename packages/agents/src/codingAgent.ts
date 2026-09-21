@@ -10,6 +10,7 @@ import type {
   ChatMessage,
   ModelProtocolMetrics,
 } from '@wazir/core';
+import { ModelProtocolAdapter, ACTION_START_PATTERN } from './protocolAdapters.js';
 
 export interface CodingAgentOptions {
   maxTurns?: number;
@@ -62,7 +63,7 @@ const FILE_TOOLS = new Set(['write', 'edit']);
  * source in its reasoning will contain plenty of literal `{` characters
  * that have nothing to do with the action object it still hasn't emitted.
  */
-const ACTION_START_RE = /\{\s*"action"\s*:/;
+const ACTION_START_RE = ACTION_START_PATTERN;
 
 export interface ParsedAction {
   action: string;
@@ -195,21 +196,12 @@ function extractFirstObject(text: string): string | null {
   return text.slice(start);
 }
 
-export function parseAction(text: string): ParsedAction | null {
-  const unfenced = text.replace(/```(?:json)?/gi, '');
-  const candidate = extractFirstObject(unfenced);
-  if (!candidate) return null;
-
-  const obj = tryParseObject(candidate);
-  if (!obj || typeof obj.action !== 'string') return null;
-
-  if (Array.isArray(obj.content)) {
-    obj.content = obj.content.map((item) => String(item).trim()).filter(Boolean).join('\n');
+export function parseAction(text: string, toolNames: Set<string> = new Set()): ParsedAction | null {
+  const canonical = ModelProtocolAdapter.parse(text, toolNames);
+  if (canonical) {
+    return canonical as unknown as ParsedAction;
   }
-  if (Array.isArray(obj.summary)) {
-    obj.summary = obj.summary.map((item) => String(item).trim()).filter(Boolean).join('\n');
-  }
-  return obj as unknown as ParsedAction;
+  return null;
 }
 
 /**
@@ -259,7 +251,7 @@ function collectStrayInput(action: ParsedAction): Record<string, unknown> | unde
   if (altContainer && typeof altContainer === 'object' && !Array.isArray(altContainer)) {
     return altContainer as Record<string, unknown>;
   }
-  const { action: _action, tool: _tool, name: _name, content: _content, summary: _summary, ...rest } = record;
+  const { action: _action, tool: _tool, name: _name, content: _content, summary: _summary, protocol: _protocol, ...rest } = record;
   return Object.keys(rest).length > 0 ? (rest as Record<string, unknown>) : undefined;
 }
 
@@ -551,7 +543,7 @@ export class CodingAgent implements AgentAdapter {
     };
 
     const toolNames = new Set(runtime.tools.map((t) => t.name));
-    const readAction = (raw: string): ParsedAction | null => normalizeAction(parseAction(raw), toolNames);
+    const readAction = (raw: string): ParsedAction | null => normalizeAction(parseAction(raw, toolNames), toolNames);
     const correctionMessage = (timedOut: boolean): string =>
       timedOut
         ? 'Your previous response took too long and was cut off before it produced a JSON action. Stop reasoning in prose — respond immediately with exactly one JSON object.'

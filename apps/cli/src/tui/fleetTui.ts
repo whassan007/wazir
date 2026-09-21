@@ -154,6 +154,7 @@ export interface AgentCardState {
   maxAttempts?: number;
   lastMessage: string;
   status: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'retry';
+  errorKind?: 'model' | 'tool' | 'environment' | 'policy' | 'infrastructure' | string;
   startedAt?: Date;
   completedAt?: Date;
   durationMs: number;
@@ -166,7 +167,7 @@ export interface AgentCardState {
 export interface AgentLogEntry {
   text: string;
   time: string;
-  kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'model' | 'validate' | 'recover' | 'policy';
+  kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'model' | 'validate' | 'recover' | 'policy' | 'infra';
   /** Raw model response text this entry came from, when available (view with 'r'
    *  on the Tail view). */
   raw?: string;
@@ -1900,41 +1901,47 @@ export class FleetTui {
         if (p.tool) agent.lastMessage = `Tool: ${p.tool}`;
         if (p.error) agent.lastMessage = `Error: ${this.humanizeError(p.error).slice(0, 60)}`;
 
-        let eventKind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'validate' | 'recover' | 'policy' = 'info';
+        let eventKind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'validate' | 'recover' | 'policy' | 'infra' = 'info';
         let eventText = p.content ?? (p.tool ? `tool: ${p.tool}` : `phase: ${p.phase}`);
 
-        // Protocol/validation corrections (a locally-rejected malformed tool call, a
-        // repeated-action circuit-breaker trip, an unparseable response) — these used to
-        // be entirely invisible: silently patched into the model's next prompt with no
-        // trace in the log at all. Checked ahead of the generic `p.tool` handling below
-        // since these DO carry a `tool` name (which action was rejected), and would
-        // otherwise be mislabeled as an ordinary tool result.
-        const VALIDATION_PREFIXES = ['ACTION_VALIDATION_FAILED:', 'ACTION_BLOCKED_DUPLICATE:', 'INVALID_JSON_ACTION:'];
-        const validationPrefix = VALIDATION_PREFIXES.find((prefix) => p.content?.startsWith(prefix));
-        if (validationPrefix) {
-          eventKind = 'validate';
-          eventText = p.content!.slice(validationPrefix.length).trim() || validationPrefix.replace(/:$/, '');
-        } else if (p.tool) {
-          // A tool_call turn's outcome (ok/error) rides in the same progress event —
-          // it used to be silently dropped here, so a failed tool call showed only
-          // "Tool call executed: shell" with no indication anything went wrong, and
-          // the real reason surfaced (if at all) only via the model quoting the raw
-          // internal string back in its own reasoning several turns later.
-          if (p.error) {
+        if (p.error?.includes('PREFLIGHT_FAILED') || p.content?.includes('PREFLIGHT_FAILED')) {
+          eventKind = 'infra';
+          eventText = p.error || p.content || 'Preflight failure';
+          agent.errorKind = 'infrastructure';
+        } else {
+          // Protocol/validation corrections (a locally-rejected malformed tool call, a
+          // repeated-action circuit-breaker trip, an unparseable response) — these used to
+          // be entirely invisible: silently patched into the model's next prompt with no
+          // trace in the log at all. Checked ahead of the generic `p.tool` handling below
+          // since these DO carry a `tool` name (which action was rejected), and would
+          // otherwise be mislabeled as an ordinary tool result.
+          const VALIDATION_PREFIXES = ['ACTION_VALIDATION_FAILED:', 'ACTION_BLOCKED_DUPLICATE:', 'INVALID_JSON_ACTION:'];
+          const validationPrefix = VALIDATION_PREFIXES.find((prefix) => p.content?.startsWith(prefix));
+          if (validationPrefix) {
+            eventKind = 'validate';
+            eventText = p.content!.slice(validationPrefix.length).trim() || validationPrefix.replace(/:$/, '');
+          } else if (p.tool) {
+            // A tool_call turn's outcome (ok/error) rides in the same progress event —
+            // it used to be silently dropped here, so a failed tool call showed only
+            // "Tool call executed: shell" with no indication anything went wrong, and
+            // the real reason surfaced (if at all) only via the model quoting the raw
+            // internal string back in its own reasoning several turns later.
+            if (p.error) {
+              eventKind = 'error';
+              eventText = `${p.tool} failed — ${this.humanizeError(p.error)}`;
+            } else {
+              eventKind = 'tool';
+              eventText = `${p.tool} succeeded`;
+            }
+          } else if (p.phase === 'test' || p.phase === 'verify') {
+            eventKind = 'test';
+            eventText = `Verification checks running (${p.phase})`;
+          } else if (p.phase === 'plan') {
+            eventKind = 'plan';
+          } else if (p.error) {
             eventKind = 'error';
-            eventText = `${p.tool} failed — ${this.humanizeError(p.error)}`;
-          } else {
-            eventKind = 'tool';
-            eventText = `${p.tool} succeeded`;
+            eventText = this.humanizeError(p.error);
           }
-        } else if (p.phase === 'test' || p.phase === 'verify') {
-          eventKind = 'test';
-          eventText = `Verification checks running (${p.phase})`;
-        } else if (p.phase === 'plan') {
-          eventKind = 'plan';
-        } else if (p.error) {
-          eventKind = 'error';
-          eventText = this.humanizeError(p.error);
         }
 
         logs.push({
@@ -1964,29 +1971,54 @@ export class FleetTui {
         agent.status = 'failed';
         agent.completedAt = now;
         agent.phase = 'failed';
+        const isInfra = Boolean(
+          agent.errorKind === 'infrastructure' ||
+          ev.error?.includes('PREFLIGHT_FAILED') ||
+          ev.error?.includes('WORKSPACE_') ||
+          ev.error?.includes('TEMP_DIRECTORY_') ||
+          ev.error?.includes('SHELL_UNAVAILABLE') ||
+          ev.error?.includes('COMPILER_PROBE_FAILED')
+        );
+        if (isInfra) {
+          agent.errorKind = 'infrastructure';
+        }
         const failureReason = ev.error ? this.humanizeError(ev.error) : 'Task failed';
         agent.lastMessage = failureReason;
 
         logs.push({
           time: timeStr,
-          text: `Task failed: ${failureReason}`,
-          kind: 'error',
+          text: isInfra ? `Infrastructure preflight failed: ${failureReason}` : `Task failed: ${failureReason}`,
+          kind: isInfra ? 'infra' : 'error',
         });
 
         // Structured Error Component (§29)
-        this.currentError = {
-          phase: agent.phase || 'execution',
-          reason: ev.error ? this.humanizeError(ev.error) : 'Task execution encountered error',
-          required: 'Clean tool execution and passing tests',
-          available: 'Uncaught failure or policy denial',
-          suggestedSteps: [
-            '1. Inspect event stream logs in main activity pane',
-            '2. Run "wa doctor" to verify runtime health',
-            '3. Retry task or provide steering via /steer <instruction>',
-          ],
-          taskId: agent.taskId,
-          timestamp: now,
-        };
+        this.currentError = isInfra
+          ? {
+              phase: 'preflight',
+              reason: ev.error ? this.humanizeError(ev.error) : 'Preflight infrastructure check failed',
+              required: 'Writable workspace, accessible tmpdir, available shell, and working compiler',
+              available: 'Host environment check failed before model invocation',
+              suggestedSteps: [
+                '1. Check workspace permissions, isolated directory paths, and disk space',
+                '2. Run "wa doctor" to verify runtime, compiler, and sandbox status',
+                '3. Check Seatbelt profile or set WAZIR_PROBE_COMPILER=0 if compiler probe is not required',
+              ],
+              taskId: agent.taskId,
+              timestamp: now,
+            }
+          : {
+              phase: agent.phase || 'execution',
+              reason: ev.error ? this.humanizeError(ev.error) : 'Task execution encountered error',
+              required: 'Clean tool execution and passing tests',
+              available: 'Uncaught failure or policy denial',
+              suggestedSteps: [
+                '1. Inspect event stream logs in main activity pane',
+                '2. Run "wa doctor" to verify runtime health',
+                '3. Retry task or provide steering via /steer <instruction>',
+              ],
+              taskId: agent.taskId,
+              timestamp: now,
+            };
       } else if (ev.type === 'task:retry') {
         agent.status = 'retry';
         agent.stage = 'REPAIR';
@@ -2444,7 +2476,7 @@ export class FleetTui {
           card.status === 'completed'
             ? color.green('[COMPLETED]')
             : card.status === 'failed'
-              ? color.red('[FAILED]')
+              ? (card.errorKind === 'infrastructure' ? color.bold(color.red('[INFRA FAILED]')) : color.red('[FAILED]'))
               : card.status === 'running'
                 ? color.cyan(`[RUNNING ${getCategorySpinnerFrame('EXECUTIONS', this.spinnerTick)}]`)
                 : color.yellow(`[${card.status.toUpperCase()}]`);
@@ -2540,6 +2572,9 @@ export class FleetTui {
               contentText = color.magenta(truncatedText);
             } else if (k === 'policy') {
               badge = color.red('POLICY  ');
+              contentText = color.red(truncatedText);
+            } else if (k === 'infra' || k === 'host') {
+              badge = color.bold(color.red('INFRA   '));
               contentText = color.red(truncatedText);
             }
 

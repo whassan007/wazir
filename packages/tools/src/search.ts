@@ -68,6 +68,23 @@ export const globTool: Tool = {
     const started = Date.now();
     try {
       const searchRoot = await assertInsideProject(ctx.projectRoot, String(input.path ?? '.'));
+      const rootStat = await fs.stat(searchRoot).catch(() => null);
+      if (!rootStat || !rootStat.isDirectory()) {
+        if (searchRoot === path.resolve(ctx.projectRoot)) {
+          return {
+            ok: false,
+            output: '',
+            error: `workspace directory '${ctx.projectRoot}' does not exist`,
+            durationMs: Date.now() - started,
+          };
+        }
+        return {
+          ok: true,
+          output: '(no matches)',
+          durationMs: Date.now() - started,
+          metadata: { count: 0 },
+        };
+      }
       const regex = globToRegExp(String(input.pattern));
       const matches: string[] = [];
       for await (const file of walkFiles(searchRoot, '')) {

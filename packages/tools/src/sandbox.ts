@@ -1,7 +1,15 @@
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+function safeRealpath(p: string): string | undefined {
+  try {
+    return realpathSync(p);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * OS-level sandbox for tool subprocesses (security review F-27).
@@ -304,22 +312,34 @@ export function seatbeltProfile(options: SandboxOptions, home: string = os.homed
   const project = path.resolve(options.projectRoot);
   const resolvedHome = path.resolve(home);
   const tmp = path.resolve(platformTmp);
+  const realProject = safeRealpath(project);
+  const realTmp = safeRealpath(tmp);
+  const realHome = safeRealpath(resolvedHome);
+
   const rules: string[] = [
     '(version 1)',
     '(allow default)',
     // Home is hidden except for toolchains/caches and the project itself.
     `(deny file-read* file-write* (subpath ${q(resolvedHome)}))`,
+    ...(realHome && realHome !== resolvedHome ? [`(deny file-read* file-write* (subpath ${q(realHome)}))`] : []),
     ...existingDirs(resolvedHome, HOME_TOOLCHAIN_DIRS).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
     ...existingDirs(resolvedHome, HOME_CACHE_DIRS).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
     ...(options.readOnlyPaths ?? []).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
     // Everything outside the project and temp dirs is read-only.
     '(deny file-write*)',
     `(allow file-write* (subpath ${q(project)}))`,
+    ...(realProject && realProject !== project ? [`(allow file-write* (subpath ${q(realProject)}))`] : []),
     `(allow file-write* (subpath ${q(tmp)}))`,
+    ...(realTmp && realTmp !== tmp ? [`(allow file-write* (subpath ${q(realTmp)}))`] : []),
     '(allow file-write* (subpath "/tmp"))',
     '(allow file-write* (subpath "/private/tmp"))',
+    '(allow file-write* (subpath "/var/tmp"))',
+    '(allow file-write* (subpath "/private/var/tmp"))',
+    '(allow file-write* (subpath "/var/folders"))',
+    '(allow file-write* (subpath "/private/var/folders"))',
     '(allow file-write* (subpath "/dev"))',
     `(allow file-read* (subpath ${q(project)}))`,
+    ...(realProject && realProject !== project ? [`(allow file-read* (subpath ${q(realProject)}))`] : []),
     ...(options.readWritePaths ?? []).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
     // Runtime sockets.
     `(deny file-read* file-write* (subpath "/private/var/run/docker.sock"))`,
