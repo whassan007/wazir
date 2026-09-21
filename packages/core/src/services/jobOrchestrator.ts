@@ -54,13 +54,6 @@ interface ActiveJobHandle {
   reject: (err: Error) => void;
 }
 
-// A job's own timeoutSeconds (or JobRunOptions.timeoutSeconds) is honored when set; this
-// is the floor for one that was never given a timeout at all. Coding tasks that hang
-// (a model stuck looping on a fix, waiting on something that will never arrive) used to
-// run forever with no way to notice besides someone happening to look at the duration —
-// this bounds that automatically instead of relying on a human to catch it and cancel it.
-const DEFAULT_JOB_TIMEOUT_SECONDS = 300;
-
 export class JobOrchestrator {
   private readonly scheduler: Scheduler;
   private readonly executionEngine: ExecutionEngine;
@@ -322,7 +315,11 @@ export class JobOrchestrator {
 
     this.emit(jobId, { type: 'job:started', jobId });
 
-    const timeoutSeconds = options.timeoutSeconds ?? job.timeoutSeconds ?? DEFAULT_JOB_TIMEOUT_SECONDS;
+    // No default: a job runs indefinitely unless a caller (job definition or
+    // this run's options) explicitly sets timeoutSeconds. Local models can
+    // legitimately take many minutes per turn — an unrequested time limit
+    // was cancelling otherwise-progressing jobs mid-repair.
+    const timeoutSeconds = options.timeoutSeconds ?? job.timeoutSeconds;
     let timedOut = false;
 
     return new Promise<Job>((resolve, reject) => {
@@ -338,17 +335,20 @@ export class JobOrchestrator {
       // Reuses cancelJob() rather than aborting jobAbortController directly, so a timeout
       // gets exactly the same cleanup a manual cancel already gets — every active task's
       // own AbortController is aborted too, not just the top-level job one.
-      const timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        void this.cancelJob(jobId, `exceeded the ${timeoutSeconds}s timeout`);
-      }, Math.max(1, timeoutSeconds) * 1000);
-      timeoutTimer.unref?.();
+      const timeoutTimer =
+        timeoutSeconds !== undefined
+          ? setTimeout(() => {
+              timedOut = true;
+              void this.cancelJob(jobId, `exceeded the ${timeoutSeconds}s timeout`);
+            }, Math.max(1, timeoutSeconds) * 1000)
+          : undefined;
+      timeoutTimer?.unref?.();
 
       let isFinished = false;
 
       const finishJob = async (finalStatus: 'completed' | 'failed' | 'cancelled') => {
         if (isFinished) return;
-        clearTimeout(timeoutTimer);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
         if (timedOut) {
           finalStatus = 'failed';
           // The per-task abort handler above (see taskAbort.signal.aborted) already marks

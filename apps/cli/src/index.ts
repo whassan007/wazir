@@ -512,7 +512,7 @@ program
   .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
   .option('--no-worktrees', 'Disable git worktree isolation')
   .option('--auto-merge', 'Automatically merge completed agent branches into main')
-  .option('--timeout <seconds>', 'Stop a job automatically after this many seconds (default: 300)')
+  .option('--timeout <seconds>', 'Stop a job automatically after this many seconds (default: no limit)')
   .action(async (options) => {
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   AgentRegistry,
   ComputerRegistry,
@@ -369,6 +369,42 @@ describe('JobOrchestrator — fleet-scale graph walk & concurrent execution', ()
     const node = finished.graph.nodes.find((n) => n.taskId === 'hangs-forever');
     expect(node?.state).toBe('failed');
     expect(node?.error).toContain('exceeded the 1s timeout');
+  });
+
+  it('never times out a job when no timeoutSeconds is given anywhere — no hidden default', async () => {
+    // Regression: runJob() used to fall back to a built-in 300s default whenever
+    // neither the run options nor the job itself set a timeout, silently killing
+    // long-running local-model jobs nobody asked to bound. Advance well past that
+    // old default and confirm nothing auto-cancels the still-running task.
+    vi.useFakeTimers();
+    try {
+      let resolveTask: (() => void) | undefined;
+      const executor: JobTaskExecutor = async (_task, ctx) => {
+        return new Promise((resolve) => {
+          ctx.signal?.addEventListener('abort', () => resolve({ success: false, error: 'aborted' }));
+          resolveTask = () => resolve({ success: true, result: 'finished eventually' });
+        });
+      };
+
+      const { orchestrator } = setupTestOrchestrator(executor);
+      const job = await orchestrator.createJob({
+        title: 'No Timeout Job',
+        tasks: [{ task: { id: 'slow-task', input: 'takes a long time' } }],
+      });
+
+      const runPromise = orchestrator.runJob(job.id, {});
+      await vi.advanceTimersByTimeAsync(400_000); // well past the old 300s default
+
+      expect(orchestrator.getJob(job.id)?.status).toBe('running');
+
+      resolveTask?.();
+      const finished = await runPromise;
+      expect(finished.status).toBe('completed');
+      const node = finished.graph.nodes.find((n) => n.taskId === 'slow-task');
+      expect(node?.error).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not touch a job that finishes comfortably within its timeout', async () => {
