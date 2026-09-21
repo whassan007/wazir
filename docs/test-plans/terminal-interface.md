@@ -109,6 +109,8 @@ Status vocabulary: PASS · FAIL · SKIP · MISSING (case not found in code — d
 | TUI-041 | backspace/delete slice buffer + re-render prompt immediately | fleetTui: `correctly handles backspace and delete key events, slicing buffer and re-rendering prompt immediately` | L2 | R |
 | TUI-042 | Tab never leaks into input buffer | fleetTui: `intercepts Tab key without leaking control characters or literal \t into the input buffer` | L2 | B |
 | TUI-043 | nav keys / unparsed ANSI never echo into buffer or streams | fleetTui: `prevents stream echo: navigation keys and unparsed ANSI codes never bind into input buffer or log streams` | L2 | R |
+| TUI-044 | bracketed paste barrier & multiline review mode | pasteBarrier: `enters PASTE review mode on multiline paste and creates exactly 0 jobs until explicit Ctrl+Enter` | L2 | B |
+| TUI-045 | rendered screen fragment rejection and accidental submission circuit breaker | pasteBarrier: `pasting the entire rendered Fleet screen creates exactly 0 jobs` | L2 | B |
 
 ### F. Layout & rendering fidelity
 | ID | Case | Entry | Level | Pri |

@@ -1,6 +1,6 @@
 {
   "name": "wazir",
-  "version": "0.1.36",
+  "version": "0.1.37",
   "description": "Wazir is a model- and runtime-agnostic meta-harness that schedules AI agents, models, tools, and compute to execute tasks across local and distributed environments.",
   "private": true,
   "workspaces": [
@@ -34,7 +34,7 @@
     "test:agent": "npm run build && vitest run packages/agents/tests/codingAgent.turnTimeout.test.ts packages/agents/tests/codingAgent.proseBailout.test.ts packages/agents/tests/codingAgent.circuitBreaker.test.ts packages/agents/tests/codingAgent.contextCompaction.test.ts packages/agents/tests/codingAgent.maxTurns.test.ts packages/agents/tests/parseAction.test.ts packages/core/tests/jobOrchestrator.test.ts packages/core/tests/jobLifecycleAndValidation.test.ts packages/core/tests/policyEngineShell.test.ts packages/core/tests/policyEngineHardening.test.ts packages/tools/tests/sandbox.test.ts apps/cli/tests/fleetTui.test.ts",
     "test:plan:agent": "node scripts/agent-execution-test-plan.mjs",
     "test:matrix": "vitest run tests/runtime/liveModelMatrix.test.ts",
-    "test:buildcpp": "npm run build && vitest run apps/cli/tests/buildcpp.e2e.test.ts",
+    "test:buildcpp": "npm run build && RUN_BUILDCPP=1 vitest run apps/cli/tests/buildcpp.e2e.test.ts",
     "typecheck": "tsc --build --force",
     "dmg": "bash scripts/build-dmg.sh",
     "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\""

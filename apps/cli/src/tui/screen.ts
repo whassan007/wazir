@@ -69,8 +69,8 @@ export class TerminalScreen {
     }
 
     if ((this.outStream as any).isTTY) {
-      // Enter alternate screen buffer, clear screen, ensure cursor visible as a steady box
-      this.outStream.write(`\x1b[?1049h\x1b[H\x1b[2J\x1b[?25h${CURSOR_STEADY_BLOCK}`);
+      // Enter alternate screen buffer, enable bracketed paste mode (\x1b[?2004h), clear screen, ensure cursor visible as a steady box
+      this.outStream.write(`\x1b[?1049h\x1b[?2004h\x1b[H\x1b[2J\x1b[?25h${CURSOR_STEADY_BLOCK}`);
       this.inAltScreen = true;
     }
 
@@ -96,8 +96,8 @@ export class TerminalScreen {
 
     if (this.inAltScreen) {
       // Restore the terminal's own default cursor style (don't leave it stuck
-      // as a forced block after `wa` exits), show cursor, leave alt screen
-      this.outStream.write(`${CURSOR_DEFAULT}\x1b[?25h\x1b[?1049l`);
+      // as a forced block after `wa` exits), show cursor, disable bracketed paste mode (\x1b[?2004l), leave alt screen
+      this.outStream.write(`${CURSOR_DEFAULT}\x1b[?2004l\x1b[?25h\x1b[?1049l`);
       this.inAltScreen = false;
     }
   }

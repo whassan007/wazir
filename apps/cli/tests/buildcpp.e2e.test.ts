@@ -44,9 +44,31 @@ const PROMPT = 'write a c++ program to sort an array of numbers and to produce t
 
 const LMSTUDIO_BASE_URL = process.env.LMSTUDIO_URL || 'http://127.0.0.1:1234';
 
-const TUI_WAIT_TIMEOUT_S = 480; // up to 8 minutes for a full plan/implement/verify loop
-const JOB_TIMEOUT_S = 470; // wa chat's own --timeout, kept just under the wait above
-const OVERALL_TEST_TIMEOUT_MS = 600_000; // 10 minutes
+const TUI_WAIT_TIMEOUT_S = 180; // 3 minutes for a full plan/implement/verify loop
+const JOB_TIMEOUT_S = 170; // wa chat's own --timeout, kept just under the wait above
+const OVERALL_TEST_TIMEOUT_MS = 240_000; // 4 minutes
+const APPROVAL_POLL_CHUNK_S = 15; // how often to clear a pending policy approval while waiting
+
+/**
+ * Splits the completion wait into short chunks, sending Ctrl+A (the TUI's
+ * approve-all binding, TUI-032) between each one. A shell command like
+ * `mkdir -p build` requires interactive policy approval — without this, the
+ * job stalls forever waiting for a human who never answers, and the driver
+ * eventually has to SIGKILL the process (confirmed live: see the first
+ * buildcpp run, which stalled exactly on an unapproved `mkdir -p build`).
+ * Ctrl+A is a no-op when nothing is pending, so this is safe to send blindly.
+ */
+function pollingWaitSteps(totalTimeoutS: number, needle: string): Array<Record<string, unknown>> {
+  const steps: Array<Record<string, unknown>> = [];
+  let remaining = totalTimeoutS;
+  while (remaining > 0) {
+    const chunk = Math.min(APPROVAL_POLL_CHUNK_S, remaining);
+    steps.push({ op: 'wait', text: needle, timeout: chunk });
+    steps.push({ op: 'send', data: '\x01' }); // Ctrl+A: approve all pending
+    remaining -= chunk;
+  }
+  return steps;
+}
 
 async function tempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -136,7 +158,12 @@ async function findFilesRecursive(root: string, pattern: RegExp): Promise<string
   async function walk(dir: string): Promise<void> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.wazir') continue;
+      // Do NOT skip .wazir: a "write ... from scratch" prompt puts the agent
+      // in an isolated clean workspace under .wazir/worktrees/, regardless of
+      // --no-worktrees — confirmed live (first buildcpp run wrote its
+      // src/main.cpp there, not at the project root). Only .git and
+      // node_modules are genuinely irrelevant to search.
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         await walk(full);
@@ -161,10 +188,24 @@ async function findCompiler(): Promise<string> {
   throw new Error('no C++ compiler (g++ or clang++) found on PATH — required to verify buildcpp output');
 }
 
+// This test drives a full live multi-turn agentic loop against whatever
+// model LM Studio has loaded, which can take several minutes and is not
+// reproducible run to run. It is intentionally opt-in only — checking
+// RUN_BUILDCPP here (rather than relying on vitest's `exclude` config) means
+// the default `vitest run`/`npm test` sweep skips it instantly regardless of
+// how the file is invoked, while still allowing it to run when explicitly
+// targeted (`npx vitest run apps/cli/tests/buildcpp.e2e.test.ts` would
+// otherwise re-include it despite an `exclude` entry, since vitest's exclude
+// patterns don't bypass an explicit path argument). Enabled via:
+//
+//   npm run test:buildcpp
+const RUN_BUILDCPP = process.env.RUN_BUILDCPP === '1';
+
 describe('buildcpp: live `wa chat` TUI writes a working C++ sort+sum program', () => {
   let isLMStudioLive = false;
 
   beforeAll(async () => {
+    if (!RUN_BUILDCPP) return;
     try {
       const res = await fetch(`${LMSTUDIO_BASE_URL}/v1/models`, { signal: AbortSignal.timeout(1500) });
       if (res.ok) {
@@ -179,6 +220,13 @@ describe('buildcpp: live `wa chat` TUI writes a working C++ sort+sum program', (
   it(
     'asks wazir via the TUI to sort an array and sum it, then verifies the result compiles and runs',
     async () => {
+      if (!RUN_BUILDCPP) {
+        // Not opted in — the default sweep must not attempt this live,
+        // multi-minute scenario. No report is written for a bare no-op skip.
+        expect(true).toBe(true);
+        return;
+      }
+
       const report: BuildCppReport = {
         startedAt: new Date().toISOString(),
         prompt: PROMPT,
@@ -217,7 +265,7 @@ describe('buildcpp: live `wa chat` TUI writes a working C++ sort+sum program', (
             steps: [
               { op: 'wait', text: 'wa>', timeout: 20 },
               { op: 'send', data: `${PROMPT}\r` },
-              { op: 'wait', text: 'Tokens: In', timeout: TUI_WAIT_TIMEOUT_S },
+              ...pollingWaitSteps(TUI_WAIT_TIMEOUT_S, 'Tokens: In'),
               { op: 'send', data: '/exit\r' },
               { op: 'exit', timeout: 20, expectCode: 0 },
             ],

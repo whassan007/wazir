@@ -119,6 +119,8 @@ export type NavCategory = 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNT
 
 export type FocusPane = 'nav' | 'main' | 'prompt';
 
+export type TuiMode = 'NORMAL' | 'COMPOSER' | 'COPY' | 'PASTE' | 'PALETTE' | 'APPROVAL';
+
 export interface StructuredError {
   phase: string;
   reason: string;
@@ -185,12 +187,105 @@ export interface FleetTuiOptions {
 }
 
 /**
+ * Detects if a text string looks like terminal output, box borders, or dashboard fragments.
+ * Used to reject accidental mouse selections, copies, or terminal echoes from launching bogus jobs.
+ */
+export function isScreenFragment(text: string): boolean {
+  // Strip ANSI escape sequences
+  const clean = text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
+  if (!clean) return true;
+
+  // 1. Box-drawing characters, borders, separators, punctuation-only strings
+  if (/^[|\-—+=\s·•─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬><#*~`\.\\/]+$/.test(clean)) {
+    return true;
+  }
+
+  // 2. Exact or normalized UI section / table headers
+  const exactHeaders = new Set([
+    'JOBS',
+    'EXECUTIONS',
+    'AGENTS',
+    'COMPUTERS',
+    'RUNTIMES',
+    'MODELS',
+    'WORKERS',
+    'POLICY APPROVAL QUEUE',
+    'QUICK ACTIONS',
+    'KEYBOARD SHORTCUTS & NAVIGATION',
+    'HISTORY',
+    'STATUS',
+    'ROUTING',
+  ]);
+  if (exactHeaders.has(clean.toUpperCase())) {
+    return true;
+  }
+
+  // 3. UI prefix markers and line patterns
+  const prefixPatterns = [
+    /^wa>\s*/,
+    /^Status:\s*/i,
+    /^History:\s*/i,
+    /^Tail:\s*/i,
+    /^WAZIR\s*-\s*CONTROL/i,
+    /^Routing:\s*/i,
+    /^Route assigned/i,
+    /^Context\s+\d+(\.\d+)?K\/\d+K/i,
+    /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◴◷◶◵·•●✓✕✗]\s+/,
+    /^\[#\d+\s+[\+\*x\-]?[^\]]*\]/,
+    /^>+\s*[◷◴◵◶·•●]\s+task-job/i,
+    /^task-job-[a-z0-9]+/i,
+    /^\.\.[a-z0-9]{5,}-\d+/i, // e.g. ..dkllp-15
+    /^\[View:\s+[A-Z]+\]/i,
+    /^Press\s+Ctrl\+[A-Z]\s+to/i,
+    /^\[A\]\s+Approve\s+\[D\]\s+Deny/i,
+  ];
+  for (const pattern of prefixPatterns) {
+    if (pattern.test(clean)) {
+      return true;
+    }
+  }
+
+  // 4. Border-wrapped lines like "| ... |" or "+---...---+"
+  if (/^([|│║]).*\1$/.test(clean) && clean.length > 2) {
+    const inner = clean.slice(1, -1).trim();
+    if (
+      /^[|\-—+=\s·•─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬]+$/.test(inner) ||
+      prefixPatterns.some((p) => p.test(inner)) ||
+      exactHeaders.has(inner.toUpperCase())
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Checks whether a key event represents Ctrl+Enter across common terminal emulators.
+ */
+function isCtrlEnter(keyStr: string, keyObj: readline.Key): boolean {
+  if (keyObj.ctrl && (keyObj.name === 'return' || keyObj.name === 'enter' || keyStr === '\r' || keyStr === '\n')) {
+    return true;
+  }
+  if (keyStr === '\x1b\r' || keyStr === '\x1b\n') return true;
+  if (keyStr === '\x1b[13;5~' || keyStr === '\x1b[27;5;13~') return true;
+  return false;
+}
+
+/**
  * Resolves structured key objects from raw strings or readline key events.
  */
 function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
   if (keyObj && keyObj.name) return keyObj;
   if (typeof keyStr !== 'string') {
     return { name: undefined as any, ctrl: false, meta: false, shift: false, sequence: '' };
+  }
+
+  if (keyStr === '\x1b[200~' || (keyObj as any)?.name === 'paste-start') {
+    return { name: 'paste-start' as any, ctrl: false, meta: false, shift: false, sequence: '\x1b[200~' };
+  }
+  if (keyStr === '\x1b[201~' || (keyObj as any)?.name === 'paste-end') {
+    return { name: 'paste-end' as any, ctrl: false, meta: false, shift: false, sequence: '\x1b[201~' };
   }
 
   if (keyStr === '\t') {
@@ -207,6 +302,9 @@ function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
   }
   if (keyStr === '\x1b' || keyStr === '\u001b') {
     return { name: 'escape', ctrl: false, meta: false, shift: false, sequence: '\x1b' };
+  }
+  if (keyStr === '\x1b\r' || keyStr === '\x1b\n') {
+    return { name: 'return', ctrl: true, meta: false, shift: false, sequence: keyStr };
   }
   if (keyStr === '\r' || keyStr === '\n') {
     return { name: 'return', ctrl: false, meta: false, shift: false, sequence: keyStr };
@@ -350,6 +448,15 @@ export class FleetTui {
   private renderTimer?: NodeJS.Timeout;
   private spinnerTick = 0;
 
+  private tuiMode: TuiMode = 'NORMAL';
+  private isPasting = false;
+  private pasteBuffer = '';
+  private pastedContent = '';
+
+  // Accidental-Paste & Burst Submission Circuit Breaker
+  private submissionTimestamps: number[] = [];
+  private burstCooldownUntil = 0;
+
   private unsubscribeApprovals?: () => void;
   private unsubscribeJobEvents?: () => void;
   private unsubscribeResize?: () => void;
@@ -368,6 +475,45 @@ export class FleetTui {
   getCurrentView(): TuiView {
     if (this.pendingApprovals.length > 0) return 'approval';
     return this.currentView;
+  }
+
+  getMode(): TuiMode {
+    if (this.pendingApprovals.length > 0) return 'APPROVAL';
+    if (this.quickActionsOpen) return 'PALETTE';
+    return this.tuiMode;
+  }
+
+  setMode(mode: TuiMode): void {
+    this.tuiMode = mode;
+    this.draw();
+  }
+
+  getPastedContent(): string {
+    return this.pastedContent;
+  }
+
+  private handlePastedText(text: string): void {
+    const clean = text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    if (!clean) return;
+
+    const hasNewlines = clean.includes('\n') || clean.includes('\r');
+    const isLarge = clean.length >= 200;
+
+    if (hasNewlines || isLarge) {
+      this.tuiMode = 'PASTE';
+      this.pastedContent = clean;
+      const lines = clean.split(/\r?\n/);
+      this.statusMessage = `Pasted ${clean.length.toLocaleString()} characters / ${lines.length} lines. Press Ctrl+Enter to submit, Esc to discard, E to edit.`;
+      this.draw();
+    } else {
+      this.inputBuffer =
+        this.inputBuffer.slice(0, this.inputCursor) + clean + this.inputBuffer.slice(this.inputCursor);
+      this.inputCursor += clean.length;
+      this.focusedPane = 'prompt';
+      this.statusMessage = 'Pasted text inserted.';
+      this.checkReferencePicker();
+      this.draw();
+    }
   }
 
   getFocusedPane(): FocusPane {
@@ -647,10 +793,141 @@ export class FleetTui {
     const keyName = keyObj.name ?? '';
     const keyStr = keyObj.sequence ?? key;
 
+    // 0. Bracketed paste handling
+    if (keyName === 'paste-start' || keyStr === '\x1b[200~' || keyStr.startsWith('\x1b[200~')) {
+      if (keyStr.includes('\x1b[201~')) {
+        // Complete bracketed paste in a single event
+        const startIdx = keyStr.indexOf('\x1b[200~');
+        const endIdx = keyStr.indexOf('\x1b[201~');
+        const content = keyStr.slice(startIdx + 6, endIdx);
+        this.isPasting = false;
+        this.pasteBuffer = '';
+        this.handlePastedText(content);
+        return;
+      }
+      this.isPasting = true;
+      this.pasteBuffer = keyStr.startsWith('\x1b[200~') ? keyStr.slice(6) : '';
+      return;
+    }
+
+    if (this.isPasting) {
+      if (keyName === 'paste-end' || keyStr === '\x1b[201~' || keyStr.includes('\x1b[201~')) {
+        this.isPasting = false;
+        if (keyStr.includes('\x1b[201~')) {
+          this.pasteBuffer += keyStr.slice(0, keyStr.indexOf('\x1b[201~'));
+        }
+        const pasted = this.pasteBuffer;
+        this.pasteBuffer = '';
+        this.handlePastedText(pasted);
+        return;
+      }
+      this.pasteBuffer += keyStr;
+      return;
+    }
+
+    // Check if an unbracketed multiline string chunk arrived (e.g. from stream or mock)
+    if (!keyStr.startsWith('\x1b') && keyStr.length > 1 && (keyStr.includes('\n') || keyStr.includes('\r'))) {
+      this.handlePastedText(keyStr);
+      return;
+    }
+
     // 1. Ctrl+C: exit
     if ((keyObj.ctrl && (keyName === 'c' || keyName === 'C')) || keyStr === '\u0003') {
       this.stop();
       process.exit(0);
+    }
+
+    // PASTE review mode handling
+    if (this.tuiMode === 'PASTE') {
+      if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
+        this.pastedContent = '';
+        this.tuiMode = 'NORMAL';
+        this.statusMessage = 'Pasted content discarded.';
+        this.draw();
+        return;
+      }
+      if (keyStr === 'e' || keyStr === 'E') {
+        this.tuiMode = 'COMPOSER';
+        this.inputBuffer = this.pastedContent;
+        this.inputCursor = this.inputBuffer.length;
+        this.pastedContent = '';
+        this.focusedPane = 'prompt';
+        this.statusMessage = 'Composer active. Press Ctrl+Enter to submit, Esc to cancel.';
+        this.draw();
+        return;
+      }
+      if (isCtrlEnter(keyStr, keyObj)) {
+        const toSubmit = this.pastedContent;
+        this.pastedContent = '';
+        this.tuiMode = 'NORMAL';
+        this.statusMessage = 'Submitting pasted task...';
+        void this.submitCommand(toSubmit);
+        return;
+      }
+      if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+        this.statusMessage = 'Press Ctrl+Enter to submit pasted content, Esc to discard, or E to edit.';
+        this.draw();
+        return;
+      }
+      // Any other keys in PASTE mode are ignored
+      return;
+    }
+
+    // COMPOSER mode handling
+    if (this.tuiMode === 'COMPOSER') {
+      if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
+        this.inputBuffer = '';
+        this.inputCursor = 0;
+        this.tuiMode = 'NORMAL';
+        this.statusMessage = 'Composer cancelled.';
+        this.draw();
+        return;
+      }
+      if (isCtrlEnter(keyStr, keyObj)) {
+        const command = this.inputBuffer.trim();
+        this.inputBuffer = '';
+        this.inputCursor = 0;
+        this.tuiMode = 'NORMAL';
+        void this.submitCommand(command);
+        return;
+      }
+      if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+        // In composer mode, Enter inserts a newline
+        this.inputBuffer =
+          this.inputBuffer.slice(0, this.inputCursor) + '\n' + this.inputBuffer.slice(this.inputCursor);
+        this.inputCursor += 1;
+        this.draw();
+        return;
+      }
+      // Fall through to standard text editing keys below
+    }
+
+    // Ctrl+Y: Toggle COPY mode
+    if ((keyObj.ctrl && (keyName === 'y' || keyName === 'Y')) || keyStr === '\u0019') {
+      this.tuiMode = this.tuiMode === 'COPY' ? 'NORMAL' : 'COPY';
+      this.statusMessage =
+        this.tuiMode === 'COPY'
+          ? 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.'
+          : 'Exited copy mode.';
+      this.draw();
+      return;
+    }
+
+    // COPY mode handling
+    if (this.tuiMode === 'COPY') {
+      if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
+        this.tuiMode = 'NORMAL';
+        this.statusMessage = 'Exited copy mode.';
+        this.draw();
+        return;
+      }
+      if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+        this.statusMessage = 'Copy mode active. Press Esc to exit before submitting.';
+        this.draw();
+        return;
+      }
+      // Ignore other keys in COPY mode
+      return;
     }
 
     // 2. Isolate Tab Key Events (§1):
@@ -1332,6 +1609,47 @@ export class FleetTui {
 
     if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'q') {
       this.stop();
+      return;
+    }
+
+    if (this.tuiMode === 'COPY' || this.tuiMode === 'PASTE') {
+      this.statusMessage = `Job submission is disabled in ${this.tuiMode} mode.`;
+      this.draw();
+      return;
+    }
+
+    if (trimmed === '/copy') {
+      this.tuiMode = 'COPY';
+      this.statusMessage = 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.';
+      this.draw();
+      return;
+    }
+
+    // Accidental-Paste & Burst Submission Circuit Breakers:
+    // A. UI Fragment Guard: reject terminal output fragments, headers, borders
+    if (isScreenFragment(trimmed)) {
+      this.statusMessage = `Rejected UI fragment submission ("${trimmed.slice(0, 30)}..."). 0 jobs created.`;
+      this.draw();
+      return;
+    }
+
+    // B. Burst Rate Guard: detect multiple rapid submissions from input stream
+    const now = Date.now();
+    if (now < this.burstCooldownUntil) {
+      this.statusMessage = 'SUBMISSION BURST DETECTED: multiple rapid submissions refused. No jobs started.';
+      this.draw();
+      return;
+    }
+
+    this.submissionTimestamps = this.submissionTimestamps.filter((t) => now - t <= 1000);
+    this.submissionTimestamps.push(now);
+    const count500ms = this.submissionTimestamps.filter((t) => now - t <= 500).length;
+    const count1000ms = this.submissionTimestamps.length;
+
+    if (count500ms > 3 || count1000ms > 3) {
+      this.burstCooldownUntil = now + 1500;
+      this.statusMessage = 'SUBMISSION BURST DETECTED: multiple rapid submissions detected from input stream. No jobs started.';
+      this.draw();
       return;
     }
 
@@ -2761,7 +3079,15 @@ export class FleetTui {
       this.statusMessage.includes('Executing');
     const spinnerPrefix = anyRunning ? `${color.cyan(getCategorySpinnerFrame('JOBS', this.spinnerTick))} ` : '';
 
-    const statusText = `  ${color.gray('Status:')} ${spinnerPrefix}${this.statusMessage}`;
+    const mode = this.getMode();
+    let modeBadge = color.gray(`[${mode}]`);
+    if (mode === 'PASTE') modeBadge = color.bold(color.yellow(`[${mode}]`));
+    else if (mode === 'COMPOSER') modeBadge = color.bold(color.magenta(`[${mode}]`));
+    else if (mode === 'COPY') modeBadge = color.bold(color.cyan(`[${mode}]`));
+    else if (mode === 'APPROVAL') modeBadge = color.bold(color.red(`[${mode}]`));
+    else if (mode === 'PALETTE') modeBadge = color.bold(color.blue(`[${mode}]`));
+
+    const statusText = `  ${modeBadge} ${color.gray('Status:')} ${spinnerPrefix}${this.statusMessage}`;
     const statusPlain = this.stripAnsi(statusText);
 
     const spaces = Math.max(2, cols - statusPlain.length - modelPlain.length - contextPlain.length - 2);
@@ -2769,18 +3095,33 @@ export class FleetTui {
   }
 
   private renderInputBar(cols: number): string {
-    const promptPrefix = color.cyan('wa> ');
-    const prefixLen = 4; // visible width of 'wa> '
+    const mode = this.getMode();
+    if (mode === 'PASTE') {
+      const charCount = this.pastedContent.length;
+      const lineCount = this.pastedContent.split(/\r?\n/).length;
+      const promptPrefix = color.cyan('wa> ');
+      const label = color.yellow(`[Pasted ${charCount.toLocaleString()} characters / ${lineCount} lines]`);
+      const hints = color.gray(' (Ctrl+Enter submit • Esc discard • E edit)');
+      const full = `${promptPrefix}${label}${hints}`;
+      this.inputCursorScreenCol = 4 + this.stripAnsi(label).length + 1;
+      return full;
+    }
+
+    if (mode === 'COPY') {
+      const promptPrefix = color.cyan('wa [COPY]> ');
+      const hint = color.gray('(Terminal selection active - press Esc to return)');
+      this.inputCursorScreenCol = 12;
+      return `${promptPrefix}${hint}`;
+    }
+
+    const promptPrefix = mode === 'COMPOSER' ? color.magenta('wa [COMPOSER]> ') : color.cyan('wa> ');
+    const prefixLen = mode === 'COMPOSER' ? 15 : 4;
     const available = Math.max(0, cols - prefixLen);
 
-    // Scroll to keep the cursor in view instead of always pinning the window to the
-    // buffer's tail - an overlong line here soft-wraps in the real terminal, which
-    // desyncs the absolute-cursor redraw and looks like ghosting, and (before the
-    // cursor could move at all) made it look like backspace stopped working once typed
-    // text got long. Now that Left/Right can walk the cursor back into a long line,
-    // pinning to the tail would also hide the cursor's real position off-window.
+    // In composer mode, replace newlines with return arrow for single line rendering
+    const displayBuffer = mode === 'COMPOSER' ? this.inputBuffer.replace(/\r?\n/g, ' ↵ ') : this.inputBuffer;
     const start = this.inputCursor > available ? this.inputCursor - available : 0;
-    const visibleInput = this.inputBuffer.slice(start, start + available);
+    const visibleInput = displayBuffer.slice(start, start + available);
     this.inputCursorScreenCol = prefixLen + (this.inputCursor - start) + 1;
 
     return `${promptPrefix}${visibleInput}`;

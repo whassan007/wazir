@@ -28,6 +28,7 @@ const FLEETRUNNER = 'apps/cli/tests/fleetRunner.e2e.test.ts';
 const SPINNER = 'apps/cli/tests/spinner.test.ts';
 const DOCTOR = 'apps/cli/tests/doctor.test.ts';
 const EXECUTE = 'apps/cli/tests/executeTask.e2e.test.ts';
+const PASTE = 'apps/cli/tests/pasteBarrier.test.ts';
 
 // level: L1 primitives | L2 harness | L3 e2e | L4 CLI surface
 // priority: B = blocking (session safety / correctness), R = regression, F = feature
@@ -73,6 +74,8 @@ const CASES = [
   { id: 'TUI-041', section: 'E', name: 'backspace/delete re-render prompt immediately', file: FLEET, test: 'correctly handles backspace and delete key events, slicing buffer and re-rendering prompt immediately', level: 'L2', priority: 'R' },
   { id: 'TUI-042', section: 'E', name: 'Tab never leaks into the input buffer', file: FLEET, test: 'intercepts Tab key without leaking control characters or literal \\t into the input buffer', level: 'L2', priority: 'B' },
   { id: 'TUI-043', section: 'E', name: 'no stream echo of nav keys / ANSI codes', file: FLEET, test: 'prevents stream echo: navigation keys and unparsed ANSI codes never bind into input buffer or log streams', level: 'L2', priority: 'R' },
+  { id: 'TUI-044', section: 'E', name: 'bracketed paste barrier & multiline review mode', file: PASTE, test: 'enters PASTE review mode on multiline paste and creates exactly 0 jobs until explicit Ctrl+Enter', level: 'L2', priority: 'B' },
+  { id: 'TUI-045', section: 'E', name: 'rendered screen fragment rejection and accidental submission circuit breaker', file: PASTE, test: 'pasting the entire rendered Fleet screen creates exactly 0 jobs', level: 'L2', priority: 'B' },
 
   // F. Layout & rendering fidelity
   { id: 'TUI-050', section: 'F', name: '2-pane layout with <100 column collapse', file: FLEET, test: 'renders persistent 2-pane layout when columns >= 100 and collapses when < 100', level: 'L2', priority: 'F' },
