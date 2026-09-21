@@ -251,6 +251,28 @@ function collectStrayInput(action: ParsedAction): Record<string, unknown> | unde
   return Object.keys(rest).length > 0 ? (rest as Record<string, unknown>) : undefined;
 }
 
+/**
+ * Some models (observed live on nvidia/nemotron-3-nano-omni) wrap the real arguments in
+ * an extra `content` object instead of putting them directly on `input`:
+ * `{"tool":"shell","input":{"content":{"command":"ls -la"}}}` instead of the schema's
+ * `{"tool":"shell","input":{"command":"ls -la"}}`. Nothing reads `input.content.command`,
+ * so the tool sees no `command` at all and the call is denied as empty — confirmed via a
+ * live repro whose recorded tool call was exactly `input: { content: { command: "ls -la" } }`.
+ * Only unwraps when `content` is the *sole* key and holds a plain object: `write`'s own
+ * `content` field is a plain string that always sits alongside `path` (never the only key,
+ * never itself an object), so a legitimate write call can never match this.
+ */
+function unwrapContentWrapper(input: Record<string, unknown>): Record<string, unknown> {
+  const keys = Object.keys(input);
+  if (keys.length === 1 && keys[0] === 'content') {
+    const inner = input.content;
+    if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+      return inner as Record<string, unknown>;
+    }
+  }
+  return input;
+}
+
 /** Accepts `{"action":"read",...}` as shorthand for `{"action":"tool","tool":"read",...}`. */
 export function normalizeAction(action: ParsedAction | null, toolNames: Set<string>): ParsedAction | null {
   if (!action) return null;
@@ -262,6 +284,9 @@ export function normalizeAction(action: ParsedAction | null, toolNames: Set<stri
     if (!action.input) {
       action.input = collectStrayInput(action);
     }
+    if (action.input) {
+      action.input = unwrapContentWrapper(action.input);
+    }
     if (action.tool === 'shell' && action.input) {
       action.input = coerceShellCommand(action.input);
     }
@@ -269,7 +294,8 @@ export function normalizeAction(action: ParsedAction | null, toolNames: Set<stri
   }
   if (toolNames.has(action.action)) {
     const { action: tool, input, ...rest } = action as ParsedAction & Record<string, unknown>;
-    const normalizedInput = (input ?? (rest as Record<string, unknown>)) as Record<string, unknown>;
+    let normalizedInput = (input ?? (rest as Record<string, unknown>)) as Record<string, unknown>;
+    normalizedInput = unwrapContentWrapper(normalizedInput);
     return { action: 'tool', tool, input: tool === 'shell' ? coerceShellCommand(normalizedInput) : normalizedInput };
   }
   return action;

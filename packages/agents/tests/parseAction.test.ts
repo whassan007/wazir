@@ -53,6 +53,44 @@ describe('normalizeAction', () => {
     );
     expect(action?.input).toEqual({ command: 'ls' });
   });
+
+  // Live repro on nvidia/nemotron-3-nano-omni: `wa run` recorded the executed tool call's
+  // own input as exactly `{ content: { command: "ls -la" } }` — the real arguments wrapped
+  // one level too deep under an extra `content` key — so `input.command` was undefined and
+  // every call was denied/rejected as empty (shell: "empty shell command"; read/write:
+  // "requires a path argument"), with the model never able to see why and just repeating it.
+  it('unwraps arguments nested one level too deep under an extra "content" key', () => {
+    const action = normalizeAction(
+      parseAction('{"action":"tool","tool":"shell","input":{"content":{"command":"ls -la"}}}'),
+      tools,
+    );
+    expect(action?.input).toEqual({ command: 'ls -la' });
+  });
+
+  it('unwraps a content-wrapped read/glob-style path argument the same way', () => {
+    const action = normalizeAction(
+      parseAction('{"action":"tool","tool":"read","input":{"content":{"path":"src/main.cpp"}}}'),
+      tools,
+    );
+    expect(action?.input).toEqual({ path: 'src/main.cpp' });
+  });
+
+  // `write`'s own schema legitimately has a `content` field (the file's text) — but it's
+  // a string, always sitting alongside `path`, so it must never be mistaken for the
+  // wrapper shape above (which only ever has `content` as the *sole* key, holding an
+  // object). This is the case the unwrap must NOT touch.
+  it('leaves a legitimate write call with a real content string untouched', () => {
+    const action = normalizeAction(
+      parseAction('{"action":"tool","tool":"write","input":{"path":"main.cpp","content":"int main(){}"}}'),
+      tools,
+    );
+    expect(action?.input).toEqual({ path: 'main.cpp', content: 'int main(){}' });
+  });
+
+  it('does not unwrap when content is a plain string rather than a wrapper object', () => {
+    const action = normalizeAction(parseAction('{"action":"tool","tool":"write","input":{"content":"just text"}}'), tools);
+    expect(action?.input).toEqual({ content: 'just text' });
+  });
 });
 
 describe('parseAction', () => {
