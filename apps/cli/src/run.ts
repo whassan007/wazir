@@ -266,6 +266,7 @@ export async function executeTask(
             temperature: request.temperature,
             contextTokens: context.available.tokens,
             stream: true,
+            tools: request.tools,
           })) {
             if (event.type === 'token') {
               loader.setText(`Generating response from ${request.modelId}...`);

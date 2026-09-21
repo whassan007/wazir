@@ -358,6 +358,9 @@ export class ModelProtocolAdapter {
       if (Array.isArray(obj.summary)) {
         obj.summary = obj.summary.map((s) => String(s).trim()).filter(Boolean).join('\n');
       }
+      if (obj.action === 'tool' && typeof obj.tool === 'string' && obj.input && typeof obj.input === 'object' && !Array.isArray(obj.input)) {
+        obj.input = normalizeToolArguments(obj.tool, obj.input as Record<string, unknown>);
+      }
       return obj as unknown as CanonicalAction;
     }
 
@@ -367,7 +370,7 @@ export class ModelProtocolAdapter {
       const input = (obj.input && typeof obj.input === 'object' && !Array.isArray(obj.input))
         ? obj.input as Record<string, unknown>
         : rest;
-      return { action: 'tool', tool, input, protocol: 'wazir' };
+      return { action: 'tool', tool, input: normalizeToolArguments(tool, input), protocol: 'wazir' };
     }
 
     // Shorthand tool format where tool name is the action: {"shell":"...", ...} or name in toolNames
@@ -377,10 +380,284 @@ export class ModelProtocolAdapter {
         const input = typeof val === 'object' && val && !Array.isArray(val)
           ? val as Record<string, unknown>
           : { [toolName === 'shell' ? 'command' : 'path']: val };
-        return { action: 'tool', tool: toolName, input, protocol: 'wazir' };
+        return { action: 'tool', tool: toolName, input: normalizeToolArguments(toolName, input), protocol: 'wazir' };
       }
     }
 
     return null;
   }
+}
+
+export function quoteShellArg(arg: string): string {
+  if (/^[a-zA-Z0-9_./:-]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Normalizes tool arguments across model dialects and argument alias conventions.
+ *
+ * For example:
+ * - `glob`: maps `content`, `query`, `glob`, `file_pattern`, `match`, etc. to `pattern`
+ * - `shell`: maps `content`, `cmd`, `script`, `run`, `code`, `exec` to `command`, coerces arrays
+ * - `read`: maps `file`, `filepath`, `filePath`, `filename`, `fileName`, `target`, `content` to `path`
+ * - `write`: maps `file`/`target` to `path`, and `text`/`code`/`data`/`body`/`contents` to `content`
+ * - `edit`: maps `file` to `path`, `old_string`/`find`/`original` to `oldString`, `new_string`/`replace` to `newString`
+ */
+export function normalizeToolArguments(tool: string, rawInput: Record<string, unknown>): Record<string, unknown> {
+  let input = { ...rawInput };
+
+  // 1. Unwrap nested containers: { input: {...} }, { arguments: {...} }, { parameters: {...} }, { args: {...} }
+  const nested = input.input ?? input.arguments ?? input.parameters ?? input.args;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    input = { ...input, ...(nested as Record<string, unknown>) };
+    delete input.input;
+    delete input.arguments;
+    delete input.parameters;
+    delete input.args;
+  }
+
+  // Unwrap { content: { ... } } if content holds an object
+  if (input.content && typeof input.content === 'object' && !Array.isArray(input.content)) {
+    input = { ...input, ...(input.content as Record<string, unknown>) };
+  }
+
+  // 2. Per-tool dialect mappings
+  switch (tool) {
+    case 'glob': {
+      if (input.pattern === undefined || input.pattern === null) {
+        const candidate = input.content ?? input.query ?? input.glob ?? input.file_pattern ?? input.path_pattern ?? input.match ?? input.search;
+        if (typeof candidate === 'string') {
+          input.pattern = candidate;
+        }
+      }
+      if (input.path === undefined || input.path === null) {
+        const candidate = input.cwd ?? input.dir ?? input.directory ?? input.root;
+        if (typeof candidate === 'string') {
+          input.path = candidate;
+        }
+      }
+      // Clean up alias keys
+      delete input.content;
+      delete input.query;
+      delete input.glob;
+      delete input.file_pattern;
+      delete input.path_pattern;
+      delete input.match;
+      delete input.search;
+      delete input.cwd;
+      delete input.dir;
+      delete input.directory;
+      delete input.root;
+      break;
+    }
+
+    case 'shell': {
+      // Coerce argv array
+      if (Array.isArray(input.command)) {
+        input.command = input.command.map((part) => quoteShellArg(String(part))).join(' ');
+      }
+      if (input.command === undefined || input.command === null) {
+        const candidate = input.content ?? input.cmd ?? input.script ?? input.run ?? input.code ?? input.exec;
+        if (typeof candidate === 'string') {
+          input.command = candidate;
+        } else if (Array.isArray(candidate)) {
+          input.command = candidate.map((part) => quoteShellArg(String(part))).join(' ');
+        }
+      }
+      delete input.content;
+      delete input.cmd;
+      delete input.script;
+      delete input.run;
+      delete input.code;
+      delete input.exec;
+      break;
+    }
+
+    case 'read':
+    case 'read_file':
+    case 'view_file': {
+      if (input.path === undefined || input.path === null) {
+        const candidate = input.file ?? input.filepath ?? input.filePath ?? input.filename ?? input.fileName ?? input.target ?? input.AbsolutePath;
+        if (typeof candidate === 'string') {
+          input.path = candidate;
+        } else if (typeof input.content === 'string' && !input.content.includes('\n') && input.content.trim().length > 0) {
+          // If model gave content: "Makefile"
+          input.path = input.content.trim();
+        }
+      }
+      delete input.file;
+      delete input.filepath;
+      delete input.filePath;
+      delete input.filename;
+      delete input.fileName;
+      delete input.target;
+      delete input.AbsolutePath;
+      delete input.content;
+      break;
+    }
+
+    case 'write':
+    case 'write_to_file': {
+      if (input.path === undefined || input.path === null) {
+        const candidate = input.file ?? input.filepath ?? input.filePath ?? input.filename ?? input.fileName ?? input.target ?? input.TargetFile;
+        if (typeof candidate === 'string') {
+          input.path = candidate;
+        }
+      }
+      if (input.content === undefined || input.content === null) {
+        const candidate = input.text ?? input.code ?? input.data ?? input.body ?? input.contents ?? input.CodeContent;
+        if (typeof candidate === 'string') {
+          input.content = candidate;
+        }
+      }
+      delete input.file;
+      delete input.filepath;
+      delete input.filePath;
+      delete input.filename;
+      delete input.fileName;
+      delete input.target;
+      delete input.TargetFile;
+      delete input.text;
+      delete input.code;
+      delete input.data;
+      delete input.body;
+      delete input.contents;
+      delete input.CodeContent;
+      break;
+    }
+
+    case 'edit':
+    case 'replace_file_content': {
+      if (input.path === undefined || input.path === null) {
+        const candidate = input.file ?? input.filepath ?? input.filePath ?? input.filename ?? input.fileName ?? input.TargetFile;
+        if (typeof candidate === 'string') {
+          input.path = candidate;
+        }
+      }
+      if (input.oldString === undefined || input.oldString === null) {
+        const candidate = input.old_string ?? input.oldText ?? input.find ?? input.original ?? input.TargetContent;
+        if (typeof candidate === 'string') {
+          input.oldString = candidate;
+        }
+      }
+      if (input.newString === undefined || input.newString === null) {
+        const candidate = input.new_string ?? input.newText ?? input.replace ?? input.replacement ?? input.ReplacementContent;
+        if (typeof candidate === 'string') {
+          input.newString = candidate;
+        }
+      }
+      delete input.file;
+      delete input.filepath;
+      delete input.filePath;
+      delete input.filename;
+      delete input.fileName;
+      delete input.TargetFile;
+      delete input.old_string;
+      delete input.oldText;
+      delete input.find;
+      delete input.original;
+      delete input.TargetContent;
+      delete input.new_string;
+      delete input.newText;
+      delete input.replace;
+      delete input.replacement;
+      delete input.ReplacementContent;
+      break;
+    }
+  }
+
+  return input;
+}
+
+export interface SemanticValidationResult {
+  ok: boolean;
+  reason?: string;
+}
+
+const PLACEHOLDER_PATTERNS = [
+  /^(\.{2,}|…)$/,                                         // .., ..., ...., …
+  /^<[^>]+>$/,                                            // <command>, <your command>, <file>
+  /^\[[^\]]+\]$/,                                         // [command], [your command here]
+  /^(TODO|FIXME|PLACEHOLDER|TBD)\b/i,                     // TODO, FIXME, etc.
+  /^(your\s+(shell\s+)?command(\s+here)?|insert\s+command\s+here|command\s+here|your_command_here)$/i,
+  /^(your\s+code\s+here|insert\s+code\s+here|path\/to\/file|path\/to\/filename)$/i,
+];
+
+/**
+ * Semantic validation of tool action arguments.
+ * Rejects empty strings, placeholders, and dummy inputs that pass structural syntax checks.
+ */
+export function validateToolActionSemantics(
+  tool: string,
+  input: Record<string, unknown>,
+): SemanticValidationResult {
+  if (tool === 'shell') {
+    if (typeof input.command !== 'string') {
+      return { ok: false, reason: "'shell' requires a string command" };
+    }
+    const trimmed = input.command.trim();
+    // Present-but-blank command (e.g. command: "") is left to the policy engine,
+    // which produces the plain-language 'Blocked: empty shell command' in the TUI.
+    if (trimmed.length === 0) {
+      return { ok: true };
+    }
+    for (const pattern of PLACEHOLDER_PATTERNS) {
+      if (pattern.test(trimmed)) {
+        return {
+          ok: false,
+          reason: `Shell command is a placeholder ('${trimmed}'). You must specify the actual shell command to execute.`,
+        };
+      }
+    }
+  }
+
+  if (tool === 'glob') {
+    if (typeof input.pattern !== 'string') {
+      return { ok: false, reason: "'glob' requires a string pattern" };
+    }
+    const trimmed = input.pattern.trim();
+    if (trimmed.length === 0) {
+      return { ok: false, reason: 'Glob pattern cannot be empty' };
+    }
+    if (/^(\.{2,}|…|<[^>]+>|\[[^\]]+\]|TODO|FIXME)$/i.test(trimmed)) {
+      return {
+        ok: false,
+        reason: `Glob pattern is a placeholder ('${trimmed}'). You must specify a real search pattern like '**/*' or '*.cpp'.`,
+      };
+    }
+  }
+
+  if (tool === 'read' || tool === 'read_file' || tool === 'view_file') {
+    if (typeof input.path !== 'string') {
+      return { ok: false, reason: `'${tool}' requires a string file path` };
+    }
+    const trimmed = input.path.trim();
+    if (trimmed.length === 0) {
+      return { ok: false, reason: 'File path cannot be empty' };
+    }
+    if (/^(\.{2,}|…|<[^>]+>|path\/to\/file|your_file_here|TODO|FIXME)$/i.test(trimmed)) {
+      return {
+        ok: false,
+        reason: `File path is a placeholder ('${trimmed}'). You must specify a real file path.`,
+      };
+    }
+  }
+
+  if (tool === 'write' || tool === 'write_to_file') {
+    if (typeof input.path !== 'string') {
+      return { ok: false, reason: `'${tool}' requires a string file path` };
+    }
+    const trimmed = input.path.trim();
+    if (trimmed.length === 0) {
+      return { ok: false, reason: 'File path cannot be empty' };
+    }
+    if (/^(\.{2,}|…|<[^>]+>|path\/to\/file|your_file_here|TODO|FIXME)$/i.test(trimmed)) {
+      return {
+        ok: false,
+        reason: `File path is a placeholder ('${trimmed}'). You must specify a real file path.`,
+      };
+    }
+  }
+
+  return { ok: true };
 }

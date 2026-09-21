@@ -213,6 +213,7 @@ export function createFleetTaskExecutor(
             temperature: request.temperature,
             contextTokens: contextDecision.available.tokens,
             stream: true,
+            tools: request.tools,
             requestId,
           })) {
             if (event.type === 'token' && event.content) {

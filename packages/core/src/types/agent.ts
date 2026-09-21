@@ -104,6 +104,7 @@ export interface AgentRuntime {
       messages: ChatMessage[];
       maxTokens?: number;
       temperature?: number;
+      tools?: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
     },
   ): AsyncIterable<GenerationEvent>;
   executeTool(toolName: string, input: Record<string, unknown>): Promise<ToolResult>;

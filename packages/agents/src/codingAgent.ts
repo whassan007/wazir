@@ -10,7 +10,12 @@ import type {
   ChatMessage,
   ModelProtocolMetrics,
 } from '@wazir/core';
-import { ModelProtocolAdapter, ACTION_START_PATTERN } from './protocolAdapters.js';
+import {
+  ModelProtocolAdapter,
+  ACTION_START_PATTERN,
+  normalizeToolArguments,
+  validateToolActionSemantics,
+} from './protocolAdapters.js';
 
 export interface CodingAgentOptions {
   maxTurns?: number;
@@ -71,6 +76,7 @@ export interface ParsedAction {
   tool?: string;
   input?: Record<string, unknown>;
   summary?: string;
+  protocol?: string;
 }
 
 const CONTROL_ESCAPES: Record<string, string> = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
@@ -247,11 +253,11 @@ function coerceShellCommand(input: Record<string, unknown>): Record<string, unkn
  */
 function collectStrayInput(action: ParsedAction): Record<string, unknown> | undefined {
   const record = action as unknown as Record<string, unknown>;
-  const altContainer = record.parameters ?? record.arguments ?? record.args;
+  const altContainer = record.parameters ?? record.arguments ?? record.args ?? record.input;
   if (altContainer && typeof altContainer === 'object' && !Array.isArray(altContainer)) {
     return altContainer as Record<string, unknown>;
   }
-  const { action: _action, tool: _tool, name: _name, content: _content, summary: _summary, protocol: _protocol, ...rest } = record;
+  const { action: _action, tool: _tool, name: _name, summary: _summary, protocol: _protocol, ...rest } = record;
   return Object.keys(rest).length > 0 ? (rest as Record<string, unknown>) : undefined;
 }
 
@@ -291,8 +297,15 @@ export function normalizeAction(action: ParsedAction | null, toolNames: Set<stri
     if (action.input) {
       action.input = unwrapContentWrapper(action.input);
     }
-    if (action.tool === 'shell' && action.input) {
-      action.input = coerceShellCommand(action.input);
+    if (action.tool) {
+      action.input = normalizeToolArguments(action.tool, action.input ?? {});
+      const { action: act, tool: t, input: inp, protocol } = action as unknown as Record<string, unknown>;
+      return {
+        action: act as string,
+        tool: t as string,
+        input: (inp as Record<string, unknown>) ?? {},
+        ...(protocol ? { protocol: protocol as string } : {}),
+      };
     }
     return action;
   }
@@ -300,23 +313,13 @@ export function normalizeAction(action: ParsedAction | null, toolNames: Set<stri
     const { action: tool, input, ...rest } = action as ParsedAction & Record<string, unknown>;
     let normalizedInput = (input ?? (rest as Record<string, unknown>)) as Record<string, unknown>;
     normalizedInput = unwrapContentWrapper(normalizedInput);
-    return { action: 'tool', tool, input: tool === 'shell' ? coerceShellCommand(normalizedInput) : normalizedInput };
+    normalizedInput = normalizeToolArguments(tool, normalizedInput);
+    return { action: 'tool', tool, input: normalizedInput };
   }
   return action;
 }
 
-// Required-field checks for the handful of built-in tools whose schema is known ahead of
-// time. A malformed call (required field entirely missing — e.g. `write({})`, `read({})`,
-// `shell({})`) used to run the full tool/policy pipeline just to bounce off a generic
-// denial ("tool 'write' requires a path argument", "empty shell command") — a full model
-// turn spent per attempt, with the correction framed as an authorization decision rather
-// than what actually went wrong (a missing argument). Checked here, once, before the tool
-// ever runs, with a message that names exactly what's missing. Deliberately narrow in two
-// ways: only the 4 tools observed going through this failure mode in a live repro against
-// nvidia/nemotron-3-nano-omni (unlisted tools like edit/git/search keep their own existing
-// validation), and only a genuinely *missing* (undefined/null) value counts — a present
-// but blank value (e.g. `command: ""`) is left to the policy engine's own handling, which
-// already gives it a deliberate plain-language translation in the TUI.
+// Required-field checks for built-in tools.
 export const REQUIRED_TOOL_FIELDS: Record<string, string[]> = {
   read: ['path'],
   write: ['path', 'content'],
@@ -330,12 +333,51 @@ export function missingRequiredFields(tool: string, input: Record<string, unknow
   return required.filter((field) => input[field] === undefined || input[field] === null);
 }
 
-function validationFailureMessage(tool: string, missing: string[]): { ok: false; output: string } {
+export function validationFailureMessage(
+  tool: string,
+  errorReason: string,
+  attemptNumber: number = 1,
+): { ok: false; output: string } {
+  const schemas: Record<string, { schema: string; example: string }> = {
+    glob: {
+      schema: 'pattern (required non-empty string), path (optional string)',
+      example: '{"action":"tool","tool":"glob","input":{"pattern":"**/*"}}',
+    },
+    shell: {
+      schema: 'command (required non-empty string)',
+      example: '{"action":"tool","tool":"shell","input":{"command":"g++ -o main main.cpp"}}',
+    },
+    read: {
+      schema: 'path (required non-empty string)',
+      example: '{"action":"tool","tool":"read","input":{"path":"src/main.cpp"}}',
+    },
+    write: {
+      schema: 'path (required non-empty string), content (required string)',
+      example: '{"action":"tool","tool":"write","input":{"path":"src/main.cpp","content":"..."}}',
+    },
+    edit: {
+      schema: 'path (required non-empty string), oldString (required string), newString (required string)',
+      example: '{"action":"tool","tool":"edit","input":{"path":"src/main.cpp","oldString":"...","newString":"..."}}',
+    },
+  };
+
+  const info = schemas[tool];
+  const schemaPart = info ? `\nRequired schema for '${tool}':\n  ${info.schema}\nExample:\n  ${info.example}` : '';
+
+  if (attemptNumber > 1) {
+    return {
+      ok: false,
+      output:
+        `ACTION_VALIDATION_FAILED (Attempt ${attemptNumber}): '${tool}' ${errorReason}.${schemaPart}\n` +
+        `Respond ONLY with a corrected tool call JSON object. Do not explain. Do not plan.`,
+    };
+  }
+
   return {
     ok: false,
     output:
-      `ACTION_VALIDATION_FAILED: '${tool}' is missing required argument(s): ${missing.join(', ')}. ` +
-      `Respond with a corrected {"action":"tool","tool":"${tool}","input":{...}} that includes them — do not repeat the same incomplete call.`,
+      `ACTION_VALIDATION_FAILED: '${tool}' ${errorReason}.${schemaPart}\n` +
+      `Respond ONLY with a corrected {"action":"tool","tool":"${tool}","input":{...}} that satisfies the schema. Do not repeat the same incomplete call.`,
   };
 }
 
@@ -509,8 +551,13 @@ export class CodingAgent implements AgentAdapter {
       return `context compacted: ${collapsedCount} turn(s) -> 1 summary (~${before}->~${after} tokens, ${reduction}% smaller)`;
     };
 
-    const modelTurn = async (): Promise<{ content: string; timedOut: boolean }> => {
+    const modelTurn = async (): Promise<{
+      content: string;
+      toolCall?: { name: string; input: Record<string, unknown> };
+      timedOut: boolean;
+    }> => {
       let content = '';
+      let toolCall: { name: string; input: Record<string, unknown> } | undefined;
       let error: string | undefined;
       let timedOut = false;
       const timer = setTimeout(() => {
@@ -523,6 +570,11 @@ export class CodingAgent implements AgentAdapter {
           messages,
           maxTokens: this.maxTokensPerTurn,
           temperature: this.temperature,
+          tools: runtime.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            parameters: t.inputSchema as Record<string, unknown>,
+          })),
         })) {
           if (event.type === 'token' && event.content) {
             content += event.content;
@@ -530,6 +582,15 @@ export class CodingAgent implements AgentAdapter {
               timedOut = true;
               runtime.cancelCurrentTurn?.();
             }
+          }
+          if (event.type === 'tool_call' && event.toolName) {
+            let input: Record<string, unknown> = {};
+            if (event.toolInput && typeof event.toolInput === 'object' && !Array.isArray(event.toolInput)) {
+              input = event.toolInput as Record<string, unknown>;
+            } else if (typeof event.toolInput === 'string') {
+              input = tryParseObject(event.toolInput) ?? { command: event.toolInput };
+            }
+            toolCall = { name: event.toolName, input };
           }
           if (event.type === 'error' && event.error) error = event.error;
         }
@@ -539,7 +600,7 @@ export class CodingAgent implements AgentAdapter {
       // A cancel-induced 'completed' with partial content is not an error —
       // only surface `error` when the turn didn't just hit its own timeout.
       if (error && !timedOut) throw new Error(error);
-      return { content, timedOut };
+      return { content, toolCall, timedOut };
     };
 
     const toolNames = new Set(runtime.tools.map((t) => t.name));
@@ -556,9 +617,6 @@ export class CodingAgent implements AgentAdapter {
     // Compact, deterministic execution state — turn budget, files actually touched, what
     // the last action was — appended to every "continue" message so the model can track
     // progress from one line instead of re-deriving it from the full conversation history.
-    // Previously this only ever appeared once, inside compactIfNeeded()'s summary, and
-    // only once the context had already grown past the compaction threshold; most tasks
-    // never got it at all.
     const stateLine = (lastAction?: string): string =>
       `[state] turn ${turnsUsed}/${maxTurns} | files changed: ${[...filesChangedSet].join(', ') || 'none'}` +
       (lastAction ? ` | last action: ${lastAction}` : '');
@@ -581,6 +639,8 @@ export class CodingAgent implements AgentAdapter {
     let validActions = 0;
     let validationErrors = 0;
     let malformedActions = 0;
+    let consecutiveValidationFailures = 0;
+    let lastValidationKey = '';
 
     const currentMetrics = (): ModelProtocolMetrics => ({
       actionAttempts,
@@ -590,22 +650,65 @@ export class CodingAgent implements AgentAdapter {
       adherenceRate: actionAttempts > 0 ? Number((validActions / actionAttempts).toFixed(3)) : 1.0,
     });
 
+    const validateAction = (
+      tool: string,
+      input: Record<string, unknown>,
+    ): { ok: true } | { ok: false; reason: string; toolMessage: string; attempts: number } => {
+      const missingFields = missingRequiredFields(tool, input);
+      if (missingFields.length > 0) {
+        const failureKey = `${tool}:${missingFields.join(',')}`;
+        consecutiveValidationFailures = (lastValidationKey === failureKey ? consecutiveValidationFailures : 0) + 1;
+        lastValidationKey = failureKey;
+        return {
+          ok: false,
+          reason: `missing ${missingFields.join(', ')}`,
+          toolMessage: `is missing required argument(s): ${missingFields.join(', ')}`,
+          attempts: consecutiveValidationFailures,
+        };
+      }
+
+      const semantic = validateToolActionSemantics(tool, input);
+      if (!semantic.ok) {
+        const reason = semantic.reason ?? 'invalid arguments';
+        const failureKey = `${tool}:${reason}`;
+        consecutiveValidationFailures = (lastValidationKey === failureKey ? consecutiveValidationFailures : 0) + 1;
+        lastValidationKey = failureKey;
+        return {
+          ok: false,
+          reason,
+          toolMessage: reason,
+          attempts: consecutiveValidationFailures,
+        };
+      }
+
+      consecutiveValidationFailures = 0;
+      lastValidationKey = '';
+      return { ok: true };
+    };
+
     // ==================== PLAN ====================
     yield { kind: 'phase', phase: 'plan' as AgentPhase };
+    let planEstablished = false;
+    let planExplorationCount = 0;
     for (let i = 0; i < 3 && !plan; i++) {
       if (request.isCancelled?.()) return;
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
-      const { content: raw, timedOut } = await modelTurn();
-      // A cancel (manual or timeout) that lands during the model turn must not let
-      // this turn's action run anyway — the check at the top of the loop already passed.
+      const { content: raw, toolCall, timedOut } = await modelTurn();
       if (request.isCancelled?.()) return;
       turnsUsed += 1;
       actionAttempts += 1;
-      const action = readAction(raw);
+      const action = toolCall
+        ? normalizeAction({ action: 'tool', tool: toolCall.name, input: toolCall.input }, toolNames)
+        : readAction(raw);
+
       if (!action) {
         correctionCount += 1;
         malformedActions += 1;
+        if (correctionCount >= 3) {
+          yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions', errorKind: 'protocol', raw, protocolMetrics: currentMetrics() };
+          return;
+        }
         yield { kind: 'message', content: 'INVALID_JSON_ACTION: model response did not parse as a JSON action', raw };
         messages.push({ role: 'user', content: correctionMessage(timedOut) });
         continue;
@@ -614,6 +717,7 @@ export class CodingAgent implements AgentAdapter {
       if (action.action === 'plan' && action.content) {
         validActions += 1;
         plan = action.content;
+        planEstablished = true;
         yield { kind: 'message', content: `Plan: ${plan}`, raw };
         pushContinue('Plan accepted. Execute it now, one tool call per turn.');
         break;
@@ -624,13 +728,18 @@ export class CodingAgent implements AgentAdapter {
         break;
       }
       if (action.action === 'tool' && action.tool) {
-        const missingFields = missingRequiredFields(action.tool, action.input ?? {});
-        if (missingFields.length > 0) {
+        const val = validateAction(action.tool, action.input ?? {});
+        if (val.ok === false) {
           validationErrors += 1;
-          yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' missing ${missingFields.join(', ')}`, tool: action.tool, raw };
-          pushToolResult(action.tool, validationFailureMessage(action.tool, missingFields));
+          if (val.attempts >= 3) {
+            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', raw, protocolMetrics: currentMetrics() };
+            return;
+          }
+          yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw };
+          pushToolResult(action.tool, validationFailureMessage(action.tool, val.toolMessage, val.attempts));
           continue;
         }
+
         validActions += 1;
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
@@ -638,10 +747,29 @@ export class CodingAgent implements AgentAdapter {
         if (CHECK_TOOLS.has(action.tool)) {
           checkOutputs.push({ name: action.tool, ok: result.ok, output: result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n') });
         }
+        if (FILE_TOOLS.has(action.tool) && typeof (action.input as { path?: unknown })?.path === 'string') {
+          yield { kind: 'message', content: `files-changed: ${(action.input as { path: string }).path}` };
+        }
+        if (result.ok) {
+          planExplorationCount += 1;
+        }
         pushToolResult(action.tool, result);
         continue;
       }
       messages.push({ role: 'user', content: 'Respond with exactly one JSON object as specified.' });
+    }
+
+    // Evidence check: only advance to implement if a plan was established or exploration occurred.
+    if (!planEstablished && planExplorationCount === 0 && !modelSummary) {
+      if (turnsUsed >= maxTurns || malformedActions + validationErrors >= 3) {
+        yield {
+          kind: 'error',
+          error: 'model failed to produce a valid plan or inspection action during planning phase',
+          errorKind: 'protocol',
+          protocolMetrics: currentMetrics(),
+        };
+        return;
+      }
     }
 
     // ==================== WORK (inspect → implement → test → debug → repair) ====================
@@ -655,13 +783,13 @@ export class CodingAgent implements AgentAdapter {
       }
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
-      const { content: raw, timedOut } = await modelTurn();
-      // A cancel (manual or timeout) that lands during the model turn must not let
-      // this turn's action run anyway — the check at the top of the loop already passed.
+      const { content: raw, toolCall, timedOut } = await modelTurn();
       if (request.isCancelled?.()) return;
       turnsUsed += 1;
       actionAttempts += 1;
-      const action = readAction(raw);
+      const action = toolCall
+        ? normalizeAction({ action: 'tool', tool: toolCall.name, input: toolCall.input }, toolNames)
+        : readAction(raw);
 
       if (!action) {
         correctionCount += 1;
@@ -704,13 +832,19 @@ export class CodingAgent implements AgentAdapter {
           });
           continue;
         }
-        const missingFields = missingRequiredFields(action.tool, action.input ?? {});
-        if (missingFields.length > 0) {
+
+        const val = validateAction(action.tool, action.input ?? {});
+        if (val.ok === false) {
           validationErrors += 1;
-          yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' missing ${missingFields.join(', ')}`, tool: action.tool, raw };
-          pushToolResult(action.tool, validationFailureMessage(action.tool, missingFields));
+          if (val.attempts >= 3) {
+            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', raw, protocolMetrics: currentMetrics() };
+            return;
+          }
+          yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw };
+          pushToolResult(action.tool, validationFailureMessage(action.tool, val.toolMessage, val.attempts));
           continue;
         }
+
         validActions += 1;
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});

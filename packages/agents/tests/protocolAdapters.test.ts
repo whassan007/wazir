@@ -5,6 +5,7 @@ import {
   parseQwenProtocol,
   parseAnthropicProtocol,
   parseOpenAiProtocol,
+  validateToolActionSemantics,
 } from '../src/protocolAdapters.js';
 import { normalizeAction, parseAction } from '../src/codingAgent.js';
 
@@ -128,6 +129,72 @@ describe('ModelProtocolAdapter', () => {
       const normalized = normalizeAction(parsed, toolNames);
       expect(normalized?.tool).toBe('shell');
       expect((normalized?.input as { command: string }).command).toBe("mkdir -p sort_dir");
+    });
+
+    it('normalizes glob with content into pattern argument', () => {
+      const raw = '{"action":"glob","content":"**/*","path":"."}';
+      const parsed = parseAction(raw, toolNames);
+      const normalized = normalizeAction(parsed, toolNames);
+      expect(normalized).toEqual({
+        action: 'tool',
+        tool: 'glob',
+        input: { pattern: '**/*', path: '.' },
+      });
+    });
+
+    it('normalizes tool:glob with content into pattern argument', () => {
+      const raw = '{"action":"tool","tool":"glob","content":"**/*","path":"."}';
+      const parsed = parseAction(raw, toolNames);
+      const normalized = normalizeAction(parsed, toolNames);
+      expect(normalized).toEqual({
+        action: 'tool',
+        tool: 'glob',
+        input: { pattern: '**/*', path: '.' },
+      });
+    });
+
+    it('normalizes shell with content into command argument', () => {
+      const raw = '{"action":"shell","content":"g++ sort_and_sum.cpp test_sort_and_sum.cpp -o test_sort_and_sum"}';
+      const parsed = parseAction(raw, toolNames);
+      const normalized = normalizeAction(parsed, toolNames);
+      expect(normalized).toEqual({
+        action: 'tool',
+        tool: 'shell',
+        input: { command: 'g++ sort_and_sum.cpp test_sort_and_sum.cpp -o test_sort_and_sum' },
+      });
+    });
+
+    it('normalizes read with file or single-line content into path argument', () => {
+      const raw = '{"action":"read","file":"Makefile"}';
+      const parsed = parseAction(raw, toolNames);
+      const normalized = normalizeAction(parsed, toolNames);
+      expect(normalized).toEqual({
+        action: 'tool',
+        tool: 'read',
+        input: { path: 'Makefile' },
+      });
+    });
+  });
+
+  describe('Semantic Validation (Placeholder Rejection)', () => {
+    it('rejects placeholder shell commands like ... and <command>', () => {
+      expect(validateToolActionSemantics('shell', { command: '...' }).ok).toBe(false);
+      expect(validateToolActionSemantics('shell', { command: '..' }).ok).toBe(false);
+      expect(validateToolActionSemantics('shell', { command: '<command>' }).ok).toBe(false);
+      expect(validateToolActionSemantics('shell', { command: 'your command here' }).ok).toBe(false);
+      expect(validateToolActionSemantics('shell', { command: 'g++ -o main main.cpp' }).ok).toBe(true);
+    });
+
+    it('rejects placeholder glob patterns', () => {
+      expect(validateToolActionSemantics('glob', { pattern: '...' }).ok).toBe(false);
+      expect(validateToolActionSemantics('glob', { pattern: '' }).ok).toBe(false);
+      expect(validateToolActionSemantics('glob', { pattern: '**/*' }).ok).toBe(true);
+    });
+
+    it('rejects placeholder file paths in read/write', () => {
+      expect(validateToolActionSemantics('read', { path: 'path/to/file' }).ok).toBe(false);
+      expect(validateToolActionSemantics('read', { path: '...' }).ok).toBe(false);
+      expect(validateToolActionSemantics('read', { path: 'Makefile' }).ok).toBe(true);
     });
   });
 });

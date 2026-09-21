@@ -122,4 +122,89 @@ describe('CodingAgent.run — tool argument validation', () => {
 
     expect(executed).toEqual([{ name: 'write', input: { path: 'empty.txt', content: '' } }]);
   });
+
+  it('rejects placeholder shell command "..." without executing the shell', async () => {
+    let calls = 0;
+    const executed: string[] = [];
+    const runtime: AgentRuntime = {
+      tools: [{ name: 'shell', description: 'run a shell command', inputSchema: {} }],
+      async *generate() {
+        calls += 1;
+        const reply =
+          calls === 1
+            ? '{"action":"plan","content":"test"}'
+            : calls === 2
+              ? '{"action":"tool","tool":"shell","input":{"command":"..."}}' // placeholder!
+              : '{"action":"done","summary":"done"}';
+        yield { type: 'token', content: reply };
+        yield { type: 'completed', content: reply };
+      },
+      async executeTool(name): Promise<ToolResult> {
+        if (name === 'shell') executed.push(name);
+        return { ok: true, output: 'ok', durationMs: 1 };
+      },
+    };
+
+    const turns = await drain(createCodingAgent({ maxTurns: 10 }).run(baseRequest, runtime));
+
+    expect(executed).toEqual([]);
+    const validationMsgs = turns.filter((t) => t.kind === 'message' && t.content?.includes('ACTION_VALIDATION_FAILED'));
+    expect(validationMsgs.length).toBe(1);
+    expect(validationMsgs[0].content).toContain('placeholder');
+  });
+
+  it('fails with errorKind protocol after 3 consecutive identical validation failures', async () => {
+    const runtime: AgentRuntime = {
+      tools: [{ name: 'glob', description: 'search files', inputSchema: {} }],
+      async *generate() {
+        // Continuously emits glob with no pattern or invalid placeholder
+        const reply = '{"action":"tool","tool":"glob","input":{"pattern":"..."}}';
+        yield { type: 'token', content: reply };
+        yield { type: 'completed', content: reply };
+      },
+      async executeTool(): Promise<ToolResult> {
+        return { ok: true, output: 'ok', durationMs: 1 };
+      },
+    };
+
+    const turns = await drain(createCodingAgent({ maxTurns: 10 }).run(baseRequest, runtime));
+
+    const errorTurn = turns.find((t) => t.kind === 'error');
+    expect(errorTurn).toBeDefined();
+    expect(errorTurn?.errorKind).toBe('protocol');
+    expect(errorTurn?.error).toContain('protocol recovery failed');
+  });
+
+  it('executes native tool_call events from runtime without text parsing', async () => {
+    let calls = 0;
+    const executed: Array<{ name: string; input: unknown }> = [];
+    const runtime: AgentRuntime = {
+      tools: [{ name: 'shell', description: 'run command', inputSchema: {} }],
+      async *generate() {
+        calls += 1;
+        if (calls === 1) {
+          yield {
+            type: 'tool_call',
+            toolName: 'shell',
+            toolInput: { command: 'ls -la' },
+          };
+          yield { type: 'completed' };
+        } else {
+          yield { type: 'token', content: '{"action":"done","summary":"finished"}' };
+          yield { type: 'completed' };
+        }
+      },
+      async executeTool(name, input): Promise<ToolResult> {
+        if (name === 'shell') executed.push({ name, input });
+        return { ok: true, output: 'total 0', durationMs: 1 };
+      },
+    };
+
+    const turns = await drain(createCodingAgent({ maxTurns: 5 }).run(baseRequest, runtime));
+
+    expect(executed).toEqual([{ name: 'shell', input: { command: 'ls -la' } }]);
+    const toolTurns = turns.filter((t) => t.kind === 'tool_call');
+    expect(toolTurns.length).toBe(1);
+    expect(toolTurns[0].tool).toBe('shell');
+  });
 });
