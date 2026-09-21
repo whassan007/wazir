@@ -64,3 +64,6 @@ test-plan-report.json
 # test plan runner artifacts (scripts/agent-execution-test-plan.mjs)
 agent-execution-test-plan-report.json
 .test-plan-vitest-agent.json
+
+# live scenario test report (apps/cli/tests/buildcpp.e2e.test.ts)
+buildcpp-test-report.json

@@ -18,6 +18,13 @@
 // itself checks independently — a C++ source file actually landed on disk,
 // and it actually compiles and runs — rather than trusting the agent's own
 // self-reported VERIFY status.
+//
+// Every run — pass, fail, or skip — writes a full report to
+// buildcpp-test-report.json at the repo root: the raw PTY transcript tail,
+// every step's outcome, the files found, compiler output, run output, and
+// (on failure) the exact error and stack. This is a live, non-reproducible
+// run, so the report is the only durable record of what actually happened —
+// scrollback is not enough to diagnose a failure after the fact.
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { promises as fs } from 'node:fs';
@@ -31,6 +38,7 @@ const execFileAsync = promisify(execFile);
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const cliEntry = path.resolve(dirname, '../dist/index.js');
 const ptyDriver = path.join(dirname, 'ptyDriver.py');
+const reportPath = path.resolve(dirname, '../../../buildcpp-test-report.json');
 
 const PROMPT = 'write a c++ program to sort an array of numbers and to produce the sum';
 
@@ -50,7 +58,40 @@ interface PtyResult {
   killed: boolean;
   steps: Array<{ op: string; ok: boolean; detail?: string }>;
   outputTail: string;
+  outputBytes?: number;
   error?: string;
+}
+
+/** Everything captured about one run, written to disk unconditionally. */
+interface BuildCppReport {
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  prompt: string;
+  lmStudioLive: boolean;
+  skipped: boolean;
+  skipReason?: string;
+  homeDir?: string;
+  projectDir?: string;
+  pty?: PtyResult;
+  jobCompletedStatusSeen?: boolean;
+  cppFilesFound?: string[];
+  compiler?: string;
+  compile?: { ok: boolean; error?: string; stdout?: string; stderr?: string };
+  run?: { ok: boolean; error?: string; stdout?: string; stderr?: string };
+  outcome: 'pass' | 'fail' | 'skip' | 'error';
+  error?: { message: string; stack?: string };
+}
+
+async function writeReport(report: BuildCppReport): Promise<void> {
+  report.finishedAt = new Date().toISOString();
+  report.durationMs = Date.parse(report.finishedAt) - Date.parse(report.startedAt);
+  await fs.writeFile(reportPath, JSON.stringify(report, null, 2), 'utf8').catch((err) => {
+    // Surface a write failure loudly — losing the only record of a live,
+    // non-reproducible run is exactly the failure mode this exists to avoid.
+    // eslint-disable-next-line no-console
+    console.error(`buildcpp: failed to write report to ${reportPath}: ${String(err)}`);
+  });
 }
 
 async function runPtyChat(
@@ -138,7 +179,19 @@ describe('buildcpp: live `wa chat` TUI writes a working C++ sort+sum program', (
   it(
     'asks wazir via the TUI to sort an array and sum it, then verifies the result compiles and runs',
     async () => {
+      const report: BuildCppReport = {
+        startedAt: new Date().toISOString(),
+        prompt: PROMPT,
+        lmStudioLive: isLMStudioLive,
+        skipped: false,
+        outcome: 'error', // overwritten below on every path; stays 'error' only if we throw before reassigning
+      };
+
       if (!isLMStudioLive) {
+        report.skipped = true;
+        report.skipReason = `no LM Studio daemon with a loaded model reachable at ${LMSTUDIO_BASE_URL}`;
+        report.outcome = 'skip';
+        await writeReport(report);
         // Graceful skip when no live LM Studio daemon is reachable — this
         // scenario needs a real model, not a fake adapter.
         expect(true).toBe(true);
@@ -147,6 +200,8 @@ describe('buildcpp: live `wa chat` TUI writes a working C++ sort+sum program', (
 
       const homeDir = await tempDir('wazir-buildcpp-home-');
       const projectDir = await tempDir('wazir-buildcpp-project-');
+      report.homeDir = homeDir;
+      report.projectDir = projectDir;
 
       const env: NodeJS.ProcessEnv = {
         ...process.env,
@@ -170,28 +225,55 @@ describe('buildcpp: live `wa chat` TUI writes a working C++ sort+sum program', (
           env,
           ['--no-worktrees', '--timeout', String(JOB_TIMEOUT_S)],
         );
+        report.pty = result;
+
+        const completed = /completed!\s*Tokens: In/.test(result.outputTail);
+        report.jobCompletedStatusSeen = completed;
 
         expect(result.killed, `driver had to SIGKILL the process — tail:\n${result.outputTail}`).toBe(false);
         expect(result.exitCode, `unexpected exit code — tail:\n${result.outputTail}`).toBe(0);
-
-        const completed = /completed!\s*Tokens: In/.test(result.outputTail);
         expect(completed, `job did not report a completed status — tail:\n${result.outputTail}`).toBe(true);
 
         // Ground truth: find what the agent actually wrote on disk, independent
         // of anything the TUI claims about its own verification.
         const cppFiles = await findFilesRecursive(projectDir, /\.(cpp|cc|cxx)$/i);
+        report.cppFilesFound = cppFiles;
         expect(cppFiles.length, `no C++ source file found under ${projectDir}`).toBeGreaterThan(0);
 
         // Independently compile and run the first C++ file the agent produced —
         // don't trust the agent's self-reported VERIFY phase.
         const compiler = await findCompiler();
+        report.compiler = compiler;
         const source = cppFiles[0];
         const binary = path.join(path.dirname(source), 'buildcpp_verify_bin');
-        await execFileAsync(compiler, ['-std=c++17', '-O2', '-o', binary, source]);
 
-        const { stdout } = await execFileAsync(binary, [], { timeout: 10_000 });
-        expect(stdout.length).toBeGreaterThan(0);
+        try {
+          await execFileAsync(compiler, ['-std=c++17', '-O2', '-o', binary, source]);
+          report.compile = { ok: true };
+        } catch (err) {
+          const e = err as { message?: string; stdout?: string; stderr?: string };
+          report.compile = { ok: false, error: e.message, stdout: e.stdout, stderr: e.stderr };
+          throw err;
+        }
+
+        try {
+          const { stdout, stderr } = await execFileAsync(binary, [], { timeout: 10_000 });
+          report.run = { ok: true, stdout, stderr };
+          expect(stdout.length).toBeGreaterThan(0);
+        } catch (err) {
+          const e = err as { message?: string; stdout?: string; stderr?: string };
+          report.run = { ok: false, error: e.message, stdout: e.stdout, stderr: e.stderr };
+          throw err;
+        }
+
+        report.outcome = 'pass';
+      } catch (err) {
+        const e = err instanceof Error ? err : new Error(String(err));
+        report.error = { message: e.message, stack: e.stack };
+        report.outcome = 'fail';
+        throw err;
       } finally {
+        await writeReport(report);
         await fs.rm(homeDir, { recursive: true, force: true }).catch(() => undefined);
         await fs.rm(projectDir, { recursive: true, force: true }).catch(() => undefined);
       }
