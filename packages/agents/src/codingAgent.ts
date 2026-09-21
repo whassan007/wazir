@@ -301,6 +301,40 @@ export function normalizeAction(action: ParsedAction | null, toolNames: Set<stri
   return action;
 }
 
+// Required-field checks for the handful of built-in tools whose schema is known ahead of
+// time. A malformed call (required field entirely missing — e.g. `write({})`, `read({})`,
+// `shell({})`) used to run the full tool/policy pipeline just to bounce off a generic
+// denial ("tool 'write' requires a path argument", "empty shell command") — a full model
+// turn spent per attempt, with the correction framed as an authorization decision rather
+// than what actually went wrong (a missing argument). Checked here, once, before the tool
+// ever runs, with a message that names exactly what's missing. Deliberately narrow in two
+// ways: only the 4 tools observed going through this failure mode in a live repro against
+// nvidia/nemotron-3-nano-omni (unlisted tools like edit/git/search keep their own existing
+// validation), and only a genuinely *missing* (undefined/null) value counts — a present
+// but blank value (e.g. `command: ""`) is left to the policy engine's own handling, which
+// already gives it a deliberate plain-language translation in the TUI.
+const REQUIRED_TOOL_FIELDS: Record<string, string[]> = {
+  read: ['path'],
+  write: ['path', 'content'],
+  shell: ['command'],
+  glob: ['pattern'],
+};
+
+function missingRequiredFields(tool: string, input: Record<string, unknown>): string[] {
+  const required = REQUIRED_TOOL_FIELDS[tool];
+  if (!required) return [];
+  return required.filter((field) => input[field] === undefined || input[field] === null);
+}
+
+function validationFailureMessage(tool: string, missing: string[]): { ok: false; output: string } {
+  return {
+    ok: false,
+    output:
+      `ACTION_VALIDATION_FAILED: '${tool}' is missing required argument(s): ${missing.join(', ')}. ` +
+      `Respond with a corrected {"action":"tool","tool":"${tool}","input":{...}} that includes them — do not repeat the same incomplete call.`,
+  };
+}
+
 export function buildSystemPrompt(projectRoot: string, tools: AgentRuntime['tools'], extra?: string): string {
   const toolLines = tools
     .map((t) => `- ${t.name}: ${t.description} input: ${JSON.stringify(t.inputSchema).slice(0, 240)}`)
@@ -558,6 +592,11 @@ export class CodingAgent implements AgentAdapter {
         break;
       }
       if (action.action === 'tool' && action.tool) {
+        const missingFields = missingRequiredFields(action.tool, action.input ?? {});
+        if (missingFields.length > 0) {
+          pushToolResult(action.tool, validationFailureMessage(action.tool, missingFields));
+          continue;
+        }
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
         yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result };
@@ -616,10 +655,15 @@ export class CodingAgent implements AgentAdapter {
       if (action.action === 'tool' && action.tool) {
         const breakerError = checkCircuitBreaker(action.tool, action.input ?? {});
         if (breakerError) {
-          pushToolResult(action.tool, { 
-            ok: false, 
-            output: `ACTION_BLOCKED_DUPLICATE: You have attempted this exact action ${this.toolRepeatLimit} times. You must use a different tool or different arguments.` 
+          pushToolResult(action.tool, {
+            ok: false,
+            output: `ACTION_BLOCKED_DUPLICATE: You have attempted this exact action ${this.toolRepeatLimit} times. You must use a different tool or different arguments.`
           });
+          continue;
+        }
+        const missingFields = missingRequiredFields(action.tool, action.input ?? {});
+        if (missingFields.length > 0) {
+          pushToolResult(action.tool, validationFailureMessage(action.tool, missingFields));
           continue;
         }
         recordToolExecution(action.tool, action.input ?? {});
