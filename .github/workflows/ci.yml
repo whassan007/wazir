@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   build-and-test:
@@ -37,5 +38,25 @@ jobs:
       - name: Verify dist is fresh
         run: npm run check-dist -- --quiet
 
-      - name: Run test suite
+      - name: Run unit and integration test suite
         run: npm test
+
+      - name: Run Wazir acceptance test library (10 Release Gates G0..G9)
+        run: npm run test:plan:acceptance
+
+      - name: Run TUI regression test plan (50 cases)
+        run: npm run test:plan:tui
+
+      - name: Run agent execution test plan (55 cases)
+        run: npm run test:plan:agent
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-node-${{ matrix.node-version }}
+          path: |
+            acceptance-test-report.json
+            test-plan-report.json
+            agent-execution-test-plan-report.json
+          if-no-files-found: ignore
