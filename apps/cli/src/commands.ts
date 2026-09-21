@@ -35,7 +35,18 @@ export function listAgents(engine: RookEngine): string {
 export function listModels(engine: RookEngine): string {
   const models = engine.models.list();
   if (models.length === 0) {
-    return color.yellow('no models registered (is Ollama / LM Studio running?)');
+    const lines = [color.yellow('no models registered')];
+    for (const runtime of engine.discovered) {
+      if (runtime.health === 'unavailable') {
+        lines.push(color.gray(`  ${runtime.id}: unreachable — ${runtime.healthMessage ?? 'unknown error'}`));
+      } else if (runtime.models.length === 0) {
+        lines.push(color.gray(`  ${runtime.id}: connected, but no models loaded — load a model first`));
+      }
+    }
+    if (lines.length === 1) {
+      lines.push(color.gray('  no runtimes configured — is Ollama / LM Studio running?'));
+    }
+    return lines.join('\n');
   }
   const rows = models.map((m) => {
     const instances = engine.models.instancesOf(m.id);
