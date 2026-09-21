@@ -297,7 +297,7 @@ export function createFleetTaskExecutor(
               name: name as CheckRunRecord['name'],
               command: `npm run ${script}`,
               ok: result.ok,
-              output: (result.ok ? result.output : result.error ?? result.output).slice(0, 4000),
+              output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
               durationMs: result.durationMs,
             });
           }

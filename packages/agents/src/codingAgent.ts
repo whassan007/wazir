@@ -484,7 +484,7 @@ export class CodingAgent implements AgentAdapter {
     };
 
     const pushToolResult = (tool: string, result: { ok: boolean; output: string; error?: string }): void => {
-      const body = result.ok ? result.output : `ERROR: ${result.error ?? result.output}`;
+      const body = result.ok ? result.output : `ERROR: ${[result.error, result.output].filter(Boolean).join('\n')}`;
       messages.push({
         role: 'user',
         content: `[tool result for ${tool} (ok=${result.ok})]\n${body.slice(0, 12000)}\nContinue. Respond with exactly one JSON object.`,
@@ -524,7 +524,7 @@ export class CodingAgent implements AgentAdapter {
         const result = await runtime.executeTool(action.tool, action.input ?? {});
         yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result };
         if (CHECK_TOOLS.has(action.tool)) {
-          checkOutputs.push({ name: action.tool, ok: result.ok, output: result.ok ? result.output : result.error ?? result.output });
+          checkOutputs.push({ name: action.tool, ok: result.ok, output: result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n') });
         }
         pushToolResult(action.tool, result);
         continue;
@@ -585,7 +585,7 @@ export class CodingAgent implements AgentAdapter {
         const result = await runtime.executeTool(action.tool, action.input ?? {});
         yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result };
         if (CHECK_TOOLS.has(action.tool)) {
-          checkOutputs.push({ name: action.tool, ok: result.ok, output: result.ok ? result.output : result.error ?? result.output });
+          checkOutputs.push({ name: action.tool, ok: result.ok, output: result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n') });
         }
         if (FILE_TOOLS.has(action.tool) && typeof (action.input as { path?: unknown })?.path === 'string') {
           yield { kind: 'message', content: `files-changed: ${(action.input as { path: string }).path}` };
@@ -606,7 +606,7 @@ export class CodingAgent implements AgentAdapter {
       for (const check of ['test', 'lint', 'typecheck']) {
         if (request.isCancelled?.()) break;
         const result = await runtime.executeTool(check, {});
-        const output = result.ok ? result.output : result.error ?? result.output;
+        const output = result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n');
         if (output && /missing script|no such file|not found/i.test(output) && !result.ok) {
           // project does not define this check — not applicable, not a failure
           continue;
