@@ -67,3 +67,7 @@ agent-execution-test-plan-report.json
 
 # live scenario test report (apps/cli/tests/buildcpp.e2e.test.ts)
 buildcpp-test-report.json
+
+# acceptance test library runner artifacts (scripts/acceptance-test-harness.mjs)
+acceptance-test-report.json
+.acceptance-vitest-report.json
