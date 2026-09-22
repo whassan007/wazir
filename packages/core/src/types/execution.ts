@@ -66,12 +66,51 @@ export interface CheckRunRecord {
   durationMs: number;
 }
 
+export interface WorkspaceState {
+  workspaceId: string;
+  revision: number;
+  contentFingerprint?: string;
+  updatedAt: Date;
+}
+
+export interface FileMutationHistoryEntry {
+  path: string;
+  revision: number;
+  at: Date;
+}
+
+export type EvidenceType = 'BUILD' | 'TEST' | 'RUN' | 'STATIC_CHECK';
+
+export interface VerificationEvidence {
+  id: string;
+  type: EvidenceType;
+  executionId?: string;
+  workspaceId?: string;
+  revision: number;
+  command?: string;
+  exitCode: number;
+  durationMs?: number;
+  startedAt?: Date;
+  completedAt?: Date;
+  output?: string;
+  artifactFingerprint?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AcceptanceContract {
+  taskType?: string;
+  requiredEvidence: EvidenceType[];
+}
+
 export interface EvaluationResult {
   success: boolean;
   reasons: string[];
   filesChanged: string[];
   checks: CheckRunRecord[];
   evaluatedAt: Date;
+  workspaceRevision?: number;
+  latestSuccessfulBuildRevision?: number | null;
+  evidence?: VerificationEvidence[];
 }
 
 /** Durable execution record — the source of truth for inspect/replay. */
@@ -89,6 +128,10 @@ export interface ExecutionRecord {
   evaluation?: EvaluationResult;
   usage?: TokenUsage;
   events: ExecutionEvent[];
+  workspaceState?: WorkspaceState;
+  evidence?: VerificationEvidence[];
+  acceptanceContract?: AcceptanceContract;
+  mutationHistory?: FileMutationHistoryEntry[];
 }
 
 export type ExecutionEventType =
@@ -106,12 +149,35 @@ export type ExecutionEventType =
   | 'generation.token'
   | 'tool.started'
   | 'tool.completed'
+  | 'files.changed'
   | 'check.completed'
   | 'evaluation.completed'
   | 'generation.completed'
   | 'execution.completed'
   | 'execution.failed'
-  | 'execution.cancelled';
+  | 'execution.cancelled'
+  | 'workspace.revision_changed'
+  | 'WORKSPACE_REVISION_CHANGED'
+  | 'file.changed'
+  | 'FILE_CHANGED'
+  | 'build.started'
+  | 'BUILD_STARTED'
+  | 'build.completed'
+  | 'BUILD_COMPLETED'
+  | 'test.started'
+  | 'TEST_STARTED'
+  | 'test.completed'
+  | 'TEST_COMPLETED'
+  | 'verification.started'
+  | 'VERIFICATION_STARTED'
+  | 'verification.passed'
+  | 'VERIFICATION_PASSED'
+  | 'verification.failed'
+  | 'VERIFICATION_FAILED'
+  | 'evidence.stale'
+  | 'EVIDENCE_STALE'
+  | 'completion.rejected'
+  | 'COMPLETION_REJECTED';
 
 export interface ExecutionEvent {
   id: string;

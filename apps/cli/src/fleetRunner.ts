@@ -52,8 +52,9 @@ const WRITE_TOOLS = new Set(['write', 'edit']);
 // generic `shell` tool was invisible to evaluateExecution()'s check
 // tracking, letting a task "complete" with zero recorded evidence even when
 // the model had genuinely compiled (or failed to compile) real code.
+// `(?=\s|$)` rather than `\b` — see the identical helper in run.ts for why.
 const BUILD_INVOCATION_PATTERN =
-  /(^|&&|\|\||;)\s*(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)\b/;
+  /(^|&&|\|\||;)\s*(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)(?=\s|$)/;
 // Kept in sync with the identical helper in apps/cli/src/run.ts.
 const SOURCE_CODE_EXTENSION_PATTERN = /\.(c|cc|cpp|cxx|h|hpp|hh|py|go|rs|java|kt|swift|ts|tsx|js|jsx|mjs|cjs|rb|php|cs|scala|m|mm)$/i;
 function touchesSourceCode(filesChanged: string[]): boolean {
@@ -399,7 +400,17 @@ export function createFleetTaskExecutor(
           });
         }
 
-        if (WRITE_TOOLS.has(name) && result.ok && typeof input.path === 'string') {
+        if (result.fileMutations && result.fileMutations.length > 0) {
+          const changedFiles = result.fileMutations
+            .filter((m) => m.changed)
+            .map((m) => {
+              const abs = path.resolve(taskRoot, m.path);
+              return path.relative(taskRoot, abs).split(path.sep).join('/');
+            });
+          if (changedFiles.length > 0) {
+            await engine.executions.recordFilesChanged(executionId, changedFiles);
+          }
+        } else if (!result.fileMutations && WRITE_TOOLS.has(name) && result.ok && typeof input.path === 'string') {
           const relative = path
             .relative(taskRoot, path.resolve(taskRoot, input.path))
             .split(path.sep)

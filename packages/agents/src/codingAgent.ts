@@ -514,7 +514,6 @@ export class CodingAgent implements AgentAdapter {
     const filesChangedSet = new Set<string>();
     const recordToolExecution = (tool: string, input: Record<string, unknown>): void => {
       toolCallCounts.set(tool, (toolCallCounts.get(tool) ?? 0) + 1);
-      if (FILE_TOOLS.has(tool) && typeof input.path === 'string') filesChangedSet.add(input.path);
     };
     
     const canonicalize = (obj: any): any => {
@@ -805,8 +804,15 @@ export class CodingAgent implements AgentAdapter {
         }
         if (result.fileMutations) {
           for (const m of result.fileMutations) {
-            if (m.changed) yield { kind: 'message', content: `files-changed: ${m.path}` };
+            if (m.changed) {
+              filesChangedSet.add(m.path);
+              yield { kind: 'message', content: `files-changed: ${m.path}` };
+            }
           }
+        } else if (FILE_TOOLS.has(action.tool) && result.ok && typeof (action.input as any)?.path === 'string') {
+          const p = String((action.input as any).path);
+          filesChangedSet.add(p);
+          yield { kind: 'message', content: `files-changed: ${p}` };
         }
         if (result.ok) {
           planExplorationCount += 1;
@@ -931,10 +937,16 @@ export class CodingAgent implements AgentAdapter {
         if (result.fileMutations) {
           for (const m of result.fileMutations) {
             if (m.changed) {
+              filesChangedSet.add(m.path);
               if (repairState) repairState.filesModified++;
               yield { kind: 'message', content: `files-changed: ${m.path}` };
             }
           }
+        } else if (FILE_TOOLS.has(action.tool) && result.ok && typeof (action.input as any)?.path === 'string') {
+          const p = String((action.input as any).path);
+          filesChangedSet.add(p);
+          if (repairState) repairState.filesModified++;
+          yield { kind: 'message', content: `files-changed: ${p}` };
         }
         
         if (repairState && ['read', 'glob', 'search'].includes(action.tool)) {

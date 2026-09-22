@@ -116,6 +116,28 @@ describe('evaluateExecution with expectedEvidence', () => {
     expect(failRes.reasons.some((r) => r.includes('evidence missing: checks failed: run'))).toBe(true);
   });
 
+  it('checks_pass/exit_code_zero require at least one check to have actually run — zero checks is not vacuous success', () => {
+    // Regression test: an empty `checks` array has zero *failed* checks by
+    // definition, so the original implementation of this branch treated "no
+    // checks ran" as indistinguishable from "all checks passed" — exactly
+    // the false-positive-completion class of bug (a real live task once
+    // reported "Task completed... Verification checks passed" despite never
+    // running a single check). See apps/cli/src/run.ts's BUILD_INVOCATION_PATTERN
+    // comment for the full story.
+    const noChecksRes = evaluateExecution(
+      { filesChanged: ['main.cpp'], checks: [], errors: [] },
+      { expectedEvidence: ['checks_pass'] },
+    );
+    expect(noChecksRes.success).toBe(false);
+    expect(noChecksRes.reasons.some((r) => r.includes('no checks were executed to verify against'))).toBe(true);
+
+    const exitCodeZeroRes = evaluateExecution(
+      { filesChanged: ['main.cpp'], checks: [], errors: [] },
+      { expectedEvidence: ['exit_code_zero'] },
+    );
+    expect(exitCodeZeroRes.success).toBe(false);
+  });
+
   it('verifies compilation_succeeds evidence against a named build/compile/typecheck check', () => {
     const okRes = evaluateExecution(
       {

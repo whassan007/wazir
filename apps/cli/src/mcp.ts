@@ -72,6 +72,9 @@ export async function authenticateMCP(registry: MCPRegistry, id: string): Promis
 
 export async function executeMCPForAgent(engine: RookEngine, name: string, input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<ToolResult> {
   const safeInput = redactMCPArguments(input);
+  const execution = ctx.executionId ? await engine.executions.get(ctx.executionId) : undefined;
+  ctx.agentId ??= execution?.execution.agentId;
+  ctx.requester ??= 'agent';
   await engine.executions.recordToolStart(ctx.executionId!, name, safeInput);
   const result = await executeTool(engine.tools, name, input, ctx);
   if (result.metadata?.policy) await engine.executions.recordPolicy(ctx.executionId!, result.metadata.policy as any);
@@ -182,7 +185,19 @@ export function registerMCPCommands(program: Command): void {
   command.command('disconnect <id>').action(run(async (r, id) => { await r.disconnect(id); return 'Disconnected in this process. Use disable to prevent future autoconnect.'; }));
   command.command('inspect <id>').action(run(async (r, id) => { const s = r.get(id); return { ...s.definition, status: s.state, tools: s.tools.length, resources: s.resources.length, prompts: s.prompts.length }; }));
   for (const kind of ['tools', 'resources', 'prompts'] as const) command.command(kind + ' <id>').action(run(async (r, id) => { await r.connect(id); return r.get(id)[kind]; }));
-  command.command('auth <id>').action(run(async (r, id) => { await authenticateMCP(r, id); return 'Credentials stored via Secret Broker.'; }));
+  command.command('auth <id>')
+    .option('--oauth', 'Use the server documented OAuth flow')
+    .option('--pat', 'Use a Personal Access Token (GitHub)')
+    .action(run(async (r, id, opts: { oauth?: boolean; pat?: boolean }) => {
+      if (opts.oauth && opts.pat) throw new Error('Choose either --oauth or --pat.');
+      if (id === 'github' && (opts.oauth || opts.pat)) {
+        const d = structuredClone(r.get(id).definition);
+        d.auth = opts.oauth ? { type: 'oauth', oauthConfig: { ...d.auth?.oauthConfig } } : { type: 'bearer', secretRef: 'github_mcp_token' };
+        await r.update(d);
+      } else if (opts.oauth || opts.pat) throw new Error('These auth options currently apply to GitHub.');
+      await authenticateMCP(r, id);
+      return 'Credentials stored via Secret Broker.';
+    }));
   command.command('test <id>').action(run(async (r, id) => { await r.connect(id); return { server: id, status: r.get(id).state, capabilities: r.get(id).capabilities }; }));
   command.command('doctor').action(run(async r => r.list().map(s => ({ server: s.definition.id, state: s.state, next: s.state === 'AUTH_REQUIRED' ? `wa mcp auth ${s.definition.id}` : `wa mcp test ${s.definition.id}` }))));
   command.command('config <id> <key> <value>').action(run(configureMCP));

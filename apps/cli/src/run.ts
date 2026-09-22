@@ -91,8 +91,13 @@ const WRITE_TOOLS = new Set(['write', 'edit']);
 // rather than failure (see packages/evaluation/src/index.ts). Mirrors the
 // compiler allowlist already in policyEngine.ts's SAFE_SHELL_COMMANDS,
 // plus common build-orchestration tools.
+// `(?=\s|$)` rather than `\b`: a word-boundary assertion never matches right
+// after a symbol like the trailing '+' in `g++`/`c++`/`clang++` (neither the
+// '+' nor the following space is a \w character, so there is no word/non-
+// word transition for \b to anchor on) — confirmed live: this exact bug
+// let a real `g++ ... && ./a.out` compile slip through undetected.
 const BUILD_INVOCATION_PATTERN =
-  /(^|&&|\|\||;)\s*(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)\b/;
+  /(^|&&|\|\||;)\s*(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)(?=\s|$)/;
 // Requiring a passing check makes sense once real source was touched; a task
 // that only wrote plain text/config/docs has nothing to compile or test, and
 // the pre-existing lenient evaluation is still the right call for it.
@@ -465,7 +470,17 @@ export async function executeTask(
         });
       }
 
-      if (WRITE_TOOLS.has(name) && result.ok && typeof input.path === 'string') {
+      if (result.fileMutations && result.fileMutations.length > 0) {
+        const changedFiles = result.fileMutations
+          .filter((m) => m.changed)
+          .map((m) => {
+            const abs = path.resolve(engine.projectRoot, m.path);
+            return path.relative(engine.projectRoot, abs).split(path.sep).join('/');
+          });
+        if (changedFiles.length > 0) {
+          await engine.executions.recordFilesChanged(executionId, changedFiles);
+        }
+      } else if (!result.fileMutations && WRITE_TOOLS.has(name) && result.ok && typeof input.path === 'string') {
         const relative = path.relative(engine.projectRoot, path.resolve(engine.projectRoot, input.path)).split(path.sep).join('/');
         await engine.executions.recordFilesChanged(executionId, [relative]);
       }

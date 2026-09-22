@@ -1,17 +1,22 @@
 import type {
+  AcceptanceContract,
   CheckRunRecord,
   ContextDecision,
   EvaluationResult,
+  EvidenceType,
   Execution,
   ExecutionEvent,
   ExecutionEventType,
   ExecutionRecord,
   ExecutionStatus,
+  FileMutationHistoryEntry,
   PolicyDecision,
   SchedulerDecision,
   Task,
   TokenUsage,
   ToolCallRecord,
+  VerificationEvidence,
+  WorkspaceState,
 } from '../types/index.js';
 import { sanitizeUntrustedOutput, appendAuditEvent, computeContentHash } from '@wazir/shared';
 import type { ProvenanceManager, CreateArtifactParams } from './provenanceManager.js';
@@ -85,6 +90,12 @@ export class ExecutionEngine {
       createdAt: now,
     };
 
+    const workspaceState: WorkspaceState = {
+      workspaceId: execution.id,
+      revision: 0,
+      updatedAt: now,
+    };
+
     const record: ExecutionRecord = {
       execution,
       task: params.task,
@@ -95,6 +106,10 @@ export class ExecutionEngine {
       filesChanged: [],
       checks: [],
       errors: [],
+      workspaceState,
+      evidence: [],
+      acceptanceContract: params.task.acceptanceContract ?? (params.task.type === 'coding' ? { taskType: 'coding', requiredEvidence: ['BUILD', 'TEST'] } : undefined),
+      mutationHistory: [],
       events: [
         {
           id: nextId('evt'),
@@ -123,8 +138,23 @@ export class ExecutionEngine {
     await this.flush(record);
   }
 
-  async setStatus(executionId: string, status: ExecutionStatus): Promise<void> {
+  async setStatus(executionId: string, status: ExecutionStatus, options?: { targetRevision?: number }): Promise<void> {
     const record = this.require(executionId);
+
+    if (status === 'completed' && options?.targetRevision !== undefined) {
+      const currentRev = record.workspaceState?.revision ?? 0;
+      if (options.targetRevision !== currentRev) {
+        this.pushEvent(record, 'completion.rejected', {
+          targetRevision: options.targetRevision,
+          currentRevision: currentRev,
+          reason: 'STALE_WORKSPACE_REVISION',
+        });
+        const err = new Error(`STALE_WORKSPACE_REVISION: target revision ${options.targetRevision} does not match current workspace revision ${currentRev}`);
+        (err as any).code = 'STALE_WORKSPACE_REVISION';
+        throw err;
+      }
+    }
+
     record.execution.status = status;
     const now = new Date();
     if (status === 'running' && !record.execution.startedAt) {
@@ -227,6 +257,7 @@ export class ExecutionEngine {
     for (const file of files) {
       if (!record.filesChanged.includes(file)) {
         record.filesChanged.push(file);
+        this.pushEvent(record, "files.changed", { file });
         
         // Register artifact provenance if provenance manager is available
         if (this.provenanceManager && !file.startsWith('node_modules') && !file.startsWith('.git')) {

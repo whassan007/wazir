@@ -26,6 +26,8 @@ export interface MCPConnection {
   failures: number; circuitUntil: number; lastError?: string; discoveredAt?: string;
 }
 const defaults = { READ_ONLY: 'allow', WRITE: 'ask', DESTRUCTIVE: 'ask', ADMIN: 'ask', UNKNOWN: 'ask' } as const;
+const liveRegistries = new Set<MCPRegistry>();
+let exitHookInstalled = false;
 export function classifyMCPTool(tool: RemoteTool): MCPRisk {
   const name = tool.name.toLowerCase();
   if (/(^|_)(admin|permission|credential|role|organization|node_pool)(_|$)/.test(name) && !/^(get|list|read|search)_/.test(name)) return 'ADMIN';
@@ -69,7 +71,17 @@ export class MCPRegistry extends EventEmitter {
   readonly auth: MCPAuthProvider;
   private readonly servers = new Map<string, MCPConnection>();
   private closing = false;
-  constructor(readonly options: MCPRegistryOptions) { super(); this.auth = new MCPAuthProvider(options.secrets); }
+  constructor(readonly options: MCPRegistryOptions) {
+    super(); this.auth = new MCPAuthProvider(options.secrets);
+    liveRegistries.add(this);
+    if (!exitHookInstalled) {
+      exitHookInstalled = true;
+      process.once('exit', () => {
+        // SDK STDIO transport.close() kills its child synchronously before its promise settles.
+        for (const registry of liveRegistries) for (const connection of registry.servers.values()) void connection.client?.close().catch(() => undefined);
+      });
+    }
+  }
   async initialize(): Promise<void> {
     let definitions: MCPServerDefinition[];
     try { definitions = JSON.parse(await fs.readFile(path.join(this.options.directory, 'mcp.json'), 'utf8')).servers; }
@@ -222,7 +234,7 @@ export class MCPRegistry extends EventEmitter {
     return { kind: 'mcp', label: `MCP template ${id}`, content: JSON.stringify({ trust: 'untrusted', server: id, retrievedAt: new Date().toISOString(), data: JSON.parse(this.auth.redact(result)) }), priority: 'optional' };
   }
   async enable(id: string, enabled: boolean): Promise<void> { const s = this.get(id); s.definition.enabled = enabled; if (!enabled) await this.disconnect(id); else s.state = 'CONFIGURED'; await this.save(); }
-  async close(): Promise<void> { this.closing = true; await Promise.allSettled(this.list().map(s => this.disconnect(s.definition.id))); }
+  async close(): Promise<void> { this.closing = true; await Promise.allSettled(this.list().map(s => this.disconnect(s.definition.id))); liveRegistries.delete(this); }
   async recover(id: string, ctx: ToolExecutionContext): Promise<void> {
     try { await this.connect(id); }
     catch (e) {

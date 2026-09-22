@@ -79,6 +79,7 @@ export interface Task {
   capabilities?: string[];
   expectedEvidence?: string[];
   expectedArtifacts?: string[];
+  acceptanceContract?: import('./execution.js').AcceptanceContract;
   mutationRequired?: boolean;
   workspaceMode?: WorkspaceMode;
   contextFrom?: string[];

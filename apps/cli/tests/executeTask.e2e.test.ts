@@ -28,7 +28,7 @@ import type { RookEngine } from '../src/engine.js';
  * filesystem/check tools against a scratch project directory) and only
  * fakes the one thing that's genuinely external: the model itself.
  */
-async function buildTestEngine(projectRoot: string): Promise<RookEngine> {
+async function buildTestEngine(projectRoot: string, scriptedReplies?: string[]): Promise<RookEngine> {
   const computers = new ComputerRegistry();
   const runtimes = new RuntimeRegistry();
   const models = new ModelRegistry();
@@ -137,7 +137,7 @@ async function buildTestEngine(projectRoot: string): Promise<RookEngine> {
     // (policy authorization, scheduling, the tool call, execution
     // recording, verification) is the genuine production code path.
     async *generate() {
-      const replies = [
+      const replies = scriptedReplies ?? [
         '{"action":"plan","content":"write hello file"}',
         '{"action":"tool","tool":"write","input":{"path":"hello.txt","content":"hi from the fake model"}}',
         '{"action":"done","summary":"wrote hello.txt"}',
@@ -204,6 +204,55 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     expect(record.toolCalls.some((c) => c.tool === 'write' && c.ok)).toBe(true);
     // Every tool call went through real policy authorization, not a bypass.
     expect(record.toolCalls.every((c) => c.policyEffect === 'allow')).toBe(true);
+  });
+
+  it('a task that writes source code but never compiles/tests it is NOT reported as a verified success', async () => {
+    // Regression test for a real, live-observed false-positive-completion
+    // bug: writing main.cpp and never running anything against it used to
+    // still report "Task completed" (evaluateExecution() defaulted
+    // success=true whenever nothing had explicitly failed, including the
+    // "no checks were executed" case). See run.ts's touchesSourceCode() /
+    // packages/evaluation/src/index.ts's checks_pass tightening.
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-unverified-'));
+    const engine = await buildTestEngine(projectRoot, [
+      '{"action":"plan","content":"write main.cpp"}',
+      '{"action":"tool","tool":"write","input":{"path":"main.cpp","content":"int main(){return 0;}"}}',
+      '{"action":"done","summary":"Task completed. Verification checks passed."}',
+    ]);
+
+    const outcome = await executeTask(engine, 'write a c++ program', { quiet: true });
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.reasons.some((r) => r.includes('no checks were executed to verify against'))).toBe(true);
+    // The model's own self-reported prose is still surfaced as `result`
+    // (informational), but it must never be what drives `success`.
+    expect(outcome.result).toContain('Verification checks passed');
+  });
+
+  it('a task that compiles source code via a raw `shell` call IS recorded as a real check and can succeed', async () => {
+    // Companion regression test: the compiler must actually be *recognized*
+    // as a check. This also pins the exact live bug found while verifying
+    // the fix — BUILD_INVOCATION_PATTERN originally used a trailing `\b`
+    // (word boundary), which never matches immediately after `g++`/`c++`
+    // /`clang++` (neither the trailing '+' nor the following space is a
+    // \w character, so there is no word/non-word transition for \b to
+    // anchor on) — `(?=\s|$)` is required instead.
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-verified-'));
+    const engine = await buildTestEngine(projectRoot, [
+      '{"action":"plan","content":"write and compile main.cpp"}',
+      '{"action":"tool","tool":"write","input":{"path":"main.cpp","content":"int main(){return 0;}"}}',
+      '{"action":"tool","tool":"shell","input":{"command":"g++ -std=c++17 -o main main.cpp && ./main"}}',
+      '{"action":"done","summary":"compiled and ran successfully"}',
+    ]);
+
+    const outcome = await executeTask(engine, 'write and compile a c++ program', { quiet: true });
+
+    expect(outcome.success).toBe(true);
+    expect(outcome.reasons.some((r) => r.includes('all checks passed'))).toBe(true);
+
+    const record = engine.executions.require(outcome.executionId);
+    expect(record.checks).toHaveLength(1);
+    expect(record.checks[0]).toMatchObject({ name: 'build', ok: true });
   });
 
   it('denies a tool call whose target path escapes the project root, end to end', async () => {

@@ -27,7 +27,7 @@ export interface EvaluationOptions {
  * toolCalls and policyDecisions for inspection.
  */
 export function evaluateExecution(
-  record: Pick<ExecutionRecord, 'filesChanged' | 'checks' | 'errors'>,
+  record: Pick<ExecutionRecord, 'filesChanged' | 'checks' | 'errors' | 'events'>,
   options: EvaluationOptions = {},
 ): EvaluationResult {
   const reasons: string[] = [];
@@ -103,20 +103,31 @@ export function evaluateExecution(
           reasons.push('evidence verified: no errors recorded');
         }
       } else if (trimmed === 'exit_code_zero' || trimmed === 'checks_pass') {
-        // Zero checks having failed is not evidence that checks passed — it
-        // is the absence of evidence either way. Without this, a task that
-        // never ran anything ("no checks were executed", below) could still
-        // satisfy 'checks_pass'/'exit_code_zero' vacuously: an empty
-        // `checks` array has zero failures by definition.
         const failedChecks = checks.filter((c) => !c.ok);
-        if (checks.length === 0) {
-          success = false;
-          reasons.push('evidence missing: no checks were executed to verify against');
-        } else if (failedChecks.length > 0) {
-          success = false;
-          reasons.push(`evidence missing: checks failed: ${failedChecks.map((c) => c.name).join(', ')}`);
-        } else {
-          reasons.push('evidence verified: all checks passed');
+        
+        let hasFreshCheck = true;
+        if (record.events) {
+          const lastMutation = record.events.slice().reverse().find(e => e.type === 'files.changed');
+          if (lastMutation) {
+            const freshChecks = record.events.filter(e => e.type === 'check.completed' && new Date(e.timestamp) > new Date(lastMutation.timestamp));
+            if (freshChecks.length === 0 && checks.length > 0) {
+              success = false;
+              reasons.push('evidence missing: BUILD_EVIDENCE_STALE (files changed after last check)');
+              hasFreshCheck = false;
+            }
+          }
+        }
+        
+        if (hasFreshCheck) {
+          if (checks.length === 0) {
+            success = false;
+            reasons.push('evidence missing: no checks were executed to verify against');
+          } else if (failedChecks.length > 0) {
+            success = false;
+            reasons.push(`evidence missing: checks failed: ${failedChecks.map((c) => c.name).join(', ')}`);
+          } else {
+            reasons.push('evidence verified: all checks passed');
+          }
         }
       } else if (trimmed === 'mutation_required' || trimmed === 'requires_mutation') {
         if (record.filesChanged.length === 0) {
