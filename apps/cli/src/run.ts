@@ -49,6 +49,7 @@ function toGenerationEvent(event: WorkerExecutionEvent): GenerationEvent | undef
 }
 
 export interface ExecuteTaskOptions {
+  protectedFiles?: string[];
   type?: TaskType;
   model?: string;
   agent?: string;
@@ -98,6 +99,18 @@ const WRITE_TOOLS = new Set(['write', 'edit']);
 // let a real `g++ ... && ./a.out` compile slip through undetected.
 const BUILD_INVOCATION_PATTERN =
   /(^|&&|\|\||;)\s*(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)(?=\s|$)/;
+// Same visibility gap as BUILD_INVOCATION_PATTERN above, for test runs: a model that
+// verifies a fix by invoking the test suite through a raw `shell` call (e.g.
+// `node add.test.js`, `pytest`) rather than a dedicated `test` tool call was invisible
+// to evaluateExecution() — a real, passing test run left `checks: []`, so "checks_pass"
+// had nothing to bind evidence to and the fix was never actually verified.
+const TEST_RUNNER_PATTERN =
+  /(^|&&|\|\||;)\s*(pytest|jest|vitest|mocha|ava|go\s+test|cargo\s+test|mvn\s+test|gradle\s+test|dotnet\s+test|ctest|phpunit|rspec|npm\s+(?:run\s+)?test|yarn\s+test|pnpm\s+test)(?=\s|$)/;
+const TEST_FILE_INVOCATION_PATTERN =
+  /(^|&&|\|\||;)\s*(node|python3?|ruby|php)\s+\S*(\.test\.|_test\.|\.spec\.|test_)\S*/;
+function isTestInvocation(command: string): boolean {
+  return TEST_RUNNER_PATTERN.test(command) || TEST_FILE_INVOCATION_PATTERN.test(command);
+}
 // Requiring a passing check makes sense once real source was touched; a task
 // that only wrote plain text/config/docs has nothing to compile or test, and
 // the pre-existing lenient evaluation is still the right call for it.
@@ -463,6 +476,14 @@ export async function executeTask(
         // nothing had been verified at all.
         await engine.executions.recordCheck(executionId, {
           name: 'build',
+          command: input.command,
+          ok: result.ok,
+          output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
+          durationMs: result.durationMs,
+        });
+      } else if (name === 'shell' && typeof input.command === 'string' && isTestInvocation(input.command)) {
+        await engine.executions.recordCheck(executionId, {
+          name: 'test',
           command: input.command,
           ok: result.ok,
           output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),

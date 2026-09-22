@@ -1849,9 +1849,9 @@
         "verification-passed-revision"
       ],
       "associatedSuites": [
+        "packages/evaluation/tests/verificationIntegrity.test.ts",
         "packages/evaluation/tests/continuousVerification.test.ts",
-        "packages/evaluation/tests/expectedEvidence.test.ts",
-        "packages/evaluation/tests/evidenceBoundVerification.test.ts"
+        "packages/evaluation/tests/expectedEvidence.test.ts"
       ],
       "tags": [
         "verification",
@@ -1888,8 +1888,8 @@
         "staleness-rejection-reason"
       ],
       "associatedSuites": [
-        "packages/evaluation/tests/continuousVerification.test.ts",
-        "packages/evaluation/tests/revisionStaleness.test.ts"
+        "packages/evaluation/tests/verificationIntegrity.test.ts",
+        "packages/evaluation/tests/continuousVerification.test.ts"
       ],
       "tags": [
         "verification",
@@ -1925,8 +1925,8 @@
         "revision-delta:0-then-1"
       ],
       "associatedSuites": [
+        "packages/evaluation/tests/verificationIntegrity.test.ts",
         "packages/tools/tests/security.test.ts",
-        "packages/tools/tests/editProvenance.test.ts",
         "packages/evaluation/tests/expectedEvidence.test.ts"
       ],
       "tags": [
@@ -1963,6 +1963,7 @@
         "external-path-still-gated"
       ],
       "associatedSuites": [
+        "packages/evaluation/tests/verificationIntegrity.test.ts",
         "packages/core/tests/policyEngineShell.test.ts",
         "packages/core/tests/policyEngineHardening.test.ts"
       ],

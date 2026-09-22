@@ -108,7 +108,7 @@ export class ExecutionEngine {
       errors: [],
       workspaceState,
       evidence: [],
-      acceptanceContract: params.task.acceptanceContract ?? (params.task.type === 'coding' ? { taskType: 'coding', requiredEvidence: ['BUILD', 'TEST'] } : undefined),
+      acceptanceContract: params.task.acceptanceContract,
       mutationHistory: [],
       events: [
         {
@@ -146,6 +146,7 @@ export class ExecutionEngine {
       if (options.targetRevision !== currentRev) {
         this.pushEvent(record, 'completion.rejected', {
           targetRevision: options.targetRevision,
+          attemptedRevision: options.targetRevision,
           currentRevision: currentRev,
           reason: 'STALE_WORKSPACE_REVISION',
         });
@@ -224,10 +225,99 @@ export class ExecutionEngine {
 
   async recordCheck(executionId: string, check: CheckRunRecord): Promise<void> {
     const record = this.require(executionId);
-    const sanitized = { ...check, output: sanitizeUntrustedOutput(check.output) };
+    const sanitized = {
+      ...check,
+      output: check.output !== undefined ? sanitizeUntrustedOutput(check.output) : undefined,
+    };
     record.checks.push(sanitized);
     this.pushEvent(record, 'check.completed', sanitized);
+
+    const currentRev = record.workspaceState?.revision ?? 0;
+    const evidenceType: EvidenceType | undefined =
+      check.name === 'build' ? 'BUILD' :
+      check.name === 'test' ? 'TEST' :
+      check.name === 'lint' || check.name === 'typecheck' ? 'STATIC_CHECK' : undefined;
+
+    if (evidenceType) {
+      if (!record.evidence) record.evidence = [];
+      const ev: VerificationEvidence = {
+        id: nextId('evd'),
+        type: evidenceType,
+        executionId,
+        workspaceId: record.workspaceState?.workspaceId ?? executionId,
+        revision: currentRev,
+        command: check.command,
+        exitCode: check.ok ? 0 : 1,
+        durationMs: check.durationMs,
+        output: sanitized.output,
+        completedAt: new Date(),
+      };
+      record.evidence.push(ev);
+
+      if (evidenceType === 'BUILD') {
+        this.pushEvent(record, 'build.completed', {
+          workspaceRevision: currentRev,
+          exitCode: ev.exitCode,
+          command: check.command,
+          ok: check.ok,
+        });
+      } else if (evidenceType === 'TEST') {
+        this.pushEvent(record, 'test.completed', {
+          workspaceRevision: currentRev,
+          exitCode: ev.exitCode,
+          command: check.command,
+          ok: check.ok,
+        });
+      }
+    }
+
     await this.flush(record);
+  }
+
+  async recordEvidence(
+    executionId: string,
+    evidence: Omit<VerificationEvidence, 'id'> & { id?: string },
+  ): Promise<VerificationEvidence> {
+    const record = this.require(executionId);
+    if (!record.evidence) {
+      record.evidence = [];
+    }
+    const currentRev = record.workspaceState?.revision ?? 0;
+    const fullEvidence: VerificationEvidence = {
+      id: evidence.id ?? nextId('evd'),
+      type: evidence.type,
+      executionId,
+      workspaceId: evidence.workspaceId ?? record.workspaceState?.workspaceId ?? executionId,
+      revision: evidence.revision !== undefined ? evidence.revision : currentRev,
+      command: evidence.command,
+      exitCode: evidence.exitCode,
+      durationMs: evidence.durationMs,
+      startedAt: evidence.startedAt,
+      completedAt: evidence.completedAt ?? new Date(),
+      output: evidence.output ? sanitizeUntrustedOutput(evidence.output) : undefined,
+      artifactFingerprint: evidence.artifactFingerprint,
+      metadata: evidence.metadata,
+    };
+    record.evidence.push(fullEvidence);
+
+    if (fullEvidence.type === 'BUILD') {
+      this.pushEvent(record, 'build.completed', {
+        workspaceRevision: fullEvidence.revision,
+        exitCode: fullEvidence.exitCode,
+        command: fullEvidence.command,
+        ok: fullEvidence.exitCode === 0,
+      });
+    } else if (fullEvidence.type === 'TEST') {
+      this.pushEvent(record, 'test.completed', {
+        workspaceRevision: fullEvidence.revision,
+        exitCode: fullEvidence.exitCode,
+        command: fullEvidence.command,
+        ok: fullEvidence.exitCode === 0,
+      });
+    }
+
+    await this.flush(record);
+    return fullEvidence;
   }
 
   async recordEvent(executionId: string, type: ExecutionEventType, data?: unknown): Promise<void> {
@@ -253,58 +343,109 @@ export class ExecutionEngine {
   }
 
   async recordFilesChanged(executionId: string, files: string[]): Promise<void> {
+    if (!files || files.length === 0) return;
     const record = this.require(executionId);
+    if (!record.workspaceState) {
+      record.workspaceState = {
+        workspaceId: executionId,
+        revision: 0,
+        updatedAt: new Date(),
+      };
+    }
+    if (!record.mutationHistory) {
+      record.mutationHistory = [];
+    }
+
+    record.workspaceState.revision += 1;
+    record.workspaceState.updatedAt = new Date();
+    const currentRev = record.workspaceState.revision;
+
     for (const file of files) {
       if (!record.filesChanged.includes(file)) {
         record.filesChanged.push(file);
-        this.pushEvent(record, "files.changed", { file });
-        
-        // Register artifact provenance if provenance manager is available
-        if (this.provenanceManager && !file.startsWith('node_modules') && !file.startsWith('.git')) {
-          try {
-            const content = await this.readFile(file);
-            const hash = await computeContentHash(content);
-            const size = Buffer.byteLength(content, 'utf8');
-            
-            const artifactParams: CreateArtifactParams = {
-              type: file.endsWith('.ts') || file.endsWith('.js') ? 'generated_code' : 'source',
-              name: file.split('/').pop() ?? file,
-              location: file,
-              contentHash: hash,
-              sizeBytes: size,
-              workspace: this.workspace,
-              executionId: executionId,
-              agentId: record.execution.agentId || '',
-              modelId: record.execution.modelId,
-              runtimeId: record.execution.runtimeId,
-              computerId: record.execution.computerId,
-              workerId: record.execution.workerId,
-              toolsUsed: record.toolCalls.map(t => t.tool),
-              mcpServersUsed: [],
-              connectorsUsed: [],
-              policyDecisions: record.policyDecisions.map(d => d.rule),
-              inputArtifactIds: [],
-              parentArtifactIds: [],
-              evaluations: record.checks.map(c => c.name),
-              reviewers: [],
-              gitMetadata: {
-                repository: this.getGitRepo(file),
-                branch: await this.getGitBranch(file),
-                commit: await this.getGitCommit(file),
-                dirty: false,
-                changedFiles: [file],
-                diffHash: ''
-              }
-            };
-            
-            await this.provenanceManager.registerArtifact(artifactParams);
-          } catch {
-            // Ignore provenance registration errors
-          }
+      }
+      record.mutationHistory.push({
+        path: file,
+        revision: currentRev,
+        at: new Date(),
+      });
+      this.pushEvent(record, 'file.changed', { file, workspaceRevision: currentRev });
+    }
+
+    this.pushEvent(record, 'workspace.revision_changed', {
+      workspaceRevision: currentRev,
+      files,
+    });
+
+    if (record.evidence && record.evidence.some((e) => e.revision < currentRev)) {
+      this.pushEvent(record, 'evidence.stale', {
+        workspaceRevision: currentRev,
+        staleEvidenceCount: record.evidence.filter((e) => e.revision < currentRev).length,
+      });
+    }
+
+    for (const file of files) {
+      // Register artifact provenance if provenance manager is available
+      if (this.provenanceManager && !file.startsWith('node_modules') && !file.startsWith('.git')) {
+        try {
+          const content = await this.readFile(file);
+          const hash = await computeContentHash(content);
+          const size = Buffer.byteLength(content, 'utf8');
+          
+          const artifactParams: CreateArtifactParams = {
+            type: file.endsWith('.ts') || file.endsWith('.js') ? 'generated_code' : 'source',
+            name: file.split('/').pop() ?? file,
+            location: file,
+            contentHash: hash,
+            sizeBytes: size,
+            workspace: this.workspace,
+            executionId: executionId,
+            agentId: record.execution.agentId || '',
+            modelId: record.execution.modelId,
+            runtimeId: record.execution.runtimeId,
+            computerId: record.execution.computerId,
+            workerId: record.execution.workerId,
+            toolsUsed: record.toolCalls.map(t => t.tool),
+            mcpServersUsed: [],
+            connectorsUsed: [],
+            policyDecisions: record.policyDecisions.map(d => d.rule),
+            inputArtifactIds: [],
+            parentArtifactIds: [],
+            evaluations: record.checks.map(c => c.name),
+            reviewers: [],
+            gitMetadata: {
+              repository: this.getGitRepo(file),
+              branch: await this.getGitBranch(file),
+              commit: await this.getGitCommit(file),
+              dirty: false,
+              changedFiles: [file],
+              diffHash: ''
+            }
+          };
+          
+          await this.provenanceManager.registerArtifact(artifactParams);
+        } catch {
+          // Ignore provenance registration errors
         }
       }
     }
     await this.flush(record);
+  }
+
+  getFilesChangedSince(executionId: string, revision: number): string[] {
+    const record = this.require(executionId);
+    if (!record.mutationHistory) return [];
+    const changed = new Set<string>();
+    for (const entry of record.mutationHistory) {
+      if (entry.revision > revision) {
+        changed.add(entry.path);
+      }
+    }
+    return Array.from(changed);
+  }
+
+  getWorkspaceRevision(executionId: string): number {
+    return this.require(executionId).workspaceState?.revision ?? 0;
   }
 
   async setResult(executionId: string, result: string): Promise<void> {

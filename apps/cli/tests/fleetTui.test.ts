@@ -231,7 +231,7 @@ function useSuccessfulFakeModel(engine: RookEngine): void {
       step === 1
         ? '{"action":"plan","content":"inspecting codebase and implementing task"}'
         : step === 2
-          ? '{"action":"tool","tool":"write","input":{"path":"output.txt","content":"result"}}'
+          ? `{"action":"tool","tool":"write","input":{"path":"output.txt","content":"result ${call}"}}`
           : '{"action":"done","summary":"all checks passed and task verified"}';
     yield { type: 'token' as const, content: reply };
     yield { type: 'completed' as const, content: reply, usage: { inputTokens: 10, outputTokens: 15, totalTokens: 25 } };

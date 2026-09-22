@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { parse as parseShell } from 'shell-quote';
 import type { ParseEntry } from 'shell-quote';
 import type {
@@ -67,6 +68,18 @@ const OUTPUT_FLAGS: Record<string, string[]> = {
 // track "this task just compiled this exact binary" so a later attempt to run it can be
 // auto-approved too — see trackCompiledOutput/isTrackedCompiledOutput.
 const NATIVE_COMPILER_COMMANDS = new Set(['gcc', 'g++', 'cc', 'c++', 'clang', 'clang++', 'rustc']);
+
+// Narrow, principled counterpart to BUILD_TOOLS/classifyBuildWorkspace below: an
+// autonomous repair task must be able to verify its own fix the same way it's already
+// trusted to compile and run its own build output — by running the project's test file.
+// Unlike `node -e "..."` or `npm test` (which can execute arbitrary inline code or
+// package.json lifecycle scripts), classifyTestWorkspace only ever allows
+// `<interpreter> <single existing test-named file>`: no eval/inline-code flags, no extra
+// arguments, the file must already exist, resolve inside the project root, and not be a
+// protected path. Anything outside that exact shape still falls through to the normal
+// ASK_SHELL_COMMANDS handling for interpreters.
+const TEST_FILE_INTERPRETERS = new Set(['node', 'python', 'python3', 'ruby', 'php']);
+const TEST_FILE_NAME_PATTERN = /(\.(test|spec)\.[^./]+$)|(_test\.[^./]+$)|(^test_[^./]+\.[^./]+$)/i;
 
 // Per-execution memory of binaries an already-approved compile step just produced, so
 // running one to verify it works isn't a second, unrelated "arbitrary command" decision
@@ -320,6 +333,32 @@ export class PolicyEngine {
     return this.compiledOutputsByExecution.get(executionId)?.has(absolutePath) ?? false;
   }
 
+  // Mirrors compiledOutputsByExecution above, for the opposite question: has this
+  // execution itself written to this path? classifyTestWorkspace uses it to refuse
+  // auto-approving `node some.test.js` when "some.test.js" is a file the model just
+  // wrote or edited in this same execution — otherwise a naming convention alone would
+  // let arbitrary model-authored code launder itself into an auto-approved run.
+  private readonly writtenPathsByExecution = new Map<string, Set<string>>();
+
+  private trackWrittenPath(executionId: string | undefined, absolutePath: string): void {
+    if (!executionId) return;
+    let set = this.writtenPathsByExecution.get(executionId);
+    if (!set) {
+      if (this.writtenPathsByExecution.size >= MAX_TRACKED_EXECUTIONS) {
+        const oldest = this.writtenPathsByExecution.keys().next().value;
+        if (oldest !== undefined) this.writtenPathsByExecution.delete(oldest);
+      }
+      set = new Set();
+      this.writtenPathsByExecution.set(executionId, set);
+    }
+    set.add(absolutePath);
+  }
+
+  private wasWrittenThisExecution(executionId: string | undefined, absolutePath: string): boolean {
+    if (!executionId) return false;
+    return this.writtenPathsByExecution.get(executionId)?.has(absolutePath) ?? false;
+  }
+
   private buildRules(): PolicyRule[] {
     const rules: PolicyRule[] = [
       { id: 'unknown-tool', description: 'Tools that are not registered are denied', effect: 'deny' },
@@ -336,6 +375,9 @@ export class PolicyEngine {
       { id: 'shell-compiled-binary-allow', description: 'Binaries compiled by this task via approved steps are allowed', effect: 'allow' },
       { id: 'shell-workspace-artifact-allow', description: 'Executable artifacts inside the isolated project workspace are allowed', effect: 'allow' },
       { id: 'shell-workspace-artifact-ask', description: 'Executable artifacts in protected project paths require approval', effect: 'ask' },
+      { id: 'shell-build-workspace-allow', description: 'Workspace-scoped build commands confined to projectRoot are allowed', effect: 'allow' },
+      { id: 'shell-build-workspace-install-ask', description: 'Build install targets may mutate system directories outside the workspace and require approval', effect: 'ask' },
+      { id: 'shell-test-workspace-allow', description: 'Running an existing, project-local test file via its interpreter (no inline-eval flags, no extra arguments) is allowed', effect: 'allow' },
       { id: 'project-checks-allow', description: 'test / lint / typecheck / build run inside the project', effect: 'allow' },
     ];
     return rules;
@@ -586,6 +628,7 @@ export class PolicyEngine {
           if (protectedReason) {
             return { decision: 'ask', rule: 'filesystem-protected-ask', reasons: [`write to protected path '${rawPath}': ${protectedReason}`] };
           }
+          this.trackWrittenPath(request.executionId, absolute);
         }
         return {
           decision: 'allow',
@@ -833,6 +876,18 @@ export class PolicyEngine {
       }
     }
 
+    const buildDecision = this.classifyBuildWorkspace(name, args, projectRoot, executionId);
+    if (buildDecision) {
+      decisions.push(buildDecision);
+      return decisions;
+    }
+
+    const testDecision = this.classifyTestWorkspace(name, args, projectRoot, executionId);
+    if (testDecision) {
+      decisions.push(testDecision);
+      return decisions;
+    }
+
     decisions.push(this.classifyCommandName(name));
     if (SAFE_SHELL_COMMANDS.has(name)) {
       decisions.push(...this.classifySafeCommandArgs(name, args, projectRoot, executionId));
@@ -845,6 +900,299 @@ export class PolicyEngine {
     }
 
     return decisions;
+  }
+
+  private classifyTestWorkspace(
+    name: string,
+    args: string[],
+    projectRoot: string,
+    executionId?: string,
+  ): PolicyDecision | null {
+    if (!TEST_FILE_INTERPRETERS.has(name)) return null;
+    if (args.length !== 1) return null;
+    const target = args[0];
+    if (!target || target.startsWith('-')) return null;
+    if (target.includes('$') || target.startsWith('~') || target.split('/').includes('..')) return null;
+    if (!TEST_FILE_NAME_PATTERN.test(target)) return null;
+
+    const absolute = path.resolve(projectRoot, target);
+    if (!isInside(projectRoot, absolute)) return null;
+    if (protectedPathReason(projectRoot, absolute)) return null;
+    if (!existsSync(absolute)) return null;
+    // A file matching the test-naming convention that this same execution just wrote or
+    // edited is not a pre-existing test to trust — running it would launder arbitrary
+    // model-authored code through an auto-approved interpreter call.
+    if (this.wasWrittenThisExecution(executionId, absolute)) return null;
+
+    return {
+      decision: 'allow',
+      rule: 'shell-test-workspace-allow',
+      reasons: [`'${name} ${target}' runs an existing test file confined to the project root`],
+    };
+  }
+
+  private classifyBuildWorkspace(
+    name: string,
+    args: string[],
+    projectRoot: string,
+    executionId?: string,
+  ): PolicyDecision | null {
+    const BUILD_TOOLS = new Set([
+      'make', 'cmake', 'ninja', 'cargo', 'go',
+      'g++', 'gcc', 'clang', 'clang++', 'cc', 'c++', 'rustc', 'swiftc',
+    ]);
+
+    if (!BUILD_TOOLS.has(name)) return null;
+
+    const checkPathInside = (target: string, desc: string): PolicyDecision | null => {
+      if (!target || target === '/dev/null') return null;
+      if (target.includes('$') || target.startsWith('~')) {
+        return {
+          decision: 'ask',
+          rule: 'shell-unknown-ask',
+          reasons: [`${desc} '${target}' contains shell expansions and cannot be verified inside workspace`],
+        };
+      }
+      const absolute = path.resolve(projectRoot, target);
+      if (!isInside(projectRoot, absolute)) {
+        return {
+          decision: 'deny',
+          rule: 'filesystem-outside-deny',
+          reasons: [`${desc} '${target}' is outside project root '${projectRoot}'`],
+        };
+      }
+      const protectedReason = protectedPathReason(projectRoot, absolute);
+      if (protectedReason) {
+        return {
+          decision: 'ask',
+          rule: 'filesystem-protected-ask',
+          reasons: [`${desc} '${target}' writes to a protected path: ${protectedReason}`],
+        };
+      }
+      return null;
+    };
+
+    if (name === 'make') {
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '-C' || arg === '--directory') {
+          const dir = args[i + 1] ?? '';
+          i++;
+          const check = checkPathInside(dir, 'make directory argument');
+          if (check) return check;
+        } else if (arg.startsWith('-C') && arg.length > 2) {
+          const check = checkPathInside(arg.slice(2), 'make directory argument');
+          if (check) return check;
+        } else if (arg.startsWith('--directory=')) {
+          const check = checkPathInside(arg.slice('--directory='.length), 'make directory argument');
+          if (check) return check;
+        } else if (arg === '-f' || arg === '--file') {
+          const file = args[i + 1] ?? '';
+          i++;
+          const check = checkPathInside(file, 'makefile path');
+          if (check) return check;
+        } else if (arg.startsWith('--file=')) {
+          const check = checkPathInside(arg.slice('--file='.length), 'makefile path');
+          if (check) return check;
+        } else if (/^(DESTDIR|PREFIX)=/i.test(arg)) {
+          const val = arg.split('=')[1];
+          const check = checkPathInside(val, `make variable '${arg}'`);
+          if (check) return check;
+        } else if (!arg.startsWith('-') && !arg.includes('=')) {
+          const lower = arg.toLowerCase();
+          if (lower === 'install' || lower.startsWith('install-') || lower === 'uninstall') {
+            return {
+              decision: 'ask',
+              rule: 'shell-build-workspace-install-ask',
+              reasons: [`'make ${arg}' may mutate system directories outside the workspace and requires approval`],
+            };
+          }
+          if (arg.startsWith('/') || arg.startsWith('~') || arg.split('/').includes('..')) {
+            const check = checkPathInside(arg, 'target path');
+            if (check) return check;
+          }
+        }
+      }
+      return {
+        decision: 'allow',
+        rule: 'shell-build-workspace-allow',
+        reasons: ["'make' is a workspace-local build command confined to the project root"],
+      };
+    }
+
+    if (name === 'cmake') {
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '-B' || arg === '-S' || arg === '--build' || arg === '--install') {
+          const target = args[i + 1] ?? '';
+          i++;
+          if (arg === '--install') {
+            return {
+              decision: 'ask',
+              rule: 'shell-build-workspace-install-ask',
+              reasons: [`'cmake --install' may mutate system directories outside the workspace and requires approval`],
+            };
+          }
+          const check = checkPathInside(target, `cmake ${arg}`);
+          if (check) return check;
+        } else if (arg.startsWith('-B') && arg.length > 2) {
+          const check = checkPathInside(arg.slice(2), 'cmake -B');
+          if (check) return check;
+        } else if (arg.startsWith('--build=') || arg.startsWith('--install=')) {
+          if (arg.startsWith('--install=')) {
+            return {
+              decision: 'ask',
+              rule: 'shell-build-workspace-install-ask',
+              reasons: [`'cmake --install' may mutate system directories outside the workspace and requires approval`],
+            };
+          }
+          const check = checkPathInside(arg.split('=')[1], 'cmake build dir');
+          if (check) return check;
+        } else if (arg === '--target' || arg.startsWith('--target=')) {
+          const target = arg.startsWith('--target=') ? arg.slice(9) : (args[i + 1] ?? '');
+          if (target.toLowerCase() === 'install') {
+            return {
+              decision: 'ask',
+              rule: 'shell-build-workspace-install-ask',
+              reasons: [`'cmake --target install' may mutate system directories outside the workspace and requires approval`],
+            };
+          }
+        } else if (!arg.startsWith('-') && !arg.includes('=')) {
+          if (arg.startsWith('/') || arg.startsWith('~') || arg.split('/').includes('..')) {
+            const check = checkPathInside(arg, 'cmake path argument');
+            if (check) return check;
+          }
+        }
+      }
+      return {
+        decision: 'allow',
+        rule: 'shell-build-workspace-allow',
+        reasons: ["'cmake' is a workspace-local build command confined to the project root"],
+      };
+    }
+
+    if (name === 'ninja') {
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '-C') {
+          const dir = args[i + 1] ?? '';
+          i++;
+          const check = checkPathInside(dir, 'ninja directory');
+          if (check) return check;
+        } else if (!arg.startsWith('-')) {
+          if (arg.toLowerCase() === 'install') {
+            return {
+              decision: 'ask',
+              rule: 'shell-build-workspace-install-ask',
+              reasons: [`'ninja install' may mutate system directories outside the workspace and requires approval`],
+            };
+          }
+          if (arg.startsWith('/') || arg.startsWith('~') || arg.split('/').includes('..')) {
+            const check = checkPathInside(arg, 'ninja target path');
+            if (check) return check;
+          }
+        }
+      }
+      return {
+        decision: 'allow',
+        rule: 'shell-build-workspace-allow',
+        reasons: ["'ninja' is a workspace-local build command confined to the project root"],
+      };
+    }
+
+    if (name === 'cargo') {
+      const subcommand = args.find((a) => !a.startsWith('-')) ?? '';
+      if (subcommand === 'install') {
+        return {
+          decision: 'ask',
+          rule: 'shell-build-workspace-install-ask',
+          reasons: ["'cargo install' installs binaries outside workspace and requires approval"],
+        };
+      }
+      if (['build', 'check', 'test', 'run', 'clippy', 'bench'].includes(subcommand)) {
+        for (let i = 0; i < args.length; i++) {
+          const arg = args[i];
+          if (arg === '--target-dir' || arg === '--manifest-path') {
+            const target = args[i + 1] ?? '';
+            i++;
+            const check = checkPathInside(target, `cargo ${arg}`);
+            if (check) return check;
+          } else if (arg.startsWith('--target-dir=') || arg.startsWith('--manifest-path=')) {
+            const check = checkPathInside(arg.split('=')[1], `cargo ${arg}`);
+            if (check) return check;
+          }
+        }
+        return {
+          decision: 'allow',
+          rule: 'shell-build-workspace-allow',
+          reasons: [`'cargo ${subcommand}' is a workspace-local build command confined to the project root`],
+        };
+      }
+    }
+
+    if (name === 'go') {
+      const subcommand = args.find((a) => !a.startsWith('-')) ?? '';
+      if (subcommand === 'install') {
+        return {
+          decision: 'ask',
+          rule: 'shell-build-workspace-install-ask',
+          reasons: ["'go install' installs binaries outside workspace and requires approval"],
+        };
+      }
+      if (['build', 'test', 'vet', 'run'].includes(subcommand)) {
+        for (let i = 0; i < args.length; i++) {
+          const arg = args[i];
+          if (arg === '-o') {
+            const target = args[i + 1] ?? '';
+            i++;
+            const check = checkPathInside(target, 'go -o output target');
+            if (check) return check;
+            this.trackCompiledOutput(executionId, path.resolve(projectRoot, target));
+          }
+        }
+        return {
+          decision: 'allow',
+          rule: 'shell-build-workspace-allow',
+          reasons: [`'go ${subcommand}' is a workspace-local build command confined to the project root`],
+        };
+      }
+    }
+
+
+    if (['g++', 'gcc', 'clang', 'clang++', 'cc', 'c++', 'rustc', 'swiftc'].includes(name)) {
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '-o' || arg === '--out-dir') {
+          const target = args[i + 1] ?? '';
+          i++;
+          const check = checkPathInside(target, `${name} output target`);
+          if (check) return check;
+          this.trackCompiledOutput(executionId, path.resolve(projectRoot, target));
+        } else if (arg.startsWith('-o') && arg.length > 2) {
+          const target = arg.slice(2);
+          const check = checkPathInside(target, `${name} output target`);
+          if (check) return check;
+          this.trackCompiledOutput(executionId, path.resolve(projectRoot, target));
+        } else if (arg.startsWith('--out-dir=')) {
+          const target = arg.slice('--out-dir='.length);
+          const check = checkPathInside(target, `${name} output directory`);
+          if (check) return check;
+          this.trackCompiledOutput(executionId, path.resolve(projectRoot, target));
+        } else if (!arg.startsWith('-') && !arg.includes('=')) {
+          if (arg.startsWith('/') || arg.startsWith('~') || arg.split('/').includes('..')) {
+            const check = checkPathInside(arg, `${name} source file`);
+            if (check) return check;
+          }
+        }
+      }
+      return {
+        decision: 'allow',
+        rule: 'shell-build-workspace-allow',
+        reasons: [`'${name}' is a workspace-local compile command confined to the project root`],
+      };
+    }
+
+    return null;
   }
 
   /**

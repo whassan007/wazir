@@ -190,10 +190,12 @@ describe('PolicyEngine auto-allows compilers with contained output (unlike inter
     expect(classify(engine, 'bash -c ./real', 'exec-C').decision).toBe('ask');
   });
 
-  it('leaves interpreters and build-script runners exactly as ask-gated as before', () => {
-    expect(classify(engine, 'make').decision).toBe('ask');
-    expect(classify(engine, 'cmake .').decision).toBe('ask');
-    expect(classify(engine, 'cargo build').decision).toBe('ask');
+  it('leaves interpreters ask-gated while workspace-scoped build commands are allowed', () => {
+    expect(classify(engine, 'make').decision).toBe('allow');
+    expect(classify(engine, 'cmake .').decision).toBe('allow');
+    expect(classify(engine, 'cargo build').decision).toBe('allow');
+    expect(classify(engine, 'make install').decision).toBe('ask');
+    expect(classify(engine, 'make -C /etc').decision).toBe('deny');
     expect(classify(engine, 'python3 hello.py').decision).toBe('ask');
     expect(classify(engine, 'node hello.js').decision).toBe('ask');
   });

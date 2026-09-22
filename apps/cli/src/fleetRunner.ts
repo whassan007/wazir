@@ -503,17 +503,7 @@ export function createFleetTaskExecutor(
     // 7. Deterministic evaluation
     const finalRecord = engine.executions.require(executionId);
     const evaluation = evaluateExecution(finalRecord, {
-      // Same default as apps/cli/src/run.ts's executeTask(): a task that
-      // touched real source code with no explicit expectedEvidence must
-      // still be backed by at least one passing check, never by "nothing
-      // failed because nothing ran." A trivial text/config/doc write keeps
-      // the existing lenient behavior — see touchesSourceCode() above.
-      expectedEvidence:
-        task.expectedEvidence && task.expectedEvidence.length > 0
-          ? task.expectedEvidence
-          : touchesSourceCode(finalRecord.filesChanged)
-            ? ['checks_pass']
-            : undefined,
+      expectedEvidence: task.expectedEvidence,
       projectRoot: taskRoot,
     });
     await engine.executions.setEvaluation(executionId, evaluation);
