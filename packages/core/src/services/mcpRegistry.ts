@@ -254,6 +254,11 @@ export class MCPRegistry extends EventEmitter {
   }
 }
 
+/** Close process-owned transports at the command boundary. */
+export async function closeMCPRegistries(): Promise<void> {
+  await Promise.allSettled([...liveRegistries].map(registry => registry.close()));
+}
+
 export class MCPToolAdapter implements Tool {
   readonly descriptor: Tool['descriptor'];
   readonly risk: MCPRisk;

@@ -90,7 +90,9 @@ export async function importMCPConfig(registry: MCPRegistry, raw: any): Promise<
   const servers = raw.mcpServers ?? raw.mcp?.servers ?? raw.servers ?? raw.mcp_servers;
   if (!servers || typeof servers !== 'object') throw new Error('Expected mcpServers, servers, mcp.servers, or mcp_servers.');
   const entries: Array<[string, any]> = Array.isArray(servers) ? servers.map(s => [s.id, s]) : Object.entries(servers);
-  for (const [id, value] of entries) {
+  for (const [rawId, value] of entries) {
+    const id = String(rawId ?? value?.id ?? '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+    if (!id) throw new Error('Imported MCP server has no valid ID.');
     if (registry.list().some(s => s.definition.id === id)) throw new Error('Duplicate MCP server ID: ' + id);
     const server: MCPServerDefinition = {
       id, name: value.name ?? id, enabled: value.enabled ?? true, transport: value.transport ?? (value.command ? 'stdio' : 'http'),

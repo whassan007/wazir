@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { registerMCPCommands } from './mcp.js';
+import { closeMCPRegistries } from '@wazir/core';
 
 const program = new Command();
 
@@ -12,6 +13,7 @@ program
   .version('0.1.39');
 
 registerMCPCommands(program);
+program.hook('postAction', async () => { await closeMCPRegistries(); });
 
 // computers command
 const computersCmd = new Command()
@@ -849,4 +851,3 @@ program
   });
 
 program.parse();
-

@@ -38,5 +38,6 @@ export type {
 } from './modelLifecycleService.js';
 
 
-export * from './mcpRegistry.js';
+export { MCPRegistry, MCPToolAdapter, classifyMCPTool, mcpToolName, validateMCPDefinition, closeMCPRegistries, redactMCPArguments } from './mcpRegistry.js';
+export type { MCPRegistryOptions, MCPConnection, MCPToolRegistry } from './mcpRegistry.js';
 export * from './mcpAuth.js';
