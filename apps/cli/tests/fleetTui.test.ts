@@ -1983,4 +1983,58 @@ describe('FleetTui — protocol/validation visibility and raw response viewer', 
 
     harness.stop();
   });
+
+  it('renders an x glyph and auth_required status for unconfigured MCP servers', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    (engine as any).mcp = {
+      list: () => [
+        {
+          definition: { id: 'github', name: 'GitHub', transport: 'stdio' },
+          state: 'AUTH_REQUIRED',
+          tools: [],
+          resources: [],
+          prompts: [],
+        },
+        {
+          definition: { id: 'nvidia-runai', name: 'NVIDIA Run:ai', transport: 'stdio' },
+          state: 'AUTH_REQUIRED',
+          tools: [],
+          resources: [],
+          prompts: [],
+        },
+      ],
+      get: (id: string) => ({
+        definition: { id, name: id === 'github' ? 'GitHub' : 'NVIDIA Run:ai', transport: 'stdio' },
+        state: 'AUTH_REQUIRED',
+        tools: [],
+        resources: [],
+        prompts: [],
+      }),
+    };
+
+    const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+    await harness.start();
+
+    const items = harness.tui.getFlatNavItems();
+    const gh = items.find((i) => i.category === 'MCP' && i.id === 'github');
+    const nv = items.find((i) => i.category === 'MCP' && i.id === 'nvidia-runai');
+
+    expect(gh).toBeDefined();
+    expect(gh?.status).toBe('auth_required');
+    expect(gh?.label).toContain('GitHub auth_required');
+
+    expect(nv).toBeDefined();
+    expect(nv?.status).toBe('auth_required');
+    expect(nv?.label).toContain('NVIDIA Run:ai auth_required');
+
+    // In the rendered screen buffer, verify 'x' is used instead of 'o'
+    const screen = harness.getScreenBuffer();
+    expect(screen).toMatch(/x\s+GitHub auth_required/);
+    expect(screen).toMatch(/x\s+NVIDIA Run:ai/);
+    expect(screen).not.toMatch(/o\s+GitHub auth_required/);
+    expect(screen).not.toMatch(/o\s+NVIDIA Run:ai/);
+
+    harness.stop();
+  });
 });

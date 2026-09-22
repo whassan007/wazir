@@ -55,10 +55,11 @@ export function validateMCPDefinition(server: MCPServerDefinition): void {
   for (const effect of Object.values(server.policy ?? {})) if (!['allow', 'ask', 'deny'].includes(effect)) throw new MCPError('MCP_PROTOCOL_FAILED', server.id);
   for (const n of [...Object.values(server.timeout ?? {}), ...Object.values(server.reconnect ?? {})]) if (!Number.isFinite(n) || n < 0 || n > 300_000) throw new MCPError('MCP_PROTOCOL_FAILED', server.id);
 }
-function normalize(error: unknown, id: string, tool = false): MCPError {
+function normalize(error: unknown, id: string, tool = false, signal?: AbortSignal): MCPError {
   if (error instanceof MCPError) return error;
+  if (signal?.aborted) return new MCPError('MCP_CANCELLED', id);
   const e = error as any;
-  if (e?.name === 'AbortError') return new MCPError('MCP_CANCELLED', id);
+  if (e?.name === 'AbortError' || e?.code === 'ABORT_ERR' || /abort/i.test(e?.message ?? '')) return new MCPError('MCP_CANCELLED', id);
   if (e?.name === 'UnauthorizedError' || e?.code === 401 || e?.status === 401) return new MCPError('MCP_AUTH_REQUIRED', id);
   if (/timeout|timed out/i.test(e?.message ?? '')) return new MCPError(tool ? 'MCP_TOOL_TIMEOUT' : 'MCP_CONNECTION_FAILED', id);
   return new MCPError(tool ? 'MCP_TOOL_EXECUTION_FAILED' : 'MCP_CONNECTION_FAILED', id);
@@ -281,7 +282,7 @@ export class MCPToolAdapter implements Tool {
       await r.event('MCP_TOOL_CALL_COMPLETED', this.serverId, { tool: this.descriptor.name, executionId: ctx.executionId, agentId: ctx.agentId, decision, approvalIdentity, duration: Date.now() - started, status: 'success' });
       return { ok: true, output: JSON.stringify({ trust: 'untrusted', source: metadata, content: JSON.parse(r.auth.redact(result)) }), durationMs: Date.now() - started, metadata };
     } catch (error) {
-      const e = normalize(error, this.serverId, true);
+      const e = normalize(error, this.serverId, true, ctx.signal);
       if (['MCP_TOOL_TIMEOUT', 'MCP_TOOL_EXECUTION_FAILED', 'MCP_CONNECTION_FAILED'].includes(e.code)) r.failure(s);
       await r.event('MCP_TOOL_CALL_FAILED', this.serverId, { tool: this.descriptor.name, executionId: ctx.executionId, agentId: ctx.agentId, decision, approvalIdentity, duration: Date.now() - started, status: e.code });
       return { ok: false, output: '', error: e.code, durationMs: Date.now() - started, metadata };

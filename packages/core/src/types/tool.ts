@@ -23,12 +23,24 @@ export interface ToolDescriptor {
   environment: ToolEnvironment;
 }
 
+export interface FileMutationResult {
+  path: string;
+  attempted: boolean;
+  succeeded: boolean;
+  existedBefore: boolean;
+  existsAfter: boolean;
+  beforeHash?: string;
+  afterHash?: string;
+  changed: boolean;
+}
+
 export interface ToolResult {
   ok: boolean;
   output: string;
   error?: string;
   durationMs: number;
   metadata?: Record<string, unknown>;
+  fileMutations?: FileMutationResult[];
 }
 
 export interface ToolExecutionContext {

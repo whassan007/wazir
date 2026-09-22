@@ -166,7 +166,7 @@ export interface NavItem {
   category: NavCategory;
   id: string;
   label: string;
-  status: 'running' | 'completed' | 'idle' | 'failed';
+  status: 'running' | 'completed' | 'idle' | 'failed' | 'auth_required';
   routing?: {
     agentId?: string;
     modelId?: string;
@@ -240,6 +240,7 @@ export function isScreenFragment(text: string): boolean {
     'AGENTS',
     'COMPUTERS',
     'RUNTIMES',
+    'MCP',
     'MODELS',
     'WORKERS',
     'POLICY APPROVAL QUEUE',
@@ -2721,9 +2722,21 @@ export class FleetTui {
     }
 
     for (const server of this.engine.mcp?.list() ?? []) {
-      items.push({ category: 'MCP', id: server.definition.id,
+      items.push({
+        category: 'MCP',
+        id: server.definition.id,
         label: `${server.definition.name} ${server.state === 'CONNECTED' ? server.tools.length + ' tools' : server.state.toLowerCase()}`,
-        status: server.state === 'CONNECTED' ? 'completed' : server.state === 'FAILED' ? 'failed' : 'idle' });
+        status:
+          server.state === 'CONNECTED'
+            ? 'completed'
+            : server.state === 'CONNECTING'
+              ? 'running'
+              : server.state === 'AUTH_REQUIRED'
+                ? 'auth_required'
+                : server.state === 'FAILED'
+                  ? 'failed'
+                  : 'idle',
+      });
     }
     return items;
   }
@@ -2987,7 +3000,7 @@ export class FleetTui {
           let glyph = color.yellow('o');
           if (item.status === 'running') glyph = color.cyan(getCategorySpinnerFrame(item.category, this.spinnerTick));
           else if (item.status === 'completed') glyph = color.green('+');
-          else if (item.status === 'failed') glyph = color.red('x');
+          else if (item.status === 'failed' || item.status === 'auth_required') glyph = color.red('x');
 
           const maxLabelLen = Math.max(6, width - 8);
           const labelStr = item.label || item.id || 'item';
@@ -3061,7 +3074,13 @@ export class FleetTui {
       routingLine = `  ${color.bold('Routing:')} Computer [${color.cyan(selected.id)}] ${color.gray('-')} OS [${color.cyan(comp?.os?.platform ?? 'linux')}] ${color.gray('-')} Cores [${color.cyan(String(comp?.hardware?.cpuCores ?? 8))}]`;
     } else if (selected.category === 'MCP') {
       const server = this.engine.mcp?.get(selected.id);
-      routingLine = `  MCP ${selected.id}: ${server?.state ?? 'unavailable'} (${server?.definition.transport ?? '-'})`;
+      const stateStr =
+        server?.state === 'AUTH_REQUIRED'
+          ? color.red('AUTH_REQUIRED')
+          : server?.state === 'CONNECTED'
+            ? color.green('CONNECTED')
+            : (server?.state ?? 'unavailable');
+      routingLine = `  MCP ${selected.id}: ${stateStr} (${server?.definition.transport ?? '-'})`;
     } else if (selected.category === 'RUNTIMES') {
       const runtime = this.engine.runtimes.get(selected.id);
       routingLine = `  ${color.bold('Routing:')} Runtime [${color.cyan(selected.id)}] ${color.gray('-')} Type [${color.cyan(runtime?.type ?? 'other')}] ${color.gray('-')} Computer [${color.cyan(runtime?.computerId ?? 'local')}]`;
@@ -3283,7 +3302,16 @@ export class FleetTui {
     } else if (selected.category === 'MCP') {
       const server = this.engine.mcp?.get(selected.id);
       if (server) {
-        for (const text of [`MCP: ${server.definition.name}`, `Status: ${server.state}`, `Tools: ${server.tools.length}  Resources: ${server.resources.length}  Prompts: ${server.prompts.length}`, `Details: wa mcp inspect ${selected.id}`, `Tool palette: wa mcp tools ${selected.id}`]) lines.push(this.padRightTo('  ' + text, width));
+        for (const text of [
+          `MCP: ${server.definition.name}`,
+          `Status: ${server.state === 'AUTH_REQUIRED' ? color.red('AUTH_REQUIRED') : server.state}`,
+          `Tools: ${server.tools.length}  Resources: ${server.resources.length}  Prompts: ${server.prompts.length}`,
+          `Details: wa mcp inspect ${selected.id}`,
+          `Tool palette: wa mcp tools ${selected.id}`,
+        ]) lines.push(this.padRightTo('  ' + text, width));
+        if (server.state === 'AUTH_REQUIRED') {
+          lines.push(this.padRightTo(`  ${color.yellow(`Action: run 'wa mcp auth ${selected.id}' to configure credentials`)}`, width));
+        }
       }
     } else if (selected.category === 'RUNTIMES') {
       const runtime = this.engine.runtimes.get(selected.id);

@@ -1,8 +1,13 @@
 import { promises as fs } from 'node:fs';
-import type { Tool, ToolExecutionContext, ToolResult } from '@wazir/core';
+import * as crypto from 'node:crypto';
+import type { Tool, ToolExecutionContext, ToolResult, FileMutationResult } from '@wazir/core';
 import { errorMessage, readProjectFile, resolveInsideProject, writeProjectFile } from './paths.js';
 
 const MAX_READ_BYTES = 1024 * 1024;
+
+function hashContent(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
 
 export const readTool: Tool = {
   descriptor: {
@@ -65,11 +70,48 @@ export const writeTool: Tool = {
   },
   async execute(input, ctx): Promise<ToolResult> {
     const started = Date.now();
+    const filePath = String(input.path);
+    const newContent = String(input.content ?? '');
+    
+    const mutation: FileMutationResult = {
+      path: filePath,
+      attempted: true,
+      succeeded: false,
+      existedBefore: false,
+      existsAfter: false,
+      changed: false,
+    };
+
     try {
-      const resolved = await writeProjectFile(ctx.projectRoot, String(input.path), String(input.content ?? ''));
-      return { ok: true, output: `wrote ${resolved}`, durationMs: Date.now() - started };
+      try {
+        const { content: oldContent } = await readProjectFile(ctx.projectRoot, filePath);
+        mutation.existedBefore = true;
+        mutation.beforeHash = hashContent(oldContent);
+      } catch {
+        mutation.existedBefore = false;
+      }
+
+      const resolved = await writeProjectFile(ctx.projectRoot, filePath, newContent);
+      
+      mutation.succeeded = true;
+      mutation.existsAfter = true;
+      mutation.afterHash = hashContent(newContent);
+      mutation.changed = mutation.beforeHash !== mutation.afterHash;
+
+      return { 
+        ok: true, 
+        output: `wrote ${resolved}`, 
+        durationMs: Date.now() - started,
+        fileMutations: [mutation]
+      };
     } catch (error) {
-      return { ok: false, output: '', error: errorMessage(error), durationMs: Date.now() - started };
+      return { 
+        ok: false, 
+        output: '', 
+        error: errorMessage(error), 
+        durationMs: Date.now() - started,
+        fileMutations: [mutation]
+      };
     }
   },
 };
@@ -94,22 +136,62 @@ export const editTool: Tool = {
   },
   async execute(input, ctx): Promise<ToolResult> {
     const started = Date.now();
+    const filePath = String(input.path);
+    
+    const mutation: FileMutationResult = {
+      path: filePath,
+      attempted: true,
+      succeeded: false,
+      existedBefore: false,
+      existsAfter: false,
+      changed: false,
+    };
+
     try {
-      const { resolved, content: raw } = await readProjectFile(ctx.projectRoot, String(input.path));
+      let raw: string;
+      let resolved: string;
+      try {
+        const result = await readProjectFile(ctx.projectRoot, filePath);
+        raw = result.content;
+        resolved = result.resolved;
+        mutation.existedBefore = true;
+        mutation.beforeHash = hashContent(raw);
+      } catch (error) {
+        return { ok: false, output: '', error: errorMessage(error), durationMs: Date.now() - started, fileMutations: [mutation] };
+      }
+
       const oldString = String(input.oldString ?? '');
       const newString = String(input.newString ?? '');
       if (!oldString) {
-        return { ok: false, output: '', error: 'oldString must not be empty', durationMs: Date.now() - started };
+        return { ok: false, output: '', error: 'oldString must not be empty', durationMs: Date.now() - started, fileMutations: [mutation] };
       }
       const count = raw.split(oldString).length - 1;
       if (count === 0) {
-        return { ok: false, output: '', error: 'oldString not found in file', durationMs: Date.now() - started };
+        return { ok: false, output: '', error: 'oldString not found in file', durationMs: Date.now() - started, fileMutations: [mutation] };
       }
+      
       const next = input.replaceAll === true ? raw.split(oldString).join(newString) : raw.replace(oldString, newString);
-      await writeProjectFile(ctx.projectRoot, String(input.path), next);
-      return { ok: true, output: `edited ${resolved} (${input.replaceAll === true ? count : 1} replacement(s))`, durationMs: Date.now() - started };
+      await writeProjectFile(ctx.projectRoot, filePath, next);
+      
+      mutation.succeeded = true;
+      mutation.existsAfter = true;
+      mutation.afterHash = hashContent(next);
+      mutation.changed = mutation.beforeHash !== mutation.afterHash;
+
+      return { 
+        ok: true, 
+        output: `edited ${resolved} (${input.replaceAll === true ? count : 1} replacement(s))`, 
+        durationMs: Date.now() - started,
+        fileMutations: [mutation]
+      };
     } catch (error) {
-      return { ok: false, output: '', error: errorMessage(error), durationMs: Date.now() - started };
+      return { 
+        ok: false, 
+        output: '', 
+        error: errorMessage(error), 
+        durationMs: Date.now() - started,
+        fileMutations: [mutation] 
+      };
     }
   },
 };

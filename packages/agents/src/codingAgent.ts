@@ -1,3 +1,4 @@
+import { detectProgress } from "./diagnostics.js";
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type {
@@ -490,7 +491,21 @@ export class CodingAgent implements AgentAdapter {
     let plan: string | null = null;
     let modelSummary: string | undefined;
     const checkOutputs: Array<{ name: string; ok: boolean; output: string }> = [];
+    const activeFileContents = new Map<string, string>();
+    let unresolvedDiagnostics: string | null = null;
     let correctionCount = 0;
+    
+    let repairState: {
+      active: boolean;
+      cycle: number;
+      triggeringFailure: string;
+      diagnosticsBefore: string;
+      filesModified: number;
+      filesInspected: number;
+      diagnosticsAfter?: string;
+      progress?: 'PROGRESS' | 'NO_PROGRESS' | 'REGRESSION';
+      consecutiveNoProgress: number;
+    } | null = null;
 
     // ---- circuit breaker: same tool + same input called back to back ----
     let lastToolSignature: string | null = null;
@@ -527,26 +542,48 @@ export class CodingAgent implements AgentAdapter {
       Math.ceil(msgs.reduce((sum, m) => sum + m.content.length, 0) / 4);
     const compactIfNeeded = (): string | null => {
       const contextTokens = request.contextTokens;
-      const KEEP_RECENT = 6;
+      const KEEP_RECENT = 2; // only the last action and result
       const KEEP_HEAD = 2; // system prompt + initial task message
       if (!contextTokens || messages.length <= KEEP_HEAD + KEEP_RECENT) return null;
-      const budget = Math.floor(contextTokens * this.contextCompactionRatio) - this.maxTokensPerTurn;
+      
       const before = estimateTokens(messages);
-      if (before <= budget) return null;
+      
+      // aggressive compaction
       const head = messages.slice(0, KEEP_HEAD);
       const tail = messages.slice(-KEEP_RECENT);
       const collapsedCount = messages.length - head.length - tail.length;
       if (collapsedCount <= 0) return null;
-      const summary: ChatMessage = {
+
+      const summaryParts = [
+        '[context compacted: earlier turns summarized]',
+        'CURRENT TASK',
+        request.taskDescription,
+        'CURRENT PLAN',
+        plan || 'none',
+        'CURRENT FILE STATE',
+        [...filesChangedSet].join(', ') || 'none',
+        'CURRENT UNRESOLVED DIAGNOSTICS',
+        unresolvedDiagnostics || 'none',
+        'CURRENT REPAIR CYCLE',
+        repairState ? `${repairState.cycle} / ${this.maxRepairCycles}` : 'not in repair',
+      ];
+
+      if (activeFileContents.size > 0) {
+        summaryParts.push('RELEVANT FILE CONTENT');
+        for (const [path, content] of activeFileContents.entries()) {
+          summaryParts.push(`--- ${path} ---\n${content}`);
+        }
+      }
+
+      summaryParts.push('Continue the task from exactly where you left off.');
+
+      const summary: import('@wazir/core').ChatMessage = {
         role: 'user',
-        content:
-          `[context compacted: ${collapsedCount} earlier turn(s) summarized to stay under the context window]\n` +
-          `Tool calls so far: ${[...toolCallCounts.entries()].map(([n, c]) => `${n}×${c}`).join(', ') || 'none'}\n` +
-          `Files changed: ${[...filesChangedSet].join(', ') || 'none'}\n` +
-          `Checks run: ${checkOutputs.map((c) => `${c.name}=${c.ok ? 'pass' : 'fail'}`).join(', ') || 'none'}\n` +
-          (plan ? `Plan: ${plan}\n` : '') +
-          'Continue the task from exactly where you left off.',
+        content: summaryParts.join('\n\n')
       };
+
+      // if the new messages size is still too big, we might need to drop activeFileContents,
+      // but let's just assemble it and let Wazir's outer limits catch it.
       messages.length = 0;
       messages.push(...head, summary, ...tail);
       const after = estimateTokens(messages);
@@ -766,11 +803,31 @@ export class CodingAgent implements AgentAdapter {
         if (CHECK_TOOLS.has(action.tool)) {
           checkOutputs.push({ name: action.tool, ok: result.ok, output: result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n') });
         }
-        if (FILE_TOOLS.has(action.tool) && typeof (action.input as { path?: unknown })?.path === 'string') {
-          yield { kind: 'message', content: `files-changed: ${(action.input as { path: string }).path}` };
+        if (result.fileMutations) {
+          for (const m of result.fileMutations) {
+            if (m.changed) yield { kind: 'message', content: `files-changed: ${m.path}` };
+          }
         }
         if (result.ok) {
           planExplorationCount += 1;
+        }
+        
+        if (action.tool === 'read' && result.ok) {
+          activeFileContents.set(String((action.input as any).path), result.output);
+        }
+        if (result.fileMutations) {
+          for (const m of result.fileMutations) {
+            if (m.changed) {
+              activeFileContents.delete(m.path);
+            }
+          }
+        }
+        if (action.tool === 'build' || action.tool === 'test') {
+          if (!result.ok) {
+            unresolvedDiagnostics = [result.error, result.output].filter(Boolean).join('\n');
+          } else {
+            unresolvedDiagnostics = null;
+          }
         }
         pushToolResult(action.tool, result);
         continue;
@@ -871,8 +928,82 @@ export class CodingAgent implements AgentAdapter {
         if (CHECK_TOOLS.has(action.tool)) {
           checkOutputs.push({ name: action.tool, ok: result.ok, output: result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n') });
         }
-        if (FILE_TOOLS.has(action.tool) && typeof (action.input as { path?: unknown })?.path === 'string') {
-          yield { kind: 'message', content: `files-changed: ${(action.input as { path: string }).path}` };
+        if (result.fileMutations) {
+          for (const m of result.fileMutations) {
+            if (m.changed) {
+              if (repairState) repairState.filesModified++;
+              yield { kind: 'message', content: `files-changed: ${m.path}` };
+            }
+          }
+        }
+        
+        if (repairState && ['read', 'glob', 'search'].includes(action.tool)) {
+          repairState.filesInspected++;
+        }
+
+        if (action.tool === 'build' || action.tool === 'test') {
+          const isFailure = !result.ok;
+          const outputString = [result.error, result.output].filter(Boolean).join('\n');
+          
+          if (isFailure) {
+            if (!repairState) {
+              repairState = {
+                active: true,
+                cycle: 1,
+                triggeringFailure: outputString,
+                diagnosticsBefore: outputString,
+                filesModified: 0,
+                filesInspected: 0,
+                consecutiveNoProgress: 0,
+              };
+              yield { kind: 'phase', phase: 'repair' as AgentPhase };
+            } else {
+              repairState.cycle++;
+              repairState.diagnosticsAfter = outputString;
+              repairState.progress = detectProgress(repairState.diagnosticsBefore, outputString);
+              
+              if (repairState.progress === 'NO_PROGRESS') {
+                repairState.consecutiveNoProgress++;
+              } else {
+                repairState.consecutiveNoProgress = 0;
+              }
+
+              if (repairState.cycle > this.maxRepairCycles || repairState.consecutiveNoProgress >= 2) {
+                yield {
+                  kind: 'error',
+                  error: `REPAIR_BUDGET_EXHAUSTED: cycle=${repairState.cycle}, progress=${repairState.progress}, files_modified=${repairState.filesModified}`,
+                  errorKind: 'verification',
+                  protocolMetrics: currentMetrics()
+                };
+                return;
+              }
+              repairState.diagnosticsBefore = outputString;
+            }
+          } else {
+            if (repairState) {
+              repairState = null;
+              yield { kind: 'phase', phase: 'implement' as AgentPhase };
+            }
+          }
+        }
+
+        
+        if (action.tool === 'read' && result.ok) {
+          activeFileContents.set(String((action.input as any).path), result.output);
+        }
+        if (result.fileMutations) {
+          for (const m of result.fileMutations) {
+            if (m.changed) {
+              activeFileContents.delete(m.path);
+            }
+          }
+        }
+        if (action.tool === 'build' || action.tool === 'test') {
+          if (!result.ok) {
+            unresolvedDiagnostics = [result.error, result.output].filter(Boolean).join('\n');
+          } else {
+            unresolvedDiagnostics = null;
+          }
         }
         pushToolResult(action.tool, result);
         continue;
