@@ -132,16 +132,19 @@ async function readDaemonState(id: string): Promise<MCPDaemonState | undefined> 
     return state;
   } catch { await fs.unlink(daemonFile(id)).catch(() => undefined); return undefined; }
 }
-async function stopDaemon(id: string): Promise<void> {
-  const state = await readDaemonState(id); if (!state) return;
-  try { process.kill(state.pid, 'SIGTERM'); } catch { /* process exited */ }
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    if (!await readDaemonState(id)) return;
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-  try { process.kill(state.pid, 'SIGKILL'); } catch { /* process exited */ }
-  await fs.unlink(daemonFile(id)).catch(() => undefined);
+async function stopDaemon(id: string, lockHeld = false): Promise<void> {
+  const unlock = lockHeld ? undefined : await acquireDaemonLock(id);
+  try {
+    const state = await readDaemonState(id); if (!state) return;
+    try { process.kill(state.pid, 'SIGTERM'); } catch { /* process exited */ }
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      if (!await readDaemonState(id)) return;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    try { process.kill(state.pid, 'SIGKILL'); } catch { /* process exited */ }
+    await fs.unlink(daemonFile(id)).catch(() => undefined);
+  } finally { await unlock?.(); }
 }
 async function acquireDaemonLock(id: string): Promise<() => Promise<void>> {
   const file = `${daemonFile(id)}.lock`, nonce = randomBytes(16).toString('hex'), deadline = Date.now() + 15_000;
@@ -169,7 +172,7 @@ async function startDaemon(id: string): Promise<MCPDaemonState> {
   const unlock = await acquireDaemonLock(id);
   try {
     const existing = await readDaemonState(id); if (existing?.state === 'CONNECTED') return existing;
-    await stopDaemon(id);
+    await stopDaemon(id, true);
     const entry = process.argv[1]; if (!entry) throw new Error('Cannot locate the Wazir CLI entry point.');
     const child = spawn(process.execPath, [entry, 'mcp', 'serve', id], { detached: true, stdio: 'ignore', env: process.env });
     child.unref();
