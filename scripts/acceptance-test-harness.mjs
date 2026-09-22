@@ -3,18 +3,18 @@
  * Wazir Acceptance Test Harness
  *
  * Drives the Wazir Acceptance Test Library:
- * 44 acceptance use cases structured into 15 progressive release gates (G0..G14).
+ * 48 acceptance use cases structured into 16 progressive release gates (G0..G15).
  *
  * Strict Release Rule:
- * Gates must be passed progressively (G0 -> G1 -> ... -> G14).
+ * Gates must be passed progressively (G0 -> G1 -> ... -> G15).
  * A later gate CANNOT compensate for a failure in an earlier prerequisite gate.
  *
  * Usage:
  *   node scripts/acceptance-test-harness.mjs                 # interactive selector (or foundational if non-interactive)
  *   node scripts/acceptance-test-harness.mjs --foundational  # run foundational sequence (20, 17, 18, 1, 9, 3, 4, 2)
- *   node scripts/acceptance-test-harness.mjs --gate G0       # run specific gate (G0..G14)
- *   node scripts/acceptance-test-harness.mjs --test 20       # run specific test ID (1..44)
- *   node scripts/acceptance-test-harness.mjs --all          # run all gates G0..G14 in progressive order
+ *   node scripts/acceptance-test-harness.mjs --gate G0       # run specific gate (G0..G15)
+ *   node scripts/acceptance-test-harness.mjs --test 20       # run specific test ID (1..48)
+ *   node scripts/acceptance-test-harness.mjs --all          # run all gates G0..G15 in progressive order
  *   node scripts/acceptance-test-harness.mjs --interactive  # force interactive menu
  *   node scripts/acceptance-test-harness.mjs --live         # enable live runtime/model probing
  *   node scripts/acceptance-test-harness.mjs --skip-build   # skip dist freshness check
@@ -47,9 +47,9 @@ Usage:
 
 Options:
   --foundational        Run foundational sequence: 20 -> 17 -> 18 -> 1 -> 9 -> 3 -> 4 -> 2
-  --gate <G0..G14>      Run all tests in specified gate
-  --test <1..44>        Run specific test by ID
-  --all                 Run all 15 progressive release gates (fail-fast prerequisite order)
+  --gate <G0..G15>      Run all tests in specified gate
+  --test <1..48>        Run specific test by ID
+  --all                 Run all 16 progressive release gates (fail-fast prerequisite order)
   --interactive         Prompt interactively to choose what to test
   --live                Probe and execute against live local models (LM Studio / Ollama)
   --skip-build          Skip dist freshness check and build
@@ -72,6 +72,7 @@ Gates:
   G12 Session Hardening Tests 38-40      Empty completions, compaction fidelity, worktree merge safety
   G13 Terminal Depth    Tests 41-42      Composer history recall, Escape cancellation mid-stream
   G14 Performance       Tests 43-44      PTY throughput/latency, multi-turn overhead growth bounds
+  G15 Verify Integrity  Tests 45-48      Evidence-bound completion, revision staleness, false files-changed events, build-tool stalls
 `);
 }
 
@@ -185,9 +186,9 @@ async function resolveExecutionSelection() {
     console.log('=============================================================');
     console.log('Each time there is an upgrade, select what to test:\n');
     console.log('  1) Foundational Sequence (20, 17, 18, 1, 9, 3, 4, 2) [Recommended]');
-    console.log('  2) Release Gate (G0 Protocol, G1 Runtime, G2 Agent, ... G14 Performance)');
+    console.log('  2) Release Gate (G0 Protocol, G1 Runtime, G2 Agent, ... G15 Verification Integrity)');
     console.log('  3) Specific Acceptance Test (Test 1 through 44)');
-    console.log('  4) Full Progressive Acceptance Suite (G0 through G14)');
+    console.log('  4) Full Progressive Acceptance Suite (G0 through G15)');
     console.log('  5) Probe Local Models & Runtimes');
     console.log('  q) Quit\n');
 
@@ -200,7 +201,7 @@ async function resolveExecutionSelection() {
       for (const g of GATES) {
         console.log(`  ${g.id}) ${g.title}: ${g.description}`);
       }
-      const gateChoice = await promptUser('\nEnter Gate ID (e.g. G0, G1, ... G14): ');
+      const gateChoice = await promptUser('\nEnter Gate ID (e.g. G0, G1, ... G15): ');
       targetGate = gateChoice.trim().toUpperCase();
       if (!GATES.some((g) => g.id === targetGate)) {
         console.error(`Unknown gate ${targetGate}`);
@@ -259,7 +260,7 @@ async function main() {
   } else if (targetGate) {
     const g = GATES.find((g) => g.id === targetGate);
     if (!g) {
-      console.error(`Gate ${targetGate} not found. Valid gates: G0..G14`);
+      console.error(`Gate ${targetGate} not found. Valid gates: G0..G15`);
       process.exit(2);
     }
     testQueue = g.testIds.map((id) => TESTS[id]);

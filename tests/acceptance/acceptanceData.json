@@ -193,6 +193,20 @@
         44
       ],
       "prerequisiteGateId": "G13"
+    },
+    {
+      "id": "G15",
+      "order": 15,
+      "name": "VerificationIntegrity",
+      "title": "G15 Verification Integrity",
+      "description": "Evidence-bound completion verification, workspace-revision staleness invalidation, accurate files-changed provenance on tool failure, and workspace-scoped build-tool policy (no false-positive completions, no approval stalls on internal build commands)",
+      "testIds": [
+        45,
+        46,
+        47,
+        48
+      ],
+      "prerequisiteGateId": "G14"
     }
   ],
   "foundationalSequence": [
@@ -1805,6 +1819,158 @@
         "latency",
         "multi-turn",
         "regression"
+      ]
+    },
+    "45": {
+      "id": 45,
+      "gateId": "G15",
+      "priority": "P0",
+      "title": "Evidence-Bound Completion Verification",
+      "purpose": "Verify the completion verifier never marks a task complete on a self-report or a bare filesChanged-count check — completion requires externally-observed evidence (a real build/exit-0, re-read from disk or re-run, not the agent's own prose) bound to the exact current workspace revision. A broken build followed by an edit that was never recompiled must never verify as passing.",
+      "prompt": "Create main.cpp with a compile error (e.g. `return broken;`).\nCompile it: the build must fail (exit 1). Do not fix it yet — attempt to report the task complete.\nVerify Wazir refuses completion because no successful build exists for the current workspace revision.\nNow fix the source so it compiles, but do NOT run the build again, and attempt to report completion a second time.\nVerify Wazir still refuses — a passing build for the current (fixed) revision has not actually been observed, only claimed.\nFinally, actually recompile (exit 0) and report completion; verify it now passes.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "WRITE(broken) -> BUILD(fail) -> COMPLETE ATTEMPT #1 (rejected) -> WRITE(fixed, no rebuild) -> COMPLETE ATTEMPT #2 (rejected) -> BUILD(pass) -> COMPLETE (accepted)",
+      "verificationCriteria": [
+        "Completion attempt #1 (no passing build at all) is rejected with a reason naming the missing build evidence, not silently accepted on file-write alone",
+        "Completion attempt #2 (source fixed but never recompiled) is also rejected — the verifier re-reads/re-runs external state rather than trusting agent-reported \"fixed\" prose",
+        "Verification success is granted only once a build with exit code 0 has actually been observed for the exact current workspace revision",
+        "An untouched file elsewhere in the workspace remains byte-identical throughout — the verifier never mutates state to make a check pass"
+      ],
+      "expectedArtifacts": [
+        "main.cpp",
+        "main"
+      ],
+      "expectedProvenance": [
+        "build-evidence-revision",
+        "build-exit-code",
+        "verification-rejected-reason",
+        "verification-passed-revision"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/continuousVerification.test.ts",
+        "packages/evaluation/tests/expectedEvidence.test.ts",
+        "packages/evaluation/tests/evidenceBoundVerification.test.ts"
+      ],
+      "tags": [
+        "verification",
+        "evidence-bound",
+        "false-positive",
+        "p0-regression"
+      ]
+    },
+    "46": {
+      "id": 46,
+      "gateId": "G15",
+      "priority": "P0",
+      "title": "Workspace Revision Staleness Invalidation",
+      "purpose": "Verify that any edit occurring after the last successful build/test invalidates that build/test evidence for verification purposes — a passing build recorded against an earlier workspace revision must never be reused to validate a later, different revision, even when the edited file (e.g. a header) was not the file the build command directly names.",
+      "prompt": "Create Calendar.cpp and Calendar.h implementing a working getDays() function. Compile with `make` — build succeeds (exit 0). Run the test runner — tests pass. Record this as the passing revision.\nEdit Calendar.h only (e.g. change a comment or a declaration) without recompiling.\nAttempt to report the task complete, relying on the earlier passing build/test evidence.\nVerify Wazir rejects this as stale: the build/test evidence is for the prior revision, not the current (post-edit) one.\nRecompile and rerun tests against the new revision, then verify completion succeeds.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "BUILD(rev1, pass) -> TEST(rev1, pass) -> EDIT(Calendar.h) -> rev2 -> COMPLETE ATTEMPT (stale evidence, rejected) -> BUILD(rev2, pass) -> TEST(rev2, pass) -> COMPLETE (accepted)",
+      "verificationCriteria": [
+        "The workspace revision counter advances on the Calendar.h edit, even though it is a header, not the file directly passed to the compiler",
+        "A completion attempt after the edit but before rebuilding is rejected with a reason identifying the build evidence as stale",
+        "The rejection reason names both the stale (last-passing) revision and the current revision so the gap is diagnosable",
+        "Completion succeeds once fresh build and test evidence exists for the exact current revision"
+      ],
+      "expectedArtifacts": [
+        "Calendar.cpp",
+        "Calendar.h",
+        "test_runner"
+      ],
+      "expectedProvenance": [
+        "workspace-revision-sequence",
+        "last-passing-build-revision",
+        "staleness-rejection-reason"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/continuousVerification.test.ts",
+        "packages/evaluation/tests/revisionStaleness.test.ts"
+      ],
+      "tags": [
+        "verification",
+        "revision-fencing",
+        "staleness",
+        "p0-regression"
+      ]
+    },
+    "47": {
+      "id": 47,
+      "gateId": "G15",
+      "priority": "P0",
+      "title": "False files-changed Event Prevention on Failed Edits",
+      "purpose": "Verify a failed edit tool call (e.g. oldString not found in file) never emits a files-changed/file-modified event and never advances the workspace revision — provenance must reflect what actually changed on disk (or an independent tree diff), never the tool-call arguments or the fact that an edit was merely attempted.",
+      "prompt": "Create Calendar.cpp with known content.\nAttempt an edit whose oldString does not exist anywhere in the file. The edit must fail.\nVerify: the edit tool result reports failure; Calendar.cpp on disk is byte-identical to before the attempt; no files-changed event was recorded for Calendar.cpp; the workspace revision is unchanged.\nNow perform a second, valid edit with a real oldString. Verify this one succeeds, the file actually changes, a files-changed event is recorded, and the revision advances exactly once.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "WRITE(Calendar.cpp) -> EDIT(bad oldString, fails) -> VERIFY no change, no event -> EDIT(valid oldString, succeeds) -> VERIFY change + event + revision bump",
+      "verificationCriteria": [
+        "The failed edit attempt returns ok:false and Calendar.cpp content is byte-for-byte identical to before the attempt",
+        "No files-changed / file-modified event is emitted for Calendar.cpp as a result of the failed attempt",
+        "The workspace revision counter does not advance on the failed attempt",
+        "The subsequent successful edit does emit exactly one files-changed event and advances the revision exactly once",
+        "files-changed provenance is derived from actual on-disk/tree state (e.g. a snapshot diff), not from the tool call arguments alone"
+      ],
+      "expectedArtifacts": [
+        "Calendar.cpp"
+      ],
+      "expectedProvenance": [
+        "edit-failure-no-event",
+        "edit-success-event",
+        "revision-delta:0-then-1"
+      ],
+      "associatedSuites": [
+        "packages/tools/tests/security.test.ts",
+        "packages/tools/tests/editProvenance.test.ts",
+        "packages/evaluation/tests/expectedEvidence.test.ts"
+      ],
+      "tags": [
+        "verification",
+        "provenance",
+        "edit-tool",
+        "false-positive",
+        "p0-regression"
+      ]
+    },
+    "48": {
+      "id": 48,
+      "gateId": "G15",
+      "priority": "P1",
+      "title": "Workspace-Scoped Build Tool Auto-Approval",
+      "purpose": "Verify build tools (make, g++, cmake, and similar) whose reads/writes are entirely confined to the project workspace run without an interactive approval stall, while a command that reaches outside the workspace boundary still requires approval. Today `make` is classified alongside arbitrary state-modifying commands, forcing a multi-minute approval timeout on every ordinary build step.",
+      "prompt": "In a project workspace containing a Makefile that only reads/writes files under the project root, run `make`.\nVerify it executes immediately without entering the interactive approval queue or waiting out an approval timeout.\nThen attempt a command that writes outside the project root (e.g. to a path under /tmp or the home directory outside the sandboxed workspace). Verify that one still requires explicit approval — workspace-scoping is not a blanket bypass of policy.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "SHELL(make, workspace-confined) -> AUTO-APPROVED, no stall -> SHELL(write outside workspace) -> ASK/APPROVAL REQUIRED",
+      "verificationCriteria": [
+        "`make` (and equivalent build tools: g++, cmake, cargo, ninja, npm run build) confined to the project workspace executes with zero interactive approval delay",
+        "No 300-second-class approval timeout is incurred for an ordinary in-workspace build step",
+        "A command whose effects reach outside the project workspace boundary still triggers the normal ask/deny policy path — workspace scoping narrows the auto-allow set, it does not disable policy",
+        "Audit log distinguishes workspace-scoped auto-approval from an explicit human approval, so the two are not conflated in the audit trail"
+      ],
+      "expectedArtifacts": [
+        "Makefile"
+      ],
+      "expectedProvenance": [
+        "policy-rule:workspace-scoped-build-tool",
+        "no-approval-wait-ms",
+        "external-path-still-gated"
+      ],
+      "associatedSuites": [
+        "packages/core/tests/policyEngineShell.test.ts",
+        "packages/core/tests/policyEngineHardening.test.ts"
+      ],
+      "tags": [
+        "policy",
+        "build-tools",
+        "approval-stall",
+        "p1-regression"
       ]
     }
   }

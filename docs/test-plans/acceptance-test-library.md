@@ -24,12 +24,13 @@ The suite verifies that:
 13. **Session & Fleet Hardening** recovers from empty model completions, preserves fidelity across repeated context-compaction rounds, and detects worktree merge conflicts safely.
 14. **Terminal UX Depth** supports composer history recall and immediate Escape-key cancellation of an actively streaming turn.
 15. **Performance Gates** bound PTY streaming latency/byte-loss and multi-turn orchestration overhead growth.
+16. **Verification Integrity** binds task completion to externally-observed evidence (not self-report), invalidates stale build/test evidence the moment the workspace is edited again, records files-changed provenance from real disk mutation rather than tool-call arguments, and auto-approves workspace-confined build tools instead of stalling on interactive approval.
 
 ---
 
 ## 2. Progressive Release Gates
 
-The suite is organized into **15 progressive release gates (G0 through G14)**. Releases must satisfy gates sequentially:
+The suite is organized into **16 progressive release gates (G0 through G15)**. Releases must satisfy gates sequentially:
 
 ```text
 G0 Protocol  ──→  G1 Runtime  ──→  G2 Agent  ──→  G3 Routing  ──→  G4 Fleet
@@ -39,7 +40,7 @@ G0 Protocol  ──→  G1 Runtime  ──→  G2 Agent  ──→  G3 Routing  
                                                                                        ★ FUNCTIONAL READY ★
                                                                                                │
      ┌─────────────────────────────────────────────────────────────────────────────────────────┘
-     └──→  G10 Tool Depth  ──→  G11 Interop  ──→  G12 Session Hardening  ──→  G13 Terminal Depth  ──→  G14 Performance
+     └──→  G10 Tool Depth  ──→  G11 Interop  ──→  G12 Session Hardening  ──→  G13 Terminal Depth  ──→  G14 Performance  ──→  G15 Verification Integrity
                                                                                                │
                                                                                        ★ WAZIR READY ★
 ```
@@ -48,7 +49,7 @@ G0 Protocol  ──→  G1 Runtime  ──→  G2 Agent  ──→  G3 Routing  
 > **A later gate CANNOT compensate for an earlier prerequisite gate.**
 > If workspace persistence or isolation fails in G1, for example, a successful multi-agent demonstration in G5 is irrelevant and the release is marked **NOT READY**.
 
-G0–G9 validate that Wazir *works end to end* (the functional golden path). G10–G14 are an additive **hardening tier**: gaps identified by cross-referencing [`docs/test_architecture.md`](../test_architecture.md), a generic testing-architecture reference catalog synthesized from unrelated projects (DeepSeek Harness, Opencode), against what Wazir actually has. G9 remains the functional-readiness milestone; G10–G14 are required for full ★ WAZIR READY ★ (see §8 for what was and wasn't ported from that reference catalog, and why).
+G0–G9 validate that Wazir *works end to end* (the functional golden path). G10–G15 are an additive **hardening tier**. G10–G14 close gaps identified by cross-referencing [`docs/test_architecture.md`](../test_architecture.md), a generic testing-architecture reference catalog synthesized from unrelated projects (DeepSeek Harness, Opencode), against what Wazir actually has (see §8). G15 closes a distinct class of defect found by cross-referencing Wazir's own *observed* verifier behavior against how deepseek-harness and opencode solved the same problem (see §9). G9 remains the functional-readiness milestone; G10–G15 are required for full ★ WAZIR READY ★.
 
 | Gate | Name | Tests Included | Core Verification Property |
 | :--- | :--- | :--- | :--- |
@@ -67,6 +68,7 @@ G0–G9 validate that Wazir *works end to end* (the functional golden path). G10
 | **G12 Session Hardening** | Session & Fleet Hardening | Tests 38, 39, 40 | Empty-completion recovery, multi-round compaction fidelity, worktree merge-conflict safety |
 | **G13 Terminal Depth** | Terminal UX Depth | Tests 41, 42 | Composer history recall, Escape-key cancellation mid-stream |
 | **G14 Performance** | Performance Gates | Tests 43, 44 | PTY throughput/latency integrity, multi-turn orchestration overhead growth bounds |
+| **G15 Verification Integrity** | Evidence-Bound Verification | Tests 45, 46, 47, 48 | Completion requires externally-observed evidence, stale build/test evidence is invalidated on edit, files-changed provenance reflects real disk mutation, workspace-confined build tools don't stall on approval |
 
 ---
 
@@ -87,7 +89,7 @@ $$\mathbf{20 \longrightarrow 17 \longrightarrow 18 \longrightarrow 1 \longrighta
 
 ---
 
-## 4. Test Catalog Matrix (44 Use Cases)
+## 4. Test Catalog Matrix (48 Use Cases)
 
 | ID | Gate | Priority | Title | Key Invariant / Verification | Associated Suites |
 | :---: | :---: | :---: | :--- | :--- | :--- |
@@ -135,6 +137,10 @@ $$\mathbf{20 \longrightarrow 17 \longrightarrow 18 \longrightarrow 1 \longrighta
 | **42** | G13 | P0 | Escape Cancellation During Active Model Streaming | Escape aborts an actively streaming turn immediately (distinct from the timeout-triggered path in Test 23), zero dangling state | `fleetTui.test.ts` |
 | **43** | G14 | P1 | PTY High-Throughput Streaming Latency & Zero Byte Loss | Multi-megabyte burst through the PTY: zero dropped bytes, bounded time-to-last-byte, terminal stays responsive | `sessionEof.test.ts`, `ptyThroughput.test.ts` |
 | **44** | G14 | P1 | Multi-Turn Latency Growth Bound | Per-turn orchestration overhead across 20 turns stays within a bounded growth percentage, no step-function spikes | `codingAgent.maxTurns.test.ts`, `codingAgent.turnLatency.test.ts` |
+| **45** | G15 | P0 | Evidence-Bound Completion Verification | Completion is refused without an externally-observed passing build for the current revision; agent self-report / file-write alone never suffices | `continuousVerification.test.ts`, `expectedEvidence.test.ts`, `evidenceBoundVerification.test.ts` |
+| **46** | G15 | P0 | Workspace Revision Staleness Invalidation | A post-build edit (even to a header the build doesn't name directly) invalidates prior passing build/test evidence; completion is refused until re-verified against the new revision | `continuousVerification.test.ts`, `revisionStaleness.test.ts` |
+| **47** | G15 | P0 | False files-changed Event Prevention on Failed Edits | A failed edit (oldString not found) leaves the file byte-identical, emits no files-changed event, and never advances the workspace revision | `security.test.ts`, `editProvenance.test.ts`, `expectedEvidence.test.ts` |
+| **48** | G15 | P1 | Workspace-Scoped Build Tool Auto-Approval | `make`/`g++`/`cmake` confined to the project workspace run without an interactive approval stall; a command reaching outside the workspace still requires approval | `policyEngineShell.test.ts`, `policyEngineHardening.test.ts` |
 
 ---
 
@@ -146,17 +152,19 @@ The test harness is implemented in [`scripts/acceptance-test-harness.mjs`](file:
 # 1. Run the foundational sequence (recommended first check)
 npm run test:acceptance -- --foundational
 
-# 2. Run a specific release gate (e.g. G0, G1, ... G14)
+# 2. Run a specific release gate (e.g. G0, G1, ... G15)
 npm run test:acceptance -- --gate G0
 npm run test:acceptance -- --gate G1
 npm run test:acceptance -- --gate G10
+npm run test:acceptance -- --gate G15
 
-# 3. Run a specific acceptance test by ID (1..44)
+# 3. Run a specific acceptance test by ID (1..48)
 npm run test:acceptance -- --test 20
 npm run test:acceptance -- --test 27
 npm run test:acceptance -- --test 42
+npm run test:acceptance -- --test 46
 
-# 4. Run the entire acceptance suite across all 15 gates (fail-fast rule)
+# 4. Run the entire acceptance suite across all 16 gates (fail-fast rule)
 npm run test:plan:acceptance
 # or:
 npm run test:acceptance -- --all
@@ -176,12 +184,12 @@ npm run test:acceptance -- --live
 
 Whenever Wazir is upgraded (version bump, new feature, architectural change, or release cut), the assistant or automation MUST interactively ask the user what to test:
 - **Option 1 (Recommended):** Foundational Sequence (`20 -> 17 -> 18 -> 1 -> 9 -> 3 -> 4 -> 2`)
-- **Option 2:** Target Release Gate (`G0 Protocol` through `G14 Performance`)
-- **Option 3:** Specific Acceptance Test (`Test 1` through `Test 44`)
-- **Option 4:** Full Progressive Acceptance Suite (`G0` through `G14` with strict fail-fast enforcement)
+- **Option 2:** Target Release Gate (`G0 Protocol` through `G15 Verification Integrity`)
+- **Option 3:** Specific Acceptance Test (`Test 1` through `Test 48`)
+- **Option 4:** Full Progressive Acceptance Suite (`G0` through `G15` with strict fail-fast enforcement)
 - **Option 5:** Live Model Runtime Probe (LM Studio & Ollama)
 
-A release that only needs to prove Wazir *works* can stop at G9 (★ Functional Ready★). A release headed for GA should run the full suite through G14.
+A release that only needs to prove Wazir *works* can stop at G9 (★ Functional Ready★). A release headed for GA should run the full suite through G15.
 
 ---
 
@@ -222,9 +230,24 @@ Every harness run emits a structured report to `acceptance-test-report.json`:
 
 ### 8.2 Categories intentionally not ported
 
-- **Multi-cloud-provider adapters, prompt caching, encrypted/thinking-block reasoning streams** (`LLM-PV-01/02/03/04`) — Wazir routes only to local LM Studio/Ollama runtimes (`packages/runtimes/`); there is no Anthropic/OpenAI/Gemini adapter layer or `cache_control` concept to test.
+- **Prompt caching, encrypted/thinking-block reasoning streams** (`LLM-PV-01/02/03`) — Wazir's hosted-provider adapters (`packages/runtimes/anthropic`, `-openai`, `-google`, added after this section was originally written) call each provider's plain HTTP API directly; none of the three exposes a `cache_control`/prompt-caching mechanism or a separated encrypted-reasoning-stream concept to Wazir's adapter layer today.
 - **ACP handshake** (`PROT-ACP-01`) — no Agent Control Protocol implementation exists in this codebase.
 - **Browser/Playwright UI stability** (`WEB-STAB-*`) — `apps/web` is a static served dashboard, not a live React/Playwright-tested SPA; Wazir's only interactive surface is the Ink TUI, already covered by G8 and G13.
 - **Recursive subagent delegation** (`SUB-DEL-*`, foreground/background child-agent spawning, recursion-depth limits) — Wazir's concurrency model is DAG/fleet orchestration (Tests 2, 5, 6, 7) and git-worktree isolation (Test 18, 40), not a parent-spawns-child agent pattern; porting `SUB-DEL-*` verbatim would describe a capability Wazir doesn't have.
 - **Session-open/stream-reconnect/240-turn-fold browser benchmarks** (`BENCH-SESS-OPEN`, `BENCH-STREAM-RECON`, `BENCH-CONV-FOLD`, `BENCH-BROWSER-LONG`) — these assume a browser chat timeline replaying committed JSONL sessions; Wazir persists job/task state, not a browsable session timeline, so only the PTY and multi-turn analogs (Tests 43, 44) were ported.
 - **Compaction rollback/reversion** (`SESS-CP-02`) — Wazir's compaction (`packages/agents/src/codingAgent.ts`) collapses turns into a lossy summary with no snapshot retained; there is no rollback mechanism to test. Test 39 instead verifies fidelity across repeated compaction rounds, the invariant Wazir's actual design can support.
+
+---
+
+## 9. Gate G15: Verification Integrity — Closing a Distinct Defect Class
+
+Unlike G10–G14 (gaps found by walking a generic external scenario catalog), G15 was added by cross-referencing **Wazir's own observed verifier behavior in a real session** against how `deepseek-harness` and `opencode` solved the identical architectural problem in their own test suites. Four concrete defects were identified from an actual failed run (a stale build being trusted, a failed edit being recorded as a change, and a routine `make` invocation stalling on a five-minute approval timeout):
+
+| # | Defect | Priority | Wazir Test | Reference Pattern | Grounding |
+| :---: | :--- | :---: | :---: | :--- | :--- |
+| 1 | Unproven / false-positive completion — the verifier accepted a self-report or a bare `filesChanged > 0` check instead of requiring executable evidence | P0 | Test 45 | deepseek-harness's "World Verification" invariant (`testing.md`) and Independent Workspace Oracle (`AGENTS.md`) — "verify the world, not the self-report" | `packages/evaluation/src/continuousVerification.ts` and `evaluateExecution()` (`packages/evaluation/src/index.ts`) drive completion off recorded checks/files-changed; no test today asserts completion is *refused* when a build has never actually passed for the current revision |
+| 2 | Missing workspace-revision staleness invalidation — an edit made after the last passing build was never checked against, so stale evidence kept validating a changed workspace | P0 | Test 46 | deepseek-harness's Goal State Revision Fencing (`README.md`) — mutations require an exact `{id, revision}` reference; any intervening change increments the revision and invalidates older references | No revision-fencing concept exists in `packages/evaluation`/`packages/core` today — this test defines the target invariant |
+| 3 | False `files-changed` event provenance — a failed edit (`oldString` not found) still emitted a files-changed event for the untouched file | P0 | Test 47 | opencode's edit-failure invariance tests (`edit.test.ts`) assert disk content is untouched and events only publish on the success branch; deepseek-harness derives changes from a git write-tree diff, never from tool-call arguments | Wazir's `edit` tool (`packages/tools/src/filesystem.ts`) already returns `ok:false` on a non-matching `oldString` without writing — this test closes the gap of asserting no files-changed event/revision bump follows a failure, the actual regression observed |
+| 4 | Policy starvation of build tools — `make` was classified as requiring interactive human approval, stalling the agent for a five-minute timeout on an ordinary in-workspace build step | P1 | Test 48 | opencode's workspace-path-scoping tests (`shell.test.ts`) auto-approve commands confined to the project directory and only prompt when a path escapes it; deepseek-harness's sandbox permission presets auto-approve build tools (`make`, `cargo`, `ninja`) whose writes stay under `$CWD` | `packages/core/src/services/policyEngine.ts`'s `SAFE_SHELL_COMMANDS` allowlist covers compilers (`gcc`, `g++`, `clang`, ...) but not build-orchestration tools like `make`/`cmake`, which fall through to `shell-unknown-ask` and stall exactly as observed |
+
+None of the specific competitor test files above (`invariant.spec.ts`, `edit.test.ts`, `snapshot-tool-race.test.ts`, `shell.test.ts`) exist in Wazir's own tree — they are `deepseek-harness`/`opencode` source, cited here only as the pattern reference. Tests 45–48's `associatedSuites` name Wazir's own existing and to-be-written suites instead.

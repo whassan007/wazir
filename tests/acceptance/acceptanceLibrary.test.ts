@@ -12,10 +12,10 @@ import {
 } from './acceptanceLibrary.js';
 
 describe('Wazir Acceptance Test Library', () => {
-  it('defines all 15 progressive release gates in strict order (G0 to G14)', () => {
-    expect(ACCEPTANCE_GATES).toHaveLength(15);
+  it('defines all 16 progressive release gates in strict order (G0 to G15)', () => {
+    expect(ACCEPTANCE_GATES).toHaveLength(16);
     const expectedIds: AcceptanceGateId[] = [
-      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14',
+      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15',
     ];
     expect(ACCEPTANCE_GATES.map((g) => g.id)).toEqual(expectedIds);
 
@@ -29,11 +29,11 @@ describe('Wazir Acceptance Test Library', () => {
     }
   });
 
-  it('contains all 44 unique acceptance tests', () => {
+  it('contains all 48 unique acceptance tests', () => {
     const keys = Object.keys(ACCEPTANCE_TESTS).map(Number);
-    expect(keys).toHaveLength(44);
+    expect(keys).toHaveLength(48);
 
-    for (let id = 1; id <= 44; id++) {
+    for (let id = 1; id <= 48; id++) {
       const test = ACCEPTANCE_TESTS[id];
       expect(test, `Test ${id} should exist`).toBeDefined();
       expect(test.id).toBe(id);
@@ -113,6 +113,14 @@ describe('Wazir Acceptance Test Library', () => {
     passed.add('G12');
     passed.add('G13');
     expect(validateGatePrerequisites('G14', passed).allowed).toBe(true);
+
+    // G15 blocked until G14 (Performance) has passed too
+    const g15Check = validateGatePrerequisites('G15', passed);
+    expect(g15Check.allowed).toBe(false);
+    expect(g15Check.blockingGateId).toBe('G14');
+
+    passed.add('G14');
+    expect(validateGatePrerequisites('G15', passed).allowed).toBe(true);
   });
 
   it('provides helpers to query by gate and ID', () => {
@@ -163,5 +171,20 @@ describe('Wazir Acceptance Test Library', () => {
     ]);
 
     expect(getTestById(44).id).toBe(44);
+  });
+
+  it('covers the verification-integrity gaps (Tests 45-48): evidence-bound completion, revision staleness, false files-changed events, and build-tool policy stalls', () => {
+    const g15Tests = getTestsForGate('G15');
+    expect(g15Tests.map((t) => t.title)).toEqual([
+      'Evidence-Bound Completion Verification',
+      'Workspace Revision Staleness Invalidation',
+      'False files-changed Event Prevention on Failed Edits',
+      'Workspace-Scoped Build Tool Auto-Approval',
+    ]);
+    expect(g15Tests.every((t) => t.priority === 'P0')).toBe(false); // test 48 is P1
+    expect(g15Tests.filter((t) => t.priority === 'P0')).toHaveLength(3);
+
+    expect(getTestById(48).id).toBe(48);
+    expect(getTestById(48).gateId).toBe('G15');
   });
 });
