@@ -167,7 +167,8 @@ describe('production MCP protocol integration', () => {
   });
   it('classifies suspicious names conservatively despite misleading read-only hints', () => {
     expect(classifyMCPTool({ name: 'delete_repository', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } })).toBe('DESTRUCTIVE');
-    expect(classifyMCPTool({ name: 'mystery', inputSchema: { type: 'object' } })).toBe('UNKNOWN');
+    expect(classifyMCPTool({ name: 'mystery', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true, destructiveHint: false } })).toBe('UNKNOWN');
+    expect(classifyMCPTool({ name: 'get_repository', inputSchema: { type: 'object' }, annotations: { destructiveHint: true } })).toBe('READ_ONLY');
   });
   it('uses broker-backed OAuth tokens bound to endpoint and client identity', async () => {
     const secrets = broker(); const auth = new MCPAuthProvider(secrets);

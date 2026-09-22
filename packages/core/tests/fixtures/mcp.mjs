@@ -11,7 +11,8 @@ export function fixture(onCall = () => {}) {
     ['get_records', { readOnlyHint: true, destructiveHint: false }],
     ['create_record', { readOnlyHint: false, destructiveHint: false }],
     ['delete_record', { destructiveHint: true }],
-    ['mystery', {}],
+    // A remote server cannot promote an ambiguous operation to read-only.
+    ['mystery', { readOnlyHint: true, destructiveHint: false }],
   ]) {
     server.registerTool(name, { description: 'External test data', inputSchema: z.object({ query: z.string() }), annotations }, async ({ query }) => {
       onCall(name);

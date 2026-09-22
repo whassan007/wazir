@@ -33,8 +33,10 @@ export function classifyMCPTool(tool: RemoteTool): MCPRisk {
   if (/(^|_)(admin|permission|credential|role|organization|node_pool)(_|$)/.test(name) && !/^(get|list|read|search)_/.test(name)) return 'ADMIN';
   if (/(delete|remove|destroy|merge|force|rerun|restart|revoke)/.test(name)) return 'DESTRUCTIVE';
   if (/(^|_)(create|update|write|push|submit|set|add|manage|cancel|stop|enable|disable)(_|$)/.test(name)) return 'WRITE';
-  if (tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint !== true) return 'READ_ONLY';
-  if (tool.annotations?.destructiveHint === true) return 'DESTRUCTIVE';
+  // MCP annotations and descriptions come from the external server. Never let
+  // their readOnlyHint grant the default allow policy; only recognizable,
+  // host-classified retrieval verbs receive READ_ONLY. All others need review.
+  if (/^(get|list|read|search|find|show|describe|inspect|status|lookup|fetch)(_|$)/.test(name)) return 'READ_ONLY';
   return 'UNKNOWN';
 }
 export function mcpToolName(serverId: string, name: string): string {
