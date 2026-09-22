@@ -47,6 +47,18 @@ function toGenerationEvent(event: WorkerExecutionEvent): GenerationEvent | undef
 
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
 const WRITE_TOOLS = new Set(['write', 'edit']);
+// Kept in sync with the identical constant + branch in apps/cli/src/run.ts —
+// see that file's comment for why this exists: a compiler run via the
+// generic `shell` tool was invisible to evaluateExecution()'s check
+// tracking, letting a task "complete" with zero recorded evidence even when
+// the model had genuinely compiled (or failed to compile) real code.
+const BUILD_INVOCATION_PATTERN =
+  /(^|&&|\|\||;)\s*(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)\b/;
+// Kept in sync with the identical helper in apps/cli/src/run.ts.
+const SOURCE_CODE_EXTENSION_PATTERN = /\.(c|cc|cpp|cxx|h|hpp|hh|py|go|rs|java|kt|swift|ts|tsx|js|jsx|mjs|cjs|rb|php|cs|scala|m|mm)$/i;
+function touchesSourceCode(filesChanged: string[]): boolean {
+  return filesChanged.some((f) => SOURCE_CODE_EXTENSION_PATTERN.test(f));
+}
 const OUTPUT_RESERVE_TOKENS = 4096;
 
 export interface FleetRunnerOptions {
@@ -377,6 +389,14 @@ export function createFleetTaskExecutor(
               durationMs: result.durationMs,
             });
           }
+        } else if (name === 'shell' && typeof input.command === 'string' && BUILD_INVOCATION_PATTERN.test(input.command)) {
+          await engine.executions.recordCheck(executionId, {
+            name: 'build',
+            command: input.command,
+            ok: result.ok,
+            output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
+            durationMs: result.durationMs,
+          });
         }
 
         if (WRITE_TOOLS.has(name) && result.ok && typeof input.path === 'string') {
@@ -472,7 +492,17 @@ export function createFleetTaskExecutor(
     // 7. Deterministic evaluation
     const finalRecord = engine.executions.require(executionId);
     const evaluation = evaluateExecution(finalRecord, {
-      expectedEvidence: task.expectedEvidence,
+      // Same default as apps/cli/src/run.ts's executeTask(): a task that
+      // touched real source code with no explicit expectedEvidence must
+      // still be backed by at least one passing check, never by "nothing
+      // failed because nothing ran." A trivial text/config/doc write keeps
+      // the existing lenient behavior — see touchesSourceCode() above.
+      expectedEvidence:
+        task.expectedEvidence && task.expectedEvidence.length > 0
+          ? task.expectedEvidence
+          : touchesSourceCode(finalRecord.filesChanged)
+            ? ['checks_pass']
+            : undefined,
       projectRoot: taskRoot,
     });
     await engine.executions.setEvaluation(executionId, evaluation);

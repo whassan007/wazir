@@ -181,7 +181,13 @@ describe('createFleetTaskExecutor — onProgress reporting', () => {
       onProgress: (ev) => progressEvents.push(ev as { kind?: string; tool?: string }),
     });
 
-    expect(outcome.success).toBe(true);
+    // This test is about onProgress reporting, not verification standards —
+    // it does not assert outcome.success. Writing hello.cpp and never
+    // compiling/testing it is correctly NOT a verified success under
+    // evaluateExecution()'s 'checks_pass' requirement for source-code
+    // changes (see touchesSourceCode() in fleetRunner.ts); asserting
+    // success here would be re-introducing the false-positive-completion
+    // bug that requirement exists to catch.
     expect(outcome.filesChanged).toContain('hello.cpp');
 
     const writeToolEvents = progressEvents.filter((e) => e.tool === 'write');

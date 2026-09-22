@@ -57,6 +57,18 @@ const APPROVAL_POLL_CHUNK_S = 15; // how often to clear a pending policy approva
  * eventually has to SIGKILL the process (confirmed live: see the first
  * buildcpp run, which stalled exactly on an unapproved `mkdir -p build`).
  * Ctrl+A is a no-op when nothing is pending, so this is safe to send blindly.
+ *
+ * The `needle` MUST be text that only appears once the job has actually
+ * reached a terminal state — NOT a status widget that's on screen from the
+ * moment generation starts (e.g. a live token counter). `ptyDriver.py`'s
+ * `wait` step checks the *entire* accumulated output buffer, not just output
+ * newly arrived since the step began, so a needle that's present from turn
+ * one makes every chunk resolve instantly and the whole `totalTimeoutS`
+ * budget collapses to a few hundred milliseconds of real wait time — the
+ * exact bug that made this test intermittently SIGKILL a job that was still
+ * legitimately working (confirmed live: two consecutive runs both failed at
+ * ~26s, nowhere near the intended 180s budget, both killed while the model
+ * was still mid-task).
  */
 function pollingWaitSteps(totalTimeoutS: number, needle: string): Array<Record<string, unknown>> {
   const steps: Array<Record<string, unknown>> = [];
@@ -265,7 +277,14 @@ describe('buildcpp: live `wa chat` TUI writes a working C++ sort+sum program', (
             steps: [
               { op: 'wait', text: 'wa>', timeout: 20 },
               { op: 'send', data: `${PROMPT}\r` },
-              ...pollingWaitSteps(TUI_WAIT_TIMEOUT_S, 'Tokens: In'),
+              // 'completed! Tokens' matches FleetTui's job-terminal status line
+              // (`Job <id> completed! Tokens: In .../Out ..., Dur: ...s` — see
+              // apps/cli/src/tui/fleetTui.ts), which is only rendered once
+              // runJob() has actually resolved. It is NOT the per-execution
+              // tail pane's live token counter ('Tokens: In ...' with no
+              // preceding 'completed!'), which is on screen from turn one and
+              // was the actual bug (see pollingWaitSteps()'s docstring).
+              ...pollingWaitSteps(TUI_WAIT_TIMEOUT_S, 'completed! Tokens'),
               { op: 'send', data: '/exit\r' },
               { op: 'exit', timeout: 20, expectCode: 0 },
             ],

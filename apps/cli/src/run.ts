@@ -83,6 +83,23 @@ export type PlanResult = { ok: true; plan: TaskPlan } | { ok: false; reasons: st
 
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
 const WRITE_TOOLS = new Set(['write', 'edit']);
+// A model that compiles via a raw `shell` call (e.g. `g++ -o main main.cpp`)
+// rather than a dedicated `build` tool invocation was previously invisible to
+// evaluateExecution() — CHECK_TOOLS only recognized the four named tools
+// above, so a real, successful (or failed) compile left `checks: []`, and
+// the evaluator's "no checks were executed" branch defaults to success
+// rather than failure (see packages/evaluation/src/index.ts). Mirrors the
+// compiler allowlist already in policyEngine.ts's SAFE_SHELL_COMMANDS,
+// plus common build-orchestration tools.
+const BUILD_INVOCATION_PATTERN =
+  /(^|&&|\|\||;)\s*(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)\b/;
+// Requiring a passing check makes sense once real source was touched; a task
+// that only wrote plain text/config/docs has nothing to compile or test, and
+// the pre-existing lenient evaluation is still the right call for it.
+const SOURCE_CODE_EXTENSION_PATTERN = /\.(c|cc|cpp|cxx|h|hpp|hh|py|go|rs|java|kt|swift|ts|tsx|js|jsx|mjs|cjs|rb|php|cs|scala|m|mm)$/i;
+function touchesSourceCode(filesChanged: string[]): boolean {
+  return filesChanged.some((f) => SOURCE_CODE_EXTENSION_PATTERN.test(f));
+}
 const OUTPUT_RESERVE_TOKENS = 4096;
 const MINIMUM_CONTEXT_TOKENS = 8192;
 
@@ -433,6 +450,19 @@ export async function executeTask(
             durationMs: result.durationMs,
           });
         }
+      } else if (name === 'shell' && typeof input.command === 'string' && BUILD_INVOCATION_PATTERN.test(input.command)) {
+        // A compiler/build tool run via the generic `shell` tool is just as
+        // real a check as one of the four named CHECK_TOOLS — record it the
+        // same way (success AND failure) so evaluateExecution() actually
+        // sees it instead of silently treating "compiled via shell" as if
+        // nothing had been verified at all.
+        await engine.executions.recordCheck(executionId, {
+          name: 'build',
+          command: input.command,
+          ok: result.ok,
+          output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
+          durationMs: result.durationMs,
+        });
       }
 
       if (WRITE_TOOLS.has(name) && result.ok && typeof input.path === 'string') {
@@ -510,7 +540,19 @@ export async function executeTask(
 
   // ---- deterministic evaluation -------------------------------------------
   const finalRecord = engine.executions.require(executionId);
-  const evaluation = evaluateExecution(finalRecord, { expectedFiles: options.expectedFiles });
+  const evaluation = evaluateExecution(finalRecord, {
+    expectedFiles: options.expectedFiles,
+    // A task that actually touched real source code must be backed by at
+    // least one executed check that passed (build/test/lint/typecheck, or a
+    // compiler run via `shell` — see BUILD_INVOCATION_PATTERN above), never
+    // by the absence of a failure alone. Without this, "no checks were
+    // executed" was only an informational reason, not a failure — a task
+    // could write main.cpp, never compile it, and still be reported "Task
+    // completed." Scoped to source-code file extensions specifically (not
+    // every 'coding'-type task) so a trivial text/config/doc write — which
+    // has nothing to compile or test — keeps the existing lenient behavior.
+    expectedEvidence: touchesSourceCode(finalRecord.filesChanged) ? ['checks_pass'] : undefined,
+  });
   await engine.executions.setEvaluation(executionId, evaluation);
   if (summary) {
     await engine.executions.setResult(executionId, summary);

@@ -103,8 +103,16 @@ export function evaluateExecution(
           reasons.push('evidence verified: no errors recorded');
         }
       } else if (trimmed === 'exit_code_zero' || trimmed === 'checks_pass') {
+        // Zero checks having failed is not evidence that checks passed — it
+        // is the absence of evidence either way. Without this, a task that
+        // never ran anything ("no checks were executed", below) could still
+        // satisfy 'checks_pass'/'exit_code_zero' vacuously: an empty
+        // `checks` array has zero failures by definition.
         const failedChecks = checks.filter((c) => !c.ok);
-        if (failedChecks.length > 0) {
+        if (checks.length === 0) {
+          success = false;
+          reasons.push('evidence missing: no checks were executed to verify against');
+        } else if (failedChecks.length > 0) {
           success = false;
           reasons.push(`evidence missing: checks failed: ${failedChecks.map((c) => c.name).join(', ')}`);
         } else {
