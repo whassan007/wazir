@@ -120,6 +120,15 @@ describe('production MCP protocol integration', () => {
     expect(results[0].status).toBe('rejected'); expect(results[1].status).toBe('fulfilled');
     expect((await call(s)).ok).toBe(true);
   });
+  it('cancels a pending STDIO initialize handshake and closes its child', async () => {
+    const s = await setup();
+    await s.registry.register({ ...stdio('hanging'), args: ['-e', 'setTimeout(() => {}, 10000)'], timeout: { connectionMs: 5000 } });
+    const controller = new AbortController();
+    const pending = s.registry.connect('hanging', controller.signal);
+    setTimeout(() => controller.abort(), 30);
+    await expect(pending).rejects.toMatchObject({ code: 'MCP_CANCELLED' });
+    expect(s.registry.get('hanging').state).toBe('DISCONNECTED');
+  });
   it('passes only explicit environment credentials and redacts echoed values', async () => {
     const s = await setup(); await s.secrets.putCredential('fixture_secret', 'hidden-value-123');
     await s.registry.register({ ...stdio(), env: { FIXTURE_SECRET: { secretRef: 'fixture_secret' } }, auth: { type: 'env' } });

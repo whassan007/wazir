@@ -129,20 +129,22 @@ export class MCPRegistry extends EventEmitter {
     try { await this.auth.resolve(s.definition); return true; }
     catch { s.state = 'AUTH_REQUIRED'; return false; }
   }
-  async connect(id: string): Promise<void> {
+  async connect(id: string, signal?: AbortSignal): Promise<void> {
     const s = this.get(id);
+    if (signal?.aborted) throw new MCPError('MCP_CANCELLED', id);
     if (s.pending) return s.pending;
     if (s.state === 'CONNECTED' && s.circuitUntil <= Date.now()) return;
     if (this.closing || !s.definition.enabled || s.circuitUntil > Date.now()) throw new MCPError('MCP_SERVER_UNAVAILABLE', id);
-    s.pending = this.open(s).finally(() => { s.pending = undefined; });
+    s.pending = this.open(s, signal).finally(() => { s.pending = undefined; });
     return s.pending;
   }
-  private async open(s: MCPConnection): Promise<void> {
+  private async open(s: MCPConnection, signal?: AbortSignal): Promise<void> {
     const d = s.definition;
     const attempts = Math.min(d.reconnect?.attempts ?? 1, 3);
     for (let attempt = 0; attempt <= attempts; attempt++) {
       let client: Client | undefined;
       try {
+        if (signal?.aborted) throw new MCPError('MCP_CANCELLED', d.id);
         if (!await this.readiness(d.id)) throw new MCPError(s.state === 'AUTH_REQUIRED' ? 'MCP_AUTH_REQUIRED' : 'MCP_SERVER_UNAVAILABLE', d.id);
         const previous = s.client; s.client = undefined; await previous?.close().catch(() => undefined);
         s.state = 'CONNECTING'; await this.event('MCP_CONNECTING', d.id);
@@ -152,10 +154,11 @@ export class MCPRegistry extends EventEmitter {
         const controller = new AbortController();
         const timeout = Math.max(1, d.timeout?.connectionMs ?? 10_000);
         const timer = setTimeout(() => controller.abort(), timeout);
+        const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
         try {
-          await client.connect(transport, { timeout, signal: controller.signal });
+          await client.connect(transport, { timeout, signal: requestSignal });
           s.capabilities = client.getServerCapabilities() ?? {};
-          const options = { timeout, signal: controller.signal };
+          const options = { timeout, signal: requestSignal };
           s.tools = s.capabilities.tools ? await this.pages(cursor => client!.listTools({ cursor }, options), 'tools') : [];
           s.resources = s.capabilities.resources ? await this.pages(cursor => client!.listResources({ cursor }, options), 'resources') : [];
           s.prompts = s.capabilities.prompts ? await this.pages(cursor => client!.listPrompts({ cursor }, options), 'prompts') : [];
@@ -180,9 +183,9 @@ export class MCPRegistry extends EventEmitter {
       } catch (error) {
         await client?.close().catch(() => undefined);
         const e = normalize(error, d.id); s.lastError = e.code;
-        s.state = e.code === 'MCP_AUTH_REQUIRED' ? 'AUTH_REQUIRED' : 'FAILED';
-        await this.event(s.state === 'AUTH_REQUIRED' ? 'MCP_AUTH_REQUIRED' : 'MCP_CONNECTION_FAILED', d.id, { status: e.code });
-        if (s.state === 'AUTH_REQUIRED' || attempt === attempts) { this.failure(s); throw e; }
+        s.state = e.code === 'MCP_AUTH_REQUIRED' ? 'AUTH_REQUIRED' : e.code === 'MCP_CANCELLED' ? 'DISCONNECTED' : 'FAILED';
+        await this.event(s.state === 'AUTH_REQUIRED' ? 'MCP_AUTH_REQUIRED' : e.code === 'MCP_CANCELLED' ? 'MCP_DISCONNECTED' : 'MCP_CONNECTION_FAILED', d.id, { status: e.code });
+        if (e.code === 'MCP_CANCELLED' || s.state === 'AUTH_REQUIRED' || attempt === attempts) { if (e.code !== 'MCP_CANCELLED') this.failure(s); throw e; }
         await new Promise(resolve => setTimeout(resolve, Math.min((d.reconnect?.backoffMs ?? 100) * 2 ** attempt, 5000)));
       }
     }
@@ -238,7 +241,7 @@ export class MCPRegistry extends EventEmitter {
   async enable(id: string, enabled: boolean): Promise<void> { const s = this.get(id); s.definition.enabled = enabled; if (!enabled) await this.disconnect(id); else s.state = 'CONFIGURED'; await this.save(); }
   async close(): Promise<void> { this.closing = true; await Promise.allSettled(this.list().map(s => this.disconnect(s.definition.id))); liveRegistries.delete(this); }
   async recover(id: string, ctx: ToolExecutionContext): Promise<void> {
-    try { await this.connect(id); }
+    try { await this.connect(id, ctx.signal); }
     catch (e) {
       if (!(e instanceof MCPError) || e.code !== 'MCP_AUTH_REQUIRED' || !this.options.onAuthRequired) throw e;
       // Await authentication inside the same invocation: no new Task/Job/Execution is created.
@@ -246,7 +249,7 @@ export class MCPRegistry extends EventEmitter {
       await this.options.onAuthRequired(id, ctx);
       if (ctx.signal?.aborted) throw new MCPError('MCP_CANCELLED', id);
       await this.event('MCP_AUTH_SUCCEEDED', id, { executionId: ctx.executionId });
-      await this.connect(id);
+      await this.connect(id, ctx.signal);
     }
   }
   async event(event: string, id: string, details: Record<string, unknown> = {}): Promise<void> {
