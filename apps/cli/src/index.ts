@@ -10,7 +10,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version('0.1.39');
+  .version('0.1.40');
 
 registerMCPCommands(program);
 program.hook('postAction', async () => { await closeMCPRegistries(); });
