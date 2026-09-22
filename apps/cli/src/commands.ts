@@ -625,7 +625,7 @@ export async function planTaskCommand(engine: RookEngine, description: string, o
   lines.push(`    agent:     ${agent.descriptor.name}`);
   lines.push(`    model:     ${scheduling.modelId} (${scheduling.modelDecision.strategy})`);
   lines.push(`    runtime:   ${scheduling.runtimeId}`);
-  lines.push(`    computer:  ${scheduling.computerId}`);
+  lines.push(`    computer:  ${scheduling.computerId ?? `hosted (${scheduling.runtimeId})`}`);
   lines.push(`    context:   ${context.finalRequiredTokens} / ${context.available.tokens} tokens (${context.available.source})`);
   lines.push('');
   lines.push(color.bold('  Reasons'));
@@ -911,8 +911,13 @@ function renderExecutionExplain(execution: ExecutionRecord | undefined, id: stri
     lines.push(`  ${s.modelId}`);
     for (const reason of s.modelDecision.reasons) lines.push(`    - ${reason}`);
     lines.push('');
-    lines.push(color.bold('Selected computer'));
-    lines.push(`  ${s.computerId}`);
+    if (s.computerDecision.placementKind === 'hosted') {
+      lines.push(color.bold('Placement'));
+      lines.push(`  hosted provider (no local computer) — provider: ${s.runtimeId}`);
+    } else {
+      lines.push(color.bold('Selected computer'));
+      lines.push(`  ${s.computerId}`);
+    }
     for (const reason of s.computerDecision.reasons) lines.push(`    - ${reason}`);
     lines.push('');
     lines.push(color.bold('Selected runtime'));
@@ -977,7 +982,7 @@ async function renderJobExplain(engine: RookEngine, job: Job, json?: boolean): P
         continue;
       }
       const s = record.scheduling;
-      lines.push(`  -> ${s.modelId} on ${s.computerId} via ${s.runtimeId}`);
+      lines.push(`  -> ${s.modelId} on ${s.computerId ?? `hosted (${s.runtimeId})`} via ${s.runtimeId}`);
       for (const reason of s.reasons) lines.push(`     - ${reason}`);
     }
     lines.push('');
@@ -1161,7 +1166,7 @@ export async function inspectArtifact(engine: RookEngine, id: string, json?: boo
   lines.push(`    agent:     ${artifact.agentId || '-'}`);
   lines.push(`    model:     ${artifact.modelId}`);
   lines.push(`    runtime:   ${artifact.runtimeId}`);
-  lines.push(`    computer:  ${artifact.computerId}`);
+  lines.push(`    computer:  ${artifact.computerId ?? '—'}`);
   if (artifact.git) {
     lines.push(color.bold('  git'));
     lines.push(`    branch:    ${artifact.git.branch ?? '-'}`);
@@ -1200,7 +1205,7 @@ export async function showArtifactWhy(engine: RookEngine, id: string, json?: boo
   lines.push(`  job:       ${why.executionContext.jobId ?? '-'}`);
   lines.push(`  agent:     ${why.executionContext.agentId || '-'}`);
   lines.push(`  model:     ${why.executionContext.modelId}`);
-  lines.push(`  computer:  ${why.executionContext.computerId}`);
+  lines.push(`  computer:  ${why.executionContext.computerId ?? '—'}`);
   lines.push(color.bold('  policy decisions'));
   if (why.policyDecisions.length === 0) lines.push('    (none recorded)');
   for (const d of why.policyDecisions) lines.push(`    ${d.decision.padEnd(5)} ${d.rule}  ${color.dim(d.reason)}`);
@@ -1473,7 +1478,7 @@ function allPassed(results: { passed: boolean }[]): boolean {
 export async function askCommand(
   engine: RookEngine,
   prompt: string,
-  options: { model?: string; computer?: string } = {},
+  options: { model?: string; computer?: string; allowHosted?: boolean } = {},
 ): Promise<{ code: number; output: string }> {
   const models = engine.models.list();
   if (models.length === 0) {
@@ -1494,7 +1499,24 @@ export async function askCommand(
     };
   }
 
-  const adapter = engine.worker.adapterForModel(target.id);
+  // askCommand bypasses the Scheduler entirely (it resolves a model directly
+  // from a --model flag or the first non-embedding model, not via
+  // Scheduler.plan()), so it is the one place a hosted model could reach
+  // generate() without ever passing through PolicyEngine.checkHostedEligibility().
+  // Gate explicitly here — never rely on engine.worker.adapterForModel()'s
+  // structural inability to find a hosted adapter as the only safeguard.
+  const targetRuntime = engine.runtimes.get(target.provider);
+  if (targetRuntime?.runtimeKind === 'hosted') {
+    const gate = engine.policy.checkHostedEligibility(
+      { allowHostedProviders: options.allowHosted ?? engine.config.providers?.allowHostedProviders },
+      target.provider,
+    );
+    if (!gate.allowed) {
+      return { code: 1, output: color.red(`refused: ${gate.reason} (pass --allow-hosted to opt in for this command)`) };
+    }
+  }
+
+  const adapter = engine.adapters.get(target.provider) ?? engine.worker.adapterForModel(target.id);
   if (!adapter) {
     return {
       code: 1,

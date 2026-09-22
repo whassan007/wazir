@@ -198,8 +198,13 @@ export function createFleetTaskExecutor(
         // crashed job's exact model output is still inspectable afterward.
         let completedContent = '';
 
-        if (assignment.computerId === engine.worker.computerId) {
-          const adapter = engine.worker.adapterForModel(request.modelId);
+        // No computerId means a hosted-provider assignment (Anthropic/OpenAI/
+        // Google) — still executes in-process on this machine, same as
+        // apps/cli/src/run.ts's equivalent branch. engine.adapters is checked
+        // first since worker.adapterForModel() can never resolve a hosted
+        // adapter (it only searches the worker's own hardware-bound list).
+        if (!assignment.computerId || assignment.computerId === engine.worker.computerId) {
+          const adapter = engine.adapters.get(assignment.runtimeId) ?? engine.worker.adapterForModel(request.modelId);
           if (!adapter) {
             yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
             return;
@@ -231,7 +236,7 @@ export function createFleetTaskExecutor(
                 // Per-turn usage, not the cumulative execution total: `input` here is the
                 // size of the prompt the model was just sent, i.e. the real context-window
                 // occupancy right now — the only honest number for a "Context N/M" gauge.
-                context.onProgress?.({ kind: 'usage', usage });
+                context.onProgress?.({ kind: 'usage', usage, breakdown: contextDecision.breakdown });
               }
             }
             yield event;
@@ -264,7 +269,7 @@ export function createFleetTaskExecutor(
                     total: generationEvent.usage.totalTokens ?? generationEvent.usage.inputTokens + generationEvent.usage.outputTokens,
                   };
                   await engine.executions.recordUsage(executionId, usage);
-                  context.onProgress?.({ kind: 'usage', usage });
+                  context.onProgress?.({ kind: 'usage', usage, breakdown: contextDecision.breakdown });
                 }
               }
               yield generationEvent;

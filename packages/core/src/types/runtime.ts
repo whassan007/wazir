@@ -1,4 +1,20 @@
-export type RuntimeType = 'ollama' | 'lmstudio' | 'openai-compatible' | 'llama-cpp' | 'other';
+export type RuntimeType =
+  | 'ollama'
+  | 'lmstudio'
+  | 'openai-compatible'
+  | 'llama-cpp'
+  | 'anthropic'
+  | 'openai'
+  | 'google'
+  | 'other';
+
+/** Runtimes registered with this kind have no `computerId`/hardware affinity
+ *  and are never placed through the scheduler's Computer-resolution path —
+ *  see `Scheduler.scheduleComputer()`. Absent means 'local' (every runtime
+ *  registered before this field existed is local). */
+export type RuntimeKind = 'local' | 'hosted';
+
+export const HOSTED_RUNTIME_TYPES: ReadonlySet<RuntimeType> = new Set(['anthropic', 'openai', 'google']);
 
 export interface RuntimeCapabilities {
   chat: boolean;
@@ -22,6 +38,8 @@ export interface RuntimeRecord {
   version: string;
   url?: string;
   computerId?: string;
+  /** Defaults to 'local' when absent (set by RuntimeRegistry.register()). */
+  runtimeKind?: RuntimeKind;
   health: 'healthy' | 'degraded' | 'unavailable';
   capabilities: RuntimeCapabilities;
   loadedModels: string[];
@@ -35,5 +53,6 @@ export interface RuntimeRegistration {
   version: string;
   url?: string;
   computerId?: string;
+  runtimeKind?: RuntimeKind;
   capabilities: RuntimeCapabilities;
 }

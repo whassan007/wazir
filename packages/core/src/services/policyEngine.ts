@@ -8,7 +8,7 @@ import type {
   PolicyEngineOptions,
   PolicyRule,
 } from '../types/policy.js';
-import type { Task } from '../types/task.js';
+import type { PolicyRequirements, Task } from '../types/task.js';
 import { appendAuditEvent } from '@wazir/shared';
 
 // `env`/`printenv` are deliberately absent: they dump the operator's whole
@@ -370,9 +370,43 @@ export class PolicyEngine {
   }
 
   /**
+   * The single authoritative "may this task's data reach a hosted provider
+   * (Anthropic/OpenAI/Google)" gate. Called by the Scheduler's hosted
+   * placement branch, and by any command that talks to a hosted
+   * `RuntimeAdapter` without going through the Scheduler (`wa ask
+   * --allow-hosted`) — never duplicated as a second check with its own
+   * logic, so there is exactly one place this rule can drift.
+   *
+   * Deny-by-default: a task must explicitly opt in (directly, or via the
+   * engine-wide `allowHostedProvidersDefault`) even when `localOnly` is
+   * unset. `localOnly`/`sensitive`|`restricted` dataClassification always
+   * override an opt-in back to deny — checked before any prompt/context is
+   * allowed to leave the process.
+   */
+  checkHostedEligibility(policy: PolicyRequirements | undefined, provider: string): { allowed: boolean; reason: string } {
+    if (policy?.localOnly) {
+      return { allowed: false, reason: `local-only policy forbids hosted provider '${provider}'` };
+    }
+    if (policy?.dataClassification === 'sensitive' || policy?.dataClassification === 'restricted') {
+      return { allowed: false, reason: `dataClassification '${policy.dataClassification}' forbids hosted provider '${provider}'` };
+    }
+    const allowed = policy?.allowHostedProviders ?? this.options.allowHostedProvidersDefault ?? false;
+    return allowed
+      ? { allowed: true, reason: `hosted provider '${provider}' explicitly allowed by policy` }
+      : {
+          allowed: false,
+          reason: `hosted provider '${provider}' routing requires explicit policy eligibility (task policy.allowHostedProviders, or the engine-wide providers.allowHostedProviders default)`,
+        };
+  }
+
+  /**
    * Action-level authorization. Agents and models can never bypass this:
    * every tool call is checked here before it executes.
    */
+  private readonly mcpRules = new Map<string, { effect: import('../types/policy.js').PolicyEffect; risk: string }>();
+  registerMCPTool(name: string, risk: string, effect: import('../types/policy.js').PolicyEffect): void { this.mcpRules.set(name, { risk, effect }); }
+  unregisterMCPTool(name: string): void { this.mcpRules.delete(name); }
+
   async authorize(request: PolicyActionRequest): Promise<PolicyDecision> {
     const decision = this.classify(request);
     return this.resolveAsk(request, decision);
@@ -487,6 +521,10 @@ export class PolicyEngine {
     const tool = request.tool;
     const projectRoot = request.projectRoot ?? this.options.projectRoot;
     const lower = tool.toLowerCase();
+    if (lower.startsWith('mcp.')) {
+      const rule = this.mcpRules.get(tool);
+      return { decision: rule?.effect ?? 'deny', rule: 'mcp-risk-policy', reasons: [rule ? `MCP ${rule.risk}` : 'MCP tool is not registered'] };
+    }
 
     // 1. MCP — explicit approval only
     if (lower.startsWith('mcp:')) {

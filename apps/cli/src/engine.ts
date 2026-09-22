@@ -28,7 +28,7 @@ import type {
   ModelRecord,
   RuntimeType,
 } from '@wazir/core';
-import type { DiscoveredModel } from '@wazir/runtimes-interfaces';
+import type { DiscoveredModel, ProviderId } from '@wazir/runtimes-interfaces';
 import {
   MemoryStore,
   JsonFileStore,
@@ -39,8 +39,10 @@ import { createCodingAgent, createStepAgent, ExternalAgentAdapter } from '@wazir
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
+import { createSecretBroker, type SecretBroker } from '@wazir/secrets';
 import { Worker, type DiscoveredRuntime } from '@wazir/workers';
 import { configDir, loadConfig, type WazirConfig } from './config.js';
+import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
 import path from 'node:path';
 
@@ -76,6 +78,8 @@ export interface RookEngine {
   discovered: DiscoveredRuntime[];
   worker: Worker;
   store: KeyValueStore;
+  secretBroker: SecretBroker;
+  hostedAdapters: Map<ProviderId, HostedAdapter>;
 }
 
 function guessFamily(id: string, provider: string): ModelRecord['family'] {
@@ -168,6 +172,20 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     await applyDiscoveredRuntime(discoveredRuntime, { runtimes, computers, models, config, computerId: localComputer.id });
   }
 
+  // ---- hosted providers (Anthropic/OpenAI/Google) ------------------------
+  // Deliberately registered only into `runtimes`/`models`/`adapterById` —
+  // NEVER into `computers` or `worker`. A hosted provider has no hardware to
+  // model as a Computer; see Scheduler.scheduleComputer()'s hosted branch and
+  // hostedProviders.ts's docstring for the invariant this depends on: nothing
+  // that searches `worker.adapterForModel()` can ever reach a hosted adapter,
+  // since the worker's own discovery list is strictly local/hardware-bound.
+  const secretBroker = await createSecretBroker({ secretsDir: engineConfigDir });
+  const hostedAdapters = createHostedProviders(config, secretBroker);
+  for (const [id, adapter] of hostedAdapters) {
+    adapterById.set(id, adapter);
+    await applyHostedProvider(id, adapter, { runtimes, models, config });
+  }
+
   // ---- remote inventory (optional distributed mode) ---------------------
   // Without this, the Scheduler can only ever see the computer this CLI
   // invocation is running on. When a control-plane API is configured, pull
@@ -222,6 +240,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     denyCommands: config.denyCommands,
     allowedMcpServers: config.allowedMcpServers,
     allowWorkspaceArtifactExecution: true,
+    allowHostedProvidersDefault: config.providers?.allowHostedProviders ?? false,
     approvalQueue,
     approveCallback: async (request, decision) => {
       const { createApprover } = await import('./approve.js');
@@ -234,6 +253,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     computers,
     runtimes,
     models,
+    policy,
     agents,
   });
 
@@ -294,6 +314,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     discovered,
     worker,
     store,
+    secretBroker,
+    hostedAdapters,
   };
 }
 

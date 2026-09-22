@@ -102,7 +102,7 @@ export interface ResourceEstimate {
  */
 export interface RuntimeAdapter {
   readonly id: string;
-  readonly type: 'ollama' | 'lmstudio' | 'openai-compatible' | 'other';
+  readonly type: 'ollama' | 'lmstudio' | 'openai-compatible' | 'llama-cpp' | 'anthropic' | 'openai' | 'google' | 'other';
 
   discover(): Promise<RuntimeInfo>;
   healthCheck(): Promise<HealthStatus>;
@@ -118,3 +118,5 @@ export interface RuntimeAdapter {
 
   cancel?(requestId: string): Promise<void>;
 }
+
+export * from './auth.js';

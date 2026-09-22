@@ -40,7 +40,8 @@ export interface OrchestratorTaskAssignment {
   agentId: string;
   modelId: string;
   runtimeId: string;
-  computerId: string;
+  /** Absent for an assignment routed to a hosted provider (no Computer). */
+  computerId?: string;
   scheduleInput: ScheduleInput;
 }
 
@@ -177,7 +178,12 @@ export class JobOrchestrator {
 
     const decision = this.scheduler.plan(scheduleInput);
 
-    if (!decision.agentId || !decision.modelId || !decision.runtimeId || !decision.computerId) {
+    // computerId is deliberately not required here: a hosted-provider
+    // placement (Anthropic/OpenAI/Google) has no Computer by design. Treating
+    // its absence as "placement unavailable" would silently loop this task
+    // forever as "waiting for free resources" (see the dispatch loop below)
+    // instead of ever executing it.
+    if (!decision.agentId || !decision.modelId || !decision.runtimeId) {
       return null;
     }
 
@@ -463,6 +469,15 @@ export class JobOrchestrator {
             const errMessage = err instanceof Error ? err.message : String(err);
             node.state = 'failed';
             node.error = errMessage;
+            // TODO(hosted-auth-followup): when `err` is a SchedulingError caused
+            // specifically by a missing hosted-provider credential (not by
+            // capability/policy mismatch), this task-time failure is where a
+            // future WAITING_FOR_AUTH pause-and-resume would hook in instead of
+            // failing the task outright — deferred out of this pass along with
+            // the rest of that feature (see docs/test-plans or the hosted-auth
+            // feature's PR description for the full deferral rationale). Today
+            // the task simply fails with the SchedulingError's message, which
+            // already names the provider and points at `wa auth login <provider>`.
             await this.jobManager.updateAgentState(job.id, node.id, 'failed', undefined, errMessage);
             await this.jobManager.updateTaskStatus(job.id, taskId, 'failed');
             this.emit(jobId, { type: 'task:failed', jobId, taskId, error: errMessage });

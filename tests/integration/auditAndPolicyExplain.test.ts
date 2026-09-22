@@ -162,7 +162,7 @@ describe('Audit Logging & Policy Explain & Model Cycle M0 (PROGRESS.md Next Step
   });
 
   describe('Doctor Command: api security & tokens and WAZIR_CHILD_ENV', () => {
-    it('reports warning when WAZIR_ALLOW_UNAUTHENTICATED=1 is set', () => {
+    it('reports warning when WAZIR_ALLOW_UNAUTHENTICATED=1 is set', async () => {
       process.env.WAZIR_ALLOW_UNAUTHENTICATED = '1';
       delete process.env.WAZIR_API_TOKEN;
       delete process.env.WAZIR_REGISTRATION_TOKEN;
@@ -180,9 +180,10 @@ describe('Audit Logging & Policy Explain & Model Cycle M0 (PROGRESS.md Next Step
         models: { list: () => [], listInstances: () => [] },
         policy: { rules: ['dummy'] },
         scheduler: {},
+        hostedAdapters: new Map(),
       } as unknown as RookEngine;
 
-      const report = doctor(mockEngine);
+      const report = await doctor(mockEngine);
       const secCheck = report.checks.find((c) => c.name === 'api security & tokens');
       expect(secCheck).toBeDefined();
       expect(secCheck!.status).toBe('WARN');
@@ -190,7 +191,7 @@ describe('Audit Logging & Policy Explain & Model Cycle M0 (PROGRESS.md Next Step
       expect(secCheck!.details).toContain('WAZIR_CHILD_ENV: not set');
     });
 
-    it('reports pass when tokens are configured and documents WAZIR_CHILD_ENV', () => {
+    it('reports pass when tokens are configured and documents WAZIR_CHILD_ENV', async () => {
       delete process.env.WAZIR_ALLOW_UNAUTHENTICATED;
       process.env.WAZIR_API_TOKEN = 'secret-token';
       process.env.WAZIR_REGISTRATION_TOKEN = 'reg-token';
@@ -209,9 +210,10 @@ describe('Audit Logging & Policy Explain & Model Cycle M0 (PROGRESS.md Next Step
         models: { list: () => [], listInstances: () => [] },
         policy: { rules: ['dummy'] },
         scheduler: {},
+        hostedAdapters: new Map(),
       } as unknown as RookEngine;
 
-      const report = doctor(mockEngine);
+      const report = await doctor(mockEngine);
       const secCheck = report.checks.find((c) => c.name === 'api security & tokens');
       expect(secCheck).toBeDefined();
       expect(secCheck!.status).toBe('PASS');

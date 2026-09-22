@@ -12,6 +12,21 @@ export interface ModelsConfig {
   startup?: ModelStartupConfig;
 }
 
+export interface GoogleProviderConfig {
+  /** Google Cloud "Desktop app" OAuth client id — not secret, but there is no
+   *  shared/public Wazir client; each operator registers their own
+   *  (ai.google.dev/gemini-api/docs/oauth). Required only for `--oauth` login;
+   *  API-key auth needs none of this. */
+  oauthClientId?: string;
+}
+
+export interface ProvidersConfig {
+  /** Engine-wide default for PolicyRequirements.allowHostedProviders when a
+   *  task/command omits it. Off by default — hosted routing is opt-in. */
+  allowHostedProviders?: boolean;
+  google?: GoogleProviderConfig;
+}
+
 export interface WazirConfig {
   ollamaUrl?: string;
   lmstudioUrl?: string;
@@ -33,6 +48,8 @@ export interface WazirConfig {
   allowCommands: string[];
   denyCommands: string[];
   allowedMcpServers: string[];
+  /** Hosted-provider (Anthropic/OpenAI/Google) routing configuration. */
+  providers?: ProvidersConfig;
 }
 
 export function configDir(): string {
@@ -118,6 +135,16 @@ export function loadConfig(): WazirConfig {
     config.models = { startup: { mode: envStartupMode } };
   }
 
+  if (process.env.WAZIR_ALLOW_HOSTED_PROVIDERS === '1') {
+    config.providers = { ...config.providers, allowHostedProviders: true };
+  }
+  if (process.env.WAZIR_GOOGLE_OAUTH_CLIENT_ID) {
+    config.providers = {
+      ...config.providers,
+      google: { ...config.providers?.google, oauthClientId: process.env.WAZIR_GOOGLE_OAUTH_CLIENT_ID },
+    };
+  }
+
   try {
     const raw = readFileSync(configFile(), 'utf8');
     const fileConfig = JSON.parse(raw) as Partial<WazirConfig>;
@@ -141,6 +168,13 @@ export function loadConfig(): WazirConfig {
     config.allowCommands = fileConfig.allowCommands ?? config.allowCommands;
     config.denyCommands = fileConfig.denyCommands ?? config.denyCommands;
     config.allowedMcpServers = fileConfig.allowedMcpServers ?? config.allowedMcpServers;
+    if (fileConfig.providers) {
+      config.providers = {
+        ...config.providers,
+        ...fileConfig.providers,
+        google: { ...config.providers?.google, ...fileConfig.providers.google },
+      };
+    }
   } catch {
     // no config file — defaults + env win
   }

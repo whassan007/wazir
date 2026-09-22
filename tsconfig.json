@@ -3,9 +3,13 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/shared" },
+    { "path": "packages/secrets" },
     { "path": "packages/runtimes/interfaces" },
     { "path": "packages/runtimes/ollama" },
     { "path": "packages/runtimes/lmstudio" },
+    { "path": "packages/runtimes/anthropic" },
+    { "path": "packages/runtimes/openai" },
+    { "path": "packages/runtimes/google" },
     { "path": "packages/registry" },
     { "path": "packages/evaluation" },
     { "path": "packages/observability" },

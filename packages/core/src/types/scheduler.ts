@@ -13,8 +13,12 @@ export interface ModelRoutingDecision {
 }
 
 export interface ComputerRoutingDecision {
-  computerId: string;
+  /** Absent when `placementKind` is 'hosted' — a hosted provider has no Computer. */
+  computerId?: string;
   runtimeId: string;
+  /** 'local' when placed on a Computer; 'hosted' when routed to an
+   *  authenticated hosted provider (Anthropic/OpenAI/Google). */
+  placementKind: 'local' | 'hosted';
   score: number;
   reasons: string[];
 }
@@ -24,7 +28,8 @@ export interface SchedulerDecision {
   modelId: string;
   modelInstanceId: string;
   runtimeId: string;
-  computerId: string;
+  /** Absent for a hosted placement — see ComputerRoutingDecision.computerId. */
+  computerId?: string;
   modelDecision: ModelRoutingDecision;
   computerDecision: ComputerRoutingDecision;
   reasons: string[];

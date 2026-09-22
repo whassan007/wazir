@@ -55,6 +55,11 @@ export interface ExecuteTaskOptions {
   expectedFiles?: string[];
   json?: boolean;
   quiet?: boolean;
+  /** Per-invocation opt-in for routing to a hosted provider (Anthropic/OpenAI/Google).
+   *  Overrides the engine-wide `providers.allowHostedProviders` default for this task only —
+   *  never overrides `localOnly`/sensitive-data policy, which always wins (see
+   *  PolicyEngine.checkHostedEligibility()). */
+  allowHosted?: boolean;
 }
 
 export interface TaskOutcome {
@@ -84,14 +89,18 @@ const MINIMUM_CONTEXT_TOKENS = 8192;
 export async function planTask(
   engine: RookEngine,
   description: string,
-  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent'> = {},
+  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted'> = {},
 ): Promise<PlanResult> {
   const task: Task = {
     id: generateId('task-'),
     type: options.type ?? 'coding',
     input: description,
     requirements: { minimumContext: MINIMUM_CONTEXT_TOKENS },
-    policy: { networkAccess: engine.config.networkAllowed, projectRoot: engine.projectRoot },
+    policy: {
+      networkAccess: engine.config.networkAllowed,
+      projectRoot: engine.projectRoot,
+      allowHostedProviders: options.allowHosted,
+    },
     execution: { targetModelId: options.model, targetAgentId: options.agent },
     priority: 'normal',
     status: 'pending',
@@ -200,14 +209,19 @@ export async function executeTask(
   log('');
   log(color.bold(`  Execution ${executionId}`));
   log(color.gray(`    agent:    ${agent.descriptor.name}`));
-  log(color.gray(`    model:    ${scheduling.modelId} via ${scheduling.runtimeId} on ${scheduling.computerId}`));
+  log(color.gray(`    model:    ${scheduling.modelId} via ${scheduling.runtimeId} on ${scheduling.computerId ?? `hosted (${scheduling.runtimeId})`}`));
   log(color.gray(`    context:  ${context.finalRequiredTokens} / ${context.available.tokens} tokens`));
   for (const reason of scheduling.reasons) {
     log(color.gray(`    - ${reason}`));
   }
 
-  // Preflight Infrastructure Verification
-  if (scheduling.computerId === engine.worker.computerId) {
+  // Preflight Infrastructure Verification. Runs whenever execution happens
+  // in-process on this machine — which includes a hosted-provider placement
+  // (no computerId at all, but the *tool* execution environment is still
+  // this local workspace regardless of which LLM answers), not only when
+  // computerId happens to equal this worker's own id.
+  const runsInProcess = !scheduling.computerId || scheduling.computerId === engine.worker.computerId;
+  if (runsInProcess) {
     const preflight = await runWorkerPreflight({
       workspace: engine.projectRoot,
       taskPrompt: description,
@@ -253,8 +267,14 @@ export async function executeTask(
       await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
 
       try {
-        if (scheduling.computerId === engine.worker.computerId) {
-          const adapter = engine.worker.adapterForModel(request.modelId);
+        if (runsInProcess) {
+          // engine.adapters already holds local adapters keyed by runtime id
+          // (see engine.ts) alongside the hosted ones added in this feature —
+          // checked first so a hosted placement (no computerId, so
+          // worker.adapterForModel() can never find it — see hostedProviders.ts's
+          // invariant) resolves correctly. Falls back to the worker lookup for
+          // any local adapter not present in that map.
+          const adapter = engine.adapters.get(scheduling.runtimeId) ?? engine.worker.adapterForModel(request.modelId);
           if (!adapter) {
             yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
             return;

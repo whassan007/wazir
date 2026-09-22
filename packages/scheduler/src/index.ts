@@ -33,7 +33,7 @@ export function describeDecision(decision: SchedulerDecision): string {
   if (decision.agentId) lines.push(`Agent:    ${decision.agentId}`);
   lines.push(`Model:    ${decision.modelId}`);
   lines.push(`Runtime:  ${decision.runtimeId}`);
-  lines.push(`Computer: ${decision.computerId}`);
+  lines.push(`Computer: ${decision.computerId ?? `(hosted via ${decision.runtimeId})`}`);
   lines.push('Because:');
   for (const reason of decision.reasons) {
     lines.push(`  - ${reason}`);

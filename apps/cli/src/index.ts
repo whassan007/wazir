@@ -547,6 +547,67 @@ policyCmd
 
 program.addCommand(policyCmd);
 
+// auth command — hosted provider authentication (Anthropic, OpenAI, Google)
+const authCmd = new Command()
+  .name('auth')
+  .description('Authenticate hosted AI providers (Anthropic, OpenAI, Google)');
+
+authCmd
+  .command('login [provider]')
+  .description('Authenticate with a hosted provider (prompts to choose one if omitted)')
+  .option('--api-key <key>', 'Provide the API key non-interactively (also honors the provider env var)')
+  .option('--oauth', 'Use OAuth instead of an API key (Google only, requires oauthClientId configured)')
+  .option('--json', 'Output the resulting status as JSON')
+  .action(async (provider: string | undefined, opts: { apiKey?: string; oauth?: boolean; json?: boolean }) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { authLoginCommand } = await import('./auth.js');
+    const result = await authLoginCommand(engine, provider, opts);
+    if (result.output) console.log(result.output);
+    process.exit(result.code);
+  });
+
+authCmd
+  .command('status')
+  .description('Show which hosted providers are connected')
+  .option('--json', 'Output as JSON')
+  .action(async (opts: { json?: boolean }) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { authStatusCommand } = await import('./auth.js');
+    const result = await authStatusCommand(engine, opts);
+    if (result.output) console.log(result.output);
+    process.exit(result.code);
+  });
+
+authCmd
+  .command('logout <provider>')
+  .description('Remove a hosted provider credential')
+  .option('--json', 'Output as JSON')
+  .action(async (provider: string, opts: { json?: boolean }) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { authLogoutCommand } = await import('./auth.js');
+    const result = await authLogoutCommand(engine, provider, opts);
+    if (result.output) console.log(result.output);
+    process.exit(result.code);
+  });
+
+authCmd
+  .command('providers')
+  .description('List supported hosted providers and their authentication methods')
+  .option('--json', 'Output as JSON')
+  .action(async (opts: { json?: boolean }) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { authProvidersCommand } = await import('./auth.js');
+    const result = await authProvidersCommand(engine, opts);
+    if (result.output) console.log(result.output);
+    process.exit(result.code);
+  });
+
+program.addCommand(authCmd);
+
 // audit command
 program
   .command('audit')
@@ -584,6 +645,7 @@ program
   .option('--computer <id>', 'Target specific computer')
   .option('--model <name>', 'Use specific model')
   .option('--local-only', 'Only run on local computers')
+  .option('--allow-hosted', 'Allow this command to route to an authenticated hosted provider (Anthropic/OpenAI/Google)')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();

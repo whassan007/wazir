@@ -50,6 +50,16 @@ export interface PolicyRequirements {
   toolAccess?: boolean;
   maxExecutionTimeSeconds?: number;
   projectRoot?: string;
+  /**
+   * Explicit opt-in for routing this task to a hosted provider
+   * (Anthropic/OpenAI/Google). Deny-by-default: routing to a hosted-only
+   * model requires this to be `true` (directly, or via the engine-wide
+   * `PolicyEngineOptions.allowHostedProvidersDefault`) even when `localOnly`
+   * is unset. `localOnly: true` or `dataClassification` in
+   * ('sensitive'|'restricted') always override this back to `false`,
+   * regardless of its value — see `PolicyEngine.checkHostedEligibility()`.
+   */
+  allowHostedProviders?: boolean;
 }
 
 export interface ExecutionPreferences {

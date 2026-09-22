@@ -164,6 +164,51 @@ function checkRuntimeConnectivity(engine: RookEngine): DoctorCheck {
   }
 }
 
+/**
+ * The only doctor check that makes a live network call to a hosted provider
+ * (via `RuntimeAdapter.healthCheck()`, not `ProviderAuthAdapter.status()` —
+ * see hostedProviders.ts's docstring on why `status()` stays network-free
+ * everywhere else). Only probes providers that are actually authenticated;
+ * an unauthenticated provider is reported as NOT INSTALLED without a wasted
+ * network round-trip.
+ */
+async function checkHostedProviders(engine: RookEngine): Promise<DoctorCheck> {
+  try {
+    const entries = Array.from(engine.hostedAdapters.entries());
+    const authenticated: typeof entries = [];
+    for (const entry of entries) {
+      const status = await entry[1].status();
+      if (status.authenticated) authenticated.push(entry);
+    }
+
+    if (authenticated.length === 0) {
+      return {
+        name: 'hosted providers',
+        status: 'NOT INSTALLED',
+        message: 'no hosted providers authenticated',
+        details: 'run `wa auth login <provider>` to enable Anthropic/OpenAI/Google routing',
+      };
+    }
+
+    const results = await Promise.all(authenticated.map(async ([id, adapter]) => [id, await adapter.healthCheck()] as const));
+    const healthy = results.filter(([, h]) => h.status === 'healthy');
+
+    return {
+      name: 'hosted providers',
+      status: healthy.length === results.length ? 'PASS' : healthy.length > 0 ? 'WARN' : 'UNAVAILABLE',
+      message: `${healthy.length}/${results.length} authenticated provider(s) reachable`,
+      details: results.map(([id, h]) => `  ${id}: ${h.status}${h.message ? ` (${h.message})` : ''}`).join('\n'),
+    };
+  } catch (error) {
+    return {
+      name: 'hosted providers',
+      status: 'FAIL',
+      message: 'hosted provider check error',
+      details: (error as Error).message,
+    };
+  }
+}
+
 function checkModelAvailability(engine: RookEngine): DoctorCheck {
   try {
     if (engine.lifecycle) {
@@ -350,7 +395,7 @@ function checkSandbox(): DoctorCheck {
   }
 }
 
-export function doctor(engine: RookEngine): DoctorReport {
+export async function doctor(engine: RookEngine): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [
     checkConfig(engine),
     checkPersistence(engine),
@@ -358,6 +403,7 @@ export function doctor(engine: RookEngine): DoctorReport {
     checkWorker(engine),
     checkComputerRegistration(engine),
     checkRuntimeConnectivity(engine),
+    await checkHostedProviders(engine),
     checkModelAvailability(engine),
     checkRequiredPermissions(engine),
     checkSchedulerReadiness(engine),
@@ -385,7 +431,7 @@ export function doctorCommand(): Promise<{ code: number; output: string }> {
 
       ({ finish } = await createBlock(engine, 'doctor', []));
 
-      const report = doctor(engine);
+      const report = await doctor(engine);
     
     const lines: string[] = [];
     lines.push(color.bold('Wazir Doctor'));

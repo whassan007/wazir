@@ -87,7 +87,9 @@ export interface ModelLifecycleEvent {
 export interface ModelInstance {
   id: string;
   modelId: string;
-  computerId: string;
+  /** Absent for a hosted-provider instance (Anthropic/OpenAI/Google) — those
+   *  have no Computer/hardware affinity by design (see HOSTED_RUNTIME_TYPES). */
+  computerId?: string;
   runtimeId: string;
   runtimeModelId: string;
   loaded: boolean;

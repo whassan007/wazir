@@ -4,10 +4,18 @@ import os from 'node:os';
 import { generateId } from './utils.js';
 import { sanitizeUntrustedOutput } from './sanitize.js';
 
+export type ProviderAuthEvent =
+  | 'AUTH_LOGIN_STARTED'
+  | 'AUTH_LOGIN_SUCCEEDED'
+  | 'AUTH_LOGIN_FAILED'
+  | 'AUTH_REFRESHED'
+  | 'AUTH_EXPIRED'
+  | 'AUTH_LOGOUT';
+
 export interface AuditEvent {
   id: string;
   timestamp: string;
-  type: 'policy_decision' | 'approval_resolution' | 'tool_call';
+  type: 'policy_decision' | 'approval_resolution' | 'tool_call' | 'provider_auth';
   tool?: string;
   decision?: 'allow' | 'ask' | 'deny';
   rule?: string;
@@ -17,6 +25,18 @@ export interface AuditEvent {
   taskId?: string;
   agentId?: string;
   resolvedBy?: string;
+  /** Set only on `type: 'provider_auth'` events — 'anthropic' | 'openai' | 'google'. */
+  provider?: string;
+  /** Set only on `type: 'provider_auth'` events. */
+  authEvent?: ProviderAuthEvent;
+  /**
+   * Free-form event metadata. For `type: 'provider_auth'` this MUST NEVER
+   * contain an API key, access/refresh token, authorization code, PKCE
+   * verifier, or any other secret material — only non-secret classification
+   * (e.g. `{ method: 'api-key' }`, `{ reason: 'invalid_api_key' }`,
+   * `{ expiresAt: '...' }`). Enforced by convention at every `wa auth` call
+   * site, not by this function; see apps/cli/tests/authAuditRedaction.test.ts.
+   */
   details?: Record<string, unknown>;
 }
 
@@ -26,6 +46,7 @@ export interface ReadAuditOptions {
   tool?: string;
   decision?: 'allow' | 'ask' | 'deny';
   type?: AuditEvent['type'];
+  provider?: string;
 }
 
 function sanitizeDeep<T>(value: T): T {
@@ -71,6 +92,8 @@ export async function appendAuditEvent(
     taskId: event.taskId,
     agentId: event.agentId,
     resolvedBy: event.resolvedBy,
+    provider: event.provider,
+    authEvent: event.authEvent,
     details: event.details,
   };
 
@@ -103,6 +126,7 @@ export async function readAuditEvents(options: ReadAuditOptions = {}): Promise<A
         if (options.type && parsed.type !== options.type) continue;
         if (options.tool && parsed.tool !== options.tool) continue;
         if (options.decision && parsed.decision !== options.decision) continue;
+        if (options.provider && parsed.provider !== options.provider) continue;
         events.push(parsed);
         if (options.limit && events.length >= options.limit) break;
       } catch {

@@ -1,0 +1,14 @@
+{
+  "name": "@wazir/runtimes-google",
+  "version": "0.1.28",
+  "description": "Google Gemini hosted runtime adapter for the meta-harness (API key + OAuth 2.0 PKCE)",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@wazir/runtimes-interfaces": "*",
+    "@wazir/secrets": "*"
+  }
+}

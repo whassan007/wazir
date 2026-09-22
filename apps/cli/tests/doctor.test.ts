@@ -75,6 +75,8 @@ function createMockEngine(overrides: Partial<RookEngine> = {}): RookEngine {
       info: { id: 'worker-local', computerId: 'local', version: '1.0', status: 'online', runtimes: ['ollama'], models: ['test-model'] },
     } as any,
     store: {} as any,
+    secretBroker: {} as any,
+    hostedAdapters: new Map(),
   };
 
   return Object.assign(base, overrides) as RookEngine;
@@ -88,122 +90,122 @@ function findCheck(report: DoctorReport, name: string): DoctorCheck {
 
 describe('Section 13: wa doctor check-by-check suite', () => {
   describe('checkConfig', () => {
-    it('reports PASS when at least one runtime URL is configured', () => {
+    it('reports PASS when at least one runtime URL is configured', async () => {
       const engine = createMockEngine({ config: { ollamaUrl: 'http://localhost:11434' } as any });
-      const check = findCheck(doctor(engine), 'configuration');
+      const check = findCheck(await doctor(engine), 'configuration');
       expect(check.status).toBe('PASS');
       expect(check.message).toContain('valid');
     });
 
-    it('reports WARN when neither ollamaUrl nor lmstudioUrl is configured', () => {
+    it('reports WARN when neither ollamaUrl nor lmstudioUrl is configured', async () => {
       const engine = createMockEngine({ config: {} as any });
-      const check = findCheck(doctor(engine), 'configuration');
+      const check = findCheck(await doctor(engine), 'configuration');
       expect(check.status).toBe('WARN');
       expect(check.message).toContain('no runtimes configured');
     });
 
-    it('reports FAIL on configuration access error', () => {
+    it('reports FAIL on configuration access error', async () => {
       const engine = createMockEngine();
       Object.defineProperty(engine, 'config', {
         get() {
           throw new Error('Corrupt YAML in ~/.wazir/config.json');
         },
       });
-      const check = findCheck(doctor(engine), 'configuration');
+      const check = findCheck(await doctor(engine), 'configuration');
       expect(check.status).toBe('FAIL');
       expect(check.details).toContain('Corrupt YAML');
     });
   });
 
   describe('checkPersistence', () => {
-    it('reports PASS when persistent storage path is present', () => {
+    it('reports PASS when persistent storage path is present', async () => {
       const engine = createMockEngine({
         executions: { store: { path: '/home/user/.wazir/store.json' } } as any,
       });
-      const check = findCheck(doctor(engine), 'persistence');
+      const check = findCheck(await doctor(engine), 'persistence');
       expect(check.status).toBe('PASS');
       expect(check.message).toContain('/home/user/.wazir/store.json');
     });
 
-    it('reports PASS when in-memory store is active (store.path absent)', () => {
+    it('reports PASS when in-memory store is active (store.path absent)', async () => {
       const engine = createMockEngine({
         executions: { store: {} } as any,
       });
-      const check = findCheck(doctor(engine), 'persistence');
+      const check = findCheck(await doctor(engine), 'persistence');
       expect(check.status).toBe('PASS');
       expect(check.message).toContain('in-memory');
     });
 
-    it('reports FAIL on persistence access error', () => {
+    it('reports FAIL on persistence access error', async () => {
       const engine = createMockEngine();
       Object.defineProperty(engine, 'executions', {
         get() {
           throw new Error('I/O error reading database descriptor');
         },
       });
-      const check = findCheck(doctor(engine), 'persistence');
+      const check = findCheck(await doctor(engine), 'persistence');
       expect(check.status).toBe('FAIL');
       expect(check.details).toContain('I/O error');
     });
   });
 
   describe('checkControlPlane', () => {
-    it('reports PASS when registered computers are online', () => {
+    it('reports PASS when registered computers are online', async () => {
       const engine = createMockEngine();
-      const check = findCheck(doctor(engine), 'control plane');
+      const check = findCheck(await doctor(engine), 'control plane');
       expect(check.status).toBe('PASS');
       expect(check.message).toContain('online');
     });
 
-    it('reports WARN when zero computers are registered', () => {
+    it('reports WARN when zero computers are registered', async () => {
       const emptyRegistry = new ComputerRegistry();
       const engine = createMockEngine({ computers: emptyRegistry });
-      const check = findCheck(doctor(engine), 'control plane');
+      const check = findCheck(await doctor(engine), 'control plane');
       expect(check.status).toBe('WARN');
       expect(check.message).toContain('no computers registered');
     });
 
-    it('reports UNAVAILABLE when computers are registered but none are online', () => {
+    it('reports UNAVAILABLE when computers are registered but none are online', async () => {
       const offlineRegistry = new ComputerRegistry();
       offlineRegistry.register({ id: 'c1', name: 'c1', type: 'workstation' });
       offlineRegistry.setOffline('c1');
 
       const engine = createMockEngine({ computers: offlineRegistry });
-      const check = findCheck(doctor(engine), 'control plane');
+      const check = findCheck(await doctor(engine), 'control plane');
       expect(check.status).toBe('UNAVAILABLE');
       expect(check.message).toBe('0/1 computer(s) online');
     });
 
-    it('reports FAIL on control plane check error', () => {
+    it('reports FAIL on control plane check error', async () => {
       const engine = createMockEngine();
       Object.defineProperty(engine, 'computers', {
         get() {
           throw new Error('Connection refused to control plane RPC');
         },
       });
-      const check = findCheck(doctor(engine), 'control plane');
+      const check = findCheck(await doctor(engine), 'control plane');
       expect(check.status).toBe('FAIL');
       expect(check.details).toContain('Connection refused');
     });
   });
 
   describe('checkWorker', () => {
-    it('reports PASS when worker is running and status is online', () => {
+    it('reports PASS when worker is running and status is online', async () => {
       const engine = createMockEngine();
-      const check = findCheck(doctor(engine), 'worker');
+      const check = findCheck(await doctor(engine), 'worker');
       expect(check.status).toBe('PASS');
     });
 
-    it('reports WARN when worker is not running', () => {
+    it('reports WARN when worker is not running', async () => {
       const engine = createMockEngine({
         worker: { isRunning: false, info: { status: 'offline' } } as any,
       });
-      const check = findCheck(doctor(engine), 'worker');
+      const check = findCheck(await doctor(engine), 'worker');
       expect(check.status).toBe('WARN');
       expect(check.message).toContain('worker not running');
     });
 
-    it('reports UNAVAILABLE when worker is running but status is not online', () => {
+    it('reports UNAVAILABLE when worker is running but status is not online', async () => {
       const engine = createMockEngine({
         worker: {
           isRunning: true,
@@ -212,49 +214,49 @@ describe('Section 13: wa doctor check-by-check suite', () => {
           info: { status: 'connecting', runtimes: [], models: [] },
         } as any,
       });
-      const check = findCheck(doctor(engine), 'worker');
+      const check = findCheck(await doctor(engine), 'worker');
       expect(check.status).toBe('UNAVAILABLE');
     });
 
-    it('reports FAIL on worker check error', () => {
+    it('reports FAIL on worker check error', async () => {
       const engine = createMockEngine();
       Object.defineProperty(engine, 'worker', {
         get() {
           throw new Error('Worker thread crashed');
         },
       });
-      const check = findCheck(doctor(engine), 'worker');
+      const check = findCheck(await doctor(engine), 'worker');
       expect(check.status).toBe('FAIL');
       expect(check.details).toContain('Worker thread crashed');
     });
   });
 
   describe('checkComputerRegistration', () => {
-    it('reports PASS when local computer is registered and online', () => {
+    it('reports PASS when local computer is registered and online', async () => {
       const engine = createMockEngine();
-      const check = findCheck(doctor(engine), 'computer registration');
+      const check = findCheck(await doctor(engine), 'computer registration');
       expect(check.status).toBe('PASS');
     });
 
-    it('reports NOT INSTALLED when local computer is not found in registry', () => {
+    it('reports NOT INSTALLED when local computer is not found in registry', async () => {
       const emptyRegistry = new ComputerRegistry();
       const engine = createMockEngine({ computers: emptyRegistry });
-      const check = findCheck(doctor(engine), 'computer registration');
+      const check = findCheck(await doctor(engine), 'computer registration');
       expect(check.status).toBe('NOT INSTALLED');
       expect(check.message).toContain('not registered');
     });
 
-    it('reports UNAVAILABLE when local computer is registered but status is offline', () => {
+    it('reports UNAVAILABLE when local computer is registered but status is offline', async () => {
       const reg = new ComputerRegistry();
       reg.register({ id: 'local', name: 'local-node', type: 'workstation' });
       reg.setOffline('local');
 
       const engine = createMockEngine({ computers: reg });
-      const check = findCheck(doctor(engine), 'computer registration');
+      const check = findCheck(await doctor(engine), 'computer registration');
       expect(check.status).toBe('UNAVAILABLE');
     });
 
-    it('reports FAIL on registration check error', () => {
+    it('reports FAIL on registration check error', async () => {
       const engine = createMockEngine();
       const faultyReg = {
         get() {
@@ -264,158 +266,158 @@ describe('Section 13: wa doctor check-by-check suite', () => {
         listOnline: () => [],
       } as any;
       engine.computers = faultyReg;
-      const check = findCheck(doctor(engine), 'computer registration');
+      const check = findCheck(await doctor(engine), 'computer registration');
       expect(check.status).toBe('FAIL');
       expect(check.details).toContain('Registry corrupted');
     });
   });
 
   describe('checkRuntimeConnectivity', () => {
-    it('reports PASS when all discovered runtimes are healthy', () => {
+    it('reports PASS when all discovered runtimes are healthy', async () => {
       const engine = createMockEngine({
         discovered: [
           { id: 'ollama', health: 'healthy', info: {}, models: [] } as any,
           { id: 'lmstudio', health: 'healthy', info: {}, models: [] } as any,
         ],
       });
-      const check = findCheck(doctor(engine), 'runtime connectivity');
+      const check = findCheck(await doctor(engine), 'runtime connectivity');
       expect(check.status).toBe('PASS');
       expect(check.message).toBe('2/2 runtime(s) healthy');
     });
 
-    it('reports WARN when some runtimes are healthy and some are degraded/unavailable', () => {
+    it('reports WARN when some runtimes are healthy and some are degraded/unavailable', async () => {
       const engine = createMockEngine({
         discovered: [
           { id: 'ollama', health: 'healthy', info: {}, models: [] } as any,
           { id: 'lmstudio', health: 'unavailable', info: {}, models: [] } as any,
         ],
       });
-      const check = findCheck(doctor(engine), 'runtime connectivity');
+      const check = findCheck(await doctor(engine), 'runtime connectivity');
       expect(check.status).toBe('WARN');
       expect(check.message).toBe('1/2 runtime(s) healthy');
     });
 
-    it('reports UNAVAILABLE when runtimes are discovered but none are healthy', () => {
+    it('reports UNAVAILABLE when runtimes are discovered but none are healthy', async () => {
       const engine = createMockEngine({
         discovered: [{ id: 'ollama', health: 'unavailable', info: {}, models: [] } as any],
       });
-      const check = findCheck(doctor(engine), 'runtime connectivity');
+      const check = findCheck(await doctor(engine), 'runtime connectivity');
       expect(check.status).toBe('UNAVAILABLE');
       expect(check.message).toContain('all runtimes unavailable');
     });
 
-    it('reports NOT INSTALLED when zero runtimes are discovered', () => {
+    it('reports NOT INSTALLED when zero runtimes are discovered', async () => {
       const engine = createMockEngine({ discovered: [] });
-      const check = findCheck(doctor(engine), 'runtime connectivity');
+      const check = findCheck(await doctor(engine), 'runtime connectivity');
       expect(check.status).toBe('NOT INSTALLED');
       expect(check.message).toContain('no runtimes discovered');
     });
 
-    it('reports FAIL on connectivity check error', () => {
+    it('reports FAIL on connectivity check error', async () => {
       const engine = createMockEngine();
       Object.defineProperty(engine, 'discovered', {
         get() {
           throw new Error('Socket timeout probing ports');
         },
       });
-      const check = findCheck(doctor(engine), 'runtime connectivity');
+      const check = findCheck(await doctor(engine), 'runtime connectivity');
       expect(check.status).toBe('FAIL');
       expect(check.details).toContain('Socket timeout');
     });
   });
 
   describe('checkModelAvailability', () => {
-    it('reports PASS when models are registered', () => {
+    it('reports PASS when models are registered', async () => {
       const engine = createMockEngine();
-      const check = findCheck(doctor(engine), 'model availability');
+      const check = findCheck(await doctor(engine), 'model availability');
       expect(check.status).toBe('PASS');
       expect(check.message).toContain('model(s)');
     });
 
-    it('reports NOT INSTALLED when no models are registered', () => {
+    it('reports NOT INSTALLED when no models are registered', async () => {
       const emptyModels = new ModelRegistry();
       const engine = createMockEngine({ models: emptyModels });
-      const check = findCheck(doctor(engine), 'model availability');
+      const check = findCheck(await doctor(engine), 'model availability');
       expect(check.status).toBe('NOT INSTALLED');
       expect(check.message).toContain('no models registered');
     });
 
-    it('reports FAIL on model availability check error', () => {
+    it('reports FAIL on model availability check error', async () => {
       const engine = createMockEngine();
       Object.defineProperty(engine, 'models', {
         get() {
           throw new Error('Model registry lock error');
         },
       });
-      const check = findCheck(doctor(engine), 'model availability');
+      const check = findCheck(await doctor(engine), 'model availability');
       expect(check.status).toBe('FAIL');
       expect(check.details).toContain('Model registry lock');
     });
   });
 
   describe('checkRequiredPermissions', () => {
-    it('reports PASS when policy engine has rules', () => {
+    it('reports PASS when policy engine has rules', async () => {
       const engine = createMockEngine();
-      const check = findCheck(doctor(engine), 'required permissions');
+      const check = findCheck(await doctor(engine), 'required permissions');
       expect(check.status).toBe('PASS');
       expect(check.message).toContain('rule(s) configured');
     });
 
-    it('reports WARN when policy rules are missing', () => {
+    it('reports WARN when policy rules are missing', async () => {
       const engine = createMockEngine({ policy: {} as any });
-      const check = findCheck(doctor(engine), 'required permissions');
+      const check = findCheck(await doctor(engine), 'required permissions');
       expect(check.status).toBe('WARN');
       expect(check.message).toContain('no policy rules defined');
     });
 
-    it('reports FAIL on policy check error', () => {
+    it('reports FAIL on policy check error', async () => {
       const engine = createMockEngine();
       Object.defineProperty(engine, 'policy', {
         get() {
           throw new Error('Policy parse syntax error');
         },
       });
-      const check = findCheck(doctor(engine), 'required permissions');
+      const check = findCheck(await doctor(engine), 'required permissions');
       expect(check.status).toBe('FAIL');
       expect(check.details).toContain('Policy parse syntax error');
     });
   });
 
   describe('checkSchedulerReadiness', () => {
-    it('reports PASS when scheduler is available', () => {
+    it('reports PASS when scheduler is available', async () => {
       const engine = createMockEngine();
-      const check = findCheck(doctor(engine), 'scheduler readiness');
+      const check = findCheck(await doctor(engine), 'scheduler readiness');
       expect(check.status).toBe('PASS');
       expect(check.message).toContain('scheduler ready');
     });
 
-    it('reports FAIL when scheduler is missing', () => {
+    it('reports FAIL when scheduler is missing', async () => {
       const engine = createMockEngine({ scheduler: undefined as any });
-      const check = findCheck(doctor(engine), 'scheduler readiness');
+      const check = findCheck(await doctor(engine), 'scheduler readiness');
       expect(check.status).toBe('FAIL');
       expect(check.message).toContain('not available');
     });
 
-    it('reports FAIL on scheduler check error', () => {
+    it('reports FAIL on scheduler check error', async () => {
       const engine = createMockEngine();
       Object.defineProperty(engine, 'scheduler', {
         get() {
           throw new Error('Failed to resolve scheduler graph');
         },
       });
-      const check = findCheck(doctor(engine), 'scheduler readiness');
+      const check = findCheck(await doctor(engine), 'scheduler readiness');
       expect(check.status).toBe('FAIL');
       expect(check.details).toContain('scheduler graph');
     });
   });
 
   describe('doctor() summary computation', () => {
-    it('computes exact counts across all 5 statuses', () => {
+    it('computes exact counts across all 5 statuses', async () => {
       const engine = createMockEngine({
         config: {} as any, // WARN (configuration)
         discovered: [], // NOT INSTALLED (runtime connectivity)
       });
-      const report = doctor(engine);
+      const report = await doctor(engine);
 
       expect(report.summary.pass).toBeGreaterThan(0);
       expect(report.summary.warn).toBeGreaterThan(0);

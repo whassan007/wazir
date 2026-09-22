@@ -47,4 +47,7 @@ export interface PolicyEngineOptions {
     /** When false, 'ask' falls through to `approveCallback` (if any) instead of waiting on the queue. */
     hasSubscribers?: boolean;
   };
+  /** Engine-wide default for `PolicyRequirements.allowHostedProviders` when a
+   *  task omits it. Defaults to `false` — hosted routing is opt-in. */
+  allowHostedProvidersDefault?: boolean;
 }

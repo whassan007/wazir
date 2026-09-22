@@ -1,0 +1,14 @@
+{
+  "name": "@wazir/runtimes-openai",
+  "version": "0.1.28",
+  "description": "OpenAI hosted runtime adapter for the meta-harness",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@wazir/runtimes-interfaces": "*",
+    "@wazir/secrets": "*"
+  }
+}

@@ -17,7 +17,8 @@ export interface Execution {
   id: string;
   taskId: string;
   agentId?: string;
-  computerId: string;
+  /** Absent for an execution routed to a hosted provider (no Computer). */
+  computerId?: string;
   runtimeId: string;
   modelId: string;
   workerId?: string;

@@ -4,6 +4,7 @@ export type { Task, TaskStatus, WorkspaceMode };
 import type { PolicyDecision } from './policy.js';
 import type { ExecutionRecord } from './execution.js';
 import type { AgentErrorKind } from './agent.js';
+import type { PromptBreakdown } from './context.js';
 
 export type JobStatus =
   | 'pending'
@@ -129,7 +130,8 @@ export interface AgentAssignment {
   agentId: string;
   modelId: string;
   runtimeId: string;
-  computerId: string;
+  /** Absent for an assignment routed to a hosted provider (no Computer). */
+  computerId?: string;
   assignedAt: Date;
   policy: PolicyDecision[];
 }
@@ -161,6 +163,7 @@ export interface JobTaskProgressEvent {
   tool?: string;
   error?: string;
   usage?: { input: number; output: number; total: number };
+  breakdown?: PromptBreakdown;
   /** Raw model response text this progress event was produced from, when available. */
   raw?: string;
   metadata?: Record<string, unknown>;
@@ -234,6 +237,7 @@ export interface JobOrchestratorEvent {
   instruction?: string;
   filesChanged?: string[];
   usage?: { input: number; output: number; total: number };
+  breakdown?: PromptBreakdown;
   timestamp?: Date;
 }
 

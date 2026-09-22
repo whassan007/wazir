@@ -16,6 +16,12 @@ export interface StatusSummary {
     healthy: number;
     unhealthy: number;
   };
+  providers: {
+    /** Statically known hosted providers (Anthropic/OpenAI/Google) — always 3. */
+    total: number;
+    authenticated: number;
+    models: number;
+  };
   workers: {
     running: boolean;
     id: string;
@@ -56,6 +62,11 @@ export function getStatus(engine: RookEngine): StatusSummary {
       total: runtimes.length,
       healthy: healthyRuntimes.length,
       unhealthy: runtimes.length - healthyRuntimes.length,
+    },
+    providers: {
+      total: engine.hostedAdapters.size,
+      authenticated: runtimes.filter((r) => r.runtimeKind === 'hosted' && r.health === 'healthy').length,
+      models: engine.models.list().filter((m) => !m.local).length,
     },
     workers: {
       running: engine.worker.isRunning,
@@ -106,6 +117,16 @@ export function statusCommand(): Promise<{ code: number; output: string }> {
       }
       
       lines.push('');
+      lines.push(color.bold('Providers'));
+      lines.push(`  connected: ${status.providers.authenticated}/${status.providers.total}`);
+      if (status.providers.models > 0) {
+        lines.push(`  models:    ${status.providers.models} available`);
+      }
+      if (status.providers.authenticated === 0) {
+        lines.push(color.gray('  none authenticated — run `wa auth login` to connect a hosted provider'));
+      }
+
+      lines.push('');
       lines.push(color.bold('Worker'));
       const workerStatus = status.workers.running ? color.green('running') : color.red('stopped');
       lines.push(`  id:        ${status.workers.id}`);
@@ -114,11 +135,19 @@ export function statusCommand(): Promise<{ code: number; output: string }> {
       lines.push(`  models:    ${status.workers.modelsDiscovered} discovered`);
       
       lines.push('');
+      lines.push(color.bold('Agents'));
+      const registeredAgents = engine.agents.list().length;
+      lines.push(`  registered: ${registeredAgents}`);
+      lines.push(`  active:     0`);
+      lines.push(`  slots:      ${engine.config?.concurrencyLimit ?? 4}`);
+
+      lines.push('');
       lines.push(color.bold('Models'));
       const readiness = engine.lifecycle.getReadiness();
-      lines.push(`  installed: ${readiness.installedCount}`);
-      lines.push(`  ready:     ${readiness.readyCount > 0 ? color.green(String(readiness.readyCount)) : color.yellow('0')}`);
-      lines.push(`  loading:   ${readiness.loadingCount}`);
+      lines.push(`  registered: ${readiness.installedCount}`);
+      lines.push(`  installed:  ${readiness.installedCount}`);
+      lines.push(`  ready:      ${readiness.readyCount > 0 ? color.green(String(readiness.readyCount)) : color.yellow('0')}`);
+      lines.push(`  loading:    ${readiness.loadingCount}`);
 
       lines.push('');
       lines.push(color.bold('Executions'));

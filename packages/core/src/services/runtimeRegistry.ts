@@ -7,6 +7,7 @@ export class RuntimeRegistry {
     const existing = this.runtimes.get(registration.id);
     const record: RuntimeRecord = {
       ...registration,
+      runtimeKind: registration.runtimeKind ?? existing?.runtimeKind ?? 'local',
       health: existing?.health ?? 'degraded',
       loadedModels: existing?.loadedModels ?? [],
       lastCheckedAt: new Date(),

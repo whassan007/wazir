@@ -1,6 +1,7 @@
 import { effectiveContextTokens } from '../types/model.js';
 import type { Computer } from '../types/computer.js';
 import type { ModelInstance, ModelRecord } from '../types/model.js';
+import { HOSTED_RUNTIME_TYPES } from '../types/runtime.js';
 import type { Task } from '../types/task.js';
 import type {
   ComputerRoutingDecision,
@@ -11,6 +12,7 @@ import { SchedulingError } from '../types/scheduler.js';
 import type { AgentRegistry } from './agentRegistry.js';
 import type { ComputerRegistry } from './computerRegistry.js';
 import type { ModelRegistry } from './modelRegistry.js';
+import type { PolicyEngine } from './policyEngine.js';
 import type { RuntimeRegistry } from './runtimeRegistry.js';
 
 export interface SchedulerDeps {
@@ -18,6 +20,8 @@ export interface SchedulerDeps {
   runtimes: RuntimeRegistry;
   models: ModelRegistry;
   agents?: AgentRegistry;
+  /** Gates hosted-provider placement — see `scheduleComputer()`'s hosted branch. */
+  policy: PolicyEngine;
 }
 
 export interface ScheduleInput {
@@ -35,7 +39,8 @@ interface ScoredModel {
 
 interface ScoredPlacement {
   instance: ModelInstance;
-  computer: Computer;
+  /** Absent for a hosted placement (no Computer). */
+  computer?: Computer;
   score: number;
   reasons: string[];
 }
@@ -185,6 +190,23 @@ export class Scheduler {
       }
     }
 
+    // A model only servable by a hosted provider must clear the hosted
+    // eligibility gate here in Phase 1, not just in Phase 2's computer
+    // placement. Otherwise an ineligible hosted-only model can still be
+    // *selected* as the best-scoring candidate (no fallback is performed —
+    // see this class's docstring) and only then fail in Phase 2 with a
+    // confusing "no computer can host" error, even when a perfectly good
+    // local model exists and would have been picked instead.
+    if (Array.isArray(record.runtimeCompatibility) && record.runtimeCompatibility.length > 0 &&
+        record.runtimeCompatibility.every((t) => HOSTED_RUNTIME_TYPES.has(t))) {
+      const gate = this.deps.policy.checkHostedEligibility(task.policy, record.runtimeCompatibility[0]);
+      if (!gate.allowed) {
+        rejected.push(gate.reason);
+      } else {
+        reasons.push(gate.reason);
+      }
+    }
+
     if (rejected.length > 0) {
       return { record, score: 0, reasons, rejected };
     }
@@ -202,7 +224,7 @@ export class Scheduler {
       .find((i) => i.loaded && i.health === 'healthy');
     if (loadedInstance) {
       score += 2;
-      reasons.push(`instance on '${loadedInstance.computerId}' already loaded`);
+      reasons.push(`instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' already loaded`);
     } else if (this.deps.models.instancesOf(record.id).length > 0) {
       reasons.push('available instance will be loaded on demand');
     } else {
@@ -222,9 +244,15 @@ export class Scheduler {
     }
 
     const online = new Set(this.deps.computers.listOnline().map((c) => c.id));
+    // A hosted instance has no computerId, so it is never a member of `online`
+    // by construction (Set.has(undefined) is always false) — treat "no
+    // computer to be online" as trivially satisfied for those instances,
+    // otherwise every hosted instance would be wrongly excluded from both
+    // preference passes below.
+    const isOnline = (i: ModelInstance): boolean => !i.computerId || online.has(i.computerId);
     const instance =
-      instances.find((i) => i.loaded && i.health === 'healthy' && online.has(i.computerId)) ??
-      instances.find((i) => i.health !== 'unavailable' && online.has(i.computerId)) ??
+      instances.find((i) => i.loaded && i.health === 'healthy' && isOnline(i)) ??
+      instances.find((i) => i.health !== 'unavailable' && isOnline(i)) ??
       instances[0];
 
     return instance;
@@ -238,7 +266,52 @@ export class Scheduler {
     const placements: ScoredPlacement[] = [];
 
     for (const instance of instances) {
-      const computer = this.deps.computers.get(instance.computerId);
+      const runtime = this.deps.runtimes.get(instance.runtimeId);
+      const isHosted = runtime?.runtimeKind === 'hosted' || !instance.computerId;
+
+      if (isHosted) {
+        const policy = task.policy;
+        const gate = this.deps.policy.checkHostedEligibility(policy, instance.runtimeId);
+        if (!gate.allowed) {
+          failures.push(gate.reason);
+          continue;
+        }
+        // allowedComputers/allowedRuntimes still apply — a hosted provider
+        // simply has no computer identity to check against allowedComputers.
+        if (policy?.allowedComputers) {
+          failures.push(`${instance.runtimeId}: hosted provider has no computer identity, cannot satisfy allowedComputers`);
+          continue;
+        }
+        if (policy?.allowedRuntimes && !policy.allowedRuntimes.includes(instance.runtimeId)) {
+          failures.push(`${instance.runtimeId}: not in allowedRuntimes`);
+          continue;
+        }
+        if (!runtime || runtime.health === 'unavailable') {
+          failures.push(`${instance.runtimeId}: not authenticated or unreachable (run 'wa auth login ${instance.runtimeId}')`);
+          continue;
+        }
+        if (instance.health === 'unavailable') {
+          failures.push(`${instance.runtimeId}: model instance reports unavailable`);
+          continue;
+        }
+        if (record.runtimeCompatibility && record.runtimeCompatibility !== 'any' && Array.isArray(record.runtimeCompatibility)) {
+          const runtimeType = runtime.type ?? instance.runtimeId;
+          if (!record.runtimeCompatibility.includes(runtimeType as any)) {
+            failures.push(`${instance.runtimeId}: runtime type '${runtimeType}' incompatible with model runtimeCompatibility`);
+            continue;
+          }
+        }
+
+        placements.push({
+          instance,
+          computer: undefined,
+          score: runtime.health === 'healthy' ? 2 : 1,
+          reasons: [`hosted provider '${instance.runtimeId}' authenticated and eligible`, gate.reason],
+        });
+        continue;
+      }
+
+      const computer = this.deps.computers.get(instance.computerId!);
       if (!computer || computer.status !== 'online') {
         failures.push(`${instance.computerId}: computer is offline or unknown`);
         continue;
@@ -258,7 +331,6 @@ export class Scheduler {
         continue;
       }
 
-      const runtime = this.deps.runtimes.get(instance.runtimeId);
       if (runtime && runtime.health === 'unavailable') {
         failures.push(`${computer.id}: runtime '${runtime.id}' is unavailable`);
         continue;
@@ -345,13 +417,14 @@ export class Scheduler {
     }
 
     placements.sort(
-      (a, b) => b.score - a.score || a.computer.id.localeCompare(b.computer.id),
+      (a, b) => b.score - a.score || (a.computer?.id ?? a.instance.runtimeId).localeCompare(b.computer?.id ?? b.instance.runtimeId),
     );
     const best = placements[0];
 
     return {
-      computerId: best.computer.id,
+      computerId: best.computer?.id,
       runtimeId: best.instance.runtimeId,
+      placementKind: best.computer ? 'local' : 'hosted',
       score: best.score,
       reasons: best.reasons,
     };
