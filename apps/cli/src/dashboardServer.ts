@@ -235,7 +235,36 @@ export async function startDashboardServer(
     }
 
     if (pathname.startsWith('/api/v1/executions/')) {
-      const execId = decodeURIComponent(pathname.slice('/api/v1/executions/'.length));
+      const rest = pathname.slice('/api/v1/executions/'.length);
+      if (rest.endsWith('/events')) {
+        const execId = decodeURIComponent(rest.slice(0, -'/events'.length));
+        const execution = await engine.executions.get(execId);
+        if (execution) {
+          const events = await engine.executions.events(execution.execution.id);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ executionId: execution.execution.id, events }));
+        } else {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Execution '${execId}' not found` }));
+        }
+        return;
+      }
+
+      if (rest.endsWith('/children')) {
+        const execId = decodeURIComponent(rest.slice(0, -'/children'.length));
+        const execution = await engine.executions.get(execId);
+        if (execution) {
+          const children = await engine.executions.listChildren(execution.execution.id);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ executionId: execution.execution.id, children }));
+        } else {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Execution '${execId}' not found` }));
+        }
+        return;
+      }
+
+      const execId = decodeURIComponent(rest);
       const execution = await engine.executions.get(execId);
       if (execution) {
         res.writeHead(200, { 'Content-Type': 'application/json' });

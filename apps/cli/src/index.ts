@@ -240,6 +240,7 @@ taskCmd
   .option('--agent <name>', 'Use specific agent')
   .option('--max-turns <number>', 'Maximum turns per task')
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
+  .option('--preset <name>', 'Runtime preset (e.g. standard, minimal)')
   .option('--expected-files <files>', 'Expected changed files (comma-separated)')
   .option('--json', 'Output in JSON format')
   .description('Run a new task')
@@ -255,6 +256,7 @@ taskCmd
         model: options.model,
         agent: options.agent,
         maxTurns: options.maxTurns ? Number(options.maxTurns) : undefined,
+        preset: options.preset,
         expectedFiles: options.expectedFiles
           ? options.expectedFiles.split(',').map((s) => s.trim())
           : undefined,
@@ -307,6 +309,7 @@ program
   .option('--agent <name>', 'Use specific agent')
   .option('--max-turns <number>', 'Maximum turns per task')
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
+  .option('--preset <name>', 'Runtime preset (e.g. standard, minimal)')
   .option('--expected-files <files>', 'Expected changed files (comma-separated)')
   .option('--json', 'Output in JSON format')
   .description('Run a new task (alias for wa task run)')
@@ -322,6 +325,7 @@ program
         model: options.model,
         agent: options.agent,
         maxTurns: options.maxTurns ? Number(options.maxTurns) : undefined,
+        preset: options.preset,
         expectedFiles: options.expectedFiles
           ? options.expectedFiles.split(',').map((s) => s.trim())
           : undefined,

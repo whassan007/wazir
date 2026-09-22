@@ -278,4 +278,52 @@ describe('ExecutionEngine', () => {
     expect(events[1].type).toBe('execution.assigned');
     expect(events[2].type).toBe('execution.completed');
   });
+
+  it('tracks parentExecutionId and lists child executions', async () => {
+    await engine.ready;
+
+    const parentTask = {
+      id: 'task-parent',
+      type: 'coding' as const,
+      input: 'Parent task',
+      requirements: { capabilities: [] },
+      priority: 'normal',
+      status: 'pending',
+      createdAt: new Date(),
+    };
+
+    const parent = await engine.create({
+      task: parentTask,
+      computerId: 'computer-1',
+      runtimeId: 'runtime-1',
+      modelId: 'model-1',
+    });
+
+    const childTask = {
+      id: 'task-child',
+      type: 'coding' as const,
+      input: 'Child subtask',
+      requirements: { capabilities: [] },
+      priority: 'normal',
+      status: 'pending',
+      createdAt: new Date(),
+    };
+
+    const child = await engine.create({
+      task: childTask,
+      parentExecutionId: parent.execution.id,
+      computerId: 'computer-1',
+      runtimeId: 'runtime-1',
+      modelId: 'model-1',
+    });
+
+    expect(child.execution.parentExecutionId).toBe(parent.execution.id);
+
+    const children = await engine.listChildren(parent.execution.id);
+    expect(children.length).toBe(1);
+    expect(children[0].execution.id).toBe(child.execution.id);
+
+    const nonExistentChildren = await engine.listChildren('non-existent');
+    expect(nonExistentChildren.length).toBe(0);
+  });
 });

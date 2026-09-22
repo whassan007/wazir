@@ -69,6 +69,7 @@ export class ExecutionEngine {
 
   async create(params: {
     task: Task;
+    parentExecutionId?: string;
     agentId?: string;
     computerId: string;
     runtimeId: string;
@@ -81,6 +82,7 @@ export class ExecutionEngine {
     const execution: Execution = {
       id: nextId(this.idPrefix),
       taskId: params.task.id,
+      parentExecutionId: params.parentExecutionId,
       agentId: params.agentId,
       computerId: params.computerId,
       runtimeId: params.runtimeId,
@@ -599,6 +601,11 @@ export class ExecutionEngine {
   async listByTask(taskId: string): Promise<ExecutionRecord[]> {
     const records = await this.list();
     return records.filter((r) => r.execution.taskId === taskId);
+  }
+
+  async listChildren(executionId: string): Promise<ExecutionRecord[]> {
+    const records = await this.list();
+    return records.filter((r) => r.execution.parentExecutionId === executionId);
   }
 
   async events(executionId: string): Promise<ExecutionEvent[]> {

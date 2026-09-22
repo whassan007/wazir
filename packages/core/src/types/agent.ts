@@ -91,6 +91,8 @@ export interface AgentRunRequest {
   mutationRequired?: boolean;
   expectedArtifacts?: string[];
   expectedEvidence?: string[];
+  /** Depth of subagent nesting (0 = root agent, 1 = direct subagent). */
+  subagentDepth?: number;
 }
 
 /**

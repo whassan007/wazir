@@ -251,4 +251,35 @@ describe('PolicyEngine', () => {
       expect(gitHookDecision.rule).toBe('shell-workspace-artifact-ask');
     });
   });
+
+  describe('checkSubagentEligibility', () => {
+    const engine = new PolicyEngine();
+
+    it('allows subagent dispatch by default for normal policy', () => {
+      const result = engine.checkSubagentEligibility(undefined);
+      expect(result.allowed).toBe(true);
+
+      const publicResult = engine.checkSubagentEligibility({ dataClassification: 'public' });
+      expect(publicResult.allowed).toBe(true);
+
+      const internalResult = engine.checkSubagentEligibility({ dataClassification: 'internal' });
+      expect(internalResult.allowed).toBe(true);
+    });
+
+    it('denies subagent dispatch when dataClassification is sensitive or restricted', () => {
+      const sensitiveResult = engine.checkSubagentEligibility({ dataClassification: 'sensitive' });
+      expect(sensitiveResult.allowed).toBe(false);
+      expect(sensitiveResult.reason).toContain('sensitive');
+
+      const restrictedResult = engine.checkSubagentEligibility({ dataClassification: 'restricted' });
+      expect(restrictedResult.allowed).toBe(false);
+      expect(restrictedResult.reason).toContain('restricted');
+    });
+
+    it('denies subagent dispatch when allowSubagentDispatch is explicitly false', () => {
+      const result = engine.checkSubagentEligibility({ allowSubagentDispatch: false });
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('allowSubagentDispatch: false');
+    });
+  });
 });

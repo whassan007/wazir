@@ -212,6 +212,43 @@ describe('wa dashboard server', () => {
     const executionsData = (await executionsRes.json()) as any;
     expect(executionsData.executions).toBeDefined();
 
+    // 10b. Execution events & children
+    const testTask = {
+      id: 'task-dash-test',
+      type: 'coding' as const,
+      input: 'Test dash execution',
+      requirements: { capabilities: [] },
+      priority: 'normal',
+      status: 'pending',
+      createdAt: new Date(),
+    };
+    const parentRec = await engine.executions.create({
+      task: testTask,
+      computerId: 'local',
+      runtimeId: 'ollama',
+      modelId: 'gemma:2b',
+    });
+    const childRec = await engine.executions.create({
+      task: { ...testTask, id: 'task-dash-child', input: 'Child dash execution' },
+      parentExecutionId: parentRec.execution.id,
+      computerId: 'local',
+      runtimeId: 'ollama',
+      modelId: 'gemma:2b',
+    });
+
+    const eventsRes = await fetch(`${baseUrl}/api/v1/executions/${parentRec.execution.id}/events`);
+    expect(eventsRes.status).toBe(200);
+    const eventsData = (await eventsRes.json()) as any;
+    expect(eventsData.executionId).toBe(parentRec.execution.id);
+    expect(eventsData.events.length).toBeGreaterThan(0);
+
+    const childrenRes = await fetch(`${baseUrl}/api/v1/executions/${parentRec.execution.id}/children`);
+    expect(childrenRes.status).toBe(200);
+    const childrenData = (await childrenRes.json()) as any;
+    expect(childrenData.executionId).toBe(parentRec.execution.id);
+    expect(childrenData.children).toHaveLength(1);
+    expect(childrenData.children[0].execution.id).toBe(childRec.execution.id);
+
     // 11. CORS preflight OPTIONS request
     const optionsRes = await fetch(`${baseUrl}/api/v1/overview`, { method: 'OPTIONS' });
     expect(optionsRes.status).toBe(204);

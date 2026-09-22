@@ -421,6 +421,7 @@ export async function inspectExecution(engine: RookEngine, id: string, json: boo
   lines.push(`  model:     ${e.modelId ?? '—'}`);
   lines.push(`  runtime:   ${e.runtimeId ?? '—'}`);
   lines.push(`  computer:  ${e.computerId ?? '—'}`);
+  if (e.parentExecutionId) lines.push(`  parent:    ${e.parentExecutionId}`);
   lines.push(`  created:   ${e.createdAt.toISOString()}`);
   if (e.completedAt) lines.push(`  completed: ${e.completedAt.toISOString()}`);
 
@@ -497,6 +498,17 @@ export async function inspectExecution(engine: RookEngine, id: string, json: boo
     lines.push(color.bold('  Errors:'));
     for (const err of record.errors) {
       lines.push(color.red(`    ${err.slice(0, 300)}`));
+    }
+  }
+
+  const children = await engine.executions.listChildren(record.execution.id);
+  if (children.length > 0) {
+    lines.push('');
+    lines.push(color.bold(`  Child executions (${children.length}):`));
+    for (const child of children) {
+      lines.push(
+        `    └── ${child.execution.id} [${child.execution.status}] ${color.gray(child.task.input.slice(0, 60))}`,
+      );
     }
   }
 
@@ -642,6 +654,7 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   maxTurns?: number;
   expectedFiles?: string[];
   json?: boolean;
+  preset?: string;
 }): Promise<{ code: number; output: string }> {
   const outcome = await executeTask(engine, description, {
     type: options.type,
@@ -651,6 +664,7 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
     expectedFiles: options.expectedFiles,
     json: options.json,
     quiet: options.json === true,
+    preset: options.preset,
   });
 
   if (options.json) {

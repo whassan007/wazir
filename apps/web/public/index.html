@@ -465,6 +465,87 @@
   .reason-list li {
     margin-bottom: 6px;
   }
+  .timeline-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    position: relative;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+  .timeline-item {
+    position: relative;
+    padding-left: 18px;
+    margin-bottom: 12px;
+    border-left: 2px solid var(--border);
+    font-size: 12px;
+  }
+  .timeline-item::before {
+    content: '';
+    position: absolute;
+    left: -5px;
+    top: 4px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .timeline-item.item-error::before {
+    background: var(--err);
+  }
+  .timeline-item.item-ok::before {
+    background: var(--ok);
+  }
+  .timeline-time {
+    color: var(--muted);
+    font-size: 11px;
+    margin-bottom: 2px;
+  }
+  .timeline-type {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .timeline-data {
+    color: var(--muted);
+    word-break: break-all;
+    font-size: 11px;
+    margin-top: 3px;
+    background: rgba(0, 0, 0, 0.25);
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+  }
+  .child-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .child-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--panel-hover);
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+  }
+  .child-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .child-prompt {
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   /* Responsive Adjustments (<900px) */
   @media (max-width: 900px) {
@@ -1215,12 +1296,19 @@ function closeDrawer() {
 async function showExecutionDrawer(execId) {
   openDrawer(`Execution: ${execId}`, '<div class="empty">Loading execution details…</div>');
   try {
-    const data = await fetchJsonWithTimeout(`/api/v1/executions/${encodeURIComponent(execId)}`, 8000);
-    const e = data.execution;
-    if (!e) {
+    const [execRes, eventsRes, childrenRes] = await Promise.allSettled([
+      fetchJsonWithTimeout(`/api/v1/executions/${encodeURIComponent(execId)}`, 8000),
+      fetchJsonWithTimeout(`/api/v1/executions/${encodeURIComponent(execId)}/events`, 8000),
+      fetchJsonWithTimeout(`/api/v1/executions/${encodeURIComponent(execId)}/children`, 8000),
+    ]);
+
+    if (execRes.status !== 'fulfilled' || !execRes.value?.execution) {
       $('drawer-body').innerHTML = `<div class="empty">Execution '${esc(execId)}' not found</div>`;
       return;
     }
+    const e = execRes.value.execution;
+    const events = (eventsRes.status === 'fulfilled' && Array.isArray(eventsRes.value?.events)) ? eventsRes.value.events : [];
+    const children = (childrenRes.status === 'fulfilled' && Array.isArray(childrenRes.value?.children)) ? childrenRes.value.children : [];
 
     const ex = e.execution ?? {};
     const task = e.task ?? {};
@@ -1232,7 +1320,9 @@ async function showExecutionDrawer(execId) {
       <dl class="drawer-dl">
         <dt>ID</dt><dd>${monoId(ex.id ?? execId)}</dd>
         <dt>Status</dt><dd>${badge(ex.status, 'completed|ok', 'failed|error')}</dd>
+        ${ex.parentExecutionId ? `<dt>Parent Execution</dt><dd><button type="button" style="background:transparent;border:none;color:var(--accent);padding:0;text-decoration:underline;cursor:pointer;" onclick="showExecutionDrawer('${esc(ex.parentExecutionId)}')">${monoId(ex.parentExecutionId)}</button></dd>` : ''}
         <dt>Task Type</dt><dd>${esc(task.type ?? '—')}</dd>
+        <dt>Preset</dt><dd><span class="badge ok">${esc(task.requirements?.runtimePreset ?? 'standard')}</span></dd>
         <dt>Task Input</dt><dd>${esc(task.input ?? '—')}</dd>
         <dt>Agent</dt><dd>${esc(e.agentId ?? '—')}</dd>
         <dt>Model</dt><dd>${esc(e.modelId ?? '—')}</dd>
@@ -1245,6 +1335,30 @@ async function showExecutionDrawer(execId) {
         <dt>Finished</dt><dd>${esc(finishedStr)}</dd>
       </dl>
     `;
+
+    // Subsection: Child Subagent Executions
+    if (children.length > 0) {
+      html += `
+        <div class="drawer-section">
+          <h4>Nested Subagent Executions (${children.length})</h4>
+          <ul class="child-list">
+            ${children.map((c) => {
+              const cEx = c.execution ?? {};
+              const cTask = c.task ?? {};
+              return `
+                <li class="child-item">
+                  <div class="child-info">
+                    <div><strong>${monoId(cEx.id)}</strong> ${badge(cEx.status, 'completed|ok', 'failed|error')}</div>
+                    <div class="child-prompt">${esc(cTask.input ?? '—')}</div>
+                  </div>
+                  <button type="button" onclick="showExecutionDrawer('${esc(cEx.id)}')">Inspect</button>
+                </li>
+              `;
+            }).join('')}
+          </ul>
+        </div>
+      `;
+    }
 
     // Subsection: Scheduling reasons
     if (e.scheduling) {
@@ -1273,6 +1387,59 @@ async function showExecutionDrawer(execId) {
             <dt>Available</dt><dd>${esc(ctx.available?.tokens ?? '—')} tokens</dd>
             <dt>Check</dt><dd>${fitBadge}</dd>
           </dl>
+        </div>
+      `;
+    }
+
+    // Subsection: Trajectory Timeline
+    if (events.length > 0) {
+      html += `
+        <div class="drawer-section">
+          <h4>Execution Trajectory Timeline (${events.length} events)</h4>
+          <ul class="timeline-list">
+            ${events.map((evt) => {
+              const ts = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+              const isErr = evt.type.includes('error') || evt.type.includes('failed');
+              const isOk = evt.type.includes('completed') || evt.type.includes('success');
+              const itemClass = isErr ? 'timeline-item item-error' : isOk ? 'timeline-item item-ok' : 'timeline-item';
+              let dataStr = '';
+              if (evt.data && Object.keys(evt.data).length > 0) {
+                try {
+                  dataStr = JSON.stringify(evt.data, null, 1).slice(0, 300);
+                } catch {
+                  dataStr = String(evt.data).slice(0, 300);
+                }
+              }
+              return `
+                <li class="${itemClass}">
+                  <div class="timeline-time">${esc(ts)}</div>
+                  <div class="timeline-type">${esc(evt.type)}</div>
+                  ${dataStr ? `<div class="timeline-data">${esc(dataStr)}</div>` : ''}
+                </li>
+              `;
+            }).join('')}
+          </ul>
+        </div>
+      `;
+    }
+
+    // Subsection: Tool Calls
+    if (e.toolCalls && e.toolCalls.length > 0) {
+      html += `
+        <div class="drawer-section">
+          <h4>Tool Invocations (${e.toolCalls.length})</h4>
+          <ul class="reason-list">
+            ${e.toolCalls.map((t) => `
+              <li>
+                <strong>${esc(t.tool)}</strong>:
+                ${t.ok ? '<span class="badge ok">ok</span>' : '<span class="badge err">failed</span>'}
+                <span class="tag">${esc(t.durationMs ?? 0)}ms</span>
+                ${t.policyEffect ? `<span class="tag">${esc(t.policyEffect)}</span>` : ''}
+                ${t.provenance?.source === 'subagent' || t.provenance?.subagentExecutionId ? '<span class="badge info">subagent</span>' : ''}
+                ${t.error ? `<div class="detail err">${esc(t.error)}</div>` : ''}
+              </li>
+            `).join('')}
+          </ul>
         </div>
       `;
     }

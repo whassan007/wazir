@@ -442,6 +442,30 @@ export class PolicyEngine {
   }
 
   /**
+   * Subagent dispatch gating: sensitive or restricted data classification
+   * forbids subagent dispatch (no uncontrolled blast radius).
+   * allowSubagentDispatch: false also explicitly forbids it.
+   */
+  checkSubagentEligibility(policy: PolicyRequirements | undefined): { allowed: boolean; reason: string } {
+    if (policy?.dataClassification === 'sensitive' || policy?.dataClassification === 'restricted') {
+      return {
+        allowed: false,
+        reason: `dataClassification '${policy.dataClassification}' forbids subagent dispatch`,
+      };
+    }
+    if (policy?.allowSubagentDispatch === false) {
+      return {
+        allowed: false,
+        reason: `policy explicitly forbids subagent dispatch (allowSubagentDispatch: false)`,
+      };
+    }
+    return {
+      allowed: true,
+      reason: 'subagent dispatch allowed by policy',
+    };
+  }
+
+  /**
    * Action-level authorization. Agents and models can never bypass this:
    * every tool call is checked here before it executes.
    */

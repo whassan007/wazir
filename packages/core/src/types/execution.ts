@@ -16,6 +16,7 @@ export type ExecutionStatus =
 export interface Execution {
   id: string;
   taskId: string;
+  parentExecutionId?: string;
   agentId?: string;
   /** Absent for an execution routed to a hosted provider (no Computer). */
   computerId?: string;

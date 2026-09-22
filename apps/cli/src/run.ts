@@ -16,7 +16,7 @@ import type {
 } from '@wazir/core';
 import { buildContextPartsFromActive } from './commands.js';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
-import { buildSystemPrompt } from '@wazir/agents';
+import { buildSystemPrompt, resolvePreset } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, stripTerminalEscapes } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
@@ -62,6 +62,8 @@ export interface ExecuteTaskOptions {
    *  never overrides `localOnly`/sensitive-data policy, which always wins (see
    *  PolicyEngine.checkHostedEligibility()). */
   allowHosted?: boolean;
+  /** Runtime preset name (e.g. 'standard', 'minimal'). */
+  preset?: string;
 }
 
 export interface TaskOutcome {
@@ -125,19 +127,20 @@ const MINIMUM_CONTEXT_TOKENS = 8192;
 export async function planTask(
   engine: RookEngine,
   description: string,
-  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted'> = {},
+  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'preset'> = {},
 ): Promise<PlanResult> {
+  const preset = resolvePreset(options.preset);
   const task: Task = {
     id: generateId('task-'),
     type: options.type ?? 'coding',
     input: description,
-    requirements: { minimumContext: MINIMUM_CONTEXT_TOKENS },
+    requirements: { minimumContext: MINIMUM_CONTEXT_TOKENS, runtimePreset: preset.name },
     policy: {
       networkAccess: engine.config.networkAllowed,
       projectRoot: engine.projectRoot,
       allowHostedProviders: options.allowHosted,
     },
-    execution: { targetModelId: options.model, targetAgentId: options.agent },
+    execution: { targetModelId: options.model, targetAgentId: options.agent, runtimePreset: preset.name },
     priority: 'normal',
     status: 'pending',
     createdAt: new Date(),
@@ -148,8 +151,13 @@ export async function planTask(
     return { ok: false, reasons: taskPolicy.reasons };
   }
 
+  const allModelTools = engine.tools.forModel();
+  const allowedTools = preset.tools === 'all'
+    ? allModelTools
+    : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
+
   const baseParts: ContextPart[] = [
-    { kind: 'system', label: 'system prompt', content: buildSystemPrompt(engine.projectRoot, engine.tools.forModel()), priority: 'critical' },
+    { kind: 'system', label: 'system prompt', content: buildSystemPrompt(engine.projectRoot, allowedTools), priority: 'critical' },
     { kind: 'task', label: 'task', content: description, priority: 'critical' },
   ];
 
@@ -289,14 +297,21 @@ export async function executeTask(
 
   // ---- policy-gated runtime handed to the agent ---------------------------
   let cancelled = false;
+  let turnsUsed = 0;
   const onSigint = (): void => {
     cancelled = true;
     log(color.yellow('  cancellation requested; finishing current step'));
   };
   process.once('SIGINT', onSigint);
 
+  const preset = resolvePreset(options.preset);
+  const allModelTools = engine.tools.forModel();
+  const availableTools = preset.tools === 'all'
+    ? allModelTools
+    : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
+
   const runtime: AgentRuntime = {
-    tools: engine.tools.forModel(),
+    tools: availableTools,
 
     async *generate(request) {
       loader.start(`Waiting for model response (${request.modelId})...`);
@@ -381,6 +396,32 @@ export async function executeTask(
     },
 
     async executeTool(name, input): Promise<ToolResult> {
+      if (preset.tools !== 'all' && !(preset.tools as string[]).includes(name)) {
+        return {
+          ok: false,
+          output: '',
+          error: `tool '${name}' is not permitted by active runtime preset '${preset.name}' (allowed tools: ${(preset.tools as string[]).join(', ')})`,
+          durationMs: 0,
+        };
+      }
+
+      if (name === 'dispatch_subagent' || engine.tools.get(name)?.descriptor.provenance?.source === 'subagent') {
+        return runSubagent(engine, input, {
+          parentExecutionId: executionId,
+          parentTaskId: task.id,
+          projectRoot: engine.projectRoot,
+          modelId: scheduling.modelId,
+          runtimeId: scheduling.runtimeId,
+          computerId: scheduling.computerId,
+          subagentDepth: 0,
+          log,
+          loader,
+          emitJson,
+          remainingTurns: options.maxTurns ? Math.max(1, options.maxTurns - turnsUsed) : undefined,
+          parentPolicy: task.policy,
+        });
+      }
+
       if (engine.tools.get(name)?.descriptor.provenance?.source === 'mcp') {
         return executeMCPForAgent(engine, name, input, { projectRoot: engine.projectRoot, executionId });
       }
@@ -529,6 +570,7 @@ export async function executeTask(
       },
       runtime,
     )) {
+      turnsUsed++;
       await engine.executions.recordEvent(executionId, 'agent.turn', {
         kind: turn.kind,
         phase: turn.phase,
@@ -578,15 +620,6 @@ export async function executeTask(
   const finalRecord = engine.executions.require(executionId);
   const evaluation = evaluateExecution(finalRecord, {
     expectedFiles: options.expectedFiles,
-    // A task that actually touched real source code must be backed by at
-    // least one executed check that passed (build/test/lint/typecheck, or a
-    // compiler run via `shell` — see BUILD_INVOCATION_PATTERN above), never
-    // by the absence of a failure alone. Without this, "no checks were
-    // executed" was only an informational reason, not a failure — a task
-    // could write main.cpp, never compile it, and still be reported "Task
-    // completed." Scoped to source-code file extensions specifically (not
-    // every 'coding'-type task) so a trivial text/config/doc write — which
-    // has nothing to compile or test — keeps the existing lenient behavior.
     expectedEvidence: touchesSourceCode(finalRecord.filesChanged) ? ['checks_pass'] : undefined,
   });
   await engine.executions.setEvaluation(executionId, evaluation);
@@ -614,5 +647,292 @@ export async function executeTask(
     executionId,
     result: summary,
     errors,
+  };
+}
+
+export interface SubagentRunContext {
+  parentExecutionId: string;
+  parentTaskId: string;
+  projectRoot: string;
+  modelId: string;
+  runtimeId: string;
+  computerId?: string;
+  subagentDepth: number;
+  log: (line: string) => void;
+  loader: StatusLoader;
+  emitJson: (event: Record<string, unknown>) => void;
+  remainingTurns?: number;
+  parentPolicy?: import('@wazir/core').PolicyRequirements;
+  signal?: AbortSignal;
+}
+
+export async function runSubagent(
+  engine: RookEngine,
+  input: unknown,
+  context: SubagentRunContext,
+): Promise<ToolResult> {
+  const startTime = Date.now();
+
+  // Guardrail 1: Max depth limit is 1 (depth <= 1)
+  if (context.subagentDepth >= 1) {
+    return {
+      ok: false,
+      output: '',
+      error: 'Subagent depth limit exceeded: recursive subagent dispatch is prohibited (maximum depth is 1)',
+      durationMs: Date.now() - startTime,
+    };
+  }
+
+  // Guardrail 2: Policy eligibility check
+  const eligibility = engine.policy.checkSubagentEligibility(context.parentPolicy);
+  if (!eligibility.allowed) {
+    return {
+      ok: false,
+      output: '',
+      error: `Subagent dispatch forbidden by policy: ${eligibility.reason}`,
+      durationMs: Date.now() - startTime,
+    };
+  }
+
+  const inp = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
+  const description = String(inp.description ?? '').trim();
+  if (!description) {
+    return {
+      ok: false,
+      output: '',
+      error: 'Missing required argument: description',
+      durationMs: Date.now() - startTime,
+    };
+  }
+  const expectedArtifacts = Array.isArray(inp.expectedArtifacts)
+    ? inp.expectedArtifacts.map(String)
+    : undefined;
+
+  // Create child execution record linked by parentExecutionId
+  const subtask: Task = {
+    id: generateId('task-sub-'),
+    type: 'coding',
+    input: description,
+    requirements: {
+      minimumContext: MINIMUM_CONTEXT_TOKENS,
+      expectedArtifacts,
+    },
+    policy: {
+      ...(context.parentPolicy ?? {}),
+      allowSubagentDispatch: false,
+      projectRoot: context.projectRoot,
+    },
+    execution: {
+      targetModelId: context.modelId,
+      targetRuntimeId: context.runtimeId,
+    },
+    priority: 'normal',
+    status: 'pending',
+    createdAt: new Date(),
+  };
+
+  const childRecord = await engine.executions.create({
+    task: subtask,
+    parentExecutionId: context.parentExecutionId,
+    agentId: 'wazir-coding',
+    computerId: context.computerId ?? engine.worker.computerId,
+    runtimeId: context.runtimeId,
+    modelId: context.modelId,
+    workerId: engine.worker.id,
+  });
+  const childExecId = childRecord.execution.id;
+
+  context.log(color.cyan(`    [subagent] spawned nested execution ${childExecId} (depth ${context.subagentDepth + 1})`));
+  context.emitJson({
+    type: 'subagent.start',
+    executionId: childExecId,
+    parentExecutionId: context.parentExecutionId,
+    description,
+  });
+
+  // Filter tools to strictly omit dispatch_subagent for child agent
+  const subagentTools = engine.tools.forModel().filter((t) => t.name !== 'dispatch_subagent');
+
+  const subagentRuntime: AgentRuntime = {
+    tools: subagentTools,
+
+    async *generate(req) {
+      if (context.signal?.aborted) return;
+      const adapter = engine.adapters.get(context.runtimeId) ?? engine.worker.adapterForModel(req.modelId);
+      if (!adapter) {
+        yield { type: 'error', error: `no runtime can serve model '${req.modelId}'` };
+        return;
+      }
+      for await (const event of adapter.generate({
+        modelId: req.modelId,
+        messages: req.messages,
+        maxTokens: req.maxTokens,
+        temperature: req.temperature,
+        stream: true,
+        tools: req.tools,
+      })) {
+        if (event.type === 'completed' && event.usage) {
+          await engine.executions.recordUsage(childExecId, {
+            input: event.usage.inputTokens,
+            output: event.usage.outputTokens,
+            total: event.usage.totalTokens,
+          });
+        }
+        yield event;
+      }
+    },
+
+    async executeTool(name, toolInput): Promise<ToolResult> {
+      if (name === 'dispatch_subagent') {
+        return {
+          ok: false,
+          output: '',
+          error: 'Subagent depth limit exceeded: recursive subagent calls are prohibited',
+          durationMs: 0,
+        };
+      }
+      if (context.signal?.aborted) {
+        return { ok: false, output: '', error: 'cancelled before the tool ran', durationMs: 0 };
+      }
+
+      if (engine.tools.get(name)?.descriptor.provenance?.source === 'mcp') {
+        return executeMCPForAgent(engine, name, toolInput, {
+          projectRoot: context.projectRoot,
+          executionId: childExecId,
+          signal: context.signal,
+        });
+      }
+
+      const decision = await engine.policy.authorize({
+        tool: name,
+        input: toolInput,
+        executionId: childExecId,
+        projectRoot: context.projectRoot,
+      });
+      await engine.executions.recordPolicy(childExecId, decision);
+
+      if (decision.decision !== 'allow') {
+        const res: ToolResult = {
+          ok: false,
+          output: '',
+          error: `policy ${decision.decision} (${decision.rule}): ${decision.reasons.join('; ')}`,
+          durationMs: 0,
+        };
+        await engine.executions.recordToolCall(childExecId, {
+          id: generateId('call-'),
+          tool: name,
+          input: toolInput,
+          ok: false,
+          error: res.error,
+          policyEffect: decision.decision,
+          policyRule: decision.rule,
+          durationMs: 0,
+          at: new Date(),
+          provenance: { subagentExecutionId: childExecId, subagentDepth: context.subagentDepth + 1 },
+        });
+        return res;
+      }
+
+      await engine.executions.recordToolStart(childExecId, name, toolInput);
+      const res = await runRegisteredTool(engine.tools, name, toolInput, {
+        projectRoot: context.projectRoot,
+        executionId: childExecId,
+        networkAllowed: engine.config.networkAllowed,
+        signal: context.signal,
+      });
+
+      await engine.executions.recordToolCall(childExecId, {
+        id: generateId('call-'),
+        tool: name,
+        input: toolInput,
+        output: res.output.slice(0, 4000),
+        ok: res.ok,
+        error: res.error,
+        policyEffect: decision.decision,
+        policyRule: decision.rule,
+        durationMs: res.durationMs,
+        at: new Date(),
+        provenance: { subagentExecutionId: childExecId, subagentDepth: context.subagentDepth + 1 },
+      });
+
+      if (res.fileMutations && res.fileMutations.length > 0) {
+        const changedFiles = res.fileMutations
+          .filter((m) => m.changed)
+          .map((m) => {
+            const abs = path.resolve(context.projectRoot, m.path);
+            return path.relative(context.projectRoot, abs).split(path.sep).join('/');
+          });
+        if (changedFiles.length > 0) {
+          await engine.executions.recordFilesChanged(childExecId, changedFiles);
+          await engine.executions.recordFilesChanged(context.parentExecutionId, changedFiles);
+        }
+      }
+
+      return res;
+    },
+  };
+
+  const agent = engine.agents.get('wazir-coding') ?? engine.agents.resolveForTask(subtask).agent;
+  await engine.executions.setStatus(childExecId, 'running');
+  const subagentMaxTurns = Math.min(12, context.remainingTurns ?? 12);
+  let subagentSummary = '';
+  let subagentSuccess = true;
+  const childErrors: string[] = [];
+
+  try {
+    for await (const turn of agent.run(
+      {
+        modelId: context.modelId,
+        taskDescription: description,
+        taskType: 'coding',
+        projectRoot: context.projectRoot,
+        maxTurns: subagentMaxTurns,
+        subagentDepth: context.subagentDepth + 1,
+        isCancelled: () => Boolean(context.signal?.aborted),
+      },
+      subagentRuntime,
+    )) {
+      if (turn.kind === 'done') {
+        subagentSummary = turn.content ?? '';
+      } else if (turn.kind === 'error') {
+        childErrors.push(turn.error ?? 'subagent error');
+      }
+    }
+  } catch (err) {
+    subagentSuccess = false;
+    childErrors.push(err instanceof Error ? err.message : String(err));
+  }
+
+  const childUpdated = await engine.executions.get(childExecId);
+  const childFiles = childUpdated?.filesChanged ?? [];
+  const status = (subagentSuccess && childErrors.length === 0) ? 'completed' : 'failed';
+  await engine.executions.setStatus(childExecId, status);
+  if (subagentSummary) {
+    await engine.executions.setResult(childExecId, subagentSummary);
+  }
+
+  const durationMs = Date.now() - startTime;
+  const condensedOutput = [
+    `[Subagent execution ${childExecId} ${status}]`,
+    subagentSummary ? `Summary: ${subagentSummary}` : undefined,
+    childFiles.length > 0 ? `Files changed: ${childFiles.join(', ')}` : 'Files changed: none',
+    childErrors.length > 0 ? `Errors: ${childErrors.join('; ')}` : undefined,
+  ].filter(Boolean).join('\n');
+
+  context.log(color.cyan(`    [subagent] finished ${childExecId} (${status})`));
+  context.emitJson({
+    type: 'subagent.complete',
+    executionId: childExecId,
+    parentExecutionId: context.parentExecutionId,
+    status,
+    filesChanged: childFiles,
+    durationMs,
+  });
+
+  return {
+    ok: status === 'completed',
+    output: condensedOutput,
+    error: childErrors.length > 0 ? childErrors.join('; ') : undefined,
+    durationMs,
   };
 }

@@ -6,13 +6,17 @@ export type ToolPermission =
   | 'test_run'
   | 'build_run'
   | 'network_access'
-  | 'mcp';
+  | 'mcp'
+  | 'subagent';
 
 export type ToolRiskLevel = 'low' | 'medium' | 'high';
 export type ToolEnvironment = 'local' | 'worker';
 
 export interface ToolDescriptor {
-  provenance?: { source: 'mcp'; serverId: string; tool: string; trust: 'untrusted' };
+  provenance?:
+    | { source: 'mcp'; serverId: string; tool: string; trust: 'untrusted' }
+    | { source: 'subagent'; [key: string]: unknown }
+    | Record<string, unknown>;
   capabilities?: string[];
   name: string;
   description: string;

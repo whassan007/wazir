@@ -1,4 +1,5 @@
 import { executeMCPForAgent } from './mcp.js';
+import { runSubagent } from './run.js';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import {
@@ -304,6 +305,23 @@ export function createFleetTaskExecutor(
       },
 
       async executeTool(name, input): Promise<ToolResult> {
+      if (name === 'dispatch_subagent' || engine.tools.get(name)?.descriptor.provenance?.source === 'subagent') {
+        return runSubagent(engine, input, {
+          parentExecutionId: executionId,
+          parentTaskId: task.id,
+          projectRoot: taskRoot,
+          modelId: assignment.modelId,
+          runtimeId: assignment.runtimeId,
+          computerId: assignment.computerId,
+          subagentDepth: 0,
+          log: (msg) => context.onProgress?.({ kind: 'token', content: `[subagent] ${msg}\n` }),
+          loader: { start: () => {}, stop: () => {}, setText: () => {}, clear: () => {} } as any,
+          emitJson: () => {},
+          parentPolicy: task.policy,
+          signal,
+        });
+      }
+
       if (engine.tools.get(name)?.descriptor.provenance?.source === 'mcp') {
         return executeMCPForAgent(engine, name, input, { projectRoot: taskRoot, executionId, signal });
       }

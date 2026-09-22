@@ -476,8 +476,12 @@ export class CodingAgent implements AgentAdapter {
     // `this.maxTurns` must stay untouched since one CodingAgent instance is
     // shared across many concurrent/sequential runs.
     const maxTurns = request.maxTurns ?? this.maxTurns;
+    const subagentDepth = request.subagentDepth ?? 0;
+    const effectiveTools = subagentDepth >= 1
+      ? runtime.tools.filter((t) => t.name !== 'dispatch_subagent')
+      : runtime.tools;
     const messages: ChatMessage[] = [
-      { role: 'system', content: buildSystemPrompt(request.projectRoot, runtime.tools, this.systemPromptExtra) },
+      { role: 'system', content: buildSystemPrompt(request.projectRoot, effectiveTools, this.systemPromptExtra) },
       {
         role: 'user',
         content:
@@ -609,7 +613,7 @@ export class CodingAgent implements AgentAdapter {
           messages,
           maxTokens: this.maxTokensPerTurn,
           temperature: this.temperature,
-          tools: runtime.tools.map((t) => ({
+          tools: effectiveTools.map((t) => ({
             name: t.name,
             description: t.description,
             parameters: t.inputSchema as Record<string, unknown>,
@@ -642,7 +646,7 @@ export class CodingAgent implements AgentAdapter {
       return { content, toolCall, timedOut };
     };
 
-    const toolNames = new Set(runtime.tools.map((t) => t.name));
+    const toolNames = new Set(effectiveTools.map((t) => t.name));
     const readAction = (raw: string): ParsedAction | null => normalizeAction(parseAction(raw, toolNames), toolNames);
     const correctionMessage = (timedOut: boolean): string =>
       timedOut

@@ -38,6 +38,7 @@ export interface TaskRequirements {
   localOnly?: boolean;
   mutationRequired?: boolean;
   expectedArtifacts?: string[];
+  runtimePreset?: string;
 }
 
 export interface PolicyRequirements {
@@ -48,6 +49,7 @@ export interface PolicyRequirements {
   allowedModels?: string[];
   networkAccess?: boolean;
   toolAccess?: boolean;
+  allowSubagentDispatch?: boolean;
   maxExecutionTimeSeconds?: number;
   projectRoot?: string;
   /**
@@ -68,6 +70,7 @@ export interface ExecutionPreferences {
   targetModelId?: string;
   targetAgentId?: string;
   executionMode?: 'automatic' | 'local' | 'fastest' | 'highestQuality';
+  runtimePreset?: string;
 }
 
 export interface Task {
