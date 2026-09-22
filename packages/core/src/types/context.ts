@@ -19,11 +19,22 @@ export interface ContextPart {
   tokens?: number;
 }
 
+export interface PromptBreakdown {
+  system: number;
+  tools: number;
+  task: number;
+  plan: number;
+  history: number;
+  repository: number;
+  [key: string]: number;
+}
+
 export interface ContextBudget {
   parts: ContextPart[];
   inputTokens: number;
   outputReserveTokens: number;
   requiredTokens: number;
+  breakdown?: PromptBreakdown;
 }
 
 export interface ContextAvailability {
@@ -48,6 +59,7 @@ export interface ContextDecision {
   finalRequiredTokens: number;
   compactions: ContextCompaction[];
   reasons: string[];
+  breakdown?: PromptBreakdown;
 }
 
 export class ContextBudgetError extends Error {

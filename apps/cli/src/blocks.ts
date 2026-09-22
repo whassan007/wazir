@@ -1,5 +1,5 @@
 import type { RookEngine } from './engine.js';
-import type { Block, BlockStatus } from '@wazir/core';
+import type { Block, BlockStatus, SubmissionSource } from '@wazir/core';
 import type { KeyValueStore } from '@wazir/shared';
 
 const BLOCK_PREFIX = 'block/';
@@ -8,6 +8,14 @@ const MAX_STDOUT_SIZE = 64 * 1024; // 64KB
 export interface BlockStartResult {
   block: Block;
   finish: (status: BlockStatus, patch?: Partial<Block>) => Promise<void>;
+}
+
+export interface CreateBlockOptions {
+  submissionId?: string;
+  source?: SubmissionSource;
+  sessionId?: string;
+  jobId?: string;
+  executionId?: string;
 }
 
 /**
@@ -33,17 +41,20 @@ export async function createBlock(
   engine: RookEngine,
   command: string,
   argv: string[] = [],
+  options?: CreateBlockOptions,
 ): Promise<BlockStartResult> {
   const store = engine.store;
   if (!store) {
     throw new Error('No persistence store available');
   }
 
-  const sessionId = process.env.WAZIR_SESSION_ID || 'default';
+  const sessionId = options?.sessionId ?? (process.env.WAZIR_SESSION_ID || 'default');
   const sequence = Date.now();
   const block: Block = {
     id: await getNextBlockId(store),
     sessionId,
+    submissionId: options?.submissionId,
+    source: options?.source ?? 'cli',
     sequence,
     timestamp: new Date(),
     command,
@@ -53,6 +64,8 @@ export async function createBlock(
     stderr: '',
     filesChanged: [],
     errors: [],
+    jobId: options?.jobId,
+    executionId: options?.executionId,
   };
 
   // Persist immediately so it shows up in history even if command fails early
@@ -68,6 +81,10 @@ export async function createBlock(
       exitCode: patch?.exitCode ?? block.exitCode,
       filesChanged: patch?.filesChanged ?? block.filesChanged,
       errors: patch?.errors ?? block.errors,
+      jobId: patch?.jobId ?? block.jobId,
+      executionId: patch?.executionId ?? block.executionId,
+      submissionId: patch?.submissionId ?? block.submissionId,
+      source: patch?.source ?? block.source,
     };
     await store.put(`${BLOCK_PREFIX}${block.id}`, updated);
   };

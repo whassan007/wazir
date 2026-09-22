@@ -4,6 +4,7 @@ import type {
   ContextCompaction,
   ContextDecision,
   ContextPart,
+  PromptBreakdown,
 } from '../types/context.js';
 
 /**
@@ -17,6 +18,40 @@ export function estimateTokens(text: string): number {
 
 export function tokensForPart(part: ContextPart): number {
   return part.tokens ?? estimateTokens(part.content);
+}
+
+/**
+ * Computes prompt token breakdown across categories (System, Tools, Task, Plan, History, Repository)
+ * to diagnose prompt growth and context usage.
+ */
+export function computePromptBreakdown(parts: ContextPart[]): PromptBreakdown {
+  const breakdown: PromptBreakdown = {
+    system: 0,
+    tools: 0,
+    task: 0,
+    plan: 0,
+    history: 0,
+    repository: 0,
+  };
+  for (const part of parts) {
+    const tokens = tokensForPart(part);
+    if (part.kind === 'system') {
+      breakdown.system += tokens;
+    } else if (part.kind === 'tools') {
+      breakdown.tools += tokens;
+    } else if (part.kind === 'task') {
+      breakdown.task += tokens;
+    } else if (part.kind === 'conversation') {
+      breakdown.history += tokens;
+    } else if (part.kind === 'repository') {
+      breakdown.repository += tokens;
+    } else if (part.label?.toLowerCase().includes('plan')) {
+      breakdown.plan += tokens;
+    } else {
+      breakdown[part.kind] = (breakdown[part.kind] ?? 0) + tokens;
+    }
+  }
+  return breakdown;
 }
 
 const COMPACT_PRIORITY: Array<ContextPart['kind']> = [
@@ -46,6 +81,7 @@ export class ContextCompiler {
       inputTokens,
       outputReserveTokens,
       requiredTokens: inputTokens + outputReserveTokens,
+      breakdown: computePromptBreakdown(parts),
     };
   }
 
@@ -75,8 +111,9 @@ export class ContextCompiler {
     reasons.push(`available ${availability.tokens} tokens (source: ${availability.source})`);
 
     if (required <= availability.tokens) {
+      const breakdown = computePromptBreakdown(parts);
       return {
-        budget: { parts, inputTokens, outputReserveTokens, requiredTokens: required },
+        budget: { parts, inputTokens, outputReserveTokens, requiredTokens: required, breakdown },
         available: availability,
         fits: true,
         finalParts: parts,
@@ -84,6 +121,7 @@ export class ContextCompiler {
         finalRequiredTokens: required,
         compactions: [],
         reasons,
+        breakdown,
       };
     }
 
@@ -139,8 +177,9 @@ export class ContextCompiler {
       );
     }
 
+    const breakdown = computePromptBreakdown(active);
     return {
-      budget: { parts, inputTokens, outputReserveTokens, requiredTokens: required },
+      budget: { parts, inputTokens, outputReserveTokens, requiredTokens: required, breakdown },
       available: availability,
       fits,
       finalParts: active,
@@ -148,6 +187,7 @@ export class ContextCompiler {
       finalRequiredTokens: required,
       compactions,
       reasons,
+      breakdown,
     };
   }
 }

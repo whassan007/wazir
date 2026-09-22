@@ -26,7 +26,7 @@ try {
     target: 'node20',
     format: 'cjs',
     outfile: outFile,
-    external: ['pg-native'],
+    external: ['pg-native', '@napi-rs/keyring'],
     sourcemap: true,
     minify: false,
     logLevel: 'info',

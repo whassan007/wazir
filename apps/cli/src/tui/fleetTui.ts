@@ -14,6 +14,9 @@ import {
   type ModelReadiness,
   type ResourceAssessment,
   type ModelLifecycleEvent,
+  type InteractiveSubmission,
+  type SubmissionSource,
+  type PromptBreakdown,
   ModelLifecycleService,
 } from '@wazir/core';
 import type { RookEngine } from '../engine.js';
@@ -192,6 +195,8 @@ export interface AgentCardState {
   usage?: { input: number; output: number; total: number };
   /** Prompt size of the most recent model turn — the real context-window occupancy. */
   lastTurnInputTokens?: number;
+  modelCallCount?: number;
+  promptBreakdown?: PromptBreakdown;
 }
 
 export interface AgentLogEntry {
@@ -508,6 +513,10 @@ export class FleetTui {
   private submissionTimestamps: number[] = [];
   private burstCooldownUntil = 0;
 
+  // Authoritative Interactive Submission Deduplication & Session Tracking
+  private readonly processedSubmissionIds = new Set<string>();
+  private readonly sessionId: string;
+
   private unsubscribeApprovals?: () => void;
   private unsubscribeJobEvents?: () => void;
   private unsubscribeResize?: () => void;
@@ -515,6 +524,7 @@ export class FleetTui {
 
   constructor(options: FleetTuiOptions) {
     this.engine = options.engine;
+    this.sessionId = process.env.WAZIR_SESSION_ID || `session-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     if (!this.engine.lifecycle && this.engine.models) {
       this.engine.lifecycle = new ModelLifecycleService({
         models: this.engine.models,
@@ -531,6 +541,18 @@ export class FleetTui {
     this.autoMerge = options.autoMerge ?? false;
     this.timeoutSeconds = options.timeoutSeconds;
     this.enablePlanner = options.enablePlanner ?? false;
+  }
+
+  getSessionId(): string {
+    return this.sessionId;
+  }
+
+  getProcessedSubmissionIds(): Set<string> {
+    return this.processedSubmissionIds;
+  }
+
+  async submitInteractive(submission: InteractiveSubmission): Promise<void> {
+    return this.submitCommand(submission);
   }
 
   getCurrentView(): TuiView {
@@ -567,9 +589,10 @@ export class FleetTui {
       this.statusMessage = `Pasted ${clean.length.toLocaleString()} characters / ${lines.length} lines. Press Ctrl+Enter to submit, Esc to discard, E to edit.`;
       this.draw();
     } else {
+      const sanitized = clean.replace(/^(wa(\s*\[[A-Z]+\])?>\s*)+/, '');
       this.inputBuffer =
-        this.inputBuffer.slice(0, this.inputCursor) + clean + this.inputBuffer.slice(this.inputCursor);
-      this.inputCursor += clean.length;
+        this.inputBuffer.slice(0, this.inputCursor) + sanitized + this.inputBuffer.slice(this.inputCursor);
+      this.inputCursor += sanitized.length;
       this.focusedPane = 'prompt';
       this.statusMessage = 'Pasted text inserted.';
       this.checkReferencePicker();
@@ -968,7 +991,14 @@ export class FleetTui {
         this.pastedContent = '';
         this.tuiMode = 'NORMAL';
         this.statusMessage = 'Submitting pasted task...';
-        void this.submitCommand(toSubmit);
+        const submission: InteractiveSubmission = {
+          submissionId: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          sessionId: this.sessionId,
+          source: 'confirmed-paste-submit',
+          text: toSubmit,
+          timestamp: new Date(),
+        };
+        void this.submitCommand(submission);
         return;
       }
       if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
@@ -995,7 +1025,14 @@ export class FleetTui {
         this.inputBuffer = '';
         this.inputCursor = 0;
         this.tuiMode = 'NORMAL';
-        void this.submitCommand(command);
+        const submission: InteractiveSubmission = {
+          submissionId: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          sessionId: this.sessionId,
+          source: 'keyboard-submit',
+          text: command,
+          timestamp: new Date(),
+        };
+        void this.submitCommand(submission);
         return;
       }
       if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
@@ -1387,7 +1424,14 @@ export class FleetTui {
         // a printable key like 'x', got typed right back into the now-empty prompt buffer
         // — until the user happened to press an arrow key first.
         this.focusedPane = 'nav';
-        void this.submitCommand(command);
+        const submission: InteractiveSubmission = {
+          submissionId: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          sessionId: this.sessionId,
+          source: 'keyboard-submit',
+          text: command,
+          timestamp: new Date(),
+        };
+        void this.submitCommand(submission);
       } else {
         // Enter to inspect currently selected item or block
         const all = this.getFlatNavItems();
@@ -1709,10 +1753,27 @@ export class FleetTui {
   }
 
   /**
-   * Submits a user command or task prompt.
+   * Submits a user command or task prompt with strict deduplication and provenance tracking.
    */
-  async submitCommand(cmd: string): Promise<void> {
-    const trimmed = cmd.trim();
+  async submitCommand(cmdOrSubmission: string | InteractiveSubmission): Promise<void> {
+    const submission: InteractiveSubmission =
+      typeof cmdOrSubmission === 'string'
+        ? {
+            submissionId: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            sessionId: this.sessionId,
+            source: 'keyboard-submit',
+            text: cmdOrSubmission,
+            timestamp: new Date(),
+          }
+        : cmdOrSubmission;
+
+    // Structural deduplication by submissionId: reject duplicate events
+    if (this.processedSubmissionIds.has(submission.submissionId)) {
+      return;
+    }
+    this.processedSubmissionIds.add(submission.submissionId);
+
+    const trimmed = submission.text.trim();
     if (!trimmed) return;
 
     if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'q') {
@@ -1961,7 +2022,11 @@ export class FleetTui {
     // Track command execution block
     try {
       if (this.engine.store) {
-        this.currentBlockTracker = await createBlock(this.engine, trimmed);
+        this.currentBlockTracker = await createBlock(this.engine, trimmed, [], {
+          submissionId: submission.submissionId,
+          source: submission.source,
+          sessionId: submission.sessionId,
+        });
         await this.refreshRecentBlocks();
       }
     } catch {
@@ -2158,6 +2223,7 @@ export class FleetTui {
           if (this.currentBlockTracker) {
             await this.currentBlockTracker.finish(job.status === 'completed' ? 'success' : 'failed', {
               exitCode: job.status === 'completed' ? 0 : 1,
+              jobId: job.id,
             });
             this.currentBlockTracker = undefined;
             await this.refreshRecentBlocks();
@@ -2339,6 +2405,7 @@ export class FleetTui {
           tool?: string;
           error?: string;
           usage?: { input: number; output: number; total: number };
+          breakdown?: PromptBreakdown;
           raw?: string;
         };
 
@@ -2359,7 +2426,20 @@ export class FleetTui {
         this.flushStreaming(taskId, logs, timeStr);
 
         if (p.kind === 'usage') {
-          if (p.usage) agent.lastTurnInputTokens = p.usage.input;
+          if (p.usage) {
+            agent.lastTurnInputTokens = p.usage.input;
+            agent.modelCallCount = (agent.modelCallCount ?? 0) + 1;
+            if (!agent.usage) {
+              agent.usage = { input: p.usage.input, output: p.usage.output, total: p.usage.total };
+            } else {
+              agent.usage.input += p.usage.input;
+              agent.usage.output += p.usage.output;
+              agent.usage.total += p.usage.total;
+            }
+          }
+          if (p.breakdown) {
+            agent.promptBreakdown = p.breakdown;
+          }
           this.agentLogs.set(taskId, logs);
           this.draw();
           return;
@@ -2653,32 +2733,54 @@ export class FleetTui {
    * fake 8.4K when idle — which is how it displayed "106.6K/32K" for a 32K model. Only a
    * measured number is shown now; 0 means no model turn has completed yet.
    */
-  getContextMetrics(): { used: number; max: number } {
+  getContextMetrics(): { used: number; max: number; jobIn: number; jobOut: number; calls: number } {
     const agents = Array.from(this.agents.values());
     const byRecency = (a: AgentCardState, b: AgentCardState) =>
       (b.startedAt?.getTime() ?? 0) - (a.startedAt?.getTime() ?? 0);
     const source =
       agents.filter((a) => a.status === 'running' && a.lastTurnInputTokens !== undefined).sort(byRecency)[0] ??
       agents.filter((a) => a.lastTurnInputTokens !== undefined).sort(byRecency)[0];
-    let used = source?.lastTurnInputTokens ?? 0;
+    const used = source?.lastTurnInputTokens ?? 0;
 
-    // If no live agent turn tokens (e.g. inspecting a past or selected job, or after job deletion),
-    // check the selected or current job's rollup tokens.
-    if (used === 0) {
-      const all = this.getFlatNavItems();
-      const current = all[this.navSelectionIndex];
-      const jobId = current?.category === 'JOBS' ? current.id : this.currentJob?.id;
-      if (jobId) {
-        const rollup = this.jobRollups.get(jobId) ?? (this.currentJob?.id === jobId ? this.currentRollup : undefined);
-        if (rollup && rollup.tokens.input > 0) {
-          used = rollup.tokens.input;
-        }
+    let jobIn = 0;
+    let jobOut = 0;
+    let calls = 0;
+
+    const all = this.getFlatNavItems();
+    const current = all[this.navSelectionIndex];
+    const jobId = current?.category === 'JOBS' ? current.id : this.currentJob?.id;
+    if (jobId) {
+      const rollup = this.jobRollups.get(jobId) ?? (this.currentJob?.id === jobId ? this.currentRollup : undefined);
+      if (rollup) {
+        jobIn = rollup.tokens.input;
+        jobOut = rollup.tokens.output;
       }
+    }
+
+    let agentIn = 0;
+    let agentOut = 0;
+    for (const a of agents) {
+      calls += a.modelCallCount ?? (a.usage ? 1 : 0);
+      if (a.usage) {
+        agentIn += a.usage.input;
+        agentOut += a.usage.output;
+      }
+    }
+
+    if (agentIn > 0) {
+      jobIn = agentIn;
+      jobOut = agentOut;
     }
 
     const models = this.engine.models.list();
     const max = models[0]?.contextMax ?? 32768;
-    return { used, max };
+    const result = { used, max };
+    Object.defineProperties(result, {
+      jobIn: { value: jobIn, enumerable: false },
+      jobOut: { value: jobOut, enumerable: false },
+      calls: { value: calls, enumerable: false },
+    });
+    return result as { used: number; max: number; jobIn: number; jobOut: number; calls: number };
   }
 
   // ==========================================
@@ -2980,12 +3082,16 @@ export class FleetTui {
             width,
           ),
         );
-        if (card.usage) {
+        if (card.usage && !this.currentError) {
           const tps = tokensPerSecond(card.usage.output, card.durationMs).toFixed(1);
+          const pb = card.promptBreakdown;
+          const pbStr = pb
+            ? ` | Prompt: sys ${pb.system} | tools ${pb.tools} | task ${pb.task} | plan ${pb.plan} | hist ${pb.history} | repo ${pb.repository}`
+            : '';
           lines.push(
             this.padRightTo(
               color.gray(
-                `  Tokens: In ${card.usage.input} / Out ${card.usage.output} (${card.usage.total} total) | Speed: ${tps} tok/s`,
+                `  Tokens: In ${card.usage.input} / Out ${card.usage.output} (${card.usage.total} total) | Speed: ${tps} tok/s${pbStr}`,
               ),
               width,
             ),
@@ -3221,17 +3327,24 @@ export class FleetTui {
    * Region 4: Status Bar & Real-Time Context Token Budget Indicator (§20)
    */
   private renderStatusBar(cols: number): string {
-    const { used, max } = this.getContextMetrics();
+    const { used, max, jobIn, jobOut, calls } = this.getContextMetrics();
     const usedK = (used / 1024).toFixed(1);
     const maxK = Math.round(max / 1024);
+    const inK = (jobIn / 1024).toFixed(1);
+    const outK = (jobOut / 1024).toFixed(1);
 
     // Semantic colors (§25): cyan = identity / active context
     // Only shown once a model is pinned via /model — otherwise this bar stays as it
     // was, since "auto-routed" is the common case and not worth a permanent label.
     const modelPlain = this.selectedModelId ? `Model ${this.selectedModelId} ~ ` : '';
     const modelIndicator = this.selectedModelId ? `${color.magenta(modelPlain.trimEnd())} ` : '';
-    const contextIndicator = color.cyan(`Context ${usedK}K/${maxK}K ~`);
+
+    const showJobTokens = calls > 0 || jobIn > 0;
+    const jobPlain = showJobTokens ? `Job ${inK}K in / ${outK}K out, Calls: ${calls} ~ ` : '';
+    const jobIndicator = showJobTokens ? color.gray(jobPlain) : '';
+
     const contextPlain = `Context ${usedK}K/${maxK}K ~`;
+    const contextIndicator = color.cyan(contextPlain);
 
     const anyRunning =
       Array.from(this.agents.values()).some((a) => a.status === 'running') ||
@@ -3248,11 +3361,18 @@ export class FleetTui {
     else if (mode === 'APPROVAL') modeBadge = color.bold(color.red(`[${mode}]`));
     else if (mode === 'PALETTE') modeBadge = color.bold(color.blue(`[${mode}]`));
 
-    const statusText = `  ${modeBadge} ${color.gray('Status:')} ${spinnerPrefix}${this.statusMessage}`;
+    const rightPlain = `${modelPlain}${jobPlain}${contextPlain} `;
+    const maxStatusLen = Math.max(10, cols - rightPlain.length - 16);
+    let msg = this.statusMessage;
+    if (msg.length > maxStatusLen) {
+      msg = msg.slice(0, maxStatusLen - 3) + '...';
+    }
+
+    const statusText = `  ${modeBadge} ${color.gray('Status:')} ${spinnerPrefix}${msg}`;
     const statusPlain = this.stripAnsi(statusText);
 
-    const spaces = Math.max(2, cols - statusPlain.length - modelPlain.length - contextPlain.length - 2);
-    return `${statusText}${' '.repeat(spaces)}${modelIndicator}${contextIndicator} `;
+    const spaces = Math.max(2, cols - statusPlain.length - rightPlain.length);
+    return `${statusText}${' '.repeat(spaces)}${modelIndicator}${jobIndicator}${contextIndicator} `;
   }
 
   private renderInputBar(cols: number): string {
@@ -3279,8 +3399,9 @@ export class FleetTui {
     const prefixLen = mode === 'COMPOSER' ? 15 : 4;
     const available = Math.max(0, cols - prefixLen);
 
-    // In composer mode, replace newlines with return arrow for single line rendering
-    const displayBuffer = mode === 'COMPOSER' ? this.inputBuffer.replace(/\r?\n/g, ' ↵ ') : this.inputBuffer;
+    // Strip any leading prompt prefix in the inputBuffer to prevent duplicate prompts (e.g. "wa> wa> ...")
+    const sanitizedInput = this.inputBuffer.replace(/^(wa(\s*\[[A-Z]+\])?>\s*)+/, '');
+    const displayBuffer = mode === 'COMPOSER' ? sanitizedInput.replace(/\r?\n/g, ' ↵ ') : sanitizedInput;
     const start = this.inputCursor > available ? this.inputCursor - available : 0;
     const visibleInput = displayBuffer.slice(start, start + available);
     this.inputCursorScreenCol = prefixLen + (this.inputCursor - start) + 1;
