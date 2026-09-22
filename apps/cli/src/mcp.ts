@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import readline from 'node:readline/promises';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { auth } from '@modelcontextprotocol/client';
 import { MCPRegistry, MCPError, PolicyEngine, defaultMCPProfiles, redactMCPArguments, type MCPServerDefinition, type ToolExecutionContext, type ToolResult } from '@wazir/core';
 import { ToolRegistry, executeTool } from '@wazir/tools';
@@ -116,6 +117,77 @@ export async function importMCPConfig(registry: MCPRegistry, raw: any): Promise<
   }
 }
 
+interface MCPDaemonState { pid: number; nonce: string; state: string; tools: number; resources: number; prompts: number; error?: string; updatedAt: string }
+function daemonFile(id: string): string { return `${configDir()}/mcp-${id}.daemon.json`; }
+async function writeDaemonState(id: string, state: MCPDaemonState): Promise<void> {
+  const file = daemonFile(id), temporary = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify(state), { mode: 0o600, flag: 'wx' });
+  await fs.rename(temporary, file);
+}
+async function readDaemonState(id: string): Promise<MCPDaemonState | undefined> {
+  try {
+    const state = JSON.parse(await fs.readFile(daemonFile(id), 'utf8')) as MCPDaemonState;
+    if (Date.now() - Date.parse(state.updatedAt) > 10_000) throw new Error('stale daemon heartbeat');
+    process.kill(state.pid, 0);
+    return state;
+  } catch { await fs.unlink(daemonFile(id)).catch(() => undefined); return undefined; }
+}
+async function stopDaemon(id: string): Promise<void> {
+  const state = await readDaemonState(id); if (!state) return;
+  try { process.kill(state.pid, 'SIGTERM'); } catch { /* process exited */ }
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (!await readDaemonState(id)) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  try { process.kill(state.pid, 'SIGKILL'); } catch { /* process exited */ }
+  await fs.unlink(daemonFile(id)).catch(() => undefined);
+}
+async function acquireDaemonLock(id: string): Promise<() => Promise<void>> {
+  const file = `${daemonFile(id)}.lock`, nonce = randomBytes(16).toString('hex'), deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try {
+      await fs.writeFile(file, JSON.stringify({ pid: process.pid, nonce }), { mode: 0o600, flag: 'wx' });
+      return async () => {
+        try { const lock = JSON.parse(await fs.readFile(file, 'utf8')); if (lock.nonce === nonce) await fs.unlink(file); } catch { /* lock already cleared */ }
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        const lock = JSON.parse(await fs.readFile(file, 'utf8'));
+        process.kill(lock.pid, 0);
+      } catch {
+        await fs.unlink(file).catch(() => undefined);
+        continue;
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+  throw new Error('Timed out waiting for another MCP connection operation.');
+}
+async function startDaemon(id: string): Promise<MCPDaemonState> {
+  const unlock = await acquireDaemonLock(id);
+  try {
+    const existing = await readDaemonState(id); if (existing?.state === 'CONNECTED') return existing;
+    await stopDaemon(id);
+    const entry = process.argv[1]; if (!entry) throw new Error('Cannot locate the Wazir CLI entry point.');
+    const child = spawn(process.execPath, [entry, 'mcp', 'serve', id], { detached: true, stdio: 'ignore', env: process.env });
+    child.unref();
+    let spawnFailed = false; child.once('error', () => { spawnFailed = true; });
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const state = await readDaemonState(id);
+      if (state?.pid === child.pid && state.state === 'CONNECTED') return state;
+      if (state?.pid === child.pid && state.state === 'FAILED') throw new Error(`MCP server connection failed (${state.error ?? 'MCP_CONNECTION_FAILED'}).`);
+      let alive = false; try { if (child.pid) { process.kill(child.pid, 0); alive = true; } } catch { /* daemon exited */ }
+      if (!alive || child.exitCode !== null || spawnFailed) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    try { if (child.pid) process.kill(child.pid, 'SIGTERM'); } catch { /* process exited */ }
+    throw new Error('MCP server did not connect before the 15-second deadline. Run wa mcp doctor for details.');
+  } finally { await unlock(); }
+}
+
 async function addMCP(registry: MCPRegistry): Promise<void> {
   console.log('ADD MCP SERVER');
   const id = await question('ID: '), name = await question('Name: ');
@@ -165,6 +237,7 @@ async function configureMCP(registry: MCPRegistry, id: string, key: string, valu
   } else if (key === 'mode' && value === 'local' && id === 'nvidia-runai') Object.assign(d, defaultMCPProfiles()[1]);
   else if (key.startsWith('policy.') && ['READ_ONLY', 'WRITE', 'DESTRUCTIVE', 'ADMIN', 'UNKNOWN'].includes(key.slice(7)) && ['allow', 'ask', 'deny'].includes(value)) d.policy = { ...d.policy, [key.slice(7)]: value };
   else throw new Error('Unsupported setting. Use url, auth, oauth-client-id, oauth-client-secret-ref, mode local, allow-write-tools, or policy.<RISK>.');
+  await stopDaemon(id);
   await registry.update(d);
 }
 
@@ -176,22 +249,40 @@ export function registerMCPCommands(program: Command): void {
     catch (e) { console.error(e instanceof MCPError ? e.code : 'MCP operation failed. Check configuration and run wa mcp doctor.'); process.exitCode = 1; }
     finally { await registry.close(); }
   };
-  const status = async (r: MCPRegistry) => ['MCP SERVERS', 'SERVER          TRANSPORT AUTH       STATUS          TOOLS', ...r.list().map(s => `${s.definition.id.padEnd(15)} ${s.definition.transport.padEnd(9)} ${(s.definition.auth?.type ?? 'none').padEnd(10)} ${s.state.padEnd(15)} ${s.tools.length}`)].join('\n');
+  const status = async (r: MCPRegistry) => ['MCP SERVERS', 'SERVER          TRANSPORT AUTH       STATUS          TOOLS', ...await Promise.all(r.list().map(async s => {
+    const daemon = await readDaemonState(s.definition.id);
+    return `${s.definition.id.padEnd(15)} ${s.definition.transport.padEnd(9)} ${(s.definition.auth?.type ?? 'none').padEnd(10)} ${(daemon?.state ?? s.state).padEnd(15)} ${daemon?.tools ?? s.tools.length}`;
+  }))].join('\n');
   command.command('list').action(run(status));
   command.command('status').action(run(status));
   command.command('add').action(run(addMCP));
-  command.command('remove <id>').action(run((r, id) => r.remove(id)));
+  command.command('remove <id>').action(run(async (r, id) => { await stopDaemon(id); await r.remove(id); }));
   command.command('enable <id>').action(run((r, id) => r.enable(id, true)));
-  command.command('disable <id>').action(run((r, id) => r.enable(id, false)));
-  command.command('connect <id>').action(run(async (r, id) => { await r.connect(id); return `${id}: CONNECTED (${r.get(id).tools.length} tools); connection closes when this command exits.`; }));
-  command.command('disconnect <id>').action(run(async (r, id) => { await r.disconnect(id); return 'Disconnected in this process. Use disable to prevent future autoconnect.'; }));
-  command.command('inspect <id>').action(run(async (r, id) => { const s = r.get(id); return { ...s.definition, status: s.state, tools: s.tools.length, resources: s.resources.length, prompts: s.prompts.length }; }));
+  command.command('disable <id>').action(run(async (r, id) => { await stopDaemon(id); await r.enable(id, false); }));
+  command.command('connect <id>').action(run(async (r, id) => { const s = await startDaemon(id); return `${id}: ${s.state} (${s.tools} tools); persistent connection active.`; }));
+  command.command('disconnect <id>').action(run(async (_r, id) => { await stopDaemon(id); return `${id}: DISCONNECTED`; }));
+  command.command('inspect <id>').action(run(async (r, id) => { const s = r.get(id), daemon = await readDaemonState(id); return { ...s.definition, status: daemon?.state ?? s.state, tools: daemon?.tools ?? s.tools.length, resources: daemon?.resources ?? s.resources.length, prompts: daemon?.prompts ?? s.prompts.length }; }));
+  command.command('serve <id>').action(run(async (r, id) => {
+    const nonce = randomBytes(24).toString('hex');
+    try { await r.connect(id); }
+    catch (error) {
+      const code = error instanceof MCPError ? error.code : 'MCP_CONNECTION_FAILED';
+      await writeDaemonState(id, { pid: process.pid, nonce, state: 'FAILED', tools: 0, resources: 0, prompts: 0, error: code, updatedAt: new Date().toISOString() });
+      throw error;
+    }
+    const publish = () => writeDaemonState(id, { pid: process.pid, nonce, state: r.get(id).state, tools: r.get(id).tools.length, resources: r.get(id).resources.length, prompts: r.get(id).prompts.length, updatedAt: new Date().toISOString() });
+    await publish();
+    const timer = setInterval(() => { void publish().catch(() => undefined); }, 1000);
+    try { await new Promise<void>(resolve => { process.once('SIGTERM', resolve); process.once('SIGINT', resolve); }); }
+    finally { clearInterval(timer); const state = await readDaemonState(id); if (state?.nonce === nonce) await fs.unlink(daemonFile(id)).catch(() => undefined); }
+  }));
   for (const kind of ['tools', 'resources', 'prompts'] as const) command.command(kind + ' <id>').action(run(async (r, id) => { await r.connect(id); return r.get(id)[kind]; }));
   command.command('auth <id>')
     .option('--oauth', 'Use the server documented OAuth flow')
     .option('--pat', 'Use a Personal Access Token (GitHub)')
     .action(run(async (r, id, opts: { oauth?: boolean; pat?: boolean }) => {
       if (opts.oauth && opts.pat) throw new Error('Choose either --oauth or --pat.');
+      await stopDaemon(id);
       if (id === 'github' && (opts.oauth || opts.pat)) {
         const d = structuredClone(r.get(id).definition);
         d.auth = opts.oauth ? { type: 'oauth', oauthConfig: { ...d.auth?.oauthConfig } } : { type: 'bearer', secretRef: 'github_mcp_token' };
