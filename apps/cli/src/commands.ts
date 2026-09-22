@@ -1524,6 +1524,11 @@ export async function askCommand(
     };
   }
 
+  if (engine.mcp && engine.tools.descriptors().some(t => t.provenance?.source === 'mcp')) {
+    const outcome = await executeTask(engine, prompt, { type: 'coding', model: target.id, agent: 'wazir-step', allowHosted: options.allowHosted });
+    return { code: outcome.success ? 0 : 1, output: outcome.result ?? outcome.reasons.join('\n') };
+  }
+
   process.stdout.write(color.bold(`[${target.id}]\n`));
 
   let fullResponse = '';
@@ -1722,4 +1727,42 @@ export async function modelProtocolTestCommand(modelId: string): Promise<{ code:
   } finally {
     await fs.rm(projectRoot, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+export async function inspectRuntime(engine: RookEngine, id: string): Promise<void> {
+  const runtime = engine.discovered.find((r) => r.id === id);
+  if (!runtime) {
+    console.error(color.red(`Runtime '${id}' not found.`));
+    return;
+  }
+  
+  console.log(`\n${color.bold(runtime.info.name || id)}`);
+  console.log('-'.repeat(48));
+  console.log(`Computer:   ${process.env.WAZIR_COMPUTER_ID || 'local'}`);
+  
+  if (runtime.healthDiagnostics) {
+    const diag = runtime.healthDiagnostics;
+    console.log(`CLI:        ${diag.cliAvailable ? color.green('available') : color.red('unavailable')}`);
+    console.log(`Server:     ${diag.serverRunning ? color.green('running') : color.red('stopped')}`);
+    console.log(`Endpoint:   ${diag.endpoint}`);
+    console.log(`API:        ${diag.apiReachable ? color.green('reachable') : color.red('unreachable')}`);
+    console.log('');
+    console.log(`Models:     ${diag.installedModels} installed | ${diag.loadedModels} loaded | ${diag.readyModels} ready`);
+  } else {
+    console.log(`Endpoint:   ${runtime.info.url || 'unknown'}`);
+    console.log(`Health:     ${runtime.health === 'healthy' ? color.green('healthy') : color.red(runtime.health)}`);
+  }
+  
+  if (runtime.health !== 'healthy') {
+    console.log(`\n${color.red('Error:')}`);
+    console.log(`  ${runtime.healthReason || 'UNAVAILABLE'} ${runtime.healthMessage}`);
+  }
+  
+  if (runtime.healthDiagnostics?.cliAvailable && !runtime.healthDiagnostics.serverRunning && runtime.adapter.startServer) {
+    console.log(`\n${color.yellow('Suggested action:')}`);
+    console.log(`  Start LM Studio API server or correct runtime endpoint.`);
+    console.log(`  Run: wa runtimes start ${id}`); // If we add a start command
+  }
+  
+  console.log();
 }

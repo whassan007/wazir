@@ -69,7 +69,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
   private readonly baseURL: string;
   private readonly controllers = new Map<string, AbortController>();
 
-  constructor(baseURL: string = 'http://localhost:1234/v1') {
+  constructor(baseURL: string = 'http://localhost:1235/v1') {
     this.baseURL = baseURL.replace(/\/+$/, '');
   }
 
@@ -87,18 +87,97 @@ export class LMStudioAdapter implements RuntimeAdapter {
   }
 
   async healthCheck(): Promise<HealthStatus> {
+    const diagnostics = {
+      cliAvailable: false,
+      serverRunning: false,
+      endpoint: this.baseURL,
+      apiReachable: false,
+      installedModels: 0,
+      loadedModels: 0,
+      readyModels: 0,
+      failureReason: ''
+    };
+
+    const lmsBin = resolveLmsBin();
+    try {
+      const { stdout } = await execFileAsync(lmsBin, ['ls'], { timeout: 3000 });
+      diagnostics.cliAvailable = true;
+      const lines = stdout.split('\n');
+      for (const line of lines) {
+        if (/Local/.test(line)) {
+          diagnostics.installedModels++;
+          if (/LOADED/.test(line)) {
+            diagnostics.loadedModels++;
+          }
+        }
+      }
+    } catch {
+      diagnostics.cliAvailable = false;
+    }
+
+    try {
+      if (diagnostics.cliAvailable) {
+        const { stdout } = await execFileAsync(lmsBin, ['server', 'status'], { timeout: 3000 });
+        if (/running/.test(stdout.toLowerCase())) {
+          diagnostics.serverRunning = true;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     try {
       const response = await fetch(`${this.baseURL}/models`, { signal: AbortSignal.timeout(3000) });
       if (!response.ok) {
-        return { status: 'unavailable', message: `HTTP ${response.status}` };
+        diagnostics.apiReachable = true;
+        return { 
+          status: 'unavailable', 
+          message: `HTTP ${response.status}`, 
+          reason: 'INVALID_RESPONSE',
+          diagnostics 
+        };
       }
+      diagnostics.apiReachable = true;
+      diagnostics.serverRunning = true; 
+      
       const data = (await response.json()) as { data?: OpenAIModel[] };
       if (!data.data || data.data.length === 0) {
-        return { status: 'degraded', message: 'no models available' };
+        diagnostics.readyModels = 0;
+        return { status: 'degraded', message: 'no models available', diagnostics };
       }
-      return { status: 'healthy' };
+      diagnostics.readyModels = data.data.length;
+      return { status: 'healthy', diagnostics };
     } catch (error) {
-      return { status: 'unavailable', message: error instanceof Error ? error.message : 'unreachable' };
+      const msg = error instanceof Error ? error.message : String(error);
+      const isRefused = msg.includes('ECONNREFUSED') || msg.includes('fetch failed');
+      const isTimeout = msg.includes('timeout');
+      
+      diagnostics.failureReason = msg;
+      
+      return { 
+        status: 'unavailable', 
+        message: msg, 
+        reason: isRefused ? 'CONNECTION_REFUSED' : isTimeout ? 'CONNECTION_TIMEOUT' : 'API_UNREACHABLE',
+        diagnostics
+      };
+    }
+  }
+
+  async startServer(): Promise<void> {
+    const lmsBin = resolveLmsBin();
+    try {
+      const child = execFile(lmsBin, ['server', 'start']);
+      child.unref();
+      for (let i = 0; i < 20; i++) {
+        try {
+          const res = await fetch(`${this.baseURL}/models`, { signal: AbortSignal.timeout(1000) });
+          if (res.ok) return;
+        } catch {}
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      throw new Error("Server started but API did not become reachable in time");
+    } catch (err: any) {
+      throw new Error(`Failed to start LM Studio server: ${err.message || String(err)}`);
     }
   }
 
@@ -201,9 +280,9 @@ export class LMStudioAdapter implements RuntimeAdapter {
       // fallback to next strategy
     }
 
-    // 2. If pointing to local default LM Studio (port 1234 or no custom port), check lms ps --json
+    // 2. If pointing to local default LM Studio (port 1235 or no custom port), check lms ps --json
     const isDefaultLms =
-      /:(1234)(\/|$)/.test(this.baseURL) ||
+      /:(1235)(\/|$)/.test(this.baseURL) ||
       (!/:[0-9]+/.test(this.baseURL) && /localhost|127\.0\.0\.1/.test(this.baseURL));
     if (isDefaultLms) {
       try {

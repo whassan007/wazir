@@ -40,9 +40,23 @@ export interface RuntimeCapabilities {
   mcp: boolean;
 }
 
+export interface RuntimeDiagnostics {
+  cliAvailable: boolean;
+  serverRunning: boolean;
+  endpoint: string;
+  apiReachable: boolean;
+  installedModels: number;
+  loadedModels: number;
+  readyModels: number;
+  failureReason?: string;
+  errorDetail?: string;
+}
+
 export interface HealthStatus {
   status: 'healthy' | 'degraded' | 'unavailable';
   message?: string;
+  reason?: 'API_UNREACHABLE' | 'CONNECTION_REFUSED' | 'CONNECTION_TIMEOUT' | 'DNS_FAILURE' | 'SERVER_STOPPED' | 'INVALID_RESPONSE' | 'AUTH_REQUIRED' | 'API_VERSION_UNSUPPORTED';
+  diagnostics?: RuntimeDiagnostics;
 }
 
 export interface ChatMessage {
@@ -115,6 +129,7 @@ export interface RuntimeAdapter {
   unloadModel?(modelId: string): Promise<void>;
   getLoadedModels?(): Promise<string[]>;
   estimateResources?(modelId: string): Promise<ResourceEstimate>;
+  startServer?(): Promise<void>;
 
   cancel?(requestId: string): Promise<void>;
 }

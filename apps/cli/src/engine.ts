@@ -1,3 +1,4 @@
+import { MCPRegistry } from '@wazir/core';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -65,6 +66,7 @@ export interface RookEngine {
   lifecycle: ModelLifecycleService;
   agents: AgentRegistry;
   tools: ToolRegistry;
+  mcp: MCPRegistry;
   policy: PolicyEngine;
   scheduler: Scheduler;
   compiler: ContextCompiler;
@@ -248,6 +250,21 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     },
   });
 
+  const mcp = new MCPRegistry({
+    directory: engineConfigDir, tools, policy, secrets: secretBroker,
+    autoConnect: config.mcp?.autoConnect ?? true,
+    onAuthRequired: async (id, ctx) => {
+      if (ctx.executionId) await executions.recordEvent(ctx.executionId, 'mcp.event', { event: 'WAITING_FOR_AUTH', serverId: id });
+      if (!process.stdin.isTTY) throw new Error('MCP_AUTH_REQUIRED');
+      const { authenticateMCP } = await import('./mcp.js');
+      await authenticateMCP(mcp, id);
+    },
+  });
+  mcp.on('event', event => {
+    if (event.executionId) void executions.recordEvent(event.executionId, 'mcp.event', event).catch(() => undefined);
+  });
+  await mcp.initialize().catch(() => { if (!options.quiet) console.error('[wazir] MCP registry unavailable; run wa mcp doctor.'); });
+
   // ---- scheduler ----------------------------------------------------------
   const scheduler = new Scheduler({
     computers,
@@ -316,6 +333,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     store,
     secretBroker,
     hostedAdapters,
+    mcp,
   };
 }
 

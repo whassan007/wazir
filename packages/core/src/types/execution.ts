@@ -35,6 +35,7 @@ export interface TokenUsage {
 }
 
 export interface ToolCallRecord {
+  provenance?: Record<string, unknown>;
   id: string;
   tool: string;
   input: unknown;
@@ -91,6 +92,7 @@ export interface ExecutionRecord {
 }
 
 export type ExecutionEventType =
+  | 'mcp.event'
   | 'execution.created'
   | 'execution.scheduled'
   | 'execution.assigned'

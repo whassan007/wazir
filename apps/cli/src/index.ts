@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import chalk from 'chalk';
+import { registerMCPCommands } from './mcp.js';
 
 const program = new Command();
 
@@ -9,6 +10,8 @@ program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
   .version('0.1.37');
+
+registerMCPCommands(program);
 
 // computers command
 const computersCmd = new Command()
@@ -65,6 +68,16 @@ runtimesCmd
     const engine = await createEngine();
     const { listRuntimes } = await import('./commands.js');
     console.log(listRuntimes(engine));
+  });
+
+runtimesCmd
+  .command('inspect <id>')
+  .description('Inspect a specific runtime')
+  .action(async (id) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { inspectRuntime } = await import('./commands.js');
+    await inspectRuntime(engine, id);
   });
 
 program.addCommand(runtimesCmd);

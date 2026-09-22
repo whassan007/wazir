@@ -8,8 +8,11 @@
     "build": "tsc --build"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
     "@wazir/runtimes-interfaces": "*",
     "@wazir/shared": "*",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "shell-quote": "^1.8.1"
   },
   "devDependencies": {

@@ -12,6 +12,8 @@ export type ToolRiskLevel = 'low' | 'medium' | 'high';
 export type ToolEnvironment = 'local' | 'worker';
 
 export interface ToolDescriptor {
+  provenance?: { source: 'mcp'; serverId: string; tool: string; trust: 'untrusted' };
+  capabilities?: string[];
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -30,6 +32,9 @@ export interface ToolResult {
 }
 
 export interface ToolExecutionContext {
+  signal?: AbortSignal;
+  requester?: string;
+  agentId?: string;
   projectRoot: string;
   executionId?: string;
   env?: Record<string, string>;

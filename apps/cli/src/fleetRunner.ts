@@ -1,3 +1,4 @@
+import { executeMCPForAgent } from './mcp.js';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import {
@@ -290,6 +291,10 @@ export function createFleetTaskExecutor(
       },
 
       async executeTool(name, input): Promise<ToolResult> {
+      if (engine.tools.get(name)?.descriptor.provenance?.source === 'mcp') {
+        return executeMCPForAgent(engine, name, input, { projectRoot: taskRoot, executionId, signal });
+      }
+ 
         // The agent loop only checks for cancellation between turns, and a model turn can
         // take a long time — so a cancel (manual or timeout) that lands mid-turn used to
         // be followed by that turn's tool call still executing (a `shell` ran 9s after

@@ -28,6 +28,7 @@ export interface ProvidersConfig {
 }
 
 export interface WazirConfig {
+  mcp?: { autoConnect?: boolean };
   ollamaUrl?: string;
   lmstudioUrl?: string;
   /** Control-plane API base URL. When set, the engine pulls remote computers/runtimes/models
@@ -167,6 +168,7 @@ export function loadConfig(): WazirConfig {
     config.networkAllowed = fileConfig.networkAllowed ?? config.networkAllowed;
     config.allowCommands = fileConfig.allowCommands ?? config.allowCommands;
     config.denyCommands = fileConfig.denyCommands ?? config.denyCommands;
+    config.mcp = fileConfig.mcp ?? { autoConnect: true };
     config.allowedMcpServers = fileConfig.allowedMcpServers ?? config.allowedMcpServers;
     if (fileConfig.providers) {
       config.providers = {

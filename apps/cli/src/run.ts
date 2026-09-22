@@ -1,3 +1,4 @@
+import { executeMCPForAgent } from './mcp.js';
 import path from 'node:path';
 import { effectiveContextTokens, SchedulingError } from '@wazir/core';
 import type {
@@ -345,6 +346,10 @@ export async function executeTask(
     },
 
     async executeTool(name, input): Promise<ToolResult> {
+      if (engine.tools.get(name)?.descriptor.provenance?.source === 'mcp') {
+        return executeMCPForAgent(engine, name, input, { projectRoot: engine.projectRoot, executionId });
+      }
+ 
       const decision = await engine.policy.authorize({ tool: name, input, executionId, projectRoot: engine.projectRoot });
       await engine.executions.recordPolicy(executionId, decision);
 

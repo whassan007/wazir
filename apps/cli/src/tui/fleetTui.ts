@@ -123,7 +123,7 @@ function diffLines(oldText: string, newText: string): DiffLine[] {
 
 export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'help';
 
-export type NavCategory = 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
+export type NavCategory = 'MCP' | 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
 
 export type FocusPane = 'nav' | 'main' | 'prompt';
 
@@ -2720,6 +2720,11 @@ export class FleetTui {
       });
     }
 
+    for (const server of this.engine.mcp?.list() ?? []) {
+      items.push({ category: 'MCP', id: server.definition.id,
+        label: `${server.definition.name} ${server.state === 'CONNECTED' ? server.tools.length + ' tools' : server.state.toLowerCase()}`,
+        status: server.state === 'CONNECTED' ? 'completed' : server.state === 'FAILED' ? 'failed' : 'idle' });
+    }
     return items;
   }
 
@@ -2956,7 +2961,7 @@ export class FleetTui {
    */
   private renderLeftNav(width: number, maxRows: number): string[] {
     const lines: string[] = [];
-    const categories: NavCategory[] = ['JOBS', 'EXECUTIONS', 'AGENTS', 'COMPUTERS', 'RUNTIMES'];
+    const categories: NavCategory[] = ['JOBS', 'EXECUTIONS', 'AGENTS', 'COMPUTERS', 'RUNTIMES', 'MCP'];
     const flatItems = this.getFlatNavItems();
     const currentSelected = flatItems[this.navSelectionIndex];
 
@@ -3054,6 +3059,9 @@ export class FleetTui {
     } else if (selected.category === 'COMPUTERS') {
       const comp = this.engine.computers.get(selected.id);
       routingLine = `  ${color.bold('Routing:')} Computer [${color.cyan(selected.id)}] ${color.gray('-')} OS [${color.cyan(comp?.os?.platform ?? 'linux')}] ${color.gray('-')} Cores [${color.cyan(String(comp?.hardware?.cpuCores ?? 8))}]`;
+    } else if (selected.category === 'MCP') {
+      const server = this.engine.mcp?.get(selected.id);
+      routingLine = `  MCP ${selected.id}: ${server?.state ?? 'unavailable'} (${server?.definition.transport ?? '-'})`;
     } else if (selected.category === 'RUNTIMES') {
       const runtime = this.engine.runtimes.get(selected.id);
       routingLine = `  ${color.bold('Routing:')} Runtime [${color.cyan(selected.id)}] ${color.gray('-')} Type [${color.cyan(runtime?.type ?? 'other')}] ${color.gray('-')} Computer [${color.cyan(runtime?.computerId ?? 'local')}]`;
@@ -3271,6 +3279,11 @@ export class FleetTui {
           ),
         );
         lines.push(this.padRightTo(`  Capabilities: ${comp.capabilities.join(', ')}`, width));
+      }
+    } else if (selected.category === 'MCP') {
+      const server = this.engine.mcp?.get(selected.id);
+      if (server) {
+        for (const text of [`MCP: ${server.definition.name}`, `Status: ${server.state}`, `Tools: ${server.tools.length}  Resources: ${server.resources.length}  Prompts: ${server.prompts.length}`, `Details: wa mcp inspect ${selected.id}`, `Tool palette: wa mcp tools ${selected.id}`]) lines.push(this.padRightTo('  ' + text, width));
       }
     } else if (selected.category === 'RUNTIMES') {
       const runtime = this.engine.runtimes.get(selected.id);

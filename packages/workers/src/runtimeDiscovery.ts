@@ -13,7 +13,9 @@ export interface DiscoveredRuntime {
   info: RuntimeInfo;
   capabilities: RuntimeCapabilities;
   health: HealthStatus['status'];
+  healthReason?: HealthStatus['reason'];
   healthMessage?: string;
+  healthDiagnostics?: HealthStatus['diagnostics'];
   models: DiscoveredModel[];
   adapter: RuntimeAdapter;
 }
@@ -61,7 +63,9 @@ export async function discoverRuntimes(adapters: RuntimeAdapter[]): Promise<Disc
     let info: RuntimeInfo = { id: adapter.id, name: adapter.id, version: 'unknown' };
     let capabilities: RuntimeCapabilities = NO_CAPABILITIES;
     let health: HealthStatus['status'] = 'unavailable';
+    let healthReason: HealthStatus['reason'] | undefined;
     let healthMessage: string | undefined;
+    let healthDiagnostics: HealthStatus['diagnostics'] | undefined;
     let models: DiscoveredModel[] = [];
 
     try {
@@ -75,7 +79,10 @@ export async function discoverRuntimes(adapters: RuntimeAdapter[]): Promise<Disc
       const check = await adapter.healthCheck();
       health = check.status;
       healthMessage = check.message;
-      if (health === 'healthy' || health === 'degraded') {
+      healthReason = check.reason;
+      healthDiagnostics = check.diagnostics;
+      if (health === 'healthy' || health === 'degraded' || health === 'unavailable') {
+        // Always try to fetch models if there's diagnostics or a chance
         models = await adapter.listModels().catch(() => []);
       }
     } catch (error) {
@@ -83,7 +90,7 @@ export async function discoverRuntimes(adapters: RuntimeAdapter[]): Promise<Disc
       healthMessage = error instanceof Error ? error.message : 'unreachable';
     }
 
-    results.push({ id: adapter.id, info, capabilities, health, healthMessage, models, adapter });
+    results.push({ id: adapter.id, info, capabilities, health, healthReason, healthMessage, healthDiagnostics, models, adapter });
   }
 
   return results.sort((a, b) => a.id.localeCompare(b.id));

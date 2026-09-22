@@ -37,3 +37,6 @@ export type {
   RestoreResult,
 } from './modelLifecycleService.js';
 
+
+export * from './mcpRegistry.js';
+export * from './mcpAuth.js';
