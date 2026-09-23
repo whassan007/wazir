@@ -23,3 +23,5 @@ export type { ToolExecutionContext, Tool } from './tool.js';
 export * from './job.js';
 
 export * from './mcp.js';
+
+export * from './modelLifecycle.js';

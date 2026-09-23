@@ -48,6 +48,8 @@ export interface Computer {
   models: string[];
   capabilities: string[];
   load?: ResourceState;
+  resourceObservedAt?: Date;
+  reservations?: import('./modelLifecycle.js').ResourceReservation[];
   runtimeHealth: Record<string, RuntimeHealth>;
   modelHealth: Record<string, ModelHealth>;
   health: HealthLevel;

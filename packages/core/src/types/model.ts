@@ -55,11 +55,18 @@ export type ModelLifecycleState =
   | 'LOADING'
   | 'LOADED'
   | 'READY'
+  | 'DRAINING'
+  | 'UNLOADED'
   | 'UNLOADING'
   | 'FAILED'
   | 'UNAVAILABLE';
 
 export type ModelLifecycleEventType =
+  | 'MODEL_INSTALLED' | 'MODEL_LOADED' | 'MODEL_UNLOADING' | 'MODEL_DRAINING'
+  | 'MODEL_LOAD_PLAN_CREATED' | 'MODEL_ADMISSION_STARTED' | 'MODEL_ADMISSION_GRANTED' | 'MODEL_ADMISSION_DENIED'
+  | 'MODEL_CONTEXT_SELECTED' | 'MODEL_CONTEXT_DOWNSHIFTED'
+  | 'RESOURCE_RESERVATION_CREATED' | 'RESOURCE_RESERVATION_RELEASED'
+  | 'MODEL_EVICTION_PLANNED' | 'MODEL_EVICTED' | 'MODEL_RECONCILED' | 'WAITING_FOR_MODEL' 
   | 'MODEL_DISCOVERED'
   | 'MODEL_LOAD_REQUESTED'
   | 'MODEL_LOADING'
@@ -100,6 +107,10 @@ export interface ModelInstance {
   lastUsedAt?: Date;
   lastCheckedAt?: Date;
   error?: string;
+  installationId?: string;
+  desired?: { state: 'READY' | 'UNLOADED'; contextTokens?: number };
+  pinned?: boolean;
+  residentMemoryBytes?: number;
 }
 
 export interface ModelRequirements {
@@ -163,4 +174,30 @@ export function estimateModelMemory(
     minSystemGB: 8,
     minGpuGB: undefined,
   };
+}
+
+/** An installation exists independently of any serving instance. */
+export interface ModelInstallation {
+  id: string;
+  modelId: string;
+  computerId: string;
+  runtimeId: string;
+  runtimeModelId: string;
+  installed: boolean;
+  observedAt: Date;
+  profile?: ModelResourceProfile;
+}
+export interface ModelResourceProfile {
+  modelId: string;
+  runtimeId: string;
+  parameterCount?: number;
+  quantization?: string;
+  weightBytes?: number;
+  minimumContext?: number;
+  maximumContext?: number;
+  runtimeMaximumContext?: number;
+  runtimeMinimumContext?: number;
+  contextBytesPerToken?: number;
+  runtimeOverheadBytes?: number;
+  metadata: Record<string, unknown>;
 }

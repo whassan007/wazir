@@ -23,6 +23,7 @@ export interface DiscoveredModel {
   embedding?: boolean;
   reasoning?: boolean;
   quantization?: string;
+  weightBytes?: number;
 }
 
 export interface RuntimeCapabilities {
@@ -33,6 +34,7 @@ export interface RuntimeCapabilities {
   vision: boolean;
   embeddings: boolean;
   reasoning: boolean;
+  lifecycle?: { discovery: boolean; inspection: boolean; contextControl: boolean; estimate: boolean; readinessProbe: boolean };
   modelLoad: boolean;
   modelUnload: boolean;
   modelDownload: boolean;
@@ -105,6 +107,22 @@ export interface GenerationEvent {
   error?: string;
 }
 
+export interface ModelLoadEstimate {
+  totalMemoryBytes?: number;
+  vramBytes?: number;
+  weightBytes?: number;
+  contextBytes?: number;
+  overheadBytes?: number;
+  source: 'RUNTIME' | 'HEURISTIC' | 'UNKNOWN';
+  confidence: 'high' | 'medium' | 'low' | 'unknown';
+}
+export interface RuntimeModelInspection {
+  modelId: string;
+  instanceId?: string;
+  loaded: boolean;
+  effectiveContext?: number;
+  memoryBytes?: number;
+}
 export interface ResourceEstimate {
   minMemoryGB?: number;
   minGpuGB?: number;
@@ -125,7 +143,10 @@ export interface RuntimeAdapter {
 
   generate(request: GenerationRequest): AsyncIterable<GenerationEvent>;
 
-  loadModel?(modelId: string): Promise<void>;
+  loadModel?(modelId: string, options?: { contextTokens?: number }): Promise<void>;
+  inspectModel?(modelId: string): Promise<RuntimeModelInspection>;
+  probeModel?(modelId: string, contextTokens: number): Promise<boolean>;
+  estimateModelLoad?(modelId: string, contextTokens: number): Promise<ModelLoadEstimate>;
   unloadModel?(modelId: string): Promise<void>;
   getLoadedModels?(): Promise<string[]>;
   estimateResources?(modelId: string): Promise<ResourceEstimate>;

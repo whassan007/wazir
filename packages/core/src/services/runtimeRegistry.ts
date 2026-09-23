@@ -29,6 +29,10 @@ export class RuntimeRegistry {
     return updated;
   }
 
+  setHealth(id: string, health: RuntimeRecord['health']): RuntimeRecord | undefined {
+    return this.update(id, { health });
+  }
+
   get(id: string): RuntimeRecord | undefined {
     return this.runtimes.get(id);
   }

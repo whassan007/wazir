@@ -314,6 +314,19 @@ export class PolicyEngine {
     this.rules = this.buildRules();
   }
 
+  checkModelLifecycle(request: { operation: 'load' | 'unload' | 'evict'; modelId: string;
+    computerId: string; runtimeId: string; context?: number; memoryBytes?: number; automatic?: boolean }): PolicyDecision {
+    const p = this.options.modelLifecycle;
+    const reasons: string[] = [];
+    if (p?.allowedRuntimes && !p.allowedRuntimes.includes(request.runtimeId)) reasons.push('runtime prohibited');
+    if (p?.prohibitedComputers?.includes(request.computerId)) reasons.push('computer prohibited');
+    if (p?.maximumContext !== undefined && (request.context ?? 0) > p.maximumContext) reasons.push('context exceeds policy');
+    if (p?.maximumMemoryBytes !== undefined && (request.memoryBytes ?? Infinity) > p.maximumMemoryBytes && request.operation === 'load') reasons.push('memory exceeds policy');
+    if (request.automatic && request.operation === 'load' && p?.autoLoad === false) reasons.push('automatic load prohibited');
+    if (request.operation === 'evict' && (p?.eviction === false || p?.protectedModels?.includes(request.modelId))) reasons.push('eviction prohibited');
+    return { decision: reasons.length ? 'deny' : 'allow', rule: 'model-lifecycle', reasons };
+  }
+
   private trackCompiledOutput(executionId: string | undefined, absolutePath: string): void {
     if (!executionId) return;
     let set = this.compiledOutputsByExecution.get(executionId);

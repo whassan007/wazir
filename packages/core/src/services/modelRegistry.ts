@@ -1,7 +1,12 @@
-import type { ModelInstance, ModelRecord } from '../types/model.js';
+import type { ModelInstallation, ModelInstance, ModelRecord } from '../types/model.js';
 
 export class ModelRegistry {
   private records = new Map<string, ModelRecord>();
+  private installations = new Map<string, ModelInstallation>();
+  upsertInstallation(installation: ModelInstallation): void { this.installations.set(installation.id, installation); }
+  listInstallations(): ModelInstallation[] { return [...this.installations.values()]; }
+  getInstallation(id: string): ModelInstallation | undefined { return this.installations.get(id); }
+
   private instances = new Map<string, ModelInstance>();
 
   register(record: ModelRecord): ModelRecord {
@@ -17,6 +22,7 @@ export class ModelRegistry {
   }
 
   upsertInstance(instance: ModelInstance): ModelInstance {
+    instance = { ...this.instances.get(instance.id), ...instance };
     this.instances.set(instance.id, { ...instance, lastCheckedAt: new Date() });
     return instance;
   }
@@ -39,7 +45,7 @@ export class ModelRegistry {
         ? patch.loaded
         : patch.state === 'READY' || patch.state === 'LOADED'
           ? true
-          : patch.state === 'INSTALLED' || patch.state === 'DISCOVERED' || patch.state === 'FAILED' || patch.state === 'UNAVAILABLE'
+          : patch.state === 'UNLOADED' || patch.state === 'INSTALLED' || patch.state === 'DISCOVERED' || patch.state === 'FAILED' || patch.state === 'UNAVAILABLE'
             ? false
             : existing.loaded;
 
@@ -59,7 +65,7 @@ export class ModelRegistry {
   setInstanceLoaded(instanceId: string, loaded: boolean): boolean {
     const updated = this.setInstanceHealth(instanceId, {
       loaded,
-      state: loaded ? 'READY' : 'INSTALLED',
+      state: loaded ? 'LOADED' : 'UNLOADED',
     });
     return updated !== undefined;
   }
@@ -75,7 +81,7 @@ export class ModelRegistry {
   isModelReady(modelId: string): boolean {
     const instances = this.instancesOf(modelId);
     return instances.some(
-      (i) => (i.loaded || i.state === 'READY') && i.health === 'healthy' && i.state !== 'FAILED' && i.state !== 'UNAVAILABLE',
+      (i) => i.loaded && i.state === 'READY' && i.health === 'healthy',
     );
   }
 
@@ -84,7 +90,10 @@ export class ModelRegistry {
     if (instances.length === 0) return 'DISCOVERED';
     if (instances.some((i) => i.state === 'READY' && i.health === 'healthy')) return 'READY';
     if (instances.some((i) => i.state === 'LOADING')) return 'LOADING';
-    if (instances.some((i) => (i.state === 'LOADED' || i.loaded) && i.health === 'healthy')) return 'READY';
+    if (instances.some((i) => i.state === 'DRAINING')) return 'DRAINING';
+    if (instances.some((i) => i.state === 'UNLOADING')) return 'UNLOADING';
+    if (instances.some((i) => i.loaded)) return 'LOADED';
+    if (instances.some((i) => i.state === 'UNLOADED')) return 'UNLOADED';
     if (instances.some((i) => i.state === 'FAILED')) return 'FAILED';
     if (instances.every((i) => i.health === 'unavailable' || i.state === 'UNAVAILABLE')) return 'UNAVAILABLE';
     return 'INSTALLED';

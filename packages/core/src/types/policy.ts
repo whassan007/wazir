@@ -24,6 +24,17 @@ export interface PolicyRule {
 }
 
 export interface PolicyEngineOptions {
+  modelLifecycle?: {
+    allowedRuntimes?: string[];
+    prohibitedComputers?: string[];
+    maximumMemoryBytes?: number;
+    maximumContext?: number;
+    autoLoad?: boolean;
+    eviction?: boolean;
+    protectedModels?: string[];
+    allowUnknownEstimate?: boolean;
+    unknownReservationBytes?: number;
+  };
   projectRoot: string;
   networkAllowed?: boolean;
   /** Extra shell command prefixes that are always allowed. */
