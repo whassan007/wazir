@@ -60,6 +60,13 @@ export interface CodingAgentOptions {
   systemPromptExtra?: string;
 }
 
+// Matches the error phrasing OpenAI-compatible, Anthropic, and Ollama-style
+// APIs use for "the request's context is too large for the model" — the
+// wording varies by provider but converges on some combination of these
+// words, so this is a broad heuristic rather than an exact-string match
+// against any one provider's error shape.
+const CONTEXT_OVERFLOW_PATTERN = /context.{0,25}(length|window|size).{0,25}(exceed|too (long|large)|maximum)|maximum context length|reduce the (length|number) of (the )?messages|prompt is too long|input is too long/i;
+
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
 const FILE_TOOLS = new Set(['write', 'edit']);
 const MUTATING_FILE_TOOLS = new Set(['write', 'edit', 'write_to_file', 'replace_file_content']);
@@ -543,11 +550,21 @@ export class CodingAgent implements AgentAdapter {
     // ---- context compaction: keep `messages` under the model's context window ----
     const estimateTokens = (msgs: ChatMessage[]): number =>
       Math.ceil(msgs.reduce((sum, m) => sum + m.content.length, 0) / 4);
-    const compactIfNeeded = (): string | null => {
+    /**
+     * `force` bypasses the token-estimate gate below — used for reactive
+     * recovery when the runtime itself has already reported a context
+     * overflow (see CONTEXT_OVERFLOW_PATTERN), which is authoritative in a
+     * way our rough chars/4 estimate isn't. Without `force`, a case where
+     * the estimate under-counted (unusual tokenization, a large single tool
+     * result) could hit a real overflow that compactIfNeeded's own gate
+     * wouldn't have triggered on, with no path to recover mid-turn.
+     */
+    const compactIfNeeded = (force = false): string | null => {
       const contextTokens = request.contextTokens;
       const KEEP_RECENT = 2; // only the last action and result
       const KEEP_HEAD = 2; // system prompt + initial task message
-      if (!contextTokens || messages.length <= KEEP_HEAD + KEEP_RECENT) return null;
+      if (messages.length <= KEEP_HEAD + KEEP_RECENT) return null;
+      if (!force && !contextTokens) return null;
       
       const before = estimateTokens(messages);
       
@@ -653,6 +670,31 @@ export class CodingAgent implements AgentAdapter {
       return { content, toolCall, timedOut, retryNotes };
     };
 
+    /**
+     * Reactive context-overflow recovery: modelTurn() throwing with wording
+     * matching CONTEXT_OVERFLOW_PATTERN means the runtime itself just
+     * rejected the request as too large — authoritative in a way our rough
+     * chars/4 estimate (compactIfNeeded's normal trigger) isn't, and a case
+     * where that estimate under-counted (unusual tokenization, one outsized
+     * tool result) would otherwise hit this with no recovery path at all,
+     * failing the whole task over a single oversized turn. One retry only:
+     * if forcing compaction still doesn't help, this is a real, unrecoverable
+     * failure and should surface as one instead of looping.
+     */
+    const modelTurnWithOverflowRecovery = async (): Promise<
+      Awaited<ReturnType<typeof modelTurn>> & { overflowNote?: string }
+    > => {
+      try {
+        return await modelTurn();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!CONTEXT_OVERFLOW_PATTERN.test(message)) throw error;
+        const note = compactIfNeeded(true) ?? 'context overflow reported by the runtime — forced compaction (no further reduction was possible)';
+        const result = await modelTurn();
+        return { ...result, overflowNote: `context overflow recovery: ${note}` };
+      }
+    };
+
     const toolNames = new Set(effectiveTools.map((t) => t.name));
     const readAction = (raw: string): ParsedAction | null => normalizeAction(parseAction(raw, toolNames), toolNames);
     const correctionMessage = (timedOut: boolean): string =>
@@ -744,7 +786,8 @@ export class CodingAgent implements AgentAdapter {
       if (request.isCancelled?.()) return;
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
-      const { content: raw, toolCall, timedOut, retryNotes } = await modelTurn();
+      const { content: raw, toolCall, timedOut, retryNotes, overflowNote } = await modelTurnWithOverflowRecovery();
+      if (overflowNote) yield { kind: 'message', content: overflowNote };
       for (const note of retryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
       turnsUsed += 1;
@@ -877,7 +920,8 @@ export class CodingAgent implements AgentAdapter {
       }
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
-      const { content: raw, toolCall, timedOut, retryNotes } = await modelTurn();
+      const { content: raw, toolCall, timedOut, retryNotes, overflowNote } = await modelTurnWithOverflowRecovery();
+      if (overflowNote) yield { kind: 'message', content: overflowNote };
       for (const note of retryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
       turnsUsed += 1;
