@@ -36,12 +36,38 @@ real `node-pty` + `@xterm/headless`, three-tier readiness, decoupled
 scrollback/pending memory, graceful teardown. 8 new tests, all passing
 against a real spawned PTY.
 
+## P1 item: worker resource-limit hardening — DONE, committed
+
+Commit `2d40897` "feat(tools): rlimit-based resource caps for tool
+subprocesses". Neither bwrap nor sandbox-exec applied resource limits —
+only namespace/filesystem isolation. `resourceLimits.ts` wraps every
+`runShell`/`runFile` call in a portable `bash -c 'ulimit ...; exec "$@"'`
+prefix, composing with the existing sandbox wrapping.
+
+Default-enabled: `maxCpuSeconds` (600s), `maxFileSizeMB` (4096MB) — both
+verified with real integration tests (a CPU-spin loop killed via
+RLIMIT_CPU, a 20MB write capped to ~1MB via RLIMIT_FSIZE).
+
+**Deliberately NOT default-enabled** (opt-in only, via
+`WAZIR_MAX_MEMORY_MB`/`WAZIR_MAX_PROCESSES` or a per-call `resourceLimits`
+option) — both broke real commands when tested against this repo's own
+suite:
+- `maxMemoryMB` (RLIMIT_AS) breaks anything that spawns Node — V8 reserves
+  large virtual address space regardless of actual usage.
+- `maxProcesses` (RLIMIT_NPROC) counts ALL processes/threads for the UID
+  *system-wide*, not the command's own subprocess tree — this dev machine
+  already had 1300+ processes/threads under its UID, so a "512" default
+  tripped immediately on every `npm run`, unrelated to what the tool
+  command actually did.
+
+Structured crash-cleanup reporting (surfacing *why* a subprocess was
+killed — OOM vs. CPU cap vs. file-size cap — back into the tool result
+rather than just a nonzero exit code) was not built; `CommandResult.code`
+and the shell's own stderr (`Killed`, `File size limit exceeded`, etc.)
+are what's available today.
+
 ## Not yet done
 
-- **Worker runtime hardening** beyond what already exists (TMPDIR/HOME
-  isolation, sandbox wrapping already present in `packages/tools/src/process.ts`)
-  — resource limits (CPU/memory caps on spawned children) and structured
-  crash-cleanup reporting were not built.
 - **JobGraph durability review** — the graph engine itself (dependencies,
   fan-out/fan-in, retries, timeout, cancellation, replan/compensation via
   `options.replanner`) already existed in `jobManager.ts`/`jobOrchestrator.ts`
