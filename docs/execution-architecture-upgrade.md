@@ -138,14 +138,50 @@ revision behavior, shell-driven mutation detection), `packages/tools/tests/
 toolContractPipeline.test.ts` (input/output schema validation, `allowedTools`
 denial, timeout → `TOOL_OUTCOME_UNKNOWN`).
 
-Not yet done: Phase 2/3 (model-attempt vs. execution-history separation,
-observation compaction), Phase 12–24 (explicit `StopCondition` types beyond the
-turn/repair caps `CodingAgent` already enforces, semantic no-progress detection,
-model capability registry and circuit breaker, aggregate execution budgets,
-protected-verification tamper detection, full recovery-from-events reconstruction,
-`wa explain`/CLI projections of the new event vocabulary, and the live acceptance
-run). The existing per-run `maxTurns`/`maxRepairCycles`/`toolRepeatLimit` caps in
-`CodingAgent` and the trivial/small/complex task-complexity budgets
+## Fourth tranche: explicit termination reasons
+
+`AgentTurn` gained a `terminationReason?: TerminationReason` field
+(`packages/core/src/types/agent.ts`), a closed union matching Phase 12's stop-condition
+vocabulary (`COMPLETED`, `VERIFICATION_PASSED`, `MAX_TURNS`, `MAX_REPAIRS`,
+`NO_PROGRESS`, `MODEL_PROTOCOL_BUDGET_EXHAUSTED`, `POLICY_DENIED`, `CANCELLED`, ...),
+set only on the terminal `'done'`/`'error'` turn of a `CodingAgent.run()`. Every
+existing stop point in `CodingAgent` now tags it explicitly instead of leaving a
+caller to infer the reason from free-text `error` prose:
+
+- repeated malformed-JSON or tool-validation failures (both the PLAN and WORK
+  phases) → `MODEL_PROTOCOL_BUDGET_EXHAUSTED`
+- `repairState.cycle > maxRepairCycles` → `MAX_REPAIRS`; `consecutiveNoProgress >= 2`
+  → `NO_PROGRESS` (same guard, now distinguishable)
+- the WORK-phase turn loop exiting because the turn budget ran out (as opposed to the
+  model reporting `done`) is tracked (`turnBudgetExhausted`) and carried onto whatever
+  VERIFY then produces — a verification failure caused by running out of turns is now
+  `MAX_TURNS`, not indistinguishable from an ordinary failed check
+- a clean VERIFY pass → `VERIFICATION_PASSED`
+
+Deliberately left untouched: the cancellation checks (`request.isCancelled?.()`)
+still bare-`return` without yielding a terminal turn — tagging those would mean
+emitting a turn where none exists today, which is a behavior change existing callers
+don't expect; and the circuit breaker (`ACTION_BLOCKED_DUPLICATE`) still only nudges
+the model with another turn rather than terminating, so `REPEATED_ACTION` isn't
+assigned anywhere yet — semantic no-progress detection driving an actual escalation
+(Phase 13) is separate, larger work.
+
+Regression coverage: `packages/agents/tests/codingAgent.terminationReason.test.ts`
+(`MAX_TURNS`, `VERIFICATION_PASSED`, `MODEL_PROTOCOL_BUDGET_EXHAUSTED`).
+
+## Not yet done
+
+Phase 2/3 (model-attempt vs. execution-history separation, observation compaction),
+Phase 12 remainder (a composed `StopCondition[]` the controller evaluates centrally,
+rather than each condition being its own inline check scattered through
+`CodingAgent` — this tranche added the typed *reason*, not the unified *mechanism*),
+Phase 13 (semantic no-progress detection beyond the existing exact-duplicate-call
+circuit breaker), Phase 14–24 (model capability registry and circuit breaker,
+aggregate execution budgets, protected-verification tamper detection, full
+recovery-from-events reconstruction, `wa explain`/CLI projections of the new event
+vocabulary, and the live acceptance run). The existing per-run
+`maxTurns`/`maxRepairCycles`/`toolRepeatLimit` caps in `CodingAgent` and the
+trivial/small/complex task-complexity budgets
 (`packages/core/src/services/complexity.ts`) predate this mission and are not the
 same thing as the mission's controller-owned `StopCondition` composition — they
 overlap in effect but aren't unified into one typed mechanism yet.

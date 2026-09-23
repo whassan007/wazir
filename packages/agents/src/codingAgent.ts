@@ -10,6 +10,7 @@ import type {
   AgentTurn,
   ChatMessage,
   ModelProtocolMetrics,
+  TerminationReason,
 } from '@wazir/core';
 import {
   ModelProtocolAdapter,
@@ -801,7 +802,7 @@ export class CodingAgent implements AgentAdapter {
         correctionCount += 1;
         malformedActions += 1;
         if (correctionCount >= 3) {
-          yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions', errorKind: 'protocol', raw, protocolMetrics: currentMetrics() };
+          yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions', errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw, protocolMetrics: currentMetrics() };
           return;
         }
         yield { kind: 'message', content: 'INVALID_JSON_ACTION: model response did not parse as a JSON action', raw };
@@ -843,7 +844,7 @@ export class CodingAgent implements AgentAdapter {
         if (val.ok === false) {
           validationErrors += 1;
           if (val.attempts >= 3) {
-            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', raw, protocolMetrics: currentMetrics() };
+            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw, protocolMetrics: currentMetrics() };
             return;
           }
           yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw };
@@ -904,6 +905,7 @@ export class CodingAgent implements AgentAdapter {
           kind: 'error',
           error: 'model failed to produce a valid plan or inspection action during planning phase',
           errorKind: 'protocol',
+          terminationReason: turnsUsed >= maxTurns ? 'MAX_TURNS' : 'MODEL_PROTOCOL_BUDGET_EXHAUSTED',
           protocolMetrics: currentMetrics(),
         };
         return;
@@ -935,7 +937,7 @@ export class CodingAgent implements AgentAdapter {
         correctionCount += 1;
         malformedActions += 1;
         if (correctionCount >= 3) {
-          yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions', errorKind: 'protocol', raw, protocolMetrics: currentMetrics() };
+          yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions', errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw, protocolMetrics: currentMetrics() };
           return;
         }
         yield { kind: 'message', content: 'INVALID_JSON_ACTION: model response did not parse as a JSON action', raw };
@@ -977,7 +979,7 @@ export class CodingAgent implements AgentAdapter {
         if (val.ok === false) {
           validationErrors += 1;
           if (val.attempts >= 3) {
-            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', raw, protocolMetrics: currentMetrics() };
+            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw, protocolMetrics: currentMetrics() };
             return;
           }
           yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw };
@@ -1043,6 +1045,7 @@ export class CodingAgent implements AgentAdapter {
                   kind: 'error',
                   error: `REPAIR_BUDGET_EXHAUSTED: cycle=${repairState.cycle}, progress=${repairState.progress}, files_modified=${repairState.filesModified}`,
                   errorKind: 'verification',
+                  terminationReason: repairState.cycle > maxRepairCycles ? 'MAX_REPAIRS' : 'NO_PROGRESS',
                   protocolMetrics: currentMetrics()
                 };
                 return;
@@ -1081,6 +1084,11 @@ export class CodingAgent implements AgentAdapter {
 
       messages.push({ role: 'user', content: 'Respond with exactly one JSON object as specified.' });
     }
+    // The loop above exits either because the model reported done/answer (modelSummary
+    // set) or because the turn budget ran out first — distinguish them so a verification
+    // outcome that follows can be attributed to the actual stop condition, not silently
+    // treated as an ordinary pass/fail.
+    const turnBudgetExhausted = !modelSummary && turnsUsed >= maxTurns;
 
     // ==================== VERIFY (deterministic, host-side) ====================
     if (request.isCancelled?.()) return;
@@ -1130,6 +1138,7 @@ export class CodingAgent implements AgentAdapter {
       yield {
         kind: 'done',
         content: modelSummary ?? 'Task completed. Verification checks passed.',
+        terminationReason: 'VERIFICATION_PASSED',
         protocolMetrics: currentMetrics(),
       };
       return;
@@ -1139,6 +1148,7 @@ export class CodingAgent implements AgentAdapter {
       kind: 'error',
       error: `verification failed:\n${failures.join('\n---\n')}`,
       errorKind: 'verification',
+      terminationReason: turnBudgetExhausted ? 'MAX_TURNS' : undefined,
       protocolMetrics: currentMetrics(),
     };
   }

@@ -46,6 +46,29 @@ export type AgentPhase =
  */
 export type AgentErrorKind = 'protocol' | 'verification' | 'policy' | 'cancelled' | 'infrastructure' | 'other';
 
+/**
+ * Explicit, controller-owned reason a run stopped — finer-grained than `AgentErrorKind`
+ * and set on success as well as failure, so a caller never has to infer "why did this
+ * stop" from prose. The model cannot choose or extend this; it is assigned only at the
+ * specific budget/policy/verification checkpoints the harness itself enforces.
+ */
+export type TerminationReason =
+  | 'COMPLETED'
+  | 'VERIFICATION_PASSED'
+  | 'MAX_TURNS'
+  | 'MAX_MODEL_CALLS'
+  | 'MAX_TOOL_CALLS'
+  | 'MAX_TOKENS'
+  | 'MAX_WALL_CLOCK'
+  | 'MAX_REPAIRS'
+  | 'MAX_RETRIES'
+  | 'NO_PROGRESS'
+  | 'REPEATED_ACTION'
+  | 'MODEL_PROTOCOL_BUDGET_EXHAUSTED'
+  | 'POLICY_DENIED'
+  | 'CANCELLED'
+  | 'RESOURCE_EXHAUSTED';
+
 export interface ModelProtocolMetrics {
   actionAttempts: number;
   validActions: number;
@@ -64,6 +87,8 @@ export interface AgentTurn {
   error?: string;
   /** Coarse failure class; only meaningful when `kind === 'error'`. */
   errorKind?: AgentErrorKind;
+  /** Set only on a terminal `'done'` or `'error'` turn — why the run actually stopped. */
+  terminationReason?: TerminationReason;
   /** The exact raw model response text this turn was produced from, when applicable —
    *  e.g. for `tool_call` (what the model said before it was parsed into the tool call)
    *  and for a `message`/`error` turn reporting an unparseable response. Lets an operator
