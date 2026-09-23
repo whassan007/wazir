@@ -13,6 +13,7 @@ import type {
   RuntimeCapabilities,
   RuntimeInfo,
 } from '@wazir/runtimes-interfaces';
+import { isRetryableHttpStatus, jitteredDelay } from '@wazir/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -382,40 +383,65 @@ export class LMStudioAdapter implements RuntimeAdapter {
       messages.push({ role: 'user', content: request.prompt });
     }
 
-    let response: Response;
-    try {
-      response = await fetch(`${this.baseURL}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: request.modelId,
-          messages,
-          stream: true,
-          stream_options: { include_usage: true },
-          temperature: request.temperature,
-          top_p: request.topP,
-          max_tokens: request.maxTokens,
-          tools: request.tools?.map((t) => ({
-            type: 'function',
-            function: { name: t.name, description: t.description, parameters: t.parameters },
-          })),
-        }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      this.controllers.delete(requestId);
-      if (controller.signal.aborted) {
-        yield { type: 'error', error: 'cancelled' };
-      } else {
+    // Connect with retry: LM Studio legitimately takes seconds to lazily swap
+    // a model into VRAM and can refuse connections or 5xx during that
+    // window. Scoped to *this* fetch only — once the response streams back
+    // and we start reading tokens from it, a retry would duplicate or drop
+    // output the caller may have already consumed, so nothing past this
+    // point is retried.
+    let response: Response | undefined;
+    const maxAttempts = 4;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const candidate = await fetch(`${this.baseURL}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: request.modelId,
+            messages,
+            stream: true,
+            stream_options: { include_usage: true },
+            temperature: request.temperature,
+            top_p: request.topP,
+            max_tokens: request.maxTokens,
+            tools: request.tools?.map((t) => ({
+              type: 'function',
+              function: { name: t.name, description: t.description, parameters: t.parameters },
+            })),
+          }),
+          signal: controller.signal,
+        });
+        if (isRetryableHttpStatus(candidate.status) && attempt < maxAttempts) {
+          await candidate.text().catch(() => undefined); // drain so the connection can be reused
+          const delayMs = jitteredDelay(attempt);
+          yield { type: 'retry', retryAttempt: attempt + 1, retryDelayMs: delayMs, error: `HTTP ${candidate.status}` };
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        response = candidate;
+        break;
+      } catch (error) {
+        if (controller.signal.aborted) {
+          this.controllers.delete(requestId);
+          yield { type: 'error', error: 'cancelled' };
+          return;
+        }
+        if (attempt < maxAttempts) {
+          const delayMs = jitteredDelay(attempt);
+          yield { type: 'retry', retryAttempt: attempt + 1, retryDelayMs: delayMs, error: error instanceof Error ? error.message : String(error) };
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        this.controllers.delete(requestId);
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
+        return;
       }
-      return;
     }
 
-    if (!response.ok || !response.body) {
-      const body = await response.text().catch(() => '');
+    if (!response || !response.ok || !response.body) {
+      const body = await response?.text().catch(() => '') ?? '';
       this.controllers.delete(requestId);
-      yield { type: 'error', error: `LM Studio API error: HTTP ${response.status} ${body.slice(0, 300)}` };
+      yield { type: 'error', error: `LM Studio API error: HTTP ${response?.status ?? 'unknown'} ${body.slice(0, 300)}` };
       return;
     }
 

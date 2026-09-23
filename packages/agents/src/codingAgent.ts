@@ -598,11 +598,13 @@ export class CodingAgent implements AgentAdapter {
       content: string;
       toolCall?: { name: string; input: Record<string, unknown> };
       timedOut: boolean;
+      retryNotes: string[];
     }> => {
       let content = '';
       let toolCall: { name: string; input: Record<string, unknown> } | undefined;
       let error: string | undefined;
       let timedOut = false;
+      const retryNotes: string[] = [];
       const timer = setTimeout(() => {
         timedOut = true;
         runtime.cancelCurrentTurn?.();
@@ -636,6 +638,11 @@ export class CodingAgent implements AgentAdapter {
             toolCall = { name: event.toolName, input };
           }
           if (event.type === 'error' && event.error) error = event.error;
+          if (event.type === 'retry') {
+            retryNotes.push(
+              `model request retry ${event.retryAttempt ?? '?'} after ${event.retryDelayMs ?? '?'}ms backoff (${event.error ?? 'transient error'})`,
+            );
+          }
         }
       } finally {
         clearTimeout(timer);
@@ -643,7 +650,7 @@ export class CodingAgent implements AgentAdapter {
       // A cancel-induced 'completed' with partial content is not an error —
       // only surface `error` when the turn didn't just hit its own timeout.
       if (error && !timedOut) throw new Error(error);
-      return { content, toolCall, timedOut };
+      return { content, toolCall, timedOut, retryNotes };
     };
 
     const toolNames = new Set(effectiveTools.map((t) => t.name));
@@ -737,7 +744,8 @@ export class CodingAgent implements AgentAdapter {
       if (request.isCancelled?.()) return;
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
-      const { content: raw, toolCall, timedOut } = await modelTurn();
+      const { content: raw, toolCall, timedOut, retryNotes } = await modelTurn();
+      for (const note of retryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
       turnsUsed += 1;
       actionAttempts += 1;
@@ -869,7 +877,8 @@ export class CodingAgent implements AgentAdapter {
       }
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
-      const { content: raw, toolCall, timedOut } = await modelTurn();
+      const { content: raw, toolCall, timedOut, retryNotes } = await modelTurn();
+      for (const note of retryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
       turnsUsed += 1;
       actionAttempts += 1;

@@ -98,13 +98,16 @@ export interface Usage {
 }
 
 export interface GenerationEvent {
-  type: 'token' | 'tool_call' | 'completed' | 'error';
+  type: 'token' | 'tool_call' | 'completed' | 'error' | 'retry';
   content?: string;
   toolCallId?: string;
   toolName?: string;
   toolInput?: unknown;
   usage?: Usage;
   error?: string;
+  /** 'retry' only: which attempt is about to run (2 = first retry) and how long the backoff before it was. */
+  retryAttempt?: number;
+  retryDelayMs?: number;
 }
 
 export interface ModelLoadEstimate {

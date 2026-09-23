@@ -8,6 +8,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
-    "@wazir/runtimes-interfaces": "*"
+    "@wazir/runtimes-interfaces": "*",
+    "@wazir/shared": "*"
   }
 }

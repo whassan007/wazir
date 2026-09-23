@@ -8,6 +8,7 @@ import type {
   RuntimeCapabilities,
   RuntimeInfo,
 } from '@wazir/runtimes-interfaces';
+import { isRetryableHttpStatus, jitteredDelay } from '@wazir/shared';
 
 interface OllamaModelDetails {
   parent_model?: string;
@@ -224,43 +225,64 @@ export class OllamaAdapter implements RuntimeAdapter {
 
     const messages = this.buildMessages(request);
 
-    let response: Response;
-    try {
-      response = await fetch(`${this.baseURL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: request.modelId,
-          messages,
-          stream: true,
-          tools: request.tools?.map((t) => ({
-            type: 'function',
-            function: { name: t.name, description: t.description, parameters: t.parameters },
-          })),
-          options: {
-            temperature: request.temperature,
-            top_p: request.topP,
-            num_predict: request.maxTokens,
-            num_ctx: request.contextTokens,
-          },
-        }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      this.controllers.delete(requestId);
-      if (controller.signal.aborted) {
-        yield { type: 'error', error: 'cancelled' };
-      } else {
+    // Connect with retry, scoped to this fetch only — see the equivalent
+    // comment in the LM Studio adapter's generate(). Ollama has the same
+    // lazy-model-load window (it can refuse connections or 5xx while
+    // swapping a model into memory) that motivated this.
+    let response: Response | undefined;
+    const maxAttempts = 4;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const candidate = await fetch(`${this.baseURL}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: request.modelId,
+            messages,
+            stream: true,
+            tools: request.tools?.map((t) => ({
+              type: 'function',
+              function: { name: t.name, description: t.description, parameters: t.parameters },
+            })),
+            options: {
+              temperature: request.temperature,
+              top_p: request.topP,
+              num_predict: request.maxTokens,
+              num_ctx: request.contextTokens,
+            },
+          }),
+          signal: controller.signal,
+        });
+        if (isRetryableHttpStatus(candidate.status) && attempt < maxAttempts) {
+          await candidate.text().catch(() => undefined);
+          const delayMs = jitteredDelay(attempt);
+          yield { type: 'retry', retryAttempt: attempt + 1, retryDelayMs: delayMs, error: `HTTP ${candidate.status}` };
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        response = candidate;
+        break;
+      } catch (error) {
+        if (controller.signal.aborted) {
+          this.controllers.delete(requestId);
+          yield { type: 'error', error: 'cancelled' };
+          return;
+        }
+        if (attempt < maxAttempts) {
+          const delayMs = jitteredDelay(attempt);
+          yield { type: 'retry', retryAttempt: attempt + 1, retryDelayMs: delayMs, error: error instanceof Error ? error.message : String(error) };
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        this.controllers.delete(requestId);
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
+        return;
       }
-      return;
-    } finally {
-      // Keep the controller registered until the stream settles.
     }
 
-    if (!response.ok || !response.body) {
+    if (!response || !response.ok || !response.body) {
       this.controllers.delete(requestId);
-      yield { type: 'error', error: `Ollama API error: HTTP ${response.status}` };
+      yield { type: 'error', error: `Ollama API error: HTTP ${response?.status ?? 'unknown'}` };
       return;
     }
 

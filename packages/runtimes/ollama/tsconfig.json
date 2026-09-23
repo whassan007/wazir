@@ -4,5 +4,5 @@
   "compilerOptions": { "outDir": "./dist" },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"],
-  "references": [{ "path": "../interfaces" }]
+  "references": [{ "path": "../interfaces" }, { "path": "../../shared" }]
 }
