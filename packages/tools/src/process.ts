@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { sandboxDegraded, sandboxStatus, wrapInSandbox, type SandboxMode, type WrappedCommand } from './sandbox.js';
+import { defaultResourceLimits, wrapWithResourceLimits, type ResourceLimits } from './resourceLimits.js';
 
 export interface CommandResult {
   code: number;
@@ -12,6 +13,8 @@ export interface CommandResult {
   timedOut: boolean;
   /** How the process was isolated from the host (`none` = plain host execution). */
   sandbox: SandboxMode;
+  /** Whether an rlimit cap (memory/CPU/process count/file size) was applied. */
+  resourceLimited: boolean;
 }
 
 export interface RunOptions {
@@ -28,6 +31,8 @@ export interface RunOptions {
   networkAllowed?: boolean;
   /** Skip the OS sandbox for this call (e.g. orchestrator-internal git). */
   unsandboxed?: boolean;
+  /** Memory/CPU/process/file-size caps. Defaults to defaultResourceLimits(); pass {} to disable. */
+  resourceLimits?: ResourceLimits;
 }
 
 let warnedDegraded = false;
@@ -83,11 +88,14 @@ function runProcess(
   const started = Date.now();
   const maxBuffer = options.maxBuffer ?? 1024 * 1024;
 
+  const limits = options.resourceLimits ?? defaultResourceLimits();
+  const limited = wrapWithResourceLimits(file, args, limits);
+
   let wrapped: WrappedCommand;
   try {
     wrapped = options.unsandboxed
-      ? { file, args, mode: 'none' }
-      : wrapInSandbox(file, args, {
+      ? { file: limited.file, args: limited.args, mode: 'none' }
+      : wrapInSandbox(limited.file, limited.args, {
           projectRoot: options.projectRoot ?? options.cwd,
           cwd: options.cwd,
           networkAllowed: options.networkAllowed ?? false,
@@ -151,7 +159,7 @@ function runProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code, stdout, stderr, durationMs: Date.now() - started, timedOut, sandbox: wrapped.mode });
+      resolve({ code, stdout, stderr, durationMs: Date.now() - started, timedOut, sandbox: wrapped.mode, resourceLimited: limited.applied });
     };
 
     child.stdout.on('data', (chunk: Buffer) => {

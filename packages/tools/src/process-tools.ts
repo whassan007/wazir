@@ -28,6 +28,7 @@ function toToolResult(
       exitCode: result.code,
       timedOut: result.timedOut,
       sandbox: result.sandbox,
+      resourceLimited: result.resourceLimited,
       stdout: result.stdout,
       stderr: result.stderr,
       command,
