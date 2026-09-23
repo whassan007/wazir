@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import type { HealthStatus } from '@wazir/runtimes-interfaces';
 
 export interface ProcessConfig {
@@ -67,9 +67,16 @@ export class ProcessManager {
     record.stdout = [];
     record.stderr = [];
 
+    // Detached (POSIX) so the child becomes the leader of its own process
+    // group: stop() below kills that whole group, not just this one pid.
+    // Previously this was `detached: false`, which meant the child shared
+    // *this* process's own group — `process.kill(-record.pid!, ...)` in
+    // stop() was therefore targeting the wrong group entirely (this
+    // process's, or nothing at all, depending on OS group assignment), a
+    // pre-existing bug independent of the missing grace/verify logic below.
     const child = spawn(record.config.command, record.config.args ?? [], {
       env: { ...process.env, ...record.config.env },
-      detached: false,
+      detached: process.platform !== 'win32',
     });
 
     record.process = child;
@@ -104,7 +111,15 @@ export class ProcessManager {
     await this.waitForStartup(record, id);
   }
 
-  async stop(id: string): Promise<void> {
+  /**
+   * Stops a managed process: SIGTERM, wait up to `graceMs` for it to actually
+   * exit, escalate to SIGKILL if it hasn't, then verify death before
+   * updating the registry. Previously this sent a signal and immediately
+   * marked the record 'stopped' with no verification at all — a process
+   * that ignored SIGTERM (or SIGKILL, briefly, before the kernel delivers
+   * it) was reported stopped while still actually running.
+   */
+  async stop(id: string, graceMs = 5000): Promise<void> {
     const record = this.require(id);
 
     if (!record.process) {
@@ -112,24 +127,51 @@ export class ProcessManager {
     }
 
     this.stopHealthCheck(id);
+    const child = record.process;
+    const pid = record.pid;
+
+    let exited = false;
+    child.once('exit', () => { exited = true; });
 
     if (process.platform === 'win32') {
+      if (pid !== undefined) killWindowsTree(pid);
+    } else if (pid !== undefined) {
       try {
-        process.kill(record.pid ?? 0, 'SIGTERM');
+        process.kill(-pid, 'SIGTERM');
       } catch {
-        process.kill(record.pid ?? 0, 'SIGKILL');
-      }
-    } else {
-      try {
-        process.kill(-record.pid!, 'SIGTERM');
-      } catch {
-        process.kill(-record.pid!, 'SIGKILL');
+        try { child.kill('SIGTERM'); } catch { /* already gone */ }
       }
     }
 
+    const deadline = Date.now() + graceMs;
+    while (!exited && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    if (!exited) {
+      if (process.platform === 'win32') {
+        if (pid !== undefined) killWindowsTree(pid);
+      } else if (pid !== undefined) {
+        try { process.kill(-pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
+      }
+      const killDeadline = Date.now() + 2000;
+      while (!exited && Date.now() < killDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+
+    // Verify death rather than assume it: a signal delivery failure (wrong
+    // pid re-used by an unrelated process, permission error, ...) should
+    // surface as a real failure, not a silently-wrong 'stopped' status.
+    const stillAlive = pid !== undefined && !exited && isAlive(pid);
     record.process = null;
-    record.status = 'stopped';
     record.pid = undefined;
+    if (stillAlive) {
+      record.status = 'failed';
+      record.health = { status: 'degraded', message: `Process ${pid} did not exit after SIGTERM/SIGKILL` };
+      throw new Error(`PROCESS_STOP_FAILED: '${id}' (pid ${pid}) is still running after SIGKILL`);
+    }
+    record.status = 'stopped';
   }
 
   async restart(id: string): Promise<void> {
@@ -242,4 +284,23 @@ export class ProcessManager {
 
 export function createProcessManager(options: ProcessManagerOptions = {}): ProcessManager {
   return new ProcessManager(options);
+}
+
+/** Terminates a process and everything it spawned. Node's own child.kill() on Windows only reaches the direct process. */
+function killWindowsTree(pid: number): void {
+  try {
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+  } catch {
+    // best effort
+  }
+}
+
+/** Existence check (kill -0) — throws if the pid is gone or not ours, which is exactly what "is it dead yet" needs. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
