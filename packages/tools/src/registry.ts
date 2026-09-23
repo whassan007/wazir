@@ -2,6 +2,7 @@ import type { Tool, ToolDescriptor, ToolResult } from '@wazir/core';
 import { editTool, readTool, writeTool } from './filesystem.js';
 import { globTool, searchTool } from './search.js';
 import { buildTool, gitTool, lintTool, shellTool, testTool, typecheckTool } from './process-tools.js';
+import { terminalCloseTool, terminalOpenTool, terminalSendTool } from './terminalTools.js';
 
 export const dispatchSubagentTool: Tool = {
   descriptor: {
@@ -48,6 +49,9 @@ export const defaultTools: Tool[] = [
   typecheckTool,
   buildTool,
   dispatchSubagentTool,
+  terminalOpenTool,
+  terminalSendTool,
+  terminalCloseTool,
 ];
 
 export class ToolRegistry {

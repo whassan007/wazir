@@ -5,3 +5,5 @@ export * from './process-tools.js';
 export * from './process.js';
 export * from './paths.js';
 export * from './sandbox.js';
+export * from './terminalSession.js';
+export * from './terminalTools.js';
