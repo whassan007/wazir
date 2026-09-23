@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -33,6 +33,49 @@ export interface RunOptions {
   unsandboxed?: boolean;
   /** Memory/CPU/process/file-size caps. Defaults to defaultResourceLimits(); pass {} to disable. */
   resourceLimits?: ResourceLimits;
+  /** Kills the process (group) early on abort, same path as a timeout. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Kills `child` and everything it spawned, not just the direct child.
+ *
+ * Before this, a timeout/cancel/maxBuffer kill only ever hit the immediate
+ * child (`child.kill(signal)`), which on POSIX only signals that one PID —
+ * anything it forked (a test runner's workers, a dev server, `npm`'s own
+ * child) inherits the parent's process group and keeps running as an orphan
+ * once the immediate child dies. Spawning with `detached: true` makes the
+ * child the leader of its own new process group (pgid === its pid), so
+ * `process.kill(-pid, signal)` reaches every descendant in one call. Windows
+ * has no equivalent of process groups; `taskkill /T` walks the actual
+ * process tree instead.
+ */
+function killProcessGroup(child: import('node:child_process').ChildProcess, signal: NodeJS.Signals, wasDetached: boolean): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } catch {
+      // best effort — fall through to killing just the direct child
+      try { child.kill(signal); } catch { /* already gone */ }
+    }
+    return;
+  }
+  if (!wasDetached) {
+    // Not its own group leader (bwrap path — see the spawn() call): a direct
+    // kill is bwrap's own documented shutdown path, not a fallback.
+    try { child.kill(signal); } catch { /* already gone */ }
+    return;
+  }
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // Group kill fails if the child never actually became its own group
+    // leader (e.g. exited before spawn finished setpgid) — the direct kill
+    // below is what child.kill() would have done anyway.
+    try { child.kill(signal); } catch { /* already gone */ }
+  }
 }
 
 let warnedDegraded = false;
@@ -138,11 +181,22 @@ function runProcess(
 
     const childEnv = childEnvironment({ ...normalizedEnv, ...(options.env ?? {}) });
 
+    const detachedGroup = process.platform !== 'win32' && wrapped.mode !== 'bwrap';
     const child = spawn(wrapped.file, wrapped.args, {
       cwd: spawnCwd,
       env: childEnv,
       // fd 3 carries the seccomp program to bwrap (`--seccomp 3`).
       stdio: wrapped.seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
+      // Makes the child the leader of its own process group on POSIX, so a
+      // timeout/cancel/overflow kill can reach its descendants too (see
+      // killProcessGroup). Skipped for bwrap: it calls setsid() itself for
+      // --new-session, which can conflict with Node's pre-exec setpgid()
+      // on the same process — bwrap already has its own kill safety net
+      // (--die-with-parent, PID-namespace teardown), so a direct SIGKILL to
+      // it (killProcessGroup's fallback when there's no group) is sufficient
+      // and doesn't fight bwrap's own session setup. No effect on Windows;
+      // taskkill /T there doesn't need it.
+      detached: detachedGroup,
     });
     if (wrapped.seccomp) {
       const feed = child.stdio[3] as NodeJS.WritableStream;
@@ -152,21 +206,33 @@ function runProcess(
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killProcessGroup(child, 'SIGKILL', detachedGroup);
     }, options.timeoutMs ?? 120_000);
+
+    let cancelled = false;
+    const onAbort = () => {
+      cancelled = true;
+      killProcessGroup(child, 'SIGKILL', detachedGroup);
+    };
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
 
     const finish = (code: number) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code, stdout, stderr, durationMs: Date.now() - started, timedOut, sandbox: wrapped.mode, resourceLimited: limited.applied });
+      options.signal?.removeEventListener('abort', onAbort);
+      resolve({
+        code: cancelled && code === 0 ? 1 : code,
+        stdout, stderr, durationMs: Date.now() - started, timedOut, sandbox: wrapped.mode, resourceLimited: limited.applied,
+      });
     };
 
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
       if (stdout.length > maxBuffer) {
         stdout = stdout.slice(0, maxBuffer);
-        child.kill('SIGKILL');
+        killProcessGroup(child, 'SIGKILL', detachedGroup);
       }
     });
 
