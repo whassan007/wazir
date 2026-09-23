@@ -169,19 +169,41 @@ assigned anywhere yet — semantic no-progress detection driving an actual escal
 Regression coverage: `packages/agents/tests/codingAgent.terminationReason.test.ts`
 (`MAX_TURNS`, `VERIFICATION_PASSED`, `MODEL_PROTOCOL_BUDGET_EXHAUSTED`).
 
+## Fifth tranche: run-level wall-clock budget
+
+`CodingAgentOptions.maxWallClockMs` / `AgentRunRequest.maxWallClockMs` (constructor
+default 20 minutes, same override pattern as `maxTurns`/`maxRepairCycles`) caps total
+run duration independent of turn/repair counts. This is distinct from the existing
+`modelTurnTimeoutMs`, which only bounds a single turn — a task whose every individual
+turn completes quickly could still run far longer than intended in aggregate; this is
+exactly the originally-reported motivating bug (a trivial task taking 258 seconds
+while never exceeding its per-turn or turn-count budgets). Checked at the top of both
+the PLAN and WORK loop iterations (a run already past budget stops before starting
+its next turn rather than being cut off mid-turn), yielding a terminal error turn
+tagged `terminationReason: 'MAX_WALL_CLOCK'`. Both current callers
+(`apps/cli/src/engine.ts`, `apps/api/src/server.ts`) construct `CodingAgent` with no
+options, so the new default applies automatically without further wiring; a
+per-request override (e.g. a future CLI `--max-wall-clock` flag) is available but not
+yet plumbed through `run.ts`/`fleetRunner.ts`.
+
+Regression coverage: `packages/agents/tests/codingAgent.wallClock.test.ts` (budget
+already exhausted stops before any model call; per-request override; a normal run
+well within budget is unaffected).
+
 ## Not yet done
 
 Phase 2/3 (model-attempt vs. execution-history separation, observation compaction),
 Phase 12 remainder (a composed `StopCondition[]` the controller evaluates centrally,
 rather than each condition being its own inline check scattered through
-`CodingAgent` — this tranche added the typed *reason*, not the unified *mechanism*),
-Phase 13 (semantic no-progress detection beyond the existing exact-duplicate-call
-circuit breaker), Phase 14–24 (model capability registry and circuit breaker,
-aggregate execution budgets, protected-verification tamper detection, full
-recovery-from-events reconstruction, `wa explain`/CLI projections of the new event
-vocabulary, and the live acceptance run). The existing per-run
-`maxTurns`/`maxRepairCycles`/`toolRepeatLimit` caps in `CodingAgent` and the
-trivial/small/complex task-complexity budgets
-(`packages/core/src/services/complexity.ts`) predate this mission and are not the
-same thing as the mission's controller-owned `StopCondition` composition — they
-overlap in effect but aren't unified into one typed mechanism yet.
+`CodingAgent` — these tranches added typed *reasons* and one additional *budget*, not
+the unified *mechanism*), Phase 13 (semantic no-progress detection beyond the
+existing exact-duplicate-call circuit breaker), Phase 14–24 (model capability
+registry and circuit breaker, remaining aggregate execution budgets — token/tool-call
+counts — protected-verification tamper detection, full recovery-from-events
+reconstruction, `wa explain`/CLI projections of the new event vocabulary, and the
+live acceptance run). The existing per-run `maxTurns`/`maxRepairCycles`/
+`toolRepeatLimit`/`maxWallClockMs` caps in `CodingAgent` and the trivial/small/complex
+task-complexity budgets (`packages/core/src/services/complexity.ts`) predate (or, for
+`maxWallClockMs`, sit alongside) this mission and are not the same thing as the
+mission's controller-owned `StopCondition` composition — they overlap in effect but
+aren't unified into one typed mechanism yet.

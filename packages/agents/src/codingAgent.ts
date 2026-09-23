@@ -25,6 +25,15 @@ export interface CodingAgentOptions {
   maxTokensPerTurn?: number;
   temperature?: number;
   /**
+   * Wall-clock budget for the entire run, distinct from `modelTurnTimeoutMs`
+   * (which bounds a single turn) — a task within its turn/repair budgets can
+   * still run far longer than intended if each individual turn is slow but
+   * never times out on its own (e.g. a local model under load). Checked at
+   * the top of the PLAN and WORK loop iterations; a run already past budget
+   * stops before starting its next turn rather than being cut off mid-turn.
+   */
+  maxWallClockMs?: number;
+  /**
    * Wall-clock budget for a single model turn, independent of the overall
    * job timeout. Small/local models can ramble in prose for minutes without
    * ever emitting the required JSON action; without this, one bad turn can
@@ -456,6 +465,7 @@ export class CodingAgent implements AgentAdapter {
 
   private readonly maxTurns: number;
   private readonly maxRepairCycles: number;
+  private readonly maxWallClockMs: number;
   private readonly maxTokensPerTurn: number;
   private readonly temperature: number;
   private readonly modelTurnTimeoutMs: number;
@@ -467,6 +477,10 @@ export class CodingAgent implements AgentAdapter {
   constructor(options: CodingAgentOptions = {}) {
     this.maxTurns = options.maxTurns ?? 30;
     this.maxRepairCycles = options.maxRepairCycles ?? 2;
+    // 20 minutes: generous enough for a genuinely large task, but a real ceiling —
+    // the original motivating bug was a trivial task taking 258s well within its
+    // turn/repair budgets simply because nothing bounded total wall-clock time.
+    this.maxWallClockMs = options.maxWallClockMs ?? 20 * 60_000;
     this.maxTokensPerTurn = options.maxTokensPerTurn ?? 4096;
     this.temperature = options.temperature ?? 0.2;
     this.modelTurnTimeoutMs = options.modelTurnTimeoutMs ?? 90_000;
@@ -485,6 +499,9 @@ export class CodingAgent implements AgentAdapter {
     // shared across many concurrent/sequential runs.
     const maxTurns = request.maxTurns ?? this.maxTurns;
     const maxRepairCycles = request.maxRepairCycles ?? this.maxRepairCycles;
+    const maxWallClockMs = request.maxWallClockMs ?? this.maxWallClockMs;
+    const runStartedAt = Date.now();
+    const wallClockExceeded = () => Date.now() - runStartedAt >= maxWallClockMs;
     const subagentDepth = request.subagentDepth ?? 0;
     const effectiveTools = subagentDepth >= 1
       ? runtime.tools.filter((t) => t.name !== 'dispatch_subagent')
@@ -786,6 +803,16 @@ export class CodingAgent implements AgentAdapter {
     let planExplorationCount = 0;
     for (let i = 0; i < 3 && !plan; i++) {
       if (request.isCancelled?.()) return;
+      if (wallClockExceeded()) {
+        yield {
+          kind: 'error',
+          error: `run exceeded its wall-clock budget (${maxWallClockMs}ms) during planning`,
+          errorKind: 'other',
+          terminationReason: 'MAX_WALL_CLOCK',
+          protocolMetrics: currentMetrics(),
+        };
+        return;
+      }
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
       const { content: raw, toolCall, timedOut, retryNotes, overflowNote } = await modelTurnWithOverflowRecovery();
@@ -916,6 +943,16 @@ export class CodingAgent implements AgentAdapter {
     yield { kind: 'phase', phase: 'implement' as AgentPhase };
     while (turnsUsed < maxTurns && !modelSummary) {
       if (request.isCancelled?.()) return;
+      if (wallClockExceeded()) {
+        yield {
+          kind: 'error',
+          error: `run exceeded its wall-clock budget (${maxWallClockMs}ms)`,
+          errorKind: 'other',
+          terminationReason: 'MAX_WALL_CLOCK',
+          protocolMetrics: currentMetrics(),
+        };
+        return;
+      }
       const steering = request.getSteeringInstruction?.();
       if (steering) {
         yield { kind: 'message', content: `[steered] ${steering}` };
