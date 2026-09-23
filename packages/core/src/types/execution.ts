@@ -152,6 +152,7 @@ export type ExecutionEventType =
   | 'generation.token'
   | 'tool.started'
   | 'tool.completed'
+  | 'tool.unknownOutcome'
   | 'files.changed'
   | 'check.completed'
   | 'evaluation.completed'
