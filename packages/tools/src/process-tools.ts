@@ -29,6 +29,8 @@ function toToolResult(
       timedOut: result.timedOut,
       sandbox: result.sandbox,
       resourceLimited: result.resourceLimited,
+      outputSpilled: result.outputSpilled,
+      spillPaths: result.spillPaths,
       stdout: result.stdout,
       stderr: result.stderr,
       command,

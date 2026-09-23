@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { sandboxDegraded, sandboxStatus, wrapInSandbox, type SandboxMode, type WrappedCommand } from './sandbox.js';
 import { defaultResourceLimits, wrapWithResourceLimits, type ResourceLimits } from './resourceLimits.js';
+import { SpillingBuffer } from './outputSpill.js';
+import { randomBytes } from 'node:crypto';
 
 export interface CommandResult {
   code: number;
@@ -15,6 +17,10 @@ export interface CommandResult {
   sandbox: SandboxMode;
   /** Whether an rlimit cap (memory/CPU/process count/file size) was applied. */
   resourceLimited: boolean;
+  /** True once stdout or stderr exceeded maxBuffer and was spilled to disk instead of being held in memory or killing the process. */
+  outputSpilled: boolean;
+  /** Absolute paths to the full spilled output, when outputSpilled is true. */
+  spillPaths?: { stdout?: string; stderr?: string };
 }
 
 export interface RunOptions {
@@ -35,6 +41,8 @@ export interface RunOptions {
   resourceLimits?: ResourceLimits;
   /** Kills the process (group) early on abort, same path as a timeout. */
   signal?: AbortSignal;
+  /** Identifies the run for output-spill pathing (`.wazir/runs/<runId>/outputs/`). Defaults to a random id when spilling is actually needed. */
+  runId?: string;
 }
 
 /**
@@ -156,8 +164,6 @@ function runProcess(
   const spawnCwd = wrapped.mode === 'bwrap' ? undefined : options.cwd;
 
   return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
     let settled = false;
     let timedOut = false;
 
@@ -165,6 +171,10 @@ function runProcess(
     const wazirTmp = path.join(project, '.wazir', 'tmp');
     const wazirHome = path.join(project, '.wazir', 'home');
     const wazirCache = path.join(project, '.wazir', 'cache');
+    const runId = options.runId ?? randomBytes(6).toString('hex');
+    const runDir = path.join(project, '.wazir', 'runs', runId, 'outputs');
+    const stdoutBuffer = new SpillingBuffer({ runDir, fileName: 'stdout.log', spillThresholdBytes: maxBuffer });
+    const stderrBuffer = new SpillingBuffer({ runDir, fileName: 'stderr.log', spillThresholdBytes: maxBuffer });
 
     try {
       if (!existsSync(wazirTmp)) mkdirSync(wazirTmp, { recursive: true });
@@ -222,29 +232,37 @@ function runProcess(
       settled = true;
       clearTimeout(timer);
       options.signal?.removeEventListener('abort', onAbort);
-      resolve({
-        code: cancelled && code === 0 ? 1 : code,
-        stdout, stderr, durationMs: Date.now() - started, timedOut, sandbox: wrapped.mode, resourceLimited: limited.applied,
+      void Promise.all([stdoutBuffer.finish(), stderrBuffer.finish()]).then(([stdoutResult, stderrResult]) => {
+        const outputSpilled = stdoutResult.spilled || stderrResult.spilled;
+        resolve({
+          code: cancelled && code === 0 ? 1 : code,
+          stdout: stdoutResult.preview,
+          stderr: stderrResult.preview,
+          durationMs: Date.now() - started,
+          timedOut,
+          sandbox: wrapped.mode,
+          resourceLimited: limited.applied,
+          outputSpilled,
+          spillPaths: outputSpilled ? { stdout: stdoutResult.filePath, stderr: stderrResult.filePath } : undefined,
+        });
       });
     };
 
+    // Overflow used to SIGKILL the process outright — a noisy-but-passing
+    // test run with verbose output became a hard failure with no way to see
+    // what actually happened. Now output past maxBuffer streams to disk
+    // (SpillingBuffer) instead, and the process is left to run to its own
+    // natural conclusion (still bounded by timeoutMs).
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-      if (stdout.length > maxBuffer) {
-        stdout = stdout.slice(0, maxBuffer);
-        killProcessGroup(child, 'SIGKILL', detachedGroup);
-      }
+      stdoutBuffer.push(chunk.toString());
     });
 
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-      if (stderr.length > maxBuffer) {
-        stderr = stderr.slice(0, maxBuffer);
-      }
+      stderrBuffer.push(chunk.toString());
     });
 
     child.on('error', (error) => {
-      stderr += `\n${error.message}`;
+      stderrBuffer.push(`\n${error.message}`);
       finish(127);
     });
 
