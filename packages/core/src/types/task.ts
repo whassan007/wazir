@@ -90,6 +90,12 @@ export interface Task {
   contextFrom?: string[];
   policy?: PolicyRequirements;
   execution?: ExecutionPreferences;
+  /** Per-task override of the agent's model-turn budget; falls back to the runner/agent default. */
+  maxTurns?: number;
+  /** Per-task override of the agent's repair-cycle budget; falls back to the agent default. */
+  maxRepairCycles?: number;
+  /** Per-task override of the job-level retry budget; falls back to `job.maxRetries`. */
+  maxRetries?: number;
   priority: Priority;
   status: TaskStatus;
   createdAt: Date;

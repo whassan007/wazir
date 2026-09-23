@@ -126,6 +126,8 @@ export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'help';
 
 export type NavCategory = 'MCP' | 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
 
+export type SidebarMode = 'full' | 'focused' | 'hidden';
+
 export type FocusPane = 'nav' | 'main' | 'prompt';
 
 export type TuiMode = 'NORMAL' | 'COMPOSER' | 'COPY' | 'PASTE' | 'PALETTE' | 'APPROVAL';
@@ -427,11 +429,26 @@ export class FleetTui {
   private selectedCategory: NavCategory = 'EXECUTIONS';
   private selectedNavId?: string;
 
+  // Sidebar mode (§ focused execution mode / manual hide-restore). 'full' shows every
+  // section; 'focused' shows only JOBS/EXECUTIONS (+ the active agent, + any section
+  // with a failure needing attention); 'hidden' removes the left pane entirely. Recomputed
+  // automatically from execution state each draw() UNLESS the user has manually chosen a
+  // mode (sidebarManuallyOverridden) — incoming MODEL/TOOL/PLAN/etc events must never
+  // silently reopen or collapse a pane the user explicitly set.
+  private sidebarMode: SidebarMode = 'full';
+  private sidebarManuallyOverridden = false;
+
   // Event stream scroll offset
   private eventScrollOffset = 0;
 
   // Structured Error Card state
   private currentError?: StructuredError;
+  /**
+   * Task IDs whose failure error-card the user has explicitly dismissed (Esc).
+   * Used to prevent the card from re-opening each time a retried task fires
+   * another task:failed event for the same task ID. Cleared when a new job starts.
+   */
+  private readonly dismissedErrorTaskIds = new Set<string>();
 
   // Model Readiness & Startup Selector state
   private startupSelector?: StartupSelectorState;
@@ -560,6 +577,15 @@ export class FleetTui {
   getCurrentView(): TuiView {
     if (this.pendingApprovals.length > 0) return 'approval';
     return this.currentView;
+  }
+
+  /**
+   * Current sidebar mode ('full' | 'focused' | 'hidden'). Reflects the most recent
+   * draw() — auto-recomputed from execution state each draw unless the user manually
+   * overrode it (Ctrl+T hide/restore, Ctrl+G full/focused toggle).
+   */
+  getSidebarMode(): SidebarMode {
+    return this.sidebarMode;
   }
 
   getMode(): TuiMode {
@@ -1079,6 +1105,35 @@ export class FleetTui {
       return;
     }
 
+    // Ctrl+G: manually toggle FULL <-> FOCUSED sidebar (does not affect selection/scroll).
+    // (Ctrl+B is already bound to "expand latest block from history" — see below —
+    // so the sidebar hide/restore toggle uses Ctrl+T instead.)
+    if ((keyObj.ctrl && (keyName === 'g' || keyName === 'G')) || keyStr === '\u0007') {
+      this.sidebarManuallyOverridden = true;
+      this.sidebarMode = this.sidebarMode === 'full' ? 'focused' : 'full';
+      this.statusMessage = `Sidebar: ${this.sidebarMode.toUpperCase()}`;
+      this.draw();
+      return;
+    }
+
+    // Ctrl+T: hide/restore the entire left pane. Hiding is a manual override that
+    // survives incoming events; restoring hands back to automatic mode selection
+    // (FOCUSED for one active task, FULL otherwise) rather than a hardcoded mode.
+    // Selection, scroll position, and the active task/execution are untouched.
+    if ((keyObj.ctrl && (keyName === 't' || keyName === 'T')) || keyStr === '\u0014') {
+      if (this.sidebarMode === 'hidden') {
+        this.sidebarManuallyOverridden = false;
+        this.sidebarMode = this.computeAutoSidebarMode();
+        this.statusMessage = `Sidebar restored: ${this.sidebarMode.toUpperCase()}`;
+      } else {
+        this.sidebarManuallyOverridden = true;
+        this.sidebarMode = 'hidden';
+        this.statusMessage = 'Sidebar hidden — Ctrl+T to restore';
+      }
+      this.draw();
+      return;
+    }
+
     // COPY mode handling
     if (this.tuiMode === 'COPY') {
       if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
@@ -1118,6 +1173,9 @@ export class FleetTui {
         return;
       }
       if (this.currentError) {
+        if (this.currentError.taskId) {
+          this.dismissedErrorTaskIds.add(this.currentError.taskId);
+        }
         this.currentError = undefined;
         this.draw();
         return;
@@ -1250,6 +1308,7 @@ export class FleetTui {
     if (this.currentError) {
       if (keyStr === 'r' || keyStr === 'R') {
         const retryTask = this.currentError.taskId;
+        if (retryTask) this.dismissedErrorTaskIds.add(retryTask);
         this.currentError = undefined;
         if (retryTask) {
           this.statusMessage = `Retrying task ${retryTask}...`;
@@ -1258,10 +1317,32 @@ export class FleetTui {
         return;
       }
       if (keyStr === 'd' || keyStr === 'D') {
+        if (this.currentError.taskId) this.dismissedErrorTaskIds.add(this.currentError.taskId);
         this.currentError = undefined;
         void this.submitCommand('/doctor');
         return;
       }
+      // Error card is a modal overlay — consume keys that would otherwise
+      // accidentally trigger destructive nav shortcuts (e.g. 'x' deletes a job,
+      // 'c' cancels a job, 'a'/'d' approve/deny approval modals beneath).
+      // Navigation keys (Tab, Enter, arrow keys, Esc) intentionally pass through:
+      // Tab and Enter let the user inspect the tail log / switch views while the
+      // card is visible, and Esc is handled in the Escape block above this one.
+      const isNavigationKey =
+        keyName === 'tab' ||
+        keyName === 'return' ||
+        keyName === 'enter' ||
+        keyName === 'up' ||
+        keyName === 'down' ||
+        keyName === 'left' ||
+        keyName === 'right' ||
+        keyName === 'escape' ||
+        keyStr === '\t' ||
+        keyStr === '\r' ||
+        keyStr === '\n' ||
+        keyStr === '\x1b[Z' || // shift-tab
+        keyStr.startsWith('\x1b[');
+      if (!isNavigationKey) return;
     }
 
     // 9. Overlaid Approval Modal Actions ([A] Approve, [D] Deny, [V] View details, [I] Inspect,
@@ -1306,6 +1387,9 @@ export class FleetTui {
         this.draw();
         return;
       }
+      // Approval modal is a blocking overlay — consume all other keys so they don't
+      // accidentally trigger nav shortcuts or other actions underneath the modal.
+      return;
     }
 
     // 10. Picker navigation when @ fuzzy picker is active
@@ -2151,6 +2235,11 @@ export class FleetTui {
       this.currentJob = job;
       this.agents.clear();
       this.agentLogs.clear();
+      // A new job means a fresh execution context — reset dismissed-error tracking so
+      // errors from this job always surface (they're new failures, not repeats of
+      // something the user already acknowledged from a previous session).
+      this.dismissedErrorTaskIds.clear();
+      this.currentError = undefined;
 
       for (const t of job.tasks) {
         const card: AgentCardState = {
@@ -2532,35 +2621,46 @@ export class FleetTui {
           kind: isInfra ? 'infra' : 'error',
         });
 
-        // Structured Error Component (§29)
-        this.currentError = isInfra
-          ? {
-              phase: 'preflight',
-              reason: ev.error ? this.humanizeError(ev.error) : 'Preflight infrastructure check failed',
-              required: 'Writable workspace, accessible tmpdir, available shell, and working compiler',
-              available: 'Host environment check failed before model invocation',
-              suggestedSteps: [
-                '1. Check workspace permissions, isolated directory paths, and disk space',
-                '2. Run "wa doctor" to verify runtime, compiler, and sandbox status',
-                '3. Check Seatbelt profile or set WAZIR_PROBE_COMPILER=0 if compiler probe is not required',
-              ],
-              taskId: agent.taskId,
-              timestamp: now,
-            }
-          : {
-              phase: agent.phase || 'execution',
-              reason: ev.error ? this.humanizeError(ev.error) : 'Task execution encountered error',
-              required: 'Clean tool execution and passing tests',
-              available: 'Uncaught failure or policy denial',
-              suggestedSteps: [
-                '1. Inspect event stream logs in main activity pane',
-                '2. Run "wa doctor" to verify runtime health',
-                '3. Retry task or provide steering via /steer <instruction>',
-              ],
-              taskId: agent.taskId,
-              timestamp: now,
-            };
+        // Structured Error Component (§29).
+        // Only open the card if the user has not already dismissed it for this
+        // specific task — otherwise pressing Esc between retry cycles is futile
+        // because every subsequent task:failed event immediately reopens the card.
+        if (!this.dismissedErrorTaskIds.has(taskId)) {
+          this.currentError = isInfra
+            ? {
+                phase: 'preflight',
+                reason: ev.error ? this.humanizeError(ev.error) : 'Preflight infrastructure check failed',
+                required: 'Writable workspace, accessible tmpdir, available shell, and working compiler',
+                available: 'Host environment check failed before model invocation',
+                suggestedSteps: [
+                  '1. Check workspace permissions, isolated directory paths, and disk space',
+                  '2. Run "wa doctor" to verify runtime, compiler, and sandbox status',
+                  '3. Check Seatbelt profile or set WAZIR_PROBE_COMPILER=0 if compiler probe is not required',
+                ],
+                taskId: agent.taskId,
+                timestamp: now,
+              }
+            : {
+                phase: agent.phase || 'execution',
+                reason: ev.error ? this.humanizeError(ev.error) : 'Task execution encountered error',
+                required: 'Clean tool execution and passing tests',
+                available: 'Uncaught failure or policy denial',
+                suggestedSteps: [
+                  '1. Inspect event stream logs in main activity pane',
+                  '2. Run "wa doctor" to verify runtime health',
+                  '3. Retry task or provide steering via /steer <instruction>',
+                ],
+                taskId: agent.taskId,
+                timestamp: now,
+              };
+        }
       } else if (ev.type === 'task:retry') {
+        // A retry means the failure was not terminal — clear any error card that was
+        // shown for the failed attempt so the UI doesn't stay in an alarmed state while
+        // the agent is already recovering.
+        if (this.currentError?.taskId === taskId) {
+          this.currentError = undefined;
+        }
         agent.status = 'retry';
         agent.stage = 'REPAIR';
         agent.phase = 'plan';
@@ -2616,6 +2716,36 @@ export class FleetTui {
   // ==========================================
   // Navigation Index Items Generator
   // ==========================================
+  /**
+   * Automatic sidebar mode from current execution state: FULL for idle/fleet-management
+   * or multiple concurrent tasks (still need the overview), FOCUSED for exactly one
+   * active task (the common "run a task, watch it" case this pane was crowding out).
+   * Never returns 'hidden' — that's only ever a manual user choice (see handleKey).
+   */
+  private computeAutoSidebarMode(): 'full' | 'focused' {
+    const runningCount = this.getAgents().filter((a) => a.status === 'running').length;
+    return runningCount === 1 ? 'focused' : 'full';
+  }
+
+  /**
+   * Sections that must stay visible even in focused mode because they have something
+   * requiring user attention (disconnected computer, failed runtime, MCP auth needed,
+   * unavailable agent) — focused mode hides infrastructure by default, but never hides
+   * a real problem.
+   */
+  private getAlertCategories(): Set<NavCategory> {
+    const alert = new Set<NavCategory>();
+    for (const it of this.getFlatNavItems()) {
+      if (
+        (it.category === 'COMPUTERS' || it.category === 'RUNTIMES' || it.category === 'MCP' || it.category === 'AGENTS') &&
+        (it.status === 'failed' || it.status === 'auth_required')
+      ) {
+        alert.add(it.category);
+      }
+    }
+    return alert;
+  }
+
   getFlatNavItems(): NavItem[] {
     const items: NavItem[] = [];
 
@@ -2809,12 +2939,22 @@ export class FleetTui {
     // Region 2: Persistent Split Content or Collapsed Pane
     const contentHeight = Math.max(5, size.rows - 6);
 
-    const isSplit = size.columns >= 100;
+    // Auto-recompute the sidebar mode from execution state UNLESS the user manually
+    // chose one (Ctrl+B / Ctrl+Shift+B) — a manual choice must survive incoming
+    // MODEL/TOOL/PLAN/ROUTE/ERROR/VERIFY events, not flicker back open/closed with them.
+    if (!this.sidebarManuallyOverridden) {
+      this.sidebarMode = this.computeAutoSidebarMode();
+    }
+    // Only worth computing in focused/hidden mode — full mode shows every section
+    // regardless, and this scan is skippable overhead on every single draw() otherwise
+    // (draw() fires on every keypress and event-stream tick).
+    const alertCategories = this.sidebarMode === 'full' ? new Set<NavCategory>() : this.getAlertCategories();
+    const isSplit = size.columns >= 100 && this.sidebarMode !== 'hidden';
     if (isSplit) {
       const leftWidth = Math.max(26, Math.min(36, Math.floor(size.columns * 0.28)));
       const mainWidth = size.columns - leftWidth - 1;
 
-      const leftLines = this.renderLeftNav(leftWidth, contentHeight);
+      const leftLines = this.renderLeftNav(leftWidth, contentHeight, this.sidebarMode, alertCategories);
       const mainLines = this.renderMainPane(mainWidth, contentHeight);
 
       for (let i = 0; i < contentHeight; i++) {
@@ -2963,18 +3103,48 @@ export class FleetTui {
    * Region 2: Left Nav Pane - Categorized Section Index
    * Semantic Colors (§25): blue = selected/highlighted, cyan = running, green = completed, yellow = pending
    */
-  private renderLeftNav(width: number, maxRows: number): string[] {
+  private renderLeftNav(
+    width: number,
+    maxRows: number,
+    mode: SidebarMode = 'full',
+    alertCategories: Set<NavCategory> = new Set(),
+  ): string[] {
     const lines: string[] = [];
-    const categories: NavCategory[] = ['JOBS', 'EXECUTIONS', 'AGENTS', 'COMPUTERS', 'RUNTIMES', 'MCP'];
+    const allCategories: NavCategory[] = ['JOBS', 'EXECUTIONS', 'AGENTS', 'COMPUTERS', 'RUNTIMES', 'MCP'];
+    // Focused mode: only task-relevant sections, plus any section with an unresolved
+    // problem (never hide something that needs the user's attention) — see § Focused
+    // Execution Mode / § Preserve Important Alerts.
+    const categories =
+      mode === 'full'
+        ? allCategories
+        : allCategories.filter(
+            (cat) => cat === 'JOBS' || cat === 'EXECUTIONS' || cat === 'AGENTS' || alertCategories.has(cat),
+          );
     const flatItems = this.getFlatNavItems();
     const currentSelected = flatItems[this.navSelectionIndex];
+    const activeAgentIds = new Set(this.getAgents().filter((a) => a.status === 'running').map((a) => a.agentId));
 
     for (const cat of categories) {
       if (lines.length >= maxRows) break;
       const isCatNavFocused = this.focusedPane === 'nav';
       lines.push(this.padRightTo(` ${color.bold(color.cyan(cat))}`, width));
 
-      const catItems = flatItems.filter((it) => it.category === cat);
+      let catItems = flatItems.filter((it) => it.category === cat);
+      if (mode !== 'full') {
+        if (cat === 'JOBS' || cat === 'EXECUTIONS') {
+          // Only the active job/execution — inactive/previous ones just add noise
+          // while a single task is running (§ Distinguish Active From Inactive State).
+          const running = catItems.filter((it) => it.status === 'running');
+          catItems = running.length > 0 ? running : catItems;
+        } else if (cat === 'AGENTS') {
+          const active = catItems.filter((it) => activeAgentIds.has(it.id));
+          catItems = active.length > 0 ? active : catItems.filter((it) => it.status === 'running');
+        } else {
+          // COMPUTERS/RUNTIMES/MCP are only present here because of an alert — show
+          // just the item(s) actually in trouble, not the whole inventory.
+          catItems = catItems.filter((it) => it.status === 'failed' || it.status === 'auth_required');
+        }
+      }
       if (catItems.length === 0) {
         if (lines.length < maxRows) {
           lines.push(this.padRightTo(color.gray('   (none)'), width));
@@ -3378,6 +3548,16 @@ export class FleetTui {
     const contextPlain = `Context ${usedK}K/${maxK}K ~`;
     const contextIndicator = color.cyan(contextPlain);
 
+    // Subtle sidebar-toggle hint (§ Show Toggle State Clearly) — a short tag, not
+    // another persistent large UI element. Alert categories still hidden from the
+    // pane surface here as a small warning glyph so a real problem stays visible
+    // even while the sidebar itself is hidden/focused.
+    const alertCats = this.sidebarMode !== 'full' ? Array.from(this.getAlertCategories()) : [];
+    const alertPlain = alertCats.length > 0 ? `${alertCats.map((c) => `!${c}`).join(' ')} ~ ` : '';
+    const alertIndicator = alertCats.length > 0 ? color.yellow(alertPlain) : '';
+    const sidebarPlain = this.sidebarMode === 'hidden' ? 'Sidebar hidden (Ctrl+T) ~ ' : 'Ctrl+T Sidebar ~ ';
+    const sidebarIndicator = color.gray(sidebarPlain);
+
     const anyRunning =
       Array.from(this.agents.values()).some((a) => a.status === 'running') ||
       this.statusMessage.includes('Planning') ||
@@ -3393,7 +3573,7 @@ export class FleetTui {
     else if (mode === 'APPROVAL') modeBadge = color.bold(color.red(`[${mode}]`));
     else if (mode === 'PALETTE') modeBadge = color.bold(color.blue(`[${mode}]`));
 
-    const rightPlain = `${modelPlain}${jobPlain}${contextPlain} `;
+    const rightPlain = `${modelPlain}${jobPlain}${alertPlain}${sidebarPlain}${contextPlain} `;
     const maxStatusLen = Math.max(10, cols - rightPlain.length - 16);
     let msg = this.statusMessage;
     if (msg.length > maxStatusLen) {
@@ -3404,7 +3584,7 @@ export class FleetTui {
     const statusPlain = this.stripAnsi(statusText);
 
     const spaces = Math.max(2, cols - statusPlain.length - rightPlain.length);
-    return `${statusText}${' '.repeat(spaces)}${modelIndicator}${jobIndicator}${contextIndicator} `;
+    return `${statusText}${' '.repeat(spaces)}${modelIndicator}${jobIndicator}${alertIndicator}${sidebarIndicator}${contextIndicator} `;
   }
 
   private renderInputBar(cols: number): string {

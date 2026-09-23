@@ -390,6 +390,11 @@ describe('FleetTui — interactive terminal UI harness', () => {
     const job = harness.tui.getCurrentJob();
     expect(job).toBeDefined();
 
+    // The fake engine may have produced a job failure, raising the error card.
+    // Dismiss it before interacting with nav (the card is now modal and consumes
+    // all keys not in its own legend, so Delete would be silently swallowed).
+    harness.sendKey('\x1b');
+
     // Navigate up to the JOBS entry (first in the flat nav list)
     for (let i = 0; i < 5; i++) harness.sendKey('\u001b[A');
     const before = harness.tui.getFlatNavItems();
@@ -422,6 +427,10 @@ describe('FleetTui — interactive terminal UI harness', () => {
     // exactly the item easy to mistake for "the job" itself, one row below it in the nav.
     const flat = harness.tui.getFlatNavItems();
     expect(flat.some((i) => i.category === 'EXECUTIONS')).toBe(true);
+
+    // The fake engine may produce a job failure, raising the error card.
+    // Dismiss it so the 'x' keystroke reaches the nav handler as intended.
+    harness.sendKey('\x1b');
 
     harness.sendKey('x');
     expect(harness.tui.getStatusMessage()).toContain('only deletes items in the JOBS section');
@@ -2042,5 +2051,188 @@ describe('FleetTui — protocol/validation visibility and raw response viewer', 
     expect(screen).not.toMatch(/o\s+NVIDIA Run:ai/);
 
     harness.stop();
+  });
+
+  // The header bar always prints "N COMPUTERS N AGENTS" regardless of sidebar mode,
+  // so a plain `.toContain('COMPUTERS')` can't tell "section hidden" from "header
+  // text present". This isolates the nav pane's own column (left of the '|'
+  // separator, skipping the header/divider lines) so section-header assertions
+  // only match the actual left-nav content.
+  function navPaneOnly(buf: string): string {
+    return buf
+      .split('\n')
+      .slice(2)
+      .map((line) => line.split('|')[0])
+      .join('\n');
+  }
+
+  describe('Sidebar modes — focused execution, manual hide/restore, and state stability', () => {
+    it('exactly one active task auto-switches the sidebar to FOCUSED, hiding infrastructure sections', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+      await harness.start();
+
+      harness.sendLine('write a single-task program');
+      await new Promise((r) => setTimeout(r, 15));
+
+      expect(harness.tui.getSidebarMode()).toBe('focused');
+      const buf = harness.getScreenBuffer();
+      const nav = navPaneOnly(buf);
+      expect(nav).toContain('JOBS');
+      expect(nav).toContain('EXECUTIONS');
+      // Infrastructure sections configured in the fixture (1 runtime, 1 computer,
+      // 1 agent) are not on-topic for a single running task and must not clutter
+      // the pane by default.
+      expect(nav).not.toContain('COMPUTERS');
+      expect(nav).not.toContain('RUNTIMES');
+
+      harness.stop();
+    });
+
+    it('multiple concurrent active tasks keep the sidebar FULL', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 3 });
+      await harness.start();
+
+      harness.sendLine('/fanout setup database; build auth endpoints; write e2e tests');
+      await new Promise((r) => setTimeout(r, 15));
+
+      expect(harness.tui.getSidebarMode()).toBe('full');
+      const nav = navPaneOnly(harness.getScreenBuffer());
+      expect(nav).toContain('COMPUTERS');
+      expect(nav).toContain('RUNTIMES');
+
+      harness.stop();
+    });
+
+    it('Ctrl+T hides the sidebar and incoming events do not reopen it', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+      await harness.start();
+
+      harness.sendLine('write a single-task program');
+      await new Promise((r) => setTimeout(r, 15));
+      expect(harness.tui.getSidebarMode()).toBe('focused');
+
+      harness.sendKey('\u0014'); // Ctrl+T
+      expect(harness.tui.getSidebarMode()).toBe('hidden');
+      let buf = harness.getScreenBuffer();
+      expect(buf).not.toContain('JOBS');
+      expect(buf).not.toContain('EXECUTIONS');
+      expect(buf).toContain('Sidebar hidden');
+
+      // Fire a burst of unrelated nav/refresh events the way MODEL/TOOL/PLAN/INFO/
+      // ERROR/VERIFY progress would arrive — none of these are a manual sidebar
+      // action, so the manual HIDDEN choice must survive all of them.
+      for (let i = 0; i < 5; i++) {
+        harness.sendKey('\u0012'); // Ctrl+R: force state refresh
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(harness.tui.getSidebarMode()).toBe('hidden');
+
+      // Selection/scroll state is untouched by the toggle.
+      buf = harness.getScreenBuffer();
+      expect(buf).toContain('wa>');
+
+      harness.stop();
+    });
+
+    it('a second Ctrl+T restores the automatic mode for current execution state', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+      await harness.start();
+
+      // No active task yet: manual hide/restore should round-trip through FULL.
+      expect(harness.tui.getSidebarMode()).toBe('full');
+      harness.sendKey('\u0014');
+      expect(harness.tui.getSidebarMode()).toBe('hidden');
+      harness.sendKey('\u0014');
+      expect(harness.tui.getSidebarMode()).toBe('full');
+
+      // With exactly one active task, restoring should land on FOCUSED instead.
+      harness.sendLine('write a single-task program');
+      await new Promise((r) => setTimeout(r, 15));
+      harness.sendKey('\u0014');
+      expect(harness.tui.getSidebarMode()).toBe('hidden');
+      harness.sendKey('\u0014');
+      expect(harness.tui.getSidebarMode()).toBe('focused');
+
+      harness.stop();
+    });
+
+    it('Ctrl+G manually toggles FULL <-> FOCUSED without affecting the active task', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+      await harness.start();
+
+      harness.sendLine('write a single-task program');
+      await new Promise((r) => setTimeout(r, 15));
+      expect(harness.tui.getSidebarMode()).toBe('focused');
+
+      harness.sendKey('\u0007'); // Ctrl+G
+      expect(harness.tui.getSidebarMode()).toBe('full');
+      expect(navPaneOnly(harness.getScreenBuffer())).toContain('COMPUTERS');
+
+      harness.sendKey('\u0007');
+      expect(harness.tui.getSidebarMode()).toBe('focused');
+      expect(harness.tui.getCurrentJob()).toBeDefined();
+
+      harness.stop();
+    });
+
+    it('surfaces a failed runtime relevant to the active task even in focused mode', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      // The default fixture's only runtime ('fake') is unreachable.
+      engine.discovered.push({
+        id: 'fake',
+        info: { id: 'fake', name: 'fake-runtime', version: '1.0' },
+        capabilities: {} as any,
+        health: 'unavailable',
+        healthMessage: 'connection refused',
+        models: [],
+        adapter: {} as any,
+      });
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+      await harness.start();
+
+      harness.sendLine('write a single-task program');
+      await new Promise((r) => setTimeout(r, 15));
+
+      expect(harness.tui.getSidebarMode()).toBe('focused');
+      const buf = harness.getScreenBuffer();
+      // RUNTIMES would normally be hidden in focused mode, but a failed runtime
+      // needs the user's attention and must stay visible in the nav pane itself...
+      expect(navPaneOnly(buf)).toContain('RUNTIMES');
+      // ...and get a small warning glyph in the status bar hint.
+      expect(buf).toContain('!RUNTIMES');
+
+      harness.stop();
+    });
+
+    it('sidebar mode stays stable while MODEL/TOOL/INFO/ERROR/PLAN/ROUTE events fire', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      useSuccessfulFakeModel(engine);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+      await harness.start();
+
+      harness.sendLine('write a single-task program');
+      await new Promise((r) => setTimeout(r, 10));
+      harness.sendKey('\u0014'); // manually hide
+      expect(harness.tui.getSidebarMode()).toBe('hidden');
+
+      // Let the task run to completion — this fires a stream of PLAN/TOOL/MODEL/
+      // VERIFY-equivalent progress events through to task:completed.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(harness.tui.getSidebarMode()).toBe('hidden');
+
+      harness.stop();
+    });
   });
 });

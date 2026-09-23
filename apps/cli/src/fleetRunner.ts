@@ -128,6 +128,7 @@ export function createFleetTaskExecutor(
       const existingRecs = await engine.executions.listByTask(taskId);
       const rec = existingRecs.length > 0 ? existingRecs[0] : await engine.executions.create({
         task,
+        jobId,
         agentId: assignment.agentId,
         computerId: assignment.computerId,
         runtimeId: assignment.runtimeId,
@@ -154,6 +155,7 @@ export function createFleetTaskExecutor(
     } else {
       const rec = await engine.executions.create({
         task,
+        jobId,
         agentId: assignment.agentId,
         computerId: assignment.computerId,
         runtimeId: assignment.runtimeId,
@@ -476,7 +478,8 @@ export function createFleetTaskExecutor(
             (context.node.type === 'supervisor' ? '\n\nReview the dependency evidence against the task requirements. Your final response must be a JSON object with decision (approve or reject) and a nonempty reason. Approval requires evidence; reject if evidence is missing.' : ''),
           taskType: task.type,
           projectRoot: taskRoot,
-          maxTurns: runnerOptions.maxTurns,
+          maxTurns: task.maxTurns ?? runnerOptions.maxTurns,
+          maxRepairCycles: task.maxRepairCycles,
           contextTokens: contextDecision.available.tokens,
           isCancelled: () => signal?.aborted ?? false,
           getSteeringInstruction: () => context.getSteeringInstruction?.(),

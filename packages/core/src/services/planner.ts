@@ -1,5 +1,6 @@
 import type { Priority, Task, TaskType, WorkspaceMode } from '../types/index.js';
 import type { JobTaskInput } from './jobManager.js';
+import { classifyComplexity, budgetFor } from './complexity.js';
 
 export interface PlanStep {
   id: string;
@@ -25,6 +26,7 @@ export interface ExecutionPlan {
   expectedArtifacts?: string[];
   steps: PlanStep[];
   successCriteria?: string[];
+  complexity?: 'trivial' | 'small' | 'complex';
 }
 
 export interface PlannerModelCaller {
@@ -46,6 +48,15 @@ export class TaskPlanner {
    */
   async plan(input: string, options: PlanOptions = {}): Promise<ExecutionPlan> {
     const trimmed = input.trim();
+    const complexity = classifyComplexity(trimmed);
+
+    // Trivial tasks skip model-based decomposition (that's itself a model call
+    // this task doesn't need) and the multi-step inspect/implement/compile/verify
+    // DAG entirely — a single implement+verify step, instead of 4 separate
+    // CodingAgent.run() invocations each with their own plan/turn/repair budget.
+    if (complexity === 'trivial') {
+      return this.trivialPlan(trimmed);
+    }
 
     if (options.modelCaller) {
       try {
@@ -53,14 +64,54 @@ export class TaskPlanner {
         const raw = await options.modelCaller.generate(prompt);
         const parsed = this.parseModelPlan(raw, trimmed);
         if (parsed && parsed.steps.length > 0) {
-          return parsed;
+          return { ...parsed, complexity };
         }
       } catch {
         // Fall back to deterministic decomposition on model error
       }
     }
 
-    return this.heuristicPlan(trimmed);
+    return { ...this.heuristicPlan(trimmed), complexity };
+  }
+
+  /**
+   * Single-step plan for trivial tasks: implement and verify inline instead
+   * of forcing a separate inspect/implement/compile/verify DAG.
+   */
+  private trivialPlan(task: string): ExecutionPlan {
+    const analysis = this.analyze(task);
+    const budget = budgetFor('trivial');
+
+    return {
+      objective: task,
+      complexity: 'trivial',
+      workspaceMode: analysis.workspaceMode,
+      mutationRequired: true,
+      expectedArtifacts: analysis.expectedArtifacts,
+      requirements: {
+        language: analysis.language,
+        capabilities: analysis.capabilities,
+      },
+      steps: [
+        {
+          id: 'implement',
+          title: 'Implement and verify',
+          description:
+            `Implement the following request directly: ${task}\n\n` +
+            'Write the necessary file(s), then compile/run/test as appropriate to ' +
+            'confirm the result works. This is a small, self-contained task: do not ' +
+            'spend turns exploring the repository beyond what is strictly necessary, ' +
+            `and stop once it works (budget: ${budget.maxTurns} model turns).`,
+          taskType: 'coding',
+          capabilities: analysis.capabilities,
+          dependencies: [],
+          expectedEvidence: ['no_errors'],
+          expectedArtifacts: analysis.expectedArtifacts,
+          mutationRequired: true,
+        },
+      ],
+      successCriteria: ['no_errors'],
+    };
   }
 
   /**
@@ -118,9 +169,13 @@ export class TaskPlanner {
     plan: ExecutionPlan,
     baseTaskProps: Partial<Task> = {},
   ): JobTaskInput[] {
+    const budget = budgetFor(plan.complexity ?? classifyComplexity(plan.objective));
     return plan.steps.map((step) => {
       return {
         task: {
+          maxTurns: baseTaskProps.maxTurns ?? budget.maxTurns,
+          maxRepairCycles: baseTaskProps.maxRepairCycles ?? budget.maxRepairCycles,
+          maxRetries: baseTaskProps.maxRetries ?? budget.maxRetries,
           id: step.id,
           title: step.title,
           type: step.taskType ?? (baseTaskProps.type ?? 'coding'),

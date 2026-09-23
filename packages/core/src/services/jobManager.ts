@@ -254,6 +254,9 @@ export class JobManager {
       workspaceMode: t.task.workspaceMode,
       contextFrom: t.task.contextFrom,
       policy: t.task.policy,
+      maxTurns: t.task.maxTurns,
+      maxRepairCycles: t.task.maxRepairCycles,
+      maxRetries: t.task.maxRetries,
       execution: {
         targetComputerId: t.task.execution?.targetComputerId,
         targetRuntimeId: t.task.execution?.targetRuntimeId,
@@ -509,6 +512,9 @@ export class JobManager {
         workspaceMode: input.task.workspaceMode,
         contextFrom: input.task.contextFrom,
         policy: input.task.policy,
+        maxTurns: input.task.maxTurns,
+        maxRepairCycles: input.task.maxRepairCycles,
+        maxRetries: input.task.maxRetries,
         execution: {
           targetComputerId: input.task.execution?.targetComputerId,
           targetRuntimeId: input.task.execution?.targetRuntimeId,
@@ -739,6 +745,9 @@ export interface JobTaskInput {
     workspaceMode?: WorkspaceMode;
     contextFrom?: string[];
     policy?: Task['policy'];
+    maxTurns?: number;
+    maxRepairCycles?: number;
+    maxRetries?: number;
     priority?: 'low' | 'normal' | 'high' | 'critical';
     /** Pins this task to a specific model/computer/runtime/agent instead of letting
      *  the scheduler auto-route it — e.g. wa run --model, or /model in wa chat. */

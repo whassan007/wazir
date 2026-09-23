@@ -5,6 +5,7 @@ export type { HeartbeatPayload } from './computerRegistry.js';
 export { ContextCompiler, estimateTokens, tokensForPart } from './contextCompiler.js';
 export type { ContextCompilerOptions } from './contextCompiler.js';
 export { ExecutionEngine, createExecutionEngine } from './executionEngine.js';
+export { persistExecutionRecord } from './executionPersistence.js';
 export type { ExecutionEngineOptions } from './executionEngine.js';
 export { ModelRegistry } from './modelRegistry.js';
 export { PolicyEngine, createPolicyEngine, protectedPathReason } from './policyEngine.js';
@@ -28,6 +29,8 @@ export type {
 } from './worktreeManager.js';
 export { TaskPlanner, createTaskPlanner } from './planner.js';
 export type { ExecutionPlan, PlanStep, PlanOptions, PlannerModelCaller } from './planner.js';
+export { classifyComplexity, budgetFor } from './complexity.js';
+export type { TaskComplexity, ComplexityBudget } from './complexity.js';
 export { RecoveryManager, createRecoveryManager } from './recoveryManager.js';
 export type { RecoveryManagerOptions, RecoverySweepResult } from './recoveryManager.js';
 export { ModelLifecycleService } from './modelLifecycleService.js';

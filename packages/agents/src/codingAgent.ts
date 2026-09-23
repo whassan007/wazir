@@ -483,6 +483,7 @@ export class CodingAgent implements AgentAdapter {
     // `this.maxTurns` must stay untouched since one CodingAgent instance is
     // shared across many concurrent/sequential runs.
     const maxTurns = request.maxTurns ?? this.maxTurns;
+    const maxRepairCycles = request.maxRepairCycles ?? this.maxRepairCycles;
     const subagentDepth = request.subagentDepth ?? 0;
     const effectiveTools = subagentDepth >= 1
       ? runtime.tools.filter((t) => t.name !== 'dispatch_subagent')
@@ -1037,7 +1038,7 @@ export class CodingAgent implements AgentAdapter {
                 repairState.consecutiveNoProgress = 0;
               }
 
-              if (repairState.cycle > this.maxRepairCycles || repairState.consecutiveNoProgress >= 2) {
+              if (repairState.cycle > maxRepairCycles || repairState.consecutiveNoProgress >= 2) {
                 yield {
                   kind: 'error',
                   error: `REPAIR_BUDGET_EXHAUSTED: cycle=${repairState.cycle}, progress=${repairState.progress}, files_modified=${repairState.filesModified}`,

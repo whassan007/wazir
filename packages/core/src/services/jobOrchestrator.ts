@@ -653,7 +653,7 @@ export class JobOrchestrator {
                 handle.orphanedTaskIds.delete(taskId);
                 const reason = 'Orphaned: the worker running this task stopped responding';
                 const retries = retryCounts.get(taskId) ?? 0;
-                const maxRetries = job.maxRetries ?? 3;
+                const maxRetries = task.maxRetries ?? job.maxRetries ?? 3;
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
@@ -739,7 +739,7 @@ export class JobOrchestrator {
                 }
 
                 const retries = retryCounts.get(taskId) ?? 0;
-                const maxRetries = isPolicyDenial ? 0 : (job.maxRetries ?? 3);
+                const maxRetries = isPolicyDenial ? 0 : (task.maxRetries ?? job.maxRetries ?? 3);
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
@@ -782,7 +782,7 @@ export class JobOrchestrator {
                 handle.orphanedTaskIds.delete(taskId);
                 const reason = 'Orphaned: the worker running this task stopped responding';
                 const retries = retryCounts.get(taskId) ?? 0;
-                const maxRetries = job.maxRetries ?? 3;
+                const maxRetries = task.maxRetries ?? job.maxRetries ?? 3;
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
@@ -809,7 +809,7 @@ export class JobOrchestrator {
               } else {
                 const isPolicyDenial = errMessage.toLowerCase().includes('policy') || errMessage.toLowerCase().includes('denied');
                 const retries = retryCounts.get(taskId) ?? 0;
-                const maxRetries = isPolicyDenial ? 0 : (job.maxRetries ?? 3);
+                const maxRetries = isPolicyDenial ? 0 : (task.maxRetries ?? job.maxRetries ?? 3);
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;

@@ -337,8 +337,11 @@ if (options.mutationRequired === true && record.filesChanged.length === 0) {
           reasons.push(`evidence verified: files were changed (${record.filesChanged.length})`);
         }
       } else if (trimmed === 'source_contains_cpp') {
-        const cppFile = changed.find((f) => f.endsWith('.cpp') || f.endsWith('.cc') || f.endsWith('.cxx'))
-          ?? (options.projectRoot && fs.existsSync(path.resolve(options.projectRoot, 'main.cpp')) ? 'main.cpp' : undefined);
+        // Only look at files the agent actually touched — guessing a hardcoded
+        // filename like 'main.cpp' here means this check can fail even when the
+        // agent correctly wrote e.g. quick_sort.cpp, since expectedArtifacts is
+        // the sole mechanism responsible for pinning a required filename.
+        const cppFile = changed.find((f) => f.endsWith('.cpp') || f.endsWith('.cc') || f.endsWith('.cxx'));
         if (!cppFile) {
           success = false;
           reasons.push('evidence missing: no C++ source file found');

@@ -81,6 +81,8 @@ export interface AgentRunRequest {
   taskType: TaskType;
   projectRoot: string;
   maxTurns?: number;
+  /** Per-request override of the agent's repair-cycle budget; falls back to the agent default. */
+  maxRepairCycles?: number;
   /** The model's context window, when known — enables mid-run compaction. */
   contextTokens?: number;
   /** Set to true by the host when the user requested cancellation. */

@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { createTaskPlanner } from '../src/index.js';
 
+// Prompts below are deliberately phrased to land on a specific complexity
+// tier (see packages/core/src/services/complexity.ts) so each test exercises
+// the planning path it claims to: a genuinely trivial one-file ask ("write a
+// C++ quicksort program") now takes the single-step trivial fast path, not
+// the multi-step DAG — see the dedicated "trivial fast path" tests below.
+const COMPLEX_CPP_PROMPT =
+  'Refactor the C++ sorting module across the codebase to add benchmarking, then update the build system and docs';
+const SMALL_PROMPT = 'add error handling to the payment service module in the backend';
+
 describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
-  it('generates a specialized DAG for C++ compile/sort requests', async () => {
+  it('generates a specialized DAG for non-trivial C++ compile/sort requests', async () => {
     const planner = createTaskPlanner();
-    const plan = await planner.plan('write a C++ program to sort an array');
+    const plan = await planner.plan(COMPLEX_CPP_PROMPT);
 
     expect(plan.requirements?.language).toBe('C++');
     expect(plan.steps.length).toBe(4);
@@ -27,9 +36,9 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
     expect(verifyStep.expectedEvidence).toContain('exit_code_zero');
   });
 
-  it('generates default 3-stage plan (inspect -> implement -> verify) for general tasks', async () => {
+  it('generates default 3-stage plan (inspect -> implement -> verify) for small general tasks', async () => {
     const planner = createTaskPlanner();
-    const plan = await planner.plan('add error handling to user service');
+    const plan = await planner.plan(SMALL_PROMPT);
 
     expect(plan.steps.length).toBe(3);
     const stepIds = plan.steps.map((s) => s.id);
@@ -38,7 +47,7 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
 
   it('converts plan into JobTaskInput array for JobManager', async () => {
     const planner = createTaskPlanner();
-    const plan = await planner.plan('write a C++ program in src/main.cpp to reverse a string');
+    const plan = await planner.plan(COMPLEX_CPP_PROMPT);
     const taskInputs = planner.planToJobTaskInputs(plan, {
       execution: { targetAgentId: 'wazir-step' },
     });
@@ -75,7 +84,10 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
       }),
     };
 
-    const plan = await planner.plan('do something custom', { modelCaller: mockModelCaller });
+    const plan = await planner.plan(
+      'do something custom with the deployment configuration and update the settings file for the new environment',
+      { modelCaller: mockModelCaller },
+    );
     expect(plan.objective).toBe('Custom LLM Plan');
     expect(plan.steps.length).toBe(2);
     expect(plan.steps[0].id).toBe('setup');
@@ -90,7 +102,7 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
       },
     };
 
-    const plan = await planner.plan('add error handling to user service', { modelCaller: throwingModelCaller });
+    const plan = await planner.plan(SMALL_PROMPT, { modelCaller: throwingModelCaller });
 
     // Should silently recover into the same deterministic 3-stage plan as no-modelCaller.
     const stepIds = plan.steps.map((s) => s.id);
@@ -103,7 +115,7 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
       generate: async () => JSON.stringify({ objective: 'nothing to do here', steps: [] }),
     };
 
-    const plan = await planner.plan('write a C++ program to sort an array', { modelCaller: emptyStepsModelCaller });
+    const plan = await planner.plan(COMPLEX_CPP_PROMPT, { modelCaller: emptyStepsModelCaller });
 
     // Empty steps must not be accepted as a valid plan — falls back to the C++ heuristic.
     expect(plan.requirements?.language).toBe('C++');
@@ -116,7 +128,7 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
       generate: async () => 'Sure, I can help with that! Let me think about the steps...',
     };
 
-    const plan = await planner.plan('add error handling to user service', { modelCaller: garbageModelCaller });
+    const plan = await planner.plan(SMALL_PROMPT, { modelCaller: garbageModelCaller });
 
     const stepIds = plan.steps.map((s) => s.id);
     expect(stepIds).toEqual(['inspect', 'implement', 'verify']);
@@ -137,5 +149,41 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
     expect(analysis.mutationRequired).toBe(true);
     expect(analysis.workspaceMode).toBe('clean');
     expect(analysis.capabilities).toContain('filesystem_write');
+  });
+
+  describe('trivial fast path', () => {
+    it('skips the multi-step DAG and model-based decomposition for a trivial request', async () => {
+      const planner = createTaskPlanner();
+      const modelCaller = {
+        generate: async () => {
+          throw new Error('trivial tasks must not call the model to plan');
+        },
+      };
+
+      const plan = await planner.plan('write a C++ program to sort an array', { modelCaller });
+
+      expect(plan.complexity).toBe('trivial');
+      expect(plan.steps.length).toBe(1);
+      expect(plan.steps[0].id).toBe('implement');
+    });
+
+    it('applies the trivial budget (tight maxTurns/maxRepairCycles/maxRetries) to the generated task', async () => {
+      const planner = createTaskPlanner();
+      const plan = await planner.plan('create a python hello world script');
+      const taskInputs = planner.planToJobTaskInputs(plan);
+
+      expect(taskInputs.length).toBe(1);
+      expect(taskInputs[0].task.maxTurns).toBeLessThanOrEqual(4);
+      expect(taskInputs[0].task.maxRepairCycles).toBe(1);
+      expect(taskInputs[0].task.maxRetries).toBe(1);
+    });
+
+    it('still classifies a large multi-file refactor as complex, not trivial', async () => {
+      const planner = createTaskPlanner();
+      const plan = await planner.plan(COMPLEX_CPP_PROMPT);
+
+      expect(plan.complexity).toBe('complex');
+      expect(plan.steps.length).toBeGreaterThan(1);
+    });
   });
 });
