@@ -3,7 +3,8 @@ import { editTool, readTool, writeTool } from './filesystem.js';
 import { globTool, searchTool } from './search.js';
 import { buildTool, gitTool, lintTool, shellTool, testTool, typecheckTool } from './process-tools.js';
 import { terminalCloseTool, terminalOpenTool, terminalSendTool } from './terminalTools.js';
-import { lspTools } from '@wazir/lsp/src/tools.js';
+import { lspTools } from './lspToolsStub';
+
 export const dispatchSubagentTool: Tool = {
   descriptor: {
     name: 'dispatch_subagent',
@@ -52,7 +53,6 @@ export const defaultTools: Tool[] = [
   terminalOpenTool,
   terminalSendTool,
   terminalCloseTool,
-  // LSP tools for code intelligence
   ...lspTools,
 ];
 

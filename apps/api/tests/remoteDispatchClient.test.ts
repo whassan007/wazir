@@ -120,4 +120,57 @@ describe('dispatchRemote (the scheduling-side client)', () => {
 
     await expect(drain()).rejects.toThrow(/unknown|not registered|dispatch to/i);
   });
+
+  it('accepts lease_acquired in the server event store but does not emit it through the consumer stream', async () => {
+    // Regression: lease_acquired is a control-plane event emitted by TaskDispatcher.claim().
+    // It must be preserved server-side for observability/lease-recovery but must never
+    // appear in the sequence yielded to dispatchRemote callers (public contract).
+    const started = await startServer();
+    server = started.server;
+
+    worker = new Worker({
+      computerId: 'wrk-lease-regression',
+      name: 'lease-regression-worker',
+      serverUrl: started.baseUrl,
+      adapters: [fakeAdapter()],
+      heartbeatIntervalMs: 60_000,
+    });
+    await worker.start();
+    await delay(150);
+
+    const request: WorkerExecutionRequest = {
+      executionId: 'exec-lease-regression',
+      requestId: 'req-lease-regression',
+      modelId: 'fake-model',
+      messages: [{ role: 'user', content: 'lease regression test' }],
+    };
+
+    const generator = dispatchRemote(started.baseUrl, 'wrk-lease-regression', request, { pollIntervalMs: 50 });
+    const events: Array<{ type: string }> = [];
+    let result = await generator.next();
+    while (!result.done) {
+      events.push(result.value);
+      result = await generator.next();
+    }
+
+    const types = events.map((e) => e.type);
+
+    // Public contract: lease_acquired must NOT appear in the consumer stream.
+    expect(types).not.toContain('lease_acquired');
+    // lease_renewed is also a control-plane event and must not appear.
+    expect(types).not.toContain('lease_renewed');
+    // The execution-level events must still all arrive.
+    expect(types).toContain('started');
+    expect(types).toContain('completed');
+
+    // Server-side store: lease_acquired MUST be present (observability / provenance).
+    // We reach directly to the status endpoint to verify the raw server state.
+    const statusRes = await fetch(
+      `${started.baseUrl}/api/v1/tasks/${encodeURIComponent(request.requestId)}/status`,
+    );
+    expect(statusRes.ok).toBe(true);
+    const status = (await statusRes.json()) as { events: Array<{ type: string }> };
+    const serverTypes = status.events.map((e) => e.type);
+    expect(serverTypes).toContain('lease_acquired');
+  });
 });

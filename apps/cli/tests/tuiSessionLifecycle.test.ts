@@ -349,6 +349,15 @@ describe('FleetTui — session lifecycle & terminal hygiene', () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-lifecycle-'));
     const engine = await buildFleetTestEngine(projectRoot);
     harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+
+    // Task IDs are auto-generated as `task-${jobId}-N` (≈ 47 chars each) so the branch
+    // string `wazir/<36-char-uuid>/task-<jobId>-0` is ~90 chars. With the default 120-column
+    // mock terminal the combined left-nav (33) + separator (1) + branch-line prefix leaves
+    // fewer than 90 chars for the branch, causing truncation. Widen to 300 so the assertion
+    // can match the full wazir/job-.../task-... string without any production code change.
+    harness.outStream.columns = 300;
+    harness.inStream.columns = 300;
+
     await harness.start();
 
     harness.sendLine('implement the login flow');
