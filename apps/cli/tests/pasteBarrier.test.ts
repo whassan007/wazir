@@ -342,6 +342,58 @@ describe('Paste Barrier & Accidental Submission Circuit Breaker', () => {
       expect(harness.getScreenBuffer()).toContain('Pasted content discarded');
     });
 
+    it('typing still works after discarding a large paste while nav was focused (regression: focus stuck on nav after Esc)', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-paste-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+      await harness.start();
+
+      // The fleet view starts focused on 'nav' — a right-click/OS-level
+      // paste of a large, single-line block (no bracketed-paste markers,
+      // matching what a terminal's native paste often delivers) arrives as
+      // one big unbracketed chunk and is exactly what was reported stuck:
+      // ~19,500 chars pasted via right-click, entering PASTE mode fine, but
+      // typing anything afterward did nothing.
+      expect(harness.tui.getFocusedPane()).toBe('nav');
+      harness.sendKey('x'.repeat(250));
+      expect(harness.tui.getMode()).toBe('PASTE');
+
+      harness.sendKey('\x1b'); // Esc discards
+      expect(harness.tui.getMode()).toBe('NORMAL');
+
+      // Before the fix, focusedPane stayed 'nav' here — typing 'x' next
+      // would trigger the nav-focused job-delete shortcut (16.5 above)
+      // instead of appearing in the prompt, and other letters would
+      // similarly collide with whatever nav shortcut they matched.
+      expect(harness.tui.getFocusedPane()).toBe('prompt');
+      harness.sendKeys('hello');
+      expect(harness.getScreenBuffer()).toContain('wa> hello');
+    });
+
+    it('typing still works after submitting a large paste (Ctrl+Enter) while nav was focused', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-paste-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+      await harness.start();
+
+      expect(harness.tui.getFocusedPane()).toBe('nav');
+      harness.sendKey('y'.repeat(250));
+      expect(harness.tui.getMode()).toBe('PASTE');
+
+      harness.sendKey('\x1b\r'); // Ctrl+Enter submits
+      expect(harness.tui.getMode()).toBe('NORMAL');
+
+      // Submitting intentionally moves focus to 'nav' (matching the
+      // keyboard-submit Enter path), not back to 'prompt' — but it must be
+      // a deliberate, known pane, not whatever leftover state the paste
+      // interrupted. Typing a letter that isn't a nav shortcut (e.g. 'z')
+      // must still land in the prompt, proving focus isn't stuck in some
+      // broken in-between state.
+      expect(harness.tui.getFocusedPane()).toBe('nav');
+      harness.sendKeys('z');
+      expect(harness.getScreenBuffer()).toContain('wa> z');
+    });
+
     it('E in PASTE mode enters COMPOSER mode for multiline editing', async () => {
       projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-paste-test-'));
       const engine = await buildFleetTestEngine(projectRoot);

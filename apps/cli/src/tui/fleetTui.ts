@@ -980,6 +980,14 @@ export class FleetTui {
       if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
         this.pastedContent = '';
         this.tuiMode = 'NORMAL';
+        // Same class of bug as the Enter-submit path above (see its own
+        // comment): nothing reset focus off whatever pane it was on before
+        // the paste (often 'nav', the default on the fleet view) after
+        // discarding, so subsequent typed letters that collide with a
+        // nav-focused shortcut (e.g. 'x', 'c') got swallowed by nav actions
+        // instead of reaching the prompt — reported as "I could no longer
+        // type" after discarding/submitting a large paste.
+        this.focusedPane = 'prompt';
         this.statusMessage = 'Pasted content discarded.';
         this.draw();
         return;
@@ -998,6 +1006,12 @@ export class FleetTui {
         const toSubmit = this.pastedContent;
         this.pastedContent = '';
         this.tuiMode = 'NORMAL';
+        // Matches the keyboard-submit Enter path above/below: focus moves to
+        // 'nav' after a submission (so nav shortcuts work immediately on the
+        // new job without an extra keypress first), not left on whatever
+        // pane was focused before the paste — which is the same
+        // stuck-focus bug the Esc-discard branch above just got fixed for.
+        this.focusedPane = 'nav';
         this.statusMessage = 'Submitting pasted task...';
         const submission: InteractiveSubmission = {
           submissionId: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
