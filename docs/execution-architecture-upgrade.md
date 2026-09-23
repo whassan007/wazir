@@ -190,20 +190,37 @@ Regression coverage: `packages/agents/tests/codingAgent.wallClock.test.ts` (budg
 already exhausted stops before any model call; per-request override; a normal run
 well within budget is unaffected).
 
+## Sixth tranche: total tool-call budget
+
+`CodingAgentOptions.maxToolCalls` / `AgentRunRequest.maxToolCalls` (constructor
+default 100, same override pattern as the other budgets) caps the total number of
+real tool dispatches across the whole run, checked immediately before each dispatch
+in both the PLAN and WORK phases and tagged `terminationReason: 'MAX_TOOL_CALLS'` on
+trip. This is distinct from `toolRepeatLimit` (the existing circuit breaker), which
+only catches the *exact same* call repeated back to back — a model alternating
+between several different, individually-novel tools or arguments (e.g. reading a
+different file every turn without ever converging) is not caught by that breaker at
+all, and previously would only have been bounded by `maxTurns`, which a
+tool-call-heavy strategy can exhaust real side effects well before reaching.
+
+Regression coverage: `packages/agents/tests/codingAgent.maxToolCalls.test.ts`
+(budget trips with no repeated calls at all — proof it's independent of the circuit
+breaker; per-request override; a normal run well within budget is unaffected).
+
 ## Not yet done
 
 Phase 2/3 (model-attempt vs. execution-history separation, observation compaction),
 Phase 12 remainder (a composed `StopCondition[]` the controller evaluates centrally,
 rather than each condition being its own inline check scattered through
-`CodingAgent` — these tranches added typed *reasons* and one additional *budget*, not
-the unified *mechanism*), Phase 13 (semantic no-progress detection beyond the
+`CodingAgent` — these tranches added typed *reasons* and two additional *budgets*,
+not the unified *mechanism*), Phase 13 (semantic no-progress detection beyond the
 existing exact-duplicate-call circuit breaker), Phase 14–24 (model capability
-registry and circuit breaker, remaining aggregate execution budgets — token/tool-call
-counts — protected-verification tamper detection, full recovery-from-events
-reconstruction, `wa explain`/CLI projections of the new event vocabulary, and the
-live acceptance run). The existing per-run `maxTurns`/`maxRepairCycles`/
-`toolRepeatLimit`/`maxWallClockMs` caps in `CodingAgent` and the trivial/small/complex
+registry and circuit breaker, remaining aggregate execution budgets — token counts —
+protected-verification tamper detection, full recovery-from-events reconstruction,
+`wa explain`/CLI projections of the new event vocabulary, and the live acceptance
+run). The existing per-run `maxTurns`/`maxRepairCycles`/`toolRepeatLimit`/
+`maxWallClockMs`/`maxToolCalls` caps in `CodingAgent` and the trivial/small/complex
 task-complexity budgets (`packages/core/src/services/complexity.ts`) predate (or, for
-`maxWallClockMs`, sit alongside) this mission and are not the same thing as the
+the newer ones, sit alongside) this mission and are not the same thing as the
 mission's controller-owned `StopCondition` composition — they overlap in effect but
 aren't unified into one typed mechanism yet.

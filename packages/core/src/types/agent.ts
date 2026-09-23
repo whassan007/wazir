@@ -110,6 +110,8 @@ export interface AgentRunRequest {
   maxRepairCycles?: number;
   /** Per-request override of the agent's wall-clock budget; falls back to the agent default. */
   maxWallClockMs?: number;
+  /** Per-request override of the agent's total tool-call budget; falls back to the agent default. */
+  maxToolCalls?: number;
   /** The model's context window, when known — enables mid-run compaction. */
   contextTokens?: number;
   /** Set to true by the host when the user requested cancellation. */

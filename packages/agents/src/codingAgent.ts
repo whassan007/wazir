@@ -34,6 +34,14 @@ export interface CodingAgentOptions {
    */
   maxWallClockMs?: number;
   /**
+   * Total real tool-dispatch budget across the whole run (every phase, every
+   * tool). Distinct from `toolRepeatLimit`, which only catches the same call
+   * repeated back to back — a model alternating between several different
+   * tools/arguments, each individually novel, is not caught by the circuit
+   * breaker at all and would otherwise be bounded only by `maxTurns`.
+   */
+  maxToolCalls?: number;
+  /**
    * Wall-clock budget for a single model turn, independent of the overall
    * job timeout. Small/local models can ramble in prose for minutes without
    * ever emitting the required JSON action; without this, one bad turn can
@@ -466,6 +474,7 @@ export class CodingAgent implements AgentAdapter {
   private readonly maxTurns: number;
   private readonly maxRepairCycles: number;
   private readonly maxWallClockMs: number;
+  private readonly maxToolCalls: number;
   private readonly maxTokensPerTurn: number;
   private readonly temperature: number;
   private readonly modelTurnTimeoutMs: number;
@@ -481,6 +490,10 @@ export class CodingAgent implements AgentAdapter {
     // the original motivating bug was a trivial task taking 258s well within its
     // turn/repair budgets simply because nothing bounded total wall-clock time.
     this.maxWallClockMs = options.maxWallClockMs ?? 20 * 60_000;
+    // Generous relative to maxTurns (one turn can itself dispatch a chain of tool
+    // calls via the read/write/build/test cycle) but a real ceiling on total
+    // real-world side effects a single run can accumulate.
+    this.maxToolCalls = options.maxToolCalls ?? 100;
     this.maxTokensPerTurn = options.maxTokensPerTurn ?? 4096;
     this.temperature = options.temperature ?? 0.2;
     this.modelTurnTimeoutMs = options.modelTurnTimeoutMs ?? 90_000;
@@ -500,6 +513,7 @@ export class CodingAgent implements AgentAdapter {
     const maxTurns = request.maxTurns ?? this.maxTurns;
     const maxRepairCycles = request.maxRepairCycles ?? this.maxRepairCycles;
     const maxWallClockMs = request.maxWallClockMs ?? this.maxWallClockMs;
+    const maxToolCalls = request.maxToolCalls ?? this.maxToolCalls;
     const runStartedAt = Date.now();
     const wallClockExceeded = () => Date.now() - runStartedAt >= maxWallClockMs;
     const subagentDepth = request.subagentDepth ?? 0;
@@ -542,8 +556,10 @@ export class CodingAgent implements AgentAdapter {
     let repeatedToolCount = 0;
     const toolCallCounts = new Map<string, number>();
     const filesChangedSet = new Set<string>();
+    let totalToolCalls = 0;
     const recordToolExecution = (tool: string, input: Record<string, unknown>): void => {
       toolCallCounts.set(tool, (toolCallCounts.get(tool) ?? 0) + 1);
+      totalToolCalls += 1;
     };
     
     const canonicalize = (obj: any): any => {
@@ -879,6 +895,16 @@ export class CodingAgent implements AgentAdapter {
           continue;
         }
 
+        if (totalToolCalls >= maxToolCalls) {
+          yield {
+            kind: 'error',
+            error: `run exceeded its tool-call budget (${maxToolCalls} calls)`,
+            errorKind: 'other',
+            terminationReason: 'MAX_TOOL_CALLS',
+            protocolMetrics: currentMetrics(),
+          };
+          return;
+        }
         validActions += 1;
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
@@ -1024,6 +1050,16 @@ export class CodingAgent implements AgentAdapter {
           continue;
         }
 
+        if (totalToolCalls >= maxToolCalls) {
+          yield {
+            kind: 'error',
+            error: `run exceeded its tool-call budget (${maxToolCalls} calls)`,
+            errorKind: 'other',
+            terminationReason: 'MAX_TOOL_CALLS',
+            protocolMetrics: currentMetrics(),
+          };
+          return;
+        }
         validActions += 1;
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
