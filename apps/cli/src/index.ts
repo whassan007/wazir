@@ -787,7 +787,20 @@ program
     const { color } = await import('./colors.js');
     const port = Number(options.port ?? 4801);
     const host = options.host ?? '127.0.0.1';
-    const server = await startDashboardServer(engine, { port, host });
+    let server: Awaited<ReturnType<typeof startDashboardServer>>;
+    try {
+      server = await startDashboardServer(engine, { port, host });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === 'EADDRINUSE') {
+        console.error(`wa dashboard: port ${port} is already in use on ${host} — stop whatever is using it, or pass --port <other>`);
+      } else if (code === 'EACCES') {
+        console.error(`wa dashboard: permission denied binding ${host}:${port} (ports below 1024 usually need elevated privileges)`);
+      } else {
+        console.error(`wa dashboard: failed to start: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      process.exit(1);
+    }
     const url = `http://${host}:${port}`;
 
     console.log();

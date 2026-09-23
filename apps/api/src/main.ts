@@ -1,3 +1,4 @@
+import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -5,6 +6,7 @@ import path from 'node:path';
 import { JsonFileStore, MemoryStore } from '@wazir/shared';
 import { createApiState, createApp } from './server.js';
 import { isLoopbackHost } from './auth.js';
+import { listenOrFail } from './listenOrFail.js';
 
 const port = Number(process.env.PORT ?? 4800);
 const host = process.env.WAZIR_HOST ?? '127.0.0.1';
@@ -44,16 +46,14 @@ async function main(): Promise<void> {
     ? https.createServer({
         cert: fs.readFileSync(tlsCert!),
         key: fs.readFileSync(tlsKey!),
-      }, app).listen(port, host, () => {
-        console.log(`wazir-api listening securely on https://${host}:${port}`);
-        console.log(`  health: https://${host}:${port}/health`);
-        console.log(`  api:    https://${host}:${port}/api/v1/overview`);
-      })
-    : app.listen(port, host, () => {
-        console.log(`wazir-api listening on http://${host}:${port}`);
-        console.log(`  health: http://${host}:${port}/health`);
-        console.log(`  api:    http://${host}:${port}/api/v1/overview`);
-      });
+      }, app)
+    : http.createServer(app);
+
+  await listenOrFail(server, port, host, 'wazir-api');
+  const scheme = isTls ? 'https' : 'http';
+  console.log(`wazir-api listening${isTls ? ' securely' : ''} on ${scheme}://${host}:${port}`);
+  console.log(`  health: ${scheme}://${host}:${port}/health`);
+  console.log(`  api:    ${scheme}://${host}:${port}/api/v1/overview`);
 
   const shutdown = () => {
     server.close(() => process.exit(0));
@@ -63,6 +63,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error);
+  if (!(error as { alreadyReported?: boolean })?.alreadyReported) {
+    console.error(error instanceof Error ? error.message : error);
+  }
   process.exit(1);
 });
