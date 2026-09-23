@@ -111,6 +111,7 @@ export class ComputerRegistry {
     const snapshot = this.resourceSnapshot(computerId);
     const available = snapshot.availableMemoryBytes;
     if (available === undefined || !Number.isFinite(memoryBytes) || memoryBytes < 0 || !Number.isFinite(vramBytes) || vramBytes < 0) return undefined;
+    if (snapshot.activeReservations.some(r => r.instanceId === instanceId && !r.settledAt)) return undefined;
     const held = snapshot.activeReservations.reduce((n, r) => n + r.memoryBytes, 0);
     const reserve = Math.max(available * reservePercent / 100, minimumReserveBytes);
     if (memoryBytes > available - reserve - held) return undefined;

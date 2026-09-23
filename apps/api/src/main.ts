@@ -1,5 +1,8 @@
 import https from 'node:https';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { JsonFileStore, MemoryStore } from '@wazir/shared';
 import { createApiState, createApp } from './server.js';
 import { isLoopbackHost } from './auth.js';
 
@@ -7,7 +10,19 @@ const port = Number(process.env.PORT ?? 4800);
 const host = process.env.WAZIR_HOST ?? '127.0.0.1';
 
 async function main(): Promise<void> {
-  const state = await createApiState();
+  const store = process.env.WAZIR_DATABASE_URL
+    ? await (async () => {
+        const { createPool, runKvMigration, PostgresStore } = await import('@wazir/database');
+        const pool = createPool({ connectionString: process.env.WAZIR_DATABASE_URL });
+        await runKvMigration(pool);
+        return new PostgresStore(pool);
+      })()
+    : process.env.WAZIR_IN_MEMORY === '1'
+      ? new MemoryStore()
+      : new JsonFileStore(path.join(process.env.WAZIR_HOME ?? path.join(os.homedir(), '.wazir'), 'wazir.json'));
+  const configPath = path.join(process.env.WAZIR_HOME ?? path.join(os.homedir(), '.wazir'), 'config.json');
+  const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+  const state = await createApiState({ store, modelStartup: config.models?.startup });
   // Binding beyond loopback without an operator token exposes dispatch and
   // history to the whole network segment; make that an explicit choice.
   if (!isLoopbackHost(host) && !state.auth.operatorTokenRequired) {

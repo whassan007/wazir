@@ -91,3 +91,22 @@ describe('AgentRegistry', () => {
     );
   });
 });
+
+
+describe('agent capability catalog', () => {
+  it('requires every requested agent skill, independently of model capabilities', () => {
+    const registry = new AgentRegistry();
+    registry.register(fakeAgent({ name: 'a', taskTypes: ['coding'], capabilities: ['review'] }));
+    registry.register(fakeAgent({ name: 'b', taskTypes: ['coding'], capabilities: ['review', 'security'] }));
+    const task = fakeTask({ requirements: { agentCapabilities: ['review', 'security'] } });
+    expect(registry.resolveForTask(task).agent.descriptor.name).toBe('b');
+    expect(() => registry.resolveForTask({ ...task, execution: { targetAgentId: 'a' } }))
+      .toThrow('AGENT_CAPABILITY_UNAVAILABLE');
+    expect(registry.catalog()).toEqual([
+      { capability: 'review', agents: ['a', 'b'] }, { capability: 'security', agents: ['b'] },
+    ]);
+    registry.register(fakeAgent({ name: 'b', taskTypes: ['coding'], capabilities: ['review'] }));
+    expect(() => registry.resolveForTask(task)).toThrow('AGENT_CAPABILITY_UNAVAILABLE');
+    expect(registry.catalog()).toEqual([{ capability: 'review', agents: ['a', 'b'] }]);
+  });
+});

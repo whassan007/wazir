@@ -24,6 +24,7 @@ export interface ComputerRoutingDecision {
 }
 
 export interface SchedulerDecision {
+  readiness?: 'READY_NOW' | 'LOADABLE' | 'NOT_LOADABLE';
   agentId?: string;
   modelId: string;
   modelInstanceId: string;

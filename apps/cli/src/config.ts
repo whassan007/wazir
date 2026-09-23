@@ -2,10 +2,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export type ModelStartupMode = 'prompt' | 'recommended' | 'restore' | 'none';
+export type ModelStartupMode = 'prompt' | 'recommended' | 'restore' | 'none' | 'explicit';
 
 export interface ModelStartupConfig {
   mode?: ModelStartupMode;
+  models?: Array<{ modelId: string; computerId?: string; runtimeId?: string; context?: number }>;
 }
 
 export interface ModelsConfig {
@@ -28,6 +29,8 @@ export interface ProvidersConfig {
 }
 
 export interface WazirConfig {
+  resources?: { memory?: { reservePercent?: number; minimumReserveGiB?: number }; minimumContext?: number; autoContext?: number };
+  modelLifecyclePolicy?: import('@wazir/core').PolicyEngineOptions['modelLifecycle'];
   mcp?: { autoConnect?: boolean };
   ollamaUrl?: string;
   lmstudioUrl?: string;
@@ -149,6 +152,8 @@ export function loadConfig(): WazirConfig {
   try {
     const raw = readFileSync(configFile(), 'utf8');
     const fileConfig = JSON.parse(raw) as Partial<WazirConfig>;
+    config.resources = fileConfig.resources;
+    config.modelLifecyclePolicy = fileConfig.modelLifecyclePolicy;
     config.ollamaUrl = fileConfig.ollamaUrl ?? config.ollamaUrl;
     config.lmstudioUrl = fileConfig.lmstudioUrl ?? config.lmstudioUrl;
     config.apiUrl = fileConfig.apiUrl ?? config.apiUrl;

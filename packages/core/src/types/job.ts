@@ -46,6 +46,7 @@ export interface JobNode {
   children: string[];
   result?: unknown;
   error?: string;
+  retryCount?: number;
   attempts?: Array<{ state: AgentState; error?: string; executedAt?: Date; completedAt?: Date }>;
   executedAt?: Date;
   completedAt?: Date;
@@ -97,6 +98,9 @@ export interface JobSession {
 }
 
 export interface Job {
+  revision?: number;
+  control?: { cancelRequestedAt?: number };
+  ownership?: { ownerId: string; epoch: number; expiresAt: number };
   id: string;
   title: string;
   description?: string;
@@ -184,7 +188,14 @@ export interface JobTaskExecutionContext {
   previousOutcomes?: Map<string, JobTaskOutcome>;
 }
 
+export interface SupervisorDecision {
+  decision: 'approve' | 'reject';
+  reason: string;
+}
+
 export interface JobTaskOutcome {
+  /** Required for a supervisor node; only approve may release dependent work. */
+  supervisorDecision?: SupervisorDecision;
   success: boolean;
   result?: unknown;
   error?: string;

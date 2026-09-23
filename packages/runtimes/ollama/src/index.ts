@@ -107,7 +107,10 @@ export class OllamaAdapter implements RuntimeAdapter {
       return [];
     }
     const data = (await response.json()) as { models?: OllamaTagModel[] };
-    return (data.models ?? []).map((model) => {
+    return Promise.all((data.models ?? []).map(async (model) => {
+      const details = await this.showModel(model.name).catch(() => ({}));
+      const info = (details as { model_info?: Record<string, unknown> }).model_info ?? {};
+      const context = Object.entries(info).find(([key]) => key.endsWith('.context_length'))?.[1];
       const size = model.size ?? 0;
       this.modelSizes.set(model.name, size);
       this.modelSizes.set(normalizeModelId(model.name), size);
@@ -118,7 +121,8 @@ export class OllamaAdapter implements RuntimeAdapter {
         family,
         parameters: model.details?.parameter_size,
         quantization: model.details?.quantization_level,
-        contextWindow: undefined,
+        contextWindow: typeof context === 'number' ? context : undefined,
+        weightBytes: size,
         capabilities: ['generalChat'],
         toolCalling: inferToolCalling(model.name, family),
         structuredOutput: false,
@@ -127,7 +131,7 @@ export class OllamaAdapter implements RuntimeAdapter {
         embedding: (model.details?.families ?? []).some((f) => f.includes('bert') || f.includes('nomic-embed')),
         reasoning: inferReasoning(model.name),
       };
-    });
+    }));
   }
 
   async getCapabilities(): Promise<RuntimeCapabilities> {
@@ -139,6 +143,7 @@ export class OllamaAdapter implements RuntimeAdapter {
       vision: true,
       embeddings: true,
       reasoning: true,
+      lifecycle: { discovery: true, inspection: true, contextControl: true, estimate: false, readinessProbe: true },
       modelLoad: true,
       modelUnload: true,
       modelDownload: true,
@@ -147,39 +152,62 @@ export class OllamaAdapter implements RuntimeAdapter {
     };
   }
 
-  async getLoadedModels(): Promise<string[]> {
-    try {
-      const response = await fetch(`${this.baseURL}/api/ps`);
-      if (!response.ok) return [];
-      const data = (await response.json()) as { models?: Array<{ name: string }> };
-      return (data.models ?? []).map((m) => m.name);
-    } catch {
-      return [];
-    }
+  private async showModel(modelId: string): Promise<{ model_info?: Record<string, unknown> }> {
+    const response = await fetch(`${this.baseURL}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelId }), signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error('MODEL_NOT_INSTALLED');
+    return await response.json() as { model_info?: Record<string, unknown> };
   }
-
-  async loadModel(modelId: string): Promise<void> {
+  private async runningModels(): Promise<Array<{ name: string; context_length?: number; size?: number; size_vram?: number }>> {
+    const response = await fetch(`${this.baseURL}/api/ps`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`RUNTIME_UNAVAILABLE: Ollama HTTP ${response.status}`);
+    const data = await response.json() as { models?: Array<{ name: string; context_length?: number; size?: number; size_vram?: number }> };
+    if (!Array.isArray(data.models)) throw new Error('RUNTIME_UNAVAILABLE: invalid residency response');
+    return data.models;
+  }
+  async getLoadedModels(): Promise<string[]> { return (await this.runningModels()).map(m => m.name); }
+  async inspectModel(modelId: string): Promise<import('@wazir/runtimes-interfaces').RuntimeModelInspection> {
+    const m = (await this.runningModels()).find(m => normalizeModelId(m.name) === normalizeModelId(modelId));
+    return { modelId, loaded: !!m, effectiveContext: m?.context_length, memoryBytes: m?.size };
+  }
+  async loadModel(modelId: string, options: { contextTokens?: number } = {}): Promise<void> {
     const response = await fetch(`${this.baseURL}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: modelId, keep_alive: -1 }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(120_000),
+      body: JSON.stringify({ model: modelId, stream: false, keep_alive: -1, options: { num_ctx: options.contextTokens } }),
     });
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      throw new Error(`Failed to load model '${modelId}' via Ollama: HTTP ${response.status} ${errText}`);
-    }
+    if (!response.ok) throw new Error(`RUNTIME_LOAD_FAILED: Ollama HTTP ${response.status}`);
+    await response.json();
   }
-
   async unloadModel(modelId: string): Promise<void> {
     const response = await fetch(`${this.baseURL}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: modelId, keep_alive: 0 }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({ model: modelId, stream: false, keep_alive: 0 }),
     });
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      throw new Error(`Failed to unload model '${modelId}' via Ollama: HTTP ${response.status} ${errText}`);
-    }
+    if (!response.ok) throw new Error(`RUNTIME_UNLOAD_FAILED: Ollama HTTP ${response.status}`);
+    await response.json();
+  }
+  async probeModel(modelId: string, contextTokens: number): Promise<boolean> {
+    const state = await this.inspectModel(modelId);
+    if (!state.loaded || state.effectiveContext !== contextTokens) return false;
+    const response = await fetch(`${this.baseURL}/api/generate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({ model: modelId, prompt: 'Reply OK.', stream: false, keep_alive: -1, options: { num_ctx: contextTokens, num_predict: 1 } }),
+    });
+    if (!response.ok) return false;
+    return (await response.json() as { done?: boolean }).done === true;
+  }
+  async estimateModelLoad(modelId: string, contextTokens: number): Promise<import('@wazir/runtimes-interfaces').ModelLoadEstimate> {
+    // Ollama has no pre-load estimation endpoint. Use architecture metadata only;
+    // file size alone is insufficient to estimate the KV cache at a chosen context.
+    const info = (await this.showModel(modelId)).model_info ?? {};
+    const get = (suffix: string) => Object.entries(info).find(([k]) => k.endsWith(suffix))?.[1];
+    const weightBytes = this.modelSizes.get(modelId) ?? this.modelSizes.get(normalizeModelId(modelId));
+    const layers = get('.block_count'), heads = get('.attention.head_count'), kvHeads = get('.attention.head_count_kv'), embedding = get('.embedding_length');
+    if (!weightBytes || ![layers, heads, kvHeads, embedding].every(n => typeof n === 'number' && n > 0)) return { source: 'UNKNOWN', confidence: 'unknown' };
+    const contextBytes = 2 * 2 * Number(layers) * Number(kvHeads) * Number(embedding) / Number(heads) * contextTokens;
+    const overheadBytes = Math.max(1024 ** 3, weightBytes * 0.15);
+    const totalMemoryBytes = weightBytes + contextBytes + overheadBytes;
+    return { weightBytes, contextBytes, overheadBytes, totalMemoryBytes, vramBytes: totalMemoryBytes, source: 'HEURISTIC', confidence: 'low' };
   }
 
   async estimateResources(modelId: string): Promise<ResourceEstimate> {

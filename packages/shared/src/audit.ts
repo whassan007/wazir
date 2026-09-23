@@ -15,7 +15,7 @@ export type ProviderAuthEvent =
 export interface AuditEvent {
   id: string;
   timestamp: string;
-  type: 'policy_decision' | 'approval_resolution' | 'tool_call' | 'provider_auth';
+  type: 'policy_decision' | 'approval_resolution' | 'tool_call' | 'provider_auth' | 'model_lifecycle';
   tool?: string;
   decision?: 'allow' | 'ask' | 'deny';
   rule?: string;

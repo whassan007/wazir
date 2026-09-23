@@ -248,6 +248,15 @@ export async function executeTask(
     context,
   });
   const executionId = record.execution.id;
+  if (scheduling.computerId) {
+    try {
+      const effective = await engine.lifecycle.activateExecution(executionId, Math.max(context.finalRequiredTokens, task.requirements.minimumContext ?? 0));
+      context.available.tokens = effective;
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      return { success: false, reasons: [error], filesChanged: [], executionId, errors: [error] };
+    }
+  }
   emitJson({ type: 'start', executionId, taskId: task.id, modelId: scheduling.modelId, agent: agent.descriptor.name });
 
   log('');
@@ -356,6 +365,7 @@ export async function executeTask(
           // that computer's worker through the control plane's task-pull loop
           // instead of running it in-process.
           const workerRequest: WorkerExecutionRequest = {
+            runtimeId: scheduling.runtimeId,
             executionId,
             requestId: generateId('req-'),
             modelId: request.modelId,
@@ -763,7 +773,9 @@ export async function runSubagent(
         yield { type: 'error', error: `no runtime can serve model '${req.modelId}'` };
         return;
       }
+      const effective = context.computerId ? await engine.lifecycle.activateExecution(childExecId, MINIMUM_CONTEXT_TOKENS) : undefined;
       for await (const event of adapter.generate({
+        contextTokens: effective,
         modelId: req.modelId,
         messages: req.messages,
         maxTokens: req.maxTokens,

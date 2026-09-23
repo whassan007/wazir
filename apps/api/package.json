@@ -11,6 +11,7 @@
   "dependencies": {
     "@wazir/agents": "*",
     "@wazir/core": "*",
+    "@wazir/database": "*",
     "@wazir/models": "*",
     "@wazir/policies": "*",
     "@wazir/runtimes-lmstudio": "*",

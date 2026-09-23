@@ -60,6 +60,7 @@ export class Worker {
   private token?: string;
   private readonly heartbeatIntervalMs: number;
   private adapters: DiscoveredRuntime[] = [];
+  private readonly activeClaims = new Map<string, () => void>();
   private heartbeatTimer: NodeJS.Timeout | undefined;
   private running = false;
   private taskStreamAbort?: AbortController;
@@ -133,6 +134,8 @@ export class Worker {
 
   async stop(): Promise<void> {
     this.running = false;
+    for (const stop of this.activeClaims.values()) stop();
+    this.activeClaims.clear();
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
@@ -183,7 +186,7 @@ export class Worker {
     request: WorkerExecutionRequest,
     onEvent?: (event: ExecutionStreamEvent) => void,
   ) {
-    const adapter = this.adapterForModel(request.modelId);
+    const adapter = request.runtimeId ? this.adapters.find(r => r.id === request.runtimeId)?.adapter : this.adapterForModel(request.modelId);
     if (!adapter) {
       throw new Error(`no runtime available to serve model '${request.modelId}'`);
     }
@@ -204,9 +207,11 @@ export class Worker {
     const runtimeHealth: Record<string, { status: string }> = {};
     const modelHealth: Record<string, { loaded: boolean }> = {};
     for (const discovered of this.adapters) {
-      runtimeHealth[discovered.id] = { status: discovered.health };
+      const health = await discovered.adapter.healthCheck().catch(() => ({ status: 'unavailable' as const }));
+      runtimeHealth[discovered.id] = { status: health.status };
       for (const model of discovered.models) {
-        modelHealth[model.id] = { loaded: discovered.health === 'healthy' };
+        const observed = await discovered.adapter.inspectModel?.(model.id).catch(() => undefined);
+        modelHealth[model.id] = { loaded: observed?.loaded === true };
       }
     }
     await fetch(`${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/heartbeat`, {
@@ -350,6 +355,27 @@ export class Worker {
 
   /** Executes a control-plane-dispatched request and reports events/outcome back. */
   private async handleDispatchedTask(request: WorkerExecutionRequest): Promise<void> {
+    if (!this.serverUrl) return;
+    const endpoint = `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}`;
+    const claimed = await fetch(`${endpoint}/claim`, { method: 'POST', headers: this.authHeaders() });
+    if (!claimed.ok) return; // A duplicate delivery or another worker already owns this attempt.
+    const lease = await claimed.json() as { token: string; leaseMs: number };
+    request = { ...request, leaseToken: lease.token };
+    let lost = false;
+    this.activeClaims.set(request.requestId, () => { lost = true; void this.cancel(request.requestId); });
+    let renewing = false;
+    const renewal = setInterval(() => {
+      if (lost) { clearInterval(renewal); return; }
+      if (renewing) return;
+      renewing = true;
+      void fetch(`${endpoint}/renew`, {
+        method: 'POST', headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ leaseToken: lease.token }), signal: AbortSignal.timeout(Math.max(100, lease.leaseMs / 3)),
+      }).then(response => { if (!response.ok) throw new Error('LEASE_LOST'); })
+        .catch(async () => { lost = true; await this.cancel(request.requestId); })
+        .finally(() => { renewing = false; });
+    }, Math.max(50, Math.floor(lease.leaseMs / 3)));
+    renewal.unref?.();
     await this.reportEvent(request, 'started');
     try {
       // `execute()`'s onEvent callback is synchronous (it can't await), but
@@ -366,8 +392,9 @@ export class Worker {
         );
       });
       await reportChain;
-      await this.reportResult(request, outcome);
+      if (!lost) await this.reportResult(request, outcome);
     } catch (error) {
+      if (lost) return;
       const message = error instanceof Error ? error.message : String(error);
       await this.reportEvent(request, 'failed', { error: message });
       await this.reportResult(request, {
@@ -378,7 +405,7 @@ export class Worker {
         durationMs: 0,
         error: message,
       });
-    }
+    } finally { clearInterval(renewal); this.activeClaims.delete(request.requestId); }
   }
 
   private mapStreamEventType(type: ExecutionStreamEvent['type']): WorkerEventType {
@@ -395,7 +422,7 @@ export class Worker {
       {
         method: 'POST',
         headers: this.authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ executionId: request.executionId, type, data }),
+        body: JSON.stringify({ executionId: request.executionId, leaseToken: request.leaseToken, type, data }),
       },
     ).catch(() => undefined);
   }
@@ -410,7 +437,7 @@ export class Worker {
       {
         method: 'POST',
         headers: this.authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify(outcome),
+        body: JSON.stringify({ ...outcome, leaseToken: request.leaseToken }),
       },
     ).catch(() => undefined);
   }

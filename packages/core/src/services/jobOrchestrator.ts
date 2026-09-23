@@ -88,7 +88,9 @@ export class JobOrchestrator {
     maxRetries?: number;
     timeoutSeconds?: number;
   }): Promise<Job> {
-    return this.jobManager.create(params);
+    const job = this.jobManager.create(params);
+    await this.jobManager.save(job.id);
+    return job;
   }
 
   getJob(id: string): Job | undefined {
@@ -311,7 +313,51 @@ export class JobOrchestrator {
    * Runs the full Job DAG, respecting concurrency limits, dependency edges,
    * hardware capacity, and retry bounds.
    */
+  /** Recover eligible persisted graphs using the caller's normal policy-gated executor. */
+  async recoverJobs(options: JobRunOptions = {}): Promise<Array<{ jobId: string; status: string }>> {
+    await this.jobManager.ready;
+    const results: Array<{ jobId: string; status: string }> = [];
+    for (const job of this.jobManager.list()) {
+      if (!['pending', 'ready', 'running'].includes(job.status) || this.activeJobs.has(job.id)) continue;
+      try { results.push({ jobId: job.id, status: (await this.runJob(job.id, options)).status }); }
+      catch (error) {
+        results.push({ jobId: job.id, status: error instanceof Error ? error.message : 'RECOVERY_FAILED' });
+      }
+    }
+    return results;
+  }
+
   async runJob(jobId: string, options: JobRunOptions = {}): Promise<Job> {
+    if (this.activeJobs.has(jobId)) throw new Error('JOB_ALREADY_RUNNING');
+    await this.jobManager.acquire(jobId);
+    const abort = new AbortController();
+    const onAbort = () => abort.abort();
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    if (options.signal?.aborted) abort.abort();
+    let leaseError: Error | undefined;
+    const timer = setInterval(() => {
+      void this.jobManager.renew(jobId).then(async () => {
+        if (this.jobManager.get(jobId)?.control?.cancelRequestedAt !== undefined) await this.cancelJob(jobId, 'requested by another control-plane process');
+      }).catch(error => {
+        leaseError = error instanceof Error ? error : new Error(String(error));
+        abort.abort();
+        for (const controller of this.activeJobs.get(jobId)?.activeTasks.values() ?? []) controller.abort();
+      });
+    }, Math.floor(this.jobManager.leaseMs / 3));
+    timer.unref?.();
+    try {
+      const job = await this.runOwnedJob(jobId, { ...options, signal: abort.signal });
+      if (leaseError) throw leaseError;
+      return job;
+    } finally {
+      clearInterval(timer);
+      options.signal?.removeEventListener('abort', onAbort);
+      this.activeJobs.delete(jobId);
+      await this.jobManager.release(jobId);
+    }
+  }
+
+  private async runOwnedJob(jobId: string, options: JobRunOptions): Promise<Job> {
     const job = this.jobManager.get(jobId);
     if (!job) {
       throw new Error(`Job '${jobId}' not found`);
@@ -335,11 +381,12 @@ export class JobOrchestrator {
 
     const jobAbortController = new AbortController();
     if (options.signal) {
-      options.signal.addEventListener('abort', () => jobAbortController.abort());
+      options.signal.addEventListener('abort', () => jobAbortController.abort(), { once: true });
+      if (options.signal.aborted) jobAbortController.abort();
     }
 
     const activeTasks = new Map<string, AbortController>();
-    const retryCounts = new Map<string, number>();
+    const retryCounts = new Map<string, number>(job.graph.nodes.map(n => [n.taskId ?? n.id, n.retryCount ?? 0]));
     const supersededTaskIds = new Set<string>();
 
     this.emit(jobId, { type: 'job:started', jobId });
@@ -555,6 +602,8 @@ export class JobOrchestrator {
                     event: ev,
                   });
                 },
+                previousOutcomes: new Map(job.graph.nodes.filter(n => node.dependencies.includes(n.id))
+                  .map(n => [n.taskId ?? n.id, { success: n.state === 'completed', result: structuredClone(n.result), error: n.error }])),
                 workspaceMode: task.workspaceMode,
                 mutationRequired: task.mutationRequired,
                 getSteeringInstruction: () => {
@@ -563,7 +612,18 @@ export class JobOrchestrator {
                 },
               };
 
-              const outcome: JobTaskOutcome = await executor(task, executionContext);
+              let outcome: JobTaskOutcome = await executor(task, executionContext);
+              if (node.type === 'supervisor') {
+                const decision = outcome.supervisorDecision;
+                if (!decision || !['approve', 'reject'].includes(decision.decision) || !decision.reason?.trim()) {
+                  outcome = { success: false, error: 'SUPERVISOR_DECISION_REQUIRED', errorKind: 'protocol' };
+                } else {
+                  outcome = { ...outcome, success: outcome.success && decision.decision === 'approve',
+                    result: { decision, result: outcome.result },
+                    error: decision.decision === 'reject' ? `SUPERVISOR_REJECTED: ${decision.reason}` : outcome.error,
+                    errorKind: decision.decision === 'reject' ? 'verification' : outcome.errorKind };
+                }
+              }
 
               if (handle.orphanedTaskIds.has(taskId)) {
                 handle.orphanedTaskIds.delete(taskId);
@@ -572,6 +632,7 @@ export class JobOrchestrator {
                 const maxRetries = job.maxRetries ?? 3;
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
+                  node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
                   node.attempts.push({ state: 'failed', error: reason, executedAt: node.executedAt, completedAt: new Date() });
                   node.executedAt = undefined;
@@ -657,6 +718,7 @@ export class JobOrchestrator {
                 const maxRetries = isPolicyDenial ? 0 : (job.maxRetries ?? 3);
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
+                  node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
                   node.attempts.push({
                     state: 'failed',
@@ -699,6 +761,7 @@ export class JobOrchestrator {
                 const maxRetries = job.maxRetries ?? 3;
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
+                  node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
                   node.attempts.push({ state: 'failed', error: reason, executedAt: node.executedAt, completedAt: new Date() });
                   node.executedAt = undefined;
@@ -725,6 +788,7 @@ export class JobOrchestrator {
                 const maxRetries = isPolicyDenial ? 0 : (job.maxRetries ?? 3);
                 if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
+                  node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
                   node.attempts.push({
                     state: 'failed',
@@ -761,9 +825,9 @@ export class JobOrchestrator {
             } finally {
               activeTasks.delete(taskId);
               this.steeringQueues.delete(taskId);
-              void pump();
+              void pump().catch(reject);
             }
-          })();
+          })().catch(reject);
         }
 
         // 4. Check termination: no active tasks running
@@ -801,7 +865,7 @@ export class JobOrchestrator {
         }
       };
 
-      void pump();
+      void pump().catch(reject);
     });
   }
 

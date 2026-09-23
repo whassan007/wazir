@@ -28,6 +28,8 @@ export type TaskStatus =
 export type WorkspaceMode = 'clean' | 'repository' | 'continue' | 'shared';
 
 export interface TaskRequirements {
+  /** Agent skills, separate from model inference capabilities. All are required. */
+  agentCapabilities?: string[];
   capabilities?: ModelCapability[];
   reasoning?: 'low' | 'medium' | 'high';
   vision?: boolean;

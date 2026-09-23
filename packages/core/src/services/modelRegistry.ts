@@ -45,7 +45,7 @@ export class ModelRegistry {
         ? patch.loaded
         : patch.state === 'READY' || patch.state === 'LOADED'
           ? true
-          : patch.state === 'UNLOADED' || patch.state === 'INSTALLED' || patch.state === 'DISCOVERED' || patch.state === 'FAILED' || patch.state === 'UNAVAILABLE'
+          : patch.state === 'UNLOADED' || patch.state === 'INSTALLED' || patch.state === 'DISCOVERED'
             ? false
             : existing.loaded;
 
@@ -92,10 +92,10 @@ export class ModelRegistry {
     if (instances.some((i) => i.state === 'LOADING')) return 'LOADING';
     if (instances.some((i) => i.state === 'DRAINING')) return 'DRAINING';
     if (instances.some((i) => i.state === 'UNLOADING')) return 'UNLOADING';
-    if (instances.some((i) => i.loaded)) return 'LOADED';
-    if (instances.some((i) => i.state === 'UNLOADED')) return 'UNLOADED';
     if (instances.some((i) => i.state === 'FAILED')) return 'FAILED';
     if (instances.every((i) => i.health === 'unavailable' || i.state === 'UNAVAILABLE')) return 'UNAVAILABLE';
+    if (instances.some((i) => i.loaded)) return 'LOADED';
+    if (instances.some((i) => i.state === 'UNLOADED')) return 'UNLOADED';
     return 'INSTALLED';
   }
 

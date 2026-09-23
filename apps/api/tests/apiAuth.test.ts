@@ -183,8 +183,11 @@ describe('control-plane authentication', () => {
     expect(status.outcome).toBeUndefined();
     expect(status.events).toHaveLength(0);
 
+    // The dispatched worker must hold a live execution claim before reporting.
+    expect((await fetch(`${started.baseUrl}/computers/victim/executions/req-forge/result`, json(forged, victim.token))).status).toBe(409);
+    const claim = await (await fetch(`${started.baseUrl}/computers/victim/executions/req-forge/claim`, json({}, victim.token))).json();
     // The dispatched worker can still report
-    const ok = await fetch(`${started.baseUrl}/computers/victim/executions/req-forge/result`, json({ ...forged, output: 'real' }, victim.token));
+    const ok = await fetch(`${started.baseUrl}/computers/victim/executions/req-forge/result`, json({ ...forged, output: 'real', leaseToken: claim.token }, victim.token));
     expect(ok.status).toBe(200);
     const after = await (await fetch(`${started.baseUrl}/api/v1/tasks/req-forge/status`)).json();
     expect(after.outcome.output).toBe('real');

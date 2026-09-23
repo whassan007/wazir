@@ -699,3 +699,52 @@ describe('JobOrchestrator — fleet-scale graph walk & concurrent execution', ()
     expect(removedIds).toContain(job.id);
   });
 });
+
+describe('supervisor gates', () => {
+  it('passes persisted dependency evidence to a supervisor and blocks rejected downstream work', async () => {
+    const executed: string[] = [];
+    const { orchestrator } = setupTestOrchestrator(async (task, context) => {
+      executed.push(task.id);
+      if (task.id === 'review') {
+        expect(context.previousOutcomes?.get('work')?.result).toEqual({ artifact: 'patch' });
+        return { success: true, supervisorDecision: { decision: 'reject', reason: 'Missing required test' } };
+      }
+      return { success: true, result: { artifact: 'patch' } };
+    });
+    const job = await orchestrator.createJob({ title: 'review gate', maxRetries: 0, tasks: [
+      { task: { id: 'work', input: 'implement', type: 'coding' } },
+      { task: { id: 'review', input: 'review', type: 'coding' }, type: 'supervisor', dependencies: ['work'] },
+      { task: { id: 'publish', input: 'publish', type: 'coding' }, dependencies: ['review'] },
+    ] });
+    const result = await orchestrator.runJob(job.id);
+    expect(result.status).toBe('failed');
+    expect(executed).toEqual(['work', 'review']);
+    expect(result.graph.nodes.find(n => n.id === 'review')?.error).toContain('SUPERVISOR_REJECTED');
+  });
+
+  it('requires a structured supervisor decision and never treats a successful call as approval', async () => {
+    const { orchestrator } = setupTestOrchestrator(async () => ({ success: true, result: 'looks good' }));
+    const job = await orchestrator.createJob({ title: 'review gate', maxRetries: 0, tasks: [
+      { task: { id: 'review', input: 'review', type: 'coding' }, type: 'supervisor' },
+    ] });
+    const result = await orchestrator.runJob(job.id);
+    expect(result.status).toBe('failed');
+    expect(result.graph.nodes[0].error).toBe('SUPERVISOR_DECISION_REQUIRED');
+  });
+
+  it('runs a persisted graph and releases ownership after completion', async () => {
+    const { MemoryStore } = await import('@wazir/shared');
+    const store = new MemoryStore();
+    const manager = new JobManager({ store });
+    await manager.ready;
+    const { orchestrator } = setupTestOrchestrator(async () => ({ success: true }), manager);
+    const job = await orchestrator.createJob({ title: 'durable run', tasks: [
+      { task: { id: 'one', input: 'work', type: 'coding' } },
+    ] });
+    expect((await orchestrator.runJob(job.id)).status).toBe('completed');
+    const restarted = new JobManager({ store });
+    await restarted.ready;
+    expect(restarted.get(job.id)?.status).toBe('completed');
+    expect(restarted.get(job.id)?.ownership?.expiresAt).toBe(0);
+  });
+});

@@ -16,9 +16,12 @@ export interface WorkerInfo {
  * Workers execute exactly what they are told — they never schedule.
  */
 export interface WorkerExecutionRequest {
+  /** Opaque claim fencing token assigned by the control plane. */
+  leaseToken?: string;
   executionId: string;
   requestId: string;
   modelId: string;
+  runtimeId?: string;
   messages: ChatMessage[];
   tools?: ToolDefinition[];
   maxTokens?: number;
@@ -28,6 +31,8 @@ export interface WorkerExecutionRequest {
 }
 
 export type WorkerEventType =
+  | 'lease_acquired'
+  | 'lease_renewed'
   | 'started'
   | 'token'
   | 'tool_call'

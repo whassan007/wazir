@@ -8,6 +8,7 @@ import {
   ContextCompiler,
   ExecutionEngine,
   ModelRegistry,
+  ModelLifecycleService,
   PolicyEngine,
   RuntimeRegistry,
   Scheduler,
@@ -62,6 +63,8 @@ async function buildTestEngine(projectRoot: string, reply: string): Promise<Rook
     },
   });
 
+  runtimes.update('fake', { health: 'healthy' });
+
   models.register({
     id: 'fake-model', name: 'fake-model', provider: 'fake', family: 'other', contextMax: 32_768,
     capabilities: ['generalChat', 'coding'], toolCalling: false, structuredOutput: false,
@@ -70,7 +73,7 @@ async function buildTestEngine(projectRoot: string, reply: string): Promise<Rook
   });
   models.upsertInstance({
     id: 'fake-model::local::fake', modelId: 'fake-model', computerId: 'local', runtimeId: 'fake',
-    runtimeModelId: 'fake-model', loaded: true, health: 'healthy', contextTokens: 32_768,
+    runtimeModelId: 'fake-model', loaded: true, state: 'READY', health: 'healthy', contextTokens: 32_768,
   });
 
   agents.register(createCodingAgent(), 'native');
@@ -82,6 +85,8 @@ async function buildTestEngine(projectRoot: string, reply: string): Promise<Rook
   const fakeAdapter: RuntimeAdapter = {
     id: 'fake',
     type: 'other',
+    async inspectModel(modelId) { return { modelId, loaded: true, effectiveContext: 32768 }; },
+    async probeModel() { return true; },
     async discover() { return { id: 'fake', name: 'fake', version: '1.0' }; },
     async healthCheck() { return { status: 'healthy' }; },
     async listModels() { return [{ id: 'fake-model', name: 'fake-model' }]; },
@@ -111,6 +116,7 @@ async function buildTestEngine(projectRoot: string, reply: string): Promise<Rook
     config: { modelContext: {}, modelCapabilities: {}, networkAllowed: false, allowCommands: [], denyCommands: [], allowedMcpServers: [] },
     projectRoot,
     configDir: path.join(projectRoot, '.wazir'),
+    lifecycle: new ModelLifecycleService({ models, runtimes, computers, executions, adapters: new Map([['fake', fakeAdapter]]) }),
     computers,
     runtimes,
     models,

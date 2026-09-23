@@ -81,11 +81,14 @@ export class Scheduler {
     }
 
     const computerDecision = this.scheduleComputer(task, record);
+    const placed = this.deps.models.instancesOf(record.id).find(i => i.runtimeId === computerDecision.runtimeId && i.computerId === computerDecision.computerId)!;
+    modelDecision.modelInstanceId = placed.id;
 
     return {
       agentId,
       modelId: record.id,
-      modelInstanceId: instance.id,
+      modelInstanceId: placed.id,
+      readiness: placed.state === 'READY' ? 'READY_NOW' : 'LOADABLE',
       runtimeId: computerDecision.runtimeId,
       computerId: computerDecision.computerId,
       modelDecision,
@@ -235,7 +238,7 @@ export class Scheduler {
   }
 
   private selectInstance(record: ModelRecord): ModelInstance {
-    const instances = this.deps.models.instancesOf(record.id);
+    const instances = this.deps.models.instancesOf(record.id).filter(i => !['DRAINING', 'UNLOADING'].includes(i.state ?? ''));
     if (instances.length === 0) {
       throw new SchedulingError(
         `Model '${record.id}' is registered but has no running instance on any computer`,
@@ -266,6 +269,10 @@ export class Scheduler {
     const placements: ScoredPlacement[] = [];
 
     for (const instance of instances) {
+      if (['DRAINING', 'UNLOADING', 'LOADING'].includes(instance.state ?? '')) {
+        failures.push(`${instance.id}: lifecycle operation in progress`); continue;
+      }
+      if (task.execution?.targetComputerId && instance.computerId !== task.execution.targetComputerId) continue;
       const runtime = this.deps.runtimes.get(instance.runtimeId);
       const isHosted = runtime?.runtimeKind === 'hosted' || !instance.computerId;
 
@@ -369,9 +376,9 @@ export class Scheduler {
       }
 
       const reasons: string[] = [];
-      let score = 0;
+      let score = instance.health === 'healthy' ? 1 : 0;
 
-      if (instance.loaded) {
+      if (instance.state === 'READY') {
         score += 2;
         reasons.push(`model already loaded via '${instance.runtimeId}' (no load latency)`);
       } else {

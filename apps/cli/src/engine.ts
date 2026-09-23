@@ -11,6 +11,7 @@ import {
   ProvenanceManager,
   Job,
   JobManager,
+  RecoveryManager,
   JobOrchestrator,
   ModelRegistry,
   ModelLifecycleService,
@@ -31,6 +32,7 @@ import type {
 } from '@wazir/core';
 import type { DiscoveredModel, ProviderId } from '@wazir/runtimes-interfaces';
 import {
+  appendAuditEvent,
   MemoryStore,
   JsonFileStore,
   type KeyValueStore,
@@ -41,7 +43,7 @@ import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import { createSecretBroker, type SecretBroker } from '@wazir/secrets';
-import { Worker, type DiscoveredRuntime } from '@wazir/workers';
+import { Worker, currentLoad, type DiscoveredRuntime } from '@wazir/workers';
 import { configDir, loadConfig, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
@@ -50,6 +52,7 @@ import path from 'node:path';
 export interface EngineOptions {
   projectRoot?: string;
   quiet?: boolean;
+  readOnlyLifecycle?: boolean;
   /** How long an unanswered policy approval waits before it is denied (default 5 minutes). */
   approvalTimeoutMs?: number;
   /** Opt in to honouring `WAZIR_AUTO_APPROVE=1`; never on by default. */
@@ -237,6 +240,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   });
   const policy = new PolicyEngine({
     projectRoot,
+    modelLifecycle: config.modelLifecyclePolicy,
     networkAllowed: config.networkAllowed,
     allowCommands: config.allowCommands,
     denyCommands: config.denyCommands,
@@ -275,14 +279,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   });
 
   // ---- jobs & orchestration -----------------------------------------------
-  const jobManager = new JobManager({
-    persist: (job) => store.put(`job/${job.id}`, job),
-    load: async () => {
-      const entries = await store.list('job/');
-      return entries.map((e) => e.value as Job);
-    },
-    remove: (jobId) => store.delete(`job/${jobId}`),
-  });
+  const jobManager = new JobManager({ store });
+  await jobManager.ready;
 
   const orchestrator = new JobOrchestrator({
     scheduler,
@@ -305,8 +303,25 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     computers,
     agents,
     adapters: adapterById,
-    store,
+    store, policy, executions,
+    resources: { ...config.resources?.memory, minimumContext: config.resources?.minimumContext, autoContext: config.resources?.autoContext },
+    refreshResources: async computerId => {
+      if (computers.get(computerId)?.local) computers.heartbeat(computerId, { load: currentLoad() });
+    },
   });
+
+  lifecycle.subscribe(event => {
+    void appendAuditEvent({ type: 'model_lifecycle', details: { ...event } }).catch(() => undefined);
+    const executionId = event.data?.executionId;
+    if (typeof executionId === 'string') void executions.recordEvent(executionId, 'model.lifecycle', event).catch(() => undefined);
+  });
+  await executions.ready;
+  await lifecycle.discoverAndReconcile({ verify: !options.readOnlyLifecycle });
+  if (!options.readOnlyLifecycle) {
+    await lifecycle.applyStartupPolicy(config.models?.startup);
+    lifecycle.startReconciliation();
+    new RecoveryManager({ computers, executions, jobManager, orchestrator }).start();
+  }
 
   return {
     config,
@@ -375,6 +390,8 @@ async function applyDiscoveredRuntime(
     },
   });
 
+  runtimes.update(discoveredRuntime.id, { health: discoveredRuntime.health });
+
   if (discoveredRuntime.health !== 'unavailable') {
     computers.heartbeat(computerId, {
       runtimeHealth: { [discoveredRuntime.id]: { status: discoveredRuntime.health === 'healthy' ? 'healthy' : 'unhealthy' } },
@@ -427,6 +444,7 @@ export async function refreshRuntime(engine: RookEngine, runtimeId: string): Pro
     computerId: process.env.WAZIR_COMPUTER_ID ?? 'local',
   });
 
+  await engine.lifecycle.reconcile();
   if (refreshed.health === 'unavailable') {
     return { ok: false, message: refreshed.healthMessage ?? `${runtimeId} is unreachable` };
   }
@@ -486,13 +504,13 @@ function registerModel(
   const isLoaded =
     loadedModelIds.has(discovered.id) ||
     (discovered.name ? loadedModelIds.has(discovered.name) : false) ||
-    Array.from(loadedModelIds).some((id) => id.startsWith(discovered.id) || discovered.id.startsWith(id));
+    false;
 
   const state: ModelLifecycleState =
     runtime.health === 'unavailable'
       ? 'UNAVAILABLE'
       : isLoaded
-      ? 'READY'
+      ? 'LOADED'
       : 'INSTALLED';
 
   models.upsertInstance({
@@ -504,7 +522,7 @@ function registerModel(
     loaded: isLoaded,
     state,
     health: runtime.health === 'healthy' ? 'healthy' : 'degraded',
-    contextTokens: contextMax,
+    contextTokens: undefined,
   });
 }
 

@@ -1,9 +1,12 @@
 import express, { type Response } from 'express';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import {
   AgentRegistry,
   ComputerRegistry,
   ModelRegistry,
+  ModelLifecycleService,
+  ModelLifecycleError,
   RuntimeRegistry,
   type ModelRecord,
   type ModelCapability,
@@ -12,18 +15,17 @@ import {
   type WorkerExecutionEvent,
   type WorkerEventType,
 } from '@wazir/core';
-import { discoverHardware, discoverRuntimes, type DiscoveredRuntime } from '@wazir/workers';
+import { currentLoad, discoverHardware, discoverRuntimes, type DiscoveredRuntime } from '@wazir/workers';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
-import { generateId, sanitizeUntrustedOutput, type KeyValueStore } from '@wazir/shared';
+import { generateId, sanitizeUntrustedOutput, MemoryStore, type KeyValueStore } from '@wazir/shared';
 import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
 
 // Bounds on in-memory state so an unauthenticated peer (or a runaway client)
 // cannot grow the control plane without limit (security review F-19).
 const MAX_QUEUED_PER_COMPUTER = 100;
-const MAX_CHANNELS = 5_000;
 const MAX_EXECUTION_RECORDS = 5_000;
 const MAX_EVENTS_PER_CHANNEL = 10_000;
 const MAX_OUTPUT_CHARS = 1_000_000;
@@ -37,148 +39,143 @@ interface ExecutionOutcome {
   error?: string;
 }
 
-/** Tracks one dispatched execution request from submission to worker-reported outcome. */
-interface ExecutionChannel {
-  computerId: string;
-  events: WorkerExecutionEvent[];
-  outcome?: ExecutionOutcome;
-  waiters: Array<(outcome: ExecutionOutcome) => void>;
-}
-
 /**
  * Per-computer task dispatch: an SSE stream the worker holds open, plus a
  * queue for requests submitted while no worker is connected. This is the
  * bridge that lets the control plane push tasks to a remote worker — the
  * worker previously had no way to receive dispatched work at all.
  */
+interface DurableDispatch {
+  computerId: string;
+  request: WorkerExecutionRequest;
+  events: WorkerExecutionEvent[];
+  outcome?: ExecutionOutcome;
+  attempt: number;
+  lease?: { token: string; expiresAt: number };
+}
+
 export class TaskDispatcher {
   private readonly streams = new Map<string, Response>();
-  private readonly queues = new Map<string, WorkerExecutionRequest[]>();
-  private readonly channels = new Map<string, ExecutionChannel>();
+  private readonly records = new Map<string, DurableDispatch>();
+  readonly ready: Promise<void>;
 
-  isConnected(computerId: string): boolean {
-    return this.streams.has(computerId);
+  constructor(private readonly store: KeyValueStore = new MemoryStore(),
+    private readonly now: () => number = Date.now, readonly leaseMs = 30_000) {
+    if (!store.update) throw new Error('ATOMIC_STORE_REQUIRED');
+    if (!Number.isFinite(leaseMs) || leaseMs < 100) throw new Error('INVALID_LEASE_DURATION');
+    this.ready = this.refresh();
   }
 
+  private key(id: string): string { return `dispatch/${id}`; }
+  private async refresh(): Promise<void> {
+    for (const entry of await this.store.list('dispatch/')) {
+      const record = entry.value as DurableDispatch;
+      this.records.set(record.request.requestId, record);
+    }
+  }
+  isConnected(id: string): boolean { return this.streams.has(id); }
+  get activeStreamsCount(): number { return this.streams.size; }
   get totalQueued(): number {
-    let count = 0;
-    for (const q of this.queues.values()) count += q.length;
-    return count;
+    return [...this.records.values()].filter(r => !r.outcome && (!r.lease || r.lease.expiresAt <= this.now())).length;
   }
-
-  get activeStreamsCount(): number {
-    return this.streams.size;
+  ownerOf(id: string): string | undefined { return this.records.get(id)?.computerId; }
+  async owner(id: string): Promise<string | undefined> {
+    return (await this.store.get<DurableDispatch>(this.key(id)))?.computerId;
   }
-
-  /**
-   * Attaches the (already authenticated) worker's response as the live
-   * stream for `computerId`. A previous stream for the same computer is
-   * closed: the caller proved it holds the computer's token, so it is the
-   * legitimate worker reconnecting, and the old socket is stale.
-   */
-  subscribe(computerId: string, res: Response): void {
-    const previous = this.streams.get(computerId);
-    if (previous && previous !== res) {
-      previous.end();
-    }
-    this.streams.set(computerId, res);
-    const queued = this.queues.get(computerId);
-    if (queued && queued.length > 0) {
-      for (const request of queued) this.writeTask(res, request);
-      this.queues.delete(computerId);
-    }
+  async subscribe(id: string, res: Response): Promise<void> {
+    this.disconnect(id);
+    this.streams.set(id, res);
+    await this.redeliver();
   }
-
-  /** Ends the live stream of a computer whose token was rotated; queued work stays for the new holder. */
-  disconnect(computerId: string): void {
-    const stream = this.streams.get(computerId);
-    if (stream) {
-      stream.end();
-      this.streams.delete(computerId);
-    }
+  disconnect(id: string): void { this.streams.get(id)?.end(); this.streams.delete(id); }
+  unsubscribe(id: string, res: Response): void {
+    if (this.streams.get(id) === res) this.streams.delete(id);
   }
-
-  ownerOf(requestId: string): string | undefined {
-    return this.channels.get(requestId)?.computerId;
-  }
-
-  unsubscribe(computerId: string, res: Response): void {
-    if (this.streams.get(computerId) === res) {
-      this.streams.delete(computerId);
-    }
-  }
-
-  /** Returns false when the target computer's queue or the channel table is full. */
-  dispatch(computerId: string, request: WorkerExecutionRequest): { ok: true } | { ok: false; reason: string } {
-    if (this.channels.has(request.requestId)) {
-      return { ok: false, reason: `request '${request.requestId}' was already dispatched` };
-    }
-    const stream = this.streams.get(computerId);
-    const queue = this.queues.get(computerId) ?? [];
-    if (!stream && queue.length >= MAX_QUEUED_PER_COMPUTER) {
-      return { ok: false, reason: `computer '${computerId}' has ${queue.length} queued requests and no connected worker` };
-    }
-    if (this.channels.size >= MAX_CHANNELS && !this.evictResolvedChannel()) {
-      return { ok: false, reason: `control plane is tracking ${this.channels.size} unresolved requests` };
-    }
-    this.channels.set(request.requestId, { computerId, events: [], waiters: [] });
-    if (stream) {
-      this.writeTask(stream, request);
-    } else {
-      queue.push(request);
-      this.queues.set(computerId, queue);
-    }
-    return { ok: true };
-  }
-
-  private evictResolvedChannel(): boolean {
-    for (const [requestId, channel] of this.channels) {
-      if (channel.outcome) {
-        this.channels.delete(requestId);
-        return true;
+  async redeliver(): Promise<void> {
+    await this.refresh();
+    for (const r of this.records.values()) {
+      const stream = this.streams.get(r.computerId);
+      if (stream && !r.outcome && (!r.lease || r.lease.expiresAt <= this.now())) {
+        stream.write(`event: task\ndata: ${JSON.stringify(r.request)}\n\n`);
       }
     }
-    return false;
   }
-
-  recordEvent(requestId: string, event: WorkerExecutionEvent): boolean {
-    const channel = this.channels.get(requestId);
-    if (!channel) return false;
-    if (channel.events.length >= MAX_EVENTS_PER_CHANNEL) channel.events.shift();
-    channel.events.push(event);
-    return true;
-  }
-
-  resolve(requestId: string, outcome: ExecutionOutcome): boolean {
-    const channel = this.channels.get(requestId);
-    if (!channel) return false;
-    channel.outcome = outcome;
-    for (const waiter of channel.waiters.splice(0)) waiter(outcome);
-    return true;
-  }
-
-  status(requestId: string): { events: WorkerExecutionEvent[]; outcome?: ExecutionOutcome } | undefined {
-    const channel = this.channels.get(requestId);
-    if (!channel) return undefined;
-    return { events: channel.events, outcome: channel.outcome };
-  }
-
-  /** Resolves once the outcome arrives, or rejects on timeout. */
-  awaitOutcome(requestId: string, timeoutMs: number): Promise<ExecutionOutcome> {
-    const channel = this.channels.get(requestId);
-    if (!channel) return Promise.reject(new Error(`unknown request '${requestId}'`));
-    if (channel.outcome) return Promise.resolve(channel.outcome);
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('timed out waiting for worker result')), timeoutMs);
-      channel.waiters.push((outcome) => {
-        clearTimeout(timer);
-        resolve(outcome);
+  async dispatch(computerId: string, request: WorkerExecutionRequest): Promise<{ ok: true } | { ok: false; reason: string }> {
+    await this.ready;
+    await this.refresh();
+    if ([...this.records.values()].filter(r => r.computerId === computerId && !r.outcome).length >= MAX_QUEUED_PER_COMPUTER) {
+      return { ok: false, reason: 'RESOURCE_BUSY' };
+    }
+    try {
+      const record = await this.store.update!<DurableDispatch>(this.key(request.requestId), current => {
+        if (current) throw new Error('REQUEST_ALREADY_DISPATCHED');
+        return { computerId, request, events: [], attempt: 0 };
       });
-    });
+      this.records.set(request.requestId, record);
+      this.streams.get(computerId)?.write(`event: task\ndata: ${JSON.stringify(request)}\n\n`);
+      return { ok: true };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'REQUEST_ALREADY_DISPATCHED') return { ok: false, reason: error.message };
+      throw error;
+    }
   }
-
-  private writeTask(res: Response, request: WorkerExecutionRequest): void {
-    res.write(`event: task\ndata: ${JSON.stringify(request)}\n\n`);
+  async claim(id: string, computerId: string): Promise<{ token: string; expiresAt: number; leaseMs: number; attempt: number }> {
+    const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
+      if (!current || current.computerId !== computerId) throw new Error('UNKNOWN_DISPATCH');
+      if (current.outcome || (current.lease && current.lease.expiresAt > this.now())) throw new Error('RESOURCE_BUSY');
+      return { ...current, attempt: current.attempt + 1,
+        events: [...current.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), { executionId: current.request.executionId, type: 'lease_acquired' as const, at: new Date(this.now()), data: { attempt: current.attempt + 1 } }],
+        lease: { token: randomUUID(), expiresAt: this.now() + this.leaseMs } };
+    });
+    this.records.set(id, record);
+    return { ...record.lease!, attempt: record.attempt, leaseMs: this.leaseMs };
+  }
+  private validate(current: DurableDispatch | undefined, token: string): DurableDispatch {
+    if (!current || !token || current.lease?.token !== token || current.lease.expiresAt <= this.now()) throw new Error('LEASE_LOST');
+    return current;
+  }
+  async renew(id: string, token: string): Promise<void> {
+    const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
+      const r = this.validate(current, token);
+      if (r.outcome) throw new Error('EXECUTION_TERMINAL');
+      return { ...r, events: [...r.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), { executionId: r.request.executionId, type: 'lease_renewed' as const, at: new Date(this.now()), data: { attempt: r.attempt } }], lease: { token, expiresAt: this.now() + this.leaseMs } };
+    });
+    this.records.set(id, record);
+  }
+  async recordEvent(id: string, event: WorkerExecutionEvent, token: string): Promise<boolean> {
+    const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
+      const r = this.validate(current, token);
+      if (r.outcome) throw new Error('EXECUTION_TERMINAL');
+      if (event.executionId !== r.request.executionId) throw new Error('EXECUTION_MISMATCH');
+      return { ...r, events: [...r.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), event] };
+    });
+    this.records.set(id, record); return true;
+  }
+  async resolve(id: string, outcome: ExecutionOutcome, token: string): Promise<boolean> {
+    const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
+      const r = this.validate(current, token);
+      return r.outcome ? r : { ...r, outcome };
+    });
+    this.records.set(id, record); return true;
+  }
+  async assignments(): Promise<Array<{ id: string; modelId: string; computerId: string; runtimeId?: string }>> {
+    await this.refresh();
+    return [...this.records.values()].filter(r => !r.outcome).map(r => ({ id: r.request.executionId,
+      computerId: r.computerId, modelId: r.request.modelId, runtimeId: r.request.runtimeId }));
+  }
+  async status(id: string): Promise<{ events: WorkerExecutionEvent[]; outcome?: ExecutionOutcome } | undefined> {
+    const r = await this.store.get<DurableDispatch>(this.key(id));
+    return r ? { events: r.events, outcome: r.outcome } : undefined;
+  }
+  async awaitOutcome(id: string, timeoutMs: number): Promise<ExecutionOutcome> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const status = await this.status(id);
+      if (!status) throw new Error('UNKNOWN_DISPATCH');
+      if (status.outcome) return status.outcome;
+      await new Promise(resolve => setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now()))));
+    }
+    throw new Error('timed out waiting for worker result');
   }
 }
 
@@ -186,15 +183,19 @@ export interface ApiState {
   computers: ComputerRegistry;
   runtimes: RuntimeRegistry;
   models: ModelRegistry;
+  lifecycle: ModelLifecycleService;
   agents: AgentRegistry;
   tools: ToolRegistry;
   discovered: DiscoveredRuntime[];
   executions: Array<Record<string, unknown>>;
   dispatcher: TaskDispatcher;
+  store: KeyValueStore;
   auth: ApiAuth;
 }
 
 export interface ApiStateOptions {
+  workerLeaseMs?: number;
+  modelStartup?: Parameters<ModelLifecycleService['applyStartupPolicy']>[0];
   auth?: ApiAuthOptions;
   store?: KeyValueStore;
 }
@@ -207,7 +208,13 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     store: options.store,
   });
   await auth.init();
+  const store = options.store ?? new MemoryStore();
   const computers = new ComputerRegistry();
+  for (const entry of await store.list('computer/registration/')) {
+    const registration = entry.value as Parameters<ComputerRegistry['register']>[0];
+    computers.register({ ...registration, local: false });
+    computers.setOffline(registration.id);
+  }
   const runtimes = new RuntimeRegistry();
   const models = new ModelRegistry();
   const agents = new AgentRegistry();
@@ -231,6 +238,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     hardware: hardware.hardware,
     capabilities: ['localExecution'],
   });
+  computers.heartbeat(localId, { load: currentLoad() });
   // The in-process computer holds a token nobody else knows, so a network
   // peer cannot re-register `local` and take over its record (F-3).
   auth.issueComputerToken(localId);
@@ -245,6 +253,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
       computerId: localId,
       capabilities: discoveredRuntime.capabilities,
     });
+    runtimes.update(discoveredRuntime.id, { health: discoveredRuntime.health });
 
     if (discoveredRuntime.health !== 'unavailable') {
       for (const discoveredModel of discoveredRuntime.models) {
@@ -277,7 +286,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
            runtimeModelId: discoveredModel.id,
            loaded: false,
            health: discoveredRuntime.health === 'healthy' ? 'healthy' : 'degraded',
-           contextTokens: discoveredModel.contextWindow ?? 32768,
+           state: 'INSTALLED',
          });
       }
     }
@@ -285,15 +294,32 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
 
   agents.register(createCodingAgent(), 'native');
 
+  const dispatcher = new TaskDispatcher(store, Date.now, options.workerLeaseMs);
+  await dispatcher.ready;
+  const lifecycle = new ModelLifecycleService({
+    models, runtimes, computers,
+    queuedAssignments: () => dispatcher.assignments(),
+    adapters: new Map(discovered.map(runtime => [runtime.id, runtime.adapter])),
+    store: options.store,
+    refreshResources: async computerId => {
+      if (computerId === localId) computers.heartbeat(localId, { load: currentLoad() });
+    },
+  });
+  await lifecycle.discoverAndReconcile();
+  await lifecycle.applyStartupPolicy(options.modelStartup);
+  lifecycle.startReconciliation();
+
   return {
     computers,
     runtimes,
     models,
+    lifecycle,
     agents,
     tools,
     discovered,
     executions: [],
-    dispatcher: new TaskDispatcher(),
+    dispatcher,
+    store,
     auth,
   };
 }
@@ -303,6 +329,15 @@ function recordExecution(state: ApiState, record: Record<string, unknown>): void
   if (state.executions.length > MAX_EXECUTION_RECORDS) {
     state.executions.splice(0, state.executions.length - MAX_EXECUTION_RECORDS);
   }
+}
+
+function lifecycleError(res: Response, error: unknown): void {
+  if (error instanceof ModelLifecycleError) {
+    res.status(error.code === 'MODEL_NOT_INSTALLED' ? 404 : 409)
+      .json({ code: error.code, reasons: error.reasons, plan: error.plan });
+    return;
+  }
+  res.status(500).json({ code: 'MODEL_LIFECYCLE_FAILED' });
 }
 
 /** Coerces a worker-reported outcome into the shape the CLI feeds back into the agent loop. */
@@ -456,13 +491,44 @@ export function createApp(state: ApiState) {
   });
 
   app.get('/api/v1/models', (_req, res) => {
-    res.json({ models: state.models.list() });
+    res.json({ models: state.models.list(), installations: state.models.listInstallations(),
+      instances: state.lifecycle.list(), readiness: state.lifecycle.getReadiness(),
+      resources: state.computers.list().map(computer => state.computers.resourceSnapshot(computer.id)) });
   });
 
   // Which computer/runtime combinations can actually serve which model — a
   // remote scheduler needs this (not just the model catalog) to place a task.
   app.get('/api/v1/model-instances', (_req, res) => {
-    res.json({ instances: state.models.listInstances() });
+    res.json({ instances: state.lifecycle.list() });
+  });
+
+  app.get('/api/v1/models/:id/inspect', (req, res) => {
+    res.json(state.lifecycle.inspect(String(req.params.id)));
+  });
+  app.post('/api/v1/models/reconcile', auth.requireOperator, async (_req, res) => {
+    res.json(await state.lifecycle.reconcile());
+  });
+  app.post('/api/v1/models/:id/estimate', auth.requireOperator, async (req, res) => {
+    try { res.json(await state.lifecycle.estimate(String(req.params.id), req.body ?? {})); }
+    catch (error) { lifecycleError(res, error); }
+  });
+  app.post('/api/v1/models/:id/load', auth.requireOperator, async (req, res) => {
+    try { res.json(await state.lifecycle.load(String(req.params.id), req.body ?? {})); }
+    catch (error) { lifecycleError(res, error); }
+  });
+  app.post('/api/v1/models/:id/unload', auth.requireOperator, async (req, res) => {
+    try { await state.lifecycle.unload(String(req.params.id), req.body ?? {}); res.json({ state: 'UNLOADED' }); }
+    catch (error) { lifecycleError(res, error); }
+  });
+  for (const operation of ['pin', 'unpin'] as const) {
+    app.post(`/api/v1/models/:id/${operation}`, auth.requireOperator, async (req, res) => {
+      try { await state.lifecycle[operation](String(req.params.id), req.body ?? {}); res.json({ ok: true }); }
+      catch (error) { lifecycleError(res, error); }
+    });
+  }
+
+  app.get('/api/v1/agents/capabilities', (_req, res) => {
+    res.json({ capabilities: state.agents.catalog() });
   });
 
   app.get('/api/v1/agents', (_req, res) => {
@@ -497,7 +563,7 @@ export function createApp(state: ApiState) {
   // registration token (a worker restarting without persisted state). An
   // unauthenticated peer can therefore never overwrite a live worker's
   // record or take over its task stream (F-1, F-3).
-  app.post('/computers/register', (req, res) => {
+  app.post('/computers/register', async (req, res) => {
     const registration = req.body as Parameters<ComputerRegistry['register']>[0] & { token?: unknown };
     if (!registration?.id || typeof registration.id !== 'string') {
       res.status(400).json({ error: 'registration.id is required' });
@@ -527,6 +593,7 @@ export function createApp(state: ApiState) {
     // Anything registering over HTTP is by definition not this process;
     // `local` is derived from the transport, never trusted from the payload
     // (F-15) — otherwise a `localOnly` task could be routed off-machine.
+    await state.store.put(`computer/registration/${registration.id}`, { ...registration, local: false });
     const computer = state.computers.register({ ...registration, local: false });
     let token: string;
     if (byComputerToken && !preferred) {
@@ -558,7 +625,7 @@ export function createApp(state: ApiState) {
   // Worker task-pull loop: a worker holds this SSE connection open and receives
   // dispatched WorkerExecutionRequests as `event: task` frames. This is the
   // channel that lets the control plane push work to a remote worker.
-  app.get('/computers/:id/tasks/stream', auth.requireComputer, (req, res) => {
+  app.get('/computers/:id/tasks/stream', auth.requireComputer, async (req, res) => {
     const computerId = String(req.params.id);
     if (!state.computers.get(computerId)) {
       res.status(404).json({ error: `computer '${computerId}' unknown — register first` });
@@ -570,9 +637,9 @@ export function createApp(state: ApiState) {
       Connection: 'keep-alive',
     });
     res.flushHeaders?.();
-    state.dispatcher.subscribe(computerId, res);
+    await state.dispatcher.subscribe(computerId, res);
 
-    const keepAlive = setInterval(() => res.write(': ping\n\n'), 15_000);
+    const keepAlive = setInterval(() => { res.write(': ping\n\n'); void state.dispatcher.redeliver().catch(() => undefined); }, 5_000);
     req.on('close', () => {
       clearInterval(keepAlive);
       state.dispatcher.unsubscribe(computerId, res);
@@ -596,7 +663,11 @@ export function createApp(state: ApiState) {
       res.status(400).json({ error: 'request.requestId must be 1-256 characters of [A-Za-z0-9._-]' });
       return;
     }
-    const dispatched = state.dispatcher.dispatch(computerId, request);
+    if (state.models.instancesOf(request.modelId).some(i => i.computerId === computerId &&
+        (!request.runtimeId || i.runtimeId === request.runtimeId) && ['DRAINING', 'UNLOADING'].includes(i.state ?? ''))) {
+      res.status(409).json({ error: 'MODEL_DRAINING' }); return;
+    }
+    const dispatched = await state.dispatcher.dispatch(computerId, request);
     if (dispatched.ok === false) {
       res.status(429).json({ error: dispatched.reason, requestId: request.requestId });
       return;
@@ -616,8 +687,8 @@ export function createApp(state: ApiState) {
     }
   });
 
-  app.get('/api/v1/tasks/:requestId/status', (req, res) => {
-    const status = state.dispatcher.status(req.params.requestId);
+  app.get('/api/v1/tasks/:requestId/status', async (req, res) => {
+    const status = await state.dispatcher.status(req.params.requestId);
     if (!status) {
       res.status(404).json({ error: `request '${req.params.requestId}' unknown` });
       return;
@@ -628,10 +699,10 @@ export function createApp(state: ApiState) {
   // Only the computer a request was dispatched to may report on it. The
   // result is fed straight back into the operator's agent loop as the model
   // reply, so a forged outcome from any other peer is code execution (F-2).
-  const requireChannelOwner = (req: express.Request, res: Response): boolean => {
+  const requireChannelOwner = async (req: express.Request, res: Response): Promise<boolean> => {
     const requestId = String(req.params.requestId);
     const computerId = String(req.params.id);
-    const owner = state.dispatcher.ownerOf(requestId);
+    const owner = await state.dispatcher.owner(requestId);
     if (owner === undefined) {
       res.status(404).json({ error: `request '${requestId}' unknown` });
       return false;
@@ -644,29 +715,42 @@ export function createApp(state: ApiState) {
     return true;
   };
 
+  for (const operation of ['claim', 'renew'] as const) {
+    app.post(`/computers/:id/executions/:requestId/${operation}`, auth.requireComputer, async (req, res) => {
+      if (!await requireChannelOwner(req, res)) return;
+      try {
+        if (operation === 'claim') res.json(await state.dispatcher.claim(String(req.params.requestId), String(req.params.id)));
+        else { await state.dispatcher.renew(String(req.params.requestId), String(req.body?.leaseToken ?? '')); res.json({ ok: true }); }
+      } catch (error) { res.status(409).json({ error: (error as Error).message }); }
+    });
+  }
+
   // Worker → control plane: stream a lifecycle event for a dispatched request.
-  app.post('/computers/:id/executions/:requestId/events', auth.requireComputer, (req, res) => {
-    if (!requireChannelOwner(req, res)) return;
+  app.post('/computers/:id/executions/:requestId/events', auth.requireComputer, async (req, res) => {
+    if (!await requireChannelOwner(req, res)) return;
     const event: WorkerExecutionEvent = {
       executionId: String(req.body?.executionId ?? ''),
       type: (req.body?.type as WorkerEventType) ?? 'started',
       data: req.body?.data,
       at: new Date(),
     };
-    state.dispatcher.recordEvent(String(req.params.requestId), event);
+    try { await state.dispatcher.recordEvent(String(req.params.requestId), event, String(req.body?.leaseToken ?? '')); }
+    catch (error) { res.status(409).json({ error: (error as Error).message }); return; }
     res.json({ ok: true });
   });
 
   // Worker → control plane: final outcome of a dispatched request.
-  app.post('/computers/:id/executions/:requestId/result', auth.requireComputer, (req, res) => {
-    if (!requireChannelOwner(req, res)) return;
+  app.post('/computers/:id/executions/:requestId/result', auth.requireComputer, async (req, res) => {
+    if (!await requireChannelOwner(req, res)) return;
     const outcome = parseOutcome(req.body);
     if (!outcome) {
       res.status(400).json({ error: 'outcome must include boolean `ok` and string `output`' });
       return;
     }
     const requestId = String(req.params.requestId);
-    const known = state.dispatcher.resolve(requestId, outcome);
+    let known: boolean;
+    try { known = await state.dispatcher.resolve(requestId, outcome, String(req.body?.leaseToken ?? '')); }
+    catch (error) { res.status(409).json({ error: (error as Error).message }); return; }
     if (!known) {
       res.status(404).json({ error: `request '${requestId}' unknown` });
       return;

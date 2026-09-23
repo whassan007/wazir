@@ -48,13 +48,13 @@ function discoverCpu(): string {
 
 async function discoverGpu(): Promise<GPUInfo | undefined> {
   try {
-    if (process.platform === 'darwin') {
+    if (process.platform === 'darwin' && process.arch === 'arm64') {
       // Apple Silicon: unified memory is shared with the GPU
       const totalGB = Math.round(os.totalmem() / (1024 ** 3));
       return {
         vendor: 'apple',
         model: 'Apple GPU (unified memory)',
-        memoryGB: Math.ceil(totalGB / 2),
+        memoryGB: totalGB,
         unifiedMemory: true,
       };
     }
@@ -64,10 +64,17 @@ async function discoverGpu(): Promise<GPUInfo | undefined> {
       }).toString().trim();
       if (info) {
         const [model, memoryMB] = info.split(',').map((part) => part.trim());
+        const dedicatedMiB = Number.parseFloat(memoryMB ?? '');
+        const report = !Number.isFinite(dedicatedMiB)
+          ? execSync('nvidia-smi -q', { timeout: 5000 }).toString() : '';
+        // ATS alone can coexist with discrete memory. Require absent framebuffer
+        // capacity and a coherent CPU/GPU link before treating the pool as shared.
+        const unifiedMemory = !Number.isFinite(dedicatedMiB) && /Addressing Mode\s*:\s*ATS/.test(report) && /GPU C2C Mode\s*:\s*Enabled/.test(report);
         return {
           vendor: 'nvidia',
           model: model ?? 'NVIDIA GPU',
-          memoryGB: Math.max(1, Math.round(parseInt(memoryMB ?? '0', 10) / 1024)),
+          memoryGB: unifiedMemory ? os.totalmem() / 1024 ** 3 : Number.isFinite(dedicatedMiB) ? dedicatedMiB / 1024 : 0,
+          unifiedMemory,
           cuda: true,
         };
       }
@@ -82,6 +89,9 @@ export function currentLoad(): {
   cpuPercent: number;
   memoryUsedGB: number;
   memoryAvailableGB: number;
+  gpuMemoryAvailableGB?: number;
+  gpuMemoryUsedGB?: number;
+  gpuUtilizationPercent?: number;
 } {
   const cpus = os.cpus();
   let idle = 0;
@@ -93,7 +103,17 @@ export function currentLoad(): {
   const cpuPercent = total > 0 ? Math.round(100 * (1 - idle / total)) : 0;
   const totalGB = Math.round(os.totalmem() / (1024 ** 3) * 10) / 10;
   const freeGB = Math.round(os.freemem() / (1024 ** 3) * 10) / 10;
+  let gpu: { gpuMemoryAvailableGB?: number; gpuMemoryUsedGB?: number; gpuUtilizationPercent?: number } = {};
+  if (process.platform === 'linux' || process.platform === 'win32') {
+    try {
+      const values = execSync('nvidia-smi --query-gpu=memory.free,memory.used,utilization.gpu --format=csv,noheader,nounits', { timeout: 3000 }).toString().trim().split('\n')[0].split(',').map(Number);
+      if (Number.isFinite(values[0])) gpu.gpuMemoryAvailableGB = values[0] / 1024;
+      if (Number.isFinite(values[1])) gpu.gpuMemoryUsedGB = values[1] / 1024;
+      if (Number.isFinite(values[2])) gpu.gpuUtilizationPercent = values[2];
+    } catch { /* Unknown GPU availability must not become zero or total capacity. */ }
+  }
   return {
+    ...gpu,
     cpuPercent,
     memoryUsedGB: Math.max(0, Math.round((totalGB - freeGB) * 10) / 10),
     memoryAvailableGB: freeGB,

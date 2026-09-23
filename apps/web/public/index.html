@@ -746,6 +746,7 @@
         <div class="section-meta"><span class="tag" id="updated-models">—</span></div>
       </div>
       <div class="inline-error" id="error-models"></div>
+      <div class="card"><div class="table-scroll" id="model-capacity"><div class="empty">loading capacity…</div></div></div>
       <div class="card"><div class="table-scroll" id="models"><div class="empty">loading…</div></div></div>
     </section>
 
@@ -1163,18 +1164,32 @@ function renderRuntimes(data) {
 }
 
 function renderModels(data) {
-  const list = data.models ?? [];
+  const gib = bytes => bytes === undefined || bytes === null ? 'unknown' : `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  $('model-capacity').innerHTML = table(
+    ['computer', 'total memory', 'available memory', 'GPU memory', 'memory type', 'reservations', 'observed'],
+    (data.resources ?? []).map(resource => [esc(resource.computerId), gib(resource.totalMemoryBytes), gib(resource.availableMemoryBytes),
+      resource.unifiedMemory ? 'shared' : gib(resource.availableVramBytes), resource.unifiedMemory ? 'unified' : 'discrete',
+      String(resource.activeReservations?.length ?? 0), timeAgo(resource.observedAt)]),
+  );
+  const list = data.instances ?? [];
+  const installations = data.installations ?? [];
+  const known = new Map((data.models ?? []).map(model => [model.id, model]));
   $('models').innerHTML = table(
-    ['id', 'provider', 'context', 'toolCalling', 'reasoning', 'vision'],
-    list.map((m) => [
-      monoId(m.id),
-      esc(m.provider),
-      `${m.contextMax ?? '—'}`,
-      badge(m.toolCalling ? 'yes' : 'no', 'yes', 'no'),
-      badge(m.reasoning ? 'yes' : 'no', 'yes', 'no'),
-      badge(m.vision ? 'yes' : 'no', 'yes', 'no'),
+    ['model', 'computer', 'runtime', 'installed', 'loaded', 'ready', 'state', 'context', 'pin', 'actions'],
+    list.map((instance) => [
+      monoId(instance.modelId),
+      esc(instance.computerId ?? '—'),
+      esc(instance.runtimeId),
+      badge(installations.some(i => i.modelId === instance.modelId && i.computerId === instance.computerId && i.runtimeId === instance.runtimeId && i.installed) ? 'yes' : 'no', 'yes', 'no'),
+      badge(instance.loaded ? 'yes' : 'no', 'yes', 'no'),
+      badge(instance.state === 'READY' ? 'yes' : 'no', 'yes', 'no'),
+      badge(instance.state ?? 'DISCOVERED', 'READY', 'FAILED|UNAVAILABLE'),
+      `${instance.contextTokens ?? '—'} / ${known.get(instance.modelId)?.contextMax ?? '—'}`,
+      badge(instance.pinned ? 'yes' : 'no', 'yes', 'no'),
+      `<button class="model-action" data-operation="${instance.loaded ? 'unload' : 'load'}" data-model-id="${esc(instance.modelId)}" data-computer-id="${esc(instance.computerId ?? '')}" data-runtime-id="${esc(instance.runtimeId)}">${instance.loaded ? 'Unload' : 'Load'}</button> ` +
+      `<button class="model-action" data-operation="${instance.pinned ? 'unpin' : 'pin'}" data-model-id="${esc(instance.modelId)}" data-computer-id="${esc(instance.computerId ?? '')}" data-runtime-id="${esc(instance.runtimeId)}">${instance.pinned ? 'Unpin' : 'Pin'}</button>`,
     ]),
-    [2],
+    [7],
   );
   updateTabBadges();
 }
@@ -1543,6 +1558,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Delegated Clicks for Links (No inline onclick for security)
   document.addEventListener('click', (e) => {
+    const modelAction = e.target.closest('.model-action');
+    if (modelAction) {
+      const { operation, modelId, computerId, runtimeId } = modelAction.dataset;
+      if (!['load', 'unload', 'pin', 'unpin'].includes(operation)) return;
+      modelAction.disabled = true;
+      fetch(`/api/v1/models/${encodeURIComponent(modelId)}/${operation}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ computerId, runtimeId }),
+      }).then(async response => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(`${result.code ?? 'MODEL_LIFECYCLE_FAILED'}: ${(result.reasons ?? []).join(', ')}`);
+        await load();
+      }).catch(error => {
+        const banner = $('error-models');
+        banner.textContent = error.message;
+        banner.style.display = 'block';
+        modelAction.disabled = false;
+      });
+      return;
+    }
     const execLink = e.target.closest('.view-execution-link');
     if (execLink) {
       e.preventDefault();

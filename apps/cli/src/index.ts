@@ -90,8 +90,10 @@ const modelsCmd = new Command()
   .description('Manage AI models');
 
 modelsCmd
-  .command('list')
+  .command('list', { isDefault: true })
   .description('List available models')
+  .option('--computer <id>', 'Target computer')
+  .option('--runtime <id>', 'Target runtime')
   .option('--json', 'Output in JSON format')
   .action(async (options) => {
     const { createEngine } = await import('./engine.js');
@@ -103,6 +105,8 @@ modelsCmd
 modelsCmd
   .command('loaded')
   .description('List resident/loaded models in memory')
+  .option('--computer <id>', 'Target computer')
+  .option('--runtime <id>', 'Target runtime')
   .option('--json', 'Output in JSON format')
   .action(async (options) => {
     const { createEngine } = await import('./engine.js');
@@ -114,6 +118,8 @@ modelsCmd
 modelsCmd
   .command('discover')
   .description('Discover and reconcile runtimes and installed models')
+  .option('--computer <id>', 'Target computer')
+  .option('--runtime <id>', 'Target runtime')
   .option('--json', 'Output in JSON format')
   .action(async (options) => {
     const { createEngine } = await import('./engine.js');
@@ -125,11 +131,17 @@ modelsCmd
 modelsCmd
   .command('load <modelId>')
   .description('Load an installed model into memory')
-  .option('--wait', 'Wait for residency verification')
+  .option('--context <tokens>', 'Context tokens, 128k, auto, or max-safe')
+  .option('--fit', 'Allow explicit context downshift')
+  .option('--evict', 'Allow safe idle model eviction')
+  .option('--dry-run', 'Plan without runtime mutation')
+  .option('--wait', 'Wait for readiness verification')
+  .option('--computer <id>', 'Target computer')
+  .option('--runtime <id>', 'Target runtime')
   .option('--json', 'Output in JSON format')
   .action(async (modelId, options) => {
     const { createEngine } = await import('./engine.js');
-    const engine = await createEngine();
+    const engine = await createEngine({ readOnlyLifecycle: !!options.dryRun });
     const { loadModelCommand } = await import('./commands.js');
     const result = await loadModelCommand(engine, modelId, options);
     console.log(result.message);
@@ -139,6 +151,9 @@ modelsCmd
 modelsCmd
   .command('unload <modelId>')
   .description('Unload a resident model from memory')
+  .option('--drain', 'Block new assignments and wait for existing executions')
+  .option('--computer <id>', 'Target computer')
+  .option('--runtime <id>', 'Target runtime')
   .option('--json', 'Output in JSON format')
   .action(async (modelId, options) => {
     const { createEngine } = await import('./engine.js');
@@ -161,6 +176,31 @@ modelsCmd
     await tui.start();
     await tui.waitForExit();
   });
+
+for (const operation of ['inspect', 'estimate', 'pin', 'unpin'] as const) {
+  modelsCmd.command(`${operation} <modelId>`)
+    .option('--computer <id>', 'Target computer').option('--runtime <id>', 'Target runtime')
+    .option('--context <tokens>', 'Context tokens, auto, or max-safe').option('--fit', 'Allow fitting')
+    .option('--json', 'JSON output')
+    .action(async (modelId, options) => {
+      const { createEngine } = await import('./engine.js');
+      const { lifecycleOptions, formatModelLoadPlan } = await import('./commands.js');
+      const engine = await createEngine({ readOnlyLifecycle: true });
+      if (operation === 'inspect') console.log(JSON.stringify(engine.lifecycle.inspect(modelId), null, 2));
+      else if (operation === 'estimate') {
+        const plan = await engine.lifecycle.estimate(modelId, lifecycleOptions(options));
+        console.log(options.json ? JSON.stringify(plan, null, 2) : formatModelLoadPlan(plan));
+      } else {
+        await engine.lifecycle[operation](modelId, lifecycleOptions(options));
+        console.log(options.json ? JSON.stringify({ ok: true, modelId, pinned: operation === 'pin' }) : `${modelId}: ${operation}`);
+      }
+    });
+}
+modelsCmd.command('reconcile').option('--json', 'JSON output').action(async () => {
+  const { createEngine } = await import('./engine.js');
+  const engine = await createEngine({ readOnlyLifecycle: true });
+  console.log(JSON.stringify(await engine.lifecycle.reconcile(), null, 2));
+});
 
 program.addCommand(modelsCmd);
 
@@ -519,6 +559,15 @@ agentsCmd
     console.log(listAgents(engine));
   });
 
+agentsCmd.command('capabilities').description('List registered agent capabilities and their providers')
+  .option('--json', 'Output JSON')
+  .action(async (options: { json?: boolean }) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const catalog = engine.agents.catalog();
+    console.log(options.json ? JSON.stringify({ capabilities: catalog }) : catalog.map(entry => `${entry.capability}: ${entry.agents.join(', ')}`).join('\n'));
+  });
+
 program.addCommand(agentsCmd);
 
 // tools command
@@ -793,6 +842,24 @@ jobsCmd
     const engine = await createEngine();
     const { mergeJob } = await import('./commands.js');
     console.log(await mergeJob(engine, id, options.target));
+  });
+
+jobsCmd.command('resume <id>').description('Resume a persisted job after its owner lease expires')
+  .action(async (id: string) => {
+    const { createEngine } = await import('./engine.js');
+    const { createFleetTaskExecutor } = await import('./fleetRunner.js');
+    const engine = await createEngine();
+    const job = await engine.orchestrator.runJob(id, { taskExecutor: createFleetTaskExecutor(engine) });
+    console.log(JSON.stringify({ jobId: job.id, status: job.status }));
+    if (job.status !== 'completed') process.exitCode = 1;
+  });
+
+jobsCmd.command('recover').description('Recover persisted pending or interrupted graphs; leave live owners and paused jobs alone')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const { createFleetTaskExecutor } = await import('./fleetRunner.js');
+    const engine = await createEngine();
+    console.log(JSON.stringify(await engine.orchestrator.recoverJobs({ taskExecutor: createFleetTaskExecutor(engine) })));
   });
 
 program.addCommand(jobsCmd);

@@ -7,6 +7,7 @@ export interface StoreEntry {
 }
 
 export interface KeyValueStore {
+  update?<T>(key: string, mutate: (current: T | undefined) => T): Promise<T>;
   put(key: string, value: unknown): Promise<void>;
   get<T>(key: string): Promise<T | undefined>;
   list(prefix: string): Promise<StoreEntry[]>;
@@ -91,18 +92,21 @@ async function ensurePrivateDir(dir: string): Promise<void> {
 export class MemoryStore implements KeyValueStore {
   private data = new Map<string, unknown>();
 
+  async update<T>(key: string, mutate: (current: T | undefined) => T): Promise<T> {
+    const value = mutate(structuredClone(this.data.get(key)) as T | undefined); this.data.set(key, structuredClone(value)); return structuredClone(value);
+  }
   async put(key: string, value: unknown): Promise<void> {
-    this.data.set(key, value);
+    this.data.set(key, structuredClone(value));
   }
 
   async get<T>(key: string): Promise<T | undefined> {
-    return this.data.get(key) as T | undefined;
+    return structuredClone(this.data.get(key)) as T | undefined;
   }
 
   async list(prefix: string): Promise<StoreEntry[]> {
     return Array.from(this.data.entries())
       .filter(([key]) => key.startsWith(prefix))
-      .map(([key, value]) => ({ key, value }));
+      .map(([key, value]) => ({ key, value: structuredClone(value) }));
   }
 
   async delete(key: string): Promise<void> {
@@ -235,17 +239,22 @@ export class JsonFileStore implements KeyValueStore {
     });
   }
 
+  async update<T>(key: string, mutate: (current: T | undefined) => T): Promise<T> {
+    let value!: T;
+    await this.withLock(() => { value = mutate(this.data.get(key) as T | undefined); this.data.set(key, value); });
+    return value;
+  }
   async put(key: string, value: unknown): Promise<void> {
     await this.withLock(() => this.data.set(key, value));
   }
 
   async get<T>(key: string): Promise<T | undefined> {
-    await this.ensureLoaded();
+    await this.reloadFromDisk();
     return this.data.get(key) as T | undefined;
   }
 
   async list(prefix: string): Promise<StoreEntry[]> {
-    await this.ensureLoaded();
+    await this.reloadFromDisk();
     return Array.from(this.data.entries())
       .filter(([key]) => key.startsWith(prefix))
       .map(([key, value]) => ({ key, value }));

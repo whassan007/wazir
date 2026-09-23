@@ -3,7 +3,7 @@ import { TerminalSession, type ReadinessTier } from './terminalSession.js';
 
 const sessions = new Map<string, TerminalSession>();
 
-function require(sessionId: string): TerminalSession {
+function getSession(sessionId: string): TerminalSession {
   const session = sessions.get(sessionId);
   if (!session) throw new Error(`No open terminal session '${sessionId}'`);
   return session;
@@ -80,7 +80,7 @@ export const terminalSendTool: Tool = {
     const started = Date.now();
     const sessionId = String(input.sessionId ?? '');
     try {
-      const session = require(sessionId);
+      const session = getSession(sessionId);
       const result = await session.send(String(input.input ?? ''), {
         newline: input.rawKeys !== true,
         maxWaitMs: typeof input.maxWaitMs === 'number' ? input.maxWaitMs : undefined,

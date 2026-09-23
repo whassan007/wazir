@@ -30,6 +30,18 @@ export class AgentRegistry {
     return [...this.agents].sort((a, b) => a.descriptor.name.localeCompare(b.descriptor.name));
   }
 
+  /** Capability catalog is a projection of the existing registry, never a second registry. */
+  catalog(): Array<{ capability: string; agents: string[] }> {
+    const capabilities = new Map<string, string[]>();
+    for (const { descriptor } of this.list()) {
+      for (const capability of new Set(descriptor.capabilities)) {
+        capabilities.set(capability, [...(capabilities.get(capability) ?? []), descriptor.name]);
+      }
+    }
+    return [...capabilities].sort(([a], [b]) => a.localeCompare(b))
+      .map(([capability, agents]) => ({ capability, agents }));
+  }
+
   /**
    * Deterministic agent selection:
    * 1. explicit preference (task.execution.targetAgentId) — hard requirement, no fallback
@@ -38,9 +50,10 @@ export class AgentRegistry {
    * 4. otherwise an explicit error (no silent default agent)
    */
   resolveForTask(task: Task): AgentResolution {
-    const sorted = this.list();
+    const requiredSkills = task.requirements.agentCapabilities ?? [];
+    const sorted = this.list().filter(a => requiredSkills.every(skill => a.descriptor.capabilities.includes(skill)));
     if (sorted.length === 0) {
-      throw new Error('No agents are registered');
+      throw new Error(requiredSkills.length ? `AGENT_CAPABILITY_UNAVAILABLE: ${requiredSkills.join(', ')}` : 'No agents are registered');
     }
 
     const preferred = task.execution?.targetAgentId;
@@ -48,6 +61,9 @@ export class AgentRegistry {
       const agent = this.adapters.get(preferred);
       if (!agent) {
         throw new Error(`Requested agent '${preferred}' is not registered`);
+      }
+      if (!requiredSkills.every(skill => agent.descriptor.capabilities.includes(skill))) {
+        throw new Error(`AGENT_CAPABILITY_UNAVAILABLE: ${preferred}`);
       }
       return { agent, reasons: [`explicitly requested agent '${preferred}'`] };
     }

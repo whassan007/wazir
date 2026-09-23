@@ -144,6 +144,8 @@ export type ExecutionEventType =
   | 'policy.decision'
   | 'agent.phase'
   | 'agent.turn'
+  | 'model.lifecycle'
+  | 'WAITING_FOR_MODEL'
   | 'model.loading'
   | 'model.loaded'
   | 'generation.started'

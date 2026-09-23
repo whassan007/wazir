@@ -1,3 +1,4 @@
+import { ModelLifecycleError, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,102 +37,62 @@ export function listAgents(engine: RookEngine): string {
   );
 }
 
-export function listModels(engine: RookEngine, options: { json?: boolean } = {}): string {
-  const models = engine.models.list();
-  if (options.json) {
-    return JSON.stringify(
-      models.map((m) => {
-        const state = engine.lifecycle.getModelState(m.id);
-        const instances = engine.models.instancesOf(m.id);
-        return {
-          id: m.id,
-          name: m.name,
-          provider: m.provider,
-          family: m.family,
-          state,
-          contextMax: m.contextMax,
-          toolCalling: m.toolCalling,
-          reasoning: m.reasoning,
-          instances: instances.map((i) => ({
-            id: i.id,
-            runtimeId: i.runtimeId,
-            loaded: i.loaded,
-            state: i.state,
-            health: i.health,
-          })),
-        };
-      }),
-      null,
-      2,
-    );
-  }
-
-  if (models.length === 0) {
-    const lines = [color.yellow('no models registered')];
-    for (const runtime of engine.discovered) {
-      if (runtime.health === 'unavailable') {
-        lines.push(color.gray(`  ${runtime.id}: unreachable — ${runtime.healthMessage ?? 'unknown error'}`));
-      } else if (runtime.models.length === 0) {
-        lines.push(color.gray(`  ${runtime.id}: connected, but no models loaded — load a model first`));
-      }
-    }
-    if (lines.length === 1) {
-      lines.push(color.gray('  no runtimes configured — is Ollama / LM Studio running?'));
-    }
-    return lines.join('\n');
-  }
-  const rows = models.map((m) => {
-    const instances = engine.models.instancesOf(m.id);
-    const state = engine.lifecycle.getModelState(m.id);
-    let stateLabel: string = state;
-    if (state === 'READY') stateLabel = color.green('READY');
-    else if (state === 'LOADING') stateLabel = color.yellow('LOADING');
-    else if (state === 'FAILED') stateLabel = color.red('FAILED');
-    else if (state === 'UNAVAILABLE') stateLabel = color.red('UNAVAIL');
-    else stateLabel = color.gray('INSTALLED');
-
-    return [
-      m.id,
-      m.provider,
-      m.family,
-      stateLabel,
-      String(m.contextMax),
-      m.toolCalling ? 'yes' : 'no',
-      m.reasoning ? 'yes' : 'no',
-      `${instances.length}`,
-    ];
+export function listModels(engine: RookEngine, options: { json?: boolean; computer?: string; runtime?: string } = {}): string {
+  const instances = engine.lifecycle.list().filter(i => (!options.computer || i.computerId === options.computer) && (!options.runtime || i.runtimeId === options.runtime));
+  if (options.json) return JSON.stringify(engine.models.list().map(m => ({ ...m, instances: instances.filter(i => i.modelId === m.id) })), null, 2);
+  const capacity = engine.computers.list().filter(c => !options.computer || c.id === options.computer).flatMap(c => {
+    const snapshot = engine.computers.resourceSnapshot(c.id);
+    return engine.runtimes.list().filter(r => r.computerId === c.id && (!options.runtime || r.id === options.runtime)).map(r => {
+      const rows = instances.filter(i => i.computerId === c.id && i.runtimeId === r.id);
+      return [c.name, `${gib(snapshot.totalMemoryBytes)} / ${gib(snapshot.availableMemoryBytes)} free`, r.name,
+        String(engine.models.listInstallations().filter(i => i.computerId === c.id && i.runtimeId === r.id && i.installed).length || rows.length),
+        String(rows.filter(i => i.loaded).length), String(rows.filter(i => i.state === 'READY').length)];
+    });
   });
-  return table(
-    ['model', 'provider', 'family', 'state', 'context', 'toolCalling', 'reasoning', 'instances'],
-    rows,
-  );
+  return ['WAZIR MODELS', '', 'Fleet Capacity', table(['COMPUTER', 'MEMORY', 'RUNTIME', 'INSTALLED', 'LOADED', 'READY'], capacity),
+    '', 'Models', table(['MODEL', 'COMPUTER', 'RUNTIME', 'STATE', 'CTX', 'PIN'], instances.map(i => [i.modelId, i.computerId ?? 'hosted', i.runtimeId,
+      i.state ?? (i.loaded ? 'LOADED' : 'INSTALLED'), i.contextTokens ? String(i.contextTokens) : '-', i.pinned ? 'yes' : 'no'])),
+    '', `Summary: Installed ${instances.length}  Loaded ${instances.filter(i => i.loaded).length}  Ready ${instances.filter(i => i.state === 'READY').length}  Loading ${instances.filter(i => i.state === 'LOADING').length}  Failed ${instances.filter(i => i.state === 'FAILED').length}`].join('\n');
+}
+function gib(bytes?: number): string { return bytes === undefined ? 'unknown' : `${(bytes / 1024 ** 3).toFixed(1)} GiB`; }
+export function listLoadedModels(engine: RookEngine, options: { json?: boolean; computer?: string; runtime?: string } = {}): string {
+  const rows = engine.lifecycle.list().filter(i => i.loaded && (!options.computer || options.computer === i.computerId) && (!options.runtime || options.runtime === i.runtimeId));
+  if (options.json) return JSON.stringify(rows, null, 2);
+  if (!rows.length) return 'No models are currently loaded in memory.';
+  return table(['MODEL', 'COMPUTER', 'RUNTIME', 'STATE', 'CTX', 'PIN'], rows.map(i => [i.modelId, i.computerId ?? 'hosted', i.runtimeId, i.state ?? 'LOADED', String(i.contextTokens ?? '-'), i.pinned ? 'yes' : 'no']));
 }
 
-export function listLoadedModels(engine: RookEngine, options: { json?: boolean } = {}): string {
-  const readyModels = engine.models.listReady();
-  if (options.json) {
-    return JSON.stringify(readyModels, null, 2);
+export interface LifecycleCommandOptions {
+  json?: boolean; wait?: boolean; computer?: string; runtime?: string; context?: string | number;
+  fit?: boolean; evict?: boolean; dryRun?: boolean; drain?: boolean;
+}
+export function lifecycleOptions(options: LifecycleCommandOptions): ModelLoadOptions {
+  const raw = options.context;
+  let context: number | undefined;
+  let mode: ModelLoadOptions['mode'] = 'AUTO';
+  if (raw !== undefined) {
+    if (String(raw).toLowerCase() === 'max-safe') mode = 'MAX_SAFE';
+    else if (String(raw).toLowerCase() !== 'auto') {
+      const match = String(raw).match(/^(\d+)(k)?$/i);
+      if (!match) throw new ModelLifecycleError('CONTEXT_TOO_LARGE', ['invalid --context']);
+      context = Number(match[1]) * (match[2] ? 1024 : 1); mode = 'EXPLICIT';
+      if (!Number.isSafeInteger(context) || context <= 0) throw new ModelLifecycleError('CONTEXT_TOO_LARGE');
+    }
   }
-  if (readyModels.length === 0) {
-    return color.yellow('No models are currently loaded in memory.');
-  }
-  const rows = readyModels.map((m) => {
-    const instances = engine.models.instancesOf(m.id);
-    return [
-      m.id,
-      m.provider,
-      m.family,
-      color.green('READY'),
-      String(m.contextMax),
-      m.toolCalling ? 'yes' : 'no',
-      m.reasoning ? 'yes' : 'no',
-      `${instances.length}`,
-    ];
-  });
-  return table(
-    ['model', 'provider', 'family', 'state', 'context', 'toolCalling', 'reasoning', 'instances'],
-    rows,
-  );
+  return { computerId: options.computer, runtimeId: options.runtime, context, mode, fit: options.fit,
+    evict: options.evict, dryRun: options.dryRun, initiator: 'cli', timeoutMs: options.wait ? 120_000 : undefined };
+}
+export function formatModelLoadPlan(plan: ModelLoadPlan): string {
+  const e = plan.estimate;
+  return ['MODEL LOAD PLAN', '', `Model               ${plan.modelId}`, `Target              ${plan.computerId} / ${plan.runtimeId}`,
+    '', 'Resources', `  Available         ${gib(e.currentlyAvailableMemory)}`, `  Safety reserve    ${gib(e.safetyReserve)}`, `  Usable            ${gib(e.usableMemory)}`,
+    '', 'Context', `  Requested         ${plan.requestedContext ?? 'AUTO'}`, `  Model maximum     ${plan.modelContextLimit ?? 'unknown'}`,
+    `  Runtime maximum   ${plan.runtimeContextLimit ?? 'unknown'}`, `  Machine safe      ${plan.machineSafeContext ?? 'unknown'}`, `  Selected          ${plan.effectiveContext}`,
+    ...(plan.contextReason ? [`  Reason            ${plan.contextReason}`] : []),
+    '', 'Estimate', `  Weights           ${gib(e.weightMemory)}`, `  Context           ${gib(e.contextMemory)}`, `  Runtime overhead  ${gib(e.runtimeOverhead)}`,
+    `  Total             ${gib(e.estimatedTotalMemory)}`, `  Source            ${e.estimateSource} (${e.confidence})`,
+    '', `Admission           ${plan.admissionDecision.status}`, ...plan.admissionDecision.reasons.map(r => `  ${r}`),
+    ...plan.modelsToEvict.map(v => `  Evict ${v.instanceId}: estimated reclaim ${gib(v.reclaimBytes)}`)].join('\n');
 }
 
 export async function discoverModelsCommand(engine: RookEngine, options: { json?: boolean } = {}): Promise<string> {
@@ -159,54 +120,28 @@ export async function discoverModelsCommand(engine: RookEngine, options: { json?
   return lines.join('\n');
 }
 
-export async function loadModelCommand(
-  engine: RookEngine,
-  modelId: string,
-  options: { wait?: boolean; json?: boolean } = {},
-): Promise<{ ok: boolean; message: string }> {
-  const record = engine.models.get(modelId);
-  if (!record) {
-    const msg = `Model '${modelId}' not found in registry. Run 'wa models list' or 'wa models discover'.`;
-    return { ok: false, message: options.json ? JSON.stringify({ ok: false, error: msg }) : color.red(msg) };
-  }
-
-  const ok = await engine.lifecycle.loadModel(modelId, { initiator: 'cli', timeoutMs: options.wait ? 60_000 : 25_000 });
-  if (ok) {
-    const assessment = engine.lifecycle.assessModelSync(modelId);
-    const msg = `Model '${modelId}' loaded successfully (state: READY, ~${assessment.estimatedMemoryGB.toFixed(1)} GB allocated).`;
-    return {
-      ok: true,
-      message: options.json ? JSON.stringify({ ok: true, modelId, state: 'READY', assessment }) : color.green(msg),
-    };
-  } else {
-    const instances = engine.models.instancesOf(modelId);
-    const err = instances[0]?.error ?? 'Load verification failed or timed out';
-    const msg = `Failed to load model '${modelId}': ${err}`;
-    return {
-      ok: false,
-      message: options.json ? JSON.stringify({ ok: false, modelId, state: 'FAILED', error: err }) : color.red(msg),
-    };
+export async function loadModelCommand(engine: RookEngine, modelId: string, options: LifecycleCommandOptions = {}): Promise<{ ok: boolean; message: string }> {
+  try {
+    const plan = await engine.lifecycle.load(modelId, lifecycleOptions(options));
+    const ok = plan.admissionDecision.status === 'ADMITTED';
+    return { ok, message: options.json ? JSON.stringify({ ok, dryRun: !!options.dryRun, plan }, null, 2)
+      : formatModelLoadPlan(plan) + (options.dryRun ? '\n\nDry run: no runtime mutation.' : '\n\nVerified context and health probe: READY') };
+  } catch (e) {
+    const code = e instanceof ModelLifecycleError ? e.code : 'RUNTIME_LOAD_FAILED';
+    const reasons = e instanceof ModelLifecycleError ? e.reasons : [];
+    const plan = e instanceof ModelLifecycleError ? e.plan : undefined;
+    return { ok: false, message: options.json ? JSON.stringify({ ok: false, code, reasons, plan }, null, 2)
+      : (plan ? formatModelLoadPlan(plan) + '\n\n' : '') + code + (reasons.length ? '\n' + reasons.join('\n') : '') +
+        (code === 'MODEL_ADMISSION_DENIED' ? '\nRuntime load was NOT attempted.' : '') };
   }
 }
-
-export async function unloadModelCommand(
-  engine: RookEngine,
-  modelId: string,
-  options: { json?: boolean } = {},
-): Promise<{ ok: boolean; message: string }> {
-  const ok = await engine.lifecycle.unloadModel(modelId, { initiator: 'cli' });
-  if (ok) {
-    const msg = `Model '${modelId}' unloaded successfully (state: INSTALLED).`;
-    return {
-      ok: true,
-      message: options.json ? JSON.stringify({ ok: true, modelId, state: 'INSTALLED' }) : color.green(msg),
-    };
-  } else {
-    const msg = `Failed to unload model '${modelId}'.`;
-    return {
-      ok: false,
-      message: options.json ? JSON.stringify({ ok: false, modelId, error: msg }) : color.red(msg),
-    };
+export async function unloadModelCommand(engine: RookEngine, modelId: string, options: LifecycleCommandOptions = {}): Promise<{ ok: boolean; message: string }> {
+  try {
+    await engine.lifecycle.unload(modelId, { ...lifecycleOptions(options), drain: options.drain });
+    return { ok: true, message: options.json ? JSON.stringify({ ok: true, modelId, state: 'UNLOADED' }) : `${modelId} unloaded successfully: UNLOADED` };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    return { ok: false, message: options.json ? JSON.stringify({ ok: false, error }) : error };
   }
 }
 

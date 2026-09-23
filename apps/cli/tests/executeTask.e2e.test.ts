@@ -8,6 +8,7 @@ import {
   ContextCompiler,
   ExecutionEngine,
   ModelRegistry,
+  ModelLifecycleService,
   PolicyEngine,
   RuntimeRegistry,
   Scheduler,
@@ -69,6 +70,8 @@ async function buildTestEngine(projectRoot: string, scriptedReplies?: string[]):
     },
   });
 
+  runtimes.update('fake', { health: 'healthy' });
+
   models.register({
     id: 'fake-model',
     name: 'fake-model',
@@ -94,6 +97,7 @@ async function buildTestEngine(projectRoot: string, scriptedReplies?: string[]):
     runtimeId: 'fake',
     runtimeModelId: 'fake-model',
     loaded: true,
+    state: 'READY',
     health: 'healthy',
     contextTokens: 32_768,
   });
@@ -107,6 +111,8 @@ async function buildTestEngine(projectRoot: string, scriptedReplies?: string[]):
   const fakeAdapter: RuntimeAdapter = {
     id: 'fake',
     type: 'other',
+    async inspectModel(modelId) { return { modelId, loaded: true, effectiveContext: 32768 }; },
+    async probeModel() { return true; },
     async discover() {
       return { id: 'fake', name: 'fake', version: '1.0' };
     },
@@ -159,6 +165,7 @@ async function buildTestEngine(projectRoot: string, scriptedReplies?: string[]):
     config: { modelContext: {}, modelCapabilities: {}, networkAllowed: false, allowCommands: [], denyCommands: [], allowedMcpServers: [] },
     projectRoot,
     configDir: path.join(projectRoot, '.wazir'),
+    lifecycle: new ModelLifecycleService({ models, runtimes, computers, executions, adapters: new Map([['fake', fakeAdapter]]) }),
     computers,
     runtimes,
     models,

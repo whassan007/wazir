@@ -63,6 +63,12 @@ function inferCapabilities(id: string): { toolCalling: boolean; reasoning: boole
   return { toolCalling, reasoning, vision };
 }
 
+interface NativeModel {
+  key: string; display_name?: string; max_context_length?: number; size_bytes?: number;
+  params_string?: string; architecture?: string; type?: string; quantization?: { name?: string };
+  capabilities?: { vision?: boolean; trained_for_tool_use?: boolean };
+  loaded_instances: Array<{ id: string; config: { context_length?: number } }>;
+}
 export class LMStudioAdapter implements RuntimeAdapter {
   readonly id = 'lmstudio';
   readonly type = 'lmstudio' as const;
@@ -116,6 +122,18 @@ export class LMStudioAdapter implements RuntimeAdapter {
     }
 
     try {
+      const installed = await this.nativeModels();
+      diagnostics.apiReachable = true;
+      diagnostics.serverRunning = true;
+      diagnostics.installedModels = installed.length;
+      diagnostics.loadedModels = installed.reduce((count, model) => count + model.loaded_instances.length, 0);
+      diagnostics.readyModels = diagnostics.loadedModels;
+      return { status: 'healthy', diagnostics };
+    } catch {
+      // Older LM Studio versions may expose only the compatibility endpoint.
+    }
+
+    try {
       if (diagnostics.cliAvailable) {
         const { stdout } = await execFileAsync(lmsBin, ['server', 'status'], { timeout: 3000 });
         if (/running/.test(stdout.toLowerCase())) {
@@ -141,9 +159,9 @@ export class LMStudioAdapter implements RuntimeAdapter {
       diagnostics.serverRunning = true; 
       
       const data = (await response.json()) as { data?: OpenAIModel[] };
-      if (!data.data || data.data.length === 0) {
+      if (!data.data) {
         diagnostics.readyModels = 0;
-        return { status: 'degraded', message: 'no models available', diagnostics };
+        return { status: 'degraded', message: 'model inventory unavailable', diagnostics };
       }
       diagnostics.readyModels = data.data.length;
       return { status: 'healthy', diagnostics };
@@ -181,7 +199,22 @@ export class LMStudioAdapter implements RuntimeAdapter {
     }
   }
 
+  private async nativeModels(): Promise<NativeModel[]> {
+    const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models`, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`RUNTIME_UNAVAILABLE: LM Studio models HTTP ${response.status}`);
+    const data = await response.json() as { models?: NativeModel[] };
+    if (!Array.isArray(data.models)) throw new Error('RUNTIME_UNAVAILABLE: invalid model inventory');
+    return data.models;
+  }
   async listModels(): Promise<DiscoveredModel[]> {
+    try {
+      const models = await this.nativeModels();
+      return models.map(m => ({ id: m.key, name: m.display_name ?? m.key, contextWindow: m.max_context_length,
+        weightBytes: m.size_bytes, parameters: m.params_string, architecture: m.architecture,
+        quantization: m.quantization?.name, embedding: m.type === 'embedding',
+        toolCalling: m.capabilities?.trained_for_tool_use, vision: m.capabilities?.vision }));
+    } catch { /* older runtimes may still expose inventory through v0 */ }
+
     // 1. Try LM Studio v0 API which returns rich metadata for all installed models
     try {
       const host = this.baseURL.replace(/\/v1\/?$/, '');
@@ -257,6 +290,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
       vision: true,
       embeddings: false,
       reasoning: true,
+      lifecycle: { discovery: true, inspection: true, contextControl: true, estimate: true, readinessProbe: true },
       modelLoad: true,
       modelUnload: true,
       modelDownload: false,
@@ -266,86 +300,66 @@ export class LMStudioAdapter implements RuntimeAdapter {
   }
 
   async getLoadedModels(): Promise<string[]> {
-    // 1. Check /api/v0/models
-    try {
-      const host = this.baseURL.replace(/\/v1\/?$/, '');
-      const response = await fetch(`${host}/api/v0/models`, { signal: AbortSignal.timeout(2000) });
-      if (response.ok) {
-        const data = (await response.json()) as { data?: Array<{ id: string; state?: string }> };
-        if (Array.isArray(data.data)) {
-          return data.data.filter((m) => m.state === 'loaded').map((m) => m.id);
-        }
-      }
-    } catch {
-      // fallback to next strategy
-    }
-
-    // 2. If pointing to local default LM Studio (port 1235 or no custom port), check lms ps --json
-    const isDefaultLms =
-      /:(1235)(\/|$)/.test(this.baseURL) ||
-      (!/:[0-9]+/.test(this.baseURL) && /localhost|127\.0\.0\.1/.test(this.baseURL));
-    if (isDefaultLms) {
-      try {
-        const lmsBin = resolveLmsBin();
-        const { stdout } = await execFileAsync(lmsBin, ['ps', '--json'], { timeout: 3000 });
-        const parsed = JSON.parse(stdout) as Array<{ identifier?: string; modelKey?: string; path?: string }>;
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((m) => m.identifier || m.modelKey || m.path || '').filter(Boolean);
-        }
-      } catch {
-        // CLI not available or errored
-      }
-    }
-
-    // 3. Fallback: in OpenAI-compatible endpoints or mock servers, models returned by /models are resident
-    try {
-      const response = await fetch(`${this.baseURL}/models`, { signal: AbortSignal.timeout(2000) });
-      if (response.ok) {
-        const data = (await response.json()) as { data?: Array<{ id: string }> };
-        if (Array.isArray(data.data) && data.data.length > 0) {
-          return data.data.map((m) => m.id);
-        }
-      }
-    } catch {
-      // fallback failed
-    }
-
-    return [];
+    return (await this.nativeModels()).filter(m => m.loaded_instances.length > 0).map(m => m.key);
   }
-
-  async loadModel(modelId: string): Promise<void> {
-    const lmsBin = resolveLmsBin();
-    try {
-      await execFileAsync(lmsBin, ['load', modelId, '-y'], { timeout: 120_000 });
-    } catch (err: any) {
-      throw new Error(`Failed to load model '${modelId}' via LM Studio: ${err.message || String(err)}`);
-    }
+  async inspectModel(modelId: string): Promise<import('@wazir/runtimes-interfaces').RuntimeModelInspection> {
+    const model = (await this.nativeModels()).find(m => m.key === modelId || m.loaded_instances.some(i => i.id === modelId));
+    const instances = model?.loaded_instances ?? [];
+    if (instances.length > 1) throw new Error('RESOURCE_BUSY: multiple runtime instances require explicit selection');
+    return { modelId, loaded: instances.length === 1, instanceId: instances[0]?.id,
+      effectiveContext: instances[0]?.config.context_length };
   }
-
+  async loadModel(modelId: string, options: { contextTokens?: number } = {}): Promise<void> {
+    const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models/load`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(120_000),
+      body: JSON.stringify({ model: modelId, context_length: options.contextTokens, echo_load_config: true }),
+    });
+    if (!response.ok) throw new Error(`RUNTIME_LOAD_FAILED: LM Studio HTTP ${response.status}`);
+    await response.json();
+  }
   async unloadModel(modelId: string): Promise<void> {
-    const lmsBin = resolveLmsBin();
+    const state = await this.inspectModel(modelId);
+    if (!state.loaded) return;
+    const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models/unload`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({ instance_id: state.instanceId }),
+    });
+    if (!response.ok) throw new Error(`RUNTIME_UNLOAD_FAILED: LM Studio HTTP ${response.status}`);
+    await response.json();
+  }
+  async probeModel(modelId: string, contextTokens: number): Promise<boolean> {
+    const state = await this.inspectModel(modelId);
+    if (!state.loaded || state.effectiveContext !== contextTokens) return false;
+    const response = await fetch(`${this.baseURL}/chat/completions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({ model: state.instanceId, messages: [{ role: 'user', content: 'Reply OK.' }], max_tokens: 1, stream: false }),
+    });
+    if (!response.ok) return false;
+    const data = await response.json() as { choices?: unknown[] };
+    return Array.isArray(data.choices) && data.choices.length > 0;
+  }
+  async estimateModelLoad(modelId: string, contextTokens: number): Promise<import('@wazir/runtimes-interfaces').ModelLoadEstimate> {
+    // The REST API does not expose estimation. The diagnostic CLI supports a target host.
+    // Never let a remote endpoint accidentally estimate against the local daemon.
+    const endpoint = new URL(this.baseURL);
     try {
-      await execFileAsync(lmsBin, ['unload', modelId], { timeout: 30_000 });
-    } catch (err: any) {
-      throw new Error(`Failed to unload model '${modelId}' via LM Studio: ${err.message || String(err)}`);
-    }
+      const { stdout, stderr } = await execFileAsync(resolveLmsBin(), ['load', modelId, '--estimate-only', '--context-length', String(contextTokens), '--host', endpoint.hostname, '--port', endpoint.port || (endpoint.protocol === 'https:' ? '443' : '80')], { timeout: 15_000 });
+      const output = stdout + '\n' + stderr;
+      const parse = (label: string): number | undefined => {
+        const match = output.match(new RegExp(label + ':\\s*([0-9.]+)\\s*([GM]i?B)', 'i'));
+        if (!match) return undefined;
+        const scale = match[2].toUpperCase().startsWith('G') ? 1024 ** 3 : 1024 ** 2;
+        return Number(match[1]) * scale;
+      };
+      const totalMemoryBytes = parse('Estimated Total Memory');
+      if (totalMemoryBytes !== undefined) return { totalMemoryBytes, vramBytes: parse('Estimated GPU Memory'), source: 'RUNTIME', confidence: 'medium' };
+    } catch { /* unavailable CLI/estimator remains unknown */ }
+    return { source: 'UNKNOWN', confidence: 'unknown' };
   }
 
   async estimateResources(modelId: string): Promise<ResourceEstimate> {
-    try {
-      const lmsBin = resolveLmsBin();
-      const { stdout } = await execFileAsync(lmsBin, ['load', modelId, '--estimate-only'], { timeout: 5000 });
-      const match = stdout.match(/Estimated Total Memory:\s*([0-9.]+)\s*([GgMm][iI]?[Bb])/);
-      if (match) {
-        const val = parseFloat(match[1]);
-        const unit = match[2].toUpperCase();
-        const gb = unit.startsWith('M') ? val / 1024 : val;
-        return { minMemoryGB: Math.ceil(gb) };
-      }
-    } catch {
-      // CLI not available or estimate not provided
-    }
-    return {};
+    const e = await this.estimateModelLoad(modelId, 4096);
+    return { minMemoryGB: e.totalMemoryBytes === undefined ? undefined : e.totalMemoryBytes / 1024 ** 3 };
   }
 
   async *generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {

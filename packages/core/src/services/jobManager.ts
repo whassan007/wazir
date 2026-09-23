@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import type { KeyValueStore } from '@wazir/shared';
 import type {
   Job,
   JobGraph,
@@ -16,6 +18,9 @@ import type {
 } from '../types/index.js';
 
 export interface JobManagerOptions {
+  store?: KeyValueStore;
+  leaseMs?: number;
+  now?: () => number;
   persist?: (job: Job) => void | Promise<void>;
   load?: () => Job[] | Promise<Job[]>;
   remove?: (jobId: string) => void | Promise<void>;
@@ -25,24 +30,94 @@ let jobCounter = 0;
 
 function nextJobId(): string {
   jobCounter += 1;
-  return `job-${Date.now().toString(36)}-${jobCounter.toString(36)}`;
+  return `job-${randomUUID()}`;
 }
 
 export class JobManager {
   private readonly jobs = new Map<string, Job>();
+  private readonly ownerId = randomUUID();
+  private readonly creations = new Map<string, Promise<void>>();
+  private readonly claims = new Map<string, number>();
+  private readonly store?: KeyValueStore;
+  readonly leaseMs: number;
+  private readonly now: () => number;
+
   private readonly persist?: (job: Job) => void | Promise<void>;
   private readonly remove?: (jobId: string) => void | Promise<void>;
   readonly ready: Promise<void>;
 
   constructor(options: JobManagerOptions = {}) {
+    this.store = options.store;
+    if (this.store && !this.store.update) throw new Error('ATOMIC_STORE_REQUIRED');
+    this.leaseMs = options.leaseMs ?? 30_000;
+    if (!Number.isFinite(this.leaseMs) || this.leaseMs < 100) throw new Error('INVALID_LEASE_DURATION');
+    this.now = options.now ?? Date.now;
     this.persist = options.persist;
     this.remove = options.remove;
-    this.ready = Promise.resolve(options.load?.() ?? []).then(async (loaded) => {
+    this.ready = Promise.resolve(this.store ? this.store.list('job/').then(entries => entries.map(e => e.value as Job)) : options.load?.() ?? []).then(async (loaded) => {
       for (const job of loaded) {
+        if (this.jobs.has(job.id)) continue;
         this.jobs.set(job.id, job);
-        await this.reconcileStaleStatus(job);
+        if (!this.store) await this.reconcileStaleStatus(job);
       }
-    }).catch(() => {});
+    });
+  }
+
+  async acquire(jobId: string): Promise<void> {
+    await this.ready;
+    if (!this.store) return;
+    const job = await this.store.update!<Job>(`job/${jobId}`, current => {
+      if (!current) throw new Error('JOB_NOT_FOUND');
+      if (['completed', 'failed', 'cancelled'].includes(current.status)) throw new Error('JOB_TERMINAL');
+      if (current.ownership && current.ownership.expiresAt > this.now()) throw new Error('JOB_LEASE_BUSY');
+      const next = structuredClone(current);
+      next.ownership = { ownerId: this.ownerId, epoch: (current.ownership?.epoch ?? 0) + 1, expiresAt: this.now() + this.leaseMs };
+      for (const node of next.graph.nodes) {
+        if (node.state === 'running' || node.state === 'assigned') {
+          node.attempts = [...(node.attempts ?? []), { state: 'failed', error: 'OWNER_LEASE_EXPIRED', executedAt: node.executedAt, completedAt: new Date(this.now()) }];
+          node.retryCount = (node.retryCount ?? 0) + 1;
+          node.state = node.retryCount <= (next.maxRetries ?? 3) ? 'idle' : 'failed';
+          node.error = node.state === 'failed' ? 'RETRY_LIMIT_EXCEEDED' : undefined;
+          const task = next.tasks.find(t => t.id === (node.taskId ?? node.id));
+          if (task) task.status = node.state === 'idle' ? 'pending' : 'failed';
+        }
+      }
+      return next;
+    });
+    this.claims.set(jobId, job.ownership!.epoch);
+    this.jobs.set(jobId, job);
+  }
+
+  async renew(jobId: string): Promise<void> {
+    if (!this.store) return;
+    const updated = await this.store.update!<Job>(`job/${jobId}`, current => {
+      this.assertOwnership(current);
+      return { ...current!, ownership: { ...current!.ownership!, expiresAt: this.now() + this.leaseMs } };
+    });
+    const local = this.jobs.get(jobId);
+    if (local) local.control = updated.control;
+  }
+
+  async release(jobId: string): Promise<void> {
+    if (!this.store || !this.claims.has(jobId)) return;
+    try {
+      await this.store.update!<Job>(`job/${jobId}`, current => {
+        this.assertOwnership(current);
+        return { ...current!, ownership: { ...current!.ownership!, expiresAt: 0 } };
+      });
+    } finally { this.claims.delete(jobId); }
+  }
+
+  private assertOwnership(current: Job | undefined): void {
+    if (!current?.ownership || current.ownership.ownerId !== this.ownerId ||
+        current.ownership.epoch !== this.claims.get(current.id) || current.ownership.expiresAt <= this.now()) {
+      throw new Error('JOB_LEASE_LOST');
+    }
+  }
+
+  async save(jobId: string): Promise<void> {
+    await this.creations.get(jobId);
+    await this.flush(this.require(jobId));
   }
 
   /** Removes a job from memory and the backing store. Refuses a job that's still active. */
@@ -53,7 +128,8 @@ export class JobManager {
       throw new Error(`Cannot delete job '${jobId}' while it is still active (status '${job.status}')`);
     }
     this.jobs.delete(jobId);
-    if (this.remove) await this.remove(jobId);
+    if (this.store) await this.store.delete(`job/${jobId}`);
+    else if (this.remove) await this.remove(jobId);
     return true;
   }
 
@@ -161,6 +237,7 @@ export class JobManager {
       title: t.task.title,
       input: t.task.input,
       requirements: {
+        agentCapabilities: t.task.requirements?.agentCapabilities,
         capabilities: t.task.requirements?.capabilities ?? [],
         reasoning: t.task.requirements?.reasoning ?? ('low' as const),
         vision: t.task.requirements?.vision ?? false,
@@ -209,7 +286,12 @@ export class JobManager {
     };
 
     this.jobs.set(jobId, job);
-    void this.flush(job);
+    if (!this.store) {
+      const creation = this.flush(job);
+      this.creations.set(jobId, creation);
+      // The durable create path (save) awaits and propagates this error.
+      void creation.catch(() => undefined);
+    }
     return job;
   }
 
@@ -225,6 +307,20 @@ export class JobManager {
 
   async cancel(jobId: string): Promise<void> {
     const job = this.require(jobId);
+    if (this.store && !this.claims.has(jobId)) {
+      const updated = await this.store.update!<Job>(`job/${jobId}`, current => {
+        if (!current) throw new Error('JOB_NOT_FOUND');
+        if (['completed', 'failed', 'cancelled'].includes(current.status)) throw new Error(`Cannot cancel job in terminal status '${current.status}'`);
+        if (current.ownership && current.ownership.expiresAt > this.now()) {
+          return { ...current, control: { cancelRequestedAt: this.now() } };
+        }
+        return { ...current, status: 'cancelled', completedAt: new Date(this.now()),
+          revision: (current.revision ?? 0) + 1,
+          tasks: current.tasks.map(t => ['completed', 'failed'].includes(t.status) ? t : { ...t, status: 'cancelled' }),
+          graph: { ...current.graph, nodes: current.graph.nodes.map(n => ['completed', 'failed'].includes(n.state) ? n : { ...n, state: 'cancelled' }) } };
+      });
+      this.jobs.set(jobId, updated); return;
+    }
     if (job.status === 'completed' || job.status === 'failed') {
       throw new Error(`Cannot cancel job in terminal status '${job.status}'`);
     }
@@ -258,9 +354,7 @@ export class JobManager {
       throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
     }
     task.status = 'completed';
-    if (result !== undefined) {
-      this.updateNodeState(job, taskId, 'completed', result);
-    }
+    this.updateNodeState(job, taskId, 'completed', result);
     await this.flush(job);
   }
 
@@ -587,7 +681,17 @@ export class JobManager {
   }
 
   private async flush(job: Job): Promise<void> {
-    if (this.persist) {
+    if (this.store) {
+      await this.store.update!<Job>(`job/${job.id}`, current => {
+        if (current) {
+          if (this.claims.has(job.id)) this.assertOwnership(current);
+          else if (current.ownership && current.ownership.expiresAt > this.now()) throw new Error('JOB_LEASE_BUSY');
+          if (current.revision !== job.revision) throw new Error('JOB_REVISION_CONFLICT');
+        }
+        job.revision = (current?.revision ?? 0) + 1;
+        return structuredClone({ ...job, control: current?.control ?? job.control, ownership: current?.ownership ?? job.ownership });
+      });
+    } else if (this.persist) {
       await this.persist(job);
     }
   }

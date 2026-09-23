@@ -5,9 +5,10 @@ import { RuntimeRegistry } from '../src/services/runtimeRegistry.js';
 import { ComputerRegistry } from '../src/services/computerRegistry.js';
 import { ExecutionEngine } from '../src/services/executionEngine.js';
 import { PolicyEngine } from '../src/services/policyEngine.js';
+import { MemoryStore } from '@wazir/shared';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 const G = 1024 ** 3;
-function setup(free = 64, size: (ctx: number) => number = () => 30) {
+function setup(free = 64, size: (ctx: number) => number = () => 30, store?: MemoryStore) {
  const computers = new ComputerRegistry();
  computers.register({ id: 'node', name: 'node', type: 'server', local: false,
    os: { platform: 'linux', architecture: 'arm64', version: '1' },
@@ -17,7 +18,7 @@ function setup(free = 64, size: (ctx: number) => number = () => 30) {
  const caps = { chat: true, streaming: true, toolCalling: true, structuredOutput: false, vision: false, embeddings: false, reasoning: false,
    modelLoad: true, modelUnload: true, modelDownload: false, statefulChat: false, mcp: false };
  runtimes.register({ id: 'r', type: 'lmstudio', name: 'runtime', version: '1', computerId: 'node', capabilities: caps });
- runtimes.setHealth('r', 'healthy');
+ runtimes.update('r', { health: 'healthy' });
  const loaded = new Map<string, number>();
  const adapter = {
    id: 'r', type: 'lmstudio', discover: async () => ({ id: 'r', name: 'r', version: '1' }), healthCheck: async () => ({ status: 'healthy' }),
@@ -39,7 +40,7 @@ function setup(free = 64, size: (ctx: number) => number = () => 30) {
  };
  add('a');
  const events: string[] = [];
- const service = new ModelLifecycleService({ models, computers, runtimes, executions, adapters: new Map([['r', adapter]]), policy: new PolicyEngine({ projectRoot: '/tmp' }) });
+ const service = new ModelLifecycleService({ models, computers, runtimes, executions, adapters: new Map([['r', adapter]]), policy: new PolicyEngine({ projectRoot: '/tmp' }), store });
  service.subscribe(e => events.push(e.type));
  return { service, models, computers, runtimes, executions, adapter, loaded, add, events };
 }
@@ -120,5 +121,73 @@ describe('model lifecycle admission and observed readiness', () => {
    const f = setup(); vi.mocked(f.adapter.estimateModelLoad!).mockResolvedValue({ source: 'UNKNOWN', confidence: 'unknown' });
    await expect(f.service.load('a')).rejects.toMatchObject({ code: 'MODEL_ADMISSION_DENIED', reasons: ['ESTIMATE_UNKNOWN'] });
    expect(f.adapter.loadModel).not.toHaveBeenCalled();
+ });
+ it('can admit an unknown estimate only with an explicit bounded reservation policy', async () => {
+   const f = setup();
+   vi.mocked(f.adapter.estimateModelLoad!).mockResolvedValue({ source: 'UNKNOWN', confidence: 'unknown' });
+   const policy = new PolicyEngine({ projectRoot: '/tmp', modelLifecycle: { allowUnknownEstimate: true, unknownReservationBytes: 20 * G } });
+   const service = new ModelLifecycleService({ models: f.models, computers: f.computers, runtimes: f.runtimes,
+     adapters: new Map([['r', f.adapter]]), policy });
+   const plan = await service.load('a');
+   expect(plan.estimate.classification).toBe('UNKNOWN');
+   expect(plan.estimate.estimateSource).toBe('UNKNOWN');
+   expect(plan.reservation?.memoryBytes).toBe(20 * G);
+   expect(f.models.isModelReady('a')).toBe(true);
+ });
+ it('shares computer reservations across independent control-plane instances', async () => {
+   const store = new MemoryStore();
+   const first = setup(60, () => 40, store);
+   const second = setup(60, () => 40, store);
+   second.add('b');
+   const results = await Promise.allSettled([first.service.load('a'), second.service.load('b')]);
+   expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+   expect(vi.mocked(first.adapter.loadModel!).mock.calls.length + vi.mocked(second.adapter.loadModel!).mock.calls.length).toBe(1);
+   const reservations = await store.get('computer/node/reservations') as Array<{ memoryBytes: number }>;
+   expect(reservations).toHaveLength(1);
+   expect(reservations[0].memoryBytes).toBe(40 * G);
+ });
+ it('restores pin intent after a fresh reconciliation', async () => {
+   const store = new MemoryStore();
+   const f = setup(64, () => 30, store);
+   await f.service.pin('a');
+   f.models.instancesOf('a')[0].pinned = false;
+   await f.service.reconcile();
+   expect(f.models.instancesOf('a')[0].pinned).toBe(true);
+   expect(f.models.listInstallations().filter(i => i.modelId === 'a')).toHaveLength(1);
+ });
+});
+
+
+describe('startup context policy', () => {
+ it('NONE loads nothing and EXPLICIT performs fresh admission', async () => {
+   const f = setup(32, () => 40);
+   expect(await f.service.applyStartupPolicy({ mode: 'none' })).toEqual({ restored: [], failed: [], missing: [] });
+   const result = await f.service.applyStartupPolicy({ mode: 'explicit', models: [{ modelId: 'a', context: 32768 }] });
+   expect(result.failed).toEqual(['a']);
+   expect(f.adapter.loadModel).not.toHaveBeenCalled();
+ });
+ it('RESTORE uses instance target and desired context, verifying readiness again', async () => {
+   const f = setup();
+   f.models.upsertInstance({ ...f.models.instancesOf('a')[0], desired: { state: 'READY', contextTokens: 16384 } });
+   const result = await f.service.applyStartupPolicy({ mode: 'restore' });
+   expect(result.restored).toEqual(['a']);
+   expect(f.adapter.loadModel).toHaveBeenCalledWith('a', { contextTokens: 16384 });
+   expect(f.adapter.probeModel).toHaveBeenCalled();
+ });
+ it('MAX_SAFE selects the largest safe context while AUTO selects a practical context', async () => {
+   const f = setup(72, ctx => 16 + ctx / 2048);
+   expect((await f.service.estimate('a', { mode: 'AUTO' })).effectiveContext).toBe(32768);
+   expect((await f.service.estimate('a', { mode: 'MAX_SAFE' })).effectiveContext).toBe(98304);
+ });
+ it('prevents independent controllers loading the same instance twice', async () => {
+   const store = new MemoryStore();
+   const a = setup(128, () => 20, store), b = setup(128, () => 20, store);
+   let release!: () => void;
+   vi.mocked(a.adapter.loadModel!).mockImplementation(async () => { await new Promise<void>(resolve => { release = resolve; }); a.loaded.set('a', 32768); });
+   const first = a.service.load('a');
+   await vi.waitFor(() => expect(a.adapter.loadModel).toHaveBeenCalled());
+   await expect(b.service.load('a')).rejects.toMatchObject({ code: 'MODEL_ADMISSION_DENIED' });
+   expect(b.adapter.loadModel).not.toHaveBeenCalled();
+   release(); await first;
  });
 });

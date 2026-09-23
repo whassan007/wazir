@@ -59,11 +59,13 @@ async function buildTestEngine(projectRoot: string, opts: TestEngineOptions = {}
     id: 'local',
     name: 'test-mac',
     type: 'workstation',
-    local: true,
+    local: false,
     os: { platform: 'darwin', architecture: 'arm64', version: '23.0.0' },
     hardware: { cpu: 'Apple M3 Max', cpuCores: 16, memoryGB: 64 },
     capabilities: ['localExecution'],
   });
+
+  computers.heartbeat('local', { load: { cpuPercent: 0, memoryUsedGB: 0, memoryAvailableGB: 64 } });
 
   runtimes.register({
     id: 'mock-runtime',
@@ -87,6 +89,7 @@ async function buildTestEngine(projectRoot: string, opts: TestEngineOptions = {}
     },
   });
 
+  runtimes.update('mock-runtime', { health: opts.runtimeHealthy === false ? 'unavailable' : 'healthy' });
   const loadedModelIds = new Set<string>();
   if (opts.modelsLoaded) {
     loadedModelIds.add('google/gemma-4-12b-qat');
@@ -99,7 +102,7 @@ async function buildTestEngine(projectRoot: string, opts: TestEngineOptions = {}
       return { id: 'mock-runtime', name: 'Mock LM Studio', version: '0.3.0' };
     },
     async healthCheck() {
-      return { status: opts.runtimeHealthy !== false ? 'healthy' : 'unhealthy' };
+      return { status: opts.runtimeHealthy !== false ? 'healthy' : 'unavailable' };
     },
     async cancel() {},
     async listModels() {
@@ -123,6 +126,9 @@ async function buildTestEngine(projectRoot: string, opts: TestEngineOptions = {}
       }
       loadedModelIds.delete(modelId);
     },
+    async inspectModel(modelId: string) { return { modelId, loaded: loadedModelIds.has(modelId), effectiveContext: 32768 }; },
+    async probeModel(modelId: string) { return loadedModelIds.has(modelId); },
+    async estimateModelLoad(modelId: string) { return { totalMemoryBytes: (modelId.includes('27b') ? 18.5 : 8.2) * 1024 ** 3, source: 'RUNTIME', confidence: 'high' }; },
     async estimateResources(modelId: string) {
       if (modelId.includes('27b')) return { minMemoryGB: 18.5 };
       if (modelId.includes('12b')) return { minMemoryGB: 8.2 };
@@ -267,7 +273,7 @@ async function buildTestEngine(projectRoot: string, opts: TestEngineOptions = {}
     approvalQueue,
   });
 
-  const scheduler = new Scheduler({ computers, runtimes, models, agents });
+  const scheduler = new Scheduler({ computers, runtimes, models, agents, policy });
   const jobManager = new JobManager();
   const orchestrator = new JobOrchestrator({
     scheduler,
@@ -293,7 +299,7 @@ async function buildTestEngine(projectRoot: string, opts: TestEngineOptions = {}
     computers,
     agents,
     adapters,
-    store,
+    store, policy, executions,
   });
 
   const engine: RookEngine = {
@@ -482,7 +488,7 @@ describe('Model Readiness & Startup Loading Workflow', () => {
 
     const ok = await engine.lifecycle.loadModel('google/gemma-4-12b-qat');
     expect(ok).toBe(false);
-    expect(engine.lifecycle.getModelState('google/gemma-4-12b-qat')).toBe('FAILED');
+    expect(engine.lifecycle.getModelState('google/gemma-4-12b-qat')).toBe('UNAVAILABLE');
   });
 
   it('8. Skip option allows continuing to Fleet without loading', async () => {
@@ -504,41 +510,25 @@ describe('Model Readiness & Startup Loading Workflow', () => {
     harness.stop();
   });
 
-  it('9. Task-time model recovery: task submitted with 0 ready models transitions to blocked modal, loads on action, resumes prompt', async () => {
+  it('9. Task activation preserves the same task and execution identity', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-model-test-'));
     const { engine } = await buildTestEngine(projectRoot, { modelsLoaded: false, modelsConfig: 'two_models' });
-
-    const harness = new TuiTestHarness({ engine });
-    await harness.start();
-
-    // Skip startup selector first
-    harness.sendKey('s');
-    expect(harness.getScreenBuffer()).toContain('[View: FLEET]');
-
-    // Submit a task prompt
-    await harness.tui.submitCommand('build a C++ program that can sort an array');
-
-    // Task-time modal should open
-    const modalScreen = harness.getScreenBuffer();
-    expect(modalScreen).toContain('TASK-TIME MODEL REQUIRED');
-    expect(modalScreen).toContain('build a C++ program that can sort an array');
-    expect(modalScreen).toContain('google/gemma-4-12b-qat');
-
-    // Press 'l' to load the highlighted model
-    harness.sendKey('l');
-
-    // Give load a tick to verify and resume
-    await new Promise((r) => setTimeout(r, 200));
-
+    const task = { id: 'same-task', requirements: { minimumContext: 8192 } } as any;
+    const record = await engine.executions.create({ task, modelId: 'google/gemma-4-12b-qat', runtimeId: 'mock-runtime', computerId: 'local' });
+    const context = await engine.lifecycle.activateExecution(record.execution.id, 8192);
+    expect(context).toBe(32768);
+    expect(record.execution.taskId).toBe('same-task');
+    expect((await engine.executions.list()).length).toBe(1);
+    expect(record.events.some(e => e.type === 'WAITING_FOR_MODEL')).toBe(true);
+    expect(record.execution.status).toBe('scheduled');
     expect(engine.lifecycle.isModelReady('google/gemma-4-12b-qat')).toBe(true);
-    harness.stop();
   });
 
   it('10. Resource estimation flags SAFE, WARNING, or INSUFFICIENT based on free memory', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-model-test-'));
     const { engine } = await buildTestEngine(projectRoot, { modelsConfig: 'two_models' });
 
-    const assessment = engine.lifecycle.assessModelSync('google/gemma-4-12b-qat');
+    const [assessment] = await engine.lifecycle.assessResources('google/gemma-4-12b-qat');
     expect(assessment.modelId).toBe('google/gemma-4-12b-qat');
     expect(assessment.estimatedMemoryGB).toBeGreaterThan(0);
     expect(['SAFE', 'WARNING', 'INSUFFICIENT', 'UNKNOWN']).toContain(assessment.classification);
@@ -620,7 +610,7 @@ describe('Model Readiness & Startup Loading Workflow', () => {
     // 3. wa models load
     const loadResult = await loadModelCommand(engine, 'google/gemma-4-12b-qat');
     expect(loadResult.ok).toBe(true);
-    expect(loadResult.message).toContain('loaded successfully');
+    expect(loadResult.message).toContain('Verified context and health probe: READY');
 
     // 4. wa models loaded (now shows gemma)
     const loadedOutput2 = listLoadedModels(engine);

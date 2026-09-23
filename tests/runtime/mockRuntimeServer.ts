@@ -94,6 +94,13 @@ export async function createMockLMStudioServer(): Promise<MockServerHandle> {
   const server = http.createServer((req, res) => {
     const url = req.url ?? '';
 
+    if (url === '/api/v1/models' && req.method === 'GET') {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ models: [{ key: 'qwen2.5-coder-7b-instruct', display_name: 'Qwen', max_context_length: 32768,
+        loaded_instances: [{ id: 'qwen2.5-coder-7b-instruct', config: { context_length: 8192 } }],
+        capabilities: { trained_for_tool_use: true } }] }));
+      return;
+    }
     if ((url === '/models' || url === '/v1/models') && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(

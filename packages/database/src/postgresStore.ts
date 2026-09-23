@@ -14,6 +14,19 @@ import { reviveDatesDeep, type KeyValueStore, type StoreEntry } from '@wazir/sha
 export class PostgresStore implements KeyValueStore {
   constructor(private readonly pool: Pool) {}
 
+  async update<T>(key: string, mutate: (current: T | undefined) => T): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [key]);
+      const result = await client.query('SELECT value FROM wazir_kv_store WHERE key = $1', [key]);
+      const value = mutate(result.rows[0] ? reviveDatesDeep(result.rows[0].value) as T : undefined);
+      await client.query(`INSERT INTO wazir_kv_store (key, value, updated_at) VALUES ($1, $2, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [key, JSON.stringify(value)]);
+      await client.query('COMMIT'); return value;
+    } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+  }
+
   async put(key: string, value: unknown): Promise<void> {
     await this.pool.query(
       `INSERT INTO wazir_kv_store (key, value, updated_at)

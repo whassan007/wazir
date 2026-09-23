@@ -70,6 +70,8 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
     },
   });
 
+  runtimes.update('fake', { health: 'healthy' });
+
   models.register({
     id: 'fake-model',
     name: 'fake-model',
@@ -96,6 +98,7 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
     runtimeId: 'fake',
     runtimeModelId: 'fake-model',
     loaded: true,
+    state: 'READY', // Fixture represents a model whose readiness probe already passed.
     health: 'healthy',
     contextTokens: 32_768,
   });
@@ -125,6 +128,8 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
   const fakeAdapter: RuntimeAdapter = {
     id: 'fake',
     type: 'other',
+    async inspectModel(modelId) { return { modelId, loaded: true, effectiveContext: 32768 }; },
+    async probeModel() { return true; },
     async discover() {
       return { id: 'fake', name: 'fake', version: '1.0' };
     },
@@ -187,6 +192,7 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
     runtimes,
     models,
     lifecycle: new ModelLifecycleService({
+      executions,
       models,
       runtimes,
       computers,

@@ -42,6 +42,8 @@ export interface LoadEstimate {
   contextMemory?: number;
   runtimeOverhead?: number;
   estimatedTotalMemory?: number;
+  /** Conservative policy cap used only when the estimate is unknown and explicitly allowed. */
+  reservationMemoryBytes?: number;
   estimatedVram?: number;
   currentlyAvailableMemory?: number;
   safetyReserve: number;

@@ -97,6 +97,7 @@ async function buildTestEngine(projectRoot: string): Promise<RookEngine> {
     runtimeId: 'fake',
     runtimeModelId: 'fake-model',
     loaded: true,
+    state: 'READY', // Fixture represents a model whose readiness probe already passed.
     health: 'healthy',
     contextTokens: 32_768,
   });

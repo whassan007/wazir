@@ -2042,42 +2042,12 @@ export class FleetTui {
    * Decomposes or parses a user prompt and launches concurrent execution.
    */
   async launchJobFromPrompt(prompt: string): Promise<void> {
-    // Task-Time Safety Net: if 0 models are ready, do NOT create a failing execution
+    // Installed models are activated on the existing execution after scheduling.
     const readiness = this.engine.lifecycle.getReadiness();
-    if (readiness.readyCount === 0) {
-      if (readiness.unloadedEligibleModels.length > 0) {
-        this.taskTimeModelRequired = {
-          pendingPrompt: prompt,
-          requiredCapabilities: ['coding', 'toolCalling'],
-          eligibleModels: readiness.unloadedEligibleModels,
-          selectedIndex: 0,
-          loading: false,
-        };
-        this.statusMessage = 'No ready models available to execute task. Select a model to load.';
-        this.draw();
-        return;
-      } else {
-        this.statusMessage = 'No models available. Install models in LM Studio or Ollama.';
-        this.openModelRecoveryModal();
-        return;
-      }
-    }
-
-    if (this.selectedModelId && !this.engine.lifecycle.isModelReady(this.selectedModelId)) {
-      const rec = this.engine.models.get(this.selectedModelId);
-      if (rec) {
-        this.taskTimeModelRequired = {
-          pendingPrompt: prompt,
-          requiredCapabilities: ['coding', 'toolCalling'],
-          eligibleModels: [rec],
-          selectedIndex: 0,
-          loading: false,
-          statusText: `Pinned model '${this.selectedModelId}' is not loaded.`,
-        };
-        this.statusMessage = `Pinned model '${this.selectedModelId}' is not loaded. Press [L] to load it.`;
-        this.draw();
-        return;
-      }
+    if (readiness.installedCount === 0 && readiness.readyCount === 0) {
+      this.statusMessage = 'No models installed. Discover models in LM Studio or Ollama.';
+      this.openModelRecoveryModal();
+      return;
     }
 
     this.statusMessage = 'Planning & scheduling job...';
@@ -3606,18 +3576,7 @@ export class FleetTui {
     if (mode === 'none') {
       return;
     }
-    if (mode === 'restore') {
-      this.statusMessage = 'Restoring last ready model set...';
-      this.draw();
-      await this.engine.lifecycle.restoreLastModelSet({ initiator: 'startup' });
-      return;
-    }
-    if (mode === 'recommended') {
-      this.statusMessage = 'Loading recommended models...';
-      this.draw();
-      await this.engine.lifecycle.loadRecommendedModels({ initiator: 'startup' });
-      return;
-    }
+    if (mode !== 'prompt') return; // Noninteractive startup policy was applied by createEngine.
 
     // Default: 'prompt'
     const readiness = this.engine.lifecycle.getReadiness();
@@ -3645,14 +3604,18 @@ export class FleetTui {
   }
 
   private handleModelLifecycleEvent(event: ModelLifecycleEvent): void {
+    if (['MODEL_DRAINING', 'MODEL_ADMISSION_DENIED', 'MODEL_CONTEXT_DOWNSHIFTED', 'WAITING_FOR_MODEL'].includes(event.type)) {
+      this.statusMessage = `${event.type}: ${event.modelId}${event.reason ? ' — ' + event.reason : ''}`;
+      this.draw();
+    }
     if (this.startupSelector) {
       if (event.type === 'MODEL_LOADING') {
         this.startupSelector.loadStatuses.set(event.modelId, 'LOADING');
       } else if (event.type === 'MODEL_READY') {
         this.startupSelector.loadStatuses.set(event.modelId, 'READY');
-      } else if (event.type === 'MODEL_LOAD_FAILED') {
+      } else if (event.type === 'MODEL_LOAD_FAILED' || event.type === 'MODEL_ADMISSION_DENIED') {
         this.startupSelector.loadStatuses.set(event.modelId, 'FAILED');
-        const err = event.error ?? (event.data?.error as string | undefined);
+        const err = event.error ?? event.reason ?? (event.data?.error as string | undefined);
         if (err) {
           this.startupSelector.loadErrors.set(event.modelId, err);
         }
