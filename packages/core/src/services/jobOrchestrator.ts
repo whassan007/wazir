@@ -51,6 +51,9 @@ interface ActiveJobHandle {
   /** Tasks whose task:cancelled has already been emitted (by cancelJob/cancelTask), so the
    *  post-executor abort branch doesn't announce the same cancellation a second time. */
   cancelledTaskIds: Set<string>;
+  /** Tasks aborted because their worker stopped heartbeating (reportExecutionOrphaned), not
+   *  because anyone asked to cancel them — these go through retry, not the cancelled path. */
+  orphanedTaskIds: Set<string>;
   resolve: (job: Job) => void;
   reject: (err: Error) => void;
 }
@@ -251,6 +254,25 @@ export class JobOrchestrator {
   }
 
   /**
+   * Called by a RecoveryManager (or any external caller) when the worker running a task
+   * has stopped heartbeating. Unlike cancelTask(), this does not mean the task should stop
+   * — it means the process actually running it is gone, so the task should retry (subject
+   * to the job's normal maxRetries) rather than be reported as user-cancelled. Only meaningful
+   * for a job this process is actively running (`runJob()` in flight) — a job whose owning
+   * process has itself died needs process-restart recovery (JobManager.reconcileStaleStatus),
+   * not this.
+   */
+  reportExecutionOrphaned(jobId: string, taskId: string, reason: string): boolean {
+    const handle = this.activeJobs.get(jobId);
+    const taskAbort = handle?.activeTasks.get(taskId);
+    if (!handle || !taskAbort) return false;
+    handle.orphanedTaskIds.add(taskId);
+    this.emit(jobId, { type: 'task:progress', jobId, taskId, phase: 'verify' as AgentPhase, event: { orphaned: true, reason } });
+    taskAbort.abort();
+    return true;
+  }
+
+  /**
    * @param reason Set when the system (not a person) is doing the cancelling — e.g. the
    *   job timeout — so subscribers can say "stopped: exceeded the 300s timeout" instead
    *   of the misleading "cancelled by operator".
@@ -334,6 +356,7 @@ export class JobOrchestrator {
         abort: jobAbortController,
         activeTasks,
         cancelledTaskIds: new Set(),
+        orphanedTaskIds: new Set(),
         resolve,
         reject,
       };
@@ -542,7 +565,30 @@ export class JobOrchestrator {
 
               const outcome: JobTaskOutcome = await executor(task, executionContext);
 
-              if (taskAbort.signal.aborted) {
+              if (handle.orphanedTaskIds.has(taskId)) {
+                handle.orphanedTaskIds.delete(taskId);
+                const reason = 'Orphaned: the worker running this task stopped responding';
+                const retries = retryCounts.get(taskId) ?? 0;
+                const maxRetries = job.maxRetries ?? 3;
+                if (retries < maxRetries) {
+                  retryCounts.set(taskId, retries + 1);
+                  if (!node.attempts) node.attempts = [];
+                  node.attempts.push({ state: 'failed', error: reason, executedAt: node.executedAt, completedAt: new Date() });
+                  node.executedAt = undefined;
+                  node.completedAt = undefined;
+                  node.error = undefined;
+                  node.result = undefined;
+                  node.state = 'idle';
+                  await this.jobManager.updateAgentState(job.id, node.id, 'idle');
+                  await this.jobManager.updateTaskStatus(job.id, taskId, 'pending');
+                  this.emit(jobId, { type: 'task:retry', jobId, taskId, retryCount: retries + 1, maxRetries });
+                } else {
+                  node.state = 'failed';
+                  node.error = reason;
+                  await this.failTask(job.id, taskId, reason, Infinity);
+                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
+                }
+              } else if (taskAbort.signal.aborted) {
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 // cancelJob()/cancelTask() already emitted this task's cancellation (with
@@ -646,7 +692,30 @@ export class JobOrchestrator {
               }
             } catch (err) {
               const errMessage = err instanceof Error ? err.message : String(err);
-              if (taskAbort.signal.aborted) {
+              if (handle.orphanedTaskIds.has(taskId)) {
+                handle.orphanedTaskIds.delete(taskId);
+                const reason = 'Orphaned: the worker running this task stopped responding';
+                const retries = retryCounts.get(taskId) ?? 0;
+                const maxRetries = job.maxRetries ?? 3;
+                if (retries < maxRetries) {
+                  retryCounts.set(taskId, retries + 1);
+                  if (!node.attempts) node.attempts = [];
+                  node.attempts.push({ state: 'failed', error: reason, executedAt: node.executedAt, completedAt: new Date() });
+                  node.executedAt = undefined;
+                  node.completedAt = undefined;
+                  node.error = undefined;
+                  node.result = undefined;
+                  node.state = 'idle';
+                  await this.jobManager.updateAgentState(job.id, node.id, 'idle');
+                  await this.jobManager.updateTaskStatus(job.id, taskId, 'pending');
+                  this.emit(jobId, { type: 'task:retry', jobId, taskId, retryCount: retries + 1, maxRetries });
+                } else {
+                  node.state = 'failed';
+                  node.error = reason;
+                  await this.failTask(job.id, taskId, reason, Infinity);
+                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
+                }
+              } else if (taskAbort.signal.aborted) {
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 this.emit(jobId, { type: 'task:cancelled', jobId, taskId });

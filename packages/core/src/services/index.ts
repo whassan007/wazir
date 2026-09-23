@@ -28,6 +28,8 @@ export type {
 } from './worktreeManager.js';
 export { TaskPlanner, createTaskPlanner } from './planner.js';
 export type { ExecutionPlan, PlanStep, PlanOptions, PlannerModelCaller } from './planner.js';
+export { RecoveryManager, createRecoveryManager } from './recoveryManager.js';
+export type { RecoveryManagerOptions, RecoverySweepResult } from './recoveryManager.js';
 export { ModelLifecycleService } from './modelLifecycleService.js';
 export type {
   ModelLifecycleServiceDeps,

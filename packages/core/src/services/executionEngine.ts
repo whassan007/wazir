@@ -603,6 +603,31 @@ export class ExecutionEngine {
     return records.filter((r) => r.execution.taskId === taskId);
   }
 
+  private static readonly NON_TERMINAL: ExecutionStatus[] = ['queued', 'scheduled', 'assigned', 'running', 'waiting'];
+
+  /** Non-terminal executions currently assigned to a computer — the set a dead worker leaves stranded. */
+  async listActiveByComputer(computerId: string): Promise<ExecutionRecord[]> {
+    const records = await this.list();
+    return records.filter(
+      (r) => r.execution.computerId === computerId && ExecutionEngine.NON_TERMINAL.includes(r.execution.status),
+    );
+  }
+
+  /**
+   * Marks a non-terminal execution as failed because the worker that owned it stopped
+   * heartbeating, distinct from an ordinary task failure so callers (and the UI) can tell
+   * "the work errored" apart from "the machine running it disappeared".
+   */
+  async orphan(executionId: string, reason: string): Promise<void> {
+    const record = this.require(executionId);
+    if (!ExecutionEngine.NON_TERMINAL.includes(record.execution.status)) return;
+    record.execution.status = 'failed';
+    record.execution.completedAt = new Date();
+    record.errors = [...(record.errors ?? []), `ORPHANED_WORKER_UNREACHABLE: ${reason}`];
+    this.pushEvent(record, 'execution.failed', { status: 'failed', reason, kind: 'ORPHANED_WORKER_UNREACHABLE' });
+    await this.flush(record);
+  }
+
   async listChildren(executionId: string): Promise<ExecutionRecord[]> {
     const records = await this.list();
     return records.filter((r) => r.execution.parentExecutionId === executionId);
