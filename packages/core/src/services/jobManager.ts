@@ -333,6 +333,34 @@ export class JobManager {
     await this.flush(job);
   }
 
+  /**
+   * Pauses a job: no new tasks are dispatched (by JobOrchestrator.runJob()'s
+   * live pump loop, if this job is actively running in this process, or by
+   * a future runJob()/recoverJobs() call otherwise) until resume(). Unlike
+   * cancel(), nothing already running or completed is touched — an
+   * in-flight task keeps going to its own natural conclusion; pause only
+   * stops the *next* one from starting.
+   */
+  async pause(jobId: string): Promise<void> {
+    const job = this.require(jobId);
+    if (this.store && !this.claims.has(jobId)) {
+      const updated = await this.store.update!<Job>(`job/${jobId}`, current => {
+        if (!current) throw new Error('JOB_NOT_FOUND');
+        if (!['pending', 'planning', 'ready', 'running'].includes(current.status)) {
+          throw new Error(`Cannot pause job in status '${current.status}'`);
+        }
+        return { ...current, status: 'paused', revision: (current.revision ?? 0) + 1 };
+      });
+      this.jobs.set(jobId, updated);
+      return;
+    }
+    if (!['pending', 'planning', 'ready', 'running'].includes(job.status)) {
+      throw new Error(`Cannot pause job in status '${job.status}'`);
+    }
+    job.status = 'paused';
+    await this.flush(job);
+  }
+
   async resume(jobId: string): Promise<void> {
     const job = this.require(jobId);
     if (job.status !== 'paused') {

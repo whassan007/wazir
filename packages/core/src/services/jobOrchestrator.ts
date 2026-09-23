@@ -54,6 +54,12 @@ interface ActiveJobHandle {
   /** Tasks aborted because their worker stopped heartbeating (reportExecutionOrphaned), not
    *  because anyone asked to cancel them — these go through retry, not the cancelled path. */
   orphanedTaskIds: Set<string>;
+  /** Re-enters the pump loop on demand — pump() is otherwise only re-triggered reactively
+   *  by a task finishing, so an external pauseJob()/resumeJob() (which change job.status
+   *  without any task completing) need this to make the change take effect immediately
+   *  rather than waiting for whatever task happens to finish next (or never, once paused
+   *  with nothing in flight). */
+  wakePump?: () => void;
   resolve: (job: Job) => void;
   reject: (err: Error) => void;
 }
@@ -294,8 +300,22 @@ export class JobOrchestrator {
     this.emit(jobId, { type: 'job:cancelled', jobId, error: reason });
   }
 
+  /**
+   * Stops new task dispatch for a job without touching anything already
+   * running or completed — distinct from cancelJob(), which aborts
+   * in-flight work. If this job is actively being pumped in this process,
+   * the change takes effect on the very next pump cycle (woken immediately
+   * here, not just whenever some other task happens to finish next).
+   */
+  async pauseJob(jobId: string): Promise<void> {
+    await this.jobManager.pause(jobId);
+    this.activeJobs.get(jobId)?.wakePump?.();
+    this.emit(jobId, { type: 'job:paused', jobId });
+  }
+
   async resumeJob(jobId: string): Promise<void> {
     await this.jobManager.resume(jobId);
+    this.activeJobs.get(jobId)?.wakePump?.();
     this.emit(jobId, { type: 'job:resumed', jobId });
   }
 
@@ -521,8 +541,12 @@ export class JobOrchestrator {
           return this.jobManager.dependenciesSatisfied(job, node.taskId ?? node.id);
         });
 
-        // 3. Dispatch ready nodes up to concurrency limit
-        while (activeTasks.size < concurrencyLimit && readyNodes.length > 0 && !isFinished) {
+        // 3. Dispatch ready nodes up to concurrency limit — skipped while paused. Nothing
+        // already running is touched (pause is not cancel); readyNodes staying non-empty
+        // here also keeps step 4's deadlock detector from misreading "paused with idle
+        // work waiting" as "stuck with nowhere to go".
+        const paused = job.status === 'paused';
+        while (!paused && activeTasks.size < concurrencyLimit && readyNodes.length > 0 && !isFinished) {
           const node = readyNodes.shift()!;
           const taskId = node.taskId ?? node.id;
           const task = job.tasks.find((t) => t.id === taskId);
@@ -865,6 +889,7 @@ export class JobOrchestrator {
         }
       };
 
+      handle.wakePump = () => void pump().catch(reject);
       void pump().catch(reject);
     });
   }
