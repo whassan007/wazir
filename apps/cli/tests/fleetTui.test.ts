@@ -223,21 +223,37 @@ async function buildFleetTestEngine(projectRoot: string): Promise<RookEngine> {
  * were changed ("Agent declared completion but produced no code modifications") — the
  * engine's default plan-then-done-only script no longer reaches 'completed' on its own,
  * which is fine for tests that don't care about final job status but breaks any test
- * that needs a genuinely successful job. Cycles plan -> write -> done every 3 calls, so
- * it also self-heals under concurrent fanout (each task's own turns may interleave with
- * others', but plan/tool actions are handled gracefully regardless of position).
+ * that needs a genuinely successful job. Cycles plan -> write -> done every 3 calls.
+ *
+ * Keyed per-task (by that task's own first user message, stable across its turns), not
+ * on a shared global call counter. A shared counter made a task's step depend on the
+ * arrival order of *every* concurrent task's calls — under a real fanout job (or with any
+ * per-call overhead added on the tool path, e.g. workspace snapshotting), that order isn't
+ * deterministic, so a task could observe plan/done without ever getting a write between
+ * them and finish with zero file changes. A per-task counter can't be perturbed by
+ * unrelated concurrent tasks or by how much work happens between calls.
+ *
+ * The written content includes the task key itself, not just the per-task call number —
+ * two different tasks both independently reach call 2 for their own write step, and with
+ * content keyed on the call number alone they'd write the exact same bytes to the shared
+ * "output.txt" path. The controller's physical-mutation-truth check (before/after content
+ * hash, not tool-reported success) correctly treats a byte-identical overwrite as no
+ * mutation, so a same-content collision between unrelated tasks would silently produce
+ * zero recorded file changes for whichever task wrote second.
  */
 function useSuccessfulFakeModel(engine: RookEngine): void {
   const adapter = engine.worker.adapterForModel('fake-model')!;
-  let call = 0;
-  adapter.generate = async function* () {
-    call += 1;
+  const callsByTask = new Map<string, number>();
+  adapter.generate = async function* (request) {
+    const taskKey = request.messages.find((m) => m.role === 'user')?.content ?? '';
+    const call = (callsByTask.get(taskKey) ?? 0) + 1;
+    callsByTask.set(taskKey, call);
     const step = call % 3;
     const reply =
       step === 1
         ? '{"action":"plan","content":"inspecting codebase and implementing task"}'
         : step === 2
-          ? `{"action":"tool","tool":"write","input":{"path":"output.txt","content":"result ${call}"}}`
+          ? `{"action":"tool","tool":"write","input":{"path":"output.txt","content":"result ${call} for ${taskKey}"}}`
           : '{"action":"done","summary":"all checks passed and task verified"}';
     yield { type: 'token' as const, content: reply };
     yield { type: 'completed' as const, content: reply, usage: { inputTokens: 10, outputTokens: 15, totalTokens: 25 } };

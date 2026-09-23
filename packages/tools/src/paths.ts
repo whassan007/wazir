@@ -73,12 +73,18 @@ export async function resolveInsideProject(root: string, target: string): Promis
  * checked to still be the inode that was verified.
  */
 export async function readProjectFile(root: string, target: string): Promise<{ resolved: string; content: string; size: number }> {
+  const result = await readProjectBytes(root, target);
+  return { ...result, content: result.content.toString('utf8') };
+}
+
+export async function readProjectBytes(root: string, target: string, maxBytes = Infinity): Promise<{ resolved: string; content: Buffer; size: number }> {
   const { resolved, real } = await resolveInsideProject(root, target);
   const handle = await fs.open(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
     const stat = await handle.stat();
     await assertSameInode(root, target, real, stat);
-    const content = await handle.readFile('utf8');
+    if (stat.size > maxBytes) throw Object.assign(new Error('RESOURCE_EXHAUSTED: file exceeds snapshot byte budget'), { code: 'RESOURCE_EXHAUSTED' });
+    const content = await handle.readFile();
     return { resolved, content, size: stat.size };
   } finally {
     await handle.close();

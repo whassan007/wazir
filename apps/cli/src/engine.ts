@@ -8,6 +8,7 @@ import {
   ComputerRegistry,
   ContextCompiler,
   ExecutionEngine,
+  persistExecutionRecord,
   ProvenanceManager,
   Job,
   JobManager,
@@ -135,7 +136,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const executions = new ExecutionEngine({
     provenanceManager: provenance,
     workspace: projectRoot,
-    persist: (record) => store.put(`execution/${record.execution.id}`, record),
+    persist: (record) => persistExecutionRecord(store, `execution/${record.execution.id}`, record),
     load: async () => {
       const entries = await store.list('execution/');
       return entries.map((e) => e.value as never);

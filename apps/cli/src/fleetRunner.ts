@@ -40,7 +40,13 @@ function toGenerationEvent(event: WorkerExecutionEvent): GenerationEvent | undef
         usage: data?.usage as GenerationEvent['usage'],
       };
     case 'failed':
-      return { type: 'error', error: (data?.error as string | undefined) ?? 'remote execution failed' };
+      return { type: 'error', error: (data?.error as string | undefined) ?? 'remote execution failed',
+        failureClass: data?.failureClass as GenerationEvent['failureClass'], retryExhausted: data?.retryExhausted === true,
+        retryAttempt: data?.retryAttempt as number | undefined };
+    case 'retry':
+      return { type: 'retry', error: data?.error as string | undefined,
+        failureClass: data?.failureClass as GenerationEvent['failureClass'],
+        retryAttempt: data?.retryAttempt as number | undefined, retryDelayMs: data?.retryDelayMs as number | undefined };
     default:
       return undefined;
   }
@@ -217,6 +223,8 @@ export function createFleetTaskExecutor(
       },
 
       async *generate(request) {
+        const requestId = generateId('req-');
+        const retryContext = { requestId, model: request.modelId, provider: engine.models.get(request.modelId)?.provider };
         await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
         // The `agent.turn` event below only records `content.slice(0, 500)` of the
         // *parsed* action — the model's raw completion (including any reasoning
@@ -236,7 +244,6 @@ export function createFleetTaskExecutor(
             yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
             return;
           }
-          const requestId = generateId('req-');
           currentTurn = { adapter, requestId };
           for await (const event of adapter.generate({
             modelId: request.modelId,
@@ -248,6 +255,7 @@ export function createFleetTaskExecutor(
             tools: request.tools,
             requestId,
           })) {
+            await engine.executions.recordProviderEvent(executionId, event, retryContext);
             if (event.type === 'token' && event.content) {
               context.onProgress?.({ kind: 'token', content: event.content });
             }
@@ -274,7 +282,7 @@ export function createFleetTaskExecutor(
           const workerRequest: WorkerExecutionRequest = {
             runtimeId: assignment.runtimeId,
             executionId,
-            requestId: generateId('req-'),
+            requestId,
             modelId: request.modelId,
             messages: request.messages,
             maxTokens: request.maxTokens,
@@ -285,6 +293,7 @@ export function createFleetTaskExecutor(
             for await (const event of dispatchRemote(engine.config.apiUrl, assignment.computerId, workerRequest, { token: engine.config.apiToken })) {
               const generationEvent = toGenerationEvent(event);
               if (!generationEvent) continue;
+              await engine.executions.recordProviderEvent(executionId, generationEvent, retryContext);
               if (generationEvent.type === 'token' && generationEvent.content) {
                 context.onProgress?.({ kind: 'token', content: generationEvent.content });
               }
@@ -379,8 +388,12 @@ export function createFleetTaskExecutor(
           return result;
         }
 
-        await engine.executions.recordToolStart(executionId, name, input);
+        const callId = generateId('call-');
         const result = await runRegisteredTool(engine.tools, name, input, {
+          verifyWorkspace: true,
+          callId,
+          signal,
+          checkpoint: async () => { await engine.executions.recordToolStart(executionId, name, input, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },
           projectRoot: taskRoot,
           executionId,
           networkAllowed: engine.config.networkAllowed,
@@ -392,10 +405,11 @@ export function createFleetTaskExecutor(
         });
 
         await engine.executions.recordToolCall(executionId, {
-          id: generateId('call-'),
+          id: callId,
+          failureClass: result.failureClass,
           tool: name,
           input,
-          output: result.output.slice(0, 4000),
+          output: result.output,
           ok: result.ok,
           error: result.error,
           policyEffect: decision.decision,
@@ -409,11 +423,33 @@ export function createFleetTaskExecutor(
           exitCode: typeof result.metadata?.exitCode === 'number' ? result.metadata.exitCode : undefined,
         });
 
+        if (result.fileMutations && result.fileMutations.length > 0) {
+          const mutations = result.fileMutations
+            .filter((m) => m.changed)
+            .map((m) => {
+              const abs = path.resolve(taskRoot, m.path);
+              return { ...m, path: path.relative(taskRoot, abs).split(path.sep).join('/') };
+            });
+          if (mutations.length > 0) {
+            await engine.executions.recordFileMutations(executionId, mutations);
+          }
+        }
+
+        // A build/test/lint/typecheck invocation can itself produce workspace
+        // mutations (a compiler writing its output binary, generated test
+        // artifacts, ...) — that's an expected, legitimate side effect of the
+        // check succeeding, not a change the check needs to be re-run against.
+        // Stamping the check with the revision captured before the tool ran
+        // would make it stale the instant its own artifact mutation above is
+        // recorded, so it's re-read here, after any such mutation from this
+        // same call has already landed.
+        const checkRevision = engine.executions.getWorkspaceRevision(executionId);
         if (CHECK_TOOLS.has(name)) {
           const notApplicable = !result.ok && /missing script/i.test(result.error ?? '');
           if (!notApplicable) {
             const script = typeof input.script === 'string' && input.script.trim() ? input.script.trim() : name;
             await engine.executions.recordCheck(executionId, {
+              workspaceRevision: checkRevision,
               name: name as CheckRunRecord['name'],
               command: `npm run ${script}`,
               ok: result.ok,
@@ -423,30 +459,13 @@ export function createFleetTaskExecutor(
           }
         } else if (name === 'shell' && typeof input.command === 'string' && BUILD_INVOCATION_PATTERN.test(input.command)) {
           await engine.executions.recordCheck(executionId, {
+            workspaceRevision: checkRevision,
             name: 'build',
             command: input.command,
             ok: result.ok,
             output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
             durationMs: result.durationMs,
           });
-        }
-
-        if (result.fileMutations && result.fileMutations.length > 0) {
-          const changedFiles = result.fileMutations
-            .filter((m) => m.changed)
-            .map((m) => {
-              const abs = path.resolve(taskRoot, m.path);
-              return path.relative(taskRoot, abs).split(path.sep).join('/');
-            });
-          if (changedFiles.length > 0) {
-            await engine.executions.recordFilesChanged(executionId, changedFiles);
-          }
-        } else if (!result.fileMutations && WRITE_TOOLS.has(name) && result.ok && typeof input.path === 'string') {
-          const relative = path
-            .relative(taskRoot, path.resolve(taskRoot, input.path))
-            .split(path.sep)
-            .join('/');
-          await engine.executions.recordFilesChanged(executionId, [relative]);
         }
 
         // No onProgress() here either — see the comment on the denied-decision branch

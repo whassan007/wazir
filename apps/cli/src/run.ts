@@ -41,7 +41,13 @@ function toGenerationEvent(event: WorkerExecutionEvent): GenerationEvent | undef
         usage: data?.usage as GenerationEvent['usage'],
       };
     case 'failed':
-      return { type: 'error', error: (data?.error as string | undefined) ?? 'remote execution failed' };
+      return { type: 'error', error: (data?.error as string | undefined) ?? 'remote execution failed',
+        failureClass: data?.failureClass as GenerationEvent['failureClass'], retryExhausted: data?.retryExhausted === true,
+        retryAttempt: data?.retryAttempt as number | undefined };
+    case 'retry':
+      return { type: 'retry', error: data?.error as string | undefined,
+        failureClass: data?.failureClass as GenerationEvent['failureClass'],
+        retryAttempt: data?.retryAttempt as number | undefined, retryDelayMs: data?.retryDelayMs as number | undefined };
     default:
       // 'started' / 'cancelled' have no local-path equivalent to surface — skip.
       return undefined;
@@ -323,6 +329,8 @@ export async function executeTask(
     tools: availableTools,
 
     async *generate(request) {
+      const requestId = generateId('req-');
+      const retryContext = { requestId, model: request.modelId, provider: engine.models.get(request.modelId)?.provider };
       loader.start(`Waiting for model response (${request.modelId})...`);
       await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
 
@@ -340,6 +348,7 @@ export async function executeTask(
             return;
           }
           for await (const event of adapter.generate({
+            requestId,
             modelId: request.modelId,
             messages: request.messages,
             maxTokens: request.maxTokens,
@@ -348,6 +357,7 @@ export async function executeTask(
             stream: true,
             tools: request.tools,
           })) {
+            await engine.executions.recordProviderEvent(executionId, event, retryContext);
             if (event.type === 'token') {
               loader.setText(`Generating response from ${request.modelId}...`);
             }
@@ -367,7 +377,7 @@ export async function executeTask(
           const workerRequest: WorkerExecutionRequest = {
             runtimeId: scheduling.runtimeId,
             executionId,
-            requestId: generateId('req-'),
+            requestId,
             modelId: request.modelId,
             messages: request.messages,
             maxTokens: request.maxTokens,
@@ -378,6 +388,7 @@ export async function executeTask(
             for await (const event of dispatchRemote(engine.config.apiUrl, scheduling.computerId, workerRequest, { token: engine.config.apiToken })) {
               const generationEvent = toGenerationEvent(event);
               if (!generationEvent) continue;
+              await engine.executions.recordProviderEvent(executionId, generationEvent, retryContext);
               if (generationEvent.type === 'token') {
                 loader.setText(`Generating response from ${request.modelId}...`);
               }
@@ -478,10 +489,14 @@ export async function executeTask(
       }
       loader.start(activityText);
 
-      await engine.executions.recordToolStart(executionId, name, input);
+      const callId = generateId('call-');
       let result: ToolResult;
       try {
         result = await runRegisteredTool(engine.tools, name, input, {
+          verifyWorkspace: true,
+          callId,
+          allowedTools: availableTools.map(tool => tool.name),
+          checkpoint: async () => { await engine.executions.recordToolStart(executionId, name, input, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },
           projectRoot: engine.projectRoot,
           executionId,
           networkAllowed: engine.config.networkAllowed,
@@ -490,10 +505,11 @@ export async function executeTask(
         loader.stop();
       }
       await engine.executions.recordToolCall(executionId, {
-        id: generateId('call-'),
+        id: callId,
+        failureClass: result.failureClass,
         tool: name,
         input,
-        output: result.output.slice(0, 4000),
+        output: result.output,
         ok: result.ok,
         error: result.error,
         policyEffect: decision.decision,
@@ -507,11 +523,33 @@ export async function executeTask(
         exitCode: typeof result.metadata?.exitCode === 'number' ? result.metadata.exitCode : undefined,
       });
 
+      if (result.fileMutations && result.fileMutations.length > 0) {
+        const mutations = result.fileMutations
+          .filter((m) => m.changed)
+          .map((m) => {
+            const abs = path.resolve(engine.projectRoot, m.path);
+            return { ...m, path: path.relative(engine.projectRoot, abs).split(path.sep).join('/') };
+          });
+        if (mutations.length > 0) {
+          await engine.executions.recordFileMutations(executionId, mutations);
+        }
+      }
+
+      // A build/test/lint/typecheck invocation can itself produce workspace
+      // mutations (a compiler writing its output binary, generated test
+      // artifacts, ...) — that's an expected, legitimate side effect of the
+      // check succeeding, not a change the check needs to be re-run against.
+      // Stamping the check with the revision captured *before* the tool ran
+      // would make it stale the instant its own artifact mutation above is
+      // recorded, so it's re-read here, after any such mutation from this
+      // same call has already landed.
+      const checkRevision = engine.executions.getWorkspaceRevision(executionId);
       if (CHECK_TOOLS.has(name)) {
         const notApplicable = !result.ok && /missing script/i.test(result.error ?? '');
         if (!notApplicable) {
           const script = typeof input.script === 'string' && input.script.trim() ? input.script.trim() : name;
           await engine.executions.recordCheck(executionId, {
+            workspaceRevision: checkRevision,
             name: name as CheckRunRecord['name'],
             command: `npm run ${script}`,
             ok: result.ok,
@@ -526,6 +564,7 @@ export async function executeTask(
         // sees it instead of silently treating "compiled via shell" as if
         // nothing had been verified at all.
         await engine.executions.recordCheck(executionId, {
+          workspaceRevision: checkRevision,
           name: 'build',
           command: input.command,
           ok: result.ok,
@@ -534,27 +573,13 @@ export async function executeTask(
         });
       } else if (name === 'shell' && typeof input.command === 'string' && isTestInvocation(input.command)) {
         await engine.executions.recordCheck(executionId, {
+          workspaceRevision: checkRevision,
           name: 'test',
           command: input.command,
           ok: result.ok,
           output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
           durationMs: result.durationMs,
         });
-      }
-
-      if (result.fileMutations && result.fileMutations.length > 0) {
-        const changedFiles = result.fileMutations
-          .filter((m) => m.changed)
-          .map((m) => {
-            const abs = path.resolve(engine.projectRoot, m.path);
-            return path.relative(engine.projectRoot, abs).split(path.sep).join('/');
-          });
-        if (changedFiles.length > 0) {
-          await engine.executions.recordFilesChanged(executionId, changedFiles);
-        }
-      } else if (!result.fileMutations && WRITE_TOOLS.has(name) && result.ok && typeof input.path === 'string') {
-        const relative = path.relative(engine.projectRoot, path.resolve(engine.projectRoot, input.path)).split(path.sep).join('/');
-        await engine.executions.recordFilesChanged(executionId, [relative]);
       }
 
       emitJson({ type: 'tool', tool: name, ok: result.ok, durationMs: result.durationMs, executionId });
@@ -767,6 +792,7 @@ export async function runSubagent(
     tools: subagentTools,
 
     async *generate(req) {
+      const requestId = generateId('req-');
       if (context.signal?.aborted) return;
       const adapter = engine.adapters.get(context.runtimeId) ?? engine.worker.adapterForModel(req.modelId);
       if (!adapter) {
@@ -775,6 +801,7 @@ export async function runSubagent(
       }
       const effective = context.computerId ? await engine.lifecycle.activateExecution(childExecId, MINIMUM_CONTEXT_TOKENS) : undefined;
       for await (const event of adapter.generate({
+        requestId,
         contextTokens: effective,
         modelId: req.modelId,
         messages: req.messages,
@@ -783,6 +810,9 @@ export async function runSubagent(
         stream: true,
         tools: req.tools,
       })) {
+        await engine.executions.recordProviderEvent(childExecId, event, {
+          requestId, model: req.modelId, provider: engine.models.get(req.modelId)?.provider,
+        });
         if (event.type === 'completed' && event.usage) {
           await engine.executions.recordUsage(childExecId, {
             input: event.usage.inputTokens,
@@ -845,8 +875,12 @@ export async function runSubagent(
         return res;
       }
 
-      await engine.executions.recordToolStart(childExecId, name, toolInput);
+      const callId = generateId('call-');
       const res = await runRegisteredTool(engine.tools, name, toolInput, {
+        verifyWorkspace: true,
+        callId,
+        allowedTools: subagentTools.map(tool => tool.name),
+        checkpoint: async () => { await engine.executions.recordToolStart(childExecId, name, toolInput, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },
         projectRoot: context.projectRoot,
         executionId: childExecId,
         networkAllowed: engine.config.networkAllowed,
@@ -854,10 +888,11 @@ export async function runSubagent(
       });
 
       await engine.executions.recordToolCall(childExecId, {
-        id: generateId('call-'),
+        id: callId,
+        failureClass: res.failureClass,
         tool: name,
         input: toolInput,
-        output: res.output.slice(0, 4000),
+        output: res.output,
         ok: res.ok,
         error: res.error,
         policyEffect: decision.decision,
@@ -868,15 +903,15 @@ export async function runSubagent(
       });
 
       if (res.fileMutations && res.fileMutations.length > 0) {
-        const changedFiles = res.fileMutations
+        const mutations = res.fileMutations
           .filter((m) => m.changed)
           .map((m) => {
             const abs = path.resolve(context.projectRoot, m.path);
-            return path.relative(context.projectRoot, abs).split(path.sep).join('/');
+            return { ...m, path: path.relative(context.projectRoot, abs).split(path.sep).join('/') };
           });
-        if (changedFiles.length > 0) {
-          await engine.executions.recordFilesChanged(childExecId, changedFiles);
-          await engine.executions.recordFilesChanged(context.parentExecutionId, changedFiles);
+        if (mutations.length > 0) {
+          await engine.executions.recordFileMutations(childExecId, mutations);
+          await engine.executions.recordFileMutations(context.parentExecutionId, mutations);
         }
       }
 

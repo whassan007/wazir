@@ -6,6 +6,7 @@ export { ContextCompiler, estimateTokens, tokensForPart } from './contextCompile
 export type { ContextCompilerOptions } from './contextCompiler.js';
 export { ExecutionEngine, createExecutionEngine } from './executionEngine.js';
 export { persistExecutionRecord } from './executionPersistence.js';
+export { compileToolSchema, hashToolArguments } from './toolValidation.js';
 export type { ExecutionEngineOptions } from './executionEngine.js';
 export { ModelRegistry } from './modelRegistry.js';
 export { PolicyEngine, createPolicyEngine, protectedPathReason } from './policyEngine.js';

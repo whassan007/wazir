@@ -1,4 +1,5 @@
 import type { ExecutionRecord } from '@wazir/core';
+import { persistExecutionRecord } from '@wazir/core';
 import { MemoryStore, type KeyValueStore } from '@wazir/shared';
 
 const PREFIX = 'executions/';
@@ -7,7 +8,13 @@ export class ExecutionRepository {
   constructor(private readonly store: KeyValueStore) {}
 
   async save(record: ExecutionRecord): Promise<void> {
-    await this.store.put(`${PREFIX}${record.execution.id}`, record);
+    const key = `${PREFIX}${record.execution.id}`;
+    // Legacy callers do not yet carry the engine's storage revision.
+    const current = record.storageRevision === undefined ? await this.get(record.execution.id) : undefined;
+    await persistExecutionRecord(this.store, key, {
+      ...record,
+      storageRevision: record.storageRevision ?? (current?.storageRevision ?? 0) + 1,
+    });
   }
 
   async get(id: string): Promise<ExecutionRecord | undefined> {

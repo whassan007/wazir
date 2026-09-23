@@ -16,7 +16,67 @@
  * involved.
  */
 
+import { classifyFailure, isProviderRetryable, type FailureClass } from './failure.js';
+
+export interface RetryPolicy {
+  maxRetries: number;
+  initialDelayMs: number;
+  maxDelayMs: number;
+  jitter: number;
+}
+
+export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze({
+  maxRetries: 5, initialDelayMs: 500, maxDelayMs: 10_000, jitter: 0.10,
+});
+
+export function resolveRetryPolicy(options: Partial<RetryPolicy> = {}): RetryPolicy {
+  const policy = { ...DEFAULT_RETRY_POLICY, ...options };
+  if (!Number.isSafeInteger(policy.maxRetries) || policy.maxRetries < 0 ||
+      !Number.isFinite(policy.initialDelayMs) || policy.initialDelayMs < 0 ||
+      !Number.isFinite(policy.maxDelayMs) || policy.maxDelayMs < policy.initialDelayMs ||
+      !Number.isFinite(policy.jitter) || policy.jitter < 0 || policy.jitter > 1) {
+    throw new RangeError('Invalid retry policy');
+  }
+  return policy;
+}
+
+export interface RetryDecision {
+  retry: boolean;
+  attempt: number;
+  failureClass: FailureClass;
+  delayMs: number;
+  reason: 'transient_provider_failure' | 'failure_not_retryable' | 'retry_budget_exhausted';
+}
+
+/** attemptsMade includes the failed initial request. This policy never replays tools. */
+export function providerRetryDecision(
+  failureClass: FailureClass,
+  attemptsMade: number,
+  options: Partial<RetryPolicy> = {},
+  random: () => number = Math.random,
+): RetryDecision {
+  const policy = resolveRetryPolicy(options);
+  if (!Number.isSafeInteger(attemptsMade) || attemptsMade < 1) throw new RangeError('Invalid retry attempt');
+  if (!isProviderRetryable(failureClass)) return { retry: false, attempt: attemptsMade, failureClass, delayMs: 0, reason: 'failure_not_retryable' };
+  if (attemptsMade > policy.maxRetries) return { retry: false, attempt: attemptsMade, failureClass, delayMs: 0, reason: 'retry_budget_exhausted' };
+  const exponential = Math.min(policy.maxDelayMs, policy.initialDelayMs * 2 ** Math.min(52, attemptsMade - 1));
+  const delayMs = Math.min(policy.maxDelayMs, Math.max(0, Math.round(exponential * (1 + policy.jitter * (2 * random() - 1)))));
+  return { retry: true, attempt: attemptsMade + 1, failureClass, delayMs, reason: 'transient_provider_failure' };
+}
+
+/** Cancellation interrupts backoff instead of waiting for the next provider attempt. */
+export function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => { clearTimeout(timer); reject(signal?.reason ?? new Error('cancelled')); };
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, delayMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export interface RetryOptions {
+  policy?: Partial<RetryPolicy>;
+  signal?: AbortSignal;
   /** Maximum number of attempts, including the first. Default 4. */
   maxAttempts?: number;
   /** Base delay in ms before the first retry. Default 250. */
@@ -24,7 +84,7 @@ export interface RetryOptions {
   /** Delay cap in ms, before jitter. Default 8000. */
   maxDelayMs?: number;
   /** Called before each sleep, with the attempt number (1-based) and the error that triggered it — durably record the pending retry (e.g. into the job log) so recovery survives a crash mid-backoff. */
-  onRetry?: (attempt: number, delayMs: number, error: unknown) => void | Promise<void>;
+  onRetry?: (attempt: number, delayMs: number, error: unknown, decision: RetryDecision) => void | Promise<void>;
   /** Decides whether `error` is worth retrying. Default: RetryableHttpError classification below, or a thrown network error (TypeError from fetch, ECONNREFUSED, etc). */
   isRetryable?: (error: unknown) => boolean;
 }
@@ -40,16 +100,7 @@ export class RetryableHttpError extends Error {
 }
 
 function defaultIsRetryable(error: unknown): boolean {
-  if (error instanceof RetryableHttpError) return error.status === 429 || (error.status >= 500 && error.status < 600);
-  if (error instanceof Error) {
-    // Network-level failures: fetch throws a plain TypeError for DNS/connection
-    // failures in undici/browsers; Node's `cause` sometimes carries the real
-    // errno code (ECONNREFUSED, ECONNRESET, ETIMEDOUT) for a connection drop.
-    const cause = (error as { cause?: { code?: string } }).cause;
-    if (error.name === 'TypeError' || error.name === 'AbortError') return true;
-    if (cause?.code && ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE'].includes(cause.code)) return true;
-  }
-  return false;
+  return isProviderRetryable(classifyFailure(error));
 }
 
 /**
@@ -75,21 +126,28 @@ export function isRetryableHttpStatus(status: number): boolean {
  * `isRetryable` (or the default classifier) to decide whether to retry.
  */
 export async function retryConnect<T>(attempt: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
-  const maxAttempts = options.maxAttempts ?? 4;
-  const baseDelayMs = options.baseDelayMs ?? 250;
-  const maxDelayMs = options.maxDelayMs ?? 8000;
+  const policy = resolveRetryPolicy({
+    maxRetries: options.maxAttempts === undefined ? 3 : options.maxAttempts - 1,
+    initialDelayMs: options.baseDelayMs ?? 250,
+    maxDelayMs: options.maxDelayMs ?? 8000,
+    ...options.policy,
+  });
+  const maxAttempts = policy.maxRetries + 1;
   const isRetryable = options.isRetryable ?? defaultIsRetryable;
 
   let lastError: unknown;
   for (let n = 1; n <= maxAttempts; n++) {
+    options.signal?.throwIfAborted();
     try {
       return await attempt();
     } catch (error) {
       lastError = error;
-      if (n === maxAttempts || !isRetryable(error)) throw error;
-      const delayMs = jitteredDelay(n, baseDelayMs, maxDelayMs);
-      await options.onRetry?.(n, delayMs, error);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      // A custom predicate may narrow retry eligibility, but cannot override a
+      // controller-classified policy/code/tool/cancellation failure.
+      const decision = providerRetryDecision(classifyFailure(error), n, policy);
+      if (!decision.retry || !isRetryable(error)) throw error;
+      await options.onRetry?.(n, decision.delayMs, error, decision);
+      await waitForRetry(decision.delayMs, options.signal);
     }
   }
   // Unreachable — the loop always returns or throws — but keeps TS satisfied.

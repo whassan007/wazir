@@ -54,6 +54,7 @@ export const readTool: Tool = {
 
 export const writeTool: Tool = {
   descriptor: {
+    sideEffectClass: 'IDEMPOTENT_WRITE',
     name: 'write',
     description: 'Create or overwrite a file inside the project.',
     inputSchema: {

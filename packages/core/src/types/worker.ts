@@ -16,6 +16,7 @@ export interface WorkerInfo {
  * Workers execute exactly what they are told — they never schedule.
  */
 export interface WorkerExecutionRequest {
+  providerRetryPolicy?: Partial<import('@wazir/shared').RetryPolicy>;
   /** Opaque claim fencing token assigned by the control plane. */
   leaseToken?: string;
   executionId: string;
@@ -31,6 +32,7 @@ export interface WorkerExecutionRequest {
 }
 
 export type WorkerEventType =
+  | 'retry'
   | 'lease_acquired'
   | 'lease_renewed'
   | 'started'

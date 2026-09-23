@@ -11,8 +11,12 @@ export type ToolPermission =
 
 export type ToolRiskLevel = 'low' | 'medium' | 'high';
 export type ToolEnvironment = 'local' | 'worker';
+export type ToolSideEffectClass = 'READ_ONLY' | 'IDEMPOTENT_WRITE' | 'NON_IDEMPOTENT_WRITE';
 
 export interface ToolDescriptor {
+  sideEffectClass?: ToolSideEffectClass;
+  timeoutMs?: number;
+  concurrencySafety?: 'parallel' | 'exclusive';
   provenance?:
     | { source: 'mcp'; serverId: string; tool: string; trust: 'untrusted' }
     | { source: 'subagent'; [key: string]: unknown }
@@ -39,6 +43,9 @@ export interface FileMutationResult {
 }
 
 export interface ToolResult {
+  failureClass?: import('@wazir/shared').FailureClass;
+  /** The value checked against descriptor.outputSchema, when provided. */
+  structuredOutput?: unknown;
   ok: boolean;
   output: string;
   error?: string;
@@ -48,6 +55,12 @@ export interface ToolResult {
 }
 
 export interface ToolExecutionContext {
+  callId?: string;
+  allowedTools?: readonly string[];
+  /** Must resolve durably before executor dispatch. A rejection prevents execution. */
+  checkpoint?: () => Promise<void>;
+  /** Controller opts in to before/after physical workspace observation. */
+  verifyWorkspace?: boolean;
   signal?: AbortSignal;
   requester?: string;
   agentId?: string;

@@ -4,6 +4,7 @@
   "description": "Runtime adapter interfaces for the meta-harness",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
+  "dependencies": { "@wazir/shared": "*" },
   "scripts": {
     "build": "tsc --build"
   }

@@ -1,0 +1,151 @@
+# Execution architecture upgrade
+
+## Inspection and implementation map
+
+Baseline: `84255a61eed8991d3be4c910aeeb0fb57a30773e`, with pre-existing local
+changes in the planner, engine, agent, orchestration, evaluation and TUI.
+Those changes are retained.
+
+| Requirement | Existing implementation | Remaining gap / modification target | Regression coverage |
+|---|---|---|---|
+| Durable execution history | `packages/core/src/services/executionEngine.ts`, `packages/registry/src/database.ts`, `apps/cli/src/engine.ts`, shared `KeyValueStore` | Sequence and envelope migration, isolated history, ordered writes, atomic history extension | Clock rollback, conflicting writers, restart, insertion deduplication, persistence failure |
+| Failure-aware retry | `packages/shared/src/retry.ts`, runtime adapters, `jobOrchestrator.ts` | Shared failure classes, separate provider/protocol/tool/coding budgets | Provider failure versus compiler/policy failure, repair exhaustion |
+| Schema-first tool pipeline | `packages/tools/src/registry.ts`, `packages/core/src/types/tool.ts`, CLI run/fleet/MCP callbacks | Central validation, output contracts, side-effect classes, stable checkpoint IDs | Invalid input/output, crash after dispatch, unknown outcome recovery |
+| Physical mutation truth | `packages/tools/src/filesystem.ts`, `FileMutationResult`, CLI tool callbacks | Preserve existing before/after hashes; cover command-driven changes | Failed/no-op edit, one revision per real mutation |
+| Verification fencing | `packages/evaluation/src/index.ts`, execution engine workspace/evidence records | Require exact revision at every completion entry point; protect verification inputs | Stale build/test evidence, model claims, oracle weakening |
+| Bounded context and attempts | `packages/agents/src/codingAgent.ts`, `ContextCompiler` | Controller-level budgets, attempt/context separation, observation compaction, semantic progress | Context growth, raw evidence retention, stop conditions |
+| Routing and reliability | `Scheduler`, Agent/Model/Runtime/Computer registries, RuntimeAdapters | Evidence-backed model reliability and failure-based routing/circuits | Explicit route events, capability selection, circuit recovery |
+| Minimum tool surface and policy | `PolicyEngine`, `ApprovalQueue`, tool descriptors | Enforced task-specific tool selection and protected verification | Denial precedence and unavailable tools |
+| Recovery and provenance | `RecoveryManager`, JobManager ownership/JobGraph, worker leases, `ProvenanceManager` | Event-derived execution reconstruction, retained budgets, safe same-execution resume | Unknown side effects, lease fencing, identity retention |
+| Projections and acceptance | CLI `commands.ts`, `fleetRunner.ts`, `tui/fleetTui.ts`, integration/live coding harnesses | Durable TUI projections and decision explanations; real coding acceptance | JSON compatibility, replay projection, exact-revision completion |
+
+## First tranche: durable event envelope
+
+The engine emits `eventId`, `executionId`, `jobId`, `sequence`, `timestamp`,
+and `eventType`, retaining `id` and `type` for existing consumers. Standalone
+executions explicitly carry `jobId: null`; fleet executions carry the owning job.
+Optional step/turn/attempt/call identifiers can be supplied by controller producers.
+Agent/model/runtime/computer/worker and workspace revision are captured on insertion.
+
+Legacy events retain their IDs and array order. Startup adds the new envelope,
+rejects invalid sequence/identity, and durably records discovered unknown outcomes
+without adding duplicates on every restart. Event reads return detached copies.
+Replay follows insertion sequence rather than the wall clock.
+
+Persistence remains in the existing record store. Engine writes use independent
+snapshots and serialize asynchronous persistence. Production CLI and registry
+adapters use atomic `KeyValueStore.update`, compare the storage revision, and
+require every existing event to remain an unchanged prefix. A storage conflict
+fails closed; a losing process must reload rather than overwrite the winner.
+Custom persistence callbacks must provide equivalent atomicity when shared across
+processes. Stores without atomic update are rejected by the production adapter.
+
+Storage errors propagate. The JSON store distinguishes a missing first-run file
+from corruption, unreadable data, or disappearance of a previously observed file;
+it cannot replace those failures with an empty history. Repeated terminal status
+notifications do not append duplicate terminal events, and stale completion
+rejections are persisted before returning the error.
+
+This is a foundation, not the complete mission. Event vocabulary is available for
+later producers, but this tranche does not claim that every listed event is emitted.
+Full state reconstruction, failure classification, retry budgets, stable tool-call
+matching, model-attempt/context separation, reliability routing, and live acceptance
+remain subsequent work. Existing mutable non-event record fields remain compatibility
+projections; this patch does not yet derive every field from events.
+
+## Second tranche: classified provider connection retries
+
+The existing shared retry module now has explicit failure classes, a validated
+finite retry policy, bounded jitter, and interruptible backoff. Its historical
+four-attempt default remains; the configurable policy defaults are five retries,
+500 ms initial delay, 10 seconds maximum, and 10% jitter. A custom predicate can
+narrow eligibility but cannot make a policy/code/tool/cancellation failure eligible
+for provider retry.
+
+The existing LM Studio and Ollama connection retry loops use this policy. Runtime
+adapters continue to own protocol-specific behavior; generation after the connection
+boundary is not replayed. Hosted adapters that previously failed immediately still
+do so. This tranche does not add automatic tool retries or coding repair policy.
+
+CLI, fleet, and subagent execution persist classified retry intent before advancing
+the provider iterator. Retry evidence records attempt, failure class, provider/model,
+request-scoped turn/step identifiers, delay, and reason, excluding raw error bodies.
+The existing worker protocol now forwards retry events and waits for event reporting
+before allowing the provider iterator to advance. Request-scoped retry policy travels
+with worker requests. Aggregate job/protocol/coding budgets and failure-based routing
+remain subsequent work.
+
+## Third tranche: schema-first tool pipeline, idempotency checkpoints, physical mutation truth
+
+`ToolRegistry.register()` now compiles a validated JSON-schema contract per tool
+(`compileToolSchema`, shared with the MCP adapter, which no longer carries its own
+duplicate Ajv setup) and assigns `sideEffectClass` (`READ_ONLY` /
+`IDEMPOTENT_WRITE` / `NON_IDEMPOTENT_WRITE`), `concurrencySafety`, and a default
+timeout when a tool doesn't declare its own. `@wazir/tools`'s `executeTool()` is the
+single pipeline every call site (CLI `run.ts`'s main and subagent loops,
+`fleetRunner.ts`, and MCP's `executeMCPForAgent`) now goes through: input schema
+validation before dispatch, an `allowedTools` gate (`POLICY_DENIED` outside the
+task's tool surface — Phase 8's minimum tool surface, enforced here rather than by
+prompt instruction alone), a durable `checkpoint()` callback the caller must resolve
+before the tool actually runs, a timeout/cancellation race that reports
+`TOOL_OUTCOME_UNKNOWN` for a non-read-only tool interrupted after dispatch (not
+`TOOL_EXECUTION_FAILED` — an interrupted write's real-world effect is unconfirmed,
+not confirmed-absent), and output schema validation when a tool declares one
+(`ARTIFACT_CONTRACT_FAILED` on mismatch).
+
+Idempotency: `ExecutionEngine.recordToolStart()` persists a `ToolCallCheckpoint`
+(`callId`, `argumentsHash`, `sideEffectClass`, `workspaceRevision` at dispatch,
+state `STARTED`) before the tool's own side effect can occur, refuses a second
+`STARTED`/`OUTCOME_UNKNOWN` non-read-only checkpoint until the prior one is
+reconciled, and `setStatus('completed')` itself refuses completion while any
+checkpoint is still `STARTED`/`OUTCOME_UNKNOWN` — a controller invariant, not a
+convention a model or caller can skip.
+
+Physical mutation truth: `snapshotWorkspace()`/`workspaceFingerprint()`/
+`workspaceMutations()` (`packages/tools/src/workspaceSnapshot.ts`) hash the
+relevant file(s) before and after a mutating tool call — the single target path for
+`write`/`edit`, a full recursive walk otherwise (e.g. `shell` running a build) — and
+`executeTool()` only reports a `fileMutations` entry where the content hash actually
+changed. A failed write, a no-op edit, and a write that reproduces byte-identical
+content all correctly report no mutation and no revision increment; only a real
+content change does. `ExecutionEngine.recordFileMutations()` re-filters on
+`beforeHash !== afterHash` as a second gate before incrementing `workspaceRevision`.
+
+Revision-fenced verification (Phase 11): `CheckRunRecord.workspaceRevision` pins a
+build/test/lint/typecheck result to the exact revision it was run against, and
+`setStatus('completed')` walks `record.evidence`/`record.evaluation` and rejects
+completion (`ARTIFACT_CONTRACT_FAILED`) unless current evidence exists for the
+*current* workspace revision — a later mutation invalidates it
+(`verification.invalidated`/`evidence.stale` events), and the model cannot argue its
+way past this. **Fixed in this tranche**: `run.ts` and `fleetRunner.ts` originally
+captured the check's `workspaceRevision` *before* dispatching the tool, then
+recorded file mutations from that same call *after* recording the check. A build
+step that writes its own output artifact (e.g. `g++ ... -o main` — the compiled
+binary is itself a detected mutation) was therefore immediately stale by the time
+`evaluateExecution()` ran, because the check was stamped against the pre-build
+revision while the binary's appearance had already bumped the workspace to the next
+one — `BUILD_EVIDENCE_STALE` on a build that had, in fact, just passed. Both call
+sites now record file mutations first and re-read the current revision immediately
+before stamping the check, so a check's own legitimate output artifacts don't
+retroactively invalidate the check that produced them. Covered by
+`apps/cli/tests/executeTask.e2e.test.ts`'s "compiles source code via a raw `shell`
+call IS recorded as a real check and can succeed".
+
+Regression coverage added this tranche: `packages/core/tests/toolCheckpoints.test.ts`
+(checkpoint lifecycle, duplicate-write rejection, completion blocked on unreconciled
+outcome), `packages/tools/tests/physicalExecution.test.ts` (failed/no-op/real edit
+revision behavior, shell-driven mutation detection), `packages/tools/tests/
+toolContractPipeline.test.ts` (input/output schema validation, `allowedTools`
+denial, timeout → `TOOL_OUTCOME_UNKNOWN`).
+
+Not yet done: Phase 2/3 (model-attempt vs. execution-history separation,
+observation compaction), Phase 12–24 (explicit `StopCondition` types beyond the
+turn/repair caps `CodingAgent` already enforces, semantic no-progress detection,
+model capability registry and circuit breaker, aggregate execution budgets,
+protected-verification tamper detection, full recovery-from-events reconstruction,
+`wa explain`/CLI projections of the new event vocabulary, and the live acceptance
+run). The existing per-run `maxTurns`/`maxRepairCycles`/`toolRepeatLimit` caps in
+`CodingAgent` and the trivial/small/complex task-complexity budgets
+(`packages/core/src/services/complexity.ts`) predate this mission and are not the
+same thing as the mission's controller-owned `StopCondition` composition — they
+overlap in effect but aren't unified into one typed mechanism yet.

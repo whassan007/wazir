@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { auth } from '@modelcontextprotocol/client';
-import { MCPRegistry, MCPError, PolicyEngine, defaultMCPProfiles, redactMCPArguments, type MCPServerDefinition, type ToolExecutionContext, type ToolResult } from '@wazir/core';
+import { MCPRegistry, MCPError, PolicyEngine, defaultMCPProfiles, hashToolArguments, redactMCPArguments, type MCPServerDefinition, type ToolExecutionContext, type ToolResult } from '@wazir/core';
 import { ToolRegistry, executeTool } from '@wazir/tools';
 import { createSecretBroker } from '@wazir/secrets';
 import { generateId } from '@wazir/shared';
@@ -76,14 +76,18 @@ export async function executeMCPForAgent(engine: RookEngine, name: string, input
   const execution = ctx.executionId ? await engine.executions.get(ctx.executionId) : undefined;
   ctx.agentId ??= execution?.execution.agentId;
   ctx.requester ??= 'agent';
-  await engine.executions.recordToolStart(ctx.executionId!, name, safeInput);
-  const result = await executeTool(engine.tools, name, input, ctx);
+  const callId = generateId('call-');
+  const result = await executeTool(engine.tools, name, input, {
+    ...ctx, callId, verifyWorkspace: true,
+    checkpoint: async () => { await engine.executions.recordToolStart(ctx.executionId!, name, safeInput, { callId, argumentsHash: hashToolArguments(input), sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },
+  });
   if (result.metadata?.policy) await engine.executions.recordPolicy(ctx.executionId!, result.metadata.policy as any);
   await engine.executions.recordToolCall(ctx.executionId!, {
-    id: generateId('call-'), tool: name, input: safeInput, output: result.output.slice(0, 4000), ok: result.ok, error: result.error,
+    id: callId, failureClass: result.failureClass, tool: name, input: safeInput, output: result.output, ok: result.ok, error: result.error,
     policyEffect: (result.metadata?.policy as any)?.decision ?? 'deny', policyRule: 'mcp-risk-policy', durationMs: result.durationMs, at: new Date(),
     provenance: result.metadata,
   });
+  if (result.fileMutations) await engine.executions.recordFileMutations(ctx.executionId!, result.fileMutations);
   return result;
 }
 

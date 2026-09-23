@@ -69,8 +69,10 @@ export class TerminalScreen {
     }
 
     if ((this.outStream as any).isTTY) {
-      // Enter alternate screen buffer, enable bracketed paste mode (\x1b[?2004h), clear screen, ensure cursor visible as a steady box
-      this.outStream.write(`\x1b[?1049h\x1b[?2004h\x1b[H\x1b[2J\x1b[?25h${CURSOR_STEADY_BLOCK}`);
+      // Enter alternate screen buffer, enable bracketed paste mode, clear screen,
+      // hide cursor immediately — render() will show it at the correct prompt column
+      // after the first frame is written.
+      this.outStream.write(`\x1b[?1049h\x1b[?2004h\x1b[H\x1b[2J\x1b[?25l${CURSOR_STEADY_BLOCK}`);
       this.inAltScreen = true;
     }
 
@@ -132,6 +134,17 @@ export class TerminalScreen {
     if (!bufferChanged && cursorCol === this.lastCursorCol) return;
 
     if (this.inAltScreen) {
+      // Hide the cursor for the duration of the write so it doesn't appear as a
+      // white-block artifact at arbitrary mid-frame positions during painting.
+      // All operations (hide, write, show+position) are batched into one write()
+      // call to prevent intermediate visible cursor states between writes.
+      const lines = buffer.split('\n');
+      const lastLine = lines[lines.length - 1] ?? '';
+      const strippedLast = lastLine.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      const col = cursorCol ?? strippedLast.length + 1;
+      const row = lines.length;
+
+      let payload = '\x1b[?25l'; // hide cursor before any writes
       if (bufferChanged) {
         // Move cursor to top-left and write lines with \x1b[K (erase to line end) so leftover
         // characters from a previous, longer frame never linger. This used to be paired with
@@ -141,18 +154,12 @@ export class TerminalScreen {
         // terminals. It's unnecessary now that every line is clamped to the exact terminal
         // width before reaching here (see FleetTui.draw()) — a fully space-padded row already
         // overwrites any stale trailing glyphs on its own, so per-line \x1b[K is enough.
-        const lines = buffer.split('\n');
         const cleared = lines.map((l) => l + '\x1b[K').join('\r\n') + '\x1b[K\x1b[J';
-        this.outStream.write('\x1b[H' + cleared);
+        payload += '\x1b[H' + cleared;
       }
-
-      // Explicitly position the hardware cursor at the active prompt line.
-      const lines = buffer.split('\n');
-      const lastLine = lines[lines.length - 1] ?? '';
-      const strippedLast = lastLine.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-      const col = cursorCol ?? strippedLast.length + 1;
-      const row = lines.length;
-      this.outStream.write(`\x1b[${row};${col}H`);
+      // Position the hardware cursor at the active prompt line, then show it.
+      payload += `\x1b[${row};${col}H\x1b[?25h`;
+      this.outStream.write(payload);
     } else if (bufferChanged) {
       // Non-TTY & unattached fallback (§23): write clean text
       this.outStream.write(buffer + '\n');

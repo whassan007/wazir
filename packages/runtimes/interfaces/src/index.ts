@@ -74,6 +74,8 @@ export interface ToolDefinition {
 }
 
 export interface GenerationRequest {
+  /** Controller-owned provider retry budget, never supplied by model output. */
+  providerRetryPolicy?: Partial<import('@wazir/shared').RetryPolicy>;
   modelId: string;
   messages: ChatMessage[];
   /** Convenience: prepended as a system message before `messages`. */
@@ -98,6 +100,9 @@ export interface Usage {
 }
 
 export interface GenerationEvent {
+  failureClass?: import('@wazir/shared').FailureClass;
+  retryExhausted?: boolean;
+  requestId?: string;
   type: 'token' | 'tool_call' | 'completed' | 'error' | 'retry';
   content?: string;
   toolCallId?: string;

@@ -15,6 +15,7 @@ export type ExecutionStatus =
 
 export interface Execution {
   id: string;
+  jobId?: string;
   taskId: string;
   parentExecutionId?: string;
   agentId?: string;
@@ -36,6 +37,8 @@ export interface TokenUsage {
 }
 
 export interface ToolCallRecord {
+  callId?: string;
+  failureClass?: import('@wazir/shared').FailureClass;
   provenance?: Record<string, unknown>;
   id: string;
   tool: string;
@@ -59,7 +62,24 @@ export interface ToolCallRecord {
   exitCode?: number;
 }
 
+export interface ToolCallCheckpoint {
+  executionId: string;
+  stepId: string;
+  callId: string;
+  toolName: string;
+  argumentsHash: string;
+  startedAt: Date;
+  finishedAt?: Date;
+  state: 'STARTED' | 'COMPLETED' | 'FAILED' | 'OUTCOME_UNKNOWN';
+  sideEffectClass: import('./tool.js').ToolSideEffectClass;
+  workspaceRevision: number;
+  input: unknown;
+  legacyCorrelation?: boolean;
+}
+
 export interface CheckRunRecord {
+  /** Captured before dispatch, not inferred from the revision at result ingestion. */
+  workspaceRevision?: number;
   name: 'test' | 'lint' | 'typecheck' | 'build';
   command: string;
   ok: boolean;
@@ -116,6 +136,8 @@ export interface EvaluationResult {
 
 /** Durable execution record — the source of truth for inspect/replay. */
 export interface ExecutionRecord {
+  /** Compare-and-swap revision for the existing durable record store. */
+  storageRevision?: number;
   execution: Execution;
   task: Task;
   scheduling?: SchedulerDecision;
@@ -136,6 +158,20 @@ export interface ExecutionRecord {
 }
 
 export type ExecutionEventType =
+  | 'execution.started'
+  | 'turn.started' | 'turn.completed'
+  | 'step.started' | 'step.completed' | 'step.failed'
+  | 'model.requested' | 'model.attempt.started' | 'model.attempt.failed'
+  | 'model.response.completed' | 'model.route.changed'
+  | 'tool.call.requested' | 'tool.call.validated' | 'tool.call.started'
+  | 'tool.call.completed' | 'tool.call.failed' | 'tool.call.outcome_unknown'
+  | 'workspace.mutated' | 'workspace.revision.changed'
+  | 'verification.completed' | 'verification.invalidated'
+  | 'retry.scheduled' | 'retry.exhausted'
+  | 'policy.allowed' | 'policy.denied' | 'policy.approval_required'
+  | 'lease.acquired' | 'lease.renewed' | 'lease.released'
+  | 'context.compacted' | 'budget.warning' | 'budget.exhausted'
+  | 'termination.requested' | 'termination.completed'
   | 'mcp.event'
   | 'execution.created'
   | 'execution.scheduled'
@@ -189,4 +225,36 @@ export interface ExecutionEvent {
   type: ExecutionEventType;
   timestamp: Date;
   data?: unknown;
+  /** Optional only for records written before the sequenced event migration. */
+  eventId?: string;
+  eventType?: ExecutionEventType;
+  sequence?: number;
+  /** null denotes a standalone execution, not an invented job. */
+  jobId?: string | null;
+  turnId?: string;
+  stepId?: string;
+  attemptId?: string;
+  callId?: string;
+  agentId?: string;
+  modelId?: string;
+  runtimeId?: string;
+  computerId?: string;
+  workerId?: string;
+  workspaceRevision?: number;
+}
+
+/** Envelope emitted by ExecutionEngine; legacy records are normalized on load. */
+export interface SequencedExecutionEvent extends ExecutionEvent {
+  eventId: string;
+  eventType: ExecutionEventType;
+  sequence: number;
+  jobId: string | null;
+}
+
+export interface ExecutionEventIdentity {
+  eventId?: string;
+  turnId?: string;
+  stepId?: string;
+  attemptId?: string;
+  callId?: string;
 }

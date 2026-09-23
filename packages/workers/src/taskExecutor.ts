@@ -1,17 +1,11 @@
 import type {
   GenerationRequest,
+  GenerationEvent,
   RuntimeAdapter,
 } from '@wazir/runtimes-interfaces';
 import type { WorkerExecutionRequest } from '@wazir/core';
 
-export interface ExecutionStreamEvent {
-  type: 'token' | 'tool_call' | 'completed' | 'error';
-  content?: string;
-  toolName?: string;
-  toolInput?: unknown;
-  usage?: { inputTokens: number; outputTokens: number; totalTokens?: number };
-  error?: string;
-}
+export interface ExecutionStreamEvent extends GenerationEvent {}
 
 export interface ExecutionOutcome {
   output: string;
@@ -30,10 +24,11 @@ export interface ExecutionOutcome {
 export async function executeRequest(
   adapter: RuntimeAdapter,
   request: WorkerExecutionRequest,
-  onEvent?: (event: ExecutionStreamEvent) => void,
+  onEvent?: (event: ExecutionStreamEvent) => void | Promise<void>,
 ): Promise<ExecutionOutcome> {
   const started = Date.now();
   const generationRequest: GenerationRequest = {
+    providerRetryPolicy: request.providerRetryPolicy,
     modelId: request.modelId,
     messages: request.messages,
     tools: request.tools,
@@ -55,24 +50,26 @@ export async function executeRequest(
     for await (const event of events) {
       if (event.type === 'token' && event.content) {
         output += event.content;
-        onEvent?.({ type: 'token', content: event.content });
+        await onEvent?.({ type: 'token', content: event.content });
       } else if (event.type === 'tool_call') {
-        onEvent?.({ type: 'tool_call', toolName: event.toolName, toolInput: event.toolInput });
+        await onEvent?.({ type: 'tool_call', toolName: event.toolName, toolInput: event.toolInput });
       } else if (event.type === 'completed') {
         if (event.content) output = event.content;
         inputTokens = event.usage?.inputTokens ?? 0;
         outputTokens = event.usage?.outputTokens ?? 0;
-        onEvent?.({ type: 'completed', content: event.content, usage: event.usage });
+        await onEvent?.({ type: 'completed', content: event.content, usage: event.usage });
+      } else if (event.type === 'retry') {
+        await onEvent?.(event);
       } else if (event.type === 'error') {
         ok = false;
         error = event.error;
-        onEvent?.({ type: 'error', error: event.error });
+        await onEvent?.(event);
       }
     }
   } catch (err) {
     ok = false;
     error = err instanceof Error ? err.message : String(err);
-    onEvent?.({ type: 'error', error });
+    await onEvent?.({ type: 'error', error });
   }
 
   return {

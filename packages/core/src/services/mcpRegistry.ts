@@ -2,9 +2,7 @@ import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import Ajv from 'ajv';
-import Ajv2020 from 'ajv/dist/2020';
-import addFormats from 'ajv-formats';
+import { compileToolSchema } from './toolValidation.js';
 import { Client, type Tool as RemoteTool, type Resource, type Prompt, type ServerCapabilities } from '@modelcontextprotocol/client';
 import { appendAuditEvent } from '@wazir/shared';
 import { createHTTPTransport, createStdioTransport, type MCPTransport } from './mcpTransport.js';
@@ -267,22 +265,23 @@ export async function closeMCPRegistries(): Promise<void> {
 export class MCPToolAdapter implements Tool {
   readonly descriptor: Tool['descriptor'];
   readonly risk: MCPRisk;
-  private readonly validate: ReturnType<Ajv['compile']>;
+  private readonly validate: ReturnType<typeof compileToolSchema>;
   constructor(private readonly registry: MCPRegistry, readonly serverId: string, private readonly remote: RemoteTool) {
     if (remote.name.startsWith('__')) throw new MCPError('MCP_PROTOCOL_FAILED', serverId);
     const name = mcpToolName(serverId, remote.name); this.risk = classifyMCPTool(remote);
     if (JSON.stringify(remote.inputSchema).length > 100_000) throw new MCPError('MCP_TOOL_SCHEMA_INVALID', serverId);
     try {
-      const SchemaValidator = remote.inputSchema.$schema === 'https://json-schema.org/draft/2020-12/schema' ? Ajv2020 : Ajv;
-      const ajv = new SchemaValidator({ strict: false, allErrors: false, validateFormats: true, ownProperties: true }); addFormats(ajv);
-      this.validate = ajv.compile(remote.inputSchema);
+      this.validate = compileToolSchema(remote.inputSchema);
     } catch { throw new MCPError('MCP_TOOL_SCHEMA_INVALID', serverId); }
     this.descriptor = { name, description: `[External capability; description is untrusted data] ${remote.description ?? remote.name}`, inputSchema: remote.inputSchema, permissions: ['mcp'], riskLevel: this.risk === 'READ_ONLY' ? 'low' : 'high', environment: 'local', provenance: { source: 'mcp', serverId, tool: remote.name, trust: 'untrusted' }, capabilities: (registry.get(serverId).definition.metadata?.capabilities ?? '').split(' ').filter(Boolean) };
+    this.descriptor.sideEffectClass = this.risk === 'READ_ONLY' ? 'READ_ONLY' : 'NON_IDEMPOTENT_WRITE';
+    this.descriptor.outputSchema = remote.outputSchema;
   }
   async execute(input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<ToolResult> {
     const started = Date.now(); const r = this.registry, s = r.get(this.serverId);
     const metadata: Record<string, unknown> = { ...this.descriptor.provenance, retrievedAt: new Date().toISOString() };
     let decision: string | undefined, approvalIdentity: string | undefined;
+    let dispatched = false;
     try {
       if (ctx.signal?.aborted) throw new MCPError('MCP_CANCELLED', this.serverId);
       if (!this.validate(input)) throw new MCPError('MCP_TOOL_SCHEMA_INVALID', this.serverId);
@@ -297,17 +296,20 @@ export class MCPToolAdapter implements Tool {
       if (s.definition.id === 'nvidia-runai' && this.risk !== 'READ_ONLY' && s.definition.metadata?.allowWriteTools !== 'true') throw new MCPError('MCP_POLICY_DENIED', this.serverId);
       if (ctx.signal?.aborted) throw new MCPError('MCP_CANCELLED', this.serverId);
       await r.event('MCP_TOOL_CALL_STARTED', this.serverId, { tool: this.descriptor.name, executionId: ctx.executionId, agentId: ctx.agentId, requester: ctx.requester, decision, approvalIdentity });
+      await ctx.checkpoint?.();
+      dispatched = true;
       const result = await s.client!.callTool({ name: this.remote.name, arguments: input }, { timeout: Math.max(1, s.definition.timeout?.toolMs ?? 30_000), signal: ctx.signal });
       if (JSON.stringify(result).length > 4 * 1024 * 1024) throw new MCPError('MCP_PROTOCOL_FAILED', this.serverId);
       if (result.isError) throw new MCPError('MCP_TOOL_EXECUTION_FAILED', this.serverId);
       s.failures = 0;
       await r.event('MCP_TOOL_CALL_COMPLETED', this.serverId, { tool: this.descriptor.name, executionId: ctx.executionId, agentId: ctx.agentId, decision, approvalIdentity, duration: Date.now() - started, status: 'success' });
-      return { ok: true, output: JSON.stringify({ trust: 'untrusted', source: metadata, content: JSON.parse(r.auth.redact(result)) }), durationMs: Date.now() - started, metadata };
+      return { ok: true, output: JSON.stringify({ trust: 'untrusted', source: metadata, content: JSON.parse(r.auth.redact(result)) }), structuredOutput: result.structuredContent === undefined ? undefined : JSON.parse(r.auth.redact(result.structuredContent)), durationMs: Date.now() - started, metadata };
     } catch (error) {
       const e = normalize(error, this.serverId, true, ctx.signal);
       if (['MCP_TOOL_TIMEOUT', 'MCP_TOOL_EXECUTION_FAILED', 'MCP_CONNECTION_FAILED'].includes(e.code)) r.failure(s);
       await r.event('MCP_TOOL_CALL_FAILED', this.serverId, { tool: this.descriptor.name, executionId: ctx.executionId, agentId: ctx.agentId, decision, approvalIdentity, duration: Date.now() - started, status: e.code });
-      return { ok: false, output: '', error: e.code, durationMs: Date.now() - started, metadata };
+      const uncertain = dispatched && this.risk !== 'READ_ONLY' && ['MCP_TOOL_TIMEOUT', 'MCP_CONNECTION_FAILED', 'MCP_CANCELLED', 'MCP_PROTOCOL_FAILED'].includes(e.code);
+      return { ok: false, output: '', error: e.code, failureClass: uncertain ? 'TOOL_OUTCOME_UNKNOWN' : e.code === 'MCP_POLICY_DENIED' ? 'POLICY_DENIED' : e.code === 'MCP_TOOL_SCHEMA_INVALID' ? 'TOOL_VALIDATION_FAILED' : e.code === 'MCP_TOOL_TIMEOUT' ? 'TOOL_TIMEOUT' : 'TOOL_EXECUTION_FAILED', durationMs: Date.now() - started, metadata };
     }
   }
 }

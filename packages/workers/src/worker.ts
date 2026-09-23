@@ -184,7 +184,7 @@ export class Worker {
    */
   async execute(
     request: WorkerExecutionRequest,
-    onEvent?: (event: ExecutionStreamEvent) => void,
+    onEvent?: (event: ExecutionStreamEvent) => void | Promise<void>,
   ) {
     const adapter = request.runtimeId ? this.adapters.find(r => r.id === request.runtimeId)?.adapter : this.adapterForModel(request.modelId);
     if (!adapter) {
@@ -378,18 +378,15 @@ export class Worker {
     renewal.unref?.();
     await this.reportEvent(request, 'started');
     try {
-      // `execute()`'s onEvent callback is synchronous (it can't await), but
-      // each call fires an HTTP POST — without chaining them explicitly,
-      // two events emitted back-to-back (e.g. two token events with no
-      // real delay between them) race as independent in-flight requests
-      // and can land at the control plane in the wrong order. Chaining
-      // onto `reportChain` serializes the POSTs without blocking the
-      // generator loop itself.
+      // Await report durability before allowing the adapter to advance. In
+      // particular, retry intent must reach the lease-fenced control plane
+      // before the next provider request is dispatched.
       let reportChain: Promise<void> = Promise.resolve();
       const outcome = await this.execute(request, (event) => {
         reportChain = reportChain.then(() =>
           this.reportEvent(request, this.mapStreamEventType(event.type), event),
         );
+        return reportChain;
       });
       await reportChain;
       if (!lost) await this.reportResult(request, outcome);
@@ -409,6 +406,7 @@ export class Worker {
   }
 
   private mapStreamEventType(type: ExecutionStreamEvent['type']): WorkerEventType {
+    if (type === 'retry') return 'retry';
     if (type === 'completed') return 'completed';
     if (type === 'error') return 'failed';
     if (type === 'tool_call') return 'tool_call';

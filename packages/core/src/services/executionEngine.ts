@@ -7,6 +7,8 @@ import type {
   Execution,
   ExecutionEvent,
   ExecutionEventType,
+  ExecutionEventIdentity,
+  SequencedExecutionEvent,
   ExecutionRecord,
   ExecutionStatus,
   FileMutationHistoryEntry,
@@ -15,11 +17,20 @@ import type {
   Task,
   TokenUsage,
   ToolCallRecord,
+  ToolCallCheckpoint,
   VerificationEvidence,
   WorkspaceState,
 } from '../types/index.js';
+import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { sanitizeUntrustedOutput, appendAuditEvent, computeContentHash } from '@wazir/shared';
 import type { ProvenanceManager, CreateArtifactParams } from './provenanceManager.js';
+import { executionValuesEqual } from './executionPersistence.js';
+import { ExecutionFailure, isProviderRetryable } from '@wazir/shared';
+import type { GenerationEvent } from '@wazir/runtimes-interfaces';
+import { hashToolArguments } from './toolValidation.js';
+import type { ToolSideEffectClass } from '../types/tool.js';
+import type { FileMutationResult } from '../types/tool.js';
 
 export interface ExecutionEngineOptions {
   /** Persists a record after every mutation. */
@@ -32,7 +43,6 @@ export interface ExecutionEngineOptions {
   workspace?: string;
 }
 
-let eventCounter = 0;
 let idCounter = 0;
 
 function nextId(prefix: string): string {
@@ -48,6 +58,9 @@ function nextId(prefix: string): string {
  */
 export class ExecutionEngine {
   private readonly records = new Map<string, ExecutionRecord>();
+  private readonly histories = new Map<string, SequencedExecutionEvent[]>();
+  private persistenceTail: Promise<void> = Promise.resolve();
+  private persistenceFailure?: Error;
   private readonly persist?: (record: ExecutionRecord) => void | Promise<void>;
   private readonly idPrefix: string;
   private readonly provenanceManager?: ProvenanceManager;
@@ -59,16 +72,55 @@ export class ExecutionEngine {
     this.idPrefix = options.idPrefix ?? 'exec';
     this.provenanceManager = options.provenanceManager;
     this.workspace = options.workspace ?? process.cwd();
-    this.ready = Promise.resolve(options.load?.()).then((loaded) => {
+    this.ready = Promise.resolve().then(() => options.load?.()).then(async (loaded) => {
       if (!loaded) return;
       for (const record of loaded) {
-        this.records.set(record.execution.id, record);
+        const copy = structuredClone(record);
+        const events = copy.events.map((event, index) => {
+          if (event.sequence !== undefined && event.sequence !== index + 1) {
+            throw new Error(`Invalid event sequence for execution '${copy.execution.id}'`);
+          }
+          if (event.executionId !== copy.execution.id ||
+              (event.eventId !== undefined && event.eventId !== event.id) ||
+              (event.eventType !== undefined && event.eventType !== event.type)) {
+            throw new Error(`Invalid event identity for execution '${copy.execution.id}'`);
+          }
+          return {
+            ...event,
+            eventId: event.id,
+            eventType: event.type,
+            sequence: index + 1,
+            jobId: event.jobId ?? copy.execution.jobId ?? null,
+            timestamp: new Date(event.timestamp),
+          } satisfies SequencedExecutionEvent;
+        });
+        if (new Set(events.map(e => e.eventId)).size !== events.length) {
+          throw new Error(`Duplicate event identity for execution '${copy.execution.id}'`);
+        }
+        copy.events = structuredClone(events);
+        this.histories.set(copy.execution.id, events);
+        this.records.set(copy.execution.id, copy);
       }
-    }).catch(() => {});
+      // Detect orphaned tool.start events without a matching completed event
+      for (const record of this.records.values()) {
+        for (const call of this.toolCheckpoints(record.execution.id).filter(call => call.state === 'STARTED')) {
+          const data = { tool: call.toolName, input: call.input, startedAt: call.startedAt, callId: call.callId, sideEffectClass: call.sideEffectClass, failureClass: 'TOOL_OUTCOME_UNKNOWN' };
+          this.pushEvent(record, 'tool.unknownOutcome', data, { callId: call.callId, stepId: call.stepId });
+          this.pushEvent(record, 'tool.call.outcome_unknown', data, { callId: call.callId, stepId: call.stepId });
+        }
+        // Persist legacy envelope migration and recovered unknown outcomes before ready.
+        const loadedRecord = loaded.find(item => item.execution.id === record.execution.id)!;
+        if (!isDeepStrictEqual(loadedRecord.events, record.events)) await this.flush(record);
+      }
+    }).catch(error => {
+      this.persistenceFailure = error instanceof Error ? error : new Error(String(error));
+      throw this.persistenceFailure;
+    });
   }
 
   async create(params: {
     task: Task;
+    jobId?: string;
     parentExecutionId?: string;
     agentId?: string;
     computerId: string;
@@ -78,9 +130,12 @@ export class ExecutionEngine {
     scheduling?: SchedulerDecision;
     context?: ContextDecision;
   }): Promise<ExecutionRecord> {
+    await this.ready;
+    if (this.persistenceFailure) throw this.persistenceFailure;
     const now = new Date();
     const execution: Execution = {
       id: nextId(this.idPrefix),
+      jobId: params.jobId,
       taskId: params.task.id,
       parentExecutionId: params.parentExecutionId,
       agentId: params.agentId,
@@ -112,23 +167,17 @@ export class ExecutionEngine {
       evidence: [],
       acceptanceContract: params.task.acceptanceContract,
       mutationHistory: [],
-      events: [
-        {
-          id: nextId('evt'),
-          executionId: execution.id,
-          type: 'execution.created',
-          timestamp: now,
-          data: {
-            agentId: params.agentId,
-            computerId: params.computerId,
-            runtimeId: params.runtimeId,
-            modelId: params.modelId,
-          },
-        },
-      ],
+      events: [],
     };
 
     this.records.set(execution.id, record);
+    this.histories.set(execution.id, []);
+    this.pushEvent(record, 'execution.created', {
+      agentId: params.agentId,
+      computerId: params.computerId,
+      runtimeId: params.runtimeId,
+      modelId: params.modelId,
+    });
     await this.flush(record);
     return record;
   }
@@ -142,7 +191,11 @@ export class ExecutionEngine {
 
   async setStatus(executionId: string, status: ExecutionStatus, options?: { targetRevision?: number }): Promise<void> {
     const record = this.require(executionId);
-
+    if (status === 'completed' && this.toolCheckpoints(executionId).some(call => call.state === 'STARTED' || call.state === 'OUTCOME_UNKNOWN')) {
+      this.pushEvent(record, 'completion.rejected', { reason: 'TOOL_OUTCOME_UNKNOWN' });
+      await this.flush(record);
+      throw new ExecutionFailure('TOOL_OUTCOME_UNKNOWN', 'Completion requires reconciliation of all dispatched tool calls');
+    }
     if (status === 'completed' && options?.targetRevision !== undefined) {
       const currentRev = record.workspaceState?.revision ?? 0;
       if (options.targetRevision !== currentRev) {
@@ -152,10 +205,35 @@ export class ExecutionEngine {
           currentRevision: currentRev,
           reason: 'STALE_WORKSPACE_REVISION',
         });
+        await this.flush(record);
         const err = new Error(`STALE_WORKSPACE_REVISION: target revision ${options.targetRevision} does not match current workspace revision ${currentRev}`);
         (err as any).code = 'STALE_WORKSPACE_REVISION';
         throw err;
       }
+    }
+
+    if (status === 'completed') {
+      const revision = record.workspaceState?.revision ?? 0;
+      const required = record.acceptanceContract?.requiredEvidence ?? [];
+      const missing = required.filter(type => {
+        const latest = new Map<string, VerificationEvidence>();
+        for (const evidence of record.evidence ?? []) {
+          if (evidence.type === type && evidence.revision === revision) latest.set(evidence.command ?? '', evidence);
+        }
+        return latest.size === 0 || [...latest.values()].some(evidence => evidence.exitCode !== 0);
+      });
+      const evaluationInvalid = record.evaluation && (!record.evaluation.success || record.evaluation.workspaceRevision !== revision);
+      const evaluationMissing = record.filesChanged.length > 0 && required.length === 0 && !record.evaluation;
+      if (missing.length > 0 || evaluationInvalid || evaluationMissing) {
+        this.pushEvent(record, 'completion.rejected', { reason: 'VERIFICATION_REQUIRED', workspaceRevision: revision, missing, evaluationInvalid: Boolean(evaluationInvalid), evaluationMissing });
+        await this.flush(record);
+        throw new ExecutionFailure('ARTIFACT_CONTRACT_FAILED', `Completion requires current verification for workspace revision ${revision}`);
+      }
+    }
+
+    if (record.execution.status === status && ['completed', 'failed', 'cancelled'].includes(status)) {
+      await this.flush(record);
+      return;
     }
 
     record.execution.status = status;
@@ -202,6 +280,16 @@ export class ExecutionEngine {
 
   async recordToolCall(executionId: string, call: ToolCallRecord): Promise<void> {
     const record = this.require(executionId);
+    const checkpoints = this.toolCheckpoints(executionId);
+    const checkpoint = checkpoints.find(c => c.callId === (call.callId ?? call.id)) ??
+      checkpoints.find(c => c.legacyCorrelation && c.state === 'STARTED' && c.toolName === call.tool && call.policyEffect !== 'deny' && call.policyEffect !== 'ask');
+    const callId = checkpoint?.callId ?? call.callId ?? call.id;
+    const prior = record.toolCalls.find(c => c.id === call.id);
+    if (prior) {
+      if (!executionValuesEqual(prior, { ...call, output: call.output === undefined ? undefined : sanitizeUntrustedOutput(call.output), error: call.error === undefined ? undefined : sanitizeUntrustedOutput(call.error) })) throw new Error(`Conflicting tool result '${callId}'`);
+      await this.flush(record);
+      return;
+    }
     // Tool output is persisted for the life of the record and may be shipped
     // to a control plane; scrub terminal escapes and credential-shaped
     // material before it lands anywhere durable (F-13, F-23).
@@ -211,18 +299,42 @@ export class ExecutionEngine {
       error: call.error === undefined ? undefined : sanitizeUntrustedOutput(call.error),
     });
     this.pushEvent(record, 'tool.completed', {
+      callId,
       tool: call.tool,
       ok: call.ok,
+      failureClass: call.failureClass,
       policyEffect: call.policyEffect,
       durationMs: call.durationMs,
-    });
+    }, { callId, stepId: checkpoint?.stepId });
+    this.pushEvent(record, call.failureClass === 'TOOL_OUTCOME_UNKNOWN' ? 'tool.call.outcome_unknown' : call.ok ? 'tool.call.completed' : 'tool.call.failed', {
+      callId, tool: call.tool, ok: call.ok, failureClass: call.failureClass, durationMs: call.durationMs,
+    }, { callId, stepId: checkpoint?.stepId });
     await this.flush(record);
   }
 
-  async recordToolStart(executionId: string, tool: string, input: unknown): Promise<void> {
+  async recordToolStart(executionId: string, tool: string, input: unknown, options: {
+    callId?: string; stepId?: string; sideEffectClass?: ToolSideEffectClass; argumentsHash?: string;
+  } = {}): Promise<string> {
     const record = this.require(executionId);
-    this.pushEvent(record, 'tool.started', { tool, input });
+    const callId = options.callId ?? `call-${randomUUID()}`;
+    if (this.toolCheckpoints(executionId).some(call => call.callId === callId)) {
+      throw new Error(`TOOL_ALREADY_DISPATCHED: '${callId}' must be reconciled or its recorded result reused`);
+    }
+    if (options.sideEffectClass !== 'READ_ONLY' && this.toolCheckpoints(executionId).some(call =>
+      call.sideEffectClass !== 'READ_ONLY' && (call.state === 'STARTED' || call.state === 'OUTCOME_UNKNOWN'))) {
+      throw new ExecutionFailure('TOOL_OUTCOME_UNKNOWN', 'A prior write must be reconciled before dispatching another write');
+    }
+    const checkpoint: ToolCallCheckpoint = {
+      executionId, stepId: options.stepId ?? callId, callId, toolName: tool, input,
+      argumentsHash: options.argumentsHash ?? hashToolArguments(input), startedAt: new Date(),
+      state: 'STARTED', sideEffectClass: options.sideEffectClass ?? 'NON_IDEMPOTENT_WRITE',
+      workspaceRevision: record.workspaceState?.revision ?? 0,
+      legacyCorrelation: options.callId === undefined,
+    };
+    this.pushEvent(record, 'tool.started', { ...checkpoint, tool }, { callId, stepId: checkpoint.stepId });
+    this.pushEvent(record, 'tool.call.started', checkpoint, { callId, stepId: checkpoint.stepId });
     await this.flush(record);
+    return callId;
   }
 
   /**
@@ -237,20 +349,41 @@ export class ExecutionEngine {
    * ordinary retry, which could double-apply a side effect that actually
    * already landed.
    *
-   * Tool calls execute sequentially within one execution (CodingAgent runs
-   * one turn at a time), so pairing by count — not by matching id, since
-   * 'tool.started' doesn't carry the call id 'tool.completed' does — is
-   * sound: an execution's nth 'tool.started' is that execution's nth tool
-   * call, full stop.
+   * Current calls are paired by callId. Legacy calls are paired by tool and
+   * ordered dispatch, excluding denials (which never dispatched a tool).
    */
-  findUnknownOutcomeToolCall(executionId: string): { tool: string; input: unknown; startedAt: Date } | undefined {
-    const record = this.require(executionId);
-    const started = record.events.filter((e) => e.type === 'tool.started');
-    const completed = record.events.filter((e) => e.type === 'tool.completed');
-    if (started.length <= completed.length) return undefined;
-    const last = started[started.length - 1];
-    const data = last.data as { tool?: string; input?: unknown } | undefined;
-    return { tool: data?.tool ?? 'unknown', input: data?.input, startedAt: last.timestamp };
+  findUnknownOutcomeToolCall(executionId: string): { tool: string; input: unknown; startedAt: Date; callId: string; sideEffectClass: ToolSideEffectClass } | undefined {
+    const call = this.toolCheckpoints(executionId).find(c => c.state === 'STARTED' || c.state === 'OUTCOME_UNKNOWN');
+    return call ? { tool: call.toolName, input: call.input, startedAt: call.startedAt, callId: call.callId, sideEffectClass: call.sideEffectClass } : undefined;
+  }
+
+  /** Reconstruct tool dispatch state from durable facts, independent of UI/transcript. */
+  toolCheckpoints(executionId: string): ToolCallCheckpoint[] {
+    this.require(executionId);
+    const calls = new Map<string, ToolCallCheckpoint>();
+    for (const event of this.histories.get(executionId) ?? []) {
+      const data = event.data as Partial<ToolCallCheckpoint> & { tool?: string; ok?: boolean; policyEffect?: string; failureClass?: string } | undefined;
+      if (!data) continue;
+      if (event.type === 'tool.started') {
+        const callId = event.callId ?? data.callId ?? event.id;
+        calls.set(callId, {
+          executionId, callId, stepId: event.stepId ?? data.stepId ?? callId,
+          toolName: data.toolName ?? data.tool ?? 'unknown', input: data.input,
+          argumentsHash: data.argumentsHash ?? hashToolArguments(data.input),
+          startedAt: data.startedAt ?? event.timestamp, state: 'STARTED',
+          workspaceRevision: data.workspaceRevision ?? event.workspaceRevision ?? 0,
+          sideEffectClass: data.sideEffectClass ?? 'NON_IDEMPOTENT_WRITE',
+          legacyCorrelation: data.legacyCorrelation ?? !event.callId,
+        });
+      } else if (event.type === 'tool.completed' || event.type === 'tool.unknownOutcome') {
+        const callId = event.callId ?? data.callId;
+        const call = callId ? calls.get(callId) : [...calls.values()].find(c => c.state === 'STARTED' && c.toolName === data.tool && data.policyEffect !== 'deny' && data.policyEffect !== 'ask');
+        if (!call) continue;
+        call.state = event.type === 'tool.unknownOutcome' || data.failureClass === 'TOOL_OUTCOME_UNKNOWN' ? 'OUTCOME_UNKNOWN' : data.ok ? 'COMPLETED' : 'FAILED';
+        if (event.type === 'tool.completed') call.finishedAt = event.timestamp;
+      }
+    }
+    return structuredClone([...calls.values()]);
   }
 
   async recordCheck(executionId: string, check: CheckRunRecord): Promise<void> {
@@ -262,7 +395,7 @@ export class ExecutionEngine {
     record.checks.push(sanitized);
     this.pushEvent(record, 'check.completed', sanitized);
 
-    const currentRev = record.workspaceState?.revision ?? 0;
+    const currentRev = check.workspaceRevision ?? record.workspaceState?.revision ?? 0;
     const evidenceType: EvidenceType | undefined =
       check.name === 'build' ? 'BUILD' :
       check.name === 'test' ? 'TEST' :
@@ -350,10 +483,36 @@ export class ExecutionEngine {
     return fullEvidence;
   }
 
-  async recordEvent(executionId: string, type: ExecutionEventType, data?: unknown): Promise<void> {
+  async recordEvent(executionId: string, type: ExecutionEventType, data?: unknown, identity?: ExecutionEventIdentity): Promise<void> {
     const record = this.require(executionId);
-    this.pushEvent(record, type, data);
+    this.pushEvent(record, type, data, identity);
     await this.flush(record);
+  }
+
+  /** Persist retry intent before the iterator resumes the provider's backoff loop. */
+  async recordProviderEvent(executionId: string, event: GenerationEvent, context: {
+    requestId: string; model: string; provider?: string;
+  }): Promise<void> {
+    if (event.type !== 'retry' && !event.retryExhausted) return;
+    if (!event.failureClass || !isProviderRetryable(event.failureClass)) {
+      throw new Error('Provider retry requires a classified transient failure');
+    }
+    const type = event.type === 'retry' ? 'retry.scheduled' : 'retry.exhausted';
+    await this.recordEvent(executionId, type, {
+      attempt: event.retryAttempt ?? null,
+      failureClass: event.failureClass,
+      provider: context.provider ?? null,
+      model: context.model,
+      delay: event.retryDelayMs ?? 0,
+      turn: context.requestId,
+      step: context.requestId,
+      reason: type === 'retry.scheduled' ? 'transient_provider_failure' : 'retry_budget_exhausted',
+    }, {
+      eventId: `${context.requestId}:${type}:${event.retryAttempt ?? 'final'}`,
+      turnId: context.requestId,
+      stepId: context.requestId,
+      attemptId: `${context.requestId}:attempt:${event.retryAttempt ?? 'final'}`,
+    });
   }
 
   async recordError(executionId: string, error: string): Promise<void> {
@@ -372,7 +531,13 @@ export class ExecutionEngine {
     await this.flush(record);
   }
 
-  async recordFilesChanged(executionId: string, files: string[]): Promise<void> {
+  async recordFileMutations(executionId: string, mutations: FileMutationResult[], contentFingerprint?: string): Promise<void> {
+    const changed = mutations.filter(m => m.changed && m.beforeHash !== m.afterHash && (m.existedBefore || m.existsAfter));
+    if (changed.length === 0) return;
+    await this.recordFilesChanged(executionId, changed.map(m => m.path), { mutations: changed, contentFingerprint });
+  }
+
+  async recordFilesChanged(executionId: string, files: string[], evidence?: { mutations: FileMutationResult[]; contentFingerprint?: string }): Promise<void> {
     if (!files || files.length === 0) return;
     const record = this.require(executionId);
     if (!record.workspaceState) {
@@ -388,7 +553,10 @@ export class ExecutionEngine {
 
     record.workspaceState.revision += 1;
     record.workspaceState.updatedAt = new Date();
+    if (evidence?.contentFingerprint) record.workspaceState.contentFingerprint = evidence.contentFingerprint;
     const currentRev = record.workspaceState.revision;
+
+    if (evidence) this.pushEvent(record, 'workspace.mutated', { workspaceRevision: currentRev, mutations: evidence.mutations });
 
     for (const file of files) {
       if (!record.filesChanged.includes(file)) {
@@ -406,8 +574,10 @@ export class ExecutionEngine {
       workspaceRevision: currentRev,
       files,
     });
+    this.pushEvent(record, 'workspace.revision.changed', { workspaceRevision: currentRev, files });
 
     if (record.evidence && record.evidence.some((e) => e.revision < currentRev)) {
+      this.pushEvent(record, 'verification.invalidated', { workspaceRevision: currentRev });
       this.pushEvent(record, 'evidence.stale', {
         workspaceRevision: currentRev,
         staleEvidenceCount: record.evidence.filter((e) => e.revision < currentRev).length,
@@ -609,10 +779,12 @@ export class ExecutionEngine {
   }
 
   async get(executionId: string): Promise<ExecutionRecord | undefined> {
+    await this.ready;
     return this.records.get(executionId);
   }
 
   require(executionId: string): ExecutionRecord {
+    if (this.persistenceFailure) throw this.persistenceFailure;
     const record = this.records.get(executionId);
     if (!record) {
       throw new Error(`Execution '${executionId}' not found`);
@@ -621,6 +793,7 @@ export class ExecutionEngine {
   }
 
   async list(): Promise<ExecutionRecord[]> {
+    await this.ready;
     return Array.from(this.records.values()).sort((a, b) =>
       b.execution.createdAt.getTime() - a.execution.createdAt.getTime(),
     );
@@ -661,14 +834,13 @@ export class ExecutionEngine {
     return records.filter((r) => r.execution.parentExecutionId === executionId);
   }
 
-  async events(executionId: string): Promise<ExecutionEvent[]> {
+  async events(executionId: string): Promise<SequencedExecutionEvent[]> {
+    await this.ready;
     const record = await this.get(executionId);
     if (!record) {
       throw new Error(`Execution '${executionId}' not found`);
     }
-    return [...record.events].sort(
-      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
-    );
+    return structuredClone(this.histories.get(executionId) ?? []);
   }
 
   /** Replays the recorded event stream in order. */
@@ -679,20 +851,52 @@ export class ExecutionEngine {
     }
   }
 
-  private pushEvent(record: ExecutionRecord, type: ExecutionEventType, data?: unknown): void {
-    eventCounter += 1;
-    record.events.push({
-      id: nextId('evt'),
+  private pushEvent(record: ExecutionRecord, type: ExecutionEventType, data?: unknown, identity: ExecutionEventIdentity = {}): void {
+    const history = this.histories.get(record.execution.id)!;
+    const existing = identity.eventId && history.find(event => event.eventId === identity.eventId);
+    if (existing) {
+      if (existing.type !== type || !executionValuesEqual(existing.data, data) ||
+          ['turnId', 'stepId', 'attemptId', 'callId'].some(key =>
+            existing[key as keyof ExecutionEventIdentity] !== identity[key as keyof ExecutionEventIdentity])) {
+        throw new Error(`Conflicting event insertion '${identity.eventId}'`);
+      }
+      return;
+    }
+    const id = identity.eventId ?? `evt-${randomUUID()}`;
+    history.push(structuredClone({
+      ...identity,
+      id,
+      eventId: id,
       executionId: record.execution.id,
+      jobId: record.execution.jobId ?? null,
+      sequence: history.length + 1,
       type,
+      eventType: type,
       timestamp: new Date(),
+      agentId: record.execution.agentId,
+      modelId: record.execution.modelId,
+      runtimeId: record.execution.runtimeId,
+      computerId: record.execution.computerId,
+      workerId: record.execution.workerId,
+      workspaceRevision: record.workspaceState?.revision ?? 0,
       data,
-    });
+    }));
+    record.events = structuredClone(history);
   }
 
   private async flush(record: ExecutionRecord): Promise<void> {
+    if (this.persistenceFailure) throw this.persistenceFailure;
     if (this.persist) {
-      await this.persist(record);
+      record.storageRevision = (record.storageRevision ?? 0) + 1;
+      const snapshot = structuredClone({ ...record, events: this.histories.get(record.execution.id) });
+      const pending = this.persistenceTail.then(async () => {
+        if (this.persistenceFailure) throw this.persistenceFailure;
+        await this.persist!(snapshot);
+      });
+      this.persistenceTail = pending.catch(error => {
+        this.persistenceFailure = error instanceof Error ? error : new Error(String(error));
+      });
+      await pending;
     }
   }
 }

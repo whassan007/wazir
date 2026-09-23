@@ -5,3 +5,4 @@ export * from './sanitize.js';
 export * from './hash.js';
 export * from './audit.js';
 export * from './retry.js';
+export * from './failure.js';

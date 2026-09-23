@@ -211,6 +211,7 @@ export class JsonFileStore implements KeyValueStore {
   private readonly lockFile: string;
   private data = new Map<string, unknown>();
   private loaded = false;
+  private observedFile = false;
 
   constructor(file: string) {
     this.file = file;
@@ -227,12 +228,19 @@ export class JsonFileStore implements KeyValueStore {
     try {
       const raw = await fs.readFile(this.file, 'utf8');
       const parsed = JSON.parse(raw, reviveDates) as Record<string, unknown>;
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(`Invalid store document '${this.file}': expected an object`);
+      }
       this.data = new Map(Object.entries(parsed));
-    } catch {
-      // Missing or corrupt file: start empty on first load. If we'd already
-      // loaded successfully before, keep the in-memory copy rather than
-      // discarding it over a transient read error mid-mutation.
-      if (!this.loaded) this.data = new Map();
+      this.observedFile = true;
+    } catch (error) {
+      // Only an absent first-run store is empty. Corruption, access failures,
+      // or loss of a previously observed store must never erase execution facts.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !this.observedFile) {
+        this.data = new Map();
+        return;
+      }
+      throw error;
     }
   }
 
@@ -259,6 +267,7 @@ export class JsonFileStore implements KeyValueStore {
     await fs.rename(tmp, this.file);
     await fs.chmod(this.file, 0o600).catch(() => undefined);
     await fsyncDir(dir);
+    this.observedFile = true;
   }
 
   private async withLock(mutate: () => void): Promise<void> {

@@ -13,7 +13,7 @@ import type {
   RuntimeCapabilities,
   RuntimeInfo,
 } from '@wazir/runtimes-interfaces';
-import { isRetryableHttpStatus, jitteredDelay } from '@wazir/shared';
+import { classifyFailure, isProviderRetryable, providerRetryDecision, resolveRetryPolicy, waitForRetry } from '@wazir/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -390,7 +390,8 @@ export class LMStudioAdapter implements RuntimeAdapter {
     // output the caller may have already consumed, so nothing past this
     // point is retried.
     let response: Response | undefined;
-    const maxAttempts = 4;
+    const retryPolicy = resolveRetryPolicy({ maxRetries: 3, initialDelayMs: 250, maxDelayMs: 8000, ...request.providerRetryPolicy });
+    const maxAttempts = retryPolicy.maxRetries + 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const candidate = await fetch(`${this.baseURL}/chat/completions`, {
@@ -411,11 +412,11 @@ export class LMStudioAdapter implements RuntimeAdapter {
           }),
           signal: controller.signal,
         });
-        if (isRetryableHttpStatus(candidate.status) && attempt < maxAttempts) {
+        const decision = providerRetryDecision(classifyFailure({ status: candidate.status }), attempt, retryPolicy);
+        if (decision.retry) {
           await candidate.text().catch(() => undefined); // drain so the connection can be reused
-          const delayMs = jitteredDelay(attempt);
-          yield { type: 'retry', retryAttempt: attempt + 1, retryDelayMs: delayMs, error: `HTTP ${candidate.status}` };
-          await new Promise((r) => setTimeout(r, delayMs));
+          yield { type: 'retry', requestId, failureClass: decision.failureClass, retryAttempt: decision.attempt, retryDelayMs: decision.delayMs, error: `HTTP ${candidate.status}` };
+          await waitForRetry(decision.delayMs, controller.signal);
           continue;
         }
         response = candidate;
@@ -426,14 +427,20 @@ export class LMStudioAdapter implements RuntimeAdapter {
           yield { type: 'error', error: 'cancelled' };
           return;
         }
-        if (attempt < maxAttempts) {
-          const delayMs = jitteredDelay(attempt);
-          yield { type: 'retry', retryAttempt: attempt + 1, retryDelayMs: delayMs, error: error instanceof Error ? error.message : String(error) };
-          await new Promise((r) => setTimeout(r, delayMs));
+        const decision = providerRetryDecision(classifyFailure(error), attempt, retryPolicy);
+        if (decision.retry) {
+          yield { type: 'retry', requestId, failureClass: decision.failureClass, retryAttempt: decision.attempt, retryDelayMs: decision.delayMs, error: error instanceof Error ? error.message : String(error) };
+          try {
+            await waitForRetry(decision.delayMs, controller.signal);
+          } catch {
+            this.controllers.delete(requestId);
+            yield { type: 'error', requestId, failureClass: 'CANCELLED', error: 'cancelled' };
+            return;
+          }
           continue;
         }
         this.controllers.delete(requestId);
-        yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
+        yield { type: 'error', requestId, retryAttempt: attempt, failureClass: decision.failureClass, retryExhausted: decision.reason === 'retry_budget_exhausted', error: error instanceof Error ? error.message : String(error) };
         return;
       }
     }
@@ -441,7 +448,8 @@ export class LMStudioAdapter implements RuntimeAdapter {
     if (!response || !response.ok || !response.body) {
       const body = await response?.text().catch(() => '') ?? '';
       this.controllers.delete(requestId);
-      yield { type: 'error', error: `LM Studio API error: HTTP ${response?.status ?? 'unknown'} ${body.slice(0, 300)}` };
+      const failureClass = classifyFailure({ status: response?.status });
+      yield { type: 'error', requestId, retryAttempt: maxAttempts, failureClass, retryExhausted: isProviderRetryable(failureClass), error: `LM Studio API error: HTTP ${response?.status ?? 'unknown'} ${body.slice(0, 300)}` };
       return;
     }
 
