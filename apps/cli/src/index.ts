@@ -760,14 +760,13 @@ program
       enablePlanner: options.planner === true,
     });
     // A closed/dead controlling terminal (the pty itself going away — distinct from
-    // stdin's own 'end' event, which FleetTui already handles) delivers SIGHUP. With
-    // no handler, Node's default disposition kills the process outside of any of our
-    // graceful-exit paths: tui.stop()'s cleanup (terminal restore, listener teardown)
-    // never runs, and the process exits by signal instead of code 0.
-    process.on('SIGHUP', () => {
-      tui.stop();
-      process.exit(0);
-    });
+    // stdin's own 'end' event, which FleetTui already handles) delivers SIGHUP, and
+    // Ctrl-C delivers SIGINT. Routed through the shared ShutdownController rather
+    // than a one-off handler so both get the same bounded-timeout-then-force-exit
+    // behavior as every other long-running command, and a second interrupt during a
+    // hung tui.stop() forces exit instead of leaving the process stuck.
+    const { shutdownController } = await import('./shutdownController.js');
+    shutdownController().register('chat-tui', () => tui.stop());
     await tui.start();
     await tui.waitForExit();
   });
@@ -804,12 +803,15 @@ program
       openBrowser(url);
     }
 
-    const shutdown = () => {
+    // Previously `server.close(() => process.exit(0))` had no timeout: a
+    // stuck keep-alive connection means close()'s callback never fires and
+    // Ctrl-C hangs forever. Routed through ShutdownController for a bounded
+    // grace period and a force-exit on a second interrupt.
+    const { shutdownController } = await import('./shutdownController.js');
+    shutdownController().register('dashboard-server', () => {
       console.log('\n  Shutting down Wazir dashboard...');
-      server.close(() => process.exit(0));
-    };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
+      return new Promise<void>((resolve) => server.close(() => resolve()));
+    });
   });
 
 // jobs command — manage distributed fleet jobs
