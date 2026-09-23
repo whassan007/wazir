@@ -320,12 +320,25 @@ describe('FleetTui — session lifecycle & terminal hygiene', () => {
     const baseRejections = process.listenerCount('unhandledRejection');
 
     await harness.start();
-    expect(process.listenerCount('unhandledRejection')).toBe(baseRejections + 1);
+    // FleetTui's rejection guard goes through crashHandler.ts's
+    // withScopedRejectionHandler(), which swaps out the process-wide fatal
+    // handler (installed once, globally, by index.ts) rather than adding a
+    // second listener alongside it — two listeners firing for the same
+    // rejection would make the fatal one treat every recovered keypress
+    // error as a crash too. So the count either stays the same (a fatal
+    // handler was already installed and got swapped for the scoped one) or
+    // increases by exactly one (nothing was installed yet in this process);
+    // it must never increase by more than that.
+    const afterStart = process.listenerCount('unhandledRejection');
+    expect(afterStart).toBeGreaterThanOrEqual(baseRejections);
+    expect(afterStart).toBeLessThanOrEqual(baseRejections + 1);
     expect((harness.screen as any).resizeListeners.length).toBe(1);
 
     harness.stop();
 
     expect(clearSpy).toHaveBeenCalled(); // 250ms render loop cleared
+    // The real invariant: whatever was there before start() is exactly what's
+    // there after stop() — no leaked listener either way.
     expect(process.listenerCount('unhandledRejection')).toBe(baseRejections);
     expect((harness.screen as any).resizeListeners.length).toBe(0);
     expect(harness.inStream.listenerCount('keypress')).toBe(0);

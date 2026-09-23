@@ -105,14 +105,22 @@ export function installGlobalCrashHandlers(): void {
  * handler's unhandled rejection — that one always stays fatal.
  */
 export function withScopedRejectionHandler(handler: (reason: unknown) => void): () => void {
-  if (currentRejectionHandler) process.off('unhandledRejection', currentRejectionHandler);
+  // Captures whatever was actually registered before this call — which is
+  // `undefined` if installGlobalCrashHandlers() was never called in this
+  // process — rather than assuming it was always the fatal default. Restoring
+  // to a hardcoded fatalRejectionHandler regardless of that prior state would
+  // install a listener that was never there to begin with whenever this is
+  // used without install() having run first (caught by a real test: it left
+  // an extra listener behind after restore in exactly that scenario).
+  const previous = currentRejectionHandler;
+  if (previous) process.off('unhandledRejection', previous);
   currentRejectionHandler = handler;
   process.on('unhandledRejection', currentRejectionHandler);
   return () => {
     if (currentRejectionHandler === handler) {
       process.off('unhandledRejection', handler);
-      currentRejectionHandler = fatalRejectionHandler;
-      process.on('unhandledRejection', currentRejectionHandler);
+      currentRejectionHandler = previous;
+      if (previous) process.on('unhandledRejection', previous);
     }
   };
 }
