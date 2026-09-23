@@ -180,4 +180,59 @@ describe('RecoveryManager', () => {
     const task = jobManager.get(job.id)!.tasks.find((t) => t.id === 'recover-me')!;
     expect(task.status).toBe('completed');
   }, 10_000);
+
+  it('flags an unknown-outcome tool call (intent recorded, no matching result) and does NOT auto-retry it', async () => {
+    const executor: JobTaskExecutor = async () => ({ success: true, result: 'should never run' });
+    const { computers, executions, orchestrator, recovery } = setup(executor);
+
+    const record = await executions.create({
+      task: { id: 'mutating-task', title: 'x', input: 'x' } as any,
+      computerId: 'dead-worker',
+      runtimeId: 'fake-runtime',
+      modelId: 'fake-model',
+    });
+    await executions.setStatus(record.execution.id, 'running');
+    // The worker recorded intent to run a mutating tool (e.g. git commit)...
+    await executions.recordToolStart(record.execution.id, 'shell', { command: 'git commit -am wip' });
+    // ...then went dark before recordToolCall() (the result) was ever written.
+
+    const c = computers.get('dead-worker')!;
+    (c as any).lastHeartbeat = new Date(Date.now() - 5000);
+
+    const result = await recovery.sweep();
+
+    expect(result.unknownOutcomes).toEqual([
+      { executionId: record.execution.id, taskId: 'mutating-task', tool: 'shell' },
+    ]);
+    expect(result.retriedLive).not.toContain('mutating-task');
+    expect(result.orphanedExecutions).toContain(record.execution.id);
+
+    const updated = await executions.get(record.execution.id);
+    expect(updated?.errors.some((e) => e.includes('UNKNOWN_OUTCOME'))).toBe(true);
+    void orchestrator;
+  });
+
+  it('does NOT flag unknown outcome when the tool call actually completed before the worker died', async () => {
+    const { computers, executions, recovery } = setup();
+
+    const record = await executions.create({
+      task: { id: 'clean-task', title: 'x', input: 'x' } as any,
+      computerId: 'dead-worker',
+      runtimeId: 'fake-runtime',
+      modelId: 'fake-model',
+    });
+    await executions.setStatus(record.execution.id, 'running');
+    await executions.recordToolStart(record.execution.id, 'shell', { command: 'echo hi' });
+    await executions.recordToolCall(record.execution.id, {
+      id: 'call-1', tool: 'shell', input: { command: 'echo hi' }, ok: true, durationMs: 5, at: new Date(),
+    });
+    // Worker died on the NEXT step, before that one got an intent record at all —
+    // nothing to flag, since no tool call was left mid-flight.
+
+    const c = computers.get('dead-worker')!;
+    (c as any).lastHeartbeat = new Date(Date.now() - 5000);
+
+    const result = await recovery.sweep();
+    expect(result.unknownOutcomes).toEqual([]);
+  });
 });

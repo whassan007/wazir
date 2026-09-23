@@ -22,6 +22,11 @@ export interface RecoverySweepResult {
   offlineComputers: string[];
   orphanedExecutions: string[];
   retriedLive: string[];
+  /** Executions orphaned with a mutating tool call whose outcome is unknown (an intent
+   *  record with no matching result — see ExecutionEngine.findUnknownOutcomeToolCall).
+   *  These are deliberately excluded from retriedLive: automatically re-running a git
+   *  commit or file write that may have already landed risks double-applying it. */
+  unknownOutcomes: Array<{ executionId: string; taskId: string; tool: string }>;
 }
 
 /**
@@ -51,16 +56,32 @@ export class RecoveryManager {
 
     const orphanedExecutions: string[] = [];
     const retriedLive: string[] = [];
+    const unknownOutcomes: RecoverySweepResult['unknownOutcomes'] = [];
 
     for (const computerId of offline) {
       const active = await this.deps.executions.listActiveByComputer(computerId);
       for (const record of active) {
-        const reason = `Worker on computer '${computerId}' stopped heartbeating`;
+        const taskId = record.execution.taskId;
+        // Durable step checkpoints: a 'tool.started' with no matching
+        // 'tool.completed' means the last tool call's actual outcome is
+        // unknown — it may have already run (a git commit, a file write, a
+        // remote dispatch) before this worker went dark. Flagging it here,
+        // before orphan()/reportExecutionOrphaned() below, is what stops
+        // that from being silently retried as if nothing happened.
+        const unknown = this.deps.executions.findUnknownOutcomeToolCall(record.execution.id);
+        const reason = unknown
+          ? `UNKNOWN_OUTCOME: worker on computer '${computerId}' stopped heartbeating mid-'${unknown.tool}' — its outcome is unrecorded and must not be assumed safe to retry`
+          : `Worker on computer '${computerId}' stopped heartbeating`;
+
         await this.deps.executions.orphan(record.execution.id, reason);
         orphanedExecutions.push(record.execution.id);
 
+        if (unknown) {
+          unknownOutcomes.push({ executionId: record.execution.id, taskId, tool: unknown.tool });
+          continue; // deliberately not reported to the orchestrator — see the field doc above
+        }
+
         if (this.deps.orchestrator) {
-          const taskId = record.execution.taskId;
           const jobId = this.findOwningJobId(taskId);
           if (jobId && this.deps.orchestrator.reportExecutionOrphaned(jobId, taskId, reason)) {
             retriedLive.push(taskId);
@@ -69,7 +90,7 @@ export class RecoveryManager {
       }
     }
 
-    const result: RecoverySweepResult = { offlineComputers: offline, orphanedExecutions, retriedLive };
+    const result: RecoverySweepResult = { offlineComputers: offline, orphanedExecutions, retriedLive, unknownOutcomes };
     if (offline.length > 0) this.deps.onSweep?.(result);
     return result;
   }

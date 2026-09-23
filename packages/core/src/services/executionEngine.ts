@@ -225,6 +225,34 @@ export class ExecutionEngine {
     await this.flush(record);
   }
 
+  /**
+   * Durable step checkpoints: recordToolStart() (intent) and recordToolCall()
+   * (result) are written as separate events around every tool call, so a
+   * process crash between them leaves a 'tool.started' with no matching
+   * 'tool.completed' in the persisted event log. This finds that gap — a
+   * mutating tool (a git commit, a file write, a remote dispatch) whose
+   * actual outcome is unknown, not just "the task didn't finish". Callers
+   * (RecoveryManager, JobManager on load) use this to flag the execution for
+   * review instead of blindly re-running the tool call as part of an
+   * ordinary retry, which could double-apply a side effect that actually
+   * already landed.
+   *
+   * Tool calls execute sequentially within one execution (CodingAgent runs
+   * one turn at a time), so pairing by count — not by matching id, since
+   * 'tool.started' doesn't carry the call id 'tool.completed' does — is
+   * sound: an execution's nth 'tool.started' is that execution's nth tool
+   * call, full stop.
+   */
+  findUnknownOutcomeToolCall(executionId: string): { tool: string; input: unknown; startedAt: Date } | undefined {
+    const record = this.require(executionId);
+    const started = record.events.filter((e) => e.type === 'tool.started');
+    const completed = record.events.filter((e) => e.type === 'tool.completed');
+    if (started.length <= completed.length) return undefined;
+    const last = started[started.length - 1];
+    const data = last.data as { tool?: string; input?: unknown } | undefined;
+    return { tool: data?.tool ?? 'unknown', input: data?.input, startedAt: last.timestamp };
+  }
+
   async recordCheck(executionId: string, check: CheckRunRecord): Promise<void> {
     const record = this.require(executionId);
     const sanitized = {

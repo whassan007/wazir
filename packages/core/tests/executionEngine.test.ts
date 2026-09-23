@@ -327,3 +327,48 @@ describe('ExecutionEngine', () => {
     expect(nonExistentChildren.length).toBe(0);
   });
 });
+
+describe('ExecutionEngine.findUnknownOutcomeToolCall — durable step checkpoints', () => {
+  let engine: ExecutionEngine;
+
+  beforeEach(() => {
+    engine = new ExecutionEngine();
+  });
+
+  async function makeExecution() {
+    const record = await engine.create({
+      task: {
+        id: 'task-1', type: 'coding' as const, input: 'x',
+        requirements: { capabilities: [] }, priority: 'normal', status: 'pending', createdAt: new Date(),
+      },
+      computerId: 'computer-1', runtimeId: 'runtime-1', modelId: 'model-1',
+    });
+    return record.execution.id;
+  }
+
+  it('returns undefined when no tool has ever been started', async () => {
+    const id = await makeExecution();
+    expect(engine.findUnknownOutcomeToolCall(id)).toBeUndefined();
+  });
+
+  it('returns undefined once every started tool has a matching completed result', async () => {
+    const id = await makeExecution();
+    await engine.recordToolStart(id, 'read', { path: 'a.ts' });
+    await engine.recordToolCall(id, { id: 'c1', tool: 'read', input: { path: 'a.ts' }, ok: true, durationMs: 1, at: new Date() });
+    await engine.recordToolStart(id, 'shell', { command: 'echo hi' });
+    await engine.recordToolCall(id, { id: 'c2', tool: 'shell', input: { command: 'echo hi' }, ok: true, durationMs: 1, at: new Date() });
+    expect(engine.findUnknownOutcomeToolCall(id)).toBeUndefined();
+  });
+
+  it('flags the most recent started tool when it has no matching completed result', async () => {
+    const id = await makeExecution();
+    await engine.recordToolStart(id, 'read', { path: 'a.ts' });
+    await engine.recordToolCall(id, { id: 'c1', tool: 'read', input: { path: 'a.ts' }, ok: true, durationMs: 1, at: new Date() });
+    await engine.recordToolStart(id, 'shell', { command: 'git commit -am wip' });
+    // No recordToolCall for this one — process died mid-tool-call.
+
+    const unknown = engine.findUnknownOutcomeToolCall(id);
+    expect(unknown?.tool).toBe('shell');
+    expect(unknown?.input).toEqual({ command: 'git commit -am wip' });
+  });
+});
