@@ -1042,7 +1042,17 @@ export class CodingAgent implements AgentAdapter {
     if (request.expectedArtifacts && request.expectedArtifacts.length > 0) {
       for (const artifact of request.expectedArtifacts) {
         const fullPath = path.resolve(request.projectRoot, artifact);
-        if (!existsSync(fullPath)) {
+        if (existsSync(fullPath)) continue;
+
+        // The exact relative path doesn't exist, but the agent may have
+        // legitimately placed the file elsewhere in the project (e.g. under
+        // src/). Fall back to matching by basename against files it actually
+        // touched before declaring this a real failure.
+        const basename = path.basename(artifact);
+        const matches = [...filesChangedSet].filter(
+          (changed) => path.basename(changed) === basename,
+        );
+        if (matches.length === 0) {
           failures.push(`Expected artifact '${artifact}' was not created.`);
         }
       }

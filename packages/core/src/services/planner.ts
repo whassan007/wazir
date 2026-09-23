@@ -83,12 +83,14 @@ export class TaskPlanner {
     const isFromScratch = /\b(from scratch|new program|new project|empty workspace)\b/i.test(input) || (isBuildOrWrite && !isFix);
     const workspaceMode: WorkspaceMode = isFromScratch ? 'clean' : 'repository';
 
+    // Only treat this as an expected artifact when the user actually named a
+    // file; otherwise the agent is free to place files wherever makes sense
+    // (e.g. src/main.cpp), and guessing a bare filename here just produces a
+    // verification target that can never match reality.
     const artifacts: string[] = [];
     const filenameMatch = input.match(/\b([A-Za-z0-9_-]+\.(?:cpp|cc|cxx|c|py|js|ts|go|rs|java))\b/i);
     if (filenameMatch) {
       artifacts.push(filenameMatch[1]);
-    } else if (lower.includes('c++') || lower.includes('.cpp') || lower.includes('sort')) {
-      artifacts.push('main.cpp');
     }
 
     let language: string | undefined;
@@ -216,14 +218,20 @@ export class TaskPlanner {
     if (lower.includes('c++') || lower.includes('.cpp') || lower.includes('clang++') || lower.includes('g++') || lower.includes('compile c')) {
       const isSort = lower.includes('sort');
       const filenameMatch = task.match(/\b([A-Za-z0-9_-]+\.(?:cpp|cc|cxx|c))\b/i);
+      // filename/binName below are only used for step titles/descriptions
+      // (what to *call* the file the agent creates), not as a hard
+      // verification target — the agent may legitimately nest it under src/
+      // or a project subdirectory. Only pin a hard expectedArtifacts entry
+      // when the user named a file explicitly.
       const filename = filenameMatch ? filenameMatch[1] : (isSort ? 'src/sort.cpp' : 'src/main.cpp');
       const binName = filename.replace(/\.(cpp|cc|cxx|c)$/i, '');
+      const expectedArtifacts = filenameMatch ? [filenameMatch[1]] : [];
 
       return {
         objective: task,
         workspaceMode: analysis.workspaceMode,
         mutationRequired: true,
-        expectedArtifacts: [filename, binName],
+        expectedArtifacts,
         requirements: {
           language: 'C++',
           capabilities: ['filesystem_read', 'filesystem_write', 'shell'],
@@ -247,7 +255,7 @@ export class TaskPlanner {
             capabilities: ['filesystem_write'],
             dependencies: ['inspect'],
             expectedEvidence: [`file_exists: ${filename}`],
-            expectedArtifacts: [filename],
+            expectedArtifacts,
             mutationRequired: true,
           },
           {
@@ -258,7 +266,6 @@ export class TaskPlanner {
             capabilities: ['shell'],
             dependencies: ['implement'],
             expectedEvidence: [`file_exists: ${binName}`, 'no_errors'],
-            expectedArtifacts: [binName],
             mutationRequired: true,
           },
           {
@@ -272,7 +279,7 @@ export class TaskPlanner {
             mutationRequired: false,
           },
         ],
-        successCriteria: [`file_exists: ${filename}`, `file_exists: ${binName}`, 'exit_code_zero'],
+        successCriteria: ['exit_code_zero'],
       };
     }
 
