@@ -42,6 +42,16 @@ export interface CodingAgentOptions {
    */
   maxToolCalls?: number;
   /**
+   * Total model-usage-reported token budget (input + output summed across every
+   * turn) for the whole run. Distinct from `maxTokensPerTurn`, which only caps a
+   * single request's own `maxTokens` generation parameter — a run within its
+   * turn/tool-call/wall-clock budgets can still accumulate an unbounded amount of
+   * actual model cost if context keeps growing turn over turn. Only enforced when
+   * the runtime actually reports `usage`; a runtime that never does leaves this
+   * budget silently unenforced rather than guessing at a token count.
+   */
+  maxTokens?: number;
+  /**
    * Wall-clock budget for a single model turn, independent of the overall
    * job timeout. Small/local models can ramble in prose for minutes without
    * ever emitting the required JSON action; without this, one bad turn can
@@ -475,6 +485,7 @@ export class CodingAgent implements AgentAdapter {
   private readonly maxRepairCycles: number;
   private readonly maxWallClockMs: number;
   private readonly maxToolCalls: number;
+  private readonly maxTokens: number;
   private readonly maxTokensPerTurn: number;
   private readonly temperature: number;
   private readonly modelTurnTimeoutMs: number;
@@ -494,6 +505,11 @@ export class CodingAgent implements AgentAdapter {
     // calls via the read/write/build/test cycle) but a real ceiling on total
     // real-world side effects a single run can accumulate.
     this.maxToolCalls = options.maxToolCalls ?? 100;
+    // The class of bug this mission started from: a trivial task accumulating
+    // hundreds of thousands of cumulative input tokens well within its turn/tool
+    // budgets because nothing bounded total reported usage. 2M is generous for a
+    // genuinely large task but a real ceiling, not effectively unbounded.
+    this.maxTokens = options.maxTokens ?? 2_000_000;
     this.maxTokensPerTurn = options.maxTokensPerTurn ?? 4096;
     this.temperature = options.temperature ?? 0.2;
     this.modelTurnTimeoutMs = options.modelTurnTimeoutMs ?? 90_000;
@@ -514,6 +530,8 @@ export class CodingAgent implements AgentAdapter {
     const maxRepairCycles = request.maxRepairCycles ?? this.maxRepairCycles;
     const maxWallClockMs = request.maxWallClockMs ?? this.maxWallClockMs;
     const maxToolCalls = request.maxToolCalls ?? this.maxToolCalls;
+    const maxTokens = request.maxTokens ?? this.maxTokens;
+    let totalTokensUsed = 0;
     const runStartedAt = Date.now();
     const wallClockExceeded = () => Date.now() - runStartedAt >= maxWallClockMs;
     const subagentDepth = request.subagentDepth ?? 0;
@@ -651,11 +669,13 @@ export class CodingAgent implements AgentAdapter {
       toolCall?: { name: string; input: Record<string, unknown> };
       timedOut: boolean;
       retryNotes: string[];
+      usage?: { inputTokens: number; outputTokens: number; totalTokens?: number };
     }> => {
       let content = '';
       let toolCall: { name: string; input: Record<string, unknown> } | undefined;
       let error: string | undefined;
       let timedOut = false;
+      let usage: { inputTokens: number; outputTokens: number; totalTokens?: number } | undefined;
       const retryNotes: string[] = [];
       const timer = setTimeout(() => {
         timedOut = true;
@@ -689,6 +709,7 @@ export class CodingAgent implements AgentAdapter {
             }
             toolCall = { name: event.toolName, input };
           }
+          if (event.type === 'completed' && event.usage) usage = event.usage;
           if (event.type === 'error' && event.error) error = event.error;
           if (event.type === 'retry') {
             retryNotes.push(
@@ -702,7 +723,7 @@ export class CodingAgent implements AgentAdapter {
       // A cancel-induced 'completed' with partial content is not an error —
       // only surface `error` when the turn didn't just hit its own timeout.
       if (error && !timedOut) throw new Error(error);
-      return { content, toolCall, timedOut, retryNotes };
+      return { content, toolCall, timedOut, retryNotes, usage };
     };
 
     /**
@@ -831,10 +852,21 @@ export class CodingAgent implements AgentAdapter {
       }
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
-      const { content: raw, toolCall, timedOut, retryNotes, overflowNote } = await modelTurnWithOverflowRecovery();
+      const { content: raw, toolCall, timedOut, retryNotes, overflowNote, usage } = await modelTurnWithOverflowRecovery();
       if (overflowNote) yield { kind: 'message', content: overflowNote };
       for (const note of retryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
+      if (usage) totalTokensUsed += usage.totalTokens ?? usage.inputTokens + usage.outputTokens;
+      if (totalTokensUsed > maxTokens) {
+        yield {
+          kind: 'error',
+          error: `run exceeded its token budget (${maxTokens} tokens, used ${totalTokensUsed})`,
+          errorKind: 'other',
+          terminationReason: 'MAX_TOKENS',
+          protocolMetrics: currentMetrics(),
+        };
+        return;
+      }
       turnsUsed += 1;
       actionAttempts += 1;
       const action = toolCall
@@ -986,10 +1018,21 @@ export class CodingAgent implements AgentAdapter {
       }
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
-      const { content: raw, toolCall, timedOut, retryNotes, overflowNote } = await modelTurnWithOverflowRecovery();
+      const { content: raw, toolCall, timedOut, retryNotes, overflowNote, usage } = await modelTurnWithOverflowRecovery();
       if (overflowNote) yield { kind: 'message', content: overflowNote };
       for (const note of retryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
+      if (usage) totalTokensUsed += usage.totalTokens ?? usage.inputTokens + usage.outputTokens;
+      if (totalTokensUsed > maxTokens) {
+        yield {
+          kind: 'error',
+          error: `run exceeded its token budget (${maxTokens} tokens, used ${totalTokensUsed})`,
+          errorKind: 'other',
+          terminationReason: 'MAX_TOKENS',
+          protocolMetrics: currentMetrics(),
+        };
+        return;
+      }
       turnsUsed += 1;
       actionAttempts += 1;
       const action = toolCall

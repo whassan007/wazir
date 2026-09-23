@@ -207,20 +207,40 @@ Regression coverage: `packages/agents/tests/codingAgent.maxToolCalls.test.ts`
 (budget trips with no repeated calls at all — proof it's independent of the circuit
 breaker; per-request override; a normal run well within budget is unaffected).
 
+## Seventh tranche: total token budget
+
+`CodingAgentOptions.maxTokens` / `AgentRunRequest.maxTokens` (constructor default 2M,
+same override pattern as the other budgets) caps cumulative model-usage-reported
+tokens (input + output summed across every turn) for the whole run, tagged
+`terminationReason: 'MAX_TOKENS'` on trip. `modelTurn()` previously discarded
+`GenerationEvent.usage` entirely — the `'completed'` event branch wasn't even handled
+in its consumption loop — so this required threading `usage` back out of `modelTurn`
+alongside `content`/`toolCall`/`timedOut`. Only enforced when the runtime actually
+reports `usage`; a runtime that never does (verified by a dedicated test) leaves this
+budget silently unenforced rather than guessing at a token count from content length.
+This is the token-side half of the class of bug the whole mission started from — a
+trivial task accumulating hundreds of thousands of cumulative input tokens while
+staying comfortably within its turn/tool-call/wall-clock budgets, because nothing
+bounded total reported cost.
+
+Regression coverage: `packages/agents/tests/codingAgent.maxTokens.test.ts` (budget
+trips independent of turn/tool-call counts; per-request override; not enforced when
+usage is never reported; a normal run well within budget is unaffected).
+
 ## Not yet done
 
 Phase 2/3 (model-attempt vs. execution-history separation, observation compaction),
 Phase 12 remainder (a composed `StopCondition[]` the controller evaluates centrally,
 rather than each condition being its own inline check scattered through
-`CodingAgent` — these tranches added typed *reasons* and two additional *budgets*,
-not the unified *mechanism*), Phase 13 (semantic no-progress detection beyond the
-existing exact-duplicate-call circuit breaker), Phase 14–24 (model capability
-registry and circuit breaker, remaining aggregate execution budgets — token counts —
-protected-verification tamper detection, full recovery-from-events reconstruction,
-`wa explain`/CLI projections of the new event vocabulary, and the live acceptance
-run). The existing per-run `maxTurns`/`maxRepairCycles`/`toolRepeatLimit`/
-`maxWallClockMs`/`maxToolCalls` caps in `CodingAgent` and the trivial/small/complex
-task-complexity budgets (`packages/core/src/services/complexity.ts`) predate (or, for
-the newer ones, sit alongside) this mission and are not the same thing as the
-mission's controller-owned `StopCondition` composition — they overlap in effect but
-aren't unified into one typed mechanism yet.
+`CodingAgent` — these tranches added typed *reasons* and several *budgets*, not the
+unified *mechanism*), Phase 13 (semantic no-progress detection beyond the existing
+exact-duplicate-call circuit breaker), Phase 14–24 (model capability registry and
+circuit breaker, protected-verification tamper detection, full
+recovery-from-events reconstruction, `wa explain`/CLI projections of the new event
+vocabulary, and the live acceptance run). The existing per-run
+`maxTurns`/`maxRepairCycles`/`toolRepeatLimit`/`maxWallClockMs`/`maxToolCalls`/
+`maxTokens` caps in `CodingAgent` and the trivial/small/complex task-complexity
+budgets (`packages/core/src/services/complexity.ts`) predate (or, for the newer
+ones, sit alongside) this mission and are not the same thing as the mission's
+controller-owned `StopCondition` composition — they overlap in effect but aren't
+unified into one typed mechanism yet.
