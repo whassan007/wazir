@@ -89,6 +89,29 @@ async function ensurePrivateDir(dir: string): Promise<void> {
   }
 }
 
+/**
+ * Fsyncs a directory so a prior rename()'s directory-entry update is durable
+ * on disk, not just visible to this process. Windows has no directory file
+ * descriptors to sync (NTFS's own metadata journal covers this instead), so
+ * this is a deliberate no-op there rather than a platform gap.
+ */
+async function fsyncDir(dir: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  try {
+    const handle = await fs.open(dir, 'r');
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // Best effort: some filesystems (overlayfs, certain network mounts)
+    // refuse to open a directory for reading, or don't support fsync on
+    // one. The rename itself already happened; this is defense in depth,
+    // not the only thing standing between a write and data loss.
+  }
+}
+
 export class MemoryStore implements KeyValueStore {
   private data = new Map<string, unknown>();
 
@@ -219,9 +242,23 @@ export class JsonFileStore implements KeyValueStore {
     // The store holds prompts, tool output and policy decisions for every
     // execution — owner-only from the first byte, not the umask default.
     const tmp = `${this.file}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(Object.fromEntries(this.data), null, 2), { encoding: 'utf8', mode: 0o600 });
+    // write -> fsync(tmp) -> rename -> fsync(dir): a bare writeFile+rename
+    // (the previous implementation) can leave an empty or truncated file on
+    // crash/power loss — the OS is free to reorder or delay when tmp's
+    // *contents* actually reach disk relative to when writeFile() returns,
+    // and separately, the rename's directory-entry update needs its own
+    // fsync to be durable (journaling filesystems commit metadata and data
+    // on independent schedules). Neither step alone is sufficient.
+    const handle = await fs.open(tmp, 'w', 0o600);
+    try {
+      await handle.writeFile(JSON.stringify(Object.fromEntries(this.data), null, 2), 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     await fs.rename(tmp, this.file);
     await fs.chmod(this.file, 0o600).catch(() => undefined);
+    await fsyncDir(dir);
   }
 
   private async withLock(mutate: () => void): Promise<void> {
