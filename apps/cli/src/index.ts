@@ -4,6 +4,13 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { registerMCPCommands } from './mcp.js';
 import { closeMCPRegistries } from '@wazir/core';
+import { installGlobalCrashHandlers } from './crashHandler.js';
+
+// Installed before anything else runs: previously `uncaughtException` had no
+// handler anywhere (Node's default silently crashes with no terminal
+// restoration and no record of what happened), and `unhandledRejection` was
+// only ever handled inside the TUI, and only while it was running.
+installGlobalCrashHandlers();
 
 const program = new Command();
 

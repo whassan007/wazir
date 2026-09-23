@@ -1,6 +1,7 @@
 import readline from 'node:readline';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { withScopedRejectionHandler } from '../crashHandler.js';
 import {
   type Job,
   type JobOrchestratorEvent,
@@ -521,7 +522,7 @@ export class FleetTui {
   private unsubscribeApprovals?: () => void;
   private unsubscribeJobEvents?: () => void;
   private unsubscribeResize?: () => void;
-  private unhandledRejectionHandler?: (reason: unknown) => void;
+  private restoreFatalRejectionHandler?: () => void;
 
   constructor(options: FleetTuiOptions) {
     this.engine = options.engine;
@@ -733,11 +734,17 @@ export class FleetTui {
     // what should have been a status-bar error message (e.g. pressing 'c' to cancel a job
     // that already finished). Individual call sites are being fixed as found, but this
     // keeps any other one we haven't found yet from killing the app outright.
-    this.unhandledRejectionHandler = (reason) => {
+    //
+    // This temporarily replaces the process-wide *fatal* rejection handler
+    // (crashHandler.ts's installGlobalCrashHandlers(), installed at CLI
+    // startup) rather than adding a second listener alongside it — Node
+    // calls every registered `unhandledRejection` listener, so leaving both
+    // installed would make the fatal one treat every one of these recovered
+    // keypress errors as a crash too. stop() restores the fatal default.
+    this.restoreFatalRejectionHandler = withScopedRejectionHandler((reason) => {
       this.statusMessage = `Internal error (recovered): ${reason instanceof Error ? reason.message : String(reason)}`;
       this.draw();
-    };
-    process.on('unhandledRejection', this.unhandledRejectionHandler);
+    });
 
     // 3. Raw Mode & Keypress Binding Check:
     // Verify that stdin is correctly running in raw mode so structured key objects are passed
@@ -850,9 +857,9 @@ export class FleetTui {
     if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
     if (this.unsubscribeResize) this.unsubscribeResize();
     if (this.unsubscribeModelLifecycle) this.unsubscribeModelLifecycle();
-    if (this.unhandledRejectionHandler) {
-      process.off('unhandledRejection', this.unhandledRejectionHandler);
-      this.unhandledRejectionHandler = undefined;
+    if (this.restoreFatalRejectionHandler) {
+      this.restoreFatalRejectionHandler();
+      this.restoreFatalRejectionHandler = undefined;
     }
 
     if (this.keypressListener) {
