@@ -61,6 +61,9 @@ export const defaultTools: Tool[] = [
 ];
 
 export class ToolRegistry {
+  private readonly controllerOnly = new Set<string>();
+  restrictToController(name: string): void { this.controllerOnly.add(name); }
+  isControllerOnly(name: string): boolean { return this.controllerOnly.has(name); }
   private readonly tools = new Map<string, Tool>();
   private readonly contracts = new Map<string, { input: ReturnType<typeof compileToolSchema>; output?: ReturnType<typeof compileToolSchema> }>();
 
@@ -103,8 +106,9 @@ export class ToolRegistry {
   }
 
   /** Schemas as presented to a model. */
-  forModel(allowedNames?: readonly string[]): Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> {
-    return this.list().filter(t => !allowedNames || allowedNames.includes(t.descriptor.name)).map((t) => ({
+  forModel(allowedNames?: readonly string[], capabilities: readonly string[] = []): Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> {
+    return this.list().filter(t => !this.controllerOnly.has(t.descriptor.name) && (!allowedNames || allowedNames.includes(t.descriptor.name)) &&
+      (t.descriptor.provenance?.source !== 'web' || t.descriptor.capabilities?.every(c => capabilities.includes(c)))).map((t) => ({
       name: t.descriptor.name,
       description: t.descriptor.description,
       inputSchema: t.descriptor.inputSchema,
@@ -152,6 +156,7 @@ export async function executeTool(
   input: Record<string, unknown>,
   ctx: Parameters<Tool['execute']>[1],
 ): Promise<ToolResult> {
+  if (registry.isControllerOnly(name)) return { ok: false, output: '', error: 'provider tool is controller-only; use web_search/web_fetch', failureClass: 'POLICY_DENIED', durationMs: 0 };
   if (ctx.allowedTools && !ctx.allowedTools.includes(name)) return {
     ok: false, output: '', error: `tool '${name}' is outside the execution tool surface`, failureClass: 'POLICY_DENIED', durationMs: 0,
   };

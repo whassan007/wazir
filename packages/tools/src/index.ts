@@ -10,3 +10,4 @@ export * from './outputSpill.js';
 export * from './terminalSession.js';
 export * from './terminalTools.js';
 export * from './outcomeInspection.js';
+export { createWebTools } from './web.js';

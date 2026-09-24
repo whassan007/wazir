@@ -13,9 +13,13 @@
     "@wazir/shared": "*",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "shell-quote": "^1.8.1"
+    "cheerio": "^1.0.0",
+    "ipaddr.js": "^2.2.0",
+    "shell-quote": "^1.8.1",
+    "turndown": "^7.2.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "@types/turndown": "^5.0.5"
   }
 }

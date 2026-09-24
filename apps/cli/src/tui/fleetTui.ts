@@ -2488,6 +2488,7 @@ export class FleetTui {
           usage?: { input: number; output: number; total: number };
           breakdown?: PromptBreakdown;
           raw?: string;
+          metadata?: Record<string, unknown>;
         };
 
         // Raw model output, one token at a time. Accumulated into a per-task buffer that
@@ -2562,6 +2563,11 @@ export class FleetTui {
             } else {
               eventKind = 'tool';
               eventText = `${p.tool} succeeded`;
+              const web = p.metadata?.webEvidence as import('@wazir/core').GroundedResult | undefined;
+              if ((p.tool === 'web_search' || p.tool === 'web_fetch') && web) {
+                const summary = web.kind === 'web_search' ? `${web.results.length} results` : `${web.bytesDownloaded} bytes → ${web.content.length} chars; ${web.citation.citationId}`;
+                eventText = `${p.tool} ✓ ${web.provider} · ${web.origin} · ${summary} · ${p.metadata?.webDurationMs ?? 0} ms`;
+              }
             }
           } else if (p.phase === 'test' || p.phase === 'verify') {
             eventKind = 'test';

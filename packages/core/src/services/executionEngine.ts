@@ -685,6 +685,20 @@ export class ExecutionEngine {
   async setResult(executionId: string, result: string): Promise<void> {
     const record = this.require(executionId);
     record.result = sanitizeUntrustedOutput(result);
+    const sources = new Map<string, import('../types/web.js').Citation>();
+    for (const event of record.events) if (event.type === 'web.evidence') {
+      const evidence = event.data as import('../types/web.js').GroundedResult;
+      const citations = evidence.kind === 'web_document' ? [evidence.citation] : evidence.results.map(r => r.citation);
+      for (const citation of citations) sources.set(citation.citationId, citation);
+    }
+    if (sources.size) {
+      const referenced = [...new Set(result.match(/web-[a-f0-9]{20}/g) ?? [])];
+      this.pushEvent(record, 'web.answer', {
+        citedSourceIds: [...sources.values()].filter(c => result.includes(c.citationId) || result.includes(c.url) || result.includes(c.finalUrl)).map(c => c.citationId),
+        unissuedSourceIds: referenced.filter(id => !sources.has(id)),
+        claimVerification: 'references_only_not_semantic_entailment',
+      });
+    }
     
     // Register execution summary as an artifact
     if (this.provenanceManager) {

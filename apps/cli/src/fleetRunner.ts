@@ -26,6 +26,7 @@ import { buildSystemPrompt } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
+import { recordWebContext } from './web.js';
 import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
 import type { RookEngine } from './engine.js';
 
@@ -184,7 +185,7 @@ export function createFleetTaskExecutor(
       {
         kind: 'system',
         label: 'system prompt',
-        content: buildSystemPrompt(taskRoot, engine.tools.forModel()),
+        content: buildSystemPrompt(taskRoot, engine.tools.forModel(undefined, engine.agents.get(assignment.agentId)?.descriptor.capabilities)),
         priority: 'critical',
       },
       { kind: 'task', label: 'task', content: task.input, priority: 'critical' },
@@ -225,7 +226,7 @@ export function createFleetTaskExecutor(
     // Where generation runs; an accepted escalation may move it. Tools always run in taskRoot.
     const placement = { runtimeId: assignment.runtimeId, computerId: assignment.computerId, contextTokens: contextDecision.available.tokens };
     const runtime: AgentRuntime = {
-      tools: engine.tools.forModel(),
+      tools: engine.tools.forModel(undefined, agent.descriptor.capabilities),
 
       cancelCurrentTurn(): void {
         void currentTurn?.adapter.cancel?.(currentTurn.requestId);
@@ -251,6 +252,7 @@ export function createFleetTaskExecutor(
         const requestId = generateId('req-');
         const retryContext = { requestId, model: request.modelId, provider: engine.models.get(request.modelId)?.provider };
         await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
+        if (engine.web) request = { ...request, messages: await recordWebContext(engine.executions, executionId, request.messages, engine.web.limits.maxGroundingTokens) };
         // The `agent.turn` event below only records `content.slice(0, 500)` of the
         // *parsed* action — the model's raw completion (including any reasoning
         // prose before/around the JSON action) is otherwise never durably stored,
@@ -419,10 +421,14 @@ export function createFleetTaskExecutor(
           allowVerificationChanges: taskAuthorizesVerificationChanges(task.input),
           callId,
           signal,
+          agentCapabilities: agent.descriptor.capabilities,
+          agentId: agent.descriptor.name,
+          jobId,
+          allowedTools: engine.tools.forModel(undefined, agent.descriptor.capabilities).map(t => t.name),
           checkpoint: async () => { await engine.executions.recordToolStart(executionId, name, input, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },
           projectRoot: taskRoot,
           executionId,
-          networkAllowed: engine.config.networkAllowed,
+          networkAllowed: engine.config.networkAllowed && task.policy?.networkAccess !== false,
           env: {
             TMPDIR: path.join(taskRoot, '.wazir', 'tmp'),
             HOME: path.join(taskRoot, '.wazir', 'home'),

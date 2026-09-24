@@ -24,6 +24,7 @@ export interface PolicyRule {
 }
 
 export interface PolicyEngineOptions {
+  web?: import('./web.js').WebPolicy;
   modelLifecycle?: {
     allowedRuntimes?: string[];
     prohibitedComputers?: string[];

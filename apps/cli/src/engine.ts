@@ -40,14 +40,15 @@ import {
   JsonFileStore,
   type KeyValueStore,
 } from '@wazir/shared';
-import { ToolRegistry, defaultTools } from '@wazir/tools';
+import { ToolRegistry, defaultTools, createWebTools } from '@wazir/tools';
+import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
+import { createConfiguredWeb } from './web.js';
 import { createCodingAgent, createStepAgent, ExternalAgentAdapter } from '@wazir/agents';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import { createSecretBroker, type SecretBroker } from '@wazir/secrets';
 import { Worker, currentLoad, type DiscoveredRuntime } from '@wazir/workers';
-import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
 import { configDir, loadConfig, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
@@ -74,6 +75,7 @@ export interface RookEngine {
   agents: AgentRegistry;
   tools: ToolRegistry;
   mcp: MCPRegistry;
+  web?: import('@wazir/core').WebGroundingService;
   policy: PolicyEngine;
   scheduler: Scheduler;
   /** Per-(model, task class) circuit breaker, rebuilt from `termination.completed` events at startup. */
@@ -211,7 +213,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   }
 
   // ---- agents -----------------------------------------------------------
-  agents.register(createCodingAgent(), 'native');
+  agents.register(createCodingAgent({ webCapabilities: config.web?.enabled ? ['web.search', 'web.fetch'] : [] }), 'native');
   agents.register(createStepAgent(), 'native');
 
   // OpenCode is an optional external execution provider: Wazir still owns
@@ -247,6 +249,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const policy = new PolicyEngine({
     projectRoot,
     modelLifecycle: config.modelLifecyclePolicy,
+    web: config.web?.policy,
     networkAllowed: config.networkAllowed,
     allowCommands: config.allowCommands,
     denyCommands: config.denyCommands,
@@ -274,6 +277,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     if (event.executionId) void executions.recordEvent(event.executionId, 'mcp.event', event).catch(() => undefined);
   });
   await mcp.initialize().catch(() => { if (!options.quiet) console.error('[wazir] MCP registry unavailable; run wa mcp doctor.'); });
+  const web = config.web?.enabled ? createConfiguredWeb(config.web, policy, mcp, engineConfigDir, executions, store) : undefined;
+  if (web) for (const tool of createWebTools(web)) tools.register(tool);
 
   // ---- scheduler ----------------------------------------------------------
   const reliability = new ModelReliabilityTracker();
@@ -341,6 +346,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     config,
     projectRoot,
     configDir: engineConfigDir,
+    web,
     computers,
     provenance,
     runtimes,

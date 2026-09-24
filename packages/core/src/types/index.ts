@@ -25,3 +25,4 @@ export * from './job.js';
 export * from './mcp.js';
 
 export * from './modelLifecycle.js';
+export * from './web.js';

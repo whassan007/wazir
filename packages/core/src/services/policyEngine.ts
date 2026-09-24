@@ -305,6 +305,7 @@ function attachedValue(arg: string, flag: string): string | undefined {
 }
 
 export class PolicyEngine {
+  webPolicy(): Readonly<import('../types/web.js').WebPolicy> { return structuredClone(this.options.web ?? {}); }
   readonly options: PolicyEngineOptions;
   readonly rules: PolicyRule[];
   private readonly compiledOutputsByExecution = new Map<string, Set<string>>();
@@ -600,6 +601,13 @@ export class PolicyEngine {
     const tool = request.tool;
     const projectRoot = request.projectRoot ?? this.options.projectRoot;
     const lower = tool.toLowerCase();
+    if (lower === 'web_search' || lower === 'web_fetch') {
+      const web = this.options.web ?? {};
+      const permitted = this.options.networkAllowed === true &&
+        (lower === 'web_search' ? web.searchAllowed !== false : web.fetchAllowed !== false);
+      return { decision: permitted ? 'allow' : 'deny', rule: 'web-network-policy',
+        reasons: [permitted ? 'web access enabled by controller policy' : 'web access disabled by controller policy'] };
+    }
     if (lower.startsWith('mcp.')) {
       const rule = this.mcpRules.get(tool);
       return { decision: rule?.effect ?? 'deny', rule: 'mcp-risk-policy', reasons: [rule ? `MCP ${rule.risk}` : 'MCP tool is not registered'] };

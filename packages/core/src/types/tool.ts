@@ -72,6 +72,8 @@ export interface ToolExecutionContext {
   agentId?: string;
   projectRoot: string;
   executionId?: string;
+  jobId?: string;
+  agentCapabilities?: readonly string[];
   env?: Record<string, string>;
   /** Policy's network decision for this execution; the OS sandbox enforces it. */
   networkAllowed?: boolean;

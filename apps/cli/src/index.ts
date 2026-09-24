@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { registerMCPCommands } from './mcp.js';
+import { registerWebCommands } from './web.js';
 import { closeMCPRegistries } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
 
@@ -20,6 +21,7 @@ program
   .version('0.1.41');
 
 registerMCPCommands(program);
+registerWebCommands(program);
 program.hook('postAction', async () => { await closeMCPRegistries(); });
 
 // computers command

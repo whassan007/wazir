@@ -20,6 +20,7 @@ import { buildSystemPrompt, resolvePreset } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, stripTerminalEscapes } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
+import { recordWebContext } from './web.js';
 import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
 import { color } from './colors.js';
 import type { RookEngine } from './engine.js';
@@ -159,7 +160,7 @@ export async function planTask(
     return { ok: false, reasons: taskPolicy.reasons };
   }
 
-  const allModelTools = engine.tools.forModel();
+  const allModelTools = engine.tools.forModel(undefined, engine.agents.get(options.agent ?? 'wazir-coding')?.descriptor.capabilities);
   const allowedTools = preset.tools === 'all'
     ? allModelTools
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
@@ -323,7 +324,7 @@ export async function executeTask(
   process.once('SIGINT', onSigint);
 
   const preset = resolvePreset(options.preset);
-  const allModelTools = engine.tools.forModel();
+  const allModelTools = engine.tools.forModel(undefined, agent.descriptor.capabilities);
   const availableTools = preset.tools === 'all'
     ? allModelTools
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
@@ -360,6 +361,7 @@ export async function executeTask(
       const retryContext = { requestId, model: request.modelId, provider: engine.models.get(request.modelId)?.provider };
       loader.start(`Waiting for model response (${request.modelId})...`);
       await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
+      if (engine.web) request = { ...request, messages: await recordWebContext(engine.executions, executionId, request.messages, engine.web.limits.maxGroundingTokens) };
 
       try {
         if (!placement.computerId || placement.computerId === engine.worker.computerId) {
@@ -524,10 +526,12 @@ export async function executeTask(
           allowVerificationChanges: taskAuthorizesVerificationChanges(description),
           callId,
           allowedTools: availableTools.map(tool => tool.name),
+          agentCapabilities: agent.descriptor.capabilities,
+          agentId: agent.descriptor.name,
           checkpoint: async () => { await engine.executions.recordToolStart(executionId, name, input, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },
           projectRoot: engine.projectRoot,
           executionId,
-          networkAllowed: engine.config.networkAllowed,
+          networkAllowed: engine.config.networkAllowed && task.policy?.networkAccess !== false,
         });
       } finally {
         loader.stop();
@@ -816,13 +820,14 @@ export async function runSubagent(
   });
 
   // Filter tools to strictly omit dispatch_subagent for child agent
-  const subagentTools = engine.tools.forModel().filter((t) => t.name !== 'dispatch_subagent');
+  const subagentTools = engine.tools.forModel(undefined, engine.agents.get('wazir-coding')?.descriptor.capabilities).filter((t) => t.name !== 'dispatch_subagent');
 
   const subagentRuntime: AgentRuntime = {
     tools: subagentTools,
 
     async *generate(req) {
       const requestId = generateId('req-');
+      if (engine.web) req = { ...req, messages: await recordWebContext(engine.executions, childExecId, req.messages, engine.web.limits.maxGroundingTokens) };
       if (context.signal?.aborted) return;
       const adapter = engine.adapters.get(context.runtimeId) ?? engine.worker.adapterForModel(req.modelId);
       if (!adapter) {
@@ -911,10 +916,13 @@ export async function runSubagent(
         allowVerificationChanges: taskAuthorizesVerificationChanges(description),
         callId,
         allowedTools: subagentTools.map(tool => tool.name),
+        agentCapabilities: agent.descriptor.capabilities,
+        agentId: agent.descriptor.name,
         checkpoint: async () => { await engine.executions.recordToolStart(childExecId, name, toolInput, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },
         projectRoot: context.projectRoot,
         executionId: childExecId,
-        networkAllowed: engine.config.networkAllowed,
+        networkAllowed: engine.config.networkAllowed && context.parentPolicy?.networkAccess !== false,
+        jobId: (await engine.executions.get(context.parentExecutionId))?.execution.jobId ?? context.parentExecutionId,
         signal: context.signal,
       });
 
