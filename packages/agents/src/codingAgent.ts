@@ -1,4 +1,5 @@
 import { detectProgress, observationFingerprint } from "./diagnostics.js";
+import { DEFAULT_STOP_CONDITIONS, firstStop, type StopCheckpoint, type StopCondition, type StopDecision } from "./stopConditions.js";
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type {
@@ -70,6 +71,11 @@ export interface CodingAgentOptions {
    * the agent only decides that the current one has demonstrably failed.
    */
   maxModelEscalations?: number;
+  /**
+   * The controller's stop conditions (see stopConditions.ts). Defaults to
+   * DEFAULT_STOP_CONDITIONS; pass `[...DEFAULT_STOP_CONDITIONS, extra]` to extend.
+   */
+  stopConditions?: readonly StopCondition[];
   /**
    * Wall-clock budget for a single model turn, independent of the overall
    * job timeout. Small/local models can ramble in prose for minutes without
@@ -508,6 +514,7 @@ export class CodingAgent implements AgentAdapter {
   private readonly maxTokens: number;
   private readonly maxNoProgressIterations: number;
   private readonly maxModelEscalations: number;
+  private readonly stopConditions: readonly StopCondition[];
   private readonly maxTokensPerTurn: number;
   private readonly temperature: number;
   private readonly modelTurnTimeoutMs: number;
@@ -537,6 +544,7 @@ export class CodingAgent implements AgentAdapter {
     this.maxTokens = options.maxTokens ?? 2_000_000;
     this.maxNoProgressIterations = options.maxNoProgressIterations ?? 6;
     this.maxModelEscalations = options.maxModelEscalations ?? 1;
+    this.stopConditions = options.stopConditions ?? DEFAULT_STOP_CONDITIONS;
     this.maxTokensPerTurn = options.maxTokensPerTurn ?? 4096;
     this.temperature = options.temperature ?? 0.2;
     this.modelTurnTimeoutMs = options.modelTurnTimeoutMs ?? 90_000;
@@ -579,7 +587,6 @@ export class CodingAgent implements AgentAdapter {
     let escalationsUsed = 0;
     let totalTokensUsed = 0;
     const runStartedAt = Date.now();
-    const wallClockExceeded = () => Date.now() - runStartedAt >= maxWallClockMs;
     const subagentDepth = request.subagentDepth ?? 0;
     const effectiveTools = subagentDepth >= 1
       ? runtime.tools.filter((t) => t.name !== 'dispatch_subagent')
@@ -670,13 +677,6 @@ export class CodingAgent implements AgentAdapter {
       longestNoProgressStreak = Math.max(longestNoProgressStreak, noProgressCount);
       return noProgressCount;
     };
-    const noProgressTurn = (): AgentTurn => ({
-      kind: 'error',
-      error: `NO_PROGRESS: ${noProgressCount} consecutive tool calls produced no file change and no new information`,
-      errorKind: 'other',
-      terminationReason: 'NO_PROGRESS',
-      protocolMetrics: currentMetrics(),
-    });
 
     // ---- context compaction: keep `messages` under the model's context window ----
     const estimateTokens = (msgs: ChatMessage[]): number =>
@@ -958,6 +958,24 @@ export class CodingAgent implements AgentAdapter {
       modelEscalations: triedModelIds.length - 1,
     });
 
+    // ---- stop conditions: evaluated centrally at fixed checkpoints (stopConditions.ts) ----
+    const stopLimits = { maxWallClockMs, maxToolCalls, maxTokens, maxNoProgressIterations };
+    const checkStop = (checkpoint: StopCheckpoint): StopDecision | null =>
+      firstStop(this.stopConditions, checkpoint, {
+        elapsedMs: Date.now() - runStartedAt,
+        turns: turnsUsed,
+        toolCalls: totalToolCalls,
+        tokensUsed: totalTokensUsed,
+        noProgressStreak: noProgressCount,
+      }, stopLimits);
+    const stopTurn = (stop: StopDecision, suffix = ''): AgentTurn => ({
+      kind: 'error',
+      error: `${stop.message}${suffix}`,
+      errorKind: 'other',
+      terminationReason: stop.reason,
+      protocolMetrics: currentMetrics(),
+    });
+
     // Compact, deterministic execution state — turn budget, files actually touched, what
     // the last action was — appended to every "continue" message so the model can track
     // progress from one line instead of re-deriving it from the full conversation history.
@@ -1050,14 +1068,9 @@ export class CodingAgent implements AgentAdapter {
     let planIterations = 0;
     for (; planIterations < 3 && !plan; planIterations++) {
       if (request.isCancelled?.()) return;
-      if (wallClockExceeded()) {
-        yield {
-          kind: 'error',
-          error: `run exceeded its wall-clock budget (${maxWallClockMs}ms) during planning`,
-          errorKind: 'other',
-          terminationReason: 'MAX_WALL_CLOCK',
-          protocolMetrics: currentMetrics(),
-        };
+      const beforeTurn = checkStop('before_turn');
+      if (beforeTurn) {
+        yield stopTurn(beforeTurn, ' during planning');
         return;
       }
       const compactionNote = compactIfNeeded();
@@ -1067,14 +1080,9 @@ export class CodingAgent implements AgentAdapter {
       for (const note of retryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
       if (usage) totalTokensUsed += usage.totalTokens ?? usage.inputTokens + usage.outputTokens;
-      if (totalTokensUsed > maxTokens) {
-        yield {
-          kind: 'error',
-          error: `run exceeded its token budget (${maxTokens} tokens, used ${totalTokensUsed})`,
-          errorKind: 'other',
-          terminationReason: 'MAX_TOKENS',
-          protocolMetrics: currentMetrics(),
-        };
+      const afterModel = checkStop('after_model_turn');
+      if (afterModel) {
+        yield stopTurn(afterModel);
         return;
       }
       turnsUsed += 1;
@@ -1136,14 +1144,9 @@ export class CodingAgent implements AgentAdapter {
           continue;
         }
 
-        if (totalToolCalls >= maxToolCalls) {
-          yield {
-            kind: 'error',
-            error: `run exceeded its tool-call budget (${maxToolCalls} calls)`,
-            errorKind: 'other',
-            terminationReason: 'MAX_TOOL_CALLS',
-            protocolMetrics: currentMetrics(),
-          };
+        const beforeTool = checkStop('before_tool');
+        if (beforeTool) {
+          yield stopTurn(beforeTool);
           return;
         }
         acceptAttempt(raw);
@@ -1188,9 +1191,11 @@ export class CodingAgent implements AgentAdapter {
           }
         }
         pushToolResult(action.tool, result, action.input ?? {});
-        if (assessProgress(action.tool, action.input ?? {}, result) >= maxNoProgressIterations) {
-          if (yield* tryEscalate('NO_PROGRESS', `${noProgressCount} consecutive tool calls produced no file change and no new information`)) continue;
-          yield noProgressTurn();
+        assessProgress(action.tool, action.input ?? {}, result);
+        const afterTool = checkStop('after_tool');
+        if (afterTool) {
+          if (afterTool.escalatable && (yield* tryEscalate(afterTool.reason, afterTool.message))) continue;
+          yield stopTurn(afterTool);
           return;
         }
         continue;
@@ -1216,14 +1221,9 @@ export class CodingAgent implements AgentAdapter {
     yield { kind: 'phase', phase: 'implement' as AgentPhase };
     while (turnsUsed < maxTurns && !modelSummary) {
       if (request.isCancelled?.()) return;
-      if (wallClockExceeded()) {
-        yield {
-          kind: 'error',
-          error: `run exceeded its wall-clock budget (${maxWallClockMs}ms)`,
-          errorKind: 'other',
-          terminationReason: 'MAX_WALL_CLOCK',
-          protocolMetrics: currentMetrics(),
-        };
+      const beforeTurn = checkStop('before_turn');
+      if (beforeTurn) {
+        yield stopTurn(beforeTurn);
         return;
       }
       const steering = request.getSteeringInstruction?.();
@@ -1238,14 +1238,9 @@ export class CodingAgent implements AgentAdapter {
       for (const note of retryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
       if (usage) totalTokensUsed += usage.totalTokens ?? usage.inputTokens + usage.outputTokens;
-      if (totalTokensUsed > maxTokens) {
-        yield {
-          kind: 'error',
-          error: `run exceeded its token budget (${maxTokens} tokens, used ${totalTokensUsed})`,
-          errorKind: 'other',
-          terminationReason: 'MAX_TOKENS',
-          protocolMetrics: currentMetrics(),
-        };
+      const afterModel = checkStop('after_model_turn');
+      if (afterModel) {
+        yield stopTurn(afterModel);
         return;
       }
       turnsUsed += 1;
@@ -1326,14 +1321,9 @@ export class CodingAgent implements AgentAdapter {
           continue;
         }
 
-        if (totalToolCalls >= maxToolCalls) {
-          yield {
-            kind: 'error',
-            error: `run exceeded its tool-call budget (${maxToolCalls} calls)`,
-            errorKind: 'other',
-            terminationReason: 'MAX_TOOL_CALLS',
-            protocolMetrics: currentMetrics(),
-          };
+        const beforeTool = checkStop('before_tool');
+        if (beforeTool) {
+          yield stopTurn(beforeTool);
           return;
         }
         acceptAttempt(raw);
@@ -1435,9 +1425,11 @@ export class CodingAgent implements AgentAdapter {
           }
         }
         pushToolResult(action.tool, result, action.input ?? {});
-        if (assessProgress(action.tool, action.input ?? {}, result) >= maxNoProgressIterations) {
-          if (yield* tryEscalate('NO_PROGRESS', `${noProgressCount} consecutive tool calls produced no file change and no new information`)) continue;
-          yield noProgressTurn();
+        assessProgress(action.tool, action.input ?? {}, result);
+        const afterTool = checkStop('after_tool');
+        if (afterTool) {
+          if (afterTool.escalatable && (yield* tryEscalate(afterTool.reason, afterTool.message))) continue;
+          yield stopTurn(afterTool);
           return;
         }
         continue;

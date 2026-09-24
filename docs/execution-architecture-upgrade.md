@@ -681,10 +681,43 @@ Regression coverage: `packages/core/tests/executionExplanation.test.ts` (driven
 through the real `ExecutionEngine`), `apps/cli/tests/explainExecution.test.ts`
 (text sections, JSON validity and fields, event ordering and filtering).
 
+## Twentieth tranche: central, composable stop conditions (Phase 12)
+
+`packages/agents/src/stopConditions.ts` defines the agent loop's stop conditions
+as one list owned by the controller. Each condition declares:
+- the checkpoint where it applies (`before_turn`, `after_model_turn`,
+  `before_tool`, `after_tool`)
+- the typed `TerminationReason` it produces
+- whether the controller may first try a model escalation
+
+Only `NO_PROGRESS` is escalatable; an exhausted budget never is, and a test
+pins that. `firstStop` evaluates them in declaration order against a snapshot
+counted by the harness: elapsed time, turns, tool calls, reported tokens, and
+the no-progress streak.
+
+`CodingAgent` previously had eight inline checks, duplicated across the plan
+and work phases (wall clock, tokens, tool calls, no progress). They are now
+four calls to the evaluator, with the same messages, reasons and escalation
+behavior. `CodingAgentOptions.stopConditions` replaces or extends the list,
+e.g. `[...DEFAULT_STOP_CONDITIONS, custom]`, and a custom condition terminates
+with its own typed reason.
+
+Deliberately left at their call sites, because each is tied to handling one
+action and already produces a typed reason:
+- protocol-budget exhaustion
+- repeated blocked actions
+- repair-cycle exhaustion
+
+The turn budget stays the loop bound, because running out of turns still runs
+verification instead of aborting.
+
+Regression coverage: `packages/agents/tests/stopConditions.test.ts`. The existing
+budget tests (`maxTokens`, `maxToolCalls`, `wallClock`, `noProgress`, `escalation`)
+pin the unchanged behavior. The agents package passed (27 files, 126 tests), as
+did the CLI e2e, fleet and escalation e2e tests against the rebuilt dist.
+
 ## Not yet done
 
-- Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
-  checks are still inline in `CodingAgent`.
 - Phase 21 remainder: resuming the agent loop inside the recovered execution
   (the recovery plan says when it's safe; tasks are still retried as before).
 - Phase 24: the live acceptance run.
