@@ -4,13 +4,15 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   AgentRegistry, ComputerRegistry, ContextCompiler, ExecutionEngine, ModelRegistry,
-  ModelLifecycleService, PolicyEngine, RuntimeRegistry, Scheduler,
+  ModelLifecycleService, PolicyEngine, RuntimeRegistry, Scheduler, WorktreeManager,
 } from '@wazir/core';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import type { Worker } from '@wazir/workers';
 import { executeTask } from '../src/run.js';
+import { createFleetTaskExecutor } from '../src/fleetRunner.js';
+import type { JobNode, Task } from '@wazir/core';
 import type { RookEngine } from '../src/engine.js';
 
 /**
@@ -94,6 +96,7 @@ async function buildEngine(projectRoot: string, strongLoaded: boolean, strongLoa
     compiler: new ContextCompiler(),
     executions,
     adapters,
+    worktrees: new WorktreeManager(),
     discovered: [],
     worker: { id: 'worker-local', computerId: 'local', adapterForModel: () => undefined } as unknown as Worker,
   } as unknown as RookEngine;
@@ -157,3 +160,46 @@ describe('mid-run model escalation with re-placement (e2e)', () => {
     expect(events.find((e) => e.eventType === 'termination.completed')?.data).toMatchObject({ reason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', modelId: 'a-weak' });
   });
 });
+
+describe('mid-run model escalation with re-placement — fleet task (e2e)', () => {
+  let projectRoot: string;
+  afterEach(async () => { if (projectRoot) await fs.rm(projectRoot, { recursive: true, force: true }).catch(() => undefined); });
+
+  async function runFleetTask(strongLoaded: boolean) {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-esc-fleet-'));
+    const built = await buildEngine(projectRoot, strongLoaded);
+    const task: Task = {
+      id: 'task-1', type: 'coding', title: 'write hello', input: 'write a hello file',
+      requirements: { capabilities: ['coding'], minimumContext: 1024 },
+      priority: 'normal', status: 'running', createdAt: new Date(), updatedAt: new Date(),
+    } as Task;
+    const node: JobNode = { id: task.id, type: 'task', taskId: task.id, state: 'running', dependencies: [], children: [] } as JobNode;
+    const outcome = await createFleetTaskExecutor(built.engine, { useWorktrees: false })(task, {
+      jobId: 'job-1', taskId: task.id, node,
+      // The orchestrator's assignment: the weak model on runtime rt-a.
+      assignment: { jobId: 'job-1', taskId: task.id, agentId: 'wazir-coding', modelId: 'a-weak', runtimeId: 'rt-a', computerId: 'local', assignedAt: new Date(), policy: [] },
+    });
+    const [record] = await built.engine.executions.listByTask(task.id);
+    const events = await built.engine.executions.events(record.execution.id);
+    return { ...built, outcome, events };
+  }
+
+  it('moves generation off the assigned runtime and completes on the replacement', async () => {
+    const { outcome, weak, strong, events } = await runFleetTask(true);
+
+    expect(await fs.readFile(path.join(projectRoot, 'hello.txt'), 'utf8')).toBe('from the strong model');
+    expect(weak.generate).toBeGreaterThanOrEqual(4);
+    expect(strong.generate).toBe(2);
+    expect(events.find((e) => e.eventType === 'model.route.changed')?.data).toMatchObject({ previousModel: 'a-weak', newModel: 'b-strong', accepted: true, runtimeId: 'rt-b' });
+    expect(events.find((e) => e.eventType === 'termination.completed')?.data).toMatchObject({ reason: 'VERIFICATION_PASSED', modelId: 'b-strong' });
+    expect(outcome.filesChanged).toContain('hello.txt');
+  });
+
+  it('loads an unloaded replacement through the lifecycle service mid-task', async () => {
+    const { strong, events } = await runFleetTask(false);
+    expect(strong.loads).toEqual(['b-strong']);
+    expect(events.find((e) => e.eventType === 'model.route.changed')?.data).toMatchObject({ accepted: true, newModel: 'b-strong' });
+    expect(events.find((e) => e.eventType === 'termination.completed')?.data).toMatchObject({ modelId: 'b-strong' });
+  });
+});
+

@@ -612,8 +612,10 @@ to `executionSummary.test.ts` and `modelReliability.test.ts`.
   - a runtime load failure declines the switch, is recorded, and the run ends
     as `MODEL_PROTOCOL_BUDGET_EXHAUSTED` on the original model
 
-  The fleet runner uses the same handler and placement logic, but has no
-  dedicated re-placement e2e test.
+  The fleet runner has the same coverage: two fleet cases in the same file drive
+  `createFleetTaskExecutor` with an orchestrator assignment to the weak model on
+  `rt-a`. Generation moves off the assigned runtime and completes on the
+  replacement, including when the replacement must be loaded mid-task.
 
 Verification: I typechecked the staged tree (HEAD plus these changes only) in
 isolation, with no errors except one unrelated MCP subpath import my scratch
