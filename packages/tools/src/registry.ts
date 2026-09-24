@@ -152,6 +152,9 @@ async function proposedOracleWeakening(projectRoot: string, name: string, input:
   return detectOracleWeakening(relative, before, after);
 }
 
+/** How long an interrupted terminatesOnAbort tool may take to confirm its process exited. */
+const TERMINATION_GRACE_MS = 10_000;
+
 export async function executeTool(
   registry: ToolRegistry,
   name: string,
@@ -195,9 +198,13 @@ export async function executeTool(
   const unknownOutcome = tool.descriptor.sideEffectClass !== 'READ_ONLY';
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort!: () => void;
+  let wasInterrupted = false;
   const interrupted = new Promise<ToolResult>(resolve => {
-    onAbort = () => resolve({ ok: false, output: '', error: controller.signal.aborted ? (isMCP ? 'MCP_TOOL_TIMEOUT' : 'tool timeout; execution outcome requires reconciliation') : (isMCP ? 'MCP_CANCELLED' : 'tool cancelled after dispatch'),
-      failureClass: unknownOutcome ? 'TOOL_OUTCOME_UNKNOWN' : controller.signal.aborted ? 'TOOL_TIMEOUT' : 'CANCELLED', durationMs: Date.now() - started });
+    onAbort = () => {
+      wasInterrupted = true;
+      resolve({ ok: false, output: '', error: controller.signal.aborted ? (isMCP ? 'MCP_TOOL_TIMEOUT' : 'tool timeout; execution outcome requires reconciliation') : (isMCP ? 'MCP_CANCELLED' : 'tool cancelled after dispatch'),
+        failureClass: unknownOutcome ? 'TOOL_OUTCOME_UNKNOWN' : controller.signal.aborted ? 'TOOL_TIMEOUT' : 'CANCELLED', durationMs: Date.now() - started });
+    };
     signal.addEventListener('abort', onAbort, { once: true });
     timer = setTimeout(() => controller.abort(), tool.descriptor.timeoutMs);
   });
@@ -207,6 +214,23 @@ export async function executeTool(
       failureClass: unknownOutcome ? 'TOOL_OUTCOME_UNKNOWN' : 'TOOL_EXECUTION_FAILED', durationMs: Date.now() - started,
     }));
     let result = await Promise.race([operation, interrupted]);
+    if (wasInterrupted && tool.descriptor.terminatesOnAbort && !isMCP) {
+      // Interrupted after dispatch. A tool that kills its own process on abort settles
+      // once that process has exited; if it does within the grace period, the side
+      // effect has stopped and the after-snapshot below is final — the outcome is
+      // determined (timeout/cancel with observed mutations), not unknown.
+      let grace: ReturnType<typeof setTimeout> | undefined;
+      const settled = await Promise.race([operation, new Promise<undefined>(r => { grace = setTimeout(() => r(undefined), TERMINATION_GRACE_MS); })]);
+      clearTimeout(grace);
+      if (settled) {
+        const timedOut = controller.signal.aborted;
+        result = {
+          ok: false, output: settled.output, metadata: { ...settled.metadata, processTerminated: true },
+          error: timedOut ? `tool timed out after ${tool.descriptor.timeoutMs}ms; its process was terminated` : 'tool cancelled after dispatch; its process was terminated',
+          failureClass: timedOut ? 'TOOL_TIMEOUT' : 'CANCELLED', durationMs: Date.now() - started,
+        };
+      }
+    }
     if (before) {
       const after = await snapshotWorkspace(ctx.projectRoot, targets);
       result = { ...result, fileMutations: workspaceMutations(before, after, result.ok), metadata: {

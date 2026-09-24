@@ -205,6 +205,18 @@ describe('PolicyEngine', () => {
       expect(decision.rule).toContain('user-approved');
     });
 
+    it('a non-interactive session denies ask decisions without attributing them to a user', async () => {
+      const engineNonInteractive = new PolicyEngine({
+        projectRoot: '/test/project',
+        approveCallback: async () => 'unavailable',
+      });
+      const decision = await engineNonInteractive.authorize({ tool: 'shell', input: { command: 'git status' } });
+      expect(decision.decision).toBe('deny');
+      expect(decision.rule).toContain('escalated-from-ask');
+      expect(decision.reasons.join(' ')).toContain('non-interactive');
+      expect(decision.reasons.join(' ')).not.toContain('denied by user');
+    });
+
     it('contextual workspace artifact execution auto-allows binaries inside projectRoot without global whitelisting', async () => {
       const engineWithArtifacts = new PolicyEngine({
         projectRoot: '/test/project',

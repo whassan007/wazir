@@ -48,13 +48,14 @@ export const shellTool: Tool = {
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Shell command line' },
-        timeoutMs: { type: 'number', description: 'Timeout in milliseconds (default 120000)' },
+        timeoutMs: { type: 'number', description: 'Timeout in milliseconds (default and maximum 120000)' },
       },
       required: ['command'],
     },
     permissions: ['shell_execute'],
     riskLevel: 'high',
     environment: 'local',
+    terminatesOnAbort: true,
   },
   async execute(input, ctx): Promise<ToolResult> {
     const command = String(input.command ?? '').trim();
@@ -68,6 +69,7 @@ export const shellTool: Tool = {
       timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : 120_000,
       env: ctx.env,
       networkAllowed: ctx.networkAllowed,
+      signal: ctx.signal,
     });
     return toToolResult(command, result, {
       shellInvocationId,
@@ -91,6 +93,7 @@ export const gitTool: Tool = {
     permissions: ['git_execute'],
     riskLevel: 'medium',
     environment: 'local',
+    terminatesOnAbort: true,
   },
   async execute(input, ctx): Promise<ToolResult> {
     const args = Array.isArray(input.args) ? input.args.map((a) => String(a)) : [];
@@ -103,6 +106,7 @@ export const gitTool: Tool = {
       timeoutMs: 60_000,
       env: ctx.env,
       networkAllowed: ctx.networkAllowed,
+      signal: ctx.signal,
     });
     return toToolResult(`git ${args.join(' ')}`, result, {
       cwd: ctx.projectRoot,
@@ -146,6 +150,9 @@ function makeCheckTool(name: string, description: string, defaultScript: string,
       permissions: [permission],
       riskLevel: 'low',
       environment: 'local',
+      // The registry's ceiling must match the advertised default, or a check is cut off at 120s.
+      timeoutMs: 300_000,
+      terminatesOnAbort: true,
     },
     async execute(input: CheckToolInput, ctx): Promise<ToolResult> {
       const started = Date.now();
@@ -167,6 +174,7 @@ function makeCheckTool(name: string, description: string, defaultScript: string,
           timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : 300_000,
           env: ctx.env,
           networkAllowed: ctx.networkAllowed,
+          signal: ctx.signal,
         });
         return toToolResult(command, result, {
           cwd: ctx.projectRoot,

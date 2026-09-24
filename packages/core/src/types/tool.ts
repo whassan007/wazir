@@ -16,6 +16,12 @@ export type ToolSideEffectClass = 'READ_ONLY' | 'IDEMPOTENT_WRITE' | 'NON_IDEMPO
 export interface ToolDescriptor {
   sideEffectClass?: ToolSideEffectClass;
   timeoutMs?: number;
+  /**
+   * Contract: on an abort of ctx.signal, execute() settles only after every process it
+   * started has exited. A timed-out call to such a tool has a determined outcome
+   * (TOOL_TIMEOUT, with its observed file mutations) instead of TOOL_OUTCOME_UNKNOWN.
+   */
+  terminatesOnAbort?: boolean;
   concurrencySafety?: 'parallel' | 'exclusive';
   provenance?:
     | { source: 'mcp'; serverId: string; tool: string; trust: 'untrusted' }

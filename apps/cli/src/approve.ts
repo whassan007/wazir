@@ -17,9 +17,9 @@ function summarize(value: unknown): string {
 export async function createApprover(
   request: PolicyActionRequest,
   decision: PolicyDecision,
-): Promise<boolean> {
+): Promise<boolean | 'unavailable'> {
   if (process.stdin.isTTY !== true || process.env.WAZIR_AUTO_DENY === '1') {
-    return false;
+    return 'unavailable';
   }
 
   console.error('');

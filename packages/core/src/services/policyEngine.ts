@@ -541,6 +541,14 @@ export class PolicyEngine {
 
     try {
       const approved = await approver(request, decision);
+      if (approved === 'unavailable') {
+        return {
+          ...decision,
+          decision: 'deny',
+          rule: `${decision.rule}+escalated-from-ask`,
+          reasons: [...decision.reasons, 'approval required but this session is non-interactive; denying (never silently allowed)'],
+        };
+      }
       void appendAuditEvent({
         type: 'approval_resolution',
         tool: request.tool,

@@ -52,7 +52,9 @@ export interface PolicyEngineOptions {
    * Approves 'ask' decisions interactively. When absent, 'ask' is
    * escalated to 'deny' — Wazir never silently allows.
    */
-  approveCallback?: (request: PolicyActionRequest, decision: PolicyDecision) => Promise<boolean>;
+  /** Resolves true/false for a human's answer, or 'unavailable' when no human could be
+   *  asked (non-interactive session) — recorded as such, never as a user denial. */
+  approveCallback?: (request: PolicyActionRequest, decision: PolicyDecision) => Promise<boolean | 'unavailable'>;
   /** Non-blocking approval queue for multi-agent execution. */
   approvalQueue?: {
     enqueue: (request: PolicyActionRequest, decision: PolicyDecision) => Promise<boolean>;
