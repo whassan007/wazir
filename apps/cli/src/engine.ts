@@ -51,6 +51,7 @@ import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import { createSecretBroker, type SecretBroker } from '@wazir/secrets';
 import { Worker, currentLoad, type DiscoveredRuntime } from '@wazir/workers';
+import { startLocalHeartbeat } from './localHeartbeat.js';
 import { configDir, loadConfig, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
@@ -343,6 +344,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     lifecycle.startReconciliation();
     const inspectOutcome = localOutcomeInspector(projectRoot, localComputer.id);
     await reconcileLocalOutcomes(executions, inspectOutcome);
+    // Heartbeat before sweeping: the sweep must never find this live process's own worker offline.
+    startLocalHeartbeat(computers, localComputer.id, currentLoad);
     new RecoveryManager({ computers, executions, jobManager, orchestrator, inspectToolOutcome: inspectOutcome }).start();
   }
 
