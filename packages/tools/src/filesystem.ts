@@ -171,7 +171,7 @@ export const editTool: Tool = {
         return { ok: false, output: '', error: 'oldString not found in file', durationMs: Date.now() - started, fileMutations: [mutation] };
       }
       
-      const next = input.replaceAll === true ? raw.split(oldString).join(newString) : raw.replace(oldString, newString);
+      const next = input.replaceAll === true ? raw.split(oldString).join(newString) : raw.replace(oldString, () => newString);
       await writeProjectFile(ctx.projectRoot, filePath, next);
       
       mutation.succeeded = true;

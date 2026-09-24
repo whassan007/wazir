@@ -1,5 +1,7 @@
 import type { Tool, ToolDescriptor, ToolResult } from '@wazir/core';
-import { compileToolSchema } from '@wazir/core';
+import { compileToolSchema, detectOracleWeakening } from '@wazir/core';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { snapshotWorkspace, workspaceFingerprint, workspaceMutations } from './workspaceSnapshot.js';
 import { editTool, readTool, writeTool } from './filesystem.js';
 import { globTool, searchTool } from './search.js';
@@ -114,6 +116,36 @@ export class ToolRegistry {
   }
 }
 
+/**
+ * Pre-dispatch oracle check for `write`/`edit`: computes the content the call
+ * would produce and compares it with what is on disk now. Nothing is written.
+ * Paths outside the project root are left to PolicyEngine.
+ */
+async function proposedOracleWeakening(projectRoot: string, name: string, input: Record<string, unknown>) {
+  if ((name !== 'write' && name !== 'edit') || typeof input.path !== 'string') return [];
+  const absolute = path.resolve(projectRoot, input.path);
+  const relative = path.relative(path.resolve(projectRoot), absolute);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return [];
+  let before: string | null;
+  try {
+    before = await readFile(absolute, 'utf8');
+  } catch {
+    before = null;
+  }
+  if (before === null) return [];
+  let after: string;
+  if (name === 'write') {
+    if (typeof input.content !== 'string') return [];
+    after = input.content;
+  } else {
+    const oldString = typeof input.oldString === 'string' ? input.oldString : '';
+    const newString = typeof input.newString === 'string' ? input.newString : '';
+    if (!oldString || !before.includes(oldString)) return [];
+    after = input.replaceAll === true ? before.split(oldString).join(newString) : before.replace(oldString, () => newString);
+  }
+  return detectOracleWeakening(relative, before, after);
+}
+
 export async function executeTool(
   registry: ToolRegistry,
   name: string,
@@ -137,6 +169,14 @@ export async function executeTool(
   const invalid = registry.validate(name, input, 'input');
   if (invalid) return { ok: false, output: '', error: isMCP ? 'MCP_TOOL_SCHEMA_INVALID' : `TOOL_VALIDATION_FAILED: ${invalid}`, failureClass: 'TOOL_VALIDATION_FAILED', durationMs: 0 };
   if (ctx.signal?.aborted) return { ok: false, output: '', error: 'cancelled before tool dispatch', failureClass: 'CANCELLED', durationMs: 0 };
+  if (!ctx.allowVerificationChanges) {
+    const findings = await proposedOracleWeakening(ctx.projectRoot, name, input);
+    if (findings.length > 0) return {
+      ok: false, output: '', failureClass: 'POLICY_DENIED', durationMs: 0, metadata: { oracleWeakening: findings },
+      error: `VERIFICATION_PROTECTED: ${findings.map(f => `${f.path}: ${f.kind} (${f.detail})`).join('; ')}. ` +
+        'Fix the implementation, not the tests; verification assets may only be weakened when the task explicitly asks for it.',
+    };
+  }
   const targets = ['write', 'edit'].includes(name) && typeof input.path === 'string' ? [input.path] : undefined;
   const before = ctx.verifyWorkspace && tool.descriptor.sideEffectClass !== 'READ_ONLY' ? await snapshotWorkspace(ctx.projectRoot, targets) : undefined;
   // MCP performs its own authorization and checkpoints immediately after it.

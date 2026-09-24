@@ -1,6 +1,6 @@
 import { executeMCPForAgent } from './mcp.js';
 import path from 'node:path';
-import { effectiveContextTokens, SchedulingError } from '@wazir/core';
+import { effectiveContextTokens, SchedulingError, taskAuthorizesVerificationChanges } from '@wazir/core';
 import type {
   AgentAdapter,
   AgentRuntime,
@@ -494,6 +494,7 @@ export async function executeTask(
       try {
         result = await runRegisteredTool(engine.tools, name, input, {
           verifyWorkspace: true,
+          allowVerificationChanges: taskAuthorizesVerificationChanges(description),
           callId,
           allowedTools: availableTools.map(tool => tool.name),
           checkpoint: async () => { await engine.executions.recordToolStart(executionId, name, input, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },
@@ -878,6 +879,7 @@ export async function runSubagent(
       const callId = generateId('call-');
       const res = await runRegisteredTool(engine.tools, name, toolInput, {
         verifyWorkspace: true,
+        allowVerificationChanges: taskAuthorizesVerificationChanges(description),
         callId,
         allowedTools: subagentTools.map(tool => tool.name),
         checkpoint: async () => { await engine.executions.recordToolStart(childExecId, name, toolInput, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },

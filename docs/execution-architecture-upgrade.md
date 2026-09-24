@@ -264,6 +264,32 @@ Regression coverage: `packages/core/tests/observationCompactor.test.ts`,
 `packages/agents/tests/codingAgent.toolResultOutput.test.ts` (raw kept as evidence,
 compact form in model context).
 
+## Tenth tranche: protected verification
+
+`detectOracleWeakening` (`packages/core/src/services/verificationIntegrity.ts`)
+recognizes verification assets (test files and directories, fixtures,
+golden/expected outputs, test-runner config) and flags these changes: a deleted
+asset, fewer test cases, fewer assertions, new skip/disable markers, an added
+assertion that cannot fail, or any edit to an expected output. Adding coverage is
+never flagged. `executeTool()` runs this check before dispatch for `write`/`edit`.
+It computes the content the call would produce, and a weakening change returns
+`POLICY_DENIED` / `VERIFICATION_PROTECTED` with no checkpoint and no write. The
+exception is `ToolExecutionContext.allowVerificationChanges`, which the CLI (main
+run, subagent, fleet) sets only when `taskAuthorizesVerificationChanges(task)`
+sees an explicit request such as "update the expected output". "Add a regression
+test" and "make the tests pass" do not authorize it.
+
+Also fixed while mirroring the edit semantics: the `edit` tool used
+`String.replace(old, new)`, which expands `$&`/`$1` in the replacement text. It
+now inserts the replacement literally.
+
+Not covered yet: oracle weakening through `shell` (e.g. `sed -i` on a test file).
+Policy already requires approval for `rm`/`mv` there, but shell edits are not
+content-checked.
+
+Regression coverage: `packages/core/tests/verificationIntegrity.test.ts`,
+`packages/tools/tests/protectedVerification.test.ts`.
+
 ## Not yet done
 
 Phase 2/3 (model-attempt vs. execution-history separation, observation compaction),

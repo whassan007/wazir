@@ -17,6 +17,7 @@ import {
   type WorkerExecutionEvent,
   type WorkerExecutionRequest,
   type WorktreeInfo,
+  taskAuthorizesVerificationChanges,
 } from '@wazir/core';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import { buildSystemPrompt } from '@wazir/agents';
@@ -391,6 +392,7 @@ export function createFleetTaskExecutor(
         const callId = generateId('call-');
         const result = await runRegisteredTool(engine.tools, name, input, {
           verifyWorkspace: true,
+          allowVerificationChanges: taskAuthorizesVerificationChanges(task.input),
           callId,
           signal,
           checkpoint: async () => { await engine.executions.recordToolStart(executionId, name, input, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },

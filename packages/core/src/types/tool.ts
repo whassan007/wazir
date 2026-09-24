@@ -61,6 +61,12 @@ export interface ToolExecutionContext {
   checkpoint?: () => Promise<void>;
   /** Controller opts in to before/after physical workspace observation. */
   verifyWorkspace?: boolean;
+  /**
+   * The task explicitly authorizes changing verification assets (tests, fixtures,
+   * golden outputs). Unset, a write/edit that weakens the oracle is refused before
+   * dispatch — see `detectOracleWeakening`.
+   */
+  allowVerificationChanges?: boolean;
   signal?: AbortSignal;
   requester?: string;
   agentId?: string;
