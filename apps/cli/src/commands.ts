@@ -292,6 +292,80 @@ export async function clearContextCommand(engine: RookEngine): Promise<{ code: n
   }
 }
 
+/** Explain active context selection and snapshot breakdown */
+export async function explainContextCommand(
+  engine: RookEngine,
+  executionId: string,
+  options: { json?: boolean } = {},
+): Promise<{ code: number; output: string }> {
+  const snapshot = engine.compiler.getLatestSnapshot(executionId);
+  if (!snapshot) {
+    const msg = `No compiled context snapshot found for execution: ${executionId}`;
+    if (options.json) {
+      return { code: 1, output: JSON.stringify({ error: msg }) };
+    }
+    return { code: 1, output: color.yellow(msg) };
+  }
+
+  if (options.json) {
+    return {
+      code: 0,
+      output: JSON.stringify(
+        {
+          executionId: snapshot.executionId,
+          snapshotId: snapshot.id,
+          generation: snapshot.generation,
+          modelId: snapshot.modelId,
+          effectiveContextWindow: snapshot.effectiveContextWindow,
+          estimatedTokens: snapshot.estimatedTokens,
+          utilization: snapshot.tokenBudget?.utilization ?? 0,
+          breakdown: {
+            pinnedTokens: snapshot.pinned.reduce((s, p) => s + (p.tokens ?? 0), 0),
+            activeTokens: snapshot.active.reduce((s, p) => s + (p.tokens ?? 0), 0),
+            relevantTokens: (snapshot.relevant ?? []).reduce((s, p) => s + (p.tokens ?? 0), 0),
+            compressedTokens: (snapshot.compressed ?? []).reduce((s, p) => s + (p.tokens ?? 0), 0),
+            tailTokens: snapshot.tail.reduce((s, p) => s + (p.tokens ?? 0), 0),
+          },
+          includedItems: [
+            ...snapshot.pinned.map((p) => ({ label: p.label, category: 'PINNED', tokens: p.tokens, reason: p.reasonIncluded })),
+            ...snapshot.active.map((p) => ({ label: p.label, category: 'ACTIVE', tokens: p.tokens, reason: p.reasonIncluded })),
+            ...(snapshot.relevant ?? []).map((p) => ({ label: p.label, category: 'RELEVANT', tokens: p.tokens, reason: p.reasonIncluded })),
+          ],
+          omittedItems: snapshot.omitted ?? [],
+        },
+        null,
+        2,
+      ),
+    };
+  }
+
+  const lines: string[] = [];
+  lines.push(color.bold(`Context Explanation for Execution: ${executionId}`));
+  lines.push(`  Model: ${snapshot.modelId}`);
+  lines.push(`  Effective context window: ${snapshot.effectiveContextWindow.toLocaleString()} tokens`);
+  lines.push(`  Snapshot generation: #${snapshot.generation} (${snapshot.id})`);
+  lines.push(`  Estimated active tokens: ${snapshot.estimatedTokens.toLocaleString()}`);
+  if (snapshot.tokenBudget?.utilization !== undefined) {
+    lines.push(`  Context utilization: ${(snapshot.tokenBudget.utilization * 100).toFixed(1)}%`);
+  }
+  lines.push('');
+  lines.push(color.cyan('INCLUDED CONTEXT:'));
+  for (const item of [...snapshot.pinned, ...snapshot.active, ...(snapshot.relevant ?? [])]) {
+    lines.push(`  - [${item.category ?? item.kind}] ${item.label}`);
+    if (item.reasonIncluded) lines.push(`    Reason: ${item.reasonIncluded}`);
+  }
+  if (snapshot.omitted && snapshot.omitted.length > 0) {
+    lines.push('');
+    lines.push(color.yellow('OMITTED CONTEXT:'));
+    for (const omit of snapshot.omitted) {
+      lines.push(`  - [${omit.category}] ${omit.label} (~${omit.estimatedTokens} tokens)`);
+      lines.push(`    Reason: ${omit.reason}`);
+    }
+  }
+
+  return { code: 0, output: lines.join('\n') };
+}
+
 export function listTools(engine: RookEngine): string {
   const tools = engine.tools.list();
   const rows = tools.map((t) => [

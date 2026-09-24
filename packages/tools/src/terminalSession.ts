@@ -1,9 +1,24 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import * as nodePty from 'node-pty';
+import type * as nodePtyType from 'node-pty';
 import { Terminal } from '@xterm/headless';
 import { childEnvironment } from './process.js';
+
+let cachedPty: typeof import('node-pty') | null = null;
+
+export function loadNodePty(): typeof import('node-pty') {
+  if (cachedPty) return cachedPty;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    cachedPty = require('node-pty');
+    return cachedPty!;
+  } catch (err) {
+    throw new Error(
+      `node-pty native module is not available in this environment: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
 
 /**
  * A persistent, PTY-backed interactive shell session.
@@ -64,7 +79,7 @@ const DEFAULT_MAX_WAIT_MS = 30_000;
 
 export class TerminalSession {
   readonly id: string;
-  private pty: nodePty.IPty;
+  private pty: nodePtyType.IPty;
   private terminal: Terminal;
   private pending = '';
   private pendingBytes = 0;
@@ -107,7 +122,8 @@ export class TerminalSession {
     // against the program's own stdout is not realistic.
     const promptCommand = `printf '${this.marker}:%d\\n' "$?"`;
 
-    this.pty = nodePty.spawn(shell, args, {
+    const ptyModule = loadNodePty();
+    this.pty = ptyModule.spawn(shell, args, {
       name: 'xterm-256color',
       cols: options.cols ?? 120,
       rows: options.rows ?? 40,
@@ -283,7 +299,7 @@ class TerminalSessionRegistryImpl {
     this.hooked = true;
     const killAllSync = () => {
       for (const session of this.sessions) {
-        try { (session as unknown as { pty: nodePty.IPty }).pty.kill('SIGKILL'); } catch { /* ignore */ }
+        try { (session as unknown as { pty: nodePtyType.IPty }).pty.kill('SIGKILL'); } catch { /* ignore */ }
       }
     };
     process.once('exit', killAllSync);

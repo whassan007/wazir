@@ -38,19 +38,27 @@ export const terminalOpenTool: Tool = {
   },
   async execute(input, ctx): Promise<ToolResult> {
     const started = Date.now();
-    const session = new TerminalSession({
-      cwd: ctx.projectRoot,
-      env: ctx.env,
-      cols: typeof input.cols === 'number' ? input.cols : undefined,
-      rows: typeof input.rows === 'number' ? input.rows : undefined,
-    });
-    sessions.set(session.id, session);
-    return {
-      ok: true,
-      output: `Opened terminal session ${session.id}`,
-      durationMs: Date.now() - started,
-      metadata: { sessionId: session.id },
-    };
+    try {
+      const session = new TerminalSession({
+        cwd: ctx.projectRoot,
+        env: ctx.env,
+        cols: typeof input.cols === 'number' ? input.cols : undefined,
+        rows: typeof input.rows === 'number' ? input.rows : undefined,
+      });
+      sessions.set(session.id, session);
+      return {
+        ok: true,
+        output: `Opened terminal session ${session.id}`,
+        durationMs: Date.now() - started,
+        metadata: { sessionId: session.id },
+      };
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        output: `Failed to open terminal session: ${err instanceof Error ? err.message : String(err)}`,
+        durationMs: Date.now() - started,
+      };
+    }
   },
 };
 

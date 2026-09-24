@@ -26,3 +26,4 @@ export * from './mcp.js';
 
 export * from './modelLifecycle.js';
 export * from './web.js';
+export * from './codeIntelligence.js';

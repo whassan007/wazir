@@ -471,7 +471,7 @@ export class ContextCompactionService implements AgentContextCompressor {
 
   private safeGetRecord(executionId: string): ExecutionRecord | undefined {
     try {
-      return this.engine?.getRecord(executionId);
+      return this.engine?.require(executionId);
     } catch {
       return undefined;
     }
@@ -500,8 +500,8 @@ export class ContextCompactionService implements AgentContextCompressor {
     }
 
     const verification = {
-      build: record?.checks?.find(c => c.kind === 'build')?.status ?? 'unknown',
-      tests: record?.checks?.find(c => c.kind === 'test')?.status ?? 'unknown',
+      build: (record?.checks?.find(c => c.name === 'build')?.ok ? 'passed' : record?.checks?.find(c => c.name === 'build') ? 'failed' : 'unknown') as 'passed' | 'failed' | 'unknown',
+      tests: (record?.checks?.find(c => c.name === 'test')?.ok ? 'passed' : record?.checks?.find(c => c.name === 'test') ? 'failed' : 'unknown') as 'passed' | 'failed' | 'unknown',
       revision: workspaceRevision,
     };
 
@@ -517,9 +517,10 @@ export class ContextCompactionService implements AgentContextCompressor {
       }
     }
 
+    const taskDesc = record?.task?.title || record?.task?.input || 'Complete task';
     return {
-      objective: record?.task?.description ?? 'Complete task',
-      requirements: record?.task?.description ? [record.task.description] : [],
+      objective: taskDesc,
+      requirements: taskDesc ? [taskDesc] : [],
       workspaceRevision,
       verification,
       files: {

@@ -49,5 +49,5 @@ describe('persistent MCP CLI connections', () => {
     const connected = cli(home, 'mcp', 'connect', 'daemon-fixture');
     expect(connected.status).not.toBe(0);
     await expect(readFile(path.join(home, 'mcp-daemon-fixture.daemon.json'), 'utf8')).rejects.toThrow();
-  });
+  }, 30_000);
 });

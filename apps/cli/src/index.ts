@@ -18,7 +18,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version('0.1.41');
+  .version('0.1.42');
 
 registerMCPCommands(program);
 registerWebCommands(program);
@@ -526,6 +526,20 @@ contextCmd
     const engine = await createEngine();
     const { clearContextCommand } = await import('./commands.js');
     const result = await clearContextCommand(engine);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+contextCmd
+  .command('explain')
+  .argument('<executionId>', 'Execution ID to explain context for')
+  .option('--json', 'Output in JSON format')
+  .description('Explain why context items were included, omitted, or compressed')
+  .action(async (executionId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const { explainContextCommand } = await import('./commands.js');
+    const result = await explainContextCommand(engine, executionId, options);
     console.log(result.output);
     process.exit(result.code);
   });

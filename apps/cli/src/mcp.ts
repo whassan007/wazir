@@ -185,12 +185,16 @@ async function startDaemon(id: string): Promise<MCPDaemonState> {
     while (Date.now() < deadline) {
       const state = await readDaemonState(id);
       if (state?.pid === child.pid && state.state === 'CONNECTED') return state;
-      if (state?.pid === child.pid && state.state === 'FAILED') throw new Error(`MCP server connection failed (${state.error ?? 'MCP_CONNECTION_FAILED'}).`);
+      if (state?.pid === child.pid && state.state === 'FAILED') {
+        await fs.unlink(daemonFile(id)).catch(() => undefined);
+        throw new Error(`MCP server connection failed (${state.error ?? 'MCP_CONNECTION_FAILED'}).`);
+      }
       let alive = false; try { if (child.pid) { process.kill(child.pid, 0); alive = true; } } catch { /* daemon exited */ }
       if (!alive || child.exitCode !== null || spawnFailed) break;
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     try { if (child.pid) process.kill(child.pid, 'SIGTERM'); } catch { /* process exited */ }
+    await fs.unlink(daemonFile(id)).catch(() => undefined);
     throw new Error('MCP server did not connect before the 15-second deadline. Run wa mcp doctor for details.');
   } finally { await unlock(); }
 }

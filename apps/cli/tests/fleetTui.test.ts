@@ -644,8 +644,12 @@ describe('FleetTui — interactive terminal UI harness', () => {
       call += 1;
       const reply =
         call === 1
-          ? '{"action":"tool","tool":"shell","input":{"command":""}}'
-          : '{"action":"done","summary":"done"}';
+          ? '{"action":"plan","content":"inspecting codebase"}'
+          : call === 2
+            ? '{"action":"tool","tool":"shell","input":{"command":""}}'
+            : call === 3
+              ? '{"action":"tool","tool":"write","input":{"path":"output.txt","content":"ok"}}'
+              : '{"action":"done","summary":"all checks passed and task verified"}';
       yield { type: 'token' as const, content: reply };
       yield { type: 'completed' as const, content: reply, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
     };

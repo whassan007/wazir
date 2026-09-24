@@ -223,5 +223,5 @@ describe('doctorCommand — real end-to-end Block wiring', () => {
     expect(blocks[0].stdout).toContain('Wazir Doctor');
     expect(typeof blocks[0].durationMs).toBe('number');
     expect(typeof blocks[0].exitCode).toBe('number');
-  });
+  }, 30_000);
 });

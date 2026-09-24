@@ -83,4 +83,8 @@ export class TuiTestHarness {
   getLines(): string[] {
     return this.screen.getLastBuffer().split('\n');
   }
+
+  getFrame() {
+    return this.screen.getFrame();
+  }
 }

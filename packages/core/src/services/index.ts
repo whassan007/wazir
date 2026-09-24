@@ -6,6 +6,17 @@ export { ComputerRegistry } from './computerRegistry.js';
 export type { HeartbeatPayload } from './computerRegistry.js';
 export { ContextCompiler, estimateTokens, tokensForPart, WEB_TRUST_INSTRUCTION, deduplicateContextParts, computeUsableBudget, computeUtilization } from './contextCompiler.js';
 export type { ContextCompilerOptions } from './contextCompiler.js';
+export { ScopedInstructionResolver, DEFAULT_CONTEXT_FILE_PATTERNS } from './instructionResolver.js';
+export type { ContextFileDescriptor, FileInstructionEntry } from './instructionResolver.js';
+export { HeuristicContextRelevanceSelector, DEFAULT_RELEVANCE_SIGNALS } from './contextRelevanceSelector.js';
+export type { RelevanceSignalConfig } from './contextRelevanceSelector.js';
+export {
+  SystemContextProvider,
+  TaskContextProvider,
+  InstructionContextProvider,
+  ExecutionStateContextProvider,
+  HistoryContextProvider,
+} from './contextProviders.js';
 export { ObservationCompactor } from './observationCompactor.js';
 export type { CompactedObservation, ObservationCompactorOptions, ObservationKind } from './observationCompactor.js';
 export { ContextCompactionService, STRUCTURED_SUMMARY_SCHEMA } from './contextCompactionService.js';
@@ -68,3 +79,7 @@ export * from './webGroundingService.js';
 export * from './webProviders.js';
 export * from './webContent.js';
 export * from './webSecurity.js';
+export { SymbolGraph } from './symbolGraph.js';
+export { CodeIntelligenceService } from './codeIntelligenceService.js';
+export type { LspProvider, CodeIntelligenceOptions } from './codeIntelligenceService.js';
+export { CodeIntelligenceContextProvider } from './codeIntelligenceContextProvider.js';

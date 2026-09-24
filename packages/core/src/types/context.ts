@@ -14,10 +14,11 @@ export type ContextPartPriority = 'critical' | 'important' | 'optional';
  * Compaction category for a context part.
  * PINNED   — system instructions, task requirements, policy, acceptance criteria. Never compacted.
  * ACTIVE   — current error, current diff, current verification state.
+ * RELEVANT — interfaces, implementations, callers/callees, tests, package docs.
  * COMPRESSIBLE — old reasoning, old tool interactions, resolved errors, historical decisions.
  * OFFLOADABLE  — huge raw shell output, huge test output, large file reads, generated logs.
  */
-export type ContextCategory = 'PINNED' | 'ACTIVE' | 'COMPRESSIBLE' | 'OFFLOADABLE';
+export type ContextCategory = 'PINNED' | 'ACTIVE' | 'RELEVANT' | 'COMPRESSIBLE' | 'OFFLOADABLE';
 
 /** Whether a token count is exact (from the model's tokenizer) or estimated (chars/4). */
 export type TokenCountKind = 'EXACT' | 'ESTIMATED';
@@ -27,22 +28,39 @@ export interface TokenCount {
   kind: TokenCountKind;
 }
 
-/** An item in the model-visible context (alias for ContextPart). */
-export type ContextItem = ContextPart;
-
-export interface ContextPart {
+export interface ContextItem {
+  id?: string;
   citationIds?: string[];
   evidenceHash?: string;
-  /** Citation envelope preserved verbatim when the excerpt is compacted. */
   evidenceHeader?: string;
   kind: ContextPartKind;
   label: string;
   content: string;
-  priority: ContextPartPriority;
-  /** Pre-computed token count. Estimated with the deterministic estimator when absent. */
+  priority: ContextPartPriority | number;
   tokens?: number;
-  /** Compaction category. Used by ContextCompactionService to decide what is safe to compress. */
+  estimatedTokens?: number;
   category?: ContextCategory;
+  scope?: string;
+  contentHash?: string;
+  sourceUri?: string;
+  reasonIncluded?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Backward-compatibility alias for ContextItem */
+export type ContextPart = ContextItem;
+
+export interface ContextCandidate extends ContextItem {
+  source: string;
+  estimatedTokens?: number;
+}
+
+export interface ContextOmission {
+  id: string;
+  label: string;
+  category: ContextCategory;
+  estimatedTokens: number;
+  reason: string;
 }
 
 export interface PromptBreakdown {
@@ -153,16 +171,27 @@ export interface ContextSnapshot {
   /** Monotonically increasing generation counter. */
   generation: number;
   modelId: string;
+  agentId?: string;
+  phase?: string;
   /** The actual context window the model is serving with (runtimeLoaded, not theoretical max). */
   effectiveContextWindow: number;
+  /** Token budget and allocation for this snapshot. */
+  tokenBudget?: ContextBudget;
   /** Estimated total input tokens for this snapshot. */
   estimatedTokens: number;
   createdAt: Date;
+
+  /** Stable prefix for prompt caching. */
+  stablePrefix?: ContextItem[];
+  /** Volatile tail. */
+  volatileTail?: ContextItem[];
 
   /** System, task, policy — never compacted. */
   pinned: ContextPart[];
   /** Current error, diff, verification state. */
   active: ContextPart[];
+  /** Information selected because it is useful to the current step. */
+  relevant?: ContextPart[];
   /** Old reasoning, old tool interactions, historical decisions (compressible). */
   compressible: ContextPart[];
   /** Compressed summary parts, if compaction has run. */
@@ -170,12 +199,68 @@ export interface ContextSnapshot {
   /** Recent N turns (always preserved verbatim). */
   tail: ContextPart[];
 
+  /** Items explicitly omitted during context compilation. */
+  omitted?: ContextOmission[];
+
   /** Event index range from ExecutionEngine this snapshot was compiled from. */
   sourceEventRange?: { from: number; to: number };
   /** Artifacts offloaded from model context during this snapshot's compilation. */
   artifactReferences: OffloadedArtifact[];
   /** Metrics from the compaction that produced this snapshot (absent for the initial snapshot). */
   compactionMetrics?: CompactionMetrics;
+}
+
+// ============================================================
+// CONTEXT REQUEST & PROVIDER INTERFACES
+// ============================================================
+
+export interface ContextRequest {
+  executionId: string;
+  agentId: string;
+  agentRole?: 'planner' | 'coder' | 'reviewer' | 'router' | string;
+  phase?: 'plan' | 'inspect' | 'implement' | 'test' | 'debug' | 'repair' | 'verify' | 'complete' | string;
+  modelId: string;
+  taskDescription: string;
+  projectRoot: string;
+  workingDirectory?: string;
+  activeFiles?: string[];
+  activeErrors?: string[];
+  activeDiff?: string;
+  acceptanceCriteria?: string[];
+  recentHistory?: ContextPart[];
+  effectiveContextWindow: number;
+  runtimeLoaded?: number;
+  reserve?: Partial<ContextReserve>;
+  config?: ContextConfig;
+}
+
+export interface ContextProvider {
+  readonly id: string;
+  provide(request: ContextRequest): Promise<ContextCandidate[]>;
+}
+
+export interface ResolvedInstruction {
+  path: string;
+  scope: string;
+  priority: number;
+  content: string;
+  tokenCount: number;
+  reasonIncluded: string;
+}
+
+export interface InstructionResolver {
+  resolve(request: {
+    projectRoot: string;
+    workingDirectory?: string;
+    activeFiles?: string[];
+    task: string;
+    agentRole?: string;
+    phase?: string;
+  }): Promise<ResolvedInstruction[]>;
+}
+
+export interface ContextRelevanceSelector {
+  rank(candidates: ContextCandidate[], request: ContextRequest): ContextCandidate[];
 }
 
 // ============================================================
@@ -295,6 +380,24 @@ export interface ContextOffloadConfig {
   retention?: 'execution' | 'session' | 'permanent';
 }
 
+export interface ContextInstructionsConfig {
+  /** Enable localized instruction routing based on active file paths and scopes. Default: true. */
+  localizedRouting?: boolean;
+  /** Discover recognized instruction files in workspace (AGENTS.md, etc.). Default: true. */
+  discoverProjectFiles?: boolean;
+}
+
+export interface ContextLargeFilesConfig {
+  /** Maximum tokens to include for any single context file before truncation. Default: 12000. */
+  maxTokens?: number;
+  /** Truncation strategy: 'head_tail' | 'head_only' | 'tail_only'. Default: 'head_tail'. */
+  truncationStrategy?: 'head_tail' | 'head_only' | 'tail_only';
+  /** Fraction of budget allocated to head (default: 0.70). */
+  headRatio?: number;
+  /** Fraction of budget allocated to tail (default: 0.20). */
+  tailRatio?: number;
+}
+
 export interface ContextConfig {
   /** Maximum tokens to include for any single tool result in model context. Default: 2000. */
   toolResultMaxTokens?: number;
@@ -303,6 +406,10 @@ export interface ContextConfig {
   compaction?: ContextCompactionConfig;
   reserve?: Partial<ContextReserve>;
   offload?: ContextOffloadConfig;
+  instructions?: ContextInstructionsConfig;
+  largeFiles?: ContextLargeFilesConfig;
+  deduplication?: { enabled?: boolean };
+  supersededContent?: { remove?: boolean };
 }
 
 // ============================================================
