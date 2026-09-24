@@ -18,7 +18,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version('0.1.45');
+  .version('0.1.46');
 
 registerMCPCommands(program);
 registerWebCommands(program);
@@ -915,6 +915,41 @@ jobsCmd.command('recover').description('Recover persisted pending or interrupted
     const { createFleetTaskExecutor } = await import('./fleetRunner.js');
     const engine = await createEngine();
     console.log(JSON.stringify(await engine.orchestrator.recoverJobs({ taskExecutor: createFleetTaskExecutor(engine) })));
+  });
+
+jobsCmd
+  .command('checkpoint <executionId>')
+  .description('Create an execution and workspace checkpoint')
+  .option('--desc <text>', 'Checkpoint description')
+  .option('--json', 'Output raw JSON')
+  .action(async (executionId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { checkpointCommand } = await import('./commands.js');
+    console.log(await checkpointCommand(engine, executionId, options));
+  });
+
+jobsCmd
+  .command('fork <checkpointId>')
+  .description('Fork an execution into an isolated worktree branch')
+  .option('--fork-id <id>', 'Optional custom fork ID')
+  .option('--json', 'Output raw JSON')
+  .action(async (checkpointId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { forkCommand } = await import('./commands.js');
+    console.log(await forkCommand(engine, checkpointId, options));
+  });
+
+jobsCmd
+  .command('rollback <executionId> <checkpointId>')
+  .description('Rollback an execution to a checkpoint')
+  .option('--json', 'Output raw JSON')
+  .action(async (executionId, checkpointId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { rollbackCommand } = await import('./commands.js');
+    console.log(await rollbackCommand(engine, executionId, checkpointId, options));
   });
 
 program.addCommand(jobsCmd);
