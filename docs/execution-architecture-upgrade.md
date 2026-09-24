@@ -584,8 +584,36 @@ to `executionSummary.test.ts` and `modelReliability.test.ts`.
   candidate now. Every decision is recorded as `model.route.changed`. The
   fleet's termination event is now attributed to the model running at the end.
 
-Still not supported: re-placing a running execution onto another computer, or
-loading a model mid-run. Both are declined with that reason.
+- **Mid-run re-placement.** An escalation is no longer limited to a model the
+  current placement can serve right away. Generation placement (runtime,
+  computer, context window) is now mutable state in `run.ts` and the fleet
+  runner. Tools always run locally in the execution's workspace, so only
+  generation moves.
+  - `planEscalation` accepts any Scheduler choice and states the placement and
+    readiness in its reason, e.g. `re-placed to 'rt-b' on 'local', must be
+    loaded`.
+  - Before the switch is accepted, `createEscalationHandler` calls
+    `prepareGenerationPlacement`. That readies the placement the same way an
+    initial placement is readied: an unloaded model goes through
+    `ModelLifecycleService.ensureReady`, with admission, eviction and health
+    checks. A remote computer needs a control-plane URL, and a hosted runtime
+    needs a configured adapter.
+  - If preparation fails, the escalation is declined with that reason, and the
+    current model keeps running until the run ends on its original reason.
+  - Accepted switches record the new `runtimeId`/`computerId` on
+    `model.route.changed`, and subagents dispatched later follow the new
+    placement.
+
+  End-to-end coverage (`apps/cli/tests/escalation.e2e.test.ts`) uses a real
+  engine where only the model adapters are fake, with three cases:
+  - generation moves to a model on a different runtime and completes there
+  - an unloaded replacement is loaded by the real lifecycle service mid-run
+    and completes
+  - a runtime load failure declines the switch, is recorded, and the run ends
+    as `MODEL_PROTOCOL_BUDGET_EXHAUSTED` on the original model
+
+  The fleet runner uses the same handler and placement logic, but has no
+  dedicated re-placement e2e test.
 
 Verification: I typechecked the staged tree (HEAD plus these changes only) in
 isolation, with no errors except one unrelated MCP subpath import my scratch
@@ -597,8 +625,6 @@ plus `policyBypassSweep` all passed (9 files, 87 tests).
 
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
   checks are still inline in `CodingAgent`.
-- Phase 14 remainder: mid-run re-placement (a different computer, or loading a
-  model) as an escalation target.
 - Phase 21 remainder: resuming the agent loop inside the recovered execution
   (the recovery plan says when it's safe; tasks are still retried as before).
 - Phase 22: `wa executions events|explain` projections of the new events.

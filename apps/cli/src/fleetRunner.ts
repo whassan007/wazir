@@ -1,7 +1,7 @@
 import { executeMCPForAgent } from './mcp.js';
 import { runSubagent } from './run.js';
 import { recordTermination } from './termination.js';
-import { createEscalationHandler } from './escalation.js';
+import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import {
@@ -222,6 +222,8 @@ export function createFleetTaskExecutor(
     let currentTurn: { adapter: import('@wazir/runtimes-interfaces').RuntimeAdapter; requestId: string } | undefined;
     // Changes only through a controller-approved escalation (runtime.escalate below).
     let currentModelId = assignment.modelId;
+    // Where generation runs; an accepted escalation may move it. Tools always run in taskRoot.
+    const placement = { runtimeId: assignment.runtimeId, computerId: assignment.computerId, contextTokens: contextDecision.available.tokens };
     const runtime: AgentRuntime = {
       tools: engine.tools.forModel(),
 
@@ -235,8 +237,14 @@ export function createFleetTaskExecutor(
         executionId,
         task,
         requiredContextTokens: contextDecision.finalRequiredTokens,
-        placement: { runtimeId: assignment.runtimeId, computerId: assignment.computerId },
-        onEscalated: (_request, modelId) => { currentModelId = modelId; },
+        placement: () => placement,
+        prepare: (next) => prepareGenerationPlacement(engine, next, { executionId, minimumContext: contextDecision.finalRequiredTokens }),
+        onEscalated: (_request, next, contextTokens) => {
+          currentModelId = next.modelId;
+          placement.runtimeId = next.runtimeId;
+          placement.computerId = next.computerId;
+          placement.contextTokens = contextTokens;
+        },
       }),
 
       async *generate(request) {
@@ -255,8 +263,8 @@ export function createFleetTaskExecutor(
         // apps/cli/src/run.ts's equivalent branch. engine.adapters is checked
         // first since worker.adapterForModel() can never resolve a hosted
         // adapter (it only searches the worker's own hardware-bound list).
-        if (!assignment.computerId || assignment.computerId === engine.worker.computerId) {
-          const adapter = engine.adapters.get(assignment.runtimeId) ?? engine.worker.adapterForModel(request.modelId);
+        if (!placement.computerId || placement.computerId === engine.worker.computerId) {
+          const adapter = engine.adapters.get(placement.runtimeId) ?? engine.worker.adapterForModel(request.modelId);
           if (!adapter) {
             yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
             return;
@@ -267,7 +275,7 @@ export function createFleetTaskExecutor(
             messages: request.messages,
             maxTokens: request.maxTokens,
             temperature: request.temperature,
-            contextTokens: contextDecision.available.tokens,
+            contextTokens: placement.contextTokens,
             stream: true,
             tools: request.tools,
             requestId,
@@ -297,17 +305,17 @@ export function createFleetTaskExecutor(
         } else if (engine.config.apiUrl) {
           // Remote dispatch to another computer in the fleet
           const workerRequest: WorkerExecutionRequest = {
-            runtimeId: assignment.runtimeId,
+            runtimeId: placement.runtimeId,
             executionId,
             requestId,
             modelId: request.modelId,
             messages: request.messages,
             maxTokens: request.maxTokens,
             temperature: request.temperature,
-            contextTokens: contextDecision.available.tokens,
+            contextTokens: placement.contextTokens,
           };
           try {
-            for await (const event of dispatchRemote(engine.config.apiUrl, assignment.computerId, workerRequest, { token: engine.config.apiToken })) {
+            for await (const event of dispatchRemote(engine.config.apiUrl, placement.computerId, workerRequest, { token: engine.config.apiToken })) {
               const generationEvent = toGenerationEvent(event);
               if (!generationEvent) continue;
               await engine.executions.recordProviderEvent(executionId, generationEvent, retryContext);
@@ -334,7 +342,7 @@ export function createFleetTaskExecutor(
         } else {
           yield {
             type: 'error',
-            error: `task scheduled on remote computer '${assignment.computerId}' but no control-plane API URL configured`,
+            error: `task scheduled on remote computer '${placement.computerId}' but no control-plane API URL configured`,
           };
         }
 
@@ -349,9 +357,9 @@ export function createFleetTaskExecutor(
           parentExecutionId: executionId,
           parentTaskId: task.id,
           projectRoot: taskRoot,
-          modelId: assignment.modelId,
-          runtimeId: assignment.runtimeId,
-          computerId: assignment.computerId,
+          modelId: currentModelId,
+          runtimeId: placement.runtimeId,
+          computerId: placement.computerId,
           subagentDepth: 0,
           log: (msg) => context.onProgress?.({ kind: 'token', content: `[subagent] ${msg}\n` }),
           loader: { start: () => {}, stop: () => {}, setText: () => {}, clear: () => {} } as any,

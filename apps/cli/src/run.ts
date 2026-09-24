@@ -25,7 +25,7 @@ import { color } from './colors.js';
 import type { RookEngine } from './engine.js';
 import { StatusLoader } from './spinner.js';
 import { recordTermination } from './termination.js';
-import { createEscalationHandler } from './escalation.js';
+import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
 
 /** Maps a control-plane-reported worker event onto the local `GenerationEvent` shape,
  * so a remotely-dispatched task streams through the same agent loop as a local one. */
@@ -330,6 +330,10 @@ export async function executeTask(
 
   // Changes only through a controller-approved escalation (runtime.escalate below).
   let currentModelId = scheduling.modelId;
+  // Where generation runs. Starts at the scheduler's placement; an accepted escalation
+  // may move it (another runtime or computer, or a freshly loaded model). Tools always
+  // run here, in-process, regardless.
+  const placement = { runtimeId: scheduling.runtimeId, computerId: scheduling.computerId, contextTokens: context.available.tokens };
 
   const runtime: AgentRuntime = {
     tools: availableTools,
@@ -338,11 +342,15 @@ export async function executeTask(
       executionId,
       task,
       requiredContextTokens: context.finalRequiredTokens,
-      placement: { runtimeId: scheduling.runtimeId, computerId: scheduling.computerId },
-      onEscalated: (request, modelId) => {
-        currentModelId = modelId;
-        emitJson({ type: 'model_escalated', executionId, previousModel: request.currentModelId, newModel: modelId, failureClass: request.failureClass });
-        log(color.yellow(`    model escalated: ${request.currentModelId} -> ${modelId} (${request.failureClass})`));
+      placement: () => placement,
+      prepare: (next) => prepareGenerationPlacement(engine, next, { executionId, minimumContext: context.finalRequiredTokens }),
+      onEscalated: (request, next, contextTokens) => {
+        currentModelId = next.modelId;
+        placement.runtimeId = next.runtimeId;
+        placement.computerId = next.computerId;
+        placement.contextTokens = contextTokens;
+        emitJson({ type: 'model_escalated', executionId, previousModel: request.currentModelId, newModel: next.modelId, runtimeId: next.runtimeId, computerId: next.computerId, failureClass: request.failureClass });
+        log(color.yellow(`    model escalated: ${request.currentModelId} -> ${next.modelId} via ${next.runtimeId} on ${next.computerId ?? 'hosted'} (${request.failureClass})`));
       },
       onDeclined: (_request, reason) => log(color.yellow(`    model escalation declined: ${untrusted(reason)}`)),
     }),
@@ -354,14 +362,14 @@ export async function executeTask(
       await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
 
       try {
-        if (runsInProcess) {
+        if (!placement.computerId || placement.computerId === engine.worker.computerId) {
           // engine.adapters already holds local adapters keyed by runtime id
           // (see engine.ts) alongside the hosted ones added in this feature —
           // checked first so a hosted placement (no computerId, so
           // worker.adapterForModel() can never find it — see hostedProviders.ts's
           // invariant) resolves correctly. Falls back to the worker lookup for
           // any local adapter not present in that map.
-          const adapter = engine.adapters.get(scheduling.runtimeId) ?? engine.worker.adapterForModel(request.modelId);
+          const adapter = engine.adapters.get(placement.runtimeId) ?? engine.worker.adapterForModel(request.modelId);
           if (!adapter) {
             yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
             return;
@@ -372,7 +380,7 @@ export async function executeTask(
             messages: request.messages,
             maxTokens: request.maxTokens,
             temperature: request.temperature,
-            contextTokens: context.available.tokens,
+            contextTokens: placement.contextTokens,
             stream: true,
             tools: request.tools,
           })) {
@@ -394,17 +402,17 @@ export async function executeTask(
           // that computer's worker through the control plane's task-pull loop
           // instead of running it in-process.
           const workerRequest: WorkerExecutionRequest = {
-            runtimeId: scheduling.runtimeId,
+            runtimeId: placement.runtimeId,
             executionId,
             requestId,
             modelId: request.modelId,
             messages: request.messages,
             maxTokens: request.maxTokens,
             temperature: request.temperature,
-            contextTokens: context.available.tokens,
+            contextTokens: placement.contextTokens,
           };
           try {
-            for await (const event of dispatchRemote(engine.config.apiUrl, scheduling.computerId, workerRequest, { token: engine.config.apiToken })) {
+            for await (const event of dispatchRemote(engine.config.apiUrl, placement.computerId, workerRequest, { token: engine.config.apiToken })) {
               const generationEvent = toGenerationEvent(event);
               if (!generationEvent) continue;
               await engine.executions.recordProviderEvent(executionId, generationEvent, retryContext);
@@ -426,7 +434,7 @@ export async function executeTask(
         } else {
           yield {
             type: 'error',
-            error: `task scheduled on remote computer '${scheduling.computerId}' but no control-plane API URL is configured (set WAZIR_API_URL)`,
+            error: `task scheduled on remote computer '${placement.computerId}' but no control-plane API URL is configured (set WAZIR_API_URL)`,
           };
         }
       } finally {
@@ -451,8 +459,8 @@ export async function executeTask(
           parentTaskId: task.id,
           projectRoot: engine.projectRoot,
           modelId: currentModelId,
-          runtimeId: scheduling.runtimeId,
-          computerId: scheduling.computerId,
+          runtimeId: placement.runtimeId,
+          computerId: placement.computerId,
           subagentDepth: 0,
           log,
           loader,
