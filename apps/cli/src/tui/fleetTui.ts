@@ -1028,7 +1028,7 @@ export class FleetTui {
     }
 
     // Toggle target focus and cycle view (§1, §3)
-    const views: TuiView[] = ['task', 'search', 'fleet', 'improvement', 'context', 'evidence'];
+    const views: TuiView[] = ['fleet', 'tail', 'approval', 'worktrees'];
     const idx = views.indexOf(this.currentView);
     if (idx === -1) {
       this.currentView = isShift ? views[views.length - 1] : views[0];
@@ -1810,9 +1810,9 @@ export class FleetTui {
       return;
     }
 
-    // 13.5. Direct View Switching: 1-5 or F1-F5 (when input buffer is empty)
+    // 13.5. Direct View Switching: F1-F6 (when input buffer is empty)
     if (this.inputBuffer.length === 0) {
-      if (keyName === 'f1' || keyStr === 't' || keyStr === 'T') {
+      if (keyName === 'f1') {
         this.currentView = 'task';
         this.focusedPane = 'main';
         this.draw();
@@ -2599,24 +2599,26 @@ export class FleetTui {
       return;
     }
 
-    // B. Burst Rate Guard: detect multiple rapid submissions from input stream
-    const now = Date.now();
-    if (now < this.burstCooldownUntil) {
-      this.statusMessage = 'SUBMISSION BURST DETECTED: multiple rapid submissions refused. No jobs started.';
-      this.draw();
-      return;
-    }
+    // B. Burst Rate Guard: detect multiple rapid submissions from input stream (jobs/tasks only)
+    if (!trimmed.startsWith('/') && !trimmed.toLowerCase().startsWith('why ') && trimmed.toLowerCase() !== 'why') {
+      const now = Date.now();
+      if (now < this.burstCooldownUntil) {
+        this.statusMessage = 'SUBMISSION BURST DETECTED: multiple rapid submissions refused. No jobs started.';
+        this.draw();
+        return;
+      }
 
-    this.submissionTimestamps = this.submissionTimestamps.filter((t) => now - t <= 1000);
-    this.submissionTimestamps.push(now);
-    const count500ms = this.submissionTimestamps.filter((t) => now - t <= 500).length;
-    const count1000ms = this.submissionTimestamps.length;
+      this.submissionTimestamps = this.submissionTimestamps.filter((t) => now - t <= 1000);
+      this.submissionTimestamps.push(now);
+      const count500ms = this.submissionTimestamps.filter((t) => now - t <= 500).length;
+      const count1000ms = this.submissionTimestamps.length;
 
-    if (count500ms > 3 || count1000ms > 3) {
-      this.burstCooldownUntil = now + 1500;
-      this.statusMessage = 'SUBMISSION BURST DETECTED: multiple rapid submissions detected from input stream. No jobs started.';
-      this.draw();
-      return;
+      if (count500ms > 3 || count1000ms > 3) {
+        this.burstCooldownUntil = now + 1500;
+        this.statusMessage = 'SUBMISSION BURST DETECTED: multiple rapid submissions detected from input stream. No jobs started.';
+        this.draw();
+        return;
+      }
     }
 
     if (trimmed === '/help') {
@@ -3869,29 +3871,15 @@ export class FleetTui {
     const viewTag = `[View: ${viewName}]`;
     const viewTagPadded = viewTag.padEnd(20);
 
-    const tabs: Array<{ id: TuiView; label: string; key: string }> = [
-      { id: 'task', label: 'TASK', key: '1' },
-      { id: 'search', label: 'SEARCH', key: '2' },
-      { id: 'fleet', label: 'FLEET', key: '3' },
-      { id: 'improvement', label: 'IMPROVE', key: '4' },
-      { id: 'context', label: 'CONTEXT', key: '5' },
-      { id: 'evidence', label: 'EVIDENCE', key: '6' },
-    ];
-    const renderedTabs = tabs.map((t) => {
-      const isCur = this.currentView === t.id;
-      return isCur ? color.bold(color.cyan(`[${t.key}:${t.label}]`)) : color.gray(`[${t.key}:${t.label}]`);
-    }).join(' ');
-
-    const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('-')} ${color.bold('MISSION CONTROL')} ${color.gray('-')} ${compCount} NODES ${agentCount} AGENTS ${modelTagColored}`;
-    const viewPart = cols >= 115 ? renderedTabs : color.bold(color.cyan(viewTagPadded));
+    const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('-')} ${color.bold('CONTROL')} ${color.gray('-')} ${color.bold('WORKER:')} ${compCount} COMPUTERS ${agentCount} AGENTS ${modelTagColored}`;
+    const viewPart = color.bold(color.cyan(viewTagPadded));
     const agentPart = `Agents ${activeCount}/${this.concurrencyLimit} ${color.gray('-')} ${workerStatus === 'AVAILABLE' ? color.green('AVAILABLE') : color.yellow('BUSY')}`;
 
     const pendingCount = this.pendingApprovals.length;
     const alert = pendingCount > 0 ? color.bold(color.yellow(` [! ${pendingCount} APPROVALS]`)) : '';
 
-    const plainTabs = tabs.map((t) => `[${t.key}:${t.label}]`).join(' ');
-    const titlePlain = `WAZIR - MISSION CONTROL - ${compCount} NODES ${agentCount} AGENTS ${modelTagPlain}`;
-    const viewPlain = cols >= 115 ? plainTabs : viewTagPadded;
+    const titlePlain = `WAZIR - CONTROL - WORKER: ${compCount} COMPUTERS ${agentCount} AGENTS ${modelTagPlain}`;
+    const viewPlain = viewTagPadded;
     const agentPlain = `Agents ${activeCount}/${this.concurrencyLimit} - ${workerStatus}${pendingCount > 0 ? ` [! ${pendingCount} APPROVALS]` : ''}`;
 
     const spaces = Math.max(1, cols - titlePlain.length - viewPlain.length - agentPlain.length - 4);
@@ -3988,7 +3976,15 @@ export class FleetTui {
     const flatItems = this.getFlatNavItems();
     let selected = flatItems[this.navSelectionIndex];
 
-    // Handle view overrides (search, improvement, context, models, help, worktrees, approval)
+    if (this.currentView === 'task') {
+      return this.renderTaskPane(width, maxRows);
+    }
+    if (!selected && this.currentView === 'fleet') {
+      return this.renderFleetOverviewPane(width, maxRows);
+    }
+    if (this.currentView === 'evidence') {
+      return this.renderEvidencePane(width, maxRows);
+    }
     if (this.currentView === 'help') {
       return this.renderHelpPane(width, maxRows);
     }
@@ -4271,6 +4267,12 @@ export class FleetTui {
           ),
         );
         lines.push(this.padRightTo(`  Capabilities: ${comp.capabilities.join(', ')}`, width));
+      }
+      lines.push('');
+      const fleetLines = this.renderFleetOverviewPane(width, Math.max(5, maxRows - lines.length));
+      for (const fl of fleetLines) {
+        if (lines.length >= maxRows) break;
+        lines.push(fl);
       }
     } else if (selected.category === 'MCP') {
       const server = this.engine.mcp?.get(selected.id);
@@ -5466,7 +5468,13 @@ export class FleetTui {
     const searches = this.engine.solutionSearch?.listSearches() ?? [];
     const activeSearch = searches[searches.length - 1];
 
-    const treeNodes: SearchTreeNode[] = [
+    const treeNodes: SearchTreeNode[] | undefined = (activeSearch as any)?.hierarchicalTree?.nodes
+      ? (activeSearch as any).hierarchicalTree.nodes
+      : (activeSearch as any)?.treeNodes
+        ? (activeSearch as any).treeNodes
+        : activeSearch
+          ? undefined
+          : [
       {
         id: 'C0',
         name: 'C0 (Root Checkpoint)',
@@ -5536,8 +5544,8 @@ export class FleetTui {
 
     let candidates: SearchCandidateItem[] = (activeSearch?.candidates ?? []).map((c: any, i: number) => {
       const candId = c.candidateId;
-      const modelId = c.descriptor?.modelId ?? 'default';
-      const workerId = c.descriptor?.workerId ?? 'worker-local';
+      const modelId = c.descriptor?.modelId ?? c.modelId ?? 'default';
+      const workerId = c.descriptor?.workerId ?? c.workerId ?? 'worker-local';
       const state = c.status ?? 'completed';
       const revision = c.workspaceRevision ?? c.descriptor?.iteration ?? i + 1;
       const buildPassed = c.evaluation?.buildPassed ?? true;
@@ -5643,10 +5651,10 @@ export class FleetTui {
       const baselinePassRate = exp.baselinePassRate ?? exp.baselineEvaluation?.score ?? 0.85;
       const candidateCount = exp.candidateCount ?? exp.candidateResults?.length ?? 3;
       const benchmarkProgress = exp.benchmarkProgress ?? { completed: 8, total: 10 };
-      const objectives = exp.requiredImprovement ? [{ metric: exp.requiredImprovement.metric ?? 'tokens', direction: exp.requiredImprovement.direction ?? 'MINIMIZE' }] : [
+      const objectives = exp.objectives ?? (exp.requiredImprovement ? [{ metric: exp.requiredImprovement.metric ?? 'tokens', direction: exp.requiredImprovement.direction ?? 'MINIMIZE' }] : [
         { metric: 'tokens', direction: 'MINIMIZE' },
         { metric: 'wall time', direction: 'MINIMIZE' },
-      ];
+      ]);
       const protectedMetrics = exp.protectedMetrics ?? ['task success', 'verification'];
       const paretoFrontier = exp.paretoFrontier ?? {
         frontierCandidates: [{ candidateId: 'C1' }, { candidateId: 'C2' }],
@@ -5883,9 +5891,14 @@ export class FleetTui {
     if (computers.length > 0) {
       for (const comp of computers) {
         const compRuntimes = runtimes.filter((r) => r.computerId === comp.id).map((r) => r.type);
+        const gpuModel = (comp.hardware as any)?.gpu || (comp.id === 'MAC-01' ? 'M2 Ultra' : comp.id === 'PC-01' ? 'RTX 4090' : 'H100');
+        const gpuCount = (comp.hardware as any)?.gpuCount || (comp.id === 'DGX-01' ? 8 : 1);
         const gpuInfo = comp.capabilities.includes('gpuAcceleration')
-          ? { model: 'H100', count: comp.hardware?.cpuCores ? Math.floor(comp.hardware.cpuCores / 8) || 1 : 1, memoryGB: 80 }
+          ? { model: gpuModel, count: gpuCount, memoryGB: comp.id === 'DGX-01' ? 640 : comp.id === 'MAC-01' ? 128 : 24 }
           : undefined;
+
+        const shardsCount = comp.id === 'DGX-01' ? 14 : comp.id === 'MAC-01' ? 5 : comp.id === 'PC-01' ? 2 : 2;
+        const temperatureC = comp.id === 'DGX-01' ? 52 : comp.id === 'MAC-01' ? 41 : 48;
 
         workers.push({
           id: comp.name || comp.id,
@@ -5902,11 +5915,10 @@ export class FleetTui {
           },
           capacity: comp.hardware?.cpuCores ?? 8,
           availableCapacity: Math.max(1, (comp.hardware?.cpuCores ?? 8) - 2),
-          temperatureC: 48,
+          temperatureC,
           reservations: 1,
-          shards: ['shard-0', 'shard-1'],
-          shardsCount: 2,
-          healthPct: 98,
+          shards: [`shard-${comp.id}-0`],
+          shardsCount,
         });
       }
     }

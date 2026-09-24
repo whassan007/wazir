@@ -488,7 +488,7 @@ export function renderSearchView(data: SearchViewData): string[] {
 
   const searchTag = searchId ?? 'active-search';
   const statusStr = status ? `(${status.toUpperCase()})` : '(ACTIVE)';
-  lines.push(padRight(`  ${color.bold(color.cyan('SOLUTION SEARCH & MCTS CANDIDATES:'))} ${color.bold(searchTag)} ${color.yellow(statusStr)}`, width));
+  lines.push(padRight(`  ${color.bold(color.cyan(`SOLUTION SEARCH: ${searchTag}`))} ${color.yellow(statusStr)}`, width));
   if (objective) {
     lines.push(padRight(`  ${color.gray(`Objective: ${objective}`)}`, width));
   }
@@ -512,18 +512,15 @@ export function renderSearchView(data: SearchViewData): string[] {
   // Flat Candidate Table
   if (candidates && candidates.length > 0 && (viewMode === 'table' || viewMode === 'split' || !shouldRenderTree || lines.length < maxRows - 7)) {
     const colCand = 10;
-    const colModel = 16;
-    const colWorker = 9;
+    const colModel = 18;
+    const colWorker = 12;
     const colState = 10;
-    const colRev = 5;
-    const colBuild = 6;
+    const colPareto = 11;
+    const colBuild = 5;
     const colTests = 10;
-    const colTok = 7;
-    const colWall = 8;
-    const colPrune = 12;
-    const colPareto = 10;
+    const colPrune = 10;
 
-    const header = `  ${color.bold('Cand'.padEnd(colCand))} ${color.bold('Model'.padEnd(colModel))} ${color.bold('Worker'.padEnd(colWorker))} ${color.bold('State'.padEnd(colState))} ${color.bold('Rev'.padEnd(colRev))} ${color.bold('Bld'.padEnd(colBuild))} ${color.bold('Tests'.padEnd(colTests))} ${color.bold('Tok'.padEnd(colTok))} ${color.bold('Time'.padEnd(colWall))} ${color.bold('Prune'.padEnd(colPrune))} ${color.bold('Pareto')}`;
+    const header = `  ${color.bold('Cand'.padEnd(colCand))} ${color.bold('Model'.padEnd(colModel))} ${color.bold('Worker'.padEnd(colWorker))} ${color.bold('State'.padEnd(colState))} ${color.bold('Pareto'.padEnd(colPareto))} ${color.bold('Bld'.padEnd(colBuild))} ${color.bold('Tests'.padEnd(colTests))} ${color.bold('Prune')}`;
     lines.push(padRight(header, width));
     lines.push(padRight(color.gray('  ' + '-'.repeat(Math.min(width - 4, 110))), width));
 
@@ -548,8 +545,6 @@ export function renderSearchView(data: SearchViewData): string[] {
       const modelIdStr = c.modelId.length > colModel ? c.modelId.slice(0, colModel - 1) + '.' : c.modelId;
       const buildStr = c.buildPassed === true ? color.green('PASS') : c.buildPassed === false ? color.red('FAIL') : color.gray('-');
       const testsStr = c.testSummary ? (c.testsPassed ? color.green(c.testSummary) : color.red(c.testSummary)) : (c.testsPassed ? color.green('PASS') : color.gray('-'));
-      const tokensStr = c.tokens !== undefined ? String(c.tokens) : '-';
-      const wallStr = c.wallTimeMs !== undefined ? `${c.wallTimeMs}ms` : '-';
       const pruneBadge = c.pruneState === 'ACTIVE'
         ? color.green('ACTIVE')
         : c.pruneState.startsWith('PRUNED')
@@ -562,17 +557,24 @@ export function renderSearchView(data: SearchViewData): string[] {
           ? color.gray('DOMINATED')
           : color.yellow('PENDING');
 
-      const row = `${prefix}${candIdStr.padEnd(colCand)} ${modelIdStr.padEnd(colModel)} ${c.workerId.padEnd(colWorker)} ${stateBadge.padEnd(colState)} ${(c.revision ? `r${c.revision}` : '-').padEnd(colRev)} ${buildStr.padEnd(colBuild)} ${testsStr.padEnd(colTests)} ${tokensStr.padEnd(colTok)} ${wallStr.padEnd(colWall)} ${pruneBadge.padEnd(colPrune)} ${paretoBadge}`;
+      const row = `${prefix}${candIdStr.padEnd(colCand)} ${modelIdStr.padEnd(colModel)} ${c.workerId.padEnd(colWorker)} ${stateBadge.padEnd(colState)} ${paretoBadge.padEnd(colPareto)} ${buildStr.padEnd(colBuild)} ${testsStr.padEnd(colTests)} ${pruneBadge}`;
       lines.push(padRight(row, width));
     }
   }
 
   // Pareto Frontier Summary
   const frontier = (candidates || []).filter((c) => c.isFrontier);
-  if (frontier.length > 0 && lines.length < maxRows - 3) {
+  const dominated = (candidates || []).filter((c) => c.isDominated || c.state === 'pruned' || c.pruneState?.startsWith('PRUNED'));
+
+  if ((frontier.length > 0 || dominated.length > 0) && lines.length < maxRows - 4) {
     lines.push(padRight('', width));
-    const frontierStr = frontier.map((f) => `${color.bold(f.candidateId)} ${color.green('●')}`).join('  │  ');
-    lines.push(padRight(`  ${color.bold('Pareto Frontier:')} ${frontierStr}`, width));
+    lines.push(padRight(`  ${color.bold('PARETO FRONTIER MEMBERSHIP:')}`, width));
+    if (frontier.length > 0) {
+      lines.push(padRight(`  ● Non-dominated (Frontier): ${frontier.map((f) => f.candidateId).join(', ')}  [● FRONTIER]`, width));
+    }
+    if (dominated.length > 0) {
+      lines.push(padRight(`  Dominated / Pruned:       ${dominated.map((d) => d.candidateId).join(', ')}`, width));
+    }
   }
 
   if (selectedCandidateId && lines.length < maxRows - 2) {
@@ -724,8 +726,31 @@ export function renderImprovementView(data: ImprovementViewData): string[] {
           { metric: 'tokens', direction: 'MINIMIZE' },
           { metric: 'wall time', direction: 'MINIMIZE' },
         ];
-    const objStr = objectives.map((o) => `${o.metric} ${color.yellow(o.direction === 'MINIMIZE' ? '↓' : '↑')}`).join('  │  ');
-    lines.push(padRight(`  ${color.bold('Objectives:')} ${objStr}`, width));
+    lines.push(padRight(`  ${color.bold('Objective:')}`, width));
+    for (const obj of objectives) {
+      lines.push(padRight(`    ${color.yellow(`${obj.metric} ${obj.direction === 'MINIMIZE' ? '↓' : '↑'}`)}`, width));
+    }
+
+    if (sel.protectedMetrics && sel.protectedMetrics.length > 0) {
+      lines.push(padRight(`  ${color.bold('Protected:')}`, width));
+      for (const prot of sel.protectedMetrics) {
+        lines.push(padRight(`    ${prot}`, width));
+      }
+    }
+
+    if (sel.paretoFrontier) {
+      const frontierCands = sel.paretoFrontier.frontierCandidates || [];
+      const dominatedCands = sel.paretoFrontier.dominatedCandidates || [];
+      if (frontierCands.length > 0 || dominatedCands.length > 0) {
+        lines.push(padRight(`  ${color.bold('Pareto:')}`, width));
+        for (const fc of frontierCands) {
+          lines.push(padRight(`    ${color.green(`${fc.candidateId} ●`)}`, width));
+        }
+        for (const dc of dominatedCands) {
+          lines.push(padRight(`    ${color.gray(`${dc.candidateId} dominated`)}`, width));
+        }
+      }
+    }
 
     // Canary State
     if (sel.canaryState) {
@@ -1032,7 +1057,7 @@ export function renderWhyModal(data: WhyExplanationData): string[] {
   if (controllerAudit.immutableHash) {
     lines.push(`│   Audit Hash: ${color.gray(controllerAudit.immutableHash.slice(0, 32))} │`);
   }
-  lines.push(`│ ${color.gray('  NOTE: Sourced exclusively from controller state. Model claims are non-authoritative.'.padEnd(modalWidth - 4))} │`);
+  lines.push(`│ ${color.gray('  NOTE: MODEL CLAIM != EXECUTION EVIDENCE. Sourced exclusively from controller state.'.padEnd(modalWidth - 4))} │`);
 
   lines.push(`├${border}┤`);
   lines.push(`│ ${color.gray('Press [Esc] or [Enter] to dismiss explanation.'.padEnd(modalWidth - 4))} │`);
@@ -1168,7 +1193,7 @@ export function renderEvidenceModal(data: EvidenceModalData): string[] {
 
   if (provenanceChain && provenanceChain.length > 0) {
     lines.push(`├${border}┤`);
-    lines.push(`│ ${color.bold('Provenance Chain:'.padEnd(modalWidth - 4))} │`);
+    lines.push(`│ ${color.bold('PROVENANCE Chain:'.padEnd(modalWidth - 4))} │`);
     for (const p of provenanceChain.slice(0, 3)) {
       lines.push(`│   ${color.gray(p.slice(0, modalWidth - 6).padEnd(modalWidth - 6))} │`);
     }

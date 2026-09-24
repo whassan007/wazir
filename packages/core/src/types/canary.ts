@@ -4,6 +4,16 @@ import type { OptimizableConfig, SelfImprovementDomain } from './metaOptimizer.j
 // WAZIR MATURITY LEVEL 3 CANARY PROMOTION TYPES
 // ======================================================================
 
+export type CanaryStage =
+  | 'QUALIFIED'
+  | 'SHADOW'
+  | 'CANARY_1'
+  | 'CANARY_5'
+  | 'CANARY_10'
+  | 'CANARY_25'
+  | 'CANARY_50'
+  | 'READY_TO_PROMOTE';
+
 export type CanaryStatus =
   | 'PENDING'
   | 'ACTIVE'
@@ -13,6 +23,8 @@ export type CanaryStatus =
   | 'READY_FOR_PROMOTION'
   | 'ROLLING_BACK'
   | 'ROLLED_BACK'
+  | 'CANARY_FAILED'
+  | 'PAUSED'
   | 'INCONCLUSIVE';
 
 export interface CanaryRollbackThresholds {
@@ -101,6 +113,7 @@ export interface CanaryRecord {
   baselineMetrics: CanarySampleMetrics;
   canaryMetrics: CanarySampleMetrics;
 
+  stage?: CanaryStage;
   rollbackReason?: CanaryRollbackReason;
   inconclusiveReasons: string[];
   evidenceIds: string[];
@@ -112,7 +125,7 @@ export interface CanaryRecord {
 
 export interface CanaryAssignmentResult {
   canaryId: string;
-  assignedVariant: 'baseline' | 'canary';
+  assignedVariant: 'baseline' | 'canary' | 'shadow';
   effectiveConfig: OptimizableConfig;
   hashSlot: number;
   allocationFraction: number;
@@ -123,7 +136,7 @@ export interface CanaryExecutionOutcome {
   canaryId: string;
   executionId: string;
   taskId?: string;
-  variant: 'baseline' | 'canary';
+  variant: 'baseline' | 'canary' | 'shadow';
   taskSuccess: boolean;
   verificationSuccess: boolean;
   toolCallsCount: number;
@@ -134,3 +147,31 @@ export interface CanaryExecutionOutcome {
   costUSD?: number;
   recoveryFailuresCount?: number;
 }
+
+export interface ShadowModeResult {
+  canaryId: string;
+  candidateId: string;
+  taskId: string;
+  executionId: string;
+  productionOutcome: {
+    success: boolean;
+    verificationSuccess: boolean;
+    tokensUsed: number;
+    wallTimeMs: number;
+  };
+  shadowOutcome: {
+    success: boolean;
+    verificationSuccess: boolean;
+    tokensUsed: number;
+    wallTimeMs: number;
+    candidateOutput?: unknown;
+  };
+  metricsDelta: {
+    tokensDelta: number;
+    wallTimeDeltaMs: number;
+    verificationAgreed: boolean;
+  };
+  retained: boolean;
+  timestamp: Date;
+}
+

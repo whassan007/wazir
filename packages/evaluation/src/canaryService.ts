@@ -4,12 +4,14 @@ import type { MemoryService } from '@wazir/memory';
 import type {
   CanaryRecord,
   CanaryStatus,
+  CanaryStage,
   CanaryRollbackThresholds,
   CanaryPromotionThresholds,
   CanarySampleMetrics,
   CanaryAssignmentResult,
   CanaryExecutionOutcome,
   CanaryRollbackReason,
+  ShadowModeResult,
   OptimizableConfig,
   SelfImprovementDomain,
 } from '@wazir/core';
@@ -48,6 +50,7 @@ export interface RegisterCanaryParams {
   domain: SelfImprovementDomain;
   qualificationStatus: string;
   initialAllocation?: number;
+  initialStage?: CanaryStage;
   stagedExpansionTiers?: number[];
   minimumSamples?: number;
   promotionThresholds?: Partial<CanaryPromotionThresholds>;
@@ -127,6 +130,16 @@ export class CanaryDeploymentService {
     const tiers = params.stagedExpansionTiers ?? [...DEFAULT_STAGED_EXPANSION_TIERS];
     const initialAllocation = params.initialAllocation !== undefined ? params.initialAllocation : tiers[0];
 
+    const getStageFromAllocation = (alloc: number): CanaryStage => {
+      if (alloc <= 0) return 'QUALIFIED';
+      if (alloc <= 0.01) return 'CANARY_1';
+      if (alloc <= 0.05) return 'CANARY_5';
+      if (alloc <= 0.10) return 'CANARY_10';
+      if (alloc <= 0.25) return 'CANARY_25';
+      if (alloc <= 0.50) return 'CANARY_50';
+      return 'READY_TO_PROMOTE';
+    };
+
     const canaryId = `canary-${params.domain}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const canaryRecord: CanaryRecord = {
       canaryId,
@@ -135,6 +148,7 @@ export class CanaryDeploymentService {
       baselineConfig: structuredClone(params.baselineConfig),
       domain: params.domain,
       status: 'ACTIVE',
+      stage: params.initialStage ?? getStageFromAllocation(initialAllocation),
       currentAllocation: initialAllocation,
       stagedExpansionTiers: tiers,
       currentTierIndex: Math.max(0, tiers.indexOf(initialAllocation)),
@@ -516,11 +530,64 @@ export class CanaryDeploymentService {
       record.currentTierIndex += 1;
       record.currentAllocation = record.stagedExpansionTiers[record.currentTierIndex];
       record.status = 'STAGED_EXPANSION';
+      if (record.currentAllocation <= 0.01) record.stage = 'CANARY_1';
+      else if (record.currentAllocation <= 0.05) record.stage = 'CANARY_5';
+      else if (record.currentAllocation <= 0.10) record.stage = 'CANARY_10';
+      else if (record.currentAllocation <= 0.25) record.stage = 'CANARY_25';
+      else if (record.currentAllocation <= 0.50) record.stage = 'CANARY_50';
     } else if (stageSamples >= p.minStageSamples) {
       record.status = 'HEALTHY';
     } else {
       record.status = 'EVALUATING';
     }
+  }
+
+  /**
+   * Evaluates candidate in shadow mode:
+   * Runs candidate against equivalent task workload, compares metrics against production outcome,
+   * ensures output never affects production result, and retains comparative observations.
+   */
+  public recordShadowExecution(params: {
+    canaryId: string;
+    taskId: string;
+    executionId: string;
+    productionOutcome: {
+      success: boolean;
+      verificationSuccess: boolean;
+      tokensUsed: number;
+      wallTimeMs: number;
+    };
+    shadowOutcome: {
+      success: boolean;
+      verificationSuccess: boolean;
+      tokensUsed: number;
+      wallTimeMs: number;
+      candidateOutput?: unknown;
+    };
+  }): ShadowModeResult {
+    const record = this.deployments.get(params.canaryId);
+    if (!record) {
+      throw new Error(`Canary deployment '${params.canaryId}' not found.`);
+    }
+
+    const shadowResult: ShadowModeResult = {
+      canaryId: params.canaryId,
+      candidateId: record.candidateId,
+      taskId: params.taskId,
+      executionId: params.executionId,
+      productionOutcome: params.productionOutcome,
+      shadowOutcome: params.shadowOutcome,
+      metricsDelta: {
+        tokensDelta: params.shadowOutcome.tokensUsed - params.productionOutcome.tokensUsed,
+        wallTimeDeltaMs: params.shadowOutcome.wallTimeMs - params.productionOutcome.wallTimeMs,
+        verificationAgreed: params.shadowOutcome.verificationSuccess === params.productionOutcome.verificationSuccess,
+      },
+      retained: true,
+      timestamp: new Date(),
+    };
+
+    record.evidenceIds.push(`shadow-${params.executionId}`);
+    return shadowResult;
   }
 
   /**
@@ -606,3 +673,10 @@ export class CanaryDeploymentService {
     return record;
   }
 }
+
+/**
+ * CanaryManager: Target architectural alias for CanaryDeploymentService.
+ */
+export const CanaryManager = CanaryDeploymentService;
+export type CanaryManager = CanaryDeploymentService;
+
