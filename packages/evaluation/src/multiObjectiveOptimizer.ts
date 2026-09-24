@@ -34,7 +34,14 @@ export function extractMetricValueSafe(
       return verifiedCount / (suite.results.length || 1);
     }
 
-    case 'input_tokens':
+    case 'input_tokens': {
+      const avgInput =
+        suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.inputTokens ?? 0), 0) /
+        (suite.results.length || 1);
+      if (avgInput > 0) return avgInput;
+      return suite.aggregateMetrics?.totalTokens ?? 0;
+    }
+
     case 'tokens':
       return suite.aggregateMetrics?.totalTokens ??
         (suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.inputTokens ?? 0), 0) / (suite.results.length || 1));
@@ -48,12 +55,21 @@ export function extractMetricValueSafe(
 
     case 'wall_time':
     case 'latency':
-    case 'duration':
-      return suite.aggregateMetrics?.totalWallTimeMs ??
-        (suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.totalWallTimeMs ?? r.durationMs ?? 0), 0) / (suite.results.length || 1));
+    case 'duration': {
+      const avgWall =
+        suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.totalWallTimeMs ?? r.durationMs ?? 0), 0) /
+        (suite.results.length || 1);
+      if (avgWall > 0) return avgWall;
+      return suite.aggregateMetrics?.totalWallTimeMs ?? 0;
+    }
 
-    case 'repair_cycles':
-      return suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.repairCycles ?? 0), 0) / (suite.results.length || 1);
+    case 'repair_cycles': {
+      const avgRepairs =
+        suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.repairCycles ?? 0), 0) /
+        (suite.results.length || 1);
+      if (avgRepairs > 0 || suite.results.length > 0) return avgRepairs;
+      return (suite.aggregateMetrics as any)?.averageRepairCycles ?? 0;
+    }
 
     case 'model_calls':
       return suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.totalModelCalls ?? 0), 0) / (suite.results.length || 1);

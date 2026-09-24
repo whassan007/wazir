@@ -1108,7 +1108,10 @@ export class MetaOptimizerService {
         const rawMetrics: Record<string, number> = {};
         const normalizedDeltas: Record<string, number> = {};
         let allConstraintsSatisfied = runRes.regressionGuard?.correctnessGatesPassed ?? true;
-        const disqualificationReasons: string[] = [...(runRes.regressionGuard?.regressionsDetected ?? [])];
+        const disqualificationReasons: string[] = [
+          ...(runRes.regressionGuard?.regressionsDetected ?? []),
+          ...(runRes.regressionGuard?.protectedViolations ?? []),
+        ];
 
         // Check if verification failed
         if (runRes.reasons.some((r) => r.includes('VERIFICATION') || r.includes('BUILD') || r.includes('TEST') || r.includes('FAILED'))) {
