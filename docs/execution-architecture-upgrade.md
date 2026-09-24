@@ -716,6 +716,56 @@ budget tests (`maxTokens`, `maxToolCalls`, `wallClock`, `noProgress`, `escalatio
 pin the unchanged behavior. The agents package passed (27 files, 126 tests), as
 did the CLI e2e, fleet and escalation e2e tests against the rebuilt dist.
 
+## Twenty-first tranche: Phase 23 regression audit
+
+Each of the mission's 35 required regressions, mapped to the test that covers it.
+"Partial" marks where coverage is narrower than the requirement.
+
+| # | Requirement | Covered by |
+|---|---|---|
+| 1 | append-only monotonic event ordering | `core/tests/executionHistory.test.ts` |
+| 2 | failed model attempt kept in history, out of canonical context | `agents/tests/codingAgent.attemptContext.test.ts` |
+| 3 | transient provider failure: bounded backoff | `shared/tests/failureRetryPolicy.test.ts`, `tests/runtime/providerRetryPolicy.test.ts` |
+| 4 | compiler failure never triggers provider retry | `shared/tests/failureRetryPolicy.test.ts` (BUILD/TEST/LINT/TYPECHECK/CODE_FAILURE never retried) |
+| 5 | POLICY_DENIED never retried | same (POLICY_DENIED, APPROVAL_REQUIRED) |
+| 6 | malformed tool call: bounded protocol repair | `agents/tests/codingAgent.toolArgValidation.test.ts`, `codingAgent.terminationReason.test.ts` |
+| 7 | repair exhaustion: escalation or termination | `agents/tests/codingAgent.escalation.test.ts`, `cli/tests/escalation.e2e.test.ts` |
+| 8 | tool arguments validated before execution | `tools/tests/toolContractPipeline.test.ts` |
+| 9 | tool output validated | `tools/tests/toolContractPipeline.test.ts` |
+| 10 | non-idempotent checkpoint before execution | `core/tests/toolCheckpoints.test.ts`, `tools/tests/protectedVerification.test.ts` (no checkpoint when refused) |
+| 11 | crash after dispatch → TOOL_OUTCOME_UNKNOWN | `core/tests/toolCheckpoints.test.ts`, `core/tests/executionRecovery.test.ts` |
+| 12 | recovery never replays an unknown write blindly | `core/tests/executionRecovery.test.ts`, `cli/tests/recovery.test.ts` |
+| 13 | failed edit: no mutation event | `tools/tests/physicalExecution.test.ts`, `evaluation/tests/verificationIntegrity.test.ts` (Test 3) |
+| 14 | no-op edit: no revision increment | same (Test 4) |
+| 15 | real edit increments revision exactly once | `tools/tests/physicalExecution.test.ts` |
+| 16 | BUILD(R) doesn't satisfy BUILD(R+1) | `core/tests/revisionFencing.test.ts` (isolated), `evaluation/.../verificationIntegrity.test.ts` (Test 2) |
+| 17 | TEST(R) doesn't satisfy TEST(R+1) | `core/tests/revisionFencing.test.ts` (isolated) |
+| 18 | VERIFY(R) then mutation rejects COMPLETE(R+1) | `evaluation/tests/verificationIntegrity.test.ts` (Test 5), `tools/tests/physicalExecution.test.ts` |
+| 19 | model "tests passed" creates no evidence | `tools/tests/physicalExecution.test.ts`, `evaluation/.../verificationIntegrity.test.ts` (Test 8), `agents/tests/codingAgent.runStats.test.ts` |
+| 20 | repeated identical calls detected | `agents/tests/codingAgent.circuitBreaker.test.ts`, `codingAgent.noProgress.test.ts` (REPEATED_ACTION) |
+| 21 | semantically equivalent empty searches detected | `agents/tests/codingAgent.noProgress.test.ts` |
+| 22 | max turns | `agents/tests/codingAgent.maxTurns.test.ts` |
+| 23 | max tool calls | `agents/tests/codingAgent.maxToolCalls.test.ts` |
+| 24 | wall-clock budget | `agents/tests/codingAgent.wallClock.test.ts` |
+| 25 | token budget | `agents/tests/codingAgent.maxTokens.test.ts` |
+| 26 | minimum tool visibility | `tools/tests/toolContractPipeline.test.ts` (`allowedTools` denial; `forModel` omits unlisted schemas), `tools/tests/web.test.ts` |
+| 27 | escalation emits an explicit route-change event | `cli/tests/escalation.test.ts`, `escalation.e2e.test.ts` |
+| 28 | compaction keeps raw evidence, reduces model-visible output | `agents/tests/codingAgent.toolResultOutput.test.ts`, `core/tests/observationCompactor.test.ts` |
+| 29 | protected tests cannot be silently weakened | `tools/tests/protectedVerification.test.ts`, `core/tests/verificationIntegrity.test.ts` |
+| 30 | reconstruction from events reproduces current state | `core/tests/executionRecovery.test.ts` |
+| 31 | recovery resumes the same execution where safe | `core/tests/executionRecovery.test.ts`. **Partial:** the plan says `resume` for the same execution, but the agent loop is not resumed inside it (Phase 21 remainder). |
+| 32 | duplicate completion event prevented | `core/tests/executionHistory.test.ts` |
+| 33 | completion requires evidence for the current revision | `tools/tests/physicalExecution.test.ts`, `core/tests/revisionFencing.test.ts` |
+| 34 | TUI state reconstructable from events | `cli/tests/executionProjection.test.ts`. **Partial:** `projectExecutionCard` rebuilds the card identically after a restart, but the live TUI still builds cards from callbacks and does not restore from it. |
+| 35 | CLI `--json` stays valid with new fields | `cli/tests/inspectExecutionSummary.test.ts`, `cli/tests/explainExecution.test.ts` |
+
+Gaps closed in this tranche: #16/#17 now have isolated tests (the existing
+fencing tests changed build and test together), and #34 gained
+`apps/cli/src/tui/executionProjection.ts` (`projectExecutionCard`), which derives
+the fleet TUI's agent card from the durable record. Beyond the card, it adds
+the current model, workspace revision, retries, repairs, escalations, longest
+no-progress streak, current vs stale verification, and termination.
+
 ## Not yet done
 
 - Phase 21 remainder: resuming the agent loop inside the recovered execution
