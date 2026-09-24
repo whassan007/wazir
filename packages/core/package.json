@@ -1,6 +1,6 @@
 {
   "name": "@wazir/core",
-  "version": "0.1.28",
+  "version": "0.1.51",
   "description": "Core domain types and services for the Wazir meta-harness",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
