@@ -8,6 +8,7 @@ import {
   ModelLifecycleService,
   ModelLifecycleError,
   RuntimeRegistry,
+  EditorProtocolService,
   type ModelRecord,
   type ModelCapability,
   type RuntimeType,
@@ -191,6 +192,7 @@ export interface ApiState {
   dispatcher: TaskDispatcher;
   store: KeyValueStore;
   auth: ApiAuth;
+  editorProtocol: EditorProtocolService;
 }
 
 export interface ApiStateOptions {
@@ -309,6 +311,11 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   await lifecycle.applyStartupPolicy(options.modelStartup);
   lifecycle.startReconciliation();
 
+  const editorProtocol = new EditorProtocolService({
+    store,
+    tools,
+  });
+
   return {
     computers,
     runtimes,
@@ -321,6 +328,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     dispatcher,
     store,
     auth,
+    editorProtocol,
   };
 }
 
@@ -785,6 +793,102 @@ export function createApp(state: ApiState) {
     recordExecution(state, record);
     res.status(201).json({ id, record });
   });
+
+  // Agent Protocol (ACP) Standard Endpoints
+  app.use('/ap/v1', auth.requireViewerOrOperator);
+
+  app.post('/ap/v1/agent/tasks', async (req, res) => {
+    try {
+      const task = await state.editorProtocol.createTask(req.body ?? {});
+      res.status(201).json(task);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get('/ap/v1/agent/tasks', async (_req, res) => {
+    const tasks = await state.editorProtocol.listTasks();
+    res.json({ tasks, pagination: { total: tasks.length, pages: 1, current: 1, page_size: tasks.length } });
+  });
+
+  app.get('/ap/v1/agent/tasks/:task_id', async (req, res) => {
+    const task = await state.editorProtocol.getTask(req.params.task_id);
+    if (!task) {
+      res.status(404).json({ error: `Task not found: ${req.params.task_id}` });
+      return;
+    }
+    res.json(task);
+  });
+
+  app.post('/ap/v1/agent/tasks/:task_id/steps', async (req, res) => {
+    try {
+      const step = await state.editorProtocol.executeStep(req.params.task_id, req.body);
+      res.json(step);
+    } catch (err) {
+      const msg = (err as Error).message;
+      res.status(msg.startsWith('TASK_NOT_FOUND') ? 404 : 400).json({ error: msg });
+    }
+  });
+
+  app.get('/ap/v1/agent/tasks/:task_id/steps', async (req, res) => {
+    try {
+      const steps = await state.editorProtocol.listSteps(req.params.task_id);
+      res.json({ steps, pagination: { total: steps.length, pages: 1, current: 1, page_size: steps.length } });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get('/ap/v1/agent/tasks/:task_id/steps/:step_id', async (req, res) => {
+    const step = await state.editorProtocol.getStep(req.params.task_id, req.params.step_id);
+    if (!step) {
+      res.status(404).json({ error: `Step not found: ${req.params.step_id}` });
+      return;
+    }
+    res.json(step);
+  });
+
+  app.get('/ap/v1/agent/tasks/:task_id/artifacts', async (req, res) => {
+    try {
+      const artifacts = await state.editorProtocol.listArtifacts(req.params.task_id);
+      res.json({ artifacts });
+    } catch (err) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/ap/v1/agent/tasks/:task_id/artifacts', async (req, res) => {
+    try {
+      const artifact = await state.editorProtocol.createArtifact(req.params.task_id, req.body ?? {});
+      res.status(201).json(artifact);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get('/ap/v1/agent/tasks/:task_id/artifacts/:artifact_id', async (req, res) => {
+    const artifact = await state.editorProtocol.getArtifact(req.params.task_id, req.params.artifact_id);
+    if (!artifact) {
+      res.status(404).json({ error: `Artifact not found: ${req.params.artifact_id}` });
+      return;
+    }
+    res.json(artifact);
+  });
+
+  // Model Context Protocol (MCP) Server JSON-RPC 2.0 Endpoint
+  app.use('/mcp', auth.requireViewerOrOperator);
+
+  const mcpHandler = async (req: express.Request, res: Response) => {
+    const response = await state.editorProtocol.handleJsonRpc(req.body);
+    if (response === null) {
+      res.status(204).end();
+    } else {
+      res.json(response);
+    }
+  };
+
+  app.post('/mcp', mcpHandler);
+  app.post('/mcp/v1', mcpHandler);
 
   return app;
 }

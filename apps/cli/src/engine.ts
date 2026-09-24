@@ -8,6 +8,8 @@ import {
   ComputerRegistry,
   ContextCompiler,
   ContextCompactionService,
+  ContextRevisionService,
+  PromptLayoutPlanner,
   OffloadStore,
   ExecutionEngine,
   persistExecutionRecord,
@@ -86,6 +88,8 @@ export interface RookEngine {
   reliability?: ModelReliabilityTracker;
   compiler: ContextCompiler;
   compaction?: ContextCompactionService;
+  revision?: ContextRevisionService;
+  layoutPlanner?: PromptLayoutPlanner;
   offloadStore?: OffloadStore;
   executions: ExecutionEngine & { store?: KeyValueStore };
   provenance: ProvenanceManager;
@@ -302,9 +306,18 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const jobManager = new JobManager({ store });
   await jobManager.ready;
 
+  const worktrees = new WorktreeManager();
+  const checkpoints = new CheckpointService({
+    executionEngine: executions,
+    worktreeManager: worktrees,
+    provenanceManager: provenance,
+    defaultWorkspaceRoot: projectRoot,
+  });
+
   const orchestrator = new JobOrchestrator({
     scheduler,
     executionEngine: executions,
+    checkpointService: checkpoints,
     policy,
     agents,
     models,
@@ -313,14 +326,6 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     jobManager,
   }) as any;
   orchestrator.store = store; // Attach store for Block persistence
-
-  const worktrees = new WorktreeManager();
-  const checkpoints = new CheckpointService({
-    executionEngine: executions,
-    worktreeManager: worktrees,
-    provenanceManager: provenance,
-    defaultWorkspaceRoot: projectRoot,
-  });
   const planner = createTaskPlanner();
 
   const lifecycle = new ModelLifecycleService({
@@ -368,12 +373,30 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     defaultReserves: config.context?.reserve as any,
   });
 
+  const layoutPlanner = new PromptLayoutPlanner();
+
+  const revision = new ContextRevisionService({
+    compiler,
+    compactionService: compaction,
+    layoutPlanner,
+    engine: executions,
+    config: {
+      enabled: config.context?.revision?.enabled ?? true,
+      autoThreshold: config.context?.revision?.autoThreshold ?? 0.75,
+      targetUtilization: config.context?.revision?.targetUtilization ?? 0.50,
+      preserveRecentTailRatio: config.context?.revision?.preserveRecentTailRatio ?? 0.50,
+      layoutStrategy: config.context?.layout?.strategy ?? 'CACHE_STABLE_PREFIX',
+    },
+  });
+
   return {
     config,
     projectRoot,
     configDir: engineConfigDir,
     web,
     compaction,
+    revision,
+    layoutPlanner,
     offloadStore,
     computers,
     provenance,

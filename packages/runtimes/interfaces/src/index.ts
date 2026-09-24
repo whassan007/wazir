@@ -30,6 +30,11 @@ export interface RuntimeCapabilities {
   chat: boolean;
   streaming: boolean;
   toolCalling: boolean;
+  nativeToolCalling?: boolean;
+  parallelToolCalling?: boolean;
+  strictJsonSchema?: boolean;
+  streamingToolCalls?: boolean;
+  promptCaching?: boolean;
   structuredOutput: boolean;
   vision: boolean;
   embeddings: boolean;
@@ -40,6 +45,11 @@ export interface RuntimeCapabilities {
   modelDownload: boolean;
   statefulChat: boolean;
   mcp: boolean;
+}
+
+export function supportsNativeToolCalling(capabilities?: Partial<RuntimeCapabilities>): boolean {
+  if (!capabilities) return false;
+  return Boolean(capabilities.nativeToolCalling ?? capabilities.toolCalling);
 }
 
 export interface RuntimeDiagnostics {
@@ -89,6 +99,8 @@ export interface GenerationRequest {
   contextTokens?: number;
   stream?: boolean;
   tools?: ToolDefinition[];
+  toolChoice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } };
+  responseFormat?: { type: 'text' | 'json_object' | 'json_schema'; json_schema?: Record<string, unknown> };
   /** Host-generated id used for cancellation. */
   requestId?: string;
 }

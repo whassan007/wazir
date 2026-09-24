@@ -31,6 +31,22 @@ export type MCPFailureCode =
   | 'MCP_TOOL_TIMEOUT' | 'MCP_TOOL_EXECUTION_FAILED' | 'MCP_POLICY_DENIED'
   | 'MCP_SERVER_UNAVAILABLE' | 'MCP_CANCELLED';
 
+export interface CanonicalMCPToolDescriptor {
+  name: string;
+  namespace: string;
+  originalName: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  serverId: string;
+  transport: 'stdio' | 'http';
+  availability: MCPState;
+  risk: MCPRisk;
+  sideEffectClass: import('./tool.js').ToolSideEffectClass;
+  permissions: string[];
+  capabilities: string[];
+}
+
 /** Deliberately does not include remote error messages, headers, or arguments. */
 export class MCPError extends Error {
   constructor(readonly code: MCPFailureCode, readonly serverId?: string) {

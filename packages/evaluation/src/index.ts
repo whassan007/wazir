@@ -13,6 +13,7 @@ export * from './types/verification.js';
 export * from './continuousVerification.js';
 export * from './evaluationService.js';
 export * from './benchmarkService.js';
+export * from './metaOptimizerService.js';
 
 export interface EvaluationOptions {
   /** If set, the task is only successful when each of these files changed. */

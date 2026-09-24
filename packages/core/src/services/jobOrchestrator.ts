@@ -10,6 +10,10 @@ import type {
   JobTaskOutcome,
   Task,
   TokenUsage,
+  ExecutionCheckpoint,
+  CheckpointCreateOptions,
+  ForkExecutionResult,
+  RollbackResult,
 } from '../types/index.js';
 import { tokensPerSecond } from '@wazir/shared';
 import { JobManager, type JobTaskInput } from './jobManager.js';
@@ -20,10 +24,12 @@ import type { AgentRegistry } from './agentRegistry.js';
 import type { ModelRegistry } from './modelRegistry.js';
 import type { RuntimeRegistry } from './runtimeRegistry.js';
 import type { ComputerRegistry } from './computerRegistry.js';
+import type { CheckpointService } from './checkpointService.js';
 
 export interface JobOrchestratorOptions {
   scheduler: Scheduler;
   executionEngine: ExecutionEngine;
+  checkpointService?: CheckpointService;
   policy?: PolicyEngine;
   agents?: AgentRegistry;
   models?: ModelRegistry;
@@ -69,6 +75,7 @@ export class JobOrchestrator {
   private readonly executionEngine: ExecutionEngine;
   private readonly jobManager: JobManager;
   private readonly taskExecutor?: JobTaskExecutor;
+  private checkpointService?: CheckpointService;
 
   private readonly listeners = new Map<string, Set<(event: JobOrchestratorEvent) => void>>();
   private readonly steeringQueues = new Map<string, string[]>();
@@ -77,8 +84,17 @@ export class JobOrchestrator {
   constructor(options: JobOrchestratorOptions) {
     this.scheduler = options.scheduler;
     this.executionEngine = options.executionEngine;
+    this.checkpointService = options.checkpointService;
     this.jobManager = options.jobManager ?? new JobManager();
     this.taskExecutor = options.taskExecutor;
+  }
+
+  setCheckpointService(checkpointService: CheckpointService): void {
+    this.checkpointService = checkpointService;
+  }
+
+  getCheckpointService(): CheckpointService | undefined {
+    return this.checkpointService;
   }
 
   getJobManager(): JobManager {
@@ -954,6 +970,119 @@ export class JobOrchestrator {
       modelsUsed: Array.from(modelsUsed),
       filesChanged: Array.from(filesChanged),
     };
+  }
+
+  /**
+   * Checkpoints a task execution within a job, or the most recent execution of a job.
+   */
+  async checkpoint(
+    jobId: string,
+    options: { taskId?: string; description?: string; metadata?: Record<string, unknown> } = {},
+  ): Promise<ExecutionCheckpoint> {
+    if (!this.checkpointService) {
+      throw new Error('CheckpointService is not configured on this JobOrchestrator');
+    }
+
+    let targetExecutionId: string | undefined;
+    if (options.taskId) {
+      const records = await this.executionEngine.listByTask(options.taskId);
+      if (records.length > 0) {
+        targetExecutionId = records[records.length - 1].execution.id;
+      }
+    } else {
+      const job = this.jobManager.get(jobId);
+      if (!job) throw new Error(`Job '${jobId}' not found`);
+      for (const t of job.tasks) {
+        const records = await this.executionEngine.listByTask(t.id);
+        if (records.length > 0) {
+          targetExecutionId = records[records.length - 1].execution.id;
+          break;
+        }
+      }
+    }
+
+    if (!targetExecutionId) {
+      throw new Error(`No active or completed execution found for job '${jobId}'`);
+    }
+
+    const checkpoint = await this.checkpointService.checkpoint(targetExecutionId, {
+      description: options.description,
+      metadata: options.metadata,
+      planState: {
+        jobId,
+        status: this.jobManager.get(jobId)?.status,
+      },
+    });
+
+    this.emit(jobId, {
+      type: 'job:checkpoint',
+      jobId,
+      taskId: options.taskId,
+      event: { checkpointId: checkpoint.id, workspaceRevision: checkpoint.workspaceRevision },
+    });
+
+    return checkpoint;
+  }
+
+  /**
+   * Creates an isolated branch of execution from a checkpoint.
+   */
+  async fork(
+    checkpointId: string,
+    options: { forkedExecutionId?: string } = {},
+  ): Promise<ForkExecutionResult> {
+    if (!this.checkpointService) {
+      throw new Error('CheckpointService is not configured on this JobOrchestrator');
+    }
+
+    const forkResult = await this.checkpointService.fork(checkpointId, options.forkedExecutionId);
+
+    const checkpoint = this.checkpointService.getCheckpoint(checkpointId);
+    const parentJobId = checkpoint?.planState?.jobId;
+    if (parentJobId) {
+      this.emit(parentJobId, {
+        type: 'job:fork',
+        jobId: parentJobId,
+        event: forkResult,
+      });
+    }
+
+    return forkResult;
+  }
+
+  /**
+   * Rolls back an execution within a job to a previous checkpoint.
+   */
+  async rollback(
+    jobId: string,
+    checkpointId: string,
+    options: { executionId?: string } = {},
+  ): Promise<RollbackResult> {
+    if (!this.checkpointService) {
+      throw new Error('CheckpointService is not configured on this JobOrchestrator');
+    }
+
+    let targetExecutionId = options.executionId;
+    if (!targetExecutionId) {
+      const checkpoint = this.checkpointService.getCheckpoint(checkpointId);
+      if (checkpoint) {
+        targetExecutionId = checkpoint.executionId;
+      }
+    }
+
+    if (!targetExecutionId) {
+      throw new Error(`Could not determine executionId to rollback for checkpoint '${checkpointId}'`);
+    }
+
+    const rollbackResult = await this.checkpointService.rollback(targetExecutionId, checkpointId);
+
+    this.emit(jobId, {
+      type: 'job:rollback',
+      jobId,
+      event: rollbackResult,
+    });
+
+    return rollbackResult;
   }
 }
 

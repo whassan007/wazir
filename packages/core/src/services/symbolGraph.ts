@@ -131,6 +131,10 @@ export class SymbolGraph {
       .filter((n): n is SymbolNode => n !== undefined);
   }
 
+  getNodesByName(name: string): SymbolNode[] {
+    return this.findNodesByName(name);
+  }
+
   findNodesByFile(filePath: string): SymbolNode[] {
     const ids = this.fileToNodes.get(filePath);
     if (!ids) return [];

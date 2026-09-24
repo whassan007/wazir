@@ -6,6 +6,9 @@ import type {
   ComparativeEvaluation,
   BenchmarkTaskCategory,
   AcceptanceContract,
+  EvaluationRecord,
+  MultiDimensionalComparison,
+  MetricValue,
 } from '@wazir/core';
 import { evaluateExecution, type EvaluationOptions } from './index.js';
 
@@ -265,6 +268,310 @@ export class EvaluationService {
     };
   }
 
+  /**
+   * Produces a structured, durable EvaluationRecord tracking model, context, tools,
+   * agent repair, workspace mutations, and performance metrics.
+   */
+  public buildEvaluationRecord(
+    record: ExecutionRecord,
+    options: EvaluationServiceOptions & {
+      gateId?: string;
+      testId?: string | number;
+      version?: string;
+    } = {},
+  ): EvaluationRecord {
+    const report = this.evaluate(record, options);
+    const m = report.metrics;
+
+    // Extract context events to measure context metrics
+    const events = record.events ?? [];
+    let snapshotCount = 0;
+    let revisionCount = 0;
+    let tokensDeduplicated = 0;
+    let tokensSuperseded = 0;
+    let tokensSummarized = m.compactedTokens;
+    let tokensOffloaded = 0;
+    let peakContext = m.inputTokens;
+    const contextSamples: number[] = [];
+
+    for (const ev of events) {
+      const type = ev.type || ev.eventType;
+      const data = ev.data as Record<string, any> | undefined;
+
+      if (type === 'context.snapshot.created' || type === 'context.compiled') {
+        snapshotCount++;
+        const tokens = data?.estimatedTokens ?? data?.tokens;
+        if (typeof tokens === 'number') {
+          contextSamples.push(tokens);
+          if (tokens > peakContext) peakContext = tokens;
+        }
+      }
+      if (type === 'context.revision.completed' || type === 'context.compaction.completed') {
+        revisionCount++;
+        if (data?.tokensDeduplicated) tokensDeduplicated += data.tokensDeduplicated;
+        if (data?.tokensSuperseded) tokensSuperseded += data.tokensSuperseded;
+        if (data?.tokensSummarized) tokensSummarized += data.tokensSummarized;
+        if (data?.tokensOffloaded) tokensOffloaded += data.tokensOffloaded;
+      }
+      if (type === 'context.deduplicated' && data?.tokens) {
+        tokensDeduplicated += data.tokens;
+      }
+      if (type === 'context.superseded.removed' && data?.tokens) {
+        tokensSuperseded += data.tokens;
+      }
+    }
+
+    const averageContextTokens = contextSamples.length > 0
+      ? Math.round(contextSamples.reduce((a, b) => a + b, 0) / contextSamples.length)
+      : m.inputTokens;
+
+    // Check runtime cache telemetry if present in rawMetrics or events
+    let cacheReadTokens: MetricValue<number> = { value: 0, kind: 'unavailable', note: 'Runtime does not expose prompt cache reads' };
+    let cacheWriteTokens: MetricValue<number> = { value: 0, kind: 'unavailable', note: 'Runtime does not expose prompt cache writes' };
+
+    const rawUsage = (record.usage as Record<string, any>) ?? {};
+    if (typeof rawUsage.cacheReadTokens === 'number') {
+      cacheReadTokens = { value: rawUsage.cacheReadTokens, kind: 'measured', unit: 'tokens' };
+    }
+    if (typeof rawUsage.cacheWriteTokens === 'number') {
+      cacheWriteTokens = { value: rawUsage.cacheWriteTokens, kind: 'measured', unit: 'tokens' };
+    }
+
+    const codeModeCalls = (record.toolCalls ?? []).filter((tc) => tc.tool === 'code_mode' || tc.tool === 'run_code_mode').length;
+    const toolFailures = (record.toolCalls ?? []).filter((tc) => !tc.ok).length;
+
+    const revisionChanges = events.filter((e) => (e.type || e.eventType) === 'workspace.revision.changed' || (e.type || e.eventType) === 'WORKSPACE_REVISION_CHANGED').length;
+    const verificationInvalidations = events.filter((e) => (e.type || e.eventType) === 'verification.invalidated' || (e.type || e.eventType) === 'EVIDENCE_STALE').length;
+
+    return {
+      identity: {
+        runId: `eval-${record.execution.id}`,
+        gateId: options.gateId,
+        testId: options.testId ?? record.task?.id,
+        version: options.version ?? '0.1.42',
+        modelId: record.execution.modelId,
+        runtimeId: record.execution.runtimeId,
+        timestamp: new Date(),
+      },
+      correctness: {
+        passed: report.passed,
+        acceptanceAssertions: report.evaluationResult.checks.map((c) => ({
+          name: c.name,
+          passed: c.ok,
+          detail: c.output?.slice(0, 100),
+        })),
+        verificationResult: {
+          status: report.passed ? 'PASS' : 'FAIL',
+          workspaceRevision: record.workspaceState?.revision ?? 0,
+          satisfiedOracles: report.evaluationResult.checks.filter((c) => c.ok).map((c) => c.name),
+          missingOracles: report.evaluationResult.checks.filter((c) => !c.ok).map((c) => c.name),
+        },
+      },
+      model: {
+        totalCalls: { value: m.totalModelCalls, kind: 'measured', unit: 'calls' },
+        inputTokens: { value: m.inputTokens, kind: 'measured', unit: 'tokens' },
+        outputTokens: { value: m.outputTokens, kind: 'measured', unit: 'tokens' },
+        cumulativeInputTokens: { value: m.inputTokens, kind: 'measured', unit: 'tokens' },
+      },
+      context: {
+        peakContextTokens: { value: peakContext, kind: 'measured', unit: 'tokens' },
+        averageContextTokens: { value: averageContextTokens, kind: 'measured', unit: 'tokens' },
+        snapshotCount: { value: Math.max(1, snapshotCount), kind: 'measured', unit: 'snapshots' },
+        revisionCount: { value: revisionCount, kind: 'measured', unit: 'revisions' },
+        tokensRemovedDeduplication: { value: tokensDeduplicated, kind: 'measured', unit: 'tokens' },
+        tokensRemovedSuperseded: { value: tokensSuperseded, kind: 'measured', unit: 'tokens' },
+        tokensSummarized: { value: tokensSummarized, kind: 'measured', unit: 'tokens' },
+        tokensOffloaded: { value: tokensOffloaded, kind: 'measured', unit: 'tokens' },
+        cacheReadTokens,
+        cacheWriteTokens,
+      },
+      tools: {
+        totalCalls: { value: m.totalToolCalls, kind: 'measured', unit: 'calls' },
+        codeModeCalls: { value: codeModeCalls, kind: 'measured', unit: 'calls' },
+        failures: { value: toolFailures, kind: 'measured', unit: 'calls' },
+        retries: { value: 0, kind: 'measured', unit: 'calls' },
+      },
+      agent: {
+        repairCycles: { value: m.repairCycles, kind: 'measured', unit: 'cycles' },
+        malformedActions: { value: 0, kind: 'estimated', unit: 'actions' },
+        noProgressEvents: { value: 0, kind: 'estimated', unit: 'events' },
+        subagentCalls: { value: 0, kind: 'measured', unit: 'calls' },
+      },
+      workspace: {
+        mutations: { value: record.filesChanged?.length ?? 0, kind: 'measured', unit: 'files' },
+        revisionChanges: { value: revisionChanges, kind: 'measured', unit: 'events' },
+        verificationInvalidations: { value: verificationInvalidations, kind: 'measured', unit: 'events' },
+      },
+      performance: {
+        wallTimeMs: { value: m.totalWallTimeMs, kind: 'measured', unit: 'ms' },
+        modelTimeMs: { value: m.modelLatencyMs, kind: 'measured', unit: 'ms' },
+        toolTimeMs: { value: m.toolLatencyMs, kind: 'measured', unit: 'ms' },
+      },
+      resources: {
+        monetaryCostUsd: { value: m.costEstimateUsd, kind: 'estimated', unit: 'USD' },
+      },
+    };
+  }
+
+  /**
+   * Compares two EvaluationRecords independently across all dimensions without
+   * collapsing into an arbitrary single score.
+   */
+  public compareDimensions(
+    baseline: EvaluationRecord,
+    candidate: EvaluationRecord,
+  ): MultiDimensionalComparison {
+    const regressions: string[] = [];
+    const improvements: string[] = [];
+
+    // 1. Correctness
+    const baselinePass = baseline.correctness.passed;
+    const candidatePass = candidate.correctness.passed;
+    let correctnessStatus: 'MATCH' | 'IMPROVED' | 'REGRESSED' = 'MATCH';
+
+    if (baselinePass && !candidatePass) {
+      correctnessStatus = 'REGRESSED';
+      regressions.push('Candidate failed run while baseline passed.');
+    } else if (!baselinePass && candidatePass) {
+      correctnessStatus = 'IMPROVED';
+      improvements.push('Candidate passed run while baseline failed.');
+    }
+
+    // 2. Model Calls
+    const bCalls = baseline.model.totalCalls.value;
+    const cCalls = candidate.model.totalCalls.value;
+    const callsDelta = cCalls - bCalls;
+    const callsPct = bCalls > 0 ? (callsDelta / bCalls) * 100 : 0;
+    if (callsDelta < 0) {
+      improvements.push(`Model calls reduced by ${Math.abs(callsDelta)} (${cCalls} vs ${bCalls}).`);
+    } else if (callsDelta > 2) {
+      regressions.push(`Model calls increased by ${callsDelta} (${cCalls} vs ${bCalls}).`);
+    }
+
+    // 3. Input Tokens
+    const bTokens = baseline.model.inputTokens.value;
+    const cTokens = candidate.model.inputTokens.value;
+    const tokensDelta = cTokens - bTokens;
+    const tokensPct = bTokens > 0 ? (tokensDelta / bTokens) * 100 : 0;
+    if (tokensDelta < -500) {
+      improvements.push(`Input tokens reduced by ${Math.abs(tokensDelta)} (${cTokens} vs ${bTokens}).`);
+    } else if (tokensDelta > 1000) {
+      regressions.push(`Input tokens increased by ${tokensDelta} (${cTokens} vs ${bTokens}).`);
+    }
+
+    // 4. Peak Context
+    const bPeak = baseline.context.peakContextTokens.value;
+    const cPeak = candidate.context.peakContextTokens.value;
+    const peakDelta = cPeak - bPeak;
+    const peakPct = bPeak > 0 ? (peakDelta / bPeak) * 100 : 0;
+    if (peakDelta < -500) {
+      improvements.push(`Peak context reduced by ${Math.abs(peakDelta)} (${cPeak} vs ${bPeak}).`);
+    } else if (peakDelta > 1500) {
+      regressions.push(`Peak context grew by ${peakDelta} (${cPeak} vs ${bPeak}).`);
+    }
+
+    // 5. Tokens Summarized
+    const bSumm = baseline.context.tokensSummarized.value;
+    const cSumm = candidate.context.tokensSummarized.value;
+    const summDelta = cSumm - bSumm;
+
+    // 6. Repair Cycles
+    const bRepair = baseline.agent.repairCycles.value;
+    const cRepair = candidate.agent.repairCycles.value;
+    const repairDelta = cRepair - bRepair;
+    if (repairDelta < 0) {
+      improvements.push(`Repair cycles reduced by ${Math.abs(repairDelta)} (${cRepair} vs ${bRepair}).`);
+    } else if (repairDelta > 0) {
+      regressions.push(`Repair cycles increased by ${repairDelta} (${cRepair} vs ${bRepair}).`);
+    }
+
+    // 7. Wall Time
+    const bWall = baseline.performance.wallTimeMs.value;
+    const cWall = candidate.performance.wallTimeMs.value;
+    const wallDelta = cWall - bWall;
+    const wallPct = bWall > 0 ? (wallDelta / bWall) * 100 : 0;
+    if (wallDelta < -2000) {
+      improvements.push(`Wall time improved by ${Math.abs(wallDelta)}ms (${cWall}ms vs ${bWall}ms).`);
+    } else if (wallDelta > 5000) {
+      regressions.push(`Wall time regressed by ${wallDelta}ms (${cWall}ms vs ${bWall}ms).`);
+    }
+
+    let verdict: MultiDimensionalComparison['verdict'] = 'EQUIVALENT';
+    if (correctnessStatus === 'REGRESSED') {
+      verdict = 'REGRESSION';
+    } else if (regressions.length > improvements.length && regressions.length > 0) {
+      verdict = 'BASELINE_BETTER';
+    } else if (improvements.length > regressions.length && regressions.length === 0) {
+      verdict = 'CANDIDATE_BETTER';
+    } else if (improvements.length > 0 && regressions.length > 0) {
+      verdict = 'INCONCLUSIVE';
+    }
+
+    const summary = [
+      `=== Multi-Dimensional Evaluation: ${baseline.identity.runId} vs ${candidate.identity.runId} ===`,
+      `Verdict: ${verdict}`,
+      `Metric                Baseline    Candidate    Delta`,
+      `----------------------------------------------------`,
+      `Pass                  ${baselinePass ? 'YES' : 'NO'}         ${candidatePass ? 'YES' : 'NO'}          ${correctnessStatus}`,
+      `Model Calls           ${String(bCalls).padEnd(11)} ${String(cCalls).padEnd(12)} ${callsDelta >= 0 ? `+${callsDelta}` : callsDelta}`,
+      `Input Tokens          ${String(bTokens).padEnd(11)} ${String(cTokens).padEnd(12)} ${tokensDelta >= 0 ? `+${tokensDelta}` : tokensDelta}`,
+      `Peak Context          ${String(bPeak).padEnd(11)} ${String(cPeak).padEnd(12)} ${peakDelta >= 0 ? `+${peakDelta}` : peakDelta}`,
+      `Tokens Summarized     ${String(bSumm).padEnd(11)} ${String(cSumm).padEnd(12)} ${summDelta >= 0 ? `+${summDelta}` : summDelta}`,
+      `Repair Cycles         ${String(bRepair).padEnd(11)} ${String(cRepair).padEnd(12)} ${repairDelta >= 0 ? `+${repairDelta}` : repairDelta}`,
+      `Wall Time (ms)        ${String(bWall).padEnd(11)} ${String(cWall).padEnd(12)} ${wallDelta >= 0 ? `+${wallDelta}` : wallDelta}`,
+    ].join('\n');
+
+    return {
+      baselineId: baseline.identity.runId,
+      candidateId: candidate.identity.runId,
+      dimensions: {
+        correctness: {
+          baselinePass,
+          candidatePass,
+          status: correctnessStatus,
+        },
+        modelCalls: {
+          baseline: bCalls,
+          candidate: cCalls,
+          delta: callsDelta,
+          percentChange: callsPct,
+        },
+        inputTokens: {
+          baseline: bTokens,
+          candidate: cTokens,
+          delta: tokensDelta,
+          percentChange: tokensPct,
+        },
+        peakContext: {
+          baseline: bPeak,
+          candidate: cPeak,
+          delta: peakDelta,
+          percentChange: peakPct,
+        },
+        tokensSummarized: {
+          baseline: bSumm,
+          candidate: cSumm,
+          delta: summDelta,
+        },
+        repairCycles: {
+          baseline: bRepair,
+          candidate: cRepair,
+          delta: repairDelta,
+        },
+        wallTimeMs: {
+          baseline: bWall,
+          candidate: cWall,
+          delta: wallDelta,
+          percentChange: wallPct,
+        },
+      },
+      verdict,
+      summary,
+      regressions,
+      improvements,
+    };
+  }
+
   // --- Private Helpers ---
 
   private checkPhysicalVerification(
@@ -322,8 +629,8 @@ export class EvaluationService {
   } {
     let totalModelCalls = 0;
     let modelLatencyMs = 0;
-    let inputTokens = record.usage?.input ?? 0;
-    let outputTokens = record.usage?.output ?? 0;
+    let inputTokens = record.usage?.input ?? (record.usage as any)?.inputTokens ?? 0;
+    let outputTokens = record.usage?.output ?? (record.usage as any)?.outputTokens ?? 0;
 
     const events = record.events ?? [];
     for (const event of events) {

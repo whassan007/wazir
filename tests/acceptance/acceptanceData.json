@@ -75,7 +75,8 @@
         10,
         11,
         12,
-        13
+        13,
+        50
       ],
       "prerequisiteGateId": "G4"
     },
@@ -207,6 +208,17 @@
         48
       ],
       "prerequisiteGateId": "G14"
+    },
+    {
+      "id": "G16",
+      "order": 16,
+      "name": "LongHorizonContext",
+      "title": "G16 Long Horizon Context & Revision",
+      "description": "Bounded sawtooth model-visible context over long autonomous executions, deterministic deduplication, superseded file elimination, immutable generations, authoritative state reinjection, and prompt-cache stable-prefix layout",
+      "testIds": [
+        49
+      ],
+      "prerequisiteGateId": "G15"
     }
   ],
   "foundationalSequence": [
@@ -1973,6 +1985,98 @@
         "approval-stall",
         "p1-regression"
       ]
+    },
+    "49": {
+      "id": 49,
+      "gateId": "G16",
+      "priority": "P0",
+      "title": "Long-Horizon Context Maintenance & Sawtooth Revision",
+      "purpose": "Verify bounded sawtooth model-visible context, exact deduplication, superseded file elimination, and immutable generations during long autonomous multi-turn executions.",
+      "prompt": "Execute a complex multi-phase task spanning 50+ turns, repeated file reads, and repair cycles. Verify model-visible context remains bounded around configured thresholds, raw execution history grows monotonically, and final revision passes verification.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "INSPECT -> IMPLEMENT(rev 1) -> TEST(fail) -> REPAIR(rev 2) -> COMPILE -> TEST(pass) -> VERIFY",
+      "verificationCriteria": [
+        "Durable execution history continues growing monotonically across all turns",
+        "Model-visible context does not grow linearly forever; exhibits bounded sawtooth compaction",
+        "Current task, acceptance criteria, and active errors survive context revisions",
+        "Superseded file versions and duplicate file reads are removed from model-visible context",
+        "Oversized tool outputs (>20k chars) are replaced with compact durable offload notices",
+        "Context snapshots are strictly immutable; generation N is never mutated while leased",
+        "Final workspace revision passes physical verification"
+      ],
+      "expectedArtifacts": [
+        "context-snapshot",
+        "evaluation-record"
+      ],
+      "expectedProvenance": [
+        "context.snapshot.created",
+        "context.revision.completed",
+        "tokens-deduplicated",
+        "tokens-superseded"
+      ],
+      "associatedSuites": [
+        "packages/core/tests/contextRevisionService.test.ts",
+        "packages/core/tests/promptLayoutPlanner.test.ts",
+        "packages/core/tests/contextStressAcceptance.test.ts",
+        "packages/evaluation/tests/evaluationComparison.test.ts"
+      ],
+      "tags": [
+        "context",
+        "long-horizon",
+        "revision",
+        "evaluation",
+        "p0-release-gate"
+      ]
+    },
+    "50": {
+      "id": 50,
+      "gateId": "G5",
+      "priority": "P0",
+      "title": "Recursive Subagent Execution & Branch Isolation Gate",
+      "purpose": "Verify execution checkpoint/fork/rollback primitives and true in-process dispatch_subagent execution: isolated contexts, clean prompt state, bounded parent observation, non-leaking branch mutations, and physical verification.",
+      "prompt": "Inspect a defect in a repository and implement a verified fix using subagents.\nParent delegates three subtasks in-process:\n- Child A: analyze implementation and root cause\n- Child B: analyze test coverage and missing regression tests\n- Child C: inspect callers and interfaces\nVerify child executions start with clean, isolated context without parent transcript copying.\nParent receives bounded structured SubagentResults, applies verified fix, and verifies final revision.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "PARENT -> [dispatch_subagent(A) || dispatch_subagent(B) || dispatch_subagent(C)] -> CHILD_RESULTS -> IMPLEMENT FIX -> COMPILE & TEST -> VERIFY",
+      "verificationCriteria": [
+        "Child executions are registered with parentExecutionId linking to parent",
+        "Child context is isolated with clean prompt state and does not inherit parent conversation history",
+        "Child execution cannot mutate parent workspace unless merged or explicitly applied",
+        "Parent receives one bounded SubagentResult per child execution",
+        "Resource budgets (turns, tokens, timeouts, recursion depth <= 1) are strictly enforced",
+        "Final code fix physically modifies source and passes VerificationEngine checks at final revision",
+        "Execution checkpoints preserve immutable file byte snapshots and revision-bound evidence"
+      ],
+      "expectedArtifacts": [
+        "subagent_analysis.md",
+        "fixed_defect.cpp",
+        "regression_test.cpp"
+      ],
+      "expectedProvenance": [
+        "execution.checkpoint.created",
+        "execution.forked",
+        "execution.rollback.completed",
+        "subagentExecutionId",
+        "parentExecutionId"
+      ],
+      "associatedSuites": [
+        "packages/core/tests/checkpointService.test.ts",
+        "packages/core/tests/executionBranching.test.ts",
+        "packages/agents/tests/subagentDispatch.test.ts"
+      ],
+      "tags": [
+        "subagent",
+        "checkpoint",
+        "fork",
+        "rollback",
+        "multi-agent",
+        "branch-isolation",
+        "p0-release-gate"
+      ]
     }
   }
 }
+

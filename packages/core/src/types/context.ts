@@ -202,6 +202,19 @@ export interface ContextSnapshot {
   /** Items explicitly omitted during context compilation. */
   omitted?: ContextOmission[];
 
+  /** Offloaded items replaced with bounded artifacts. */
+  offloadedItems?: Array<{ id: string; label: string; artifactId: string; tokensSaved: number }>;
+
+  /** Revision metadata tracking context lifecycle and compression effects. */
+  revisionMetadata?: {
+    revisionTrigger?: 'AUTO' | 'USER' | 'AGENT' | 'CONTROLLER' | 'OVERFLOW_RECOVERY';
+    tokensDeduplicated?: number;
+    tokensSuperseded?: number;
+    tokensSummarized?: number;
+    tokensOffloaded?: number;
+    layoutStrategy?: 'CACHE_STABLE_PREFIX' | 'RELEVANCE_FIRST' | 'HEAD_TAIL' | 'STRUCTURAL_EXTRACT';
+  };
+
   /** Event index range from ExecutionEngine this snapshot was compiled from. */
   sourceEventRange?: { from: number; to: number };
   /** Artifacts offloaded from model context during this snapshot's compilation. */
@@ -404,6 +417,15 @@ export interface ContextConfig {
   /** Maximum tokens for the compact preview when a tool result is offloaded. Default: 500. */
   toolResultPreviewTokens?: number;
   compaction?: ContextCompactionConfig;
+  revision?: {
+    enabled?: boolean;
+    autoThreshold?: number; // default ~0.75
+    targetUtilization?: number; // default ~0.50
+    preserveRecentTailRatio?: number; // default ~0.50
+  };
+  layout?: {
+    strategy?: 'CACHE_STABLE_PREFIX' | 'RELEVANCE_FIRST' | 'HEAD_TAIL' | 'STRUCTURAL_EXTRACT';
+  };
   reserve?: Partial<ContextReserve>;
   offload?: ContextOffloadConfig;
   instructions?: ContextInstructionsConfig;

@@ -14,6 +14,9 @@
  * This adapter normalizes all native protocols into a canonical Wazir action.
  */
 
+import { randomUUID } from 'node:crypto';
+import type { ActionEnvelope, ActionSource } from '@wazir/core';
+
 export interface CanonicalAction {
   action: 'tool' | 'plan' | 'done' | 'answer' | string;
   tool?: string;
@@ -661,3 +664,163 @@ export function validateToolActionSemantics(
 
   return { ok: true };
 }
+
+export function actionToEnvelope(
+  action: CanonicalAction,
+  options: {
+    runtimeId: string;
+    modelId: string;
+    source?: ActionSource;
+    id?: string;
+    rawReference?: string;
+    phase?: string;
+  },
+): ActionEnvelope {
+  const source = options.source ?? (
+    action.protocol === 'openai' || action.protocol === 'anthropic' || action.protocol === 'qwen' || action.protocol === 'gemma'
+      ? 'native_tool_call'
+      : (action.action === 'tool' ? 'structured_output' : 'legacy_text')
+  );
+
+  const name = action.action === 'tool' ? (action.tool ?? 'unknown') : action.action;
+  const args = action.action === 'tool'
+    ? (action.input ?? {})
+    : {
+        ...(action.content ? { content: action.content } : {}),
+        ...(action.summary ? { summary: action.summary } : {}),
+        ...(action.input ?? {}),
+      };
+
+  return {
+    id: options.id ?? `act-${randomUUID().slice(0, 8)}`,
+    name,
+    arguments: args,
+    source,
+    runtimeId: options.runtimeId,
+    modelId: options.modelId,
+    rawReference: options.rawReference,
+    phase: options.phase,
+    timestamp: new Date(),
+    metadata: {
+      actionKind: action.action,
+      protocol: action.protocol,
+    },
+  };
+}
+
+export function envelopeToCanonicalAction(envelope: ActionEnvelope): CanonicalAction {
+  if (envelope.name === 'plan') {
+    return {
+      action: 'plan',
+      content: typeof envelope.arguments.content === 'string' ? envelope.arguments.content : JSON.stringify(envelope.arguments),
+      protocol: envelope.source === 'native_tool_call' ? 'openai' : 'wazir',
+    };
+  }
+  if (envelope.name === 'done' || envelope.name === 'answer') {
+    return {
+      action: envelope.name,
+      summary: typeof envelope.arguments.summary === 'string'
+        ? envelope.arguments.summary
+        : (typeof envelope.arguments.content === 'string' ? envelope.arguments.content : JSON.stringify(envelope.arguments)),
+      protocol: envelope.source === 'native_tool_call' ? 'openai' : 'wazir',
+    };
+  }
+  return {
+    action: 'tool',
+    tool: envelope.name,
+    input: envelope.arguments,
+    protocol: envelope.source === 'native_tool_call' ? 'openai' : 'wazir',
+  };
+}
+
+export function normalizeToActionEnvelope(params: {
+  raw?: string;
+  nativeToolCall?: { id?: string; name: string; input: unknown };
+  runtimeId: string;
+  modelId: string;
+  toolNames: Set<string>;
+  phase?: string;
+}): { envelope: ActionEnvelope | null; error?: string } {
+  // 1. Native tool call takes precedence
+  if (params.nativeToolCall) {
+    const { id, name, input: rawInput } = params.nativeToolCall;
+    let input: Record<string, unknown> = {};
+    if (rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
+      input = rawInput as Record<string, unknown>;
+    } else if (typeof rawInput === 'string') {
+      try {
+        const parsed = JSON.parse(rawInput);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          input = parsed as Record<string, unknown>;
+        } else {
+          return {
+            envelope: null,
+            error: `Malformed native tool arguments: expected JSON object, received ${typeof parsed}`,
+          };
+        }
+      } catch (err) {
+        return {
+          envelope: null,
+          error: `Malformed native tool arguments: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    } else if (rawInput !== undefined && rawInput !== null) {
+      return {
+        envelope: null,
+        error: `Malformed native tool arguments: unexpected type ${typeof rawInput}`,
+      };
+    }
+
+    const normalizedArgs = normalizeToolArguments(name, input);
+    const semanticValidation = validateToolActionSemantics(name, normalizedArgs);
+    if (!semanticValidation.ok) {
+      return {
+        envelope: null,
+        error: semanticValidation.reason ?? 'Semantic validation failed',
+      };
+    }
+
+    const envelope: ActionEnvelope = {
+      id: id ?? `act-${randomUUID().slice(0, 8)}`,
+      name,
+      arguments: normalizedArgs,
+      source: 'native_tool_call',
+      runtimeId: params.runtimeId,
+      modelId: params.modelId,
+      rawReference: typeof params.raw === 'string' ? params.raw : JSON.stringify(params.nativeToolCall),
+      phase: params.phase,
+      timestamp: new Date(),
+    };
+    return { envelope };
+  }
+
+  // 2. Legacy / structured output text parsing
+  if (!params.raw) return { envelope: null };
+
+  const parsedAction = ModelProtocolAdapter.parse(params.raw, params.toolNames);
+  if (!parsedAction) {
+    return { envelope: null };
+  }
+
+  // Semantic validation if tool action
+  if (parsedAction.action === 'tool' && parsedAction.tool && parsedAction.input) {
+    const semanticValidation = validateToolActionSemantics(parsedAction.tool, parsedAction.input);
+    if (!semanticValidation.ok) {
+      return {
+        envelope: null,
+        error: semanticValidation.reason ?? 'Semantic validation failed',
+      };
+    }
+  }
+
+  const envelope = actionToEnvelope(parsedAction, {
+    runtimeId: params.runtimeId,
+    modelId: params.modelId,
+    rawReference: params.raw,
+    phase: params.phase,
+    source: 'legacy_text',
+  });
+
+  return { envelope };
+}
+

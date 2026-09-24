@@ -103,6 +103,10 @@ export interface AgentTurn {
   routeChange?: ModelRouteChange;
   /** Harness-counted run totals, set on terminal `'done'`/`'error'` turns. */
   runStats?: AgentRunStats;
+  /** Normalized canonical action envelope if a structured action was processed. */
+  envelope?: import('./action.js').ActionEnvelope;
+  /** Active tool surface compiled for this turn/phase. */
+  toolSurface?: import('./toolSurface.js').ToolSurface;
 }
 
 /**
@@ -219,10 +223,14 @@ export interface AgentRuntime {
       maxTokens?: number;
       temperature?: number;
       tools?: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
+      toolChoice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } };
+      responseFormat?: { type: 'text' | 'json_object' | 'json_schema'; json_schema?: Record<string, unknown> };
     },
   ): AsyncIterable<GenerationEvent>;
   executeTool(toolName: string, input: Record<string, unknown>): Promise<ToolResult>;
-  readonly tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+  readonly tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown>; descriptor?: any; permissions?: any[]; execute?: any }>;
+  readonly runtimeCapabilities?: Partial<import('@wazir/runtimes-interfaces').RuntimeCapabilities>;
+  getCapabilities?(): Partial<import('@wazir/runtimes-interfaces').RuntimeCapabilities>;
   /**
    * Best-effort abort of whichever `generate()` call is currently in flight.
    * Lets the agent enforce a per-turn wall-clock budget independent of the

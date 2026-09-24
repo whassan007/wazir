@@ -12,10 +12,10 @@ import {
 } from './acceptanceLibrary.js';
 
 describe('Wazir Acceptance Test Library', () => {
-  it('defines all 16 progressive release gates in strict order (G0 to G15)', () => {
-    expect(ACCEPTANCE_GATES).toHaveLength(16);
+  it('defines all 17 progressive release gates in strict order (G0 to G16)', () => {
+    expect(ACCEPTANCE_GATES).toHaveLength(17);
     const expectedIds: AcceptanceGateId[] = [
-      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15',
+      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16',
     ];
     expect(ACCEPTANCE_GATES.map((g) => g.id)).toEqual(expectedIds);
 
@@ -29,11 +29,11 @@ describe('Wazir Acceptance Test Library', () => {
     }
   });
 
-  it('contains all 48 unique acceptance tests', () => {
+  it('contains all 49 unique acceptance tests', () => {
     const keys = Object.keys(ACCEPTANCE_TESTS).map(Number);
-    expect(keys).toHaveLength(48);
+    expect(keys).toHaveLength(49);
 
-    for (let id = 1; id <= 48; id++) {
+    for (let id = 1; id <= 49; id++) {
       const test = ACCEPTANCE_TESTS[id];
       expect(test, `Test ${id} should exist`).toBeDefined();
       expect(test.id).toBe(id);

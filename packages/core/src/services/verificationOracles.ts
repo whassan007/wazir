@@ -163,8 +163,12 @@ export class AcceptanceOracle implements VerificationOracle {
   }
 }
 
+import { BrowserVerificationService } from './browserVerificationService.js';
+import type { BrowserVerificationSpec } from '../types/browserVerification.js';
+
 export class BrowserOracle implements VerificationOracle {
   readonly type: OracleType = 'BROWSER';
+  private readonly browserService = new BrowserVerificationService();
 
   async verify(params: { metadata?: Record<string, unknown> }): Promise<{
     exitCode: number;
@@ -172,6 +176,17 @@ export class BrowserOracle implements VerificationOracle {
     status: VerificationStatus;
     reasons: string[];
   }> {
+    const spec = params.metadata?.spec as BrowserVerificationSpec | undefined;
+    if (spec) {
+      const res = await this.browserService.verify(spec);
+      return {
+        exitCode: res.ok ? 0 : 1,
+        output: res.reasons.join('\n'),
+        status: res.ok ? 'PASS' : 'FAIL',
+        reasons: res.reasons,
+      };
+    }
+
     const assertions = (params.metadata?.assertions ?? []) as Array<{ ok: boolean; message: string }>;
     const failed = assertions.filter((a) => !a.ok);
     const ok = failed.length === 0;

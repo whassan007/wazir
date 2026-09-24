@@ -85,6 +85,11 @@ export interface ToolExecutionContext {
   networkAllowed?: boolean;
   /** Context compaction service for autonomous compact_memory tool requests. */
   compactor?: import('./context.js').AgentContextCompressor;
+  /** In-process subagent executor callback for dispatch_subagent. */
+  subagentExecutor?: (
+    input: Record<string, unknown>,
+    ctx: ToolExecutionContext,
+  ) => Promise<ToolResult>;
 }
 
 export interface Tool {

@@ -39,6 +39,30 @@ export interface CodeModeResult {
   };
 }
 
+export type CodeModeStreamingEventType =
+  | 'codemode.started'
+  | 'codemode.operation.started'
+  | 'codemode.operation.output'
+  | 'codemode.operation.completed'
+  | 'codemode.operation.failed'
+  | 'codemode.completed';
+
+export interface CodeModeStreamingEvent {
+  type: CodeModeStreamingEventType;
+  scriptId: string;
+  executionId?: string;
+  operationId?: string;
+  tool?: string;
+  input?: Record<string, unknown>;
+  outputChunk?: string;
+  result?: ToolResult;
+  error?: string;
+  durationMs?: number;
+  timestamp: Date;
+}
+
+export type CodeModeStreamListener = (event: CodeModeStreamingEvent) => void;
+
 export interface WazirCodeModeSdk {
   read(filePath: string): Promise<string>;
   write(filePath: string, content: string): Promise<ToolResult>;
@@ -56,4 +80,6 @@ export interface WazirCodeModeSdk {
   test(command?: string): Promise<ToolResult>;
   build(command?: string): Promise<ToolResult>;
   call(toolName: string, input: Record<string, unknown>): Promise<ToolResult>;
+  /** Dynamic MCP namespace proxy: wazir.mcp.<server>.<tool>(args) */
+  mcp: Record<string, Record<string, (input: Record<string, unknown>) => Promise<ToolResult>>>;
 }

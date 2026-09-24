@@ -366,6 +366,137 @@ export async function explainContextCommand(
   return { code: 0, output: lines.join('\n') };
 }
 
+/** Detailed inspection of model-visible context snapshot */
+export async function inspectContextCommand(
+  engine: RookEngine,
+  executionId: string,
+  options: { json?: boolean } = {},
+): Promise<{ code: number; output: string }> {
+  const snapshot = engine.compiler.getLatestSnapshot(executionId);
+  if (!snapshot) {
+    const msg = `No compiled context snapshot found for execution: ${executionId}`;
+    if (options.json) {
+      return { code: 1, output: JSON.stringify({ error: msg }) };
+    }
+    return { code: 1, output: color.yellow(msg) };
+  }
+
+  if (options.json) {
+    return { code: 0, output: JSON.stringify(snapshot, null, 2) };
+  }
+
+  const lines: string[] = [];
+  lines.push(color.bold(`Context Snapshot Inspection: ${snapshot.id}`));
+  lines.push(`  Execution: ${snapshot.executionId} | Generation: #${snapshot.generation}`);
+  lines.push(`  Model: ${snapshot.modelId} | Effective Window: ${snapshot.effectiveContextWindow} tokens`);
+  lines.push(`  Estimated Tokens: ${snapshot.estimatedTokens}`);
+  if (snapshot.revisionMetadata) {
+    lines.push(`  Revision Trigger: ${snapshot.revisionMetadata.revisionTrigger ?? 'INITIAL'}`);
+    lines.push(`  Layout Strategy: ${snapshot.revisionMetadata.layoutStrategy ?? 'DEFAULT'}`);
+    lines.push(`  Tokens Deduped: ${snapshot.revisionMetadata.tokensDeduplicated ?? 0} | Superseded: ${snapshot.revisionMetadata.tokensSuperseded ?? 0} | Summarized: ${snapshot.revisionMetadata.tokensSummarized ?? 0}`);
+  }
+  lines.push('');
+  lines.push(color.bold('PARTITION BREAKDOWN:'));
+  lines.push(`  Pinned: ${snapshot.pinned.length} items`);
+  lines.push(`  Active: ${snapshot.active.length} items`);
+  lines.push(`  Relevant: ${(snapshot.relevant ?? []).length} items`);
+  lines.push(`  Compressed: ${(snapshot.compressed ?? []).length} items`);
+  lines.push(`  Tail: ${snapshot.tail.length} items`);
+  if (snapshot.stablePrefix) {
+    lines.push(`  Stable Prefix (KV Cache): ${snapshot.stablePrefix.length} items`);
+  }
+  if (snapshot.offloadedItems && snapshot.offloadedItems.length > 0) {
+    lines.push(`  Offloaded Artifacts: ${snapshot.offloadedItems.length} items`);
+    for (const off of snapshot.offloadedItems) {
+      lines.push(`    - ${off.label} -> ${off.artifactId} (saved ~${off.tokensSaved} tokens)`);
+    }
+  }
+
+  return { code: 0, output: lines.join('\n') };
+}
+
+/** Show quantitative EvaluationRecord for an execution */
+export async function showEvaluationCommand(
+  engine: RookEngine,
+  executionId: string,
+  options: { json?: boolean } = {},
+): Promise<{ code: number; output: string }> {
+  try {
+    const record = engine.executions.require(executionId);
+    const { EvaluationService } = await import('@wazir/evaluation');
+    const evalService = new EvaluationService();
+    const evalRecord = evalService.buildEvaluationRecord(record);
+
+    if (options.json) {
+      return { code: 0, output: JSON.stringify(evalRecord, null, 2) };
+    }
+
+    const lines: string[] = [];
+    lines.push(color.bold(`=== Evaluation Record: ${evalRecord.identity.runId} ===`));
+    lines.push(`  Execution: ${executionId} | Status: ${evalRecord.correctness.passed ? color.green('PASSED') : color.red('FAILED')}`);
+    lines.push(`  Model: ${evalRecord.identity.modelId} | Runtime: ${evalRecord.identity.runtimeId}`);
+    lines.push('');
+    lines.push(color.cyan('MODEL METRICS:'));
+    lines.push(`  Calls: ${evalRecord.model.totalCalls.value} (${evalRecord.model.totalCalls.kind})`);
+    lines.push(`  Input Tokens: ${evalRecord.model.inputTokens.value.toLocaleString()} (${evalRecord.model.inputTokens.kind})`);
+    lines.push(`  Output Tokens: ${evalRecord.model.outputTokens.value.toLocaleString()} (${evalRecord.model.outputTokens.kind})`);
+    lines.push('');
+    lines.push(color.cyan('CONTEXT METRICS:'));
+    lines.push(`  Peak Context: ${evalRecord.context.peakContextTokens.value.toLocaleString()} tokens`);
+    lines.push(`  Average Context: ${evalRecord.context.averageContextTokens.value.toLocaleString()} tokens`);
+    lines.push(`  Snapshots: ${evalRecord.context.snapshotCount.value} | Revisions: ${evalRecord.context.revisionCount.value}`);
+    lines.push(`  Reclaimed (Dedup): ${evalRecord.context.tokensRemovedDeduplication.value} tokens`);
+    lines.push(`  Reclaimed (Superseded): ${evalRecord.context.tokensRemovedSuperseded.value} tokens`);
+    lines.push(`  Tokens Summarized: ${evalRecord.context.tokensSummarized.value} tokens`);
+    lines.push(`  Tokens Offloaded: ${evalRecord.context.tokensOffloaded.value} tokens`);
+    lines.push(`  Cache Read: ${evalRecord.context.cacheReadTokens.value} (${evalRecord.context.cacheReadTokens.kind}${evalRecord.context.cacheReadTokens.note ? ` - ${evalRecord.context.cacheReadTokens.note}` : ''})`);
+    lines.push(`  Cache Write: ${evalRecord.context.cacheWriteTokens.value} (${evalRecord.context.cacheWriteTokens.kind}${evalRecord.context.cacheWriteTokens.note ? ` - ${evalRecord.context.cacheWriteTokens.note}` : ''})`);
+    lines.push('');
+    lines.push(color.cyan('PERFORMANCE & TOOLS:'));
+    lines.push(`  Wall Time: ${(evalRecord.performance.wallTimeMs.value / 1000).toFixed(1)}s | Repair Cycles: ${evalRecord.agent.repairCycles.value}`);
+    lines.push(`  Tool Calls: ${evalRecord.tools.totalCalls.value} | Code Mode Calls: ${evalRecord.tools.codeModeCalls.value}`);
+
+    return { code: 0, output: lines.join('\n') };
+  } catch (err) {
+    const msg = `Failed to show evaluation for ${executionId}: ${err instanceof Error ? err.message : String(err)}`;
+    if (options.json) {
+      return { code: 1, output: JSON.stringify({ error: msg }) };
+    }
+    return { code: 1, output: color.red(msg) };
+  }
+}
+
+/** Multi-dimensional comparison of baseline vs candidate execution */
+export async function compareEvaluationCommand(
+  engine: RookEngine,
+  baselineId: string,
+  candidateId: string,
+  options: { json?: boolean } = {},
+): Promise<{ code: number; output: string }> {
+  try {
+    const baseRecord = engine.executions.require(baselineId);
+    const candRecord = engine.executions.require(candidateId);
+    const { EvaluationService } = await import('@wazir/evaluation');
+    const evalService = new EvaluationService();
+
+    const baseEval = evalService.buildEvaluationRecord(baseRecord);
+    const candEval = evalService.buildEvaluationRecord(candRecord);
+    const comparison = evalService.compareDimensions(baseEval, candEval);
+
+    if (options.json) {
+      return { code: 0, output: JSON.stringify(comparison, null, 2) };
+    }
+
+    return { code: 0, output: comparison.summary };
+  } catch (err) {
+    const msg = `Failed to compare evaluations ${baselineId} vs ${candidateId}: ${err instanceof Error ? err.message : String(err)}`;
+    if (options.json) {
+      return { code: 1, output: JSON.stringify({ error: msg }) };
+    }
+    return { code: 1, output: color.red(msg) };
+  }
+}
+
 export function listTools(engine: RookEngine): string {
   const tools = engine.tools.list();
   const rows = tools.map((t) => [

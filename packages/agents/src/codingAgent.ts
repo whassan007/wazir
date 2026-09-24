@@ -15,12 +15,27 @@ import type {
   AgentRunStats,
   TerminationReason,
 } from '@wazir/core';
-import { ObservationCompactor, ContextCompiler, keepEnds, WEB_TRUST_INSTRUCTION, computeUsableBudget, computeUtilization, type GroundedResult, type ToolResult } from '@wazir/core';
+import {
+  ObservationCompactor,
+  ContextCompiler,
+  keepEnds,
+  WEB_TRUST_INSTRUCTION,
+  computeUsableBudget,
+  computeUtilization,
+  ToolSurfaceCompiler,
+  type GroundedResult,
+  type ToolResult,
+  type Tool,
+  type ToolSurface,
+  type ActionEnvelope,
+} from '@wazir/core';
 import {
   ModelProtocolAdapter,
   ACTION_START_PATTERN,
   normalizeToolArguments,
   validateToolActionSemantics,
+  normalizeToActionEnvelope,
+  envelopeToCanonicalAction,
 } from './protocolAdapters.js';
 
 export interface CodingAgentOptions {
@@ -593,6 +608,32 @@ export class CodingAgent implements AgentAdapter {
     const effectiveTools = subagentDepth >= 1
       ? runtime.tools.filter((t) => t.name !== 'dispatch_subagent')
       : runtime.tools;
+
+    const availableTools: Tool[] = effectiveTools.map((t) => ({
+      descriptor: (t as any).descriptor ?? {
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+        permissions: (t as any).permissions ?? [],
+        riskLevel: 'low',
+        environment: 'local',
+      },
+      execute: async (input, ctx) => runtime.executeTool(t.name, input),
+    }));
+
+    const toolSurfaceCompiler = new ToolSurfaceCompiler();
+    let currentPhase: string = 'plan';
+    const compileSurface = (phase: string): ToolSurface => {
+      currentPhase = phase;
+      return toolSurfaceCompiler.compile(availableTools, {
+        phase,
+        runtimeCapabilities: runtime.getCapabilities?.() ?? runtime.runtimeCapabilities,
+        projectRoot: request.projectRoot,
+        taskDescription: request.taskDescription,
+      });
+    };
+    let currentToolSurface = compileSurface('plan');
+
     const messages: ChatMessage[] = [
       { role: 'system', content: buildSystemPrompt(request.projectRoot, effectiveTools, this.systemPromptExtra) },
       {
@@ -790,11 +831,7 @@ export class CodingAgent implements AgentAdapter {
           messages: messages.map((m) => ({ ...m })),
           maxTokens: this.maxTokensPerTurn,
           temperature: this.temperature,
-          tools: effectiveTools.map((t) => ({
-            name: t.name,
-            description: t.description,
-            parameters: t.inputSchema as Record<string, unknown>,
-          })),
+          tools: currentToolSurface.serializedSchemas,
         })) {
           if (event.type === 'token' && event.content) {
             content += event.content;
@@ -1076,7 +1113,16 @@ export class CodingAgent implements AgentAdapter {
     };
 
     // ==================== PLAN ====================
-    yield { kind: 'phase', phase: 'plan' as AgentPhase };
+    currentToolSurface = compileSurface('plan');
+    yield { kind: 'phase', phase: 'plan' as AgentPhase, toolSurface: currentToolSurface };
+    yield {
+      kind: 'message',
+      content: `runtime.protocol.selected: ${currentToolSurface.selectedProtocol} (${currentToolSurface.protocolSelectionReason})`,
+    };
+    yield {
+      kind: 'message',
+      content: `tool_surface.compiled: phase=${currentToolSurface.phase} tools=${currentToolSurface.totalToolsExposed}/${currentToolSurface.totalToolsAvailable} tokens=${currentToolSurface.totalSchemaTokens} (${Math.round(currentToolSurface.reductionRatio * 100)}% reduction)`,
+    };
     let planEstablished = false;
     let planExplorationCount = 0;
     let planIterations = 0;
@@ -1101,9 +1147,39 @@ export class CodingAgent implements AgentAdapter {
       }
       turnsUsed += 1;
       actionAttempts += 1;
-      const action = toolCall
-        ? normalizeAction({ action: 'tool', tool: toolCall.name, input: toolCall.input }, toolNames)
-        : readAction(raw);
+
+      const activeToolNames = new Set(currentToolSurface.tools.map((t) => t.descriptor.name));
+      const { envelope, error: normalizationError } = normalizeToActionEnvelope({
+        raw,
+        nativeToolCall: toolCall ? { id: undefined, name: toolCall.name, input: toolCall.input } : undefined,
+        runtimeId: (runtime as any).id ?? 'default-runtime',
+        modelId: currentModelId,
+        toolNames: activeToolNames,
+        phase: currentPhase,
+      });
+
+      if (normalizationError) {
+        validationErrors += 1;
+        malformedActions += 1;
+        yield {
+          kind: 'message',
+          content: `action.validation_failed: ${normalizationError}`,
+          raw: toolCall ? JSON.stringify(toolCall) : raw,
+        };
+        rejectAttempt(`Invalid tool action: ${normalizationError}`);
+        continue;
+      }
+
+      if (currentToolSurface.selectedProtocol === 'native_tool_call' && envelope?.source === 'legacy_text') {
+        yield {
+          kind: 'message',
+          content: 'runtime.protocol.fallback: Native tool calling expected, but model emitted legacy text action. Normalizing through compatibility fallback.',
+        };
+      }
+
+      const action = envelope
+        ? (envelopeToCanonicalAction(envelope) as ParsedAction)
+        : (toolCall ? normalizeAction({ action: 'tool', tool: toolCall.name, input: toolCall.input }, toolNames) : readAction(raw));
 
       if (!action) {
         correctionCount += 1;
@@ -1167,7 +1243,7 @@ export class CodingAgent implements AgentAdapter {
         validActions += 1;
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
-        yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result, raw };
+        yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result, raw, envelope: envelope ?? undefined, toolSurface: currentToolSurface };
         if (CHECK_TOOLS.has(action.tool)) {
           checkOutputs.push({ name: action.tool, ok: result.ok, output: result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n') });
         }
@@ -1232,7 +1308,12 @@ export class CodingAgent implements AgentAdapter {
     }
 
     // ==================== WORK (inspect → implement → test → debug → repair) ====================
-    yield { kind: 'phase', phase: 'implement' as AgentPhase };
+    currentToolSurface = compileSurface('implement');
+    yield { kind: 'phase', phase: 'implement' as AgentPhase, toolSurface: currentToolSurface };
+    yield {
+      kind: 'message',
+      content: `tool_surface.compiled: phase=${currentToolSurface.phase} tools=${currentToolSurface.totalToolsExposed}/${currentToolSurface.totalToolsAvailable} tokens=${currentToolSurface.totalSchemaTokens} (${Math.round(currentToolSurface.reductionRatio * 100)}% reduction)`,
+    };
     while (turnsUsed < maxTurns && !modelSummary) {
       if (request.isCancelled?.()) return;
       const beforeTurn = checkStop('before_turn');
@@ -1259,9 +1340,39 @@ export class CodingAgent implements AgentAdapter {
       }
       turnsUsed += 1;
       actionAttempts += 1;
-      const action = toolCall
-        ? normalizeAction({ action: 'tool', tool: toolCall.name, input: toolCall.input }, toolNames)
-        : readAction(raw);
+
+      const activeToolNames = new Set(currentToolSurface.tools.map((t) => t.descriptor.name));
+      const { envelope, error: normalizationError } = normalizeToActionEnvelope({
+        raw,
+        nativeToolCall: toolCall ? { id: undefined, name: toolCall.name, input: toolCall.input } : undefined,
+        runtimeId: (runtime as any).id ?? 'default-runtime',
+        modelId: currentModelId,
+        toolNames: activeToolNames,
+        phase: currentPhase,
+      });
+
+      if (normalizationError) {
+        validationErrors += 1;
+        malformedActions += 1;
+        yield {
+          kind: 'message',
+          content: `action.validation_failed: ${normalizationError}`,
+          raw: toolCall ? JSON.stringify(toolCall) : raw,
+        };
+        rejectAttempt(`Invalid tool action: ${normalizationError}`);
+        continue;
+      }
+
+      if (currentToolSurface.selectedProtocol === 'native_tool_call' && envelope?.source === 'legacy_text') {
+        yield {
+          kind: 'message',
+          content: 'runtime.protocol.fallback: Native tool calling expected, but model emitted legacy text action. Normalizing through compatibility fallback.',
+        };
+      }
+
+      const action = envelope
+        ? (envelopeToCanonicalAction(envelope) as ParsedAction)
+        : (toolCall ? normalizeAction({ action: 'tool', tool: toolCall.name, input: toolCall.input }, toolNames) : readAction(raw));
 
       if (!action) {
         correctionCount += 1;
@@ -1345,7 +1456,7 @@ export class CodingAgent implements AgentAdapter {
         consecutiveBlockedRepeats = 0;
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
-        yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result, raw };
+        yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result, raw, envelope: envelope ?? undefined, toolSurface: currentToolSurface };
         if (CHECK_TOOLS.has(action.tool)) {
           checkOutputs.push({ name: action.tool, ok: result.ok, output: result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n') });
         }
@@ -1383,7 +1494,12 @@ export class CodingAgent implements AgentAdapter {
                 filesInspected: 0,
                 consecutiveNoProgress: 0,
               };
-              yield { kind: 'phase', phase: 'repair' as AgentPhase };
+              currentToolSurface = compileSurface('repair');
+              yield { kind: 'phase', phase: 'repair' as AgentPhase, toolSurface: currentToolSurface };
+              yield {
+                kind: 'message',
+                content: `tool_surface.compiled: phase=${currentToolSurface.phase} tools=${currentToolSurface.totalToolsExposed}/${currentToolSurface.totalToolsAvailable} tokens=${currentToolSurface.totalSchemaTokens}`,
+              };
             } else {
               repairState.cycle++;
               repairState.diagnosticsAfter = outputString;

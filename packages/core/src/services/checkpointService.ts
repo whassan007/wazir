@@ -67,6 +67,14 @@ export class CheckpointService {
     const checksPass = currentChecks.length > 0 && currentChecks.every((c) => c.ok);
 
     const checkpointId = `chk-${randomUUID()}`;
+    const evidenceReferences = currentEvidence.map((e) => ({
+      id: e.id,
+      type: e.type ?? e.oracle ?? 'TEST',
+      revision: e.revision ?? e.workspaceRevision ?? 0,
+      status: e.status,
+    }));
+    const provenanceCursor = record.events ? record.events.length : 0;
+
     const checkpoint: ExecutionCheckpoint = {
       id: checkpointId,
       executionId,
@@ -90,6 +98,8 @@ export class CheckpointService {
         evidenceIds,
         checksPass,
       },
+      provenanceCursor,
+      evidenceReferences,
       description: options.description,
       metadata: options.metadata,
     };
@@ -100,6 +110,7 @@ export class CheckpointService {
     (this.executionEngine as any).pushEvent?.(record, 'execution.checkpoint.created', {
       checkpointId,
       workspaceRevision: currentRevision,
+      provenanceCursor,
       filesCount: Object.keys(filesSnapshot).length,
       description: options.description,
     });
@@ -278,12 +289,39 @@ export class CheckpointService {
       );
     }
 
+    // Detect irreversible side effects that occurred after the checkpoint
+    const irreversibleSideEffects: import('../types/index.js').IrreversibleSideEffectReport[] = [];
+    const checkpointTimestamp = checkpoint.createdAt.getTime();
+    for (const toolCall of record.toolCalls ?? []) {
+      const toolTime = toolCall.at instanceof Date ? toolCall.at.getTime() : new Date(toolCall.at).getTime();
+      if (toolTime >= checkpointTimestamp) {
+        const isIrreversible =
+          toolCall.tool === 'shell' ||
+          toolCall.tool === 'terminal_send' ||
+          toolCall.tool === 'web_search' ||
+          toolCall.tool === 'web_fetch' ||
+          (toolCall.provenance?.sideEffectClass === 'NON_IDEMPOTENT_WRITE');
+
+        if (isIrreversible) {
+          irreversibleSideEffects.push({
+            tool: toolCall.tool,
+            callId: toolCall.callId ?? toolCall.id,
+            sideEffectClass: (toolCall.provenance?.sideEffectClass as string) ?? 'NON_IDEMPOTENT_SIDE_EFFECT',
+            description: `Tool '${toolCall.tool}' executed with potentially irreversible external side effect`,
+            at: toolCall.at instanceof Date ? toolCall.at : new Date(toolCall.at),
+          });
+        }
+      }
+    }
+
     // Emit rollback event
     (this.executionEngine as any).pushEvent?.(record, 'execution.rollback.completed', {
       executionId,
       checkpointId,
       restoredRevision: checkpoint.workspaceRevision,
       filesRestored,
+      irreversibleSideEffectsCount: irreversibleSideEffects.length,
+      irreversibleSideEffects,
     });
 
     return {
@@ -291,6 +329,7 @@ export class CheckpointService {
       checkpointId,
       restoredRevision: checkpoint.workspaceRevision,
       filesRestored,
+      irreversibleSideEffects: irreversibleSideEffects.length > 0 ? irreversibleSideEffects : undefined,
       success: true,
     };
   }

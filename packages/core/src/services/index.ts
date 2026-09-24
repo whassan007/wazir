@@ -21,6 +21,10 @@ export { ObservationCompactor } from './observationCompactor.js';
 export type { CompactedObservation, ObservationCompactorOptions, ObservationKind } from './observationCompactor.js';
 export { ContextCompactionService, STRUCTURED_SUMMARY_SCHEMA } from './contextCompactionService.js';
 export type { ContextCompactionServiceOptions, SummarizerFn } from './contextCompactionService.js';
+export { ContextRevisionService } from './contextRevisionService.js';
+export type { ContextRevisionConfig, RevisionResult } from './contextRevisionService.js';
+export { PromptLayoutPlanner } from './promptLayoutPlanner.js';
+export type { PlannedPromptLayout, PromptItemStability, PromptLayoutStrategy } from './promptLayoutPlanner.js';
 export { ModelReliabilityTracker, classifyTerminationForReliability } from './modelReliability.js';
 export { measureModelPerformance } from './modelPerformance.js';
 export { summarizeExecution } from './executionSummary.js';
@@ -100,3 +104,37 @@ export { CheckpointService } from './checkpointService.js';
 export type { CheckpointServiceOptions } from './checkpointService.js';
 export { ArtifactIntelligenceService } from './artifactIntelligenceService.js';
 export type { ArtifactIntelligenceOptions } from './artifactIntelligenceService.js';
+export { BrowserVerificationService } from './browserVerificationService.js';
+export { BranchSearchService } from './branchSearchService.js';
+export type { BranchSearchServiceOptions } from './branchSearchService.js';
+export { GovernanceService } from './governanceService.js';
+export type { GovernanceServiceOptions } from './governanceService.js';
+export {
+  ToolSurfaceCompiler,
+  optimizeToolSchema,
+  estimateSchemaTokens,
+  classifyToolSource,
+  selectProtocol,
+  normalizeMCPToolDescriptor,
+  MUTATION_TOOLS,
+  VERIFICATION_TOOLS,
+  CODE_INTELLIGENCE_TOOLS,
+  PLAN_ALLOWED_TOOLS,
+} from './toolSurfaceCompiler.js';
+export type { ToolSurfaceCompilerOptions } from './toolSurfaceCompiler.js';
+export { EditorProtocolService } from './editorProtocolService.js';
+export type { EditorProtocolServiceOptions } from './editorProtocolService.js';
+export { SemanticIndexService } from './semanticIndexService.js';
+export type { SemanticIndexOptions } from './semanticIndexService.js';
+export {
+  DeterministicLocalEmbeddingProvider,
+  OllamaEmbeddingProvider,
+  LMStudioEmbeddingProvider,
+} from './embeddingProvider.js';
+export {
+  ChangeImpactAnalyzer,
+  VerificationPlanner,
+} from './verificationPlanning.js';
+export type { ChangeImpactAnalyzerOptions } from './verificationPlanning.js';
+export { TelemetryCollector } from './telemetryService.js';
+

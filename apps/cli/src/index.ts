@@ -544,7 +544,57 @@ contextCmd
     process.exit(result.code);
   });
 
+contextCmd
+  .command('inspect')
+  .argument('<executionId>', 'Execution ID to inspect context snapshot for')
+  .option('--json', 'Output in JSON format')
+  .description('Inspect detailed compiled context snapshot and revision metadata')
+  .action(async (executionId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const { inspectContextCommand } = await import('./commands.js');
+    const result = await inspectContextCommand(engine, executionId, options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
 program.addCommand(contextCmd);
+
+// evaluation command
+const evalCmd = new Command()
+  .name('evaluation')
+  .description('Quantitative evaluation metrics and multi-dimensional comparisons');
+
+evalCmd
+  .command('show')
+  .argument('<executionId>', 'Execution ID to show evaluation record for')
+  .option('--json', 'Output in JSON format')
+  .description('Show quantitative EvaluationRecord for an execution')
+  .action(async (executionId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const { showEvaluationCommand } = await import('./commands.js');
+    const result = await showEvaluationCommand(engine, executionId, options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+evalCmd
+  .command('compare')
+  .argument('<baselineId>', 'Baseline execution ID')
+  .argument('<candidateId>', 'Candidate execution ID')
+  .option('--json', 'Output in JSON format')
+  .description('Compare baseline vs candidate execution across all evaluation dimensions')
+  .action(async (baselineId, candidateId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const { compareEvaluationCommand } = await import('./commands.js');
+    const result = await compareEvaluationCommand(engine, baselineId, candidateId, options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+program.addCommand(evalCmd);
 
 // benchmark command
 const benchCmd = new Command()

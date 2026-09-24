@@ -8,6 +8,7 @@ import type {
   BenchmarkRunResult,
   BenchmarkSuiteResult,
   ComparativeBenchmarkResult,
+  ComparativeBenchmarkSuiteResult,
   BenchmarkExecutionContext,
 } from '@wazir/core';
 import { EvaluationService } from './evaluationService.js';
@@ -277,6 +278,137 @@ export class BenchmarkService {
       baseline: baselineResult,
       candidate: candidateResult,
       comparison,
+    };
+  }
+
+  /**
+   * Runs an arbitrary collection of benchmark tasks under a runner, computing
+   * aggregate metrics and returning a BenchmarkSuiteResult.
+   */
+  public async runBenchmarkSuite(
+    tasks: BenchmarkTask[],
+    runner: BenchmarkRunner,
+    options?: { suiteName?: string },
+  ): Promise<BenchmarkSuiteResult> {
+    const results: BenchmarkRunResult[] = [];
+
+    for (const task of tasks) {
+      const res = await this.runTask(task.id, runner);
+      results.push(res);
+    }
+
+    const passedTasks = results.filter((r) => r.scoreReport.passed).length;
+    const failedTasks = results.length - passedTasks;
+
+    let totalWallTimeMs = 0;
+    let totalModelCalls = 0;
+    let totalToolCalls = 0;
+    let totalTokens = 0;
+    let totalCostUsd = 0;
+    let totalRepairCycles = 0;
+
+    for (const r of results) {
+      const m = r.scoreReport.metrics;
+      totalWallTimeMs += m.totalWallTimeMs;
+      totalModelCalls += m.totalModelCalls;
+      totalToolCalls += m.totalToolCalls;
+      totalTokens += m.inputTokens + m.outputTokens;
+      totalCostUsd += m.costEstimateUsd;
+      totalRepairCycles += m.repairCycles;
+    }
+
+    const aggregateMetrics = {
+      totalWallTimeMs,
+      totalModelCalls,
+      totalToolCalls,
+      totalTokens,
+      totalCostUsd: Number(totalCostUsd.toFixed(6)),
+      averageRepairCycles: tasks.length > 0 ? totalRepairCycles / tasks.length : 0,
+    };
+
+    const suiteLabel = options?.suiteName ?? 'Custom Suite';
+    const summary = [
+      `=== Benchmark Suite: ${suiteLabel} ===`,
+      `Runner: ${runner.name} (${runner.id})`,
+      `Tasks: ${passedTasks}/${results.length} passed (${failedTasks} failed)`,
+      `Total Tokens: ${totalTokens} | Total Cost: $${totalCostUsd.toFixed(4)}`,
+      `Total Wall Time: ${totalWallTimeMs}ms | Avg Repair Cycles: ${aggregateMetrics.averageRepairCycles.toFixed(2)}`,
+    ].join('\n');
+
+    return {
+      runnerId: runner.id,
+      totalTasks: results.length,
+      passedTasks,
+      failedTasks,
+      results,
+      aggregateMetrics,
+      summary,
+    };
+  }
+
+  /**
+   * Compares two benchmark suite results, detecting regressions and improvements.
+   */
+  public compareSuites(
+    baseline: BenchmarkSuiteResult,
+    candidate: BenchmarkSuiteResult,
+  ): ComparativeBenchmarkSuiteResult {
+    const baselinePassRate = baseline.totalTasks > 0 ? baseline.passedTasks / baseline.totalTasks : 0;
+    const candidatePassRate = candidate.totalTasks > 0 ? candidate.passedTasks / candidate.totalTasks : 0;
+    const passRateDelta = candidatePassRate - baselinePassRate;
+
+    const tokenUsageDelta = candidate.aggregateMetrics.totalTokens - baseline.aggregateMetrics.totalTokens;
+    const costDelta = candidate.aggregateMetrics.totalCostUsd - baseline.aggregateMetrics.totalCostUsd;
+    const durationDelta = candidate.aggregateMetrics.totalWallTimeMs - baseline.aggregateMetrics.totalWallTimeMs;
+
+    const regressedTasks: string[] = [];
+    const improvedTasks: string[] = [];
+
+    const baselineMap = new Map(baseline.results.map((r) => [r.taskId, r.scoreReport.passed]));
+    for (const candRes of candidate.results) {
+      const basePassed = baselineMap.get(candRes.taskId);
+      if (basePassed === true && !candRes.scoreReport.passed) {
+        regressedTasks.push(candRes.taskId);
+      } else if (basePassed === false && candRes.scoreReport.passed) {
+        improvedTasks.push(candRes.taskId);
+      }
+    }
+
+    const regressionDetected = regressedTasks.length > 0 || passRateDelta < 0;
+    const improvementDetected = improvedTasks.length > 0 || passRateDelta > 0;
+
+    let preferredCandidate: 'candidate' | 'baseline' | 'tie' = 'tie';
+    if (regressionDetected) {
+      preferredCandidate = 'baseline';
+    } else if (improvementDetected || costDelta < 0 || tokenUsageDelta < 0) {
+      preferredCandidate = 'candidate';
+    }
+
+    const summary = [
+      `Suite Comparison: ${candidate.runnerId} vs ${baseline.runnerId}`,
+      `Pass Rate: ${(baselinePassRate * 100).toFixed(1)}% -> ${(candidatePassRate * 100).toFixed(1)}% (delta: ${(passRateDelta * 100).toFixed(1)}%)`,
+      `Token Delta: ${tokenUsageDelta} | Cost Delta: $${costDelta.toFixed(4)} | Time Delta: ${durationDelta}ms`,
+      `Regressions: ${regressedTasks.length} | Improvements: ${improvedTasks.length}`,
+      `Verdict: ${preferredCandidate.toUpperCase()}`,
+    ].join('\n');
+
+    return {
+      baselineRunnerId: baseline.runnerId,
+      candidateRunnerId: candidate.runnerId,
+      baselineTasks: baseline.totalTasks,
+      candidateTasks: candidate.totalTasks,
+      baselinePassRate,
+      candidatePassRate,
+      passRateDelta,
+      tokenUsageDelta,
+      costDelta,
+      durationDelta,
+      regressedTasks,
+      improvedTasks,
+      regressionDetected,
+      improvementDetected,
+      preferredCandidate,
+      summary,
     };
   }
 

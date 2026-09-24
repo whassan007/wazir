@@ -39,8 +39,11 @@ export const dispatchSubagentTool: Tool = {
     environment: 'local',
     provenance: { source: 'subagent' },
   },
-  async execute(): Promise<ToolResult> {
-    throw new Error('dispatch_subagent must be executed via the runtime harness, not directly');
+  async execute(input: Record<string, unknown>, ctx?: import('@wazir/core').ToolExecutionContext): Promise<ToolResult> {
+    if (ctx?.subagentExecutor) {
+      return ctx.subagentExecutor(input, ctx);
+    }
+    throw new Error('dispatch_subagent must be executed via the runtime harness or an attached subagentExecutor');
   },
 };
 

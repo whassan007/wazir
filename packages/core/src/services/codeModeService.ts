@@ -5,6 +5,8 @@ import type {
   CodeModeResult,
   CodeModeSubCallRecord,
   WazirCodeModeSdk,
+  CodeModeStreamListener,
+  CodeModeStreamingEvent,
 } from '../types/codeMode.js';
 import type { ToolExecutionContext, ToolResult } from '../types/tool.js';
 
@@ -17,14 +19,17 @@ export type CodeModeToolExecutor = (
 export interface CodeModeServiceOptions {
   toolExecutor: CodeModeToolExecutor;
   limits?: CodeModeLimits;
+  onStream?: CodeModeStreamListener;
 }
 
 export class CodeModeService {
   private readonly toolExecutor: CodeModeToolExecutor;
   private readonly defaultLimits: Required<CodeModeLimits>;
+  private readonly onStream?: CodeModeStreamListener;
 
   constructor(options: CodeModeServiceOptions) {
     this.toolExecutor = options.toolExecutor;
+    this.onStream = options.onStream;
     this.defaultLimits = {
       maxCalls: options.limits?.maxCalls ?? 50,
       timeoutMs: options.limits?.timeoutMs ?? 30_000,
@@ -50,6 +55,20 @@ export class CodeModeService {
     };
 
     const startedAt = Date.now();
+    const scriptId = `cms-${crypto.randomBytes(4).toString('hex')}`;
+    const emitStream = (event: Omit<CodeModeStreamingEvent, 'timestamp' | 'scriptId'>) => {
+      const fullEvent: CodeModeStreamingEvent = {
+        ...event,
+        scriptId,
+        executionId: context.executionId,
+        timestamp: new Date(),
+      };
+      (context as { onStream?: CodeModeStreamListener }).onStream?.(fullEvent);
+      this.onStream?.(fullEvent);
+    };
+
+    emitStream({ type: 'codemode.started' });
+
     const subCalls: CodeModeSubCallRecord[] = [];
     let callCounter = 0;
     let activeInFlight = 0;
@@ -103,6 +122,14 @@ export class CodeModeService {
       await acquireSlot();
       const callStarted = Date.now();
       const callId = `cm-${crypto.randomBytes(4).toString('hex')}`;
+
+      emitStream({
+        type: 'codemode.operation.started',
+        operationId: callId,
+        tool: toolName,
+        input,
+      });
+
       try {
         const result = await this.toolExecutor(toolName, input, {
           ...context,
@@ -112,12 +139,23 @@ export class CodeModeService {
         } as ToolExecutionContext);
 
         const duration = Date.now() - callStarted;
+        const boundedOutput = result.output?.slice(0, 10_000);
+
+        if (boundedOutput) {
+          emitStream({
+            type: 'codemode.operation.output',
+            operationId: callId,
+            tool: toolName,
+            outputChunk: boundedOutput,
+          });
+        }
+
         subCalls.push({
           callId,
           tool: toolName,
           input,
           ok: result.ok,
-          output: result.output?.slice(0, 10_000),
+          output: boundedOutput,
           error: result.error,
           durationMs: duration,
           timestamp: new Date(),
@@ -125,10 +163,36 @@ export class CodeModeService {
         });
 
         if (!result.ok) {
+          emitStream({
+            type: 'codemode.operation.failed',
+            operationId: callId,
+            tool: toolName,
+            error: result.error ?? `${toolName} failed`,
+            durationMs: duration,
+          });
           throw new Error(result.error ?? `${toolName} failed`);
         }
 
+        emitStream({
+          type: 'codemode.operation.completed',
+          operationId: callId,
+          tool: toolName,
+          result,
+          durationMs: duration,
+        });
+
         return result;
+      } catch (err: any) {
+        if (!subCalls.some((c) => c.callId === callId)) {
+          emitStream({
+            type: 'codemode.operation.failed',
+            operationId: callId,
+            tool: toolName,
+            error: err instanceof Error ? err.message : String(err),
+            durationMs: Date.now() - callStarted,
+          });
+        }
+        throw err;
       } finally {
         releaseSlot();
       }
@@ -199,6 +263,17 @@ export class CodeModeService {
       async call(toolName: string, input: Record<string, unknown>): Promise<ToolResult> {
         return dispatchSdkOperation(toolName, input);
       },
+      mcp: new Proxy({}, {
+        get: (_target, serverId: string) => {
+          return new Proxy({}, {
+            get: (_subTarget, toolName: string) => {
+              return async (input: Record<string, unknown> = {}) => {
+                return dispatchSdkOperation(`mcp.${serverId}.${toolName}`, input);
+              };
+            },
+          });
+        },
+      }) as Record<string, Record<string, (input: Record<string, unknown>) => Promise<ToolResult>>>,
     };
 
     // Sandbox execution context: isolated, with NO access to process, fs, require, or globals
@@ -264,6 +339,11 @@ export class CodeModeService {
       const rawOutput = returnValue !== undefined ? JSON.stringify(returnValue, null, 2) : logs.join('\n');
       const boundedOutput = rawOutput.slice(0, limits.maxOutputChars);
 
+      emitStream({
+        type: 'codemode.completed',
+        durationMs: elapsed,
+      });
+
       return {
         ok: true,
         returnValue,
@@ -283,6 +363,12 @@ export class CodeModeService {
       const isTimeout = controller.signal.aborted || err?.message?.includes('CODE_MODE_TIMEOUT');
       const isBudget = err?.message?.includes('CODE_MODE_BUDGET_EXCEEDED');
       const isCancel = mergedSignal.aborted && !isTimeout;
+
+      emitStream({
+        type: 'codemode.completed',
+        durationMs: elapsed,
+        error: err instanceof Error ? err.message : String(err),
+      });
 
       const failureClass = isTimeout
         ? 'CODE_MODE_TIMEOUT'

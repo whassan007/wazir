@@ -222,6 +222,9 @@ export type JobOrchestratorEventType =
   | 'job:cancelled'
   | 'job:paused'
   | 'job:resumed'
+  | 'job:checkpoint'
+  | 'job:fork'
+  | 'job:rollback'
   | 'task:scheduled'
   | 'task:started'
   | 'task:progress'
@@ -230,7 +233,10 @@ export type JobOrchestratorEventType =
   | 'task:retry'
   | 'task:replan'
   | 'task:cancelled'
-  | 'task:steered';
+  | 'task:steered'
+  | 'task:checkpoint'
+  | 'task:fork'
+  | 'task:rollback';
 
 export interface JobOrchestratorEvent {
   type: JobOrchestratorEventType;
