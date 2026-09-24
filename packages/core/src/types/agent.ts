@@ -97,6 +97,34 @@ export interface AgentTurn {
   raw?: string;
   /** Model protocol adherence metrics for capability catalog tracking. */
   protocolMetrics?: ModelProtocolMetrics;
+  /** Set on the turn reporting a controller-driven model switch mid-run. */
+  routeChange?: ModelRouteChange;
+}
+
+/** Why the controller asked the host for a different model mid-run. */
+export interface ModelEscalationRequest {
+  currentModelId: string;
+  /** Every model this run has used so far, including the current one. */
+  triedModelIds: string[];
+  failureClass: TerminationReason;
+  reason: string;
+}
+
+/**
+ * The host's answer. `modelId` absent means escalation was declined; `reason`
+ * is required either way so the decision is explainable.
+ */
+export interface ModelEscalationDecision {
+  modelId?: string;
+  reason: string;
+}
+
+export interface ModelRouteChange {
+  previousModel: string;
+  newModel: string;
+  failureClass: TerminationReason;
+  reason: string;
+  routeDecision: string;
 }
 
 export interface AgentRunRequest {
@@ -116,6 +144,8 @@ export interface AgentRunRequest {
   maxTokens?: number;
   /** Per-request override of the agent's semantic no-progress threshold; falls back to the agent default. */
   maxNoProgressIterations?: number;
+  /** Per-request override of how many mid-run model escalations the agent may request. */
+  maxModelEscalations?: number;
   /** The model's context window, when known — enables mid-run compaction. */
   contextTokens?: number;
   /** Set to true by the host when the user requested cancellation. */
@@ -153,6 +183,13 @@ export interface AgentRuntime {
    * parseable action would otherwise burn the whole job on one turn.
    */
   cancelCurrentTurn?(): void;
+  /**
+   * Controller hook for failure-based model escalation. The agent calls it when the
+   * current model exhausts its protocol budget or stops making progress; the host
+   * (which owns routing and placement) either names a model the same runtime can
+   * serve now, or declines with a reason. Absent means escalation is unsupported.
+   */
+  escalate?(request: ModelEscalationRequest): Promise<ModelEscalationDecision>;
 }
 
 export interface AgentAdapter {

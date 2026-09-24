@@ -113,3 +113,33 @@ describe('Scheduler + model circuit breaker', () => {
     expect(decision.modelDecision.reasons.some((r) => r.includes('circuit open'))).toBe(true);
   });
 });
+
+describe('escalation support', () => {
+  it('Scheduler never routes to an excluded (already tried) model', async () => {
+    const { ComputerRegistry: C, ModelRegistry: M, RuntimeRegistry: R } = await import('@wazir/core');
+    const computers = new C(); const runtimes = new R(); const models = new M();
+    computers.register({ id: 'local-1', name: 'Local', type: 'workstation' as const, local: true, os: { platform: 'linux', architecture: 'x64', version: '5' }, hardware: { cpu: 'c', cpuCores: 8, memoryGB: 32 }, runtimes: ['ollama'], models: [], capabilities: [] });
+    runtimes.register({ id: 'ollama', type: 'ollama' as const, name: 'O', version: '1', computerId: 'local-1', health: 'healthy' as const, capabilities: { chat: true, streaming: true, toolCalling: false, structuredOutput: false, vision: false, embeddings: false, reasoning: false, modelLoad: true, modelUnload: true, modelDownload: false, statefulChat: false, mcp: false }, loadedModels: [] });
+    models.register({ id: 'only', name: 'only', provider: 'ollama', family: 'qwen' as const, contextMax: 32768, capabilities: ['coding'], toolCalling: false, structuredOutput: false, vision: false, audio: false, embedding: false, reasoning: false, runtimeCompatibility: ['ollama' as const], local: true, createdAt: new Date(), updatedAt: new Date() });
+    models.upsertInstance({ id: 'only-i', modelId: 'only', computerId: 'local-1', runtimeId: 'ollama' as const, runtimeModelId: 'only', loaded: true, health: 'healthy' as const });
+    const scheduler = new Scheduler({ computers, runtimes, models } as never);
+    const t = { id: 't', type: 'coding' as const, input: 'x', requirements: {}, priority: 'normal', status: 'pending', createdAt: new Date() } as never;
+    expect(scheduler.plan({ task: t }).modelId).toBe('only');
+    expect(() => scheduler.plan({ task: t, excludeModelIds: ['only'] })).toThrow(/No model satisfies/);
+  });
+
+  it('hydrate counts an accepted escalation against the abandoned model and the termination against the final model', () => {
+    const record = {
+      execution: { id: 'e', modelId: 'weak' },
+      task: { type: 'coding' },
+      events: [
+        { id: '1', executionId: 'e', type: 'model.route.changed', timestamp: at(0), data: { accepted: true, previousModel: 'weak', newModel: 'strong', failureClass: 'NO_PROGRESS' } },
+        { id: '2', executionId: 'e', type: 'termination.completed', timestamp: at(1), data: { reason: 'VERIFICATION_PASSED', modelId: 'strong' } },
+      ],
+    } as unknown as ExecutionRecord;
+    const tracker = new ModelReliabilityTracker({ minSamples: 1 });
+    tracker.hydrate([record]);
+    expect(tracker.status('weak', 'coding', at(2))).toMatchObject({ samples: 1, failures: 1 });
+    expect(tracker.status('strong', 'coding', at(2))).toMatchObject({ samples: 1, failures: 0 });
+  });
+});

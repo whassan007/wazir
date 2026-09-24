@@ -339,13 +339,59 @@ Regression coverage: `packages/agents/tests/codingAgent.attemptContext.test.ts`.
 Verification: `npx tsc --build apps/cli` exit 0; `npx vitest run packages/agents
 apps/cli/tests/executeTask.e2e.test.ts` passed (24 files, 115 tests).
 
+## Thirteenth tranche: failure-based model escalation
+
+`CodingAgent` no longer treats every model failure as terminal. Protocol-budget
+exhaustion (malformed JSON or repeated invalid arguments), `REPEATED_ACTION`,
+semantic `NO_PROGRESS`, and a stalled repair loop (same diagnostics twice) first
+call the new optional `AgentRuntime.escalate()`. That is bounded by
+`maxModelEscalations` (option and per-request override, default 1). The agent
+decides only that the current model has demonstrably failed. The host, which owns
+routing, names the replacement or declines with a reason, and either answer is
+explainable. On a switch the agent resets its per-model counters but keeps
+workspace facts (seen observations, changed files). It drops any pending repair
+note, tells the model about the switch, and yields a typed
+`AgentTurn.routeChange` (`previousModel`, `newModel`, `failureClass`, `reason`,
+`routeDecision`). An exhausted repair *budget* (`MAX_REPAIRS`) is a controller
+limit and still terminates. A declined, unsupported or budget-exhausted
+escalation terminates with the original reason, so behavior without a host hook
+is unchanged.
+
+Routing stays in the Scheduler. `ScheduleInput.excludeModelIds` rejects models
+the run already tried, with an explicit reason. The CLI host (`planEscalation`,
+`apps/cli/src/escalation.ts`, wired into `run.ts`) re-plans with the tried models
+excluded and any pin cleared. It never substitutes a pinned model. It accepts
+only a candidate the current placement can serve right now: same runtime, same
+computer, `READY_NOW`. Re-placing a running execution (another computer, a model
+load) is declined with that reason rather than attempted. Every decision,
+accepted or declined, is recorded as `model.route.changed` with `accepted`,
+`failureClass`, `reason` and `routeDecision`. An accepted escalation counts as a
+failure of the abandoned model in the circuit breaker. The run's
+`termination.completed` event is attributed to the model that was running at the
+end, and `ModelReliabilityTracker.hydrate` rebuilds both from events.
+
+Not yet wired: the fleet runner (`fleetRunner.ts`) provides no `escalate` hook,
+so fleet tasks keep the terminate-on-failure behavior.
+
+Regression coverage: `packages/agents/tests/codingAgent.escalation.test.ts`,
+`apps/cli/tests/escalation.test.ts`, and additions to
+`packages/core/tests/modelReliability.test.ts` (Scheduler exclusion, hydrate from
+route changes).
+
+Verification: another session was editing `packages/core` at the same time, and
+its untracked `services/webContent.ts` does not compile. That blocked
+`tsc --build`, so I typechecked with a scratch tsconfig covering
+`packages/core/src` (minus the in-progress `web*.ts` files), `packages/agents/src`
+and `apps/cli/src`: exit 0. Tests: `npx vitest run` on the escalation,
+modelReliability, scheduler, termination and executeTask e2e tests plus the whole
+`packages/agents` package. All passed.
+
 ## Not yet done
 
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
   checks are still inline in `CodingAgent`.
-- Phase 14: failure-based escalation within a run (switching model mid-execution
-  and emitting `model.route.changed`). The circuit breaker only affects the *next*
-  routing decision.
+- Phase 14 remainder: an escalation hook for the fleet runner, and mid-run
+  re-placement (a different computer, or loading a model) as an escalation target.
 - Phase 15: empirically measured capability fields (`firstPassBuildRate`,
   `protocolFailureRate`, ...) on `ModelRecord`, populated from benchmark evidence.
 - Phase 17: execution summary metrics (inference/tool/verification/backoff time

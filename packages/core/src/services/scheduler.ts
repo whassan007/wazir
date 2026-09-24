@@ -35,6 +35,11 @@ export interface ScheduleInput {
   task: Task;
   /** Total tokens required (input + output reserve) from the context compiler. */
   requiredContextTokens?: number;
+  /**
+   * Models capability routing must not choose — e.g. the models a run already
+   * tried before a failure-based escalation. Rejected with an explicit reason.
+   */
+  excludeModelIds?: readonly string[];
 }
 
 interface ScoredModel {
@@ -78,7 +83,7 @@ export class Scheduler {
       agentReasons = resolution.reasons;
     }
 
-    const modelDecision = this.routeModel(task, requiredContext);
+    const modelDecision = this.routeModel(task, requiredContext, input.excludeModelIds ?? []);
     const record = this.deps.models.getRequired(modelDecision.modelId);
     const instance = this.deps.models
       .instancesOf(record.id)
@@ -111,14 +116,18 @@ export class Scheduler {
 
   // ==================== PHASE 1: MODEL ROUTING ====================
 
-  private routeModel(task: Task, requiredContext: number): ModelRoutingDecision {
+  private routeModel(task: Task, requiredContext: number, excludeModelIds: readonly string[] = []): ModelRoutingDecision {
     const records = this.deps.models.list();
     if (records.length === 0) {
       throw new SchedulingError('No models are registered', ['model registry is empty']);
     }
 
     const requiredCapabilities = task.requirements.capabilities ?? [];
-    const scored: ScoredModel[] = records.map((record) => this.scoreModel(task, record, requiredContext));
+    const scored: ScoredModel[] = records.map((record) => {
+      const result = this.scoreModel(task, record, requiredContext);
+      if (excludeModelIds.includes(record.id)) result.rejected.push('excluded: already tried by this execution');
+      return result;
+    });
 
     const eligible = scored.filter((s) => s.rejected.length === 0);
     const rejected = scored.filter((s) => s.rejected.length > 0);

@@ -146,12 +146,24 @@ export class ModelReliabilityTracker {
   hydrate(records: ExecutionRecord[]): void {
     const terminations: ReliabilityOutcome[] = [];
     for (const record of records) {
+      for (const event of record.events) {
+        const type = event.eventType ?? event.type;
+        // An accepted mid-run escalation is a failure of the model it abandoned.
+        if (type === 'model.route.changed') {
+          const change = event.data as { accepted?: boolean; previousModel?: string; failureClass?: string } | undefined;
+          if (change?.accepted && change.previousModel && classifyTerminationForReliability(change.failureClass) === 'failure') {
+            terminations.push({ modelId: change.previousModel, taskClass: record.task.type, success: false, reason: change.failureClass, at: new Date(event.timestamp) });
+          }
+        }
+      }
       const event = [...record.events].reverse().find((e) => (e.eventType ?? e.type) === 'termination.completed');
-      const data = event?.data as { reason?: string } | undefined;
+      const data = event?.data as { reason?: string; modelId?: string } | undefined;
       const verdict = classifyTerminationForReliability(data?.reason);
       if (!event || !verdict) continue;
       terminations.push({
-        modelId: record.execution.modelId,
+        // The model that was running when the run stopped, which differs from the
+        // scheduled one after an escalation.
+        modelId: data?.modelId ?? record.execution.modelId,
         taskClass: record.task.type,
         success: verdict === 'success',
         reason: data?.reason,

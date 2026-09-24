@@ -10,6 +10,7 @@ import type {
   AgentTurn,
   ChatMessage,
   ModelProtocolMetrics,
+  ModelRouteChange,
   TerminationReason,
 } from '@wazir/core';
 import { ObservationCompactor } from '@wazir/core';
@@ -60,6 +61,13 @@ export interface CodingAgentOptions {
    * `glob src/*.cpp`, `find . -name '*.cpp'`, all empty, each syntactically novel.
    */
   maxNoProgressIterations?: number;
+  /**
+   * Mid-run model switches the agent may request through `AgentRuntime.escalate`
+   * when the current model exhausts its protocol budget, repeats a blocked action,
+   * or stops making progress. Default 1. The host decides which model (or declines);
+   * the agent only decides that the current one has demonstrably failed.
+   */
+  maxModelEscalations?: number;
   /**
    * Wall-clock budget for a single model turn, independent of the overall
    * job timeout. Small/local models can ramble in prose for minutes without
@@ -496,6 +504,7 @@ export class CodingAgent implements AgentAdapter {
   private readonly maxToolCalls: number;
   private readonly maxTokens: number;
   private readonly maxNoProgressIterations: number;
+  private readonly maxModelEscalations: number;
   private readonly maxTokensPerTurn: number;
   private readonly temperature: number;
   private readonly modelTurnTimeoutMs: number;
@@ -521,6 +530,7 @@ export class CodingAgent implements AgentAdapter {
     // genuinely large task but a real ceiling, not effectively unbounded.
     this.maxTokens = options.maxTokens ?? 2_000_000;
     this.maxNoProgressIterations = options.maxNoProgressIterations ?? 6;
+    this.maxModelEscalations = options.maxModelEscalations ?? 1;
     this.maxTokensPerTurn = options.maxTokensPerTurn ?? 4096;
     this.temperature = options.temperature ?? 0.2;
     this.modelTurnTimeoutMs = options.modelTurnTimeoutMs ?? 90_000;
@@ -543,6 +553,12 @@ export class CodingAgent implements AgentAdapter {
     const maxToolCalls = request.maxToolCalls ?? this.maxToolCalls;
     const maxTokens = request.maxTokens ?? this.maxTokens;
     const maxNoProgressIterations = request.maxNoProgressIterations ?? this.maxNoProgressIterations;
+    const maxModelEscalations = request.maxModelEscalations ?? this.maxModelEscalations;
+    // The model this run is currently driving. Starts as the scheduler's choice and
+    // changes only through the controller's escalation path below.
+    let currentModelId = request.modelId;
+    const triedModelIds = [request.modelId];
+    let escalationsUsed = 0;
     let totalTokensUsed = 0;
     const runStartedAt = Date.now();
     const wallClockExceeded = () => Date.now() - runStartedAt >= maxWallClockMs;
@@ -724,7 +740,7 @@ export class CodingAgent implements AgentAdapter {
       }, this.modelTurnTimeoutMs);
       try {
         for await (const event of runtime.generate({
-          modelId: request.modelId,
+          modelId: currentModelId,
           // A snapshot: the request is what the model saw at this turn, and later
           // transcript edits (e.g. dropping a resolved repair note) must not rewrite it.
           messages: messages.map((m) => ({ ...m })),
@@ -842,6 +858,66 @@ export class CodingAgent implements AgentAdapter {
       pushAssistant(raw);
     };
 
+    /**
+     * Failure-based model escalation. Called where the current model has demonstrably
+     * failed (protocol budget, repeated blocked action, no progress). Asks the host for
+     * another model; on success, resets the per-model failure counters (workspace facts
+     * such as seen observations and changed files are kept), tells the model about the
+     * switch, and yields a typed `routeChange` turn for execution history. Returns false
+     * — and the caller terminates as before — when unsupported, out of budget, or declined.
+     */
+    const tryEscalate = async function* (failureClass: TerminationReason, reason: string): AsyncGenerator<AgentTurn, boolean> {
+      if (!runtime.escalate || escalationsUsed >= maxModelEscalations) return false;
+      escalationsUsed += 1;
+      let decision: { modelId?: string; reason: string };
+      try {
+        decision = await runtime.escalate({ currentModelId, triedModelIds: [...triedModelIds], failureClass, reason });
+      } catch (error) {
+        decision = { reason: `escalation failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      if (!decision.modelId || triedModelIds.includes(decision.modelId)) {
+        yield { kind: 'message', content: `model escalation declined after ${failureClass}: ${decision.reason}` };
+        return false;
+      }
+      const routeChange: ModelRouteChange = {
+        previousModel: currentModelId,
+        newModel: decision.modelId,
+        failureClass,
+        reason,
+        routeDecision: decision.reason,
+      };
+      currentModelId = decision.modelId;
+      triedModelIds.push(decision.modelId);
+      correctionCount = 0;
+      consecutiveValidationFailures = 0;
+      lastValidationKey = '';
+      noProgressCount = 0;
+      consecutiveBlockedRepeats = 0;
+      lastToolSignature = null;
+      repeatedToolCount = 0;
+      if (repairState) repairState.consecutiveNoProgress = 0;
+      planIterations = 0;
+      // Drop any pending repair note: it addressed the previous model's failed attempt.
+      if (pendingRepair) {
+        const repair = pendingRepair;
+        if (repair.base === null) {
+          const index = messages.indexOf(repair.message);
+          if (index !== -1) messages.splice(index, 1);
+        } else {
+          repair.message.content = repair.base;
+        }
+        pendingRepair = null;
+      }
+      const note =
+        `[controller] The previous model (${routeChange.previousModel}) was replaced by ${routeChange.newModel} ` +
+        `after ${failureClass}: ${reason}. Continue the task from the current workspace state; do not repeat the previous strategy.`;
+      const last = messages[messages.length - 1];
+      if (last && last.role === 'user') last.content = `${last.content}\n\n${note}`;
+      else messages.push({ role: 'user', content: `${note} ${stateLine()}\nRespond with exactly one JSON object.` });
+      yield { kind: 'message', content: `model escalated: ${routeChange.previousModel} -> ${routeChange.newModel} (${failureClass})`, routeChange };
+      return true;
+    };
+
     // Compact, deterministic execution state — turn budget, files actually touched, what
     // the last action was — appended to every "continue" message so the model can track
     // progress from one line instead of re-deriving it from the full conversation history.
@@ -926,7 +1002,8 @@ export class CodingAgent implements AgentAdapter {
     yield { kind: 'phase', phase: 'plan' as AgentPhase };
     let planEstablished = false;
     let planExplorationCount = 0;
-    for (let i = 0; i < 3 && !plan; i++) {
+    let planIterations = 0;
+    for (; planIterations < 3 && !plan; planIterations++) {
       if (request.isCancelled?.()) return;
       if (wallClockExceeded()) {
         yield {
@@ -965,6 +1042,7 @@ export class CodingAgent implements AgentAdapter {
         correctionCount += 1;
         malformedActions += 1;
         if (correctionCount >= 3) {
+          if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', 'model repeatedly failed to produce valid JSON actions')) continue;
           yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions', errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw, protocolMetrics: currentMetrics() };
           return;
         }
@@ -1004,6 +1082,7 @@ export class CodingAgent implements AgentAdapter {
         if (val.ok === false) {
           validationErrors += 1;
           if (val.attempts >= 3) {
+            if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', `'${action.tool}' repeatedly failed validation (${val.reason})`)) continue;
             yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw, protocolMetrics: currentMetrics() };
             return;
           }
@@ -1065,6 +1144,7 @@ export class CodingAgent implements AgentAdapter {
         }
         pushToolResult(action.tool, result, action.input ?? {});
         if (assessProgress(action.tool, action.input ?? {}, result) >= maxNoProgressIterations) {
+          if (yield* tryEscalate('NO_PROGRESS', `${noProgressCount} consecutive tool calls produced no file change and no new information`)) continue;
           yield noProgressTurn();
           return;
         }
@@ -1133,6 +1213,7 @@ export class CodingAgent implements AgentAdapter {
         correctionCount += 1;
         malformedActions += 1;
         if (correctionCount >= 3) {
+          if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', 'model repeatedly failed to produce valid JSON actions')) continue;
           yield { kind: 'error', error: 'model repeatedly failed to produce valid JSON actions', errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw, protocolMetrics: currentMetrics() };
           return;
         }
@@ -1166,6 +1247,7 @@ export class CodingAgent implements AgentAdapter {
           validationErrors += 1;
           consecutiveBlockedRepeats += 1;
           if (consecutiveBlockedRepeats >= 2) {
+            if (yield* tryEscalate('REPEATED_ACTION', `${breakerError}; the model ignored the duplicate-action correction`)) continue;
             yield {
               kind: 'error',
               error: `REPEATED_ACTION: ${breakerError}; the model ignored the duplicate-action correction`,
@@ -1189,6 +1271,7 @@ export class CodingAgent implements AgentAdapter {
         if (val.ok === false) {
           validationErrors += 1;
           if (val.attempts >= 3) {
+            if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', `'${action.tool}' repeatedly failed validation (${val.reason})`)) continue;
             yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw, protocolMetrics: currentMetrics() };
             return;
           }
@@ -1262,7 +1345,12 @@ export class CodingAgent implements AgentAdapter {
                 repairState.consecutiveNoProgress = 0;
               }
 
-              if (repairState.cycle > maxRepairCycles || repairState.consecutiveNoProgress >= 2) {
+              const repairStalled = repairState.cycle > maxRepairCycles || repairState.consecutiveNoProgress >= 2;
+              // A stalled repair (same diagnostics twice) warrants a different model; an
+              // exhausted repair budget is a controller limit and still terminates.
+              const escalated = repairStalled && repairState.cycle <= maxRepairCycles &&
+                (yield* tryEscalate('NO_PROGRESS', `repair made no progress: diagnostics unchanged after ${repairState.cycle} cycles`));
+              if (repairStalled && !escalated) {
                 yield {
                   kind: 'error',
                   error: `REPAIR_BUDGET_EXHAUSTED: cycle=${repairState.cycle}, progress=${repairState.progress}, files_modified=${repairState.filesModified}`,
@@ -1302,6 +1390,7 @@ export class CodingAgent implements AgentAdapter {
         }
         pushToolResult(action.tool, result, action.input ?? {});
         if (assessProgress(action.tool, action.input ?? {}, result) >= maxNoProgressIterations) {
+          if (yield* tryEscalate('NO_PROGRESS', `${noProgressCount} consecutive tool calls produced no file change and no new information`)) continue;
           yield noProgressTurn();
           return;
         }
