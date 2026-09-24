@@ -168,6 +168,13 @@ export class MetaOptimizerService {
             }
           }
         }
+        const planEntries = await this.store.list('meta/plans/');
+        for (const entry of planEntries) {
+          if (entry.value) {
+            const plan = entry.value as ExperimentPlan;
+            this.experiments.set(plan.experimentId, plan);
+          }
+        }
       }
     } catch {
       // Ignore store errors during hydration
@@ -448,6 +455,13 @@ export class MetaOptimizerService {
     };
 
     this.experiments.set(experimentId, plan);
+    if (this.store && 'put' in this.store && typeof this.store.put === 'function') {
+      try {
+        void this.store.put(`meta/plans/${experimentId}`, plan);
+      } catch {
+        // Ignore store put failure
+      }
+    }
     this.emitEvent('meta.experiment.started', {
       experimentId,
       name: plan.name,
@@ -930,10 +944,36 @@ export class MetaOptimizerService {
 
   public explainExperiment(experimentId: string): string {
     const plan = this.experiments.get(experimentId);
-    const run = this.history.find((h) => h.experimentId === experimentId);
+    const run = this.history.find((h) => h.experimentId === experimentId || h.runId === experimentId);
 
-    if (!plan) {
+    if (!plan && !run) {
       return `Experiment '${experimentId}' not found in registry.`;
+    }
+
+    if (!plan && run) {
+      return [
+        `=======================================================`,
+        `EXPLAIN EXPERIMENT: ${run.experimentId ?? run.runId}`,
+        `=======================================================`,
+        `1. Run Details:`,
+        `   Run ID:            ${run.runId}`,
+        `   Baseline Config:   ${run.baselineConfig.id} (v${run.baselineConfig.version})`,
+        `   Candidate Config:  ${run.candidateConfig.id} (v${run.candidateConfig.version})`,
+        ``,
+        `2. Mutations Attempted:`,
+        ...(run.mutations.map((m) => `   - ${m.type} on '${m.path}': ${JSON.stringify(m.oldValue)} -> ${JSON.stringify(m.newValue)} (${m.rationale})`)),
+        ``,
+        `3. Measured Results:`,
+        `   Baseline Pass Rate:  ${(run.comparison.baselinePassRate * 100).toFixed(1)}%`,
+        `   Candidate Pass Rate: ${(run.comparison.candidatePassRate * 100).toFixed(1)}% (delta: ${(run.comparison.passRateDelta * 100).toFixed(1)}%)`,
+        `   Token Delta:         ${run.comparison.tokenUsageDelta}`,
+        `   Cost Delta:          ${run.comparison.costDelta}`,
+        `   Regressions:         ${run.comparison.regressedTasks.join(', ') || 'None'}`,
+        ``,
+        `4. Final Decision:      ${run.decision}`,
+        `   Reasons: ${run.reasons.join('\n   ')}`,
+        `=======================================================`,
+      ].join('\n');
     }
 
     const lines: string[] = [
