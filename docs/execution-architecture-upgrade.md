@@ -621,6 +621,34 @@ path mapping can't resolve. I also typechecked the working tree. The CLI
 escalation, e2e, fleet, termination, recovery, inspect, TUI and context tests
 plus `policyBypassSweep` all passed (9 files, 87 tests).
 
+## Eighteenth tranche: context compaction ran on every turn (bug fix)
+
+Found with the Phase 17 execution summary on this machine's real history. The
+latest real run made 28 context compactions in 30 model requests.
+`CodingAgent.compactIfNeeded` never read `contextCompactionRatio` (default 0.7)
+even though the option was set. Any run whose host supplies `contextTokens`,
+which `run.ts` and the fleet runner always do, compacted on every turn once the
+transcript passed four messages. Each compaction discarded the recent turns and
+re-sent a summary that re-embedded active file contents. The model lost its
+working context every turn while input tokens kept being spent on it: the
+runaway pattern this mission began with.
+
+Fix: compaction now happens only at or above `contextTokens ×
+contextCompactionRatio`, and never when the resulting transcript would not be
+smaller. The summary can outweigh what it replaces. A forced compaction
+(recovery after the runtime reports a context overflow) is unchanged.
+
+Regression coverage: three new cases in
+`packages/agents/tests/codingAgent.contextCompaction.test.ts`:
+- no compaction in a large window
+- the first compaction only after several real turns, and far fewer than one
+  per turn
+- a non-shrinking compaction is refused
+
+I confirmed all three fail with the gates removed and pass with them. The
+agents package passed: 26 files, 118 tests before the new cases, and the
+compaction file passed 5/5 after.
+
 ## Not yet done
 
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
