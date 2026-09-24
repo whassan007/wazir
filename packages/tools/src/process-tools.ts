@@ -9,12 +9,23 @@ function generateId(prefix: string = ''): string {
   return `${prefix}${randomBytes(8).toString('hex')}`;
 }
 
+const OUTPUT_LIMIT = 100_000;
+const OUTPUT_HEAD = 20_000;
+
+/** Keeps the start and the end of oversized output: a test or build run's verdict and
+ *  failure summary are printed last, so a head-only cut discarded the evidence itself. */
+export function boundOutput(text: string): string {
+  if (text.length <= OUTPUT_LIMIT) return text;
+  const omitted = text.length - OUTPUT_LIMIT;
+  return `${text.slice(0, OUTPUT_HEAD)}\n… [${omitted} characters omitted] …\n${text.slice(text.length - (OUTPUT_LIMIT - OUTPUT_HEAD))}`;
+}
+
 function toToolResult(
   command: string,
   result: Awaited<ReturnType<typeof runShell>>,
   extraMetadata?: Record<string, unknown>,
 ): ToolResult {
-  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').slice(0, 100_000);
+  const output = boundOutput([result.stdout, result.stderr].filter(Boolean).join('\n'));
   const details = (result.stderr.trim() || result.stdout.trim() || '').slice(0, 4000);
   const error = result.code === 0
     ? undefined

@@ -60,3 +60,16 @@ describe('tool timeout terminates the process and determines the outcome', () =>
     expect(registry.get('test')!.descriptor.terminatesOnAbort).toBe(true);
   });
 });
+
+describe('oversized process output keeps its verdict', () => {
+  it('keeps both the start and the final summary of a long check run', async () => {
+    const { boundOutput } = await import('../src/process-tools.js');
+    const log = `RUN start\n${'x'.repeat(300_000)}\n Test Files  1 failed | 9 passed (10)\n`;
+    const bounded = boundOutput(log);
+    expect(bounded.length).toBeLessThan(100_100);
+    expect(bounded.startsWith('RUN start')).toBe(true);
+    expect(bounded).toContain('Test Files  1 failed | 9 passed (10)');
+    expect(bounded).toContain('characters omitted');
+    expect(boundOutput('short')).toBe('short');
+  });
+});
