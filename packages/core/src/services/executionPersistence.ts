@@ -21,7 +21,10 @@ export async function persistExecutionRecord(
   if (!store.update) throw new Error('Execution persistence requires atomic store.update');
   await store.update<ExecutionRecord>(key, current => {
     if ((record.storageRevision ?? 0) !== (current?.storageRevision ?? 0) + 1) {
-      throw new Error(`EXECUTION_STORAGE_CONFLICT: ${record.execution.id}`);
+      // Keep the prefix (callers match on it); the rest makes a conflict explainable.
+      const owner = current?.execution.owner;
+      throw new Error(`EXECUTION_STORAGE_CONFLICT: ${record.execution.id} (writing revision ${record.storageRevision ?? 0}` +
+        ` over stored revision ${current?.storageRevision ?? 0}${owner ? ` last written by pid ${owner.pid} on ${owner.host}` : ''})`);
     }
     if (current) {
       if (current.execution.id !== record.execution.id || current.events.length > record.events.length) {

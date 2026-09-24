@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -16,12 +17,27 @@ export interface KeyValueStore {
 }
 
 /**
- * A lock older than this is assumed to belong to a process that crashed
- * while holding it (killed worker, `kill -9`, power loss) rather than one
- * doing legitimately slow I/O, and is force-cleared so the store never
- * deadlocks permanently on a dead holder.
+ * A lock older than this *and* whose holder is not a live process is assumed to
+ * belong to a process that crashed while holding it (killed worker, `kill -9`,
+ * power loss) and is force-cleared so the store never deadlocks on a dead
+ * holder. A live holder's lock is never stolen, however old: two writers
+ * inside the critical section rewrite the whole file from different
+ * snapshots, and one of them silently loses its update.
  */
 const LOCK_STALE_AFTER_MS = 30_000;
+
+/** A lock's holder pid, when it's another process that is still alive. */
+async function liveForeignHolder(lockFile: string): Promise<number | undefined> {
+  const content = await fs.readFile(lockFile, 'utf8').catch(() => '');
+  const pid = Number.parseInt(content.split('\n')[0] ?? '', 10);
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return undefined;
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM' ? pid : undefined;
+  }
+}
 const LOCK_RETRY_DELAY_MS = 25;
 const LOCK_MAX_WAIT_MS = 10_000;
 
@@ -36,16 +52,21 @@ const LOCK_MAX_WAIT_MS = 10_000;
  */
 async function withFileLock<T>(lockFile: string, fn: () => Promise<T>): Promise<T> {
   const deadline = Date.now() + LOCK_MAX_WAIT_MS;
+  // Identifies this acquisition, so release never deletes a lock someone else now holds.
+  const token = `${process.pid}\n${new Date().toISOString()}\n${randomBytes(8).toString('hex')}\n`;
+  let blockedBy: number | undefined;
   for (;;) {
     try {
       const handle = await fs.open(lockFile, 'wx', 0o600);
-      await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`);
+      await handle.writeFile(token);
       await handle.close();
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       const staleSince = await fs.stat(lockFile).then((s) => s.mtimeMs).catch(() => undefined);
-      if (staleSince !== undefined && Date.now() - staleSince > LOCK_STALE_AFTER_MS) {
+      const old = staleSince !== undefined && Date.now() - staleSince > LOCK_STALE_AFTER_MS;
+      blockedBy = old ? await liveForeignHolder(lockFile) : undefined;
+      if (old && blockedBy === undefined) {
         // Steal the stale lock with an atomic rename rather than unlink: if
         // two waiters both observe the same stale lock, only one rename can
         // succeed, so only one of them proceeds to re-acquire — a bare
@@ -59,7 +80,8 @@ async function withFileLock<T>(lockFile: string, fn: () => Promise<T>): Promise<
         // Another process stole it first; fall through and wait our turn.
       }
       if (Date.now() > deadline) {
-        throw new Error(`timed out waiting for lock '${lockFile}' (held for over ${LOCK_MAX_WAIT_MS}ms)`);
+        throw new Error(`timed out waiting for lock '${lockFile}' (held for over ${LOCK_MAX_WAIT_MS}ms` +
+          `${blockedBy ? ` by live process ${blockedBy}, which is never stolen from; stop that process if it is hung` : ''})`);
       }
       await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
     }
@@ -68,7 +90,8 @@ async function withFileLock<T>(lockFile: string, fn: () => Promise<T>): Promise<
   try {
     return await fn();
   } finally {
-    await fs.unlink(lockFile).catch(() => undefined);
+    const current = await fs.readFile(lockFile, 'utf8').catch(() => undefined);
+    if (current === token) await fs.unlink(lockFile).catch(() => undefined);
   }
 }
 
