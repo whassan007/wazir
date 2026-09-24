@@ -791,7 +791,9 @@ program
 // dashboard command — launch web dashboard & control plane
 program
   .command('dashboard')
-  .alias('web')
+  // Not also aliased 'web': that name is the top-level `wa web` command (web grounding
+  // diagnostics, registered first), and a duplicate makes commander throw at startup —
+  // which crashed every `wa` invocation. `wa ui` still opens the dashboard.
   .alias('ui')
   .description('Launch the Wazir web control plane & dashboard')
   .option('-p, --port <port>', 'Port to listen on', '4801')

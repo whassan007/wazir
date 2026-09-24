@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import type { SecretBackend } from './backend.js';
 
 const SERVICE = 'wazir';
@@ -29,11 +30,62 @@ interface KeyringModule {
  * on a headless server — an honest failure (falling through to the encrypted
  * file backend) is preferred over that silent, weaker default.
  */
+const DEFAULT_PROBE_TIMEOUT_MS = 3_000;
+
+// A real set/get/delete round-trip against the same store the backend uses.
+const PROBE_SCRIPT = `
+const { Entry } = require('@napi-rs/keyring');
+const entry = new Entry('wazir', '__wazir_keyring_probe__', { linux: { store: 'secret-service' } });
+entry.setPassword('probe');
+if (entry.getPassword() !== 'probe') process.exit(2);
+entry.deletePassword();
+`;
+
+/**
+ * Proves the OS keychain answers before the process trusts it in-process.
+ *
+ * The keyring calls are synchronous native calls. When the store can't answer
+ * without user interaction — e.g. a locked GNOME keyring over SSH, where the unlock
+ * prompt has no display — they block the calling thread forever, and no in-process
+ * timeout can interrupt that. (Observed: every `wa` command hung at startup on such a
+ * machine.) So the round-trip runs first in a child process that is killed on
+ * timeout; a hang or failure rejects, and the broker falls back to the
+ * encrypted-file backend.
+ */
+export function probeKeyringInSubprocess(
+  timeoutMs = Number(process.env.WAZIR_KEYRING_PROBE_TIMEOUT_MS) || DEFAULT_PROBE_TIMEOUT_MS,
+  script = PROBE_SCRIPT,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // cwd = this package, so the child resolves @napi-rs/keyring the same way we do.
+    execFile(process.execPath, ['-e', script], { cwd: __dirname, timeout: timeoutMs, killSignal: 'SIGKILL', windowsHide: true }, (error) => {
+      if (!error) return resolve();
+      const timedOut = (error as { killed?: boolean }).killed === true;
+      reject(new Error(timedOut
+        ? `OS keychain did not respond within ${timeoutMs}ms (e.g. a locked keyring that cannot prompt over SSH); not using it`
+        : `OS keychain probe failed: ${error.message}`));
+    });
+  });
+}
+
+// One probe per process; concurrent callers share it, a failure is retried by the next caller.
+let sharedProbe: Promise<void> | undefined;
+function probeOnce(probe: () => Promise<void>): Promise<void> {
+  sharedProbe ??= probe().catch((error) => {
+    sharedProbe = undefined;
+    throw error;
+  });
+  return sharedProbe;
+}
+
 export class KeyringBackend implements SecretBackend {
   readonly name = 'os-keychain' as const;
   private constructor(private readonly keyring: KeyringModule) {}
 
-  static async create(): Promise<KeyringBackend> {
+  static async create(options: { probe?: () => Promise<void> } = {}): Promise<KeyringBackend> {
+    // Before any in-process native call: a keychain that can't answer would block forever.
+    if (options.probe) await options.probe();
+    else await probeOnce(() => probeKeyringInSubprocess());
     // Dynamic import: @napi-rs/keyring is an optionalDependency (native addon,
     // not guaranteed to have a prebuilt binary on every platform/CI target).
     const keyring = (await import('@napi-rs/keyring')) as unknown as KeyringModule;

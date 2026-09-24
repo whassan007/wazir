@@ -8,6 +8,8 @@ export interface SecretBrokerOptions {
   backend?: SecretBackend;
   /** Defaults to `$WAZIR_CONFIG_DIR`/`$WAZIR_HOME`/`~/.wazir`, matching the CLI's configDir(). */
   secretsDir?: string;
+  /** Replaces the OS-keychain liveness probe (tests); see probeKeyringInSubprocess. */
+  keyringProbe?: () => Promise<void>;
 }
 
 function defaultSecretsDir(): string {
@@ -65,7 +67,7 @@ export async function createSecretBroker(options: SecretBrokerOptions = {}): Pro
   if (process.env.WAZIR_SECRETS_BACKEND !== 'encrypted-file') {
     try {
       const { KeyringBackend } = await import('./keyringBackend.js');
-      const backend = await KeyringBackend.create();
+      const backend = await KeyringBackend.create({ probe: options.keyringProbe });
       return new SecretBroker(backend);
     } catch {
       // No usable OS keychain (missing native module, no Secret Service on
