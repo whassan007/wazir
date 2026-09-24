@@ -221,6 +221,41 @@ export interface CompactionResult {
 }
 
 /**
+ * Structured summary produced by AgentContextCompressor for historical context.
+ * Adheres to a strict JSON Schema validated at runtime.
+ */
+export interface StructuredCompactionSummary {
+  objective: string;
+  requirements: string[];
+  decisions: string[];
+  files: {
+    read: string[];
+    modified: string[];
+    created: string[];
+  };
+  currentState: string;
+  workspaceRevision: number;
+  verification: {
+    build: string;
+    tests: string;
+    revision: number;
+  };
+  errors: Array<{
+    fingerprint: string;
+    status: 'resolved' | 'active';
+    summary: string;
+  }>;
+  importantSymbols: string[];
+  toolArtifacts: string[];
+  remainingWork: string[];
+  constraints: string[];
+  provenance: {
+    compactedRange: string;
+    createdAt: string;
+  };
+}
+
+/**
  * Interface for tool-aware result pruning and summarization.
  */
 export interface ToolResultCompactor {

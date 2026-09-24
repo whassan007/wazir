@@ -8,6 +8,8 @@ export { ContextCompiler, estimateTokens, tokensForPart, WEB_TRUST_INSTRUCTION, 
 export type { ContextCompilerOptions } from './contextCompiler.js';
 export { ObservationCompactor } from './observationCompactor.js';
 export type { CompactedObservation, ObservationCompactorOptions, ObservationKind } from './observationCompactor.js';
+export { ContextCompactionService, STRUCTURED_SUMMARY_SCHEMA } from './contextCompactionService.js';
+export type { ContextCompactionServiceOptions, SummarizerFn } from './contextCompactionService.js';
 export { ModelReliabilityTracker, classifyTerminationForReliability } from './modelReliability.js';
 export { measureModelPerformance } from './modelPerformance.js';
 export { summarizeExecution } from './executionSummary.js';
