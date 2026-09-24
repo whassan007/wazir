@@ -8,6 +8,8 @@ export { ObservationCompactor } from './observationCompactor.js';
 export type { CompactedObservation, ObservationCompactorOptions, ObservationKind } from './observationCompactor.js';
 export { ModelReliabilityTracker, classifyTerminationForReliability } from './modelReliability.js';
 export { measureModelPerformance } from './modelPerformance.js';
+export { summarizeExecution } from './executionSummary.js';
+export type { ExecutionSummary } from './executionSummary.js';
 export type { CircuitState, CircuitStatus, ModelReliabilityOptions, ReliabilityOutcome } from './modelReliability.js';
 export { detectOracleWeakening, isVerificationAsset, taskAuthorizesVerificationChanges } from './verificationIntegrity.js';
 export type { OracleWeakeningFinding, OracleWeakeningKind } from './verificationIntegrity.js';

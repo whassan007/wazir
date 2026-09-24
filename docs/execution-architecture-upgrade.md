@@ -425,14 +425,59 @@ termination, escalation, executeTask e2e, modelLifecycleAdmission,
 modelResources, jobOrchestrator and the CLI modelLifecycle tests: all passed
 (11 files, 96 tests).
 
+## Fifteenth tranche: execution summary (observability)
+
+`summarizeExecution` (`packages/core/src/services/executionSummary.ts`) derives a
+per-execution summary entirely from the durable record:
+- **Time:** total, model inference (from `generation.started/completed` pairs,
+  minus backoff), retry backoff (from `retry.scheduled` delays), tool time and
+  verification time (a subset of tool time). `unattributedMs` is the remainder no
+  recorded activity accounts for.
+- **Counts:** model requests (including ones started but never completed), tool
+  calls and failures, invalid actions, blocked duplicates, repair phases,
+  context compactions, retries, escalations, checks, and policy
+  allow/deny/ask.
+- **Other:** tokens, context size, workspace revision, the model sequence, and
+  the typed termination reason.
+
+It holds only identifiers, counts and durations. A test verifies that
+prompt/tool content never leaks into it, so it is safe for generic telemetry.
+`wa executions inspect` shows it as a Summary block, and `--json` adds a
+`summary` field next to the unchanged record fields (still valid JSON).
+
+Verified read-only against this machine's real persisted history (29
+executions). All loaded and summarized. None had typed terminations yet, since
+they predate the termination event, so there were correctly no measured
+profiles or open circuits. The most recent real run is an example of what the
+summary surfaces. It took 440s total, but only 96s was model inference and 0.1s
+tools, leaving 344s unattributed, with 28 context compactions in 30 model
+requests. That points to compaction firing almost every turn and to a large
+unexplained gap, both worth investigating.
+
+Deferred: the agent does not persist its own run counters (longest no-progress
+streak, token total) or a typed reason for an ordinary verification failure
+(currently no `termination.completed` event). Both need edits to
+`codingAgent.ts`/`run.ts`, which another session was editing at the same time.
+
+Build note: CLI tests import `@wazir/core`/`@wazir/agents` from `dist/`. Once the
+other session's untracked `webContent.ts` broke `tsc --build`, `dist/` went
+stale, so the CLI-level runs reported for tranches 13–14 exercised previously
+built package code. Their core/agent logic was tested from source. In this
+tranche I rebuilt `dist/` with `tsc -p` (which emits despite that unrelated
+error) and re-ran the termination, escalation, executeTask e2e, fleetRunner e2e
+and inspect-summary CLI tests against the fresh build. All passed.
+
+Regression coverage: `packages/core/tests/executionSummary.test.ts`,
+`apps/cli/tests/inspectExecutionSummary.test.ts`.
+
 ## Not yet done
 
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
   checks are still inline in `CodingAgent`.
 - Phase 14 remainder: an escalation hook for the fleet runner, and mid-run
   re-placement (a different computer, or loading a model) as an escalation target.
-- Phase 17: execution summary metrics (inference/tool/verification/backoff time
-  breakdown).
+- Phase 17 remainder: agent-side run counters and a typed reason for an ordinary
+  verification failure (see the fifteenth tranche).
 - Phase 21: full event-derived recovery reconstruction.
 - Phase 22: `wa executions events|explain` projections of the new events.
 - Phase 24: the live acceptance run.

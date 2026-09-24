@@ -1,4 +1,4 @@
-import { ModelLifecycleError, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
+import { ModelLifecycleError, summarizeExecution, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -345,7 +345,9 @@ export async function inspectExecution(engine: RookEngine, id: string, json: boo
     }
     record = fuzzy;
   }
-  if (json) return JSON.stringify(record, null, 2);
+  // Derived, content-free projection; the record itself remains the evidence.
+  const summary = summarizeExecution(record);
+  if (json) return JSON.stringify({ ...record, summary }, null, 2);
 
   const e = record.execution;
   const lines: string[] = [];
@@ -359,6 +361,22 @@ export async function inspectExecution(engine: RookEngine, id: string, json: boo
   if (e.parentExecutionId) lines.push(`  parent:    ${e.parentExecutionId}`);
   lines.push(`  created:   ${e.createdAt.toISOString()}`);
   if (e.completedAt) lines.push(`  completed: ${e.completedAt.toISOString()}`);
+
+  const ms = (value: number | null): string => (value === null ? '—' : value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${value}ms`);
+  lines.push('');
+  lines.push(color.bold('  Summary:'));
+  lines.push(`    termination: ${summary.terminationReason ?? '—'}${summary.models.length > 1 ? `  models: ${summary.models.join(' -> ')}` : ''}`);
+  lines.push(
+    `    time:        total ${ms(summary.durations.totalMs)}, inference ${ms(summary.durations.modelInferenceMs)}, ` +
+      `tools ${ms(summary.durations.toolMs)} (verification ${ms(summary.durations.verificationMs)}), backoff ${ms(summary.durations.retryBackoffMs)}, ` +
+      `unattributed ${ms(summary.durations.unattributedMs)}`,
+  );
+  lines.push(
+    `    counts:      ${summary.counts.modelRequests} model requests, ${summary.counts.toolCalls} tool calls (${summary.counts.failedToolCalls} failed), ` +
+      `${summary.counts.invalidActions} invalid actions, ${summary.counts.duplicateActionsBlocked} duplicates blocked, ` +
+      `${summary.counts.repairPhases} repair phases, ${summary.counts.retries} retries, ${summary.counts.escalations} escalations`,
+  );
+  lines.push(`    workspace:   revision ${summary.workspaceRevision}, ${summary.filesChanged} files changed`);
 
   if (record.scheduling) {
     lines.push('');
