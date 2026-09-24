@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { Tool, ToolResult } from '@wazir/core';
+import { keepEnds, type Tool, type ToolResult } from '@wazir/core';
 import { errorMessage } from './paths.js';
 import { runFile, runShell } from './process.js';
 
@@ -9,15 +9,10 @@ function generateId(prefix: string = ''): string {
   return `${prefix}${randomBytes(8).toString('hex')}`;
 }
 
-const OUTPUT_LIMIT = 100_000;
-const OUTPUT_HEAD = 20_000;
-
 /** Keeps the start and the end of oversized output: a test or build run's verdict and
  *  failure summary are printed last, so a head-only cut discarded the evidence itself. */
 export function boundOutput(text: string): string {
-  if (text.length <= OUTPUT_LIMIT) return text;
-  const omitted = text.length - OUTPUT_LIMIT;
-  return `${text.slice(0, OUTPUT_HEAD)}\n… [${omitted} characters omitted] …\n${text.slice(text.length - (OUTPUT_LIMIT - OUTPUT_HEAD))}`;
+  return keepEnds(text, 100_000, 20_000);
 }
 
 function toToolResult(
@@ -26,7 +21,7 @@ function toToolResult(
   extraMetadata?: Record<string, unknown>,
 ): ToolResult {
   const output = boundOutput([result.stdout, result.stderr].filter(Boolean).join('\n'));
-  const details = (result.stderr.trim() || result.stdout.trim() || '').slice(0, 4000);
+  const details = keepEnds(result.stderr.trim() || result.stdout.trim() || '', 4000);
   const error = result.code === 0
     ? undefined
     : `${command} exited with code ${result.code}${result.timedOut ? ' (timed out)' : ''}${details ? `:\n${details}` : ''}`;

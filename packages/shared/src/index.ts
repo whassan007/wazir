@@ -6,3 +6,4 @@ export * from './hash.js';
 export * from './audit.js';
 export * from './retry.js';
 export * from './failure.js';
+export * from './text.js';

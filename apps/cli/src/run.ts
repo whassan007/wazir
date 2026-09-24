@@ -18,7 +18,7 @@ import { buildContextPartsFromActive } from './commands.js';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import { buildSystemPrompt, resolvePreset } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
-import { generateId, stripTerminalEscapes } from '@wazir/shared';
+import { generateId, keepEnds, stripTerminalEscapes } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
 import { recordWebContext } from './web.js';
 import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
@@ -586,7 +586,7 @@ export async function executeTask(
             name: name as CheckRunRecord['name'],
             command: `npm run ${script}`,
             ok: result.ok,
-            output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
+            output: keepEnds(result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n'), 4000),
             durationMs: result.durationMs,
           });
         }
@@ -601,7 +601,7 @@ export async function executeTask(
           name: 'build',
           command: input.command,
           ok: result.ok,
-          output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
+          output: keepEnds(result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n'), 4000),
           durationMs: result.durationMs,
         });
       } else if (name === 'shell' && typeof input.command === 'string' && isTestInvocation(input.command)) {
@@ -610,7 +610,7 @@ export async function executeTask(
           name: 'test',
           command: input.command,
           ok: result.ok,
-          output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
+          output: keepEnds(result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n'), 4000),
           durationMs: result.durationMs,
         });
       }

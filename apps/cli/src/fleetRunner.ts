@@ -26,7 +26,7 @@ import {
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import { buildSystemPrompt } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
-import { generateId } from '@wazir/shared';
+import { generateId, keepEnds } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
 import { recordWebContext } from './web.js';
 import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
@@ -502,7 +502,7 @@ export function createFleetTaskExecutor(
               name: name as CheckRunRecord['name'],
               command: `npm run ${script}`,
               ok: result.ok,
-              output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
+              output: keepEnds(result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n'), 4000),
               durationMs: result.durationMs,
             });
           }
@@ -512,7 +512,7 @@ export function createFleetTaskExecutor(
             name: 'build',
             command: input.command,
             ok: result.ok,
-            output: (result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n')).slice(0, 4000),
+            output: keepEnds(result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n'), 4000),
             durationMs: result.durationMs,
           });
         }

@@ -15,7 +15,7 @@ import type {
   AgentRunStats,
   TerminationReason,
 } from '@wazir/core';
-import { ObservationCompactor, ContextCompiler, WEB_TRUST_INSTRUCTION, computeUsableBudget, computeUtilization, type GroundedResult, type ToolResult } from '@wazir/core';
+import { ObservationCompactor, ContextCompiler, keepEnds, WEB_TRUST_INSTRUCTION, computeUsableBudget, computeUtilization, type GroundedResult, type ToolResult } from '@wazir/core';
 import {
   ModelProtocolAdapter,
   ACTION_START_PATTERN,
@@ -1502,7 +1502,7 @@ export class CodingAgent implements AgentAdapter {
         continue;
       }
       if (!result.ok) {
-        failures.push(`${check}: ${output.slice(0, 4000)}`);
+        failures.push(`${check}: ${keepEnds(output, 4000)}`);
       }
     }
 
