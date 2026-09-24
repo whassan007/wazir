@@ -114,6 +114,8 @@ export interface AgentRunRequest {
   maxToolCalls?: number;
   /** Per-request override of the agent's total token budget; falls back to the agent default. */
   maxTokens?: number;
+  /** Per-request override of the agent's semantic no-progress threshold; falls back to the agent default. */
+  maxNoProgressIterations?: number;
   /** The model's context window, when known — enables mid-run compaction. */
   contextTokens?: number;
   /** Set to true by the host when the user requested cancellation. */

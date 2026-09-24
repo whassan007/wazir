@@ -1,4 +1,4 @@
-import { detectProgress } from "./diagnostics.js";
+import { detectProgress, observationFingerprint } from "./diagnostics.js";
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type {
@@ -51,6 +51,14 @@ export interface CodingAgentOptions {
    * budget silently unenforced rather than guessing at a token count.
    */
   maxTokens?: number;
+  /**
+   * Consecutive executed tool calls that yield no semantic progress — no physical
+   * file change and no observation the run hasn't already seen (see
+   * `observationFingerprint`) — before the run stops with `NO_PROGRESS`. Catches
+   * the investigation loop the exact-repeat circuit breaker can't: `glob *.cpp`,
+   * `glob src/*.cpp`, `find . -name '*.cpp'`, all empty, each syntactically novel.
+   */
+  maxNoProgressIterations?: number;
   /**
    * Wall-clock budget for a single model turn, independent of the overall
    * job timeout. Small/local models can ramble in prose for minutes without
@@ -486,6 +494,7 @@ export class CodingAgent implements AgentAdapter {
   private readonly maxWallClockMs: number;
   private readonly maxToolCalls: number;
   private readonly maxTokens: number;
+  private readonly maxNoProgressIterations: number;
   private readonly maxTokensPerTurn: number;
   private readonly temperature: number;
   private readonly modelTurnTimeoutMs: number;
@@ -510,6 +519,7 @@ export class CodingAgent implements AgentAdapter {
     // budgets because nothing bounded total reported usage. 2M is generous for a
     // genuinely large task but a real ceiling, not effectively unbounded.
     this.maxTokens = options.maxTokens ?? 2_000_000;
+    this.maxNoProgressIterations = options.maxNoProgressIterations ?? 6;
     this.maxTokensPerTurn = options.maxTokensPerTurn ?? 4096;
     this.temperature = options.temperature ?? 0.2;
     this.modelTurnTimeoutMs = options.modelTurnTimeoutMs ?? 90_000;
@@ -531,6 +541,7 @@ export class CodingAgent implements AgentAdapter {
     const maxWallClockMs = request.maxWallClockMs ?? this.maxWallClockMs;
     const maxToolCalls = request.maxToolCalls ?? this.maxToolCalls;
     const maxTokens = request.maxTokens ?? this.maxTokens;
+    const maxNoProgressIterations = request.maxNoProgressIterations ?? this.maxNoProgressIterations;
     let totalTokensUsed = 0;
     const runStartedAt = Date.now();
     const wallClockExceeded = () => Date.now() - runStartedAt >= maxWallClockMs;
@@ -599,6 +610,35 @@ export class CodingAgent implements AgentAdapter {
       if (repeatedToolCount < this.toolRepeatLimit) return null;
       return `circuit breaker: model called ${tool} with identical input ${repeatedToolCount} times in a row without making progress`;
     };
+
+    // ---- semantic no-progress: novel-looking calls that change nothing and teach nothing ----
+    const seenObservations = new Set<string>();
+    let noProgressCount = 0;
+    // Consecutive tool actions the circuit breaker refused. The breaker's correction
+    // gives the model one chance to change strategy; ignoring it again is terminal.
+    let consecutiveBlockedRepeats = 0;
+    /**
+     * Progress is a controller judgement from physical facts, never from the model's
+     * narration: a real content change on disk, or an observation (normalized tool
+     * output) this run has not seen before. Returns the updated no-progress streak.
+     */
+    const assessProgress = (tool: string, input: Record<string, unknown>, result: { ok: boolean; output: string; error?: string; fileMutations?: Array<{ changed: boolean }> }): number => {
+      const mutated = result.fileMutations
+        ? result.fileMutations.some((m) => m.changed)
+        : FILE_TOOLS.has(tool) && result.ok && typeof input.path === 'string';
+      const fingerprint = observationFingerprint(result);
+      const novel = !seenObservations.has(fingerprint);
+      seenObservations.add(fingerprint);
+      noProgressCount = mutated || novel ? 0 : noProgressCount + 1;
+      return noProgressCount;
+    };
+    const noProgressTurn = (): AgentTurn => ({
+      kind: 'error',
+      error: `NO_PROGRESS: ${noProgressCount} consecutive tool calls produced no file change and no new information`,
+      errorKind: 'other',
+      terminationReason: 'NO_PROGRESS',
+      protocolMetrics: currentMetrics(),
+    });
 
     // ---- context compaction: keep `messages` under the model's context window ----
     const estimateTokens = (msgs: ChatMessage[]): number =>
@@ -978,6 +1018,10 @@ export class CodingAgent implements AgentAdapter {
           }
         }
         pushToolResult(action.tool, result);
+        if (assessProgress(action.tool, action.input ?? {}, result) >= maxNoProgressIterations) {
+          yield noProgressTurn();
+          return;
+        }
         continue;
       }
       messages.push({ role: 'user', content: 'Respond with exactly one JSON object as specified.' });
@@ -1073,6 +1117,18 @@ export class CodingAgent implements AgentAdapter {
         const breakerError = checkCircuitBreaker(action.tool, action.input ?? {});
         if (breakerError) {
           validationErrors += 1;
+          consecutiveBlockedRepeats += 1;
+          if (consecutiveBlockedRepeats >= 2) {
+            yield {
+              kind: 'error',
+              error: `REPEATED_ACTION: ${breakerError}; the model ignored the duplicate-action correction`,
+              errorKind: 'other',
+              terminationReason: 'REPEATED_ACTION',
+              raw,
+              protocolMetrics: currentMetrics(),
+            };
+            return;
+          }
           yield { kind: 'message', content: `ACTION_BLOCKED_DUPLICATE: '${action.tool}' repeated ${this.toolRepeatLimit} times`, tool: action.tool, raw };
           pushToolResult(action.tool, {
             ok: false,
@@ -1104,6 +1160,7 @@ export class CodingAgent implements AgentAdapter {
           return;
         }
         validActions += 1;
+        consecutiveBlockedRepeats = 0;
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
         yield { kind: 'tool_call', tool: action.tool, toolInput: action.input, toolResult: result, raw };
@@ -1195,6 +1252,10 @@ export class CodingAgent implements AgentAdapter {
           }
         }
         pushToolResult(action.tool, result);
+        if (assessProgress(action.tool, action.input ?? {}, result) >= maxNoProgressIterations) {
+          yield noProgressTurn();
+          return;
+        }
         continue;
       }
 

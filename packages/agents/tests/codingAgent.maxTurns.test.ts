@@ -24,7 +24,9 @@ function fakeRuntime(toolName = 'read'): { runtime: AgentRuntime; counters: { ge
     tools: [{ name: toolName, description: `${toolName} a file`, inputSchema: {} }],
     async *generate() {
       counters.generateCalls += 1;
-      const input = toolName === 'write' ? '{"path":"x.txt","content":"x"}' : '{"path":"x.txt"}';
+      // Distinct content per turn: an identical write repeated past the duplicate-action
+      // correction is terminated as REPEATED_ACTION, which is not what this fixture tests.
+      const input = toolName === 'write' ? `{"path":"x.txt","content":"x${counters.generateCalls}"}` : '{"path":"x.txt"}';
       const reply =
         counters.generateCalls === 1 && toolName === 'write'
           ? '{"action":"plan","content":"plan"}'

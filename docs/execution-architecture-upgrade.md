@@ -227,6 +227,26 @@ Regression coverage: `packages/agents/tests/codingAgent.maxTokens.test.ts` (budg
 trips independent of turn/tool-call counts; per-request override; not enforced when
 usage is never reported; a normal run well within budget is unaffected).
 
+## Eighth tranche: semantic no-progress and repeated-action termination
+
+`CodingAgent` now judges progress from physical facts after every executed tool
+call: a real content change on disk (`fileMutations[].changed`), or an observation
+it has not seen before (`observationFingerprint`, `packages/agents/src/diagnostics.ts`).
+The fingerprint ignores how a call was phrased: differently-worded empty results
+(`''`, `No matches found.`, `none`) collapse into one, and failures reduce to their
+diagnostic fingerprints. `maxNoProgressIterations` (option and per-request override,
+default 6) consecutive calls with neither stop the run with `terminationReason:
+'NO_PROGRESS'`. That covers `glob *.cpp` → `glob src/*.cpp` → `find . -name '*.cpp'`,
+which the exact-repeat breaker cannot catch.
+
+The circuit breaker still corrects the model once. If the model sends the blocked
+action again, the run ends with `REPEATED_ACTION`, not a loop that runs until
+`maxTurns`. The `maxTurns` test fixture used to write byte-identical content every
+turn. It now varies the content, because that test covers turn capping and the
+identical-write loop is now correctly a `REPEATED_ACTION`.
+
+Regression coverage: `packages/agents/tests/codingAgent.noProgress.test.ts`.
+
 ## Not yet done
 
 Phase 2/3 (model-attempt vs. execution-history separation, observation compaction),

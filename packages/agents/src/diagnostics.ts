@@ -56,3 +56,26 @@ export function detectProgress(before: string, after: string): 'PROGRESS' | 'NO_
   if (identical) return 'NO_PROGRESS';
   return 'PROGRESS'; // different errors, count same => still progressing through issues
 }
+
+// Phrasings search/listing tools use for "nothing matched". Different commands
+// (`glob *.cpp`, `glob **/*.cpp`, `find . -name '*.cpp'`) word an empty result
+// differently but carry the same information, so they share one fingerprint.
+const EMPTY_RESULT_RE = /^(no (matches|files|results|entries)( found)?|nothing found|none|0 (matches|results|files))\.?$/i;
+
+/**
+ * Semantic fingerprint of what a tool call *told* the agent — independent of how
+ * the call was phrased. Two syntactically different calls whose observations share
+ * a fingerprint obtained no new information from the second one. Failures are
+ * reduced to their diagnostic fingerprints so line-number-free reruns of the same
+ * compile error collapse together; successful output is whitespace-normalized.
+ */
+export function observationFingerprint(result: { ok: boolean; output: string; error?: string }): string {
+  const text = [result.error, result.output].filter(Boolean).join('\n');
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length === 0 || EMPTY_RESULT_RE.test(normalized)) return `${result.ok ? 'ok' : 'fail'}:EMPTY`;
+  if (!result.ok) {
+    const diagnostics = [...extractDiagnosticFingerprints(text)].sort();
+    if (diagnostics.length > 0) return `fail:${diagnostics.join('|')}`;
+  }
+  return `${result.ok ? 'ok' : 'fail'}:${normalized}`;
+}
