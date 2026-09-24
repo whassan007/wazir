@@ -29,6 +29,7 @@ export interface ProvidersConfig {
 }
 
 export interface WazirConfig {
+  web?: import('@wazir/core').WebConfig;
   resources?: { memory?: { reservePercent?: number; minimumReserveGiB?: number }; minimumContext?: number; autoContext?: number };
   modelLifecyclePolicy?: import('@wazir/core').PolicyEngineOptions['modelLifecycle'];
   mcp?: { autoConnect?: boolean };
@@ -54,6 +55,8 @@ export interface WazirConfig {
   allowedMcpServers: string[];
   /** Hosted-provider (Anthropic/OpenAI/Google) routing configuration. */
   providers?: ProvidersConfig;
+  /** Context compaction and token optimization settings. */
+  context?: import('@wazir/core').ContextConfig;
 }
 
 export function configDir(): string {
@@ -153,6 +156,7 @@ export function loadConfig(): WazirConfig {
     const raw = readFileSync(configFile(), 'utf8');
     const fileConfig = JSON.parse(raw) as Partial<WazirConfig>;
     config.resources = fileConfig.resources;
+    config.web = fileConfig.web;
     config.modelLifecyclePolicy = fileConfig.modelLifecyclePolicy;
     config.ollamaUrl = fileConfig.ollamaUrl ?? config.ollamaUrl;
     config.lmstudioUrl = fileConfig.lmstudioUrl ?? config.lmstudioUrl;
@@ -181,6 +185,9 @@ export function loadConfig(): WazirConfig {
         ...fileConfig.providers,
         google: { ...config.providers?.google, ...fileConfig.providers.google },
       };
+    }
+    if (fileConfig.context) {
+      config.context = fileConfig.context;
     }
   } catch {
     // no config file — defaults + env win

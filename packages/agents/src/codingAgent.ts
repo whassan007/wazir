@@ -699,6 +699,11 @@ export class CodingAgent implements AgentAdapter {
       if (!force && !contextTokens) return null;
       
       const before = estimateTokens(messages);
+      // Compaction discards recent working context, so it is a response to pressure, not
+      // a per-turn routine: only once usage reaches contextCompactionRatio of the window.
+      // (This gate was missing — any run whose host reported contextTokens compacted on
+      // every turn; observed live as 28 compactions in 30 model requests.)
+      if (!force && before < (contextTokens as number) * this.contextCompactionRatio) return null;
       
       // aggressive compaction
       const head = messages.slice(0, KEEP_HEAD);
@@ -735,8 +740,10 @@ export class CodingAgent implements AgentAdapter {
         content: summaryParts.join('\n\n')
       };
 
-      // if the new messages size is still too big, we might need to drop activeFileContents,
-      // but let's just assemble it and let Wazir's outer limits catch it.
+      // The summary re-embeds active file contents, so it can outweigh the turns it
+      // replaces; a compaction that doesn't shrink the transcript only loses history.
+      // A forced (overflow-recovery) compaction is still applied.
+      if (!force && estimateTokens([...head, summary, ...tail]) >= before) return null;
       messages.length = 0;
       messages.push(...head, summary, ...tail);
       const after = estimateTokens(messages);
