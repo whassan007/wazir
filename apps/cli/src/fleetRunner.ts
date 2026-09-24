@@ -1,6 +1,7 @@
 import { executeMCPForAgent } from './mcp.js';
 import { runSubagent } from './run.js';
 import { recordTermination } from './termination.js';
+import { createEscalationHandler } from './escalation.js';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import {
@@ -219,12 +220,24 @@ export function createFleetTaskExecutor(
 
     // 5. Build AgentRuntime
     let currentTurn: { adapter: import('@wazir/runtimes-interfaces').RuntimeAdapter; requestId: string } | undefined;
+    // Changes only through a controller-approved escalation (runtime.escalate below).
+    let currentModelId = assignment.modelId;
     const runtime: AgentRuntime = {
       tools: engine.tools.forModel(),
 
       cancelCurrentTurn(): void {
         void currentTurn?.adapter.cancel?.(currentTurn.requestId);
       },
+
+      // Same controller-owned escalation as `wa run`: the Scheduler picks, the
+      // placement stays, every decision is recorded as model.route.changed.
+      escalate: createEscalationHandler(engine, {
+        executionId,
+        task,
+        requiredContextTokens: contextDecision.finalRequiredTokens,
+        placement: { runtimeId: assignment.runtimeId, computerId: assignment.computerId },
+        onEscalated: (_request, modelId) => { currentModelId = modelId; },
+      }),
 
       async *generate(request) {
         const requestId = generateId('req-');
@@ -521,7 +534,7 @@ export function createFleetTaskExecutor(
         const turnContent = turn.content ?? (turn.kind === 'tool_call' && turn.toolResult?.ok ? turn.toolResult.output : undefined);
         const turnError = turn.error ?? (turn.kind === 'tool_call' && turn.toolResult && !turn.toolResult.ok ? turn.toolResult.error : undefined);
         const turnMeta = turn.kind === 'tool_call' && turn.toolResult?.metadata ? turn.toolResult.metadata : undefined;
-        if (turn.terminationReason) await recordTermination(engine, executionId, turn.terminationReason, assignment.modelId, task.type, turn.protocolMetrics, turn.runStats);
+        if (turn.terminationReason) await recordTermination(engine, executionId, turn.terminationReason, currentModelId, task.type, turn.protocolMetrics, turn.runStats);
 
         await engine.executions.recordEvent(executionId, 'agent.turn', {
           kind: turn.kind,

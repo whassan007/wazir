@@ -25,7 +25,7 @@ import { color } from './colors.js';
 import type { RookEngine } from './engine.js';
 import { StatusLoader } from './spinner.js';
 import { recordTermination } from './termination.js';
-import { planEscalation } from './escalation.js';
+import { createEscalationHandler } from './escalation.js';
 
 /** Maps a control-plane-reported worker event onto the local `GenerationEvent` shape,
  * so a remotely-dispatched task streams through the same agent loop as a local one. */
@@ -334,33 +334,18 @@ export async function executeTask(
   const runtime: AgentRuntime = {
     tools: availableTools,
 
-    async escalate(request) {
-      const { decision } = planEscalation(engine.scheduler, {
-        task,
-        requiredContextTokens: context.finalRequiredTokens,
-        placement: { runtimeId: scheduling.runtimeId, computerId: scheduling.computerId },
-        request,
-      });
-      await engine.executions.recordEvent(executionId, 'model.route.changed', {
-        previousModel: request.currentModelId,
-        newModel: decision.modelId ?? null,
-        accepted: Boolean(decision.modelId),
-        failureClass: request.failureClass,
-        reason: request.reason,
-        routeDecision: decision.reason,
-        taskClass: task.type,
-      });
-      if (!decision.modelId) {
-        log(color.yellow(`    model escalation declined: ${untrusted(decision.reason)}`));
-        return decision;
-      }
-      // The abandoned model failed this task class; the circuit breaker should know.
-      engine.reliability?.recordTermination(request.currentModelId, task.type, request.failureClass);
-      currentModelId = decision.modelId;
-      emitJson({ type: 'model_escalated', executionId, previousModel: request.currentModelId, newModel: decision.modelId, failureClass: request.failureClass });
-      log(color.yellow(`    model escalated: ${request.currentModelId} -> ${decision.modelId} (${request.failureClass})`));
-      return decision;
-    },
+    escalate: createEscalationHandler(engine, {
+      executionId,
+      task,
+      requiredContextTokens: context.finalRequiredTokens,
+      placement: { runtimeId: scheduling.runtimeId, computerId: scheduling.computerId },
+      onEscalated: (request, modelId) => {
+        currentModelId = modelId;
+        emitJson({ type: 'model_escalated', executionId, previousModel: request.currentModelId, newModel: modelId, failureClass: request.failureClass });
+        log(color.yellow(`    model escalated: ${request.currentModelId} -> ${modelId} (${request.failureClass})`));
+      },
+      onDeclined: (_request, reason) => log(color.yellow(`    model escalation declined: ${untrusted(reason)}`)),
+    }),
 
     async *generate(request) {
       const requestId = generateId('req-');

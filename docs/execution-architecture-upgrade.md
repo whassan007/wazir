@@ -573,12 +573,32 @@ Regression coverage: `packages/tools/tests/atomicWrite.test.ts`, additions to
 Regression coverage: `packages/agents/tests/codingAgent.runStats.test.ts`, additions
 to `executionSummary.test.ts` and `modelReliability.test.ts`.
 
+### Escalation (Phase 14)
+
+- **Fleet tasks can escalate.** Escalation moved into one shared
+  `createEscalationHandler` (`apps/cli/src/escalation.ts`), used by both `wa run`
+  and the fleet runner. In fleet tasks, a model that exhausts its protocol
+  budget, repeats a blocked action or stops making progress can be replaced
+  mid-task under the same rules: the Scheduler picks, tried models are
+  excluded, a pin is never substituted, and the placement must serve the
+  candidate now. Every decision is recorded as `model.route.changed`. The
+  fleet's termination event is now attributed to the model running at the end.
+
+Still not supported: re-placing a running execution onto another computer, or
+loading a model mid-run. Both are declined with that reason.
+
+Verification: I typechecked the staged tree (HEAD plus these changes only) in
+isolation, with no errors except one unrelated MCP subpath import my scratch
+path mapping can't resolve. I also typechecked the working tree. The CLI
+escalation, e2e, fleet, termination, recovery, inspect, TUI and context tests
+plus `policyBypassSweep` all passed (9 files, 87 tests).
+
 ## Not yet done
 
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
   checks are still inline in `CodingAgent`.
-- Phase 14 remainder: an escalation hook for the fleet runner, and mid-run
-  re-placement (a different computer, or loading a model) as an escalation target.
+- Phase 14 remainder: mid-run re-placement (a different computer, or loading a
+  model) as an escalation target.
 - Phase 21 remainder: resuming the agent loop inside the recovered execution
   (the recovery plan says when it's safe; tasks are still retried as before).
 - Phase 22: `wa executions events|explain` projections of the new events.
