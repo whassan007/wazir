@@ -73,6 +73,9 @@ export class RecoveryManager {
     for (const computerId of offline) {
       const active = await this.deps.executions.listActiveByComputer(computerId);
       for (const record of active) {
+        // A live process on this host is still running it; that process heartbeats its
+        // own worker, so this registry's view of the computer is not evidence it died.
+        if (this.deps.executions.ownedByAnotherLiveProcess(record)) continue;
         const taskId = record.execution.taskId;
         // Durable step checkpoints: a 'tool.started' with no matching
         // 'tool.completed' means the last tool call's actual outcome is

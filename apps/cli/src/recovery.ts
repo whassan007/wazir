@@ -39,6 +39,8 @@ export async function reconcileLocalOutcomes(
 ): Promise<Array<{ executionId: string; callId: string; outcome: string }>> {
   const done: Array<{ executionId: string; callId: string; outcome: string }> = [];
   for (const record of await executions.list()) {
+    // Another live `wa` process's in-flight calls are its own to resolve.
+    if (executions.ownedByAnotherLiveProcess(record)) continue;
     for (const call of executions.toolCheckpoints(record.execution.id)) {
       if (call.state !== 'STARTED' && call.state !== 'OUTCOME_UNKNOWN') continue;
       const inspection = await inspect(record, call).catch((): ToolOutcomeInspection => ({ outcome: 'UNDETERMINED', evidence: 'inspection failed' }));

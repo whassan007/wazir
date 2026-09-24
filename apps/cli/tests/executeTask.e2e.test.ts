@@ -29,14 +29,13 @@ import type { RookEngine } from '../src/engine.js';
  * filesystem/check tools against a scratch project directory) and only
  * fakes the one thing that's genuinely external: the model itself.
  */
-async function buildTestEngine(projectRoot: string, scriptedReplies?: string[]): Promise<RookEngine> {
+async function buildTestEngine(projectRoot: string, scriptedReplies?: string[], executions = new ExecutionEngine()): Promise<RookEngine> {
   const computers = new ComputerRegistry();
   const runtimes = new RuntimeRegistry();
   const models = new ModelRegistry();
   const agents = new AgentRegistry();
   const tools = new ToolRegistry(defaultTools);
   const compiler = new ContextCompiler();
-  const executions = new ExecutionEngine();
 
   computers.register({
     id: 'local',
@@ -188,6 +187,30 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     if (projectRoot) await fs.rm(projectRoot, { recursive: true, force: true }).catch(() => undefined);
   });
 
+  it('fails cleanly, instead of crashing, when the store rejects a write mid-run', async () => {
+    // Phase 24 live run (exec-muf5bd29-1): another process changed the stored record, the
+    // next write hit EXECUTION_STORAGE_CONFLICT, and the error escaped executeTask as a
+    // fatal unhandledRejection because its own error path wrote to the record again.
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-'));
+    let conflicted = false;
+    const executions = new ExecutionEngine({
+      persist: (record) => {
+        if (conflicted || record.events.some((e) => (e.eventType ?? e.type) === 'tool.call.started')) {
+          conflicted = true;
+          throw new Error(`EXECUTION_STORAGE_CONFLICT: ${record.execution.id}`);
+        }
+      },
+    });
+    const engine = await buildTestEngine(projectRoot, undefined, executions);
+
+    const outcome = await executeTask(engine, 'write a hello file', { quiet: true });
+
+    expect(conflicted).toBe(true);
+    expect(outcome.success).toBe(false);
+    expect(outcome.reasons.join(' ')).toContain('EXECUTION_STORAGE_CONFLICT');
+    expect(outcome.reasons.join(' ')).toContain('stopped rather than overwrite history');
+  });
+
   it('plans, schedules, runs the agent loop through real policy-gated tools, and evaluates the result', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-'));
     const engine = await buildTestEngine(projectRoot);
@@ -206,6 +229,7 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     // The real ExecutionEngine actually recorded the run.
     const record = engine.executions.require(outcome.executionId);
     expect(record.execution.status).toBe('completed');
+    expect(record.execution.owner).toEqual({ pid: process.pid, host: os.hostname() });
     expect(record.execution.computerId).toBe('local');
     expect(record.execution.modelId).toBe('fake-model');
     expect(record.toolCalls.some((c) => c.tool === 'write' && c.ok)).toBe(true);

@@ -677,12 +677,23 @@ export async function executeTask(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     errors.push(message);
-    await engine.executions.recordError(executionId, message);
+    // Best effort: when the error *is* a rejected write, recording it would rethrow.
+    await engine.executions.recordError(executionId, message).catch(() => undefined);
     emitJson({ type: 'error', error: message, executionId });
     log(color.red(`    ${untrusted(message)}`));
   } finally {
     loader.stop();
     process.off('SIGINT', onSigint);
+  }
+
+  // The durable record refused a write (another process changed it). Nothing this run
+  // does can be recorded any more, so it must not evaluate or claim a result — it stops
+  // with a plain failure instead of crashing on the next write.
+  const storageError = engine.executions.persistenceError;
+  if (storageError) {
+    const reason = `execution record could not be written (${storageError.message}); this run stopped rather than overwrite history another process recorded`;
+    emitJson({ type: 'complete', success: false, executionId, filesChanged: [], result: summary, errors: [...errors, reason] });
+    return { success: false, reasons: [reason], filesChanged: [], executionId, result: summary, errors: [...errors, reason] };
   }
 
   // ---- deterministic evaluation -------------------------------------------

@@ -13,6 +13,11 @@ export type ExecutionStatus =
   | 'failed'
   | 'cancelled';
 
+export interface ExecutionOwner {
+  pid: number;
+  host: string;
+}
+
 export interface Execution {
   id: string;
   jobId?: string;
@@ -29,6 +34,12 @@ export interface Execution {
    * task's worktree). Lets recovery inspect the right files for an unknown outcome.
    */
   workspaceRoot?: string;
+  /**
+   * The process that last wrote this execution. Several `wa` processes share one store;
+   * a process starting up must not "recover" an execution another live process is still
+   * running (see ExecutionEngine.ownedByAnotherLiveProcess).
+   */
+  owner?: ExecutionOwner;
   status: ExecutionStatus;
   createdAt: Date;
   startedAt?: Date;

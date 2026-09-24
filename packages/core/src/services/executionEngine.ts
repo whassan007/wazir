@@ -1,4 +1,5 @@
 import type {
+  ExecutionOwner,
   AcceptanceContract,
   CheckRunRecord,
   ContextDecision,
@@ -23,6 +24,7 @@ import type {
 } from '../types/index.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { hostname } from 'node:os';
 import { sanitizeUntrustedOutput, appendAuditEvent, computeContentHash } from '@wazir/shared';
 import type { ProvenanceManager, CreateArtifactParams } from './provenanceManager.js';
 import { executionValuesEqual } from './executionPersistence.js';
@@ -43,6 +45,19 @@ export interface ExecutionEngineOptions {
   provenanceManager?: ProvenanceManager;
   /** Project root used as the artifact workspace; defaults to process.cwd(). */
   workspace?: string;
+  /** Identity stamped on every execution this engine writes; defaults to this process. */
+  owner?: ExecutionOwner;
+  /** Liveness check for a same-host owner pid; defaults to signal 0. */
+  isProcessAlive?: (pid: number) => boolean;
+}
+
+function signalZeroAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'; // exists, owned by another user
+  }
 }
 
 let idCounter = 0;
@@ -67,6 +82,8 @@ export class ExecutionEngine {
   private readonly idPrefix: string;
   private readonly provenanceManager?: ProvenanceManager;
   private readonly workspace: string;
+  private readonly owner: ExecutionOwner;
+  private readonly isProcessAlive: (pid: number) => boolean;
   readonly ready: Promise<void>;
 
   constructor(options: ExecutionEngineOptions = {}) {
@@ -74,6 +91,8 @@ export class ExecutionEngine {
     this.idPrefix = options.idPrefix ?? 'exec';
     this.provenanceManager = options.provenanceManager;
     this.workspace = options.workspace ?? process.cwd();
+    this.owner = options.owner ?? { pid: process.pid, host: hostname() };
+    this.isProcessAlive = options.isProcessAlive ?? signalZeroAlive;
     this.ready = Promise.resolve().then(() => options.load?.()).then(async (loaded) => {
       if (!loaded) return;
       for (const record of loaded) {
@@ -103,8 +122,11 @@ export class ExecutionEngine {
         this.histories.set(copy.execution.id, events);
         this.records.set(copy.execution.id, copy);
       }
-      // Detect orphaned tool.start events without a matching completed event
+      // Detect orphaned tool.start events without a matching completed event — but never
+      // in an execution another live process is still running: its "unfinished" call is
+      // in flight, and marking it would also fork the record's storage revision.
       for (const record of this.records.values()) {
+        if (this.ownedByAnotherLiveProcess(record)) continue;
         for (const call of this.toolCheckpoints(record.execution.id).filter(call => call.state === 'STARTED')) {
           const data = { tool: call.toolName, input: call.input, startedAt: call.startedAt, callId: call.callId, sideEffectClass: call.sideEffectClass, failureClass: 'TOOL_OUTCOME_UNKNOWN' };
           this.pushEvent(record, 'tool.unknownOutcome', data, { callId: call.callId, stepId: call.stepId });
@@ -946,8 +968,27 @@ export class ExecutionEngine {
     record.events = structuredClone(history);
   }
 
+  /**
+   * True when a different process on this host last wrote the execution and is still
+   * alive. Such an execution is that process's to finish or recover; a remote or
+   * unstamped (legacy) owner can't be checked here and returns false.
+   */
+  /** The latched failure after a write was rejected (e.g. EXECUTION_STORAGE_CONFLICT);
+   *  once set, every later write rethrows it, so callers must stop writing. */
+  get persistenceError(): Error | undefined {
+    return this.persistenceFailure;
+  }
+
+  ownedByAnotherLiveProcess(record: ExecutionRecord): boolean {
+    const owner = record.execution.owner;
+    if (!owner || owner.host !== this.owner.host || owner.pid === this.owner.pid) return false;
+    return this.isProcessAlive(owner.pid);
+  }
+
   private async flush(record: ExecutionRecord): Promise<void> {
     if (this.persistenceFailure) throw this.persistenceFailure;
+    // Every write claims the execution for this process (e.g. a retry resuming it).
+    record.execution.owner = { ...this.owner };
     if (this.persist) {
       record.storageRevision = (record.storageRevision ?? 0) + 1;
       const snapshot = structuredClone({ ...record, events: this.histories.get(record.execution.id) });
