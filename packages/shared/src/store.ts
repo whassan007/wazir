@@ -248,26 +248,32 @@ export class JsonFileStore implements KeyValueStore {
   }
 
   private async reloadFromDisk(): Promise<void> {
+    this.data = await this.readFromDisk();
+  }
+
+  /** A fresh copy of the file. Writers mutate their own copy: a concurrent read that
+   *  refreshed a shared map mid-write made the writer persist the pre-mutation snapshot
+   *  and still report success. */
+  private async readFromDisk(): Promise<Map<string, unknown>> {
     try {
       const raw = await fs.readFile(this.file, 'utf8');
       const parsed = JSON.parse(raw, reviveDates) as Record<string, unknown>;
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error(`Invalid store document '${this.file}': expected an object`);
       }
-      this.data = new Map(Object.entries(parsed));
       this.observedFile = true;
+      return new Map(Object.entries(parsed));
     } catch (error) {
       // Only an absent first-run store is empty. Corruption, access failures,
       // or loss of a previously observed store must never erase execution facts.
       if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !this.observedFile) {
-        this.data = new Map();
-        return;
+        return new Map();
       }
       throw error;
     }
   }
 
-  private async persist(): Promise<void> {
+  private async persist(data: Map<string, unknown>): Promise<void> {
     const dir = path.dirname(this.file);
     await ensurePrivateDir(dir);
     // The store holds prompts, tool output and policy decisions for every
@@ -282,7 +288,7 @@ export class JsonFileStore implements KeyValueStore {
     // on independent schedules). Neither step alone is sufficient.
     const handle = await fs.open(tmp, 'w', 0o600);
     try {
-      await handle.writeFile(JSON.stringify(Object.fromEntries(this.data), null, 2), 'utf8');
+      await handle.writeFile(JSON.stringify(Object.fromEntries(data), null, 2), 'utf8');
       await handle.sync();
     } finally {
       await handle.close();
@@ -293,7 +299,7 @@ export class JsonFileStore implements KeyValueStore {
     this.observedFile = true;
   }
 
-  private async withLock(mutate: () => void): Promise<void> {
+  private async withLock(mutate: (data: Map<string, unknown>) => void): Promise<void> {
     // The lock file lives next to the data file, which may not exist yet on
     // a fresh install (e.g. the first-ever write to ~/.wazir/wazir.json) —
     // `persist()` below creates this directory too, but that's too late:
@@ -301,20 +307,21 @@ export class JsonFileStore implements KeyValueStore {
     // 'wx')` fails with ENOENT before `persist()` ever runs.
     await ensurePrivateDir(path.dirname(this.file));
     await withFileLock(this.lockFile, async () => {
-      await this.reloadFromDisk();
-      mutate();
-      await this.persist();
+      const data = await this.readFromDisk();
+      mutate(data);
+      await this.persist(data);
+      this.data = data;
       this.loaded = true;
     });
   }
 
   async update<T>(key: string, mutate: (current: T | undefined) => T): Promise<T> {
     let value!: T;
-    await this.withLock(() => { value = mutate(this.data.get(key) as T | undefined); this.data.set(key, value); });
+    await this.withLock((data) => { value = mutate(data.get(key) as T | undefined); data.set(key, value); });
     return value;
   }
   async put(key: string, value: unknown): Promise<void> {
-    await this.withLock(() => this.data.set(key, value));
+    await this.withLock((data) => data.set(key, value));
   }
 
   async get<T>(key: string): Promise<T | undefined> {
@@ -330,10 +337,10 @@ export class JsonFileStore implements KeyValueStore {
   }
 
   async delete(key: string): Promise<void> {
-    await this.withLock(() => this.data.delete(key));
+    await this.withLock((data) => data.delete(key));
   }
 
   async clear(): Promise<void> {
-    await this.withLock(() => this.data.clear());
+    await this.withLock((data) => data.clear());
   }
 }
