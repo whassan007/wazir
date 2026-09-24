@@ -18,7 +18,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version('0.1.48');
+  .version('0.1.49');
 
 registerMCPCommands(program);
 registerWebCommands(program);
