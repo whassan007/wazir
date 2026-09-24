@@ -106,6 +106,26 @@ export interface AgentTurn {
 }
 
 /**
+ * What a resumed run inherits from the execution it continues. Cost budgets
+ * (tool calls, tokens) are execution-wide, so their prior consumption counts against
+ * this attempt's limits; per-attempt pacing (turns, wall clock) starts fresh.
+ */
+export interface AgentResumeContext {
+  executionId: string;
+  /** 2 for the first resumption, and so on. */
+  attempt: number;
+  workspaceRevision: number;
+  /** Files physically changed by earlier attempts (still changed on disk). */
+  filesChanged: string[];
+  consumed: { toolCalls: number; tokens: number };
+  verification: { passing: string[]; failing: string[]; stale: number };
+  previousTermination: string | null;
+  lastError: string | null;
+  /** Unknown outcomes resolved from physical evidence before resuming. */
+  reconciled: string[];
+}
+
+/**
  * Counted by the controller as the run happens — never reported by the model.
  * Persisted with the run's termination so observability doesn't have to infer them.
  */
@@ -165,6 +185,12 @@ export interface AgentRunRequest {
   maxNoProgressIterations?: number;
   /** Per-request override of how many mid-run model escalations the agent may request. */
   maxModelEscalations?: number;
+  /**
+   * Set when this run continues an existing execution after a failure or crash,
+   * instead of starting fresh. Built by the controller from durable execution facts
+   * (see executionRecovery.ts) — never from a transcript.
+   */
+  resume?: AgentResumeContext;
   /** The model's context window, when known — enables mid-run compaction. */
   contextTokens?: number;
   /** Set to true by the host when the user requested cancellation. */

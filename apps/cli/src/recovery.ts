@@ -1,4 +1,5 @@
-import type { ExecutionEngine, ExecutionRecord, ToolCallCheckpoint, ToolOutcomeInspection } from '@wazir/core';
+import { summarizeExecution } from '@wazir/core';
+import type { AgentResumeContext, ExecutionEngine, ExecutionRecord, ToolCallCheckpoint, ToolOutcomeInspection } from '@wazir/core';
 import { existsSync } from 'node:fs';
 import { inspectToolOutcome } from '@wazir/tools';
 
@@ -47,4 +48,76 @@ export async function reconcileLocalOutcomes(
     }
   }
   return done;
+}
+
+export type TaskResumePlan =
+  | { action: 'resume'; reasons: string[]; resume: AgentResumeContext }
+  | { action: 'refuse'; reasons: string[] };
+
+/**
+ * Before a retried task runs again on its existing execution, decide — from durable
+ * facts only — whether that execution can safely continue:
+ *   1. resolve any dispatched-but-unconfirmed tool calls that physical state proves;
+ *   2. reconstruct the execution from its events and plan recovery;
+ *   3. resume with the inherited state, or refuse with the reason.
+ * A still-unresolved non-read-only call refuses: the side effect may already have
+ * happened, so re-running the agent could repeat it. The refusal is recorded on the
+ * execution; the resumption is recorded as `execution.resumed`.
+ */
+export async function planTaskResume(
+  executions: ExecutionEngine,
+  executionId: string,
+  inspect: (record: ExecutionRecord, call: ToolCallCheckpoint) => Promise<ToolOutcomeInspection>,
+): Promise<TaskResumePlan> {
+  const reconciled: string[] = [];
+  const record = executions.require(executionId);
+  for (const call of executions.toolCheckpoints(executionId)) {
+    if (call.state !== 'STARTED' && call.state !== 'OUTCOME_UNKNOWN') continue;
+    const inspection = await inspect(record, call).catch((): ToolOutcomeInspection => ({ outcome: 'UNDETERMINED', evidence: 'inspection failed' }));
+    if (inspection.outcome === 'UNDETERMINED') continue;
+    await executions.reconcileToolCall(executionId, call.callId, { ...inspection, inspectedBy: 'task-resume' });
+    reconciled.push(`'${call.toolName}' ${inspection.outcome}: ${inspection.evidence}`);
+  }
+
+  const { state, plan } = executions.reconstruct(executionId);
+  // A retry re-runs a task whose previous attempt ended (failed/cancelled/orphaned);
+  // that terminal status is what's being recovered, so only unresolved side effects
+  // and budgets decide — not the status itself. A completed execution is never resumed.
+  if (state.status === 'completed') return { action: 'refuse', reasons: ['execution already completed'] };
+  // Checked directly: planRecovery reports 'none' for a terminal status before it looks
+  // at unresolved calls, and a retried execution is usually already 'failed'.
+  const blocking = state.unresolvedToolCalls.filter((c) => c.sideEffectClass !== 'READ_ONLY');
+  if (blocking.length > 0 || plan.action === 'terminate') {
+    const reasons = blocking.length > 0
+      ? blocking.map((c) => `'${c.toolName}' (call ${c.callId}) was dispatched with no confirmed outcome; physical state cannot prove whether it happened, so the task is not re-run — reconcile it first`)
+      : plan.reasons;
+    await executions.recordError(executionId, `RESUME_REFUSED: ${reasons.join(' | ')}`);
+    return { action: 'refuse', reasons };
+  }
+  const planReasons = plan.action === 'none'
+    ? [`previous attempt ended ${state.status}; resuming the same execution at workspace revision ${state.workspaceRevision}`]
+    : plan.reasons;
+
+  const summary = summarizeExecution(executions.require(executionId));
+  const resumedBefore = (await executions.events(executionId)).filter((e) => (e.eventType ?? e.type) === 'execution.resumed').length;
+  const current = executions.require(executionId);
+  const resume: AgentResumeContext = {
+    executionId,
+    attempt: resumedBefore + 2,
+    workspaceRevision: state.workspaceRevision,
+    filesChanged: [...current.filesChanged],
+    consumed: { toolCalls: summary.agentRunStats?.toolCalls ?? current.toolCalls.length, tokens: summary.agentRunStats?.tokensUsed ?? summary.tokens?.total ?? 0 },
+    verification: { passing: state.verification.currentPassing, failing: state.verification.currentFailing, stale: state.verification.staleChecks },
+    previousTermination: summary.terminationReason,
+    lastError: current.errors.at(-1) ?? null,
+    reconciled,
+  };
+  const reasons = [...planReasons, ...reconciled.map((r) => `reconciled ${r}`)];
+  // errorsBefore: earlier attempts' errors stay as history but don't decide this attempt
+  // (see evaluation's currentAttemptErrors).
+  await executions.recordEvent(executionId, 'execution.resumed', {
+    attempt: resume.attempt, workspaceRevision: resume.workspaceRevision, consumed: resume.consumed,
+    errorsBefore: current.errors.length, reasons,
+  });
+  return { action: 'resume', reasons, resume };
 }

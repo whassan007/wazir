@@ -2,6 +2,7 @@ import { executeMCPForAgent } from './mcp.js';
 import { runSubagent } from './run.js';
 import { recordTermination } from './termination.js';
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
+import { localOutcomeInspector, planTaskResume } from './recovery.js';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import {
@@ -19,6 +20,7 @@ import {
   type WorkerExecutionEvent,
   type WorkerExecutionRequest,
   type WorktreeInfo,
+  type AgentResumeContext,
   taskAuthorizesVerificationChanges,
 } from '@wazir/core';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
@@ -161,8 +163,21 @@ export function createFleetTaskExecutor(
     const existingRecords = await engine.executions.listByTask(taskId);
     let executionId: string;
 
+    // A retry of this task continues its existing execution — but only when durable
+    // facts say that's safe (planTaskResume): provable outcomes are reconciled first,
+    // and an unresolved side effect refuses rather than risking a repeat.
+    let resume: AgentResumeContext | undefined;
     if (existingRecords.length > 0) {
       executionId = existingRecords[0].execution.id;
+      const resumePlan = await planTaskResume(engine.executions, executionId, localOutcomeInspector(engine.projectRoot, engine.worker.computerId ?? 'local'));
+      if (resumePlan.action === 'refuse') {
+        const error = `RESUME_REFUSED: ${resumePlan.reasons.join(' | ')}`;
+        context.onProgress?.({ kind: 'error', phase: 'plan', error });
+        // 'policy': a controller safety refusal — retrying or replanning can't clear it.
+        return { success: false, error, errorKind: 'policy', reasons: resumePlan.reasons };
+      }
+      resume = resumePlan.resume;
+      context.onProgress?.({ kind: 'message', phase: 'plan', content: `resuming execution ${executionId} (attempt ${resume.attempt}): ${resumePlan.reasons.join('; ')}` });
     } else {
       const rec = await engine.executions.create({
         task,
@@ -537,6 +552,7 @@ export function createFleetTaskExecutor(
           mutationRequired: context.mutationRequired ?? task.mutationRequired ?? task.requirements?.mutationRequired,
           expectedArtifacts: task.expectedArtifacts ?? task.requirements?.expectedArtifacts,
           expectedEvidence: task.expectedEvidence,
+          resume,
         },
         runtime,
       )) {

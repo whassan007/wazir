@@ -755,7 +755,7 @@ Each of the mission's 35 required regressions, mapped to the test that covers it
 | 28 | compaction keeps raw evidence, reduces model-visible output | `agents/tests/codingAgent.toolResultOutput.test.ts`, `core/tests/observationCompactor.test.ts` |
 | 29 | protected tests cannot be silently weakened | `tools/tests/protectedVerification.test.ts`, `core/tests/verificationIntegrity.test.ts` |
 | 30 | reconstruction from events reproduces current state | `core/tests/executionRecovery.test.ts` |
-| 31 | recovery resumes the same execution where safe | `core/tests/executionRecovery.test.ts`. **Partial:** the plan says `resume` for the same execution, but the agent loop is not resumed inside it (Phase 21 remainder). |
+| 31 | recovery resumes the same execution where safe | `cli/tests/resume.e2e.test.ts`, `cli/tests/taskResume.test.ts`, `core/tests/executionRecovery.test.ts` |
 | 32 | duplicate completion event prevented | `core/tests/executionHistory.test.ts` |
 | 33 | completion requires evidence for the current revision | `tools/tests/physicalExecution.test.ts`, `core/tests/revisionFencing.test.ts` |
 | 34 | TUI state reconstructable from events | `cli/tests/executionProjection.test.ts`. **Partial:** `projectExecutionCard` rebuilds the card identically after a restart, but the live TUI still builds cards from callbacks and does not restore from it. |
@@ -768,8 +768,60 @@ the fleet TUI's agent card from the durable record. Beyond the card, it adds
 the current model, workspace revision, retries, repairs, escalations, longest
 no-progress streak, current vs stale verification, and termination.
 
+## Twenty-second tranche: resuming the same execution (Phase 21 remainder)
+
+A retried fleet task already reused its execution record, but the agent started
+from scratch with no recovery:
+- it ignored unresolved tool outcomes, so the first write failed with
+  `TOOL_OUTCOME_UNKNOWN`
+- budgets reset, so every retry got a fresh tool-call and token allowance
+- the agent knew nothing of the earlier work; a retry that only had to verify
+  already-correct files failed with "produced no code modifications"
+- the evaluator counted the earlier attempt's errors, so a resumed execution
+  could never succeed
+
+`planTaskResume` (`apps/cli/src/recovery.ts`) now runs before a retried task
+continues its execution:
+1. It reconciles dispatched-but-unconfirmed calls that physical state proves,
+   inspecting the execution's recorded workspace.
+2. It rebuilds the execution from events.
+3. It refuses while any non-read-only call is still unresolved. This is checked
+   directly, because `planRecovery` reports `none` for a terminal status and a
+   retried execution is usually already `failed`. The refusal is recorded on the
+   execution, and the fleet returns it as `errorKind: 'policy'`, so it is neither
+   retried nor replanned and the model is never called.
+4. Otherwise it records `execution.resumed` and returns a typed
+   `AgentResumeContext`: attempt number, workspace revision, files already
+   changed, consumed tool calls and tokens, current vs stale verification, the
+   previous typed termination, the last error, and what was reconciled.
+
+`CodingAgent` then continues instead of starting over:
+- Prior tool-call and token consumption counts against this attempt's limits,
+  because cost budgets are execution-wide. Turns and wall clock start fresh.
+- Earlier physical changes count as changes.
+- The opening message carries `resumeBriefing`, which is built from controller
+  facts only, never from the previous attempt's narration.
+
+The evaluator's `currentAttemptErrors` counts only errors after the latest
+resumption, using `errorsBefore` recorded on the event. Earlier errors stay in
+the record as history.
+
+Scope: this covers fleet retries (orchestrator retries and orphan recovery). A
+standalone `wa run` always creates a new execution per invocation, so there is
+nothing to resume there.
+
+Regression coverage:
+- `packages/agents/tests/codingAgent.resume.test.ts`
+- `apps/cli/tests/taskResume.test.ts`
+- `packages/evaluation/tests/currentAttemptErrors.test.ts`
+- `apps/cli/tests/resume.e2e.test.ts`, a real engine and tools with a fake
+  model: attempt 1 writes a file and stalls, and attempt 2 continues the same
+  execution (one record, `execution.resumed`, a briefing listing the file and
+  prior termination) and succeeds without rewriting. Also, an unresolved
+  commit from a previous attempt refuses the retry without calling the model.
+
+Regression table update: #31 is now covered, by the e2e test above.
+
 ## Not yet done
 
-- Phase 21 remainder: resuming the agent loop inside the recovered execution
-  (the recovery plan says when it's safe; tasks are still retried as before).
 - Phase 24: the live acceptance run.

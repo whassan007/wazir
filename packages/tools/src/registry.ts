@@ -8,6 +8,7 @@ import { globTool, searchTool } from './search.js';
 import { buildTool, gitTool, lintTool, shellTool, testTool, typecheckTool } from './process-tools.js';
 import { terminalCloseTool, terminalOpenTool, terminalSendTool } from './terminalTools.js';
 import { lspTools } from './lspToolsStub';
+import { compactMemoryTool } from './compactionTools.js';
 
 export const dispatchSubagentTool: Tool = {
   descriptor: {
@@ -57,6 +58,7 @@ export const defaultTools: Tool[] = [
   terminalOpenTool,
   terminalSendTool,
   terminalCloseTool,
+  compactMemoryTool,
   ...lspTools,
 ];
 

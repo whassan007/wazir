@@ -601,6 +601,13 @@ export class PolicyEngine {
     const tool = request.tool;
     const projectRoot = request.projectRoot ?? this.options.projectRoot;
     const lower = tool.toLowerCase();
+    if (lower === 'compact_memory') {
+      return {
+        decision: 'allow',
+        rule: 'compaction-policy',
+        reasons: ['agent requested context compaction via controller'],
+      };
+    }
     if (lower === 'web_search' || lower === 'web_fetch') {
       const web = this.options.web ?? {};
       const permitted = this.options.networkAllowed === true &&

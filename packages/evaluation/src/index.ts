@@ -150,11 +150,23 @@ function deriveEventRevisions(events: ExecutionRecord['events']): {
   return { currentRevision: revision, checkRevision };
 }
 
+/**
+ * Errors belonging to the attempt being evaluated. A resumed execution keeps earlier
+ * attempts' errors as history; its `execution.resumed` event records how many existed
+ * when it resumed, and only errors after the latest resumption decide this attempt.
+ */
+export function currentAttemptErrors(record: Pick<ExecutionRecord, 'errors'> & Partial<Pick<ExecutionRecord, 'events'>>): string[] {
+  const resumed = [...(record.events ?? [])].reverse().find((e) => (e.eventType ?? e.type) === 'execution.resumed');
+  const before = (resumed?.data as { errorsBefore?: unknown } | undefined)?.errorsBefore;
+  return typeof before === 'number' ? record.errors.slice(before) : record.errors;
+}
+
 export function evaluateExecution(
   record: Pick<ExecutionRecord, 'filesChanged' | 'checks' | 'errors'> &
     Partial<Pick<ExecutionRecord, 'events' | 'workspaceState' | 'evidence' | 'acceptanceContract' | 'task' | 'result'>>,
   options: EvaluationOptions = {},
 ): EvaluationResult {
+  const errors = currentAttemptErrors(record);
   const reasons: string[] = [];
   const checks: CheckRunRecord[] = [...record.checks];
   const evidenceList: VerificationEvidence[] = record.evidence ? [...record.evidence] : [];
@@ -292,9 +304,9 @@ if (options.mutationRequired === true && record.filesChanged.length === 0) {
           reasons.push(`evidence verified: check '${checkName}' passed`);
         }
       } else if (trimmed === 'no_errors') {
-        if (record.errors.length > 0) {
+        if (errors.length > 0) {
           success = false;
-          reasons.push(`evidence missing: errors were recorded (${record.errors.length})`);
+          reasons.push(`evidence missing: errors were recorded (${errors.length})`);
         } else {
           reasons.push('evidence verified: no errors recorded');
         }
@@ -396,9 +408,9 @@ if (options.mutationRequired === true && record.filesChanged.length === 0) {
     }
   }
 
-  if (record.errors.length > 0) {
+  if (errors.length > 0) {
     success = false;
-    reasons.push(`${record.errors.length} error(s) recorded during execution`);
+    reasons.push(`${errors.length} error(s) recorded during execution`);
   }
 
   return {

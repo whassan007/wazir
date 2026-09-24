@@ -7,6 +7,8 @@ import {
   ApprovalQueue,
   ComputerRegistry,
   ContextCompiler,
+  ContextCompactionService,
+  OffloadStore,
   ExecutionEngine,
   persistExecutionRecord,
   ProvenanceManager,
@@ -81,6 +83,8 @@ export interface RookEngine {
   /** Per-(model, task class) circuit breaker, rebuilt from `termination.completed` events at startup. */
   reliability?: ModelReliabilityTracker;
   compiler: ContextCompiler;
+  compaction?: ContextCompactionService;
+  offloadStore?: OffloadStore;
   executions: ExecutionEngine & { store?: KeyValueStore };
   provenance: ProvenanceManager;
   approvalQueue: ApprovalQueue;
@@ -342,11 +346,24 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     new RecoveryManager({ computers, executions, jobManager, orchestrator, inspectToolOutcome: inspectOutcome }).start();
   }
 
+  const offloadStore = new OffloadStore({
+    workspace: projectRoot,
+    enabled: config.context?.offload?.enabled ?? true,
+  });
+
+  const compaction = new ContextCompactionService({
+    engine: executions,
+    config: config.context?.compaction,
+    defaultReserves: config.context?.reserve as any,
+  });
+
   return {
     config,
     projectRoot,
     configDir: engineConfigDir,
     web,
+    compaction,
+    offloadStore,
     computers,
     provenance,
     runtimes,

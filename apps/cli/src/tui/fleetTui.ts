@@ -2096,6 +2096,41 @@ export class FleetTui {
       return;
     }
 
+    if (trimmed.startsWith('/compact')) {
+      try {
+        const parts = trimmed.split(/\s+/);
+        const targetExecId = parts[1] ?? this.selectedTaskId ?? this.currentJob?.tasks[0]?.id;
+        if (!targetExecId) {
+          this.statusMessage = 'No active task/execution to compact. Usage: /compact [executionId]';
+        } else {
+          const compactor = this.engine.compaction;
+          if (!compactor) {
+            this.statusMessage = 'Context compaction service is not initialized';
+          } else {
+            const res = await compactor.compact({
+              executionId: targetExecId,
+              trigger: 'USER',
+              reason: 'Manual compaction via /compact',
+              force: true,
+            });
+            if (res.status === 'compacted' && res.metrics) {
+              const m = res.metrics;
+              const reduction = m.beforeTokens > 0 ? ((m.tokensSaved / m.beforeTokens) * 100).toFixed(1) : '0';
+              this.statusMessage = `Context compacted: ${m.beforeTokens} -> ${m.afterTokens} tokens (saved ${m.tokensSaved}, -${reduction}%). Offloads: ${m.offloadedArtifacts}`;
+            } else if (res.status === 'skipped') {
+              this.statusMessage = `Context compaction skipped: ${res.metrics?.reason ?? 'insufficient tokens to reclaim'}`;
+            } else {
+              this.statusMessage = `Context compaction failed: ${res.error ?? 'unknown error'}`;
+            }
+          }
+        }
+      } catch (err) {
+        this.statusMessage = `Compaction error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+      this.draw();
+      return;
+    }
+
     if (trimmed.startsWith('/steer ')) {
       const instruction = trimmed.slice(7).trim();
       const targetTaskId = this.selectedTaskId ?? this.getAgents()[this.highlightedIndex]?.taskId;
@@ -4654,6 +4689,7 @@ export class FleetTui {
       '  Commands & Quick Actions:',
       '    /fanout <t1;t2> Decompose and run concurrent subtasks',
       '    /steer <msg>    Inject mid-run follow-up instruction to agent',
+      '    /compact [id]   Compact model context for active or specified task',
       '    /cancel <id>    Cancel one agent or all agents',
       '    /doctor         Execute system diagnostics',
       '    /launch lmstudio  Start LM Studio\'s server when its runtime shows unavailable',

@@ -585,7 +585,9 @@ export class CodingAgent implements AgentAdapter {
     let currentModelId = request.modelId;
     const triedModelIds = [request.modelId];
     let escalationsUsed = 0;
-    let totalTokensUsed = 0;
+    // A resumed execution's cost budgets are execution-wide: prior consumption counts.
+    const resume = request.resume;
+    let totalTokensUsed = resume?.consumed.tokens ?? 0;
     const runStartedAt = Date.now();
     const subagentDepth = request.subagentDepth ?? 0;
     const effectiveTools = subagentDepth >= 1
@@ -597,6 +599,7 @@ export class CodingAgent implements AgentAdapter {
         role: 'user',
         content:
           `Task: ${request.taskDescription}\n\n` +
+          (resume ? `${resumeBriefing(resume)}\n\n` : '') +
           'Start with a plan. You may inspect the repository with read/glob/search tools first. ' +
           'Respond now with either a plan or a tool call.',
       },
@@ -626,8 +629,10 @@ export class CodingAgent implements AgentAdapter {
     let lastToolSignature: string | null = null;
     let repeatedToolCount = 0;
     const toolCallCounts = new Map<string, number>();
-    const filesChangedSet = new Set<string>();
-    let totalToolCalls = 0;
+    // Earlier attempts' physical changes still stand; a resumed run that only has to
+    // verify them must not fail as "produced no code modifications".
+    const filesChangedSet = new Set<string>(resume?.filesChanged ?? []);
+    let totalToolCalls = resume?.consumed.toolCalls ?? 0;
     const recordToolExecution = (tool: string, input: Record<string, unknown>): void => {
       toolCallCounts.set(tool, (toolCallCounts.get(tool) ?? 0) + 1);
       totalToolCalls += 1;
@@ -1511,6 +1516,25 @@ export class CodingAgent implements AgentAdapter {
       protocolMetrics: currentMetrics(),
     };
   }
+}
+
+/**
+ * The model-visible account of a resumed execution. Every line is a controller
+ * fact from the durable record; none of it is the previous attempt's narration.
+ */
+export function resumeBriefing(resume: NonNullable<AgentRunRequest['resume']>): string {
+  const lines = [
+    `RESUMING execution ${resume.executionId} (attempt ${resume.attempt}). An earlier attempt stopped` +
+      `${resume.previousTermination ? ` (${resume.previousTermination})` : ''}; the workspace already reflects its real changes.`,
+    `Workspace revision: ${resume.workspaceRevision}.`,
+    `Files already changed on disk: ${resume.filesChanged.length ? resume.filesChanged.join(', ') : 'none'}.`,
+    `Checks passing at this revision: ${resume.verification.passing.join(', ') || 'none'}; failing: ${resume.verification.failing.join(', ') || 'none'}` +
+      (resume.verification.stale ? `; ${resume.verification.stale} older result(s) are stale and must be re-run.` : '.'),
+  ];
+  if (resume.lastError) lines.push(`Last recorded error: ${resume.lastError.split('\n')[0].slice(0, 300)}`);
+  if (resume.reconciled.length) lines.push(`Interrupted calls resolved from physical evidence: ${resume.reconciled.join('; ')}.`);
+  lines.push('Inspect the current files before changing them, continue from this state, and do not redo work that is already done.');
+  return lines.join('\n');
 }
 
 export function createCodingAgent(options: CodingAgentOptions = {}): CodingAgent {

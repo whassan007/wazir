@@ -164,6 +164,7 @@ export interface ExecutionRecord {
 
 export type ExecutionEventType =
   | 'execution.started'
+  | 'execution.resumed'
   | 'turn.started' | 'turn.completed'
   | 'step.started' | 'step.completed' | 'step.failed'
   | 'model.requested' | 'model.attempt.started' | 'model.attempt.failed'
@@ -179,6 +180,9 @@ export type ExecutionEventType =
   | 'context.snapshot.created' | 'context.threshold.reached'
   | 'context.compaction.started' | 'context.compaction.completed' | 'context.compaction.failed'
   | 'context.tool_result.offloaded' | 'context.tool_result.pruned' | 'context.deduplicated'
+  | 'context.compile.started' | 'context.compile.completed' | 'context.item.included' | 'context.item.omitted'
+  | 'context.superseded.removed' | 'context.file.truncated' | 'context.history.compressed'
+  | 'context.revision.started' | 'context.revision.completed'
   | 'termination.requested' | 'termination.completed'
   | 'mcp.event'
   | 'web.search.started' | 'web.search.completed' | 'web.search.failed' | 'web.search.retry'

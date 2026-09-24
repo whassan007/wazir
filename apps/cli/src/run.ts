@@ -532,6 +532,7 @@ export async function executeTask(
           projectRoot: engine.projectRoot,
           executionId,
           networkAllowed: engine.config.networkAllowed && task.policy?.networkAccess !== false,
+          compactor: engine.compaction,
         });
       } finally {
         loader.stop();
@@ -924,6 +925,7 @@ export async function runSubagent(
         networkAllowed: engine.config.networkAllowed && context.parentPolicy?.networkAccess !== false,
         jobId: (await engine.executions.get(context.parentExecutionId))?.execution.jobId ?? context.parentExecutionId,
         signal: context.signal,
+        compactor: engine.compaction,
       });
 
       await engine.executions.recordToolCall(childExecId, {

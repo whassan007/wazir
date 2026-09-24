@@ -77,6 +77,8 @@ export interface ToolExecutionContext {
   env?: Record<string, string>;
   /** Policy's network decision for this execution; the OS sandbox enforces it. */
   networkAllowed?: boolean;
+  /** Context compaction service for autonomous compact_memory tool requests. */
+  compactor?: import('./context.js').AgentContextCompressor;
 }
 
 export interface Tool {
