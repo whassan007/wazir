@@ -15,7 +15,7 @@ import type {
   AgentRunStats,
   TerminationReason,
 } from '@wazir/core';
-import { ObservationCompactor, ContextCompiler, WEB_TRUST_INSTRUCTION, type GroundedResult, type ToolResult } from '@wazir/core';
+import { ObservationCompactor, ContextCompiler, WEB_TRUST_INSTRUCTION, computeUsableBudget, computeUtilization, type GroundedResult, type ToolResult } from '@wazir/core';
 import {
   ModelProtocolAdapter,
   ACTION_START_PATTERN,
@@ -549,7 +549,7 @@ export class CodingAgent implements AgentAdapter {
     this.temperature = options.temperature ?? 0.2;
     this.modelTurnTimeoutMs = options.modelTurnTimeoutMs ?? 90_000;
     this.toolRepeatLimit = options.toolRepeatLimit ?? 3;
-    this.contextCompactionRatio = options.contextCompactionRatio ?? 0.7;
+    this.contextCompactionRatio = options.contextCompactionRatio ?? 0.75;
     this.maxProseBeforeActionChars = options.maxProseBeforeActionChars ?? 2_000;
     this.systemPromptExtra = options.systemPromptExtra;
   }
@@ -704,11 +704,20 @@ export class CodingAgent implements AgentAdapter {
       if (!force && !contextTokens) return null;
       
       const before = estimateTokens(messages);
-      // Compaction discards recent working context, so it is a response to pressure, not
-      // a per-turn routine: only once usage reaches contextCompactionRatio of the window.
-      // (This gate was missing — any run whose host reported contextTokens compacted on
-      // every turn; observed live as 28 compactions in 30 model requests.)
-      if (!force && before < (contextTokens as number) * this.contextCompactionRatio) return null;
+      const totalTokens = contextTokens as number;
+      const outputReserve = request.reserve?.outputTokens ?? (totalTokens > 32_000 ? 8000 : Math.floor(totalTokens * 0.1));
+      const schemaReserve = request.reserve?.toolSchemaTokens ?? (totalTokens > 32_000 ? 5000 : Math.floor(totalTokens * 0.05));
+      const safetyReserve = request.reserve?.safetyTokens ?? (totalTokens > 32_000 ? 5000 : Math.floor(totalTokens * 0.05));
+
+      const usableBudget = computeUsableBudget({
+        effectiveContextTokens: totalTokens,
+        reserveOutputTokens: outputReserve,
+        reserveToolSchemaTokens: schemaReserve,
+        reserveSafetyTokens: safetyReserve,
+      });
+
+      const utilization = computeUtilization(before, usableBudget);
+      if (!force && utilization < this.contextCompactionRatio) return null;
       
       // aggressive compaction
       const head = messages.slice(0, KEEP_HEAD);

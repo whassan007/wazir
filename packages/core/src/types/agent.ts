@@ -193,6 +193,8 @@ export interface AgentRunRequest {
   resume?: AgentResumeContext;
   /** The model's context window, when known — enables mid-run compaction. */
   contextTokens?: number;
+  /** Reserves (output, tool schema, safety) to subtract when calculating usable compaction budget. */
+  reserve?: Partial<import('./context.js').ContextReserve>;
   /** Set to true by the host when the user requested cancellation. */
   isCancelled?: () => boolean;
   /** Returns any pending mid-run user instruction, drained once per turn. */
