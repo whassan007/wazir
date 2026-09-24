@@ -24,6 +24,7 @@ import {
   RuntimeRegistry,
   Scheduler,
   WorktreeManager,
+  CheckpointService,
   TaskPlanner,
   createTaskPlanner,
   estimateModelMemory,
@@ -91,6 +92,7 @@ export interface RookEngine {
   approvalQueue: ApprovalQueue;
   orchestrator: JobOrchestrator & { store?: KeyValueStore };
   worktrees: WorktreeManager;
+  checkpoints: CheckpointService;
   planner: TaskPlanner;
   adapters: Map<string, RuntimeAdapter>;
   discovered: DiscoveredRuntime[];
@@ -313,6 +315,12 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   orchestrator.store = store; // Attach store for Block persistence
 
   const worktrees = new WorktreeManager();
+  const checkpoints = new CheckpointService({
+    executionEngine: executions,
+    worktreeManager: worktrees,
+    provenanceManager: provenance,
+    defaultWorkspaceRoot: projectRoot,
+  });
   const planner = createTaskPlanner();
 
   const lifecycle = new ModelLifecycleService({
@@ -382,6 +390,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     approvalQueue,
     orchestrator,
     worktrees,
+    checkpoints,
     planner,
     adapters: adapterById,
     discovered,

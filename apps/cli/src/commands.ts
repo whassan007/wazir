@@ -1880,3 +1880,80 @@ export async function inspectRuntime(engine: RookEngine, id: string): Promise<vo
   
   console.log();
 }
+
+export async function checkpointCommand(
+  engine: RookEngine,
+  executionId: string,
+  options?: { desc?: string; json?: boolean },
+): Promise<string> {
+  try {
+    const chk = await engine.checkpoints.checkpoint(executionId, {
+      description: options?.desc,
+    });
+    if (options?.json) {
+      return JSON.stringify(chk, null, 2);
+    }
+    return [
+      color.green(`✓ Checkpoint created: ${chk.id}`),
+      `  Execution: ${chk.executionId}`,
+      `  Workspace Revision: R${chk.workspaceRevision}`,
+      `  Files Snapshot: ${Object.keys(chk.worktreeState.filesSnapshot).length} files`,
+    ].join('\n');
+  } catch (err) {
+    if (options?.json) {
+      return JSON.stringify({ ok: false, error: String(err) }, null, 2);
+    }
+    return color.red(`Failed to create checkpoint: ${String(err)}`);
+  }
+}
+
+export async function forkCommand(
+  engine: RookEngine,
+  checkpointId: string,
+  options?: { forkId?: string; json?: boolean },
+): Promise<string> {
+  try {
+    const res = await engine.checkpoints.fork(checkpointId, options?.forkId);
+    if (options?.json) {
+      return JSON.stringify(res, null, 2);
+    }
+    return [
+      color.green(`✓ Forked execution: ${res.forkedExecutionId}`),
+      `  Parent: ${res.parentExecutionId}`,
+      `  Checkpoint: ${res.checkpointId}`,
+      `  Branch: ${res.branch}`,
+      `  Worktree: ${res.forkedWorktreePath}`,
+      `  Revision: R${res.workspaceRevision}`,
+    ].join('\n');
+  } catch (err) {
+    if (options?.json) {
+      return JSON.stringify({ ok: false, error: String(err) }, null, 2);
+    }
+    return color.red(`Failed to fork execution: ${String(err)}`);
+  }
+}
+
+export async function rollbackCommand(
+  engine: RookEngine,
+  executionId: string,
+  checkpointId: string,
+  options?: { json?: boolean },
+): Promise<string> {
+  try {
+    const res = await engine.checkpoints.rollback(executionId, checkpointId);
+    if (options?.json) {
+      return JSON.stringify(res, null, 2);
+    }
+    return [
+      color.green(`✓ Rollback completed: ${executionId}`),
+      `  Restored Checkpoint: ${res.checkpointId}`,
+      `  Restored Revision: R${res.restoredRevision}`,
+      `  Files Restored: ${res.filesRestored.length}`,
+    ].join('\n');
+  } catch (err) {
+    if (options?.json) {
+      return JSON.stringify({ ok: false, error: String(err) }, null, 2);
+    }
+    return color.red(`Failed to rollback: ${String(err)}`);
+  }
+}

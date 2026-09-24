@@ -125,12 +125,17 @@ export class WorktreeManager {
     const baseBranch = isGit ? await this.getCurrentBranch(projectRoot) : 'none';
 
     if (!isGit) {
-      // Fallback for non-git projects: copy directory
+      // Fallback for non-git projects: copy directory entries excluding .wazir
       await fs.mkdir(worktreeDir, { recursive: true });
-      await fs.cp(projectRoot, worktreeDir, {
-        recursive: true,
-        filter: (source) => !source.includes('.wazir') && !source.includes('node_modules'),
-      });
+      const entries = await fs.readdir(projectRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name === '.wazir' || entry.name === 'node_modules' || entry.name === '.git') {
+          continue;
+        }
+        const srcPath = path.join(projectRoot, entry.name);
+        const destPath = path.join(worktreeDir, entry.name);
+        await fs.cp(srcPath, destPath, { recursive: true });
+      }
       await fs.mkdir(path.join(worktreeDir, '.wazir', 'tmp'), { recursive: true });
       await fs.mkdir(path.join(worktreeDir, '.wazir', 'home'), { recursive: true });
       await fs.mkdir(path.join(worktreeDir, '.wazir', 'cache'), { recursive: true });

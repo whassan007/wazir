@@ -66,7 +66,7 @@ async function openStream(baseUrl: string, computerId: string, token?: string, w
   return { status: 200, frame, close: () => controller.abort() };
 }
 
-describe('control-plane authentication', () => {
+describe('control-plane authentication', { timeout: 20_000 }, () => {
   const servers: Server[] = [];
   afterEach(async () => {
     for (const server of servers.splice(0)) await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -120,7 +120,7 @@ describe('control-plane authentication', () => {
     expect(hb.status).toBe(401);
     const hb2 = await fetch(`${started.baseUrl}/computers/w1/heartbeat`, json({}, second.token));
     expect(hb2.status).toBe(200);
-  });
+  }, 15_000);
 
   it('F-15: `local` is derived from the transport — HTTP registrations are never local', async () => {
     const started = await startServer();

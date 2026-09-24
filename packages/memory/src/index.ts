@@ -3,6 +3,8 @@ export interface MemoryEntry<T> {
   expiresAt?: number;
 }
 
+export * from './memoryService.js';
+
 /** In-memory key-value store with optional TTL. Deterministic eviction by expiry. */
 export class InMemoryStore<T = unknown> {
   private data = new Map<string, MemoryEntry<T>>();

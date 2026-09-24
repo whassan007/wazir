@@ -96,3 +96,7 @@ export {
 export type { CommandRunner } from './verificationOracles.js';
 export { CodeModeService } from './codeModeService.js';
 export type { CodeModeToolExecutor, CodeModeServiceOptions } from './codeModeService.js';
+export { CheckpointService } from './checkpointService.js';
+export type { CheckpointServiceOptions } from './checkpointService.js';
+export { ArtifactIntelligenceService } from './artifactIntelligenceService.js';
+export type { ArtifactIntelligenceOptions } from './artifactIntelligenceService.js';

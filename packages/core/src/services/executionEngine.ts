@@ -21,6 +21,8 @@ import type {
   ToolCallCheckpoint,
   VerificationEvidence,
   WorkspaceState,
+  SteeringParams,
+  SteeringResult,
 } from '../types/index.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -76,6 +78,9 @@ function nextId(prefix: string): string {
 export class ExecutionEngine {
   private readonly records = new Map<string, ExecutionRecord>();
   private readonly histories = new Map<string, SequencedExecutionEvent[]>();
+  private readonly pausedExecutions = new Set<string>();
+  private readonly steeringQueues = new Map<string, SteeringParams[]>();
+  private readonly cancelledToolCalls = new Map<string, Set<string>>();
   private persistenceTail: Promise<void> = Promise.resolve();
   private persistenceFailure?: Error;
   private readonly persist?: (record: ExecutionRecord) => void | Promise<void>;
@@ -977,6 +982,167 @@ export class ExecutionEngine {
    *  once set, every later write rethrows it, so callers must stop writing. */
   get persistenceError(): Error | undefined {
     return this.persistenceFailure;
+  }
+
+  /**
+   * Pauses execution mid-flight.
+   */
+  async pause(executionId: string, reason?: string): Promise<void> {
+    const record = this.require(executionId);
+    this.pausedExecutions.add(executionId);
+    record.execution.status = 'paused';
+    this.pushEvent(record, 'execution.paused', {
+      executionId,
+      reason: reason ?? 'Paused by operator',
+      pausedAt: new Date(),
+    });
+    await this.flush(record);
+  }
+
+  /**
+   * Steers execution by injecting guidance, modifying constraints, cancelling
+   * scheduled tool calls, changing model routing mid-flight, or forcing re-verification.
+   */
+  async steer(
+    executionId: string,
+    instruction: string | SteeringParams,
+  ): Promise<SteeringResult> {
+    const record = this.require(executionId);
+    const params: SteeringParams = typeof instruction === 'string'
+      ? { guidance: instruction, who: 'user' }
+      : instruction;
+
+    const who = params.who ?? 'user';
+    const effectiveAt = new Date();
+
+    // 1. Injected guidance
+    if (params.guidance) {
+      let queue = this.steeringQueues.get(executionId);
+      if (!queue) {
+        queue = [];
+        this.steeringQueues.set(executionId, queue);
+      }
+      queue.push(params);
+    }
+
+    // 2. Modifying constraints
+    if (params.injectedConstraints) {
+      const c = params.injectedConstraints;
+      if (c.maxTurns !== undefined) {
+        record.task.maxTurns = c.maxTurns;
+      }
+      if (c.maxExecutionTimeSeconds !== undefined) {
+        if (!record.task.policy) record.task.policy = {};
+        record.task.policy.maxExecutionTimeSeconds = c.maxExecutionTimeSeconds;
+      }
+      if (c.protectedFiles && c.protectedFiles.length > 0) {
+        if (!record.task.expectedEvidence) record.task.expectedEvidence = [];
+        for (const pf of c.protectedFiles) {
+          record.task.expectedEvidence.push(`protected:${pf}`);
+        }
+      }
+    }
+
+    // 3. Canceling scheduled tool calls
+    if (params.cancelScheduledToolCalls) {
+      let cancelled = this.cancelledToolCalls.get(executionId);
+      if (!cancelled) {
+        cancelled = new Set<string>();
+        this.cancelledToolCalls.set(executionId, cancelled);
+      }
+      cancelled.add('*');
+    }
+
+    // 4. Changing model routing mid-flight
+    let modelRoutingChanged: { modelId: string; runtimeId?: string } | undefined;
+    if (params.changeModelRouting) {
+      const fromModel = record.execution.modelId;
+      const toModel = params.changeModelRouting.modelId;
+      const fromRuntime = record.execution.runtimeId;
+      const toRuntime = params.changeModelRouting.runtimeId ?? fromRuntime;
+
+      record.execution.modelId = toModel;
+      record.execution.runtimeId = toRuntime;
+      modelRoutingChanged = { modelId: toModel, runtimeId: toRuntime };
+
+      this.pushEvent(record, 'model.route.changed', {
+        executionId,
+        fromModel,
+        toModel,
+        fromRuntime,
+        toRuntime,
+        reason: 'Steered mid-flight',
+      });
+    }
+
+    // 5. Forcing re-verification
+    if (params.forceReverification) {
+      this.pushEvent(record, 'verification.invalidated', {
+        executionId,
+        workspaceRevision: record.workspaceState?.revision ?? 0,
+        reason: 'Re-verification forced by steering',
+      });
+      if (record.evidence) {
+        record.evidence = [];
+      }
+    }
+
+    const whatChanged = {
+      guidance: params.guidance,
+      constraintsModified: params.injectedConstraints,
+      toolCallsCancelled: params.cancelScheduledToolCalls,
+      modelRoutingChanged,
+      forcedReverification: params.forceReverification,
+    };
+
+    // Emit execution.steered event for provenance audit
+    this.pushEvent(record, 'execution.steered', {
+      executionId,
+      who,
+      whatChanged,
+      effectiveAt,
+    });
+
+    await this.flush(record);
+
+    return {
+      executionId,
+      who,
+      whatChanged,
+      effectiveAt,
+      success: true,
+    };
+  }
+
+  /**
+   * Resumes a paused execution.
+   */
+  async resume(executionId: string, reason?: string): Promise<void> {
+    const record = this.require(executionId);
+    this.pausedExecutions.delete(executionId);
+    record.execution.status = 'running';
+    this.pushEvent(record, 'execution.resumed', {
+      executionId,
+      reason: reason ?? 'Resumed by operator',
+      resumedAt: new Date(),
+    });
+    await this.flush(record);
+  }
+
+  isPaused(executionId: string): boolean {
+    return this.pausedExecutions.has(executionId);
+  }
+
+  getSteering(executionId: string): SteeringParams | undefined {
+    const queue = this.steeringQueues.get(executionId);
+    return queue && queue.length > 0 ? queue.shift() : undefined;
+  }
+
+  isToolCancelled(executionId: string, callId?: string): boolean {
+    const cancelled = this.cancelledToolCalls.get(executionId);
+    if (!cancelled) return false;
+    if (cancelled.has('*')) return true;
+    return callId ? cancelled.has(callId) : false;
   }
 
   ownedByAnotherLiveProcess(record: ExecutionRecord): boolean {

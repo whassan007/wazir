@@ -9,6 +9,7 @@ export type ExecutionStatus =
   | 'assigned'
   | 'running'
   | 'waiting'
+  | 'paused'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -161,6 +162,12 @@ export interface ExecutionRecord {
 export type ExecutionEventType =
   | 'execution.started'
   | 'execution.resumed'
+  | 'execution.paused'
+  | 'execution.steered'
+  | 'execution.checkpoint.created'
+  | 'execution.forked'
+  | 'execution.rollback.completed'
+  | 'execution.rollback.rejected'
   | 'turn.started' | 'turn.completed'
   | 'step.started' | 'step.completed' | 'step.failed'
   | 'model.requested' | 'model.attempt.started' | 'model.attempt.failed'
