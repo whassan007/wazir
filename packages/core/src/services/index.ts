@@ -94,3 +94,5 @@ export {
   defaultCommandRunner,
 } from './verificationOracles.js';
 export type { CommandRunner } from './verificationOracles.js';
+export { CodeModeService } from './codeModeService.js';
+export type { CodeModeToolExecutor, CodeModeServiceOptions } from './codeModeService.js';

@@ -9,6 +9,8 @@ import { buildTool, gitTool, lintTool, shellTool, testTool, typecheckTool } from
 import { terminalCloseTool, terminalOpenTool, terminalSendTool } from './terminalTools.js';
 import { lspTools } from './lspToolsStub';
 import { compactMemoryTool } from './compactionTools.js';
+import { codeIntelligenceTools } from './codeIntelligenceTools.js';
+import { codeModeTool, setCodeModeToolRegistry } from './codeModeTool.js';
 
 export const dispatchSubagentTool: Tool = {
   descriptor: {
@@ -60,6 +62,8 @@ export const defaultTools: Tool[] = [
   terminalCloseTool,
   compactMemoryTool,
   ...lspTools,
+  ...codeIntelligenceTools,
+  codeModeTool,
 ];
 
 export class ToolRegistry {
@@ -70,6 +74,7 @@ export class ToolRegistry {
   private readonly contracts = new Map<string, { input: ReturnType<typeof compileToolSchema>; output?: ReturnType<typeof compileToolSchema> }>();
 
   constructor(tools: Tool[] = defaultTools) {
+    setCodeModeToolRegistry(this);
     for (const tool of tools) {
       this.register(tool);
     }

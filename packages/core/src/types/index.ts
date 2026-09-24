@@ -28,3 +28,4 @@ export * from './modelLifecycle.js';
 export * from './web.js';
 export * from './codeIntelligence.js';
 export * from './verification.js';
+export * from './codeMode.js';

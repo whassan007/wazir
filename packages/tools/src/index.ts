@@ -12,3 +12,5 @@ export * from './terminalTools.js';
 export * from './outcomeInspection.js';
 export { createWebTools } from './web.js';
 export * from './compactionTools.js';
+export * from './codeIntelligenceTools.js';
+export * from './codeModeTool.js';
