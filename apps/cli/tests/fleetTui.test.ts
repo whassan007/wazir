@@ -1962,7 +1962,6 @@ describe('FleetTui — protocol/validation visibility and raw response viewer', 
 
     const taskId = harness.tui.getAgents()[0]?.taskId;
     const logs = (harness.tui as any).agentLogs.get(taskId) as Array<{ kind: string; text: string }>;
-    console.log('DEBUG JOB:', harness.tui.getCurrentJob(), 'AGENTS:', harness.tui.getAgents(), 'LOGS:', logs);
     const validateEntry = logs.find((l) => l.kind === 'validate');
     expect(validateEntry).toBeDefined();
     expect(validateEntry!.text).toContain("'write' missing path, content");

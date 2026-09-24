@@ -122,7 +122,7 @@ function diffLines(oldText: string, newText: string): DiffLine[] {
   return result;
 }
 
-export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'help';
+export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'search' | 'help';
 
 export type NavCategory = 'MCP' | 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
 
@@ -3238,6 +3238,9 @@ export class FleetTui {
     if (this.currentView === 'worktrees') {
       return this.renderWorktreesPane(width, maxRows);
     }
+    if (this.currentView === 'search') {
+      return this.renderSearchPane(width, maxRows);
+    }
     if (this.currentView === 'approval') {
       return this.renderApprovalPane(width, maxRows);
     }
@@ -4623,6 +4626,47 @@ export class FleetTui {
 
     lines.push('');
     lines.push(color.gray('  Merge-back story: Changes are verified on isolated branches before merge into target.'));
+    while (lines.length < maxRows) lines.push('');
+    return lines;
+  }
+
+  /**
+   * Dedicated Solution Search Projection Pane (§22)
+   * Displays solution search trajectories, candidate states, qualification, and selection.
+   */
+  private renderSearchPane(cols: number, maxRows: number): string[] {
+    const lines: string[] = [];
+    const searches = this.engine.solutionSearch.listSearches();
+    const activeSearch = searches[searches.length - 1];
+
+    if (!activeSearch) {
+      lines.push(color.bold(color.cyan('  SOLUTION SEARCH: No active searches')));
+      lines.push(color.gray('  Run a search with: wa search run "<objective>" --candidates 3'));
+      while (lines.length < maxRows) lines.push('');
+      return lines;
+    }
+
+    lines.push(color.bold(color.cyan(`  SEARCH: ${activeSearch.searchId} (${activeSearch.status})`)));
+    lines.push(color.gray(`  Candidates ${activeSearch.candidates.length}/${activeSearch.totalCandidates} | Strategy: ${activeSearch.strategy}`));
+    lines.push('');
+
+    for (const c of activeSearch.candidates) {
+      const model = c.descriptor.modelId ?? 'default';
+      const statusColor = c.status === 'completed' ? color.green : c.status === 'running' ? color.yellow : color.red;
+      const qTag = c.evaluation?.qualifies ? color.green('QUALIFIED') : c.evaluation ? color.red('DISQUALIFIED') : color.gray('PENDING');
+      lines.push(`  ${c.candidateId.padEnd(10)} ${model.padEnd(14)} ${statusColor(c.status.toUpperCase().padEnd(12))} [${qTag}]`);
+      if (c.evaluation?.disqualificationReasons?.length) {
+        lines.push(`    ${color.gray(c.evaluation.disqualificationReasons.join(', ').slice(0, cols - 6))}`);
+      }
+    }
+
+    lines.push('');
+    lines.push(`  Qualified: ${color.green(String(activeSearch.qualifyingCandidates.length))}  Failed: ${color.red(String(activeSearch.disqualifiedCandidates.length))}  Running: ${activeSearch.status === 'running' ? 1 : 0}`);
+    lines.push(`  Selection: ${activeSearch.selectedCandidate ? color.bold(color.green(activeSearch.selectedCandidate.candidateId)) : color.yellow('pending')}`);
+    if (activeSearch.selectionReason) {
+      lines.push(`  Decision: ${color.gray(activeSearch.selectionReason.slice(0, cols - 14))}`);
+    }
+
     while (lines.length < maxRows) lines.push('');
     return lines;
   }

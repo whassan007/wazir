@@ -203,20 +203,19 @@ export class ContextRevisionService {
     const omitted: ContextOmission[] = [];
     const offloadedItems: Array<{ id: string; label: string; artifactId: string; tokensSaved: number }> = [];
 
-    // Compile candidate items using ContextCompiler's modular providers
+    // Collect raw candidate items directly from ContextCompiler's modular providers
     let baseCandidates: ContextCandidate[] = [];
-    try {
-      const compiled = await this.compiler.compileSnapshot(request);
-      baseCandidates = [
-        ...compiled.pinned,
-        ...compiled.active,
-        ...(compiled.relevant ?? []),
-        ...(compiled.compressed ?? []),
-        ...compiled.tail,
-      ].map((c) => ({ ...c, source: c.id ?? c.label }));
-    } catch {
-      // Fallback: build from recent history and active error
-      baseCandidates = (request.recentHistory ?? []).map((h) => ({ ...h, source: 'history' }));
+    const providers = this.compiler.getProviders();
+    for (const provider of providers) {
+      try {
+        const cands = await provider.provide(request);
+        baseCandidates.push(...cands);
+      } catch {
+        // Safe skip on provider error
+      }
+    }
+    if (baseCandidates.length === 0 && request.recentHistory) {
+      baseCandidates = request.recentHistory.map((h) => ({ ...h, source: 'history' }));
     }
 
     const initialTokens = baseCandidates.reduce((sum, c) => sum + (c.tokens ?? estimateTokens(c.content)), 0);
@@ -227,7 +226,7 @@ export class ContextRevisionService {
     let tokensDeduplicated = 0;
 
     for (const item of baseCandidates) {
-      const hash = item.contentHash ?? createHash('sha256').update(`${item.label}:${item.content}`).digest('hex');
+      const hash = item.contentHash ?? createHash('sha256').update(item.content.trim()).digest('hex');
       if (seenHashes.has(hash)) {
         const itemTok = item.tokens ?? estimateTokens(item.content);
         tokensDeduplicated += itemTok;

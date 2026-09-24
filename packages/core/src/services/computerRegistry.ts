@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ResourceSnapshot, ResourceReservation } from '../types/modelLifecycle.js';
+import { injectFault } from '@wazir/shared';
 import type {
   Computer,
   ComputerRegistration,
@@ -53,6 +54,14 @@ export class ComputerRegistry {
   }
 
   heartbeat(computerId: string, payload: HeartbeatPayload = {}): Computer | undefined {
+    try {
+      const p = injectFault('DURING_WORKER_HEARTBEAT', { computerId, payload });
+      if (p && typeof (p as any).catch === 'function') {
+        (p as any).catch(() => {});
+      }
+    } catch {
+      // In synchronous mode if thrown
+    }
     const computer = this.computers.get(computerId);
     if (!computer) {
       return undefined;

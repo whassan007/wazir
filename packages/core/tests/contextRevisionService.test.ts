@@ -143,7 +143,7 @@ describe('ContextRevisionService & PromptLayoutPlanner (Comprehensive)', () => {
         {
           kind: 'conversation',
           label: 'Resolved error discussion',
-          content: 'The old TypeError in utils.ts was resolved in commit 1234',
+          content: 'Resolved error discussion: The old TypeError in utils.ts was resolved in commit 1234',
           category: 'COMPRESSIBLE',
           priority: 30,
         },
@@ -155,7 +155,11 @@ describe('ContextRevisionService & PromptLayoutPlanner (Comprehensive)', () => {
     expect(activeParts.some((p) => p.content.includes('SyntaxError: Unexpected token'))).toBe(true);
 
     const compressibleParts = result.snapshot.compressible;
-    expect(compressibleParts.some((p) => p.content.includes('Resolved error discussion'))).toBe(true);
+    expect(
+      compressibleParts.some(
+        (p) => p.label.includes('Resolved error discussion') || p.content.includes('Resolved error discussion'),
+      ),
+    ).toBe(true);
   });
 
   // Test 9 & 10: Authoritative revision and verification state reinjected

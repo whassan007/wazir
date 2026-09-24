@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { injectFault } from './faultInjection.js';
 
 export interface StoreEntry {
   key: string;
@@ -293,6 +294,7 @@ export class JsonFileStore implements KeyValueStore {
     } finally {
       await handle.close();
     }
+    await injectFault('DURING_STORE_WRITE', { filePath: this.file, tmp });
     await fs.rename(tmp, this.file);
     await fs.chmod(this.file, 0o600).catch(() => undefined);
     await fsyncDir(dir);

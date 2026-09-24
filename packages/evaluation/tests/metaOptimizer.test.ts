@@ -91,14 +91,12 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
       },
     ]);
 
-    // Baseline runner: passes task1 and task2
     let runCount = 0;
     const runner: BenchmarkRunner = {
       id: 'mock-regressing-runner',
       name: 'Mock Regressing Runner',
       async run(task): Promise<ExecutionRecord> {
         runCount++;
-        // First 2 runs are baseline (passes both). Next 2 are candidate (breaks task2).
         const isCandidate = runCount > 2;
         const pass = isCandidate ? task.id === 'opt-bench-1' : true;
 
@@ -161,7 +159,6 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
       name: 'Mock Improving Runner',
       async run(task): Promise<ExecutionRecord> {
         runCount++;
-        // Baseline: fails task2. Candidate: passes both task1 and task2.
         const isCandidate = runCount > 2;
         const pass = isCandidate ? true : task.id === 'opt-bench-1';
 
@@ -225,7 +222,6 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
       async run(task): Promise<ExecutionRecord> {
         runCount++;
         const isCandidate = runCount > 2;
-        // Both baseline and candidate pass all tasks, but candidate uses 80% fewer tokens
         const tokens = isCandidate ? 100 : 1000;
 
         return {

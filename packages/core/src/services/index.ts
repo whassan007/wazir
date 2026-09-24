@@ -107,6 +107,13 @@ export type { ArtifactIntelligenceOptions } from './artifactIntelligenceService.
 export { BrowserVerificationService } from './browserVerificationService.js';
 export { BranchSearchService } from './branchSearchService.js';
 export type { BranchSearchServiceOptions } from './branchSearchService.js';
+export { SolutionSearchService } from './solutionSearchService.js';
+export type {
+  SolutionSearchServiceOptions,
+  CandidateRunner,
+  CandidateRunnerContext,
+  EvaluationServiceInterface,
+} from './solutionSearchService.js';
 export { GovernanceService } from './governanceService.js';
 export type { GovernanceServiceOptions } from './governanceService.js';
 export {

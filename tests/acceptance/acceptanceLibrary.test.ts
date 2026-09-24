@@ -12,10 +12,10 @@ import {
 } from './acceptanceLibrary.js';
 
 describe('Wazir Acceptance Test Library', () => {
-  it('defines all 17 progressive release gates in strict order (G0 to G16)', () => {
-    expect(ACCEPTANCE_GATES).toHaveLength(17);
+  it('defines all 20 progressive release gates in strict order (G0 to G31)', () => {
+    expect(ACCEPTANCE_GATES).toHaveLength(20);
     const expectedIds: AcceptanceGateId[] = [
-      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16',
+      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G29', 'G30', 'G31',
     ];
     expect(ACCEPTANCE_GATES.map((g) => g.id)).toEqual(expectedIds);
 
@@ -29,11 +29,11 @@ describe('Wazir Acceptance Test Library', () => {
     }
   });
 
-  it('contains all 49 unique acceptance tests', () => {
+  it('contains all 53 unique acceptance tests', () => {
     const keys = Object.keys(ACCEPTANCE_TESTS).map(Number);
-    expect(keys).toHaveLength(49);
+    expect(keys).toHaveLength(53);
 
-    for (let id = 1; id <= 49; id++) {
+    for (let id = 1; id <= 53; id++) {
       const test = ACCEPTANCE_TESTS[id];
       expect(test, `Test ${id} should exist`).toBeDefined();
       expect(test.id).toBe(id);
@@ -121,6 +121,38 @@ describe('Wazir Acceptance Test Library', () => {
 
     passed.add('G14');
     expect(validateGatePrerequisites('G15', passed).allowed).toBe(true);
+
+    // G16 blocked until G15 has passed
+    const g16Check = validateGatePrerequisites('G16', passed);
+    expect(g16Check.allowed).toBe(false);
+    expect(g16Check.blockingGateId).toBe('G15');
+
+    passed.add('G15');
+    expect(validateGatePrerequisites('G16', passed).allowed).toBe(true);
+
+    // G29 blocked until G16 has passed
+    const g29Check = validateGatePrerequisites('G29', passed);
+    expect(g29Check.allowed).toBe(false);
+    expect(g29Check.blockingGateId).toBe('G16');
+
+    passed.add('G16');
+    expect(validateGatePrerequisites('G29', passed).allowed).toBe(true);
+
+    // G30 blocked until G29 has passed
+    const g30Check = validateGatePrerequisites('G30', passed);
+    expect(g30Check.allowed).toBe(false);
+    expect(g30Check.blockingGateId).toBe('G29');
+
+    passed.add('G29');
+    expect(validateGatePrerequisites('G30', passed).allowed).toBe(true);
+
+    // G31 blocked until G30 has passed
+    const g31Check = validateGatePrerequisites('G31', passed);
+    expect(g31Check.allowed).toBe(false);
+    expect(g31Check.blockingGateId).toBe('G30');
+
+    passed.add('G30');
+    expect(validateGatePrerequisites('G31', passed).allowed).toBe(true);
   });
 
   it('provides helpers to query by gate and ID', () => {
@@ -186,5 +218,28 @@ describe('Wazir Acceptance Test Library', () => {
 
     expect(getTestById(48).id).toBe(48);
     expect(getTestById(48).gateId).toBe('G15');
+  });
+
+  it('covers empirical self-improvement acceptance benchmarks (Tests 51-53: G29, G30, G31)', () => {
+    const g29Tests = getTestsForGate('G29');
+    expect(g29Tests.map((t) => t.title)).toEqual([
+      'Empirical Self-Improvement Cycle (SELF_IMPROVEMENT)',
+    ]);
+    expect(g29Tests[0].id).toBe(51);
+    expect(g29Tests[0].priority).toBe('P0');
+
+    const g30Tests = getTestsForGate('G30');
+    expect(g30Tests.map((t) => t.title)).toEqual([
+      'Zero-Regression Guard Enforcement (SELF_IMPROVEMENT_REGRESSION)',
+    ]);
+    expect(g30Tests[0].id).toBe(52);
+    expect(g30Tests[0].priority).toBe('P0');
+
+    const g31Tests = getTestsForGate('G31');
+    expect(g31Tests.map((t) => t.title)).toEqual([
+      'Inconclusive Determination on Insufficient Evidence (SELF_IMPROVEMENT_INCONCLUSIVE)',
+    ]);
+    expect(g31Tests[0].id).toBe(53);
+    expect(g31Tests[0].priority).toBe('P0');
   });
 });

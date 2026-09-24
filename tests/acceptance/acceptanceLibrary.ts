@@ -41,7 +41,11 @@ export type AcceptanceGateId =
   | 'G12'
   | 'G13'
   | 'G14'
-  | 'G15';
+  | 'G15'
+  | 'G16'
+  | 'G29'
+  | 'G30'
+  | 'G31';
 
 export type Priority = 'P0' | 'P1' | 'P2'; // P0 = Blocking, P1 = Feature/Major, P2 = Quality
 
@@ -167,7 +171,7 @@ export const ACCEPTANCE_GATES: AcceptanceGate[] = [
     name: 'Multi-Agent',
     title: 'G5 Multi-Agent',
     description: 'Reviewer/supervisor pattern, competitive execution, cross-model handoff, and provenance work',
-    testIds: [10, 11, 12, 13],
+    testIds: [10, 11, 12, 13, 50],
     prerequisiteGateId: 'G4',
   },
   {
@@ -259,6 +263,46 @@ export const ACCEPTANCE_GATES: AcceptanceGate[] = [
     description: 'Evidence-bound completion verification, workspace-revision staleness invalidation, accurate files-changed provenance on tool failure, and workspace-scoped build-tool policy (no false-positive completions, no approval stalls on internal build commands)',
     testIds: [45, 46, 47, 48],
     prerequisiteGateId: 'G14',
+  },
+  {
+    id: 'G16',
+    order: 16,
+    name: 'LongHorizonContext',
+    title: 'G16 Long Horizon Context & Revision',
+    description:
+      'Bounded sawtooth model-visible context over long autonomous executions, deterministic deduplication, superseded file elimination, immutable generations, authoritative state reinjection, and prompt-cache stable-prefix layout',
+    testIds: [49],
+    prerequisiteGateId: 'G15',
+  },
+  {
+    id: 'G29',
+    order: 17,
+    name: 'SelfImprovement',
+    title: 'G29 Self-Improvement',
+    description:
+      'Empirical self-improvement cycle: multi-execution observation, opportunity detection, hypothesis formulation, pre-registered experiment, isolated candidate generation, physical verification, equivalent benchmark comparison, qualification, memory recording, and guarded promotion',
+    testIds: [51],
+    prerequisiteGateId: 'G16',
+  },
+  {
+    id: 'G30',
+    order: 18,
+    name: 'RegressionGuard',
+    title: 'G30 Regression Guard',
+    description:
+      'Zero-regression tolerance: strict rejection of candidates that regress protected correctness or task success metrics despite primary metric gains',
+    testIds: [52],
+    prerequisiteGateId: 'G29',
+  },
+  {
+    id: 'G31',
+    order: 19,
+    name: 'InconclusiveDecision',
+    title: 'G31 Inconclusive Decision',
+    description:
+      'Empirical honesty: inconclusive determination when statistical evidence, sample sizes, or confidence bounds are insufficient, preventing unjustified promotion',
+    testIds: [53],
+    prerequisiteGateId: 'G30',
   },
 ];
 
@@ -1522,6 +1566,180 @@ export const ACCEPTANCE_TESTS: Record<number, AcceptanceTest> = {
     associatedSuites: ['packages/core/tests/policyEngineShell.test.ts', 'packages/core/tests/policyEngineHardening.test.ts'],
     tags: ['policy', 'build-tools', 'approval-stall', 'p1-regression'],
   },
+  49: {
+    id: 49,
+    gateId: 'G16',
+    priority: 'P0',
+    title: 'Long-Horizon Context Maintenance & Sawtooth Revision',
+    purpose:
+      'Verify bounded sawtooth model-visible context, exact deduplication, superseded file elimination, and immutable generations during long autonomous multi-turn executions.',
+    prompt:
+      'Execute a complex multi-phase task spanning 50+ turns, repeated file reads, and repair cycles. Verify model-visible context remains bounded around configured thresholds, raw execution history grows monotonically, and final revision passes verification.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'INSPECT -> IMPLEMENT(rev 1) -> TEST(fail) -> REPAIR(rev 2) -> COMPILE -> TEST(pass) -> VERIFY',
+    verificationCriteria: [
+      'Durable execution history continues growing monotonically across all turns',
+      'Model-visible context does not grow linearly forever; exhibits bounded sawtooth compaction',
+      'Current task, acceptance criteria, and active errors survive context revisions',
+      'Superseded file versions and duplicate file reads are removed from model-visible context',
+      'Oversized tool outputs (>20k chars) are replaced with compact durable offload notices',
+      'Context snapshots are strictly immutable; generation N is never mutated while leased',
+      'Final workspace revision passes physical verification',
+    ],
+    expectedArtifacts: ['context-snapshot', 'evaluation-record'],
+    expectedProvenance: [
+      'context.snapshot.created',
+      'context.revision.completed',
+      'tokens-deduplicated',
+      'tokens-superseded',
+    ],
+    associatedSuites: [
+      'packages/core/tests/contextRevisionService.test.ts',
+      'packages/core/tests/promptLayoutPlanner.test.ts',
+      'packages/core/tests/contextStressAcceptance.test.ts',
+      'packages/evaluation/tests/evaluationComparison.test.ts',
+    ],
+    tags: ['context', 'long-horizon', 'revision', 'evaluation', 'p0-release-gate'],
+  },
+  50: {
+    id: 50,
+    gateId: 'G5',
+    priority: 'P0',
+    title: 'Recursive Subagent Execution & Branch Isolation Gate',
+    purpose:
+      'Verify execution checkpoint/fork/rollback primitives and true in-process dispatch_subagent execution: isolated contexts, clean prompt state, bounded parent observation, non-leaking branch mutations, and physical verification.',
+    prompt:
+      'Inspect a defect in a repository and implement a verified fix using subagents.\nParent delegates three subtasks in-process:\n- Child A: analyze implementation and root cause\n- Child B: analyze test coverage and missing regression tests\n- Child C: inspect callers and interfaces\nVerify child executions start with clean, isolated context without parent transcript copying.\nParent receives bounded structured SubagentResults, applies verified fix, and verifies final revision.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'PARENT -> [dispatch_subagent(A) || dispatch_subagent(B) || dispatch_subagent(C)] -> CHILD_RESULTS -> IMPLEMENT FIX -> COMPILE & TEST -> VERIFY',
+    verificationCriteria: [
+      'Child executions are registered with parentExecutionId linking to parent',
+      'Child context is isolated with clean prompt state and does not inherit parent conversation history',
+      'Child execution cannot mutate parent workspace unless merged or explicitly applied',
+      'Parent receives one bounded SubagentResult per child execution',
+      'Resource budgets (turns, tokens, timeouts, recursion depth <= 1) are strictly enforced',
+      'Final code fix physically modifies source and passes VerificationEngine checks at final revision',
+      'Execution checkpoints preserve immutable file byte snapshots and revision-bound evidence',
+    ],
+    expectedArtifacts: ['subagent_analysis.md', 'fixed_defect.cpp', 'regression_test.cpp'],
+    expectedProvenance: [
+      'execution.checkpoint.created',
+      'execution.forked',
+      'execution.rollback.completed',
+      'subagentExecutionId',
+      'parentExecutionId',
+    ],
+    associatedSuites: [
+      'packages/core/tests/checkpointService.test.ts',
+      'packages/core/tests/executionBranching.test.ts',
+      'packages/agents/tests/subagentDispatch.test.ts',
+    ],
+    tags: [
+      'subagent',
+      'checkpoint',
+      'fork',
+      'rollback',
+      'multi-agent',
+      'branch-isolation',
+      'p0-release-gate',
+    ],
+  },
+  51: {
+    id: 51,
+    gateId: 'G29',
+    priority: 'P0',
+    title: 'Empirical Self-Improvement Cycle (SELF_IMPROVEMENT)',
+    purpose:
+      'Verify the complete empirical self-improvement loop: baseline recording, opportunity detection from multi-execution observation window, hypothesis formulation, pre-registered experiment plan, isolated candidate generation, candidate verification, equivalent benchmarking, regression guard qualification, MemoryService episode recording, and guarded baseline promotion.',
+    prompt:
+      'Observe past execution history showing context growth. Identify opportunity, formulate hypothesis, design experiment with pre-registered criteria, generate isolated candidate, verify build/checks, benchmark candidate against baseline, confirm qualified decision via RegressionGuard, and record learning in MemoryService.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'OBSERVE -> IDENTIFY_OPPORTUNITY -> FORMULATE_HYPOTHESIS -> DESIGN_EXPERIMENT -> GENERATE_CANDIDATE -> VERIFY -> BENCHMARK -> EVALUATE -> QUALIFIED -> PROMOTE',
+    verificationCriteria: [
+      'Pre-registered experiment plan defines primary and regression metrics before candidate evaluation',
+      'Candidate is generated with isolated ID/configuration without mutating active baseline',
+      'Candidate passes build/physical verification checks',
+      'Candidate and baseline are evaluated under identical benchmark tasks and workloads',
+      'Candidate achieves primary metric improvement with zero protected metric regressions',
+      'RegressionGuard qualifies candidate objectively',
+      'MemoryService records successful self-improvement episode with provenance',
+      'Baseline is updated only upon authorized promotion',
+    ],
+    expectedArtifacts: ['baseline-record', 'experiment-plan', 'candidate-patch', 'evaluation-report'],
+    expectedProvenance: [
+      'meta.baseline.frozen',
+      'meta.opportunity.detected',
+      'meta.hypothesis.created',
+      'meta.experiment.planned',
+      'meta.candidate.generated',
+      'meta.candidate.verified',
+      'meta.candidate.evaluated',
+      'meta.candidate.promoted',
+    ],
+    associatedSuites: [
+      'packages/evaluation/tests/selfImprovementGates.test.ts',
+      'packages/evaluation/tests/metaOptimizer.test.ts',
+    ],
+    tags: ['self-improvement', 'meta-optimizer', 'g29', 'p0-release-gate'],
+  },
+  52: {
+    id: 52,
+    gateId: 'G30',
+    priority: 'P0',
+    title: 'Zero-Regression Guard Enforcement (SELF_IMPROVEMENT_REGRESSION)',
+    purpose:
+      'Verify that a candidate showing large improvement on the primary metric is strictly REJECTED when it regresses any protected correctness or success metric, with baseline preserved and failure recorded in MemoryService.',
+    prompt:
+      'Evaluate a candidate that dramatically reduces token usage but causes task failure on a secondary benchmark task. Verify RegressionGuard detects the regression, rejects the candidate, retains active baseline, and records failure in MemoryService.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'EVALUATE_CANDIDATE -> DETECT_REGRESSION -> REJECT -> RETAIN_BASELINE -> RECORD_FAILURE',
+    verificationCriteria: [
+      'Superficial primary metric gains (e.g. -60% tokens) cannot override protected metric failures',
+      'RegressionGuard marks candidate as disqualified and logs specific regressed task and metric',
+      'Decision is strictly REJECTED',
+      'Active baseline configuration remains completely unchanged',
+      'Failure episode is recorded in MemoryService to prevent repeating the failed strategy',
+    ],
+    expectedArtifacts: ['rejection-report', 'regression-evidence'],
+    expectedProvenance: [
+      'meta.candidate.rejected',
+      'regression-detected',
+      'baseline-preserved',
+    ],
+    associatedSuites: [
+      'packages/evaluation/tests/selfImprovementGates.test.ts',
+      'packages/evaluation/tests/metaOptimizer.test.ts',
+    ],
+    tags: ['self-improvement', 'regression-guard', 'g30', 'p0-release-gate'],
+  },
+  53: {
+    id: 53,
+    gateId: 'G31',
+    priority: 'P0',
+    title: 'Inconclusive Determination on Insufficient Evidence (SELF_IMPROVEMENT_INCONCLUSIVE)',
+    purpose:
+      'Verify that when sample size is insufficient, benchmark runs are noisy, or statistical confidence bounds overlap, the MetaOptimizer returns INCONCLUSIVE rather than inventing certainty or guessing.',
+    prompt:
+      'Evaluate candidate with sample size below minimum statistical threshold. Verify RegressionGuard produces INCONCLUSIVE determination and does not qualify or promote candidate.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'EVALUATE_CANDIDATE -> CHECK_STATISTICAL_CONFIDENCE -> INCONCLUSIVE_DETECTED -> HALT_PROMOTION',
+    verificationCriteria: [
+      'Insufficient sample size (< minSampleCount) triggers INCONCLUSIVE determination',
+      'Inconclusive reasons are explicitly logged (sample count, confidence interval overlap)',
+      'Candidate is neither qualified nor promoted',
+      'System does not invent certainty under noisy or sparse empirical measurements',
+    ],
+    expectedArtifacts: ['inconclusive-report'],
+    expectedProvenance: [
+      'meta.candidate.inconclusive',
+      'insufficient-evidence',
+    ],
+    associatedSuites: [
+      'packages/evaluation/tests/selfImprovementGates.test.ts',
+      'packages/evaluation/tests/metaOptimizer.test.ts',
+    ],
+    tags: ['self-improvement', 'inconclusive', 'g31', 'p0-release-gate'],
+  },
 };
 
 /**
@@ -1544,7 +1762,7 @@ export function getTestsForGate(gateId: AcceptanceGateId): AcceptanceTest[] {
 
 export function getTestById(id: number): AcceptanceTest {
   const test = ACCEPTANCE_TESTS[id];
-  if (!test) throw new Error(`Acceptance test ${id} not found (valid range: 1..30)`);
+  if (!test) throw new Error(`Acceptance test ${id} not found (valid range: 1..53)`);
   return test;
 }
 

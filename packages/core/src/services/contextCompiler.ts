@@ -137,6 +137,10 @@ export class ContextCompiler {
     }
   }
 
+  getProviders(): ContextProvider[] {
+    return [...this.providers];
+  }
+
   getLatestSnapshot(executionId: string): ContextSnapshot | undefined {
     const list = this.snapshotsByExecution.get(executionId);
     if (!list || list.length === 0) return undefined;

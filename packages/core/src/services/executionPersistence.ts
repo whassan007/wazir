@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { KeyValueStore } from '@wazir/shared';
+import { injectFault } from '@wazir/shared';
 import type { ExecutionRecord } from '../types/execution.js';
 
 // Compare storage values, not JS-only details lost by the JSON/Postgres adapters
@@ -19,6 +20,7 @@ export async function persistExecutionRecord(
   record: ExecutionRecord,
 ): Promise<void> {
   if (!store.update) throw new Error('Execution persistence requires atomic store.update');
+  await injectFault('DURING_EVENT_PERSIST', { key, executionId: record.execution.id, storageRevision: record.storageRevision });
   await store.update<ExecutionRecord>(key, current => {
     if ((record.storageRevision ?? 0) !== (current?.storageRevision ?? 0) + 1) {
       // Keep the prefix (callers match on it); the rest makes a conflict explainable.

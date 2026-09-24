@@ -627,12 +627,13 @@ export class EvaluationService {
     inputTokens: number;
     outputTokens: number;
   } {
-    let totalModelCalls = 0;
+    let totalModelCalls = (record as any).modelCalls ?? (record as any).totalModelCalls ?? 0;
     let modelLatencyMs = 0;
     let inputTokens = record.usage?.input ?? (record.usage as any)?.inputTokens ?? 0;
     let outputTokens = record.usage?.output ?? (record.usage as any)?.outputTokens ?? 0;
 
     const events = record.events ?? [];
+    let eventModelCalls = 0;
     for (const event of events) {
       const type = event.eventType ?? event.type;
       if (
@@ -642,7 +643,7 @@ export class EvaluationService {
         type === 'model.requested'
       ) {
         if (type === 'generation.completed' || type === 'model.response.completed') {
-          totalModelCalls += 1;
+          eventModelCalls += 1;
         }
         const data = event.data as Record<string, unknown> | undefined;
         if (data) {
@@ -660,6 +661,10 @@ export class EvaluationService {
           }
         }
       }
+    }
+
+    if (totalModelCalls === 0) {
+      totalModelCalls = eventModelCalls;
     }
 
     if (totalModelCalls === 0 && (inputTokens > 0 || outputTokens > 0)) {

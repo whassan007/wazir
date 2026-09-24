@@ -76,7 +76,8 @@ describe('EvaluationRecord & Multi-Dimensional Comparison', () => {
         workspaceId: 'ws-1',
         revision: 4,
       },
-    };
+      modelCalls: params.modelCalls,
+    } as any;
   };
 
   it('26 & 27. EvaluationRecord captures model calls and input/output tokens accurately', () => {

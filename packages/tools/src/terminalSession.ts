@@ -140,19 +140,41 @@ export class TerminalSession {
     TerminalSessionRegistry.register(this);
   }
 
+  private incomingBuffer = '';
+
   private onData(data: string): void {
     this.lastDataAt = Date.now();
     this.terminal.write(data);
+    this.incomingBuffer += data;
 
-    const markerIdx = data.indexOf(this.marker);
+    const markerIdx = this.incomingBuffer.indexOf(this.marker);
     if (markerIdx !== -1) {
-      const after = data.slice(markerIdx + this.marker.length);
-      const match = /^:(\d+)/.exec(after);
-      if (match) this.markerHit = { exitCode: Number(match[1]) };
-      data = data.slice(0, markerIdx);
+      const after = this.incomingBuffer.slice(markerIdx + this.marker.length);
+      const match = /^:(\d+)(?:\r?\n)?/.exec(after);
+      if (match) {
+        this.markerHit = { exitCode: Number(match[1]) };
+        const preMarker = this.incomingBuffer.slice(0, markerIdx);
+        this.incomingBuffer = after.slice(match[0].length);
+        this.appendClean(preMarker);
+        return;
+      }
+      if (after.length < 15 && (!after.includes('\n') || after.startsWith(':'))) {
+        return;
+      }
     }
 
-    const clean = sanitizeChunk(data);
+    const controlIdx = this.incomingBuffer.indexOf('\u0001');
+    if (controlIdx === -1) {
+      this.appendClean(this.incomingBuffer);
+      this.incomingBuffer = '';
+    } else if (controlIdx > 0) {
+      this.appendClean(this.incomingBuffer.slice(0, controlIdx));
+      this.incomingBuffer = this.incomingBuffer.slice(controlIdx);
+    }
+  }
+
+  private appendClean(raw: string): void {
+    const clean = sanitizeChunk(raw);
     if (clean.length === 0) return;
     this.pending += clean;
     this.pendingBytes += Buffer.byteLength(clean, 'utf8');
@@ -186,8 +208,7 @@ export class TerminalSession {
   async send(input: string, options: { maxWaitMs?: number; newline?: boolean } = {}): Promise<SendResult> {
     if (this.disposed) throw new Error('TERMINAL_SESSION_DISPOSED');
     this.markerHit = undefined;
-    const startPending = this.pending.length;
-    void startPending;
+    const sendAt = Date.now();
     this.pty.write(options.newline === false ? input : `${input}\r`);
 
     const maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
@@ -197,10 +218,10 @@ export class TerminalSession {
       if (this.markerHit) {
         return this.flush('PROMPT_MARKER', this.markerHit.exitCode);
       }
-      if (this.stdinWaitEvidence() && Date.now() - this.lastDataAt > 20) {
+      if (this.lastDataAt >= sendAt && this.stdinWaitEvidence() && Date.now() - this.lastDataAt > 20) {
         return this.flush('STDIN_WAIT');
       }
-      if (Date.now() - this.lastDataAt >= IDLE_SETTLE_MS) {
+      if (this.lastDataAt >= sendAt && Date.now() - this.lastDataAt >= IDLE_SETTLE_MS) {
         return this.flush('IDLE_INFERRED');
       }
       await new Promise((r) => setTimeout(r, 20));
@@ -214,6 +235,10 @@ export class TerminalSession {
   }
 
   private flush(readiness: ReadinessTier, exitCode?: number): SendResult {
+    if (this.incomingBuffer.length > 0) {
+      this.appendClean(this.incomingBuffer);
+      this.incomingBuffer = '';
+    }
     const result: SendResult = {
       output: this.pending,
       readiness,

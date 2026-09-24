@@ -2,6 +2,7 @@ import { detectProgress, observationFingerprint } from "./diagnostics.js";
 import { DEFAULT_STOP_CONDITIONS, firstStop, type StopCheckpoint, type StopCondition, type StopDecision } from "./stopConditions.js";
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { injectFault } from '@wazir/shared';
 import type {
   AgentAdapter,
   AgentDescriptor,
@@ -835,6 +836,7 @@ export class CodingAgent implements AgentAdapter {
         })) {
           if (event.type === 'token' && event.content) {
             content += event.content;
+            await injectFault('DURING_MODEL_STREAM', { modelId: currentModelId, token: event.content, length: content.length });
             if (!timedOut && content.length > this.maxProseBeforeActionChars && !ACTION_START_RE.test(content)) {
               timedOut = true;
               runtime.cancelCurrentTurn?.();
@@ -1163,7 +1165,7 @@ export class CodingAgent implements AgentAdapter {
         malformedActions += 1;
         yield {
           kind: 'message',
-          content: `action.validation_failed: ${normalizationError}`,
+          content: `ACTION_VALIDATION_FAILED: ${normalizationError}`,
           raw: toolCall ? JSON.stringify(toolCall) : raw,
         };
         rejectAttempt(`Invalid tool action: ${normalizationError}`);
@@ -1356,7 +1358,7 @@ export class CodingAgent implements AgentAdapter {
         malformedActions += 1;
         yield {
           kind: 'message',
-          content: `action.validation_failed: ${normalizationError}`,
+          content: `ACTION_VALIDATION_FAILED: ${normalizationError}`,
           raw: toolCall ? JSON.stringify(toolCall) : raw,
         };
         rejectAttempt(`Invalid tool action: ${normalizationError}`);

@@ -27,7 +27,7 @@ import type {
 import { randomUUID, createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { hostname } from 'node:os';
-import { sanitizeUntrustedOutput, appendAuditEvent, computeContentHash } from '@wazir/shared';
+import { sanitizeUntrustedOutput, appendAuditEvent, computeContentHash, injectFault } from '@wazir/shared';
 import type { ProvenanceManager, CreateArtifactParams } from './provenanceManager.js';
 import { executionValuesEqual } from './executionPersistence.js';
 import { ExecutionFailure, isProviderRetryable } from '@wazir/shared';
@@ -260,6 +260,7 @@ export class ExecutionEngine {
         await this.flush(record);
         throw new ExecutionFailure('ARTIFACT_CONTRACT_FAILED', `Completion requires current verification for workspace revision ${revision}`);
       }
+      await injectFault('DURING_COMPLETION', { executionId, status, workspaceRevision: revision });
     }
 
     if (record.execution.status === status && ['completed', 'failed', 'cancelled'].includes(status)) {
@@ -329,6 +330,7 @@ export class ExecutionEngine {
       output: call.output === undefined ? undefined : sanitizeUntrustedOutput(call.output),
       error: call.error === undefined ? undefined : sanitizeUntrustedOutput(call.error),
     });
+    await injectFault('AFTER_TOOL_EXECUTION_BEFORE_PERSIST', { executionId, callId, tool: call.tool, ok: call.ok });
     this.pushEvent(record, 'tool.completed', {
       callId,
       tool: call.tool,
@@ -348,6 +350,7 @@ export class ExecutionEngine {
   } = {}): Promise<string> {
     const record = this.require(executionId);
     const callId = options.callId ?? `call-${randomUUID()}`;
+    await injectFault('BEFORE_TOOL_EXECUTION', { executionId, callId, tool, input, sideEffectClass: options.sideEffectClass });
     if (this.toolCheckpoints(executionId).some(call => call.callId === callId)) {
       throw new Error(`TOOL_ALREADY_DISPATCHED: '${callId}' must be reconciled or its recorded result reused`);
     }
@@ -513,6 +516,7 @@ export class ExecutionEngine {
     }
     const currentRev = record.workspaceState?.revision ?? 0;
     const boundRev = evidence.workspaceRevision !== undefined ? evidence.workspaceRevision : (evidence.revision !== undefined ? evidence.revision : currentRev);
+    await injectFault('AFTER_REVISION_BEFORE_VERIFICATION', { executionId, currentRevision: currentRev, boundRevision: boundRev, evidenceType: evidence.type ?? evidence.oracle });
     const oracleType = evidence.oracle ?? evidence.type;
     const rawPayload = `${oracleType}:${evidence.command ?? ''}:${evidence.exitCode}:${boundRev}:${evidence.output ?? ''}`;
     const fullEvidence: VerificationEvidence = {
@@ -625,6 +629,8 @@ export class ExecutionEngine {
     if (!record.mutationHistory) {
       record.mutationHistory = [];
     }
+
+    await injectFault('AFTER_MUTATION_BEFORE_REVISION_RECORD', { executionId, files, currentRevision: record.workspaceState?.revision ?? 0 });
 
     record.workspaceState.revision += 1;
     record.workspaceState.updatedAt = new Date();

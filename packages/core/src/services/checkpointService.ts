@@ -11,6 +11,7 @@ import type {
 import type { ExecutionEngine } from './executionEngine.js';
 import type { WorktreeManager, WorktreeMergeResult } from './worktreeManager.js';
 import type { ProvenanceManager } from './provenanceManager.js';
+import { injectFault } from '@wazir/shared';
 
 export interface CheckpointServiceOptions {
   executionEngine: ExecutionEngine;
@@ -103,6 +104,8 @@ export class CheckpointService {
       description: options.description,
       metadata: options.metadata,
     };
+
+    await injectFault('DURING_CHECKPOINT', { executionId, checkpointId, workspaceRevision: currentRevision });
 
     this.checkpoints.set(checkpointId, checkpoint);
 
@@ -203,6 +206,8 @@ export class CheckpointService {
       branch: worktreeInfo.branch,
       worktreeDir: worktreeInfo.worktreeDir,
     });
+
+    await injectFault('DURING_FORK', { checkpointId, parentExecutionId: parentRecord.execution.id, forkedExecutionId: forkedRecord.execution.id, worktreeDir: worktreeInfo.worktreeDir });
 
     return {
       forkedExecutionId: forkedRecord.execution.id,
@@ -323,6 +328,8 @@ export class CheckpointService {
       irreversibleSideEffectsCount: irreversibleSideEffects.length,
       irreversibleSideEffects,
     });
+
+    await injectFault('DURING_ROLLBACK', { executionId, checkpointId, restoredRevision: checkpoint.workspaceRevision });
 
     return {
       executionId,

@@ -27,6 +27,7 @@ import {
   Scheduler,
   WorktreeManager,
   CheckpointService,
+  SolutionSearchService,
   TaskPlanner,
   createTaskPlanner,
   estimateModelMemory,
@@ -59,6 +60,9 @@ import { configDir, loadConfig, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
 import path from 'node:path';
+
+import { EvaluationService, BenchmarkService, MetaOptimizerService } from '@wazir/evaluation';
+import { VerificationEngine } from '@wazir/core';
 
 export interface EngineOptions {
   projectRoot?: string;
@@ -97,6 +101,10 @@ export interface RookEngine {
   orchestrator: JobOrchestrator & { store?: KeyValueStore };
   worktrees: WorktreeManager;
   checkpoints: CheckpointService;
+  solutionSearch?: SolutionSearchService;
+  evaluation?: EvaluationService;
+  benchmark?: BenchmarkService;
+  optimizer?: MetaOptimizerService;
   planner: TaskPlanner;
   adapters: Map<string, RuntimeAdapter>;
   discovered: DiscoveredRuntime[];
@@ -389,6 +397,31 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     },
   });
 
+  const evaluation = new EvaluationService();
+  const benchmark = new BenchmarkService(evaluation);
+  const verificationEngine = new VerificationEngine({ projectRoot });
+
+  const solutionSearch = new SolutionSearchService({
+    checkpointService: checkpoints,
+    worktreeManager: worktrees,
+    executionEngine: executions,
+    evaluationService: evaluation,
+    verificationEngine,
+    provenanceManager: provenance,
+    defaultProjectRoot: projectRoot,
+  });
+
+  const optimizer = new MetaOptimizerService({
+    benchmarkService: benchmark,
+    evaluationService: evaluation,
+    verificationEngine,
+    worktreeManager: worktrees,
+    checkpointService: checkpoints,
+    policyEngine: policy,
+    store,
+  });
+  await optimizer.hydrate();
+
   return {
     config,
     projectRoot,
@@ -414,6 +447,10 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     orchestrator,
     worktrees,
     checkpoints,
+    solutionSearch,
+    evaluation,
+    benchmark,
+    optimizer,
     planner,
     adapters: adapterById,
     discovered,

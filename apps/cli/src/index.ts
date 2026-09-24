@@ -18,7 +18,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version('0.1.49');
+  .version('0.1.50');
 
 registerMCPCommands(program);
 registerWebCommands(program);
@@ -1060,5 +1060,195 @@ program
     console.log(result.output);
     process.exit(result.code);
   });
+
+// search command — systematically explore multiple independent solution trajectories
+const searchCmd = new Command()
+  .name('search')
+  .description('Systematically explore multiple independent solution trajectories (Best-of-N)');
+
+searchCmd
+  .command('run <task>')
+  .description('Run parallel candidate trajectories for an objective')
+  .option('--candidates <n>', 'Number of candidates to explore (default 3)', (val) => parseInt(val, 10), 3)
+  .option('--strategy <strategy>', 'Search strategy: same_model_diverse, multi_model, multi_agent, mixed', 'same_model_diverse')
+  .option('--max-parallel <n>', 'Maximum parallel candidate worktrees', (val) => parseInt(val, 10), 2)
+  .option('--timeout <ms>', 'Per-candidate timeout in milliseconds', (val) => parseInt(val, 10), 180_000)
+  .option('--auto-promote', 'Automatically promote winning candidate to parent workspace')
+  .option('--model <id>', 'Target model for execution')
+  .option('--agent <name>', 'Target agent for execution')
+  .option('--json', 'Output in JSON format')
+  .action(async (task, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { searchRunCommand } = await import('./searchCommands.js');
+    console.log(await searchRunCommand(engine, task, options));
+  });
+
+searchCmd
+  .command('status <searchId>')
+  .description('Check status of a solution search')
+  .option('--json', 'Output in JSON format')
+  .action(async (searchId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { searchStatusCommand } = await import('./searchCommands.js');
+    console.log(searchStatusCommand(engine, searchId, options));
+  });
+
+searchCmd
+  .command('candidates <searchId>')
+  .description('List all candidates for a solution search')
+  .option('--json', 'Output in JSON format')
+  .action(async (searchId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { searchCandidatesCommand } = await import('./searchCommands.js');
+    console.log(searchCandidatesCommand(engine, searchId, options));
+  });
+
+searchCmd
+  .command('inspect <searchId> <candidateId>')
+  .description('Inspect detailed evaluation, checks, and evidence for a candidate')
+  .option('--json', 'Output in JSON format')
+  .action(async (searchId, candidateId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { searchInspectCommand } = await import('./searchCommands.js');
+    console.log(searchInspectCommand(engine, searchId, candidateId, options));
+  });
+
+searchCmd
+  .command('promote <searchId> <candidateId>')
+  .description('Promote a verified candidate to parent workspace with conflict check & reverification')
+  .option('--json', 'Output in JSON format')
+  .action(async (searchId, candidateId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { searchPromoteCommand } = await import('./searchCommands.js');
+    console.log(await searchPromoteCommand(engine, searchId, candidateId, options));
+  });
+
+searchCmd
+  .command('cancel <searchId>')
+  .description('Cancel an active solution search')
+  .option('--json', 'Output in JSON format')
+  .action(async (searchId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { searchCancelCommand } = await import('./searchCommands.js');
+    console.log(searchCancelCommand(engine, searchId, options));
+  });
+
+program.addCommand(searchCmd);
+
+// ======================================================================
+// IMPROVE COMMAND (Empirical self-improvement system)
+// ======================================================================
+const improveCmd = new Command()
+  .name('improve')
+  .description('Empirical self-improvement system (observe, hypothesize, experiment, guard, promote)');
+
+improveCmd
+  .command('status')
+  .description('Show self-improvement status, maturity levels, and budgets')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { improveStatusCommand } = await import('./commands.js');
+    console.log(await improveStatusCommand(engine, options));
+  });
+
+improveCmd
+  .command('opportunities')
+  .description('List detected measurable improvement opportunities')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { improveOpportunitiesCommand } = await import('./commands.js');
+    console.log(await improveOpportunitiesCommand(engine, options));
+  });
+
+improveCmd
+  .command('experiments')
+  .description('List recorded self-improvement experiments')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { improveExperimentsCommand } = await import('./commands.js');
+    console.log(await improveExperimentsCommand(engine, options));
+  });
+
+improveCmd
+  .command('inspect <experiment>')
+  .description('Inspect detailed metrics, mutations, and decisions for an experiment')
+  .option('--json', 'Output in JSON format')
+  .action(async (experiment, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { improveInspectCommand } = await import('./commands.js');
+    console.log(await improveInspectCommand(engine, experiment, options));
+  });
+
+improveCmd
+  .command('run')
+  .description('Execute an optimization cycle under explicit budgets')
+  .option('--level <level>', 'Target self-improvement maturity level')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { improveRunCommand } = await import('./commands.js');
+    console.log(await improveRunCommand(engine, options));
+  });
+
+improveCmd
+  .command('compare <experiment>')
+  .description('Compare baseline vs candidate metrics for an experiment')
+  .option('--json', 'Output in JSON format')
+  .action(async (experiment, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { improveCompareCommand } = await import('./commands.js');
+    console.log(await improveCompareCommand(engine, experiment, options));
+  });
+
+improveCmd
+  .command('promote <candidate>')
+  .description('Promote a verified candidate to active baseline with operator authorization')
+  .option('--force', 'Bypass level guards')
+  .option('--json', 'Output in JSON format')
+  .action(async (candidate, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { improvePromoteCommand } = await import('./commands.js');
+    console.log(await improvePromoteCommand(engine, candidate, options));
+  });
+
+improveCmd
+  .command('rollback [promotion]')
+  .description('Rollback active baseline to a previous verified state')
+  .option('--json', 'Output in JSON format')
+  .action(async (promotion, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { improveRollbackCommand } = await import('./commands.js');
+    console.log(await improveRollbackCommand(engine, promotion, options));
+  });
+
+improveCmd
+  .command('explain <experiment>')
+  .description('Explain why an experiment was initiated, what changed, what improved/regressed, and why it was promoted/rejected')
+  .option('--json', 'Output in JSON format')
+  .action(async (experiment, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { improveExplainCommand } = await import('./commands.js');
+    console.log(await improveExplainCommand(engine, experiment, options));
+  });
+
+program.addCommand(improveCmd);
 
 program.parse();

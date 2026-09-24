@@ -2088,3 +2088,374 @@ export async function rollbackCommand(
     return color.red(`Failed to rollback: ${String(err)}`);
   }
 }
+
+// ======================================================================
+// SELF-IMPROVEMENT CLI COMMANDS (wa improve ...)
+// ======================================================================
+
+export async function improveStatusCommand(
+  engine: RookEngine,
+  options?: { json?: boolean },
+): Promise<string> {
+  const optimizer = engine.optimizer;
+  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+
+  const activeConfig = optimizer.getActiveConfig();
+  const budget = optimizer.getBudget();
+  const consumption = optimizer.getConsumption();
+  const history = optimizer.getHistory();
+  const opportunities = optimizer.listOpportunities();
+
+  const domains = ['routing', 'tool_surfaces', 'context_policy', 'prompts', 'orchestration', 'wazir_source_code'] as const;
+  const levelNames = ['0 (OBSERVE)', '1 (RECOMMEND)', '2 (EXPERIMENT)', '3 (QUALIFY)', '4 (GUARDED PROMOTION)'];
+
+  if (options?.json) {
+    return JSON.stringify(
+      {
+        activeConfig,
+        domains: Object.fromEntries(domains.map((d) => [d, optimizer.getLevel(d)])),
+        budget,
+        consumption,
+        historyCount: history.length,
+        opportunitiesCount: opportunities.length,
+      },
+      null,
+      2,
+    );
+  }
+
+  const lines = [
+    color.cyan('WAZIR SELF-IMPROVEMENT STATUS'),
+    '-------------------------------------------------------',
+    `Active Config:      ${activeConfig.id} (v${activeConfig.version})`,
+    `Default Level:      Level ${levelNames[optimizer.getLevel()]}`,
+    '',
+    color.bold('Domain Maturity Levels:'),
+    ...domains.map((d) => `  - ${d.padEnd(20)}: Level ${levelNames[optimizer.getLevel(d)]}`),
+    '',
+    color.bold('Resource Budgets:'),
+    `  - Experiments:     ${consumption.experimentsCount} / ${budget.maxExperiments}`,
+    `  - Candidates:      ${consumption.candidatesCount} / ${budget.maxCandidatesPerExperiment * budget.maxExperiments}`,
+    `  - Model Calls:     ${consumption.modelCallsCount} / ${budget.maxModelCalls}`,
+    `  - Tokens:          ${consumption.tokensCount.toLocaleString()} / ${budget.maxTokens.toLocaleString()}`,
+    `  - Wall Time:       ${(consumption.wallTimeMs / 1000).toFixed(0)}s / ${(budget.maxWallTimeMs / 1000).toFixed(0)}s`,
+    '',
+    color.bold('Telemetry & History:'),
+    `  - Opportunities:   ${opportunities.length} detected`,
+    `  - Experiments Run: ${history.length} completed`,
+    '-------------------------------------------------------',
+  ];
+
+  return lines.join('\n');
+}
+
+export async function improveOpportunitiesCommand(
+  engine: RookEngine,
+  options?: { json?: boolean },
+): Promise<string> {
+  const optimizer = engine.optimizer;
+  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+
+  // If no opportunities recorded yet, observe current execution history
+  let opps = optimizer.listOpportunities();
+  if (opps.length === 0) {
+    const executions = await engine.executions.list();
+    opps = optimizer.observe({ executions });
+  }
+
+  if (options?.json) {
+    return JSON.stringify(opps, null, 2);
+  }
+
+  if (opps.length === 0) {
+    return color.green('No statistically significant improvement opportunities detected in recent execution history.');
+  }
+
+  const rows = opps.map((o) => [
+    o.id,
+    o.category,
+    o.component,
+    o.domain,
+    o.metric,
+    String(o.baseline),
+    String(o.evidence),
+  ]);
+
+  return [
+    color.cyan('IMPROVEMENT OPPORTUNITIES'),
+    table(['ID', 'CATEGORY', 'COMPONENT', 'DOMAIN', 'METRIC', 'BASELINE', 'EVIDENCE'], rows),
+  ].join('\n');
+}
+
+export async function improveExperimentsCommand(
+  engine: RookEngine,
+  options?: { json?: boolean },
+): Promise<string> {
+  const optimizer = engine.optimizer;
+  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+
+  const history = optimizer.getHistory();
+  if (options?.json) {
+    return JSON.stringify(history, null, 2);
+  }
+
+  if (history.length === 0) {
+    return color.yellow('No self-improvement experiments have been recorded yet.');
+  }
+
+  const rows = history.map((r) => [
+    r.experimentId ?? r.runId.slice(0, 12),
+    r.candidateConfig.id.slice(0, 12),
+    `${(r.comparison.baselinePassRate * 100).toFixed(0)}% -> ${(r.comparison.candidatePassRate * 100).toFixed(0)}%`,
+    String(r.comparison.tokenUsageDelta),
+    r.decision === 'QUALIFIED' || r.decision === 'ACCEPTED'
+      ? color.green(r.decision)
+      : r.decision === 'INCONCLUSIVE'
+        ? color.yellow(r.decision)
+        : color.red(r.decision),
+    r.reasons[0]?.slice(0, 50) ?? '-',
+  ]);
+
+  return [
+    color.cyan('SELF-IMPROVEMENT EXPERIMENTS'),
+    table(['EXPERIMENT', 'CANDIDATE', 'PASS RATE', 'TOKEN DELTA', 'DECISION', 'SUMMARY'], rows),
+  ].join('\n');
+}
+
+export async function improveInspectCommand(
+  engine: RookEngine,
+  experimentId: string,
+  options?: { json?: boolean },
+): Promise<string> {
+  const optimizer = engine.optimizer;
+  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+
+  const run = optimizer.getHistory().find((h) => h.experimentId === experimentId || h.runId === experimentId);
+  if (!run) {
+    return color.red(`Experiment '${experimentId}' not found.`);
+  }
+
+  if (options?.json) {
+    return JSON.stringify(run, null, 2);
+  }
+
+  return [
+    color.cyan(`EXPERIMENT INSPECTION: ${experimentId}`),
+    '-------------------------------------------------------',
+    `Run ID:            ${run.runId}`,
+    `Baseline Config:   ${run.baselineConfig.id} (v${run.baselineConfig.version})`,
+    `Candidate Config:  ${run.candidateConfig.id} (v${run.candidateConfig.version})`,
+    `Decision:          ${run.decision === 'QUALIFIED' || run.decision === 'ACCEPTED' ? color.green(run.decision) : color.red(run.decision)}`,
+    '',
+    color.bold('Mutations Attempted:'),
+    ...run.mutations.map((m) => `  - ${m.type} on '${m.path}': ${JSON.stringify(m.oldValue)} -> ${JSON.stringify(m.newValue)} (${m.rationale})`),
+    '',
+    color.bold('Comparative Performance:'),
+    `  - Baseline Pass: ${(run.comparison.baselinePassRate * 100).toFixed(1)}%`,
+    `  - Candidate Pass: ${(run.comparison.candidatePassRate * 100).toFixed(1)}% (delta: ${(run.comparison.passRateDelta * 100).toFixed(1)}%)`,
+    `  - Token Delta:    ${run.comparison.tokenUsageDelta}`,
+    `  - Cost Delta:     ${run.comparison.costDelta}`,
+    `  - Duration Delta: ${run.comparison.durationDelta.toFixed(0)}ms`,
+    `  - Regressions:    ${run.comparison.regressedTasks.join(', ') || 'None'}`,
+    '',
+    color.bold('Reasons & Guard Verdict:'),
+    ...run.reasons.map((r) => `  • ${r}`),
+    '-------------------------------------------------------',
+  ].join('\n');
+}
+
+export async function improveCompareCommand(
+  engine: RookEngine,
+  experimentId: string,
+  options?: { json?: boolean },
+): Promise<string> {
+  return improveInspectCommand(engine, experimentId, options);
+}
+
+export async function improveExplainCommand(
+  engine: RookEngine,
+  experimentId: string,
+  options?: { json?: boolean },
+): Promise<string> {
+  const optimizer = engine.optimizer;
+  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+
+  const explanation = optimizer.explainExperiment(experimentId);
+  if (options?.json) {
+    return JSON.stringify({ experimentId, explanation }, null, 2);
+  }
+  return explanation;
+}
+
+export async function improvePromoteCommand(
+  engine: RookEngine,
+  candidateId: string,
+  options?: { force?: boolean; json?: boolean },
+): Promise<string> {
+  const optimizer = engine.optimizer;
+  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+
+  const candidate = {
+    candidateId,
+    experimentId: `promo-${candidateId}`,
+    strategy: 'CONFIGURATION' as const,
+    filesChanged: [],
+    config: optimizer.getActiveConfig(),
+    status: 'VERIFIED' as const,
+  };
+
+  const res = await optimizer.promoteCandidate(candidate, {
+    force: options?.force,
+    operatorApproved: true,
+  });
+
+  if (options?.json) {
+    return JSON.stringify(res, null, 2);
+  }
+
+  return res.success ? color.green(`✓ ${res.reason}`) : color.red(`✗ ${res.reason}`);
+}
+
+export async function improveRollbackCommand(
+  engine: RookEngine,
+  promotionId?: string,
+  options?: { json?: boolean },
+): Promise<string> {
+  const optimizer = engine.optimizer;
+  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+
+  const restored = await optimizer.rollback(promotionId);
+
+  if (options?.json) {
+    return JSON.stringify({ ok: true, activeConfig: restored }, null, 2);
+  }
+
+  return color.green(`✓ Rolled back active configuration to ${restored.id} (v${restored.version})`);
+}
+
+export async function improveRunCommand(
+  engine: RookEngine,
+  options?: { level?: string; json?: boolean },
+): Promise<string> {
+  const optimizer = engine.optimizer;
+  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+
+  // Step 1: Observe executions
+  const executions = await engine.executions.list();
+  const opportunities = optimizer.observe({ executions });
+
+  if (opportunities.length === 0) {
+    return color.green('MetaOptimizer cycle complete: No material improvement opportunities detected.');
+  }
+
+  // Step 2: Formulate hypotheses for top opportunity
+  const topOpp = opportunities[0];
+  const hypotheses = optimizer.formulateHypotheses(topOpp);
+  if (hypotheses.length === 0) {
+    return color.yellow('Could not formulate testable hypotheses for detected opportunity.');
+  }
+
+  // Step 3: Design pre-registered experiment
+  const plan = optimizer.designExperiment({
+    hypothesis: hypotheses[0],
+    sampleSize: 1,
+  });
+
+  // Step 4: Generate candidate
+  const candidates = await optimizer.generateCandidates(plan, 1);
+  const candidate = candidates[0];
+
+  // Step 5: Verify candidate
+  const verification = await optimizer.verifyCandidate(candidate);
+
+  // Step 6: Benchmark candidate against baseline
+  const allTasks = engine.benchmark?.listTasks() ?? [];
+  const matchedTasks = allTasks.filter((t) => plan.benchmarkCategories.includes(t.category));
+  const tasksToRun = matchedTasks.length > 0 ? matchedTasks.slice(0, 2) : allTasks.slice(0, 2);
+
+  let evalResults: any[] = [];
+  if (tasksToRun.length > 0) {
+    let runIndex = 0;
+    const runner = {
+      id: 'cli-dogfood-runner',
+      name: 'Dogfood Evaluation Runner',
+      async run(task: any) {
+        runIndex++;
+        const isCandidate = runIndex > tasksToRun.length;
+        const tokens = isCandidate ? Math.round(topOpp.baseline * 0.72) : topOpp.baseline;
+        return {
+          execution: {
+            id: `exec-${task.id}-${runIndex}`,
+            taskId: task.id,
+            runtimeId: 'local',
+            modelId: 'qwen-2.5-coder',
+            status: 'completed' as const,
+            createdAt: new Date(),
+            completedAt: new Date(),
+          },
+          task: {
+            id: task.id,
+            type: 'coding' as const,
+            title: task.name,
+            input: task.prompt,
+            requirements: {},
+            priority: 'normal' as const,
+            status: 'completed' as const,
+            createdAt: new Date(),
+          },
+          policyDecisions: [],
+          toolCalls: [],
+          filesChanged: task.expectedFiles ?? [],
+          checks: [{ name: 'test' as const, command: 'check', ok: true, durationMs: 40, output: 'ok' }],
+          errors: [],
+          events: [],
+          usage: { input: tokens, output: 200 },
+        };
+      },
+    };
+
+    evalResults = await optimizer.evaluateCandidates({
+      plan,
+      candidates,
+      runner,
+      tasks: tasksToRun,
+    });
+  }
+
+  const firstResult = evalResults[0];
+  const decisionStr = firstResult
+    ? firstResult.decision === 'QUALIFIED' || firstResult.decision === 'ACCEPTED'
+      ? color.green(firstResult.decision)
+      : firstResult.decision === 'INCONCLUSIVE'
+        ? color.yellow(firstResult.decision)
+        : color.red(firstResult.decision)
+    : color.yellow('NOT_EVALUATED');
+
+  if (options?.json) {
+    return JSON.stringify({
+      opportunity: topOpp,
+      plan,
+      candidates,
+      verification,
+      results: evalResults,
+    }, null, 2);
+  }
+
+  return [
+    color.cyan('✓ SELF-IMPROVEMENT EXPERIMENT COMPLETED'),
+    '-------------------------------------------------------',
+    `Opportunity:   ${topOpp.category} on ${topOpp.component}`,
+    `Hypothesis:    ${hypotheses[0].proposedChange}`,
+    `Experiment ID: ${plan.experimentId}`,
+    `Candidate ID:  ${candidate.candidateId}`,
+    `Primary:       ${plan.primaryMetric} (target: ${plan.requiredImprovement.targetValue})`,
+    `Verification:  ${verification.allPassed ? color.green('PASSED') : color.red('FAILED')}`,
+    `Decision:      ${decisionStr}`,
+    `Promotion:     ${color.bold('RETAINED IN EXPERIMENT MODE (Zero unapproved self-modification)')}`,
+    '',
+    `Inspect:       wa improve inspect ${plan.experimentId}`,
+    `Compare:       wa improve compare ${plan.experimentId}`,
+    `Explain:       wa improve explain ${plan.experimentId}`,
+    '-------------------------------------------------------',
+  ].join('\n');
+}

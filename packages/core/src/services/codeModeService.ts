@@ -9,6 +9,7 @@ import type {
   CodeModeStreamingEvent,
 } from '../types/codeMode.js';
 import type { ToolExecutionContext, ToolResult } from '../types/tool.js';
+import { injectFault } from '@wazir/shared';
 
 export type CodeModeToolExecutor = (
   toolName: string,
@@ -129,6 +130,8 @@ export class CodeModeService {
         tool: toolName,
         input,
       });
+
+      await injectFault('DURING_CODE_MODE', { operationId: callId, tool: toolName, input, scriptId });
 
       try {
         const result = await this.toolExecutor(toolName, input, {

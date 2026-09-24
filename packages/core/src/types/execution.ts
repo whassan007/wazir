@@ -181,6 +181,14 @@ export type ExecutionEventType =
   | 'codemode.operation.completed' | 'codemode.operation.failed'
   | 'runtime.protocol.selected' | 'tool_surface.compiled'
   | 'action.received' | 'action.validation_failed' | 'runtime.protocol.fallback'
+  | 'solution_search.started' | 'solution_search.checkpoint_created'
+  | 'solution_search.paused' | 'solution_search.resumed' | 'solution_search.cancelled'
+  | 'candidate.created' | 'candidate.started' | 'candidate.steered'
+  | 'candidate.cancelled' | 'candidate.completed' | 'candidate.failed'
+  | 'candidate.verified' | 'candidate.evaluated' | 'candidate.promoted'
+  | 'solution_search.frontier_computed' | 'solution_search.selection_made'
+  | 'candidate.promotion_started' | 'candidate.promotion_completed' | 'candidate.promotion_failed'
+  | 'solution_search.budget_exhausted' | 'solution_search.completed'
   | 'retry.scheduled' | 'retry.exhausted'
   | 'policy.allowed' | 'policy.denied' | 'policy.approval_required'
   | 'lease.acquired' | 'lease.renewed' | 'lease.released'
@@ -240,7 +248,21 @@ export type ExecutionEventType =
   | 'evidence.stale'
   | 'EVIDENCE_STALE'
   | 'completion.rejected'
-  | 'COMPLETION_REJECTED';
+  | 'COMPLETION_REJECTED'
+  | 'meta.opportunity.detected'
+  | 'meta.hypothesis.created'
+  | 'meta.experiment.started'
+  | 'meta.baseline.recorded'
+  | 'meta.candidate.created'
+  | 'meta.candidate.verified'
+  | 'meta.candidate.evaluated'
+  | 'meta.candidate.rejected'
+  | 'meta.candidate.qualified'
+  | 'meta.promotion.started'
+  | 'meta.promotion.completed'
+  | 'meta.promotion.failed'
+  | 'meta.rollback'
+  | 'meta.learning.recorded';
 
 export interface ExecutionEvent {
   id: string;

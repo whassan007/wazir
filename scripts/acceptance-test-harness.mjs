@@ -47,9 +47,9 @@ Usage:
 
 Options:
   --foundational        Run foundational sequence: 20 -> 17 -> 18 -> 1 -> 9 -> 3 -> 4 -> 2
-  --gate <G0..G15>      Run all tests in specified gate
-  --test <1..48>        Run specific test by ID
-  --all                 Run all 16 progressive release gates (fail-fast prerequisite order)
+  --gate <G0..G31>      Run all tests in specified gate
+  --test <1..53>        Run specific test by ID
+  --all                 Run all 20 progressive release gates (fail-fast prerequisite order)
   --interactive         Prompt interactively to choose what to test
   --live                Probe and execute against live local models (LM Studio / Ollama)
   --skip-build          Skip dist freshness check and build
@@ -62,7 +62,7 @@ Gates:
   G2  Agent             Tests 8, 9       Coding + repair works
   G3  Routing           Tests 3, 4, 14, 29 Capability-based routing works
   G4  Fleet             Tests 2, 5, 6, 7 DAG / concurrency / fan-in works
-  G5  Multi-Agent       Tests 10-13      Review / delegation / handoff works
+  G5  Multi-Agent       Tests 10-13, 50  Review / delegation / handoff works
   G6  Governance        Tests 15, 16, 24 Policy / audit works
   G7  Resilience        Tests 21-23      Failover / recovery works
   G8  Terminal          Tests 25-28      TUI / history / context are safe
@@ -74,6 +74,9 @@ Gates:
   G14 Performance       Tests 43-44      PTY throughput/latency, multi-turn overhead growth bounds
   G15 Verify Integrity  Tests 45-48      Evidence-bound completion, revision staleness, false files-changed events, build-tool stalls
   G16 Long Horizon Ctx  Test 49          Sawtooth context bounding, deduplication, superseded elimination, evaluation record
+  G29 Self-Improvement  Test 51          Empirical self-improvement cycle: observe, hypothesize, experiment, evaluate, promote
+  G30 Regression Guard  Test 52          Zero-regression tolerance: strict rejection of regressions
+  G31 Inconclusive      Test 53          Inconclusive determination on insufficient evidence or noisy metrics
 `);
 }
 
@@ -187,9 +190,9 @@ async function resolveExecutionSelection() {
     console.log('=============================================================');
     console.log('Each time there is an upgrade, select what to test:\n');
     console.log('  1) Foundational Sequence (20, 17, 18, 1, 9, 3, 4, 2) [Recommended]');
-    console.log('  2) Release Gate (G0 Protocol, G1 Runtime, G2 Agent, ... G16 Long Horizon Context)');
-    console.log('  3) Specific Acceptance Test (Test 1 through 49)');
-    console.log('  4) Full Progressive Acceptance Suite (G0 through G16)');
+    console.log('  2) Release Gate (G0 Protocol, G1 Runtime, G2 Agent, ... G31 Inconclusive)');
+    console.log('  3) Specific Acceptance Test (Test 1 through 53)');
+    console.log('  4) Full Progressive Acceptance Suite (G0 through G31)');
     console.log('  5) Probe Local Models & Runtimes');
     console.log('  q) Quit\n');
 
@@ -202,14 +205,14 @@ async function resolveExecutionSelection() {
       for (const g of GATES) {
         console.log(`  ${g.id}) ${g.title}: ${g.description}`);
       }
-      const gateChoice = await promptUser('\nEnter Gate ID (e.g. G0, G1, ... G16): ');
+      const gateChoice = await promptUser('\nEnter Gate ID (e.g. G0, G1, ... G31): ');
       targetGate = gateChoice.trim().toUpperCase();
       if (!GATES.some((g) => g.id === targetGate)) {
         console.error(`Unknown gate ${targetGate}`);
         process.exit(1);
       }
     } else if (choice === '3') {
-      const testChoice = await promptUser('\nEnter Test ID (1 to 49): ');
+      const testChoice = await promptUser('\nEnter Test ID (1 to 53): ');
       targetTestId = parseInt(testChoice.trim(), 10);
       if (!TESTS[targetTestId]) {
         console.error(`Unknown test ${targetTestId}`);
@@ -261,7 +264,7 @@ async function main() {
   } else if (targetGate) {
     const g = GATES.find((g) => g.id === targetGate);
     if (!g) {
-      console.error(`Gate ${targetGate} not found. Valid gates: G0..G16`);
+      console.error(`Gate ${targetGate} not found. Valid gates: G0..G31`);
       process.exit(2);
     }
     testQueue = g.testIds.map((id) => TESTS[id]);

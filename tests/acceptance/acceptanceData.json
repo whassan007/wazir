@@ -219,6 +219,39 @@
         49
       ],
       "prerequisiteGateId": "G15"
+    },
+    {
+      "id": "G29",
+      "order": 17,
+      "name": "SelfImprovement",
+      "title": "G29 Self-Improvement",
+      "description": "Empirical self-improvement cycle: multi-execution observation, opportunity detection, hypothesis formulation, pre-registered experiment, isolated candidate generation, physical verification, equivalent benchmark comparison, qualification, memory recording, and guarded promotion",
+      "testIds": [
+        51
+      ],
+      "prerequisiteGateId": "G16"
+    },
+    {
+      "id": "G30",
+      "order": 18,
+      "name": "RegressionGuard",
+      "title": "G30 Regression Guard",
+      "description": "Zero-regression tolerance: strict rejection of candidates that regress protected correctness or task success metrics despite primary metric gains",
+      "testIds": [
+        52
+      ],
+      "prerequisiteGateId": "G29"
+    },
+    {
+      "id": "G31",
+      "order": 19,
+      "name": "InconclusiveDecision",
+      "title": "G31 Inconclusive Decision",
+      "description": "Empirical honesty: inconclusive determination when statistical evidence, sample sizes, or confidence bounds are insufficient, preventing unjustified promotion",
+      "testIds": [
+        53
+      ],
+      "prerequisiteGateId": "G30"
     }
   ],
   "foundationalSequence": [
@@ -2074,6 +2107,127 @@
         "rollback",
         "multi-agent",
         "branch-isolation",
+        "p0-release-gate"
+      ]
+    },
+    "51": {
+      "id": 51,
+      "gateId": "G29",
+      "priority": "P0",
+      "title": "Empirical Self-Improvement Cycle (SELF_IMPROVEMENT)",
+      "purpose": "Verify the complete empirical self-improvement loop: baseline recording, opportunity detection from multi-execution observation window, hypothesis formulation, pre-registered experiment plan, isolated candidate generation, candidate verification, equivalent benchmarking, regression guard qualification, MemoryService episode recording, and guarded baseline promotion.",
+      "prompt": "Observe past execution history showing context growth. Identify opportunity, formulate hypothesis, design experiment with pre-registered criteria, generate isolated candidate, verify build/checks, benchmark candidate against baseline, confirm qualified decision via RegressionGuard, and record learning in MemoryService.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "OBSERVE -> IDENTIFY_OPPORTUNITY -> FORMULATE_HYPOTHESIS -> DESIGN_EXPERIMENT -> GENERATE_CANDIDATE -> VERIFY -> BENCHMARK -> EVALUATE -> QUALIFIED -> PROMOTE",
+      "verificationCriteria": [
+        "Pre-registered experiment plan defines primary and regression metrics before candidate evaluation",
+        "Candidate is generated with isolated ID/configuration without mutating active baseline",
+        "Candidate passes build/physical verification checks",
+        "Candidate and baseline are evaluated under identical benchmark tasks and workloads",
+        "Candidate achieves primary metric improvement with zero protected metric regressions",
+        "RegressionGuard qualifies candidate objectively",
+        "MemoryService records successful self-improvement episode with provenance",
+        "Baseline is updated only upon authorized promotion"
+      ],
+      "expectedArtifacts": [
+        "baseline-record",
+        "experiment-plan",
+        "candidate-patch",
+        "evaluation-report"
+      ],
+      "expectedProvenance": [
+        "meta.baseline.frozen",
+        "meta.opportunity.detected",
+        "meta.hypothesis.created",
+        "meta.experiment.planned",
+        "meta.candidate.generated",
+        "meta.candidate.verified",
+        "meta.candidate.evaluated",
+        "meta.candidate.promoted"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/selfImprovementGates.test.ts",
+        "packages/evaluation/tests/metaOptimizer.test.ts"
+      ],
+      "tags": [
+        "self-improvement",
+        "meta-optimizer",
+        "g29",
+        "p0-release-gate"
+      ]
+    },
+    "52": {
+      "id": 52,
+      "gateId": "G30",
+      "priority": "P0",
+      "title": "Zero-Regression Guard Enforcement (SELF_IMPROVEMENT_REGRESSION)",
+      "purpose": "Verify that a candidate showing large improvement on the primary metric is strictly REJECTED when it regresses any protected correctness or success metric, with baseline preserved and failure recorded in MemoryService.",
+      "prompt": "Evaluate a candidate that dramatically reduces token usage but causes task failure on a secondary benchmark task. Verify RegressionGuard detects the regression, rejects the candidate, retains active baseline, and records failure in MemoryService.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "EVALUATE_CANDIDATE -> DETECT_REGRESSION -> REJECT -> RETAIN_BASELINE -> RECORD_FAILURE",
+      "verificationCriteria": [
+        "Superficial primary metric gains (e.g. -60% tokens) cannot override protected metric failures",
+        "RegressionGuard marks candidate as disqualified and logs specific regressed task and metric",
+        "Decision is strictly REJECTED",
+        "Active baseline configuration remains completely unchanged",
+        "Failure episode is recorded in MemoryService to prevent repeating the failed strategy"
+      ],
+      "expectedArtifacts": [
+        "rejection-report",
+        "regression-evidence"
+      ],
+      "expectedProvenance": [
+        "meta.candidate.rejected",
+        "regression-detected",
+        "baseline-preserved"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/selfImprovementGates.test.ts",
+        "packages/evaluation/tests/metaOptimizer.test.ts"
+      ],
+      "tags": [
+        "self-improvement",
+        "regression-guard",
+        "g30",
+        "p0-release-gate"
+      ]
+    },
+    "53": {
+      "id": 53,
+      "gateId": "G31",
+      "priority": "P0",
+      "title": "Inconclusive Determination on Insufficient Evidence (SELF_IMPROVEMENT_INCONCLUSIVE)",
+      "purpose": "Verify that when sample size is insufficient, benchmark runs are noisy, or statistical confidence bounds overlap, the MetaOptimizer returns INCONCLUSIVE rather than inventing certainty or guessing.",
+      "prompt": "Evaluate candidate with sample size below minimum statistical threshold. Verify RegressionGuard produces INCONCLUSIVE determination and does not qualify or promote candidate.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "EVALUATE_CANDIDATE -> CHECK_STATISTICAL_CONFIDENCE -> INCONCLUSIVE_DETECTED -> HALT_PROMOTION",
+      "verificationCriteria": [
+        "Insufficient sample size (< minSampleCount) triggers INCONCLUSIVE determination",
+        "Inconclusive reasons are explicitly logged (sample count, confidence interval overlap)",
+        "Candidate is neither qualified nor promoted",
+        "System does not invent certainty under noisy or sparse empirical measurements"
+      ],
+      "expectedArtifacts": [
+        "inconclusive-report"
+      ],
+      "expectedProvenance": [
+        "meta.candidate.inconclusive",
+        "insufficient-evidence"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/selfImprovementGates.test.ts",
+        "packages/evaluation/tests/metaOptimizer.test.ts"
+      ],
+      "tags": [
+        "self-improvement",
+        "inconclusive",
+        "g31",
         "p0-release-gate"
       ]
     }

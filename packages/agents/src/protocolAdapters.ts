@@ -802,16 +802,7 @@ export function normalizeToActionEnvelope(params: {
     return { envelope: null };
   }
 
-  // Semantic validation if tool action
-  if (parsedAction.action === 'tool' && parsedAction.tool && parsedAction.input) {
-    const semanticValidation = validateToolActionSemantics(parsedAction.tool, parsedAction.input);
-    if (!semanticValidation.ok) {
-      return {
-        envelope: null,
-        error: semanticValidation.reason ?? 'Semantic validation failed',
-      };
-    }
-  }
+
 
   const envelope = actionToEnvelope(parsedAction, {
     runtimeId: params.runtimeId,
