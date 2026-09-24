@@ -322,7 +322,7 @@ export function renderSearchTreeNode(
       ? color.gray(' [DOMINATED]')
       : '';
 
-  const pruneInfo = node.prunedReason ? color.red(` (${node.prunedReason})`) : '';
+  const pruneInfo = node.prunedReason ? color.red(` [PRUNED: ${node.prunedReason}]`) : '';
   const tokenInfo = node.tokens !== undefined ? color.gray(` (${node.tokens} tok)`) : '';
   const testInfo = node.testsPassed === true ? color.green(' [tests ✓]') : node.testsPassed === false ? color.red(' [tests ×]') : '';
   const label = `${node.label ?? node.name ?? node.id} ${stateGlyph}${tokenInfo}${testInfo}${paretoBadge}${pruneInfo}`;
@@ -535,13 +535,17 @@ export function renderSearchView(data: SearchViewData): string[] {
       const isSelected = i === selectedIndex;
       const prefix = isSelected ? color.cyan('> ') : '  ';
 
-      const stateColor =
-        c.state === 'completed' || c.state === 'promoted'
-          ? color.green
-          : c.state === 'failed' || c.state === 'cancelled'
-            ? color.red
-            : color.yellow;
+      const stateBadge =
+        c.state === 'pruned' || c.pruneState.startsWith('PRUNED')
+          ? color.red('PRUNED')
+          : c.state === 'completed' || c.state === 'promoted'
+            ? color.green(c.state.toUpperCase())
+            : c.state === 'failed' || c.state === 'cancelled'
+              ? color.red(c.state.toUpperCase())
+              : color.yellow(c.state.toUpperCase());
 
+      const candIdStr = c.candidateId.length > colCand ? c.candidateId.slice(0, colCand - 1) + '.' : c.candidateId;
+      const modelIdStr = c.modelId.length > colModel ? c.modelId.slice(0, colModel - 1) + '.' : c.modelId;
       const buildStr = c.buildPassed === true ? color.green('PASS') : c.buildPassed === false ? color.red('FAIL') : color.gray('-');
       const testsStr = c.testSummary ? (c.testsPassed ? color.green(c.testSummary) : color.red(c.testSummary)) : (c.testsPassed ? color.green('PASS') : color.gray('-'));
       const tokensStr = c.tokens !== undefined ? String(c.tokens) : '-';
@@ -558,7 +562,7 @@ export function renderSearchView(data: SearchViewData): string[] {
           ? color.gray('DOMINATED')
           : color.yellow('PENDING');
 
-      const row = `${prefix}${c.candidateId.padEnd(colCand)} ${c.modelId.padEnd(colModel)} ${c.workerId.padEnd(colWorker)} ${stateColor(c.state.padEnd(colState))} ${(c.revision ? `r${c.revision}` : '-').padEnd(colRev)} ${buildStr.padEnd(colBuild)} ${testsStr.padEnd(colTests)} ${tokensStr.padEnd(colTok)} ${wallStr.padEnd(colWall)} ${pruneBadge.padEnd(colPrune)} ${paretoBadge}`;
+      const row = `${prefix}${candIdStr.padEnd(colCand)} ${modelIdStr.padEnd(colModel)} ${c.workerId.padEnd(colWorker)} ${stateBadge.padEnd(colState)} ${(c.revision ? `r${c.revision}` : '-').padEnd(colRev)} ${buildStr.padEnd(colBuild)} ${testsStr.padEnd(colTests)} ${tokensStr.padEnd(colTok)} ${wallStr.padEnd(colWall)} ${pruneBadge.padEnd(colPrune)} ${paretoBadge}`;
       lines.push(padRight(row, width));
     }
   }
@@ -799,14 +803,17 @@ export function renderContextView(data: ContextViewData): string[] {
   const scaleMax = Math.max(maxCap, maxTok);
   const targetTokens = windowedSamples[windowedSamples.length - 1]?.targetTokens ?? Math.floor(scaleMax * 0.5);
 
+  const maxRowIndex = graphRows - 1;
+  const targetRowIndex = Math.min(graphRows - 2, Math.max(0, Math.round((targetTokens / scaleMax) * (graphRows - 1))));
+
   for (let r = graphRows - 1; r >= 0; r--) {
     const rowFrac = r / (graphRows - 1);
     const tokenVal = Math.round(rowFrac * scaleMax);
     const yLabel = (tokenVal >= 1000 ? `${(tokenVal / 1000).toFixed(0)}k` : `${tokenVal}`).padStart(4);
 
     let rowChars = '';
-    const isTargetRow = Math.abs(tokenVal - targetTokens) <= scaleMax / (graphRows * 1.8);
-    const isMaxRow = Math.abs(tokenVal - maxCap) <= scaleMax / (graphRows * 1.8);
+    const isMaxRow = r === maxRowIndex;
+    const isTargetRow = r === targetRowIndex;
 
     for (let c = 0; c < windowedSamples.length; c++) {
       const s = windowedSamples[c];
@@ -861,14 +868,25 @@ export function renderContextView(data: ContextViewData): string[] {
 
   lines.push(
     padRight(
-      `  Stable Prefix: ${color.green(`${latest.stablePrefix} tok`)} │ Volatile Portion: ${color.magenta(`${latest.volatilePortion} tok`)} │ Deduplicated: ${color.green(`${latest.deduplicated} tok`)}`,
+      `  Stable Prefix: ${color.green(`${latest.stablePrefix} tok`)} │ Volatile Portion: ${color.magenta(`${latest.volatilePortion} tok`)}`,
       width,
     ),
   );
-
   lines.push(
     padRight(
-      `  Compacted & Compressed: ${color.green(`${latest.compressed} tok`)} │ Oversized Offloaded: ${color.green(`${latest.offloaded} tok`)}`,
+      `    Exact Deduplicated:   ${color.green(`${latest.deduplicated} tok`)} (identical observations removed)`,
+      width,
+    ),
+  );
+  lines.push(
+    padRight(
+      `    Semantic Compressed:  ${color.green(`${latest.compressed} tok`)} (historical conversations summarized)`,
+      width,
+    ),
+  );
+  lines.push(
+    padRight(
+      `    Oversized Offloaded:  ${color.green(`${latest.offloaded} tok`)} (large tool outputs moved to disk)`,
       width,
     ),
   );

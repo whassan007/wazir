@@ -384,6 +384,61 @@
         65
       ],
       "prerequisiteGateId": "G70"
+    },
+    {
+      "id": "G61",
+      "order": 32,
+      "name": "CapabilityWeightedFleet",
+      "title": "G61 Capability-Weighted Fleet",
+      "description": "Multi-dimensional worker capacity profiles drive deterministic weighted hash-ring placement across heterogeneous hardware, enforcing baseline/candidate workload equivalence, dynamic load awareness, and model locality preferences",
+      "testIds": [
+        66
+      ],
+      "prerequisiteGateId": "G71"
+    },
+    {
+      "id": "G62",
+      "order": 33,
+      "name": "DynamicRebalance",
+      "title": "G62 Dynamic Rebalance & Straggler Detection",
+      "description": "Mid-run worker overload, join, or failure safely rebalances only uncompleted workload across active nodes without duplicate metric accounting, isolating stragglers and maintaining deterministic qualification decisions",
+      "testIds": [
+        67
+      ],
+      "prerequisiteGateId": "G61"
+    },
+    {
+      "id": "G66",
+      "order": 34,
+      "name": "HierarchicalSearch",
+      "title": "G66 Hierarchical MCTS Search",
+      "description": "Multi-module refactoring across architecture, design, and implementation levels with physical checkpoint inheritance, diverse branch expansion, UCT selection, progressive verification, unpromising branch pruning, and controller-grounded promotion",
+      "testIds": [
+        68
+      ],
+      "prerequisiteGateId": "G62"
+    },
+    {
+      "id": "G67",
+      "order": 35,
+      "name": "TreeRecovery",
+      "title": "G67 Tree Recovery",
+      "description": "Mid-branch worker failure or disconnection preserves central tree validity, retains completed rollout evidence, and enables safe branch recovery or requeue without tree corruption",
+      "testIds": [
+        69
+      ],
+      "prerequisiteGateId": "G66"
+    },
+    {
+      "id": "G68",
+      "order": 36,
+      "name": "Transposition",
+      "title": "G68 Transposition Convergence",
+      "description": "Deterministic node state hashing detects when two independent branches converge on equivalent workspace states, reusing existing evaluation evidence and avoiding redundant simulation",
+      "testIds": [
+        70
+      ],
+      "prerequisiteGateId": "G67"
     }
   ],
   "foundationalSequence": [
@@ -2808,6 +2863,197 @@
         "efficiency",
         "learning-curve",
         "g71",
+        "p0-release-gate"
+      ]
+    },
+    "66": {
+      "id": 66,
+      "gateId": "G61",
+      "priority": "P0",
+      "title": "Capability-Weighted Deterministic Fleet Placement (CAPABILITY_WEIGHTED_FLEET)",
+      "purpose": "Verify that DistributedBenchmarkFabric computes comprehensive multi-dimensional WorkerCapacityProfiles, accurately balances placement proportional to effective capacity (e.g. DGX:Mac:PC in 8:3:1 ratio), enforces strict baseline/candidate workload equivalence, and preserves model locality preferences.",
+      "prompt": "Execute a distributed benchmark across heterogeneous worker nodes with diverse compute capability. Verify deterministic capability-weighted shard distribution, paired baseline/candidate execution, dynamic load modulation, and stratified metric reporting.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "EVALUATE_CAPACITY_PROFILES -> BUILD_WEIGHTED_HASH_RING -> SHARD_WORKLOAD_EQUIVALENT -> DISPATCH_BASELINE_AND_CANDIDATE -> STRATIFY_METRICS",
+      "verificationCriteria": [
+        "WorkerCapacityProfiles correctly reflect multi-dimensional CPU, GPU, RAM, load, and locality attributes",
+        "Tasks are deterministically distributed across workers proportional to their effective capacity weights",
+        "Baseline and candidate for each task execute on the identical worker under identical environment conditions",
+        "Dynamic load modulation adjusts available capacity without violating determinism or equivalence",
+        "Stratified metrics clearly separate portable algorithmic improvements from hardware-specific speedups"
+      ],
+      "expectedArtifacts": [
+        "capability-weighted-placement-report"
+      ],
+      "expectedProvenance": [
+        "meta.distributed.placement",
+        "meta.distributed.shard_completed",
+        "meta.distributed.aggregation_completed"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/capabilityWeightedScheduler.test.ts",
+        "tests/acceptance/capabilityWeightedGates.test.ts"
+      ],
+      "tags": [
+        "distributed",
+        "capability-weighted",
+        "hash-ring",
+        "workload-equivalence",
+        "g61",
+        "p0-release-gate"
+      ]
+    },
+    "67": {
+      "id": 67,
+      "gateId": "G62",
+      "priority": "P0",
+      "title": "Dynamic Rebalancing & Straggler Detection (DYNAMIC_REBALANCE)",
+      "purpose": "Verify that mid-run worker overload, join, or failure safely rebalances only uncompleted workload across active nodes without duplicate metric accounting, isolating stragglers and maintaining deterministic qualification decisions.",
+      "prompt": "Simulate mid-run worker overload, dynamic node changes, and straggler latency deviations during distributed benchmark execution. Verify that only uncompleted shards are rebalanced, evidence from completed shards is preserved, stragglers are isolated, and no double accounting occurs.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "START_DISTRIBUTED_SHARDS -> DETECT_NODE_EVENT_OR_STRAGGLER -> REBALANCE_UNSTARTED_TASKS -> EXECUTE_ON_ACTIVE_NODES -> AGGREGATE_DEDUPLICATED_EVIDENCE",
+      "verificationCriteria": [
+        "Mid-run worker failure or overload triggers safe rebalance of unstarted work only",
+        "Completed tasks on affected or previous workers are preserved and never re-executed or double counted",
+        "Straggler nodes with significant latency deviations are flagged and their placement status recorded",
+        "Dynamic rebalance preserves identical baseline/candidate pairing on reassigned workers",
+        "Final decision convergence remains deterministic despite mid-run fleet fluctuations"
+      ],
+      "expectedArtifacts": [
+        "dynamic-rebalance-report"
+      ],
+      "expectedProvenance": [
+        "meta.distributed.rebalance",
+        "meta.distributed.workload_requeued",
+        "meta.distributed.straggler_detected",
+        "meta.distributed.aggregation_completed"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/capabilityWeightedScheduler.test.ts",
+        "tests/acceptance/capabilityWeightedGates.test.ts"
+      ],
+      "tags": [
+        "distributed",
+        "rebalance",
+        "straggler-detection",
+        "fault-tolerance",
+        "g62",
+        "p0-release-gate"
+      ]
+    },
+    "68": {
+      "id": 68,
+      "gateId": "G66",
+      "priority": "P0",
+      "title": "Hierarchical MCTS Search Across Complex Engineering Phases (HIERARCHICAL_SEARCH)",
+      "purpose": "Verify that SolutionSearch executes hierarchical Monte Carlo Tree Search across architecture, design, and implementation phases with physical checkpoint inheritance, pruning, and controller-grounded reward promotion.",
+      "prompt": "Execute hierarchical MCTS refactoring on multi-module payment architecture across >= 2 architecture choices to depth >= 3 with physical checkpoint inheritance and progressive verification.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "ROOT_INIT -> SELECT_UCT -> EXPAND_ARCHITECTURE -> FORK_CHECKPOINT -> SIMULATE_ROLLOUT -> PROGRESSIVE_VERIFY -> PRUNE_UNPROMISING -> BACKPROPAGATE -> PROMOTE_BEST",
+      "verificationCriteria": [
+        "Search tree reaches depth >= 3 across configured phases (architecture, design, implementation)",
+        "Multiple diverse branches are explored at each phase level",
+        "Child nodes fork cleanly from parent physical checkpoints",
+        "Unpromising or failing branches are pruned with recorded reason",
+        "Final candidate selection is grounded in controller verification evidence"
+      ],
+      "expectedArtifacts": [
+        "hierarchical-mcts-report",
+        "checkpoint-tree-lineage"
+      ],
+      "expectedProvenance": [
+        "mcts.node_selected",
+        "mcts.node_expanded",
+        "mcts.simulation_started",
+        "mcts.checkpoint_forked",
+        "mcts.simulation_completed",
+        "mcts.node_pruned",
+        "mcts.backpropagated"
+      ],
+      "associatedSuites": [
+        "packages/core/tests/hierarchicalSearchGates.test.ts"
+      ],
+      "tags": [
+        "hierarchical-search",
+        "mcts",
+        "tree-search",
+        "g66",
+        "p0-release-gate"
+      ]
+    },
+    "69": {
+      "id": 69,
+      "gateId": "G67",
+      "priority": "P0",
+      "title": "Authoritative Tree Resilience on Worker Failure (TREE_RECOVERY)",
+      "purpose": "Verify that mid-branch worker failure or disconnection preserves central tree validity, retains completed rollout evidence, and enables safe branch recovery or requeue without tree corruption.",
+      "prompt": "Simulate worker failure mid-rollout on a deep search branch. Verify tree integrity is preserved, completed node evidence remains valid, failed node is safely recovered, and sibling branches continue unaffected.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "SELECT_BRANCH -> SPAWN_WORKER -> INJECT_WORKER_FAILURE -> PRESERVE_CENTRAL_TREE -> RETAIN_COMPLETED_EVIDENCE -> REQUEUE_OR_RECOVER_BRANCH",
+      "verificationCriteria": [
+        "Worker failure during branch rollout does not corrupt central tree state",
+        "Previously completed node evaluations and evidence are retained intact",
+        "Failed node is safely reset or requeued with failure metadata",
+        "Other active branches proceed without interruption or data loss"
+      ],
+      "expectedArtifacts": [
+        "tree-recovery-audit",
+        "worker-failure-provenance"
+      ],
+      "expectedProvenance": [
+        "mcts.worker_failed",
+        "mcts.worker_recovered"
+      ],
+      "associatedSuites": [
+        "packages/core/tests/hierarchicalSearchGates.test.ts"
+      ],
+      "tags": [
+        "tree-recovery",
+        "worker-failure",
+        "resilience",
+        "g67",
+        "p0-release-gate"
+      ]
+    },
+    "70": {
+      "id": 70,
+      "gateId": "G68",
+      "priority": "P0",
+      "title": "Equivalent Workspace Convergence & Transposition Detection (TRANSPOSITION)",
+      "purpose": "Verify that when two independent branches converge on an equivalent workspace state, state hashing detects the duplicate and reuses existing evaluation evidence without redundant computation.",
+      "prompt": "Execute two distinct branches that arrive at identical file snapshots and mutations. Verify transposition detection matches state hashes, copies existing evaluation evidence, and skips redundant simulation.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "BRANCH_1_EVALUATE -> REGISTER_TRANSPOSITION -> BRANCH_2_EVALUATE -> DETECT_MATCHING_STATE_HASH -> REUSE_EVALUATION -> AVOID_REDUNDANT_SIMULATION",
+      "verificationCriteria": [
+        "State hash accurately reflects workspace files snapshot, changes, mutations, and strategy",
+        "Converged equivalent branch is identified as transposition target",
+        "Evaluation and verification evidence are reused directly from prior node",
+        "Redundant candidate runner execution is completely avoided"
+      ],
+      "expectedArtifacts": [
+        "transposition-reuse-report"
+      ],
+      "expectedProvenance": [
+        "mcts.transposition_detected"
+      ],
+      "associatedSuites": [
+        "packages/core/tests/hierarchicalSearchGates.test.ts"
+      ],
+      "tags": [
+        "transposition",
+        "state-hashing",
+        "deduplication",
+        "g68",
         "p0-release-gate"
       ]
     }

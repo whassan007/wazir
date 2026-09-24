@@ -12,10 +12,10 @@ import {
 } from './acceptanceLibrary.js';
 
 describe('Wazir Acceptance Test Library', () => {
-  it('defines all 32 progressive release gates in strict order (G0 to G71)', () => {
-    expect(ACCEPTANCE_GATES).toHaveLength(32);
+  it('defines all 37 progressive release gates in strict order (G0 to G68)', () => {
+    expect(ACCEPTANCE_GATES).toHaveLength(37);
     const expectedIds: AcceptanceGateId[] = [
-      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G29', 'G30', 'G31', 'G43', 'G46', 'G47', 'G48', 'G44', 'G45', 'G49', 'G50', 'G51', 'G69', 'G70', 'G71',
+      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G29', 'G30', 'G31', 'G43', 'G46', 'G47', 'G48', 'G44', 'G45', 'G49', 'G50', 'G51', 'G69', 'G70', 'G71', 'G61', 'G62', 'G66', 'G67', 'G68',
     ];
     expect(ACCEPTANCE_GATES.map((g) => g.id)).toEqual(expectedIds);
 
@@ -29,11 +29,11 @@ describe('Wazir Acceptance Test Library', () => {
     }
   });
 
-  it('contains all 65 unique acceptance tests', () => {
+  it('contains all 70 unique acceptance tests', () => {
     const keys = Object.keys(ACCEPTANCE_TESTS).map(Number);
-    expect(keys).toHaveLength(65);
+    expect(keys).toHaveLength(70);
 
-    for (let id = 1; id <= 65; id++) {
+    for (let id = 1; id <= 70; id++) {
       const test = ACCEPTANCE_TESTS[id];
       expect(test, `Test ${id} should exist`).toBeDefined();
       expect(test.id).toBe(id);
@@ -320,5 +320,21 @@ describe('Wazir Acceptance Test Library', () => {
     ]);
     expect(g71Tests[0].id).toBe(65);
     expect(g71Tests[0].priority).toBe('P0');
+  });
+
+  it('covers Capability-Weighted Fleet & Dynamic Rebalance acceptance gates (Tests 66-67: G61, G62)', () => {
+    const g61Tests = getTestsForGate('G61');
+    expect(g61Tests.map((t) => t.title)).toEqual([
+      'Capability-Weighted Deterministic Fleet Placement (CAPABILITY_WEIGHTED_FLEET)',
+    ]);
+    expect(g61Tests[0].id).toBe(66);
+    expect(g61Tests[0].priority).toBe('P0');
+
+    const g62Tests = getTestsForGate('G62');
+    expect(g62Tests.map((t) => t.title)).toEqual([
+      'Dynamic Rebalancing & Straggler Detection (DYNAMIC_REBALANCE)',
+    ]);
+    expect(g62Tests[0].id).toBe(67);
+    expect(g62Tests[0].priority).toBe('P0');
   });
 });

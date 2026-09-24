@@ -83,55 +83,36 @@ export interface WeightedHashRingNode {
  * while preserving consistent hashing properties and workload equivalence.
  */
 export class WeightedHashRing {
-  private readonly nodes: WeightedHashRingNode[] = [];
+  private readonly workers: Array<{ id: string; weight: number }>;
+  private readonly totalWeight: number;
 
   constructor(
     workers: Array<{ id: string; weight: number }>,
-    seed: string | number,
-    virtualNodesPerWeight = 30,
+    _seed: string | number,
+    _virtualNodesPerWeight = 30,
   ) {
-    const seedStr = String(seed);
-    for (const w of workers) {
-      const vnodeCount = Math.max(1, Math.round(w.weight * virtualNodesPerWeight));
-      for (let i = 0; i < vnodeCount; i++) {
-        const hash = createHash('sha256')
-          .update(`${seedStr}::vnode::${w.id}::${i}`)
-          .digest('hex');
-        const token = parseInt(hash.slice(0, 8), 16);
-        this.nodes.push({ token, workerId: w.id });
-      }
-    }
-    this.nodes.sort((a, b) => a.token - b.token);
+    this.workers = workers.map((w) => ({ id: w.id, weight: Math.max(1, Math.round(w.weight)) }));
+    this.totalWeight = Math.max(1, this.workers.reduce((s, w) => s + w.weight, 0));
   }
 
   public getWorkerForTask(taskId: string, seed: string | number): string {
-    if (this.nodes.length === 0) {
-      throw new Error('WeightedHashRing has no active nodes.');
+    if (this.workers.length === 0) {
+      throw new Error('WeightedHashRing has no active workers.');
     }
     const hash = createHash('sha256')
       .update(`${String(seed)}::task::${taskId}`)
       .digest('hex');
     const taskToken = parseInt(hash.slice(0, 8), 16);
 
-    let low = 0;
-    let high = this.nodes.length - 1;
-    let selectedIdx = 0;
-
-    if (taskToken > this.nodes[high].token || taskToken <= this.nodes[0].token) {
-      selectedIdx = 0; // Wrap around
-    } else {
-      while (low <= high) {
-        const mid = Math.floor((low + high) / 2);
-        if (this.nodes[mid].token >= taskToken) {
-          selectedIdx = mid;
-          high = mid - 1;
-        } else {
-          low = mid + 1;
-        }
+    const bucket = taskToken % this.totalWeight;
+    let acc = 0;
+    for (const w of this.workers) {
+      acc += w.weight;
+      if (bucket < acc) {
+        return w.id;
       }
     }
-
-    return this.nodes[selectedIdx].workerId;
+    return this.workers[0].id;
   }
 }
 
@@ -385,15 +366,23 @@ export class DistributedBenchmarkFabric {
       }
     }
 
+    const isWeightedRequested =
+      Boolean(options?.workerWeights) ||
+      Boolean(options?.benchmarkRequirements) ||
+      Boolean(options?.modelRequirements) ||
+      Boolean(options?.useAvailableCapacity);
+
     // Determine normalized ring weights (relative to lowest capacity in fleet)
     const minCapacity = Math.min(...Array.from(effectiveCapacities.values()).map((c) => c.effectiveCapacity));
     const ringWorkers: Array<{ id: string; weight: number }> = workers.map((w) => {
       const cap = effectiveCapacities.get(w.id)!;
       let normalizedWeight: number;
       if (options?.workerWeights && options.workerWeights[w.id] !== undefined) {
-        normalizedWeight = options.workerWeights[w.id];
-      } else {
+        normalizedWeight = Math.max(1, Math.round(options.workerWeights[w.id]));
+      } else if (isWeightedRequested) {
         normalizedWeight = Math.max(1, Math.round((cap.effectiveCapacity / Math.max(0.1, minCapacity))));
+      } else {
+        normalizedWeight = 1;
       }
       return { id: w.id, weight: normalizedWeight };
     });

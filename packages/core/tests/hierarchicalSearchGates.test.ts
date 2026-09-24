@@ -156,6 +156,7 @@ describe('Acceptance Gates: G66, G67, G68 — Hierarchical MCTS & Tree Resilienc
     // Approach B (Monolith): fails build or tests at depth 2/3 -> gets pruned
     const runner: CandidateRunner = async (context) => {
       const isApproachB = context.descriptor.implementationApproach?.includes('monolith') ||
+                          context.descriptor.implementationApproach?.includes('option_B') ||
                           context.candidateId.includes('option_B');
 
       if (isApproachB) {
@@ -219,8 +220,6 @@ describe('Acceptance Gates: G66, G67, G68 — Hierarchical MCTS & Tree Resilienc
     expect(result.hierarchicalTelemetry).toBeDefined();
 
     const telemetry = result.hierarchicalTelemetry!;
-    console.log('TELEMETRY NODES:', telemetry.totalNodes, telemetry.nodesPerLevel);
-    console.log('ALL NODES:', Array.from(result.hierarchicalTree!.nodes.values()).map(n => ({ id: n.id, depth: n.depth, level: n.level, strategy: n.strategy, pruned: n.pruned })));
     expect(telemetry.treeDepth).toBeGreaterThanOrEqual(3);
     expect(telemetry.totalNodes).toBeGreaterThanOrEqual(5);
 

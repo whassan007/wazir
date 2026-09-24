@@ -47,9 +47,9 @@ Usage:
 
 Options:
   --foundational        Run foundational sequence: 20 -> 17 -> 18 -> 1 -> 9 -> 3 -> 4 -> 2
-  --gate <G0..G51>      Run all tests in specified gate
-  --test <1..62>        Run specific test by ID
-  --all                 Run all 29 progressive release gates (fail-fast prerequisite order)
+  --gate <G0..G68>      Run all tests in specified gate
+  --test <1..70>        Run specific test by ID
+  --all                 Run all 37 progressive release gates (fail-fast prerequisite order)
   --interactive         Prompt interactively to choose what to test
   --live                Probe and execute against live local models (LM Studio / Ollama)
   --skip-build          Skip dist freshness check and build
@@ -86,6 +86,14 @@ Gates:
   G49 Causal Ablation   Test 60          Controlled factorial ablation across multi-mutation candidates
   G50 Causal Interaction Test 61         Non-linear synergy and parameter interaction detection
   G51 Causal Uncertainty Test 62         Epistemic uncertainty guard under sparse samples
+  G69 Strategy Transfer Test 63          Cross-repo strategy transfer
+  G70 Negative Transfer Test 64          Negative transfer override
+  G71 Strategy Learning Test 65          Measured strategy learning efficiency curve
+  G61 Cap-Weighted Fleet Test 66         Capability-weighted deterministic fleet placement
+  G62 Dynamic Rebalance Test 67          Mid-run worker overload, join, or failure dynamic rebalancing
+  G66 Hierarchical Search Test 68        Hierarchical MCTS refactoring across architecture, design, and implementation
+  G67 Tree Recovery     Test 69          Authoritative central tree resilience on worker failure mid-branch
+  G68 Transposition     Test 70          Workspace state hashing convergence and duplicate evaluation avoidance
 `);
 }
 
@@ -214,14 +222,14 @@ async function resolveExecutionSelection() {
       for (const g of GATES) {
         console.log(`  ${g.id}) ${g.title}: ${g.description}`);
       }
-      const gateChoice = await promptUser('\nEnter Gate ID (e.g. G0, G1, ... G51): ');
+      const gateChoice = await promptUser('\nEnter Gate ID (e.g. G0, G1, ... G68): ');
       targetGate = gateChoice.trim().toUpperCase();
       if (!GATES.some((g) => g.id === targetGate)) {
         console.error(`Unknown gate ${targetGate}`);
         process.exit(1);
       }
     } else if (choice === '3') {
-      const testChoice = await promptUser('\nEnter Test ID (1 to 62): ');
+      const testChoice = await promptUser('\nEnter Test ID (1 to 70): ');
       targetTestId = parseInt(testChoice.trim(), 10);
       if (!TESTS[targetTestId]) {
         console.error(`Unknown test ${targetTestId}`);
@@ -273,7 +281,7 @@ async function main() {
   } else if (targetGate) {
     const g = GATES.find((g) => g.id === targetGate);
     if (!g) {
-      console.error(`Gate ${targetGate} not found. Valid gates: G0..G51`);
+      console.error(`Gate ${targetGate} not found. Valid gates: G0..G68`);
       process.exit(2);
     }
     testQueue = g.testIds.map((id) => TESTS[id]);

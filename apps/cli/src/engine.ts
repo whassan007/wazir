@@ -108,6 +108,7 @@ export interface RookEngine {
   benchmark?: BenchmarkService;
   optimizer?: MetaOptimizerService;
   modelIntelligence?: ModelIntelligenceService;
+  verification?: VerificationEngine;
   planner: TaskPlanner;
   adapters: Map<string, RuntimeAdapter>;
   discovered: DiscoveredRuntime[];
@@ -458,6 +459,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     benchmark,
     optimizer,
     modelIntelligence,
+    verification: verificationEngine,
     planner,
     adapters: adapterById,
     discovered,

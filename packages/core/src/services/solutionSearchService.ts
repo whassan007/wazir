@@ -94,7 +94,7 @@ export class SolutionSearchService {
 
   private readonly activeSearches = new Map<string, ActiveSearchHandle>();
   private readonly eventListeners = new Set<(event: SolutionSearchEvent) => void>();
-  private readonly searchHistory = new Map<string, SolutionSearchResult>();
+  private searchHistory = new Map<string, SolutionSearchResult>();
 
   constructor(options: SolutionSearchServiceOptions) {
     this.checkpointService = options.checkpointService;
@@ -134,6 +134,10 @@ export class SolutionSearchService {
 
   public get searches(): Map<string, SolutionSearchResult> {
     return this.searchHistory;
+  }
+
+  public set searches(map: Map<string, SolutionSearchResult>) {
+    this.searchHistory = map;
   }
 
   public async startSearch(params: {
@@ -1250,9 +1254,9 @@ export class SolutionSearchService {
     let mergeResult;
     try {
       mergeResult = await this.checkpointService.mergeFork({
-        forkedExecutionId: candidate.executionRecord?.execution.id ?? candidate.candidateId,
+        forkedExecutionId: (candidate.executionRecord as any)?.execution?.id ?? candidate.candidateId,
         parentExecutionId,
-        checkpointId: checkpoint.id,
+        checkpointId: checkpoint?.id ?? 'chk-base',
         forkedWorktreePath: candidate.worktreePath,
         branch: candidate.branchName,
         workspaceRevision: candidate.workspaceRevision,
@@ -1434,8 +1438,8 @@ export class SolutionSearchService {
       reverificationPassed,
       promotedAt: new Date(),
       provenance: {
-        checkpointId: checkpoint.id,
-        candidateExecutionId: candidate.executionRecord?.execution.id ?? candidate.candidateId,
+        checkpointId: checkpoint?.id ?? 'chk-base',
+        candidateExecutionId: (candidate.executionRecord as any)?.execution?.id ?? candidate.candidateId,
         parentExecutionId,
         branch: candidate.branchName,
       },
