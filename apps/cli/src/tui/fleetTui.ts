@@ -1812,38 +1812,44 @@ export class FleetTui {
 
     // 13.5. Direct View Switching: 1-5 or F1-F5 (when input buffer is empty)
     if (this.inputBuffer.length === 0) {
-      if (keyStr === '1' || keyName === 'f1') {
-        this.currentView = 'fleet';
-        this.focusedPane = 'nav';
+      if (keyName === 'f1' || keyStr === 't' || keyStr === 'T') {
+        this.currentView = 'task';
+        this.focusedPane = 'main';
         this.draw();
         return;
       }
-      if (keyStr === '2' || keyName === 'f2') {
+      if (keyStr === '1' || keyName === 'f3') {
+        this.currentView = 'fleet';
+        this.focusedPane = 'main';
+        this.draw();
+        return;
+      }
+      if (keyStr === '2' || keyName === 'f4') {
         this.currentView = 'improvement';
         this.focusedPane = 'main';
         this.draw();
         return;
       }
-      if (keyStr === '3' || keyName === 'f3') {
+      if (keyStr === '3' || keyName === 'f2') {
         this.currentView = 'search';
         this.focusedPane = 'main';
         this.draw();
         return;
       }
-      if (keyStr === '4' || keyName === 'f4') {
+      if (keyStr === '4' || keyName === 'f5') {
         this.currentView = 'context';
         this.focusedPane = 'main';
         this.draw();
         return;
       }
-      if (keyStr === '5' || keyName === 'f5') {
+      if (keyStr === '5') {
         this.currentView = 'models';
         this.focusedPane = 'main';
         this.draw();
         return;
       }
       if (keyStr === '6' || keyName === 'f6') {
-        this.currentView = 'task';
+        this.currentView = 'evidence';
         this.focusedPane = 'main';
         this.draw();
         return;
