@@ -78,12 +78,9 @@ export const globTool: Tool = {
             durationMs: Date.now() - started,
           };
         }
-        return {
-          ok: true,
-          output: '(no matches)',
-          durationMs: Date.now() - started,
-          metadata: { count: 0 },
-        };
+        // A missing directory is not "no matches": saying so stops a model from
+        // re-globbing a path it wrongly believes exists.
+        return { ok: false, output: '', error: `directory '${String(input.path)}' does not exist in the project`, durationMs: Date.now() - started };
       }
       const regex = globToRegExp(String(input.pattern));
       const matches: string[] = [];
@@ -142,10 +139,18 @@ export const searchTool: Tool = {
         return { ok: false, output: '', error: `invalid regex: ${errorMessage(error)}`, durationMs: Date.now() - started };
       }
 
+      // `path` is advertised in the schema; it used to be ignored, so a search scoped to a
+      // nonexistent directory silently returned whole-project matches.
+      const searchRoot = await assertInsideProject(ctx.projectRoot, String(input.path ?? '.'));
+      const rootStat = await fs.stat(searchRoot).catch(() => null);
+      if (!rootStat || !rootStat.isDirectory()) {
+        return { ok: false, output: '', error: `directory '${String(input.path ?? '.')}' does not exist in the project`, durationMs: Date.now() - started };
+      }
+
       const results: string[] = [];
       let filesScanned = 0;
 
-      for await (const file of walkFiles(ctx.projectRoot, '')) {
+      for await (const file of walkFiles(searchRoot, path.relative(ctx.projectRoot, searchRoot).split(path.sep).join('/'))) {
         const relative = path.relative(ctx.projectRoot, file).split(path.sep).join('/');
         if (!matchesInclude(relative, typeof input.include === 'string' ? input.include : undefined)) continue;
         const stat = await fs.stat(file).catch(() => null);
