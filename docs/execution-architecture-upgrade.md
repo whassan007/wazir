@@ -555,14 +555,30 @@ code this tranche doesn't touch.
 Regression coverage: `packages/tools/tests/atomicWrite.test.ts`, additions to
 `apps/cli/tests/recovery.test.ts`.
 
+### Observability (Phase 17)
+
+- **Typed verification failure.** A failed controller verification now ends with
+  `terminationReason: 'VERIFICATION_FAILED'` (still `MAX_TURNS` when the turn
+  budget ran out first). Before, it ended with no reason and no
+  `termination.completed` event. The circuit breaker counts it as a failure the
+  model is responsible for: the model said done, and the evidence disagreed.
+- **Run stats.** Every terminal turn carries `AgentTurn.runStats`, counted by
+  the controller as the run happens: turns, tool calls, reported tokens, longest
+  no-progress streak, duplicate actions blocked, and accepted model escalations.
+  `recordTermination` persists them on `termination.completed`, and
+  `summarizeExecution` exposes them as `agentRunStats`. Implementation:
+  `CodingAgent.run` now wraps a private `execute` loop and stamps its terminal
+  turns, so no individual stop site has to remember to.
+
+Regression coverage: `packages/agents/tests/codingAgent.runStats.test.ts`, additions
+to `executionSummary.test.ts` and `modelReliability.test.ts`.
+
 ## Not yet done
 
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
   checks are still inline in `CodingAgent`.
 - Phase 14 remainder: an escalation hook for the fleet runner, and mid-run
   re-placement (a different computer, or loading a model) as an escalation target.
-- Phase 17 remainder: agent-side run counters and a typed reason for an ordinary
-  verification failure (see the fifteenth tranche).
 - Phase 21 remainder: resuming the agent loop inside the recovered execution
   (the recovery plan says when it's safe; tasks are still retried as before).
 - Phase 22: `wa executions events|explain` projections of the new events.

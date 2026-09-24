@@ -1,4 +1,5 @@
 import type { ExecutionRecord } from '../types/execution.js';
+import type { AgentRunStats } from '../types/agent.js';
 
 /**
  * Observability projection of one execution, derived entirely from its durable
@@ -20,6 +21,8 @@ export interface ExecutionSummary {
   runtimeId: string;
   computerId: string | null;
   terminationReason: string | null;
+  /** The agent's own harness counters from its termination event, when it recorded them. */
+  agentRunStats: AgentRunStats | null;
   durations: {
     /** Wall clock from start to completion; null while running or when unrecorded. */
     totalMs: number | null;
@@ -81,6 +84,7 @@ export function summarizeExecution(record: ExecutionRecord): ExecutionSummary {
   const models = [record.execution.modelId];
   let escalations = 0;
   let terminationReason: string | null = null;
+  let agentRunStats: AgentRunStats | null = null;
 
   for (const event of events) {
     const type = eventType(event);
@@ -121,6 +125,7 @@ export function summarizeExecution(record: ExecutionRecord): ExecutionSummary {
         break;
       case 'termination.completed':
         if (typeof data.reason === 'string') terminationReason = data.reason;
+        if (data.runStats && typeof data.runStats === 'object') agentRunStats = data.runStats as AgentRunStats;
         break;
       default:
         break;
@@ -146,6 +151,7 @@ export function summarizeExecution(record: ExecutionRecord): ExecutionSummary {
     runtimeId: record.execution.runtimeId,
     computerId: record.execution.computerId ?? null,
     terminationReason,
+    agentRunStats,
     durations: {
       totalMs,
       // Backoff happens inside a generation request; report inference without it.

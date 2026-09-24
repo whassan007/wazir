@@ -1,4 +1,4 @@
-import type { CircuitStatus, ModelProtocolMetrics, TerminationReason } from '@wazir/core';
+import type { AgentRunStats, CircuitStatus, ModelProtocolMetrics, TerminationReason } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 
 /**
@@ -14,8 +14,10 @@ export async function recordTermination(
   modelId: string,
   taskClass: string,
   protocolMetrics?: ModelProtocolMetrics,
+  runStats?: AgentRunStats,
 ): Promise<CircuitStatus | null> {
-  // protocolMetrics feed the measured schemaReliability (see measureModelPerformance).
-  await engine.executions.recordEvent(executionId, 'termination.completed', { reason, modelId, taskClass, protocolMetrics });
+  // protocolMetrics feed the measured schemaReliability (see measureModelPerformance);
+  // runStats are the agent's own harness counters, surfaced by summarizeExecution.
+  await engine.executions.recordEvent(executionId, 'termination.completed', { reason, modelId, taskClass, protocolMetrics, runStats });
   return engine.reliability?.recordTermination(modelId, taskClass, reason) ?? null;
 }

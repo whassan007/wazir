@@ -11,6 +11,7 @@ import type {
   ChatMessage,
   ModelProtocolMetrics,
   ModelRouteChange,
+  AgentRunStats,
   TerminationReason,
 } from '@wazir/core';
 import { ObservationCompactor } from '@wazir/core';
@@ -540,9 +541,21 @@ export class CodingAgent implements AgentAdapter {
     this.systemPromptExtra = options.systemPromptExtra;
   }
 
-  async *run(
+  /**
+   * Runs the loop and stamps every terminal turn with the controller's own run totals,
+   * so callers persist counts the harness observed rather than inferring them later.
+   */
+  async *run(request: AgentRunRequest, runtime: AgentRuntime): AsyncIterable<AgentTurn> {
+    const stats: { read?: () => AgentRunStats } = {};
+    for await (const turn of this.execute(request, runtime, stats)) {
+      yield (turn.kind === 'done' || turn.kind === 'error') && stats.read ? { ...turn, runStats: stats.read() } : turn;
+    }
+  }
+
+  private async *execute(
     request: AgentRunRequest,
     runtime: AgentRuntime,
+    stats: { read?: () => AgentRunStats },
   ): AsyncIterable<AgentTurn> {
     // A caller-supplied per-task limit overrides the agent's own default —
     // `this.maxTurns` must stay untouched since one CodingAgent instance is
@@ -631,6 +644,8 @@ export class CodingAgent implements AgentAdapter {
     // ---- semantic no-progress: novel-looking calls that change nothing and teach nothing ----
     const seenObservations = new Set<string>();
     let noProgressCount = 0;
+    let longestNoProgressStreak = 0;
+    let duplicateActionsBlocked = 0;
     // Consecutive tool actions the circuit breaker refused. The breaker's correction
     // gives the model one chance to change strategy; ignoring it again is terminal.
     let consecutiveBlockedRepeats = 0;
@@ -647,6 +662,7 @@ export class CodingAgent implements AgentAdapter {
       const novel = !seenObservations.has(fingerprint);
       seenObservations.add(fingerprint);
       noProgressCount = mutated || novel ? 0 : noProgressCount + 1;
+      longestNoProgressStreak = Math.max(longestNoProgressStreak, noProgressCount);
       return noProgressCount;
     };
     const noProgressTurn = (): AgentTurn => ({
@@ -917,6 +933,16 @@ export class CodingAgent implements AgentAdapter {
       yield { kind: 'message', content: `model escalated: ${routeChange.previousModel} -> ${routeChange.newModel} (${failureClass})`, routeChange };
       return true;
     };
+
+    stats.read = () => ({
+      turns: turnsUsed,
+      toolCalls: totalToolCalls,
+      tokensUsed: totalTokensUsed,
+      longestNoProgressStreak,
+      duplicateActionsBlocked,
+      // Counts accepted switches, not requests the host declined.
+      modelEscalations: triedModelIds.length - 1,
+    });
 
     // Compact, deterministic execution state — turn budget, files actually touched, what
     // the last action was — appended to every "continue" message so the model can track
@@ -1246,6 +1272,7 @@ export class CodingAgent implements AgentAdapter {
         if (breakerError) {
           validationErrors += 1;
           consecutiveBlockedRepeats += 1;
+          duplicateActionsBlocked += 1;
           if (consecutiveBlockedRepeats >= 2) {
             if (yield* tryEscalate('REPEATED_ACTION', `${breakerError}; the model ignored the duplicate-action correction`)) continue;
             yield {
@@ -1463,7 +1490,7 @@ export class CodingAgent implements AgentAdapter {
       kind: 'error',
       error: `verification failed:\n${failures.join('\n---\n')}`,
       errorKind: 'verification',
-      terminationReason: turnBudgetExhausted ? 'MAX_TURNS' : undefined,
+      terminationReason: turnBudgetExhausted ? 'MAX_TURNS' : 'VERIFICATION_FAILED',
       protocolMetrics: currentMetrics(),
     };
   }

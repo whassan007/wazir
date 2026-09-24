@@ -55,6 +55,8 @@ export type AgentErrorKind = 'protocol' | 'verification' | 'policy' | 'cancelled
 export type TerminationReason =
   | 'COMPLETED'
   | 'VERIFICATION_PASSED'
+  /** The controller's own post-run verification failed (model said done; evidence disagrees). */
+  | 'VERIFICATION_FAILED'
   | 'MAX_TURNS'
   | 'MAX_MODEL_CALLS'
   | 'MAX_TOOL_CALLS'
@@ -99,6 +101,23 @@ export interface AgentTurn {
   protocolMetrics?: ModelProtocolMetrics;
   /** Set on the turn reporting a controller-driven model switch mid-run. */
   routeChange?: ModelRouteChange;
+  /** Harness-counted run totals, set on terminal `'done'`/`'error'` turns. */
+  runStats?: AgentRunStats;
+}
+
+/**
+ * Counted by the controller as the run happens — never reported by the model.
+ * Persisted with the run's termination so observability doesn't have to infer them.
+ */
+export interface AgentRunStats {
+  turns: number;
+  toolCalls: number;
+  /** Sum of runtime-reported usage; 0 when the runtime reports none. */
+  tokensUsed: number;
+  /** Longest run of consecutive tool calls with no file change and no new information. */
+  longestNoProgressStreak: number;
+  duplicateActionsBlocked: number;
+  modelEscalations: number;
 }
 
 /** Why the controller asked the host for a different model mid-run. */

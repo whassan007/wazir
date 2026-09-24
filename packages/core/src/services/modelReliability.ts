@@ -63,6 +63,8 @@ const MODEL_ATTRIBUTABLE_FAILURES = new Set<string>([
   'MAX_TURNS',
   'MAX_TOOL_CALLS',
   'MAX_TOKENS',
+  // The model declared the task done and the controller's verification disagreed.
+  'VERIFICATION_FAILED',
 ]);
 const SUCCESS_REASONS = new Set<string>(['VERIFICATION_PASSED', 'COMPLETED']);
 

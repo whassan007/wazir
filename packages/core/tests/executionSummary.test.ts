@@ -27,7 +27,7 @@ describe('summarizeExecution', () => {
         ev('model.route.changed', 6003, { accepted: false, previousModel: 'weak', newModel: null }),
         ev('model.route.changed', 6004, { accepted: true, previousModel: 'weak', newModel: 'strong' }),
         ev('generation.started', 7000), // never completed
-        ev('termination.completed', 19_000, { reason: 'VERIFICATION_PASSED', modelId: 'strong' }),
+        ev('termination.completed', 19_000, { reason: 'VERIFICATION_PASSED', modelId: 'strong', runStats: { turns: 7, toolCalls: 3, tokensUsed: 1500, longestNoProgressStreak: 2, duplicateActionsBlocked: 1, modelEscalations: 1 } }),
       ],
     } as unknown as ExecutionRecord;
 
@@ -35,6 +35,7 @@ describe('summarizeExecution', () => {
 
     expect(summary).toMatchObject({
       executionId: 'x', jobId: 'job-1', models: ['weak', 'strong'], terminationReason: 'VERIFICATION_PASSED',
+      agentRunStats: { turns: 7, toolCalls: 3, tokensUsed: 1500, longestNoProgressStreak: 2, duplicateActionsBlocked: 1, modelEscalations: 1 },
       durations: { totalMs: 20_000, modelInferenceMs: 4500, retryBackoffMs: 500, toolMs: 3000, verificationMs: 1900, unattributedMs: 12_000 },
       counts: {
         modelRequests: 3, unfinishedModelRequests: 1, toolCalls: 3, failedToolCalls: 1, duplicateActionsBlocked: 1,

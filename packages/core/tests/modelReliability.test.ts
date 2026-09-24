@@ -39,6 +39,7 @@ describe('ModelReliabilityTracker', () => {
     expect(classifyTerminationForReliability('VERIFICATION_PASSED')).toBe('success');
     expect(classifyTerminationForReliability('MODEL_PROTOCOL_BUDGET_EXHAUSTED')).toBe('failure');
     expect(classifyTerminationForReliability('NO_PROGRESS')).toBe('failure');
+    expect(classifyTerminationForReliability('VERIFICATION_FAILED')).toBe('failure');
     expect(classifyTerminationForReliability('CANCELLED')).toBeNull();
     expect(classifyTerminationForReliability('POLICY_DENIED')).toBeNull();
     expect(classifyTerminationForReliability(undefined)).toBeNull();
