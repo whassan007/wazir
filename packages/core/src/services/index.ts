@@ -1,8 +1,10 @@
 export { AgentRegistry } from './agentRegistry.js';
 export type { AgentResolution } from './agentRegistry.js';
+export { OffloadStore } from './offloadStore.js';
+export type { OffloadStoreOptions } from './offloadStore.js';
 export { ComputerRegistry } from './computerRegistry.js';
 export type { HeartbeatPayload } from './computerRegistry.js';
-export { ContextCompiler, estimateTokens, tokensForPart } from './contextCompiler.js';
+export { ContextCompiler, estimateTokens, tokensForPart, WEB_TRUST_INSTRUCTION, deduplicateContextParts, computeUsableBudget, computeUtilization } from './contextCompiler.js';
 export type { ContextCompilerOptions } from './contextCompiler.js';
 export { ObservationCompactor } from './observationCompactor.js';
 export type { CompactedObservation, ObservationCompactorOptions, ObservationKind } from './observationCompactor.js';
@@ -58,3 +60,7 @@ export type {
 export { MCPRegistry, MCPToolAdapter, classifyMCPTool, mcpToolName, validateMCPDefinition, closeMCPRegistries, redactMCPArguments } from './mcpRegistry.js';
 export type { MCPRegistryOptions, MCPConnection, MCPToolRegistry } from './mcpRegistry.js';
 export * from './mcpAuth.js';
+export * from './webGroundingService.js';
+export * from './webProviders.js';
+export * from './webContent.js';
+export * from './webSecurity.js';
