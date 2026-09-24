@@ -499,6 +499,11 @@ export class FleetTui {
   private quickActionsOpen = false;
   private quickActionIndex = 0;
   private readonly quickActions = [
+    { id: 'view-fleet', title: 'View: Fleet Topology', cmd: '/fleet' },
+    { id: 'view-improvement', title: 'View: Self-Improvement', cmd: '/improvement' },
+    { id: 'view-search', title: 'View: Solution Search', cmd: '/search' },
+    { id: 'view-context', title: 'View: Context Utilization', cmd: '/context' },
+    { id: 'view-models', title: 'View: Model Intelligence', cmd: '/models' },
     { id: 'fanout', title: 'Fanout Concurrent Tasks', cmd: '/fanout ' },
     { id: 'steer', title: 'Steer Selected Agent', cmd: '/steer ' },
     { id: 'cancel', title: 'Cancel Active Job/Task', cmd: '/cancel' },
@@ -617,6 +622,29 @@ export class FleetTui {
   getCurrentView(): TuiView {
     if (this.pendingApprovals.length > 0) return 'approval';
     return this.currentView;
+  }
+
+  setCurrentView(view: TuiView): void {
+    this.currentView = view;
+    this.draw();
+  }
+
+  openEvidenceModal(data: EvidenceModalData): void {
+    this.evidenceModalData = data;
+    this.evidenceModalOpen = true;
+    this.evidenceScrollOffset = 0;
+    this.draw();
+  }
+
+  closeEvidenceModal(): void {
+    this.evidenceModalOpen = false;
+    this.evidenceModalData = undefined;
+    this.evidenceScrollOffset = 0;
+    this.draw();
+  }
+
+  isEvidenceModalOpen(): boolean {
+    return this.evidenceModalOpen;
   }
 
   /**

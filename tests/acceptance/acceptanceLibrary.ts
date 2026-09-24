@@ -373,6 +373,36 @@ export const ACCEPTANCE_GATES: AcceptanceGate[] = [
     testIds: [58],
     prerequisiteGateId: 'G44',
   },
+  {
+    id: 'G49',
+    order: 26,
+    name: 'CausalAblation',
+    title: 'G49 Causal Ablation',
+    description:
+      'Controlled factorial ablation isolating and attributing individual mutation contributions across multi-mutation candidates, differentiating beneficial, neutral, and harmful changes without uniform credit',
+    testIds: [60],
+    prerequisiteGateId: 'G45',
+  },
+  {
+    id: 'G50',
+    order: 27,
+    name: 'CausalInteraction',
+    title: 'G50 Causal Interaction',
+    description:
+      'Non-linear synergy and parameter interaction detection: identifies cases where performance improvements appear only jointly without incorrectly crediting either mutation independently',
+    testIds: [61],
+    prerequisiteGateId: 'G49',
+  },
+  {
+    id: 'G51',
+    order: 28,
+    name: 'CausalUncertainty',
+    title: 'G51 Causal Uncertainty',
+    description:
+      'Empirical epistemic discipline declaring INSUFFICIENT_EVIDENCE under sparse sample counts or low confidence rather than asserting unjustified causal claims',
+    testIds: [62],
+    prerequisiteGateId: 'G50',
+  },
 ];
 
 /**
@@ -1988,6 +2018,90 @@ export const ACCEPTANCE_TESTS: Record<number, AcceptanceTest> = {
     ],
     tags: ['self-improvement', 'multi-objective', 'pareto', 'g43', 'p0-release-gate'],
   },
+  60: {
+    id: 60,
+    gateId: 'G49',
+    priority: 'P0',
+    title: 'Multi-Mutation Causal Ablation (G49_ABLATION)',
+    purpose:
+      'Verify that a multi-mutation candidate containing beneficial, neutral, and harmful changes is factorially ablated, attributing isolated and marginal impacts accurately without false uniform credit.',
+    prompt:
+      'Execute factorial ablation on candidate C with beneficial, neutral, and harmful mutations. Verify independent attribution reports SUPPORTED_CONTRIBUTOR, NO_MEASURABLE_EFFECT, and NEGATIVE_CONTRIBUTOR.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'DESIGN_ABLATION -> EXECUTE_FACTORIAL_CONFIGS -> MEASURE_MARGINAL_EFFECTS -> ATTRIBUTE_CAUSALITY -> RECORD_MUTATION_MEMORY',
+    verificationCriteria: [
+      'Candidate with 3 mutations is ablated using full factorial 2^3 design',
+      'Beneficial mutation is identified as SUPPORTED_CONTRIBUTOR',
+      'Neutral mutation is identified as NO_MEASURABLE_EFFECT',
+      'Harmful mutation is identified as NEGATIVE_CONTRIBUTOR',
+      'Harmful mutation target is recorded in mutation memory to prevent future exploration',
+    ],
+    expectedArtifacts: ['causal-attribution-report', 'mutation-memory-records'],
+    expectedProvenance: [
+      'meta.causal.ablation_completed',
+      'meta.causal.attribution_analyzed',
+      'meta.causal.memory_recorded',
+    ],
+    associatedSuites: [
+      'packages/evaluation/tests/causalAttribution.test.ts',
+    ],
+    tags: ['causal', 'ablation', 'meta-optimizer', 'g49', 'p0-release-gate'],
+  },
+  61: {
+    id: 61,
+    gateId: 'G50',
+    priority: 'P0',
+    title: 'Non-Linear Mutation Interaction Detection (G50_INTERACTION)',
+    purpose:
+      'Verify that an A/B pair of mutations showing no individual benefit produces INTERACTION_DETECTED when evaluated jointly, preventing false independent attribution.',
+    prompt:
+      'Execute factorial ablation on synergistic mutations A and B. Verify neither is attributed as independent contributor and system detects INTERACTION_DETECTED with interaction partner.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'EXECUTE_ISOLATED_CONFIGS -> DETECT_NO_SOLO_GAIN -> EXECUTE_JOINT_CONFIG -> DETECT_SYNERGY -> FLAG_INTERACTION',
+    verificationCriteria: [
+      'Mutations A and B in isolation exhibit no measurable individual improvement',
+      'Joint configuration A+B exhibits substantial performance gain',
+      'Neither A nor B is falsely credited with SUPPORTED_CONTRIBUTOR alone',
+      'Both mutations receive INTERACTION_DETECTED verdict with partner ID linked',
+      'Interaction effect is preserved in causal report and mutation memory',
+    ],
+    expectedArtifacts: ['interaction-detection-report'],
+    expectedProvenance: [
+      'meta.causal.interaction_detected',
+      'meta.causal.synergy_verified',
+    ],
+    associatedSuites: [
+      'packages/evaluation/tests/causalAttribution.test.ts',
+    ],
+    tags: ['causal', 'interaction', 'meta-optimizer', 'g50', 'p0-release-gate'],
+  },
+  62: {
+    id: 62,
+    gateId: 'G51',
+    priority: 'P0',
+    title: 'Causal Uncertainty on Sparse Sample Counts (G51_CAUSAL_UNCERTAINTY)',
+    purpose:
+      'Verify that when sample count is insufficient or variance exceeds confidence bounds, the system conservatively declares INSUFFICIENT_EVIDENCE rather than asserting causality.',
+    prompt:
+      'Execute causal attribution with insufficient sample count (< minSamplesPerConfig). Verify system conservatively asserts INSUFFICIENT_EVIDENCE and prevents unjustified causal claims.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'DESIGN_ABLATION -> EXECUTE_SPARSE_RUNS -> CHECK_STATISTICAL_POWER -> DETECT_UNCERTAINTY -> EMIT_INSUFFICIENT_EVIDENCE',
+    verificationCriteria: [
+      'Insufficient sample count per ablation configuration prevents definite causal verdicts',
+      'Verdicts are conservatively returned as INSUFFICIENT_EVIDENCE',
+      'No false attribution or unjustified hypothesis rejection occurs',
+      'Conservative epistemic claim discipline is preserved',
+    ],
+    expectedArtifacts: ['causal-uncertainty-report'],
+    expectedProvenance: [
+      'meta.causal.insufficient_evidence',
+      'meta.causal.uncertainty_preserved',
+    ],
+    associatedSuites: [
+      'packages/evaluation/tests/causalAttribution.test.ts',
+    ],
+    tags: ['causal', 'uncertainty', 'meta-optimizer', 'g51', 'p0-release-gate'],
+  },
 };
 
 /**
@@ -2010,7 +2124,7 @@ export function getTestsForGate(gateId: AcceptanceGateId): AcceptanceTest[] {
 
 export function getTestById(id: number): AcceptanceTest {
   const test = ACCEPTANCE_TESTS[id];
-  if (!test) throw new Error(`Acceptance test ${id} not found (valid range: 1..59)`);
+  if (!test) throw new Error(`Acceptance test ${id} not found (valid range: 1..62)`);
   return test;
 }
 

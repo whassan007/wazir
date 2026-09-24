@@ -1137,7 +1137,7 @@ export class MetaOptimizerService {
           }
         }
 
-        if (runRes.decision === 'REJECTED' && runRes.regressionGuard?.regressionsDetected.length) {
+        if (runRes.decision === 'REJECTED' || (runRes.regressionGuard && !runRes.regressionGuard.qualified)) {
           allConstraintsSatisfied = false;
         }
 
