@@ -14,6 +14,8 @@ export { summarizeExecution } from './executionSummary.js';
 export type { ExecutionSummary } from './executionSummary.js';
 export { reconstructExecutionState, planRecovery } from './executionRecovery.js';
 export type { ReconstructedExecutionState, RecoveryBudgetLimits, RecoveryPlan, ToolOutcomeInspection } from './executionRecovery.js';
+export { explainExecution } from './executionExplanation.js';
+export type { ExecutionExplanation } from './executionExplanation.js';
 export type { CircuitState, CircuitStatus, ModelReliabilityOptions, ReliabilityOutcome } from './modelReliability.js';
 export { detectOracleWeakening, isVerificationAsset, taskAuthorizesVerificationChanges } from './verificationIntegrity.js';
 export type { OracleWeakeningFinding, OracleWeakeningKind } from './verificationIntegrity.js';

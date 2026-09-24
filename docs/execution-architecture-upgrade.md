@@ -649,11 +649,42 @@ I confirmed all three fail with the gates removed and pass with them. The
 agents package passed: 26 files, 118 tests before the new cases, and the
 compaction file passed 5/5 after.
 
+## Nineteenth tranche: CLI explanations and event log (Phase 22)
+
+`explainExecution` (`packages/core/src/services/executionExplanation.ts`) answers
+"why?" for one execution from its durable record, never from model narration:
+- routing: the chosen model, placement and runtime, with the scheduler's reasons
+- every escalation, accepted or declined, with its trigger and routing decision
+- every classified provider retry, and retry-budget exhaustion
+- policy denials
+- tool calls whose outcome is still unknown, and ones reconciled from physical
+  evidence (with the evidence and who inspected)
+- completion rejections, with detail (which revision lacks which evidence, or
+  an unresolved tool call)
+- evidence invalidated by later mutations
+- the typed termination, and the model running when the run stopped
+
+The CLI changes:
+- `wa explain <execution>` renders these as "Why retries", "Why the model
+  changed", "Tool outcomes", "Why completion was rejected" and "Why it stopped".
+  Its `--json` output adds a `decisions` field next to the existing fields,
+  which are unchanged.
+- The new `wa executions events <id>` lists the durable event log in sequence
+  order. `--type <prefix>` filters by type (e.g. `tool.`, `model.route`). Text
+  output previews each payload (bounded, terminal-escape-stripped), and
+  `--json` returns the events unmodified. It starts the engine read-only.
+
+Not added: `wa jobs events`. A job's explanation already exists as
+`wa explain @job:<id>`, and per-execution events cover each task.
+
+Regression coverage: `packages/core/tests/executionExplanation.test.ts` (driven
+through the real `ExecutionEngine`), `apps/cli/tests/explainExecution.test.ts`
+(text sections, JSON validity and fields, event ordering and filtering).
+
 ## Not yet done
 
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
   checks are still inline in `CodingAgent`.
 - Phase 21 remainder: resuming the agent loop inside the recovered execution
   (the recovery plan says when it's safe; tasks are still retried as before).
-- Phase 22: `wa executions events|explain` projections of the new events.
 - Phase 24: the live acceptance run.

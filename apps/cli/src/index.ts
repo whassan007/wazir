@@ -416,6 +416,21 @@ execCmd
   });
 
 execCmd
+  .command('events')
+  .argument('<id>', 'Execution ID')
+  .description('Show the execution\'s durable event log in sequence order')
+  .option('--type <prefix>', 'Only events whose type starts with this prefix (e.g. tool., model.route)')
+  .option('--json', 'Output in JSON format')
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const { listExecutionEvents } = await import('./commands.js');
+    const result = await listExecutionEvents(engine, id, options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+execCmd
   .command('replay')
   .argument('<id>', 'Execution ID')
   .description('Replay an execution from recorded events')

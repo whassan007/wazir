@@ -1,4 +1,4 @@
-import { ModelLifecycleError, summarizeExecution, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
+import { explainExecution, ModelLifecycleError, summarizeExecution, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -851,11 +851,13 @@ function renderExecutionExplain(execution: ExecutionRecord | undefined, id: stri
     return { code: 1, output: color.red(`execution '${id}' not found`) };
   }
 
+  // Every "why" below is derived from the durable record (see explainExecution).
+  const decisions = explainExecution(execution);
   if (json) {
     return {
       code: 0,
       output: JSON.stringify(
-        { id, task: execution.task, scheduling: execution.scheduling, policyDecisions: execution.policyDecisions },
+        { id, task: execution.task, scheduling: execution.scheduling, policyDecisions: execution.policyDecisions, decisions },
         null,
         2,
       ),
@@ -905,6 +907,68 @@ function renderExecutionExplain(execution: ExecutionRecord | undefined, id: stri
     }
   }
 
+  if (decisions.retries.length > 0) {
+    lines.push('');
+    lines.push(color.bold('Why retries'));
+    for (const r of decisions.retries) {
+      lines.push(r.exhausted
+        ? `  retry budget exhausted (${r.failureClass}) for ${r.model ?? 'model'}`
+        : `  attempt ${r.attempt ?? '?'}: ${r.failureClass} from ${r.provider ?? 'provider'}/${r.model ?? 'model'}; backed off ${r.delayMs}ms`);
+    }
+  }
+
+  if (decisions.escalations.length > 0) {
+    lines.push('');
+    lines.push(color.bold('Why the model changed'));
+    for (const e of decisions.escalations) {
+      lines.push(e.accepted
+        ? `  ${e.previousModel} -> ${e.newModel} after ${e.failureClass}: ${e.trigger}`
+        : `  kept ${e.previousModel} after ${e.failureClass}: escalation declined`);
+      lines.push(color.gray(`    ${e.decision}`));
+    }
+  }
+
+  if (decisions.toolOutcomes.unknown.length > 0 || decisions.toolOutcomes.reconciled.length > 0) {
+    lines.push('');
+    lines.push(color.bold('Tool outcomes'));
+    for (const u of decisions.toolOutcomes.unknown) lines.push(color.yellow(`  UNKNOWN: '${u.tool}' (${u.callId ?? '?'}) was dispatched with no confirmed result — must be reconciled, never replayed blindly`));
+    for (const r of decisions.toolOutcomes.reconciled) lines.push(`  reconciled '${r.tool}' (${r.callId ?? '?'}) as ${r.outcome} by ${r.inspectedBy}: ${r.evidence}`);
+  }
+
+  if (decisions.completionRejections.length > 0 || decisions.evidenceInvalidations.length > 0) {
+    lines.push('');
+    lines.push(color.bold('Why completion was rejected'));
+    for (const c of decisions.completionRejections) lines.push(`  ${c.reason}: ${c.detail}`);
+    for (const v of decisions.evidenceInvalidations) lines.push(color.gray(`  evidence invalidated by a mutation at revision ${v.workspaceRevision ?? '?'}`));
+  }
+
+  lines.push('');
+  lines.push(color.bold('Why it stopped'));
+  lines.push(`  ${decisions.termination.reason ?? '(no typed termination recorded)'}` +
+    `${decisions.termination.modelId ? ` on ${decisions.termination.modelId}` : ''} — status ${decisions.termination.status}`);
+  for (const error of decisions.termination.errors.slice(0, 3)) lines.push(color.gray(`    ${error.split('\n')[0]}`));
+
+  return { code: 0, output: lines.join('\n') };
+}
+
+/**
+ * `wa executions events <id>`: the execution's durable event log in sequence order.
+ * `type` filters by event-type prefix (e.g. `tool.`, `model.route`). Text output shows
+ * a bounded preview of each payload; `--json` returns the events unmodified.
+ */
+export async function listExecutionEvents(engine: RookEngine, id: string, options: { json?: boolean; type?: string } = {}): Promise<{ code: number; output: string }> {
+  let record = await engine.executions.get(id);
+  if (!record) record = (await engine.executions.list()).find((r) => r.execution.id.includes(id));
+  if (!record) return { code: 1, output: color.red(`execution '${id}' not found`) };
+  const events = (await engine.executions.events(record.execution.id))
+    .filter((e) => !options.type || (e.eventType ?? e.type).startsWith(options.type));
+  if (options.json) return { code: 0, output: JSON.stringify({ executionId: record.execution.id, events }, null, 2) };
+  const lines = [color.bold(`${record.execution.id} — ${events.length} event(s)${options.type ? ` matching '${options.type}'` : ''}`)];
+  for (const e of events) {
+    const data = e.data === undefined ? '' : stripTerminalEscapes(JSON.stringify(e.data));
+    const preview = data.length > 160 ? `${data.slice(0, 160)}…` : data;
+    lines.push(`  ${String(e.sequence ?? '?').padStart(4)}  ${new Date(e.timestamp).toISOString()}  ${e.eventType ?? e.type}${e.callId ? color.gray(` [${e.callId}]`) : ''}  ${color.gray(preview)}`);
+  }
   return { code: 0, output: lines.join('\n') };
 }
 
