@@ -12,6 +12,7 @@ import type {
   ModelProtocolMetrics,
   TerminationReason,
 } from '@wazir/core';
+import { ObservationCompactor } from '@wazir/core';
 import {
   ModelProtocolAdapter,
   ACTION_START_PATTERN,
@@ -815,11 +816,19 @@ export class CodingAgent implements AgentAdapter {
       messages.push({ role: 'user', content: `${content} ${stateLine()}\nRespond with exactly one JSON object.` });
     };
 
-    const pushToolResult = (tool: string, result: { ok: boolean; output: string; error?: string }): void => {
-      const body = result.ok ? result.output : `ERROR: ${[result.error, result.output].filter(Boolean).join('\n')}`;
+    // Model context gets a compact projection of large observations; the raw result
+    // stays in the `tool_call` turn (execution evidence) and is never re-sent verbatim.
+    const observationCompactor = new ObservationCompactor({ maxChars: 4000 });
+    const pushToolResult = (
+      tool: string,
+      result: { ok: boolean; output: string; error?: string; durationMs?: number },
+      input: Record<string, unknown> = {},
+    ): void => {
+      const observation = observationCompactor.compact(tool, input, { durationMs: 0, ...result });
+      const body = result.ok || observation.compacted ? observation.text : `ERROR: ${observation.text}`;
       messages.push({
         role: 'user',
-        content: `[tool result for ${tool} (ok=${result.ok})]\n${body.slice(0, 4000)}\n${stateLine(`${tool}(${result.ok ? 'ok' : 'failed'})`)}\nContinue. Respond with exactly one JSON object.`,
+        content: `[tool result for ${tool} (ok=${result.ok})]\n${body}\n${stateLine(`${tool}(${result.ok ? 'ok' : 'failed'})`)}\nContinue. Respond with exactly one JSON object.`,
       });
     };
 
@@ -1017,7 +1026,7 @@ export class CodingAgent implements AgentAdapter {
             unresolvedDiagnostics = null;
           }
         }
-        pushToolResult(action.tool, result);
+        pushToolResult(action.tool, result, action.input ?? {});
         if (assessProgress(action.tool, action.input ?? {}, result) >= maxNoProgressIterations) {
           yield noProgressTurn();
           return;
@@ -1251,7 +1260,7 @@ export class CodingAgent implements AgentAdapter {
             unresolvedDiagnostics = null;
           }
         }
-        pushToolResult(action.tool, result);
+        pushToolResult(action.tool, result, action.input ?? {});
         if (assessProgress(action.tool, action.input ?? {}, result) >= maxNoProgressIterations) {
           yield noProgressTurn();
           return;

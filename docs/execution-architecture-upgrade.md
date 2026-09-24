@@ -247,6 +247,23 @@ identical-write loop is now correctly a `REPEATED_ACTION`.
 
 Regression coverage: `packages/agents/tests/codingAgent.noProgress.test.ts`.
 
+## Ninth tranche: observation compaction
+
+`ObservationCompactor` (`packages/core/src/services/observationCompactor.ts`,
+exported from `@wazir/core`) decides what the model sees of a tool result.
+Output within budget (4000 chars) passes through verbatim. Larger output is
+reduced by kind: a failed build/test becomes `exitCode`, `failedCommand`,
+`failedFiles`, `primaryErrors` (gcc/clang, tsc, eslint, test-runner FAIL lines),
+`additionalErrors` and a short tail. Searches become a match count plus whole
+lines. Git diffs get a per-file `+/-` summary. Anything else keeps its head and
+tail with an omission marker. `CodingAgent.pushToolResult` uses it in place of the
+old blind `slice(0, 4000)`. The raw `ToolResult` is unchanged in the `tool_call`
+turn, which is the execution evidence callers persist.
+
+Regression coverage: `packages/core/tests/observationCompactor.test.ts`,
+`packages/agents/tests/codingAgent.toolResultOutput.test.ts` (raw kept as evidence,
+compact form in model context).
+
 ## Not yet done
 
 Phase 2/3 (model-attempt vs. execution-history separation, observation compaction),
