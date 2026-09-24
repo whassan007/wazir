@@ -725,7 +725,9 @@ export class CodingAgent implements AgentAdapter {
       try {
         for await (const event of runtime.generate({
           modelId: request.modelId,
-          messages,
+          // A snapshot: the request is what the model saw at this turn, and later
+          // transcript edits (e.g. dropping a resolved repair note) must not rewrite it.
+          messages: messages.map((m) => ({ ...m })),
           maxTokens: this.maxTokensPerTurn,
           temperature: this.temperature,
           tools: effectiveTools.map((t) => ({
@@ -801,6 +803,43 @@ export class CodingAgent implements AgentAdapter {
 
     const pushAssistant = (content: string): void => {
       messages.push({ role: 'assistant', content });
+    };
+
+    // ---- model attempts vs. canonical context ----
+    // A rejected attempt (unparseable, invalid arguments, not permitted in this phase) is an
+    // execution fact — the yielded turn carries its raw text into execution history — but it
+    // never becomes a canonical assistant message. The model sees one repair note appended to
+    // the latest user message (replaced, not accumulated, on repeated failures), and the note
+    // is removed once a valid action is accepted, so later turns never re-send the failures.
+    let pendingRepair: { message: ChatMessage; base: string | null } | null = null;
+    const rejectAttempt = (note: string): void => {
+      let repair = pendingRepair;
+      if (!repair) {
+        const last = messages[messages.length - 1];
+        if (last && last.role === 'user') {
+          repair = { message: last, base: last.content };
+        } else {
+          const message: ChatMessage = { role: 'user', content: '' };
+          messages.push(message);
+          repair = { message, base: null };
+        }
+        pendingRepair = repair;
+      }
+      const prefix = repair.base ? `${repair.base}\n\n` : '';
+      repair.message.content = `${prefix}[previous response rejected and discarded] ${note}`;
+    };
+    const acceptAttempt = (raw: string): void => {
+      const repair = pendingRepair;
+      if (repair) {
+        if (repair.base === null) {
+          const index = messages.indexOf(repair.message);
+          if (index !== -1) messages.splice(index, 1);
+        } else {
+          repair.message.content = repair.base;
+        }
+        pendingRepair = null;
+      }
+      pushAssistant(raw);
     };
 
     // Compact, deterministic execution state — turn budget, files actually touched, what
@@ -930,11 +969,11 @@ export class CodingAgent implements AgentAdapter {
           return;
         }
         yield { kind: 'message', content: 'INVALID_JSON_ACTION: model response did not parse as a JSON action', raw };
-        messages.push({ role: 'user', content: correctionMessage(timedOut) });
+        rejectAttempt(correctionMessage(timedOut));
         continue;
       }
-      pushAssistant(raw);
       if (action.action === 'plan' && action.content) {
+        acceptAttempt(raw);
         validActions += 1;
         plan = action.content;
         planEstablished = true;
@@ -943,6 +982,7 @@ export class CodingAgent implements AgentAdapter {
         break;
       }
       if (action.action === 'done' || action.action === 'answer') {
+        acceptAttempt(raw);
         validActions += 1;
         modelSummary = action.summary ?? action.content;
         break;
@@ -956,11 +996,7 @@ export class CodingAgent implements AgentAdapter {
             tool: action.tool,
             raw,
           };
-          pushToolResult(action.tool, {
-            ok: false,
-            output: '',
-            error: `'${action.tool}' is not permitted during the planning phase. You must inspect the workspace (read, glob, search) or establish a plan ({"action":"plan","content":"..."}) before modifying files.`,
-          });
+          rejectAttempt(`ACTION_VALIDATION_FAILED: '${action.tool}' is not permitted during the planning phase. You must inspect the workspace (read, glob, search) or establish a plan ({"action":"plan","content":"..."}) before modifying files.`);
           continue;
         }
 
@@ -972,7 +1008,7 @@ export class CodingAgent implements AgentAdapter {
             return;
           }
           yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw };
-          pushToolResult(action.tool, validationFailureMessage(action.tool, val.toolMessage, val.attempts));
+          rejectAttempt(validationFailureMessage(action.tool, val.toolMessage, val.attempts).output);
           continue;
         }
 
@@ -986,6 +1022,7 @@ export class CodingAgent implements AgentAdapter {
           };
           return;
         }
+        acceptAttempt(raw);
         validActions += 1;
         recordToolExecution(action.tool, action.input ?? {});
         const result = await runtime.executeTool(action.tool, action.input ?? {});
@@ -1033,7 +1070,7 @@ export class CodingAgent implements AgentAdapter {
         }
         continue;
       }
-      messages.push({ role: 'user', content: 'Respond with exactly one JSON object as specified.' });
+      rejectAttempt('Respond with exactly one JSON object as specified.');
     }
 
     // Evidence check: only advance to implement if a plan was established or exploration occurred.
@@ -1100,23 +1137,24 @@ export class CodingAgent implements AgentAdapter {
           return;
         }
         yield { kind: 'message', content: 'INVALID_JSON_ACTION: model response did not parse as a JSON action', raw };
-        messages.push({ role: 'user', content: correctionMessage(timedOut) });
+        rejectAttempt(correctionMessage(timedOut));
         continue;
       }
 
-      pushAssistant(raw);
-
       if (action.action === 'done') {
+        acceptAttempt(raw);
         validActions += 1;
         modelSummary = action.summary ?? 'completed';
         break;
       }
       if (action.action === 'answer') {
+        acceptAttempt(raw);
         validActions += 1;
         modelSummary = action.content ?? 'completed';
         break;
       }
       if (action.action === 'plan') {
+        acceptAttempt(raw);
         validActions += 1;
         plan = action.content ?? plan;
         pushContinue('Plan noted. Execute it now, one tool call per turn.');
@@ -1139,6 +1177,7 @@ export class CodingAgent implements AgentAdapter {
             return;
           }
           yield { kind: 'message', content: `ACTION_BLOCKED_DUPLICATE: '${action.tool}' repeated ${this.toolRepeatLimit} times`, tool: action.tool, raw };
+          acceptAttempt(raw);
           pushToolResult(action.tool, {
             ok: false,
             output: `ACTION_BLOCKED_DUPLICATE: You have attempted this exact action ${this.toolRepeatLimit} times. You must use a different tool or different arguments.`
@@ -1154,7 +1193,7 @@ export class CodingAgent implements AgentAdapter {
             return;
           }
           yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw };
-          pushToolResult(action.tool, validationFailureMessage(action.tool, val.toolMessage, val.attempts));
+          rejectAttempt(validationFailureMessage(action.tool, val.toolMessage, val.attempts).output);
           continue;
         }
 
@@ -1168,6 +1207,7 @@ export class CodingAgent implements AgentAdapter {
           };
           return;
         }
+        acceptAttempt(raw);
         validActions += 1;
         consecutiveBlockedRepeats = 0;
         recordToolExecution(action.tool, action.input ?? {});
@@ -1268,7 +1308,7 @@ export class CodingAgent implements AgentAdapter {
         continue;
       }
 
-      messages.push({ role: 'user', content: 'Respond with exactly one JSON object as specified.' });
+      rejectAttempt('Respond with exactly one JSON object as specified.');
     }
     // The loop above exits either because the model reported done/answer (modelSummary
     // set) or because the turn budget ran out first — distinguish them so a verification

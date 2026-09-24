@@ -319,10 +319,28 @@ dashboard/modelLifecycle/termination tests and `tests/integration/policyBypassSw
 Result: 68 files, 617 passed, 6 skipped (the pre-existing live-coding tests).
 `npx tsc --build apps/cli` exited 0.
 
+## Twelfth tranche: model attempts separated from model context
+
+A rejected model attempt is now an execution fact, not a canonical assistant
+message. This covers unparseable output, invalid tool arguments, a mutating tool
+during planning, and an unknown action shape. The yielded turn keeps the raw text
+(execution history), but `CodingAgent` no longer pushes it into `messages`.
+Instead, one repair note is appended to the latest user message. On repeated
+failures the note is replaced rather than accumulated, and it is removed when a
+valid action is accepted, so later requests carry none of the failure history.
+This also removes the back-to-back user messages the old correction path
+produced, which strict chat templates reject. An action refused by the duplicate
+circuit breaker is well-formed, so it still stays visible next to the refusal.
+
+Each `runtime.generate()` call now receives a snapshot of `messages`. A request is
+what the model saw at that turn, and later transcript edits cannot rewrite it.
+
+Regression coverage: `packages/agents/tests/codingAgent.attemptContext.test.ts`.
+Verification: `npx tsc --build apps/cli` exit 0; `npx vitest run packages/agents
+apps/cli/tests/executeTask.e2e.test.ts` passed (24 files, 115 tests).
+
 ## Not yet done
 
-- Phase 2: separating model attempts from execution history. Failed attempts still
-  append a correction message to `messages`, not just an attempt event.
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
   checks are still inline in `CodingAgent`.
 - Phase 14: failure-based escalation within a run (switching model mid-execution
