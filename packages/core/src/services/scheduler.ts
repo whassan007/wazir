@@ -16,6 +16,10 @@ import type { ModelReliabilityTracker } from './modelReliability.js';
 import type { PolicyEngine } from './policyEngine.js';
 import type { RuntimeRegistry } from './runtimeRegistry.js';
 
+/** Measured profiles with fewer runs than this don't influence routing. */
+const MIN_MEASURED_SAMPLES = 3;
+const pct = (rate: number): string => `${Math.round(rate * 100)}%`;
+
 export interface SchedulerDeps {
   computers: ComputerRegistry;
   runtimes: RuntimeRegistry;
@@ -245,6 +249,19 @@ export class Scheduler {
     let score = 0;
     score += requiredCapabilities.filter((c) => record.capabilities.includes(c)).length * 2;
     if (record.toolCalling) score += 1;
+
+    // Measured evidence, not model size or name: how this model actually did on this
+    // task class in Wazir's own executions. Worth up to +2 for verified success and -1
+    // for a majority protocol-failure rate; ignored until there are enough samples.
+    const measured = record.performance?.[task.type];
+    if (measured && measured.samples >= MIN_MEASURED_SAMPLES) {
+      score += Math.round(measured.verifiedSuccessRate * 2) - (measured.protocolFailureRate >= 0.5 ? 1 : 0);
+      reasons.push(
+        `measured ${task.type}: ${pct(measured.verifiedSuccessRate)} verified over ${measured.samples} runs, ` +
+          `protocol failures ${pct(measured.protocolFailureRate)}` +
+          (measured.firstPassBuildRate !== null ? `, first-pass build ${pct(measured.firstPassBuildRate)}` : ''),
+      );
+    }
     if (requiredContext > 0 && context >= requiredContext * 2) {
       score += 1;
       reasons.push('context headroom: at least 2x the requirement');

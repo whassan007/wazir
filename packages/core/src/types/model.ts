@@ -47,6 +47,37 @@ export interface ModelRecord {
   local: boolean;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * Empirically measured behavior per task class, derived from Wazir's own execution
+   * evidence (see `measureModelPerformance`). Never hand-entered or speculative; absent
+   * until the model has actually run tasks of that class.
+   */
+  performance?: Record<string, ModelPerformanceProfile>;
+}
+
+/**
+ * Measured from durable execution records. Rates are fractions in [0, 1] over the runs
+ * that could observe them; a rate is null when no run could (e.g. no run ever built).
+ */
+export interface ModelPerformanceProfile {
+  taskClass: string;
+  /** Runs with a typed termination attributed to this model. */
+  samples: number;
+  /** Runs that ended VERIFICATION_PASSED/COMPLETED. */
+  verifiedSuccessRate: number;
+  /** First build check of a run passed, over runs that built. */
+  firstPassBuildRate: number | null;
+  /** First test check of a run passed, over runs that tested. */
+  firstPassTestRate: number | null;
+  /** Protocol-budget exhaustion (as termination or escalation cause) per run. */
+  protocolFailureRate: number;
+  /** NO_PROGRESS / REPEATED_ACTION (as termination or escalation cause) per run. */
+  noProgressRate: number;
+  /** Valid actions / attempted actions across runs that reported protocol metrics. */
+  schemaReliability: number | null;
+  medianToolCalls: number | null;
+  medianDurationMs: number | null;
+  measuredAt: Date;
 }
 
 export type ModelLifecycleState =

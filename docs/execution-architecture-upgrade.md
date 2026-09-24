@@ -386,14 +386,51 @@ and `apps/cli/src`: exit 0. Tests: `npx vitest run` on the escalation,
 modelReliability, scheduler, termination and executeTask e2e tests plus the whole
 `packages/agents` package. All passed.
 
+## Fourteenth tranche: measured model performance
+
+`ModelRecord.performance` (per task class, `ModelPerformanceProfile`) holds
+empirically measured behavior. The fields are `samples`, `verifiedSuccessRate`,
+`firstPassBuildRate`, `firstPassTestRate`, `protocolFailureRate`, `noProgressRate`,
+`schemaReliability`, `medianToolCalls` and `medianDurationMs`.
+`measureModelPerformance` (`packages/core/src/services/modelPerformance.ts`)
+derives them only from durable execution evidence: the typed
+`termination.completed` event, accepted `model.route.changed` events,
+revision-stamped check records, recorded tool calls and execution timestamps.
+Nothing is hand-entered, and nothing comes from model claims. First-pass rates
+use a run's *first* build/test check, so a later passing rerun doesn't inflate
+them. A rate no run could observe is `null`, not 0. After an escalation, the
+failure is charged to the abandoned model and the outcome credited to the final
+one, but run-level metrics (first-pass, tool calls, duration) are skipped
+because they can't be attributed to one model. `schemaReliability` needed a new
+input: the agent's per-run protocol metrics (valid vs attempted actions) were
+computed but never persisted. `recordTermination` now stores them on the
+`termination.completed` event.
+
+`ModelRegistry.setPerformance`/`performanceFor` store the profiles.
+`register()` preserves them when discovery re-registers a model. The CLI
+engine measures from execution history at startup, after model discovery. The
+Scheduler uses a profile only with at least 3 samples: up to +2 for verified
+success, -1 for a majority protocol-failure rate. It records the measurement in
+the routing reasons, e.g. `measured coding: 100% verified over 3 runs, protocol
+failures 0%, first-pass build 67%`. Model size or name never enters the score.
+
+The existing `wa benchmark` (single-prompt latency) is unchanged and does not
+feed these profiles. Only real executions do.
+
+Regression coverage: `packages/core/tests/modelPerformance.test.ts`. Verification:
+scratch-tsconfig typecheck of core/agents/cli sources with no errors outside
+another session's in-progress `web*` files. `npx vitest run` on
+modelPerformance, scheduler, schedulerHostedRouting, modelReliability,
+termination, escalation, executeTask e2e, modelLifecycleAdmission,
+modelResources, jobOrchestrator and the CLI modelLifecycle tests: all passed
+(11 files, 96 tests).
+
 ## Not yet done
 
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
   checks are still inline in `CodingAgent`.
 - Phase 14 remainder: an escalation hook for the fleet runner, and mid-run
   re-placement (a different computer, or loading a model) as an escalation target.
-- Phase 15: empirically measured capability fields (`firstPassBuildRate`,
-  `protocolFailureRate`, ...) on `ModelRecord`, populated from benchmark evidence.
 - Phase 17: execution summary metrics (inference/tool/verification/backoff time
   breakdown).
 - Phase 21: full event-derived recovery reconstruction.

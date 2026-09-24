@@ -1,4 +1,4 @@
-import type { ModelInstallation, ModelInstance, ModelRecord } from '../types/model.js';
+import type { ModelInstallation, ModelInstance, ModelPerformanceProfile, ModelRecord } from '../types/model.js';
 
 export class ModelRegistry {
   private records = new Map<string, ModelRecord>();
@@ -14,11 +14,28 @@ export class ModelRegistry {
     const existing = this.records.get(record.id);
     const merged: ModelRecord = {
       ...record,
+      // Re-discovery refreshes static metadata; it must not erase measured evidence.
+      performance: record.performance ?? existing?.performance,
       createdAt: existing?.createdAt ?? record.createdAt ?? now,
       updatedAt: now,
     };
     this.records.set(merged.id, merged);
     return merged;
+  }
+
+  /** Replaces the measured profile for each given task class (see `measureModelPerformance`). */
+  setPerformance(modelId: string, profiles: ModelPerformanceProfile[]): ModelRecord | undefined {
+    const existing = this.records.get(modelId);
+    if (!existing) return undefined;
+    const performance = { ...existing.performance };
+    for (const profile of profiles) performance[profile.taskClass] = profile;
+    const updated: ModelRecord = { ...existing, performance };
+    this.records.set(modelId, updated);
+    return updated;
+  }
+
+  performanceFor(modelId: string, taskClass: string): ModelPerformanceProfile | undefined {
+    return this.records.get(modelId)?.performance?.[taskClass];
   }
 
   upsertInstance(instance: ModelInstance): ModelInstance {

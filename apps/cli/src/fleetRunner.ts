@@ -519,7 +519,7 @@ export function createFleetTaskExecutor(
         const turnContent = turn.content ?? (turn.kind === 'tool_call' && turn.toolResult?.ok ? turn.toolResult.output : undefined);
         const turnError = turn.error ?? (turn.kind === 'tool_call' && turn.toolResult && !turn.toolResult.ok ? turn.toolResult.error : undefined);
         const turnMeta = turn.kind === 'tool_call' && turn.toolResult?.metadata ? turn.toolResult.metadata : undefined;
-        if (turn.terminationReason) await recordTermination(engine, executionId, turn.terminationReason, assignment.modelId, task.type);
+        if (turn.terminationReason) await recordTermination(engine, executionId, turn.terminationReason, assignment.modelId, task.type, turn.protocolMetrics);
 
         await engine.executions.recordEvent(executionId, 'agent.turn', {
           kind: turn.kind,

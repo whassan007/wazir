@@ -17,6 +17,7 @@ import {
   ModelRegistry,
   ModelLifecycleService,
   ModelReliabilityTracker,
+  measureModelPerformance,
   PolicyEngine,
   RuntimeRegistry,
   Scheduler,
@@ -322,8 +323,11 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     if (typeof executionId === 'string') void executions.recordEvent(executionId, 'model.lifecycle', event).catch(() => undefined);
   });
   await executions.ready;
-  reliability.hydrate(await executions.list());
+  const executionHistory = await executions.list();
+  reliability.hydrate(executionHistory);
   await lifecycle.discoverAndReconcile({ verify: !options.readOnlyLifecycle });
+  // After discovery so every model is registered; register() preserves the profiles.
+  for (const [modelId, profiles] of measureModelPerformance(executionHistory)) models.setPerformance(modelId, profiles);
   if (!options.readOnlyLifecycle) {
     await lifecycle.applyStartupPolicy(config.models?.startup);
     lifecycle.startReconciliation();

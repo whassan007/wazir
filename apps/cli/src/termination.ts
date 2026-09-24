@@ -1,4 +1,4 @@
-import type { CircuitStatus, TerminationReason } from '@wazir/core';
+import type { CircuitStatus, ModelProtocolMetrics, TerminationReason } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 
 /**
@@ -13,7 +13,9 @@ export async function recordTermination(
   reason: TerminationReason,
   modelId: string,
   taskClass: string,
+  protocolMetrics?: ModelProtocolMetrics,
 ): Promise<CircuitStatus | null> {
-  await engine.executions.recordEvent(executionId, 'termination.completed', { reason, modelId, taskClass });
+  // protocolMetrics feed the measured schemaReliability (see measureModelPerformance).
+  await engine.executions.recordEvent(executionId, 'termination.completed', { reason, modelId, taskClass, protocolMetrics });
   return engine.reliability?.recordTermination(modelId, taskClass, reason) ?? null;
 }

@@ -640,7 +640,7 @@ export async function executeTask(
       runtime,
     )) {
       turnsUsed++;
-      if (turn.terminationReason) await recordTermination(engine, executionId, turn.terminationReason, currentModelId, task.type);
+      if (turn.terminationReason) await recordTermination(engine, executionId, turn.terminationReason, currentModelId, task.type, turn.protocolMetrics);
       await engine.executions.recordEvent(executionId, 'agent.turn', {
         kind: turn.kind,
         phase: turn.phase,
@@ -975,7 +975,7 @@ export async function runSubagent(
       },
       subagentRuntime,
     )) {
-      if (turn.terminationReason) await recordTermination(engine, childExecId, turn.terminationReason, context.modelId, 'coding');
+      if (turn.terminationReason) await recordTermination(engine, childExecId, turn.terminationReason, context.modelId, 'coding', turn.protocolMetrics);
       if (turn.kind === 'done') {
         subagentSummary = turn.content ?? '';
       } else if (turn.kind === 'error') {
