@@ -535,6 +535,26 @@ project's pinned major) with a scratch config. `packages/core`,
 at file load in the combined run but passed 19/19 on its own. It covers MCP
 code this tranche doesn't touch.
 
+## Seventeenth tranche: leftovers from tranches 13, 15 and 16
+
+### Recovery (Phase 21)
+
+- **Atomic writes.** `writeProjectFile` writes an exclusive temp file beside the
+  target (`O_EXCL | O_NOFOLLOW`, inode and containment re-checked like reads),
+  fsyncs it and renames it over the target. An existing file keeps its
+  permission bits. A crash now leaves the old file or the complete new one,
+  never a truncated half-write. This covers `write`, `edit` and every other
+  caller.
+- **Workspace root recorded.** `Execution.workspaceRoot` records the directory
+  the execution's tools ran in: the project root for `wa run` and its
+  subagents, the task root (worktree) for fleet tasks. `localOutcomeInspector`
+  inspects that directory, so a job task's unknown outcome can now be resolved
+  from its own worktree. A job execution with no recorded root (created before
+  this change), or whose recorded root no longer exists, stays `UNDETERMINED`.
+
+Regression coverage: `packages/tools/tests/atomicWrite.test.ts`, additions to
+`apps/cli/tests/recovery.test.ts`.
+
 ## Not yet done
 
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
@@ -543,8 +563,7 @@ code this tranche doesn't touch.
   re-placement (a different computer, or loading a model) as an escalation target.
 - Phase 17 remainder: agent-side run counters and a typed reason for an ordinary
   verification failure (see the fifteenth tranche).
-- Phase 21 remainder: resuming the agent loop inside the recovered execution,
-  recording worktree paths so job-task outcomes can be inspected, and an atomic
-  `writeProjectFile`.
+- Phase 21 remainder: resuming the agent loop inside the recovered execution
+  (the recovery plan says when it's safe; tasks are still retried as before).
 - Phase 22: `wa executions events|explain` projections of the new events.
 - Phase 24: the live acceptance run.

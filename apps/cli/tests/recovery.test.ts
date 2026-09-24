@@ -45,4 +45,28 @@ describe('CLI startup recovery', () => {
     expect(await reconcileLocalOutcomes(engine, inspect)).toEqual([]);
     expect(engine.reconstruct(id).plan.action).toBe('reconcile');
   });
+
+  it('inspects a job task in the worktree recorded on its execution, not the project root', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'wazir-worktree-'));
+    try {
+      await writeFile(join(worktree, 'main.cpp'), 'int main(){}'); // landed in the worktree only
+      const inspect = localOutcomeInspector(root, 'local');
+      const call = { toolName: 'write', sideEffectClass: 'IDEMPOTENT_WRITE', input: { path: 'main.cpp', content: 'int main(){}' } } as ToolCallCheckpoint;
+      const jobTask = { execution: { computerId: 'local', jobId: 'job-1', workspaceRoot: worktree } } as ExecutionRecord;
+      expect(await inspect(jobTask, call)).toMatchObject({ outcome: 'APPLIED' });
+      const gone = { execution: { computerId: 'local', jobId: 'job-1', workspaceRoot: join(worktree, 'removed') } } as ExecutionRecord;
+      expect(await inspect(gone, call)).toMatchObject({ outcome: 'UNDETERMINED' });
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('ExecutionEngine records the workspace root it was created with', async () => {
+    const engine = new ExecutionEngine();
+    const { execution } = await engine.create({
+      task: { id: 't', type: 'coding', input: 'x', requirements: {}, priority: 'normal', status: 'pending', createdAt: new Date() },
+      computerId: 'local', runtimeId: 'r', modelId: 'm', workspaceRoot: '/work/tree',
+    });
+    expect(engine.require(execution.id).execution.workspaceRoot).toBe('/work/tree');
+  });
 });

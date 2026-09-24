@@ -9,11 +9,11 @@ import { resolveInsideProject } from './paths.js';
  *
  * - READ_ONLY calls have no side effect: NOT_APPLIED, repeat freely.
  * - write: the target holding exactly the intended content proves APPLIED. Anything
- *   else is NOT_APPLIED — including a truncated file, since the write opens with
- *   O_TRUNC before writing — and re-issuing it is safe because it sets exact content.
+ *   else is NOT_APPLIED (writes are atomic, so the target is either the old or the new
+ *   file), and re-issuing it is safe because it sets exact content.
  * - edit (single replacement): old text present and new text absent proves NOT_APPLIED;
  *   old absent and new present proves APPLIED. Overlapping or ambiguous text, or a file
- *   that is now neither (an edit interrupted mid-write, original lost), is UNDETERMINED.
+ *   that holds neither (changed by something else since), is UNDETERMINED.
  * - shell, git, MCP and other external effects: UNDETERMINED.
  */
 export async function inspectToolOutcome(projectRoot: string, call: Pick<ToolCallCheckpoint, 'toolName' | 'input' | 'sideEffectClass'>): Promise<ToolOutcomeInspection> {

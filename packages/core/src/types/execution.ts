@@ -24,6 +24,11 @@ export interface Execution {
   runtimeId: string;
   modelId: string;
   workerId?: string;
+  /**
+   * Absolute directory the execution's tools operated in (the project root, or a job
+   * task's worktree). Lets recovery inspect the right files for an unknown outcome.
+   */
+  workspaceRoot?: string;
   status: ExecutionStatus;
   createdAt: Date;
   startedAt?: Date;

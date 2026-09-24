@@ -1,5 +1,6 @@
 import { constants as fsConstants, promises as fs } from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 export function isInside(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
@@ -91,18 +92,47 @@ export async function readProjectBytes(root: string, target: string, maxBytes = 
   }
 }
 
-/** Write counterpart of `readProjectFile`; creates parent directories inside the project. */
+/**
+ * Write counterpart of `readProjectFile`; creates parent directories inside the project.
+ *
+ * Atomic: the content goes to an exclusive temp file beside the target (O_EXCL |
+ * O_NOFOLLOW, inode and containment re-checked like reads), is fsynced, and then
+ * renamed over the target. A crash leaves either the old file or the complete new
+ * one — never the truncated half-write an in-place O_TRUNC write could — so an
+ * interrupted write/edit is always recoverable (see tools' inspectToolOutcome).
+ * rename never follows a symlink at the target, and an existing file keeps its
+ * permission bits.
+ */
 export async function writeProjectFile(root: string, target: string, content: string): Promise<string> {
   const { resolved, real } = await resolveInsideProject(root, target);
-  await fs.mkdir(path.dirname(real), { recursive: true });
-  const handle = await fs.open(real, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o644);
+  const dir = path.dirname(real);
+  await fs.mkdir(dir, { recursive: true });
+  let mode = 0o644;
+  try {
+    const existing = await fs.lstat(real);
+    if (existing.isFile()) mode = existing.mode & 0o7777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const temp = path.join(dir, `.${path.basename(real)}.wazir-${randomUUID()}.tmp`);
+  const handle = await fs.open(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, mode);
+  let renamed = false;
   try {
     const stat = await handle.stat();
-    await assertSameInode(root, target, real, stat);
+    await assertSameInode(root, target, temp, stat);
     await handle.writeFile(content, 'utf8');
+    // O_CREAT's mode is filtered by umask; set the intended bits explicitly.
+    await handle.chmod(mode);
+    await handle.sync();
+    await handle.close();
+    await fs.rename(temp, real);
+    renamed = true;
+    const realRoot = await fs.realpath(root);
+    if (!isInside(realRoot, await canonicalize(real))) throw new PathEscapeError(target, root);
     return resolved;
   } finally {
-    await handle.close();
+    await handle.close().catch(() => undefined);
+    if (!renamed) await fs.unlink(temp).catch(() => undefined);
   }
 }
 

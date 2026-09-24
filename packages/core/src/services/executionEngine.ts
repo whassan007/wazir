@@ -129,6 +129,7 @@ export class ExecutionEngine {
     runtimeId: string;
     modelId: string;
     workerId?: string;
+    workspaceRoot?: string;
     scheduling?: SchedulerDecision;
     context?: ContextDecision;
   }): Promise<ExecutionRecord> {
@@ -145,6 +146,7 @@ export class ExecutionEngine {
       runtimeId: params.runtimeId,
       modelId: params.modelId,
       workerId: params.workerId,
+      ...(params.workspaceRoot ? { workspaceRoot: params.workspaceRoot } : {}),
       status: 'queued',
       createdAt: now,
     };

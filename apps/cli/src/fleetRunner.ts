@@ -142,6 +142,7 @@ export function createFleetTaskExecutor(
         runtimeId: assignment.runtimeId,
         modelId: assignment.modelId,
         workerId: engine.worker.id,
+        workspaceRoot: taskRoot,
       });
       await engine.executions.recordError(rec.execution.id, preflightErr);
       await engine.executions.setStatus(rec.execution.id, 'failed');
@@ -169,6 +170,7 @@ export function createFleetTaskExecutor(
         runtimeId: assignment.runtimeId,
         modelId: assignment.modelId,
         workerId: engine.worker.id,
+        workspaceRoot: taskRoot,
       });
       executionId = rec.execution.id;
     }

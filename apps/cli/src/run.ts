@@ -252,6 +252,7 @@ export async function executeTask(
     runtimeId: scheduling.runtimeId,
     modelId: scheduling.modelId,
     workerId: engine.worker.id,
+    workspaceRoot: engine.projectRoot,
     scheduling,
     context,
   });
@@ -809,6 +810,7 @@ export async function runSubagent(
     runtimeId: context.runtimeId,
     modelId: context.modelId,
     workerId: engine.worker.id,
+    workspaceRoot: context.projectRoot,
   });
   const childExecId = childRecord.execution.id;
 

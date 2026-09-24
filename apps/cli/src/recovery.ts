@@ -1,22 +1,29 @@
 import type { ExecutionEngine, ExecutionRecord, ToolCallCheckpoint, ToolOutcomeInspection } from '@wazir/core';
+import { existsSync } from 'node:fs';
 import { inspectToolOutcome } from '@wazir/tools';
 
 /**
  * Physical-state inspector for RecoveryManager and startup reconciliation. It only
  * inspects when this process can see the execution's actual files: the execution ran
- * on this computer, and not inside a job task's worktree (whose path the execution
- * record does not carry). Anything else is UNDETERMINED with that reason, so it stays
- * blocked for an operator instead of being judged against the wrong directory.
+ * on this computer, in the workspace root recorded on it (the project root, or a job
+ * task's worktree). An execution with no recorded root is only inspected when it is a
+ * standalone run, which always uses the project root; a job task without one ran in a
+ * worktree this process can't locate. Anything else is UNDETERMINED with that reason,
+ * so it stays blocked for an operator instead of being judged against the wrong tree.
  */
 export function localOutcomeInspector(projectRoot: string, localComputerId: string) {
   return async (record: ExecutionRecord, call: ToolCallCheckpoint): Promise<ToolOutcomeInspection> => {
     if (record.execution.computerId !== localComputerId) {
       return { outcome: 'UNDETERMINED', evidence: `execution ran on '${record.execution.computerId ?? 'a hosted runtime'}', whose files this process cannot inspect` };
     }
-    if (record.execution.jobId) {
+    const root = record.execution.workspaceRoot ?? (record.execution.jobId ? undefined : projectRoot);
+    if (!root) {
       return { outcome: 'UNDETERMINED', evidence: 'job task ran in a worktree whose path is not recorded on the execution' };
     }
-    return inspectToolOutcome(projectRoot, call);
+    if (!existsSync(root)) {
+      return { outcome: 'UNDETERMINED', evidence: `recorded workspace '${root}' no longer exists` };
+    }
+    return inspectToolOutcome(root, call);
   };
 }
 
