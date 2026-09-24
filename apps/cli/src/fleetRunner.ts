@@ -176,8 +176,10 @@ export function createFleetTaskExecutor(
         // 'policy': a controller safety refusal — retrying or replanning can't clear it.
         return { success: false, error, errorKind: 'policy', reasons: resumePlan.reasons };
       }
+      // Recorded as a durable execution.resumed event (wa explain → "Why it resumed"), not a
+      // TUI log line: the retry's own progress already shows, and an extra line per attempt
+      // pushed the attempt's actual failure out of the visible log.
       resume = resumePlan.resume;
-      context.onProgress?.({ kind: 'message', phase: 'plan', content: `resuming execution ${executionId} (attempt ${resume.attempt}): ${resumePlan.reasons.join('; ')}` });
     } else {
       const rec = await engine.executions.create({
         task,

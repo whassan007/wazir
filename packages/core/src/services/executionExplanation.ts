@@ -25,6 +25,8 @@ export interface ExecutionExplanation {
     trigger: string;
     decision: string;
   }>;
+  /** Retries that continued this same execution (see planTaskResume), with the facts they resumed from. */
+  resumes: Array<{ at: string; attempt: number | null; workspaceRevision: number | null; reasons: string[] }>;
   retries: Array<{ at: string; attempt: number | null; failureClass: string; provider: string | null; model: string | null; delayMs: number; exhausted: boolean }>;
   policyDenials: Array<{ tool: string; decision: string; rule: string; reasons: string[] }>;
   toolOutcomes: {
@@ -55,6 +57,7 @@ export function explainExecution(record: ExecutionRecord): ExecutionExplanation 
       placementReasons: s?.computerDecision.reasons ?? [],
     },
     escalations: [],
+    resumes: [],
     retries: [],
     policyDenials: record.policyDecisions
       .filter((d) => d.decision !== 'allow')
@@ -78,6 +81,14 @@ export function explainExecution(record: ExecutionRecord): ExecutionExplanation 
           failureClass: str(data.failureClass) ?? 'unknown',
           trigger: str(data.reason) ?? '',
           decision: str(data.routeDecision) ?? '',
+        });
+        break;
+      case 'execution.resumed':
+        out.resumes.push({
+          at: iso(event.timestamp),
+          attempt: typeof data.attempt === 'number' ? data.attempt : null,
+          workspaceRevision: typeof data.workspaceRevision === 'number' ? data.workspaceRevision : null,
+          reasons: Array.isArray(data.reasons) ? data.reasons.filter((r): r is string => typeof r === 'string') : [],
         });
         break;
       case 'retry.scheduled':

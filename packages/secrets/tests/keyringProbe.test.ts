@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { probeKeyringInSubprocess } from '../src/keyringBackend.js';
 import { createSecretBroker } from '../src/secretBroker.js';
 
@@ -29,9 +29,10 @@ describe('probeKeyringInSubprocess', () => {
 describe('createSecretBroker', () => {
   let dir: string;
   beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'wazir-secrets-')); });
-  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+  afterEach(async () => { vi.unstubAllEnvs(); await rm(dir, { recursive: true, force: true }); });
 
   it('falls back to the encrypted-file backend when the keychain probe times out', async () => {
+    vi.stubEnv('WAZIR_SECRETS_BACKEND', ''); // exercise real selection, not the suite-wide override
     const broker = await createSecretBroker({ secretsDir: dir, keyringProbe: () => probeKeyringInSubprocess(300, 'setInterval(() => {}, 1000)') });
     expect(broker.backendName).toBe('encrypted-file');
     await broker.putCredential('k', 'v');

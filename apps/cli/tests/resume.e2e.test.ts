@@ -9,7 +9,7 @@ import {
 } from '@wazir/core';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
-import type { ChatMessage } from '@wazir/core';
+import { explainExecution, type ChatMessage } from '@wazir/core';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import type { Worker } from '@wazir/workers';
 import { createFleetTaskExecutor } from '../src/fleetRunner.js';
@@ -109,6 +109,10 @@ describe('retried fleet task resumes the same execution (e2e)', () => {
     expect(records).toHaveLength(1); // same execution, no replacement
     const events = await engine.executions.events(record.execution.id);
     expect(events.find((e) => e.eventType === 'execution.resumed')?.data).toMatchObject({ attempt: 2 });
+    // The resume is explainable from the durable record, with the facts it resumed from.
+    const [explained] = explainExecution(engine.executions.require(record.execution.id)).resumes;
+    expect(explained).toMatchObject({ attempt: 2 });
+    expect(explained.reasons.join(' ')).toContain('resuming the same execution at workspace revision');
     const briefing = requests[firstRequestOfAttempt2][1].content;
     expect(briefing).toContain(`RESUMING execution ${record.execution.id} (attempt 2)`);
     expect(briefing).toContain('(MODEL_PROTOCOL_BUDGET_EXHAUSTED)');

@@ -991,6 +991,15 @@ function renderExecutionExplain(execution: ExecutionRecord | undefined, id: stri
     }
   }
 
+  if (decisions.resumes.length > 0) {
+    lines.push('');
+    lines.push(color.bold('Why it resumed'));
+    for (const r of decisions.resumes) {
+      lines.push(`  attempt ${r.attempt ?? '?'} continued this execution at revision ${r.workspaceRevision ?? '?'}`);
+      for (const reason of r.reasons) lines.push(color.gray(`    ${reason}`));
+    }
+  }
+
   if (decisions.escalations.length > 0) {
     lines.push('');
     lines.push(color.bold('Why the model changed'));
