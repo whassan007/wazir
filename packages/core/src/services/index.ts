@@ -144,4 +144,6 @@ export {
 } from './verificationPlanning.js';
 export type { ChangeImpactAnalyzerOptions } from './verificationPlanning.js';
 export { TelemetryCollector } from './telemetryService.js';
-
+export { TaskCapabilityClassifier } from './taskCapabilityClassifier.js';
+export { ModelIntelligenceService } from './modelIntelligenceService.js';
+export type { ModelIntelligenceServiceOptions } from './modelIntelligenceService.js';

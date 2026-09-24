@@ -23,6 +23,11 @@ import type {
   VerificationRequirements,
   SteeringParams,
   SteeringResult,
+  AdaptiveSearchConfig,
+  AdaptiveSearchTelemetry,
+  CandidatePairDiversity,
+  CheckRunRecord,
+  SearchBudget,
 } from '../types/index.js';
 import type { CheckpointService } from './checkpointService.js';
 import type { WorktreeManager } from './worktreeManager.js';
@@ -31,6 +36,7 @@ import type { VerificationEngine } from './verificationEngine.js';
 import type { ProvenanceManager } from './provenanceManager.js';
 import type { MemoryService } from '@wazir/memory';
 import type { ArtifactIntelligenceService } from './artifactIntelligenceService.js';
+import type { ModelRegistry } from './modelRegistry.js';
 
 export interface EvaluationServiceInterface {
   evaluate: (record: ExecutionRecord, options?: Record<string, unknown>) => EvaluationScoreReport;
@@ -56,6 +62,7 @@ export interface SolutionSearchServiceOptions {
   provenanceManager?: ProvenanceManager;
   memoryService?: MemoryService;
   artifactIntelligenceService?: ArtifactIntelligenceService;
+  modelRegistry?: ModelRegistry;
   defaultProjectRoot?: string;
 }
 
@@ -79,6 +86,7 @@ export class SolutionSearchService {
   private readonly provenanceManager?: ProvenanceManager;
   private readonly memoryService?: MemoryService;
   private readonly artifactIntelligenceService?: ArtifactIntelligenceService;
+  private readonly modelRegistry?: ModelRegistry;
   private readonly defaultProjectRoot: string;
 
   private readonly activeSearches = new Map<string, ActiveSearchHandle>();
@@ -94,6 +102,7 @@ export class SolutionSearchService {
     this.provenanceManager = options.provenanceManager;
     this.memoryService = options.memoryService;
     this.artifactIntelligenceService = options.artifactIntelligenceService;
+    this.modelRegistry = options.modelRegistry;
     this.defaultProjectRoot = options.defaultProjectRoot ?? process.cwd();
   }
 
@@ -195,7 +204,10 @@ export class SolutionSearchService {
     const searchBudget = request.searchBudget ?? {};
 
     // Helper to run one candidate
-    const executeCandidate = async (descriptor: CandidateDescriptor): Promise<CandidateResult> => {
+    const executeCandidate = async (
+      descriptor: CandidateDescriptor,
+      bonusBudget?: { tokens?: number; turns?: number },
+    ): Promise<CandidateResult> => {
       // Check search-level cancellation or budget
       if (searchHandle.cancelled) {
         return {
@@ -402,21 +414,307 @@ export class SolutionSearchService {
         startedAt: candidateStartedAt,
         completedAt: candidateCompletedAt,
         durationMs,
+        reallocatedBudget: bonusBudget,
       };
     };
 
-    // Execute in batches according to maxParallel
-    const remainingDescriptors = [...descriptors];
-    while (remainingDescriptors.length > 0 && !searchHandle.cancelled && !budgetExhausted) {
-      const batch = remainingDescriptors.splice(0, maxParallel);
-      const batchResults = await Promise.all(batch.map((desc) => executeCandidate(desc)));
-      candidates.push(...batchResults);
+    const isAdaptive = Boolean(request.adaptive?.enabled);
+    const adaptiveConfig = request.adaptive;
+    const initialCount = isAdaptive
+      ? (adaptiveConfig?.initialCandidates ?? Math.min(request.candidates, 2))
+      : request.candidates;
+    const maxCandidates = isAdaptive
+      ? (adaptiveConfig?.maxCandidates ?? Math.max(request.candidates, initialCount))
+      : request.candidates;
 
-      // Check early stopping policy if sufficient candidate is found
-      if (request.selectionPolicy?.earlyStopOnSufficient) {
-        const sufficient = candidates.find((c) => c.evaluation?.qualifies);
-        if (sufficient) {
-          break;
+    const candidateQueue: CandidateDescriptor[] = descriptors.slice(0, initialCount);
+
+    const telemetry: AdaptiveSearchTelemetry = {
+      initialCandidatesCount: candidateQueue.length,
+      spawnedCandidatesCount: 0,
+      prunedCandidatesCount: 0,
+      escalatedCandidatesCount: 0,
+      reallocatedBudgetsCount: 0,
+      diversityScores: [],
+      pruningReasons: [],
+      escalationEvents: [],
+    };
+
+    let reallocatedPool = { tokens: 0, turns: 0 };
+    const failureCountByModel = new Map<string, number>();
+
+    // Execute candidates via adaptive controller loop
+    while (candidateQueue.length > 0 && !searchHandle.cancelled && !budgetExhausted) {
+      const batch = candidateQueue.splice(0, maxParallel);
+      const bonusForBatch = (isAdaptive && adaptiveConfig?.budgetReallocation?.bonusBudgetForPromisingCandidates && reallocatedPool.tokens > 0)
+        ? { tokens: Math.floor(reallocatedPool.tokens / batch.length), turns: Math.floor(reallocatedPool.turns / batch.length) }
+        : undefined;
+
+      const batchResults = await Promise.all(batch.map((desc) => executeCandidate(desc, bonusForBatch)));
+
+      for (const result of batchResults) {
+        candidates.push(result);
+
+        if (!isAdaptive) {
+          continue;
+        }
+
+        // 1. Evaluate early pruning
+        if (adaptiveConfig?.pruning?.enabled !== false) {
+          const pruneEval = this.evaluatePruning(
+            result.descriptor,
+            result.executionRecord,
+            result.evidence,
+            result.checks,
+            searchBudget,
+            adaptiveConfig,
+          );
+
+          if (pruneEval.shouldPrune) {
+            result.status = 'pruned';
+            result.isPruned = true;
+            result.prunedReason = pruneEval.reason;
+            telemetry.prunedCandidatesCount++;
+            telemetry.pruningReasons.push({
+              candidateId: result.candidateId,
+              hard: pruneEval.isHard,
+              reason: pruneEval.reason,
+            });
+
+            this.emitEvent({
+              type: 'candidate.pruned',
+              searchId,
+              candidateId: result.candidateId,
+              executionId: result.executionRecord?.execution.id ?? '',
+              checkpointId: checkpoint.id,
+              timestamp: new Date(),
+              data: { isHard: pruneEval.isHard, reason: pruneEval.reason },
+            });
+
+            // Reallocate unused candidate budget
+            if (adaptiveConfig?.budgetReallocation?.reallocateUnusedBudget !== false) {
+              const maxTok = request.candidateBudget?.maxTokens ?? searchBudget.maxCandidateTokens ?? 25000;
+              const usedTok =
+                (result.executionRecord?.usage?.total ??
+                  ((result.executionRecord?.usage?.input ?? 0) + (result.executionRecord?.usage?.output ?? 0))) ||
+                ((result.executionRecord as any)?.metrics?.tokensUsed ?? 0);
+              const savedTok = Math.max(0, maxTok - usedTok);
+              const maxTurn = request.candidateBudget?.maxTurns ?? searchBudget.maxCandidateTurns ?? 10;
+              const usedTurn =
+                result.executionRecord?.events?.filter((e) => e.type === 'turn.completed').length ||
+                ((result.executionRecord as any)?.metrics?.turns ?? 1);
+              const savedTurn = Math.max(0, maxTurn - usedTurn);
+
+              reallocatedPool.tokens += savedTok;
+              reallocatedPool.turns += savedTurn;
+              telemetry.reallocatedBudgetsCount++;
+
+              this.emitEvent({
+                type: 'budget.reallocated',
+                searchId,
+                candidateId: result.candidateId,
+                executionId: result.executionRecord?.execution.id ?? '',
+                checkpointId: checkpoint.id,
+                timestamp: new Date(),
+                data: {
+                  reallocatedFromCandidate: result.candidateId,
+                  tokensReallocated: savedTok,
+                  turnsReallocated: savedTurn,
+                  totalPool: { ...reallocatedPool },
+                },
+              });
+            }
+          }
+        }
+
+        // 2. Evaluate model escalation
+        if (adaptiveConfig?.escalation?.enabled !== false && !result.isPruned) {
+          const modelKey = result.descriptor.modelId ?? 'default';
+          const failed = result.status === 'failed' || (result.evaluation && !result.evaluation.qualifies);
+          if (failed) {
+            const currentFailures = (failureCountByModel.get(modelKey) ?? 0) + 1;
+            failureCountByModel.set(modelKey, currentFailures);
+
+            const escalationEval = this.determineEscalation(
+              result.descriptor,
+              result.executionRecord,
+              currentFailures,
+              adaptiveConfig,
+            );
+
+            if (escalationEval.shouldEscalate && escalationEval.toModel) {
+              result.isEscalated = true;
+              const escEntry = {
+                fromModel: result.descriptor.modelId,
+                toModel: escalationEval.toModel,
+                at: new Date(),
+                reason: escalationEval.reason ?? 'Escalated on failure',
+              };
+              result.escalationHistory = [escEntry];
+              telemetry.escalatedCandidatesCount++;
+              telemetry.escalationEvents.push({
+                candidateId: result.candidateId,
+                fromModel: result.descriptor.modelId,
+                toModel: escalationEval.toModel,
+                reason: escEntry.reason,
+              });
+
+              this.emitEvent({
+                type: 'candidate.escalated',
+                searchId,
+                candidateId: result.candidateId,
+                executionId: result.executionRecord?.execution.id ?? '',
+                checkpointId: checkpoint.id,
+                model: escalationEval.toModel,
+                timestamp: new Date(),
+                data: escEntry,
+              });
+
+              // If pool has room, spawn an escalated candidate to execute with the stronger model!
+              if (candidates.length + candidateQueue.length < maxCandidates) {
+                const escalatedCandidate: CandidateDescriptor = {
+                  ...result.descriptor,
+                  id: `cand-${result.candidateId.replace('cand-', '')}-esc-${randomUUID().slice(0, 4)}`,
+                  name: `${result.descriptor.name} (Escalated to ${escalationEval.toModel})`,
+                  modelId: escalationEval.toModel,
+                  promptModifier: `${result.descriptor.promptModifier ?? ''} [Escalated Reasoning Mode: focus on rigorous correctness]`,
+                };
+                candidateQueue.push(escalatedCandidate);
+                telemetry.spawnedCandidatesCount++;
+
+                this.emitEvent({
+                  type: 'candidate.spawned',
+                  searchId,
+                  candidateId: escalatedCandidate.id,
+                  executionId: parentExecutionId,
+                  checkpointId: checkpoint.id,
+                  model: escalatedCandidate.modelId,
+                  timestamp: new Date(),
+                  data: { reason: 'model_escalation', originalCandidateId: result.candidateId },
+                });
+              }
+            }
+          }
+        }
+
+        // 3. Measure Diversity
+        if (adaptiveConfig?.diversity?.enabled !== false && candidates.length >= 2) {
+          const latest = result;
+          for (let i = 0; i < candidates.length - 1; i++) {
+            const pairDiv = this.calculatePairwiseDiversity(candidates[i], latest);
+            telemetry.diversityScores.push(pairDiv);
+          }
+          const sumDiv = telemetry.diversityScores.reduce((acc, p) => acc + p.diversity, 0);
+          telemetry.meanDiversityScore = Number((sumDiv / telemetry.diversityScores.length).toFixed(4));
+
+          this.emitEvent({
+            type: 'diversity.measured',
+            searchId,
+            executionId: parentExecutionId,
+            checkpointId: checkpoint.id,
+            timestamp: new Date(),
+            data: {
+              meanDiversity: telemetry.meanDiversityScore,
+              pairCount: telemetry.diversityScores.length,
+            },
+          });
+        }
+
+        // 4. Adaptive Spawning if pool has capacity
+        if (candidates.length + candidateQueue.length < maxCandidates) {
+          const minDiversity = adaptiveConfig?.diversity?.minDiversityScore ?? 0.35;
+          const diversityTooLow = telemetry.meanDiversityScore !== undefined && telemetry.meanDiversityScore < minDiversity;
+          const hasImpossible = candidates.some(
+            (c) => c.prunedReason?.toLowerCase().includes('impossible') || c.prunedReason?.toLowerCase().includes('corrupted workspace'),
+          );
+          const replacementNeededForPruned = result.isPruned && !hasImpossible;
+
+          if (!hasImpossible && (diversityTooLow || replacementNeededForPruned)) {
+            const spawnDesc = this.generateAdaptiveSpawnDescriptor(
+              request,
+              checkpoint,
+              candidates,
+              candidates.length + candidateQueue.length,
+            );
+            candidateQueue.push(spawnDesc);
+            telemetry.spawnedCandidatesCount++;
+
+            this.emitEvent({
+              type: 'candidate.spawned',
+              searchId,
+              candidateId: spawnDesc.id,
+              executionId: parentExecutionId,
+              checkpointId: checkpoint.id,
+              model: spawnDesc.modelId,
+              timestamp: new Date(),
+              data: {
+                reason: replacementNeededForPruned ? 'replacement_for_pruned' : 'diversity_enrichment',
+                meanDiversity: telemetry.meanDiversityScore,
+              },
+            });
+          }
+        }
+      }
+
+      // Check Stopping Criteria after batch
+      if (!isAdaptive) {
+        if (request.selectionPolicy?.earlyStopOnSufficient) {
+          const sufficient = candidates.find((c) => c.evaluation?.qualifies);
+          if (sufficient) break;
+        }
+      } else {
+        const stopCriteria = adaptiveConfig?.stoppingCriteria ?? {};
+
+        // 1. Sufficient policy satisfied
+        if (stopCriteria.stopOnSufficient !== false) {
+          const qualifying = candidates.find((c) => !c.isPruned && c.evaluation?.qualifies);
+          if (qualifying) {
+            telemetry.stopConditionTriggered = 'sufficient_solution_found';
+            this.emitEvent({
+              type: 'solution_search.stopped',
+              searchId,
+              executionId: parentExecutionId,
+              checkpointId: checkpoint.id,
+              timestamp: new Date(),
+              data: { reason: telemetry.stopConditionTriggered, candidateId: qualifying.candidateId },
+            });
+            break;
+          }
+        }
+
+        // 2. All candidates failed / impossible
+        if (stopCriteria.stopOnAllFailedImpossible !== false && candidateQueue.length === 0) {
+          const allPrunedOrFailed = candidates.every((c) => c.isPruned || c.status === 'failed' || (c.evaluation && !c.evaluation.qualifies));
+          const allImpossible = candidates.length > 0 && candidates.every((c) => c.prunedReason?.toLowerCase().includes('impossible'));
+          if (allPrunedOrFailed && allImpossible) {
+            telemetry.stopConditionTriggered = 'all_candidates_impossible';
+            this.emitEvent({
+              type: 'solution_search.stopped',
+              searchId,
+              executionId: parentExecutionId,
+              checkpointId: checkpoint.id,
+              timestamp: new Date(),
+              data: { reason: telemetry.stopConditionTriggered },
+            });
+            break;
+          }
+        }
+
+        // 3. Cannot materially improve
+        if (stopCriteria.stopWhenCannotMateriallyImprove) {
+          const qualifying = candidates.filter((c) => !c.isPruned && c.evaluation?.qualifies);
+          if (this.cannotMateriallyImprove(qualifying)) {
+            telemetry.stopConditionTriggered = 'cannot_materially_improve';
+            this.emitEvent({
+              type: 'solution_search.stopped',
+              searchId,
+              executionId: parentExecutionId,
+              checkpointId: checkpoint.id,
+              timestamp: new Date(),
+              data: { reason: telemetry.stopConditionTriggered },
+            });
+            break;
+          }
         }
       }
     }
@@ -430,12 +728,12 @@ export class SolutionSearchService {
       timestamp: new Date(),
     });
 
-    const qualifyingCandidates = candidates.filter((c) => c.evaluation?.qualifies === true);
+    const qualifyingCandidates = candidates.filter((c) => !c.isPruned && c.evaluation?.qualifies === true);
     const disqualifiedCandidates = candidates
-      .filter((c) => !c.evaluation?.qualifies)
+      .filter((c) => c.isPruned || !c.evaluation?.qualifies)
       .map((c) => ({
         candidateId: c.candidateId,
-        reasons: c.evaluation?.disqualificationReasons ?? [c.failureReason ?? 'Candidate failed execution'],
+        reasons: c.prunedReason ? [c.prunedReason] : (c.evaluation?.disqualificationReasons ?? [c.failureReason ?? 'Candidate failed execution']),
       }));
 
     const paretoFrontier = this.computeParetoFrontier(qualifyingCandidates);
@@ -546,13 +844,28 @@ export class SolutionSearchService {
       searchStatus = 'completed_no_qualifying';
     }
 
+    if (isAdaptive) {
+      const fixedEquivalentTokens = (searchBudget.maxCandidateTokens ?? 25000) * maxCandidates;
+      const tokenSavingsRatio = fixedEquivalentTokens > 0
+        ? Math.max(0, (fixedEquivalentTokens - totalTokens) / fixedEquivalentTokens)
+        : 0;
+      const candidateSavingsRatio = maxCandidates > 0
+        ? Math.max(0, (maxCandidates - candidates.length) / maxCandidates)
+        : 0;
+      telemetry.efficiency = {
+        tokenSavingsRatio: Number(tokenSavingsRatio.toFixed(4)),
+        candidateSavingsRatio: Number(candidateSavingsRatio.toFixed(4)),
+        wallTimeSavingsRatio: 0,
+      };
+    }
+
     const finalResult: SolutionSearchResult = {
       searchId,
       parentExecutionId,
       checkpointId: checkpoint.id,
       status: searchStatus,
       strategy: request.strategy,
-      totalCandidates: descriptors.length,
+      totalCandidates: candidates.length,
       candidates,
       qualifyingCandidates,
       disqualifiedCandidates,
@@ -566,6 +879,7 @@ export class SolutionSearchService {
       wallTimeMs,
       startedAt: new Date(startTime),
       completedAt: new Date(),
+      adaptiveTelemetry: isAdaptive ? telemetry : undefined,
     };
 
     this.emitEvent({
@@ -1134,6 +1448,294 @@ export class SolutionSearchService {
     }
 
     return descriptors;
+  }
+
+  // --- Adaptive Search Controller Helpers ---
+
+  private evaluatePruning(
+    descriptor: CandidateDescriptor,
+    executionRecord: ExecutionRecord | undefined,
+    evidence: VerificationEvidence[],
+    checks: CheckRunRecord[],
+    searchBudget: SearchBudget,
+    adaptiveConfig?: AdaptiveSearchConfig,
+  ): { shouldPrune: boolean; isHard: boolean; reason: string } {
+    const pruningConfig = adaptiveConfig?.pruning ?? {};
+
+    // 1. Unrecoverable build failure (Hard prune)
+    const errText = [
+      (executionRecord?.execution as any)?.error,
+      (executionRecord?.execution as any)?.failureReason,
+      ...(executionRecord?.errors ?? []),
+      ...(executionRecord?.events?.map((e) => JSON.stringify(e)) ?? []),
+    ].filter(Boolean).join(' ');
+
+    const hasUnrecoverableBuild =
+      errText.includes('UNRECOVERABLE_BUILD') ||
+      errText.toLowerCase().includes('unrecoverable build failure') ||
+      errText.toLowerCase().includes('syntax error in generated code') ||
+      checks.some((c) => c.name === 'build' && !c.ok && (c.output.includes('UNRECOVERABLE_BUILD') || c.output.toLowerCase().includes('syntax error')));
+
+    if (pruningConfig.hardPruneOnUnrecoverableBuild !== false && hasUnrecoverableBuild) {
+      return {
+        shouldPrune: true,
+        isHard: true,
+        reason: 'Hard-pruned: unrecoverable build failure detected',
+      };
+    }
+
+    // 2. Protected oracle failure (Hard prune)
+    const protectedFailure =
+      checks.some((c) => (c as any).protected && !(c as any).ok) ||
+      (descriptor as any)?.checks?.some((c: any) => c.protected && c.status === 'failed') ||
+      errText.includes('PROTECTED_ORACLE_VIOLATION') ||
+      evidence.some((e) => (e as any).details?.protectedOracleViolation === true);
+
+    if (pruningConfig.hardPruneOnProtectedOracleFailure !== false && protectedFailure) {
+      return {
+        shouldPrune: true,
+        isHard: true,
+        reason: 'Hard-pruned: protected verification oracle violated',
+      };
+    }
+
+    // 3. Invalid workspace (Hard prune)
+    if (errText.includes('INVALID_WORKSPACE') || errText.toLowerCase().includes('corrupted workspace')) {
+      return {
+        shouldPrune: true,
+        isHard: true,
+        reason: 'Hard-pruned: invalid or corrupted workspace state',
+      };
+    }
+
+    // 4. Impossible acceptance criterion (Hard prune)
+    if (errText.includes('IMPOSSIBLE_ACCEPTANCE_CRITERION')) {
+      return {
+        shouldPrune: true,
+        isHard: true,
+        reason: 'Hard-pruned: impossible acceptance criterion detected',
+      };
+    }
+
+    // 5. Repeated deterministic failure (Hard prune)
+    if (
+      pruningConfig.pruneOnRepeatedDeterministicFailure !== false &&
+      (errText.includes('DETERMINISTIC_REPEATED_FAILURE') || errText.includes('REPEATED_DETERMINISTIC_FAILURE'))
+    ) {
+      return {
+        shouldPrune: true,
+        isHard: true,
+        reason: 'Hard-pruned: repeated deterministic failure across repair cycles',
+      };
+    }
+
+    // 6. Soft pruning (Conservative)
+    const repairCycles =
+      (executionRecord as any)?.repairCycles ??
+      (executionRecord as any)?.metrics?.repairCycles ??
+      (executionRecord?.events?.filter((e) => e.type.includes('repair')).length ?? 0);
+    const maxRepairs = pruningConfig.maxRepairCyclesBeforePrune ?? 3;
+    const passingChecks = checks.filter((c) => c.ok || (c as any).status === 'passed').length;
+
+    if (repairCycles >= maxRepairs && passingChecks === 0 && checks.length > 0) {
+      return {
+        shouldPrune: true,
+        isHard: false,
+        reason: `Soft-pruned: exhausted ${repairCycles} repair cycles without any passing verification checks`,
+      };
+    }
+
+    const tokensUsed =
+      (executionRecord?.usage?.total ?? ((executionRecord?.usage?.input ?? 0) + (executionRecord?.usage?.output ?? 0))) ||
+      ((executionRecord as any)?.metrics?.tokensUsed ?? 0);
+    const maxTokens = pruningConfig.maxTokenBurnBeforePrune ?? (searchBudget.maxCandidateTokens ?? 50000);
+    if (tokensUsed >= maxTokens && passingChecks === 0 && checks.length > 0) {
+      return {
+        shouldPrune: true,
+        isHard: false,
+        reason: `Soft-pruned: burned ${tokensUsed} tokens without progress on verification checks`,
+      };
+    }
+
+    return { shouldPrune: false, isHard: false, reason: '' };
+  }
+
+  private determineEscalation(
+    descriptor: CandidateDescriptor,
+    executionRecord: ExecutionRecord | undefined,
+    failureCount: number,
+    adaptiveConfig?: AdaptiveSearchConfig,
+  ): { shouldEscalate: boolean; toModel?: string; reason?: string } {
+    if (adaptiveConfig?.escalation?.enabled === false) {
+      return { shouldEscalate: false };
+    }
+
+    const triggerCount = adaptiveConfig?.escalation?.triggerOnFailureCount ?? 2;
+    const errText = [
+      (executionRecord?.execution as any)?.error,
+      (executionRecord?.execution as any)?.failureReason,
+      ...(executionRecord?.errors ?? []),
+    ].filter(Boolean).join(' ');
+
+    const isComplexFailure =
+      failureCount >= triggerCount ||
+      errText.includes('REASONING_COMPLEXITY_EXCEEDED') ||
+      errText.includes('ESCALATE_MODEL');
+
+    if (!isComplexFailure) {
+      return { shouldEscalate: false };
+    }
+
+    // 1. If explicit tiers configured
+    const tiers = adaptiveConfig?.escalation?.candidateModelTiers;
+    if (tiers && tiers.length > 0) {
+      const currentIndex = descriptor.modelId ? tiers.indexOf(descriptor.modelId) : -1;
+      if (currentIndex < tiers.length - 1) {
+        const nextModel = tiers[currentIndex + 1];
+        return {
+          shouldEscalate: true,
+          toModel: nextModel,
+          reason: `Escalated from tier ${descriptor.modelId ?? 'default'} to stronger model ${nextModel}`,
+        };
+      }
+    }
+
+    // 2. Query ModelRegistry if available
+    if (this.modelRegistry) {
+      const candidates = this.modelRegistry.listReady().length > 0
+        ? this.modelRegistry.listReady()
+        : this.modelRegistry.list();
+
+      const strongerModel = candidates.find(
+        (m) =>
+          m.id !== descriptor.modelId &&
+          ((Array.isArray(m.capabilities) ? (m.capabilities as string[]).includes('reasoning') : Boolean((m.capabilities as any)?.reasoning)) || (Boolean(m.performance) && Object.keys(m.performance!).length > 0)),
+      );
+
+      if (strongerModel) {
+        return {
+          shouldEscalate: true,
+          toModel: strongerModel.id,
+          reason: `Escalated using ModelRegistry empirical profile to ${strongerModel.id}`,
+        };
+      }
+    }
+
+    // 3. Fallback to tiered naming convention if neither provided
+    const defaultStronger = descriptor.modelId ? `${descriptor.modelId}-reasoning` : 'reasoning-tier-model';
+    return {
+      shouldEscalate: true,
+      toModel: defaultStronger,
+      reason: `Escalated to stronger reasoning tier: ${defaultStronger}`,
+    };
+  }
+
+  private calculatePairwiseDiversity(
+    candidateA: CandidateResult,
+    candidateB: CandidateResult,
+  ): CandidatePairDiversity {
+    const getFiles = (c: CandidateResult): Set<string> => {
+      const files = new Set<string>();
+      for (const ev of c.evidence) {
+        if (ev.artifacts) {
+          for (const a of ev.artifacts) files.add(a);
+        }
+        if ((ev as any).details?.filesModified && Array.isArray((ev as any).details.filesModified)) {
+          for (const f of (ev as any).details.filesModified) files.add(f);
+        }
+      }
+      return files;
+    };
+
+    const filesA = getFiles(candidateA);
+    const filesB = getFiles(candidateB);
+
+    let jaccardSimilarity = 0;
+    const union = new Set([...filesA, ...filesB]);
+    const intersection = [...filesA].filter((f) => filesB.has(f));
+
+    if (union.size > 0) {
+      jaccardSimilarity = intersection.length / union.size;
+    }
+
+    // Approach / model / agent similarity
+    let approachScore = 0;
+    if (candidateA.descriptor.strategyKind === candidateB.descriptor.strategyKind) approachScore += 0.4;
+    if (candidateA.descriptor.modelId === candidateB.descriptor.modelId) approachScore += 0.3;
+    if (candidateA.descriptor.agentId === candidateB.descriptor.agentId) approachScore += 0.3;
+
+    const combinedSimilarity = union.size > 0
+      ? (0.6 * jaccardSimilarity + 0.4 * approachScore)
+      : approachScore;
+
+    const diversity = Math.max(0, Math.min(1, 1 - combinedSimilarity));
+
+    return {
+      candidateA: candidateA.candidateId,
+      candidateB: candidateB.candidateId,
+      similarity: Number(combinedSimilarity.toFixed(4)),
+      diversity: Number(diversity.toFixed(4)),
+      sharedFiles: intersection,
+    };
+  }
+
+  private generateAdaptiveSpawnDescriptor(
+    request: SolutionSearchRequest,
+    checkpoint: ExecutionCheckpoint,
+    existingCandidates: CandidateResult[],
+    index: number,
+  ): CandidateDescriptor {
+    const candidateId = `cand-spawn-${index + 1}-${randomUUID().slice(0, 6)}`;
+    const usedModels = new Set(existingCandidates.map((c) => c.descriptor.modelId).filter(Boolean));
+    const usedAgents = new Set(existingCandidates.map((c) => c.descriptor.agentId).filter(Boolean));
+
+    const orthogonalStrategies = [
+      'minimal_diff_boundary_fix',
+      'architectural_decomposition',
+      'isolated_adapter_refactor',
+      'defensive_fallback_strategy',
+    ];
+    const strategyName = orthogonalStrategies[index % orthogonalStrategies.length];
+
+    let candidateModel = request.adaptive?.escalation?.candidateModelTiers?.[0];
+    if (this.modelRegistry) {
+      const available = this.modelRegistry.listReady().length > 0
+        ? this.modelRegistry.listReady()
+        : this.modelRegistry.list();
+      const unused = available.find((m) => !usedModels.has(m.id));
+      if (unused) candidateModel = unused.id;
+    }
+
+    return {
+      id: candidateId,
+      name: `Spawned Candidate ${index + 1} (${strategyName})`,
+      strategyKind: request.strategy,
+      modelId: candidateModel,
+      agentId: usedAgents.has('wazir-repair') ? 'wazir-coding' : 'wazir-repair',
+      reasoningStrategy: `Adaptive spawn for diversity and recovery: ${strategyName}`,
+      implementationApproach: `Orthogonal approach: ${strategyName}`,
+      promptModifier: `Approach focused on: ${strategyName}. Ensure strict compliance with all verification checks.`,
+      temperature: 0.35 + (index * 0.1),
+    };
+  }
+
+  private cannotMateriallyImprove(qualifyingCandidates: CandidateResult[]): boolean {
+    if (qualifyingCandidates.length === 0) return false;
+
+    for (const c of qualifyingCandidates) {
+      const repairs =
+        (c.executionRecord as any)?.repairCycles ??
+        (c.executionRecord as any)?.metrics?.repairCycles ??
+        (c.evaluation?.execution?.repairCycles ?? 0);
+      const filesCount = c.evaluation?.engineering?.filesChanged?.length ?? 1;
+      const allChecksPass = c.checks.length > 0 && c.checks.every((chk) => chk.ok || (chk as any).status === 'passed');
+
+      if (repairs === 0 && filesCount <= 1 && allChecksPass) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   // --- Human Steering & Control ---

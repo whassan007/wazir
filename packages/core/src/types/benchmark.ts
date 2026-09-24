@@ -105,6 +105,8 @@ export interface BenchmarkExecutionContext {
   workspaceRoot: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
+  config?: import('./metaOptimizer.js').OptimizableConfig;
+  activeMutations?: string[];
 }
 
 export interface BenchmarkRunner {
@@ -138,7 +140,11 @@ export interface BenchmarkSuiteResult {
     totalCostUsd: number;
     averageRepairCycles: number;
   };
-  summary: string;
+  passRate?: number;
+  averageDurationMs?: number;
+  totalDurationMs?: number;
+  executedAt?: Date;
+  summary?: string;
 }
 
 export interface ComparativeBenchmarkResult {

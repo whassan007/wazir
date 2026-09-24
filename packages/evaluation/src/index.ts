@@ -14,6 +14,11 @@ export * from './continuousVerification.js';
 export * from './evaluationService.js';
 export * from './benchmarkService.js';
 export * from './metaOptimizerService.js';
+export * from './canaryService.js';
+export * from './causalAttributionService.js';
+export * from './multiObjectiveOptimizer.js';
+export * from './regressionGuard.js';
+export * from './distributedBenchmarkFabric.js';
 
 export interface EvaluationOptions {
   /** If set, the task is only successful when each of these files changed. */

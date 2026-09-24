@@ -29,6 +29,25 @@ import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } fro
 import { resolveReference, type ResolvedReference } from '../references.js';
 import { tokensPerSecond } from '@wazir/shared';
 import { parseAction } from '@wazir/agents';
+import {
+  renderImprovementView,
+  renderSearchView,
+  renderContextView,
+  renderFleetView,
+  renderModelIntelligenceView,
+  renderEvidenceModal,
+  type ImprovementExperimentItem,
+  type ImprovementViewData,
+  type SearchCandidateItem,
+  type SearchViewData,
+  type ContextSampleItem,
+  type ContextViewData,
+  type FleetWorkerItem,
+  type FleetViewData,
+  type ModelProfileItem,
+  type ModelIntelligenceViewData,
+  type EvidenceModalData,
+} from './observabilityViews.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -122,7 +141,7 @@ function diffLines(oldText: string, newText: string): DiffLine[] {
   return result;
 }
 
-export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'search' | 'help';
+export type TuiView = 'fleet' | 'tail' | 'approval' | 'worktrees' | 'search' | 'help' | 'improvement' | 'context' | 'models';
 
 export type NavCategory = 'MCP' | 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
 
@@ -449,6 +468,27 @@ export class FleetTui {
    * another task:failed event for the same task ID. Cleared when a new job starts.
    */
   private readonly dismissedErrorTaskIds = new Set<string>();
+
+  // Observability & Intelligence Views State
+  private selectedExperimentIndex = 0;
+  private selectedSearchCandidateIndex = 0;
+  private selectedContextSampleIndex = 0;
+  private selectedWorkerIndex = 0;
+  private selectedModelProfileIndex = 0;
+
+  // Ring buffers for bounded telemetry
+  private contextSamples: ContextSampleItem[] = [];
+  private static readonly MAX_CONTEXT_SAMPLES = 100;
+  private static readonly MAX_EVENT_HISTORY = 100;
+
+  // Evidence Modal state
+  private evidenceModalOpen = false;
+  private evidenceModalData?: EvidenceModalData;
+  private evidenceScrollOffset = 0;
+
+  // Subscriptions
+  private unsubscribeSolutionSearch?: () => void;
+  private unsubscribeOptimizer?: () => void;
 
   // Model Readiness & Startup Selector state
   private startupSelector?: StartupSelectorState;
@@ -870,6 +910,31 @@ export class FleetTui {
       await this.handleStartupModelReadiness();
     }
 
+    // Subscribe to solution search and optimizer event streams
+    if (this.engine.solutionSearch && typeof this.engine.solutionSearch.onEvent === 'function') {
+      this.unsubscribeSolutionSearch = this.engine.solutionSearch.onEvent((_event) => {
+        this.draw();
+      });
+    }
+
+    if (this.engine.optimizer && typeof this.engine.optimizer.onEvent === 'function') {
+      this.unsubscribeOptimizer = this.engine.optimizer.onEvent((_event) => {
+        this.draw();
+      });
+    }
+
+    this.draw();
+  }
+
+  /**
+   * Bounded context telemetry recorder (caps at MAX_CONTEXT_SAMPLES).
+   */
+  recordContextSample(sample: ContextSampleItem): void {
+    this.contextSamples.push(sample);
+    if (this.contextSamples.length > FleetTui.MAX_CONTEXT_SAMPLES) {
+      this.contextSamples.shift();
+    }
+    this.selectedContextSampleIndex = this.contextSamples.length - 1;
     this.draw();
   }
 
@@ -883,6 +948,8 @@ export class FleetTui {
     if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
     if (this.unsubscribeResize) this.unsubscribeResize();
     if (this.unsubscribeModelLifecycle) this.unsubscribeModelLifecycle();
+    if (this.unsubscribeSolutionSearch) this.unsubscribeSolutionSearch();
+    if (this.unsubscribeOptimizer) this.unsubscribeOptimizer();
     if (this.restoreFatalRejectionHandler) {
       this.restoreFatalRejectionHandler();
       this.restoreFatalRejectionHandler = undefined;

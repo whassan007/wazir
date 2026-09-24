@@ -2248,7 +2248,7 @@ export async function improveInspectCommand(
     `Decision:          ${run.decision === 'QUALIFIED' || run.decision === 'ACCEPTED' ? color.green(run.decision) : color.red(run.decision)}`,
     '',
     color.bold('Mutations Attempted:'),
-    ...run.mutations.map((m) => `  - ${m.type} on '${m.path}': ${JSON.stringify(m.oldValue)} -> ${JSON.stringify(m.newValue)} (${m.rationale})`),
+    ...run.mutations.map((m: any) => `  - ${m.type ?? m.strategy} on '${m.path ?? 'config'}': ${JSON.stringify(m.oldValue)} -> ${JSON.stringify(m.newValue)} (${m.rationale ?? ''})`),
     '',
     color.bold('Comparative Performance:'),
     `  - Baseline Pass: ${(run.comparison.baselinePassRate * 100).toFixed(1)}%`,
@@ -2260,6 +2260,56 @@ export async function improveInspectCommand(
     '',
     color.bold('Reasons & Guard Verdict:'),
     ...run.reasons.map((r) => `  • ${r}`),
+    ...(run.causalAttribution
+      ? [
+          '',
+          color.bold(`Causal Attribution Matrix (Design: ${run.causalAttribution.design}):`),
+          `  Overall Candidate Delta: ${(run.causalAttribution.candidateDelta * 100).toFixed(1)}%`,
+          ...Object.values(run.causalAttribution.attributions).map(
+            (attr) =>
+              `  • ${attr.mutationId} (${attr.target}): ${color.bold(attr.verdict)} [isolated: ${(attr.isolatedDelta * 100).toFixed(1)}%, marginal: ${(attr.marginalDelta * 100).toFixed(1)}%] (confidence: ${(attr.confidence * 100).toFixed(0)}%)`,
+          ),
+          ...(run.causalAttribution.interactions.length > 0
+            ? [
+                color.bold('  Interactions:'),
+                ...run.causalAttribution.interactions.map((i) => `    ⚠ ${i.description}`),
+              ]
+            : []),
+        ]
+      : []),
+    ...(run.workerPlacements && run.workerPlacements.length > 0
+      ? [
+          '',
+          color.bold(`Distributed Worker Placement (${run.workerPlacements.length} fleet nodes):`),
+          table(
+            ['WORKER', 'SHARD', 'TASKS', 'HARDWARE', 'PASS RATE', 'STATUS'],
+            run.workerPlacements.map((p: any) => [
+              p.workerId,
+              p.shardId,
+              `${p.taskCount} tasks`,
+              `${p.hardware.cpu}, ${p.hardware.ramGB}GB`,
+              `${(p.portableMetrics.passRate * 100).toFixed(0)}%`,
+              p.status === 'FAILED' ? color.red(p.status) : color.green(p.status),
+            ]),
+          ),
+        ]
+      : []),
+    ...(run.stratifiedMetrics && Object.keys(run.stratifiedMetrics).length > 0
+      ? [
+          '',
+          color.bold('Stratified Hardware Performance:'),
+          table(
+            ['WORKER', 'BASELINE MS', 'CANDIDATE MS', 'DELTA MS', 'SPEEDUP'],
+            Object.values(run.stratifiedMetrics).map((s: any) => [
+              s.workerId,
+              `${s.hardwareSensitive.baselineDurationMs}ms`,
+              `${s.hardwareSensitive.candidateDurationMs}ms`,
+              `${s.hardwareSensitive.durationDeltaMs}ms`,
+              `${s.hardwareSensitive.speedupFactor}x`,
+            ]),
+          ),
+        ]
+      : []),
     '-------------------------------------------------------',
   ].join('\n');
 }
@@ -2335,7 +2385,7 @@ export async function improveRollbackCommand(
 
 export async function improveRunCommand(
   engine: RookEngine,
-  options?: { level?: string; json?: boolean },
+  options?: { level?: string; json?: boolean; distributed?: boolean },
 ): Promise<string> {
   const optimizer = engine.optimizer;
   if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
@@ -2414,11 +2464,16 @@ export async function improveRunCommand(
       },
     };
 
+    const onlineWorkers = engine.computers.list().filter((c) => c.status === 'online');
+    const isDistributed = Boolean(options?.distributed && onlineWorkers.length >= 2);
+
     evalResults = await optimizer.evaluateCandidates({
       plan,
       candidates,
       runner,
       tasks: tasksToRun,
+      distributed: isDistributed,
+      workers: isDistributed ? onlineWorkers : undefined,
     });
   }
 
@@ -2458,4 +2513,153 @@ export async function improveRunCommand(
     `Explain:       wa improve explain ${plan.experimentId}`,
     '-------------------------------------------------------',
   ].join('\n');
+}
+
+// ======================================================================
+// WAZIR MATURITY LEVEL 3 CANARY PROMOTION CLI COMMANDS
+// ======================================================================
+
+export async function canaryListCommand(
+  engine: RookEngine,
+  options?: { json?: boolean },
+): Promise<string> {
+  const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
+  if (!canaryService) {
+    return color.yellow('CanaryDeploymentService is not configured on this engine.');
+  }
+
+  const deployments = canaryService.listDeployments();
+  if (options?.json) {
+    return JSON.stringify(deployments, null, 2);
+  }
+
+  if (deployments.length === 0) {
+    return 'No active or historical canary deployments found.';
+  }
+
+  const rows = deployments.map((d) => [
+    d.canaryId,
+    d.candidateId,
+    d.domain,
+    `${(d.currentAllocation * 100).toFixed(1)}%`,
+    d.status === 'HEALTHY'
+      ? color.green(d.status)
+      : d.status === 'ROLLED_BACK'
+        ? color.red(d.status)
+        : d.status === 'READY_FOR_PROMOTION'
+          ? color.cyan(d.status)
+          : color.yellow(d.status),
+    String(d.canaryMetrics.totalExecutions),
+    `${(d.canaryMetrics.taskSuccessRate * 100).toFixed(1)}%`,
+    `${(d.canaryMetrics.verificationSuccessRate * 100).toFixed(1)}%`,
+  ]);
+
+  return [
+    color.cyan('WAZIR LEVEL 3 CANARY DEPLOYMENTS'),
+    '',
+    table(
+      ['CANARY ID', 'CANDIDATE', 'DOMAIN', 'TRAFFIC', 'STATUS', 'SAMPLES', 'TASK PASS', 'VERIF PASS'],
+      rows,
+    ),
+  ].join('\n');
+}
+
+export async function canaryInspectCommand(
+  engine: RookEngine,
+  canaryId: string,
+  options?: { json?: boolean },
+): Promise<string> {
+  const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
+  if (!canaryService) {
+    return color.yellow('CanaryDeploymentService is not configured on this engine.');
+  }
+
+  const record = canaryService.getDeployment(canaryId);
+  if (!record) {
+    return color.red(`Canary deployment '${canaryId}' not found.`);
+  }
+
+  if (options?.json) {
+    return JSON.stringify(record, null, 2);
+  }
+
+  const c = record.canaryMetrics;
+  const b = record.baselineMetrics;
+
+  const lines = [
+    color.cyan(`CANARY DEPLOYMENT: ${record.canaryId}`),
+    '======================================================================',
+    `Status:              ${record.status}`,
+    `Domain:              ${record.domain}`,
+    `Candidate ID:        ${record.candidateId}`,
+    `Current Traffic:     ${(record.currentAllocation * 100).toFixed(1)}% (Stage ${record.currentTierIndex + 1}/${record.stagedExpansionTiers.length})`,
+    `Started At:          ${record.startTime.toISOString()}`,
+    `Updated At:          ${record.updatedAt.toISOString()}`,
+    ...(record.completedAt ? [`Completed At:        ${record.completedAt.toISOString()}`] : []),
+    '',
+    'COMPARATIVE ONLINE METRICS (Canary vs Baseline):',
+    '----------------------------------------------------------------------',
+    `Total Executions:    Canary: ${c.totalExecutions.toString().padEnd(6)} | Baseline: ${b.totalExecutions}`,
+    `Task Success Rate:   Canary: ${(c.taskSuccessRate * 100).toFixed(1)}%     | Baseline: ${(b.taskSuccessRate * 100).toFixed(1)}%`,
+    `Verif Success Rate:  Canary: ${(c.verificationSuccessRate * 100).toFixed(1)}%     | Baseline: ${(b.verificationSuccessRate * 100).toFixed(1)}%`,
+    `Tool Failure Rate:   Canary: ${(c.toolFailureRate * 100).toFixed(1)}%     | Baseline: ${(b.toolFailureRate * 100).toFixed(1)}%`,
+    `Repair Cycles:       Canary: ${c.repairCycles.toString().padEnd(6)} | Baseline: ${b.repairCycles}`,
+    `Recovery Failures:   Canary: ${c.recoveryFailures.toString().padEnd(6)} | Baseline: ${b.recoveryFailures}`,
+    `Total Tokens:        Canary: ${c.totalTokens.toString().padEnd(6)} | Baseline: ${b.totalTokens}`,
+    `Wall Time:           Canary: ${c.wallTimeMs}ms  | Baseline: ${b.wallTimeMs}ms`,
+  ];
+
+  if (record.rollbackReason) {
+    lines.push(
+      '',
+      color.red('ROLLBACK TRIGGERED:'),
+      `Metric:              ${record.rollbackReason.metric}`,
+      `Description:         ${record.rollbackReason.description}`,
+      `Delta:               ${record.rollbackReason.delta}`,
+      `Threshold:           ${record.rollbackReason.threshold}`,
+    );
+  }
+
+  if (record.inconclusiveReasons.length > 0) {
+    lines.push(
+      '',
+      color.yellow('INCONCLUSIVE DETERMINATIONS:'),
+      ...record.inconclusiveReasons.map((r) => `  - ${r}`),
+    );
+  }
+
+  lines.push('======================================================================');
+  return lines.join('\n');
+}
+
+export async function canaryRollbackCommand(
+  engine: RookEngine,
+  canaryId: string,
+  options?: { reason?: string; json?: boolean },
+): Promise<string> {
+  const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
+  if (!canaryService) {
+    return color.yellow('CanaryDeploymentService is not configured on this engine.');
+  }
+
+  const record = canaryService.getDeployment(canaryId);
+  if (!record) {
+    return color.red(`Canary deployment '${canaryId}' not found.`);
+  }
+
+  const rolledBack = await canaryService.triggerRollback(canaryId, {
+    metric: 'operator_override',
+    baselineValue: 0,
+    canaryValue: 0,
+    delta: 0,
+    threshold: 0,
+    description: options?.reason ?? 'Operator manual emergency rollback initiated.',
+    timestamp: new Date(),
+  });
+
+  if (options?.json) {
+    return JSON.stringify(rolledBack, null, 2);
+  }
+
+  return color.green(`✓ Canary ${canaryId} successfully rolled back. 100% traffic restored to verified baseline.`);
 }

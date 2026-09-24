@@ -92,6 +92,8 @@ export class BenchmarkService {
       workspaceRoot: customContext?.workspaceRoot ?? tempDir,
       timeoutMs,
       abortSignal: abortController.signal,
+      config: customContext?.config,
+      activeMutations: customContext?.activeMutations,
     };
 
     const startTime = Date.now();
@@ -288,12 +290,19 @@ export class BenchmarkService {
   public async runBenchmarkSuite(
     tasks: BenchmarkTask[],
     runner: BenchmarkRunner,
-    options?: { suiteName?: string },
+    options?: {
+      suiteName?: string;
+      config?: import('@wazir/core').OptimizableConfig;
+      activeMutations?: string[];
+    },
   ): Promise<BenchmarkSuiteResult> {
     const results: BenchmarkRunResult[] = [];
 
     for (const task of tasks) {
-      const res = await this.runTask(task.id, runner);
+      const res = await this.runTask(task.id, runner, {
+        config: options?.config,
+        activeMutations: options?.activeMutations,
+      });
       results.push(res);
     }
 

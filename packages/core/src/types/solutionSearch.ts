@@ -24,6 +24,69 @@ export interface SearchBudget {
   maxTotalTokens?: number;
   maxWallTimeMs?: number;
   maxCandidateRepairCycles?: number;
+  maxCandidateTokens?: number;
+  maxCandidateTurns?: number;
+}
+
+export interface AdaptiveSearchConfig {
+  enabled?: boolean;
+  initialCandidates?: number;
+  maxCandidates?: number;
+  pruning?: {
+    enabled?: boolean;
+    maxRepairCyclesBeforePrune?: number;
+    maxTokenBurnBeforePrune?: number;
+    hardPruneOnUnrecoverableBuild?: boolean;
+    hardPruneOnProtectedOracleFailure?: boolean;
+    pruneOnRepeatedDeterministicFailure?: boolean;
+  };
+  escalation?: {
+    enabled?: boolean;
+    triggerOnFailureCount?: number;
+    candidateModelTiers?: string[];
+  };
+  diversity?: {
+    enabled?: boolean;
+    minDiversityScore?: number;
+    similarityThreshold?: number;
+  };
+  budgetReallocation?: {
+    enabled?: boolean;
+    reallocateUnusedBudget?: boolean;
+    bonusBudgetForPromisingCandidates?: boolean;
+  };
+  stoppingCriteria?: {
+    stopOnSufficient?: boolean;
+    stopOnAllFailedImpossible?: boolean;
+    stopOnBudgetExhausted?: boolean;
+    stopWhenCannotMateriallyImprove?: boolean;
+  };
+}
+
+export interface CandidatePairDiversity {
+  candidateA: string;
+  candidateB: string;
+  similarity: number;
+  diversity: number;
+  sharedFiles: string[];
+}
+
+export interface AdaptiveSearchTelemetry {
+  initialCandidatesCount: number;
+  spawnedCandidatesCount: number;
+  prunedCandidatesCount: number;
+  escalatedCandidatesCount: number;
+  reallocatedBudgetsCount: number;
+  diversityScores: CandidatePairDiversity[];
+  meanDiversityScore?: number;
+  pruningReasons: Array<{ candidateId: string; hard: boolean; reason: string }>;
+  escalationEvents: Array<{ candidateId: string; fromModel?: string; toModel: string; reason: string }>;
+  stopConditionTriggered?: string;
+  efficiency?: {
+    tokenSavingsRatio?: number;
+    candidateSavingsRatio?: number;
+    wallTimeSavingsRatio?: number;
+  };
 }
 
 export type CandidateSecondaryCriterion =
@@ -93,6 +156,7 @@ export interface SolutionSearchRequest {
   customCandidates?: CandidateDescriptor[];
   projectRoot?: string;
   autoPromote?: boolean;
+  adaptive?: AdaptiveSearchConfig;
 }
 
 export interface CandidateEngineeringProperties {
@@ -144,7 +208,9 @@ export type CandidateStatus =
   | 'repairing'
   | 'completed'
   | 'failed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'pruned'
+  | 'escalated';
 
 export interface CandidateResult {
   candidateId: string;
@@ -160,6 +226,11 @@ export interface CandidateResult {
   failureReason?: string;
   failureTail?: string;
   error?: string;
+  prunedReason?: string;
+  isPruned?: boolean;
+  isEscalated?: boolean;
+  escalationHistory?: Array<{ fromModel?: string; toModel: string; at: Date; reason: string }>;
+  reallocatedBudget?: { tokens?: number; turns?: number };
   startedAt?: Date;
   completedAt?: Date;
   durationMs?: number;
@@ -229,6 +300,7 @@ export interface SolutionSearchResult {
   wallTimeMs: number;
   startedAt: Date;
   completedAt?: Date;
+  adaptiveTelemetry?: AdaptiveSearchTelemetry;
 }
 
 export type SolutionSearchEventType =
@@ -243,6 +315,12 @@ export type SolutionSearchEventType =
   | 'candidate.cancelled'
   | 'candidate.completed'
   | 'candidate.failed'
+  | 'candidate.pruned'
+  | 'candidate.escalated'
+  | 'candidate.spawned'
+  | 'budget.reallocated'
+  | 'diversity.measured'
+  | 'solution_search.stopped'
   | 'candidate.verified'
   | 'candidate.evaluated'
   | 'solution_search.frontier_computed'

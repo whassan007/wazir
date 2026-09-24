@@ -5,7 +5,9 @@ import type {
   ImprovementOpportunity,
   OpportunityCategory,
   SelfImprovementDomain,
+  MutationMemoryRecord,
 } from '@wazir/core';
+import type { CausalAttributionService } from './causalAttributionService.js';
 
 export interface OpportunityDetectorOptions {
   minExecutionsThreshold?: number; // Minimum number of executions required to claim repeated pattern (default 3)
@@ -13,6 +15,7 @@ export interface OpportunityDetectorOptions {
   highContextTokensThreshold?: number; // Tokens threshold (default 60_000)
   highToolFailureRateThreshold?: number; // Tool failure percentage threshold (default 0.15)
   highMalformedActionRateThreshold?: number; // Malformed action percentage threshold (default 0.10)
+  causalService?: CausalAttributionService;
 }
 
 export class OpportunityDetector {
@@ -21,6 +24,7 @@ export class OpportunityDetector {
   private readonly highContextTokens: number;
   private readonly highToolFailureRate: number;
   private readonly highMalformedActionRate: number;
+  private causalService?: CausalAttributionService;
 
   constructor(options: OpportunityDetectorOptions = {}) {
     this.minExecutions = options.minExecutionsThreshold ?? 3;
@@ -28,6 +32,41 @@ export class OpportunityDetector {
     this.highContextTokens = options.highContextTokensThreshold ?? 60_000;
     this.highToolFailureRate = options.highToolFailureRateThreshold ?? 0.15;
     this.highMalformedActionRate = options.highMalformedActionRateThreshold ?? 0.10;
+    this.causalService = options.causalService;
+  }
+
+  public setCausalService(causalService: CausalAttributionService): void {
+    this.causalService = causalService;
+  }
+
+  public getCausalService(): CausalAttributionService | undefined {
+    return this.causalService;
+  }
+
+  public getMutationRecords(): MutationMemoryRecord[] {
+    return this.causalService ? this.causalService.listMutationRecords() : [];
+  }
+
+  public getBeneficialMutations(): MutationMemoryRecord[] {
+    return this.getMutationRecords().filter(
+      (r) => r.lastObservedVerdict === 'SUPPORTED_CONTRIBUTOR',
+    );
+  }
+
+  public getHarmfulMutations(): MutationMemoryRecord[] {
+    return this.getMutationRecords().filter(
+      (r) => r.lastObservedVerdict === 'NEGATIVE_CONTRIBUTOR',
+    );
+  }
+
+  public getInteractions(): MutationMemoryRecord[] {
+    return this.getMutationRecords().filter(
+      (r) => r.lastObservedVerdict === 'INTERACTION_DETECTED' || r.interactionPartners.length > 0,
+    );
+  }
+
+  public isKnownHarmful(target: string): boolean {
+    return this.causalService ? this.causalService.isKnownHarmful(target) : false;
   }
 
   /**

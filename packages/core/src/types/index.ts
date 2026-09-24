@@ -43,4 +43,20 @@ export * from './metaOptimizer.js';
 export * from './semanticIndex.js';
 export * from './changeImpact.js';
 export * from './telemetry.js';
+export * from './canary.js';
+export {
+  type ModelCapabilityCategory,
+  MODEL_CAPABILITY_CATEGORIES,
+  type ProgrammingLanguage,
+  type TaskCapabilityClassification,
+  type CategoryMeasurement,
+  type CategoryMetrics,
+  type ConditionalMeasurement,
+  type ModelCapabilityProfile,
+  type ProfileSegmentationKey,
+  type EvaluatedCandidate,
+  type EmpiricalRoutingExplanation,
+  SUPPORTED_LANGUAGES,
+  EXECUTION_PHASES,
+} from './modelIntelligence.js';
 export type { BudgetConsumption } from './governance.js';

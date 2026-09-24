@@ -252,6 +252,72 @@
         53
       ],
       "prerequisiteGateId": "G30"
+    },
+    {
+      "id": "G43",
+      "order": 20,
+      "name": "MultiObjectiveMeta",
+      "title": "G43 Multi-Objective Meta",
+      "description": "Multi-objective empirical meta-optimization: simultaneous optimization across competing dimensions (tokens, wall time, repair cycles) with non-dominated Pareto frontier construction, constraints-first qualification, and tradeoff preservation without scalar score collapse",
+      "testIds": [
+        59
+      ],
+      "prerequisiteGateId": "G31"
+    },
+    {
+      "id": "G46",
+      "order": 21,
+      "name": "CanaryDeployment",
+      "title": "G46 Canary Deployment",
+      "description": "Controlled fractional traffic assignment, concurrent baseline vs candidate comparison, minimum sample enforcement, and healthy recognition without premature promotion",
+      "testIds": [
+        54
+      ],
+      "prerequisiteGateId": "G43"
+    },
+    {
+      "id": "G47",
+      "order": 22,
+      "name": "CanaryRollback",
+      "title": "G47 Canary Rollback",
+      "description": "Immediate automatic rollback on observed protected regression, baseline traffic restoration, evidence preservation, and MemoryService failure recording",
+      "testIds": [
+        55
+      ],
+      "prerequisiteGateId": "G46"
+    },
+    {
+      "id": "G48",
+      "order": 23,
+      "name": "CanaryUncertainty",
+      "title": "G48 Canary Uncertainty",
+      "description": "Empirical uncertainty guard: insufficient samples or confidence bounds yield CANARY_INCONCLUSIVE rather than unjustified promotion",
+      "testIds": [
+        56
+      ],
+      "prerequisiteGateId": "G47"
+    },
+    {
+      "id": "G44",
+      "order": 24,
+      "name": "DistributedMeta",
+      "title": "G44 Distributed Meta",
+      "description": "Distribute baseline and candidate benchmark shards across independent fleet workers, preserving workload equivalence, separating portable from hardware-sensitive metrics, deduplicating retry observations, retaining environmental identities, and feeding aggregate comparative results to RegressionGuard",
+      "testIds": [
+        57
+      ],
+      "prerequisiteGateId": "G48"
+    },
+    {
+      "id": "G45",
+      "order": 25,
+      "name": "DistributedFailure",
+      "title": "G45 Distributed Failure",
+      "description": "Worker crash or disconnection mid-experiment is isolated: no false completion, completed shard evidence preserved, unknown workload safely requeued to surviving workers, duplicate metric accounting prevented, and final experiment decision remains deterministic",
+      "testIds": [
+        58
+      ],
+      "prerequisiteGateId": "G44"
     }
   ],
   "foundationalSequence": [
@@ -2228,6 +2294,235 @@
         "self-improvement",
         "inconclusive",
         "g31",
+        "p0-release-gate"
+      ]
+    },
+    "54": {
+      "id": 54,
+      "gateId": "G46",
+      "priority": "P0",
+      "title": "Controlled Fractional Canary Deployment (CANARY_DEPLOYMENT)",
+      "purpose": "Verify that qualified self-improvement candidates deploy to controlled fractions of traffic with deterministic hashing, concurrent comparative baseline metrics, and recognition of healthy canary without premature full promotion.",
+      "prompt": "Deploy a qualified routing candidate to Level 3 Canary at 10% allocation. Run concurrent executions. Verify deterministic hashing, fractional exposure, separate metrics, minimum sample enforcement, and healthy canary status.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "CHECK_QUALIFIED -> REGISTER_CANARY -> HASH_TRAFFIC -> EVALUATE_CONCURRENT -> RECOGNIZE_HEALTHY",
+      "verificationCriteria": [
+        "Deterministic identity hashing prevents random reassignment during execution",
+        "Candidate receives only configured fraction (10%)",
+        "Metrics separated accurately between baseline and canary",
+        "Minimum sample count enforced before stage expansion or promotion readiness",
+        "System never jumps automatically from small sample to 100%"
+      ],
+      "expectedArtifacts": [
+        "canary-report",
+        "traffic-assignment-log"
+      ],
+      "expectedProvenance": [
+        "meta.canary.registered",
+        "meta.canary.assigned",
+        "meta.canary.healthy"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/canaryDeployment.test.ts"
+      ],
+      "tags": [
+        "self-improvement",
+        "canary",
+        "g46",
+        "p0-release-gate"
+      ]
+    },
+    "55": {
+      "id": 55,
+      "gateId": "G47",
+      "priority": "P0",
+      "title": "Automated Hard Regression Canary Rollback (CANARY_ROLLBACK)",
+      "purpose": "Verify that when a canary candidate causes protected correctness or recovery regressions, the CanaryDeploymentService immediately rolls back to 100% baseline, preserves evidence, marks candidate CANARY_FAILED, and records failure in MemoryService.",
+      "prompt": "Introduce a candidate with an observable protected regression during canary. Verify automatic rollback triggers immediately, baseline resumes all traffic, evidence is retained, and failure is recorded in MemoryService.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "MONITOR_ONLINE_CANARY -> DETECT_HARD_REGRESSION -> TRIGGER_ROLLBACK -> RESTORE_BASELINE -> RECORD_MEMORY",
+      "verificationCriteria": [
+        "Automatic rollback triggered immediately upon reaching hard regression criteria",
+        "New canary assignments stop immediately and baseline routing restored (0% canary)",
+        "Observable evidence and rollback reason retained in record",
+        "Candidate marked CANARY_FAILED / ROLLED_BACK",
+        "Failure episode recorded in MemoryService to prevent repeating regression"
+      ],
+      "expectedArtifacts": [
+        "canary-rollback-report",
+        "regression-evidence"
+      ],
+      "expectedProvenance": [
+        "meta.canary.rollback",
+        "regression-detected",
+        "baseline-restored"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/canaryDeployment.test.ts"
+      ],
+      "tags": [
+        "self-improvement",
+        "canary-rollback",
+        "g47",
+        "p0-release-gate"
+      ]
+    },
+    "56": {
+      "id": 56,
+      "gateId": "G48",
+      "priority": "P0",
+      "title": "Canary Uncertainty on Insufficient Evidence (CANARY_UNCERTAINTY)",
+      "purpose": "Verify that when canary evidence is insufficient, sample size is below minimum threshold, or variance is high, the system declares CANARY_INCONCLUSIVE rather than promoting.",
+      "prompt": "Evaluate canary candidate with sample count below minimum threshold. Verify concluding evaluation produces CANARY_INCONCLUSIVE rather than promotion.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "EVALUATE_CANARY -> CHECK_MINIMUM_SAMPLES -> INCONCLUSIVE_DETECTED -> HALT_PROMOTION",
+      "verificationCriteria": [
+        "Insufficient canary samples (< minimumSamples) triggers CANARY_INCONCLUSIVE",
+        "Inconclusive reasons explicitly logged with actual vs required sample counts",
+        "Candidate is not promoted to active baseline",
+        "System does not invent certainty under sparse operational samples"
+      ],
+      "expectedArtifacts": [
+        "canary-inconclusive-report"
+      ],
+      "expectedProvenance": [
+        "meta.canary.inconclusive",
+        "insufficient-evidence"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/canaryDeployment.test.ts"
+      ],
+      "tags": [
+        "self-improvement",
+        "canary-inconclusive",
+        "g48",
+        "p0-release-gate"
+      ]
+    },
+    "57": {
+      "id": 57,
+      "gateId": "G44",
+      "priority": "P0",
+      "title": "Distributed Benchmark Candidate Evaluation (DISTRIBUTED_META)",
+      "purpose": "Verify multi-worker benchmark placement across heterogeneous fleet nodes, workload equivalence between baseline and candidate, result aggregation with retry deduplication, separation of portable and hardware-sensitive metrics, and RegressionGuard consumption.",
+      "prompt": "Execute a comparative benchmark experiment sharded across independent fleet workers. Verify deterministic placement, workload equivalence, result aggregation, deduplication of retries, hardware metadata retention, and consumption by RegressionGuard.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "SHARD_TASKS -> PLACE_WORKERS -> EXECUTE_BASELINE_AND_CANDIDATE -> DEDUPLICATE_OBSERVATIONS -> STRATIFY_METRICS -> REGRESSION_GUARD_EVALUATION",
+      "verificationCriteria": [
+        "At least two independent fleet workers are assigned benchmark shards",
+        "Workload equivalence is strictly preserved between baseline and candidate on identical shards",
+        "Observations are uniquely identified by (experimentId, candidateId, benchmarkId, taskId, workerId, modelId, runtimeId, attemptId)",
+        "Retry observations are deduplicated to avoid metric skew",
+        "Portable metrics (task correctness, pass rate, tokens) are separated from hardware-sensitive metrics (wall time, duration)",
+        "Hardware and environmental identity metadata (CPU, GPU, RAM, OS, runtime, quantization) is retained per worker",
+        "Aggregated comparative result is consumed by RegressionGuard for deterministic qualification or rejection"
+      ],
+      "expectedArtifacts": [
+        "distributed-placement-report",
+        "stratified-metrics-report"
+      ],
+      "expectedProvenance": [
+        "meta.distributed.placement",
+        "meta.distributed.shard_completed",
+        "meta.distributed.aggregation_completed"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/distributedMetaGate.test.ts",
+        "packages/evaluation/tests/selfImprovementGates.test.ts"
+      ],
+      "tags": [
+        "distributed",
+        "meta-optimizer",
+        "fleet",
+        "g44",
+        "p0-release-gate"
+      ]
+    },
+    "58": {
+      "id": 58,
+      "gateId": "G45",
+      "priority": "P0",
+      "title": "Distributed Worker Failure Recovery (DISTRIBUTED_FAILURE)",
+      "purpose": "Verify worker crash or disconnect mid-shard preserves completed evidence, prevents false completion, requeues safe workload to healthy node, avoids duplicate metric accounting, and yields deterministic decision.",
+      "prompt": "Simulate worker death during shard execution. Verify no false completion occurs, completed shard tasks are preserved, in-flight or interrupted tasks are safely requeued without duplicate counting, and final experiment decision remains deterministic.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "EXECUTE_SHARDS -> DETECT_WORKER_FAILURE -> PRESERVE_COMPLETED -> REQUEUE_INCOMPLETE -> FAILOVER_EXECUTION -> VERIFY_NO_DUPLICATE_METRICS -> CONVERGE_DECISION",
+      "verificationCriteria": [
+        "Worker loss during experiment does not trigger false completion or experiment abortion",
+        "Completed task observations prior to worker failure are preserved intact",
+        "Interrupted or incomplete shard workload is safely requeued to surviving healthy worker",
+        "No duplicate metric accounting occurs for requeued or retried tasks",
+        "Worker failure events are emitted with full error provenance",
+        "Final experiment qualification or rejection remains deterministic despite the failure"
+      ],
+      "expectedArtifacts": [
+        "failure-recovery-report",
+        "failover-execution-evidence"
+      ],
+      "expectedProvenance": [
+        "meta.distributed.worker_failed",
+        "meta.distributed.workload_requeued",
+        "meta.distributed.aggregation_completed"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/distributedMetaGate.test.ts",
+        "packages/evaluation/tests/selfImprovementGates.test.ts"
+      ],
+      "tags": [
+        "distributed",
+        "failure-recovery",
+        "fleet",
+        "g45",
+        "p0-release-gate"
+      ]
+    },
+    "59": {
+      "id": 59,
+      "gateId": "G43",
+      "priority": "P0",
+      "title": "Multi-Objective Empirical Pareto Meta-Optimization (MULTI_OBJECTIVE_META)",
+      "purpose": "Verify empirical self-improvement under multi-objective optimization: pre-register competing objectives (e.g. input tokens, wall time, repair cycles), enforce constraints-first qualification, construct non-dominated Pareto frontier, preserve genuine tradeoffs without scalar score collapse, and produce explainable multi-objective audit.",
+      "prompt": "Execute multi-objective candidate evaluation across competing objectives (input tokens, wall time, repair cycles) with equal correctness. Verify that candidates forming a genuine tradeoff are identified as a non-dominated Pareto frontier, no arbitrary winner is fabricated under PARETO_ONLY policy, and an explainable audit report is generated.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "DESIGN_MULTI_OBJECTIVE_EXPERIMENT -> BENCHMARK_CANDIDATES -> CONSTRAINTS_FIRST_FILTER -> EXTRACT_METRIC_VECTORS -> COMPUTE_PARETO_FRONTIER -> EXPLAIN_TRADEOFFS",
+      "verificationCriteria": [
+        "Experiment pre-registers multiple competing objectives (MINIMIZE tokens, MINIMIZE wall time, MINIMIZE repair cycles)",
+        "All candidates satisfy correctness and protected metric constraints equally",
+        "Non-dominated candidates are correctly identified as members of the Pareto frontier",
+        "No candidate dominates another across all dimensions; genuine tradeoffs are preserved",
+        "No winner is fabricated when selection policy is PARETO_ONLY",
+        "Baseline-relative percentage deltas and raw metric vectors are preserved and explainable"
+      ],
+      "expectedArtifacts": [
+        "multi-objective-pareto-report",
+        "metric-vectors-summary"
+      ],
+      "expectedProvenance": [
+        "meta.pareto.frontier_computed",
+        "meta.candidates.non_dominated",
+        "meta.tradeoff.explained"
+      ],
+      "associatedSuites": [
+        "packages/evaluation/tests/multiObjectiveGate.test.ts",
+        "packages/evaluation/tests/multiObjectiveOptimizer.test.ts"
+      ],
+      "tags": [
+        "self-improvement",
+        "multi-objective",
+        "pareto",
+        "g43",
         "p0-release-gate"
       ]
     }

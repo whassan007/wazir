@@ -31,6 +31,8 @@ import {
   TaskPlanner,
   createTaskPlanner,
   estimateModelMemory,
+  TaskCapabilityClassifier,
+  ModelIntelligenceService,
 } from '@wazir/core';
 import type {
   ComputerRegistration,
@@ -105,6 +107,7 @@ export interface RookEngine {
   evaluation?: EvaluationService;
   benchmark?: BenchmarkService;
   optimizer?: MetaOptimizerService;
+  modelIntelligence?: ModelIntelligenceService;
   planner: TaskPlanner;
   adapters: Map<string, RuntimeAdapter>;
   discovered: DiscoveredRuntime[];
@@ -300,6 +303,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   if (web) for (const tool of createWebTools(web)) tools.register(tool);
 
   // ---- scheduler ----------------------------------------------------------
+  const classifier = new TaskCapabilityClassifier();
+  const modelIntelligence = new ModelIntelligenceService({ classifier, store });
   const reliability = new ModelReliabilityTracker();
   const scheduler = new Scheduler({
     computers,
@@ -308,6 +313,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     policy,
     agents,
     reliability,
+    modelIntelligence,
   });
 
   // ---- jobs & orchestration -----------------------------------------------
@@ -451,6 +457,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     evaluation,
     benchmark,
     optimizer,
+    modelIntelligence,
     planner,
     adapters: adapterById,
     discovered,

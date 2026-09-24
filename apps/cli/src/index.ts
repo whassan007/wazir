@@ -1196,6 +1196,7 @@ improveCmd
   .command('run')
   .description('Execute an optimization cycle under explicit budgets')
   .option('--level <level>', 'Target self-improvement maturity level')
+  .option('--distributed', 'Distribute benchmark candidate evaluation across the worker fleet')
   .option('--json', 'Output in JSON format')
   .action(async (options) => {
     const { createEngine } = await import('./engine.js');

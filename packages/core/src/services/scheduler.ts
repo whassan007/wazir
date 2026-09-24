@@ -15,6 +15,14 @@ import type { ModelRegistry } from './modelRegistry.js';
 import type { ModelReliabilityTracker } from './modelReliability.js';
 import type { PolicyEngine } from './policyEngine.js';
 import type { RuntimeRegistry } from './runtimeRegistry.js';
+import type { ModelIntelligenceService } from './modelIntelligenceService.js';
+import { TaskCapabilityClassifier } from './taskCapabilityClassifier.js';
+import type {
+  EmpiricalRoutingExplanation,
+  EvaluatedCandidate,
+  ProfileSegmentationKey,
+  TaskCapabilityClassification,
+} from '../types/modelIntelligence.js';
 
 /** Measured profiles with fewer runs than this don't influence routing. */
 const MIN_MEASURED_SAMPLES = 3;
@@ -33,6 +41,14 @@ export interface SchedulerDeps {
    * silent substitution) but the open circuit is stated in the decision reasons.
    */
   reliability?: ModelReliabilityTracker;
+  /**
+   * Empirical Model Intelligence Service providing fine-grained capability profiles.
+   */
+  modelIntelligence?: ModelIntelligenceService;
+  /**
+   * Classifier for decomposing task capability requirements.
+   */
+  classifier?: TaskCapabilityClassifier;
 }
 
 export interface ScheduleInput {
@@ -73,7 +89,11 @@ interface ScoredPlacement {
  * - ties are broken lexicographically so the same input always yields the same output
  */
 export class Scheduler {
-  constructor(private readonly deps: SchedulerDeps) {}
+  private readonly classifier: TaskCapabilityClassifier;
+
+  constructor(private readonly deps: SchedulerDeps) {
+    this.classifier = deps.classifier ?? new TaskCapabilityClassifier();
+  }
 
   plan(input: ScheduleInput): SchedulerDecision {
     const { task } = input;
@@ -126,15 +146,63 @@ export class Scheduler {
       throw new SchedulingError('No models are registered', ['model registry is empty']);
     }
 
-    const requiredCapabilities = task.requirements.capabilities ?? [];
+    const classification = this.classifier.classify(task);
+    const requiredCapability = classification.primaryCategory;
+
     const scored: ScoredModel[] = records.map((record) => {
-      const result = this.scoreModel(task, record, requiredContext);
+      const result = this.scoreModel(task, record, requiredContext, classification);
       if (excludeModelIds.includes(record.id)) result.rejected.push('excluded: already tried by this execution');
       return result;
     });
 
     const eligible = scored.filter((s) => s.rejected.length === 0);
     const rejected = scored.filter((s) => s.rejected.length > 0);
+
+    const evaluatedCandidates: EvaluatedCandidate[] = [];
+    const policyConstraintsApplied: string[] = ['hosted-provider-gate', 'execution-policy-bounds'];
+    const resourceConstraintsApplied: string[] = ['context-headroom-requirement', 'concurrency-limits', 'gpu-memory'];
+
+    for (const s of scored) {
+      const record = s.record;
+      const instances = this.deps.models.instancesOf(record.id);
+      const runtimeId = instances[0]?.runtimeId ?? 'unknown';
+      const segKey: ProfileSegmentationKey = {
+        model: record.id,
+        runtime: runtimeId,
+        quantization: record.quantization,
+        modelVersion: (record as unknown as Record<string, unknown>).version as string | undefined,
+        wazirProtocolVersion: '1.0.0',
+      };
+      const profile = this.deps.modelIntelligence?.getProfile(segKey);
+      const m = profile?.categoryMeasurements?.find((c) => c.category === requiredCapability);
+      const cond =
+        classification.language && profile?.conditionalMeasurements?.byLanguage?.[classification.language]
+          ? profile.conditionalMeasurements.byLanguage[classification.language].find((c) => c.category === requiredCapability)
+          : undefined;
+
+      const isEligible = s.rejected.length === 0;
+      const policyRejection = s.rejected.find((r) => r.includes('hosted') || r.includes('policy'));
+      const resourceRejection = s.rejected.find((r) => r.includes('context') || r.includes('instance') || r.includes('memory'));
+
+      evaluatedCandidates.push({
+        modelId: record.id,
+        runtimeId,
+        profileFound: !!profile,
+        isStale: !!profile?.isStale,
+        staleReason: profile?.staleReason,
+        categoryScore: m ? m.score : undefined,
+        conditionalScore: cond ? cond.score : undefined,
+        effectiveScore: s.score,
+        confidence: m ? m.confidence : (profile ? profile.confidence : undefined),
+        sampleCount: m ? m.sampleCount : 0,
+        policyAllowed: !policyRejection,
+        policyRejection,
+        resourceAllowed: !resourceRejection,
+        resourceRejection,
+        eligible: isEligible,
+        reasons: isEligible ? s.reasons : s.rejected,
+      });
+    }
 
     const preferred = task.execution?.targetModelId;
     if (preferred) {
@@ -150,13 +218,28 @@ export class Scheduler {
       }
       const instance = this.selectInstance(match.record);
       const circuit = this.deps.reliability?.status(preferred, task.type);
+
+      const explanation: EmpiricalRoutingExplanation = {
+        requiredCapability,
+        phase: classification.phase,
+        language: classification.language,
+        candidateModels: records.map((r) => r.id),
+        evaluatedCandidates,
+        selectedModelId: preferred,
+        selectionReason: `Explicitly requested model '${preferred}' satisfied all hard constraints`,
+        policyConstraintsApplied,
+        resourceConstraintsApplied,
+      };
+
       return {
         modelId: preferred,
         modelInstanceId: instance.id,
         strategy: 'explicit',
         score: match.score,
+        empiricalExplanation: explanation,
         reasons: [
           `explicitly requested model '${preferred}'`,
+          `required capability: ${requiredCapability}`,
           ...match.reasons,
           ...(circuit && circuit.state !== 'CLOSED' ? [`warning: ${task.type} ${circuit.reason}`] : []),
         ],
@@ -174,16 +257,39 @@ export class Scheduler {
     const best = eligible[0];
     const instance = this.selectInstance(best.record);
 
+    const explanation: EmpiricalRoutingExplanation = {
+      requiredCapability,
+      phase: classification.phase,
+      language: classification.language,
+      candidateModels: records.map((r) => r.id),
+      evaluatedCandidates,
+      selectedModelId: best.record.id,
+      selectionReason: `Selected model '${best.record.id}' with highest verified evidence score (${best.score}) for required capability '${requiredCapability}'`,
+      policyConstraintsApplied,
+      resourceConstraintsApplied,
+    };
+
     return {
       modelId: best.record.id,
       modelInstanceId: instance.id,
-      strategy: 'capability_match',
+      strategy: this.deps.modelIntelligence ? 'empirical_profile' : 'capability_match',
       score: best.score,
-      reasons: best.reasons,
+      empiricalExplanation: explanation,
+      reasons: [
+        `required capability: ${requiredCapability}`,
+        ...(classification.language ? [`language: ${classification.language}`] : []),
+        ...(classification.phase ? [`phase: ${classification.phase}`] : []),
+        ...best.reasons,
+      ],
     };
   }
 
-  private scoreModel(task: Task, record: ModelRecord, requiredContext: number): ScoredModel {
+  private scoreModel(
+    task: Task,
+    record: ModelRecord,
+    requiredContext: number,
+    classification?: TaskCapabilityClassification,
+  ): ScoredModel {
     const reasons: string[] = [];
     const rejected: string[] = [];
     const requiredCapabilities = task.requirements.capabilities ?? [];
@@ -250,18 +356,61 @@ export class Scheduler {
     score += requiredCapabilities.filter((c) => record.capabilities.includes(c)).length * 2;
     if (record.toolCalling) score += 1;
 
-    // Measured evidence, not model size or name: how this model actually did on this
-    // task class in Wazir's own executions. Worth up to +2 for verified success and -1
-    // for a majority protocol-failure rate; ignored until there are enough samples.
-    const measured = record.performance?.[task.type];
-    if (measured && measured.samples >= MIN_MEASURED_SAMPLES) {
-      score += Math.round(measured.verifiedSuccessRate * 2) - (measured.protocolFailureRate >= 0.5 ? 1 : 0);
-      reasons.push(
-        `measured ${task.type}: ${pct(measured.verifiedSuccessRate)} verified over ${measured.samples} runs, ` +
-          `protocol failures ${pct(measured.protocolFailureRate)}` +
-          (measured.firstPassBuildRate !== null ? `, first-pass build ${pct(measured.firstPassBuildRate)}` : ''),
-      );
+    // Empirical Model Intelligence Profile integration
+    if (this.deps.modelIntelligence && classification) {
+      const instances = this.deps.models.instancesOf(record.id);
+      const runtimeId = instances[0]?.runtimeId ?? 'unknown';
+      const segKey: ProfileSegmentationKey = {
+        model: record.id,
+        runtime: runtimeId,
+        quantization: record.quantization,
+        modelVersion: (record as unknown as Record<string, unknown>).version as string | undefined,
+        wazirProtocolVersion: '1.0.0',
+      };
+      const profile = this.deps.modelIntelligence.getProfile(segKey);
+      if (profile?.isStale) {
+        reasons.push(`empirical profile stale: ${profile.staleReason} (evidence ignored for active routing)`);
+      } else if (profile) {
+        const m = profile.categoryMeasurements.find((c) => c.category === classification.primaryCategory);
+        if (m && m.sampleCount >= 2) {
+          const evidenceWeight = Math.round(m.score * 5 * m.confidence);
+          score += evidenceWeight;
+          reasons.push(
+            `empirical evidence [${classification.primaryCategory}]: score ${(m.score * 100).toFixed(0)}%, ` +
+              `confidence ${(m.confidence * 100).toFixed(0)}% across ${m.sampleCount} samples (+${evidenceWeight})`,
+          );
+        } else if (m) {
+          reasons.push(`empirical evidence [${classification.primaryCategory}]: insufficient samples (${m.sampleCount} < 2)`);
+        }
+
+        if (classification.language && profile.conditionalMeasurements?.byLanguage?.[classification.language]) {
+          const cond = profile.conditionalMeasurements.byLanguage[classification.language].find(
+            (c) => c.category === classification.primaryCategory,
+          );
+          if (cond && cond.sampleCount >= 2) {
+            const condBonus = Math.round(cond.score * 2 * cond.confidence);
+            score += condBonus;
+            reasons.push(
+              `empirical conditional [lang=${classification.language}]: score ${(cond.score * 100).toFixed(0)}% (+${condBonus})`,
+            );
+          }
+        }
+      } else {
+        reasons.push(`empirical evidence [${classification.primaryCategory}]: unmeasured (neutral baseline)`);
+      }
+    } else {
+      // Measured evidence from legacy record.performance if modelIntelligence is not configured
+      const measured = record.performance?.[task.type];
+      if (measured && measured.samples >= MIN_MEASURED_SAMPLES) {
+        score += Math.round(measured.verifiedSuccessRate * 2) - (measured.protocolFailureRate >= 0.5 ? 1 : 0);
+        reasons.push(
+          `measured ${task.type}: ${pct(measured.verifiedSuccessRate)} verified over ${measured.samples} runs, ` +
+            `protocol failures ${pct(measured.protocolFailureRate)}` +
+            (measured.firstPassBuildRate !== null ? `, first-pass build ${pct(measured.firstPassBuildRate)}` : ''),
+        );
+      }
     }
+
     if (requiredContext > 0 && context >= requiredContext * 2) {
       score += 1;
       reasons.push('context headroom: at least 2x the requirement');

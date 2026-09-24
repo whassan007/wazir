@@ -12,10 +12,10 @@ import {
 } from './acceptanceLibrary.js';
 
 describe('Wazir Acceptance Test Library', () => {
-  it('defines all 20 progressive release gates in strict order (G0 to G31)', () => {
-    expect(ACCEPTANCE_GATES).toHaveLength(20);
+  it('defines all 26 progressive release gates in strict order (G0 to G45)', () => {
+    expect(ACCEPTANCE_GATES).toHaveLength(26);
     const expectedIds: AcceptanceGateId[] = [
-      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G29', 'G30', 'G31',
+      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G29', 'G30', 'G31', 'G43', 'G46', 'G47', 'G48', 'G44', 'G45',
     ];
     expect(ACCEPTANCE_GATES.map((g) => g.id)).toEqual(expectedIds);
 
@@ -29,11 +29,11 @@ describe('Wazir Acceptance Test Library', () => {
     }
   });
 
-  it('contains all 53 unique acceptance tests', () => {
+  it('contains all 59 unique acceptance tests', () => {
     const keys = Object.keys(ACCEPTANCE_TESTS).map(Number);
-    expect(keys).toHaveLength(53);
+    expect(keys).toHaveLength(59);
 
-    for (let id = 1; id <= 53; id++) {
+    for (let id = 1; id <= 59; id++) {
       const test = ACCEPTANCE_TESTS[id];
       expect(test, `Test ${id} should exist`).toBeDefined();
       expect(test.id).toBe(id);
@@ -153,6 +153,14 @@ describe('Wazir Acceptance Test Library', () => {
 
     passed.add('G30');
     expect(validateGatePrerequisites('G31', passed).allowed).toBe(true);
+
+    // G43 blocked until G31 has passed
+    const g43Check = validateGatePrerequisites('G43', passed);
+    expect(g43Check.allowed).toBe(false);
+    expect(g43Check.blockingGateId).toBe('G31');
+
+    passed.add('G31');
+    expect(validateGatePrerequisites('G43', passed).allowed).toBe(true);
   });
 
   it('provides helpers to query by gate and ID', () => {
@@ -241,5 +249,53 @@ describe('Wazir Acceptance Test Library', () => {
     ]);
     expect(g31Tests[0].id).toBe(53);
     expect(g31Tests[0].priority).toBe('P0');
+  });
+
+  it('covers multi-objective empirical Pareto meta-optimization (Test 59: G43)', () => {
+    const g43Tests = getTestsForGate('G43');
+    expect(g43Tests.map((t) => t.title)).toEqual([
+      'Multi-Objective Empirical Pareto Meta-Optimization (MULTI_OBJECTIVE_META)',
+    ]);
+    expect(g43Tests[0].id).toBe(59);
+    expect(g43Tests[0].priority).toBe('P0');
+  });
+
+  it('covers distributed benchmark fabric acceptance gates (Tests 57-58: G44, G45)', () => {
+    const g44Tests = getTestsForGate('G44');
+    expect(g44Tests.map((t) => t.title)).toEqual([
+      'Distributed Benchmark Candidate Evaluation (DISTRIBUTED_META)',
+    ]);
+    expect(g44Tests[0].id).toBe(57);
+    expect(g44Tests[0].priority).toBe('P0');
+
+    const g45Tests = getTestsForGate('G45');
+    expect(g45Tests.map((t) => t.title)).toEqual([
+      'Distributed Worker Failure Recovery (DISTRIBUTED_FAILURE)',
+    ]);
+    expect(g45Tests[0].id).toBe(58);
+    expect(g45Tests[0].priority).toBe('P0');
+  });
+
+  it('covers Level 3 Canary acceptance gates (Tests 54-56: G46, G47, G48)', () => {
+    const g46Tests = getTestsForGate('G46');
+    expect(g46Tests.map((t) => t.title)).toEqual([
+      'Controlled Fractional Canary Deployment (CANARY_DEPLOYMENT)',
+    ]);
+    expect(g46Tests[0].id).toBe(54);
+    expect(g46Tests[0].priority).toBe('P0');
+
+    const g47Tests = getTestsForGate('G47');
+    expect(g47Tests.map((t) => t.title)).toEqual([
+      'Automated Hard Regression Canary Rollback (CANARY_ROLLBACK)',
+    ]);
+    expect(g47Tests[0].id).toBe(55);
+    expect(g47Tests[0].priority).toBe('P0');
+
+    const g48Tests = getTestsForGate('G48');
+    expect(g48Tests.map((t) => t.title)).toEqual([
+      'Canary Uncertainty on Insufficient Evidence (CANARY_UNCERTAINTY)',
+    ]);
+    expect(g48Tests[0].id).toBe(56);
+    expect(g48Tests[0].priority).toBe('P0');
   });
 });

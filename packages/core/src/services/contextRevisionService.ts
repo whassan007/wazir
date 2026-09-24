@@ -110,6 +110,18 @@ export class ContextRevisionService {
     return list[list.length - 1];
   }
 
+  getSnapshots(executionId: string): ContextSnapshot[] {
+    return [...(this.snapshotsByExecution.get(executionId) ?? [])];
+  }
+
+  getAllSnapshots(): ContextSnapshot[] {
+    const all: ContextSnapshot[] = [];
+    for (const list of this.snapshotsByExecution.values()) {
+      all.push(...list);
+    }
+    return all.sort((a, b) => a.generation - b.generation);
+  }
+
   registerSnapshot(snapshot: ContextSnapshot): void {
     const list = this.snapshotsByExecution.get(snapshot.executionId) ?? [];
     list.push(snapshot);

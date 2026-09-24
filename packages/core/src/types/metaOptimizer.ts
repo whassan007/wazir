@@ -1,4 +1,4 @@
-import type { BenchmarkSuiteResult, ComparativeBenchmarkResult } from './benchmark.js';
+import type { BenchmarkSuiteResult, ComparativeBenchmarkResult, BenchmarkTask } from './benchmark.js';
 import type { ExecutionRecord } from './execution.js';
 
 // ======================================================================
@@ -151,7 +151,7 @@ export type SelfImprovementLevel =
   | 0 // LEVEL 0 — OBSERVE: Measure only, no changes
   | 1 // LEVEL 1 — RECOMMEND: Generate hypotheses & experiment plans, no mods
   | 2 // LEVEL 2 — EXPERIMENT: Create isolated candidate worktrees & benchmark (DEFAULT)
-  | 3 // LEVEL 3 — QUALIFY: Automatically identify qualifying candidates; operator decides promotion
+  | 3 // LEVEL 3 — CANARY: Staged non-critical traffic deployment with regression auto-rollback
   | 4; // LEVEL 4 — GUARDED PROMOTION: Auto-promote only within authorized domains, auto-rollback
 
 export type SelfImprovementDomain =
@@ -223,12 +223,28 @@ export interface ImprovementOpportunity {
 // ======================================================================
 
 export interface MetricConstraint {
-  metric: MeasurableMetricName;
+  metric: MeasurableMetricName | string;
   operator: '<=' | '>=' | '<' | '>' | '==';
   targetValue: number;
   /** When true, targetValue is treated as a relative ratio against baseline (e.g. 0.80 = <= 80% baseline) */
   isRelativeFactor?: boolean;
 }
+
+export type ObjectiveDirection = 'MINIMIZE' | 'MAXIMIZE';
+
+export interface OptimizationObjective {
+  metric: MeasurableMetricName | string;
+  direction: ObjectiveDirection;
+  importance?: number;
+  hardConstraint?: MetricConstraint;
+  tolerance?: number;
+}
+
+export type MultiObjectiveSelectionPolicy =
+  | 'LEXICOGRAPHIC'
+  | 'PARETO_ONLY'
+  | 'WEIGHTED_AFTER_PARETO'
+  | 'CONSTRAINED_PRIMARY';
 
 export interface ImprovementHypothesis {
   id: string;
@@ -262,6 +278,13 @@ export interface ExperimentPlan {
   sampleSize: number;
   budget: MetaOptimizationBudget;
   createdAt: Date;
+  /** Multi-objective configuration */
+  objectives?: OptimizationObjective[];
+  protectedMetrics?: Array<MeasurableMetricName | string>;
+  hardConstraints?: MetricConstraint[];
+  selectionPolicy?: MultiObjectiveSelectionPolicy;
+  weights?: Record<string, number>;
+  lexicographicOrder?: string[];
 }
 
 // ======================================================================
@@ -303,6 +326,7 @@ export interface CandidateImplementation {
   branchName?: string;
   filesChanged: string[];
   mutations?: ConfigMutation[];
+  mutationIds?: string[];
   codeDiff?: string;
   config: OptimizableConfig;
   status: 'CREATED' | 'VERIFIED' | 'FAILED_VERIFICATION' | 'EVALUATED';
@@ -339,6 +363,12 @@ export type MetaOptimizationDecision =
   | 'QUALIFIED'
   | 'REJECTED'
   | 'INCONCLUSIVE'
+  | 'CANARY_ACTIVE'
+  | 'CANARY_HEALTHY'
+  | 'CANARY_FAILED'
+  | 'CANARY_ROLLED_BACK'
+  | 'CANARY_INCONCLUSIVE'
+  | 'READY_FOR_PROMOTION'
   | 'PROMOTED'
   | 'ACCEPTED'; // Backward compatibility with Gate 13
 
@@ -393,7 +423,9 @@ export interface ImprovementAttempt {
     | 'INCONCLUSIVE'
     | 'FAILED_IMPLEMENTATION'
     | 'FAILED_VERIFICATION'
-    | 'REGRESSION';
+    | 'REGRESSION'
+    | 'CANARY_FAILED'
+    | 'CANARY_ROLLED_BACK';
   regressionReasons: string[];
   evidence: Record<string, unknown>;
   recordedAt: Date;
@@ -406,6 +438,7 @@ export interface ImprovementAttempt {
 export type MetaOptimizerEventType =
   | 'meta.opportunity.detected'
   | 'meta.hypothesis.created'
+  | 'meta.hypothesis.rejected'
   | 'meta.experiment.started'
   | 'meta.baseline.recorded'
   | 'meta.candidate.created'
@@ -417,7 +450,18 @@ export type MetaOptimizerEventType =
   | 'meta.promotion.completed'
   | 'meta.promotion.failed'
   | 'meta.rollback'
-  | 'meta.learning.recorded';
+  | 'meta.learning.recorded'
+  | 'meta.canary.registered'
+  | 'meta.canary.assigned'
+  | 'meta.canary.staged_expansion'
+  | 'meta.canary.healthy'
+  | 'meta.canary.rollback'
+  | 'meta.canary.inconclusive'
+  | 'meta.distributed.placement'
+  | 'meta.distributed.shard_completed'
+  | 'meta.distributed.worker_failed'
+  | 'meta.distributed.workload_requeued'
+  | 'meta.distributed.aggregation_completed';
 
 export interface MetaOptimizerEvent {
   id: string;
@@ -481,6 +525,7 @@ export interface ConfigMutation {
 export interface MetaOptimizationCandidate {
   candidateId: string;
   mutations: ConfigMutation[];
+  mutationIds?: string[];
   config: OptimizableConfig;
 }
 
@@ -501,6 +546,36 @@ export interface ComparativeBenchmarkSuiteResult {
   improvementDetected: boolean;
   preferredCandidate: 'candidate' | 'baseline' | 'tie';
   summary: string;
+  isDistributed?: boolean;
+  workerPlacements?: WorkerPlacementReport[];
+  stratifiedMetrics?: Record<string, StratifiedWorkerMetrics>;
+  environmentIdentities?: Record<string, EnvironmentIdentity>;
+}
+
+export interface CandidateMetricVector {
+  candidateId: string;
+  rawMetrics: Record<string, number>;
+  normalizedDeltas: Record<string, number>;
+  qualifies: boolean;
+  disqualificationReasons: string[];
+  isNonDominated?: boolean;
+  frontierRank?: number;
+  weightedScore?: number;
+}
+
+export interface MultiObjectiveParetoFrontier {
+  dimensions: string[];
+  directions: Record<string, ObjectiveDirection>;
+  frontierCandidates: CandidateMetricVector[];
+  dominatedCandidates: CandidateMetricVector[];
+  allEvaluated: CandidateMetricVector[];
+  hypervolume?: number;
+  baselineHypervolume?: number;
+  hypervolumeDifference?: number;
+  tradeoffsSummary: string;
+  selectedCandidateId?: string;
+  selectionReason?: string;
+  policyUsed: MultiObjectiveSelectionPolicy;
 }
 
 export interface MetaOptimizationRunResult {
@@ -515,5 +590,255 @@ export interface MetaOptimizationRunResult {
   decision: MetaOptimizationDecision;
   reasons: string[];
   regressionGuard?: RegressionGuardResult;
+  paretoFrontier?: MultiObjectiveParetoFrontier;
+  metricVectors?: Record<string, CandidateMetricVector> | CandidateMetricVector[];
+  selectedCandidateId?: string;
+  selectedReason?: string;
+  workerPlacements?: WorkerPlacementReport[];
+  stratifiedMetrics?: Record<string, StratifiedWorkerMetrics>;
+  environmentIdentities?: Record<string, EnvironmentIdentity>;
+  causalAttribution?: CausalAttributionReport;
   evaluatedAt: Date;
 }
+
+// ======================================================================
+// 11. DISTRIBUTED BENCHMARK FABRIC & ENVIRONMENT IDENTITY
+// ======================================================================
+
+export interface EnvironmentIdentity {
+  workerId: string;
+  workerName?: string;
+  cpu: {
+    model?: string;
+    cores?: number;
+    architecture?: string;
+  };
+  gpu?: {
+    model?: string;
+    count?: number;
+    memoryGB?: number;
+    unifiedMemory?: boolean;
+  };
+  ram: {
+    totalGB?: number;
+    availableGB?: number;
+  };
+  runtime: {
+    type: string;
+    version?: string;
+  };
+  model: {
+    id: string;
+    version?: string;
+    family?: string;
+    quantization?: string;
+  };
+  os: {
+    platform: string;
+    release?: string;
+    architecture?: string;
+  };
+  architecture: string;
+  benchmarkVersion: string;
+  wazirVersion: string;
+  configuration: {
+    configId: string;
+    version: number;
+  };
+  contextSettings: {
+    maxTokens?: number;
+    contextWindow?: number;
+  };
+}
+
+export interface BenchmarkShard {
+  shardId: string;
+  workerId: string;
+  tasks: BenchmarkTask[];
+  environment: EnvironmentIdentity;
+}
+
+export interface DistributedObservation {
+  experimentId: string;
+  candidateId: string;
+  benchmarkId: string;
+  taskId: string;
+  workerId: string;
+  modelId: string;
+  runtimeId: string;
+  attemptId: string;
+  environment: EnvironmentIdentity;
+  metrics: {
+    portable: {
+      taskSuccess: boolean;
+      firstPassBuild?: boolean;
+      firstPassTest?: boolean;
+      physicalVerificationSuccess: boolean;
+      inputTokens: number;
+      outputTokens: number;
+      compactedTokens?: number;
+      repairCycles: number;
+    };
+    hardwareSensitive: {
+      durationMs: number;
+      modelLatencyMs?: number;
+      toolLatencyMs?: number;
+      gpuUtilizationPct?: number;
+    };
+  };
+  status: 'COMPLETED' | 'UNKNOWN' | 'FAILED';
+  error?: string;
+  timestamp: Date;
+}
+
+export interface WorkerPlacementReport {
+  workerId: string;
+  workerName: string;
+  shardId: string;
+  taskCount: number;
+  tasks: string[];
+  modelsUsed: string[];
+  hardware: {
+    cpu?: string;
+    gpu?: string;
+    ramGB?: number;
+    os?: string;
+  };
+  portableMetrics: {
+    passRate: number;
+    avgInputTokens: number;
+    avgOutputTokens: number;
+  };
+  hardwareMetrics: {
+    avgDurationMs: number;
+    speedupVsBaseline?: number;
+  };
+  status: 'HEALTHY' | 'FAILED' | 'RECOVERED';
+}
+
+export interface StratifiedWorkerMetrics {
+  workerId: string;
+  workerName?: string;
+  environment: EnvironmentIdentity;
+  taskCount: number;
+  portable: {
+    baselinePassRate: number;
+    candidatePassRate: number;
+    passRateDelta: number;
+    baselineTokens: number;
+    candidateTokens: number;
+    tokenDelta: number;
+  };
+  hardwareSensitive: {
+    baselineDurationMs: number;
+    candidateDurationMs: number;
+    durationDeltaMs: number;
+    speedupFactor: number;
+  };
+}
+
+// ======================================================================
+// 12. CAUSAL EXPERIMENT DISCIPLINE & ABLATION ATTRIBUTION
+// ======================================================================
+
+export interface Mutation {
+  id: string;
+  domain: SelfImprovementDomain;
+  target: string;
+  before: unknown;
+  after: unknown;
+  rationale: string;
+}
+
+export type CausalAttributionVerdict =
+  | 'SUPPORTED_CONTRIBUTOR'
+  | 'NO_MEASURABLE_EFFECT'
+  | 'NEGATIVE_CONTRIBUTOR'
+  | 'INTERACTION_DETECTED'
+  | 'INSUFFICIENT_EVIDENCE';
+
+export interface MutationAttribution {
+  mutationId: string;
+  target: string;
+  domain: SelfImprovementDomain;
+  verdict: CausalAttributionVerdict;
+  isolatedDelta: number;
+  marginalDelta: number;
+  confidence: number;
+  sampleCount: number;
+  interactionPartners?: string[];
+  details: string;
+}
+
+export interface InteractionEffect {
+  mutationIds: string[];
+  individualEffects: Record<string, number>;
+  jointEffect: number;
+  interactionMagnitude: number;
+  verdict: 'INTERACTION_DETECTED' | 'NO_INTERACTION' | 'INSUFFICIENT_EVIDENCE';
+  description: string;
+}
+
+export type AblationExperimentDesign =
+  | 'ONE_FACTOR_AT_A_TIME'
+  | 'LEAVE_ONE_OUT'
+  | 'FRACTIONAL_FACTORIAL'
+  | 'FULL_FACTORIAL';
+
+export interface AblationConfiguration {
+  configId: string;
+  mutationIds: string[];
+  label: string;
+  config: OptimizableConfig;
+}
+
+export interface AblationPlan {
+  experimentId: string;
+  candidateId: string;
+  allMutations: Mutation[];
+  design: AblationExperimentDesign;
+  configurations: AblationConfiguration[];
+  createdAt: Date;
+}
+
+export interface AblationRunResult {
+  subCandidateId: string;
+  activeMutationIds: string[];
+  metricValue: number;
+  deltaVsBaseline: number;
+  sampleCount: number;
+  passRate: number;
+}
+
+export interface CausalAttributionReport {
+  experimentId: string;
+  candidateId: string;
+  primaryMetric: MeasurableMetricName;
+  direction: 'decrease' | 'increase';
+  baselineValue: number;
+  candidateValue: number;
+  candidateDelta: number;
+  design: AblationExperimentDesign;
+  ablationRuns: AblationRunResult[];
+  attributions: Record<string, MutationAttribution>;
+  interactions: InteractionEffect[];
+  summary: string;
+  analyzedAt: Date;
+}
+
+export interface MutationMemoryRecord {
+  mutationId: string;
+  target: string;
+  domain: SelfImprovementDomain;
+  lastObservedVerdict: CausalAttributionVerdict;
+  averageEffect: number;
+  totalEvaluations: number;
+  interactionPartners: string[];
+  history: Array<{
+    experimentId: string;
+    verdict: CausalAttributionVerdict;
+    delta: number;
+    timestamp: Date;
+  }>;
+}
+

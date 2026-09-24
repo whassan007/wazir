@@ -47,9 +47,9 @@ Usage:
 
 Options:
   --foundational        Run foundational sequence: 20 -> 17 -> 18 -> 1 -> 9 -> 3 -> 4 -> 2
-  --gate <G0..G31>      Run all tests in specified gate
-  --test <1..53>        Run specific test by ID
-  --all                 Run all 20 progressive release gates (fail-fast prerequisite order)
+  --gate <G0..G48>      Run all tests in specified gate
+  --test <1..59>        Run specific test by ID
+  --all                 Run all 26 progressive release gates (fail-fast prerequisite order)
   --interactive         Prompt interactively to choose what to test
   --live                Probe and execute against live local models (LM Studio / Ollama)
   --skip-build          Skip dist freshness check and build
@@ -77,6 +77,12 @@ Gates:
   G29 Self-Improvement  Test 51          Empirical self-improvement cycle: observe, hypothesize, experiment, evaluate, promote
   G30 Regression Guard  Test 52          Zero-regression tolerance: strict rejection of regressions
   G31 Inconclusive      Test 53          Inconclusive determination on insufficient evidence or noisy metrics
+  G43 Multi-Obj Meta   Test 59          Empirical Pareto frontier across tokens, wall time, repair cycles
+  G46 Canary Deploy     Test 54          Controlled fractional canary deployment (Level 3 Canary)
+  G47 Canary Rollback   Test 55          Automated hard regression canary rollback to baseline
+  G48 Canary Uncertain  Test 56          Canary uncertainty guard on insufficient evidence
+  G44 Distributed Meta  Test 57          Distributed benchmark candidate evaluation across fleet workers
+  G45 Distrib Failure   Test 58          Distributed worker failure recovery and deduplication
 `);
 }
 
@@ -205,14 +211,14 @@ async function resolveExecutionSelection() {
       for (const g of GATES) {
         console.log(`  ${g.id}) ${g.title}: ${g.description}`);
       }
-      const gateChoice = await promptUser('\nEnter Gate ID (e.g. G0, G1, ... G31): ');
+      const gateChoice = await promptUser('\nEnter Gate ID (e.g. G0, G1, ... G48): ');
       targetGate = gateChoice.trim().toUpperCase();
       if (!GATES.some((g) => g.id === targetGate)) {
         console.error(`Unknown gate ${targetGate}`);
         process.exit(1);
       }
     } else if (choice === '3') {
-      const testChoice = await promptUser('\nEnter Test ID (1 to 53): ');
+      const testChoice = await promptUser('\nEnter Test ID (1 to 59): ');
       targetTestId = parseInt(testChoice.trim(), 10);
       if (!TESTS[targetTestId]) {
         console.error(`Unknown test ${targetTestId}`);
@@ -264,7 +270,7 @@ async function main() {
   } else if (targetGate) {
     const g = GATES.find((g) => g.id === targetGate);
     if (!g) {
-      console.error(`Gate ${targetGate} not found. Valid gates: G0..G31`);
+      console.error(`Gate ${targetGate} not found. Valid gates: G0..G48`);
       process.exit(2);
     }
     testQueue = g.testIds.map((id) => TESTS[id]);

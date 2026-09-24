@@ -42,6 +42,7 @@ export interface ModelRecord {
   embedding: boolean;
   reasoning: boolean;
   quantization?: string;
+  version?: string;
   memory?: MemoryRequirements;
   runtimeCompatibility: RuntimeType[] | 'any';
   local: boolean;

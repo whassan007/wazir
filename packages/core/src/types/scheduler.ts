@@ -2,7 +2,8 @@ export type ModelSelectionStrategy =
   | 'explicit'
   | 'capability_match'
   | 'context_fit'
-  | 'loaded_preferred';
+  | 'loaded_preferred'
+  | 'empirical_profile';
 
 export interface ModelRoutingDecision {
   modelId: string;
@@ -10,6 +11,7 @@ export interface ModelRoutingDecision {
   strategy: ModelSelectionStrategy;
   score: number;
   reasons: string[];
+  empiricalExplanation?: import('./modelIntelligence.js').EmpiricalRoutingExplanation;
 }
 
 export interface ComputerRoutingDecision {

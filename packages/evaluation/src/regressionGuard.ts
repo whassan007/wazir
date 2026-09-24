@@ -6,6 +6,7 @@ import type {
   BenchmarkSuiteResult,
   MetricSummaryStatistics,
 } from '@wazir/core';
+import { extractMetricValueSafe } from './multiObjectiveOptimizer.js';
 
 export interface RegressionGuardOptions {
   /** Global tolerance allowed for protected metrics (e.g. 0.02 = 2% drop permitted on non-critical metrics) */
@@ -71,18 +72,49 @@ export class RegressionGuard {
       );
     }
 
-    // 2. Primary Objective Check
-    const primaryMet = this.evaluateConstraint(
-      plan.requiredImprovement,
-      baselineSuite,
-      candidateSuite,
-      comparison,
-    );
+    // 2. Primary / Multi-Objective Constraints Check
+    const isMultiObjective = Boolean(plan.objectives && plan.objectives.length > 0);
+    let primaryMet = { satisfied: true, reason: 'multi-objective evaluation' };
 
-    if (!primaryMet.satisfied) {
-      regressionsDetected.push(
-        `PRIMARY_OBJECTIVE_NOT_MET: Primary metric '${plan.primaryMetric}' failed constraint: ${primaryMet.reason}`,
-      );
+    if (!isMultiObjective) {
+      if (plan.requiredImprovement) {
+        primaryMet = this.evaluateConstraint(
+          plan.requiredImprovement,
+          baselineSuite,
+          candidateSuite,
+          comparison,
+        );
+
+        if (!primaryMet.satisfied) {
+          regressionsDetected.push(
+            `PRIMARY_OBJECTIVE_NOT_MET: Primary metric '${plan.primaryMetric}' failed constraint: ${primaryMet.reason}`,
+          );
+        }
+      }
+    } else {
+      // In multi-objective mode, check hard constraints from plan.hardConstraints
+      for (const constraint of plan.hardConstraints ?? []) {
+        const check = this.evaluateConstraint(constraint, baselineSuite, candidateSuite, comparison);
+        if (!check.satisfied) {
+          regressionsDetected.push(
+            `HARD_CONSTRAINT_VIOLATED: Hard constraint on '${constraint.metric}' failed: ${check.reason}`,
+          );
+          primaryMet = { satisfied: false, reason: check.reason };
+        }
+      }
+
+      // Check hard constraints defined on individual objectives
+      for (const obj of plan.objectives ?? []) {
+        if (obj.hardConstraint) {
+          const check = this.evaluateConstraint(obj.hardConstraint, baselineSuite, candidateSuite, comparison);
+          if (!check.satisfied) {
+            regressionsDetected.push(
+              `HARD_CONSTRAINT_VIOLATED: Objective '${obj.metric}' hard constraint failed: ${check.reason}`,
+            );
+            primaryMet = { satisfied: false, reason: check.reason };
+          }
+        }
+      }
     }
 
     // 3. Protected Metrics Check
@@ -95,8 +127,50 @@ export class RegressionGuard {
       }
     }
 
+    if (plan.protectedMetrics) {
+      for (const metricName of plan.protectedMetrics) {
+        const metricStr = String(metricName);
+        if (plan.regressionConstraints && plan.regressionConstraints[metricStr]) {
+          continue; // Already evaluated above
+        }
+        const baseVal = this.extractMetricValue(metricStr, baselineSuite, comparison, true);
+        const candVal = this.extractMetricValue(metricStr, candidateSuite, comparison, false);
+        const isCostOrResource = [
+          'input_tokens',
+          'tokens',
+          'total_tokens',
+          'peak_context_tokens',
+          'wall_time',
+          'latency',
+          'duration',
+          'repair_cycles',
+          'model_calls',
+          'monetary_cost',
+          'compute_cost',
+          'tool_failures',
+          'malformed_actions',
+        ].includes(metricStr);
+
+        if (isCostOrResource) {
+          const maxAllowed = baseVal * (1 + this.defaultTolerance);
+          if (candVal > maxAllowed + 1e-9) {
+            protectedViolations.push(
+              `PROTECTED_METRIC_REGRESSION: Protected metric '${metricStr}' increased from ${candVal} above allowed baseline ${maxAllowed}`,
+            );
+          }
+        } else {
+          const minAllowed = baseVal * (1 - this.defaultTolerance);
+          if (candVal < minAllowed - 1e-9) {
+            protectedViolations.push(
+              `PROTECTED_METRIC_REGRESSION: Protected metric '${metricStr}' dropped to ${candVal} below allowed baseline ${minAllowed}`,
+            );
+          }
+        }
+      }
+    }
+
     // Default protection on pass rate if not explicitly specified
-    if (this.strictPassRateProtection && !plan.regressionConstraints['task_success']) {
+    if (this.strictPassRateProtection && !plan.regressionConstraints?.['task_success']) {
       if (comparison.passRateDelta < -this.defaultTolerance) {
         protectedViolations.push(
           `PASS_RATE_REGRESSION: Overall task pass rate dropped from ${(comparison.baselinePassRate * 100).toFixed(1)}% to ${(comparison.candidatePassRate * 100).toFixed(1)}% (delta: ${(comparison.passRateDelta * 100).toFixed(1)}%)`,
@@ -121,7 +195,9 @@ export class RegressionGuard {
 
     let summary = '';
     if (qualified) {
-      summary = `QUALIFIED: Candidate met primary objective '${plan.primaryMetric}' without regressions across protected metrics.`;
+      summary = isMultiObjective
+        ? `QUALIFIED: Candidate satisfied multi-objective constraints and protected metrics without regressions.`
+        : `QUALIFIED: Candidate met primary objective '${plan.primaryMetric}' without regressions across protected metrics.`;
     } else if (inconclusiveReasons.length > 0 && protectedViolations.length === 0 && regressionsDetected.length === 0) {
       summary = `INCONCLUSIVE: Evidence is insufficient to establish verified improvement: ${inconclusiveReasons.join('; ')}`;
     } else {
@@ -231,7 +307,7 @@ export class RegressionGuard {
         return 0;
       }
       default:
-        return 0;
+        return extractMetricValueSafe(metric, suite, comparison, isBaseline);
     }
   }
 

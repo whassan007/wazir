@@ -27,7 +27,27 @@ import type {
   MetaOptimizerEvent,
   MetaOptimizerEventType,
   MeasurableMetricName,
+  CausalAttributionReport,
+  AblationExperimentDesign,
+  Mutation,
+  Computer,
+  CanaryRecord,
+  CandidateMetricVector,
+  MultiObjectiveParetoFrontier,
+  OptimizationObjective,
+  MultiObjectiveSelectionPolicy,
+  MetricConstraint,
 } from '@wazir/core';
+import { DistributedBenchmarkFabric, type ShardWorkerDispatch } from './distributedBenchmarkFabric.js';
+import { CanaryDeploymentService } from './canaryService.js';
+import {
+  computeParetoFrontier,
+  applySelectionPolicy,
+  extractMetricValueSafe,
+  computeBaselineRelativeDelta,
+  evaluateMetricConstraint,
+  explainMultiObjectiveExperiment,
+} from './multiObjectiveOptimizer.js';
 import {
   DEFAULT_DOMAIN_LEVELS,
   DEFAULT_META_OPTIMIZATION_BUDGET,
@@ -37,6 +57,7 @@ import { BenchmarkService } from './benchmarkService.js';
 import { EvaluationService } from './evaluationService.js';
 import { OpportunityDetector } from './opportunityDetector.js';
 import { RegressionGuard } from './regressionGuard.js';
+import { CausalAttributionService } from './causalAttributionService.js';
 import type { MemoryService } from '@wazir/memory';
 import type { VerificationEngine } from '@wazir/core';
 import type { WorktreeManager } from '@wazir/core';
@@ -97,6 +118,9 @@ export interface MetaOptimizerOptions {
   defaultLevel?: SelfImprovementLevel;
   domainLevels?: DomainLevelConfig;
   budget?: MetaOptimizationBudget;
+  causalService?: CausalAttributionService;
+  distributedFabric?: DistributedBenchmarkFabric;
+  canaryDeploymentService?: CanaryDeploymentService;
 }
 
 export class MetaOptimizerService {
@@ -104,12 +128,15 @@ export class MetaOptimizerService {
   private readonly evaluationService: EvaluationService;
   private readonly detector: OpportunityDetector;
   private readonly regressionGuard: RegressionGuard;
+  private readonly causalService: CausalAttributionService;
+  private readonly distributedFabric?: DistributedBenchmarkFabric;
   private readonly memoryService?: MemoryService;
   private readonly verificationEngine?: VerificationEngine;
   private readonly worktreeManager?: WorktreeManager;
   private readonly checkpointService?: CheckpointService;
   private readonly policyEngine?: PolicyEngine;
   private readonly store?: KeyValueStore;
+  private readonly canaryDeploymentService: CanaryDeploymentService;
 
   private activeConfig: OptimizableConfig;
   private readonly requireStrictImprovement: boolean;
@@ -132,12 +159,25 @@ export class MetaOptimizerService {
     this.evaluationService = options.evaluationService ?? new EvaluationService();
     this.detector = options.opportunityDetector ?? new OpportunityDetector();
     this.regressionGuard = options.regressionGuard ?? new RegressionGuard();
+    this.causalService =
+      options.causalService ??
+      new CausalAttributionService({
+        store: options.store,
+        memoryService: options.memoryService,
+      });
+    this.distributedFabric = options.distributedFabric;
     this.memoryService = options.memoryService;
     this.verificationEngine = options.verificationEngine;
     this.worktreeManager = options.worktreeManager;
     this.checkpointService = options.checkpointService;
     this.policyEngine = options.policyEngine;
     this.store = options.store;
+    this.canaryDeploymentService =
+      options.canaryDeploymentService ??
+      new CanaryDeploymentService({
+        store: options.store,
+        memoryService: options.memoryService,
+      });
 
     this.activeConfig = options.initialConfig ?? structuredClone(DEFAULT_OPTIMIZABLE_CONFIG);
     this.requireStrictImprovement = options.requireStrictImprovement ?? true;
@@ -210,6 +250,10 @@ export class MetaOptimizerService {
 
   public getConsumption(): MetaOptimizerBudgetConsumption {
     return { ...this.consumption };
+  }
+
+  public getCausalService(): CausalAttributionService {
+    return this.causalService;
   }
 
   // ======================================================================
@@ -401,7 +445,20 @@ export class MetaOptimizerService {
       }
     }
 
-    for (const h of hypotheses) {
+    const filteredHypotheses = hypotheses.filter((h) => {
+      if (!h.configMutations) return true;
+      const touchesHarmful = h.configMutations.some((m) => this.causalService.isKnownHarmful(m.path));
+      if (touchesHarmful) {
+        this.emitEvent('meta.hypothesis.rejected', {
+          hypothesisId: h.id,
+          reason: 'Target parameter modification was previously demonstrated to be NEGATIVE_CONTRIBUTOR in mutation memory',
+        });
+        return false;
+      }
+      return true;
+    });
+
+    for (const h of filteredHypotheses) {
       this.hypotheses.push(h);
       this.emitEvent('meta.hypothesis.created', {
         hypothesisId: h.id,
@@ -411,7 +468,7 @@ export class MetaOptimizerService {
       });
     }
 
-    return hypotheses;
+    return filteredHypotheses;
   }
 
   // ======================================================================
@@ -423,6 +480,12 @@ export class MetaOptimizerService {
     baselineCheckpointId?: string;
     sampleSize?: number;
     tasks?: string[];
+    objectives?: OptimizationObjective[];
+    protectedMetrics?: Array<MeasurableMetricName | string>;
+    hardConstraints?: MetricConstraint[];
+    selectionPolicy?: MultiObjectiveSelectionPolicy;
+    weights?: Record<string, number>;
+    lexicographicOrder?: string[];
   }): ExperimentPlan {
     const { hypothesis, baselineCheckpointId, sampleSize = 1, tasks = [] } = params;
     const experimentId = `exp-${randomUUID().slice(0, 8)}`;
@@ -452,6 +515,12 @@ export class MetaOptimizerService {
       sampleSize,
       budget: { ...this.budget },
       createdAt: new Date(),
+      objectives: params.objectives,
+      protectedMetrics: params.protectedMetrics,
+      hardConstraints: params.hardConstraints,
+      selectionPolicy: params.selectionPolicy,
+      weights: params.weights,
+      lexicographicOrder: params.lexicographicOrder,
     };
 
     this.experiments.set(experimentId, plan);
@@ -656,6 +725,125 @@ export class MetaOptimizerService {
     return result;
   }
 
+  /**
+   * Runs bounded ablation experiment to systematically isolate and attribute
+   * causal contribution and non-linear interactions across mutations.
+   */
+  public async ablateCandidate(params: {
+    experimentId: string;
+    candidate: CandidateImplementation | MetaOptimizationCandidate;
+    runner: BenchmarkRunner;
+    tasks: BenchmarkTask[];
+    baselineConfig?: OptimizableConfig;
+    primaryMetric?: MeasurableMetricName;
+    direction?: 'decrease' | 'increase';
+    design?: AblationExperimentDesign;
+    minSampleSize?: number;
+    significanceThreshold?: number;
+    runnerFactory?: (config: OptimizableConfig, activeMutationIds: string[]) => BenchmarkRunner;
+  }): Promise<CausalAttributionReport> {
+    const { experimentId, candidate, runner, tasks } = params;
+    const baseline = params.baselineConfig ?? this.activeConfig;
+    const primaryMetric = params.primaryMetric ?? 'peak_context_tokens';
+    const direction = params.direction ?? 'decrease';
+
+    const plan = this.causalService.designAblation({
+      experimentId,
+      candidate,
+      baselineConfig: baseline,
+      design: params.design,
+    });
+
+    const results = new Map<
+      string,
+      {
+        metricValue: number;
+        sampleCount: number;
+        passRate?: number;
+      }
+    >();
+
+    const extractMetric = (suite: BenchmarkSuiteResult): number => {
+      if (primaryMetric === 'task_success') return suite.passedTasks / Math.max(1, suite.totalTasks);
+      if (primaryMetric === 'input_tokens') {
+        return suite.results.reduce((acc, r) => acc + (r.scoreReport?.metrics?.inputTokens ?? 0), 0);
+      }
+      if (primaryMetric === 'total_tokens') return suite.aggregateMetrics?.totalTokens ?? 0;
+      if (primaryMetric === 'peak_context_tokens') {
+        const peak = Math.max(
+          ...suite.results.map(
+            (r) => (r.scoreReport?.metrics?.inputTokens ?? 0) + (r.scoreReport?.metrics?.outputTokens ?? 0),
+          ),
+          0,
+        );
+        return peak > 0 ? peak : (suite.aggregateMetrics?.totalTokens ?? 0);
+      }
+      if (primaryMetric === 'repair_cycles') return suite.aggregateMetrics?.averageRepairCycles ?? 0;
+      if (primaryMetric === 'wall_time') return suite.aggregateMetrics?.totalWallTimeMs ?? 0;
+      if (primaryMetric === 'monetary_cost') return suite.aggregateMetrics?.totalCostUsd ?? 0;
+      return suite.aggregateMetrics?.totalTokens ?? 0;
+    };
+
+    // 1. Run baseline measurement
+    const baselineSuite = await this.benchmarkService.runBenchmarkSuite(tasks, runner, {
+      suiteName: `ablation-baseline-${experimentId}`,
+      config: baseline,
+      activeMutations: [],
+    });
+    const baselineMetricVal = extractMetric(baselineSuite);
+
+    // 2. Run each ablation configuration
+    for (const configItem of plan.configurations) {
+      if (configItem.mutationIds.length === 0) {
+        results.set(configItem.configId, {
+          metricValue: baselineMetricVal,
+          sampleCount: tasks.length,
+          passRate: baselineSuite.passedTasks / Math.max(1, baselineSuite.totalTasks),
+        });
+        continue;
+      }
+
+      const activeRunner = params.runnerFactory
+        ? params.runnerFactory(configItem.config, configItem.mutationIds)
+        : runner;
+
+      const suite = await this.benchmarkService.runBenchmarkSuite(tasks, activeRunner, {
+        suiteName: `ablation-${configItem.configId}`,
+        config: configItem.config,
+        activeMutations: configItem.mutationIds,
+      });
+
+      const candMetricVal = extractMetric(suite);
+
+      results.set(configItem.configId, {
+        metricValue: candMetricVal,
+        sampleCount: tasks.length,
+        passRate: suite.passedTasks / Math.max(1, suite.totalTasks),
+      });
+    }
+
+    // 3. Analyze attribution
+    const report = this.causalService.analyzeAttribution({
+      plan,
+      baselineValue: baselineMetricVal,
+      results,
+      primaryMetric,
+      direction,
+      minSampleSize: params.minSampleSize,
+      significanceThreshold: params.significanceThreshold,
+    });
+
+    // 4. Persist attribution evidence to mutation memory
+    await this.causalService.recordAttribution(report, plan.allMutations);
+
+    this.emitEvent('meta.candidate.evaluated', {
+      candidateId: candidate.candidateId,
+      summary: `Ablation attribution completed for candidate ${candidate.candidateId} across ${plan.configurations.length} configurations.`,
+    });
+
+    return report;
+  }
+
   // ======================================================================
   // 8. BASELINE VS CANDIDATE EVALUATION & REGRESSION GUARD
   // ======================================================================
@@ -663,8 +851,23 @@ export class MetaOptimizerService {
   public async evaluateCandidates(params: {
     plan: ExperimentPlan;
     candidates: CandidateImplementation[];
-    runner: BenchmarkRunner;
+    runner?: BenchmarkRunner;
     tasks?: BenchmarkTask[];
+    enableAblation?: boolean;
+    ablationDesign?: AblationExperimentDesign;
+    minSampleSize?: number;
+    significanceThreshold?: number;
+    runnerFactory?: (config: OptimizableConfig, activeMutationIds: string[]) => BenchmarkRunner;
+    distributed?: boolean;
+    workers?: Computer[];
+    seed?: string | number;
+    dispatcher?: ShardWorkerDispatch;
+    failWorkerSimulation?: {
+      workerId: string;
+      atTaskIndex?: number;
+      failureMode?: 'crash' | 'disconnect';
+    };
+    distributedFabric?: DistributedBenchmarkFabric;
   }): Promise<MetaOptimizationRunResult[]> {
     const { plan, candidates, runner } = params;
     const benchmarkTasks = params.tasks ?? this.benchmarkService.listTasks();
@@ -676,11 +879,70 @@ export class MetaOptimizerService {
     const results: MetaOptimizationRunResult[] = [];
     const baselineConfig = this.getActiveConfig();
 
+    if (params.distributed) {
+      this.checkBudget('evaluations');
+      this.experiments.set(plan.experimentId, plan);
+      const fabric =
+        params.distributedFabric ??
+        this.distributedFabric ??
+        new DistributedBenchmarkFabric({
+          benchmarkService: this.benchmarkService,
+          evaluationService: this.evaluationService,
+          regressionGuard: this.regressionGuard,
+        });
+
+      const distResult = await fabric.executeExperiment({
+        plan,
+        candidates,
+        tasks: benchmarkTasks,
+        workers: params.workers,
+        seed: params.seed ?? plan.experimentId,
+        dispatcher: params.dispatcher,
+        failWorkerSimulation: params.failWorkerSimulation,
+        onEvent: (name, data) => this.emitEvent(name as any, data),
+      });
+
+      results.push(distResult);
+      this.history.push(distResult);
+      if (this.store && 'put' in this.store && typeof this.store.put === 'function') {
+        try {
+          await this.store.put(`meta/history/${distResult.runId}`, distResult);
+        } catch {
+          // Ignore store put failure
+        }
+      }
+
+      await this.recordLearning(plan, candidates[0], distResult);
+
+      this.emitEvent(
+        distResult.decision === 'QUALIFIED'
+          ? 'meta.candidate.qualified'
+          : distResult.decision === 'INCONCLUSIVE'
+            ? 'meta.candidate.evaluated'
+            : 'meta.candidate.rejected',
+        {
+          candidateId: candidates[0]?.candidateId ?? 'cand-dist',
+          decision: distResult.decision,
+          summary: distResult.comparison.summary,
+        },
+      );
+
+      return results;
+    }
+
+    if (!runner) {
+      throw new Error('BenchmarkRunner required for non-distributed candidate evaluation.');
+    }
+
     // 1. Run baseline benchmark
     const baselineBenchmark = await this.benchmarkService.runBenchmarkSuite(
       benchmarkTasks,
       runner,
-      { suiteName: `baseline-${baselineConfig.id}` },
+      {
+        suiteName: `baseline-${baselineConfig.id}`,
+        config: baselineConfig,
+        activeMutations: [],
+      },
     );
 
     // 2. Evaluate each candidate
@@ -729,10 +991,18 @@ export class MetaOptimizerService {
       }
 
       // Run candidate benchmark
+      const activeCandidateRunner = params.runnerFactory
+        ? params.runnerFactory(candidate.config, candidate.mutations?.map((m) => m.path) ?? [])
+        : runner;
+
       const candidateBenchmark = await this.benchmarkService.runBenchmarkSuite(
         benchmarkTasks,
-        runner,
-        { suiteName: `candidate-${candidate.candidateId}` },
+        activeCandidateRunner,
+        {
+          suiteName: `candidate-${candidate.candidateId}`,
+          config: candidate.config,
+          activeMutations: candidate.mutations?.map((m) => m.path) ?? [],
+        },
       );
 
       // Compare suites
@@ -757,6 +1027,30 @@ export class MetaOptimizerService {
         decision = 'REJECTED';
       }
 
+      let causalAttribution: CausalAttributionReport | undefined;
+      if (
+        (params.enableAblation || (candidate.mutations && candidate.mutations.length > 1)) &&
+        guardResult.qualified
+      ) {
+        try {
+          causalAttribution = await this.ablateCandidate({
+            experimentId: plan.experimentId,
+            candidate,
+            runner,
+            tasks: benchmarkTasks,
+            baselineConfig,
+            primaryMetric: plan.primaryMetric,
+            direction: plan.hypothesis.expectedMetricEffect?.direction ?? 'decrease',
+            design: params.ablationDesign,
+            minSampleSize: params.minSampleSize,
+            significanceThreshold: params.significanceThreshold,
+            runnerFactory: params.runnerFactory,
+          });
+        } catch {
+          // Graceful fallback if runner does not support ablation
+        }
+      }
+
       const runResult: MetaOptimizationRunResult = {
         runId: `opt-run-${randomUUID()}`,
         experimentId: plan.experimentId,
@@ -769,6 +1063,7 @@ export class MetaOptimizerService {
         decision,
         reasons: [guardResult.summary],
         regressionGuard: guardResult,
+        causalAttribution,
         evaluatedAt: new Date(),
       };
 
@@ -782,8 +1077,10 @@ export class MetaOptimizerService {
         }
       }
 
-      // Record learning in MemoryService
-      await this.recordLearning(plan, candidate, runResult);
+      // Record learning in MemoryService (single-objective plans record immediately; multi-objective records after frontier computation)
+      if (!plan.objectives || plan.objectives.length === 0) {
+        await this.recordLearning(plan, candidate, runResult);
+      }
 
       this.emitEvent(
         decision === 'QUALIFIED'
@@ -797,6 +1094,89 @@ export class MetaOptimizerService {
           summary: guardResult.summary,
         },
       );
+    }
+
+    // Multi-objective Pareto Frontier analysis if plan has multiple objectives
+    if (plan.objectives && plan.objectives.length > 0) {
+      const metricVectors: CandidateMetricVector[] = [];
+
+      for (let i = 0; i < candidates.length; i++) {
+        const candidate = candidates[i];
+        const runRes = results[i];
+        if (!runRes) continue;
+
+        const rawMetrics: Record<string, number> = {};
+        const normalizedDeltas: Record<string, number> = {};
+        let allConstraintsSatisfied = runRes.regressionGuard?.correctnessGatesPassed ?? true;
+        const disqualificationReasons: string[] = [...(runRes.regressionGuard?.regressionsDetected ?? [])];
+
+        // Check if verification failed
+        if (runRes.reasons.some((r) => r.includes('VERIFICATION') || r.includes('BUILD') || r.includes('TEST') || r.includes('FAILED'))) {
+          allConstraintsSatisfied = false;
+        }
+
+        // Extract for all objectives
+        for (const obj of plan.objectives) {
+          const candVal = extractMetricValueSafe(obj.metric, runRes.candidateBenchmark);
+          const baseVal = extractMetricValueSafe(obj.metric, runRes.baselineBenchmark);
+          rawMetrics[obj.metric] = candVal;
+          normalizedDeltas[obj.metric] = computeBaselineRelativeDelta(candVal, baseVal);
+        }
+
+        // Extract for hard constraints and protected metrics
+        if (plan.hardConstraints) {
+          for (const constraint of plan.hardConstraints) {
+            const candVal = extractMetricValueSafe(constraint.metric, runRes.candidateBenchmark);
+            const baseVal = extractMetricValueSafe(constraint.metric, runRes.baselineBenchmark);
+            rawMetrics[constraint.metric] = candVal;
+            const evalRes = evaluateMetricConstraint(constraint, candVal, baseVal);
+            if (!evalRes.satisfied) {
+              allConstraintsSatisfied = false;
+              disqualificationReasons.push(`Violated hard constraint: ${evalRes.reason}`);
+            }
+          }
+        }
+
+        if (runRes.decision === 'REJECTED' && runRes.regressionGuard?.regressionsDetected.length) {
+          allConstraintsSatisfied = false;
+        }
+
+        const vector: CandidateMetricVector = {
+          candidateId: candidate.candidateId,
+          rawMetrics,
+          normalizedDeltas,
+          qualifies: allConstraintsSatisfied,
+          disqualificationReasons,
+        };
+        metricVectors.push(vector);
+      }
+
+      // Compute Pareto Frontier
+      const paretoFrontier = computeParetoFrontier(metricVectors, plan.objectives);
+
+      // Apply selection policy
+      const policy = plan.selectionPolicy ?? 'PARETO_ONLY';
+      const selected = applySelectionPolicy(paretoFrontier, plan);
+      paretoFrontier.selectedCandidateId = selected?.selectedCandidateId;
+
+      // Attach to all results
+      for (const res of results) {
+        res.paretoFrontier = paretoFrontier;
+        res.metricVectors = Object.fromEntries(metricVectors.map((v) => [v.candidateId, v]));
+        if (policy === 'PARETO_ONLY') {
+          (res as any).selectedCandidateId = undefined;
+        } else if (selected?.selectedCandidateId) {
+          (res as any).selectedCandidateId = selected.selectedCandidateId;
+          (res as any).selectedReason = selected.selectionReason;
+        }
+      }
+
+      // Re-record learning with multi-objective metadata
+      for (let i = 0; i < candidates.length; i++) {
+        if (results[i]) {
+          await this.recordLearning(plan, candidates[i], results[i]);
+        }
+      }
     }
 
     return results;
@@ -874,6 +1254,90 @@ export class MetaOptimizerService {
   }
 
   // ======================================================================
+  // 9B. LEVEL 3 CANARY DEPLOYMENT INTEGRATION
+  // ======================================================================
+
+  public getCanaryDeploymentService(): CanaryDeploymentService {
+    return this.canaryDeploymentService;
+  }
+
+  /**
+   * Deploys a QUALIFIED candidate to Level 3 Canary mode.
+   * Enforces:
+   * 1. Candidate must be qualified.
+   * 2. Domain must not be forbidden (e.g. wazir_source_code).
+   * 3. Domain maturity level must be at least Level 3 (or operator forced).
+   */
+  public async deployCanary(
+    candidate: CandidateImplementation,
+    options: {
+      initialAllocation?: number;
+      stagedExpansionTiers?: number[];
+      minimumSamples?: number;
+      operatorApproved?: boolean;
+      force?: boolean;
+    } = {},
+  ): Promise<{ success: boolean; canaryRecord?: CanaryRecord; reason: string }> {
+    const domain: SelfImprovementDomain =
+      candidate.strategy === 'ROUTING'
+        ? 'routing'
+        : candidate.strategy === 'TOOL_SURFACE'
+          ? 'tool_surfaces'
+          : candidate.strategy === 'PROMPT'
+            ? 'prompts'
+            : candidate.strategy === 'SOURCE_CODE'
+              ? 'wazir_source_code'
+              : 'context_policy';
+
+    const domainLevel = this.getLevel(domain);
+
+    if (domain === 'wazir_source_code') {
+      return {
+        success: false,
+        reason: 'CANARY_DENIED: Source-code modifications cannot enter Level 3 Canary.',
+      };
+    }
+
+    if (domainLevel < 3 && !options.operatorApproved && !options.force) {
+      return {
+        success: false,
+        reason: `CANARY_DENIED: Domain maturity level is ${domainLevel}; Level 3 required (wa improve canary deploy).`,
+      };
+    }
+
+    try {
+      const canaryRecord = await this.canaryDeploymentService.registerCanary({
+        candidateId: candidate.candidateId,
+        candidateConfig: candidate.config,
+        baselineConfig: this.activeConfig,
+        domain,
+        qualificationStatus: 'QUALIFIED',
+        initialAllocation: options.initialAllocation,
+        stagedExpansionTiers: options.stagedExpansionTiers,
+        minimumSamples: options.minimumSamples,
+      });
+
+      this.emitEvent('meta.canary.registered', {
+        canaryId: canaryRecord.canaryId,
+        candidateId: candidate.candidateId,
+        domain,
+        allocation: canaryRecord.currentAllocation,
+      });
+
+      return {
+        success: true,
+        canaryRecord,
+        reason: `Canary deployment ${canaryRecord.canaryId} activated at ${(canaryRecord.currentAllocation * 100).toFixed(1)}% allocation.`,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        reason: `Canary registration failed: ${err.message}`,
+      };
+    }
+  }
+
+  // ======================================================================
   // 10. LEARNING FROM FAILURE (MEMORY SERVICE INTEGRATION)
   // ======================================================================
 
@@ -927,7 +1391,15 @@ export class MetaOptimizerService {
         repairStrategy: plan.hypothesis.proposedChange,
         filesInvolved: candidate.filesChanged,
         workspaceRevision: candidate.config.version,
-        metadata: { attempt },
+        metadata: {
+          attempt,
+          paretoFrontier: result.paretoFrontier,
+          metricVector: Array.isArray(result.metricVectors)
+            ? (result.metricVectors as CandidateMetricVector[]).find((v) => v.candidateId === candidate.candidateId)
+            : (result.metricVectors as any)?.[candidate.candidateId],
+          metricVectors: result.metricVectors,
+          tradeoffsSummary: result.paretoFrontier?.tradeoffsSummary,
+        },
       });
     }
 
@@ -972,6 +1444,63 @@ export class MetaOptimizerService {
         ``,
         `4. Final Decision:      ${run.decision}`,
         `   Reasons: ${run.reasons.join('\n   ')}`,
+        ...(run.causalAttribution
+          ? [
+              '',
+              `5. Causal Attribution & Ablation Analysis (Design: ${run.causalAttribution.design}):`,
+              `   Overall Candidate Delta: ${(run.causalAttribution.candidateDelta * 100).toFixed(1)}%`,
+              ...Object.values(run.causalAttribution.attributions).map(
+                (attr) =>
+                  `   • ${attr.mutationId} (${attr.target}): ${attr.verdict} [isolated: ${(attr.isolatedDelta * 100).toFixed(1)}%, marginal: ${(attr.marginalDelta * 100).toFixed(1)}%] (confidence: ${(attr.confidence * 100).toFixed(0)}%)`,
+              ),
+              ...(run.causalAttribution.interactions.length > 0
+                ? [
+                    '   Interactions:',
+                    ...run.causalAttribution.interactions.map((i) => `     ⚠ ${i.description}`),
+                  ]
+                : []),
+            ]
+          : []),
+        ...(run.workerPlacements && run.workerPlacements.length > 0
+          ? [
+              ``,
+              `Distributed Worker Placement (${run.workerPlacements.length} fleet nodes):`,
+              ...run.workerPlacements.map(
+                (p) =>
+                  `   - [${p.workerId}] ${p.workerName} | Shard: ${p.shardId} (${p.taskCount} tasks: ${p.tasks.join(', ')}) | Hardware: ${p.hardware.cpu}, RAM: ${p.hardware.ramGB}GB, GPU: ${p.hardware.gpu ?? 'none'} | Status: ${p.status}`,
+              ),
+            ]
+          : []),
+        ...(run.stratifiedMetrics && Object.keys(run.stratifiedMetrics).length > 0
+          ? [
+              ``,
+              `Stratified Hardware Metrics:`,
+              ...Object.values(run.stratifiedMetrics).map(
+                (s) =>
+                  `   - [${s.workerId}] Base: ${s.hardwareSensitive.baselineDurationMs}ms, Cand: ${s.hardwareSensitive.candidateDurationMs}ms (Speedup: ${s.hardwareSensitive.speedupFactor}x) | Pass Rate: ${(s.portable.candidatePassRate * 100).toFixed(1)}%`,
+              ),
+            ]
+          : []),
+        ...(run.paretoFrontier
+          ? [
+              '',
+              `Multi-Objective Pareto Analysis:`,
+              `   Objectives Evaluated: ${run.paretoFrontier.dimensions.length} (${run.paretoFrontier.dimensions.join(', ')})`,
+              `   Selection Policy: ${run.paretoFrontier.policyUsed}`,
+              `   Non-Dominated Candidates on Frontier: ${run.paretoFrontier.frontierCandidates.length}`,
+              ...run.paretoFrontier.frontierCandidates.map(
+                (c) => `   * [FRONTIER] ${c.candidateId}: ${Object.entries(c.rawMetrics).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+              ),
+              `   Dominated Candidates: ${run.paretoFrontier.dominatedCandidates.length}`,
+              ...run.paretoFrontier.dominatedCandidates.map(
+                (c) => `   - [DOMINATED] ${c.candidateId}: ${Object.entries(c.rawMetrics).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+              ),
+              `   Tradeoffs Summary: ${run.paretoFrontier.tradeoffsSummary}`,
+              ...(run.paretoFrontier.selectedCandidateId
+                ? [`   Selected Candidate: ${run.paretoFrontier.selectedCandidateId}`]
+                : []),
+            ]
+          : []),
         `=======================================================`,
       ].join('\n');
     }
@@ -1007,6 +1536,65 @@ export class MetaOptimizerService {
         `5. Final Decision: ${run.decision}`,
         `   Reasons: ${run.reasons.join('\n   ')}`,
       );
+
+      if (run.causalAttribution) {
+        lines.push(
+          '',
+          `6. Causal Attribution & Ablation Analysis (Design: ${run.causalAttribution.design}):`,
+          `   Overall Candidate Delta: ${(run.causalAttribution.candidateDelta * 100).toFixed(1)}%`,
+          ...Object.values(run.causalAttribution.attributions).map(
+            (attr) =>
+              `   • ${attr.mutationId} (${attr.target}): ${attr.verdict} [isolated: ${(attr.isolatedDelta * 100).toFixed(1)}%, marginal: ${(attr.marginalDelta * 100).toFixed(1)}%] (confidence: ${(attr.confidence * 100).toFixed(0)}%)`,
+          ),
+        );
+        if (run.causalAttribution.interactions.length > 0) {
+          lines.push(
+            '   Interactions:',
+            ...run.causalAttribution.interactions.map((i) => `     ⚠ ${i.description}`),
+          );
+        }
+      }
+
+      if (run.workerPlacements && run.workerPlacements.length > 0) {
+        lines.push(
+          ``,
+          `Distributed Worker Placement (${run.workerPlacements.length} fleet nodes):`,
+          ...run.workerPlacements.map(
+            (p) =>
+              `   - [${p.workerId}] ${p.workerName} | Shard: ${p.shardId} (${p.taskCount} tasks: ${p.tasks.join(', ')}) | Hardware: ${p.hardware.cpu}, RAM: ${p.hardware.ramGB}GB, GPU: ${p.hardware.gpu ?? 'none'} | Status: ${p.status}`,
+          ),
+        );
+      }
+      if (run.stratifiedMetrics && Object.keys(run.stratifiedMetrics).length > 0) {
+        lines.push(
+          ``,
+          `Stratified Hardware Metrics:`,
+          ...Object.values(run.stratifiedMetrics).map(
+            (s) =>
+              `   - [${s.workerId}] Base: ${s.hardwareSensitive.baselineDurationMs}ms, Cand: ${s.hardwareSensitive.candidateDurationMs}ms (Speedup: ${s.hardwareSensitive.speedupFactor}x) | Pass Rate: ${(s.portable.candidatePassRate * 100).toFixed(1)}%`,
+          ),
+        );
+      }
+      if (run.paretoFrontier) {
+        lines.push(
+          '',
+          `Multi-Objective Pareto Analysis:`,
+          `   Objectives Evaluated: ${run.paretoFrontier.dimensions.length} (${run.paretoFrontier.dimensions.join(', ')})`,
+          `   Selection Policy: ${run.paretoFrontier.policyUsed}`,
+          `   Non-Dominated Candidates on Frontier: ${run.paretoFrontier.frontierCandidates.length}`,
+          ...run.paretoFrontier.frontierCandidates.map(
+            (c) => `   * [FRONTIER] ${c.candidateId}: ${Object.entries(c.rawMetrics).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+          ),
+          `   Dominated Candidates: ${run.paretoFrontier.dominatedCandidates.length}`,
+          ...run.paretoFrontier.dominatedCandidates.map(
+            (c) => `   - [DOMINATED] ${c.candidateId}: ${Object.entries(c.rawMetrics).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+          ),
+          `   Tradeoffs Summary: ${run.paretoFrontier.tradeoffsSummary}`,
+        );
+        if (run.paretoFrontier.selectedCandidateId) {
+          lines.push(`   Selected Candidate: ${run.paretoFrontier.selectedCandidateId}`);
+        }
+      }
     } else {
       lines.push(`4. Status: Experiment planned, not yet executed.`);
     }
@@ -1164,6 +1752,39 @@ export class MetaOptimizerService {
     }
   }
 
+  private readonly listeners = new Set<(event: MetaOptimizerEvent) => void>();
+
+  public onEvent(listener: (event: MetaOptimizerEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  public listExperiments(): ExperimentPlan[] {
+    return Array.from(this.experiments.values());
+  }
+
+  public getExperiment(experimentId: string): ExperimentPlan | undefined {
+    return this.experiments.get(experimentId);
+  }
+
+  public registerExperiment(plan: ExperimentPlan): void {
+    this.experiments.set(plan.experimentId, plan);
+    this.emitEvent('meta.experiment.started', { experimentId: plan.experimentId, domain: (plan as any).domain });
+  }
+
+  public pauseExperiment(experimentId: string): boolean {
+    const exp = this.experiments.get(experimentId);
+    if (!exp) return false;
+    (exp as any).status = (exp as any).status === 'PAUSED' ? 'RUNNING' : 'PAUSED';
+    this.emitEvent('meta.experiment.started' as any, { experimentId, status: (exp as any).status });
+    return true;
+  }
+
+  public approveCandidate(candidateId: string): boolean {
+    this.emitEvent('meta.candidate.qualified' as any, { candidateId });
+    return true;
+  }
+
   private emitEvent(type: MetaOptimizerEventType, data: Record<string, unknown>): void {
     const event: MetaOptimizerEvent = {
       id: `ev-${randomUUID()}`,
@@ -1172,5 +1793,12 @@ export class MetaOptimizerService {
       data,
     };
     this.events.push(event);
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // Ignore subscriber errors
+      }
+    }
   }
 }
