@@ -47,6 +47,7 @@ import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import { createSecretBroker, type SecretBroker } from '@wazir/secrets';
 import { Worker, currentLoad, type DiscoveredRuntime } from '@wazir/workers';
+import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
 import { configDir, loadConfig, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
@@ -331,7 +332,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   if (!options.readOnlyLifecycle) {
     await lifecycle.applyStartupPolicy(config.models?.startup);
     lifecycle.startReconciliation();
-    new RecoveryManager({ computers, executions, jobManager, orchestrator }).start();
+    const inspectOutcome = localOutcomeInspector(projectRoot, localComputer.id);
+    await reconcileLocalOutcomes(executions, inspectOutcome);
+    new RecoveryManager({ computers, executions, jobManager, orchestrator, inspectToolOutcome: inspectOutcome }).start();
   }
 
   return {

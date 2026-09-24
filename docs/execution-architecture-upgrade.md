@@ -470,6 +470,71 @@ and inspect-summary CLI tests against the fresh build. All passed.
 Regression coverage: `packages/core/tests/executionSummary.test.ts`,
 `apps/cli/tests/inspectExecutionSummary.test.ts`.
 
+## Sixteenth tranche: event-derived recovery and outcome reconciliation
+
+The engine already turned a dispatched call with no recorded result into
+`OUTCOME_UNKNOWN` on load. It then refused completion and any further write
+"until reconciled", but no reconcile API existed, so a crashed execution could
+never finish.
+
+- **`ExecutionEngine.reconcileToolCall(executionId, callId, inspection)`**
+  resolves such a call from physical evidence. `APPLIED` records it as completed,
+  and `NOT_APPLIED` as failed, so the action may be issued again. `UNDETERMINED`
+  is refused. The evidence and who inspected are part of the durable record. The
+  call is idempotent through stable event IDs, and a second reconciliation of a
+  resolved call is rejected.
+- **`reconstructExecutionState` / `planRecovery`**
+  (`packages/core/src/services/executionRecovery.ts`, plus
+  `ExecutionEngine.reconstruct()`) rebuild the state from events:
+  - the last confirmed workspace revision
+  - the last confirmed tool result
+  - unresolved tool calls
+  - the lease holder, when lease events exist
+  - which checks are current at that revision and which are stale
+  - consumed budgets, and remaining ones given limits
+
+  The plan is `none` for a terminal execution. It is `reconcile` (listing each
+  unresolved non-read-only call, never a replay) while any remain, `terminate`
+  when a budget is already exhausted, and otherwise `resume` the *same*
+  execution at its revision.
+- **`inspectToolOutcome`** (`packages/tools/src/outcomeInspection.ts`) answers
+  only what the filesystem proves:
+  - read-only: `NOT_APPLIED`
+  - `write`: exact intended content is `APPLIED`, anything else `NOT_APPLIED`
+    (safe to reissue, because the write sets exact content)
+  - `edit`: old-text-only is `NOT_APPLIED`, new-text-only `APPLIED`; overlap,
+    both or neither is `UNDETERMINED`
+  - shell, git, MCP and other external effects: always `UNDETERMINED`
+- **`RecoveryManager`** takes an optional `inspectToolOutcome`. It reconciles
+  proven outcomes before orphaning, reports them in `reconciled`, and keeps
+  undetermined ones in `unknownOutcomes`, out of live retry.
+- **The CLI** (`apps/cli/src/recovery.ts`) inspects only executions that ran on
+  this computer outside a job worktree. The execution record does not carry a
+  worktree path, and remote workers' files aren't local. Everything else is
+  `UNDETERMINED` with that reason. On non-read-only startup the engine reconciles
+  local standalone executions' provable outcomes.
+
+Finding: `writeProjectFile` opens with `O_TRUNC` and then writes, so it is not
+atomic. A crash mid-write leaves a truncated file. Recovery handles this safely
+(truncated means `NOT_APPLIED` for `write`, and `UNDETERMINED` for `edit`, whose
+original text may be lost). Making the write atomic (temp file plus rename)
+would need care around the current same-inode and `O_NOFOLLOW` checks, and is
+left open.
+
+Not done: resuming the agent loop itself inside the recovered execution. The
+plan says when resumption is safe and at which revision, but the orchestrator
+still retries a task as before.
+
+Regression coverage: `packages/core/tests/executionRecovery.test.ts`,
+`packages/tools/tests/outcomeInspection.test.ts`, `apps/cli/tests/recovery.test.ts`.
+Verification: the shared `node_modules` lost `vitest` during the other
+session's dependency changes, so tests ran through `npx vitest@2.1` (the
+project's pinned major) with a scratch config. `packages/core`,
+`packages/tools` and the CLI recovery/e2e/fleet/termination/inspect tests ran:
+48 of 49 files passed (486 passed, 6 skipped). `mcp.integration.test.ts` failed
+at file load in the combined run but passed 19/19 on its own. It covers MCP
+code this tranche doesn't touch.
+
 ## Not yet done
 
 - Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
@@ -478,6 +543,8 @@ Regression coverage: `packages/core/tests/executionSummary.test.ts`,
   re-placement (a different computer, or loading a model) as an escalation target.
 - Phase 17 remainder: agent-side run counters and a typed reason for an ordinary
   verification failure (see the fifteenth tranche).
-- Phase 21: full event-derived recovery reconstruction.
+- Phase 21 remainder: resuming the agent loop inside the recovered execution,
+  recording worktree paths so job-task outcomes can be inspected, and an atomic
+  `writeProjectFile`.
 - Phase 22: `wa executions events|explain` projections of the new events.
 - Phase 24: the live acceptance run.

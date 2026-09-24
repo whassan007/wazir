@@ -2,6 +2,8 @@ import type { ComputerRegistry } from './computerRegistry.js';
 import type { ExecutionEngine } from './executionEngine.js';
 import type { JobManager } from './jobManager.js';
 import type { JobOrchestrator } from './jobOrchestrator.js';
+import type { ToolOutcomeInspection } from './executionRecovery.js';
+import type { ExecutionRecord, ToolCallCheckpoint } from '../types/execution.js';
 
 export interface RecoveryManagerOptions {
   computers: ComputerRegistry;
@@ -16,6 +18,13 @@ export interface RecoveryManagerOptions {
    *  executions are orphaned and, where possible, retried. */
   offlineMs?: number;
   onSweep?: (result: RecoverySweepResult) => void;
+  /**
+   * Physical-state inspection for tool calls with no recorded outcome (e.g. tools'
+   * `inspectToolOutcome`). When provided, each such call is inspected and reconciled
+   * if — and only if — the evidence proves APPLIED or NOT_APPLIED. Without it, every
+   * unknown outcome stays blocked for an operator, as before.
+   */
+  inspectToolOutcome?: (record: ExecutionRecord, call: ToolCallCheckpoint) => Promise<ToolOutcomeInspection>;
 }
 
 export interface RecoverySweepResult {
@@ -27,6 +36,8 @@ export interface RecoverySweepResult {
    *  These are deliberately excluded from retriedLive: automatically re-running a git
    *  commit or file write that may have already landed risks double-applying it. */
   unknownOutcomes: Array<{ executionId: string; taskId: string; tool: string }>;
+  /** Unknown outcomes resolved from physical evidence during this sweep. */
+  reconciled: Array<{ executionId: string; callId: string; tool: string; outcome: 'APPLIED' | 'NOT_APPLIED'; evidence: string }>;
 }
 
 /**
@@ -57,6 +68,7 @@ export class RecoveryManager {
     const orphanedExecutions: string[] = [];
     const retriedLive: string[] = [];
     const unknownOutcomes: RecoverySweepResult['unknownOutcomes'] = [];
+    const reconciled: RecoverySweepResult['reconciled'] = [];
 
     for (const computerId of offline) {
       const active = await this.deps.executions.listActiveByComputer(computerId);
@@ -68,6 +80,9 @@ export class RecoveryManager {
         // remote dispatch) before this worker went dark. Flagging it here,
         // before orphan()/reportExecutionOrphaned() below, is what stops
         // that from being silently retried as if nothing happened.
+        if (this.deps.inspectToolOutcome) {
+          await this.reconcileFromPhysicalState(record, reconciled);
+        }
         const unknown = this.deps.executions.findUnknownOutcomeToolCall(record.execution.id);
         const reason = unknown
           ? `UNKNOWN_OUTCOME: worker on computer '${computerId}' stopped heartbeating mid-'${unknown.tool}' — its outcome is unrecorded and must not be assumed safe to retry`
@@ -90,9 +105,25 @@ export class RecoveryManager {
       }
     }
 
-    const result: RecoverySweepResult = { offlineComputers: offline, orphanedExecutions, retriedLive, unknownOutcomes };
+    const result: RecoverySweepResult = { offlineComputers: offline, orphanedExecutions, retriedLive, unknownOutcomes, reconciled };
     if (offline.length > 0) this.deps.onSweep?.(result);
     return result;
+  }
+
+  private async reconcileFromPhysicalState(record: ExecutionRecord, reconciled: RecoverySweepResult['reconciled']): Promise<void> {
+    const executionId = record.execution.id;
+    for (const call of this.deps.executions.toolCheckpoints(executionId)) {
+      if (call.state !== 'STARTED' && call.state !== 'OUTCOME_UNKNOWN') continue;
+      let inspection: ToolOutcomeInspection;
+      try {
+        inspection = await this.deps.inspectToolOutcome!(record, call);
+      } catch {
+        continue; // an inspector failure proves nothing; the call stays unresolved
+      }
+      if (inspection.outcome === 'UNDETERMINED') continue;
+      await this.deps.executions.reconcileToolCall(executionId, call.callId, { ...inspection, inspectedBy: 'recovery-manager' });
+      reconciled.push({ executionId, callId: call.callId, tool: call.toolName, outcome: inspection.outcome, evidence: inspection.evidence });
+    }
   }
 
   private findOwningJobId(taskId: string): string | undefined {

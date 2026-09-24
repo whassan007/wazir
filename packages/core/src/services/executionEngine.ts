@@ -29,6 +29,8 @@ import { executionValuesEqual } from './executionPersistence.js';
 import { ExecutionFailure, isProviderRetryable } from '@wazir/shared';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import { hashToolArguments } from './toolValidation.js';
+import { planRecovery, reconstructExecutionState } from './executionRecovery.js';
+import type { ReconstructedExecutionState, RecoveryBudgetLimits, RecoveryPlan, ToolOutcomeInspection } from './executionRecovery.js';
 import type { ToolSideEffectClass } from '../types/tool.js';
 import type { FileMutationResult } from '../types/tool.js';
 
@@ -355,6 +357,36 @@ export class ExecutionEngine {
   findUnknownOutcomeToolCall(executionId: string): { tool: string; input: unknown; startedAt: Date; callId: string; sideEffectClass: ToolSideEffectClass } | undefined {
     const call = this.toolCheckpoints(executionId).find(c => c.state === 'STARTED' || c.state === 'OUTCOME_UNKNOWN');
     return call ? { tool: call.toolName, input: call.input, startedAt: call.startedAt, callId: call.callId, sideEffectClass: call.sideEffectClass } : undefined;
+  }
+
+  /**
+   * Resolves a dispatched call whose outcome is unknown, from physical evidence.
+   * APPLIED confirms the side effect happened (recorded as a completed call);
+   * NOT_APPLIED confirms it did not (recorded as failed, so the action may be issued
+   * again). UNDETERMINED is refused: an unproven outcome stays unresolved and keeps
+   * blocking further writes and completion. The evidence is part of the durable record.
+   */
+  async reconcileToolCall(executionId: string, callId: string, inspection: ToolOutcomeInspection & { inspectedBy: string }): Promise<void> {
+    const record = this.require(executionId);
+    const call = this.toolCheckpoints(executionId).find((c) => c.callId === callId);
+    if (!call) throw new Error(`unknown tool call '${callId}' for execution '${executionId}'`);
+    if (call.state !== 'STARTED' && call.state !== 'OUTCOME_UNKNOWN') {
+      throw new Error(`tool call '${callId}' is already ${call.state}; nothing to reconcile`);
+    }
+    if (inspection.outcome === 'UNDETERMINED') {
+      throw new ExecutionFailure('TOOL_OUTCOME_UNKNOWN', `cannot reconcile '${callId}' without proof: ${inspection.evidence}`);
+    }
+    const ok = inspection.outcome === 'APPLIED';
+    const reconciled = { outcome: inspection.outcome, evidence: inspection.evidence, inspectedBy: inspection.inspectedBy };
+    this.pushEvent(record, 'tool.completed', { callId, tool: call.toolName, ok, reconciled }, { callId, stepId: call.stepId, eventId: `${callId}:reconciled` });
+    this.pushEvent(record, ok ? 'tool.call.completed' : 'tool.call.failed', { callId, tool: call.toolName, ok, reconciled }, { callId, stepId: call.stepId, eventId: `${callId}:reconciled:call` });
+    await this.flush(record);
+  }
+
+  /** Event-derived state and the recovery decision for one execution (see executionRecovery.ts). */
+  reconstruct(executionId: string, limits: RecoveryBudgetLimits = {}, now?: Date): { state: ReconstructedExecutionState; plan: RecoveryPlan } {
+    const state = reconstructExecutionState(this.require(executionId), this.toolCheckpoints(executionId), limits, now);
+    return { state, plan: planRecovery(state) };
   }
 
   /** Reconstruct tool dispatch state from durable facts, independent of UI/transcript. */
