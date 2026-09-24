@@ -290,20 +290,48 @@ content-checked.
 Regression coverage: `packages/core/tests/verificationIntegrity.test.ts`,
 `packages/tools/tests/protectedVerification.test.ts`.
 
+## Eleventh tranche: model circuit breaker
+
+`ModelReliabilityTracker` (`packages/core/src/services/modelReliability.ts`) keeps a
+rolling window of model-attributable outcomes per (model, task class). Success is
+`VERIFICATION_PASSED`/`COMPLETED`. Failure is protocol exhaustion, `NO_PROGRESS`,
+`REPEATED_ACTION`, `MAX_REPAIRS`/`MAX_TURNS`/`MAX_TOOL_CALLS`/`MAX_TOKENS`.
+Cancellation, policy denial and wall-clock limits are ignored. The circuit only
+opens after `minSamples` (default 4) at a failure rate of at least 0.6. It stays
+`OPEN` for a cooldown (default 10 minutes), then goes `HALF_OPEN`: a successful
+trial closes it with a clean window, and a failed trial reopens it.
+
+`Scheduler` accepts an optional `reliability` dependency. An `OPEN` circuit
+rejects the model from capability routing for that task class, and the reason is
+recorded. An explicit model pin is still honored (no silent substitution), with a
+warning in the routing reasons. The CLI persists each terminal turn's reason as
+the durable `termination.completed` event (`apps/cli/src/termination.ts`, used by
+the main run, subagent and fleet). The engine rebuilds the tracker from those
+events at startup (`reliability.hydrate(await executions.list())`), so circuit
+state comes from execution history, not process memory.
+
+Regression coverage: `packages/core/tests/modelReliability.test.ts`,
+`apps/cli/tests/termination.test.ts`.
+
+Verification for tranches 8–11 was targeted, not a full suite run: `npx vitest run
+packages/core packages/agents packages/tools` plus the CLI e2e/fleet/TUI/context/
+dashboard/modelLifecycle/termination tests and `tests/integration/policyBypassSweep`.
+Result: 68 files, 617 passed, 6 skipped (the pre-existing live-coding tests).
+`npx tsc --build apps/cli` exited 0.
+
 ## Not yet done
 
-Phase 2/3 (model-attempt vs. execution-history separation, observation compaction),
-Phase 12 remainder (a composed `StopCondition[]` the controller evaluates centrally,
-rather than each condition being its own inline check scattered through
-`CodingAgent` — these tranches added typed *reasons* and several *budgets*, not the
-unified *mechanism*), Phase 13 (semantic no-progress detection beyond the existing
-exact-duplicate-call circuit breaker), Phase 14–24 (model capability registry and
-circuit breaker, protected-verification tamper detection, full
-recovery-from-events reconstruction, `wa explain`/CLI projections of the new event
-vocabulary, and the live acceptance run). The existing per-run
-`maxTurns`/`maxRepairCycles`/`toolRepeatLimit`/`maxWallClockMs`/`maxToolCalls`/
-`maxTokens` caps in `CodingAgent` and the trivial/small/complex task-complexity
-budgets (`packages/core/src/services/complexity.ts`) predate (or, for the newer
-ones, sit alongside) this mission and are not the same thing as the mission's
-controller-owned `StopCondition` composition — they overlap in effect but aren't
-unified into one typed mechanism yet.
+- Phase 2: separating model attempts from execution history. Failed attempts still
+  append a correction message to `messages`, not just an attempt event.
+- Phase 12 remainder: one composed `StopCondition[]` evaluated centrally. The
+  checks are still inline in `CodingAgent`.
+- Phase 14: failure-based escalation within a run (switching model mid-execution
+  and emitting `model.route.changed`). The circuit breaker only affects the *next*
+  routing decision.
+- Phase 15: empirically measured capability fields (`firstPassBuildRate`,
+  `protocolFailureRate`, ...) on `ModelRecord`, populated from benchmark evidence.
+- Phase 17: execution summary metrics (inference/tool/verification/backoff time
+  breakdown).
+- Phase 21: full event-derived recovery reconstruction.
+- Phase 22: `wa executions events|explain` projections of the new events.
+- Phase 24: the live acceptance run.

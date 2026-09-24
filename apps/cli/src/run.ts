@@ -24,6 +24,7 @@ import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
 import { color } from './colors.js';
 import type { RookEngine } from './engine.js';
 import { StatusLoader } from './spinner.js';
+import { recordTermination } from './termination.js';
 
 /** Maps a control-plane-reported worker event onto the local `GenerationEvent` shape,
  * so a remotely-dispatched task streams through the same agent loop as a local one. */
@@ -607,6 +608,7 @@ export async function executeTask(
       runtime,
     )) {
       turnsUsed++;
+      if (turn.terminationReason) await recordTermination(engine, executionId, turn.terminationReason, scheduling.modelId, task.type);
       await engine.executions.recordEvent(executionId, 'agent.turn', {
         kind: turn.kind,
         phase: turn.phase,
@@ -941,6 +943,7 @@ export async function runSubagent(
       },
       subagentRuntime,
     )) {
+      if (turn.terminationReason) await recordTermination(engine, childExecId, turn.terminationReason, context.modelId, 'coding');
       if (turn.kind === 'done') {
         subagentSummary = turn.content ?? '';
       } else if (turn.kind === 'error') {

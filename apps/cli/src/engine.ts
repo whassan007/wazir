@@ -16,6 +16,7 @@ import {
   JobOrchestrator,
   ModelRegistry,
   ModelLifecycleService,
+  ModelReliabilityTracker,
   PolicyEngine,
   RuntimeRegistry,
   Scheduler,
@@ -73,6 +74,8 @@ export interface RookEngine {
   mcp: MCPRegistry;
   policy: PolicyEngine;
   scheduler: Scheduler;
+  /** Per-(model, task class) circuit breaker, rebuilt from `termination.completed` events at startup. */
+  reliability?: ModelReliabilityTracker;
   compiler: ContextCompiler;
   executions: ExecutionEngine & { store?: KeyValueStore };
   provenance: ProvenanceManager;
@@ -271,12 +274,14 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   await mcp.initialize().catch(() => { if (!options.quiet) console.error('[wazir] MCP registry unavailable; run wa mcp doctor.'); });
 
   // ---- scheduler ----------------------------------------------------------
+  const reliability = new ModelReliabilityTracker();
   const scheduler = new Scheduler({
     computers,
     runtimes,
     models,
     policy,
     agents,
+    reliability,
   });
 
   // ---- jobs & orchestration -----------------------------------------------
@@ -317,6 +322,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     if (typeof executionId === 'string') void executions.recordEvent(executionId, 'model.lifecycle', event).catch(() => undefined);
   });
   await executions.ready;
+  reliability.hydrate(await executions.list());
   await lifecycle.discoverAndReconcile({ verify: !options.readOnlyLifecycle });
   if (!options.readOnlyLifecycle) {
     await lifecycle.applyStartupPolicy(config.models?.startup);
@@ -337,6 +343,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     tools,
     policy,
     scheduler,
+    reliability,
     compiler,
     executions,
     approvalQueue,

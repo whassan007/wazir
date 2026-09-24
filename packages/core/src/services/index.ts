@@ -6,6 +6,8 @@ export { ContextCompiler, estimateTokens, tokensForPart } from './contextCompile
 export type { ContextCompilerOptions } from './contextCompiler.js';
 export { ObservationCompactor } from './observationCompactor.js';
 export type { CompactedObservation, ObservationCompactorOptions, ObservationKind } from './observationCompactor.js';
+export { ModelReliabilityTracker, classifyTerminationForReliability } from './modelReliability.js';
+export type { CircuitState, CircuitStatus, ModelReliabilityOptions, ReliabilityOutcome } from './modelReliability.js';
 export { detectOracleWeakening, isVerificationAsset, taskAuthorizesVerificationChanges } from './verificationIntegrity.js';
 export type { OracleWeakeningFinding, OracleWeakeningKind } from './verificationIntegrity.js';
 export { ExecutionEngine, createExecutionEngine } from './executionEngine.js';

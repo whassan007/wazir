@@ -12,6 +12,7 @@ import { SchedulingError } from '../types/scheduler.js';
 import type { AgentRegistry } from './agentRegistry.js';
 import type { ComputerRegistry } from './computerRegistry.js';
 import type { ModelRegistry } from './modelRegistry.js';
+import type { ModelReliabilityTracker } from './modelReliability.js';
 import type { PolicyEngine } from './policyEngine.js';
 import type { RuntimeRegistry } from './runtimeRegistry.js';
 
@@ -22,6 +23,12 @@ export interface SchedulerDeps {
   agents?: AgentRegistry;
   /** Gates hosted-provider placement — see `scheduleComputer()`'s hosted branch. */
   policy: PolicyEngine;
+  /**
+   * Per-(model, task class) circuit breaker. An OPEN circuit removes the model from
+   * capability routing for that task class; an explicit pin is still honored (no
+   * silent substitution) but the open circuit is stated in the decision reasons.
+   */
+  reliability?: ModelReliabilityTracker;
 }
 
 export interface ScheduleInput {
@@ -129,12 +136,17 @@ export class Scheduler {
         );
       }
       const instance = this.selectInstance(match.record);
+      const circuit = this.deps.reliability?.status(preferred, task.type);
       return {
         modelId: preferred,
         modelInstanceId: instance.id,
         strategy: 'explicit',
         score: match.score,
-        reasons: [`explicitly requested model '${preferred}'`, ...match.reasons],
+        reasons: [
+          `explicitly requested model '${preferred}'`,
+          ...match.reasons,
+          ...(circuit && circuit.state !== 'CLOSED' ? [`warning: ${task.type} ${circuit.reason}`] : []),
+        ],
       };
     }
 
@@ -208,6 +220,13 @@ export class Scheduler {
       } else {
         reasons.push(gate.reason);
       }
+    }
+
+    const circuit = this.deps.reliability?.status(record.id, task.type);
+    if (circuit?.state === 'OPEN' && task.execution?.targetModelId !== record.id) {
+      rejected.push(`${task.type} ${circuit.reason}`);
+    } else if (circuit?.state === 'HALF_OPEN') {
+      reasons.push(`${task.type} ${circuit.reason}`);
     }
 
     if (rejected.length > 0) {
