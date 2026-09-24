@@ -71,7 +71,8 @@ export class CodeIntelligenceContextProvider implements ContextProvider {
           if (callers.length > 0) {
             callerLines.push(`  Callers of ${topSym.name}:`);
             for (const caller of callers.slice(0, 5)) {
-              callerLines.push(`    <- ${caller.name} in ${caller.file} (Line ${caller.range.start.line})`);
+              const container = caller.containerName ? `${caller.containerName}.` : '';
+              callerLines.push(`    <- ${container}${caller.name} in ${caller.file} (Line ${caller.range.start.line})`);
             }
           }
         }

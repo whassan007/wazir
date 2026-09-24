@@ -105,23 +105,8 @@ export interface FileMutationHistoryEntry {
   at: Date;
 }
 
-export type EvidenceType = 'BUILD' | 'TEST' | 'RUN' | 'STATIC_CHECK';
-
-export interface VerificationEvidence {
-  id: string;
-  type: EvidenceType;
-  executionId?: string;
-  workspaceId?: string;
-  revision: number;
-  command?: string;
-  exitCode: number;
-  durationMs?: number;
-  startedAt?: Date;
-  completedAt?: Date;
-  output?: string;
-  artifactFingerprint?: string;
-  metadata?: Record<string, unknown>;
-}
+import type { EvidenceType, VerificationEvidence } from './verification.js';
+export type { EvidenceType, VerificationEvidence };
 
 export interface AcceptanceContract {
   taskType?: string;

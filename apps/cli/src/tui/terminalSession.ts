@@ -19,6 +19,10 @@ export class TerminalSession {
   readonly input: InputController;
   readonly renderer: TerminalRenderer;
 
+  get inputController(): InputController {
+    return this.input;
+  }
+
   private active = false;
   private cleanedUp = false;
   private unsubscribeResize?: () => void;

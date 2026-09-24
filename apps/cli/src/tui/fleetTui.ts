@@ -2328,17 +2328,19 @@ export class FleetTui {
             timeoutSeconds: this.timeoutSeconds,
           });
 
+          const finalJob = (await this.engine.orchestrator.getJob(job.id)) ?? job;
+          this.currentJob = finalJob;
           this.currentRollup = await this.engine.orchestrator.getJobRollup(job.id);
           this.jobRollups.set(job.id, this.currentRollup);
           // A timeout is reported as 'failed' with the reason on the task node; say so
           // here rather than a bare "failed!" that hides why.
-          const timeoutNode = job.graph.nodes.find((n) => /timeout/i.test(n.error ?? ''));
-          const outcome = timeoutNode ? `failed (${timeoutNode.error})` : `${job.status}!`;
+          const timeoutNode = finalJob.graph.nodes.find((n) => /timeout/i.test(n.error ?? ''));
+          const outcome = timeoutNode ? `failed (${timeoutNode.error})` : `${finalJob.status}!`;
           this.statusMessage = `Job ${job.id} ${outcome} Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
 
           if (this.currentBlockTracker) {
-            await this.currentBlockTracker.finish(job.status === 'completed' ? 'success' : 'failed', {
-              exitCode: job.status === 'completed' ? 0 : 1,
+            await this.currentBlockTracker.finish(finalJob.status === 'completed' ? 'success' : 'failed', {
+              exitCode: finalJob.status === 'completed' ? 0 : 1,
               jobId: job.id,
             });
             this.currentBlockTracker = undefined;

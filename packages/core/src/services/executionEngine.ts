@@ -21,7 +21,7 @@ import type {
   VerificationEvidence,
   WorkspaceState,
 } from '../types/index.js';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { sanitizeUntrustedOutput, appendAuditEvent, computeContentHash } from '@wazir/shared';
 import type { ProvenanceManager, CreateArtifactParams } from './provenanceManager.js';
@@ -437,9 +437,12 @@ export class ExecutionEngine {
 
     if (evidenceType) {
       if (!record.evidence) record.evidence = [];
+      const rawPayload = `${evidenceType}:${check.command}:${check.ok ? 0 : 1}:${currentRev}:${sanitized.output ?? ''}`;
       const ev: VerificationEvidence = {
         id: nextId('evd'),
         type: evidenceType,
+        oracle: evidenceType,
+        workspaceRevision: currentRev,
         executionId,
         workspaceId: record.workspaceState?.workspaceId ?? executionId,
         revision: currentRev,
@@ -447,6 +450,8 @@ export class ExecutionEngine {
         exitCode: check.ok ? 0 : 1,
         durationMs: check.durationMs,
         output: sanitized.output,
+        status: check.ok ? 'PASS' : 'FAIL',
+        evidenceHash: createHash('sha256').update(rawPayload).digest('hex'),
         completedAt: new Date(),
       };
       record.evidence.push(ev);
@@ -480,19 +485,28 @@ export class ExecutionEngine {
       record.evidence = [];
     }
     const currentRev = record.workspaceState?.revision ?? 0;
+    const boundRev = evidence.workspaceRevision !== undefined ? evidence.workspaceRevision : (evidence.revision !== undefined ? evidence.revision : currentRev);
+    const oracleType = evidence.oracle ?? evidence.type;
+    const rawPayload = `${oracleType}:${evidence.command ?? ''}:${evidence.exitCode}:${boundRev}:${evidence.output ?? ''}`;
     const fullEvidence: VerificationEvidence = {
       id: evidence.id ?? nextId('evd'),
-      type: evidence.type,
+      type: oracleType,
+      oracle: oracleType,
       executionId,
       workspaceId: evidence.workspaceId ?? record.workspaceState?.workspaceId ?? executionId,
-      revision: evidence.revision !== undefined ? evidence.revision : currentRev,
+      workspaceRevision: boundRev,
+      revision: boundRev,
       command: evidence.command,
       exitCode: evidence.exitCode,
       durationMs: evidence.durationMs,
       startedAt: evidence.startedAt,
       completedAt: evidence.completedAt ?? new Date(),
+      status: evidence.status ?? (evidence.exitCode === 0 ? 'PASS' : 'FAIL'),
+      evidenceHash: evidence.evidenceHash ?? createHash('sha256').update(rawPayload).digest('hex'),
+      artifacts: evidence.artifacts,
       output: evidence.output ? sanitizeUntrustedOutput(evidence.output) : undefined,
       artifactFingerprint: evidence.artifactFingerprint,
+      reasons: evidence.reasons,
       metadata: evidence.metadata,
     };
     record.evidence.push(fullEvidence);

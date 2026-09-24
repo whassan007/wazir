@@ -124,8 +124,8 @@ describe('Code Intelligence & Symbol Graph', () => {
     });
 
     it('resolves definition lookup via AST when cursor is on symbol', async () => {
-      // Line 6 in clientCode: "await this.lifecycle.ensureReady();"
-      const locs = await service.goToDefinition(clientFile, 7, 33);
+      // Line 8 in clientCode: "await this.lifecycle.ensureReady();"
+      const locs = await service.goToDefinition(clientFile, 8, 33);
       expect(locs.length).toBeGreaterThan(0);
       expect(locs.some((l) => l.file === serviceFile)).toBe(true);
     });
@@ -218,7 +218,7 @@ describe('Code Intelligence & Symbol Graph', () => {
       await lspService.indexFile(clientFile, clientCode);
 
       // Should not throw, should fall back to AST definition
-      const locs = await lspService.goToDefinition(clientFile, 7, 33);
+      const locs = await lspService.goToDefinition(clientFile, 8, 33);
       expect(locs.length).toBeGreaterThan(0);
       expect(locs.some((l) => l.file === serviceFile)).toBe(true);
     });

@@ -367,7 +367,7 @@ export class CodeIntelligenceService {
             const firstArg = node.arguments[0];
             if (ts.isStringLiteral(firstArg)) {
               this.graph.addEdge({
-                from: filePath,
+                from: fileNodeId,
                 to: firstArg.text,
                 type: 'TESTS',
               });
@@ -397,9 +397,17 @@ export class CodeIntelligenceService {
     if (specifier.startsWith('.')) {
       const dir = path.dirname(sourceFile);
       const joined = path.resolve(dir, specifier);
-      // Try extensions
-      for (const ext of ['', '.ts', '.tsx', '.js', '/index.ts', '/index.js']) {
-        const candidate = joined + ext;
+      const baseJoined = joined.replace(/\.[cm]?[jt]sx?$/, '');
+      const candidates = [
+        joined,
+        baseJoined + '.ts',
+        baseJoined + '.tsx',
+        baseJoined + '.js',
+        baseJoined + '.jsx',
+        baseJoined + '/index.ts',
+        baseJoined + '/index.js',
+      ];
+      for (const candidate of candidates) {
         if (this.fileContents.has(candidate)) return candidate;
         if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
           return candidate;

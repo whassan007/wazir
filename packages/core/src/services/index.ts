@@ -83,3 +83,14 @@ export { SymbolGraph } from './symbolGraph.js';
 export { CodeIntelligenceService } from './codeIntelligenceService.js';
 export type { LspProvider, CodeIntelligenceOptions } from './codeIntelligenceService.js';
 export { CodeIntelligenceContextProvider } from './codeIntelligenceContextProvider.js';
+export { VerificationEngine } from './verificationEngine.js';
+export type { VerificationOracle, VerificationEngineOptions } from './verificationEngine.js';
+export {
+  BuildOracle,
+  TestOracle,
+  StaticOracle,
+  AcceptanceOracle,
+  BrowserOracle,
+  defaultCommandRunner,
+} from './verificationOracles.js';
+export type { CommandRunner } from './verificationOracles.js';
