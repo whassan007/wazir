@@ -54,7 +54,10 @@ export type AcceptanceGateId =
   | 'G45'
   | 'G49'
   | 'G50'
-  | 'G51';
+  | 'G51'
+  | 'G69'
+  | 'G70'
+  | 'G71';
 
 export type Priority = 'P0' | 'P1' | 'P2'; // P0 = Blocking, P1 = Feature/Major, P2 = Quality
 
@@ -402,6 +405,36 @@ export const ACCEPTANCE_GATES: AcceptanceGate[] = [
       'Empirical epistemic discipline declaring INSUFFICIENT_EVIDENCE under sparse sample counts or low confidence rather than asserting unjustified causal claims',
     testIds: [62],
     prerequisiteGateId: 'G50',
+  },
+  {
+    id: 'G69',
+    order: 29,
+    name: 'StrategyTransfer',
+    title: 'G69 Strategy Transfer',
+    description:
+      'Reusable engineering strategy learned from verified run on Repository A transfers to solve structurally similar problem in Repository B without copying incidental literal symbols, filenames, or bypassing independent physical verification',
+    testIds: [63],
+    prerequisiteGateId: 'G51',
+  },
+  {
+    id: 'G70',
+    order: 30,
+    name: 'NegativeTransfer',
+    title: 'G70 Negative Transfer Override',
+    description:
+      'Superficially similar task where previously learned strategy is inappropriate: system refrains from blind application, enforces anti-strategy warnings, and current physical evidence overrides historical strategy',
+    testIds: [64],
+    prerequisiteGateId: 'G69',
+  },
+  {
+    id: 'G71',
+    order: 31,
+    name: 'StrategyLearning',
+    title: 'G71 Strategy Learning Efficiency',
+    description:
+      'Accumulated verified experience yields measurable improvements across repeated similar tasks: statistically reduced model calls, repository reads, repair cycles, token consumption, and wall time',
+    testIds: [65],
+    prerequisiteGateId: 'G70',
   },
 ];
 
@@ -2102,6 +2135,92 @@ export const ACCEPTANCE_TESTS: Record<number, AcceptanceTest> = {
     ],
     tags: ['causal', 'uncertainty', 'meta-optimizer', 'g51', 'p0-release-gate'],
   },
+  63: {
+    id: 63,
+    gateId: 'G69',
+    priority: 'P0',
+    title: 'Cross-Repository Strategy Transfer (G69_STRATEGY_TRANSFER)',
+    purpose:
+      'Verify that a verified engineering strategy learned on Repository A transfers to solve a structurally similar defect on Repository B without copying incidental literal symbols or filenames, requiring independent physical verification.',
+    prompt:
+      'Solve defect in Repository A, verify full pass, extract strategy. Apply to structurally similar Repository B with different symbol and module names. Verify B succeeds with strategy guidance and passes independent verification.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'EXTRACT_VERIFIED_STRATEGY_A -> MATCH_SIGNATURE_B -> RETRIEVE_ABSTRACT_APPROACH -> PLAN_AND_EXECUTE_B -> INDEPENDENTLY_VERIFY_B',
+    verificationCriteria: [
+      'Verified strategy is successfully extracted from clean run on Repository A',
+      'Strategy is retrieved for Repository B based on structural problem signature',
+      'No incidental filenames or literal symbols from Repository A are leaked into B',
+      'Repository B is independently verified using its own tests and build checks',
+      'Performance comparison with strategy retrieval ON exhibits fewer repair cycles',
+    ],
+    expectedArtifacts: ['strategy-transfer-report', 'repo-b-verification-set'],
+    expectedProvenance: [
+      'meta.strategy.retrieved',
+      'meta.strategy.transfer_validated',
+      'verification.independent_pass',
+    ],
+    associatedSuites: [
+      'packages/core/tests/strategyLearningGates.test.ts',
+    ],
+    tags: ['strategy-learning', 'transfer', 'g69', 'p0-release-gate'],
+  },
+  64: {
+    id: 64,
+    gateId: 'G70',
+    priority: 'P0',
+    title: 'Negative Transfer Resistance & Current Evidence Dominance (G70_NEGATIVE_TRANSFER)',
+    purpose:
+      'Verify that on a superficially similar task where a learned strategy is inappropriate, Wazir does not blindly apply it, anti-strategy warnings are surfaced, and current physical evidence overrides historical strategy.',
+    prompt:
+      'Present a task superficially resembling an API migration but containing a different root cause (e.g. race condition). Verify learned API migration strategy is not blindly forced, anti-strategy warnings guide against inappropriate edits, and current evidence dominates.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'CLASSIFY_CURRENT_EVIDENCE -> DETECT_SIGNATURE_MISMATCH -> EMIT_ANTI_STRATEGY_WARNING -> ADAPT_PLAN_TO_CURRENT_EVIDENCE -> VERIFY_PHYSICAL_PASS',
+    verificationCriteria: [
+      'Historical strategy is NOT blindly applied when current diagnostics contradict it',
+      'Anti-strategy warning is surfaced if inappropriate pattern is detected',
+      'Current physical evidence strictly overrides historical strategy recommendations',
+      'Task completes successfully using evidence-guided repair',
+    ],
+    expectedArtifacts: ['negative-transfer-report', 'anti-strategy-warning'],
+    expectedProvenance: [
+      'meta.strategy.negative_transfer_prevented',
+      'meta.strategy.anti_strategy_warned',
+      'verification.override_completed',
+    ],
+    associatedSuites: [
+      'packages/core/tests/strategyLearningGates.test.ts',
+    ],
+    tags: ['strategy-learning', 'negative-transfer', 'g70', 'p0-release-gate'],
+  },
+  65: {
+    id: 65,
+    gateId: 'G71',
+    priority: 'P0',
+    title: 'Measured Strategy Learning Efficiency Across Repeated Tasks (G71_STRATEGY_LEARNING)',
+    purpose:
+      'Verify that repeated execution on similar task families produces statistically measured efficiency improvements: fewer model calls, reduced repo reads, fewer repair cycles, lower token usage, and shorter wall time.',
+    prompt:
+      'Execute a sequence of similar engineering tasks across successive iterations. Measure model calls, repo reads, repair cycles, tokens, and wall time. Verify progressive empirical improvement as strategy confidence matures.',
+    modelRequirements: { toolCalling: true },
+    expectedDag: 'EXECUTE_ITERATION_1 -> EXTRACT_AND_STORE -> EXECUTE_ITERATION_2 -> REFINE_DISTRIBUTIONS -> EXECUTE_ITERATION_N -> MEASURE_EFFICIENCY_GAINS',
+    verificationCriteria: [
+      'Model calls show measurable reduction across successive similar tasks',
+      'Repository read exploratory operations decrease as targeted strategy guides planning',
+      'Repair cycles decrease from baseline to mature strategy execution',
+      'Total token consumption and wall time exhibit empirical improvement',
+      'Strategy version and confidence update monotonically with verified evidence',
+    ],
+    expectedArtifacts: ['learning-efficiency-report'],
+    expectedProvenance: [
+      'meta.strategy.evolved',
+      'meta.strategy.efficiency_measured',
+      'meta.strategy.distributions_updated',
+    ],
+    associatedSuites: [
+      'packages/core/tests/strategyLearningGates.test.ts',
+    ],
+    tags: ['strategy-learning', 'efficiency', 'learning-curve', 'g71', 'p0-release-gate'],
+  },
 };
 
 /**
@@ -2124,7 +2243,7 @@ export function getTestsForGate(gateId: AcceptanceGateId): AcceptanceTest[] {
 
 export function getTestById(id: number): AcceptanceTest {
   const test = ACCEPTANCE_TESTS[id];
-  if (!test) throw new Error(`Acceptance test ${id} not found (valid range: 1..62)`);
+  if (!test) throw new Error(`Acceptance test ${id} not found (valid range: 1..65)`);
   return test;
 }
 

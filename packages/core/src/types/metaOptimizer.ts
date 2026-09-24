@@ -461,7 +461,10 @@ export type MetaOptimizerEventType =
   | 'meta.distributed.shard_completed'
   | 'meta.distributed.worker_failed'
   | 'meta.distributed.workload_requeued'
-  | 'meta.distributed.aggregation_completed';
+  | 'meta.distributed.aggregation_completed'
+  | 'meta.distributed.rebalance'
+  | 'meta.distributed.straggler_detected'
+  | 'meta.distributed.capacity_updated';
 
 export interface MetaOptimizerEvent {
   id: string;
@@ -594,6 +597,7 @@ export interface MetaOptimizationRunResult {
   metricVectors?: Record<string, CandidateMetricVector> | CandidateMetricVector[];
   selectedCandidateId?: string;
   selectedReason?: string;
+  isDistributed?: boolean;
   workerPlacements?: WorkerPlacementReport[];
   stratifiedMetrics?: Record<string, StratifiedWorkerMetrics>;
   environmentIdentities?: Record<string, EnvironmentIdentity>;
@@ -651,11 +655,43 @@ export interface EnvironmentIdentity {
   };
 }
 
+export interface BenchmarkRequirements {
+  minCores?: number;
+  minRamGB?: number;
+  requiresGpu?: boolean;
+  minVramGB?: number;
+  preferredModelId?: string;
+  targetArchitecture?: string;
+}
+
+export interface WorkerCapacityProfile {
+  workerId: string;
+  workerName: string;
+  cpuCores: number;
+  cpuArchitecture: string;
+  ramTotalGB: number;
+  ramAvailableGB: number;
+  gpuCount: number;
+  gpuVramGB: number;
+  unifiedMemory: boolean;
+  runtimes: string[];
+  loadedModels: string[];
+  activeReservationsCount: number;
+  activeJobsCount: number;
+  historicalThroughput?: number; // tasks/minute or tokens/sec
+  thermalThrottling?: boolean;
+  memoryPressurePct?: number; // 0 - 100
+  basePhysicalCapacity: number;
+  availableCapacity: number;
+}
+
 export interface BenchmarkShard {
   shardId: string;
   workerId: string;
   tasks: BenchmarkTask[];
   environment: EnvironmentIdentity;
+  capacityWeight?: number;
+  effectiveCapacity?: number;
 }
 
 export interface DistributedObservation {
@@ -697,6 +733,9 @@ export interface WorkerPlacementReport {
   shardId: string;
   taskCount: number;
   tasks: string[];
+  taskIds?: string[];
+  baselineCompletedTasks?: number;
+  candidateCompletedTasks?: number;
   modelsUsed: string[];
   hardware: {
     cpu?: string;
@@ -713,7 +752,10 @@ export interface WorkerPlacementReport {
     avgDurationMs: number;
     speedupVsBaseline?: number;
   };
-  status: 'HEALTHY' | 'FAILED' | 'RECOVERED';
+  capacityWeight?: number;
+  effectiveCapacity?: number;
+  capacityProfile?: WorkerCapacityProfile;
+  status: 'HEALTHY' | 'FAILED' | 'RECOVERED' | 'STRAGGLER';
 }
 
 export interface StratifiedWorkerMetrics {

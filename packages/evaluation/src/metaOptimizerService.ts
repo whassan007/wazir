@@ -1365,7 +1365,7 @@ export class MetaOptimizerService {
       objective: 'REDUCE_INPUT_TOKENS',
       hypothesis: plan.hypothesis,
       filesChanged: candidate.filesChanged,
-      benchmark: plan.benchmarkCategories.join(','),
+      benchmark: plan.benchmarkCategories ? plan.benchmarkCategories.join(',') : ((plan as any).benchmarkSuite ?? 'benchmark'),
       baselineMetrics: {
         task_success: result.comparison.baselinePassRate,
         tokens: result.baselineBenchmark.aggregateMetrics?.totalTokens ?? 0,
@@ -1387,11 +1387,11 @@ export class MetaOptimizerService {
       this.memoryService.recordEpisode({
         repositoryScope: 'wazir',
         taskType: 'meta_optimization',
-        taskPrompt: plan.hypothesis.proposedChange,
+        taskPrompt: plan.hypothesis?.proposedChange ?? (plan as any).hypothesisId ?? 'optimization',
         executionId: plan.experimentId,
         attemptOutcome: attemptResult === 'QUALIFIED' ? 'success' : 'failure',
         failurePattern: result.reasons.join('; '),
-        repairStrategy: plan.hypothesis.proposedChange,
+        repairStrategy: plan.hypothesis?.proposedChange ?? (plan as any).hypothesisId ?? 'optimization',
         filesInvolved: candidate.filesChanged,
         workspaceRevision: candidate.config.version,
         metadata: {
@@ -1510,20 +1510,20 @@ export class MetaOptimizerService {
 
     const lines: string[] = [
       `=======================================================`,
-      `EXPLAIN EXPERIMENT: ${plan.experimentId} (${plan.name})`,
+      `EXPLAIN EXPERIMENT: ${plan.experimentId} (${plan.name ?? plan.experimentId})`,
       `=======================================================`,
-      `1. Problem Detected: ${plan.hypothesis.opportunityId ?? 'Targeted optimization'}`,
-      `   Domain: ${plan.hypothesis.domain}`,
-      `   Component: ${plan.hypothesis.targetComponent}`,
+      `1. Problem Detected: ${plan.hypothesis?.opportunityId ?? 'Targeted optimization'}`,
+      `   Domain: ${plan.hypothesis?.domain ?? 'GENERAL'}`,
+      `   Component: ${plan.hypothesis?.targetComponent ?? 'optimizer'}`,
       ``,
       `2. Hypothesis:`,
-      `   Proposed Change: ${plan.hypothesis.proposedChange}`,
-      `   Expected Metric Effect: ${plan.hypothesis.expectedMetricEffect.direction} ${plan.hypothesis.expectedMetricEffect.metric} (threshold: ${plan.hypothesis.successThreshold})`,
+      `   Proposed Change: ${plan.hypothesis?.proposedChange ?? (plan as any).hypothesisId ?? 'configuration optimization'}`,
+      `   Expected Metric Effect: ${plan.hypothesis?.expectedMetricEffect ? `${plan.hypothesis.expectedMetricEffect.direction} ${plan.hypothesis.expectedMetricEffect.metric}` : 'improvement'} (threshold: ${plan.hypothesis?.successThreshold ?? 0})`,
       ``,
       `3. Pre-Registered Plan:`,
-      `   Primary Metric: ${plan.primaryMetric}`,
-      `   Regression Constraints: ${JSON.stringify(plan.regressionConstraints)}`,
-      `   Benchmark Tasks: ${plan.benchmarkCategories.join(', ')}`,
+      `   Primary Metric: ${plan.primaryMetric ?? 'score'}`,
+      `   Regression Constraints: ${JSON.stringify(plan.regressionConstraints ?? [])}`,
+      `   Benchmark Tasks: ${(plan.benchmarkCategories ?? []).join(', ') || (plan as any).benchmarkSuite || 'default'}`,
       ``,
     ];
 

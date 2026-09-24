@@ -12,10 +12,10 @@ import {
 } from './acceptanceLibrary.js';
 
 describe('Wazir Acceptance Test Library', () => {
-  it('defines all 29 progressive release gates in strict order (G0 to G51)', () => {
-    expect(ACCEPTANCE_GATES).toHaveLength(29);
+  it('defines all 32 progressive release gates in strict order (G0 to G71)', () => {
+    expect(ACCEPTANCE_GATES).toHaveLength(32);
     const expectedIds: AcceptanceGateId[] = [
-      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G29', 'G30', 'G31', 'G43', 'G46', 'G47', 'G48', 'G44', 'G45', 'G49', 'G50', 'G51',
+      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G29', 'G30', 'G31', 'G43', 'G46', 'G47', 'G48', 'G44', 'G45', 'G49', 'G50', 'G51', 'G69', 'G70', 'G71',
     ];
     expect(ACCEPTANCE_GATES.map((g) => g.id)).toEqual(expectedIds);
 
@@ -29,11 +29,11 @@ describe('Wazir Acceptance Test Library', () => {
     }
   });
 
-  it('contains all 62 unique acceptance tests', () => {
+  it('contains all 65 unique acceptance tests', () => {
     const keys = Object.keys(ACCEPTANCE_TESTS).map(Number);
-    expect(keys).toHaveLength(62);
+    expect(keys).toHaveLength(65);
 
-    for (let id = 1; id <= 62; id++) {
+    for (let id = 1; id <= 65; id++) {
       const test = ACCEPTANCE_TESTS[id];
       expect(test, `Test ${id} should exist`).toBeDefined();
       expect(test.id).toBe(id);
@@ -297,5 +297,28 @@ describe('Wazir Acceptance Test Library', () => {
     ]);
     expect(g48Tests[0].id).toBe(56);
     expect(g48Tests[0].priority).toBe('P0');
+  });
+
+  it('covers Strategy Learning & Transfer acceptance gates (Tests 63-65: G69, G70, G71)', () => {
+    const g69Tests = getTestsForGate('G69');
+    expect(g69Tests.map((t) => t.title)).toEqual([
+      'Cross-Repository Strategy Transfer (G69_STRATEGY_TRANSFER)',
+    ]);
+    expect(g69Tests[0].id).toBe(63);
+    expect(g69Tests[0].priority).toBe('P0');
+
+    const g70Tests = getTestsForGate('G70');
+    expect(g70Tests.map((t) => t.title)).toEqual([
+      'Negative Transfer Resistance & Current Evidence Dominance (G70_NEGATIVE_TRANSFER)',
+    ]);
+    expect(g70Tests[0].id).toBe(64);
+    expect(g70Tests[0].priority).toBe('P0');
+
+    const g71Tests = getTestsForGate('G71');
+    expect(g71Tests.map((t) => t.title)).toEqual([
+      'Measured Strategy Learning Efficiency Across Repeated Tasks (G71_STRATEGY_LEARNING)',
+    ]);
+    expect(g71Tests[0].id).toBe(65);
+    expect(g71Tests[0].priority).toBe('P0');
   });
 });

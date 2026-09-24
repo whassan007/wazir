@@ -8,7 +8,8 @@ export type SearchStrategyKind =
   | 'same_model_diverse'
   | 'multi_model'
   | 'multi_agent'
-  | 'mixed';
+  | 'mixed'
+  | 'hierarchical_mcts';
 
 export interface CandidateBudget {
   maxTurns?: number;
@@ -142,6 +143,112 @@ export interface CandidateDescriptor {
   metadata?: Record<string, unknown>;
 }
 
+// ======================================================================
+// HIERARCHICAL MONTE CARLO TREE SEARCH (MCTS) TYPES
+// ======================================================================
+
+export type SearchPhaseLevel =
+  | 'architecture'
+  | 'design'
+  | 'implementation'
+  | 'repair'
+  | 'optimization';
+
+export interface SearchNodeRewardEvidence {
+  correctness: boolean;
+  verificationPassed: boolean;
+  acceptanceProgress: number; // 0.0 - 1.0 fraction of verification criteria satisfied
+  resourceUsage: {
+    tokens: number;
+    modelCalls: number;
+    wallTimeMs: number;
+    repairCycles: number;
+    costUsd?: number;
+  };
+  protectedViolations: string[];
+  scalarReward: number; // Derived strictly from controller evidence, never model confidence!
+  rawMetrics: Record<string, number>;
+}
+
+export interface SearchNode {
+  id: string;
+  parentId?: string;
+  depth: number;
+  level: SearchPhaseLevel;
+  checkpointId: string;
+  strategy: string;
+  mutations: string[];
+  workspaceRevision: number;
+  stateHash: string; // Used for transposition detection
+  visits: number;
+  value: number; // Accumulated value/reward
+  meanValue: number;
+  rewardEvidence?: SearchNodeRewardEvidence;
+  verification?: {
+    passed: boolean;
+    checksPassed: boolean;
+    buildPassed: boolean;
+    errors: string[];
+    evidenceIds: string[];
+  };
+  children: string[]; // Child node IDs
+  terminal: boolean;
+  pruned?: boolean;
+  pruneReason?: string;
+  worktreePath?: string;
+  branchName?: string;
+  executionRecord?: ExecutionRecord;
+  evaluation?: CandidateEvaluation;
+  isTransposition?: boolean;
+  transpositionTargetId?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: Date;
+  completedAt?: Date;
+}
+
+export interface MCTSSearchTree {
+  rootId: string;
+  nodes: Map<string, SearchNode>;
+  transpositionTable: Map<string, string>; // stateHash -> nodeId
+  bestNodeId?: string;
+  maxDepthReached: number;
+  totalNodesCreated: number;
+  paretoFrontierNodeIds: string[];
+}
+
+export interface HierarchicalSearchConfig {
+  enabled?: boolean;
+  maxDepth?: number;
+  maxNodes?: number;
+  branchingFactor?: number;
+  explorationConstant?: number; // c in UCT, default sqrt(2) ~ 1.414
+  phases?: SearchPhaseLevel[];
+  progressiveVerification?: boolean;
+  transpositionDetection?: boolean;
+  diversityThreshold?: number; // Minimum diversity required for child expansion
+  pruneThreshold?: number; // Minimum reward below which node is pruned
+  parallelWorkers?: number;
+  requeueOnWorkerFailure?: boolean;
+  scalarizationPolicy?: 'balanced' | 'correctness_priority' | 'efficiency_priority' | 'pareto_only';
+}
+
+export interface HierarchicalSearchTelemetry {
+  treeDepth: number;
+  totalNodes: number;
+  nodesPerLevel: Record<SearchPhaseLevel, number>;
+  rolloutsCount: number;
+  transpositionsDetected: number;
+  prunedNodesCount: number;
+  workerFailuresRecovered: number;
+  meanNodeReward: number;
+  maxNodeReward: number;
+  paretoFrontierSize: number;
+  bestStrategyPath: string[];
+  selectionLatencyMs: number;
+  expansionCount: number;
+  backpropagationCount: number;
+}
+
 export interface SolutionSearchRequest {
   searchId?: string;
   executionId: string;
@@ -157,6 +264,7 @@ export interface SolutionSearchRequest {
   projectRoot?: string;
   autoPromote?: boolean;
   adaptive?: AdaptiveSearchConfig;
+  hierarchical?: HierarchicalSearchConfig;
 }
 
 export interface CandidateEngineeringProperties {
@@ -237,15 +345,20 @@ export interface CandidateResult {
 }
 
 export interface ParetoFrontier {
-  candidates: CandidateResult[];
+  candidates?: CandidateResult[];
   dimensions: string[];
-  tradeoffsSummary: string;
+  tradeoffsSummary?: string;
+  directions?: Record<string, string>;
+  frontierCandidates?: CandidateResult[] | any[];
+  dominatedCandidates?: CandidateResult[] | any[];
+  allEvaluated?: CandidateResult[] | any[];
 }
 
 export interface CandidatePromotionResult {
   searchId: string;
   candidateId: string;
   success: boolean;
+  promoted?: boolean;
   promotedRevision: number;
   prePromotionRevision: number;
   mergeResult?: WorktreeMergeResult;
@@ -301,6 +414,8 @@ export interface SolutionSearchResult {
   startedAt: Date;
   completedAt?: Date;
   adaptiveTelemetry?: AdaptiveSearchTelemetry;
+  hierarchicalTree?: MCTSSearchTree;
+  hierarchicalTelemetry?: HierarchicalSearchTelemetry;
 }
 
 export type SolutionSearchEventType =
@@ -329,7 +444,17 @@ export type SolutionSearchEventType =
   | 'candidate.promotion_completed'
   | 'candidate.promotion_failed'
   | 'solution_search.budget_exhausted'
-  | 'solution_search.completed';
+  | 'solution_search.completed'
+  | 'mcts.node_selected'
+  | 'mcts.node_expanded'
+  | 'mcts.simulation_started'
+  | 'mcts.simulation_completed'
+  | 'mcts.backpropagated'
+  | 'mcts.transposition_detected'
+  | 'mcts.node_pruned'
+  | 'mcts.worker_failed'
+  | 'mcts.worker_recovered'
+  | 'mcts.checkpoint_forked';
 
 export interface SolutionSearchEvent {
   type: SolutionSearchEventType;

@@ -10,7 +10,9 @@ import {
   type CategoryMeasurement,
   type ConditionalMeasurement,
   type ModelCapabilityProfile,
+  type TaskCapabilityClassification,
 } from '../types/modelIntelligence.js';
+import type { Task } from '../types/task.js';
 import { TaskCapabilityClassifier } from './taskCapabilityClassifier.js';
 
 export interface ModelIntelligenceServiceOptions {
@@ -54,7 +56,22 @@ export class ModelIntelligenceService {
    * Enforces Gate 56 Drift Invariant: If a model or runtime has changed version,
    * stale evidence is NEVER silently returned as current evidence.
    */
-  public getProfile(key: ProfileSegmentationKey): ModelCapabilityProfile | undefined {
+  public getProfile(key: string | ProfileSegmentationKey): ModelCapabilityProfile | undefined {
+    if (typeof key === 'string') {
+      for (const prof of this.profiles.values()) {
+        if (prof.model === key || prof.id === key) {
+          return prof;
+        }
+      }
+      return this.getOrCreateProfile({
+        model: key,
+        runtime: 'local',
+        modelVersion: 'default',
+        quantization: 'default',
+        wazirProtocolVersion: this.defaultProtocolVersion,
+      });
+    }
+
     const targetKey = this.getSegmentKey(key);
     const exact = this.profiles.get(targetKey);
     if (exact) {
@@ -92,6 +109,27 @@ export class ModelIntelligenceService {
   /**
    * Online Learning: Records verified execution evidence into the model profile.
    * Deduplicates execution IDs to avoid double-counting retries or duplicate provenance.
+   * Classify task requirements into measurable capability categories.
+   */
+  public classifyTask(task: any): TaskCapabilityClassification {
+    const t =
+      typeof task === 'string'
+        ? {
+            id: 'ad-hoc',
+            type: 'code',
+            title: task,
+            input: task,
+            requirements: {},
+            priority: 'normal',
+            status: 'pending',
+            createdAt: new Date(),
+          }
+        : task;
+    return this.classifier.classify(t);
+  }
+
+  /**
+   * Ingests a completed execution record and updates capability profiles.
    */
   public recordExecution(
     record: ExecutionRecord,

@@ -17,6 +17,8 @@ import type {
   StratifiedWorkerMetrics,
   DistributedObservation,
   BenchmarkShard,
+  WorkerCapacityProfile,
+  BenchmarkRequirements,
 } from '@wazir/core';
 import { EvaluationService } from './evaluationService.js';
 import { RegressionGuard } from './regressionGuard.js';
@@ -50,12 +52,87 @@ export interface DistributedExecutionParams {
   workers?: Computer[];
   seed?: string | number;
   dispatcher?: ShardWorkerDispatch;
+  benchmarkRequirements?: BenchmarkRequirements;
+  modelRequirements?: { modelId?: string; memoryGB?: number };
+  useAvailableCapacity?: boolean;
+  workerWeights?: Record<string, number>;
+  virtualNodesPerWeight?: number;
+  stragglerThresholdFactor?: number;
   failWorkerSimulation?: {
     workerId: string;
     atTaskIndex?: number;
     failureMode?: 'crash' | 'disconnect';
   };
+  rebalanceSimulation?: {
+    atTaskIndex: number;
+    trigger: 'overload' | 'worker_left' | 'worker_joined';
+    workerId?: string;
+    newWorker?: Computer;
+  };
   onEvent?: (eventName: string, data: Record<string, unknown>) => void;
+}
+
+export interface WeightedHashRingNode {
+  token: number;
+  workerId: string;
+}
+
+/**
+ * Deterministic weighted hash ring using virtual nodes.
+ * Proportional representation guarantees capacity-weighted distribution
+ * while preserving consistent hashing properties and workload equivalence.
+ */
+export class WeightedHashRing {
+  private readonly nodes: WeightedHashRingNode[] = [];
+
+  constructor(
+    workers: Array<{ id: string; weight: number }>,
+    seed: string | number,
+    virtualNodesPerWeight = 30,
+  ) {
+    const seedStr = String(seed);
+    for (const w of workers) {
+      const vnodeCount = Math.max(1, Math.round(w.weight * virtualNodesPerWeight));
+      for (let i = 0; i < vnodeCount; i++) {
+        const hash = createHash('sha256')
+          .update(`${seedStr}::vnode::${w.id}::${i}`)
+          .digest('hex');
+        const token = parseInt(hash.slice(0, 8), 16);
+        this.nodes.push({ token, workerId: w.id });
+      }
+    }
+    this.nodes.sort((a, b) => a.token - b.token);
+  }
+
+  public getWorkerForTask(taskId: string, seed: string | number): string {
+    if (this.nodes.length === 0) {
+      throw new Error('WeightedHashRing has no active nodes.');
+    }
+    const hash = createHash('sha256')
+      .update(`${String(seed)}::task::${taskId}`)
+      .digest('hex');
+    const taskToken = parseInt(hash.slice(0, 8), 16);
+
+    let low = 0;
+    let high = this.nodes.length - 1;
+    let selectedIdx = 0;
+
+    if (taskToken > this.nodes[high].token || taskToken <= this.nodes[0].token) {
+      selectedIdx = 0; // Wrap around
+    } else {
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        if (this.nodes[mid].token >= taskToken) {
+          selectedIdx = mid;
+          high = mid - 1;
+        } else {
+          low = mid + 1;
+        }
+      }
+    }
+
+    return this.nodes[selectedIdx].workerId;
+  }
 }
 
 /**
@@ -144,15 +221,140 @@ export class DistributedBenchmarkFabric {
   }
 
   /**
-   * Deterministically shards benchmark tasks across available workers.
+   * Constructs a comprehensive WorkerCapacityProfile representing multi-dimensional
+   * compute capabilities, dynamic load state, and runtime availability.
+   */
+  public buildCapacityProfile(worker: Computer): WorkerCapacityProfile {
+    const cpuCores = worker.hardware.cpuCores ?? 8;
+    const cpuArchitecture = worker.os.architecture ?? 'x64';
+    const ramTotalGB = worker.hardware.memoryGB ?? 16;
+    const ramAvailableGB = worker.load?.memoryAvailableGB ?? ramTotalGB;
+    const gpuCount = (worker.hardware.gpu as any)?.count ?? (worker.hardware.gpu ? 1 : 0);
+    const gpuVramGB = worker.hardware.gpu?.memoryGB ?? 0;
+    const unifiedMemory = worker.hardware.gpu?.unifiedMemory ?? false;
+    const runtimes = worker.runtimes ?? [];
+    const loadedModels = worker.models ?? Object.keys(worker.modelHealth ?? {});
+    const activeReservationsCount = worker.reservations?.length ?? 0;
+    const activeJobsCount = (worker as unknown as { activeJobs?: number }).activeJobs ?? (worker.load?.cpuPercent ? Math.round(worker.load.cpuPercent / 20) : 0);
+    const historicalThroughput = (worker as unknown as { historicalThroughput?: number; throughput?: number }).historicalThroughput ?? (worker as unknown as { throughput?: number }).throughput;
+    const thermalThrottling = (worker as unknown as { thermalThrottling?: boolean }).thermalThrottling ?? (worker.load?.cpuPercent !== undefined && worker.load.cpuPercent > 95);
+    const memoryPressurePct = ramTotalGB > 0 ? Math.max(0, Math.min(100, Math.round(((ramTotalGB - ramAvailableGB) / ramTotalGB) * 100))) : 0;
+
+    // Physical capacity score: multi-dimensional hardware aggregation
+    const cpuScore = cpuCores * (cpuArchitecture === 'arm64' ? 1.1 : 1.0);
+    const ramScore = ramTotalGB / 8;
+    let gpuScore = 0;
+    if (unifiedMemory) {
+      gpuScore = (gpuVramGB / 16) * 2.0;
+    } else if (gpuCount > 0 && gpuVramGB > 0) {
+      gpuScore = gpuCount * (gpuVramGB / 16) * 3.5;
+    }
+    const basePhysicalCapacity = Math.max(1, Math.round((cpuScore + ramScore + gpuScore) * 10) / 10);
+
+    // Dynamic available capacity modulation
+    const cpuFactor = Math.max(0.1, 1 - (worker.load?.cpuPercent ?? 0) / 100);
+    const memFactor = ramTotalGB > 0 ? Math.max(0.1, ramAvailableGB / ramTotalGB) : 1.0;
+    const thermalFactor = thermalThrottling ? 0.5 : 1.0;
+    const reservationFactor = Math.max(0.2, 1 - activeReservationsCount * 0.15);
+
+    const availableCapacity = Math.max(
+      0.5,
+      Math.round(basePhysicalCapacity * cpuFactor * memFactor * thermalFactor * reservationFactor * 10) / 10,
+    );
+
+    return {
+      workerId: worker.id,
+      workerName: worker.name,
+      cpuCores,
+      cpuArchitecture,
+      ramTotalGB,
+      ramAvailableGB,
+      gpuCount,
+      gpuVramGB,
+      unifiedMemory,
+      runtimes,
+      loadedModels,
+      activeReservationsCount,
+      activeJobsCount,
+      historicalThroughput,
+      thermalThrottling,
+      memoryPressurePct,
+      basePhysicalCapacity,
+      availableCapacity,
+    };
+  }
+
+  /**
+   * Computes normalized effective capacity for a specific benchmark workload and model.
+   * Tailors capacity dynamically: GPU inference favors high VRAM/discrete GPUs,
+   * lightweight local models benefit from unified memory, and CPU tasks scale on cores/RAM.
+   */
+  public computeEffectiveCapacity(
+    worker: Computer,
+    benchmarkRequirements?: BenchmarkRequirements,
+    modelRequirements?: { modelId?: string; memoryGB?: number },
+    useAvailableCapacity = false,
+  ): { effectiveCapacity: number; weight: number; profile: WorkerCapacityProfile } {
+    const profile = this.buildCapacityProfile(worker);
+    let baseScore = useAvailableCapacity ? profile.availableCapacity : profile.basePhysicalCapacity;
+
+    const requiresGpu = benchmarkRequirements?.requiresGpu ?? false;
+    const minVramGB = benchmarkRequirements?.minVramGB ?? 16;
+    const targetModelId = benchmarkRequirements?.preferredModelId ?? modelRequirements?.modelId ?? 'default-model';
+
+    if (requiresGpu) {
+      if (profile.gpuCount === 0 && !profile.unifiedMemory) {
+        baseScore *= 0.15; // Severe penalty if workload requires GPU but node is CPU-only
+      } else if (profile.gpuCount > 0 && profile.gpuVramGB >= minVramGB) {
+        const vramRatio = profile.gpuVramGB / minVramGB;
+        baseScore *= 1.0 + Math.min(2.0, (profile.gpuCount - 1) * 0.5 + vramRatio * 0.5);
+      } else if (profile.unifiedMemory && profile.gpuVramGB >= minVramGB) {
+        baseScore *= 1.3; // Competitive for large memory local models
+      }
+    }
+
+    // Model Locality Preference: bonus when required model is already loaded and ready
+    const isModelLoaded =
+      profile.loadedModels.includes(targetModelId) ||
+      (worker.modelHealth && worker.modelHealth[targetModelId]?.loaded);
+    if (isModelLoaded) {
+      baseScore *= 1.35; // +35% effective capacity bonus for zero model-loading penalty
+    }
+
+    // Historical throughput modulation
+    if (profile.historicalThroughput && profile.historicalThroughput > 0) {
+      baseScore *= Math.min(1.5, Math.max(0.5, profile.historicalThroughput / 100));
+    }
+
+    const effectiveCapacity = Math.max(0.5, Math.round(baseScore * 10) / 10);
+    const weight = Math.max(1, Math.round(effectiveCapacity));
+
+    return {
+      effectiveCapacity,
+      weight,
+      profile,
+    };
+  }
+
+  /**
+   * Deterministically shards benchmark tasks across available workers using a Weighted Hash Ring.
+   * Representation on the ring is proportional to each worker's effective capacity.
+   *
    * Enforces WORKLOAD EQUIVALENCE: the exact same shard allocation is evaluated
-   * by both baseline and candidates.
+   * by both baseline and candidates on equivalent worker nodes.
    */
   public shardTasks(
     tasks: BenchmarkTask[],
     workers: Computer[],
     seed: string | number,
     config: OptimizableConfig,
+    options?: {
+      benchmarkRequirements?: BenchmarkRequirements;
+      modelRequirements?: { modelId?: string; memoryGB?: number };
+      useAvailableCapacity?: boolean;
+      workerWeights?: Record<string, number>;
+      virtualNodesPerWeight?: number;
+    },
   ): BenchmarkShard[] {
     if (workers.length === 0) {
       throw new Error('Cannot shard tasks: No workers available.');
@@ -161,25 +363,101 @@ export class DistributedBenchmarkFabric {
       throw new Error('Cannot shard tasks: Task list is empty.');
     }
 
-    const seedStr = String(seed);
-    const shards: BenchmarkShard[] = workers.map((w, idx) => ({
-      shardId: `shard-${idx + 1}-${w.id}`,
-      workerId: w.id,
-      tasks: [],
-      environment: this.extractEnvironmentIdentity(w, config),
-    }));
+    // Calculate effective capacities and normalized weights for each worker
+    const effectiveCapacities = new Map<string, { effectiveCapacity: number; weight: number; profile: WorkerCapacityProfile }>();
 
-    // Deterministic distribution using SHA-256 hash ring
+    for (const w of workers) {
+      if (options?.workerWeights && options.workerWeights[w.id] !== undefined) {
+        const customWeight = Math.max(1, Math.round(options.workerWeights[w.id]));
+        effectiveCapacities.set(w.id, {
+          effectiveCapacity: customWeight,
+          weight: customWeight,
+          profile: this.buildCapacityProfile(w),
+        });
+      } else {
+        const computed = this.computeEffectiveCapacity(
+          w,
+          options?.benchmarkRequirements,
+          options?.modelRequirements,
+          options?.useAvailableCapacity ?? false,
+        );
+        effectiveCapacities.set(w.id, computed);
+      }
+    }
+
+    // Determine normalized ring weights (relative to lowest capacity in fleet)
+    const minCapacity = Math.min(...Array.from(effectiveCapacities.values()).map((c) => c.effectiveCapacity));
+    const ringWorkers: Array<{ id: string; weight: number }> = workers.map((w) => {
+      const cap = effectiveCapacities.get(w.id)!;
+      let normalizedWeight: number;
+      if (options?.workerWeights && options.workerWeights[w.id] !== undefined) {
+        normalizedWeight = options.workerWeights[w.id];
+      } else {
+        normalizedWeight = Math.max(1, Math.round((cap.effectiveCapacity / Math.max(0.1, minCapacity))));
+      }
+      return { id: w.id, weight: normalizedWeight };
+    });
+
+    // Initialize shards
+    const shards: BenchmarkShard[] = workers.map((w, idx) => {
+      const capInfo = effectiveCapacities.get(w.id)!;
+      const ringWorker = ringWorkers.find((rw) => rw.id === w.id);
+      return {
+        shardId: `shard-${idx + 1}-${w.id}`,
+        workerId: w.id,
+        tasks: [],
+        environment: this.extractEnvironmentIdentity(w, config),
+        capacityWeight: ringWorker?.weight ?? 1,
+        effectiveCapacity: capInfo.effectiveCapacity,
+      };
+    });
+
+    const shardByWorker = new Map<string, BenchmarkShard>();
+    shards.forEach((s) => shardByWorker.set(s.workerId, s));
+
+    // Build Weighted Hash Ring with deterministic virtual node placements
+    const vnodeDensity = options?.virtualNodesPerWeight ?? 30;
+    const ring = new WeightedHashRing(ringWorkers, seed, vnodeDensity);
+
+    // Deterministically assign each task to the corresponding ring bucket
     for (const task of tasks) {
-      const hash = createHash('sha256')
-        .update(`${seedStr}::task::${task.id}`)
-        .digest('hex');
-      const numericVal = parseInt(hash.slice(0, 8), 16);
-      const workerIdx = numericVal % workers.length;
-      shards[workerIdx].tasks.push(task);
+      const assignedWorkerId = ring.getWorkerForTask(task.id, seed);
+      const targetShard = shardByWorker.get(assignedWorkerId) ?? shards[0];
+      targetShard.tasks.push(task);
     }
 
     return shards;
+  }
+
+  /**
+   * Rebalances unstarted benchmark tasks across active workers upon worker join, leave, or overload.
+   * Ensures completed tasks are preserved and zero duplicate metric accounting occurs.
+   */
+  public rebalanceUnstartedTasks(params: {
+    completedTaskIds: Set<string>;
+    allTasks: BenchmarkTask[];
+    activeWorkers: Computer[];
+    seed: string | number;
+    config: OptimizableConfig;
+    options?: {
+      benchmarkRequirements?: BenchmarkRequirements;
+      modelRequirements?: { modelId?: string; memoryGB?: number };
+      useAvailableCapacity?: boolean;
+      workerWeights?: Record<string, number>;
+      virtualNodesPerWeight?: number;
+    };
+  }): BenchmarkShard[] {
+    const unstartedTasks = params.allTasks.filter((t) => !params.completedTaskIds.has(t.id));
+    if (unstartedTasks.length === 0) {
+      return [];
+    }
+    return this.shardTasks(
+      unstartedTasks,
+      params.activeWorkers,
+      `${params.seed}::rebalance`,
+      params.config,
+      params.options,
+    );
   }
 
   /**
@@ -226,12 +504,18 @@ export class DistributedBenchmarkFabric {
     const candidateConfig = candidate.config;
     const baselineConfig = { id: 'cfg-baseline', version: 1 } as OptimizableConfig;
 
-    // 3. Shard tasks deterministically
-    const shards = this.shardTasks(tasks, availableWorkers, seed, baselineConfig);
+    // 3. Shard tasks deterministically with capability weighting
+    const shards = this.shardTasks(tasks, availableWorkers, seed, baselineConfig, {
+      benchmarkRequirements: params.benchmarkRequirements,
+      modelRequirements: params.modelRequirements,
+      useAvailableCapacity: params.useAvailableCapacity,
+      workerWeights: params.workerWeights,
+      virtualNodesPerWeight: params.virtualNodesPerWeight,
+    });
 
     // Track all observations with deduplication
     const observations = new Map<string, DistributedObservation & { scoreReport: EvaluationScoreReport }>();
-    const workerStatuses = new Map<string, 'HEALTHY' | 'FAILED' | 'RECOVERED'>();
+    const workerStatuses = new Map<string, 'HEALTHY' | 'FAILED' | 'RECOVERED' | 'STRAGGLER'>();
     availableWorkers.forEach((w) => workerStatuses.set(w.id, 'HEALTHY'));
 
     // 4. Execute Baseline & Candidate Shards Across Workers
@@ -524,6 +808,146 @@ export class DistributedBenchmarkFabric {
           status: 'COMPLETED',
           timestamp: new Date(),
         });
+
+        // Dynamic Rebalance Simulation: Mid-run worker overload, join, or leave
+        if (
+          params.rebalanceSimulation &&
+          (!params.rebalanceSimulation.workerId || params.rebalanceSimulation.workerId === worker.id) &&
+          taskIdx === params.rebalanceSimulation.atTaskIndex
+        ) {
+          const trigger = params.rebalanceSimulation.trigger;
+          const remainingTasks = shard.tasks.slice(taskIdx);
+
+          onEvent('meta.distributed.rebalance', {
+            trigger,
+            workerId: worker.id,
+            atTaskIndex: taskIdx,
+            unstartedTasksCount: remainingTasks.length,
+          });
+
+          if (trigger === 'overload') {
+            workerStatuses.set(worker.id, 'STRAGGLER');
+            const survivingWorkers = availableWorkers.filter((w) => w.id !== worker.id);
+            if (survivingWorkers.length > 0 && remainingTasks.length > 0) {
+              const rebalancedShards = this.shardTasks(
+                remainingTasks,
+                survivingWorkers,
+                `${seed}::rebalance::${taskIdx}`,
+                baselineConfig,
+                {
+                  benchmarkRequirements: params.benchmarkRequirements,
+                  modelRequirements: params.modelRequirements,
+                  useAvailableCapacity: true,
+                },
+              );
+
+              for (const rShard of rebalancedShards) {
+                const targetWorker = survivingWorkers.find((w) => w.id === rShard.workerId)!;
+                workerStatuses.set(targetWorker.id, 'RECOVERED');
+                const targetEnv = this.extractEnvironmentIdentity(targetWorker, candidateConfig);
+
+                for (const rTask of rShard.tasks) {
+                  onEvent('meta.distributed.workload_requeued', {
+                    fromWorkerId: worker.id,
+                    toWorkerId: targetWorker.id,
+                    taskId: rTask.id,
+                    reason: 'OVERLOAD_REBALANCE',
+                  });
+
+                  // Execute baseline on target worker
+                  const rBaseExec = await dispatcher.executeTask({
+                    task: rTask,
+                    worker: targetWorker,
+                    config: baselineConfig,
+                    isCandidate: false,
+                    environment: targetEnv,
+                  });
+                  const rBaseReport = this.evaluationService.evaluate(rBaseExec);
+                  observations.set(`base-${targetWorker.id}-${rTask.id}`, {
+                    experimentId: plan.experimentId,
+                    candidateId: 'baseline',
+                    benchmarkId: 'distributed-suite',
+                    taskId: rTask.id,
+                    workerId: targetWorker.id,
+                    modelId: rBaseExec.execution.modelId,
+                    runtimeId: rBaseExec.execution.runtimeId,
+                    attemptId: `att-${rBaseExec.execution.id}`,
+                    environment: targetEnv,
+                    metrics: {
+                      portable: {
+                        taskSuccess: rBaseReport.passed,
+                        firstPassBuild: (rBaseReport.metrics.rawMetrics?.firstPassBuild as boolean | undefined) ?? true,
+                        firstPassTest: (rBaseReport.metrics.rawMetrics?.firstPassTest as boolean | undefined) ?? true,
+                        physicalVerificationSuccess: rBaseReport.metrics.physicalVerificationSuccess,
+                        inputTokens: rBaseReport.metrics.inputTokens,
+                        outputTokens: rBaseReport.metrics.outputTokens,
+                        compactedTokens: rBaseReport.metrics.compactedTokens,
+                        repairCycles: rBaseReport.metrics.repairCycles,
+                      },
+                      hardwareSensitive: {
+                        durationMs:
+                          rBaseExec.checks.length > 0
+                            ? rBaseExec.checks.reduce((acc, c) => acc + (c.durationMs || 0), 0)
+                            : 100,
+                        modelLatencyMs: rBaseReport.metrics.modelLatencyMs,
+                        toolLatencyMs: rBaseReport.metrics.toolLatencyMs,
+                      },
+                    },
+                    scoreReport: rBaseReport,
+                    status: 'COMPLETED',
+                    timestamp: new Date(),
+                  });
+
+                  // Execute candidate on target worker
+                  const rCandExec = await dispatcher.executeTask({
+                    task: rTask,
+                    worker: targetWorker,
+                    config: candidateConfig,
+                    isCandidate: true,
+                    candidateId: candidate.candidateId,
+                    environment: targetEnv,
+                  });
+                  const rCandReport = this.evaluationService.evaluate(rCandExec);
+                  observations.set(`cand-${candidate.candidateId}-${rTask.id}`, {
+                    experimentId: plan.experimentId,
+                    candidateId: candidate.candidateId,
+                    benchmarkId: 'distributed-suite',
+                    taskId: rTask.id,
+                    workerId: targetWorker.id,
+                    modelId: rCandExec.execution.modelId,
+                    runtimeId: rCandExec.execution.runtimeId,
+                    attemptId: `att-${rCandExec.execution.id}`,
+                    environment: targetEnv,
+                    metrics: {
+                      portable: {
+                        taskSuccess: rCandReport.passed,
+                        firstPassBuild: (rCandReport.metrics.rawMetrics?.firstPassBuild as boolean | undefined) ?? true,
+                        firstPassTest: (rCandReport.metrics.rawMetrics?.firstPassTest as boolean | undefined) ?? true,
+                        physicalVerificationSuccess: rCandReport.metrics.physicalVerificationSuccess,
+                        inputTokens: rCandReport.metrics.inputTokens,
+                        outputTokens: rCandReport.metrics.outputTokens,
+                        compactedTokens: rCandReport.metrics.compactedTokens,
+                        repairCycles: rCandReport.metrics.repairCycles,
+                      },
+                      hardwareSensitive: {
+                        durationMs:
+                          rCandExec.checks.length > 0
+                            ? rCandExec.checks.reduce((acc, c) => acc + (c.durationMs || 0), 0)
+                            : 80,
+                        modelLatencyMs: rCandReport.metrics.modelLatencyMs,
+                        toolLatencyMs: rCandReport.metrics.toolLatencyMs,
+                      },
+                    },
+                    scoreReport: rCandReport,
+                    status: 'COMPLETED',
+                    timestamp: new Date(),
+                  });
+                }
+              }
+            }
+            break;
+          }
+        }
       }
 
       onEvent('meta.distributed.shard_completed', {
@@ -531,6 +955,35 @@ export class DistributedBenchmarkFabric {
         workerId: shard.workerId,
         taskCount: shard.tasks.length,
       });
+    }
+
+    // Straggler Detection: Check if any worker's average duration is significantly higher than fleet median
+    const durationsByWorker = new Map<string, number[]>();
+    for (const obs of observations.values()) {
+      if (obs.status === 'COMPLETED' && obs.candidateId === candidate.candidateId) {
+        const list = durationsByWorker.get(obs.workerId) ?? [];
+        list.push(obs.metrics.hardwareSensitive.durationMs);
+        durationsByWorker.set(obs.workerId, list);
+      }
+    }
+
+    const allDurations = Array.from(durationsByWorker.values()).flat().sort((a, b) => a - b);
+    if (allDurations.length > 0) {
+      const fleetMedian = allDurations[Math.floor(allDurations.length / 2)];
+      const thresholdFactor = params.stragglerThresholdFactor ?? 2.5;
+
+      for (const [wId, durs] of durationsByWorker.entries()) {
+        const wAvg = durs.reduce((a, b) => a + b, 0) / durs.length;
+        if (durs.length >= 2 && wAvg > fleetMedian * thresholdFactor) {
+          workerStatuses.set(wId, 'STRAGGLER');
+          onEvent('meta.distributed.straggler_detected', {
+            workerId: wId,
+            averageDurationMs: Math.round(wAvg),
+            fleetMedianDurationMs: fleetMedian,
+            thresholdFactor,
+          });
+        }
+      }
     }
 
     // 5. Aggregate Results & Stratify Metrics
@@ -556,7 +1009,7 @@ export class DistributedBenchmarkFabric {
     tasks: BenchmarkTask[];
     shards: BenchmarkShard[];
     observations: (DistributedObservation & { scoreReport: EvaluationScoreReport })[];
-    workerStatuses: Map<string, 'HEALTHY' | 'FAILED' | 'RECOVERED'>;
+    workerStatuses: Map<string, 'HEALTHY' | 'FAILED' | 'RECOVERED' | 'STRAGGLER'>;
     availableWorkers: Computer[];
     onEvent: (name: string, data: Record<string, unknown>) => void;
   }): MetaOptimizationRunResult {
@@ -673,12 +1126,18 @@ export class DistributedBenchmarkFabric {
         },
       };
 
+      const profile = this.buildCapacityProfile(worker);
+      const effectiveCap = this.computeEffectiveCapacity(worker, undefined, undefined, false);
+
       workerPlacements.push({
         workerId: worker.id,
         workerName: worker.name,
         shardId: workerShards[0]?.shardId ?? `shard-${worker.id}`,
         taskCount: workerTasks.length,
         tasks: workerTasks,
+        taskIds: workerTasks,
+        baselineCompletedTasks: workerBaseObs.length,
+        candidateCompletedTasks: workerCandObs.length,
         modelsUsed: ['qwen-2.5-coder'],
         hardware: {
           cpu: `${worker.hardware.cpu ?? 'CPU'} (${worker.hardware.cpuCores ?? 8}c)`,
@@ -699,6 +1158,9 @@ export class DistributedBenchmarkFabric {
           avgDurationMs: Math.round(wCandDuration / wCount),
           speedupVsBaseline: speedup,
         },
+        capacityWeight: workerShards[0]?.capacityWeight ?? effectiveCap.weight,
+        effectiveCapacity: workerShards[0]?.effectiveCapacity ?? effectiveCap.effectiveCapacity,
+        capacityProfile: profile,
         status: workerStatuses.get(worker.id) ?? 'HEALTHY',
       });
     }
@@ -814,6 +1276,7 @@ export class DistributedBenchmarkFabric {
         ? ['Distributed evaluation passed all correctness and regression gates without regression.']
         : guardResult.regressionsDetected,
       regressionGuard: guardResult,
+      isDistributed: true,
       workerPlacements,
       stratifiedMetrics,
       environmentIdentities,

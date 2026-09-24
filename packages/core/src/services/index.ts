@@ -147,3 +147,13 @@ export { TelemetryCollector } from './telemetryService.js';
 export { TaskCapabilityClassifier } from './taskCapabilityClassifier.js';
 export { ModelIntelligenceService } from './modelIntelligenceService.js';
 export type { ModelIntelligenceServiceOptions } from './modelIntelligenceService.js';
+export { StrategyLearningService } from './strategyLearningService.js';
+export type { StrategyLearningServiceOptions } from './strategyLearningService.js';
+export {
+  HierarchicalMctsService,
+  computeStrategyDiversity,
+  computeNodeStateHash,
+  computeControllerReward,
+  selectBestUCTChild,
+} from './hierarchicalMctsService.js';
+export type { HierarchicalMctsServiceOptions } from './hierarchicalMctsService.js';

@@ -33,11 +33,15 @@ export interface PlannerModelCaller {
   generate(prompt: string): Promise<string>;
 }
 
+import type { StrategyLearningService } from './strategyLearningService.js';
+import type { StrategyMatchResult } from '../types/strategyLearning.js';
+
 export interface PlanOptions {
   modelCaller?: PlannerModelCaller;
   projectRoot?: string;
   availableTools?: string[];
   maxSteps?: number;
+  strategyService?: StrategyLearningService;
 }
 
 export class TaskPlanner {
@@ -46,16 +50,33 @@ export class TaskPlanner {
    * ExecutionPlan. If a modelCaller is provided, it uses the model for dynamic
    * decomposition; otherwise, it applies deterministic semantic analysis.
    */
-  async plan(input: string, options: PlanOptions = {}): Promise<ExecutionPlan> {
+  async plan(input: string, options: PlanOptions = {}): Promise<ExecutionPlan & { retrievedStrategy?: StrategyMatchResult }> {
     const trimmed = input.trim();
     const complexity = classifyComplexity(trimmed);
+
+    // Retrieve learned strategy if StrategyLearningService is provided
+    let retrievedStrategy: StrategyMatchResult | undefined;
+    if (options.strategyService) {
+      const candidates = options.strategyService.queryStrategies({
+        problemSignature: {
+          category: 'general_repair',
+          languages: ['typescript'],
+          repositoryCharacteristics: ['monorepo', 'typed'],
+        },
+        taskPrompt: trimmed,
+        minConfidence: 0.3,
+      });
+      if (candidates.length > 0) {
+        retrievedStrategy = candidates[0];
+      }
+    }
 
     // Trivial tasks skip model-based decomposition (that's itself a model call
     // this task doesn't need) and the multi-step inspect/implement/compile/verify
     // DAG entirely — a single implement+verify step, instead of 4 separate
     // CodingAgent.run() invocations each with their own plan/turn/repair budget.
     if (complexity === 'trivial') {
-      return this.trivialPlan(trimmed);
+      return { ...this.trivialPlan(trimmed), retrievedStrategy };
     }
 
     if (options.modelCaller) {
@@ -64,14 +85,14 @@ export class TaskPlanner {
         const raw = await options.modelCaller.generate(prompt);
         const parsed = this.parseModelPlan(raw, trimmed);
         if (parsed && parsed.steps.length > 0) {
-          return { ...parsed, complexity };
+          return { ...parsed, complexity, retrievedStrategy };
         }
       } catch {
         // Fall back to deterministic decomposition on model error
       }
     }
 
-    return { ...this.heuristicPlan(trimmed), complexity };
+    return { ...this.heuristicPlan(trimmed), complexity, retrievedStrategy };
   }
 
   /**

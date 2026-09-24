@@ -24,6 +24,7 @@ export class TaskCapabilityClassifier {
       return {
         primaryCategory: cat,
         secondaryCategories: [],
+        relevantCategories: [cat],
         phase: (metadata.phase as ExecutionPhase) || this.detectPhase(task, text),
         language: (metadata.language as ProgrammingLanguage) || this.detectLanguage(task, text),
         confidence: 1.0,
@@ -125,9 +126,11 @@ export class TaskCapabilityClassifier {
       secondaryCategories.push('context_efficiency');
     }
 
+    const relevantCategories = Array.from(new Set([primaryCategory, ...secondaryCategories]));
     return {
       primaryCategory,
       secondaryCategories,
+      relevantCategories,
       phase,
       language,
       confidence,

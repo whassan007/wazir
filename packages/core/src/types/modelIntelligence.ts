@@ -178,6 +178,7 @@ export interface ModelCapabilityProfile {
 export interface TaskCapabilityClassification {
   primaryCategory: ModelCapabilityCategory;
   secondaryCategories: ModelCapabilityCategory[];
+  relevantCategories?: ModelCapabilityCategory[];
   phase?: ExecutionPhase;
   language?: ProgrammingLanguage;
   confidence: number;

@@ -166,7 +166,7 @@ function deriveEventRevisions(events: ExecutionRecord['events']): {
 export function currentAttemptErrors(record: Pick<ExecutionRecord, 'errors'> & Partial<Pick<ExecutionRecord, 'events'>>): string[] {
   const resumed = [...(record.events ?? [])].reverse().find((e) => (e.eventType ?? e.type) === 'execution.resumed');
   const before = (resumed?.data as { errorsBefore?: unknown } | undefined)?.errorsBefore;
-  return typeof before === 'number' ? record.errors.slice(before) : record.errors;
+  return (typeof before === 'number' ? record.errors?.slice(before) : record.errors) ?? [];
 }
 
 export function evaluateExecution(
@@ -188,7 +188,7 @@ export function evaluateExecution(
       : null;
 
   const currentRevision =
-    record.workspaceState?.revision ?? eventDerived?.currentRevision ?? (record.filesChanged.length > 0 ? 1 : 0);
+    record.workspaceState?.revision ?? eventDerived?.currentRevision ?? ((record.filesChanged?.length ?? 0) > 0 ? 1 : 0);
 
   // If evidenceList is empty but checks exist, construct baseline evidence bound to the
   // revision each check actually ran at (event-derived when available, else currentRevision).
@@ -405,7 +405,7 @@ if (options.mutationRequired === true && record.filesChanged.length === 0) {
       reasons.push(`checks passed for current revision (${checks.map((c) => c.name).join(', ')})`);
     }
   } else {
-    const failed = checks.filter((check) => !check.ok);
+    const failed = checks.filter((check) => !('ok' in check ? check.ok : (check as any).passed));
     if (failed.length > 0) {
       success = false;
       reasons.push(`failed checks: ${failed.map((c) => `${c.name} (${c.command})`).join(', ')}`);

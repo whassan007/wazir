@@ -44,6 +44,7 @@ export * from './semanticIndex.js';
 export * from './changeImpact.js';
 export * from './telemetry.js';
 export * from './canary.js';
+export * from './strategyLearning.js';
 export {
   type ModelCapabilityCategory,
   MODEL_CAPABILITY_CATEGORIES,
