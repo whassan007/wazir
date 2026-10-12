@@ -225,7 +225,7 @@ describe('Section 17 Matrix: LM Studio Live Execution', () => {
     expect(outcome.durationMs).toBeGreaterThan(0);
     expect(outcome.outputTokens).toBeGreaterThan(0);
     expect(streamedTokens.length).toBeGreaterThan(0);
-  });
+  }, 180_000); // a real 1024-token generation can exceed the 5 s default
 
   it('enforces policy gate on live LM Studio model dispatch', async () => {
     if (!isLMStudioLive) return;
