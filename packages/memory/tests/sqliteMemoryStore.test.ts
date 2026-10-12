@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SqliteMemoryStore } from '../src/sqlite/sqliteMemoryStore.js';
+import { MemoryService } from '../src/memoryService.js';
 import { unlinkSync, existsSync } from 'node:fs';
 
 describe('SqliteMemoryStore (Adapted from Qwen-Live-Harness)', () => {
@@ -73,5 +74,33 @@ describe('SqliteMemoryStore (Adapted from Qwen-Live-Harness)', () => {
     } finally {
       if (existsSync(dbPath)) unlinkSync(dbPath);
     }
+  });
+
+  it('bridges MemoryService episodic and procedural records to SqliteMemoryStore', () => {
+    const sqlite = new SqliteMemoryStore();
+    const memory = new MemoryService(sqlite);
+
+    memory.recordEpisode({
+      repositoryScope: 'repo-meta',
+      taskType: 'repair',
+      taskPrompt: 'Fix buffer overflow in parser',
+      executionId: 'exec-1',
+      attemptOutcome: 'success',
+      repairStrategy: 'apply bounds check',
+      filesInvolved: ['src/parser.c'],
+      workspaceRevision: 3,
+    });
+
+    memory.recordProcedure({
+      repositoryScope: 'repo-meta',
+      kind: 'build',
+      name: 'Clean Build',
+      triggerPattern: 'make clean && make',
+      recipe: { command: 'make clean && make -j4' },
+      associatedFiles: ['Makefile'],
+    });
+
+    expect(memory.getSqliteStore()).toBe(sqlite);
+    sqlite.close();
   });
 });

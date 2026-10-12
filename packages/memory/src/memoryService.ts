@@ -59,9 +59,17 @@ export interface ProceduralQueryOptions {
   limit?: number;
 }
 
+import type { SqliteMemoryStore } from './sqlite/sqliteMemoryStore.js';
+
 export class MemoryService {
   private readonly episodes = new Map<string, EpisodicRecord>();
   private readonly procedures = new Map<string, ProceduralRecipe>();
+
+  constructor(private readonly sqliteStore?: SqliteMemoryStore) {}
+
+  public getSqliteStore(): SqliteMemoryStore | undefined {
+    return this.sqliteStore;
+  }
 
   /**
    * Records an episodic memory of a past run, failure, repair attempt, and outcome.
@@ -95,6 +103,15 @@ export class MemoryService {
     };
 
     this.episodes.set(id, episode);
+    if (this.sqliteStore) {
+      this.sqliteStore.addEnvObservation({
+        libraryId: params.repositoryScope,
+        scope: params.taskType,
+        observation: `${params.taskPrompt} -> ${params.attemptOutcome}: ${params.repairStrategy ?? params.failurePattern ?? ''}`,
+        evidenceId: params.verificationEvidenceId,
+        timestamp: Date.now(),
+      });
+    }
     return episode;
   }
 
@@ -129,6 +146,15 @@ export class MemoryService {
     };
 
     this.procedures.set(id, recipe);
+    if (this.sqliteStore) {
+      this.sqliteStore.addEnvObservation({
+        libraryId: params.repositoryScope,
+        scope: `proc_${params.kind}`,
+        observation: `${params.name} [${params.triggerPattern}]: ${params.recipe.command ?? ''}`,
+        evidenceId: params.verifiedByEvidenceId,
+        timestamp: Date.now(),
+      });
+    }
     return recipe;
   }
 
