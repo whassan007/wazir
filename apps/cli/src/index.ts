@@ -300,6 +300,7 @@ taskCmd
   .option('--model <name>', 'Use specific model')
   .option('--runtime <name>', 'Use specific runtime')
   .option('--agent <name>', 'Use specific agent')
+  .option('--force', 'Run even if the agent failed its last preflight check')
   .option('--max-turns <number>', 'Maximum turns per task')
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
   .option('--preset <name>', 'Runtime preset (e.g. standard, minimal)')
@@ -317,6 +318,7 @@ taskCmd
         type: options.type as any,
         model: options.model,
         agent: options.agent,
+        force: options.force,
         maxTurns: options.maxTurns ? Number(options.maxTurns) : undefined,
         preset: options.preset,
         expectedFiles: options.expectedFiles
@@ -369,6 +371,7 @@ program
   .option('--model <name>', 'Use specific model')
   .option('--runtime <name>', 'Use specific runtime')
   .option('--agent <name>', 'Use specific agent')
+  .option('--force', 'Run even if the agent failed its last preflight check')
   .option('--max-turns <number>', 'Maximum turns per task')
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
   .option('--preset <name>', 'Runtime preset (e.g. standard, minimal)')
@@ -386,6 +389,7 @@ program
         type: options.type as any,
         model: options.model,
         agent: options.agent,
+        force: options.force,
         maxTurns: options.maxTurns ? Number(options.maxTurns) : undefined,
         preset: options.preset,
         expectedFiles: options.expectedFiles
@@ -667,6 +671,22 @@ agentsCmd.command('capabilities').description('List registered agent capabilitie
     const engine = await createEngine({ readOnlyLifecycle: true });
     const catalog = engine.agents.catalog();
     console.log(options.json ? JSON.stringify({ capabilities: catalog }) : catalog.map(entry => `${entry.capability}: ${entry.agents.join(', ')}`).join('\n'));
+  });
+
+agentsCmd
+  .command('check')
+  .argument('[names...]', 'Agents to check (default: all external agents)')
+  .option('--fresh', 'Ignore cached results and probe again')
+  .option('--timeout <seconds>', 'Per-agent probe timeout', '90')
+  .option('--json', 'Output in JSON format')
+  .description('Check that external agents (Claude Code, Codex, Qwen Code, Gemini, Antigravity) can actually run a task')
+  .action(async (names: string[], options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { checkAgents, renderPreflight } = await import('./agentPreflight.js');
+    const results = await checkAgents(engine, names, { fresh: options.fresh, timeoutMs: Number(options.timeout) * 1000 });
+    console.log(options.json ? JSON.stringify({ agents: results }, null, 2) : renderPreflight(results));
+    process.exit(results.length > 0 && results.every((r) => r.status === 'READY') ? 0 : 1);
   });
 
 program.addCommand(agentsCmd);
