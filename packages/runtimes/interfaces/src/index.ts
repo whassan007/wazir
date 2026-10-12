@@ -117,6 +117,10 @@ export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   name?: string;
+  /** role 'tool': id of the assistant tool call this result answers (native tool protocol). */
+  toolCallId?: string;
+  /** role 'assistant': tool calls the model made in this turn (native tool protocol). */
+  toolCalls?: Array<{ id?: string; name: string; arguments: unknown }>;
 }
 
 export interface ToolDefinition {
@@ -352,7 +356,10 @@ export interface GenerationEvent {
   failureClass?: import('@wazir/shared').FailureClass;
   retryExhausted?: boolean;
   requestId?: string;
-  type: 'token' | 'tool_call' | 'completed' | 'error' | 'retry';
+  /** 'reasoning': model thinking, streamed for progress only; never part of the answer. */
+  type: 'token' | 'reasoning' | 'tool_call' | 'completed' | 'error' | 'retry';
+  /** 'completed' only: provider finish reason (e.g. stop, tool_calls, length, content_filter), or 'cancelled' when the stream was aborted. */
+  finishReason?: string;
   content?: string;
   toolCallId?: string;
   toolName?: string;
