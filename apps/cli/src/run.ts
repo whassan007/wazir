@@ -258,7 +258,11 @@ export async function executeTask(
     context,
   });
   const executionId = record.execution.id;
-  if (scheduling.computerId) {
+  // External agents (Claude Code, Codex, Antigravity, ...) bring their own models, so loading
+  // and admitting a local one would only cost memory and could refuse a task that never
+  // needed it (seen live: INSUFFICIENT_MEMORY blocking a Codex run).
+  const externalAgent = agent.descriptor.strategy === 'external';
+  if (scheduling.computerId && !externalAgent) {
     try {
       const effective = await engine.lifecycle.activateExecution(executionId, Math.max(context.finalRequiredTokens, task.requirements.minimumContext ?? 0));
       context.available.tokens = effective;
@@ -267,12 +271,14 @@ export async function executeTask(
       return { success: false, reasons: [error], filesChanged: [], executionId, errors: [error] };
     }
   }
-  emitJson({ type: 'start', executionId, taskId: task.id, modelId: scheduling.modelId, agent: agent.descriptor.name });
+  emitJson({ type: 'start', executionId, taskId: task.id, modelId: externalAgent ? `external:${agent.descriptor.name}` : scheduling.modelId, agent: agent.descriptor.name });
 
   log('');
   log(color.bold(`  Execution ${executionId}`));
   log(color.gray(`    agent:    ${agent.descriptor.name}`));
-  log(color.gray(`    model:    ${scheduling.modelId} via ${scheduling.runtimeId} on ${scheduling.computerId ?? `hosted (${scheduling.runtimeId})`}`));
+  log(color.gray(externalAgent
+    ? `    model:    chosen by ${agent.descriptor.name} (external agent)`
+    : `    model:    ${scheduling.modelId} via ${scheduling.runtimeId} on ${scheduling.computerId ?? `hosted (${scheduling.runtimeId})`}`));
   log(color.gray(`    context:  ${context.finalRequiredTokens} / ${context.available.tokens} tokens`));
   for (const reason of scheduling.reasons) {
     log(color.gray(`    - ${reason}`));
