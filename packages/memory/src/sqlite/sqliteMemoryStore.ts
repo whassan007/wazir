@@ -156,15 +156,18 @@ export class SqliteMemoryStore {
     const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
     if (terms.length === 0) return [];
 
+    // Match terms in SQL before limiting: limiting to the newest rows first made any
+    // segment older than the most recent 100 unretrievable regardless of relevance.
+    const escapeLike = (t: string) => t.replace(/[\\%_]/g, (c) => `\\${c}`);
     const stmt = this.db.prepare(`
       SELECT id, library_id, turn_id, speaker, text, timestamp
       FROM dialogue_segments
-      WHERE library_id = ?
+      WHERE library_id = ? AND (${terms.map(() => "lower(text) LIKE ? ESCAPE '\\'").join(' OR ')})
       ORDER BY timestamp DESC
-      LIMIT 100
+      LIMIT 500
     `);
 
-    const rows = stmt.all(libraryId) as Array<{
+    const rows = stmt.all(libraryId, ...terms.map((t) => `%${escapeLike(t)}%`)) as Array<{
       id: number;
       library_id: string;
       turn_id: string;

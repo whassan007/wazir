@@ -4,6 +4,27 @@ import { MemoryService } from '../src/memoryService.js';
 import { unlinkSync, existsSync } from 'node:fs';
 
 describe('SqliteMemoryStore (Adapted from Qwen-Live-Harness)', () => {
+  it('retrieves a matching segment older than the 100 most recent', () => {
+    const store = new SqliteMemoryStore();
+    store.ensureLibrary('lib', 'lib');
+    const now = Date.now();
+    store.addDialogueSegment({ libraryId: 'lib', turnId: 'old', speaker: 'user', text: 'the flamingo deployment key rotation', timestamp: now - 10 * 86_400_000 });
+    for (let i = 0; i < 150; i++) {
+      store.addDialogueSegment({ libraryId: 'lib', turnId: `t${i}`, speaker: 'assistant', text: `unrelated chatter ${i}`, timestamp: now - i });
+    }
+    const hits = store.searchDialogue('lib', 'flamingo rotation');
+    expect(hits.map((h) => h.item.turnId)).toEqual(['old']);
+    store.close();
+  });
+
+  it('treats LIKE wildcards in queries literally', () => {
+    const store = new SqliteMemoryStore();
+    store.ensureLibrary('lib', 'lib');
+    store.addDialogueSegment({ libraryId: 'lib', turnId: 'a', speaker: 'user', text: 'plain words here', timestamp: Date.now() });
+    expect(store.searchDialogue('lib', '%%% ___')).toEqual([]);
+    store.close();
+  });
+
   it('creates schema, stores dialogue segments, and retrieves via BM25 lexical ranking', () => {
     const store = new SqliteMemoryStore();
 
