@@ -91,7 +91,11 @@ export class ExternalAgentAdapter implements AgentAdapter {
         if (stopReason === 'cancelled') resolve(undefined);
         else if (stopReason === 'timeout') reject(new Error(`'${this.spec.command}' timed out after ${timeoutMs}ms`));
         else if (code === 0) resolve(captured);
-        else reject(new Error(`'${this.spec.command}' exited with code ${code}`));
+        else {
+          // The agent's own last words say why; an exit code alone is not diagnosable.
+          const tail = captured.trim().split('\n').slice(-3).join(' ').slice(-300);
+          reject(new Error(`'${this.spec.command}' exited with code ${code}${tail ? `: ${tail}` : ''}`));
+        }
       });
     });
 
