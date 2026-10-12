@@ -17,6 +17,9 @@ import type { PolicyEngine } from './policyEngine.js';
 import type { RuntimeRegistry } from './runtimeRegistry.js';
 import type { ModelIntelligenceService } from './modelIntelligenceService.js';
 import { TaskCapabilityClassifier } from './taskCapabilityClassifier.js';
+import { classifyWorkload, type ResourceRouter } from '../resources/router.js';
+import type { WorkloadClass } from '../resources/types.js';
+import type { ModelCapabilityCategory } from '../types/modelIntelligence.js';
 import type {
   EmpiricalRoutingExplanation,
   EvaluatedCandidate,
@@ -49,6 +52,11 @@ export interface SchedulerDeps {
    * Classifier for decomposing task capability requirements.
    */
   classifier?: TaskCapabilityClassifier;
+  /**
+   * Resource-aware routing: budget/quota/GPU constraints and cost/latency/capacity scoring
+   * (see resources/router.ts). Absent = capability-only routing, as before.
+   */
+  resources?: { router: ResourceRouter; workloadFor?: (task: Task, category: ModelCapabilityCategory) => WorkloadClass };
 }
 
 export interface ScheduleInput {
@@ -154,6 +162,28 @@ export class Scheduler {
       if (excludeModelIds.includes(record.id)) result.rejected.push('excluded: already tried by this execution');
       return result;
     });
+
+    if (this.deps.resources) {
+      const { router, workloadFor } = this.deps.resources;
+      const workload = workloadFor?.(task, requiredCapability) ?? classifyWorkload(task, requiredCapability);
+      const capable = scored.filter((s) => s.rejected.length === 0);
+      const all = router.assess({
+        task, workload, estimatedInputTokens: Math.max(requiredContext, 1),
+        candidates: capable.map((s) => ({ modelId: s.record.id, runtimeId: this.preferredRuntime(s.record.id), capabilityScore: Math.max(0, s.score), residency: this.residency(s.record.id, requiredContext) })),
+      });
+      for (const a of all) {
+        const s = capable.find((c) => c.record.id === a.modelId)!;
+        if (!a.admissible) {
+          s.rejected.push(`resource: ${a.reasons.join('; ')}`);
+          continue;
+        }
+        const f = a.factors!;
+        s.reasons.push(`resource (${workload}, account ${a.accountId}): score ${a.score} = quality ${f.quality.toFixed(2)}, reliability ${f.reliability.toFixed(2)}, capacity ${f.capacity.toFixed(2)}, cost ${f.cost.toFixed(2)}, latency ${f.latency.toFixed(2)}, quota risk ${f.quotaRisk.toFixed(2)}`);
+        s.score = Math.round(a.score! * 1000) / 10;
+      }
+      const chosen = all.filter((a) => a.admissible).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
+      router.record(task.id, workload, chosen, all);
+    }
 
     const eligible = scored.filter((s) => s.rejected.length === 0);
     const rejected = scored.filter((s) => s.rejected.length > 0);
@@ -282,6 +312,20 @@ export class Scheduler {
         ...best.reasons,
       ],
     };
+  }
+
+  /** Whether a model is resident with enough context (`ready`), loaded too small (`reload`), or not loaded. */
+  private residency(modelId: string, requiredContext: number): 'ready' | 'reload' | 'load' {
+    const instances = this.deps.models.instancesOf(modelId);
+    const loaded = instances.filter((i) => i.loaded);
+    if (loaded.some((i) => i.contextTokens === undefined || i.contextTokens >= requiredContext)) return 'ready';
+    return loaded.length ? 'reload' : 'load';
+  }
+
+  /** Runtime of the instance a model would run on: a ready instance first. */
+  private preferredRuntime(modelId: string): string {
+    const instances = this.deps.models.instancesOf(modelId);
+    return (instances.find((i) => i.state === 'READY') ?? instances.find((i) => i.loaded) ?? instances[0])?.runtimeId ?? 'unknown';
   }
 
   private scoreModel(
