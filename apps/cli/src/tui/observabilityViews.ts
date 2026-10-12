@@ -1,4 +1,7 @@
 import { color } from '../colors.js';
+import type { VerificationInspection, WhyCompleteAnswer, EvidenceSlotStatus } from '@wazir/core';
+import type { PromptCacheMetrics, CacheMetricValue } from '@wazir/runtimes-interfaces';
+import { promptCacheSource, promptCacheReuse } from '@wazir/runtimes-interfaces';
 
 export interface ImprovementExperimentItem {
   id: string;
@@ -24,12 +27,20 @@ export interface ImprovementExperimentItem {
   decisionReason?: string;
   canaryState?: {
     canaryId?: string;
+    candidateId?: string;
     trafficFraction?: number;
     currentAllocation?: number;
     stage?: number;
+    stageName?: string;
     totalStages?: number;
     status: 'HEALTHY' | 'ROLLED_BACK' | 'PROMOTED' | 'EVALUATING' | string;
     rollbackReason?: string;
+    sampleCount?: number;
+    minimumSamples?: number;
+    correctnessStatus?: string;
+    regressionGuardState?: string;
+    nextStage?: string;
+    stagedExpansionTiers?: number[];
   };
   causalEvidence?: {
     design?: string;
@@ -59,6 +70,8 @@ export interface SearchTreeNode {
   wallTimeMs?: number;
   testsPassed?: boolean;
   workerId?: string;
+  leaseStatus?: string;
+  treeRevision?: number;
   modelId?: string;
   isFrontier?: boolean;
   isDominated?: boolean;
@@ -85,6 +98,99 @@ export interface SearchCandidateItem {
   checkpointId?: string;
 }
 
+export interface SearchNodeInspection {
+  nodeId: string;
+  parentId?: string;
+  prunedReason?: string;
+  phase?: string;
+  state?: string;
+  modelId?: string;
+  workerId?: string;
+  checkpointId?: string;
+  revision?: string | number;
+
+  changeSummary?: {
+    filesChanged?: number | string | string[];
+    filesChangedCount?: number;
+    linesAdded?: number;
+    linesRemoved?: number;
+    patchDigest?: string;
+    diffSnippet?: string;
+    fileDeltas?: Array<{
+      path: string;
+      additions?: number;
+      deletions?: number;
+      digest?: string;
+    }>;
+  };
+
+  verification?: {
+    buildStatus?: string;
+    buildCommand?: string;
+    buildExitCode?: number;
+    buildOutput?: string;
+
+    testsStatus?: string;
+    testSummary?: string;
+    testCommand?: string;
+    testExitCode?: number;
+    testOutput?: string;
+
+    acceptanceStatus?: string;
+    acceptanceDetails?: string;
+
+    verifyStatus?: string;
+    oracles?: Array<{
+      name: string;
+      status: string;
+      exitCode?: number;
+      command?: string;
+      message?: string;
+      output?: string;
+    }>;
+  };
+
+  search?: {
+    visits?: number;
+    controllerReward?: number;
+    uctComponents?: string;
+    uctExploitation?: number;
+    uctExploration?: number;
+    uctScore?: number;
+    paretoMembership?: string;
+  };
+
+  provenance?: {
+    parentNodeId?: string;
+    checkpointLineage?: string | string[];
+    executionId?: string;
+    evidenceIds?: string[];
+  };
+
+  physicalEvidence?: {
+    fileDeltas?: Array<{
+      path: string;
+      additions?: number;
+      deletions?: number;
+      diffHash?: string;
+    }>;
+    patchSummary?: string;
+    buildCommand?: string;
+    buildExitCode?: number;
+    buildOutput?: string;
+    testCommand?: string;
+    testExitCode?: number;
+    testOutput?: string;
+    oracleResults?: Array<{
+      name: string;
+      status?: string;
+      exitCode?: number;
+      command?: string;
+      message?: string;
+    }>;
+  };
+}
+
 export interface SearchViewData {
   searchId?: string;
   objective?: string;
@@ -95,7 +201,17 @@ export interface SearchViewData {
   viewMode?: 'tree' | 'table' | 'split';
   selectedIndex: number;
   selectedCandidateId?: string;
+  selectedNodeId?: string;
+  selectedNodeInspection?: SearchNodeInspection;
   selectionReason?: string;
+  treeRevision?: number;
+  fleetSummary?: {
+    activeWorkers?: number;
+    totalWorkers?: number;
+    runningBranches?: number;
+    budgetUtilizationPct?: number;
+    transpositionsCount?: number;
+  };
   width: number;
   maxRows: number;
 }
@@ -111,6 +227,54 @@ export interface ContextSampleItem {
   stablePrefix: number;
   volatilePortion: number;
   timestamp?: Date;
+  /** Normalized prompt-cache telemetry (produced by controller telemetry; consumed read-only). */
+  cache?: PromptCacheMetrics;
+}
+
+export type {
+  CacheMetricStatus,
+  CacheMetricValue,
+  PromptCacheMetrics,
+} from '@wazir/runtimes-interfaces';
+export {
+  promptCacheSource,
+  promptCacheReuse,
+} from '@wazir/runtimes-interfaces';
+
+function hasCacheValue(m: import('@wazir/runtimes-interfaces').CacheMetricValue | undefined): m is import('@wazir/runtimes-interfaces').CacheMetricValue & { value: number } {
+  return !!m && (m.status === 'OBSERVED' || m.status === 'ESTIMATED') && typeof m.value === 'number' && Number.isFinite(m.value);
+}
+
+function fmtCacheMetric(m: CacheMetricValue | undefined): string {
+  if (!m) return 'UNKNOWN';
+  if (hasCacheValue(m)) return m.value.toLocaleString('en-US');
+  return m.status === 'UNSUPPORTED' ? 'UNSUPPORTED' : 'UNKNOWN';
+}
+
+const SPARK = '▁▂▃▄▅▆▇█';
+
+export function renderPromptCacheSection(samples: ContextSampleItem[], width: number): string[] {
+  const latest = samples[samples.length - 1];
+  const cache = latest?.cache;
+  const rule = '─'.repeat(Math.max(10, Math.min(24, width - 4)));
+  const row = (label: string, val: string) => padRight(`  ${label.padEnd(18)}${val.padStart(12)}`, width);
+  const out: string[] = [padRight(color.bold('  PROMPT CACHE'), width), padRight(color.gray(`  ${rule}`), width)];
+  out.push(row('Input Tokens', fmtCacheMetric(cache?.inputTokens)));
+  out.push(row('Cache Read', fmtCacheMetric(cache?.cacheReadTokens)));
+  out.push(row('Cache Write', fmtCacheMetric(cache?.cacheWriteTokens)));
+  const reuse = promptCacheReuse(cache);
+  out.push(row('Effective Reuse', reuse === undefined ? 'UNKNOWN' : `${(reuse * 100).toFixed(1)}%`));
+  out.push(row('Source', promptCacheSource(cache)));
+  out.push(row('Provider', cache?.provider ?? 'UNKNOWN'));
+
+  // Trend: derived solely from the already-bounded sample ring buffer; no extra history.
+  const maxPoints = Math.max(0, Math.min(samples.length, width - 24));
+  const trend = samples.slice(-maxPoints).map((s) => promptCacheReuse(s.cache));
+  if (trend.filter((v) => v !== undefined).length >= 2) {
+    const spark = trend.map((v) => (v === undefined ? '·' : SPARK[Math.min(SPARK.length - 1, Math.floor(v * SPARK.length))])).join('');
+    out.push(padRight(`  ${'Reuse Trend'.padEnd(18)}${color.cyan(spark)}`, width));
+  }
+  return out;
 }
 
 export interface ContextViewData {
@@ -137,6 +301,49 @@ export interface FleetWorkerItem {
   shardsCount?: number;
   healthPct?: number;
   candidatePlacement?: string;
+  /** Runtime/model health projection for this node (see buildHealthReport). */
+  health?: FleetNodeHealth;
+}
+
+export interface FleetNodeHealth {
+  runtime?: { name: string; state: string };
+  model?: { id: string; state: string };
+  memory?: { usedGiB?: number; totalGiB?: number; level: string };
+  queueDepth: number | null;
+  inference: string;
+  telemetry: string;
+  /** Diagnostics for this node, most severe first; evidence is shown only for the selected node. */
+  diagnostics: Array<{ code: string; severity: string; subject: string; reason: string; evidence: string[] }>;
+}
+
+function healthTone(s: string): string {
+  if (['READY', 'HEALTHY', 'OBSERVED', 'OK'].includes(s)) return color.green(s);
+  if (['UNREACHABLE', 'UNAVAILABLE', 'FAILING', 'CRITICAL', 'FAILED'].includes(s)) return color.red(s);
+  if (['DEGRADED', 'HIGH', 'LOADED', 'LOADING'].includes(s)) return color.yellow(s);
+  return color.gray(s);
+}
+
+/** Compact health lines for one fleet node; evidence expands only when selected. */
+export function renderFleetNodeHealth(h: FleetNodeHealth, selected: boolean, width: number): string[] {
+  const lines: string[] = [];
+  const rt = h.runtime ? `Runtime ${h.runtime.name} ${healthTone(h.runtime.state)}` : `Runtime ${color.gray('none')}`;
+  const model = h.model ? `Model ${truncateAnsi(h.model.id, 24)} ${healthTone(h.model.state)}` : '';
+  lines.push(padRight(`   ${[rt, model].filter(Boolean).join('  ')}`, width));
+  const mem = h.memory
+    ? h.memory.totalGiB !== undefined && h.memory.usedGiB !== undefined
+      ? `Memory ${h.memory.usedGiB}/${h.memory.totalGiB} GiB${h.memory.level !== 'OK' ? ` ${healthTone(h.memory.level)}` : ''}`
+      : `Memory ${color.gray('UNKNOWN')}`
+    : '';
+  const queue = `Queue ${h.queueDepth ?? color.gray('?')}`;
+  lines.push(padRight(`   ${[mem, queue, `Inference ${healthTone(h.inference)}`, `Telemetry ${healthTone(h.telemetry)}`].filter(Boolean).join('  ')}`, width));
+  const top = h.diagnostics[0];
+  if (top) {
+    const tone = top.severity === 'error' ? color.red : top.severity === 'warning' ? color.yellow : color.gray;
+    const more = h.diagnostics.length > 1 ? color.gray(` (+${h.diagnostics.length - 1})`) : '';
+    lines.push(padRight(`   ${tone(top.code)} ${color.gray(truncateAnsi(`${top.subject}: ${top.reason}`, Math.max(10, width - top.code.length - 12)))}${more}`, width));
+    if (selected) for (const e of top.evidence.slice(0, 4)) lines.push(padRight(color.gray(`     ${truncateAnsi(e, Math.max(10, width - 6))}`), width));
+  }
+  return lines;
 }
 
 export interface FleetViewData {
@@ -197,23 +404,11 @@ export interface TaskViewData {
 }
 
 export interface EvidenceViewData {
-  taskId?: string;
-  title?: string;
-  status?: string;
-  workspaceRevision?: { base: number; current: number; hash?: string; branch?: string };
-  physicalMutations: Array<{ file: string; additions?: number; deletions?: number; patchHash?: string }>;
-  buildEvidence?: { command: string; exitCode: number; durationMs?: number; outputSnippet?: string };
-  testEvidence?: { command: string; exitCode: number; passed: number; failed: number; assertions?: number; durationMs?: number };
-  verificationChecks: Array<{ name: string; ok: boolean; exitCode?: number; command?: string; message?: string }>;
-  policyDecisions: Array<{ action: string; resource?: string; decision: 'ALLOW' | 'DENY'; rule?: string }>;
-  faultRecoveryEvents: Array<{ time?: string; type: string; details: string; recovered?: boolean }>;
-  completionReason?: {
-    verified: boolean;
-    summary: string;
-    oraclesSatisfied: string[];
-    diskConfirmed: boolean;
-  };
-  provenanceChain?: string[];
+  /** Absent when no execution record is selected; the view then says so instead of implying PASS. */
+  inspection?: VerificationInspection;
+  why?: WhyCompleteAnswer;
+  /** Provenance drill-down depth (0 = collapsed). Bounded by the steps present. */
+  provenanceDepth?: number;
   width: number;
   maxRows: number;
 }
@@ -245,6 +440,7 @@ export interface EvidenceModalData {
   width: number;
   maxRows: number;
   scrollOffset?: number;
+  nodeInspection?: SearchNodeInspection;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +464,7 @@ function truncateAnsi(str: string, maxLen: number): string {
       result += char;
     } else if (inEscape) {
       result += char;
+      if (/[a-zA-Z]/.test(char)) inEscape = false;
     } else {
       if (visibleCount < maxLen - 1) {
         result += char;
@@ -297,12 +494,29 @@ export function renderProgressBar(percentage: number, width = 10): string {
   return color.green(bar);
 }
 
+export function flattenSearchTree(roots: SearchTreeNode[]): SearchTreeNode[] {
+  const result: SearchTreeNode[] = [];
+  function traverse(node: SearchTreeNode) {
+    result.push(node);
+    if (node.children) {
+      for (const child of node.children) {
+        traverse(child);
+      }
+    }
+  }
+  for (const root of roots) {
+    traverse(root);
+  }
+  return result;
+}
+
 export function renderSearchTreeNode(
   node: SearchTreeNode,
   prefix = '',
   isLast = true,
   isRoot = false,
   width = 80,
+  selectedNodeId?: string,
 ): string[] {
   const lines: string[] = [];
   const connector = isRoot ? '' : isLast ? '└─ ' : '├─ ';
@@ -325,15 +539,18 @@ export function renderSearchTreeNode(
   const pruneInfo = node.prunedReason ? color.red(` [PRUNED: ${node.prunedReason}]`) : '';
   const tokenInfo = node.tokens !== undefined ? color.gray(` (${node.tokens} tok)`) : '';
   const testInfo = node.testsPassed === true ? color.green(' [tests ✓]') : node.testsPassed === false ? color.red(' [tests ×]') : '';
-  const label = `${node.label ?? node.name ?? node.id} ${stateGlyph}${tokenInfo}${testInfo}${paretoBadge}${pruneInfo}`;
+  const ownerInfo = node.workerId ? color.magenta(` [${node.workerId}${node.leaseStatus ? ` ${node.leaseStatus}` : ''}]`) : '';
+  const revisionInfo = node.treeRevision !== undefined ? color.gray(` [T${node.treeRevision}]`) : '';
+  const label = `${node.label ?? node.name ?? node.id} ${stateGlyph}${tokenInfo}${testInfo}${ownerInfo}${revisionInfo}${paretoBadge}${pruneInfo}`;
 
-  lines.push(padRight(`  ${prefix}${connector}${label}`, width));
+  const marker = selectedNodeId !== undefined && node.id === selectedNodeId ? '> ' : '  ';
+  lines.push(padRight(`${marker}${prefix}${connector}${label}`, width));
 
   const childPrefix = prefix + (isRoot ? '' : isLast ? '   ' : '│  ');
   const children = node.children ?? [];
   for (let i = 0; i < children.length; i++) {
     const childIsLast = i === children.length - 1;
-    lines.push(...renderSearchTreeNode(children[i], childPrefix, childIsLast, false, width));
+    lines.push(...renderSearchTreeNode(children[i], childPrefix, childIsLast, false, width, selectedNodeId));
   }
   return lines;
 }
@@ -479,20 +696,225 @@ export function renderTaskView(data: TaskViewData): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// 1b. SEARCH NODE INSPECTION RENDERER (Authoritative Controller Evidence)
+// ---------------------------------------------------------------------------
+
+export function renderSearchNodeInspection(
+  inspection: SearchNodeInspection,
+  options: { width?: number; maxRows?: number } = {},
+): string[] {
+  const width = options.width ?? 80;
+  const maxRows = options.maxRows ?? 60;
+  const lines: string[] = [];
+
+  const sep = '─'.repeat(Math.min(width - 4, 36));
+
+  // NODE <id>
+  lines.push(`NODE ${color.bold(inspection.nodeId)}`);
+  lines.push(color.gray(sep));
+
+  // Metadata
+  const phaseStr = inspection.phase ? inspection.phase.toUpperCase() : 'UNKNOWN';
+  const stateStr = inspection.state
+    ? inspection.state.toUpperCase() === 'VERIFIED'
+      ? color.green('VERIFIED')
+      : inspection.state.toUpperCase() === 'FAILED' || inspection.state.toUpperCase() === 'PRUNED'
+        ? color.red(inspection.state.toUpperCase())
+        : color.yellow(inspection.state.toUpperCase())
+    : 'UNKNOWN';
+
+  lines.push(`Phase:       ${phaseStr}`);
+  lines.push(`State:       ${stateStr}`);
+  lines.push(`Model:       ${inspection.modelId ?? 'UNKNOWN'}`);
+  lines.push(`Worker:      ${inspection.workerId ?? 'UNKNOWN'}`);
+  lines.push(`Checkpoint:  ${inspection.checkpointId ?? 'UNKNOWN'}`);
+  lines.push(
+    `Revision:    ${
+      inspection.revision !== undefined
+        ? String(inspection.revision).startsWith('r')
+          ? String(inspection.revision)
+          : `r${inspection.revision}`
+        : 'UNKNOWN'
+    }`,
+  );
+  const parentNodeStr = inspection.parentId ?? inspection.provenance?.parentNodeId ?? 'UNKNOWN';
+  lines.push(`Parent:      ${parentNodeStr}`);
+  const pruningReasonStr = inspection.prunedReason ?? (inspection.state === 'PRUNED' ? 'PRUNED' : 'UNKNOWN');
+  lines.push(`Pruning reason: ${pruningReasonStr}`);
+  lines.push('');
+
+  // CHANGE SUMMARY
+  lines.push(color.bold('CHANGE SUMMARY'));
+  const filesChangedStr =
+    inspection.changeSummary?.filesChanged !== undefined
+      ? Array.isArray(inspection.changeSummary.filesChanged)
+        ? `${inspection.changeSummary.filesChanged.length} (${inspection.changeSummary.filesChanged.slice(0, 3).join(', ')})`
+        : String(inspection.changeSummary.filesChanged)
+      : 'UNKNOWN';
+
+  const linesDeltaStr =
+    inspection.changeSummary?.linesAdded !== undefined || inspection.changeSummary?.linesRemoved !== undefined
+      ? `+${inspection.changeSummary.linesAdded ?? 0}, -${inspection.changeSummary.linesRemoved ?? 0}`
+      : 'UNKNOWN';
+
+  const patchDigestStr = inspection.changeSummary?.patchDigest ?? 'UNKNOWN';
+
+  lines.push(`files changed        ${filesChangedStr}`);
+  lines.push(`lines added/removed  ${linesDeltaStr}`);
+  lines.push(`patch/diff digest    ${patchDigestStr}`);
+  lines.push('');
+
+  // VERIFICATION
+  lines.push(color.bold('VERIFICATION'));
+  const fmtStatus = (s: string | undefined): string => {
+    if (!s) return 'UNKNOWN';
+    if (s.toUpperCase() === 'PASS') return color.green('PASS');
+    if (s.toUpperCase() === 'FAIL') return color.red('FAIL');
+    return s;
+  };
+
+  const buildStr = fmtStatus(inspection.verification?.buildStatus);
+  const testsStr = inspection.verification?.testSummary
+    ? inspection.verification.testsStatus === 'FAIL'
+      ? color.red(inspection.verification.testSummary)
+      : color.green(inspection.verification.testSummary)
+    : fmtStatus(inspection.verification?.testsStatus);
+  const acceptanceStr = fmtStatus(inspection.verification?.acceptanceStatus);
+  const verifyStr = fmtStatus(inspection.verification?.verifyStatus);
+
+  lines.push(`Build       ${buildStr}`);
+  lines.push(`Tests       ${testsStr}`);
+  lines.push(`Acceptance  ${acceptanceStr}`);
+  lines.push(`Verify      ${verifyStr}`);
+
+  if (inspection.verification?.oracles && inspection.verification.oracles.length > 0) {
+    const oracleSummaries = inspection.verification.oracles
+      .slice(0, 3)
+      .map((o) => `${o.status === 'PASS' ? color.green('✓') : color.red('×')} ${o.name}`)
+      .join('  ');
+    lines.push(`Oracles:    ${oracleSummaries}`);
+  }
+  lines.push('');
+
+  // SEARCH
+  lines.push(color.bold('SEARCH'));
+  const visitsStr = inspection.search?.visits !== undefined ? String(inspection.search.visits) : 'UNKNOWN';
+  const rewardStr =
+    inspection.search?.controllerReward !== undefined
+      ? typeof inspection.search.controllerReward === 'number'
+        ? inspection.search.controllerReward.toFixed(4)
+        : String(inspection.search.controllerReward)
+      : 'UNKNOWN';
+  const uctStr = inspection.search?.uctComponents ?? 'UNKNOWN';
+  const paretoStr = inspection.search?.paretoMembership
+    ? inspection.search.paretoMembership.toUpperCase() === 'FRONTIER'
+      ? color.bold(color.green('● FRONTIER'))
+      : inspection.search.paretoMembership.toUpperCase() === 'DOMINATED'
+        ? color.gray('DOMINATED')
+        : color.yellow(inspection.search.paretoMembership.toUpperCase())
+    : 'UNKNOWN';
+
+  lines.push(`Visits               ${visitsStr}`);
+  lines.push(`Controller reward    ${rewardStr}`);
+  lines.push(`UCT components       ${uctStr}`);
+  lines.push(`Pareto membership    ${paretoStr}`);
+  lines.push('');
+
+  // PROVENANCE
+  lines.push(color.bold('PROVENANCE'));
+  const lineageStr = Array.isArray(inspection.provenance?.checkpointLineage)
+    ? inspection.provenance.checkpointLineage.join(' -> ')
+    : inspection.provenance?.checkpointLineage ?? 'UNKNOWN';
+  const execIdStr = inspection.provenance?.executionId ?? 'UNKNOWN';
+  const evidenceIdsStr =
+    inspection.provenance?.evidenceIds && inspection.provenance.evidenceIds.length > 0
+      ? inspection.provenance.evidenceIds.join(', ')
+      : 'UNKNOWN';
+
+  lines.push(`parent node          ${parentNodeStr}`);
+  lines.push(`checkpoint lineage   ${lineageStr}`);
+  lines.push(`execution id         ${execIdStr}`);
+  lines.push(`evidence ids         ${evidenceIdsStr}`);
+  lines.push('');
+
+  // PHYSICAL EVIDENCE
+  lines.push(color.bold('PHYSICAL EVIDENCE'));
+  const pe = inspection.physicalEvidence;
+  let hasEvidence = false;
+
+  if (pe?.buildCommand || pe?.buildExitCode !== undefined) {
+    hasEvidence = true;
+    const badge = pe.buildExitCode === 0 ? color.green('Exit 0 (PASS)') : color.red(`Exit ${pe.buildExitCode} (FAIL)`);
+    lines.push(`  Build: ${badge}${pe.buildCommand ? ` - ${pe.buildCommand}` : ''}`);
+    if (pe.buildOutput) {
+      lines.push(color.gray(`    Output: ${pe.buildOutput}`));
+    }
+  }
+
+  if (pe?.testCommand || pe?.testExitCode !== undefined) {
+    hasEvidence = true;
+    const badge = pe.testExitCode === 0 ? color.green('Exit 0 (PASS)') : color.red(`Exit ${pe.testExitCode} (FAIL)`);
+    lines.push(`  Tests: ${badge}${pe.testCommand ? ` - ${pe.testCommand}` : ''}`);
+    if (pe.testOutput) {
+      lines.push(color.gray(`    Output: ${pe.testOutput}`));
+    }
+  }
+
+  if (pe?.oracleResults && pe.oracleResults.length > 0) {
+    hasEvidence = true;
+    lines.push('  Verification Oracles:');
+    for (const o of pe.oracleResults.slice(0, 4)) {
+      const badge = o.status === 'PASS' ? color.green('✓') : color.red('×');
+      const exitStr = o.exitCode !== undefined ? ` (exit ${o.exitCode})` : '';
+      lines.push(`    ${badge} ${o.name}${exitStr}${o.command ? ` - ${o.command}` : ''}`);
+    }
+  }
+
+  if (pe?.fileDeltas && pe.fileDeltas.length > 0) {
+    hasEvidence = true;
+    lines.push('  File Deltas:');
+    for (const fd of pe.fileDeltas.slice(0, 4)) {
+      const adds = fd.additions !== undefined ? color.green(`+${fd.additions}`) : '';
+      const dels = fd.deletions !== undefined ? color.red(`-${fd.deletions}`) : '';
+      const diffStr = [adds, dels].filter(Boolean).join(', ');
+      lines.push(`    • ${fd.path}${diffStr ? ` (${diffStr})` : ''}`);
+    }
+  }
+
+  if (pe?.patchSummary) {
+    hasEvidence = true;
+    lines.push(`  Patch Summary: ${pe.patchSummary}`);
+  }
+
+  if (!hasEvidence) {
+    lines.push(color.gray('  No physical execution evidence recorded.'));
+  }
+
+  lines.push(color.gray('  Invariant: MODEL CLAIM != EXECUTION EVIDENCE. Completion is verified solely by physical execution.'));
+
+  return lines.slice(0, maxRows);
+}
+
+// ---------------------------------------------------------------------------
 // 2. SEARCH VIEW RENDERER (Hierarchical MCTS Tree + Flat Table)
 // ---------------------------------------------------------------------------
 
 export function renderSearchView(data: SearchViewData): string[] {
-  const { searchId, objective, status, strategy, candidates, treeNodes, viewMode, selectedIndex, selectedCandidateId, selectionReason, width, maxRows } = data;
+  const { searchId, objective, status, strategy, candidates, treeNodes, viewMode, selectedIndex, selectedCandidateId, selectedNodeId, selectedNodeInspection, selectionReason, width, maxRows } = data;
   const lines: string[] = [];
 
   const searchTag = searchId ?? 'active-search';
   const statusStr = status ? `(${status.toUpperCase()})` : '(ACTIVE)';
-  lines.push(padRight(`  ${color.bold(color.cyan(`SOLUTION SEARCH: ${searchTag}`))} ${color.yellow(statusStr)}`, width));
+  const treeRevStr = data.treeRevision !== undefined ? `  ${color.magenta(`TREE: T${data.treeRevision}`)}` : '';
+  lines.push(padRight(`  ${color.bold(color.cyan(`SOLUTION SEARCH: ${searchTag}`))}${treeRevStr} ${color.yellow(statusStr)}`, width));
   if (objective) {
     lines.push(padRight(`  ${color.gray(`Objective: ${objective}`)}`, width));
   }
-  lines.push(padRight(color.gray(`  Strategy: ${strategy ?? 'hierarchical_mcts'} | Total Candidates: ${candidates?.length ?? 0}`), width));
+  const fs = data.fleetSummary;
+  const fleetInfo = fs
+    ? ` | Workers: ${fs.activeWorkers ?? 0}/${fs.totalWorkers ?? 0} | Running: ${fs.runningBranches ?? 0} | Budget: ${fs.budgetUtilizationPct ?? 0}% | Transpositions: ${fs.transpositionsCount ?? 0}`
+    : '';
+  lines.push(padRight(color.gray(`  Strategy: ${strategy ?? 'hierarchical_mcts'} | Total Candidates: ${candidates?.length ?? 0}${fleetInfo}`), width));
   lines.push(padRight(color.gray('  ' + '='.repeat(Math.max(10, width - 4))), width));
 
   const shouldRenderTree = viewMode === 'tree' || (treeNodes && treeNodes.length > 0 && viewMode !== 'table');
@@ -502,7 +924,7 @@ export function renderSearchView(data: SearchViewData): string[] {
     lines.push(padRight(color.gray('  ' + '-'.repeat(Math.min(width - 4, 80))), width));
     const treeLines: string[] = [];
     for (const root of treeNodes) {
-      treeLines.push(...renderSearchTreeNode(root, '', true, true, width));
+      treeLines.push(...renderSearchTreeNode(root, '', true, true, width, selectedNodeId));
     }
     const maxTreeLines = Math.min(treeLines.length, Math.max(5, maxRows - lines.length - 8));
     lines.push(...treeLines.slice(0, maxTreeLines));
@@ -581,6 +1003,17 @@ export function renderSearchView(data: SearchViewData): string[] {
     lines.push(padRight(`  ${color.bold('Selected Candidate:')} ${color.bold(color.green(selectedCandidateId))}${selectionReason ? color.gray(` (${selectionReason})`) : ''}`, width));
   }
 
+  if (selectedNodeInspection && lines.length < maxRows - 4) {
+    lines.push(padRight('', width));
+    lines.push(padRight(`  ${color.bold('SELECTED NODE DETAIL & EVIDENCE:')}`, width));
+    lines.push(padRight(color.gray('  ' + '-'.repeat(Math.min(width - 4, 80))), width));
+    const inspLines = renderSearchNodeInspection(selectedNodeInspection, { width: width - 4 });
+    const remaining = Math.max(4, maxRows - lines.length - 2);
+    for (const l of inspLines.slice(0, remaining)) {
+      lines.push(padRight(`  ${l}`, width));
+    }
+  }
+
   lines.push(padRight(color.gray('  Actions: [P] Pause  [X] Prune/Cancel  [A] Promote  [E] Inspect Evidence  [Tab] Mode  [↑/↓] Select'), width));
 
   while (lines.length < maxRows) lines.push(padRight('', width));
@@ -653,6 +1086,7 @@ export function renderFleetView(data: FleetViewData): string[] {
 
     // Fourth line: Models, Runtime
     lines.push(padRight(`   ${modelsStr.padEnd(14)} ${color.gray(rtStr)}`, width));
+    if (w.health) lines.push(...renderFleetNodeHealth(w.health, isSelected, width));
     lines.push(padRight('', width));
   }
 
@@ -719,6 +1153,11 @@ export function renderImprovementView(data: ImprovementViewData): string[] {
     const benchStr = sel.benchmarkProgress ? `${sel.benchmarkProgress.completed}/${sel.benchmarkProgress.total} tasks` : 'completed';
     lines.push(padRight(`  Baseline: ${color.gray(baselineStr)}  │  Candidates: ${color.bold(String(candCount))}  │  Progress: ${color.green(benchStr)}`, width));
 
+    // Keep the controller decision visible even when the canary widget fills the pane.
+    if (sel.decision) {
+      lines.push(padRight(`  ${color.bold('Decision:')} ${color.bold(sel.decision)}${sel.decisionReason ? color.gray(` - ${sel.decisionReason}`) : ''}`, width));
+    }
+
     // Multi-objective section
     const objectives = sel.objectives && sel.objectives.length > 0
       ? sel.objectives
@@ -752,20 +1191,65 @@ export function renderImprovementView(data: ImprovementViewData): string[] {
       }
     }
 
-    // Canary State
+    // Interactive Canary Control Widget
     if (sel.canaryState) {
-      const canaryBadge =
-        sel.canaryState.status === 'HEALTHY' || sel.canaryState.status === 'PROMOTED'
-          ? color.green(sel.canaryState.status)
-          : sel.canaryState.status === 'ROLLED_BACK'
-            ? color.red(sel.canaryState.status)
-            : color.yellow(sel.canaryState.status);
-      const allocStr = sel.canaryState.trafficFraction !== undefined ? `${(sel.canaryState.trafficFraction * 100).toFixed(0)}% traffic` : '';
-      const stageStr = sel.canaryState.stage !== undefined ? `Stage ${sel.canaryState.stage}/${sel.canaryState.totalStages ?? 3}` : '';
-      lines.push(padRight(`  ${color.bold('Canary State:')} ${canaryBadge}  ${color.gray(`[${[stageStr, allocStr].filter(Boolean).join(', ')}]`)}`, width));
-      if (sel.canaryState.rollbackReason) {
-        lines.push(padRight(`    ${color.red(`Rollback Reason: ${sel.canaryState.rollbackReason}`)}`, width));
+      const cs = sel.canaryState;
+      const candId = cs.candidateId ?? sel.id ?? 'UNKNOWN';
+      const stageName = cs.stageName ?? (cs.stage !== undefined ? `CANARY_${Math.round((cs.currentAllocation ?? cs.trafficFraction ?? 0.10) * 100)}` : 'UNKNOWN');
+      const canaryAlloc = cs.status === 'ROLLED_BACK' ? 0.0 : (cs.currentAllocation ?? cs.trafficFraction ?? 0.0);
+      const baseAlloc = Math.max(0, 1.0 - canaryAlloc);
+      const barLen = Math.max(12, Math.min(20, width - 36));
+
+      lines.push(padRight(`  ${color.bold('CANARY')}`, width));
+      lines.push(padRight(color.gray('  ' + '─'.repeat(Math.min(width - 4, 32))), width));
+      lines.push(padRight(`  ${'Candidate'.padEnd(12)}${color.bold(color.cyan(candId))}`, width));
+      lines.push(padRight(`  ${'State'.padEnd(12)}${color.bold(stageName)}`, width));
+      lines.push(padRight('', width));
+
+      const basePct = `${(baseAlloc * 100).toFixed(0)}%`;
+      const canaryPct = `${(canaryAlloc * 100).toFixed(0)}%`;
+      lines.push(padRight(`  Baseline ${renderCanaryProgressBar(baseAlloc, barLen)} ${basePct}`, width));
+      lines.push(padRight(`  Canary   ${renderCanaryProgressBar(canaryAlloc, barLen)} ${canaryPct}`, width));
+      lines.push(padRight('', width));
+
+      // Telemetry: current allocation, stage, sample count, min required samples, correctness status, RegressionGuard state, next legal stage
+      const sampleCountStr = cs.sampleCount !== undefined ? String(cs.sampleCount) : 'UNKNOWN';
+      const minSamplesStr = cs.minimumSamples !== undefined ? String(cs.minimumSamples) : 'UNKNOWN';
+      const correctnessStr = cs.correctnessStatus ?? 'UNKNOWN';
+      const guardStr = cs.regressionGuardState ?? (sel.regressionGuardStatus ? (sel.regressionGuardStatus.passed ? color.green('INTACT (0 violations)') : color.red(`FAILED (${sel.regressionGuardStatus.violationsCount} violations)`)) : 'UNKNOWN');
+      const nextStageStr = cs.nextStage ?? 'UNKNOWN';
+
+      lines.push(padRight(`  Allocation:  ${canaryPct}  │  Stage: ${stageName}  │  Next: ${nextStageStr}`, width));
+      lines.push(padRight(`  Samples:     ${sampleCountStr} / ${minSamplesStr} min  │  Correctness: ${correctnessStr}`, width));
+      lines.push(padRight(`  Guard:       ${guardStr}`, width));
+
+      if (cs.rollbackReason) {
+        lines.push(padRight(`  ${color.red(`Rollback Reason: ${cs.rollbackReason}`)}`, width));
       }
+      lines.push(padRight('', width));
+
+      // Allowed transitions / actions
+      const actions: string[] = [];
+      if (cs.status === 'PAUSED') {
+        actions.push('[r] Resume');
+      } else if (['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION'].includes(cs.status)) {
+        actions.push('[p] Pause');
+      }
+      if (['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION'].includes(cs.status) && canaryAlloc > 0) {
+        actions.push('[t] Throttle');
+      }
+      if (['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION'].includes(cs.status) && cs.nextStage && cs.nextStage !== 'UNKNOWN') {
+        actions.push('[a] Advance');
+      }
+      if (!['ROLLED_BACK', 'CANARY_FAILED', 'INCONCLUSIVE'].includes(cs.status)) {
+        actions.push('[x] Rollback');
+      }
+      if (actions.length > 0) {
+        for (const act of actions) {
+          lines.push(padRight(`  ${color.cyan(act)}`, width));
+        }
+      }
+      lines.push(padRight('', width));
     }
 
     // Causal Evidence
@@ -780,19 +1264,11 @@ export function renderImprovementView(data: ImprovementViewData): string[] {
     }
 
     // RegressionGuard
-    const guardStatus = sel.regressionGuardStatus?.passed !== false
+    const guardStatus = !sel.regressionGuardStatus ? 'UNKNOWN' : sel.regressionGuardStatus.passed
       ? color.green('PASSED (0 violations)')
-      : color.red(`FAILED (${sel.regressionGuardStatus?.violationsCount ?? 1} violations)`);
+      : color.red(`FAILED (${sel.regressionGuardStatus.violationsCount} violations)`);
     lines.push(padRight(`  ${color.bold('RegressionGuard:')} ${guardStatus}`, width));
 
-    if (sel.decision) {
-      const decBadge = sel.decision === 'QUALIFIED' || sel.decision === 'PROMOTED'
-        ? color.bold(color.green(sel.decision))
-        : sel.decision === 'INCONCLUSIVE'
-          ? color.bold(color.yellow(sel.decision))
-          : color.bold(color.red(sel.decision));
-      lines.push(padRight(`  ${color.bold('Decision:')} ${decBadge}${sel.decisionReason ? color.gray(` - ${sel.decisionReason}`) : ''}`, width));
-    }
   }
 
   lines.push(padRight('', width));
@@ -916,6 +1392,9 @@ export function renderContextView(data: ContextViewData): string[] {
     ),
   );
 
+  lines.push(padRight('', width));
+  lines.push(...renderPromptCacheSection(windowedSamples, width));
+
   while (lines.length < maxRows) lines.push(padRight('', width));
   return lines.slice(0, maxRows);
 }
@@ -924,97 +1403,99 @@ export function renderContextView(data: ContextViewData): string[] {
 // 6. EVIDENCE VIEW RENDERER (Controller Truth & Completion Proof)
 // ---------------------------------------------------------------------------
 
+function evidenceStatusBadge(status: EvidenceSlotStatus): string {
+  switch (status) {
+    case 'PASS': return color.green('PASS');
+    case 'FAIL': return color.red('FAIL');
+    case 'ERROR': return color.red('ERROR');
+    case 'STALE': return color.yellow('STALE — NOT VALID FOR COMPLETION');
+    case 'MISSING': return color.gray('MISSING');
+  }
+}
+
+const fmtRev = (rev: number | string): string => (typeof rev === 'number' ? `R${rev}` : String(rev));
+const shortHash = (h: string): string => (/^[0-9a-f]{16,}$/i.test(h) ? h.slice(0, 12) : h);
+
+/** Pure-text inspector lines (no padding) — shared by the TUI pane and the CLI command. */
+export function formatVerificationInspection(inspection: VerificationInspection, why: WhyCompleteAnswer, provenanceDepth = 9): string[] {
+  const i = inspection;
+  const out: string[] = [];
+  const kv = (k: string, v: string | number) => out.push(`  ${k.padEnd(14)}${v}`);
+  out.push(color.bold(color.cyan('VERIFICATION EVIDENCE')));
+  kv('Execution', i.executionId);
+  kv('Revision', fmtRev(i.currentRevision));
+  kv('Workspace', shortHash(String(i.workspaceDigest)));
+  kv('Status', i.status);
+
+  for (const slot of i.slots) {
+    out.push('');
+    out.push(color.bold(`${slot.oracle}${slot.required ? '' : color.gray(' (not required)')}`));
+    kv('Command', slot.command);
+    if (slot.oracle !== 'ACCEPTANCE' && slot.oracle !== 'TEST') kv('Exit', slot.exitCode);
+    if (slot.oracle === 'TEST') {
+      kv('Exit', slot.exitCode);
+      kv('Passed', slot.passed ?? 'UNKNOWN');
+      kv('Failed', slot.failed ?? 'UNKNOWN');
+    }
+    if (slot.oracle === 'ACCEPTANCE') kv('Criteria', slot.criteria ? `${slot.criteria.satisfied}/${slot.criteria.total}` : 'UNKNOWN');
+    kv('Revision', fmtRev(slot.revision));
+    kv('Status', evidenceStatusBadge(slot.status));
+    if (slot.status === 'STALE') {
+      kv('', color.gray(`recorded ${slot.recordedStatus} at ${fmtRev(slot.revision)}; current revision ${fmtRev(i.currentRevision)}`));
+    }
+    for (const r of slot.reasons.filter((r) => slot.status !== 'PASS' && r).slice(0, 3)) kv('', color.gray(r));
+  }
+
+  out.push('');
+  out.push(color.bold('PHYSICAL MUTATIONS'));
+  if (i.mutations.length === 0) out.push(color.gray('  No physical mutations recorded.'));
+  for (const m of i.mutations.slice(-8)) {
+    const tag = m.afterVerification ? color.yellow('  AFTER VERIFICATION') : '';
+    out.push(`  ${fmtRev(m.revision).padEnd(5)} ${m.file}  ${shortHash(m.beforeHash)} → ${shortHash(m.afterHash)}${tag}`);
+  }
+
+  const denials = i.policy.filter((p) => p.decision !== 'allow');
+  if (denials.length > 0) {
+    out.push('');
+    out.push(color.bold('POLICY'));
+    for (const p of denials.slice(0, 4)) out.push(`  ${p.decision.toUpperCase().padEnd(6)} ${p.rule}${p.tool ? ` (${p.tool})` : ''}`);
+  }
+
+  if (provenanceDepth > 0) {
+    out.push('');
+    out.push(color.bold('PROVENANCE'));
+    for (const [idx, step] of i.provenance.slice(0, provenanceDepth).entries()) {
+      out.push(`  ${idx === 0 ? '' : '→ '}${step.kind.padEnd(13)}${step.values.slice(0, 3).join(', ')}${step.values.length > 3 ? color.gray(` (+${step.values.length - 3})`) : ''}`);
+    }
+  }
+
+  out.push('');
+  out.push(color.bold('COMPLETION'));
+  kv('Eligible', i.completion.eligible ? color.green('YES') : color.red('NO'));
+  if (why.complete) {
+    out.push(color.gray('  why complete?'));
+    for (const c of why.chain) out.push(`    ${c}`);
+  } else {
+    out.push(color.gray('  why incomplete?'));
+    for (const m of why.missing) out.push(`    ${color.red('✗')} ${m}`);
+  }
+  out.push(color.gray('  MODEL CLAIM != EXECUTION EVIDENCE — model narration is not consulted.'));
+  return out;
+}
+
 export function renderEvidenceView(data: EvidenceViewData): string[] {
   const { width, maxRows } = data;
-  const lines: string[] = [];
-
-  lines.push(padRight(color.bold(color.cyan('  CONTROLLER TRUTH & DETERMINISTIC VERIFICATION EVIDENCE')), width));
-  lines.push(padRight(color.gray('  ' + '='.repeat(Math.max(10, width - 4))), width));
-
-  // Revision & status header
-  const rev = data.workspaceRevision;
-  const revStr = rev ? `r${rev.current} (base r${rev.base}${rev.hash ? `, ${rev.hash.slice(0, 8)}` : ''})` : 'r1';
-  const statusStr = data.status ? `[${data.status.toUpperCase()}]` : '[VERIFIED]';
-  lines.push(
-    padRight(
-      `  Task: ${color.bold(data.taskId ?? 'current-task')}  │  Revision: ${color.magenta(revStr)}  │  Status: ${color.green(statusStr)}`,
-      width,
-    ),
-  );
-  lines.push(padRight(color.gray('  ' + '-'.repeat(Math.max(10, width - 4))), width));
-
-  // Physical Mutations
-  lines.push(padRight(color.bold('  PHYSICAL DISK MUTATIONS (AST & Workspace Revisions):'), width));
-  if (data.physicalMutations && data.physicalMutations.length > 0) {
-    for (const m of data.physicalMutations.slice(0, 4)) {
-      const adds = m.additions !== undefined ? color.green(`+${m.additions}`) : '';
-      const dels = m.deletions !== undefined ? color.red(`-${m.deletions}`) : '';
-      const diffStr = [adds, dels].filter(Boolean).join(', ');
-      const patchStr = m.patchHash ? color.gray(` [patch ${m.patchHash.slice(0, 8)}]`) : '';
-      lines.push(padRight(`    • ${m.file} (${diffStr})${patchStr}`, width));
-    }
-  } else {
-    lines.push(padRight(color.gray('    No physical disk mutations recorded in current revision.'), width));
-  }
-  lines.push(padRight('', width));
-
-  // Deterministic Build & Test Evidence
-  lines.push(padRight(color.bold('  DETERMINISTIC BUILD & TEST EXECUTION EVIDENCE:'), width));
-  if (data.buildEvidence) {
-    const b = data.buildEvidence;
-    const bBadge = b.exitCode === 0 ? color.green('Exit 0 (PASS)') : color.red(`Exit ${b.exitCode} (FAIL)`);
-    const durStr = b.durationMs ? ` (${b.durationMs}ms)` : '';
-    lines.push(padRight(`    Build: ${bBadge}${durStr} - ${color.gray(b.command)}`, width));
-  }
-  if (data.testEvidence) {
-    const t = data.testEvidence;
-    const tBadge = t.failed === 0 && t.exitCode === 0 ? color.green('PASS') : color.red('FAIL');
-    const durStr = t.durationMs ? ` (${t.durationMs}ms)` : '';
-    lines.push(
-      padRight(
-        `    Tests: [${tBadge}] ${t.passed} passed, ${t.failed} failed${t.assertions ? `, ${t.assertions} assertions` : ''}${durStr} - ${color.gray(t.command)}`,
-        width,
-      ),
-    );
-  }
-  lines.push(padRight('', width));
-
-  // Verification Checks (Oracles)
-  lines.push(padRight(color.bold('  DETERMINISTIC VERIFICATION ORACLES:'), width));
-  if (data.verificationChecks && data.verificationChecks.length > 0) {
-    for (const chk of data.verificationChecks.slice(0, 4)) {
-      const badge = chk.ok ? color.green('✓ PASS') : color.red('× FAIL');
-      const exitStr = chk.exitCode !== undefined ? ` (exit ${chk.exitCode})` : '';
-      lines.push(padRight(`    ${badge} ${chk.name}${exitStr}${chk.message ? ` - ${chk.message}` : ''}`, width));
-    }
-  } else {
-    lines.push(padRight(color.gray('    No verification checks evaluated.'), width));
-  }
-  lines.push(padRight('', width));
-
-  // Policy decisions
-  if (data.policyDecisions && data.policyDecisions.length > 0) {
-    lines.push(padRight(color.bold('  POLICY ENGINE AUDIT:'), width));
-    for (const p of data.policyDecisions.slice(0, 2)) {
-      const pBadge = p.decision === 'ALLOW' ? color.green('ALLOW') : color.red('DENY');
-      lines.push(padRight(`    • ${pBadge} ${p.action}${p.resource ? ` on ${p.resource}` : ''} [${p.rule ?? 'default_policy'}]`, width));
-    }
-    lines.push(padRight('', width));
-  }
-
-  // Authoritative Completion Reason Block:
-  // "Why does Wazir believe this task is complete?"
-  lines.push(padRight(color.bold(color.yellow('  WHY DOES WAZIR BELIEVE THIS TASK IS COMPLETE?')), width));
-  lines.push(padRight(color.gray('  ' + '-'.repeat(Math.min(width - 4, 76))), width));
-
-  const comp = data.completionReason;
-  const verifiedBadge = comp?.verified !== false ? color.green('[CONFIRMED]') : color.red('[UNVERIFIED]');
-  const diskBadge = comp?.diskConfirmed !== false ? color.green('[CONFIRMED ON DISK]') : color.red('[UNCONFIRMED]');
-  lines.push(padRight(`    1. Physical disk state: ${diskBadge} Workspace mutations match AST invariants.`, width));
-  lines.push(padRight(`    2. Deterministic exit codes: ${verifiedBadge} Build & test exit code 0.`, width));
-  lines.push(padRight(`    3. Oracles satisfied: ${color.green(comp?.oraclesSatisfied?.join(', ') || 'All deterministic oracles passed')}.`, width));
-  lines.push(padRight(`    4. Invariant: ${color.bold('MODEL CLAIM != EXECUTION EVIDENCE')}. Completion is verified solely by physical evidence.`, width));
-
+  const body = data.inspection && data.why
+    ? formatVerificationInspection(data.inspection, data.why, data.provenanceDepth ?? 0)
+    : [
+      color.bold(color.cyan('VERIFICATION EVIDENCE')),
+      '',
+      color.gray('  No execution record selected. No evidence is shown and nothing is implied verified.'),
+      '',
+      color.gray('  MODEL CLAIM != EXECUTION EVIDENCE — model narration is not consulted.'),
+    ];
+  const lines = body.map((l) => padRight(`  ${l}`, width));
+  if (data.inspection) lines.push(padRight(color.gray('  [p] provenance drill-down  [P] collapse'), width));
   while (lines.length < maxRows) lines.push(padRight('', width));
   return lines.slice(0, maxRows);
 }
@@ -1140,7 +1621,7 @@ export function renderModelIntelligenceView(data: ModelIntelligenceViewData): st
 // ---------------------------------------------------------------------------
 
 export function renderEvidenceModal(data: EvidenceModalData): string[] {
-  const { title, candidateId, experimentId, revision, checks, evidence, provenanceChain, metrics, width, maxRows } = data;
+  const { title, candidateId, experimentId, revision, checks, evidence, provenanceChain, metrics, width, maxRows, nodeInspection } = data;
   const lines: string[] = [];
 
   const modalWidth = Math.min(width - 6, 84);
@@ -1149,6 +1630,20 @@ export function renderEvidenceModal(data: EvidenceModalData): string[] {
   lines.push(`┌${border}┐`);
   lines.push(`│ ${color.bold(color.cyan(title.padEnd(modalWidth - 4)))} │`);
   lines.push(`├${border}┤`);
+
+  if (nodeInspection) {
+    const inspLines = renderSearchNodeInspection(nodeInspection, { width: modalWidth - 4 });
+    const scrollOffset = data.scrollOffset ?? 0;
+    const maxVisible = Math.max(5, maxRows - 4);
+    const visible = inspLines.slice(scrollOffset, scrollOffset + maxVisible);
+    for (const l of visible) {
+      lines.push(`│ ${padRight(l, modalWidth - 4)} │`);
+    }
+    lines.push(`├${border}┤`);
+    lines.push(`│ ${color.gray('Press [Esc] or [E] to close evidence inspector.'.padEnd(modalWidth - 4))} │`);
+    lines.push(`└${border}┘`);
+    return lines.slice(0, maxRows);
+  }
 
   if (candidateId) {
     lines.push(`│ Candidate: ${color.bold(candidateId.padEnd(modalWidth - 15))} │`);
@@ -1202,6 +1697,505 @@ export function renderEvidenceModal(data: EvidenceModalData): string[] {
   lines.push(`├${border}┤`);
   lines.push(`│ ${color.gray('Press [Esc] or [E] to close evidence inspector.'.padEnd(modalWidth - 4))} │`);
   lines.push(`└${border}┘`);
+
+  return lines.slice(0, maxRows);
+}
+
+// ======================================================================
+// WAZIR LEVEL 3 CONTINUOUS CANARY OPERATIONAL CONTROL CENTER VIEW
+// ======================================================================
+
+export type CanaryViewTab = 'dashboard' | 'statemachine' | 'shadow' | 'history' | 'rollback';
+
+export interface CanaryViewData {
+  activeCanary?: {
+    canaryId: string;
+    candidateId: string;
+    domain: string;
+    stage: string;
+    status: string;
+    currentAllocation: number; // 0.0 to 1.0
+    startTime: Date;
+    updatedAt: Date;
+    completedAt?: Date;
+    minimumSamples: number;
+    baselineMetrics: {
+      totalExecutions: number;
+      taskSuccessRate?: number;
+      verificationSuccessRate?: number;
+      toolFailureRate?: number;
+      totalTokens?: number;
+      wallTimeMs?: number;
+      toolInvocations?: number;
+      repairCycles?: number;
+    };
+    canaryMetrics: {
+      totalExecutions: number;
+      taskSuccessRate?: number;
+      verificationSuccessRate?: number;
+      toolFailureRate?: number;
+      totalTokens?: number;
+      wallTimeMs?: number;
+      toolInvocations?: number;
+      repairCycles?: number;
+    };
+    rollbackReason?: {
+      metric: string;
+      baselineValue: number;
+      canaryValue: number;
+      delta: number;
+      threshold: number;
+      description: string;
+      timestamp: Date;
+    };
+    inconclusiveReasons?: string[];
+    evidenceIds?: string[];
+  };
+  deployments?: Array<{
+    canaryId: string;
+    candidateId: string;
+    domain: string;
+    stage: string;
+    status: string;
+    currentAllocation: number;
+    startTime: Date;
+    completedAt?: Date;
+    rollbackReason?: { metric: string; description: string };
+    totalExecutions: number;
+  }>;
+  shadowResults?: Array<{
+    canaryId: string;
+    candidateId: string;
+    taskId: string;
+    executionId: string;
+    productionOutcome: {
+      success: boolean;
+      verificationSuccess: boolean;
+      tokensUsed: number;
+      wallTimeMs: number;
+    };
+    shadowOutcome: {
+      success: boolean;
+      verificationSuccess: boolean;
+      tokensUsed: number;
+      wallTimeMs: number;
+    };
+    metricsDelta: {
+      tokensDelta: number;
+      wallTimeDeltaMs: number;
+      verificationAgreed: boolean;
+    };
+    timestamp: Date;
+  }>;
+  activeTab: CanaryViewTab;
+  selectedHistoryIndex?: number;
+  showBaselineComparison?: boolean;
+  width: number;
+  maxRows: number;
+}
+
+function renderCanaryProgressBar(fraction: number, width: number, fillChar = '█', emptyChar = ' '): string {
+  const clamped = Math.max(0, Math.min(1, fraction));
+  const fillWidth = Math.round(clamped * width);
+  const emptyWidth = width - fillWidth;
+  return `[${fillChar.repeat(fillWidth)}${emptyChar.repeat(emptyWidth)}]`;
+}
+
+function formatMetricPercent(val?: number): string {
+  if (val === undefined || val === null || Number.isNaN(val)) return 'UNKNOWN';
+  return `${(val * 100).toFixed(1)}%`;
+}
+
+function formatMetricDeltaPercent(canaryVal?: number, baselineVal?: number, inverse = false): string {
+  if (canaryVal === undefined || baselineVal === undefined || Number.isNaN(canaryVal) || Number.isNaN(baselineVal)) {
+    return 'UNKNOWN';
+  }
+  const delta = (canaryVal - baselineVal) * 100;
+  const sign = delta > 0 ? '+' : '';
+  const text = `${sign}${delta.toFixed(1)}%`;
+  if (Math.abs(delta) < 0.01) return color.gray(text);
+  const isBetter = inverse ? delta < 0 : delta > 0;
+  return isBetter ? color.green(text) : color.red(text);
+}
+
+function formatMetricTokens(val?: number): string {
+  if (val === undefined || val === null || Number.isNaN(val)) return 'UNKNOWN';
+  if (val >= 1000) return `${(val / 1000).toFixed(1)}K`;
+  return String(val);
+}
+
+function formatMetricSeconds(ms?: number): string {
+  if (ms === undefined || ms === null || Number.isNaN(ms)) return 'UNKNOWN';
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+export function renderCanaryView(data: CanaryViewData): string[] {
+  const { activeCanary, deployments = [], shadowResults = [], activeTab, width, maxRows } = data;
+  const lines: string[] = [];
+
+  const tabNames: Array<{ key: CanaryViewTab; label: string; shortcut: string }> = [
+    { key: 'dashboard', label: 'Dashboard', shortcut: 'C' },
+    { key: 'statemachine', label: 'State Machine', shortcut: 'M' },
+    { key: 'shadow', label: 'Shadow Mode', shortcut: 'S' },
+    { key: 'rollback', label: 'Rollback Alert', shortcut: 'R' },
+    { key: 'history', label: 'History', shortcut: 'H' },
+  ];
+
+  const tabHeader = tabNames
+    .map((t) => {
+      const active = t.key === activeTab;
+      const text = `[${t.shortcut}] ${t.label}`;
+      return active ? color.bold(color.cyan(text)) : color.gray(text);
+    })
+    .join('  ');
+
+  lines.push(color.bold('WAZIR — CONTINUOUS CANARY CONTROL (LEVEL 3)'));
+  lines.push('─'.repeat(Math.max(10, width)));
+  lines.push(tabHeader);
+  lines.push('─'.repeat(Math.max(10, width)));
+
+  // Domain restriction notice if domain is wazir_source_code
+  if (activeCanary?.domain === 'wazir_source_code') {
+    lines.push(color.bold(color.red('┌─────────────────────────────────────────────────────────────────┐')));
+    lines.push(color.bold(color.red('│ AUTONOMOUS DEPLOYMENT PROHIBITED: Operator action required.     │')));
+    lines.push(color.bold(color.red('│ CANARY_DOMAIN_RESTRICTION: Source code changes cannot auto-roll │')));
+    lines.push(color.bold(color.red('└─────────────────────────────────────────────────────────────────┘')));
+    lines.push('');
+  }
+
+  if (activeTab === 'history') {
+    lines.push(color.bold('CANARY DEPLOYMENT HISTORY:'));
+    lines.push('');
+    if (deployments.length === 0) {
+      lines.push(color.gray('  No canary deployments recorded.'));
+    } else {
+      const selIdx = data.selectedHistoryIndex ?? 0;
+      lines.push(
+        padRight('  CANARY ID', 32) +
+          padRight('CANDIDATE', 24) +
+          padRight('DOMAIN', 16) +
+          padRight('STATUS', 16) +
+          padRight('SAMPLES', 10) +
+          'RESULT',
+      );
+      lines.push('  ' + '─'.repeat(Math.max(10, width - 4)));
+
+      deployments.forEach((dep, idx) => {
+        const isSelected = idx === selIdx;
+        const prefix = isSelected ? color.cyan('▶ ') : '  ';
+        const stColor =
+          dep.status === 'ROLLED_BACK'
+            ? color.red
+            : dep.status === 'READY_FOR_PROMOTION' || dep.status === 'HEALTHY'
+              ? color.green
+              : color.yellow;
+        const resText = dep.rollbackReason ? `ROLLED BACK: ${dep.rollbackReason.metric}` : dep.status;
+        const row =
+          prefix +
+          padRight(dep.canaryId, 30) +
+          padRight(dep.candidateId.slice(0, 22), 24) +
+          padRight(dep.domain, 16) +
+          padRight(stColor(dep.status), 25) +
+          padRight(String(dep.totalExecutions), 10) +
+          resText;
+        lines.push(isSelected ? color.bold(row) : row);
+      });
+      lines.push('');
+      lines.push(color.gray('  [↑/↓] Select  [Enter] Inspect Candidate Timeline'));
+    }
+    return lines.slice(0, maxRows);
+  }
+
+  if (activeTab === 'shadow') {
+    lines.push(color.bold('SHADOW EVALUATION (OFFLINE/PARALLEL)'));
+    lines.push(color.gray('Production impact: NONE (Shadow executions run concurrently with zero client impact)'));
+    lines.push('');
+
+    const shadowCount = shadowResults.length;
+    lines.push(`Workloads Evaluated: ${shadowCount}`);
+    lines.push('');
+
+    if (shadowCount === 0) {
+      lines.push(color.gray('  No shadow evaluations observed for this candidate yet.'));
+    } else {
+      let bSuccessCount = 0;
+      let sSuccessCount = 0;
+      let bVerifCount = 0;
+      let sVerifCount = 0;
+      let bTokensTotal = 0;
+      let sTokensTotal = 0;
+      let bWallTimeTotal = 0;
+      let sWallTimeTotal = 0;
+
+      for (const item of shadowResults) {
+        if (item.productionOutcome.success) bSuccessCount++;
+        if (item.shadowOutcome.success) sSuccessCount++;
+        if (item.productionOutcome.verificationSuccess) bVerifCount++;
+        if (item.shadowOutcome.verificationSuccess) sVerifCount++;
+        bTokensTotal += item.productionOutcome.tokensUsed;
+        sTokensTotal += item.shadowOutcome.tokensUsed;
+        bWallTimeTotal += item.productionOutcome.wallTimeMs;
+        sWallTimeTotal += item.shadowOutcome.wallTimeMs;
+      }
+
+      const bTaskRate = (bSuccessCount / shadowCount) * 100;
+      const sTaskRate = (sSuccessCount / shadowCount) * 100;
+      const bVerifRate = (bVerifCount / shadowCount) * 100;
+      const sVerifRate = (sVerifCount / shadowCount) * 100;
+      const bAvgTokens = bTokensTotal / shadowCount;
+      const sAvgTokens = sTokensTotal / shadowCount;
+      const bAvgTime = (bWallTimeTotal / shadowCount) / 1000;
+      const sAvgTime = (sWallTimeTotal / shadowCount) / 1000;
+
+      lines.push(
+        padRight('METRIC', 24) +
+          padRight('BASELINE (PROD)', 18) +
+          padRight('SHADOW (CANDIDATE)', 20) +
+          'VERDICT',
+      );
+      lines.push('─'.repeat(Math.min(width, 74)));
+      lines.push(
+        padRight('Task Success', 24) +
+          padRight(`${bTaskRate.toFixed(1)}%`, 18) +
+          padRight(`${sTaskRate.toFixed(1)}%`, 20) +
+          (sTaskRate >= bTaskRate ? color.green('MATCH/BETTER') : color.red('REGRESSION')),
+      );
+      lines.push(
+        padRight('Verification Pass', 24) +
+          padRight(`${bVerifRate.toFixed(1)}%`, 18) +
+          padRight(`${sVerifRate.toFixed(1)}%`, 20) +
+          (sVerifRate >= bVerifRate ? color.green('MATCH/BETTER') : color.red('REGRESSION')),
+      );
+      lines.push(
+        padRight('Avg Tokens', 24) +
+          padRight(formatMetricTokens(bAvgTokens), 18) +
+          padRight(formatMetricTokens(sAvgTokens), 20) +
+          (sAvgTokens <= bAvgTokens ? color.green('EFFICIENT') : color.yellow('HIGHER')),
+      );
+      lines.push(
+        padRight('Avg Wall Time', 24) +
+          padRight(`${bAvgTime.toFixed(1)}s`, 18) +
+          padRight(`${sAvgTime.toFixed(1)}s`, 20) +
+          (sAvgTime <= bAvgTime ? color.green('FASTER') : color.yellow('SLOWER')),
+      );
+    }
+    return lines.slice(0, maxRows);
+  }
+
+  if (activeTab === 'rollback' || (activeCanary?.status === 'ROLLED_BACK' && activeTab === 'dashboard')) {
+    if (activeCanary?.rollbackReason || activeCanary?.status === 'ROLLED_BACK') {
+      const rr = activeCanary.rollbackReason;
+      lines.push(color.bold(color.red('┌────────────────────────────────────────────────────────────────────────┐')));
+      lines.push(color.bold(color.red('│ AUTOMATIC CANARY ROLLBACK TRIGGERED                                   │')));
+      lines.push(color.bold(color.red('├────────────────────────────────────────────────────────────────────────┤')));
+      lines.push(`│ Candidate:    ${color.bold(activeCanary.candidateId.padEnd(54))} │`);
+      lines.push(`│ Domain:       ${activeCanary.domain.padEnd(54)} │`);
+      lines.push(`│ Triggered At: ${new Date(rr?.timestamp ?? activeCanary.updatedAt).toISOString().padEnd(54)} │`);
+      lines.push(`│ Metric:       ${color.red(String(rr?.metric ?? 'regression').padEnd(54))} │`);
+      lines.push(`│ Delta:        ${String(rr?.delta !== undefined ? rr.delta : 'exceeded').padEnd(54)} │`);
+      lines.push(`│ Threshold:    ${String(rr?.threshold !== undefined ? rr.threshold : '0.05').padEnd(54)} │`);
+      lines.push(`│ Reason:       ${(rr?.description ?? 'Regression guard violation').slice(0, 54).padEnd(54)} │`);
+      lines.push(color.bold(color.red('├────────────────────────────────────────────────────────────────────────┤')));
+      lines.push(`│ ${color.bold('TRAFFIC RESTORATION: 100% BASELINE  (0% CANARY)'.padEnd(70))} │`);
+      lines.push(color.bold(color.red('└────────────────────────────────────────────────────────────────────────┘')));
+      lines.push('');
+      if (activeTab === 'rollback') {
+        return lines.slice(0, maxRows);
+      }
+    } else if (activeTab === 'rollback') {
+      lines.push(color.green('No rollback detected. Current deployment is healthy or evaluating.'));
+      return lines.slice(0, maxRows);
+    }
+  }
+
+  if (activeTab === 'statemachine') {
+    lines.push(color.bold('CANARY STAGED PROGRESSION TREE:'));
+    lines.push('');
+    const curStage = activeCanary?.stage ?? 'QUALIFIED';
+    const isRolledBack = activeCanary?.status === 'ROLLED_BACK';
+
+    const stages: Array<{ id: string; label: string; minAlloc: number }> = [
+      { id: 'QUALIFIED', label: 'QUALIFIED', minAlloc: 0 },
+      { id: 'SHADOW', label: 'SHADOW', minAlloc: 0 },
+      { id: 'CANARY_1', label: 'CANARY_1  (1% Traffic)', minAlloc: 0.01 },
+      { id: 'CANARY_5', label: 'CANARY_5  (5% Traffic)', minAlloc: 0.05 },
+      { id: 'CANARY_10', label: 'CANARY_10 (10% Traffic)', minAlloc: 0.10 },
+      { id: 'CANARY_25', label: 'CANARY_25 (25% Traffic)', minAlloc: 0.25 },
+      { id: 'CANARY_50', label: 'CANARY_50 (50% Traffic)', minAlloc: 0.50 },
+      { id: 'READY_TO_PROMOTE', label: 'READY_TO_PROMOTE', minAlloc: 1.0 },
+    ];
+
+    const stageOrder = stages.map((s) => s.id);
+    const curIdx = stageOrder.indexOf(curStage);
+
+    stages.forEach((st, idx) => {
+      let mark = '  ';
+      let title = st.label;
+      if (curStage === st.id) {
+        mark = isRolledBack ? color.red('✖ ') : color.cyan('◉ ');
+        title = color.bold(title);
+      } else if (curIdx > idx) {
+        mark = color.green('✓ ');
+      }
+
+      lines.push(`${mark}${title}`);
+
+      if (idx === curIdx && isRolledBack) {
+        lines.push(`   ├── ${color.bold(color.red('ROLLBACK TRIGGERED ✖ (Traffic: 0% Canary, 100% Baseline)'))}`);
+      }
+
+      if (idx < stages.length - 1) {
+        lines.push('   │');
+        lines.push('   ▼');
+      }
+    });
+
+    lines.push('');
+    if (activeCanary) {
+      lines.push(
+        `Current Stage: ${color.bold(curStage)} | Observed Samples: ${activeCanary.canaryMetrics.totalExecutions} / Required: ${activeCanary.minimumSamples}`,
+      );
+    }
+    return lines.slice(0, maxRows);
+  }
+
+  // DEFAULT: DASHBOARD TAB
+  if (!activeCanary) {
+    lines.push(color.yellow('No active canary deployment found.'));
+    lines.push(color.gray('Register a canary deployment via CanaryDeploymentService or CLI to view real-time control.'));
+    return lines.slice(0, maxRows);
+  }
+
+  const durationSec = Math.max(0, Math.floor((Date.now() - new Date(activeCanary.startTime).getTime()) / 1000));
+  const durMin = Math.floor(durationSec / 60);
+  const durRemSec = durationSec % 60;
+  const startedStr = `${durMin}m ${durRemSec}s`;
+
+  lines.push(`Candidate: ${color.bold(activeCanary.candidateId)}`);
+  lines.push(`Domain:    ${color.bold(activeCanary.domain)}`);
+  lines.push(
+    `State:     ${
+      activeCanary.status === 'ROLLED_BACK'
+        ? color.bold(color.red('ROLLED_BACK'))
+        : activeCanary.status === 'READY_FOR_PROMOTION'
+          ? color.bold(color.green('READY_TO_PROMOTE'))
+          : color.bold(color.cyan(activeCanary.stage ?? activeCanary.status))
+    }`,
+  );
+  lines.push(`Started:   ${startedStr}`);
+  lines.push('');
+
+  // TRAFFIC PROGRESS BARS
+  const barWidth = Math.max(20, Math.min(50, width - 24));
+  const canaryAlloc = activeCanary.status === 'ROLLED_BACK' ? 0.0 : activeCanary.currentAllocation;
+  const baseAlloc = 1.0 - canaryAlloc;
+
+  lines.push(color.bold('TRAFFIC'));
+  lines.push(`Baseline  ${renderCanaryProgressBar(baseAlloc, barWidth)} ${(baseAlloc * 100).toFixed(0)}%`);
+  lines.push(`Canary    ${renderCanaryProgressBar(canaryAlloc, barWidth)} ${(canaryAlloc * 100).toFixed(0)}%`);
+  lines.push('');
+
+  // SAMPLES TABLE
+  const cMetrics = activeCanary.canaryMetrics;
+  const bMetrics = activeCanary.baselineMetrics;
+  const reqSamples = activeCanary.minimumSamples;
+  const samplesSatisfied = cMetrics.totalExecutions >= reqSamples;
+
+  lines.push(color.bold('SAMPLES'));
+  lines.push(`Baseline       ${bMetrics.totalExecutions.toLocaleString()}`);
+  lines.push(`Canary         ${cMetrics.totalExecutions.toLocaleString()}`);
+  lines.push(
+    `Required       ${reqSamples.toLocaleString()} ${samplesSatisfied ? color.green('✓') : color.yellow('⏳')}`,
+  );
+  lines.push('');
+
+  // CORRECTNESS OVER EFFICIENCY DOMINANCE
+  const cTaskSuccess = cMetrics.taskSuccessRate;
+  const bTaskSuccess = bMetrics.taskSuccessRate;
+  const cVerifSuccess = cMetrics.verificationSuccessRate;
+  const bVerifSuccess = bMetrics.verificationSuccessRate;
+  const cToolFail = cMetrics.toolFailureRate;
+  const bToolFail = bMetrics.toolFailureRate;
+
+  const hasCorrectnessRegression =
+    (cTaskSuccess !== undefined && bTaskSuccess !== undefined && cTaskSuccess < bTaskSuccess) ||
+    (cVerifSuccess !== undefined && bVerifSuccess !== undefined && cVerifSuccess < bVerifSuccess) ||
+    activeCanary.status === 'ROLLED_BACK';
+
+  if (hasCorrectnessRegression) {
+    lines.push(color.bold(color.red('═════════════════════════════════════════════════════════════════════')));
+    lines.push(color.bold(color.red('! CANARY REGRESSION DETECTED — ROLLBACK REQUIRED / ACTIVE !')));
+    lines.push(color.bold(color.red('═════════════════════════════════════════════════════════════════════')));
+  }
+
+  lines.push(color.bold('CORRECTNESS'));
+  lines.push(
+    padRight('                    BASELINE', 36) +
+      padRight('CANARY', 16) +
+      'Δ',
+  );
+  lines.push(
+    padRight('Verification Pass   ' + formatMetricPercent(bVerifSuccess), 36) +
+      padRight(formatMetricPercent(cVerifSuccess), 16) +
+      formatMetricDeltaPercent(cVerifSuccess, bVerifSuccess),
+  );
+  lines.push(
+    padRight('Task Success        ' + formatMetricPercent(bTaskSuccess), 36) +
+      padRight(formatMetricPercent(cTaskSuccess), 16) +
+      formatMetricDeltaPercent(cTaskSuccess, bTaskSuccess),
+  );
+  lines.push(
+    padRight('Tool Failure Rate   ' + formatMetricPercent(bToolFail), 36) +
+      padRight(formatMetricPercent(cToolFail), 16) +
+      formatMetricDeltaPercent(cToolFail, bToolFail, true),
+  );
+  lines.push('');
+
+  // EFFICIENCY
+  lines.push(color.bold('EFFICIENCY'));
+  lines.push(
+    padRight('Tokens              ' + formatMetricTokens(bMetrics.totalTokens), 36) +
+      padRight(formatMetricTokens(cMetrics.totalTokens), 16) +
+      formatMetricDeltaPercent(
+        cMetrics.totalTokens && bMetrics.totalTokens ? (cMetrics.totalTokens - bMetrics.totalTokens) / bMetrics.totalTokens : undefined,
+        0,
+        true,
+      ),
+  );
+  lines.push(
+    padRight('Duration            ' + formatMetricSeconds(bMetrics.wallTimeMs), 36) +
+      padRight(formatMetricSeconds(cMetrics.wallTimeMs), 16) +
+      formatMetricDeltaPercent(
+        cMetrics.wallTimeMs && bMetrics.wallTimeMs ? (cMetrics.wallTimeMs - bMetrics.wallTimeMs) / bMetrics.wallTimeMs : undefined,
+        0,
+        true,
+      ),
+  );
+  lines.push(
+    padRight('Repair Cycles       ' + (bMetrics.repairCycles ?? '0'), 36) +
+      padRight(String(cMetrics.repairCycles ?? '0'), 16) +
+      '',
+  );
+  lines.push('');
+
+  // STATUS SUMMARY
+  lines.push(color.bold('STATUS'));
+  if (activeCanary.status === 'ROLLED_BACK') {
+    lines.push(color.red('✖ Rollback active (100% baseline restoration)'));
+    if (activeCanary.rollbackReason) {
+      lines.push(color.red(`  Reason: ${activeCanary.rollbackReason.description}`));
+    }
+  } else {
+    lines.push(`${hasCorrectnessRegression ? color.red('✖') : color.green('✓')} Correctness guard`);
+    lines.push(`${samplesSatisfied ? color.green('✓') : color.yellow('⏳')} Minimum samples`);
+    lines.push(`${color.green('✓')} Stable assignment`);
+    lines.push(`${activeCanary.rollbackReason ? color.red('✖') : color.green('✓')} No protected regression`);
+    if (activeCanary.stage === 'READY_TO_PROMOTE' || activeCanary.status === 'READY_FOR_PROMOTION') {
+      lines.push(color.bold(color.green('Next eligible stage: PROMOTION READY (Level 3 Autonomous)')));
+    } else {
+      lines.push(color.cyan(`Current stage: ${activeCanary.stage ?? 'ACTIVE'}`));
+    }
+  }
 
   return lines.slice(0, maxRows);
 }

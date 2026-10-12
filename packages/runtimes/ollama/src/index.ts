@@ -3,11 +3,13 @@ import type {
   GenerationEvent,
   GenerationRequest,
   HealthStatus,
+  PromptCacheMetrics,
   ResourceEstimate,
   RuntimeAdapter,
   RuntimeCapabilities,
   RuntimeInfo,
 } from '@wazir/runtimes-interfaces';
+import { normalizePromptCacheTelemetry } from '@wazir/runtimes-interfaces';
 import { classifyFailure, isProviderRetryable, providerRetryDecision, resolveRetryPolicy, waitForRetry } from '@wazir/shared';
 
 interface OllamaModelDetails {
@@ -71,6 +73,11 @@ export class OllamaAdapter implements RuntimeAdapter {
   private readonly baseURL: string;
   private readonly controllers = new Map<string, AbortController>();
   private modelSizes = new Map<string, number>();
+  private detectedCapabilities = {
+    promptCacheTelemetry: false,
+    cacheReadMetrics: false,
+    cacheWriteMetrics: false,
+  };
 
   constructor(baseURL: string = 'http://localhost:11434') {
     this.baseURL = baseURL.replace(/\/+$/, '');
@@ -144,7 +151,10 @@ export class OllamaAdapter implements RuntimeAdapter {
       parallelToolCalling: false,
       strictJsonSchema: false,
       streamingToolCalls: false,
-      promptCaching: false,
+      promptCaching: this.detectedCapabilities.promptCacheTelemetry,
+      promptCacheTelemetry: this.detectedCapabilities.promptCacheTelemetry,
+      cacheReadMetrics: this.detectedCapabilities.cacheReadMetrics,
+      cacheWriteMetrics: this.detectedCapabilities.cacheWriteMetrics,
       structuredOutput: false,
       vision: true,
       embeddings: true,
@@ -302,6 +312,8 @@ export class OllamaAdapter implements RuntimeAdapter {
     let full = '';
     let inputTokens = 0;
     let outputTokens = 0;
+    let lastDoneLine: OllamaChatLine | undefined;
+    const responseHeaders = response.headers;
     const buffer = createLineBuffer();
 
     try {
@@ -311,7 +323,13 @@ export class OllamaAdapter implements RuntimeAdapter {
         if (done) break;
         buffer.push(new TextDecoder().decode(value, { stream: true }));
         for (const line of buffer.drain()) {
-          const parsed = JSON.parse(line) as OllamaChatLine;
+          let parsed: OllamaChatLine;
+          try {
+            parsed = JSON.parse(line) as OllamaChatLine;
+          } catch {
+            // Malformed line should not crash stream
+            continue;
+          }
           if (parsed.error) {
             yield { type: 'error', error: parsed.error };
             continue;
@@ -331,17 +349,60 @@ export class OllamaAdapter implements RuntimeAdapter {
           if (parsed.done) {
             inputTokens = parsed.prompt_eval_count ?? 0;
             outputTokens = parsed.eval_count ?? 0;
+            lastDoneLine = parsed;
           }
         }
       }
+
+      const promptCache = normalizePromptCacheTelemetry({
+        provider: 'ollama',
+        inputTokens,
+        usage: lastDoneLine as Record<string, any>,
+        headers: responseHeaders,
+      });
+
+      if (promptCache.cacheReadTokens.status === 'OBSERVED') {
+        this.detectedCapabilities.promptCacheTelemetry = true;
+        this.detectedCapabilities.cacheReadMetrics = true;
+      }
+      if (promptCache.cacheWriteTokens.status === 'OBSERVED') {
+        this.detectedCapabilities.cacheWriteMetrics = true;
+      }
+
       yield {
         type: 'completed',
         content: full,
-        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+        usage: {
+          inputTokens,
+          outputTokens,
+          totalTokens: inputTokens + outputTokens,
+          cacheReadTokens: promptCache.cacheReadTokens.value,
+          cacheWriteTokens: promptCache.cacheWriteTokens.value,
+          promptCache,
+        },
+        promptCache,
       };
     } catch (error) {
       if (controller.signal.aborted) {
-        yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } };
+        const promptCache = normalizePromptCacheTelemetry({
+          provider: 'ollama',
+          inputTokens,
+          usage: lastDoneLine as Record<string, any>,
+          headers: responseHeaders,
+        });
+        yield {
+          type: 'completed',
+          content: full,
+          usage: {
+            inputTokens,
+            outputTokens,
+            totalTokens: inputTokens + outputTokens,
+            cacheReadTokens: promptCache.cacheReadTokens.value,
+            cacheWriteTokens: promptCache.cacheWriteTokens.value,
+            promptCache,
+          },
+          promptCache,
+        };
       } else {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }

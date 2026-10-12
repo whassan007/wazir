@@ -29,6 +29,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { hostname } from 'node:os';
 import { sanitizeUntrustedOutput, appendAuditEvent, computeContentHash, injectFault } from '@wazir/shared';
 import type { ProvenanceManager, CreateArtifactParams } from './provenanceManager.js';
+import { assessCompletionEvidence } from './verificationEvidenceInspector.js';
 import { executionValuesEqual } from './executionPersistence.js';
 import { ExecutionFailure, isProviderRetryable } from '@wazir/shared';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
@@ -244,19 +245,9 @@ export class ExecutionEngine {
     }
 
     if (status === 'completed') {
-      const revision = record.workspaceState?.revision ?? 0;
-      const required = record.acceptanceContract?.requiredEvidence ?? [];
-      const missing = required.filter(type => {
-        const latest = new Map<string, VerificationEvidence>();
-        for (const evidence of record.evidence ?? []) {
-          if (evidence.type === type && evidence.revision === revision) latest.set(evidence.command ?? '', evidence);
-        }
-        return latest.size === 0 || [...latest.values()].some(evidence => evidence.exitCode !== 0);
-      });
-      const evaluationInvalid = record.evaluation && (!record.evaluation.success || record.evaluation.workspaceRevision !== revision);
-      const evaluationMissing = record.filesChanged.length > 0 && required.length === 0 && !record.evaluation;
+      const { workspaceRevision: revision, missing, evaluationInvalid, evaluationMissing } = assessCompletionEvidence(record);
       if (missing.length > 0 || evaluationInvalid || evaluationMissing) {
-        this.pushEvent(record, 'completion.rejected', { reason: 'VERIFICATION_REQUIRED', workspaceRevision: revision, missing, evaluationInvalid: Boolean(evaluationInvalid), evaluationMissing });
+        this.pushEvent(record, 'completion.rejected', { reason: 'VERIFICATION_REQUIRED', workspaceRevision: revision, missing, evaluationInvalid, evaluationMissing });
         await this.flush(record);
         throw new ExecutionFailure('ARTIFACT_CONTRACT_FAILED', `Completion requires current verification for workspace revision ${revision}`);
       }
@@ -606,7 +597,42 @@ export class ExecutionEngine {
       input: (record.usage?.input ?? 0) + usage.input,
       output: (record.usage?.output ?? 0) + usage.output,
       total: (record.usage?.total ?? 0) + (usage.total ?? usage.input + usage.output),
+      cacheReadTokens: usage.cacheReadTokens !== undefined
+        ? (record.usage?.cacheReadTokens ?? 0) + usage.cacheReadTokens
+        : record.usage?.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens !== undefined
+        ? (record.usage?.cacheWriteTokens ?? 0) + usage.cacheWriteTokens
+        : record.usage?.cacheWriteTokens,
+      promptCacheMetrics: usage.promptCacheMetrics ?? record.usage?.promptCacheMetrics,
+      promptCache: usage.promptCache ?? record.usage?.promptCache,
     };
+    if (usage.promptCache || usage.promptCacheMetrics || usage.cacheReadTokens !== undefined) {
+      const readVal = usage.promptCache?.cacheReadTokens?.value ?? usage.cacheReadTokens ?? usage.promptCacheMetrics?.cacheReadTokens?.value;
+      const writeVal = usage.promptCache?.cacheWriteTokens?.value ?? usage.cacheWriteTokens ?? usage.promptCacheMetrics?.cacheWriteTokens?.value;
+      const hit = usage.promptCache?.cacheHits?.value !== undefined
+        ? (usage.promptCache.cacheHits.value > 0)
+        : (usage.promptCacheMetrics?.hit ?? (readVal !== undefined ? readVal > 0 : undefined));
+      const source = usage.promptCache?.source ?? usage.promptCacheMetrics?.source ?? (readVal !== undefined ? 'OBSERVED' : 'UNKNOWN');
+
+      const eventPayload = {
+        executionId,
+        runtimeId: usage.promptCache?.runtimeId,
+        modelId: usage.promptCache?.modelId,
+        cacheReadTokens: readVal,
+        cacheWriteTokens: writeVal,
+        hit,
+        source,
+        promptCache: usage.promptCache,
+      };
+
+      this.pushEvent(record, 'model.cache.telemetry', eventPayload);
+      this.pushEvent(record, 'prompt_cache.telemetry', eventPayload);
+      if (hit === true) {
+        this.pushEvent(record, 'prompt_cache.observed', eventPayload);
+      } else if (hit === false) {
+        this.pushEvent(record, 'prompt_cache.missed', eventPayload);
+      }
+    }
     await this.flush(record);
   }
 

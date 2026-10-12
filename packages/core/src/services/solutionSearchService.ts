@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { keepEnds } from '@wazir/shared';
@@ -7,6 +7,8 @@ import type {
   SolutionSearchResult,
   SearchStrategyKind,
   CandidateResult,
+  SearchNodeInspection,
+  MCTSSearchTree,
   CandidateDescriptor,
   CandidateEvaluation,
   CandidatePromotionResult,
@@ -80,6 +82,530 @@ interface ActiveSearchHandle {
   pauseResolvers: Array<() => void>;
 }
 
+export interface AssembleSearchNodeInspectionOptions {
+  nodeId: string;
+  searchId?: string;
+  search?: SolutionSearchResult | any;
+  tree?: MCTSSearchTree;
+  node?: SearchNode;
+  candidate?: CandidateResult | any;
+  checkpointService?: CheckpointService;
+  verificationEngine?: VerificationEngine;
+  provenanceManager?: ProvenanceManager;
+  engine?: any;
+}
+
+export function assembleSearchNodeInspection(
+  options: AssembleSearchNodeInspectionOptions,
+): SearchNodeInspection {
+  const { nodeId } = options;
+  const truncate = (str?: string, max = 500) => {
+    if (!str) return undefined;
+    if (str.length <= max) return str;
+    return str.slice(0, max) + `... [truncated ${str.length - max} chars]`;
+  };
+
+  let checkpointService = options.checkpointService ?? options.engine?.checkpoints;
+  let verificationEngine = options.verificationEngine ?? options.engine?.verification;
+  let provenanceManager = options.provenanceManager ?? options.engine?.provenance;
+
+  let search = options.search;
+  if (!search && options.engine?.solutionSearch) {
+    const list = options.engine.solutionSearch.listSearches() ?? [];
+    search = options.searchId
+      ? options.engine.solutionSearch.searches?.get(options.searchId)
+      : list[list.length - 1];
+  }
+
+  let tree = options.tree ?? search?.hierarchicalTree;
+  let node = options.node;
+  if (!node && tree?.nodes) {
+    node = tree.nodes.get(nodeId);
+  }
+
+  let candidate = options.candidate;
+  if (!candidate && search?.candidates) {
+    candidate = search.candidates.find(
+      (c: any) => c.candidateId === nodeId || c.descriptor?.id === nodeId || c.descriptor?.name === nodeId,
+    );
+  }
+
+  // 1. Header Metadata
+  let phase: string | undefined = undefined;
+  if (node?.level) {
+    phase = String(node.level).toUpperCase();
+  } else if (node?.metadata?.phase) {
+    phase = String(node.metadata.phase).toUpperCase();
+  } else if (candidate?.descriptor?.metadata?.phase) {
+    phase = String(candidate.descriptor.metadata.phase).toUpperCase();
+  } else if (candidate?.phase) {
+    phase = String(candidate.phase).toUpperCase();
+  }
+
+  let state: string | undefined = undefined;
+  if (
+    node?.pruned ||
+    candidate?.status === 'pruned' ||
+    candidate?.state === 'pruned' ||
+    candidate?.isPruned ||
+    candidate?.pruneState?.startsWith('PRUNED')
+  ) {
+    state = 'PRUNED';
+  } else if (
+    node?.verification?.passed === true ||
+    candidate?.evaluation?.verificationPassed === true ||
+    (candidate?.evaluation?.buildPassed === true &&
+      candidate?.evaluation?.testsPassed === true &&
+      candidate?.evaluation?.qualifies !== false)
+  ) {
+    state = 'VERIFIED';
+  } else if (
+    node?.verification?.passed === false ||
+    candidate?.status === 'failed' ||
+    candidate?.state === 'failed' ||
+    candidate?.evaluation?.buildPassed === false ||
+    candidate?.evaluation?.testsPassed === false
+  ) {
+    state = 'FAILED';
+  } else if (
+    (node as any)?.state === 'running' ||
+    (node as any)?.state === 'active' ||
+    candidate?.status === 'running' ||
+    candidate?.state === 'running'
+  ) {
+    state = 'RUNNING';
+  } else if (
+    (node as any)?.state === 'pending' ||
+    candidate?.status === 'pending' ||
+    candidate?.state === 'pending'
+  ) {
+    state = 'PENDING';
+  } else if (
+    (node as any)?.state === 'completed' ||
+    candidate?.status === 'completed' ||
+    candidate?.state === 'completed'
+  ) {
+    state = 'COMPLETED';
+  } else if ((node as any)?.state) {
+    state = String((node as any).state).toUpperCase();
+  } else if (candidate?.state) {
+    state = String(candidate.state).toUpperCase();
+  }
+
+  const modelId =
+    candidate?.descriptor?.modelId ??
+    candidate?.modelId ??
+    node?.executionRecord?.execution?.modelId ??
+    (node?.metadata?.modelId as string | undefined);
+
+  const workerId =
+    candidate?.descriptor?.workerId ??
+    candidate?.workerId ??
+    node?.executionRecord?.execution?.workerId ??
+    (node?.metadata?.workerId as string | undefined);
+
+  const checkpointId =
+    node?.checkpointId ??
+    candidate?.checkpointId ??
+    candidate?.descriptor?.checkpointId;
+
+  const revision =
+    node?.workspaceRevision ??
+    candidate?.workspaceRevision ??
+    candidate?.revision ??
+    candidate?.descriptor?.iteration;
+
+  // 2. Change Summary / Physical Disk Mutations
+  let filesChanged: number | string | string[] | undefined = undefined;
+  let filesChangedCount: number | undefined = undefined;
+  let linesAdded: number | undefined = undefined;
+  let linesRemoved: number | undefined = undefined;
+  let patchDigest: string | undefined = undefined;
+  let diffSnippet: string | undefined = undefined;
+  const fileDeltas: Array<{ path: string; additions?: number; deletions?: number; digest?: string }> = [];
+
+  const chk = checkpointId && checkpointService ? checkpointService.getCheckpoint(checkpointId) : undefined;
+  const parentChk = chk?.parentCheckpointId && checkpointService ? checkpointService.getCheckpoint(chk.parentCheckpointId) : undefined;
+
+  if (chk?.worktreeState?.filesSnapshot && parentChk?.worktreeState?.filesSnapshot) {
+    const curSnap = chk.worktreeState.filesSnapshot;
+    const parSnap = parentChk.worktreeState.filesSnapshot;
+    const allFiles = new Set([...Object.keys(curSnap), ...Object.keys(parSnap)]);
+    let adds = 0;
+    let dels = 0;
+    let changed = 0;
+
+    const countLines = (s: string) => (s.length === 0 ? 0 : s.endsWith('\n') ? s.slice(0, -1).split('\n').length : s.split('\n').length);
+
+    for (const f of allFiles) {
+      const c = curSnap[f];
+      const p = parSnap[f];
+      if (p === undefined && c !== undefined) {
+        changed++;
+        const l = countLines(c);
+        adds += l;
+        fileDeltas.push({ path: f, additions: l, deletions: 0 });
+      } else if (c === undefined && p !== undefined) {
+        changed++;
+        const l = countLines(p);
+        dels += l;
+        fileDeltas.push({ path: f, additions: 0, deletions: l });
+      } else if (c !== p) {
+        changed++;
+        const cLen = countLines(c);
+        const pLen = countLines(p);
+        const diff = Math.abs(cLen - pLen);
+        const a = cLen >= pLen ? diff : 0;
+        const d = pLen > cLen ? diff : 0;
+        adds += a;
+        dels += d;
+        fileDeltas.push({ path: f, additions: a, deletions: d });
+      }
+    }
+
+    filesChangedCount = changed;
+    filesChanged = changed;
+    linesAdded = adds;
+    linesRemoved = dels;
+    patchDigest = createHash('sha256')
+      .update(fileDeltas.map((d) => `${d.path}:${d.additions}:${d.deletions}`).join(';'))
+      .digest('hex')
+      .slice(0, 16);
+  } else if (node?.mutations && node.mutations.length > 0) {
+    filesChangedCount = node.mutations.length;
+    filesChanged = node.mutations.length;
+    for (const m of node.mutations) {
+      if (typeof m === 'string') {
+        fileDeltas.push({ path: m });
+      } else if (typeof m === 'object' && (m as any).path) {
+        fileDeltas.push({ path: (m as any).path });
+      }
+    }
+    patchDigest = createHash('sha256').update(JSON.stringify(node.mutations)).digest('hex').slice(0, 16);
+  } else if (candidate?.executionRecord?.filesChanged && candidate.executionRecord.filesChanged.length > 0) {
+    filesChangedCount = candidate.executionRecord.filesChanged.length;
+    filesChanged = candidate.executionRecord.filesChanged;
+    for (const f of candidate.executionRecord.filesChanged) {
+      fileDeltas.push({ path: f });
+    }
+    patchDigest = candidate.executionRecord.diff
+      ? createHash('sha256').update(candidate.executionRecord.diff).digest('hex').slice(0, 16)
+      : undefined;
+    diffSnippet = truncate(candidate.executionRecord.diff);
+  } else if (candidate?.mutations && candidate.mutations.length > 0) {
+    filesChangedCount = candidate.mutations.length;
+    filesChanged = candidate.mutations.length;
+    for (const m of candidate.mutations) {
+      fileDeltas.push({ path: m.path ?? String(m) });
+    }
+    patchDigest = createHash('sha256').update(JSON.stringify(candidate.mutations)).digest('hex').slice(0, 16);
+  } else if (node !== undefined || candidate !== undefined) {
+    if (chk?.worktreeState?.filesSnapshot && (!parentChk || Object.keys(chk.worktreeState.filesSnapshot).length === 0)) {
+      filesChangedCount = 0;
+      filesChanged = 0;
+      linesAdded = 0;
+      linesRemoved = 0;
+    }
+  }
+
+  // 3. Verification & Oracles
+  let buildStatus: string | undefined = undefined;
+  let buildCommand: string | undefined = undefined;
+  let buildExitCode: number | undefined = undefined;
+  let buildOutput: string | undefined = undefined;
+
+  let testsStatus: string | undefined = undefined;
+  let testSummary: string | undefined = undefined;
+  let testCommand: string | undefined = undefined;
+  let testExitCode: number | undefined = undefined;
+  let testOutput: string | undefined = undefined;
+
+  let acceptanceStatus: string | undefined = undefined;
+  let acceptanceDetails: string | undefined = undefined;
+  let verifyStatus: string | undefined = undefined;
+
+  const oracles: Array<{
+    name: string;
+    status: string;
+    exitCode?: number;
+    command?: string;
+    message?: string;
+    output?: string;
+  }> = [];
+
+  const checks = candidate?.checks ?? candidate?.buildEvidence ?? [];
+  const evidence = candidate?.evidence ?? [];
+
+  const buildCheck = (checks as any[]).find((c: any) => {
+    const n = String(c.name).toLowerCase();
+    return n.includes('build') || n.includes('compile') || n.includes('typecheck');
+  });
+  const buildEv = (evidence as any[]).find((e: any) => e.oracle === 'BUILD' || e.type === 'BUILD');
+  if (buildCheck) {
+    buildStatus = buildCheck.ok ? 'PASS' : 'FAIL';
+    buildCommand = buildCheck.command;
+    buildExitCode = buildCheck.exitCode ?? (buildCheck.ok ? 0 : 1);
+    buildOutput = truncate(buildCheck.output);
+  } else if (buildEv) {
+    buildStatus = buildEv.exitCode === 0 ? 'PASS' : 'FAIL';
+    buildCommand = buildEv.command;
+    buildExitCode = buildEv.exitCode;
+    buildOutput = truncate(buildEv.output);
+  } else if (node?.verification?.buildPassed !== undefined) {
+    buildStatus = node.verification.buildPassed ? 'PASS' : 'FAIL';
+  } else if (candidate?.evaluation?.buildPassed !== undefined) {
+    buildStatus = candidate.evaluation.buildPassed ? 'PASS' : 'FAIL';
+  } else if (candidate?.buildPassed !== undefined) {
+    buildStatus = candidate.buildPassed ? 'PASS' : 'FAIL';
+  }
+
+  const testCheck = (checks as any[]).find((c: any) => {
+    const n = String(c.name).toLowerCase();
+    return n.includes('test') || n.includes('unit') || n.includes('spec');
+  });
+  const testEv = (evidence as any[]).find((e: any) => e.oracle === 'TEST' || e.type === 'TEST');
+  if (testCheck) {
+    testsStatus = testCheck.ok ? 'PASS' : 'FAIL';
+    testCommand = testCheck.command;
+    testExitCode = testCheck.exitCode ?? (testCheck.ok ? 0 : 1);
+    testOutput = truncate(testCheck.output);
+  } else if (testEv) {
+    testsStatus = testEv.exitCode === 0 ? 'PASS' : 'FAIL';
+    testCommand = testEv.command;
+    testExitCode = testEv.exitCode;
+    testOutput = truncate(testEv.output);
+  } else if (node?.verification?.checksPassed !== undefined) {
+    testsStatus = node.verification.checksPassed ? 'PASS' : 'FAIL';
+  } else if (candidate?.evaluation?.testsPassed !== undefined) {
+    testsStatus = candidate.evaluation.testsPassed ? 'PASS' : 'FAIL';
+  } else if (candidate?.testsPassed !== undefined) {
+    testsStatus = candidate.testsPassed ? 'PASS' : 'FAIL';
+  }
+
+  if (candidate?.evaluation?.testSummary) {
+    testSummary = candidate.evaluation.testSummary;
+  } else if (candidate?.testSummary) {
+    testSummary = candidate.testSummary;
+  } else if (testsStatus) {
+    testSummary = testsStatus;
+  }
+
+  const acceptCheck = (checks as any[]).find((c: any) => String(c.name).toLowerCase().includes('acceptance'));
+  const acceptEv = (evidence as any[]).find((e: any) => e.oracle === 'ACCEPTANCE' || e.type === 'ACCEPTANCE');
+  if (acceptCheck) {
+    acceptanceStatus = acceptCheck.ok ? 'PASS' : 'FAIL';
+  } else if (acceptEv) {
+    acceptanceStatus = acceptEv.exitCode === 0 ? 'PASS' : 'FAIL';
+  } else if (node?.rewardEvidence?.acceptanceProgress !== undefined) {
+    acceptanceStatus = node.rewardEvidence.acceptanceProgress >= 1.0 ? 'PASS' : (node.rewardEvidence.acceptanceProgress > 0 ? `${(node.rewardEvidence.acceptanceProgress * 100).toFixed(0)}%` : 'FAIL');
+  } else if (candidate?.evaluation?.qualifies !== undefined) {
+    acceptanceStatus = candidate.evaluation.qualifies ? 'PASS' : 'FAIL';
+  } else if (candidate?.qualifies !== undefined) {
+    acceptanceStatus = candidate.qualifies ? 'PASS' : 'FAIL';
+  }
+
+  if (node?.verification?.passed !== undefined) {
+    verifyStatus = node.verification.passed ? 'PASS' : 'FAIL';
+  } else if (candidate?.evaluation?.verificationPassed !== undefined) {
+    verifyStatus = candidate.evaluation.verificationPassed ? 'PASS' : 'FAIL';
+  } else if (chk?.verificationState?.checksPass !== undefined) {
+    verifyStatus = chk.verificationState.checksPass ? 'PASS' : 'FAIL';
+  } else if (buildStatus === 'PASS' && testsStatus === 'PASS') {
+    verifyStatus = 'PASS';
+  } else if (buildStatus === 'FAIL' || testsStatus === 'FAIL') {
+    verifyStatus = 'FAIL';
+  }
+
+  for (const c of (checks as any[]).slice(0, 10)) {
+    oracles.push({
+      name: c.name,
+      status: c.ok ? 'PASS' : 'FAIL',
+      exitCode: c.exitCode ?? (c.ok ? 0 : 1),
+      command: c.command,
+      message: c.message,
+      output: truncate(c.output),
+    });
+  }
+
+  if (oracles.length === 0) {
+    if (buildStatus !== undefined) {
+      oracles.push({
+        name: 'build-oracle',
+        status: buildStatus,
+        exitCode: buildExitCode ?? (buildStatus === 'PASS' ? 0 : 1),
+        command: buildCommand,
+      });
+    }
+    if (testsStatus !== undefined) {
+      oracles.push({
+        name: 'unit-tests',
+        status: testsStatus,
+        exitCode: testExitCode ?? (testsStatus === 'PASS' ? 0 : 1),
+        command: testCommand,
+      });
+    }
+  }
+
+  // 4. Search Metrics & UCT
+  const visits = node?.visits;
+  const controllerReward =
+    node?.rewardEvidence?.scalarReward ??
+    (node?.value !== undefined && node?.visits ? node.value / node.visits : undefined);
+
+  let uctComponents: string | undefined = undefined;
+  let uctScore: number | undefined = undefined;
+  let uctExploitation: number | undefined = undefined;
+  let uctExploration: number | undefined = undefined;
+
+  if (tree && node && node.parentId) {
+    const parentNode = tree.nodes.get(node.parentId);
+    if (parentNode && parentNode.visits > 0 && node.visits !== undefined && node.visits > 0) {
+      uctExploitation = node.meanValue ?? (node.value / node.visits);
+      uctExploration = Math.SQRT2 * Math.sqrt(Math.log(parentNode.visits) / node.visits);
+      uctScore = uctExploitation + uctExploration;
+      uctComponents = `exploitation: ${uctExploitation.toFixed(3)}, exploration: ${uctExploration.toFixed(3)} (UCT: ${uctScore.toFixed(3)})`;
+    } else if (node.visits === 0) {
+      uctExploitation = node.meanValue ?? 0;
+      uctComponents = `exploitation: ${(node.meanValue ?? 0).toFixed(3)}, exploration: ∞ (unvisited)`;
+    }
+  }
+
+  let paretoMembership: string | undefined = undefined;
+  const isFrontier =
+    tree?.paretoFrontierNodeIds?.includes(nodeId) ||
+    candidate?.evaluation?.isParetoFrontier === true ||
+    candidate?.isFrontier === true;
+
+  const isDominated =
+    candidate?.evaluation?.isDominated === true ||
+    candidate?.isDominated === true ||
+    node?.pruned === true ||
+    candidate?.status === 'pruned' ||
+    candidate?.pruneState?.startsWith('PRUNED');
+
+  if (isFrontier) {
+    paretoMembership = 'FRONTIER';
+  } else if (isDominated) {
+    paretoMembership = 'DOMINATED';
+  } else if (
+    candidate?.status === 'running' ||
+    (candidate as any)?.state === 'running' ||
+    candidate?.status === 'pending' ||
+    (node as any)?.state === 'running'
+  ) {
+    paretoMembership = 'PENDING';
+  }
+
+  // 5. Provenance
+  const parentNodeId = node?.parentId ?? candidate?.parentId;
+
+  let checkpointLineage: string | undefined = undefined;
+  if (checkpointId && checkpointService) {
+    const lineage: string[] = [checkpointId];
+    let curr = checkpointService.getCheckpoint(checkpointId);
+    let depth = 0;
+    while (curr?.parentCheckpointId && depth < 10) {
+      lineage.push(curr.parentCheckpointId);
+      curr = checkpointService.getCheckpoint(curr.parentCheckpointId);
+      depth++;
+    }
+    checkpointLineage = lineage.join(' -> ');
+  } else if (checkpointId) {
+    checkpointLineage = checkpointId;
+  }
+
+  const executionId =
+    candidate?.executionRecord?.execution?.id ??
+    node?.executionRecord?.execution?.id ??
+    chk?.executionId ??
+    (node?.metadata?.executionId as string | undefined) ??
+    candidate?.executionId;
+
+  let evidenceIds: string[] | undefined = undefined;
+  if (node?.verification?.evidenceIds && node.verification.evidenceIds.length > 0) {
+    evidenceIds = node.verification.evidenceIds;
+  } else if (chk?.verificationState?.evidenceIds && chk.verificationState.evidenceIds.length > 0) {
+    evidenceIds = chk.verificationState.evidenceIds;
+  } else if ((evidence as any[]).length > 0) {
+    evidenceIds = (evidence as any[]).map((e: any) => e.id).filter(Boolean);
+  }
+
+  // 6. Physical Evidence
+  const physicalEvidence = {
+    fileDeltas: fileDeltas.slice(0, 10),
+    patchSummary: patchDigest ? `Digest: ${patchDigest} (${filesChangedCount ?? 0} files)` : undefined,
+    buildCommand,
+    buildExitCode,
+    buildOutput,
+    testCommand,
+    testExitCode,
+    testOutput,
+    oracleResults: oracles.slice(0, 10),
+  };
+
+  return {
+    nodeId,
+    phase,
+    state,
+    modelId,
+    workerId,
+    checkpointId,
+    revision,
+    changeSummary:
+      filesChanged !== undefined || linesAdded !== undefined || patchDigest !== undefined
+        ? {
+            filesChanged,
+            filesChangedCount,
+            linesAdded,
+            linesRemoved,
+            patchDigest,
+            diffSnippet,
+            fileDeltas: fileDeltas.slice(0, 10),
+          }
+        : undefined,
+    verification:
+      buildStatus !== undefined || testsStatus !== undefined || acceptanceStatus !== undefined || verifyStatus !== undefined || oracles.length > 0
+        ? {
+            buildStatus,
+            buildCommand,
+            buildExitCode,
+            buildOutput,
+            testsStatus,
+            testSummary,
+            testCommand,
+            testExitCode,
+            testOutput,
+            acceptanceStatus,
+            acceptanceDetails,
+            verifyStatus,
+            oracles,
+          }
+        : undefined,
+    search:
+      visits !== undefined || controllerReward !== undefined || uctComponents !== undefined || paretoMembership !== undefined
+        ? {
+            visits,
+            controllerReward,
+            uctComponents,
+            uctExploitation,
+            uctExploration,
+            uctScore,
+            paretoMembership,
+          }
+        : undefined,
+    provenance:
+      parentNodeId !== undefined || checkpointLineage !== undefined || executionId !== undefined || evidenceIds !== undefined
+        ? {
+            parentNodeId,
+            checkpointLineage,
+            executionId,
+            evidenceIds,
+          }
+        : undefined,
+    physicalEvidence,
+  };
+}
+
 export class SolutionSearchService {
   private readonly checkpointService: CheckpointService;
   private readonly worktreeManager: WorktreeManager;
@@ -130,6 +656,19 @@ export class SolutionSearchService {
 
   public listSearches(): SolutionSearchResult[] {
     return Array.from(this.searchHistory.values());
+  }
+
+  public inspectNode(nodeId: string, searchId?: string): SearchNodeInspection | undefined {
+    const search = searchId ? this.searchHistory.get(searchId) : Array.from(this.searchHistory.values()).pop();
+    return assembleSearchNodeInspection({
+      nodeId,
+      searchId: search?.searchId,
+      search,
+      tree: (search as any)?.hierarchicalTree,
+      checkpointService: this.checkpointService,
+      verificationEngine: this.verificationEngine,
+      provenanceManager: this.provenanceManager,
+    });
   }
 
   public get searches(): Map<string, SolutionSearchResult> {

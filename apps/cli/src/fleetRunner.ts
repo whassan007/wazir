@@ -310,6 +310,9 @@ export function createFleetTaskExecutor(
                   input: event.usage.inputTokens,
                   output: event.usage.outputTokens,
                   total: event.usage.totalTokens ?? event.usage.inputTokens + event.usage.outputTokens,
+                  cacheReadTokens: event.usage.cacheReadTokens,
+                  cacheWriteTokens: event.usage.cacheWriteTokens,
+                  promptCacheMetrics: event.promptCache ?? event.usage.promptCache,
                 };
                 await engine.executions.recordUsage(executionId, usage);
                 // Per-turn usage, not the cumulative execution total: `input` here is the
@@ -348,6 +351,9 @@ export function createFleetTaskExecutor(
                     input: generationEvent.usage.inputTokens,
                     output: generationEvent.usage.outputTokens,
                     total: generationEvent.usage.totalTokens ?? generationEvent.usage.inputTokens + generationEvent.usage.outputTokens,
+                    cacheReadTokens: generationEvent.usage.cacheReadTokens,
+                    cacheWriteTokens: generationEvent.usage.cacheWriteTokens,
+                    promptCacheMetrics: generationEvent.promptCache ?? generationEvent.usage.promptCache,
                   };
                   await engine.executions.recordUsage(executionId, usage);
                   context.onProgress?.({ kind: 'usage', usage, breakdown: contextDecision.breakdown });

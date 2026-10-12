@@ -401,6 +401,7 @@ export function normalizeAction(action: ParsedAction | null, toolNames: Set<stri
 export const REQUIRED_TOOL_FIELDS: Record<string, string[]> = {
   read: ['path'],
   write: ['path', 'content'],
+  edit: ['path', 'oldString', 'newString'],
   shell: ['command'],
   glob: ['pattern'],
 };
@@ -1223,15 +1224,16 @@ export class CodingAgent implements AgentAdapter {
           continue;
         }
 
+        const effectiveRaw = raw || (toolCall ? JSON.stringify(toolCall) : (envelope ? JSON.stringify(envelope) : ''));
         const val = validateAction(action.tool, action.input ?? {});
         if (val.ok === false) {
           validationErrors += 1;
           if (val.attempts >= 3) {
             if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', `'${action.tool}' repeatedly failed validation (${val.reason})`)) continue;
-            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw, protocolMetrics: currentMetrics() };
+            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw: effectiveRaw, protocolMetrics: currentMetrics() };
             return;
           }
-          yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw };
+          yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw: effectiveRaw };
           rejectAttempt(validationFailureMessage(action.tool, val.toolMessage, val.attempts).output);
           continue;
         }
@@ -1435,15 +1437,16 @@ export class CodingAgent implements AgentAdapter {
           continue;
         }
 
+        const effectiveRaw = raw || (toolCall ? JSON.stringify(toolCall) : (envelope ? JSON.stringify(envelope) : ''));
         const val = validateAction(action.tool, action.input ?? {});
         if (val.ok === false) {
           validationErrors += 1;
           if (val.attempts >= 3) {
             if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', `'${action.tool}' repeatedly failed validation (${val.reason})`)) continue;
-            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw, protocolMetrics: currentMetrics() };
+            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw: effectiveRaw, protocolMetrics: currentMetrics() };
             return;
           }
-          yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw };
+          yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw: effectiveRaw };
           rejectAttempt(validationFailureMessage(action.tool, val.toolMessage, val.attempts).output);
           continue;
         }
@@ -1611,7 +1614,7 @@ export class CodingAgent implements AgentAdapter {
       if (!documents.some(d => modelSummary?.includes(d.citation.citationId) || modelSummary?.includes(d.url) || modelSummary?.includes(d.finalUrl)))
         failures.push('WEB_EVIDENCE_REQUIRED: research completion requires a successfully fetched document cited in the answer.');
     }
-    for (const check of groundedResearch && filesChangedSet.size === 0 ? [] : ['test', 'lint', 'typecheck']) {
+    for (const check of groundedResearch && filesChangedSet.size === 0 ? [] : ['build', 'test', 'lint', 'typecheck']) {
       if (request.isCancelled?.()) return;
       const result = await runtime.executeTool(check, {});
       const output = result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n');

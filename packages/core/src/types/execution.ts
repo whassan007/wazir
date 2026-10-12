@@ -51,6 +51,10 @@ export interface TokenUsage {
   input: number;
   output: number;
   total?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  promptCacheMetrics?: import('@wazir/runtimes-interfaces').PromptCacheMetrics;
+  promptCache?: import('./telemetry.js').PromptCacheTelemetry;
 }
 
 export interface ToolCallRecord {
@@ -172,6 +176,8 @@ export type ExecutionEventType =
   | 'step.started' | 'step.completed' | 'step.failed'
   | 'model.requested' | 'model.attempt.started' | 'model.attempt.failed'
   | 'model.response.completed' | 'model.route.changed'
+  | 'model.cache.telemetry'
+  | 'prompt_cache.telemetry' | 'prompt_cache.observed' | 'prompt_cache.missed'
   | 'tool.call.requested' | 'tool.call.validated' | 'tool.call.started'
   | 'tool.call.completed' | 'tool.call.failed' | 'tool.call.outcome_unknown'
   | 'workspace.mutated' | 'workspace.revision.changed'

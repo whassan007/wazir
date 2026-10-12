@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import type { KeyValueStore } from '@wazir/shared';
 import type {
   EmbeddingProvider,
   SemanticIndexUnit,
@@ -12,6 +13,10 @@ import type { SymbolGraph } from './symbolGraph.js';
 import type { EpisodicRecord, ProceduralRecipe } from '@wazir/memory';
 
 export interface SemanticIndexOptions {
+  store?: KeyValueStore;
+  storagePrefix?: string;
+  embeddingProviderId?: string;
+  embeddingVersion?: string;
   embeddingProvider: EmbeddingProvider;
   defaultRepositoryScope?: string;
   symbolGraph?: SymbolGraph;
@@ -19,6 +24,7 @@ export interface SemanticIndexOptions {
 }
 
 export class SemanticIndexService {
+  private readonly persistence: Pick<SemanticIndexOptions, 'store' | 'storagePrefix' | 'embeddingProviderId' | 'embeddingVersion'>;
   private readonly provider: EmbeddingProvider;
   private readonly defaultScope: string;
   private readonly symbolGraph?: SymbolGraph;
@@ -32,6 +38,7 @@ export class SemanticIndexService {
   private readonly fileHashes = new Map<string, string>();
 
   constructor(options: SemanticIndexOptions) {
+    this.persistence = options;
     this.provider = options.embeddingProvider;
     this.defaultScope = options.defaultRepositoryScope ?? 'default';
     this.symbolGraph = options.symbolGraph;
@@ -56,19 +63,39 @@ export class SemanticIndexService {
     const id = unitInput.id ?? `sem-${randomUUID()}`;
     const contentHash = unitInput.contentHash ?? this.hash(unitInput.content);
 
-    // Compute embedding
-    const [embedRes] = await this.provider.embed([unitInput.content]);
+    const key = `${this.persistence.storagePrefix ?? 'semantic-unit/'}${id}`;
+    const previous = this.units.get(id) ?? await this.persistence.store?.get<SemanticIndexUnit>(key);
+    const invalidatePrevious = async () => {
+      this.units.delete(id);
+      if (previous) this.fileUnits.get(previous.path)?.delete(id);
+      await this.persistence.store?.delete(key);
+    };
+    // Invalidate changed content even when provider capability discovery fails.
+    if (previous && previous.contentHash !== contentHash) await invalidatePrevious();
     const caps = this.provider.capabilities();
+    const embeddingProvider = this.persistence.embeddingProviderId ?? this.provider.constructor.name;
+    const embeddingVersion = this.persistence.embeddingVersion ?? '1.0';
+    const reusable = previous?.contentHash === contentHash && previous.embeddingModel === caps.modelName
+      && previous.embeddingProvider === embeddingProvider && previous.embeddingVersion === embeddingVersion
+      && previous.embedding?.length === caps.dimensions && previous.embedding.every(Number.isFinite);
+    // Never retain an obsolete vector if refreshing it fails.
+    if (previous && previous.contentHash === contentHash && !reusable) await invalidatePrevious();
+    const embedding = reusable ? previous!.embedding! : (await this.provider.embed([unitInput.content]))[0]?.vector;
+    if (!embedding || embedding.length !== caps.dimensions || !embedding.every(Number.isFinite)) {
+      throw new Error('Invalid embedding vector');
+    }
 
     const unit: SemanticIndexUnit = {
       ...unitInput,
       id,
       contentHash,
-      embedding: embedRes.vector,
+      embedding,
       embeddingModel: caps.modelName,
-      embeddingVersion: '1.0',
+      embeddingProvider,
+      embeddingVersion,
     };
 
+    await this.persistence.store?.put(key, unit);
     this.units.set(id, unit);
 
     let set = this.fileUnits.get(unit.path);
@@ -290,6 +317,11 @@ export class SemanticIndexService {
 
   public getUnitCount(): number {
     return this.units.size;
+  }
+
+  /** Unranked snapshot for domain-specific retrieval adapters. */
+  public getUnits(): SemanticIndexUnit[] {
+    return structuredClone(Array.from(this.units.values()));
   }
 
   public getUnit(id: string): SemanticIndexUnit | undefined {

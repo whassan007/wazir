@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import type {
   ExecutionCheckpoint,
   CheckpointCreateOptions,
@@ -436,5 +436,48 @@ export class CheckpointService {
     }
 
     return restored;
+  }
+
+  /**
+   * Computes deterministic SHA-256 digest of a checkpoint's filesSnapshot and revision.
+   */
+  public computeDigest(checkpoint: ExecutionCheckpoint): string {
+    const hash = createHash('sha256');
+    const sortedEntries = Object.entries(checkpoint.worktreeState.filesSnapshot ?? {}).sort(([a], [b]) =>
+      a.localeCompare(b),
+    );
+    for (const [filePath, content] of sortedEntries) {
+      hash.update(`${filePath}:${content}\n`);
+    }
+    hash.update(`rev:${checkpoint.workspaceRevision}\n`);
+    return hash.digest('hex');
+  }
+
+  /**
+   * Materializes an immutable checkpoint onto a remote worker directory,
+   * verifying content-addressed digest integrity before allowing execution.
+   */
+  public async materializeOnTarget(
+    targetDir: string,
+    checkpoint: ExecutionCheckpoint,
+    expectedDigest?: string,
+  ): Promise<{ materialized: boolean; digest: string; filesRestored: string[] }> {
+    const currentDigest = this.computeDigest(checkpoint);
+    if (expectedDigest && currentDigest !== expectedDigest) {
+      throw new Error(
+        `CHECKPOINT_MATERIALIZATION_FAILED: Digest mismatch. Expected '${expectedDigest}', got '${currentDigest}'`,
+      );
+    }
+
+    const filesRestored = await this.restoreSnapshotToDirectory(
+      targetDir,
+      checkpoint.worktreeState.filesSnapshot ?? {},
+    );
+
+    return {
+      materialized: true,
+      digest: currentDigest,
+      filesRestored,
+    };
   }
 }

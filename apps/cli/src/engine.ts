@@ -20,6 +20,7 @@ import {
   JobOrchestrator,
   ModelRegistry,
   ModelLifecycleService,
+  HealthEvidenceLog,
   ModelReliabilityTracker,
   measureModelPerformance,
   PolicyEngine,
@@ -84,6 +85,8 @@ export interface RookEngine {
   runtimes: RuntimeRegistry;
   models: ModelRegistry;
   lifecycle: ModelLifecycleService;
+  /** Advisory evidence for runtime/model health diagnostics (see `wa health`). */
+  health: HealthEvidenceLog;
   agents: AgentRegistry;
   tools: ToolRegistry;
   mcp: MCPRegistry;
@@ -356,6 +359,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     },
   });
 
+  const health = new HealthEvidenceLog();
+  lifecycle.subscribe(event => health.onLifecycleEvent(event));
   lifecycle.subscribe(event => {
     void appendAuditEvent({ type: 'model_lifecycle', details: { ...event } }).catch(() => undefined);
     const executionId = event.data?.executionId;
@@ -364,6 +369,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   await executions.ready;
   const executionHistory = await executions.list();
   reliability.hydrate(executionHistory);
+  health.hydrateFromExecutions(executionHistory);
   await lifecycle.discoverAndReconcile({ verify: !options.readOnlyLifecycle });
   // After discovery so every model is registered; register() preserves the profiles.
   for (const [modelId, profiles] of measureModelPerformance(executionHistory)) models.setPerformance(modelId, profiles);
@@ -443,6 +449,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     runtimes,
     models,
     lifecycle,
+    health,
     agents,
     tools,
     policy,

@@ -8,11 +8,13 @@ import type {
   GenerationEvent,
   GenerationRequest,
   HealthStatus,
+  PromptCacheMetrics,
   ResourceEstimate,
   RuntimeAdapter,
   RuntimeCapabilities,
   RuntimeInfo,
 } from '@wazir/runtimes-interfaces';
+import { normalizePromptCacheTelemetry } from '@wazir/runtimes-interfaces';
 import { classifyFailure, isProviderRetryable, providerRetryDecision, resolveRetryPolicy, waitForRetry } from '@wazir/shared';
 
 const execFileAsync = promisify(execFile);
@@ -75,6 +77,11 @@ export class LMStudioAdapter implements RuntimeAdapter {
   readonly type = 'lmstudio' as const;
   private readonly baseURL: string;
   private readonly controllers = new Map<string, AbortController>();
+  private detectedCapabilities = {
+    promptCacheTelemetry: false,
+    cacheReadMetrics: false,
+    cacheWriteMetrics: false,
+  };
 
   constructor(baseURL: string = 'http://localhost:1235/v1') {
     this.baseURL = baseURL.replace(/\/+$/, '');
@@ -291,7 +298,10 @@ export class LMStudioAdapter implements RuntimeAdapter {
       parallelToolCalling: true,
       strictJsonSchema: true,
       streamingToolCalls: true,
-      promptCaching: false,
+      promptCaching: this.detectedCapabilities.promptCacheTelemetry,
+      promptCacheTelemetry: this.detectedCapabilities.promptCacheTelemetry,
+      cacheReadMetrics: this.detectedCapabilities.cacheReadMetrics,
+      cacheWriteMetrics: this.detectedCapabilities.cacheWriteMetrics,
       structuredOutput: true,
       vision: true,
       embeddings: false,
@@ -334,15 +344,33 @@ export class LMStudioAdapter implements RuntimeAdapter {
     await response.json();
   }
   async probeModel(modelId: string, contextTokens: number): Promise<boolean> {
-    const state = await this.inspectModel(modelId);
-    if (!state.loaded || state.effectiveContext !== contextTokens) return false;
-    const response = await fetch(`${this.baseURL}/chat/completions`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30_000),
-      body: JSON.stringify({ model: state.instanceId, messages: [{ role: 'user', content: 'Reply OK.' }], max_tokens: 1, stream: false }),
-    });
-    if (!response.ok) return false;
-    const data = await response.json() as { choices?: unknown[] };
-    return Array.isArray(data.choices) && data.choices.length > 0;
+    try {
+      const state = await this.inspectModel(modelId);
+      if (!state.loaded || state.effectiveContext !== contextTokens) return false;
+      const response = await fetch(`${this.baseURL}/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({ model: state.instanceId, messages: [{ role: 'user', content: 'Reply OK.' }], max_tokens: 1, stream: false }),
+      });
+      if (!response.ok) return false;
+      const data = await response.json() as { choices?: unknown[]; usage?: Record<string, any>; stats?: Record<string, any> };
+      if (data.usage || data.stats) {
+        try {
+          const pc = normalizePromptCacheTelemetry({ provider: 'lmstudio', usage: data.usage, stats: data.stats, headers: response.headers });
+          if (pc.cacheReadTokens.status === 'OBSERVED') {
+            this.detectedCapabilities.promptCacheTelemetry = true;
+            this.detectedCapabilities.cacheReadMetrics = true;
+          }
+          if (pc.cacheWriteTokens.status === 'OBSERVED') {
+            this.detectedCapabilities.cacheWriteMetrics = true;
+          }
+        } catch {
+          // Telemetry detection failure must never affect probe
+        }
+      }
+      return Array.isArray(data.choices) && data.choices.length > 0;
+    } catch {
+      return false;
+    }
   }
   async estimateModelLoad(modelId: string, contextTokens: number): Promise<import('@wazir/runtimes-interfaces').ModelLoadEstimate> {
     // The REST API does not expose estimation. The diagnostic CLI supports a target host.
@@ -462,6 +490,9 @@ export class LMStudioAdapter implements RuntimeAdapter {
 
     let full = '';
     let usage: GenerationEvent['usage'];
+    let rawUsageChunk: Record<string, any> | undefined;
+    let rawStatsChunk: Record<string, any> | undefined;
+    const responseHeaders = response.headers;
     const pendingToolCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
     const buffer = createSSEBuffer();
 
@@ -473,7 +504,13 @@ export class LMStudioAdapter implements RuntimeAdapter {
         buffer.push(new TextDecoder().decode(value, { stream: true }));
         for (const payload of buffer.drain()) {
           if (payload === '[DONE]') continue;
-          const chunk = JSON.parse(payload) as StreamChunk;
+          let chunk: StreamChunk;
+          try {
+            chunk = JSON.parse(payload) as StreamChunk;
+          } catch {
+            // Malformed chunk should not crash the stream
+            continue;
+          }
 
           const delta = chunk.choices?.[0]?.delta;
           const text = delta?.content || delta?.reasoning_content;
@@ -490,11 +527,15 @@ export class LMStudioAdapter implements RuntimeAdapter {
           }
 
           if (chunk.usage) {
+            rawUsageChunk = chunk.usage;
             usage = {
               inputTokens: chunk.usage.prompt_tokens ?? 0,
               outputTokens: chunk.usage.completion_tokens ?? 0,
               totalTokens: chunk.usage.total_tokens,
             };
+          }
+          if ((chunk as any).stats) {
+            rawStatsChunk = (chunk as any).stats;
           }
         }
       }
@@ -514,14 +555,57 @@ export class LMStudioAdapter implements RuntimeAdapter {
         };
       }
 
+      const promptCache = normalizePromptCacheTelemetry({
+        provider: 'lmstudio',
+        inputTokens: usage?.inputTokens ?? 0,
+        usage: rawUsageChunk,
+        stats: rawStatsChunk,
+        headers: responseHeaders,
+      });
+
+      if (promptCache.cacheReadTokens.status === 'OBSERVED') {
+        this.detectedCapabilities.promptCacheTelemetry = true;
+        this.detectedCapabilities.cacheReadMetrics = true;
+      }
+      if (promptCache.cacheWriteTokens.status === 'OBSERVED') {
+        this.detectedCapabilities.cacheWriteMetrics = true;
+      }
+
       yield {
         type: 'completed',
         content: full,
-        usage: usage ?? { inputTokens: 0, outputTokens: 0 },
+        usage: {
+          inputTokens: usage?.inputTokens ?? 0,
+          outputTokens: usage?.outputTokens ?? 0,
+          totalTokens: usage?.totalTokens ?? ((usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0)),
+          cacheReadTokens: promptCache.cacheReadTokens.value,
+          cacheWriteTokens: promptCache.cacheWriteTokens.value,
+          promptCache,
+        },
+        promptCache,
       };
     } catch (error) {
       if (controller.signal.aborted) {
-        yield { type: 'completed', content: full, usage: usage ?? { inputTokens: 0, outputTokens: 0 } };
+        const promptCache = normalizePromptCacheTelemetry({
+          provider: 'lmstudio',
+          inputTokens: usage?.inputTokens ?? 0,
+          usage: rawUsageChunk,
+          stats: rawStatsChunk,
+          headers: responseHeaders,
+        });
+        yield {
+          type: 'completed',
+          content: full,
+          usage: {
+            inputTokens: usage?.inputTokens ?? 0,
+            outputTokens: usage?.outputTokens ?? 0,
+            totalTokens: usage?.totalTokens ?? ((usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0)),
+            cacheReadTokens: promptCache.cacheReadTokens.value,
+            cacheWriteTokens: promptCache.cacheWriteTokens.value,
+            promptCache,
+          },
+          promptCache,
+        };
       } else {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }

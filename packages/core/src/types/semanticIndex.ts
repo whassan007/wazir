@@ -25,7 +25,9 @@ export type SemanticUnitKind =
   | 'doc'
   | 'config'
   | 'procedural_recipe'
-  | 'episodic_summary';
+  | 'episodic_summary'
+  | 'engineering_strategy'
+  | 'anti_strategy';
 
 export interface SemanticIndexUnit {
   id: string;
@@ -40,6 +42,7 @@ export interface SemanticIndexUnit {
   embedding?: number[];
   artifactOrPackage?: string;
   embeddingModel?: string;
+  embeddingProvider?: string;
   embeddingVersion?: string;
   metadata?: Record<string, unknown>;
 }

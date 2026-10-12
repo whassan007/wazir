@@ -2,6 +2,7 @@ import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
 import { createBlock } from './blocks.js';
 import { sandboxStatus } from '@wazir/tools';
+import { collectHealthReport } from './health.js';
 
 export type DoctorStatus = 'PASS' | 'WARN' | 'FAIL' | 'NOT INSTALLED' | 'UNAVAILABLE';
 
@@ -395,6 +396,25 @@ function checkSandbox(): DoctorCheck {
   }
 }
 
+function checkRuntimeModelHealth(engine: RookEngine): DoctorCheck {
+  try {
+    const report = collectHealthReport(engine);
+    const errors = report.diagnostics.filter((d) => d.severity === 'error');
+    const warnings = report.diagnostics.filter((d) => d.severity === 'warning');
+    const details = report.diagnostics.map((d) => `${d.code}: ${d.subject.id} — ${d.reason}`).join('\n') || undefined;
+    return {
+      name: 'runtime & model health',
+      status: errors.length ? 'FAIL' : warnings.length ? 'WARN' : 'PASS',
+      message: report.diagnostics.length
+        ? `${errors.length} error(s), ${warnings.length} warning(s); run \`wa models health --detail\``
+        : 'no problems classified',
+      details,
+    };
+  } catch (error) {
+    return { name: 'runtime & model health', status: 'FAIL', message: 'health projection error', details: (error as Error).message };
+  }
+}
+
 export async function doctor(engine: RookEngine): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [
     checkConfig(engine),
@@ -405,6 +425,7 @@ export async function doctor(engine: RookEngine): Promise<DoctorReport> {
     checkRuntimeConnectivity(engine),
     await checkHostedProviders(engine),
     checkModelAvailability(engine),
+    checkRuntimeModelHealth(engine),
     checkRequiredPermissions(engine),
     checkSchedulerReadiness(engine),
     checkSecurity(engine),
@@ -422,7 +443,7 @@ export async function doctor(engine: RookEngine): Promise<DoctorReport> {
   return { checks, summary };
 }
 
-export function doctorCommand(): Promise<{ code: number; output: string }> {
+export function doctorCommand(options: { json?: boolean } = {}): Promise<{ code: number; output: string }> {
   return new Promise(async (resolve) => {
     let finish: Awaited<ReturnType<typeof createBlock>>['finish'] | undefined;
     try {
@@ -432,6 +453,13 @@ export function doctorCommand(): Promise<{ code: number; output: string }> {
       ({ finish } = await createBlock(engine, 'doctor', []));
 
       const report = await doctor(engine);
+      if (options.json) {
+        const hasIssues = report.summary.fail > 0 || report.summary.warn > 0;
+        const output = JSON.stringify({ ...report, health: collectHealthReport(engine) }, null, 2);
+        await finish?.(hasIssues ? 'failed' : 'success', { stdout: output, exitCode: hasIssues ? 1 : 0 });
+        resolve({ code: hasIssues ? 1 : 0, output });
+        return;
+      }
     
     const lines: string[] = [];
     lines.push(color.bold('Wazir Doctor'));

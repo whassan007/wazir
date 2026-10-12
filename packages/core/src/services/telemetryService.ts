@@ -1,12 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  UsageRecord,
-  PhysicalComputeUsage,
-  MonetaryCost,
-  ModelPricingTier,
-  AggregatedUsageReport,
-  CostStatus,
+import {
+  type UsageRecord,
+  type PhysicalComputeUsage,
+  type MonetaryCost,
+  type ModelPricingTier,
+  type AggregatedUsageReport,
+  type CostStatus,
+  type PromptCacheTelemetry,
+  type CacheMetricStatus,
+  type CacheMetricValue,
+  aggregatePromptCacheTelemetry,
+  toPromptCacheTelemetry,
 } from '../types/telemetry.js';
+
 
 export class TelemetryCollector {
   private records: UsageRecord[] = [];
@@ -130,13 +136,30 @@ export class TelemetryCollector {
     peakMemoryBytes?: number;
     gpuTimeMs?: number;
     costOverride?: MonetaryCost;
+    promptCacheMetrics?: import('../types/telemetry.js').PromptCacheMetrics;
+    promptCache?: PromptCacheTelemetry;
   }): UsageRecord {
     const isLocal =
       params.isLocal ??
       (params.provider.toLowerCase() === 'ollama' ||
         params.provider.toLowerCase() === 'lmstudio');
 
-    const cachedTokens = params.cachedTokens ?? 0;
+    const promptCache: PromptCacheTelemetry | undefined =
+      params.promptCache ??
+      (params.promptCacheMetrics
+        ? toPromptCacheTelemetry({
+            runtimeId: params.runtimeId,
+            modelId: params.modelId,
+            executionId: params.executionId,
+            metrics: params.promptCacheMetrics,
+          })
+        : undefined);
+
+    const cachedTokens =
+      params.cachedTokens ??
+      promptCache?.cacheReadTokens?.value ??
+      params.promptCacheMetrics?.cacheReadTokens?.value ??
+      0;
     const totalTokens = params.inputTokens + params.outputTokens + cachedTokens;
 
     const physical: PhysicalComputeUsage = {
@@ -149,6 +172,9 @@ export class TelemetryCollector {
       modelTimeMs: params.modelTimeMs ?? params.wallTimeMs,
       gpuTimeMs: params.gpuTimeMs,
       peakMemoryBytes: params.peakMemoryBytes ?? (isLocal ? 1024 * 1024 * 1024 : 0), // Local model loads in memory
+      cacheReadTokens: promptCache?.cacheReadTokens?.value ?? params.promptCacheMetrics?.cacheReadTokens?.value,
+      cacheWriteTokens: promptCache?.cacheWriteTokens?.value ?? params.promptCacheMetrics?.cacheWriteTokens?.value,
+      promptCacheMetrics: params.promptCacheMetrics,
     };
 
     let monetary =
@@ -179,6 +205,8 @@ export class TelemetryCollector {
       isLocal,
       physical,
       monetary,
+      promptCacheMetrics: params.promptCacheMetrics,
+      promptCache,
       timestamp: new Date(),
     };
 
@@ -308,6 +336,23 @@ export class TelemetryCollector {
         ? 'ESTIMATED'
         : 'ACTUAL';
 
+    const promptCacheRecords: PromptCacheTelemetry[] = [];
+    for (const r of records) {
+      if (r.promptCache) {
+        promptCacheRecords.push(r.promptCache);
+      } else if (r.promptCacheMetrics) {
+        promptCacheRecords.push(
+          toPromptCacheTelemetry({
+            runtimeId: r.runtimeId,
+            modelId: r.modelId,
+            executionId: r.executionId,
+            metrics: r.promptCacheMetrics,
+          }),
+        );
+      }
+    }
+    const aggregatedPromptCache = aggregatePromptCacheTelemetry(promptCacheRecords);
+
     return {
       totalExecutions: new Set(records.map((r) => r.executionId)).size,
       totalModelCalls: records.reduce((acc, r) => acc + r.physical.modelCalls, 0),
@@ -327,6 +372,7 @@ export class TelemetryCollector {
         costStatus: overallCostStatus,
         byProvider,
       },
+      promptCache: aggregatedPromptCache,
       byModel,
     };
   }
