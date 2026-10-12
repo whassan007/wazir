@@ -52,7 +52,7 @@ import {
 import { ToolRegistry, defaultTools, createWebTools } from '@wazir/tools';
 import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
 import { createConfiguredWeb } from './web.js';
-import { createCodingAgent, createStepAgent, ExternalAgentAdapter } from '@wazir/agents';
+import { AcpAgentAdapter, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
@@ -62,6 +62,7 @@ import { startLocalHeartbeat } from './localHeartbeat.js';
 import { configDir, loadConfig, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
+import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
 import path from 'node:path';
 
 import { EvaluationService, BenchmarkService, MetaOptimizerService } from '@wazir/evaluation';
@@ -137,6 +138,38 @@ function guessFamily(id: string, provider: string): ModelRecord['family'] {
 
 const DEFAULT_CONTEXT = 32_768;
 const execFileAsync = promisify(execFile);
+
+/** True when `bin` is an executable on PATH. A lookup, not a launch: startup stays fast. */
+function onPath(bin: string): boolean {
+  const exts = process.platform === 'win32' ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';') : [''];
+  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+    for (const ext of exts) {
+      try {
+        accessSync(path.join(dir, bin + ext), fsConstants.X_OK);
+        return true;
+      } catch { /* keep looking */ }
+    }
+  }
+  return false;
+}
+
+/**
+ * External coding agents reachable over the Agent Client Protocol. `requires` is the CLI that
+ * must be installed (and signed in) for the agent to work; Claude Code and Codex speak ACP
+ * through Zed's pinned adapters, launched with npx (the first run downloads them).
+ */
+function acpAgentSpecs(): Array<{ name: string; description: string; requires: string; command: string; args: string[]; initTimeoutMs?: number }> {
+  const npx = path.join(path.dirname(process.execPath), process.platform === 'win32' ? 'npx.cmd' : 'npx');
+  const npxCommand = existsSync(npx) ? npx : 'npx';
+  return [
+    { name: 'claude-code', description: 'Claude Code over ACP (@zed-industries/claude-code-acp)', requires: 'claude',
+      command: npxCommand, args: ['-y', '@zed-industries/claude-code-acp@0.16.2'], initTimeoutMs: 180_000 },
+    { name: 'codex', description: 'OpenAI Codex over ACP (@zed-industries/codex-acp)', requires: 'codex',
+      command: npxCommand, args: ['-y', '@zed-industries/codex-acp@0.16.0'], initTimeoutMs: 180_000 },
+    { name: 'qwen-code', description: 'Qwen Code over ACP', requires: 'qwen', command: 'qwen', args: ['--acp'] },
+    { name: 'gemini', description: 'Gemini CLI over ACP', requires: 'gemini', command: 'gemini', args: ['--acp'] },
+  ];
+}
 
 async function detectOpenCode(): Promise<boolean> {
   try {
@@ -258,6 +291,38 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
         description: 'OpenCode terminal coding agent, invoked as an external process',
         command: 'opencode',
         args: ['run'],
+        taskTypes: [],
+        capabilities: ['coding'],
+      }),
+      'external',
+    );
+  }
+
+  // ACP delegation (Claude Code, Codex, Qwen Code, Gemini CLI). Same contract as OpenCode:
+  // registered only when the CLI is installed and selected only with `--agent <name>`.
+  // Wazir answers every permission request the agent makes, under WAZIR_ACP_PERMISSIONS
+  // (read | edit | full; default edit, which never allows shell commands).
+  const acpPermissionMode = parseAcpPermissionMode(process.env.WAZIR_ACP_PERMISSIONS);
+  for (const spec of acpAgentSpecs()) {
+    if (!onPath(spec.requires) || agents.get(spec.name)) continue;
+    agents.register(new AcpAgentAdapter({ ...spec, permissionMode: acpPermissionMode }), 'external');
+  }
+
+  // Antigravity (`agy`) has no ACP mode, so it runs as a headless external process and its
+  // own permission model applies. WAZIR_ACP_PERMISSIONS maps onto its flags: `read` plans
+  // only, `edit` (default) accepts edits with headless command requests auto-denied
+  // (--sandbox), `full` auto-approves every tool.
+  if (onPath('agy') && !agents.get('antigravity')) {
+    const agyMode = acpPermissionMode === 'read' ? ['--sandbox', '--mode', 'plan']
+      : acpPermissionMode === 'full' ? ['--mode', 'accept-edits', '--dangerously-skip-permissions']
+        : ['--sandbox', '--mode', 'accept-edits'];
+    agents.register(
+      new ExternalAgentAdapter({
+        name: 'antigravity',
+        version: 'external',
+        description: 'Google Antigravity CLI (agy), headless print mode',
+        command: 'agy',
+        args: [...agyMode, '--output-format', 'text', '-p'],
         taskTypes: [],
         capabilities: ['coding'],
       }),

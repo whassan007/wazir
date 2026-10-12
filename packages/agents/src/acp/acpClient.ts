@@ -47,10 +47,16 @@ export interface AcpClientOptions {
     onExit: (info: { code: number | null; signal: string | null }) => void,
   ) => Promise<AcpConnectionLike>;
   onActivity?: (activity: SubagentActivity) => void;
+  /** Raw ACP `session/update` payloads (the `update` object), for adapters that map them. */
+  onSessionUpdate?: (sessionId: string, update: Record<string, unknown>) => void;
+  /** Bound for spawn + `initialize`; an `npx`-launched bridge may need to download first. */
+  initTimeoutMs?: number;
   onRequestPermission?: (request: {
     requestId: string;
     sessionId: string;
     title: string;
+    /** ACP tool kind of the call asking for permission (read, edit, execute, fetch, ...). */
+    toolKind?: string;
     options: PermissionOption[];
   }) => Promise<{ optionId?: string; cancelled?: boolean }>;
 }
@@ -74,6 +80,24 @@ export class AcpClientAdapter {
   private generation = 0;
   private turnSeq = 0;
   private closing = false;
+  private detached = false;
+  /** Auth method ids the agent advertised in `initialize`. */
+  private authMethodIds: string[] = [];
+  private stderrTail = '';
+
+  /** Last ~4 KB of the agent's stderr, for diagnosing startup or protocol failures. */
+  get stderr(): string {
+    return this.stderrTail;
+  }
+
+  private signal(child: ChildProcess, sig: NodeJS.Signals): void {
+    try {
+      if (this.detached && child.pid !== undefined) process.kill(-child.pid, sig);
+      else child.kill(sig);
+    } catch {
+      try { child.kill(sig); } catch { /* already gone */ }
+    }
+  }
 
   constructor(options: AcpClientOptions) {
     this.name = options.name;
@@ -93,10 +117,19 @@ export class AcpClientAdapter {
     }
 
     this.generation += 1;
+    // Own process group: an `npx`-launched bridge runs the real agent as a grandchild,
+    // which a signal to the direct child alone would orphan. stderr is captured (bounded)
+    // rather than inherited so agent logs never corrupt the host terminal or TUI.
+    const detached = process.platform !== 'win32';
     const child = spawn(this.options.command, this.options.args ?? [], {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env },
-      stdio: ['pipe', 'pipe', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached,
+    });
+    this.detached = detached;
+    child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
+      this.stderrTail = (this.stderrTail + chunk).slice(-4_000);
     });
 
     this.child = child;
@@ -125,7 +158,7 @@ export class AcpClientAdapter {
 
     let initTimer: NodeJS.Timeout | undefined;
     try {
-      await Promise.race([
+      const init = await Promise.race([
         conn.initialize({
           protocolVersion: PROTOCOL_VERSION,
           clientCapabilities: {},
@@ -137,14 +170,18 @@ export class AcpClientAdapter {
         spawnFailed,
         new Promise<never>((_, reject) => {
           initTimer = setTimeout(
-            () => reject(new Error(`ACP agent '${this.name}' did not initialize within ${ACP_INIT_TIMEOUT_MS}ms`)),
-            ACP_INIT_TIMEOUT_MS,
+            () => reject(new Error(`ACP agent '${this.name}' did not initialize within ${this.options.initTimeoutMs ?? ACP_INIT_TIMEOUT_MS}ms`)),
+            this.options.initTimeoutMs ?? ACP_INIT_TIMEOUT_MS,
           );
         }),
       ]);
+      const methods = (init as { authMethods?: Array<{ id?: unknown }> } | undefined)?.authMethods;
+      this.authMethodIds = Array.isArray(methods) ? methods.map((m) => String(m?.id ?? '')).filter(Boolean) : [];
     } catch (error) {
-      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      this.signal(child, 'SIGKILL');
       this.handleProcessExit();
+      const tail = this.stderrTail.trim().split('\n').slice(-5).join('\n');
+      if (tail && error instanceof Error) error.message += `\n[agent stderr]\n${redactPermissionText(tail)}`;
       throw error;
     } finally {
       clearTimeout(initTimer);
@@ -162,10 +199,17 @@ export class AcpClientAdapter {
     try {
       response = await conn.newSession({ cwd, mcpServers: [] });
     } catch (err) {
-      if (conn.authenticate) {
-        await conn.authenticate({ methodId: 'default' });
+      // Retry after authenticating only with a method the agent advertised, and only when it
+      // offers exactly one: guessing an id (the old 'default') replaced the real failure with
+      // "Method not implemented". Anything else surfaces the original error with stderr.
+      if (conn.authenticate && this.authMethodIds.length === 1) {
+        await conn.authenticate({ methodId: this.authMethodIds[0] });
         response = await conn.newSession({ cwd, mcpServers: [] });
       } else {
+        const tail = this.stderrTail.trim().split('\n').slice(-5).join('\n');
+        if (tail && err instanceof Error && !err.message.includes('[agent stderr]')) {
+          err.message += `\n[agent stderr]\n${redactPermissionText(tail)}`;
+        }
         throw err;
       }
     }
@@ -209,6 +253,34 @@ export class AcpClientAdapter {
     return { jobRef, status: 'queued' };
   }
 
+  /**
+   * Runs one prompt turn and resolves when the agent ends it, with the ACP stop reason
+   * (end_turn, max_tokens, max_turn_requests, refusal, cancelled). Rejects if the
+   * connection fails or the agent process exits mid-turn.
+   */
+  async runTurn(sessionId: string, promptText: string): Promise<{ stopReason: string }> {
+    const state = this.sessions.get(sessionId);
+    const conn = this.connection;
+    if (!state || state.closed || !conn || state.generation !== this.generation) {
+      throw new Error(`Session ${sessionId} is closed or invalidated`);
+    }
+    if (state.busy) throw new Error(`Session ${sessionId} already has an active turn`);
+    state.busy = true;
+    try {
+      const exited = new Promise<never>((_, reject) => {
+        this.child?.once('exit', (code, signal) => reject(new Error(
+          `ACP agent '${this.name}' exited during the turn (${signal ?? `code ${code}`})` +
+          (this.stderrTail.trim() ? `\n[agent stderr]\n${redactPermissionText(this.stderrTail.trim().split('\n').slice(-5).join('\n'))}` : ''),
+        )));
+      });
+      exited.catch(() => undefined);
+      const response = await Promise.race([conn.prompt({ sessionId, prompt: [{ type: 'text', text: promptText }] }), exited]);
+      return { stopReason: String(response?.stopReason ?? 'end_turn') };
+    } finally {
+      state.busy = false;
+    }
+  }
+
   async cancelSession(sessionId: string): Promise<void> {
     const state = this.sessions.get(sessionId);
     if (!state || !this.connection) return;
@@ -233,19 +305,11 @@ export class AcpClientAdapter {
           resolve();
         };
         const escalate = setTimeout(() => {
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            finish();
-          }
+          this.signal(child, 'SIGKILL');
         }, KILL_GRACE_MS);
         const deadline = setTimeout(finish, KILL_GRACE_MS * 2);
         child.once('exit', finish);
-        try {
-          child.kill('SIGTERM');
-        } catch {
-          finish();
-        }
+        this.signal(child, 'SIGTERM');
       });
     }
   }
@@ -304,19 +368,20 @@ export class AcpClientAdapter {
   private buildClient(): Client {
     return {
       sessionUpdate: async (params: any) => {
-        const text = String(params.update ?? params.text ?? JSON.stringify(params));
-        this.options.onActivity?.({
-          at: Date.now(),
-          kind: 'tool',
-          text: text.slice(0, 500),
-        });
+        const update = params?.update as Record<string, any> | undefined;
+        if (!update || typeof update !== 'object') return;
+        this.options.onSessionUpdate?.(String(params.sessionId ?? ''), update);
+        const activity = describeSessionUpdate(update);
+        if (activity) this.options.onActivity?.({ at: Date.now(), ...activity });
       },
       requestPermission: async (params: Record<string, unknown>) => {
         const optionsList = Array.isArray(params.options)
           ? params.options.filter((o): o is Record<string, unknown> => typeof o === 'object' && o !== null).map(classifyOption)
           : [];
 
-        const title = redactPermissionText(String(params.title ?? 'Permission requested'));
+        const toolCall = (params.toolCall ?? {}) as Record<string, unknown>;
+        const title = redactPermissionText(String(toolCall.title ?? params.title ?? 'Permission requested'));
+        const toolKind = typeof toolCall.kind === 'string' ? toolCall.kind : undefined;
         const requestId = String(params.requestId ?? `req-${Date.now()}`);
         const sessionId = String(params.sessionId ?? '');
 
@@ -331,6 +396,7 @@ export class AcpClientAdapter {
             requestId,
             sessionId,
             title,
+            toolKind,
             options: optionsList,
           });
         } catch {
@@ -350,5 +416,33 @@ export class AcpClientAdapter {
       state.closed = true;
       state.busy = false;
     }
+  }
+}
+
+/**
+ * Human-readable summary of an ACP `session/update`, or undefined for updates that carry
+ * nothing useful to show. Agent thoughts are deliberately not surfaced (they are not
+ * answers, and other runtimes keep reasoning out of user-visible output too).
+ */
+export function describeSessionUpdate(update: Record<string, any>): Pick<SubagentActivity, 'kind' | 'text'> | undefined {
+  const textOf = (content: any): string => (content?.type === 'text' && typeof content.text === 'string' ? content.text : '');
+  switch (update.sessionUpdate) {
+    case 'agent_message_chunk':
+    case 'agent_message': {
+      const text = textOf(update.content);
+      return text ? { kind: 'message', text: text.slice(0, 2_000) } : undefined;
+    }
+    case 'tool_call':
+      return { kind: 'tool', text: `${update.kind ?? 'tool'}: ${String(update.title ?? update.toolCallId ?? '').slice(0, 300)}` };
+    case 'tool_call_update':
+      return update.status === 'completed' || update.status === 'failed'
+        ? { kind: 'observation', text: `${String(update.title ?? update.toolCallId ?? 'tool')}: ${update.status}`.slice(0, 300) }
+        : undefined;
+    case 'plan':
+      return Array.isArray(update.entries)
+        ? { kind: 'plan', text: update.entries.map((e: any) => `[${e.status ?? 'pending'}] ${e.content ?? ''}`).join('\n').slice(0, 2_000) }
+        : undefined;
+    default:
+      return undefined;
   }
 }

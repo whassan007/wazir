@@ -5,3 +5,4 @@ export * from './protocolAdapters.js';
 export * from './presets.js';
 export * from './stopConditions.js';
 export * from './acp/acpClient.js';
+export * from './acp/acpAgentAdapter.js';
