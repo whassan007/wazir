@@ -815,7 +815,17 @@ export class ModelLifecycleService {
           if (existing && this.operations.has(existing.id)) continue;
           const id = existing?.id ?? installationId;
           const intent = await this.deps.store?.get('models/intent/' + id) as { desired?: ModelInstance['desired']; pinned?: boolean } | undefined;
-          const observed = await adapter.inspectModel?.(m.id);
+          let observed: Awaited<ReturnType<NonNullable<typeof adapter.inspectModel>>> | undefined;
+          try {
+            observed = await adapter.inspectModel?.(m.id);
+          } catch {
+            // One model that cannot be inspected (e.g. LM Studio holding two instances of it,
+            // RESOURCE_BUSY) is unavailable on its own. It must not fall through to the
+            // runtime-wide catch below, which would take every model on this runtime offline.
+            this.deps.models.upsertInstance({ ...existing, ...intent, id, installationId, modelId: m.id, runtimeModelId: m.id,
+              computerId, runtimeId, loaded: existing?.loaded ?? false, state: 'UNAVAILABLE', health: 'unavailable' });
+            continue;
+          }
           const loaded = observed?.loaded ?? false;
           const i: ModelInstance = { ...existing, ...intent, id, installationId, modelId: m.id, runtimeModelId: m.id,
             computerId, runtimeId, loaded, state: loaded ? 'LOADED' : existing?.loaded || existing?.state === 'READY' ? 'UNLOADED' : 'INSTALLED',

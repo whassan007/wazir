@@ -191,3 +191,17 @@ describe('startup context policy', () => {
    release(); await first;
  });
 });
+describe('reconcile isolates per-model failures', () => {
+ it('one model that cannot be inspected does not take the whole runtime offline', async () => {
+   const f = setup();
+   f.add('b');
+   (f.adapter.inspectModel as any).mockImplementation(async (id: string) => {
+     if (id === 'b') throw new Error('RESOURCE_BUSY: multiple runtime instances require explicit selection');
+     return { modelId: id, loaded: true, effectiveContext: 131072, memoryBytes: 30 * G };
+   });
+   await f.service.discoverAndReconcile({ verify: false });
+   expect(f.runtimes.get('r')?.health).toBe('healthy');
+   expect(f.models.instancesOf('a')[0]).toMatchObject({ loaded: true, health: 'healthy' });
+   expect(f.models.instancesOf('b')[0]).toMatchObject({ state: 'UNAVAILABLE', health: 'unavailable' });
+ });
+});
