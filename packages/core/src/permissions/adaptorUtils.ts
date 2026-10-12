@@ -53,12 +53,17 @@ export interface PermissionOption {
 export function classifyOption(raw: Record<string, unknown>): PermissionOption {
   const optionId = String(raw.id ?? raw.optionId ?? '');
   const name = String(raw.name ?? raw.title ?? '').toLowerCase();
-  const kind: PermissionOptionKind =
-    name.includes('deny') || name.includes('reject') || name.includes('cancel')
+  // ACP options carry a typed kind (allow_once | allow_always | reject_once | reject_always);
+  // the label is only a fallback, since "No" or "Skip" would otherwise read as proceed.
+  const specKind = typeof raw.kind === 'string' ? raw.kind : '';
+  const kind: PermissionOptionKind = /^(allow|reject)_(once|always)$/.test(specKind)
+    ? (specKind.startsWith('reject') ? 'reject' : 'proceed')
+    : name.includes('deny') || name.includes('reject') || name.includes('cancel')
       ? 'reject'
       : 'proceed';
-  const escalation: PermissionEscalation =
-    name.includes('always') || name.includes('permanent') || name.includes('remember')
+  const escalation: PermissionEscalation = /^(allow|reject)_(once|always)$/.test(specKind)
+    ? (specKind.endsWith('always') ? 'always' : 'once')
+    : name.includes('always') || name.includes('permanent') || name.includes('remember')
       ? 'always'
       : 'once';
   return { optionId, kind, escalation, description: String(raw.description ?? raw.name ?? '') };

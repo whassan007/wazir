@@ -14,8 +14,6 @@ import {
   type Client,
 } from '@agentclientprotocol/sdk';
 import {
-  pickLeastEscalating,
-  pickPersistentGrant,
   classifyOption,
   redactPermissionText,
   type PermissionOption,
@@ -106,6 +104,14 @@ export class AcpClientAdapter {
     child.on('exit', () => {
       this.handleProcessExit();
     });
+    // Without a listener a spawn failure (e.g. ENOENT) is an uncaught 'error' event.
+    const spawnFailed = new Promise<never>((_, reject) => {
+      child.once('error', (error) => {
+        this.handleProcessExit();
+        reject(error);
+      });
+    });
+    spawnFailed.catch(() => undefined);
 
     const client = this.buildClient();
     if (!child.stdin || !child.stdout) {
@@ -117,14 +123,32 @@ export class AcpClientAdapter {
     const stream = ndJsonStream(stdin, stdout);
     const conn = new ClientSideConnection(() => client, stream);
 
-    await conn.initialize({
-      protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: {},
-      clientInfo: {
-        name: 'wazir',
-        version: '0.1.55',
-      },
-    });
+    let initTimer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        conn.initialize({
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+          clientInfo: {
+            name: 'wazir',
+            version: '0.1.55',
+          },
+        }),
+        spawnFailed,
+        new Promise<never>((_, reject) => {
+          initTimer = setTimeout(
+            () => reject(new Error(`ACP agent '${this.name}' did not initialize within ${ACP_INIT_TIMEOUT_MS}ms`)),
+            ACP_INIT_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } catch (error) {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      this.handleProcessExit();
+      throw error;
+    } finally {
+      clearTimeout(initTimer);
+    }
 
     this.connection = conn as unknown as AcpConnectionLike;
     return this.connection;
@@ -173,7 +197,7 @@ export class AcpClientAdapter {
     const jobRef = `turn-${this.turnSeq}`;
 
     if (!state.busy) {
-      void this.sendPromptNow(state, jobRef, promptText);
+      this.startTurn(state, jobRef, promptText);
       return { jobRef, status: 'accepted' };
     }
 
@@ -226,6 +250,17 @@ export class AcpClientAdapter {
     }
   }
 
+  /** Runs a turn in the background; a failed turn is reported as activity, never an unhandled rejection. */
+  private startTurn(state: AcpSessionState, jobRef: string, text: string): void {
+    this.sendPromptNow(state, jobRef, text).catch((error: unknown) => {
+      this.options.onActivity?.({
+        at: Date.now(),
+        kind: 'status',
+        text: `Turn failed (${jobRef}): ${redactPermissionText(error instanceof Error ? error.message : String(error)).slice(0, 500)}`,
+      });
+    });
+  }
+
   private async sendPromptNow(state: AcpSessionState, jobRef: string, text: string): Promise<void> {
     const conn = this.connection;
     if (!conn || state.closed || state.generation !== this.generation) return;
@@ -261,7 +296,7 @@ export class AcpClientAdapter {
       // Drain next pending prompt if queued
       const next = state.pendingPrompts.shift();
       if (next && !state.closed) {
-        void this.sendPromptNow(state, next.jobRef, next.text);
+        this.startTurn(state, next.jobRef, next.text);
       }
     }
   }
@@ -285,26 +320,25 @@ export class AcpClientAdapter {
         const requestId = String(params.requestId ?? `req-${Date.now()}`);
         const sessionId = String(params.sessionId ?? '');
 
-        if (this.options.onRequestPermission) {
-          const decision = await this.options.onRequestPermission({
+        // Fail closed: approval needs an explicit operator decision naming an offered
+        // option. No resolver, no decision, a resolver error, or an unknown optionId
+        // all deny — a delegated agent must never be approved by default.
+        const deny = { outcome: { outcome: 'cancelled' as const } };
+        if (!this.options.onRequestPermission) return deny;
+        let decision: { optionId?: string; cancelled?: boolean };
+        try {
+          decision = await this.options.onRequestPermission({
             requestId,
             sessionId,
             title,
             options: optionsList,
           });
-
-          if (decision.cancelled) {
-            return { outcome: { outcome: 'cancelled' } };
-          }
-          if (decision.optionId) {
-            return { outcome: { outcome: 'selected', optionId: decision.optionId } };
-          }
+        } catch {
+          return deny;
         }
-
-        const fallback = pickLeastEscalating(optionsList, 'proceed');
-        return fallback
-          ? { outcome: { outcome: 'selected', optionId: fallback.optionId } }
-          : { outcome: { outcome: 'cancelled' } };
+        if (decision.cancelled || !decision.optionId) return deny;
+        if (!optionsList.some((o) => o.optionId === decision.optionId)) return deny;
+        return { outcome: { outcome: 'selected', optionId: decision.optionId } };
       },
     };
   }
