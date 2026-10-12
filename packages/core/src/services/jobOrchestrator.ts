@@ -270,6 +270,9 @@ export class JobOrchestrator {
       handle.cancelledTaskIds.add(taskId);
     }
     const job = this.jobManager.get(jobId);
+    // A task that already finished keeps its outcome; cancelJob() applies the same rule.
+    const status = job?.tasks.find((t) => t.id === taskId)?.status;
+    if (status === 'completed' || status === 'failed' || status === 'cancelled') return;
     if (job) {
       await this.jobManager.updateTaskStatus(jobId, taskId, 'cancelled');
       await this.jobManager.updateAgentState(jobId, taskId, 'cancelled', undefined, 'Cancelled by user');
