@@ -505,6 +505,50 @@
         79
       ],
       "prerequisiteGateId": "G95"
+    },
+    {
+      "id": "G97",
+      "order": 43,
+      "name": "SemanticStrategyRetrieval",
+      "title": "G97 Semantic Strategy Retrieval",
+      "description": "Concepts and abstract verified strategies transfer across semantic-equivalent repositories with different names and file layouts without literal symbol leakage; physical inspection and verification on target repository remain mandatory.",
+      "testIds": [
+        80
+      ],
+      "prerequisiteGateId": "G96"
+    },
+    {
+      "id": "G98",
+      "order": 44,
+      "name": "SemanticFalsePositiveControl",
+      "title": "G98 Semantic False-Positive Control",
+      "description": "Lexically similar defects masking orthogonal architectural root causes are rejected or given low confidence by structural and failure-trait checks, preventing false positive strategy recommendations.",
+      "testIds": [
+        81
+      ],
+      "prerequisiteGateId": "G97"
+    },
+    {
+      "id": "G99",
+      "order": 45,
+      "name": "CrossLanguageStrategyTransfer",
+      "title": "G99 Cross-Language Strategy Transfer",
+      "description": "Architecture-level strategy concepts transfer across different programming languages while syntax-specific and tool-specific details are stripped, maintaining semantic architecture relevance without language leakage.",
+      "testIds": [
+        82
+      ],
+      "prerequisiteGateId": "G98"
+    },
+    {
+      "id": "G100",
+      "order": 46,
+      "name": "AntiStrategyRetrieval",
+      "title": "G100 Anti-Strategy Retrieval & Guidance",
+      "description": "Historically failed patterns are retrievable as warnings to inform the planner and agent against known pitfalls without triggering false policy denials unless PolicyEngine strictly denies.",
+      "testIds": [
+        83
+      ],
+      "prerequisiteGateId": "G99"
     }
   ],
   "foundationalSequence": [
