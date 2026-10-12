@@ -352,6 +352,24 @@ async function main() {
 
   for (const test of testQueue) {
     const gateDef = GATES.find((g) => g.id === test.gateId);
+
+    // A test pointing at a gate the catalog does not define is a catalog error:
+    // report it as a failing row instead of crashing the whole run.
+    if (!gateDef) {
+      gateStatus[test.gateId] ??= { gateId: test.gateId, name: 'UNDEFINED GATE (catalog error)', passed: false, testCount: 0, passedCount: 0, failedCount: 0 };
+      gateStatus[test.gateId].testCount += 1;
+      gateStatus[test.gateId].failedCount += 1;
+      rows.push({
+        id: test.id,
+        gateId: test.gateId,
+        priority: test.priority,
+        status: 'FAIL',
+        name: test.title,
+        duration: 0,
+        detail: `Gate ${test.gateId} is not defined in tests/acceptance/acceptanceData.json`,
+      });
+      continue;
+    }
     
     // Strict prerequisite gate check:
     // If testing all gates or gate sequences, cannot pass if prerequisite failed
@@ -501,7 +519,7 @@ async function main() {
     cases: rows,
   };
 
-  const reportOutPath = join(root, reportFile);
+  const reportOutPath = resolve(root, reportFile); // resolve(): an absolute --report path is used as given
   writeFileSync(reportOutPath, JSON.stringify(report, null, 2));
   console.log(`Report written to ${reportFile}`);
 
