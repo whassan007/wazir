@@ -6,13 +6,18 @@ A persistence release. Checkpoints and long-term memory now survive restarts, th
 agent keeps native tool-call history, and the web dashboard is no longer exposed beyond
 localhost by default.
 
-**Verification:** typecheck and build pass; 1964 tests pass, 0 fail (18 skipped:
+**Verification:** from a clean checkout, every CI step passes: build, typecheck, dist
+check; 1964 tests pass, 0 fail (18 skipped:
 PostgreSQL, bwrap sandbox and live lifecycle infrastructure); acceptance gates
 80/80 PASS, verdict READY FOR RELEASE. Live (LM Studio `qwen/qwen3.8-27b`): every
 `wa run` outcome matched an independent `npm test`.
 
 ### ⚠️ Behaviour changes
 
+- **Node.js ≥ 22.5 is now required** (was ≥ 20). `@wazir/memory` uses the built-in
+  `node:sqlite`, first shipped in 22.5, and Node 20 reached end-of-life on 2026-04-30.
+  The install script, `engines` field, CI matrix and Docker images (`node:22-alpine`)
+  are updated to match.
 - **Web dashboard binds `127.0.0.1` by default.** Set `WAZIR_WEB_HOST=0.0.0.0` to
   restore network access.
 - **A corrupt or unsupported persisted checkpoint stops engine startup** with
@@ -33,6 +38,9 @@ PostgreSQL, bwrap sandbox and live lifecycle infrastructure); acceptance gates
 
 ### Fixed
 
+- **Clean builds failed** (TS2307 `Cannot find module '@wazir/memory'`), breaking every
+  CI run of `main`: `core` and `evaluation` imported `@wazir/memory` without declaring
+  it. A stale local `dist/` hid this. CI now passes from a clean checkout.
 - A parallel batch of tool calls (common with Qwen models) aborted the whole run. It
   is now rejected as one invalid attempt: nothing in it executes, and the model is
   asked to issue one call. Live runs with 3 and 6 batches completed.
