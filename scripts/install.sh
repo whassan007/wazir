@@ -22,14 +22,14 @@ fi
 cd "$REPO_ROOT"
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "error: node is not installed. Wazir needs Node.js >= 20 (https://nodejs.org or nvm)." >&2
+  echo "error: node is not installed. Wazir needs Node.js >= 22.5 (https://nodejs.org or nvm)." >&2
   exit 1
 fi
 NODE_BIN="$(command -v node)"
 NODE_BIN="$(readlink -f "$NODE_BIN" 2>/dev/null || echo "$NODE_BIN")"
-NODE_MAJOR="$("$NODE_BIN" -p 'process.versions.node.split(".")[0]')"
-if (( NODE_MAJOR < 20 )); then
-  echo "error: Node.js >= 20 required, found $("$NODE_BIN" -v) at $NODE_BIN" >&2
+# 22.5 is the first release with the built-in node:sqlite used by @wazir/memory.
+if ! "$NODE_BIN" -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=5)?0:1)'; then
+  echo "error: Node.js >= 22.5 required, found $("$NODE_BIN" -v) at $NODE_BIN" >&2
   exit 1
 fi
 echo "==> Using Node $("$NODE_BIN" -v) at $NODE_BIN"

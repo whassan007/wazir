@@ -65,7 +65,7 @@ git clone <this-repo> ~/Code/Wazir
 bash ~/Code/Wazir/scripts/install.sh
 ```
 
-The script works from any directory: it finds the repository from its own path, checks for Node.js ≥ 20, runs `npm install` and `npm run build`, creates a self-contained CLI bundle (`bin/wa.js`), and installs the `wa` launcher into `~/.local/bin/wa` (override with `WAZIR_BIN_DIR`), ensuring it is on your PATH.
+The script works from any directory: it finds the repository from its own path, checks for Node.js ≥ 22.5, runs `npm install` and `npm run build`, creates a self-contained CLI bundle (`bin/wa.js`), and installs the `wa` launcher into `~/.local/bin/wa` (override with `WAZIR_BIN_DIR`), ensuring it is on your PATH.
 
 ### Alternative Installation & Packaging Methods
 
