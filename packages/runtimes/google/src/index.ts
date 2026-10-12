@@ -13,7 +13,7 @@ import type {
   RuntimeInfo,
   StoredCredential,
 } from '@wazir/runtimes-interfaces';
-import { isStoredCredential } from '@wazir/runtimes-interfaces';
+import { httpFailureEvent, isStoredCredential } from '@wazir/runtimes-interfaces';
 import type { SecretBroker } from '@wazir/secrets';
 import { buildAuthorizationUrl, createLoopbackCallbackServer, exchangeCodeForToken, generatePkce, generateState, refreshAccessToken } from './oauth.js';
 
@@ -269,12 +269,14 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     if (!response.ok || !response.body) {
       const body = await response.text().catch(() => '');
       this.controllers.delete(requestId);
-      yield { type: 'error', error: `Google API error: HTTP ${response.status} ${body.slice(0, 300)}` };
+      yield httpFailureEvent('Google', response, body, requestId);
       return;
     }
 
     let full = '';
     let inputTokens = 0;
+    let reasoningTokens = 0;
+    let cacheReadTokens = 0;
     let outputTokens = 0;
     const toolCalls: Array<{ name: string; args: unknown }> = [];
     let pending = '';
@@ -315,7 +317,10 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
           }
           if (chunk.usageMetadata) {
             inputTokens = chunk.usageMetadata.promptTokenCount ?? inputTokens;
-            outputTokens = chunk.usageMetadata.candidatesTokenCount ?? outputTokens;
+            // Thinking tokens are billed as output but excluded from candidatesTokenCount.
+            reasoningTokens = chunk.usageMetadata.thoughtsTokenCount ?? reasoningTokens;
+            outputTokens = (chunk.usageMetadata.candidatesTokenCount ?? 0) + reasoningTokens || outputTokens;
+            cacheReadTokens = chunk.usageMetadata.cachedContentTokenCount ?? cacheReadTokens;
           }
         }
       }
@@ -324,10 +329,10 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
         yield { type: 'tool_call', toolCallId: `tool-${index}`, toolName: call.name, toolInput: call.args };
       }
 
-      yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } };
+      yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, reasoningTokens } };
     } catch (error) {
       if (controller.signal.aborted) {
-        yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } };
+        yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, reasoningTokens } };
       } else {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }

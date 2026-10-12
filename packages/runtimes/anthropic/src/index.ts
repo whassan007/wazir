@@ -12,7 +12,7 @@ import type {
   RuntimeInfo,
   StoredCredential,
 } from '@wazir/runtimes-interfaces';
-import { isStoredCredential } from '@wazir/runtimes-interfaces';
+import { httpFailureEvent, isStoredCredential, readRateLimitHeaders } from '@wazir/runtimes-interfaces';
 import type { SecretBroker } from '@wazir/secrets';
 
 const API_BASE = 'https://api.anthropic.com';
@@ -215,12 +215,14 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     if (!response.ok || !response.body) {
       const body = await response.text().catch(() => '');
       this.controllers.delete(requestId);
-      yield { type: 'error', error: `Anthropic API error: HTTP ${response.status} ${body.slice(0, 300)}` };
+      yield httpFailureEvent('Anthropic', response, body, requestId);
       return;
     }
 
     let full = '';
     let inputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
     let outputTokens = 0;
     const pendingToolCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
     const buffer = createSSEBuffer();
@@ -245,6 +247,8 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
           switch (event.type) {
             case 'message_start':
               inputTokens = event.message?.usage?.input_tokens ?? 0;
+              cacheReadTokens = event.message?.usage?.cache_read_input_tokens ?? 0;
+              cacheWriteTokens = event.message?.usage?.cache_creation_input_tokens ?? 0;
               break;
             case 'content_block_start':
               if (event.content_block?.type === 'tool_use') {
@@ -280,10 +284,10 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
         yield { type: 'tool_call', toolCallId: entry.id ?? `tool-${index}`, toolName: entry.name ?? 'unknown', toolInput: parsed };
       }
 
-      yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } };
+      yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens }, rateLimit: readRateLimitHeaders(response.headers) };
     } catch (error) {
       if (controller.signal.aborted) {
-        yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } };
+        yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens }, rateLimit: readRateLimitHeaders(response.headers) };
       } else {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }

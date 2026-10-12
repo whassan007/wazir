@@ -15,7 +15,7 @@ import type {
   RuntimeInfo,
 } from '@wazir/runtimes-interfaces';
 import { normalizePromptCacheTelemetry } from '@wazir/runtimes-interfaces';
-import { classifyFailure, isProviderRetryable, providerRetryDecision, resolveRetryPolicy, waitForRetry } from '@wazir/shared';
+import { classifyFailure, classifyHttpFailure, isProviderRetryable, providerRetryDecision, resolveRetryPolicy, waitForRetry } from '@wazir/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -511,8 +511,8 @@ export class LMStudioAdapter implements RuntimeAdapter {
     if (!response || !response.ok || !response.body) {
       const body = await response?.text().catch(() => '') ?? '';
       this.controllers.delete(requestId);
-      const failureClass = classifyFailure({ status: response?.status });
-      yield { type: 'error', requestId, retryAttempt: maxAttempts, failureClass, retryExhausted: isProviderRetryable(failureClass), error: `LM Studio API error: HTTP ${response?.status ?? 'unknown'} ${body.slice(0, 300)}` };
+      const failureClass = response ? classifyHttpFailure(response.status, body) : classifyFailure({ status: undefined });
+      yield { type: 'error', requestId, status: response?.status, retryAttempt: maxAttempts, failureClass, retryExhausted: isProviderRetryable(failureClass), error: `LM Studio API error: HTTP ${response?.status ?? 'unknown'} ${body.slice(0, 300)}` };
       return;
     }
 
