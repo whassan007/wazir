@@ -34,6 +34,7 @@ export function validateResourceConfig(raw: unknown): { policy: ResourcePolicy; 
   const cfg = (raw ?? {}) as ResourceConfigFile;
   const policy: ResourcePolicy = { ...DEFAULT_POLICY, ...(cfg.policy ?? {}) };
   if (!MODES.includes(policy.mode)) problems.push(`policy.mode must be one of ${MODES.join(', ')}`);
+  if (typeof policy.enforce !== 'boolean') problems.push('policy.enforce must be true or false');
   for (const k of ['estimateMargin', 'leaseMs', 'maxTaskTokens', 'dailySpendUsd', 'monthlySpendUsd', 'localQueueTimeoutMs'] as const) {
     if (typeof policy[k] !== 'number' || !(policy[k] >= 0)) problems.push(`policy.${k} must be a non-negative number`);
   }

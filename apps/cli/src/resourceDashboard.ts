@@ -118,7 +118,7 @@ const healthColor = (h: string) => (h === 'ok' ? color.green(h) : color.red(h));
 
 export function renderResourceSnapshot(s: ResourceSnapshot): string {
   const L: string[] = [];
-  L.push(color.bold(`Wazir resources — ${new Date(s.generatedAt).toLocaleString()}   policy: ${s.policy.mode}, paid API fallback ${s.policy.paidApiFallback ? 'ALLOWED' : 'off'}`));
+  L.push(color.bold(`Wazir resources — ${new Date(s.generatedAt).toLocaleString()}   policy: ${s.policy.mode}, limits ${s.policy.enforce ? 'ENFORCED' : 'not enforced (accounting only)'}, paid API fallback ${s.policy.paidApiFallback ? 'ALLOWED' : 'off'}`));
   if (s.emergencyStop) L.push(color.red(`EMERGENCY STOP since ${when(s.emergencyStop.at)}: ${s.emergencyStop.reason} — cloud dispatch blocked (wa resources resume)`));
   if (s.configError) L.push(color.red(s.configError));
   L.push(color.gray('Values: measured = observed on this machine · provider = reported by the provider · computed = Wazir accounting · est = estimate'));

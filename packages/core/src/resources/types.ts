@@ -105,6 +105,12 @@ export interface RoutingWeights {
 }
 
 export interface ResourcePolicy {
+  /**
+   * Enforce limits (quotas, spend ceilings, concurrency, cooldowns, paid-API gate). Off by
+   * default: requests are still accounted and routed, but never refused for budget reasons.
+   * The emergency stop is an operator switch, not a limit, and applies either way.
+   */
+  enforce: boolean;
   mode: PolicyMode;
   /** Never dispatch to paid API accounts unless true (or the account sets allowPaid). */
   paidApiFallback: boolean;
@@ -127,6 +133,7 @@ export interface ResourcePolicy {
 export const DEFAULT_THRESHOLDS: Thresholds = { advisory: 0.70, conserve: 0.85, critical: 0.95 };
 
 export const DEFAULT_POLICY: ResourcePolicy = {
+  enforce: false,
   mode: 'balanced',
   paidApiFallback: false,
   estimateMargin: 0.25,

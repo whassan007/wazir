@@ -767,7 +767,7 @@ resourcesCmd.command('init').option('--force', 'Overwrite an existing resources.
     if (existsSync(path) && !options.force) { console.error(`${path} exists; use --force to overwrite`); process.exit(1); }
     const { exampleResourceConfig } = await import('./resourceConfigExample.js');
     writeFileSync(path, JSON.stringify(exampleResourceConfig(engine), null, 2) + '\n', { mode: 0o600 });
-    console.log(`Wrote ${path}. Review the limits (subscription quotas are unknown until you set them), then run \`wa resources validate\`.`);
+    console.log(`Wrote ${path}. Limits are recorded but not enforced until you set "enforce": true in policy. Review the limits (subscription quotas are unknown until you set them), then run \`wa resources validate\`.`);
     process.exit(0);
   });
 

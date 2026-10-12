@@ -11,7 +11,8 @@ import {
 const T0 = Date.UTC(2026, 9, 12, 10, 0, 0);
 let clock = T0;
 let dir: string;
-const policy = (p: Partial<ResourcePolicy> = {}): ResourcePolicy => ({ ...DEFAULT_POLICY, estimateMargin: 0, ...p });
+// These scenarios exercise enforcement, which is opt-in (policy.enforce defaults to false).
+const policy = (p: Partial<ResourcePolicy> = {}): ResourcePolicy => ({ ...DEFAULT_POLICY, enforce: true, estimateMargin: 0, ...p });
 
 function setup(accounts: AccountConfig[], p: Partial<ResourcePolicy> = {}, file = ':memory:') {
   const ledger = new ResourceLedger(file, () => clock);
@@ -57,6 +58,26 @@ async function drain(it: AsyncIterable<GenerationEvent>) {
 
 beforeEach(() => { clock = T0; n = 0; dir = mkdtempSync(path.join(os.tmpdir(), 'wazir-res-')); });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+describe('default policy: limits are not enforced', () => {
+  it('admits past quotas, cooldowns and the paid gate, but still accounts every request', () => {
+    const { budget, ledger } = setup([sub('A', 1_000), api], { enforce: false });
+    expect(DEFAULT_POLICY.enforce).toBe(false);
+    for (let i = 0; i < 5; i++) expect(ask(budget, 'A', 1_000, 0).outcome).toBe('admitted');
+    ledger.setHealth('api', 'auth_blocked', undefined, 'test');
+    const paid = ask(budget, 'api', 10, 10);
+    expect(paid.outcome).toBe('admitted');
+    expect(paid.reasons.join(' ')).toMatch(/limits not enforced/);
+    expect(ledger.reservedNow('A', 'tokens')).toBe(5_000);
+  });
+
+  it('the emergency stop still applies (an operator switch, not a limit)', () => {
+    const { budget } = setup([sub('A', 1_000), local], { enforce: false });
+    budget.emergencyStop('test');
+    expect(ask(budget, 'A', 1, 1).outcome).toBe('blocked');
+    expect(ask(budget, 'dgx', 1, 1).outcome).toBe('admitted');
+  });
+});
 
 describe('subscription quotas', () => {
   it('1. two subscriptions with different quotas are enforced independently', () => {

@@ -14,6 +14,14 @@ Files (in `$WAZIR_HOME`, default `~/.wazir`):
 | `resources.json` | accounts and policy (optional; without it every runtime/agent gets an implicit account) |
 | `resources.db` | the ledger: SQLite in WAL mode, with reservations, usage, health, audit trail and calibration. `:memory:` when `WAZIR_IN_MEMORY=1` |
 
+## Enforcement is off by default
+
+`policy.enforce` defaults to **false**. Every request is still estimated, reserved, reconciled,
+routed and shown on the dashboard, but nothing is refused for budget reasons. Quotas, spend
+ceilings, concurrency queues, 429 cooldowns, auth/quota blocks and the paid-API gate are all
+ignored. The **emergency stop** (`wa resources stop`) still applies: it is an operator switch,
+not a limit. Set `"enforce": true` in `resources.json` to turn enforcement on.
+
 ## Commands
 
 | Command | Use |
@@ -35,6 +43,7 @@ Files (in `$WAZIR_HOME`, default `~/.wazir`):
 {
   "version": 1,
   "policy": {
+    "enforce": true,                   // default false: limits are recorded, not enforced
     "mode": "local-first",            // balanced | local-first | quality-first | budget-first
     "paidApiFallback": false,          // paid API accounts are never used unless true (or account.allowPaid)
     "estimateMargin": 0.25,            // +25% on every token estimate

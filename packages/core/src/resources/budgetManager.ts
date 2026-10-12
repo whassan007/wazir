@@ -140,6 +140,17 @@ export class TokenBudgetManager {
     {
       const now = this.ledger.now();
       const reasons: string[] = [];
+      const reserveAndAdmit = (mode: BudgetMode): ResourceAdmissionDecision => {
+        if (!reserve) return { ...base, outcome: 'admitted', mode, reasons };
+        const reservationId = randomUUID();
+        this.ledger.insertReservation({
+          id: reservationId, requestId: req.requestId, accountId: account.id, modelId: req.modelId, taskId: req.taskId,
+          workload: req.workload, estInputTokens: req.estimatedInputTokens, estOutputTokens: req.estimatedOutputTokens,
+          estRequests: req.requests ?? 1, estCostUsd: costUsd(pricingFor(account, req.modelId), req.estimatedInputTokens, req.estimatedOutputTokens),
+          status: 'active', createdAt: now, leaseExpiresAt: now + this.policy.leaseMs, local: account.kind === 'local',
+        });
+        return { ...base, outcome: 'admitted', reservationId, mode, reasons };
+      };
       const deny = (outcome: 'blocked' | 'deferred', reason: string, mode: BudgetMode, retryAt?: number): ResourceAdmissionDecision =>
         ({ ...base, outcome, mode, reasons: [...reasons, reason], retryAt });
 
@@ -147,6 +158,11 @@ export class TokenBudgetManager {
       if (account.kind !== 'local') {
         const stop = this.stopped();
         if (stop) return deny('blocked', `emergency stop is active (${stop.reason}); only local inference is dispatched`, 'exhausted');
+      }
+      if (!this.policy.enforce) {
+        // Accounting only: reserve and record, but never refuse for budget, quota, health or cost.
+        reasons.push('limits not enforced (policy.enforce=false)');
+        return reserveAndAdmit('normal');
       }
       if (isPaid(account) && !(this.policy.paidApiFallback || account.allowPaid)) {
         return deny('blocked', `account '${account.id}' is a paid API and paid fallback is not authorized (policy.paidApiFallback=false)`, 'exhausted');
@@ -209,15 +225,7 @@ export class TokenBudgetManager {
         if (over) return over;
       }
 
-      if (!reserve) return { ...base, outcome: 'admitted', mode, reasons };
-      const reservationId = randomUUID();
-      this.ledger.insertReservation({
-        id: reservationId, requestId: req.requestId, accountId: account.id, modelId: req.modelId, taskId: req.taskId,
-        workload: req.workload, estInputTokens: req.estimatedInputTokens, estOutputTokens: req.estimatedOutputTokens,
-        estRequests: req.requests ?? 1, estCostUsd: estCost, status: 'active', createdAt: now,
-        leaseExpiresAt: now + this.policy.leaseMs, local: account.kind === 'local',
-      });
-      return { ...base, outcome: 'admitted', reservationId, mode, reasons };
+      return reserveAndAdmit(mode);
     }
   }
 

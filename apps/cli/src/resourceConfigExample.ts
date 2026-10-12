@@ -30,6 +30,8 @@ export function exampleResourceConfig(engine: Pick<RookEngine, 'runtimes' | 'age
   return {
     version: 1,
     policy: {
+      // Limits below are recorded but not enforced until this is true.
+      enforce: false,
       mode: 'local-first',
       paidApiFallback: false,
       estimateMargin: 0.25,

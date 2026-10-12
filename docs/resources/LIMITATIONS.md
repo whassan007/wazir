@@ -10,4 +10,4 @@
 8. **No background telemetry.** The dashboard probes on demand and reads the ledger; provider quota state is learned only from responses (headers, 429s). This is intentional: no extra provider polling.
 9. **Ledger growth.** The audit trail is append-only and has no retention policy yet.
 10. **Live coverage gaps.** Paid APIs, Claude Code and Codex subscriptions, vLLM and Ollama were not exercised live on this host (see TEST_REPORT.md).
-11. **Implicit accounts preserve existing behaviour.** Without `resources.json`, local accounts have no concurrency cap and subscriptions have unknown limits (`allow`). Enforcement starts when you configure limits (`wa resources init`).
+11. **Limits are not enforced by default.** `policy.enforce` defaults to false, so only accounting and routing happen until you set it to true. The emergency stop applies either way.
