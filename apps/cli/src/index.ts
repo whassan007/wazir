@@ -18,7 +18,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version('0.1.52');
+  .version('0.1.57');
 
 registerMCPCommands(program);
 registerWebCommands(program);
@@ -211,6 +211,18 @@ modelsCmd.command('reconcile').option('--json', 'JSON output').action(async () =
   console.log(JSON.stringify(await engine.lifecycle.reconcile(), null, 2));
 });
 
+modelsCmd
+  .command('health')
+  .description('Runtime and model health diagnostics (runtime, model, load, resource, telemetry, worker)')
+  .option('--detail', 'Show the evidence behind each classification')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { healthCommand } = await import('./health.js');
+    const result = await healthCommand(options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
 program.addCommand(modelsCmd);
 
 // init command
@@ -229,9 +241,10 @@ program
 program
   .command('doctor')
   .description('Check system health')
-  .action(async () => {
+  .option('--json', 'Output in JSON format (includes runtime & model health)')
+  .action(async (options) => {
     const { doctorCommand } = await import('./doctor.js');
-    const result = await doctorCommand();
+    const result = await doctorCommand(options);
     console.log(result.output);
     process.exit(result.code);
   });
@@ -1061,6 +1074,21 @@ program
     process.exit(result.code);
   });
 
+// evidence command — read-only verification evidence inspector for one execution.
+program
+  .command('evidence')
+  .argument('<ref>', 'Execution id or @<blockId>')
+  .option('--json', 'Output in JSON format')
+  .description('Show exactly which controller evidence verifies (or fails to verify) an execution revision')
+  .action(async (ref, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const { evidenceCommand } = await import('./commands.js');
+    const result = await evidenceCommand(engine, ref, { json: options.json });
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
 // search command — systematically explore multiple independent solution trajectories
 const searchCmd = new Command()
   .name('search')
@@ -1251,5 +1279,105 @@ improveCmd
   });
 
 program.addCommand(improveCmd);
+
+// ======================================================================
+// wa canary commands (Level 3 Autonomous Continuous Canary Control)
+// ======================================================================
+const canaryCmd = new Command()
+  .name('canary')
+  .description('Level 3 Autonomous Continuous Canary deployment control and status');
+
+canaryCmd
+  .command('status')
+  .description('Show status of the currently active canary deployment')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { canaryStatusCommand } = await import('./commands.js');
+    console.log(await canaryStatusCommand(engine, options));
+  });
+
+canaryCmd
+  .command('inspect <id>')
+  .description('Inspect detailed canary deployment metrics, stages, and evidence')
+  .option('--json', 'Output in JSON format')
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { canaryInspectCommand } = await import('./commands.js');
+    console.log(await canaryInspectCommand(engine, id, options));
+  });
+
+canaryCmd
+  .command('history')
+  .description('List historical canary deployments and outcomes')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { canaryHistoryCommand } = await import('./commands.js');
+    console.log(await canaryHistoryCommand(engine, options));
+  });
+
+canaryCmd
+  .command('compare <id>')
+  .description('Compare baseline vs candidate metrics for a canary deployment')
+  .option('--json', 'Output in JSON format')
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { canaryCompareCommand } = await import('./commands.js');
+    console.log(await canaryCompareCommand(engine, id, options));
+  });
+
+canaryCmd
+  .command('shadow <id>')
+  .description('Inspect shadow mode evaluation results for a canary candidate')
+  .option('--json', 'Output in JSON format')
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { canaryShadowCommand } = await import('./commands.js');
+    console.log(await canaryShadowCommand(engine, id, options));
+  });
+
+canaryCmd
+  .command('rollback <id>')
+  .description('Trigger immediate manual operator rollback for a canary deployment')
+  .option('--reason <text>', 'Reason for manual rollback')
+  .option('--json', 'Output in JSON format')
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { canaryRollbackCommand } = await import('./commands.js');
+    console.log(await canaryRollbackCommand(engine, id, options));
+  });
+
+for (const action of ['pause', 'resume', 'advance'] as const) {
+  canaryCmd
+    .command(`${action} <id>`)
+    .description(`${action} an existing canary deployment`)
+    .option('--json', 'Output in JSON format')
+    .action(async (id, options) => {
+      const { createEngine } = await import('./engine.js');
+      const engine = await createEngine();
+      const { canaryControlCommand } = await import('./commands.js');
+      console.log(await canaryControlCommand(engine, action, id, options));
+    });
+}
+
+canaryCmd
+  .command('throttle <id> <percentage>')
+  .description('Reduce canary traffic to the requested percentage')
+  .option('--json', 'Output in JSON format')
+  .action(async (id, percentage, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const { canaryControlCommand } = await import('./commands.js');
+    console.log(await canaryControlCommand(engine, 'throttle', id, { ...options, percentage }));
+  });
+
+program.addCommand(canaryCmd);
 
 program.parse();

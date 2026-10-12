@@ -130,6 +130,22 @@ describe('Section 5: Job / Orchestration Testing (the JobGraph-equivalent)', () 
       await expect(orchestrator.runJob(job.id)).rejects.toThrow(/Cannot run job in status 'completed'/);
     });
 
+    it('cancelTask on an already-completed task preserves its completed status', async () => {
+      const { orchestrator } = setupOrchestrator(async () => ({ success: true, result: 'done' }));
+      const job = await orchestrator.createJob({
+        title: 'Late cancel test',
+        tasks: [{ task: { id: 't1', input: 'step 1' } }],
+      });
+      const finished = await orchestrator.runJob(job.id);
+      expect(finished.status).toBe('completed');
+
+      await orchestrator.cancelTask(job.id, 't1');
+
+      const after = orchestrator.getJob(job.id)!;
+      expect(after.tasks.find((t) => t.id === 't1')!.status).toBe('completed');
+      expect(after.graph.nodes.find((n) => n.id === 't1')!.state).toBe('completed');
+    });
+
     it('rejects invalid transitions: failed -> running', async () => {
       const { orchestrator } = setupOrchestrator(async () => ({ success: false, error: 'unrecoverable' }));
       const job = await orchestrator.createJob({

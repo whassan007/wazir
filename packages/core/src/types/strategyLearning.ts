@@ -173,14 +173,107 @@ export interface StrategyMatchQuery {
   allowAntiStrategies?: boolean;
 }
 
-export interface StrategyMatchResult {
+export interface StrategyQuery {
+  /** Concise problem description (no entire transcripts embedded) */
+  problemDescription: string;
+  /** Task category */
+  taskCategory: ProblemCategory | string;
+  /** Observed physical failures, errors, or diagnostic tags */
+  observedFailures: string[];
+  /** Repository / architecture properties */
+  architectureProperties: (RepositoryCharacteristic | string)[];
+  /** Programming language if applicable */
+  language?: ProgrammingLanguage | string;
+  /** Framework or runtime if applicable */
+  framework?: string;
+  /** Strategy phase if querying for a specific stage */
+  phase?: StrategyPhase;
+  /** Available physical evidence tags */
+  availableEvidence?: string[];
+  /** Optional structured problem signature */
+  problemSignature?: ProblemSignature;
+  /** Task prompt */
+  taskPrompt?: string;
+  /** Repository scope or root if applicable */
+  repositoryScope?: string;
+  minConfidence?: number;
+  maxResults?: number;
+  allowAntiStrategies?: boolean;
+}
+
+export interface RelevantStrategy {
+  strategyId: string;
+  normalizedStrategy: EngineeringStrategy;
+  applicability: number;
+  semanticSimilarity: number;
+  structuralSimilarity: number;
+  evidenceQuality: number;
+  verifiedUses: number;
+  verifiedFailures: number;
+  antiStrategyWarnings: AntiStrategyWarning[];
+
+  // StrategyMatchResult backwards-compatibility aliases:
   strategy: EngineeringStrategy;
   matchScore: number;
-  relevanceExplanation: string;
   confidence: number;
   historicalEvidenceCount: number;
   warnings: AntiStrategyWarning[];
+  relevanceExplanation: string;
   suggestedPlanAdaptations?: string[];
+
+  // Diagnostics, clustering, and cross-language transfer metadata:
+  relevanceClass?: 'HIGH' | 'MEDIUM' | 'IRRELEVANT';
+  clusterId?: string;
+  clusterLabel?: string;
+  crossLanguageTransferrable?: boolean;
+  architectureTransferrable?: boolean;
+  scoreBreakdown?: {
+    semantic: number;
+    structural: number;
+    architecture: number;
+    failureTraits: number;
+    languageCompatibility: number;
+    evidenceQuality: number;
+    confidence: number;
+    falsePositivePenalty?: number;
+  };
+}
+
+export type StrategyMatchResult = RelevantStrategy;
+
+export interface StrategyCluster {
+  id: string;
+  label: string;
+  description: string;
+  conceptKeywords: string[];
+  strategies: string[]; // strategy IDs
+  representativeStrategyId?: string;
+}
+
+export interface StrategyBenchmarkMetrics {
+  taskSuccess: boolean;
+  localizationCalls: number;
+  modelCalls: number;
+  tokens: number;
+  repairCycles: number;
+  falseRetrievalRate: number;
+  verificationSuccess: boolean;
+  wallTimeMs: number;
+}
+
+export interface StrategyRetrievalBenchmarkReport {
+  modeA: StrategyBenchmarkMetrics & { name: string };
+  modeB: StrategyBenchmarkMetrics & { name: string };
+  delta: {
+    taskSuccess: boolean;
+    localizationReduction: number;
+    modelCallsRatio: number;
+    tokenImprovementRatio: number;
+    repairCyclesSaved: number;
+    falseRetrievalReduction: number;
+    verificationSuccess: boolean;
+    wallTimeImprovementRatio: number;
+  };
 }
 
 export interface StrategyTransferReport {

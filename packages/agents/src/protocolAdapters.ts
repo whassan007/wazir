@@ -662,6 +662,28 @@ export function validateToolActionSemantics(
     }
   }
 
+  if (tool === 'edit' || tool === 'edit_file' || tool === 'replace' || tool === 'replace_file_content') {
+    if (typeof input.path !== 'string') {
+      return { ok: false, reason: `'${tool}' requires a string file path` };
+    }
+    const trimmed = input.path.trim();
+    if (trimmed.length === 0) {
+      return { ok: false, reason: 'File path cannot be empty' };
+    }
+    if (/^(\.{2,}|…|<[^>]+>|path\/to\/file|your_file_here|TODO|FIXME)$/i.test(trimmed)) {
+      return {
+        ok: false,
+        reason: `File path is a placeholder ('${trimmed}'). You must specify a real file path.`,
+      };
+    }
+    if (typeof input.oldString !== 'string') {
+      return { ok: false, reason: `'${tool}' requires a string 'oldString' to replace` };
+    }
+    if (typeof input.newString !== 'string') {
+      return { ok: false, reason: `'${tool}' requires a string 'newString' replacement` };
+    }
+  }
+
   return { ok: true };
 }
 

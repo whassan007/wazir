@@ -439,6 +439,116 @@
         70
       ],
       "prerequisiteGateId": "G67"
+    },
+    {
+      "id": "G91",
+      "order": 37,
+      "name": "DistributedMctsFleet",
+      "title": "G91 Distributed MCTS Fleet Execution",
+      "description": "Concurrent multi-worker MCTS expansion across heterogeneous physical nodes and models; workers return raw physical execution evidence while authoritative control plane solely owns tree mutations, rewards, and promotions",
+      "testIds": [
+        74
+      ],
+      "prerequisiteGateId": "G68"
+    },
+    {
+      "id": "G92",
+      "order": 38,
+      "name": "DistributedBranchFaultIsolation",
+      "title": "G92 Distributed Branch Fault Isolation & Requeue",
+      "description": "Worker crash or disconnect mid-expansion transitions branch lease to UNKNOWN while preserving authoritative central tree integrity; safe branch requeue with fresh lease and zero duplicate rewards",
+      "testIds": [
+        75
+      ],
+      "prerequisiteGateId": "G91"
+    },
+    {
+      "id": "G93",
+      "order": 39,
+      "name": "StaleResultRejection",
+      "title": "G93 Stale Result Rejection & Exactly-Once Accounting",
+      "description": "Late results from expired or superseded worker leases are rejected as RESULT_REJECTED_STALE; exactly-once backpropagation deduplication prevents double visit or reward counting",
+      "testIds": [
+        76
+      ],
+      "prerequisiteGateId": "G92"
+    },
+    {
+      "id": "G94",
+      "order": 40,
+      "name": "ControlPlaneCrashRecovery",
+      "title": "G94 Control Plane Crash Recovery & State Reconciliation",
+      "description": "Coordinator restart safely restores authoritative search tree, reconciles active worker leases and budgets, and resumes distributed MCTS without loss of progress or duplicate rewards",
+      "testIds": [
+        77
+      ],
+      "prerequisiteGateId": "G93"
+    },
+    {
+      "id": "G95",
+      "order": 41,
+      "name": "DistributedTransposition",
+      "title": "G95 Distributed Transposition & Work Avoidance",
+      "description": "Content-addressed node state hashing detects when concurrent remote branches converge on equivalent workspace states, sharing evaluation evidence and skipping redundant simulations",
+      "testIds": [
+        78
+      ],
+      "prerequisiteGateId": "G94"
+    },
+    {
+      "id": "G96",
+      "order": 42,
+      "name": "DistributedSearchBenchmarkEfficiency",
+      "title": "G96 Distributed vs Local Search Efficiency",
+      "description": "Distributed MCTS demonstrates superior wall-clock exploration efficiency and solution discovery over single-worker sequential search across comparable budgets",
+      "testIds": [
+        79
+      ],
+      "prerequisiteGateId": "G95"
+    },
+    {
+      "id": "G97",
+      "order": 43,
+      "name": "SemanticStrategyRetrieval",
+      "title": "G97 Semantic Strategy Retrieval",
+      "description": "Concepts and abstract verified strategies transfer across semantic-equivalent repositories with different names and file layouts without literal symbol leakage; physical inspection and verification on target repository remain mandatory.",
+      "testIds": [
+        80
+      ],
+      "prerequisiteGateId": "G96"
+    },
+    {
+      "id": "G98",
+      "order": 44,
+      "name": "SemanticFalsePositiveControl",
+      "title": "G98 Semantic False-Positive Control",
+      "description": "Lexically similar defects masking orthogonal architectural root causes are rejected or given low confidence by structural and failure-trait checks, preventing false positive strategy recommendations.",
+      "testIds": [
+        81
+      ],
+      "prerequisiteGateId": "G97"
+    },
+    {
+      "id": "G99",
+      "order": 45,
+      "name": "CrossLanguageStrategyTransfer",
+      "title": "G99 Cross-Language Strategy Transfer",
+      "description": "Architecture-level strategy concepts transfer across different programming languages while syntax-specific and tool-specific details are stripped, maintaining semantic architecture relevance without language leakage.",
+      "testIds": [
+        82
+      ],
+      "prerequisiteGateId": "G98"
+    },
+    {
+      "id": "G100",
+      "order": 46,
+      "name": "AntiStrategyRetrieval",
+      "title": "G100 Anti-Strategy Retrieval & Guidance",
+      "description": "Historically failed patterns are retrievable as warnings to inform the planner and agent against known pitfalls without triggering false policy denials unless PolicyEngine strictly denies.",
+      "testIds": [
+        83
+      ],
+      "prerequisiteGateId": "G99"
     }
   ],
   "foundationalSequence": [
@@ -3054,6 +3164,373 @@
         "state-hashing",
         "deduplication",
         "g68",
+        "p0-release-gate"
+      ]
+    },
+    "74": {
+      "id": 74,
+      "gateId": "G91",
+      "priority": "P0",
+      "title": "Distributed MCTS Fleet Execution (DISTRIBUTED_MCTS_FLEET)",
+      "purpose": "Verify distributed hierarchical MCTS expands tree nodes concurrently across multiple physical workers, models, and runtimes; controller computes UCT, rewards, and promotions while workers strictly execute branches and return physical evidence.",
+      "prompt": "Execute distributed MCTS on heterogeneous fleet across DGX-01, MAC-01, and PC-01 to depth >= 3 with physical mutations and verification checks. Verify controller alone mutates tree and computes reward from execution evidence.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "ROOT_INIT -> PARALLEL_UCT_SELECT -> LEASE_BRANCH_WORKERS -> MATERIALIZE_CHECKPOINT -> DISPATCH_WORKERS -> COLLECT_RAW_EVIDENCE -> CONTROLLER_GROUNDED_REWARD -> EXACTLY_ONCE_BACKPROP -> CONTROLLER_PROMOTE",
+      "verificationCriteria": [
+        "Search tree reaches depth >= 3 across multiple remote physical workers",
+        "Worker execution reports contain real physical build/test command evidence",
+        "Model self-confidence is strictly 0 and ignored; reward computed by controller only",
+        "Authoritative treeRevision increments monotonically on central controller only",
+        "Tree structure and promotions are identical to local authoritative ground truth"
+      ],
+      "expectedArtifacts": [
+        "distributed-mcts-report",
+        "worker-evidence-manifest",
+        "fleet-tree-lineage"
+      ],
+      "expectedProvenance": [
+        "mcts.distributed.branch_leased",
+        "mcts.distributed.evidence_collected",
+        "mcts.distributed.reward_computed",
+        "mcts.distributed.backpropagated"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/distributedMctsGate.test.ts"
+      ],
+      "tags": [
+        "distributed-mcts",
+        "fleet-search",
+        "authoritative-control-plane",
+        "g91",
+        "p0-release-gate"
+      ]
+    },
+    "75": {
+      "id": 75,
+      "gateId": "G92",
+      "priority": "P0",
+      "title": "Distributed Branch Fault Isolation & Safe Requeue (DISTRIBUTED_BRANCH_FAULT_ISOLATION)",
+      "purpose": "Verify that worker failure or disconnect mid-expansion transitions branch lease to UNKNOWN while preserving authoritative central tree integrity; safe branch requeue with fresh lease and zero duplicate rewards.",
+      "prompt": "Simulate physical worker disconnection during branch execution. Verify branch lease is marked UNKNOWN, central tree survives uncorrupted, branch is safely requeued to surviving worker, and no double reward occurs.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "SELECT_BRANCH -> LEASE_TO_WORKER_1 -> INJECT_WORKER_CRASH -> MARK_LEASE_UNKNOWN -> PRESERVE_CENTRAL_TREE -> REQUEUE_TO_WORKER_2 -> COMPLETE_EXECUTION -> SAFE_BACKPROPAGATE",
+      "verificationCriteria": [
+        "Worker crash sets branch lease status to UNKNOWN without corrupting central tree",
+        "Surviving worker takes over execution with fresh attemptId and lease",
+        "Prior failed or disconnected state does not contaminate search node statistics",
+        "Completed execution from reattempt backpropagates exactly once with verified reward"
+      ],
+      "expectedArtifacts": [
+        "branch-fault-audit",
+        "lease-recovery-log"
+      ],
+      "expectedProvenance": [
+        "mcts.distributed.worker_lost",
+        "mcts.distributed.branch_requeued",
+        "mcts.distributed.reattempt_backpropagated"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/distributedMctsGate.test.ts"
+      ],
+      "tags": [
+        "fault-isolation",
+        "requeue",
+        "lease-resilience",
+        "g92",
+        "p0-release-gate"
+      ]
+    },
+    "76": {
+      "id": 76,
+      "gateId": "G93",
+      "priority": "P0",
+      "title": "Stale Result Rejection & Exactly-Once Accounting (STALE_RESULT_REJECTION)",
+      "purpose": "Verify that late results arriving from expired or superseded worker leases are rejected as RESULT_REJECTED_STALE; exactly-once backpropagation deduplication prevents double visit or reward counting.",
+      "prompt": "Dispatch branch to worker, expire its lease, requeue and complete reattempt on second worker, then simulate late result arriving from first worker. Verify late result is rejected and no double accounting occurs.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "DISPATCH_WORKER_1 -> EXPIRE_LEASE_1 -> DISPATCH_WORKER_2 -> ACCEPT_RESULT_2 -> BACKPROPAGATE_2 -> RECEIVE_LATE_RESULT_1 -> REJECT_STALE_RESULT -> VERIFY_NO_DOUBLE_COUNTING",
+      "verificationCriteria": [
+        "Late result received after lease expiration/supersession rejected with reason RESULT_REJECTED_STALE",
+        "Duplicate results for identical searchId/nodeId/attemptId ignored",
+        "Search node visit count reflects exactly one successful rollout",
+        "Total accumulated reward reflects exactly one backpropagation"
+      ],
+      "expectedArtifacts": [
+        "stale-result-audit",
+        "deduplication-report"
+      ],
+      "expectedProvenance": [
+        "mcts.distributed.result_rejected_stale",
+        "mcts.distributed.duplicate_prevented"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/distributedMctsGate.test.ts"
+      ],
+      "tags": [
+        "stale-rejection",
+        "exactly-once",
+        "idempotency",
+        "g93",
+        "p0-release-gate"
+      ]
+    },
+    "77": {
+      "id": 77,
+      "gateId": "G94",
+      "priority": "P0",
+      "title": "Control Plane Crash Recovery & State Reconciliation (CONTROL_PLANE_CRASH_RECOVERY)",
+      "purpose": "Verify coordinator restart safely restores authoritative search tree, reconciles active worker leases and budgets, and resumes distributed MCTS without loss of progress or duplicate rewards.",
+      "prompt": "Persist distributed MCTS snapshot to durable store mid-search, tear down coordinator instance, restore new coordinator from snapshot, reconcile worker leases, and continue distributed search to completion.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "DISPATCH_BRANCHES -> PERSIST_COORDINATOR_SNAPSHOT -> KILL_COORDINATOR -> RESTORE_COORDINATOR -> RECONCILE_WORKER_LEASES -> RECONCILE_BUDGETS -> RESUME_SEARCH -> VERIFY_INTEGRITY",
+      "verificationCriteria": [
+        "Restored coordinator reconstructs authoritative tree, nodes, visits, and values accurately",
+        "In-flight worker leases are reconciled and active heartbeats honored",
+        "Search budget limits (tokens, wall time, max iterations) preserved across restart",
+        "Resumed search reaches goal without duplicate backpropagation or lost nodes"
+      ],
+      "expectedArtifacts": [
+        "coordinator-recovery-report",
+        "tree-state-audit"
+      ],
+      "expectedProvenance": [
+        "mcts.distributed.coordinator_snapshot_persisted",
+        "mcts.distributed.coordinator_restored",
+        "mcts.distributed.leases_reconciled"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/distributedMctsGate.test.ts"
+      ],
+      "tags": [
+        "crash-recovery",
+        "state-reconciliation",
+        "persistence",
+        "g94",
+        "p0-release-gate"
+      ]
+    },
+    "78": {
+      "id": 78,
+      "gateId": "G95",
+      "priority": "P0",
+      "title": "Distributed Transposition & Work Avoidance (DISTRIBUTED_TRANSPOSITION)",
+      "purpose": "Verify that content-addressed node state hashing detects when concurrent remote branches converge on equivalent workspace states, sharing evaluation evidence and skipping redundant simulations.",
+      "prompt": "Execute two concurrent branches on separate physical workers that arrive at identical workspace mutations and file states. Verify controller detects matching state hash, links transposition, and avoids duplicate simulation.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "DISPATCH_BRANCH_A -> EXECUTE_ON_WORKER_1 -> RECEIVE_RESULT_A -> RECORD_STATE_HASH -> DISPATCH_BRANCH_B -> EXECUTE_ON_WORKER_2 -> DETECT_TRANSPOSITION -> LINK_EVIDENCE -> SKIP_REDUNDANT_WORK",
+      "verificationCriteria": [
+        "Content-addressed state hash matches across independently executed remote branches",
+        "Controller links branch B to transposed node A without scheduling second redundant simulation",
+        "Evaluation evidence and verification checks are reused directly",
+        "Worker compute tokens and physical run time are saved"
+      ],
+      "expectedArtifacts": [
+        "distributed-transposition-report",
+        "hash-equivalence-manifest"
+      ],
+      "expectedProvenance": [
+        "mcts.distributed.transposition_detected",
+        "mcts.distributed.simulation_skipped"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/distributedMctsGate.test.ts"
+      ],
+      "tags": [
+        "transposition",
+        "state-hashing",
+        "distributed-dedup",
+        "g95",
+        "p0-release-gate"
+      ]
+    },
+    "79": {
+      "id": 79,
+      "gateId": "G96",
+      "priority": "P0",
+      "title": "Distributed vs Local Search Efficiency (DISTRIBUTED_BENCHMARK_EFFICIENCY)",
+      "purpose": "Verify distributed MCTS demonstrates superior wall-clock exploration efficiency and solution discovery over single-worker sequential search across comparable budgets.",
+      "prompt": "Run benchmark comparing distributed fleet MCTS against local sequential MCTS on complex multi-phase refactoring. Record verified solutions, wall time, tokens, and model calls.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "RUN_LOCAL_SEQUENTIAL_BENCHMARK -> RUN_DISTRIBUTED_FLEET_BENCHMARK -> MEASURE_WALL_CLOCK_TIME -> MEASURE_TOKEN_EFFICIENCY -> RECORD_METRICS -> ASSERT_SUPERIOR_EFFICIENCY",
+      "verificationCriteria": [
+        "Both local and distributed searches verify solution against identical physical oracle",
+        "Distributed MCTS completes equivalent exploration depth in significantly lower wall-clock time",
+        "Parallel UCT virtual loss prevents redundant branch scheduling across workers",
+        "Hardware-sensitive metrics (wall time) stratified from portable metrics (correctness, tokens)"
+      ],
+      "expectedArtifacts": [
+        "search-efficiency-comparison",
+        "benchmark-stratification-report"
+      ],
+      "expectedProvenance": [
+        "mcts.distributed.benchmark_compared",
+        "mcts.distributed.metrics_stratified"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/distributedMctsGate.test.ts"
+      ],
+      "tags": [
+        "benchmark-efficiency",
+        "wall-time-scaling",
+        "fleet-performance",
+        "g96",
+        "p0-release-gate"
+      ]
+    },
+    "80": {
+      "id": 80,
+      "gateId": "G97",
+      "priority": "P0",
+      "title": "Semantic Strategy Retrieval Across Layouts (SEMANTIC_STRATEGY_RETRIEVAL)",
+      "purpose": "Verify that a verified engineering strategy retrieves and transfers to a semantic-equivalent repository with different names and file layouts without literal symbol leakage, while enforcing independent physical verification.",
+      "prompt": "Retrieve learned strategy for remote worker ownership timeout from cancellation lease race experience. Verify abstract steps transfer without symbol leakage and target workspace verifies independently.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "LOAD_STRATEGY_MEMORY -> QUERY_HYBRID_SEMANTIC -> RETRIEVE_VERIFIED_STRATEGY -> ASSERT_NO_SYMBOL_LEAKAGE -> EXECUTE_TARGET_VERIFICATION -> ASSERT_INDEPENDENT_EVIDENCE",
+      "verificationCriteria": [
+        "Relevant verified strategy retrieved via hybrid semantic similarity",
+        "No incidental symbol or filename leakage from source into target plan",
+        "Target workspace independently inspected without blindly applying past state",
+        "Current physical verification strictly required and validated"
+      ],
+      "expectedArtifacts": [
+        "transferred-strategy-summary",
+        "target-verification-report"
+      ],
+      "expectedProvenance": [
+        "strategy.hybrid.retrieved",
+        "strategy.transfer.verified"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/semanticStrategyGates.test.ts",
+        "packages/core/tests/semanticStrategyRetrieval.test.ts"
+      ],
+      "tags": [
+        "semantic-retrieval",
+        "strategy-transfer",
+        "symbol-isolation",
+        "g97",
+        "p0-release-gate"
+      ]
+    },
+    "81": {
+      "id": 81,
+      "gateId": "G98",
+      "priority": "P0",
+      "title": "Semantic False-Positive Control on Lexical Overlap (SEMANTIC_FALSE_POSITIVE)",
+      "purpose": "Verify that defects sharing superficial lexical tokens but representing orthogonal root causes are rejected or marked low-confidence, preventing false-positive strategy application.",
+      "prompt": "Query strategy memory with an unbounded queue heap overflow problem against a deadlock lock inversion experience sharing worker/queue/timeout tokens. Verify strategy is rejected or classified as IRRELEVANT.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "LOAD_DEADLOCK_STRATEGY -> QUERY_QUEUE_OOM_PROBLEM -> DETECT_ORTHOGONAL_DEFECT_TRAITS -> APPLY_FALSE_POSITIVE_GUARD -> ASSERT_STRATEGY_REJECTED",
+      "verificationCriteria": [
+        "Multi-signal ranking detects orthogonal failure traits despite lexical token overlap",
+        "False-positive suppression penalty lowers applicability below threshold",
+        "Strategy classified as IRRELEVANT or low-confidence",
+        "System does not falsely recommend lock hierarchy adjustments for heap exhaustion"
+      ],
+      "expectedArtifacts": [
+        "false-positive-defense-report"
+      ],
+      "expectedProvenance": [
+        "strategy.false_positive.suppressed",
+        "strategy.defect_traits.orthogonal"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/semanticStrategyGates.test.ts",
+        "packages/core/tests/semanticStrategyRetrieval.test.ts"
+      ],
+      "tags": [
+        "false-positive-control",
+        "lexical-orthogonality",
+        "defect-traits",
+        "g98",
+        "p0-release-gate"
+      ]
+    },
+    "82": {
+      "id": 82,
+      "gateId": "G99",
+      "priority": "P0",
+      "title": "Cross-Language Architecture Strategy Transfer (CROSS_LANGUAGE_STRATEGY)",
+      "purpose": "Verify that architecture-level strategies transfer across distinct programming languages while syntax-specific and tool-specific details do not.",
+      "prompt": "Transfer lifecycle cancellation strategy from TypeScript to Go. Verify abstract lifecycle guard and cleanup steps transfer, while language-specific primitives and files are stripped.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "LOAD_TS_LIFECYCLE_STRATEGY -> QUERY_GO_LIFECYCLE_PROBLEM -> EVALUATE_ARCHITECTURE_TRANSFERRABILITY -> SEPARATE_ARCHITECTURE_FROM_SYNTAX -> TRANSFER_CLEAN_APPROACH",
+      "verificationCriteria": [
+        "Architecture-level concepts (fencing, cancellation, cleanup) transfer across languages",
+        "Syntax-specific constructs (AbortSignal, taskRunner.ts) stripped from plan",
+        "Semantic architecture relevance separated from implementation compatibility",
+        "Target Go problem verified independently with language-appropriate constructs"
+      ],
+      "expectedArtifacts": [
+        "cross-language-transfer-report"
+      ],
+      "expectedProvenance": [
+        "strategy.cross_language.transferred",
+        "strategy.syntax_leakage.prevented"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/semanticStrategyGates.test.ts",
+        "packages/core/tests/semanticStrategyRetrieval.test.ts"
+      ],
+      "tags": [
+        "cross-language",
+        "architecture-transfer",
+        "language-separation",
+        "g99",
+        "p0-release-gate"
+      ]
+    },
+    "83": {
+      "id": 83,
+      "gateId": "G100",
+      "priority": "P0",
+      "title": "Anti-Strategy Retrieval & Non-Blocking Warnings (ANTI_STRATEGY_RETRIEVAL)",
+      "purpose": "Verify that historical failure patterns and anti-strategies are retrieved as advisory warnings to inform the planner and agent without causing false policy denials.",
+      "prompt": "Present a repair problem matching historically flawed speculative blind editing. Verify anti-strategy warning is surfaced to the planner, but execution is not falsely blocked.",
+      "modelRequirements": {
+        "toolCalling": true
+      },
+      "expectedDag": "RECORD_ANTI_STRATEGY -> PRESENT_MATCHING_PROBLEM -> RETRIEVE_ANTI_STRATEGY_WARNING -> INFORM_PLANNER -> ASSERT_NO_FALSE_POLICY_DENIAL",
+      "verificationCriteria": [
+        "Anti-strategy warning surfaced with clear warningMessage and remedySuggestion",
+        "Task planner incorporates cautionary guidance without blind policy denial",
+        "Execution proceeds and is governed strictly by physical policy engine rules",
+        "Historical negative experience guides without creating arbitrary blocks"
+      ],
+      "expectedArtifacts": [
+        "anti-strategy-warning-log"
+      ],
+      "expectedProvenance": [
+        "strategy.anti_strategy.retrieved",
+        "strategy.policy_denial.prevented"
+      ],
+      "associatedSuites": [
+        "tests/acceptance/semanticStrategyGates.test.ts",
+        "packages/core/tests/semanticStrategyRetrieval.test.ts"
+      ],
+      "tags": [
+        "anti-strategy",
+        "warning-guidance",
+        "no-false-denial",
+        "g100",
         "p0-release-gate"
       ]
     }

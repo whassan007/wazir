@@ -645,13 +645,27 @@ export function createApp(state: ApiState) {
       Connection: 'keep-alive',
     });
     res.flushHeaders?.();
-    await state.dispatcher.subscribe(computerId, res);
-
-    const keepAlive = setInterval(() => { res.write(': ping\n\n'); void state.dispatcher.redeliver().catch(() => undefined); }, 5_000);
+    // Cleanup is registered before the first await: a worker that disconnects while
+    // subscribe() is still redelivering would otherwise never fire this listener,
+    // leaking the stream registration and the keep-alive timer.
+    let keepAlive: NodeJS.Timeout | undefined;
     req.on('close', () => {
       clearInterval(keepAlive);
       state.dispatcher.unsubscribe(computerId, res);
     });
+    try {
+      await state.dispatcher.subscribe(computerId, res);
+    } catch {
+      // Headers are already sent; end the stream so the worker reconnects.
+      state.dispatcher.unsubscribe(computerId, res);
+      res.end();
+      return;
+    }
+    if (req.destroyed) {
+      state.dispatcher.unsubscribe(computerId, res);
+      return;
+    }
+    keepAlive = setInterval(() => { res.write(': ping\n\n'); void state.dispatcher.redeliver().catch(() => undefined); }, 5_000);
   });
 
   // Dispatch an authorized execution request to a specific computer's worker.

@@ -352,6 +352,34 @@ async function main() {
 
   for (const test of testQueue) {
     const gateDef = GATES.find((g) => g.id === test.gateId);
+
+    // A test pointing at a gate the catalog does not define is a catalog error:
+    // report it as an UNDEFINED row instead of crashing the whole run.
+    if (!gateDef) {
+      gateStatus[test.gateId] ??= {
+        gateId: test.gateId,
+        name: 'UNDEFINED GATE (catalog error)',
+        status: 'UNDEFINED',
+        passed: false,
+        testCount: 0,
+        passedCount: 0,
+        failedCount: 0,
+        undefinedCount: 0,
+      };
+      gateStatus[test.gateId].testCount += 1;
+      gateStatus[test.gateId].undefinedCount += 1;
+      gateStatus[test.gateId].failedCount += 1;
+      rows.push({
+        id: test.id,
+        gateId: test.gateId,
+        priority: test.priority,
+        status: 'UNDEFINED',
+        name: test.title,
+        duration: 0,
+        detail: `Gate ${test.gateId} is not defined in tests/acceptance/acceptanceData.json`,
+      });
+      continue;
+    }
     
     // Strict prerequisite gate check:
     // If testing all gates or gate sequences, cannot pass if prerequisite failed
@@ -372,10 +400,12 @@ async function main() {
     }
 
     // Evaluate associated suites for this acceptance test
-    let testPassed = true;
+    let testStatus = 'PASS';
     let totalDurationMs = 0;
     let detail = '';
     let executedSuites = 0;
+    let totalPassedAssertions = 0;
+    let totalSkippedAssertions = 0;
 
     for (const suitePath of test.associatedSuites) {
       const fullPath = join(root, suitePath).replace(/\\/g, '/');
@@ -384,30 +414,43 @@ async function main() {
       if (matched) {
         executedSuites += 1;
         const [, tr] = matched;
+        if (tr.status === 'failed' && (!tr.assertionResults || tr.assertionResults.length === 0)) {
+          testStatus = 'ERROR';
+          detail = tr.message ? tr.message.slice(0, 80) : 'Test suite crashed with runtime error';
+          break;
+        }
         const failedTests = (tr.assertionResults || []).filter((a) => a.status === 'failed');
         const passTests = (tr.assertionResults || []).filter((a) => a.status === 'passed');
+        const skippedTests = (tr.assertionResults || []).filter((a) => a.status === 'skipped' || a.status === 'pending');
         totalDurationMs += (tr.endTime || 0) - (tr.startTime || 0);
+        totalPassedAssertions += passTests.length;
+        totalSkippedAssertions += skippedTests.length;
 
         if (failedTests.length > 0) {
-          testPassed = false;
+          testStatus = 'FAIL';
           detail = `${failedTests.length} assertions failed: ${failedTests[0].title.slice(0, 60)}`;
           break;
-        } else {
-          detail = `${passTests.length} assertions passed`;
         }
       }
     }
 
     if (executedSuites === 0) {
-      testPassed = false;
+      testStatus = 'ERROR';
       detail = 'No associated test suites executed';
+    } else if (testStatus === 'PASS') {
+      if (totalPassedAssertions === 0 && totalSkippedAssertions > 0) {
+        testStatus = 'SKIP';
+        detail = `${totalSkippedAssertions} assertions skipped (environment requirement unmet)`;
+      } else {
+        detail = `${totalPassedAssertions} assertions passed`;
+      }
     }
 
     const row = {
       id: test.id,
       gateId: test.gateId,
       priority: test.priority,
-      status: testPassed ? 'PASS' : 'FAIL',
+      status: testStatus,
       name: test.title,
       duration: Math.max(0, totalDurationMs),
       detail,
@@ -417,7 +460,7 @@ async function main() {
 
     const gStat = gateStatus[test.gateId];
     gStat.testCount += 1;
-    if (testPassed) {
+    if (testStatus === 'PASS') {
       gStat.passedCount += 1;
     } else {
       gStat.failedCount += 1;
@@ -434,14 +477,14 @@ async function main() {
   const pad = (s, n) => String(s).padEnd(n);
   console.log('\n');
   console.log(
-    `${pad('ID', 5)} ${pad('GATE', 6)} ${pad('PR', 4)} ${pad('STATUS', 8)} ${pad('TEST NAME', 45)} ${pad('DURATION', 10)} DETAIL`,
+    `${pad('ID', 5)} ${pad('GATE', 6)} ${pad('PR', 4)} ${pad('STATUS', 10)} ${pad('TEST NAME', 45)} ${pad('DURATION', 10)} DETAIL`,
   );
   console.log('-'.repeat(120));
 
   for (const r of rows) {
     const idStr = String(r.id).padStart(2, '0');
     console.log(
-      `${pad(idStr, 5)} ${pad(r.gateId, 6)} ${pad(r.priority, 4)} ${pad(r.status, 8)} ${pad(r.name.slice(0, 43), 45)} ${pad((r.duration).toFixed(1) + 'ms', 10)} ${r.detail}`,
+      `${pad(idStr, 5)} ${pad(r.gateId, 6)} ${pad(r.priority, 4)} ${pad(r.status, 10)} ${pad(r.name.slice(0, 43), 45)} ${pad((r.duration).toFixed(1) + 'ms', 10)} ${r.detail}`,
     );
   }
 
@@ -450,28 +493,47 @@ async function main() {
   const passed = rows.filter((r) => r.status === 'PASS').length;
   const failed = rows.filter((r) => r.status === 'FAIL').length;
   const blocked = rows.filter((r) => r.status === 'BLOCKED').length;
+  const skipped = rows.filter((r) => r.status === 'SKIP').length;
+  const undefinedCount = rows.filter((r) => r.status === 'UNDEFINED').length;
+  const errors = rows.filter((r) => r.status === 'ERROR').length;
 
   console.log('\n=============================================================');
   console.log('                      GATE SUMMARY                           ');
   console.log('=============================================================');
 
-  for (const g of GATES) {
-    const stat = gateStatus[g.id];
-    if (stat.testCount > 0) {
-      const mark = stat.passed && stat.failedCount === 0 ? '✓ PASS' : '✗ FAIL';
-      console.log(`  ${mark} [${g.id} ${g.name.padEnd(12)}] ${stat.passedCount}/${stat.testCount} tests passed`);
+  const allGateEntries = [...GATES, ...Object.values(gateStatus).filter((s) => !GATES.some((g) => g.id === s.gateId))];
+  for (const g of allGateEntries) {
+    const stat = gateStatus[g.id || g.gateId];
+    if (stat && stat.testCount > 0) {
+      const mark = stat.status === 'UNDEFINED'
+        ? '? UNDEF'
+        : stat.passed && stat.failedCount === 0
+          ? '✓ PASS'
+          : '✗ FAIL';
+      const name = g.name || stat.name || 'UNKNOWN';
+      const id = g.id || g.gateId;
+      console.log(`  ${mark} [${id.padEnd(4)} ${name.padEnd(16)}] ${stat.passedCount}/${stat.testCount} tests passed`);
     }
   }
 
   console.log('-------------------------------------------------------------');
-  console.log(`Total: ${total} | PASS: ${passed} | FAIL: ${failed} | BLOCKED: ${blocked}`);
+  const countsLine = [
+    `Total: ${total}`,
+    `PASS: ${passed}`,
+    `FAIL: ${failed}`,
+    `BLOCKED: ${blocked}`,
+    skipped > 0 ? `SKIP: ${skipped}` : null,
+    undefinedCount > 0 ? `UNDEFINED: ${undefinedCount}` : null,
+    errors > 0 ? `ERROR: ${errors}` : null,
+  ].filter(Boolean).join(' | ');
+  console.log(countsLine);
 
   const foundationalPass = FOUNDATIONAL.every((fid) => rows.some((r) => r.id === fid && r.status === 'PASS'));
   if (argv.includes('--foundational')) {
     console.log(`Foundational Sequence: ${foundationalPass ? '✓ ALL 8 PASSED' : '✗ FAILED'}`);
   }
 
-  const isReady = failed === 0 && blocked === 0;
+  const isReady = failed === 0 && blocked === 0 && undefinedCount === 0 && errors === 0;
   console.log('');
   if (isReady) {
     console.log('★ RELEASE VERDICT: WAZIR READY FOR RELEASE ★');
@@ -495,13 +557,16 @@ async function main() {
       passed,
       failed,
       blocked,
+      skipped,
+      undefined: undefinedCount,
+      errors,
       ready: isReady,
     },
     gateResults: gateStatus,
     cases: rows,
   };
 
-  const reportOutPath = join(root, reportFile);
+  const reportOutPath = resolve(root, reportFile); // resolve(): an absolute --report path is used as given
   writeFileSync(reportOutPath, JSON.stringify(report, null, 2));
   console.log(`Report written to ${reportFile}`);
 

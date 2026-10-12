@@ -1,4 +1,5 @@
-import { explainExecution, ModelLifecycleError, summarizeExecution, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
+import { formatVerificationInspection } from './tui/observabilityViews.js';
+import { explainExecution, inspectVerificationEvidence, explainCompletion, ModelLifecycleError, summarizeExecution, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1242,6 +1243,28 @@ async function renderJobExplain(engine: RookEngine, job: Job, json?: boolean): P
  * (@job:x). Renders the scheduling decision already recorded at execution
  * time — never recomputes one.
  */
+function safeToolCheckpoints(engine: RookEngine, id: string): Array<{ state: string }> | undefined {
+  try { return engine.executions.toolCheckpoints(id); } catch { return undefined; }
+}
+
+/**
+ * `wa evidence <ref>` — read-only verification evidence inspector.
+ * Projects the durable ExecutionRecord; model narration (record.result) is never read.
+ */
+export async function evidenceCommand(engine: RookEngine, ref: string, opts: { json?: boolean } = {}): Promise<{ code: number; output: string }> {
+  const resolved = await resolveReference(engine, ref);
+  let execution: ExecutionRecord | undefined;
+  let id = ref;
+  if (resolved.kind === 'execution') { execution = resolved.execution; id = resolved.id; }
+  else if (resolved.kind === 'block' && resolved.block?.executionId) { id = resolved.block.executionId; execution = await engine.executions.get(id); }
+  if (!execution) return { code: 1, output: color.red(`execution '${id}' not found`) };
+  const artifacts = await engine.provenance.getArtifactsByExecution(execution.execution.id).catch(() => []);
+  const inspection = inspectVerificationEvidence(execution, { artifacts, toolCheckpoints: safeToolCheckpoints(engine, execution.execution.id) });
+  const why = explainCompletion(inspection);
+  if (opts.json) return { code: 0, output: JSON.stringify({ inspection, why }, null, 2) };
+  return { code: 0, output: formatVerificationInspection(inspection, why).join('\n') };
+}
+
 export async function explainCommand(engine: RookEngine, ref: string, json?: boolean): Promise<{ code: number; output: string }> {
   const resolved = await resolveReference(engine, ref);
 
@@ -2518,6 +2541,8 @@ export async function improveRunCommand(
 // ======================================================================
 // WAZIR MATURITY LEVEL 3 CANARY PROMOTION CLI COMMANDS
 // ======================================================================
+// LEVEL 3 CONTINUOUS CANARY COMMANDS
+// ======================================================================
 
 export async function canaryListCommand(
   engine: RookEngine,
@@ -2525,6 +2550,7 @@ export async function canaryListCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
 
@@ -2537,7 +2563,7 @@ export async function canaryListCommand(
     return 'No active or historical canary deployments found.';
   }
 
-  const rows = deployments.map((d) => [
+  const rows = deployments.map((d: any) => [
     d.canaryId,
     d.candidateId,
     d.domain,
@@ -2564,6 +2590,45 @@ export async function canaryListCommand(
   ].join('\n');
 }
 
+export async function canaryStatusCommand(
+  engine: RookEngine,
+  options?: { json?: boolean },
+): Promise<string> {
+  const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
+  if (!canaryService) {
+    if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
+    return color.yellow('CanaryDeploymentService is not configured on this engine.');
+  }
+
+  const deployments = canaryService.listDeployments();
+  const active = deployments.find(
+    (d: any) =>
+      d.status === 'ACTIVE' ||
+      d.status === 'EVALUATING' ||
+      d.status === 'HEALTHY' ||
+      d.status === 'STAGED_EXPANSION' ||
+      d.status === 'READY_FOR_PROMOTION',
+  ) ?? deployments[deployments.length - 1];
+
+  if (!active) {
+    if (options?.json) return JSON.stringify({ active: null, total: 0 });
+    return 'No active canary deployment.';
+  }
+
+  if (options?.json) {
+    return JSON.stringify(active, null, 2);
+  }
+
+  return canaryInspectCommand(engine, active.canaryId, options);
+}
+
+export async function canaryHistoryCommand(
+  engine: RookEngine,
+  options?: { json?: boolean },
+): Promise<string> {
+  return canaryListCommand(engine, options);
+}
+
 export async function canaryInspectCommand(
   engine: RookEngine,
   canaryId: string,
@@ -2571,11 +2636,13 @@ export async function canaryInspectCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
 
   const record = canaryService.getDeployment(canaryId);
   if (!record) {
+    if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
     return color.red(`Canary deployment '${canaryId}' not found.`);
   }
 
@@ -2592,10 +2659,10 @@ export async function canaryInspectCommand(
     `Status:              ${record.status}`,
     `Domain:              ${record.domain}`,
     `Candidate ID:        ${record.candidateId}`,
-    `Current Traffic:     ${(record.currentAllocation * 100).toFixed(1)}% (Stage ${record.currentTierIndex + 1}/${record.stagedExpansionTiers.length})`,
-    `Started At:          ${record.startTime.toISOString()}`,
-    `Updated At:          ${record.updatedAt.toISOString()}`,
-    ...(record.completedAt ? [`Completed At:        ${record.completedAt.toISOString()}`] : []),
+    `Current Traffic:     ${(record.currentAllocation * 100).toFixed(1)}% (Stage ${(record.currentTierIndex ?? 0) + 1}/${record.stagedExpansionTiers.length})`,
+    `Started At:          ${new Date(record.startTime).toISOString()}`,
+    `Updated At:          ${new Date(record.updatedAt).toISOString()}`,
+    ...(record.completedAt ? [`Completed At:        ${new Date(record.completedAt).toISOString()}`] : []),
     '',
     'COMPARATIVE ONLINE METRICS (Canary vs Baseline):',
     '----------------------------------------------------------------------',
@@ -2620,16 +2687,138 @@ export async function canaryInspectCommand(
     );
   }
 
-  if (record.inconclusiveReasons.length > 0) {
+  if (record.inconclusiveReasons && record.inconclusiveReasons.length > 0) {
     lines.push(
       '',
       color.yellow('INCONCLUSIVE DETERMINATIONS:'),
-      ...record.inconclusiveReasons.map((r) => `  - ${r}`),
+      ...record.inconclusiveReasons.map((r: string) => `  - ${r}`),
     );
   }
 
   lines.push('======================================================================');
   return lines.join('\n');
+}
+
+export async function canaryCompareCommand(
+  engine: RookEngine,
+  canaryId: string,
+  options?: { json?: boolean },
+): Promise<string> {
+  const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
+  if (!canaryService) {
+    if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
+    return color.yellow('CanaryDeploymentService is not configured on this engine.');
+  }
+
+  const record = canaryService.getDeployment(canaryId);
+  if (!record) {
+    if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
+    return color.red(`Canary deployment '${canaryId}' not found.`);
+  }
+
+  const c = record.canaryMetrics;
+  const b = record.baselineMetrics;
+
+  const comparison = {
+    canaryId: record.canaryId,
+    candidateId: record.candidateId,
+    domain: record.domain,
+    status: record.status,
+    stage: record.stage,
+    allocation: record.currentAllocation,
+    metrics: {
+      taskSuccessRate: { baseline: b.taskSuccessRate, canary: c.taskSuccessRate, delta: c.taskSuccessRate - b.taskSuccessRate },
+      verificationSuccessRate: { baseline: b.verificationSuccessRate, canary: c.verificationSuccessRate, delta: c.verificationSuccessRate - b.verificationSuccessRate },
+      toolFailureRate: { baseline: b.toolFailureRate, canary: c.toolFailureRate, delta: c.toolFailureRate - b.toolFailureRate },
+      totalTokens: { baseline: b.totalTokens, canary: c.totalTokens, delta: c.totalTokens - b.totalTokens },
+      wallTimeMs: { baseline: b.wallTimeMs, canary: c.wallTimeMs, delta: c.wallTimeMs - b.wallTimeMs },
+      totalExecutions: { baseline: b.totalExecutions, canary: c.totalExecutions },
+    },
+  };
+
+  if (options?.json) {
+    return JSON.stringify(comparison, null, 2);
+  }
+
+  const rows = [
+    [
+      'Verification Pass',
+      `${(b.verificationSuccessRate * 100).toFixed(1)}%`,
+      `${(c.verificationSuccessRate * 100).toFixed(1)}%`,
+      `${((c.verificationSuccessRate - b.verificationSuccessRate) * 100).toFixed(1)}%`,
+    ],
+    [
+      'Task Success',
+      `${(b.taskSuccessRate * 100).toFixed(1)}%`,
+      `${(c.taskSuccessRate * 100).toFixed(1)}%`,
+      `${((c.taskSuccessRate - b.taskSuccessRate) * 100).toFixed(1)}%`,
+    ],
+    [
+      'Tool Failure Rate',
+      `${(b.toolFailureRate * 100).toFixed(1)}%`,
+      `${(c.toolFailureRate * 100).toFixed(1)}%`,
+      `${((c.toolFailureRate - b.toolFailureRate) * 100).toFixed(1)}%`,
+    ],
+    [
+      'Total Tokens',
+      String(b.totalTokens),
+      String(c.totalTokens),
+      String(c.totalTokens - b.totalTokens),
+    ],
+    [
+      'Wall Time (ms)',
+      String(b.wallTimeMs),
+      String(c.wallTimeMs),
+      String(c.wallTimeMs - b.wallTimeMs),
+    ],
+  ];
+
+  return [
+    color.cyan(`CANARY COMPARISON: ${record.canaryId} (${record.candidateId})`),
+    '',
+    table(['DIMENSION', 'BASELINE', 'CANARY', 'DELTA'], rows),
+  ].join('\n');
+}
+
+export async function canaryShadowCommand(
+  engine: RookEngine,
+  canaryId: string,
+  options?: { json?: boolean },
+): Promise<string> {
+  const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
+  if (!canaryService) {
+    if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
+    return color.yellow('CanaryDeploymentService is not configured on this engine.');
+  }
+
+  let shadowResults: any[] = [];
+  if (typeof canaryService.getShadowResults === 'function') {
+    shadowResults = canaryService.getShadowResults(canaryId);
+  }
+
+  if (options?.json) {
+    return JSON.stringify(shadowResults, null, 2);
+  }
+
+  if (shadowResults.length === 0) {
+    return `No shadow evaluation results recorded for canary '${canaryId}'.`;
+  }
+
+  const rows = shadowResults.map((s: any) => [
+    s.taskId.slice(0, 16),
+    s.productionOutcome.success ? color.green('PASS') : color.red('FAIL'),
+    s.shadowOutcome.success ? color.green('PASS') : color.red('FAIL'),
+    s.metricsDelta.verificationAgreed ? color.green('YES') : color.red('NO'),
+    `${s.metricsDelta.tokensDelta > 0 ? '+' : ''}${s.metricsDelta.tokensDelta}`,
+    `${s.metricsDelta.wallTimeDeltaMs > 0 ? '+' : ''}${s.metricsDelta.wallTimeDeltaMs}ms`,
+  ]);
+
+  return [
+    color.cyan(`SHADOW EVALUATION RESULTS FOR ${canaryId}`),
+    `Total Shadow Workloads: ${shadowResults.length} (Production Impact: NONE)`,
+    '',
+    table(['TASK ID', 'PROD SUCCESS', 'SHADOW SUCCESS', 'VERIF AGREE', 'TOKENS Δ', 'WALL TIME Δ'], rows),
+  ].join('\n');
 }
 
 export async function canaryRollbackCommand(
@@ -2639,27 +2828,41 @@ export async function canaryRollbackCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
 
   const record = canaryService.getDeployment(canaryId);
   if (!record) {
+    if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
     return color.red(`Canary deployment '${canaryId}' not found.`);
   }
 
-  const rolledBack = await canaryService.triggerRollback(canaryId, {
-    metric: 'operator_override',
-    baselineValue: 0,
-    canaryValue: 0,
-    delta: 0,
-    threshold: 0,
-    description: options?.reason ?? 'Operator manual emergency rollback initiated.',
-    timestamp: new Date(),
-  });
+  const rolledBack = await canaryService.rollbackCanary(canaryId, options?.reason ?? 'Operator manual emergency rollback initiated.');
 
   if (options?.json) {
     return JSON.stringify(rolledBack, null, 2);
   }
 
   return color.green(`✓ Canary ${canaryId} successfully rolled back. 100% traffic restored to verified baseline.`);
+}
+
+export async function canaryControlCommand(
+  engine: RookEngine,
+  action: 'pause' | 'resume' | 'throttle' | 'advance',
+  canaryId: string,
+  options?: { json?: boolean; percentage?: string },
+): Promise<string> {
+  const service = engine.optimizer.getCanaryDeploymentService();
+  let record;
+  if (action === 'pause') record = await service.pauseCanary(canaryId);
+  else if (action === 'resume') record = await service.resumeCanary(canaryId);
+  else if (action === 'advance') record = await service.advanceCanaryStage(canaryId);
+  else {
+    const raw = options?.percentage ?? '';
+    if (!/^(?:\d+)(?:\.\d+)?$/.test(raw)) throw new Error(`Invalid canary percentage '${raw}'.`);
+    record = await service.throttleCanary(canaryId, Number(raw));
+  }
+  if (options?.json) return JSON.stringify(record, null, 2);
+  return color.green(`Canary ${canaryId}: ${action} complete (${record.status}, ${record.stage}, ${(record.currentAllocation * 100).toFixed(1)}%).`);
 }

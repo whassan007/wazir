@@ -8,11 +8,13 @@ import type {
   GenerationEvent,
   GenerationRequest,
   HealthStatus,
+  PromptCacheMetrics,
   ResourceEstimate,
   RuntimeAdapter,
   RuntimeCapabilities,
   RuntimeInfo,
 } from '@wazir/runtimes-interfaces';
+import { normalizePromptCacheTelemetry } from '@wazir/runtimes-interfaces';
 import { classifyFailure, isProviderRetryable, providerRetryDecision, resolveRetryPolicy, waitForRetry } from '@wazir/shared';
 
 const execFileAsync = promisify(execFile);
@@ -75,13 +77,32 @@ export class LMStudioAdapter implements RuntimeAdapter {
   readonly type = 'lmstudio' as const;
   private readonly baseURL: string;
   private readonly controllers = new Map<string, AbortController>();
+  private detectedCapabilities = {
+    promptCacheTelemetry: false,
+    cacheReadMetrics: false,
+    cacheWriteMetrics: false,
+  };
 
-  constructor(baseURL: string = 'http://localhost:1235/v1') {
+  private readonly apiKey?: string;
+
+  /**
+   * `apiKey` is sent as a Bearer token. Any authenticated OpenAI-compatible endpoint
+   * (LiteLLM, vLLM --api-key, LM Studio with auth enabled) rejects requests without it.
+   */
+  constructor(baseURL: string = 'http://localhost:1235/v1', options: { apiKey?: string } = {}) {
     this.baseURL = baseURL.replace(/\/+$/, '');
+    this.apiKey = options.apiKey ?? (process.env.WAZIR_LMSTUDIO_API_KEY || undefined);
+  }
+
+  private headers(json = false): Record<string, string> {
+    return {
+      ...(json ? { 'Content-Type': 'application/json' } : {}),
+      ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+    };
   }
 
   async discover(): Promise<RuntimeInfo> {
-    const response = await fetch(`${this.baseURL}/models`, { signal: AbortSignal.timeout(3000) });
+    const response = await fetch(`${this.baseURL}/models`, { headers: this.headers(), signal: AbortSignal.timeout(3000) });
     if (!response.ok) {
       throw new Error(`LM Studio /models responded ${response.status}`);
     }
@@ -146,7 +167,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     }
 
     try {
-      const response = await fetch(`${this.baseURL}/models`, { signal: AbortSignal.timeout(3000) });
+      const response = await fetch(`${this.baseURL}/models`, { headers: this.headers(), signal: AbortSignal.timeout(3000) });
       if (!response.ok) {
         diagnostics.apiReachable = true;
         return { 
@@ -189,7 +210,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
       child.unref();
       for (let i = 0; i < 20; i++) {
         try {
-          const res = await fetch(`${this.baseURL}/models`, { signal: AbortSignal.timeout(1000) });
+          const res = await fetch(`${this.baseURL}/models`, { headers: this.headers(), signal: AbortSignal.timeout(1000) });
           if (res.ok) return;
         } catch {}
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -201,7 +222,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
   }
 
   private async nativeModels(): Promise<NativeModel[]> {
-    const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models`, { signal: AbortSignal.timeout(5000) });
+    const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models`, { headers: this.headers(), signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`RUNTIME_UNAVAILABLE: LM Studio models HTTP ${response.status}`);
     const data = await response.json() as { models?: NativeModel[] };
     if (!Array.isArray(data.models)) throw new Error('RUNTIME_UNAVAILABLE: invalid model inventory');
@@ -219,7 +240,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     // 1. Try LM Studio v0 API which returns rich metadata for all installed models
     try {
       const host = this.baseURL.replace(/\/v1\/?$/, '');
-      const response = await fetch(`${host}/api/v0/models`, { signal: AbortSignal.timeout(3000) });
+      const response = await fetch(`${host}/api/v0/models`, { headers: this.headers(), signal: AbortSignal.timeout(3000) });
       if (response.ok) {
         const data = (await response.json()) as {
           data?: Array<{
@@ -259,7 +280,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
 
     // 2. Fallback to /models
     try {
-      const response = await fetch(`${this.baseURL}/models`, { signal: AbortSignal.timeout(3000) });
+      const response = await fetch(`${this.baseURL}/models`, { headers: this.headers(), signal: AbortSignal.timeout(3000) });
       if (!response.ok) return [];
       const data = (await response.json()) as { data?: OpenAIModel[] };
       return (data.data ?? []).map((model) => {
@@ -291,7 +312,10 @@ export class LMStudioAdapter implements RuntimeAdapter {
       parallelToolCalling: true,
       strictJsonSchema: true,
       streamingToolCalls: true,
-      promptCaching: false,
+      promptCaching: this.detectedCapabilities.promptCacheTelemetry,
+      promptCacheTelemetry: this.detectedCapabilities.promptCacheTelemetry,
+      cacheReadMetrics: this.detectedCapabilities.cacheReadMetrics,
+      cacheWriteMetrics: this.detectedCapabilities.cacheWriteMetrics,
       structuredOutput: true,
       vision: true,
       embeddings: false,
@@ -317,7 +341,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
   }
   async loadModel(modelId: string, options: { contextTokens?: number } = {}): Promise<void> {
     const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models/load`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(120_000),
+      method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(120_000),
       body: JSON.stringify({ model: modelId, context_length: options.contextTokens, echo_load_config: true }),
     });
     if (!response.ok) throw new Error(`RUNTIME_LOAD_FAILED: LM Studio HTTP ${response.status}`);
@@ -327,22 +351,40 @@ export class LMStudioAdapter implements RuntimeAdapter {
     const state = await this.inspectModel(modelId);
     if (!state.loaded) return;
     const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models/unload`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30_000),
+      method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(30_000),
       body: JSON.stringify({ instance_id: state.instanceId }),
     });
     if (!response.ok) throw new Error(`RUNTIME_UNLOAD_FAILED: LM Studio HTTP ${response.status}`);
     await response.json();
   }
   async probeModel(modelId: string, contextTokens: number): Promise<boolean> {
-    const state = await this.inspectModel(modelId);
-    if (!state.loaded || state.effectiveContext !== contextTokens) return false;
-    const response = await fetch(`${this.baseURL}/chat/completions`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(30_000),
-      body: JSON.stringify({ model: state.instanceId, messages: [{ role: 'user', content: 'Reply OK.' }], max_tokens: 1, stream: false }),
-    });
-    if (!response.ok) return false;
-    const data = await response.json() as { choices?: unknown[] };
-    return Array.isArray(data.choices) && data.choices.length > 0;
+    try {
+      const state = await this.inspectModel(modelId);
+      if (!state.loaded || state.effectiveContext !== contextTokens) return false;
+      const response = await fetch(`${this.baseURL}/chat/completions`, {
+        method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({ model: state.instanceId, messages: [{ role: 'user', content: 'Reply OK.' }], max_tokens: 1, stream: false }),
+      });
+      if (!response.ok) return false;
+      const data = await response.json() as { choices?: unknown[]; usage?: Record<string, any>; stats?: Record<string, any> };
+      if (data.usage || data.stats) {
+        try {
+          const pc = normalizePromptCacheTelemetry({ provider: 'lmstudio', usage: data.usage, stats: data.stats, headers: response.headers });
+          if (pc.cacheReadTokens.status === 'OBSERVED') {
+            this.detectedCapabilities.promptCacheTelemetry = true;
+            this.detectedCapabilities.cacheReadMetrics = true;
+          }
+          if (pc.cacheWriteTokens.status === 'OBSERVED') {
+            this.detectedCapabilities.cacheWriteMetrics = true;
+          }
+        } catch {
+          // Telemetry detection failure must never affect probe
+        }
+      }
+      return Array.isArray(data.choices) && data.choices.length > 0;
+    } catch {
+      return false;
+    }
   }
   async estimateModelLoad(modelId: string, contextTokens: number): Promise<import('@wazir/runtimes-interfaces').ModelLoadEstimate> {
     // The REST API does not expose estimation. The diagnostic CLI supports a target host.
@@ -373,13 +415,27 @@ export class LMStudioAdapter implements RuntimeAdapter {
     const requestId = request.requestId ?? `lmstudio-${Date.now()}`;
     this.controllers.set(requestId, controller);
 
-    const messages: Array<{ role: string; content: string }> = [];
+    const messages: Array<Record<string, unknown>> = [];
     if (request.systemPrompt) {
       messages.push({ role: 'system', content: request.systemPrompt });
     }
     for (const message of request.messages) {
-      if (message.role === 'tool') {
+      if (message.role === 'tool' && message.toolCallId) {
+        // Native protocol: the result answers a specific assistant tool call.
+        messages.push({ role: 'tool', tool_call_id: message.toolCallId, content: message.content });
+      } else if (message.role === 'tool') {
+        // Legacy text-action transcripts carry no call id; keep them readable as user text.
         messages.push({ role: 'user', content: `[tool result: ${message.content}]` });
+      } else if (message.role === 'assistant' && message.toolCalls?.length) {
+        messages.push({
+          role: 'assistant',
+          content: message.content || null,
+          tool_calls: message.toolCalls.map((c, i) => ({
+            id: c.id ?? `tool-${i}`,
+            type: 'function',
+            function: { name: c.name, arguments: typeof c.arguments === 'string' ? c.arguments : JSON.stringify(c.arguments ?? {}) },
+          })),
+        });
       } else {
         messages.push({ role: message.role, content: message.content });
       }
@@ -401,7 +457,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
       try {
         const candidate = await fetch(`${this.baseURL}/chat/completions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: this.headers(true),
           body: JSON.stringify({
             model: request.modelId,
             messages,
@@ -462,24 +518,43 @@ export class LMStudioAdapter implements RuntimeAdapter {
 
     let full = '';
     let usage: GenerationEvent['usage'];
+    let rawUsageChunk: Record<string, any> | undefined;
+    let rawStatsChunk: Record<string, any> | undefined;
+    const responseHeaders = response.headers;
     const pendingToolCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
+    let finishReason: string | undefined;
     const buffer = createSSEBuffer();
 
     try {
+      // One decoder per stream: {stream: true} only reassembles multi-byte characters
+      // split across chunks when the same decoder instance sees every chunk.
+      const decoder = new TextDecoder();
       const reader = response.body.getReader();
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer.push(new TextDecoder().decode(value, { stream: true }));
+        buffer.push(decoder.decode(value, { stream: true }));
         for (const payload of buffer.drain()) {
           if (payload === '[DONE]') continue;
-          const chunk = JSON.parse(payload) as StreamChunk;
+          let chunk: StreamChunk;
+          try {
+            chunk = JSON.parse(payload) as StreamChunk;
+          } catch {
+            // Malformed chunk should not crash the stream
+            continue;
+          }
 
+          const finish = (chunk.choices?.[0] as { finish_reason?: string | null } | undefined)?.finish_reason;
+          if (finish) finishReason = finish;
           const delta = chunk.choices?.[0]?.delta;
-          const text = delta?.content || delta?.reasoning_content;
-          if (text) {
-            full += text;
-            yield { type: 'token', content: text };
+          // Reasoning is streamed for progress but kept out of the answer: mixing it into
+          // `token`/`completed.content` leaked chain-of-thought and corrupted final answers.
+          if (delta?.reasoning_content) {
+            yield { type: 'reasoning', content: delta.reasoning_content };
+          }
+          if (delta?.content) {
+            full += delta.content;
+            yield { type: 'token', content: delta.content };
           }
           for (const call of delta?.tool_calls ?? []) {
             const entry = pendingToolCalls.get(call.index) ?? { arguments: '' };
@@ -490,11 +565,15 @@ export class LMStudioAdapter implements RuntimeAdapter {
           }
 
           if (chunk.usage) {
+            rawUsageChunk = chunk.usage;
             usage = {
               inputTokens: chunk.usage.prompt_tokens ?? 0,
               outputTokens: chunk.usage.completion_tokens ?? 0,
               totalTokens: chunk.usage.total_tokens,
             };
+          }
+          if ((chunk as any).stats) {
+            rawStatsChunk = (chunk as any).stats;
           }
         }
       }
@@ -514,18 +593,66 @@ export class LMStudioAdapter implements RuntimeAdapter {
         };
       }
 
+      const promptCache = normalizePromptCacheTelemetry({
+        provider: 'lmstudio',
+        inputTokens: usage?.inputTokens ?? 0,
+        usage: rawUsageChunk,
+        stats: rawStatsChunk,
+        headers: responseHeaders,
+      });
+
+      if (promptCache.cacheReadTokens.status === 'OBSERVED') {
+        this.detectedCapabilities.promptCacheTelemetry = true;
+        this.detectedCapabilities.cacheReadMetrics = true;
+      }
+      if (promptCache.cacheWriteTokens.status === 'OBSERVED') {
+        this.detectedCapabilities.cacheWriteMetrics = true;
+      }
+
       yield {
         type: 'completed',
+        finishReason,
         content: full,
-        usage: usage ?? { inputTokens: 0, outputTokens: 0 },
+        usage: {
+          inputTokens: usage?.inputTokens ?? 0,
+          outputTokens: usage?.outputTokens ?? 0,
+          totalTokens: usage?.totalTokens ?? ((usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0)),
+          cacheReadTokens: promptCache.cacheReadTokens.value,
+          cacheWriteTokens: promptCache.cacheWriteTokens.value,
+          promptCache,
+        },
+        promptCache,
       };
     } catch (error) {
       if (controller.signal.aborted) {
-        yield { type: 'completed', content: full, usage: usage ?? { inputTokens: 0, outputTokens: 0 } };
+        const promptCache = normalizePromptCacheTelemetry({
+          provider: 'lmstudio',
+          inputTokens: usage?.inputTokens ?? 0,
+          usage: rawUsageChunk,
+          stats: rawStatsChunk,
+          headers: responseHeaders,
+        });
+        yield {
+          type: 'completed',
+          finishReason: 'cancelled',
+          content: full,
+          usage: {
+            inputTokens: usage?.inputTokens ?? 0,
+            outputTokens: usage?.outputTokens ?? 0,
+            totalTokens: usage?.totalTokens ?? ((usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0)),
+            cacheReadTokens: promptCache.cacheReadTokens.value,
+            cacheWriteTokens: promptCache.cacheWriteTokens.value,
+            promptCache,
+          },
+          promptCache,
+        };
       } else {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }
     } finally {
+      // Also reached when the consumer stops iterating early: abort so the provider
+      // stops generating instead of streaming into a closed reader. No-op once done.
+      controller.abort();
       this.controllers.delete(requestId);
     }
   }

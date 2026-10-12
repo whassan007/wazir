@@ -326,15 +326,39 @@ export class EvaluationService {
       ? Math.round(contextSamples.reduce((a, b) => a + b, 0) / contextSamples.length)
       : m.inputTokens;
 
-    // Check runtime cache telemetry if present in rawMetrics or events
+    // Check runtime cache telemetry if present in promptCache, rawMetrics, or events
     let cacheReadTokens: MetricValue<number> = { value: 0, kind: 'unavailable', note: 'Runtime does not expose prompt cache reads' };
     let cacheWriteTokens: MetricValue<number> = { value: 0, kind: 'unavailable', note: 'Runtime does not expose prompt cache writes' };
 
     const rawUsage = (record.usage as Record<string, any>) ?? {};
-    if (typeof rawUsage.cacheReadTokens === 'number') {
+    const pc = rawUsage.promptCache ?? (rawUsage.promptCacheMetrics ? {
+      cacheReadTokens: rawUsage.promptCacheMetrics.cacheReadTokens,
+      cacheWriteTokens: rawUsage.promptCacheMetrics.cacheWriteTokens,
+    } : undefined);
+
+    if (pc?.cacheReadTokens) {
+      const cr = pc.cacheReadTokens;
+      if (cr.status === 'OBSERVED' && typeof cr.value === 'number') {
+        cacheReadTokens = { value: cr.value, kind: 'measured', unit: 'tokens' };
+      } else if (cr.status === 'ESTIMATED' && typeof cr.value === 'number') {
+        cacheReadTokens = { value: cr.value, kind: 'estimated', unit: 'tokens' };
+      } else {
+        cacheReadTokens = { value: 0, kind: 'unavailable', note: `Cache read status: ${cr.status}` };
+      }
+    } else if (typeof rawUsage.cacheReadTokens === 'number') {
       cacheReadTokens = { value: rawUsage.cacheReadTokens, kind: 'measured', unit: 'tokens' };
     }
-    if (typeof rawUsage.cacheWriteTokens === 'number') {
+
+    if (pc?.cacheWriteTokens) {
+      const cw = pc.cacheWriteTokens;
+      if (cw.status === 'OBSERVED' && typeof cw.value === 'number') {
+        cacheWriteTokens = { value: cw.value, kind: 'measured', unit: 'tokens' };
+      } else if (cw.status === 'ESTIMATED' && typeof cw.value === 'number') {
+        cacheWriteTokens = { value: cw.value, kind: 'estimated', unit: 'tokens' };
+      } else {
+        cacheWriteTokens = { value: 0, kind: 'unavailable', note: `Cache write status: ${cw.status}` };
+      }
+    } else if (typeof rawUsage.cacheWriteTokens === 'number') {
       cacheWriteTokens = { value: rawUsage.cacheWriteTokens, kind: 'measured', unit: 'tokens' };
     }
 

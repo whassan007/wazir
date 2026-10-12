@@ -336,8 +336,19 @@ export async function executeTask(
   // run here, in-process, regardless.
   const placement = { runtimeId: scheduling.runtimeId, computerId: scheduling.computerId, contextTokens: context.available.tokens };
 
+  const activeRuntimeReg = engine.runtimes.get(scheduling.runtimeId);
+  const activeModelReg = engine.models.get(scheduling.modelId);
+  const resolvedCapabilities: Partial<import('@wazir/runtimes-interfaces').RuntimeCapabilities> = {
+    ...(activeRuntimeReg?.capabilities ?? {}),
+    toolCalling: activeModelReg?.toolCalling ?? activeRuntimeReg?.capabilities.toolCalling ?? false,
+    nativeToolCalling: activeModelReg?.toolCalling ?? activeRuntimeReg?.capabilities.toolCalling ?? false,
+    structuredOutput: activeModelReg?.structuredOutput ?? activeRuntimeReg?.capabilities.structuredOutput ?? false,
+  };
+
   const runtime: AgentRuntime = {
     tools: availableTools,
+    runtimeCapabilities: resolvedCapabilities,
+    getCapabilities: () => resolvedCapabilities,
 
     escalate: createEscalationHandler(engine, {
       executionId,
@@ -362,6 +373,12 @@ export async function executeTask(
       loader.start(`Waiting for model response (${request.modelId})...`);
       await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
       if (engine.web) request = { ...request, messages: await recordWebContext(engine.executions, executionId, request.messages, engine.web.limits.maxGroundingTokens) };
+      // Inference outcome evidence for health diagnostics; 'unknown' when the stream ended without either.
+      let outcome: { outcome: 'completed' | 'error' | 'unknown'; error?: string } = { outcome: 'unknown' };
+      const observe = (event: { type: string; error?: string }) => {
+        if (event.type === 'completed') outcome = { outcome: 'completed' };
+        else if (event.type === 'error') outcome = { outcome: 'error', error: event.error };
+      };
 
       try {
         if (!placement.computerId || placement.computerId === engine.worker.computerId) {
@@ -387,6 +404,7 @@ export async function executeTask(
             tools: request.tools,
           })) {
             await engine.executions.recordProviderEvent(executionId, event, retryContext);
+            observe(event);
             if (event.type === 'token') {
               loader.setText(`Generating response from ${request.modelId}...`);
             }
@@ -395,6 +413,9 @@ export async function executeTask(
                 input: event.usage.inputTokens,
                 output: event.usage.outputTokens,
                 total: event.usage.totalTokens,
+                cacheReadTokens: event.usage.cacheReadTokens,
+                cacheWriteTokens: event.usage.cacheWriteTokens,
+                promptCacheMetrics: event.promptCache ?? event.usage.promptCache,
               });
             }
             yield event;
@@ -418,6 +439,7 @@ export async function executeTask(
               const generationEvent = toGenerationEvent(event);
               if (!generationEvent) continue;
               await engine.executions.recordProviderEvent(executionId, generationEvent, retryContext);
+              observe(generationEvent);
               if (generationEvent.type === 'token') {
                 loader.setText(`Generating response from ${request.modelId}...`);
               }
@@ -426,6 +448,9 @@ export async function executeTask(
                   input: generationEvent.usage.inputTokens,
                   output: generationEvent.usage.outputTokens,
                   total: generationEvent.usage.totalTokens,
+                  cacheReadTokens: generationEvent.usage.cacheReadTokens,
+                  cacheWriteTokens: generationEvent.usage.cacheWriteTokens,
+                  promptCacheMetrics: generationEvent.promptCache ?? generationEvent.usage.promptCache,
                 });
               }
               yield generationEvent;
@@ -441,7 +466,7 @@ export async function executeTask(
         }
       } finally {
         loader.stop();
-        await engine.executions.recordEvent(executionId, 'generation.completed');
+        await engine.executions.recordEvent(executionId, 'generation.completed', { modelId: request.modelId, runtimeId: placement.runtimeId, ...outcome });
       }
     },
 

@@ -33,6 +33,8 @@ export { reconstructExecutionState, planRecovery } from './executionRecovery.js'
 export type { ReconstructedExecutionState, RecoveryBudgetLimits, RecoveryPlan, ToolOutcomeInspection } from './executionRecovery.js';
 export { explainExecution } from './executionExplanation.js';
 export type { ExecutionExplanation } from './executionExplanation.js';
+export { inspectVerificationEvidence, explainCompletion, assessCompletionEvidence, UNKNOWN as EVIDENCE_UNKNOWN } from './verificationEvidenceInspector.js';
+export type { VerificationInspection, EvidenceSlot, EvidenceSlotStatus, PhysicalMutationRow, ProvenanceStep, CompletionAssessment, WhyCompleteAnswer } from './verificationEvidenceInspector.js';
 export type { CircuitState, CircuitStatus, ModelReliabilityOptions, ReliabilityOutcome } from './modelReliability.js';
 export { detectOracleWeakening, isVerificationAsset, taskAuthorizesVerificationChanges } from './verificationIntegrity.js';
 export type { OracleWeakeningFinding, OracleWeakeningKind } from './verificationIntegrity.js';
@@ -67,6 +69,8 @@ export type { TaskComplexity, ComplexityBudget } from './complexity.js';
 export { RecoveryManager, createRecoveryManager } from './recoveryManager.js';
 export type { RecoveryManagerOptions, RecoverySweepResult } from './recoveryManager.js';
 export { ModelLifecycleService } from './modelLifecycleService.js';
+export { buildHealthReport, HealthEvidenceLog, DEFAULT_HEALTH_THRESHOLDS, DIAGNOSTIC_CODES, inferenceKey, ago as formatAgo } from './healthDiagnostics.js';
+export type { HealthSnapshotInput } from './healthDiagnostics.js';
 export type {
   ModelLifecycleServiceDeps,
   ModelReadiness,
@@ -107,12 +111,13 @@ export type { ArtifactIntelligenceOptions } from './artifactIntelligenceService.
 export { BrowserVerificationService } from './browserVerificationService.js';
 export { BranchSearchService } from './branchSearchService.js';
 export type { BranchSearchServiceOptions } from './branchSearchService.js';
-export { SolutionSearchService } from './solutionSearchService.js';
+export { SolutionSearchService, assembleSearchNodeInspection } from './solutionSearchService.js';
 export type {
   SolutionSearchServiceOptions,
   CandidateRunner,
   CandidateRunnerContext,
   EvaluationServiceInterface,
+  AssembleSearchNodeInspectionOptions,
 } from './solutionSearchService.js';
 export { GovernanceService } from './governanceService.js';
 export type { GovernanceServiceOptions } from './governanceService.js';
@@ -149,6 +154,8 @@ export { ModelIntelligenceService } from './modelIntelligenceService.js';
 export type { ModelIntelligenceServiceOptions } from './modelIntelligenceService.js';
 export { StrategyLearningService } from './strategyLearningService.js';
 export type { StrategyLearningServiceOptions } from './strategyLearningService.js';
+export { StrategySemanticIndex, buildStrategyDocument, buildAntiStrategyDocument, normalizeStrategyText, STRATEGY_DOCUMENT_VERSION } from './strategySemanticIndex.js';
+export type { StrategySemanticIndexOptions, StrategySemanticCandidates } from './strategySemanticIndex.js';
 export {
   HierarchicalMctsService,
   computeStrategyDiversity,
@@ -157,3 +164,9 @@ export {
   selectBestUCTChild,
 } from './hierarchicalMctsService.js';
 export type { HierarchicalMctsServiceOptions } from './hierarchicalMctsService.js';
+export {
+  DistributedMctsCoordinator,
+  DistributedSearchCoordinator,
+  digest,
+} from './distributedSearchCoordinator.js';
+export type { DistributedSearchCoordinatorOptions } from '../types/distributedSearch.js';

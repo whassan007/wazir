@@ -1,4 +1,4 @@
-import type { Task, TaskStatus, WorkspaceMode } from './task.js';
+import type { Task, TaskStatus, WorkspaceMode, TaskRequirements } from './task.js';
 
 export type { Task, TaskStatus, WorkspaceMode };
 import type { PolicyDecision } from './policy.js';
@@ -38,18 +38,24 @@ export interface JobGraph {
 
 export interface JobNode {
   id: string;
+  parentId?: string;
   type: 'task' | 'aggregator' | 'evaluator' | 'supervisor';
   taskId?: string;
   agentId?: string;
+  requirements?: TaskRequirements;
   state: AgentState;
   dependencies: string[];
   children: string[];
+  inputs?: unknown;
   result?: unknown;
+  artifacts?: string[];
+  evidence?: string[];
   error?: string;
   retryCount?: number;
   attempts?: Array<{ state: AgentState; error?: string; executedAt?: Date; completedAt?: Date }>;
   executedAt?: Date;
   completedAt?: Date;
+  workspaceRevision?: string;
 }
 
 export interface JobMessage {
@@ -74,6 +80,23 @@ export interface JobMessage {
   artifactReferences?: string[];
   priority: 'low' | 'normal' | 'high' | 'critical';
   timestamp: Date;
+}
+
+export interface AgentHandoff {
+  sourceNodeId: string;
+  targetNodeId: string;
+  findings: {
+    description: string;
+    type: 'claim' | 'observation' | 'artifact' | 'verified_evidence';
+    evidenceRefs?: string[]; // references to JobArtifact ids
+  }[];
+  artifactRefs: string[]; // JobArtifact ids
+  evidenceRefs: string[]; // JobArtifact ids that are evidence
+  changedFiles: string[]; // file paths
+  workspaceRevision: string; // commit hash or checkpoint id
+  unresolvedQuestions: string[];
+  constraints: string[];
+  generatedAt: Date;
 }
 
 export interface JobArtifact {

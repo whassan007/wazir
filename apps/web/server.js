@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const PORT = Number(process.env.PORT ?? 4801);
+const HOST = process.env.WAZIR_WEB_HOST ?? '127.0.0.1';
 const API = (process.env.WAZIR_API ?? 'http://localhost:4800').replace(/\/+$/, '');
 // Operator token for the API. The dashboard holds it server-side and attaches
 // it to proxied requests, so it never reaches the browser — which also means
@@ -43,9 +44,12 @@ function proxy(req, res) {
     upstreamRes.pipe(res);
   });
   upstream.on('error', (error) => {
+    if (res.headersSent) { res.destroy(error); return; }
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: `api unreachable: ${error.message}` }));
   });
+  upstream.setTimeout(30_000, () => upstream.destroy(new Error('API request timed out')));
+  res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
   req.pipe(upstream);
 }
 
@@ -73,7 +77,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`wazir-web listening on http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`wazir-web listening on http://${HOST}:${server.address().port}`);
   console.log(`  proxying /api and /health → ${API}`);
 });

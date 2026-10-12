@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import type {
   ExecutionCheckpoint,
   CheckpointCreateOptions,
@@ -11,9 +11,11 @@ import type {
 import type { ExecutionEngine } from './executionEngine.js';
 import type { WorktreeManager, WorktreeMergeResult } from './worktreeManager.js';
 import type { ProvenanceManager } from './provenanceManager.js';
-import { injectFault } from '@wazir/shared';
+import { injectFault, type KeyValueStore } from '@wazir/shared';
 
 export interface CheckpointServiceOptions {
+  /** Durable store owned by the host. Without it checkpoints are explicitly ephemeral. */
+  store?: KeyValueStore;
   executionEngine: ExecutionEngine;
   worktreeManager: WorktreeManager;
   provenanceManager?: ProvenanceManager;
@@ -21,6 +23,8 @@ export interface CheckpointServiceOptions {
 }
 
 export class CheckpointService {
+  readonly ready: Promise<void>;
+  private readonly store?: KeyValueStore;
   private readonly checkpoints = new Map<string, ExecutionCheckpoint>();
   private readonly executionEngine: ExecutionEngine;
   private readonly worktreeManager: WorktreeManager;
@@ -28,10 +32,28 @@ export class CheckpointService {
   private readonly defaultWorkspaceRoot: string;
 
   constructor(options: CheckpointServiceOptions) {
+    this.store = options.store;
     this.executionEngine = options.executionEngine;
     this.worktreeManager = options.worktreeManager;
     this.provenanceManager = options.provenanceManager;
     this.defaultWorkspaceRoot = options.defaultWorkspaceRoot ?? process.cwd();
+    this.ready = this.restore();
+  }
+
+  private async restore(): Promise<void> {
+    if (!this.store) return;
+    for (const { key, value } of await this.store.list('checkpoint/')) {
+      const envelope = value as { version: number; digest: string; checkpoint: ExecutionCheckpoint };
+      const checkpoint = envelope?.checkpoint;
+      if (envelope?.version !== 1 || !checkpoint || key !== `checkpoint/${checkpoint.id}` ||
+          typeof checkpoint.executionId !== 'string' || !Number.isSafeInteger(checkpoint.workspaceRevision) ||
+          !checkpoint.worktreeState?.filesSnapshot || !Number.isFinite(new Date(checkpoint.createdAt).getTime())) {
+        throw new Error(`INVALID_CHECKPOINT: ${key}`);
+      }
+      if (this.computeDigest(checkpoint) !== envelope.digest) throw new Error(`CHECKPOINT_DIGEST_MISMATCH: ${key}`);
+      checkpoint.createdAt = new Date(checkpoint.createdAt);
+      this.checkpoints.set(checkpoint.id, checkpoint);
+    }
   }
 
   /**
@@ -47,6 +69,7 @@ export class CheckpointService {
     executionId: string,
     options: CheckpointCreateOptions = {},
   ): Promise<ExecutionCheckpoint> {
+    await this.ready;
     const record = await this.executionEngine.get(executionId);
     if (!record) {
       throw new Error(`Execution '${executionId}' not found`);
@@ -107,7 +130,11 @@ export class CheckpointService {
 
     await injectFault('DURING_CHECKPOINT', { executionId, checkpointId, workspaceRevision: currentRevision });
 
-    this.checkpoints.set(checkpointId, checkpoint);
+    // A successful return means the snapshot is committed, not merely cached.
+    await this.store?.put(`checkpoint/${checkpointId}`, {
+      version: 1, digest: this.computeDigest(checkpoint), checkpoint,
+    });
+    this.checkpoints.set(checkpointId, structuredClone(checkpoint));
 
     // Record audit / provenance event on ExecutionEngine
     (this.executionEngine as any).pushEvent?.(record, 'execution.checkpoint.created', {
@@ -125,14 +152,15 @@ export class CheckpointService {
    * Retrieves a checkpoint by ID.
    */
   public getCheckpoint(checkpointId: string): ExecutionCheckpoint | undefined {
-    return this.checkpoints.get(checkpointId);
+    const checkpoint = this.checkpoints.get(checkpointId);
+    return checkpoint ? structuredClone(checkpoint) : undefined;
   }
 
   /**
    * Lists checkpoints for an execution.
    */
   public listCheckpoints(executionId?: string): ExecutionCheckpoint[] {
-    const all = Array.from(this.checkpoints.values());
+    const all = structuredClone(Array.from(this.checkpoints.values()));
     if (!executionId) return all;
     return all.filter((c) => c.executionId === executionId);
   }
@@ -145,6 +173,7 @@ export class CheckpointService {
     checkpointId: string,
     forkedExecutionId?: string,
   ): Promise<ForkExecutionResult> {
+    await this.ready;
     const checkpoint = this.getCheckpoint(checkpointId);
     if (!checkpoint) {
       throw new Error(`Checkpoint '${checkpointId}' not found`);
@@ -232,6 +261,7 @@ export class CheckpointService {
     executionId: string,
     checkpointId: string,
   ): Promise<RollbackResult> {
+    await this.ready;
     const record = await this.executionEngine.get(executionId);
     if (!record) {
       throw new Error(`Execution '${executionId}' not found`);
@@ -436,5 +466,48 @@ export class CheckpointService {
     }
 
     return restored;
+  }
+
+  /**
+   * Computes deterministic SHA-256 digest of a checkpoint's filesSnapshot and revision.
+   */
+  public computeDigest(checkpoint: ExecutionCheckpoint): string {
+    const hash = createHash('sha256');
+    const sortedEntries = Object.entries(checkpoint.worktreeState.filesSnapshot ?? {}).sort(([a], [b]) =>
+      a.localeCompare(b),
+    );
+    for (const [filePath, content] of sortedEntries) {
+      hash.update(JSON.stringify([filePath, content]));
+    }
+    hash.update(`rev:${checkpoint.workspaceRevision}\n`);
+    return hash.digest('hex');
+  }
+
+  /**
+   * Materializes an immutable checkpoint onto a remote worker directory,
+   * verifying content-addressed digest integrity before allowing execution.
+   */
+  public async materializeOnTarget(
+    targetDir: string,
+    checkpoint: ExecutionCheckpoint,
+    expectedDigest?: string,
+  ): Promise<{ materialized: boolean; digest: string; filesRestored: string[] }> {
+    const currentDigest = this.computeDigest(checkpoint);
+    if (expectedDigest && currentDigest !== expectedDigest) {
+      throw new Error(
+        `CHECKPOINT_MATERIALIZATION_FAILED: Digest mismatch. Expected '${expectedDigest}', got '${currentDigest}'`,
+      );
+    }
+
+    const filesRestored = await this.restoreSnapshotToDirectory(
+      targetDir,
+      checkpoint.worktreeState.filesSnapshot ?? {},
+    );
+
+    return {
+      materialized: true,
+      digest: currentDigest,
+      filesRestored,
+    };
   }
 }

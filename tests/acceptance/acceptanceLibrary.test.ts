@@ -12,10 +12,10 @@ import {
 } from './acceptanceLibrary.js';
 
 describe('Wazir Acceptance Test Library', () => {
-  it('defines all 37 progressive release gates in strict order (G0 to G68)', () => {
-    expect(ACCEPTANCE_GATES).toHaveLength(37);
+  it('defines all 47 progressive release gates in strict order (G0 to G100)', () => {
+    expect(ACCEPTANCE_GATES).toHaveLength(47);
     const expectedIds: AcceptanceGateId[] = [
-      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G29', 'G30', 'G31', 'G43', 'G46', 'G47', 'G48', 'G44', 'G45', 'G49', 'G50', 'G51', 'G69', 'G70', 'G71', 'G61', 'G62', 'G66', 'G67', 'G68',
+      'G0', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7', 'G8', 'G9', 'G10', 'G11', 'G12', 'G13', 'G14', 'G15', 'G16', 'G29', 'G30', 'G31', 'G43', 'G46', 'G47', 'G48', 'G44', 'G45', 'G49', 'G50', 'G51', 'G69', 'G70', 'G71', 'G61', 'G62', 'G66', 'G67', 'G68', 'G91', 'G92', 'G93', 'G94', 'G95', 'G96', 'G97', 'G98', 'G99', 'G100',
     ];
     expect(ACCEPTANCE_GATES.map((g) => g.id)).toEqual(expectedIds);
 
@@ -29,11 +29,11 @@ describe('Wazir Acceptance Test Library', () => {
     }
   });
 
-  it('contains all 70 unique acceptance tests', () => {
+  it('contains all valid acceptance tests', () => {
     const keys = Object.keys(ACCEPTANCE_TESTS).map(Number);
-    expect(keys).toHaveLength(70);
+    expect(keys).toHaveLength(80);
 
-    for (let id = 1; id <= 70; id++) {
+    for (const id of keys) {
       const test = ACCEPTANCE_TESTS[id];
       expect(test, `Test ${id} should exist`).toBeDefined();
       expect(test.id).toBe(id);
@@ -336,5 +336,59 @@ describe('Wazir Acceptance Test Library', () => {
     ]);
     expect(g62Tests[0].id).toBe(67);
     expect(g62Tests[0].priority).toBe('P0');
+  });
+
+  it('covers Distributed MCTS acceptance gates (Tests 74-79: G91 to G96)', () => {
+    const g91Tests = getTestsForGate('G91');
+    expect(g91Tests[0].id).toBe(74);
+    expect(g91Tests[0].priority).toBe('P0');
+    expect(g91Tests[0].title).toBe('Distributed MCTS Fleet Execution (DISTRIBUTED_MCTS_FLEET)');
+
+    const g92Tests = getTestsForGate('G92');
+    expect(g92Tests[0].id).toBe(75);
+    expect(g92Tests[0].priority).toBe('P0');
+    expect(g92Tests[0].title).toBe('Distributed Branch Fault Isolation & Safe Requeue (DISTRIBUTED_BRANCH_FAULT_ISOLATION)');
+
+    const g93Tests = getTestsForGate('G93');
+    expect(g93Tests[0].id).toBe(76);
+    expect(g93Tests[0].priority).toBe('P0');
+    expect(g93Tests[0].title).toBe('Stale Result Rejection & Exactly-Once Accounting (STALE_RESULT_REJECTION)');
+
+    const g94Tests = getTestsForGate('G94');
+    expect(g94Tests[0].id).toBe(77);
+    expect(g94Tests[0].priority).toBe('P0');
+    expect(g94Tests[0].title).toBe('Control Plane Crash Recovery & State Reconciliation (CONTROL_PLANE_CRASH_RECOVERY)');
+
+    const g95Tests = getTestsForGate('G95');
+    expect(g95Tests[0].id).toBe(78);
+    expect(g95Tests[0].priority).toBe('P0');
+    expect(g95Tests[0].title).toBe('Distributed Transposition & Work Avoidance (DISTRIBUTED_TRANSPOSITION)');
+
+    const g96Tests = getTestsForGate('G96');
+    expect(g96Tests[0].id).toBe(79);
+    expect(g96Tests[0].priority).toBe('P0');
+    expect(g96Tests[0].title).toBe('Distributed vs Local Search Efficiency (DISTRIBUTED_BENCHMARK_EFFICIENCY)');
+  });
+
+  it('covers Semantic Strategy Retrieval acceptance gates (Tests 80-83: G97 to G100)', () => {
+    const g97Tests = getTestsForGate('G97');
+    expect(g97Tests[0].id).toBe(80);
+    expect(g97Tests[0].priority).toBe('P0');
+    expect(g97Tests[0].title).toBe('Semantic Strategy Retrieval Across Layouts (SEMANTIC_STRATEGY_RETRIEVAL)');
+
+    const g98Tests = getTestsForGate('G98');
+    expect(g98Tests[0].id).toBe(81);
+    expect(g98Tests[0].priority).toBe('P0');
+    expect(g98Tests[0].title).toBe('Semantic False-Positive Control on Lexical Overlap (SEMANTIC_FALSE_POSITIVE)');
+
+    const g99Tests = getTestsForGate('G99');
+    expect(g99Tests[0].id).toBe(82);
+    expect(g99Tests[0].priority).toBe('P0');
+    expect(g99Tests[0].title).toBe('Cross-Language Architecture Strategy Transfer (CROSS_LANGUAGE_STRATEGY)');
+
+    const g100Tests = getTestsForGate('G100');
+    expect(g100Tests[0].id).toBe(83);
+    expect(g100Tests[0].priority).toBe('P0');
+    expect(g100Tests[0].title).toBe('Anti-Strategy Retrieval & Non-Blocking Warnings (ANTI_STRATEGY_RETRIEVAL)');
   });
 });

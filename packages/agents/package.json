@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^1.8.0",
     "@wazir/core": "*"
   },
   "devDependencies": {

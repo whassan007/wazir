@@ -158,11 +158,13 @@ export function loadConfig(): WazirConfig {
     config.resources = fileConfig.resources;
     config.web = fileConfig.web;
     config.modelLifecyclePolicy = fileConfig.modelLifecyclePolicy;
-    config.ollamaUrl = fileConfig.ollamaUrl ?? config.ollamaUrl;
-    config.lmstudioUrl = fileConfig.lmstudioUrl ?? config.lmstudioUrl;
-    config.apiUrl = fileConfig.apiUrl ?? config.apiUrl;
-    config.apiToken = fileConfig.apiToken ?? config.apiToken;
-    config.registrationToken = fileConfig.registrationToken ?? config.registrationToken;
+    // Environment overrides config.json: `wa init` writes localhost URLs to the file, and
+    // the documented container setup relies on WAZIR_*_URL pointing elsewhere.
+    config.ollamaUrl = ollamaUrl ?? fileConfig.ollamaUrl ?? config.ollamaUrl;
+    config.lmstudioUrl = lmstudioUrl ?? fileConfig.lmstudioUrl ?? config.lmstudioUrl;
+    config.apiUrl = apiUrl ?? fileConfig.apiUrl ?? config.apiUrl;
+    config.apiToken = process.env.WAZIR_API_TOKEN ?? fileConfig.apiToken ?? config.apiToken;
+    config.registrationToken = process.env.WAZIR_REGISTRATION_TOKEN ?? fileConfig.registrationToken ?? config.registrationToken;
     config.modelContext = { ...config.modelContext, ...(fileConfig.modelContext ?? {}) };
     config.modelCapabilities = { ...config.modelCapabilities, ...(fileConfig.modelCapabilities ?? {}) };
     if (fileConfig.models) {

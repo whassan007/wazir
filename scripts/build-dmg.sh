@@ -117,7 +117,7 @@ for candidate in \
 done
 
 if [ -z "$NODE_BIN" ]; then
-  osascript -e 'display dialog "Node.js (v20+) is required to run Wazir.\n\nWould you like to open nodejs.org to download it?" with title "Wazir — Node.js Required" buttons {"Cancel", "Download Node.js"} default button "Download Node.js" with icon caution' >/dev/null 2>&1 && open "https://nodejs.org"
+  osascript -e 'display dialog "Node.js (v22.5+) is required to run Wazir.\n\nWould you like to open nodejs.org to download it?" with title "Wazir — Node.js Required" buttons {"Cancel", "Download Node.js"} default button "Download Node.js" with icon caution' >/dev/null 2>&1 && open "https://nodejs.org"
   exit 1
 fi
 
@@ -359,7 +359,7 @@ Option 2: Install CLI globally
 SYSTEM REQUIREMENTS:
 --------------------
 - macOS 12.0 (Monterey) or later (Apple Silicon M1/M2/M3/M4 & Intel x86_64).
-- Node.js v20.0.0 or later (download from https://nodejs.org or run 'brew install node').
+- Node.js v22.5.0 or later (download from https://nodejs.org or run 'brew install node').
 - Optional AI runtimes: Ollama (https://ollama.com) or LM Studio (https://lmstudio.ai).
 
 CONTENTS OF THIS DISK IMAGE:

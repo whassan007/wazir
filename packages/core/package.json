@@ -1,6 +1,6 @@
 {
   "name": "@wazir/core",
-  "version": "0.1.54",
+  "version": "0.1.57",
   "description": "Core domain types and services for the Wazir meta-harness",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
+    "@wazir/memory": "*",
     "@wazir/runtimes-interfaces": "*",
     "@wazir/shared": "*",
     "ajv": "^8.20.0",

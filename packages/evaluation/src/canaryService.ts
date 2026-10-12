@@ -4,14 +4,18 @@ import type { MemoryService } from '@wazir/memory';
 import type {
   CanaryRecord,
   CanaryStatus,
+  CanaryStage,
   CanaryRollbackThresholds,
   CanaryPromotionThresholds,
   CanarySampleMetrics,
   CanaryAssignmentResult,
   CanaryExecutionOutcome,
   CanaryRollbackReason,
+  ShadowModeResult,
   OptimizableConfig,
   SelfImprovementDomain,
+  CanaryEvent,
+  CanaryEventListener,
 } from '@wazir/core';
 
 export const DEFAULT_STAGED_EXPANSION_TIERS = [0.01, 0.05, 0.10, 0.25, 0.50];
@@ -48,6 +52,7 @@ export interface RegisterCanaryParams {
   domain: SelfImprovementDomain;
   qualificationStatus: string;
   initialAllocation?: number;
+  initialStage?: CanaryStage;
   stagedExpansionTiers?: number[];
   minimumSamples?: number;
   promotionThresholds?: Partial<CanaryPromotionThresholds>;
@@ -89,10 +94,43 @@ export class CanaryDeploymentService {
   private readonly memoryService?: MemoryService;
   private readonly deployments = new Map<string, CanaryRecord>();
   private readonly executionAssignments = new Map<string, CanaryAssignmentResult>();
+  private readonly shadowResults = new Map<string, ShadowModeResult[]>();
+  private readonly eventListeners = new Set<CanaryEventListener>();
 
   constructor(options: CanaryServiceOptions = {}) {
     this.store = options.store;
     this.memoryService = options.memoryService;
+  }
+
+  public async hydrate(): Promise<void> {
+    if (!this.store) return;
+    const entries = await this.store.list('canary/records/');
+    for (const entry of entries) {
+      const record = entry.value as CanaryRecord;
+      if (record?.canaryId) this.deployments.set(record.canaryId, record);
+    }
+  }
+
+  public onEvent(listener: CanaryEventListener): () => void {
+    this.eventListeners.add(listener);
+    return () => {
+      this.eventListeners.delete(listener);
+    };
+  }
+
+  public emitEvent(event: Omit<CanaryEvent, 'id' | 'timestamp'> & { id?: string; timestamp?: Date }): void {
+    const fullEvent: CanaryEvent = {
+      id: event.id ?? `cevt-${randomUUID()}`,
+      timestamp: event.timestamp ?? new Date(),
+      ...event,
+    };
+    for (const listener of this.eventListeners) {
+      try {
+        listener(fullEvent);
+      } catch {
+        // Observers must not crash controller execution
+      }
+    }
   }
 
   /**
@@ -127,6 +165,16 @@ export class CanaryDeploymentService {
     const tiers = params.stagedExpansionTiers ?? [...DEFAULT_STAGED_EXPANSION_TIERS];
     const initialAllocation = params.initialAllocation !== undefined ? params.initialAllocation : tiers[0];
 
+    const getStageFromAllocation = (alloc: number): CanaryStage => {
+      if (alloc <= 0) return 'QUALIFIED';
+      if (alloc <= 0.01) return 'CANARY_1';
+      if (alloc <= 0.05) return 'CANARY_5';
+      if (alloc <= 0.10) return 'CANARY_10';
+      if (alloc <= 0.25) return 'CANARY_25';
+      if (alloc <= 0.50) return 'CANARY_50';
+      return 'READY_TO_PROMOTE';
+    };
+
     const canaryId = `canary-${params.domain}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const canaryRecord: CanaryRecord = {
       canaryId,
@@ -135,6 +183,7 @@ export class CanaryDeploymentService {
       baselineConfig: structuredClone(params.baselineConfig),
       domain: params.domain,
       status: 'ACTIVE',
+      stage: params.initialStage ?? getStageFromAllocation(initialAllocation),
       currentAllocation: initialAllocation,
       stagedExpansionTiers: tiers,
       currentTierIndex: Math.max(0, tiers.indexOf(initialAllocation)),
@@ -161,6 +210,19 @@ export class CanaryDeploymentService {
       await this.store.put(`canary/records/${canaryId}`, canaryRecord);
     }
 
+    this.emitEvent({
+      type: 'canary.started',
+      canaryId,
+      candidateId: canaryRecord.candidateId,
+      domain: canaryRecord.domain,
+      stage: canaryRecord.stage,
+      allocation: canaryRecord.currentAllocation,
+      data: {
+        tiers: canaryRecord.stagedExpansionTiers,
+        minimumSamples: canaryRecord.minimumSamples,
+      },
+    });
+
     return canaryRecord;
   }
 
@@ -185,6 +247,99 @@ export class CanaryDeploymentService {
 
   public listDeployments(): CanaryRecord[] {
     return Array.from(this.deployments.values());
+  }
+
+  private operatorRecord(canaryId: string): CanaryRecord {
+    const record = this.deployments.get(canaryId);
+    if (!record) throw new Error(`Canary deployment '${canaryId}' not found.`);
+    if (!CANARY_ELIGIBLE_DOMAINS.has(record.domain)) {
+      throw new Error(`CANARY_DOMAIN_RESTRICTION: Domain '${record.domain}' is not eligible for canary control.`);
+    }
+    return record;
+  }
+
+  private async recordOperatorAction(record: CanaryRecord, action: string, previousState: string): Promise<CanaryRecord> {
+    record.updatedAt = new Date();
+    if (this.store) await this.store.put(`canary/records/${record.canaryId}`, record);
+    const event = {
+      id: `cevt-${randomUUID()}`,
+      type: 'canary.operator.action', canaryId: record.canaryId, candidateId: record.candidateId,
+      domain: record.domain, stage: record.stage, allocation: record.currentAllocation,
+      timestamp: record.updatedAt,
+      data: { candidate: record.candidateId, previousState, requestedAction: action,
+        resultingState: record.status, source: 'operator:cli', timestamp: record.updatedAt.toISOString() },
+    } as const;
+    if (this.store) await this.store.put(`canary/events/${event.id}`, event);
+    this.emitEvent(event);
+    return record;
+  }
+
+  public async pauseCanary(canaryId: string): Promise<CanaryRecord> {
+    const record = this.operatorRecord(canaryId);
+    if (!['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION'].includes(record.status)) {
+      throw new Error(`Cannot pause canary in state '${record.status}'.`);
+    }
+    const previous = record.status;
+    record.pausedAllocation = record.currentAllocation;
+    record.currentAllocation = 0;
+    record.status = 'PAUSED';
+    return this.recordOperatorAction(record, 'pause', previous);
+  }
+
+  public async resumeCanary(canaryId: string): Promise<CanaryRecord> {
+    const record = this.operatorRecord(canaryId);
+    if (record.status !== 'PAUSED' || !record.pausedAllocation) {
+      throw new Error(`Cannot resume canary in state '${record.status}'.`);
+    }
+    const previous = record.status;
+    record.currentAllocation = record.pausedAllocation;
+    delete record.pausedAllocation;
+    record.status = 'ACTIVE';
+    return this.recordOperatorAction(record, 'resume', previous);
+  }
+
+  public async throttleCanary(canaryId: string, percentage: number): Promise<CanaryRecord> {
+    const record = this.operatorRecord(canaryId);
+    if (!['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION'].includes(record.status)) {
+      throw new Error(`Cannot throttle canary in state '${record.status}'.`);
+    }
+    if (!Number.isFinite(percentage) || percentage <= 0 || percentage > record.currentAllocation * 100) {
+      throw new Error(`Invalid canary percentage '${percentage}'; expected greater than 0 and at most current allocation ${(record.currentAllocation * 100)}.`);
+    }
+    const previous = record.status;
+    record.currentAllocation = percentage / 100;
+    return this.recordOperatorAction(record, `throttle:${percentage}`, previous);
+  }
+
+  public async advanceCanaryStage(canaryId: string): Promise<CanaryRecord> {
+    const record = this.operatorRecord(canaryId);
+    if (!['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION'].includes(record.status)) {
+      throw new Error(`Cannot advance canary in state '${record.status}'.`);
+    }
+    const stages: CanaryStage[] = ['CANARY_1', 'CANARY_5', 'CANARY_10', 'CANARY_25', 'CANARY_50'];
+    const index = stages.indexOf(record.stage ?? 'QUALIFIED');
+    if (index < 0 || index >= stages.length - 1 || record.currentTierIndex !== index) {
+      throw new Error(`Cannot advance canary from stage '${record.stage}'.`);
+    }
+    const previous = `${record.status}:${record.stage}`;
+    record.currentTierIndex = index + 1;
+    record.stage = stages[index + 1];
+    record.currentAllocation = [0.01, 0.05, 0.10, 0.25, 0.50][index + 1];
+    record.status = 'STAGED_EXPANSION';
+    return this.recordOperatorAction(record, 'advance', previous);
+  }
+
+  public async rollbackCanary(canaryId: string, description: string): Promise<CanaryRecord> {
+    const record = this.operatorRecord(canaryId);
+    if (['ROLLED_BACK', 'CANARY_FAILED', 'INCONCLUSIVE'].includes(record.status)) {
+      throw new Error(`Cannot rollback canary in state '${record.status}'.`);
+    }
+    const previous = record.status;
+    const result = await this.triggerRollback(canaryId, {
+      metric: 'operator_override', baselineValue: 0, canaryValue: 0, delta: 0, threshold: 0,
+      description, timestamp: new Date(),
+    });
+    return this.recordOperatorAction(result, 'rollback', previous);
   }
 
   /**
@@ -329,6 +484,19 @@ export class CanaryDeploymentService {
     // Check for hard regressions if canary has at least 1 observation
     const regressionCheck = this.evaluateRegression(record);
     if (regressionCheck.hasRegressed && regressionCheck.reason) {
+      this.emitEvent({
+        type: 'canary.regression.detected',
+        canaryId: record.canaryId,
+        candidateId: record.candidateId,
+        domain: record.domain,
+        stage: record.stage,
+        allocation: record.currentAllocation,
+        data: {
+          reason: regressionCheck.reason,
+          metric: regressionCheck.reason.metric,
+          delta: regressionCheck.reason.delta,
+        },
+      });
       await this.triggerRollback(record.canaryId, regressionCheck.reason);
       return {
         canaryRecord: record,
@@ -336,6 +504,22 @@ export class CanaryDeploymentService {
         rollbackReason: regressionCheck.reason,
       };
     }
+
+    // Emit sample recorded
+    this.emitEvent({
+      type: 'canary.sample.recorded',
+      canaryId: record.canaryId,
+      candidateId: record.candidateId,
+      domain: record.domain,
+      stage: record.stage,
+      allocation: record.currentAllocation,
+      data: {
+        variant: outcome.variant,
+        taskSuccess: outcome.taskSuccess,
+        verificationSuccess: outcome.verificationSuccess,
+        totalExecutions: metrics.totalExecutions,
+      },
+    });
 
     // If still healthy and active, evaluate staged progression
     this.evaluateStagedProgress(record);
@@ -506,6 +690,20 @@ export class CanaryDeploymentService {
 
       if (taskSuccessRatio >= p.minTaskSuccessRateRatio && verifSuccessRatio >= p.minVerificationSuccessRateRatio) {
         record.status = 'READY_FOR_PROMOTION';
+        record.stage = 'READY_TO_PROMOTE';
+        this.emitEvent({
+          type: 'canary.ready_to_promote',
+          canaryId: record.canaryId,
+          candidateId: record.candidateId,
+          domain: record.domain,
+          stage: 'READY_TO_PROMOTE',
+          allocation: record.currentAllocation,
+          data: {
+            taskSuccessRatio,
+            verifSuccessRatio,
+            totalSamples: c.totalExecutions,
+          },
+        });
         return;
       }
     }
@@ -516,11 +714,100 @@ export class CanaryDeploymentService {
       record.currentTierIndex += 1;
       record.currentAllocation = record.stagedExpansionTiers[record.currentTierIndex];
       record.status = 'STAGED_EXPANSION';
+      if (record.currentAllocation <= 0.01) record.stage = 'CANARY_1';
+      else if (record.currentAllocation <= 0.05) record.stage = 'CANARY_5';
+      else if (record.currentAllocation <= 0.10) record.stage = 'CANARY_10';
+      else if (record.currentAllocation <= 0.25) record.stage = 'CANARY_25';
+      else if (record.currentAllocation <= 0.50) record.stage = 'CANARY_50';
+
+      this.emitEvent({
+        type: 'canary.stage.entered',
+        canaryId: record.canaryId,
+        candidateId: record.candidateId,
+        domain: record.domain,
+        stage: record.stage,
+        allocation: record.currentAllocation,
+        data: {
+          tierIndex: record.currentTierIndex,
+          samplesAtTransition: stageSamples,
+        },
+      });
     } else if (stageSamples >= p.minStageSamples) {
       record.status = 'HEALTHY';
     } else {
       record.status = 'EVALUATING';
     }
+  }
+
+  /**
+   * Evaluates candidate in shadow mode:
+   * Runs candidate against equivalent task workload, compares metrics against production outcome,
+   * ensures output never affects production result, and retains comparative observations.
+   */
+  public recordShadowExecution(params: {
+    canaryId: string;
+    taskId: string;
+    executionId: string;
+    productionOutcome: {
+      success: boolean;
+      verificationSuccess: boolean;
+      tokensUsed: number;
+      wallTimeMs: number;
+    };
+    shadowOutcome: {
+      success: boolean;
+      verificationSuccess: boolean;
+      tokensUsed: number;
+      wallTimeMs: number;
+      candidateOutput?: unknown;
+    };
+  }): ShadowModeResult {
+    const record = this.deployments.get(params.canaryId);
+    if (!record) {
+      throw new Error(`Canary deployment '${params.canaryId}' not found.`);
+    }
+
+    const shadowResult: ShadowModeResult = {
+      canaryId: params.canaryId,
+      candidateId: record.candidateId,
+      taskId: params.taskId,
+      executionId: params.executionId,
+      productionOutcome: params.productionOutcome,
+      shadowOutcome: params.shadowOutcome,
+      metricsDelta: {
+        tokensDelta: params.shadowOutcome.tokensUsed - params.productionOutcome.tokensUsed,
+        wallTimeDeltaMs: params.shadowOutcome.wallTimeMs - params.productionOutcome.wallTimeMs,
+        verificationAgreed: params.shadowOutcome.verificationSuccess === params.productionOutcome.verificationSuccess,
+      },
+      retained: true,
+      timestamp: new Date(),
+    };
+
+    record.evidenceIds.push(`shadow-${params.executionId}`);
+
+    const existingShadow = this.shadowResults.get(params.canaryId) ?? [];
+    existingShadow.push(shadowResult);
+    this.shadowResults.set(params.canaryId, existingShadow);
+
+    this.emitEvent({
+      type: 'shadow.sample.recorded',
+      canaryId: params.canaryId,
+      candidateId: record.candidateId,
+      domain: record.domain,
+      stage: 'SHADOW',
+      allocation: 0,
+      data: {
+        taskId: params.taskId,
+        executionId: params.executionId,
+        metricsDelta: shadowResult.metricsDelta,
+      },
+    });
+
+    return shadowResult;
+  }
+
+  public getShadowResults(canaryId: string): ShadowModeResult[] {
+    return this.shadowResults.get(canaryId) ?? [];
   }
 
   /**
@@ -570,6 +857,23 @@ export class CanaryDeploymentService {
     record.completedAt = new Date();
     record.updatedAt = new Date();
 
+    this.emitEvent({
+      type: 'canary.rollback.triggered',
+      canaryId: record.canaryId,
+      candidateId: record.candidateId,
+      domain: record.domain,
+      stage: record.stage,
+      allocation: 0,
+      data: {
+        reason: reason.description,
+        metric: reason.metric,
+        baselineValue: reason.baselineValue,
+        canaryValue: reason.canaryValue,
+        delta: reason.delta,
+        threshold: reason.threshold,
+      },
+    });
+
     // Record failure in MemoryService
     if (this.memoryService) {
       try {
@@ -606,3 +910,9 @@ export class CanaryDeploymentService {
     return record;
   }
 }
+
+/**
+ * CanaryManager: Target architectural alias for CanaryDeploymentService.
+ */
+export const CanaryManager = CanaryDeploymentService;
+export type CanaryManager = CanaryDeploymentService;

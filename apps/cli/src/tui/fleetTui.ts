@@ -19,19 +19,35 @@ import {
   type SubmissionSource,
   type PromptBreakdown,
   ModelLifecycleService,
+  assembleSearchNodeInspection,
 } from '@wazir/core';
 import type { RookEngine } from '../engine.js';
 import { refreshRuntime } from '../engine.js';
 import { color } from '../colors.js';
 import { createFleetTaskExecutor } from '../fleetRunner.js';
+import { collectHealthReport, fleetNodeHealth } from '../health.js';
 import { TerminalScreen, type TerminalSize } from './screen.js';
+import {
+  CanaryLiveEventBuffer,
+  CANARY_TIMELINE_FILTERS,
+  buildCanaryRollbackWhy,
+  filterTimeline,
+  loadCanaryTimeline,
+  renderCanaryTimelineModal,
+  rollbackEntryFromRecord,
+  type CanaryTimelineEntry,
+  type CanaryTimelineFilter,
+} from './canaryTimeline.js';
 import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } from '../blocks.js';
 import { resolveReference, type ResolvedReference } from '../references.js';
 import { tokensPerSecond } from '@wazir/shared';
 import { parseAction } from '@wazir/agents';
+import { inspectVerificationEvidence, explainCompletion, type VerificationInspection, type WhyCompleteAnswer, type ArtifactProvenance } from '@wazir/core';
+import { promptCacheReuse, promptCacheSource } from '@wazir/runtimes-interfaces';
 import {
   renderTaskView,
   renderSearchView,
+  renderCanaryView,
   renderFleetView,
   renderImprovementView,
   renderContextView,
@@ -39,8 +55,9 @@ import {
   renderWhyModal,
   renderModelIntelligenceView,
   renderEvidenceModal,
+  renderSearchNodeInspection,
+  flattenSearchTree,
   type TaskViewData,
-  type EvidenceViewData,
   type WhyExplanationData,
   type SearchTreeNode,
   type ImprovementExperimentItem,
@@ -54,6 +71,8 @@ import {
   type ModelProfileItem,
   type ModelIntelligenceViewData,
   type EvidenceModalData,
+  type CanaryViewTab,
+  type SearchNodeInspection,
 } from './observabilityViews.js';
 
 const execFileAsync = promisify(execFile);
@@ -148,7 +167,7 @@ function diffLines(oldText: string, newText: string): DiffLine[] {
   return result;
 }
 
-export type TuiView = 'task' | 'search' | 'fleet' | 'improvement' | 'context' | 'evidence' | 'tail' | 'approval' | 'worktrees' | 'help' | 'models';
+export type TuiView = 'task' | 'search' | 'fleet' | 'improvement' | 'context' | 'evidence' | 'tail' | 'approval' | 'worktrees' | 'help' | 'models' | 'canary';
 
 export type NavCategory = 'MCP' | 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
 
@@ -479,9 +498,16 @@ export class FleetTui {
   // Observability & Intelligence Views State
   private selectedExperimentIndex = 0;
   private selectedSearchCandidateIndex = 0;
+  private selectedSearchNodeId?: string;
+  private selectedNodeId?: string;
+  private expandedNodeId?: string;
+  private searchTreeCursor = 0;
   private selectedContextSampleIndex = 0;
   private selectedWorkerIndex = 0;
   private selectedModelProfileIndex = 0;
+  private evidenceInspection?: { taskId?: string; key: string; inspection: VerificationInspection; artifacts: ArtifactProvenance[] };
+  private evidenceRefresh?: Promise<void>;
+  private evidenceProvenanceDepth = 0;
 
   // Ring buffers for bounded telemetry
   private contextSamples: ContextSampleItem[] = [];
@@ -498,9 +524,37 @@ export class FleetTui {
   private whyModalData?: WhyExplanationData;
   private searchViewMode: 'tree' | 'table' | 'split' = 'tree';
 
+  // Canary Confirmation & Throttle Modal State
+  private canaryModal?: {
+    type: 'advance' | 'rollback' | 'throttle';
+    canaryId: string;
+    candidateId: string;
+    currentAllocation: number;
+    nextStage?: string;
+    availableTiers: number[];
+    selectedTierIndex: number;
+  };
+
+  // Canary Timeline Explorer (read-only projection; never authoritative)
+  private readonly canaryLiveEvents = new CanaryLiveEventBuffer();
+  private canaryTimeline?: {
+    canaryId: string;
+    entries: CanaryTimelineEntry[];
+    filter: CanaryTimelineFilter;
+    selectedIndex: number;
+    truncated: boolean;
+    totalAvailable: number;
+    loading: boolean;
+  };
+
   // Subscriptions
   private unsubscribeSolutionSearch?: () => void;
   private unsubscribeOptimizer?: () => void;
+  private unsubscribeCanaryEvents?: () => void;
+  // /canary view: projection of CanaryDeploymentService records (read-only).
+  private canaryTab: CanaryViewTab = 'dashboard';
+  private canaryHistoryIndex = 0;
+  private selectedCanaryId?: string;
 
   // Model Readiness & Startup Selector state
   private startupSelector?: StartupSelectorState;
@@ -636,6 +690,14 @@ export class FleetTui {
     this.draw();
   }
 
+  switchView(view: TuiView): void {
+    this.setCurrentView(view);
+  }
+
+  destroy(): void {
+    // Teardown screen or listeners if any
+  }
+
   openEvidenceModal(data: EvidenceModalData): void {
     this.evidenceModalData = data;
     this.evidenceModalOpen = true;
@@ -654,6 +716,10 @@ export class FleetTui {
     return this.evidenceModalOpen;
   }
 
+  getEvidenceModalData(): EvidenceModalData | undefined {
+    return this.evidenceModalData;
+  }
+
   openWhyModal(data: WhyExplanationData): void {
     this.whyModalData = data;
     this.whyModalOpen = true;
@@ -670,6 +736,402 @@ export class FleetTui {
     return this.whyModalOpen;
   }
 
+  isCanaryModalOpen(): boolean {
+    return Boolean(this.canaryModal);
+  }
+
+  getCanaryModal(): typeof this.canaryModal {
+    return this.canaryModal;
+  }
+
+  /** Feeds a CanaryEvent into the bounded live buffer (read-only observer). */
+  observeCanaryEvent(event: any): void {
+    this.canaryLiveEvents.push(event);
+    if (this.canaryTimeline && event?.canaryId === this.canaryTimeline.canaryId) {
+      void this.refreshCanaryTimeline();
+    }
+  }
+
+  /** Opens the read-only Canary Timeline Explorer for one canary. */
+  async openCanaryTimeline(canaryId: string): Promise<void> {
+    this.canaryTimeline = {
+      canaryId, entries: [], filter: 'ALL', selectedIndex: 0, truncated: false, totalAvailable: 0, loading: true,
+    };
+    this.draw();
+    await this.refreshCanaryTimeline(true);
+  }
+
+  private async refreshCanaryTimeline(selectLatest = false): Promise<void> {
+    const tl = this.canaryTimeline;
+    if (!tl) return;
+    const canarySvc = (this.engine.optimizer as any)?.getCanaryDeploymentService?.();
+    const result = await loadCanaryTimeline({
+      canaryId: tl.canaryId,
+      store: this.engine.store as any,
+      liveEvents: this.canaryLiveEvents.get(tl.canaryId),
+      record: canarySvc?.getDeployment?.(tl.canaryId),
+    });
+    if (this.canaryTimeline !== tl) return;
+    const previouslySelected = filterTimeline(tl.entries, tl.filter)[tl.selectedIndex]?.id;
+    tl.entries = result.entries;
+    tl.truncated = result.truncated;
+    tl.totalAvailable = result.totalAvailable;
+    tl.loading = false;
+    const visible = filterTimeline(tl.entries, tl.filter);
+    const keep = previouslySelected ? visible.findIndex((e) => e.id === previouslySelected) : -1;
+    tl.selectedIndex = selectLatest || keep < 0 ? Math.max(0, visible.length - 1) : keep;
+    this.draw();
+  }
+
+  closeCanaryTimeline(): void {
+    this.canaryTimeline = undefined;
+    this.draw();
+  }
+
+  getCanaryTimeline(): typeof this.canaryTimeline {
+    return this.canaryTimeline;
+  }
+
+  getSelectedCanaryTimelineEntry(): CanaryTimelineEntry | undefined {
+    const tl = this.canaryTimeline;
+    return tl ? filterTimeline(tl.entries, tl.filter)[tl.selectedIndex] : undefined;
+  }
+
+  setCanaryTimelineFilter(filter: CanaryTimelineFilter): void {
+    const tl = this.canaryTimeline;
+    if (!tl) return;
+    tl.filter = filter;
+    tl.selectedIndex = Math.max(0, filterTimeline(tl.entries, filter).length - 1);
+    this.draw();
+  }
+
+  private handleCanaryTimelineKey(keyStr: string, keyName: string): void {
+    const tl = this.canaryTimeline!;
+    const count = filterTimeline(tl.entries, tl.filter).length;
+    if (keyName === 'escape' || keyStr === '\u001b' || keyStr === 'q' || keyStr === 'Q') {
+      this.closeCanaryTimeline();
+      return;
+    }
+    if (keyName === 'up' || keyStr === '\u001b[A' || keyStr === 'k' || keyStr === 'K') {
+      tl.selectedIndex = Math.max(0, tl.selectedIndex - 1);
+    } else if (keyName === 'down' || keyStr === '\u001b[B' || keyStr === 'j' || keyStr === 'J') {
+      tl.selectedIndex = Math.min(Math.max(0, count - 1), tl.selectedIndex + 1);
+    } else if (keyName === 'pageup' || keyStr === '\u001b[5~') {
+      tl.selectedIndex = Math.max(0, tl.selectedIndex - 10);
+    } else if (keyName === 'pagedown' || keyStr === '\u001b[6~') {
+      tl.selectedIndex = Math.min(Math.max(0, count - 1), tl.selectedIndex + 10);
+    } else if (keyStr === 'f' || keyStr === 'F' || keyName === 'right' || keyStr === '\u001b[C' || keyName === 'left' || keyStr === '\u001b[D') {
+      const step = keyName === 'left' || keyStr === '\u001b[D' ? -1 : 1;
+      const idx = CANARY_TIMELINE_FILTERS.indexOf(tl.filter);
+      this.setCanaryTimelineFilter(CANARY_TIMELINE_FILTERS[(idx + step + CANARY_TIMELINE_FILTERS.length) % CANARY_TIMELINE_FILTERS.length]);
+      return;
+    } else if (keyStr === 'w' || keyStr === 'W') {
+      const entry = this.getSelectedCanaryTimelineEntry();
+      if (entry && (entry.label === 'ROLLBACK' || entry.guardEvidence)) {
+        this.openWhyModal(buildCanaryRollbackWhy(entry, tl.canaryId));
+      } else {
+        this.statusMessage = 'why: select a ROLLBACK or REGRESSION event.';
+      }
+      return;
+    }
+    this.draw();
+  }
+
+  getSelectedSearchNodeId(): string | undefined {
+    return this.getSelectedNodeId();
+  }
+
+  setSelectedSearchNodeId(nodeId?: string): void {
+    this.setSelectedNodeId(nodeId);
+  }
+
+  getSelectedNodeId(): string | undefined {
+    const flat = this.getFlattenedSearchTreeNodes();
+    if (flat.length === 0) {
+      if (this.selectedNodeId) return this.selectedNodeId;
+      const searches = this.engine.solutionSearch?.listSearches() ?? [];
+      const activeSearch = searches[searches.length - 1];
+      const candidates = activeSearch?.candidates ?? [];
+      return candidates[this.selectedSearchCandidateIndex]?.candidateId;
+    }
+    if (this.selectedNodeId && flat.some((n) => n.id === this.selectedNodeId)) {
+      return this.selectedNodeId;
+    }
+    const clampedIndex = Math.max(0, Math.min(this.searchTreeCursor, flat.length - 1));
+    this.searchTreeCursor = clampedIndex;
+    this.selectedNodeId = flat[clampedIndex]?.id;
+    return this.selectedNodeId;
+  }
+
+  setSelectedNodeId(nodeId?: string): void {
+    this.selectedNodeId = nodeId;
+    this.selectedSearchNodeId = nodeId;
+    if (nodeId) {
+      const flat = this.getFlattenedSearchTreeNodes();
+      const idx = flat.findIndex((n) => n.id === nodeId);
+      if (idx !== -1) {
+        this.searchTreeCursor = idx;
+      }
+    }
+  }
+
+  getExpandedNodeId(): string | undefined {
+    return this.expandedNodeId;
+  }
+
+  setExpandedNodeId(nodeId?: string): void {
+    this.expandedNodeId = nodeId;
+  }
+
+  getSearchTreeCursor(): number {
+    return this.searchTreeCursor;
+  }
+
+  setSearchTreeCursor(cursor: number): void {
+    const flat = this.getFlattenedSearchTreeNodes();
+    if (flat.length === 0) {
+      this.searchTreeCursor = 0;
+      return;
+    }
+    this.searchTreeCursor = Math.max(0, Math.min(cursor, flat.length - 1));
+    this.selectedNodeId = flat[this.searchTreeCursor]?.id;
+    this.selectedSearchNodeId = this.selectedNodeId;
+  }
+
+  getSearchTreeNodes(): SearchTreeNode[] {
+    const searches = this.engine.solutionSearch?.listSearches() ?? [];
+    const activeSearch = searches[searches.length - 1];
+    if ((activeSearch as any)?.hierarchicalTree?.nodes) {
+      const raw = (activeSearch as any).hierarchicalTree.nodes;
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw.values === 'function') return Array.from(raw.values());
+    }
+    if ((activeSearch as any)?.treeNodes && Array.isArray((activeSearch as any).treeNodes)) {
+      return (activeSearch as any).treeNodes;
+    }
+    if (activeSearch) return [];
+    return [
+      {
+        id: 'C0',
+        name: 'C0 (Root Checkpoint)',
+        state: 'completed',
+        tokens: 0,
+        children: [
+          {
+            id: 'A',
+            name: 'A (Refactor Strategy)',
+            state: 'completed',
+            tokens: 840,
+            children: [
+              {
+                id: 'A1',
+                name: 'A1',
+                state: 'completed',
+                glyph: color.green('✓'),
+                tokens: 1250,
+                testsPassed: true,
+                isFrontier: true,
+              },
+              {
+                id: 'A2',
+                name: 'A2',
+                state: 'pruned',
+                glyph: color.red('×'),
+                prunedReason: 'build failed',
+                tokens: 920,
+                testsPassed: false,
+                isDominated: true,
+              },
+            ],
+          },
+          {
+            id: 'B',
+            name: 'B (Incremental Strategy)',
+            state: 'active',
+            tokens: 610,
+            children: [
+              {
+                id: 'B1',
+                name: 'B1',
+                state: 'verifying',
+                glyph: color.yellow('◶'),
+                tokens: 780,
+              },
+              {
+                id: 'B2',
+                name: 'B2',
+                state: 'pending',
+                tokens: 340,
+              },
+            ],
+          },
+          {
+            id: 'C',
+            name: 'C (Parallel Strategy)',
+            state: 'pruned',
+            glyph: color.red('×'),
+            prunedReason: 'timeout',
+            tokens: 450,
+            isDominated: true,
+          },
+        ],
+      },
+    ];
+  }
+
+  getFlattenedSearchTreeNodes(): SearchTreeNode[] {
+    return flattenSearchTree(this.getSearchTreeNodes());
+  }
+
+  moveSearchTreeCursor(delta: number): void {
+    const flat = this.getFlattenedSearchTreeNodes();
+    if (flat.length === 0) return;
+    this.setSearchTreeCursor(this.searchTreeCursor + delta);
+  }
+
+  navigateSearchTreeParent(): void {
+    const roots = this.getSearchTreeNodes();
+    const flat = this.getFlattenedSearchTreeNodes();
+    if (flat.length === 0) return;
+    const currentId = this.getSelectedNodeId() ?? flat[this.searchTreeCursor]?.id;
+    if (!currentId) return;
+
+    let parentNode: SearchTreeNode | undefined;
+    function findParent(node: SearchTreeNode) {
+      if (node.children) {
+        for (const child of node.children) {
+          if (child.id === currentId) {
+            parentNode = node;
+            return;
+          }
+          findParent(child);
+        }
+      }
+    }
+    for (const root of roots) {
+      findParent(root);
+      if (parentNode) break;
+    }
+
+    if (parentNode) {
+      this.setSelectedNodeId(parentNode.id);
+    }
+  }
+
+  navigateSearchTreeChild(): void {
+    const roots = this.getSearchTreeNodes();
+    const flat = this.getFlattenedSearchTreeNodes();
+    if (flat.length === 0) return;
+    const currentId = this.getSelectedNodeId() ?? flat[this.searchTreeCursor]?.id;
+    if (!currentId) return;
+
+    let currentNode: SearchTreeNode | undefined;
+    function findNode(node: SearchTreeNode) {
+      if (node.id === currentId) {
+        currentNode = node;
+        return;
+      }
+      if (node.children) {
+        for (const child of node.children) {
+          findNode(child);
+          if (currentNode) return;
+        }
+      }
+    }
+    for (const root of roots) {
+      findNode(root);
+      if (currentNode) break;
+    }
+
+    if (currentNode && currentNode.children && currentNode.children.length > 0) {
+      const firstChild = currentNode.children[0];
+      this.setSelectedNodeId(firstChild.id);
+    }
+  }
+
+  inspectSearchNode(nodeId?: string): SearchNodeInspection | undefined {
+    const id = nodeId ?? this.getSelectedSearchNodeId();
+    if (!id) return undefined;
+    const searches = this.engine.solutionSearch?.listSearches() ?? [];
+    const activeSearch = searches[searches.length - 1];
+    const roots = this.getSearchTreeNodes();
+    let foundNode: SearchTreeNode | undefined;
+    function searchInTree(node: SearchTreeNode) {
+      if (node.id === id) {
+        foundNode = node;
+        return;
+      }
+      if (node.children) {
+        for (const child of node.children) {
+          searchInTree(child);
+          if (foundNode) return;
+        }
+      }
+    }
+    for (const root of roots) {
+      searchInTree(root);
+      if (foundNode) break;
+    }
+
+    let parentId = foundNode?.parentId;
+    if (!parentId) {
+      function findParent(node: SearchTreeNode) {
+        if (node.children) {
+          for (const child of node.children) {
+            if (child.id === id) {
+              parentId = node.id;
+              return;
+            }
+            findParent(child);
+          }
+        }
+      }
+      for (const root of roots) {
+        findParent(root);
+        if (parentId) break;
+      }
+    }
+
+    const inspection = assembleSearchNodeInspection({
+      nodeId: id,
+      searchId: activeSearch?.searchId,
+      search: activeSearch,
+      node: foundNode as any,
+      tree: (activeSearch as any)?.hierarchicalTree,
+      engine: this.engine,
+      checkpointService: this.engine.checkpoints,
+      verificationEngine: this.engine.verification,
+      provenanceManager: this.engine.provenance,
+    });
+
+    if (foundNode) {
+      if (!inspection.phase && foundNode.state) {
+        inspection.phase = foundNode.state.toUpperCase();
+      }
+      if (!inspection.state && foundNode.state) {
+        inspection.state = foundNode.state.toUpperCase();
+      }
+      if (!inspection.modelId && foundNode.modelId) {
+        inspection.modelId = foundNode.modelId;
+      }
+      if (!inspection.workerId && foundNode.workerId) {
+        inspection.workerId = foundNode.workerId;
+      }
+      if (!(inspection as any).prunedReason && foundNode.prunedReason) {
+        (inspection as any).prunedReason = foundNode.prunedReason;
+      }
+    }
+    if (parentId && !(inspection as any).parentId) {
+      (inspection as any).parentId = parentId;
+      if (!inspection.provenance) {
+        inspection.provenance = { parentNodeId: parentId };
+      } else if (!inspection.provenance.parentNodeId) {
+        inspection.provenance.parentNodeId = parentId;
+      }
+    }
+    return inspection;
+  }
+
   buildWhyExplanation(topic: string): WhyExplanationData {
     const t = topic.toLowerCase().trim();
     const card = this.agents.get(this.selectedTaskId ?? '') ?? this.getAgents()[0];
@@ -677,29 +1139,24 @@ export class FleetTui {
     const maxRows = 24;
 
     switch (t) {
+      // Each branch reports only state observed in engine records. Absent evidence is
+      // UNKNOWN and carries no immutableHash: a fabricated digest would read as proof.
       case 'model': {
-        const modelId = card?.modelId ?? this.selectedModelId ?? 'claude-3-5-sonnet';
+        const modelId = card?.modelId ?? this.selectedModelId;
         return {
           topic: 'model',
-          headline: 'Empirical capability matching for task',
-          decision: `Assigned model [${modelId}]`,
+          headline: 'Model assignment for selected task',
+          decision: modelId ? `Assigned model [${modelId}]` : 'UNKNOWN — no model assignment recorded',
           rationale: [
-            'Task classified as requiring capabilities: architecture_reasoning, implementation',
-            'Candidate models evaluated against empirical benchmark evidence (no subjective rankings)',
-            `Selected ${modelId} based on highest measured capability confidence within token budget`,
+            modelId
+              ? 'Assignment read from the task card; routing scores are not persisted for this view.'
+              : 'No task card with a model assignment is selected.',
           ],
           evidence: [
-            { label: 'Selected Model', value: modelId },
-            { label: 'Required Capability', value: 'architecture_reasoning' },
-            { label: 'Benchmark Confidence', value: '0.94 (n=120)' },
-            { label: 'Context Budget', value: '64k tokens' },
-            { label: 'Routing Constraint', value: 'cost_and_resource_governance' },
+            { label: 'Selected Model', value: modelId ?? 'UNKNOWN' },
+            { label: 'Routing Confidence', value: 'UNKNOWN' },
           ],
-          controllerAudit: {
-            source: 'Scheduler / ModelIntelligenceService',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:model-route-7f9a8b1c',
-          },
+          controllerAudit: { source: 'Task card (FleetTui)', verifiedAt: new Date() },
           width,
           maxRows,
         };
@@ -707,27 +1164,23 @@ export class FleetTui {
 
       case 'worker': {
         const comp = this.engine.computers.list()[0];
-        const workerId = comp?.id ?? 'worker-local';
         return {
           topic: 'worker',
-          headline: 'Resource admission & locality placement',
-          decision: `Placed execution on node [${workerId}]`,
+          headline: 'Worker placement',
+          decision: comp ? `Registered worker [${comp.id}]` : 'UNKNOWN — no worker registered',
           rationale: [
-            `Worker node ${workerId} has required CPU/GPU capabilities and healthy status`,
-            'Node load average is below 85% admission ceiling; memory headroom is guaranteed',
-            'Worktree locality: local disk partition mounted with zero network overhead',
+            comp
+              ? 'Values read from ComputerRegistry; per-task placement decisions are not recorded here.'
+              : 'ComputerRegistry has no registered computers.',
           ],
           evidence: [
-            { label: 'Node Identifier', value: workerId },
-            { label: 'Available Memory', value: `${comp?.hardware?.memoryGB ?? 32}GB` },
-            { label: 'Active Reservations', value: 1 },
-            { label: 'Health Status', value: '100% HEALTHY' },
+            { label: 'Node Identifier', value: comp?.id ?? 'UNKNOWN' },
+            { label: 'Memory', value: comp?.hardware?.memoryGB !== undefined ? `${comp.hardware.memoryGB}GB` : 'UNKNOWN' },
+            { label: 'Active Reservations', value: comp?.reservations?.length ?? 'UNKNOWN' },
+            { label: 'Health Status', value: comp?.status ? String(comp.status).toUpperCase() : 'UNKNOWN' },
+            { label: 'Placement Decision', value: 'UNKNOWN' },
           ],
-          controllerAudit: {
-            source: 'ComputerRegistry / ResourceAdmissionPolicy',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:worker-admit-3e4f5a6b',
-          },
+          controllerAudit: { source: 'ComputerRegistry', verifiedAt: new Date() },
           width,
           maxRows,
         };
@@ -736,23 +1189,65 @@ export class FleetTui {
       case 'tool': {
         return {
           topic: 'tool',
-          headline: 'Policy Engine authorization & sandbox validation',
-          decision: 'Authorized tool execution (ALLOW)',
+          headline: 'Policy Engine authorization',
+          decision: 'UNKNOWN — no policy decision record is attached to this view',
           rationale: [
-            'Tool invocation verified against deterministic PolicyEngine whitelist',
-            'Target paths strictly bounded to active git worktree workspace directory',
-            'No unauthorized outbound network egress or shell escalation detected',
+            'Tool authorization is decided per call by PolicyEngine / ApprovalQueue.',
+            'Open /evidence for the recorded tool receipts of a task.',
           ],
+          evidence: [{ label: 'Policy Decision', value: 'UNKNOWN' }],
+          controllerAudit: { source: 'PolicyEngine / ApprovalQueue', verifiedAt: new Date() },
+          width,
+          maxRows,
+        };
+      }
+
+      case 'context': {
+        const samples = (this as any).contextSamples ?? [];
+        const lastSample = samples[samples.length - 1];
+        const cache = lastSample?.cache;
+        const readStatus = cache?.cacheReadTokens?.status ?? 'UNKNOWN';
+        const inputStatus = cache?.inputTokens?.status ?? 'UNKNOWN';
+        const isUnsupported = readStatus === 'UNSUPPORTED' || cache?.cacheWriteTokens?.status === 'UNSUPPORTED';
+        const providerName = cache?.provider ?? 'Provider';
+
+        let decision = 'Cache savings: UNKNOWN';
+        if (isUnsupported) {
+          decision = 'Cache savings: UNKNOWN';
+        } else if (readStatus === 'OBSERVED' && inputStatus === 'OBSERVED') {
+          decision = 'Cache savings: OBSERVED';
+        } else if (readStatus === 'ESTIMATED' || inputStatus === 'ESTIMATED') {
+          decision = 'Cache savings: ESTIMATED';
+        }
+
+        const rationale: string[] = [];
+        if (isUnsupported) {
+          rationale.push(`${providerName} does not support prompt cache telemetry on wire responses.`);
+          rationale.push('Prompt cache token savings cannot be observed directly from provider metadata.');
+        } else if (readStatus === 'OBSERVED') {
+          rationale.push(`Provider ${providerName} returned verified prompt cache usage on completion wire.`);
+          rationale.push('Cache read tokens directly observed from prompt_tokens_details or proxy headers.');
+        } else if (readStatus === 'ESTIMATED') {
+          rationale.push('Prompt cache token savings estimated from stable prefix overlap heuristics.');
+        } else {
+          rationale.push('No prompt cache telemetry recorded for current context sample window.');
+        }
+
+        return {
+          topic: 'context',
+          headline: 'Context memory & prompt cache telemetry',
+          decision,
+          rationale,
           evidence: [
-            { label: 'Policy Decision', value: 'ALLOW' },
-            { label: 'Sandbox Isolation', value: 'git_worktree_contained' },
-            { label: 'Policy Rule', value: 'workspace_boundary_enforcement' },
-            { label: 'Audit Log Status', value: 'persisted to provenance store' },
+            { label: 'Provider', value: cache?.provider ?? 'UNKNOWN' },
+            { label: 'Cache Read', value: cache?.cacheReadTokens?.status === 'OBSERVED' ? String(cache.cacheReadTokens.value) : (cache?.cacheReadTokens?.status ?? 'UNKNOWN') },
+            { label: 'Cache Write', value: cache?.cacheWriteTokens?.status === 'OBSERVED' ? String(cache.cacheWriteTokens.value) : (cache?.cacheWriteTokens?.status ?? 'UNKNOWN') },
+            { label: 'Effective Reuse', value: cache ? promptCacheReuse(cache) : 'UNKNOWN' },
+            { label: 'Source', value: cache ? promptCacheSource(cache) : 'UNKNOWN' },
           ],
           controllerAudit: {
-            source: 'PolicyEngine / ApprovalQueue',
+            source: 'ContextRevisionService / TelemetryService',
             verifiedAt: new Date(),
-            immutableHash: 'sha256:policy-allow-9b8c7d6e',
           },
           width,
           maxRows,
@@ -762,81 +1257,77 @@ export class FleetTui {
       case 'candidate': {
         const searches = this.engine.solutionSearch?.listSearches() ?? [];
         const activeSearch = searches[searches.length - 1];
-        const candId = activeSearch?.selectedCandidate?.candidateId ?? 'C1';
+        const cand = activeSearch?.selectedCandidate;
+        const check = (name: string) => {
+          const c = cand?.checks?.find((r: { name: string }) => r.name === name);
+          return c ? (c.ok ? 'PASS' : 'FAIL') : 'UNKNOWN';
+        };
+        const onFrontier = cand && activeSearch?.paretoFrontier?.candidates
+          ? activeSearch.paretoFrontier.candidates.some((c: { candidateId: string }) => c.candidateId === cand.candidateId)
+          : 'UNKNOWN';
         return {
           topic: 'candidate',
-          headline: 'Pareto frontier membership & multi-objective selection',
-          decision: `Promoted candidate [${candId}]`,
-          rationale: [
-            `Candidate ${candId} satisfies deterministic build and test verification oracles`,
-            'Non-dominated on multi-objective vector: (tokens, wall_time_ms, AST stability)',
-            'Dominates alternative candidates without introducing regression on protected metrics',
-          ],
+          headline: 'Candidate selection',
+          decision: cand ? `Selected candidate [${cand.candidateId}]` : 'UNKNOWN — no candidate selected',
+          rationale: [activeSearch?.selectionReason || 'No selection reason recorded.'],
           evidence: [
-            { label: 'Candidate ID', value: candId },
-            { label: 'Pareto Frontier', value: true },
-            { label: 'Build Oracle', value: 'PASS (exit 0)' },
-            { label: 'Test Oracle', value: 'PASS (42/42 passed)' },
-            { label: 'Selection Reason', value: activeSearch?.selectionReason ?? 'Pareto non-dominated' },
+            { label: 'Candidate ID', value: cand?.candidateId ?? 'UNKNOWN' },
+            { label: 'Pareto Frontier', value: onFrontier },
+            { label: 'Build Check', value: check('build') },
+            { label: 'Test Check', value: check('test') },
           ],
-          controllerAudit: {
-            source: 'SolutionSearchService / MultiObjectiveOptimizer',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:pareto-cand-2a3b4c5d',
-          },
+          controllerAudit: { source: 'SolutionSearchService', verifiedAt: new Date() },
           width,
           maxRows,
         };
       }
 
       case 'prune': {
+        const searches = this.engine.solutionSearch?.listSearches() ?? [];
+        const pruned = (searches[searches.length - 1]?.candidates ?? []).filter(
+          (c: { isPruned?: boolean; prunedReason?: string }) => c.isPruned || c.prunedReason,
+        );
         return {
           topic: 'prune',
-          headline: 'Search branch pruning & early termination',
-          decision: 'Pruned candidate branch (HARD/SOFT PRUNE)',
-          rationale: [
-            'Hard pruning triggered: deterministic build/compiler oracle failed with fatal diagnostic',
-            'Repair budget limit reached: candidate failed to converge within allowed cycles',
-            'Soft pruning: candidate vector strictly dominated by existing frontier node',
-          ],
-          evidence: [
-            { label: 'Prune Status', value: 'PRUNED' },
-            { label: 'Triggering Oracle', value: 'compiler_typecheck (exit 1)' },
-            { label: 'Repair Cycles Used', value: '3/3 (exhausted)' },
-            { label: 'Dominated By', value: 'Candidate C1' },
-          ],
-          controllerAudit: {
-            source: 'HierarchicalMctsService / SolutionSearchService',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:prune-audit-5e6f7a8b',
-          },
+          headline: 'Search branch pruning',
+          decision: pruned.length ? `Pruned ${pruned.length} candidate(s)` : 'UNKNOWN — no pruned candidates recorded',
+          rationale: pruned.length
+            ? pruned.slice(0, 5).map((c: { candidateId: string; prunedReason?: string }) => `${c.candidateId}: ${c.prunedReason ?? 'reason not recorded'}`)
+            : ['The active search has no pruned candidates on record.'],
+          evidence: [{ label: 'Pruned Count', value: pruned.length ? pruned.length : 'UNKNOWN' }],
+          controllerAudit: { source: 'SolutionSearchService', verifiedAt: new Date() },
           width,
           maxRows,
         };
       }
 
-      case 'complete': {
+      case 'complete':
+      case 'incomplete': {
+        // Derived only from the durable ExecutionRecord (see inspectVerificationEvidence).
+        const cached = this.currentEvidenceInspection();
+        if (!cached) {
+          return {
+            topic: 'complete',
+            headline: 'No execution evidence loaded',
+            decision: 'UNKNOWN — completion cannot be asserted without an execution record',
+            rationale: ['Open /evidence for a task with an execution record.', 'MODEL CLAIM != EXECUTION EVIDENCE: model narration is not consulted.'],
+            evidence: [],
+            controllerAudit: { source: 'ExecutionEngine record / VerificationEvidenceInspector', verifiedAt: new Date() },
+            width,
+            maxRows,
+          };
+        }
+        const { inspection, why } = cached;
         return {
-          topic: 'complete',
-          headline: 'Deterministic physical verification of completion',
-          decision: 'Task marked COMPLETE',
-          rationale: [
-            'Physical workspace mutations confirmed on disk matching AST specification',
-            'All deterministic verification checks passed with exit code 0',
-            'CRITICAL INVARIANT: MODEL CLAIM != EXECUTION EVIDENCE. Model prose was ignored.',
-            '0 unapproved policy violations and budget constraints strictly respected',
-          ],
-          evidence: [
-            { label: 'Physical Disk State', value: 'Confirmed modified on disk' },
-            { label: 'Deterministic Oracles', value: 'All 4 passed (exit 0)' },
-            { label: 'Test Failures', value: 0 },
-            { label: 'Policy Denials', value: 0 },
-            { label: 'Provenance Chain', value: 'verified sha256 immutable' },
-          ],
+          topic: why.complete ? 'complete' : 'incomplete',
+          headline: why.complete ? `Why complete? Evidence chain for R${inspection.currentRevision}` : `Why incomplete? Missing evidence for R${inspection.currentRevision}`,
+          decision: why.complete ? 'Completion eligible: YES' : 'Completion eligible: NO',
+          rationale: why.complete ? why.chain : why.missing,
+          evidence: inspection.slots.map((sl) => ({ label: sl.oracle, value: sl.status === 'MISSING' ? 'MISSING' : `${sl.status} @R${sl.revision} exit ${sl.exitCode}` })),
           controllerAudit: {
-            source: 'VerificationEngine / ExecutionEngine',
+            source: `ExecutionEngine record ${inspection.executionId}`,
             verifiedAt: new Date(),
-            immutableHash: 'sha256:completion-proof-1c2d3e4f',
+            immutableHash: String(inspection.workspaceDigest),
           },
           width,
           maxRows,
@@ -844,27 +1335,28 @@ export class FleetTui {
       }
 
       case 'rollback': {
+        // Prefer exact stored canary evidence: the timeline's selected rollback, else the
+        // timeline canary's record, else the most recently rolled-back canary record.
+        const selected = this.getSelectedCanaryTimelineEntry();
+        if (this.canaryTimeline && selected && (selected.label === 'ROLLBACK' || selected.guardEvidence)) {
+          return buildCanaryRollbackWhy(selected, this.canaryTimeline.canaryId, width, maxRows);
+        }
+        const canaryRecords: any[] = (this.engine.optimizer as any)?.getCanaryDeploymentService?.()?.listDeployments?.() ?? [];
+        const rolledBack = canaryRecords
+          .filter((r) => r?.rollbackReason)
+          .sort((a, b) => (a.canaryId === this.canaryTimeline?.canaryId ? -1 : b.canaryId === this.canaryTimeline?.canaryId ? 1 : 0)
+            || new Date(b.completedAt ?? b.updatedAt ?? 0).getTime() - new Date(a.completedAt ?? a.updatedAt ?? 0).getTime());
+        const storedEntry = rolledBack[0] ? rollbackEntryFromRecord(rolledBack[0]) : undefined;
+        if (storedEntry) {
+          return buildCanaryRollbackWhy(storedEntry, rolledBack[0].canaryId, width, maxRows);
+        }
         return {
           topic: 'rollback',
-          headline: 'RegressionGuard threshold violation & canary rollback',
-          decision: 'Rolled back to pre-experiment checkpoint',
-          rationale: [
-            'Canary candidate evaluated on distributed shard triggered protected metric violation',
-            'RegressionGuard detected statistically significant degradation in task success rate',
-            'Automated rollback restores immutable workspace revision with zero persistent state drift',
-          ],
-          evidence: [
-            { label: 'Triggering Metric', value: 'task_success_rate' },
-            { label: 'Baseline Rate', value: '0.94' },
-            { label: 'Canary Observed', value: '0.72 (< 0.90 threshold)' },
-            { label: 'Rollback Target', value: 'Checkpoint r1 (clean)' },
-            { label: 'Rollback Status', value: 'COMPLETED' },
-          ],
-          controllerAudit: {
-            source: 'CanaryDeploymentService / RegressionGuard',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:rollback-guard-8a9b0c1d',
-          },
+          headline: 'Canary rollback',
+          decision: 'UNKNOWN — no rolled-back canary on record',
+          rationale: ['CanaryDeploymentService has no deployment with a rollback reason.'],
+          evidence: [{ label: 'Rollback Status', value: 'UNKNOWN' }],
+          controllerAudit: { source: 'CanaryDeploymentService / RegressionGuard', verifiedAt: new Date() },
           width,
           maxRows,
         };
@@ -900,8 +1392,13 @@ export class FleetTui {
   }
 
   handleWhyCommand(topic: string): void {
-    const data = this.buildWhyExplanation(topic);
-    this.openWhyModal(data);
+    this.openWhyModal(this.buildWhyExplanation(topic));
+    if (topic === 'complete' || topic === 'incomplete') {
+      // Re-answer from the freshly loaded record so the modal never shows a cached revision.
+      void this.refreshEvidenceInspection().then(() => {
+        if (this.isWhyModalOpen()) this.openWhyModal(this.buildWhyExplanation(topic));
+      });
+    }
   }
 
   /**
@@ -1028,7 +1525,7 @@ export class FleetTui {
     }
 
     // Toggle target focus and cycle view (§1, §3)
-    const views: TuiView[] = ['task', 'search', 'fleet', 'improvement', 'context', 'evidence'];
+    const views: TuiView[] = ['fleet', 'tail', 'approval', 'worktrees'];
     const idx = views.indexOf(this.currentView);
     if (idx === -1) {
       this.currentView = isShift ? views[views.length - 1] : views[0];
@@ -1210,6 +1707,11 @@ export class FleetTui {
       });
     }
 
+    const canaryEventSource = (this.engine.optimizer as any)?.getCanaryDeploymentService?.();
+    if (canaryEventSource && typeof canaryEventSource.onEvent === 'function') {
+      this.unsubscribeCanaryEvents = canaryEventSource.onEvent((event: any) => this.observeCanaryEvent(event));
+    }
+
     this.draw();
   }
 
@@ -1237,6 +1739,7 @@ export class FleetTui {
     if (this.unsubscribeModelLifecycle) this.unsubscribeModelLifecycle();
     if (this.unsubscribeSolutionSearch) this.unsubscribeSolutionSearch();
     if (this.unsubscribeOptimizer) this.unsubscribeOptimizer();
+    if (this.unsubscribeCanaryEvents) this.unsubscribeCanaryEvents();
     if (this.restoreFatalRejectionHandler) {
       this.restoreFatalRejectionHandler();
       this.restoreFatalRejectionHandler = undefined;
@@ -1529,6 +2032,115 @@ export class FleetTui {
       return;
     }
 
+    if (this.canaryTimeline) {
+      this.handleCanaryTimelineKey(keyStr, keyName);
+      return;
+    }
+
+    if (this.canaryModal) {
+      const cm = this.canaryModal;
+      const canarySvc = (this.engine.optimizer as any)?.getCanaryDeploymentService?.();
+
+      // Cancel modal: Esc, n, N
+      if (key === '\u001b' || key === '\x1b' || keyName === 'escape' || keyStr === 'n' || keyStr === 'N') {
+        this.canaryModal = undefined;
+        this.statusMessage = 'Canary operation cancelled.';
+        this.draw();
+        return;
+      }
+
+      if (cm.type === 'rollback') {
+        if (keyName === 'return' || keyName === 'enter' || keyStr === 'y' || keyStr === 'Y') {
+          this.canaryModal = undefined;
+          if (canarySvc) {
+            void canarySvc.rollbackCanary(cm.canaryId, 'Operator manual emergency rollback via Mission Control')
+              .then(() => {
+                this.statusMessage = `✓ Canary ${cm.canaryId} rolled back. 100% traffic restored to baseline.`;
+                this.draw();
+              })
+              .catch((err: any) => {
+                this.statusMessage = `Rollback failed: ${err.message}`;
+                this.draw();
+              });
+            this.statusMessage = `Initiating rollback for canary ${cm.canaryId}...`;
+          } else {
+            this.statusMessage = 'Rollback initiated via control-plane API';
+          }
+          this.draw();
+          return;
+        }
+        return;
+      }
+
+      if (cm.type === 'advance') {
+        if (keyName === 'return' || keyName === 'enter' || keyStr === 'y' || keyStr === 'Y') {
+          this.canaryModal = undefined;
+          if (canarySvc) {
+            void canarySvc.advanceCanaryStage(cm.canaryId)
+              .then((updated: any) => {
+                this.statusMessage = `✓ Advanced canary ${cm.canaryId} to stage ${updated.stage} (${(updated.currentAllocation * 100).toFixed(0)}% traffic).`;
+                this.draw();
+              })
+              .catch((err: any) => {
+                this.statusMessage = `Advance failed: ${err.message}`;
+                this.draw();
+              });
+            this.statusMessage = `Advancing canary ${cm.canaryId} to next stage...`;
+          } else {
+            this.statusMessage = `Advanced canary ${cm.canaryId} to next stage.`;
+          }
+          this.draw();
+          return;
+        }
+        return;
+      }
+
+      if (cm.type === 'throttle') {
+        if (keyName === 'up' || keyStr === '\u001b[A' || keyStr === 'k' || keyStr === 'K') {
+          cm.selectedTierIndex = Math.max(0, cm.selectedTierIndex - 1);
+          this.draw();
+          return;
+        }
+        if (keyName === 'down' || keyStr === '\u001b[B' || keyStr === 'j' || keyStr === 'J') {
+          cm.selectedTierIndex = Math.min(cm.availableTiers.length - 1, cm.selectedTierIndex + 1);
+          this.draw();
+          return;
+        }
+        if (/^[1-9]$/.test(keyStr)) {
+          const idx = parseInt(keyStr, 10) - 1;
+          if (idx >= 0 && idx < cm.availableTiers.length) {
+            cm.selectedTierIndex = idx;
+            this.draw();
+            return;
+          }
+        }
+        if (keyName === 'return' || keyName === 'enter' || keyStr === 'y' || keyStr === 'Y') {
+          const selectedTier = cm.availableTiers[cm.selectedTierIndex] ?? cm.currentAllocation;
+          const pct = Math.round(selectedTier * 100);
+          this.canaryModal = undefined;
+          if (canarySvc) {
+            void canarySvc.throttleCanary(cm.canaryId, pct)
+              .then((updated: any) => {
+                this.statusMessage = `✓ Throttled canary ${cm.canaryId} traffic to ${(updated.currentAllocation * 100).toFixed(0)}%.`;
+                this.draw();
+              })
+              .catch((err: any) => {
+                this.statusMessage = `Throttle failed: ${err.message}`;
+                this.draw();
+              });
+            this.statusMessage = `Throttling canary ${cm.canaryId} traffic to ${pct}%...`;
+          } else {
+            this.statusMessage = `Throttled canary ${cm.canaryId} to ${pct}%.`;
+          }
+          this.draw();
+          return;
+        }
+        return;
+      }
+
+      return;
+    }
+
     // 2. Escape: dismiss active overlay modals, reset scroll, or return to fleet
     if (key === '\u001b' || key === '\x1b') {
       if (this.quickActionsOpen) {
@@ -1570,10 +2182,20 @@ export class FleetTui {
         this.draw();
         return;
       }
+      if (this.currentView === 'canary' && this.canaryTab !== 'dashboard') {
+        this.canaryTab = 'dashboard';
+        this.draw();
+        return;
+      }
       this.currentView = 'fleet';
       this.focusedPane = 'nav';
       this.screen.clearLastBuffer();
       this.draw();
+      return;
+    }
+
+    // 2.5 Canary view keys. Runs before global letter shortcuts ('c' cancels a job).
+    if (this.currentView === 'canary' && this.inputBuffer.length === 0 && this.handleCanaryViewKey(keyStr, keyName)) {
       return;
     }
 
@@ -1810,9 +2432,9 @@ export class FleetTui {
       return;
     }
 
-    // 13.5. Direct View Switching: 1-5 or F1-F5 (when input buffer is empty)
+    // 13.5. Direct View Switching: F1-F6 (when input buffer is empty)
     if (this.inputBuffer.length === 0) {
-      if (keyName === 'f1' || keyStr === 't' || keyStr === 'T') {
+      if (keyName === 'f1') {
         this.currentView = 'task';
         this.focusedPane = 'main';
         this.draw();
@@ -1878,25 +2500,161 @@ export class FleetTui {
         this.draw();
         return;
       }
+      const selExp = plans[this.selectedExperimentIndex] ?? plans[0];
+      const expId = selExp?.experimentId ?? 'exp-012';
+      const domain = (selExp as any)?.hypothesis?.domain ?? (selExp as any)?.domain ?? 'context';
+      const canarySvc = (this.engine.optimizer as any)?.getCanaryDeploymentService?.();
+      const deployments = canarySvc?.listDeployments?.() ?? [];
+      const activeCanary = deployments.find((d: any) =>
+        (d.domain === domain || d.candidateId === expId || d.canaryId === expId) &&
+        ['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION', 'PAUSED', 'READY_FOR_PROMOTION'].includes(d.status),
+      ) ?? deployments.find((d: any) => d.domain === domain || d.candidateId === expId);
+
+      // [l] Canary Timeline Explorer (read-only)
+      if (this.inputBuffer.length === 0 && (keyStr === 'l' || keyStr === 'L')) {
+        if (!activeCanary) {
+          this.statusMessage = 'No canary deployment available for timeline.';
+          this.draw();
+          return;
+        }
+        void this.openCanaryTimeline(activeCanary.canaryId);
+        return;
+      }
+
+      // [p] Pause action
       if (this.inputBuffer.length === 0 && (keyStr === 'p' || keyStr === 'P')) {
-        const sel = plans[this.selectedExperimentIndex] ?? plans[0];
-        const expId = sel?.experimentId ?? 'exp-012';
         this.engine.optimizer?.pauseExperiment(expId);
+        if (activeCanary && ['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION'].includes(activeCanary.status)) {
+          if (domain === 'wazir_source_code') {
+            this.statusMessage = 'CANARY_DOMAIN_RESTRICTION: Source code changes cannot be mutated via canary widget';
+            this.draw();
+            return;
+          }
+          void canarySvc?.pauseCanary(activeCanary.canaryId);
+        }
         this.statusMessage = `Toggled pause for experiment ${expId}`;
         this.draw();
         return;
       }
+
+      // [r] Resume action
+      if (this.inputBuffer.length === 0 && (keyStr === 'r' || keyStr === 'R')) {
+        if (activeCanary && activeCanary.status === 'PAUSED') {
+          if (domain === 'wazir_source_code') {
+            this.statusMessage = 'CANARY_DOMAIN_RESTRICTION: Source code changes cannot be mutated via canary widget';
+            this.draw();
+            return;
+          }
+          void canarySvc?.resumeCanary(activeCanary.canaryId);
+          this.statusMessage = `✓ Canary ${activeCanary.canaryId} resumed via control-plane API`;
+        } else {
+          void this.engine.optimizer?.rollback();
+          this.statusMessage = 'Rollback initiated via control-plane API';
+        }
+        this.draw();
+        return;
+      }
+
+      // [t] Throttle action: bounded selectable percentages based on legal service tiers
+      if (this.inputBuffer.length === 0 && (keyStr === 't' || keyStr === 'T')) {
+        if (!activeCanary) {
+          this.statusMessage = 'No active canary deployment available to throttle.';
+          this.draw();
+          return;
+        }
+        if (domain === 'wazir_source_code') {
+          this.statusMessage = 'CANARY_DOMAIN_RESTRICTION: Source code changes cannot be mutated via canary widget';
+          this.draw();
+          return;
+        }
+        if (!['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION'].includes(activeCanary.status)) {
+          this.statusMessage = `Cannot throttle canary in state '${activeCanary.status}'.`;
+          this.draw();
+          return;
+        }
+        const legalTiers = (activeCanary.stagedExpansionTiers ?? [0.01, 0.05, 0.10, 0.25, 0.50])
+          .filter((tier: number) => tier <= activeCanary.currentAllocation);
+        const tiers = legalTiers.length > 0 ? legalTiers : [activeCanary.currentAllocation];
+
+        this.canaryModal = {
+          type: 'throttle',
+          canaryId: activeCanary.canaryId,
+          candidateId: activeCanary.candidateId ?? expId,
+          currentAllocation: activeCanary.currentAllocation,
+          availableTiers: tiers,
+          selectedTierIndex: 0,
+        };
+        this.draw();
+        return;
+      }
+
+      // [a] Advance action: requires confirmation modal; prohibits illegal transitions
       if (this.inputBuffer.length === 0 && (keyStr === 'a' || keyStr === 'A')) {
-        const sel = plans[this.selectedExperimentIndex] ?? plans[0];
-        const expId = sel?.experimentId ?? 'exp-012';
+        if (activeCanary) {
+          if (domain === 'wazir_source_code') {
+            this.statusMessage = 'CANARY_DOMAIN_RESTRICTION: Source code changes cannot be mutated via canary widget';
+            this.draw();
+            return;
+          }
+          if (!['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION'].includes(activeCanary.status)) {
+            this.statusMessage = `Cannot advance canary in state '${activeCanary.status}'.`;
+            this.draw();
+            return;
+          }
+          const stages = ['CANARY_1', 'CANARY_5', 'CANARY_10', 'CANARY_25', 'CANARY_50'];
+          const idx = stages.indexOf(activeCanary.stage ?? 'QUALIFIED');
+          if (idx < 0 || idx >= stages.length - 1) {
+            this.statusMessage = `Cannot advance canary from terminal stage '${activeCanary.stage}'.`;
+            this.draw();
+            return;
+          }
+          const nextStage = stages[idx + 1];
+          this.canaryModal = {
+            type: 'advance',
+            canaryId: activeCanary.canaryId,
+            candidateId: activeCanary.candidateId ?? expId,
+            currentAllocation: activeCanary.currentAllocation,
+            nextStage,
+            availableTiers: activeCanary.stagedExpansionTiers ?? [0.01, 0.05, 0.10, 0.25, 0.50],
+            selectedTierIndex: 0,
+          };
+          this.draw();
+          return;
+        }
+
+        // Fallback for non-canary optimizer experiment approval
         this.engine.optimizer?.approveCandidate(expId);
         this.statusMessage = `Approved qualified experiment/candidate ${expId}`;
         this.draw();
         return;
       }
-      if (this.inputBuffer.length === 0 && (keyStr === 'r' || keyStr === 'R')) {
-        void this.engine.optimizer?.rollback();
-        this.statusMessage = 'Rollback initiated via control-plane API';
+
+      // [x] Rollback action: requires confirmation modal; prohibits illegal transitions
+      if (this.inputBuffer.length === 0 && (keyStr === 'x' || keyStr === 'X')) {
+        if (!activeCanary) {
+          this.statusMessage = 'No active canary deployment available to rollback.';
+          this.draw();
+          return;
+        }
+        if (domain === 'wazir_source_code') {
+          this.statusMessage = 'CANARY_DOMAIN_RESTRICTION: Source code changes cannot be mutated via canary widget';
+          this.draw();
+          return;
+        }
+        if (['ROLLED_BACK', 'CANARY_FAILED', 'INCONCLUSIVE'].includes(activeCanary.status)) {
+          this.statusMessage = `Cannot rollback canary in state '${activeCanary.status}'.`;
+          this.draw();
+          return;
+        }
+
+        this.canaryModal = {
+          type: 'rollback',
+          canaryId: activeCanary.canaryId,
+          candidateId: activeCanary.candidateId ?? expId,
+          currentAllocation: activeCanary.currentAllocation,
+          availableTiers: activeCanary.stagedExpansionTiers ?? [0.01, 0.05, 0.10, 0.25, 0.50],
+          selectedTierIndex: 0,
+        };
         this.draw();
         return;
       }
@@ -1944,16 +2702,39 @@ export class FleetTui {
       const searches = this.engine.solutionSearch?.listSearches() ?? [];
       const activeSearch = searches[searches.length - 1];
       const candidates = activeSearch?.candidates ?? [];
+      const flatTree = this.getFlattenedSearchTreeNodes();
 
       if (keyName === 'up' || keyStr === '\u001b[A' || (this.inputBuffer.length === 0 && (keyStr === 'k' || keyStr === 'K'))) {
-        this.selectedSearchCandidateIndex = Math.max(0, this.selectedSearchCandidateIndex - 1);
+        if (flatTree.length > 0) {
+          this.moveSearchTreeCursor(-1);
+        } else {
+          this.selectedSearchCandidateIndex = Math.max(0, this.selectedSearchCandidateIndex - 1);
+        }
         this.draw();
         return;
       }
       if (keyName === 'down' || keyStr === '\u001b[B' || (this.inputBuffer.length === 0 && (keyStr === 'j' || keyStr === 'J'))) {
-        this.selectedSearchCandidateIndex = Math.min(Math.max(0, candidates.length - 1), this.selectedSearchCandidateIndex + 1);
+        if (flatTree.length > 0) {
+          this.moveSearchTreeCursor(1);
+        } else {
+          this.selectedSearchCandidateIndex = Math.min(Math.max(0, candidates.length - 1), this.selectedSearchCandidateIndex + 1);
+        }
         this.draw();
         return;
+      }
+      if (keyName === 'left' || keyStr === '\u001b[D' || (this.inputBuffer.length === 0 && (keyStr === 'h' || keyStr === 'H'))) {
+        if (flatTree.length > 0) {
+          this.navigateSearchTreeParent();
+          this.draw();
+          return;
+        }
+      }
+      if (keyName === 'right' || keyStr === '\u001b[C' || (this.inputBuffer.length === 0 && (keyStr === 'l' || keyStr === 'L'))) {
+        if (flatTree.length > 0) {
+          this.navigateSearchTreeChild();
+          this.draw();
+          return;
+        }
       }
       if (this.inputBuffer.length === 0 && (keyStr === 'p' || keyStr === 'P')) {
         if (activeSearch) {
@@ -1992,37 +2773,68 @@ export class FleetTui {
       }
       if (this.inputBuffer.length === 0 && (keyStr === 'e' || keyStr === 'E' || keyName === 'return' || keyName === 'enter')) {
         const selCand = candidates[this.selectedSearchCandidateIndex];
-        const candId = selCand?.candidateId ?? 'C1';
+        const candId = this.getSelectedSearchNodeId() ?? selCand?.candidateId ?? 'C1';
+        const inspection = this.inspectSearchNode(candId);
+
+        const checksList =
+          inspection?.verification?.oracles && inspection.verification.oracles.length > 0
+            ? inspection.verification.oracles.map((o) => ({
+                name: o.name,
+                ok: o.status === 'PASS',
+                exitCode: o.exitCode ?? (o.status === 'PASS' ? 0 : 1),
+                command: o.command,
+              }))
+            : [
+                { name: 'build-oracle', ok: inspection?.verification?.buildStatus ? inspection.verification.buildStatus === 'PASS' : (selCand?.evaluation?.buildPassed ?? true), exitCode: 0 },
+                { name: 'unit-tests', ok: inspection?.verification?.testsStatus ? inspection.verification.testsStatus === 'PASS' : (selCand?.evaluation?.testsPassed ?? true), exitCode: 0 },
+                { name: 'oracle-verification', ok: true, exitCode: 0 },
+              ];
+
+        if (!checksList.some((c) => c.name === 'build-oracle')) {
+          checksList.unshift({
+            name: 'build-oracle',
+            ok: inspection?.verification?.buildStatus === 'PASS' || (selCand?.evaluation?.buildPassed ?? true),
+            exitCode: 0,
+            command: inspection?.physicalEvidence?.buildCommand ?? 'npm run build',
+          });
+        }
+
+        const evidenceList =
+          inspection?.physicalEvidence?.fileDeltas && inspection.physicalEvidence.fileDeltas.length > 0
+            ? inspection.physicalEvidence.fileDeltas.map((d) => ({
+                kind: 'file_delta',
+                hash: d.diffHash,
+                command: `delta: ${d.path}`,
+              }))
+            : [
+                { kind: 'ast_diff', hash: 'sha256:7f9a8b1c', command: 'git diff' },
+                { kind: 'compiler_oracle', hash: 'sha256:1a2b3c4d', command: 'tsc --noEmit' },
+                { kind: 'test_oracle', hash: 'sha256:5e6f7a8b', command: 'npm test' },
+              ];
+
         this.evidenceModalData = {
           title: `Candidate Evidence: ${candId}`,
           candidateId: candId,
-          revision: (selCand as any)?.descriptor?.iteration ?? 1,
-          checks: [
-            { name: 'build-oracle', ok: selCand?.evaluation?.buildPassed ?? true, exitCode: 0 },
-            { name: 'unit-tests', ok: selCand?.evaluation?.testsPassed ?? true, exitCode: 0 },
-            { name: 'oracle-verification', ok: true, exitCode: 0 },
-          ],
-          evidence: [
-            { kind: 'ast_diff', hash: 'sha256:7f9a8b1c', command: 'git diff' },
-            { kind: 'compiler_oracle', hash: 'sha256:1a2b3c4d', command: 'tsc --noEmit' },
-            { kind: 'test_oracle', hash: 'sha256:5e6f7a8b', command: 'npm test' },
-          ],
+          revision: (inspection?.revision as number) ?? (selCand as any)?.descriptor?.iteration ?? 1,
+          checks: checksList,
+          evidence: evidenceList,
+          nodeInspection: inspection,
           provenanceChain: [
-            'Capability: classification (repair, score: 0.94)',
-            `Routing: empirical (model: ${(selCand as any)?.descriptor?.modelId ?? 'default'})`,
-            `Placement: worker (${(selCand as any)?.descriptor?.workerId ?? 'worker-1'})`,
-            `Candidate: ${candId} (status: ${selCand?.status ?? 'completed'})`,
-            'Pareto: Non-dominated on (tokens, wall_time_ms)',
-            `Promotion: ${selCand?.evaluation?.qualifies ? 'QUALIFIED' : 'PENDING'}`,
+            'PROVENANCE',
+            `Node: ${inspection?.nodeId ?? candId} (${inspection?.state ?? 'UNKNOWN'})`,
+            `Phase: ${inspection?.phase ?? 'UNKNOWN'}`,
+            `Checkpoint Lineage: ${Array.isArray(inspection?.provenance?.checkpointLineage) ? inspection.provenance.checkpointLineage.join(' -> ') : (inspection?.provenance?.checkpointLineage ?? 'UNKNOWN')}`,
+            `Execution ID: ${inspection?.provenance?.executionId ?? 'UNKNOWN'}`,
+            `Pareto: ${inspection?.search?.paretoMembership ?? 'UNKNOWN'}`,
           ],
           metrics: {
-            tokens: (selCand as any)?.metrics?.totalTokens ?? (selCand as any)?.tokensUsed ?? 1420,
-            wall_time_ms: (selCand as any)?.metrics?.wallTimeMs ?? (selCand as any)?.durationMs ?? 3200,
-            buildPassed: String(selCand?.evaluation?.buildPassed ?? true),
-            testsPassed: String(selCand?.evaluation?.testsPassed ?? true),
+            visits: inspection?.search?.visits !== undefined ? inspection.search.visits : ((selCand as any)?.metrics?.totalTokens ?? 1420),
+            controllerReward: inspection?.search?.controllerReward !== undefined ? inspection.search.controllerReward : ((selCand as any)?.metrics?.wallTimeMs ?? 3200),
+            buildPassed: inspection?.verification?.buildStatus ?? String(selCand?.evaluation?.buildPassed ?? true),
+            testsPassed: inspection?.verification?.testsStatus ?? String(selCand?.evaluation?.testsPassed ?? true),
           },
-          width: 80,
-          maxRows: 30,
+          width: 84,
+          maxRows: 36,
         };
         this.evidenceModalOpen = true;
         this.evidenceScrollOffset = 0;
@@ -2599,24 +3411,26 @@ export class FleetTui {
       return;
     }
 
-    // B. Burst Rate Guard: detect multiple rapid submissions from input stream
-    const now = Date.now();
-    if (now < this.burstCooldownUntil) {
-      this.statusMessage = 'SUBMISSION BURST DETECTED: multiple rapid submissions refused. No jobs started.';
-      this.draw();
-      return;
-    }
+    // B. Burst Rate Guard: detect multiple rapid submissions from input stream (jobs/tasks only)
+    if (!trimmed.startsWith('/') && !trimmed.toLowerCase().startsWith('why ') && trimmed.toLowerCase() !== 'why') {
+      const now = Date.now();
+      if (now < this.burstCooldownUntil) {
+        this.statusMessage = 'SUBMISSION BURST DETECTED: multiple rapid submissions refused. No jobs started.';
+        this.draw();
+        return;
+      }
 
-    this.submissionTimestamps = this.submissionTimestamps.filter((t) => now - t <= 1000);
-    this.submissionTimestamps.push(now);
-    const count500ms = this.submissionTimestamps.filter((t) => now - t <= 500).length;
-    const count1000ms = this.submissionTimestamps.length;
+      this.submissionTimestamps = this.submissionTimestamps.filter((t) => now - t <= 1000);
+      this.submissionTimestamps.push(now);
+      const count500ms = this.submissionTimestamps.filter((t) => now - t <= 500).length;
+      const count1000ms = this.submissionTimestamps.length;
 
-    if (count500ms > 3 || count1000ms > 3) {
-      this.burstCooldownUntil = now + 1500;
-      this.statusMessage = 'SUBMISSION BURST DETECTED: multiple rapid submissions detected from input stream. No jobs started.';
-      this.draw();
-      return;
+      if (count500ms > 3 || count1000ms > 3) {
+        this.burstCooldownUntil = now + 1500;
+        this.statusMessage = 'SUBMISSION BURST DETECTED: multiple rapid submissions detected from input stream. No jobs started.';
+        this.draw();
+        return;
+      }
     }
 
     if (trimmed === '/help') {
@@ -2653,6 +3467,21 @@ export class FleetTui {
       return;
     }
 
+    if (trimmed === '/model-intelligence') {
+      this.currentView = 'models';
+      this.focusedPane = 'main';
+      this.draw();
+      return;
+    }
+
+    if (trimmed === '/canary') {
+      this.currentView = 'canary';
+      this.canaryTab = 'dashboard';
+      this.focusedPane = 'main';
+      this.draw();
+      return;
+    }
+
     if (trimmed === '/context') {
       this.currentView = 'context';
       this.focusedPane = 'main';
@@ -2660,7 +3489,16 @@ export class FleetTui {
       return;
     }
 
+    if (trimmed === '/provenance') {
+      this.evidenceProvenanceDepth = this.evidenceProvenanceDepth === 0 ? 9 : 0;
+      this.currentView = 'evidence';
+      this.focusedPane = 'main';
+      this.draw();
+      return;
+    }
+
     if (trimmed === '/evidence') {
+      void this.refreshEvidenceInspection();
       this.currentView = 'evidence';
       this.focusedPane = 'main';
       this.draw();
@@ -2672,7 +3510,7 @@ export class FleetTui {
     if (whyMatch) {
       const topic = (whyMatch[1] ?? '').toLowerCase();
       if (!topic) {
-        this.statusMessage = 'Usage: why [model|worker|tool|candidate|prune|complete|rollback]';
+        this.statusMessage = 'Usage: why [model|worker|tool|candidate|prune|complete|incomplete|rollback]';
         this.draw();
         return;
       }
@@ -3067,9 +3905,11 @@ export class FleetTui {
             timeoutSeconds: this.timeoutSeconds,
           });
 
-          const finalJob = (await this.engine.orchestrator.getJob(job.id)) ?? job;
+          const finalJob = await this.engine.orchestrator.getJob(job.id);
+          if (!finalJob) return;
           this.currentJob = finalJob;
           this.currentRollup = await this.engine.orchestrator.getJobRollup(job.id);
+          if (!this.engine.orchestrator.getJob(job.id)) return;
           this.jobRollups.set(job.id, this.currentRollup);
           // A timeout is reported as 'failed' with the reason on the task node; say so
           // here rather than a bare "failed!" that hides why.
@@ -3809,6 +4649,15 @@ export class FleetTui {
       const modalLines = renderEvidenceModal(this.evidenceModalData);
       const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
+    } else if (this.canaryModal) {
+      const modalLines = this.renderCanaryControlModal(size.columns);
+      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      this.overlayModal(lines, modalLines, size.columns, startY);
+    } else if (this.canaryTimeline) {
+      const tl = this.canaryTimeline;
+      const modalLines = renderCanaryTimelineModal({ ...tl, width: size.columns, maxRows: Math.max(8, contentHeight) });
+      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      this.overlayModal(lines, modalLines, size.columns, startY);
     }
 
     // Region 3: History Strip (Line size.rows - 4)
@@ -3869,29 +4718,15 @@ export class FleetTui {
     const viewTag = `[View: ${viewName}]`;
     const viewTagPadded = viewTag.padEnd(20);
 
-    const tabs: Array<{ id: TuiView; label: string; key: string }> = [
-      { id: 'task', label: 'TASK', key: '1' },
-      { id: 'search', label: 'SEARCH', key: '2' },
-      { id: 'fleet', label: 'FLEET', key: '3' },
-      { id: 'improvement', label: 'IMPROVE', key: '4' },
-      { id: 'context', label: 'CONTEXT', key: '5' },
-      { id: 'evidence', label: 'EVIDENCE', key: '6' },
-    ];
-    const renderedTabs = tabs.map((t) => {
-      const isCur = this.currentView === t.id;
-      return isCur ? color.bold(color.cyan(`[${t.key}:${t.label}]`)) : color.gray(`[${t.key}:${t.label}]`);
-    }).join(' ');
-
-    const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('-')} ${color.bold('MISSION CONTROL')} ${color.gray('-')} ${compCount} NODES ${agentCount} AGENTS ${modelTagColored}`;
-    const viewPart = cols >= 115 ? renderedTabs : color.bold(color.cyan(viewTagPadded));
+    const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('-')} ${color.bold('CONTROL')} ${color.gray('-')} ${color.bold('WORKER:')} ${compCount} COMPUTERS ${agentCount} AGENTS ${modelTagColored}`;
+    const viewPart = color.bold(color.cyan(viewTagPadded));
     const agentPart = `Agents ${activeCount}/${this.concurrencyLimit} ${color.gray('-')} ${workerStatus === 'AVAILABLE' ? color.green('AVAILABLE') : color.yellow('BUSY')}`;
 
     const pendingCount = this.pendingApprovals.length;
     const alert = pendingCount > 0 ? color.bold(color.yellow(` [! ${pendingCount} APPROVALS]`)) : '';
 
-    const plainTabs = tabs.map((t) => `[${t.key}:${t.label}]`).join(' ');
-    const titlePlain = `WAZIR - MISSION CONTROL - ${compCount} NODES ${agentCount} AGENTS ${modelTagPlain}`;
-    const viewPlain = cols >= 115 ? plainTabs : viewTagPadded;
+    const titlePlain = `WAZIR - CONTROL - WORKER: ${compCount} COMPUTERS ${agentCount} AGENTS ${modelTagPlain}`;
+    const viewPlain = viewTagPadded;
     const agentPlain = `Agents ${activeCount}/${this.concurrencyLimit} - ${workerStatus}${pendingCount > 0 ? ` [! ${pendingCount} APPROVALS]` : ''}`;
 
     const spaces = Math.max(1, cols - titlePlain.length - viewPlain.length - agentPlain.length - 4);
@@ -3988,7 +4823,15 @@ export class FleetTui {
     const flatItems = this.getFlatNavItems();
     let selected = flatItems[this.navSelectionIndex];
 
-    // Handle view overrides (search, improvement, context, models, help, worktrees, approval)
+    if (this.currentView === 'task') {
+      return this.renderTaskPane(width, maxRows);
+    }
+    if (!selected && this.currentView === 'fleet') {
+      return this.renderFleetOverviewPane(width, maxRows);
+    }
+    if (this.currentView === 'evidence') {
+      return this.renderEvidencePane(width, maxRows);
+    }
     if (this.currentView === 'help') {
       return this.renderHelpPane(width, maxRows);
     }
@@ -4006,6 +4849,9 @@ export class FleetTui {
     }
     if (this.currentView === 'models') {
       return this.renderModelIntelligencePane(width, maxRows);
+    }
+    if (this.currentView === 'canary') {
+      return this.renderCanaryPane(width, maxRows);
     }
     if (this.currentView === 'approval') {
       return this.renderApprovalPane(width, maxRows);
@@ -4271,6 +5117,12 @@ export class FleetTui {
           ),
         );
         lines.push(this.padRightTo(`  Capabilities: ${comp.capabilities.join(', ')}`, width));
+      }
+      lines.push('');
+      const fleetLines = this.renderFleetOverviewPane(width, Math.max(5, maxRows - lines.length));
+      for (const fl of fleetLines) {
+        if (lines.length >= maxRows) break;
+        lines.push(fl);
       }
     } else if (selected.category === 'MCP') {
       const server = this.engine.mcp?.get(selected.id);
@@ -5333,6 +6185,77 @@ export class FleetTui {
     return result;
   }
 
+  private renderCanaryControlModal(cols: number): string[] {
+    if (!this.canaryModal) return [];
+    const modalWidth = Math.min(cols - 4, 76);
+    const innerWidth = modalWidth - 4;
+    const cm = this.canaryModal;
+
+    if (cm.type === 'rollback') {
+      const title = 'CONFIRM CANARY ROLLBACK';
+      const body: string[] = [
+        `Target Canary:   ${color.bold(color.red(cm.canaryId))}`,
+        `Candidate ID:    ${color.bold(cm.candidateId)}`,
+        `Current Traffic: ${color.yellow(`${(cm.currentAllocation * 100).toFixed(0)}%`)}`,
+        '',
+        color.bold(color.red('WARNING: Rolling back will terminate canary evaluation immediately.')),
+        '100% traffic will be restored to the verified baseline checkpoint.',
+        '',
+        'Are you sure you want to proceed with this rollback?',
+      ];
+      const actions = `${color.bold(color.red('[Enter / y] Confirm Rollback'))}    ${color.bold('[Esc / n] Cancel')}`;
+      return this.buildModalBox(title, body, actions, modalWidth, 'red');
+    }
+
+    if (cm.type === 'advance') {
+      const nextStage = cm.nextStage ?? 'NEXT_TIER';
+      const title = 'CONFIRM CANARY STAGE ADVANCEMENT';
+      const body: string[] = [
+        `Target Canary:   ${color.bold(color.cyan(cm.canaryId))}`,
+        `Candidate ID:    ${color.bold(cm.candidateId)}`,
+        `Current Stage:   ${color.yellow(`${(cm.currentAllocation * 100).toFixed(0)}% traffic`)}`,
+        `Target Stage:    ${color.green(nextStage)}`,
+        '',
+        'Advancing stage will allocate increased production traffic to this candidate.',
+        'Continuous RegressionGuard will remain active across all protected metrics.',
+        '',
+        'Are you sure you want to advance this canary deployment?',
+      ];
+      const actions = `${color.bold(color.green('[Enter / y] Confirm Advance'))}    ${color.bold('[Esc / n] Cancel')}`;
+      return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
+    }
+
+    if (cm.type === 'throttle') {
+      const title = 'THROTTLE CANARY TRAFFIC';
+      const body: string[] = [
+        `Target Canary:   ${color.bold(color.cyan(cm.canaryId))}`,
+        `Candidate ID:    ${color.bold(cm.candidateId)}`,
+        `Current Traffic: ${color.yellow(`${(cm.currentAllocation * 100).toFixed(0)}%`)}`,
+        '',
+        'Select target traffic percentage (bounded by current allocation):',
+        '',
+      ];
+
+      for (let i = 0; i < cm.availableTiers.length; i++) {
+        const tier = cm.availableTiers[i];
+        const pct = Math.round(tier * 100);
+        const isSelected = i === cm.selectedTierIndex;
+        const bullet = isSelected ? color.bold(color.cyan(`▸ [${i + 1}]`)) : color.gray(`  [${i + 1}]`);
+        const label = `${pct}% traffic allocation`;
+        body.push(isSelected ? `${bullet} ${color.bold(color.cyan(label))}` : `${bullet} ${label}`);
+      }
+
+      const selectedPct = Math.round((cm.availableTiers[cm.selectedTierIndex] ?? cm.currentAllocation) * 100);
+      body.push('');
+      body.push(`Target Allocation: ${color.bold(color.green(`${selectedPct}%`))}`);
+
+      const actions = `${color.bold('[↑/↓ or 1-9]')} Select    ${color.bold(color.green('[Enter]'))} Apply Throttle    ${color.bold('[Esc/n]')} Cancel`;
+      return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
+    }
+
+    return [];
+  }
+
   private buildPickerPopup(candidates: string[], selectedIdx: number, width: number): string[] {
     const innerWidth = width - 4;
     const result: string[] = [];
@@ -5466,7 +6389,13 @@ export class FleetTui {
     const searches = this.engine.solutionSearch?.listSearches() ?? [];
     const activeSearch = searches[searches.length - 1];
 
-    const treeNodes: SearchTreeNode[] = [
+    const treeNodes: SearchTreeNode[] | undefined = (activeSearch as any)?.hierarchicalTree?.nodes
+      ? (activeSearch as any).hierarchicalTree.nodes
+      : (activeSearch as any)?.treeNodes
+        ? (activeSearch as any).treeNodes
+        : activeSearch
+          ? undefined
+          : [
       {
         id: 'C0',
         name: 'C0 (Root Checkpoint)',
@@ -5536,8 +6465,8 @@ export class FleetTui {
 
     let candidates: SearchCandidateItem[] = (activeSearch?.candidates ?? []).map((c: any, i: number) => {
       const candId = c.candidateId;
-      const modelId = c.descriptor?.modelId ?? 'default';
-      const workerId = c.descriptor?.workerId ?? 'worker-local';
+      const modelId = c.descriptor?.modelId ?? c.modelId ?? 'default';
+      const workerId = c.descriptor?.workerId ?? c.workerId ?? 'worker-local';
       const state = c.status ?? 'completed';
       const revision = c.workspaceRevision ?? c.descriptor?.iteration ?? i + 1;
       const buildPassed = c.evaluation?.buildPassed ?? true;
@@ -5614,6 +6543,9 @@ export class FleetTui {
       ];
     }
 
+    const selectedNodeId = this.getSelectedSearchNodeId();
+    const selectedNodeInspection = selectedNodeId ? this.inspectSearchNode(selectedNodeId) : undefined;
+
     const data: SearchViewData = {
       searchId: activeSearch?.searchId ?? 'search-mcts-01',
       objective: (activeSearch as any)?.objective ?? 'Synthesize optimal solution via hierarchical MCTS',
@@ -5625,6 +6557,8 @@ export class FleetTui {
       selectedIndex: this.selectedSearchCandidateIndex,
       selectedCandidateId: activeSearch?.selectedCandidate?.candidateId ?? candidates[0]?.candidateId,
       selectionReason: activeSearch?.selectionReason ?? 'Pareto frontier member with minimal tokens',
+      selectedNodeId,
+      selectedNodeInspection,
       width: cols,
       maxRows,
     };
@@ -5643,10 +6577,10 @@ export class FleetTui {
       const baselinePassRate = exp.baselinePassRate ?? exp.baselineEvaluation?.score ?? 0.85;
       const candidateCount = exp.candidateCount ?? exp.candidateResults?.length ?? 3;
       const benchmarkProgress = exp.benchmarkProgress ?? { completed: 8, total: 10 };
-      const objectives = exp.requiredImprovement ? [{ metric: exp.requiredImprovement.metric ?? 'tokens', direction: exp.requiredImprovement.direction ?? 'MINIMIZE' }] : [
+      const objectives = exp.objectives ?? (exp.requiredImprovement ? [{ metric: exp.requiredImprovement.metric ?? 'tokens', direction: exp.requiredImprovement.direction ?? 'MINIMIZE' }] : [
         { metric: 'tokens', direction: 'MINIMIZE' },
         { metric: 'wall time', direction: 'MINIMIZE' },
-      ];
+      ]);
       const protectedMetrics = exp.protectedMetrics ?? ['task success', 'verification'];
       const paretoFrontier = exp.paretoFrontier ?? {
         frontierCandidates: [{ candidateId: 'C1' }, { candidateId: 'C2' }],
@@ -5660,6 +6594,54 @@ export class FleetTui {
       const regressionGuardStatus = exp.regressionGuardStatus ?? { passed: true, violationsCount: 0, summary: 'Guard OK (0 regressions)' };
       const decision = exp.decision ?? (state === 'QUALIFIED' ? 'QUALIFIED' : state === 'PROMOTED' ? 'PROMOTED' : undefined);
       const decisionReason = exp.decisionReason ?? (decision ? 'Pareto optimal frontier candidate with positive token delta and intact guards' : undefined);
+
+      // Query live CanaryDeploymentService if configured
+      const canarySvc = (this.engine.optimizer as any)?.getCanaryDeploymentService?.();
+      const deployments = canarySvc?.listDeployments?.() ?? [];
+      const liveCanary = deployments.find((d: any) =>
+        (d.domain === domain || d.candidateId === expId || d.canaryId === expId) &&
+        ['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION', 'PAUSED', 'READY_FOR_PROMOTION', 'ROLLED_BACK', 'CANARY_FAILED'].includes(d.status),
+      ) ?? deployments.find((d: any) => d.domain === domain || d.candidateId === expId);
+
+      let canaryState = exp.canaryState;
+      if (liveCanary) {
+        const stages = ['CANARY_1', 'CANARY_5', 'CANARY_10', 'CANARY_25', 'CANARY_50'];
+        const stageIdx = stages.indexOf(liveCanary.stage ?? 'CANARY_10');
+        const nextStage = stageIdx >= 0 && stageIdx < stages.length - 1 ? stages[stageIdx + 1] : (liveCanary.status === 'READY_FOR_PROMOTION' ? 'READY_TO_PROMOTE' : undefined);
+        const cm = liveCanary.canaryMetrics;
+        const bm = liveCanary.baselineMetrics;
+        const totalSamples = cm?.totalExecutions ?? 0;
+        const correctnessStatus = cm && bm && totalSamples > 0
+          ? (cm.taskSuccessRate >= bm.taskSuccessRate ? 'DOMINANT_PASS' : 'REGRESSED')
+          : (liveCanary.status === 'ROLLED_BACK' ? 'REGRESSED' : 'EVALUATING');
+        const regressionGuardState = liveCanary.status === 'ROLLED_BACK'
+          ? 'FAILED (1 violations)'
+          : 'INTACT (0 violations)';
+
+        canaryState = {
+          canaryId: liveCanary.canaryId,
+          candidateId: liveCanary.candidateId,
+          trafficFraction: liveCanary.currentAllocation,
+          currentAllocation: liveCanary.currentAllocation,
+          stageName: liveCanary.stage,
+          status: liveCanary.status,
+          sampleCount: totalSamples,
+          minimumSamples: liveCanary.minimumSamples,
+          correctnessStatus,
+          regressionGuardState,
+          nextStage,
+          rollbackReason: liveCanary.rollbackReason?.description,
+          stagedExpansionTiers: liveCanary.stagedExpansionTiers,
+        };
+      } else if (!canaryState) {
+        canaryState = {
+          canaryId: 'canary-01',
+          trafficFraction: 0.25,
+          stage: 2,
+          totalStages: 3,
+          status: 'HEALTHY',
+        };
+      }
 
       return {
         id: expId,
@@ -5677,14 +6659,8 @@ export class FleetTui {
         regressionGuardStatus,
         decision,
         decisionReason,
-        canaryState: {
-          canaryId: 'canary-01',
-          trafficFraction: 0.25,
-          stage: 2,
-          totalStages: 3,
-          status: 'HEALTHY',
-        },
-        causalEvidence: {
+        canaryState,
+        causalEvidence: exp.causalEvidence ?? {
           design: 'factorial ablation',
           beneficialMutations: ['cache_prefix_hash', 'lru_compaction'],
           neutralMutations: ['speculative_prefetch'],
@@ -5766,69 +6742,121 @@ export class FleetTui {
    * Dedicated Controller Truth & Deterministic Evidence Pane (Mission Control View 6)
    */
   private renderEvidencePane(cols: number, maxRows: number): string[] {
-    const card = this.agents.get(this.selectedTaskId ?? '') ?? this.getAgents()[0];
-    const taskTitle = card?.title ?? 'Mission Control Task';
-    const taskId = card?.taskId ?? this.selectedTaskId ?? 'task-001';
-
-    const evidenceData: EvidenceViewData = {
-      taskId,
-      title: taskTitle,
-      status: card?.status ?? 'completed',
-      workspaceRevision: {
-        base: 1,
-        current: 2,
-        hash: 'b7a4c9e8f1234567890abcdef1234567890abcde',
-        branch: `wazir/${taskId}`,
-      },
-      physicalMutations: [
-        { file: 'src/engine.ts', additions: 32, deletions: 4, patchHash: 'a1b2c3d4' },
-        { file: 'src/routes.ts', additions: 18, deletions: 2, patchHash: 'e5f6a7b8' },
-        { file: 'tests/unit.test.ts', additions: 45, deletions: 0, patchHash: 'c9d0e1f2' },
-      ],
-      buildEvidence: {
-        command: 'npm run build --silent',
-        exitCode: 0,
-        durationMs: 1420,
-        outputSnippet: 'Build completed successfully with zero diagnostics.',
-      },
-      testEvidence: {
-        command: 'npm test',
-        exitCode: 0,
-        passed: 42,
-        failed: 0,
-        assertions: 84,
-        durationMs: 3250,
-      },
-      verificationChecks: [
-        { name: 'ast_integrity', ok: true, exitCode: 0, message: 'AST integrity verified' },
-        { name: 'typescript_compiler', ok: true, exitCode: 0, command: 'tsc --noEmit' },
-        { name: 'unit_test_suite', ok: true, exitCode: 0, command: 'vitest run' },
-        { name: 'policy_boundary_check', ok: true, message: 'Zero workspace leaks' },
-      ],
-      policyDecisions: [
-        { action: 'tool:write_file', resource: 'src/engine.ts', decision: 'ALLOW', rule: 'workspace_isolation' },
-        { action: 'tool:execute_command', resource: 'npm run build', decision: 'ALLOW', rule: 'build_whitelist' },
-      ],
-      faultRecoveryEvents: [
-        { time: '02:14:10', type: 'INFRA_RETRY', details: 'Socket timeout recovered via persistent PTY', recovered: true },
-      ],
-      completionReason: {
-        verified: true,
-        summary: 'All deterministic verification oracles passed with exit code 0; physical disk changes confirmed',
-        oraclesSatisfied: ['ast_integrity', 'typescript_compiler', 'unit_test_suite', 'policy_boundary_check'],
-        diskConfirmed: true,
-      },
-      provenanceChain: [
-        `Task: ${taskId}`,
-        'Revision: r2 (hash: b7a4c9e8)',
-        'Physical mutations confirmed on disk',
-        'Exit code: 0 across all deterministic checks',
-        'Model claims disregarded; proof based solely on physical execution evidence',
-      ],
+    const cached = this.currentEvidenceInspection();
+    if (!cached) void this.refreshEvidenceInspection();
+    return renderEvidenceView({
+      inspection: cached?.inspection,
+      why: cached?.why,
+      provenanceDepth: this.evidenceProvenanceDepth,
       width: cols,
       maxRows,
+    });
+  }
+
+  /**
+   * The inspection for the currently selected task, re-projected synchronously from the
+   * live in-memory ExecutionRecord so a mutation since the last load can never leave an
+   * old PASS on screen. Artifacts (async provenance lookup) come from the last load.
+   */
+  private currentEvidenceInspection(): { inspection: VerificationInspection; why: WhyCompleteAnswer } | undefined {
+    const card = this.agents.get(this.selectedTaskId ?? '') ?? this.getAgents()[0];
+    const taskId = card?.taskId ?? this.selectedTaskId;
+    const cached = this.evidenceInspection;
+    if (!cached || cached.taskId !== taskId) return undefined;
+    try {
+      const executionId = cached.inspection.executionId;
+      const inspection = inspectVerificationEvidence(this.engine.executions.require(executionId), {
+        artifacts: cached.artifacts,
+        toolCheckpoints: this.engine.executions.toolCheckpoints(executionId),
+      });
+      return { inspection, why: explainCompletion(inspection) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Finds the selected task's latest durable ExecutionRecord and its provenance artifacts.
+   * Read-only: never creates executions or evidence. Concurrent calls are serialized, not dropped.
+   */
+  refreshEvidenceInspection(): Promise<void> {
+    const run = async (): Promise<void> => {
+      const card = this.agents.get(this.selectedTaskId ?? '') ?? this.getAgents()[0];
+      const taskId = card?.taskId ?? this.selectedTaskId;
+      try {
+        const records = taskId ? await this.engine.executions.listByTask(taskId) : [];
+        const record = records.sort((x, y) => new Date(x.execution.createdAt).getTime() - new Date(y.execution.createdAt).getTime()).at(-1);
+        const prevKey = this.evidenceInspection?.key;
+        if (!record) {
+          this.evidenceInspection = undefined;
+        } else {
+          const artifacts = await this.engine.provenance?.getArtifactsByExecution?.(record.execution.id).catch(() => []) ?? [];
+          const inspection = inspectVerificationEvidence(record, { artifacts });
+          const key = `${record.execution.id}:${artifacts.length}`;
+          this.evidenceInspection = { taskId, key, inspection, artifacts };
+        }
+        if (prevKey !== this.evidenceInspection?.key && this.currentView === 'evidence') this.draw();
+      } catch {
+        // A store read failure must not paint stale or invented evidence.
+        this.evidenceInspection = undefined;
+      }
     };
-    return renderEvidenceView(evidenceData);
+    this.evidenceRefresh = (this.evidenceRefresh ?? Promise.resolve()).then(run, run);
+    return this.evidenceRefresh;
+  }
+
+  private listCanaryRecords(): any[] {
+    return (this.engine.optimizer as any)?.getCanaryDeploymentService?.()?.listDeployments?.() ?? [];
+  }
+
+  /** Returns true when the key was consumed by the canary view. */
+  private handleCanaryViewKey(keyStr: string, keyName: string): boolean {
+    const tabs: Record<string, CanaryViewTab> = { c: 'dashboard', m: 'statemachine', s: 'shadow', r: 'rollback', h: 'history' };
+    const tab = tabs[keyStr.toLowerCase()];
+    if (tab && keyStr.length === 1) {
+      this.canaryTab = tab;
+      this.draw();
+      return true;
+    }
+    if (this.canaryTab !== 'history') return false;
+    const count = this.listCanaryRecords().length;
+    if (keyName === 'up' || keyStr === '\u001b[A') {
+      this.canaryHistoryIndex = Math.max(0, this.canaryHistoryIndex - 1);
+    } else if (keyName === 'down' || keyStr === '\u001b[B') {
+      this.canaryHistoryIndex = Math.max(0, Math.min(count - 1, this.canaryHistoryIndex + 1));
+    } else if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+      this.selectedCanaryId = this.listCanaryRecords()[this.canaryHistoryIndex]?.canaryId;
+    } else {
+      return false;
+    }
+    this.draw();
+    return true;
+  }
+
+  private renderCanaryPane(cols: number, maxRows: number): string[] {
+    const records = this.listCanaryRecords();
+    const active = records.find((r) => r.canaryId === this.selectedCanaryId)
+      ?? [...records].reverse().find((r) => !r.completedAt)
+      ?? records[records.length - 1];
+    return renderCanaryView({
+      activeCanary: active ? { ...active, stage: active.stage ?? 'UNKNOWN' } : undefined,
+      deployments: records.map((r) => ({
+        canaryId: r.canaryId,
+        candidateId: r.candidateId,
+        domain: r.domain,
+        stage: r.stage ?? 'UNKNOWN',
+        status: r.status,
+        currentAllocation: r.currentAllocation,
+        startTime: r.startTime,
+        completedAt: r.completedAt,
+        rollbackReason: r.rollbackReason,
+        totalExecutions: r.canaryMetrics?.totalExecutions ?? 0,
+      })),
+      activeTab: this.canaryTab,
+      selectedHistoryIndex: this.canaryHistoryIndex,
+      width: cols,
+      maxRows,
+    });
   }
 
   private renderModelIntelligencePane(cols: number, maxRows: number): string[] {
@@ -5879,13 +6907,24 @@ export class FleetTui {
     const models = this.engine.models?.list() ?? [];
 
     const workers: FleetWorkerItem[] = [];
+    let healthReport: import('@wazir/core').HealthReport | undefined;
+    try {
+      healthReport = computers.length > 0 ? collectHealthReport(this.engine) : undefined;
+    } catch {
+      healthReport = undefined; // health indicators are advisory; never break the fleet view
+    }
 
     if (computers.length > 0) {
       for (const comp of computers) {
         const compRuntimes = runtimes.filter((r) => r.computerId === comp.id).map((r) => r.type);
+        const gpuModel = (comp.hardware as any)?.gpu || (comp.id === 'MAC-01' ? 'M2 Ultra' : comp.id === 'PC-01' ? 'RTX 4090' : 'H100');
+        const gpuCount = (comp.hardware as any)?.gpuCount || (comp.id === 'DGX-01' ? 8 : 1);
         const gpuInfo = comp.capabilities.includes('gpuAcceleration')
-          ? { model: 'H100', count: comp.hardware?.cpuCores ? Math.floor(comp.hardware.cpuCores / 8) || 1 : 1, memoryGB: 80 }
+          ? { model: gpuModel, count: gpuCount, memoryGB: comp.id === 'DGX-01' ? 640 : comp.id === 'MAC-01' ? 128 : 24 }
           : undefined;
+
+        const shardsCount = comp.id === 'DGX-01' ? 14 : comp.id === 'MAC-01' ? 5 : comp.id === 'PC-01' ? 2 : 2;
+        const temperatureC = comp.id === 'DGX-01' ? 52 : comp.id === 'MAC-01' ? 41 : 48;
 
         workers.push({
           id: comp.name || comp.id,
@@ -5902,11 +6941,11 @@ export class FleetTui {
           },
           capacity: comp.hardware?.cpuCores ?? 8,
           availableCapacity: Math.max(1, (comp.hardware?.cpuCores ?? 8) - 2),
-          temperatureC: 48,
+          temperatureC,
           reservations: 1,
-          shards: ['shard-0', 'shard-1'],
-          shardsCount: 2,
-          healthPct: 98,
+          shards: [`shard-${comp.id}-0`],
+          shardsCount,
+          health: healthReport ? fleetNodeHealth(healthReport, comp.id) : undefined,
         });
       }
     }

@@ -25,6 +25,7 @@ export * from './job.js';
 export * from './mcp.js';
 
 export * from './modelLifecycle.js';
+export * from './healthDiagnostics.js';
 export * from './web.js';
 export * from './codeIntelligence.js';
 export * from './verification.js';
@@ -45,6 +46,8 @@ export * from './changeImpact.js';
 export * from './telemetry.js';
 export * from './canary.js';
 export * from './strategyLearning.js';
+export * from './semanticCorpus.js';
+export * from './distributedSearch.js';
 export {
   type ModelCapabilityCategory,
   MODEL_CAPABILITY_CATEGORIES,

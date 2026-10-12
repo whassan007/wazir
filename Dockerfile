@@ -12,7 +12,7 @@
 # rather than a pruned/slimmed one — correct and simple over minimal image
 # size, matching the scope of the rest of this remediation pass.
 
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json tsconfig.json tsconfig.base.json ./

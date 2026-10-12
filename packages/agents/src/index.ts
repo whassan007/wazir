@@ -4,3 +4,4 @@ export * from './stepAgent.js';
 export * from './protocolAdapters.js';
 export * from './presets.js';
 export * from './stopConditions.js';
+export * from './acp/acpClient.js';

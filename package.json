@@ -1,6 +1,6 @@
 {
   "name": "wazir",
-  "version": "0.1.54",
+  "version": "0.1.57",
   "description": "Wazir is a model- and runtime-agnostic meta-harness that schedules AI agents, models, tools, and compute to execute tasks across local and distributed environments.",
   "private": true,
   "workspaces": [
@@ -52,6 +52,6 @@
     "vitest": "^2.1.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.5.0"
   }
 }

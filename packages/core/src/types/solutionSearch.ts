@@ -180,6 +180,7 @@ export interface SearchNode {
   mutations: string[];
   workspaceRevision: number;
   stateHash: string; // Used for transposition detection
+  state?: string;
   visits: number;
   value: number; // Accumulated value/reward
   meanValue: number;
@@ -214,6 +215,97 @@ export interface MCTSSearchTree {
   maxDepthReached: number;
   totalNodesCreated: number;
   paretoFrontierNodeIds: string[];
+}
+
+export interface SearchNodeInspection {
+  nodeId: string;
+  phase?: string;
+  state?: string;
+  modelId?: string;
+  workerId?: string;
+  checkpointId?: string;
+  revision?: string | number;
+
+  changeSummary?: {
+    filesChanged?: number | string | string[];
+    filesChangedCount?: number;
+    linesAdded?: number;
+    linesRemoved?: number;
+    patchDigest?: string;
+    diffSnippet?: string;
+    fileDeltas?: Array<{
+      path: string;
+      additions?: number;
+      deletions?: number;
+      digest?: string;
+    }>;
+  };
+
+  verification?: {
+    buildStatus?: string;
+    buildCommand?: string;
+    buildExitCode?: number;
+    buildOutput?: string;
+
+    testsStatus?: string;
+    testSummary?: string;
+    testCommand?: string;
+    testExitCode?: number;
+    testOutput?: string;
+
+    acceptanceStatus?: string;
+    acceptanceDetails?: string;
+
+    verifyStatus?: string;
+    oracles?: Array<{
+      name: string;
+      status: string;
+      exitCode?: number;
+      command?: string;
+      message?: string;
+      output?: string;
+    }>;
+  };
+
+  search?: {
+    visits?: number;
+    controllerReward?: number;
+    uctComponents?: string;
+    uctExploitation?: number;
+    uctExploration?: number;
+    uctScore?: number;
+    paretoMembership?: string;
+  };
+
+  provenance?: {
+    parentNodeId?: string;
+    checkpointLineage?: string | string[];
+    executionId?: string;
+    evidenceIds?: string[];
+  };
+
+  physicalEvidence?: {
+    fileDeltas?: Array<{
+      path: string;
+      additions?: number;
+      deletions?: number;
+      diffHash?: string;
+    }>;
+    patchSummary?: string;
+    buildCommand?: string;
+    buildExitCode?: number;
+    buildOutput?: string;
+    testCommand?: string;
+    testExitCode?: number;
+    testOutput?: string;
+    oracleResults?: Array<{
+      name: string;
+      status?: string;
+      exitCode?: number;
+      command?: string;
+      message?: string;
+    }>;
+  };
 }
 
 export interface HierarchicalSearchConfig {

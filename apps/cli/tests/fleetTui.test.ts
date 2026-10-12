@@ -397,18 +397,20 @@ describe('FleetTui — interactive terminal UI harness', () => {
   it('deletes a completed job from the JOBS list via the Delete key', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);
+    useSuccessfulFakeModel(engine);
     const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
 
     await harness.start();
 
     harness.sendLine('solo job');
-    await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 60 && !harness.tui.getStatusMessage()?.includes('completed!'); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
     const job = harness.tui.getCurrentJob();
     expect(job).toBeDefined();
+    expect(job?.status).toBe('completed');
 
-    // The fake engine may have produced a job failure, raising the error card.
-    // Dismiss it before interacting with nav (the card is now modal and consumes
-    // all keys not in its own legend, so Delete would be silently swallowed).
+    // Dismiss error card if any was raised
     harness.sendKey('\x1b');
 
     // Navigate up to the JOBS entry (first in the flat nav list)
@@ -417,7 +419,9 @@ describe('FleetTui — interactive terminal UI harness', () => {
     expect(before.some((i) => i.category === 'JOBS' && i.id === job!.id)).toBe(true);
 
     harness.sendKey('\x1b[3~'); // forward-Delete
-    await new Promise((r) => setTimeout(r, 10)); // deleteJob() is async
+    for (let i = 0; i < 40 && !harness.tui.getStatusMessage()?.includes(`Deleted job ${job!.id}`); i++) {
+      await new Promise((r) => setTimeout(r, 25)); // deleteJob() is async
+    }
 
     const after = harness.tui.getFlatNavItems();
     expect(after.some((i) => i.category === 'JOBS' && i.id === job!.id)).toBe(false);
@@ -538,12 +542,16 @@ describe('FleetTui — interactive terminal UI harness', () => {
     await harness.start();
 
     harness.sendLine('first job');
-    await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 60 && harness.tui.getCurrentJob()?.status !== 'completed'; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
     const jobA = harness.tui.getCurrentJob();
     expect(jobA?.status).toBe('completed');
 
     harness.sendLine('second job');
-    await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 60 && (harness.tui.getCurrentJob()?.id === jobA?.id || harness.tui.getCurrentJob()?.status !== 'completed'); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
     const jobB = harness.tui.getCurrentJob();
     expect(jobB?.status).toBe('completed');
 

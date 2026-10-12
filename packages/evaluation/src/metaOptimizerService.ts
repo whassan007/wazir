@@ -196,6 +196,7 @@ export class MetaOptimizerService {
   }
 
   public async hydrate(): Promise<void> {
+    await this.canaryDeploymentService.hydrate();
     if (!this.store) return;
     try {
       if ('list' in this.store && typeof this.store.list === 'function') {

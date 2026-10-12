@@ -181,13 +181,22 @@ export class TerminalScreen {
     this.forceFullRedraw = true;
   }
 
-  onResize = (): void => {
-    this.clearLastBuffer();
-    const size = this.getSize();
-    for (const listener of this.resizeListeners) {
-      listener(size);
+  handleResize(size?: TerminalSize): void {
+    if (size) {
+      (this.outStream as any).columns = size.columns;
+      (this.outStream as any).rows = size.rows;
     }
+    this.clearLastBuffer();
+    const currentSize = size ?? this.getSize();
+    for (const listener of this.resizeListeners) {
+      listener(currentSize);
+    }
+  }
+
+  onResize = (): void => {
+    this.handleResize();
   };
+
 
   onTerminalResize(listener: (size: TerminalSize) => void): () => void {
     this.resizeListeners.push(listener);

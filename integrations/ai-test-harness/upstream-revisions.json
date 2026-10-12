@@ -1,0 +1,4 @@
+{
+  "ai-test-harness": {"url":"https://github.com/schubergphilis/ai-test-harness.git","commit":"3c8f3f0ac21fd84389695a1e6a511c3edd341d9b","license":"Apache-2.0"},
+  "Qwen-Live-Harness": {"url":"https://github.com/QwenLM/Qwen-Live-Harness.git","commit":"b6ce544ebbcd7417e37e0314ec946466c49c615c","license":"Apache-2.0"}
+}

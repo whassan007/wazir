@@ -29,6 +29,10 @@ export interface RuntimeCapabilities {
   modelDownload: boolean;
   statefulChat: boolean;
   mcp: boolean;
+  promptCaching?: boolean;
+  promptCacheTelemetry?: boolean;
+  cacheReadMetrics?: boolean;
+  cacheWriteMetrics?: boolean;
 }
 
 export interface RuntimeRecord {
