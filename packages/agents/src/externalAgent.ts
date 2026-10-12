@@ -20,6 +20,8 @@ export interface ExternalAgentSpec {
   taskTypes: TaskType[];
   capabilities: string[];
   timeoutMs?: number;
+  /** Extra environment, e.g. a vendor CLI config dir selecting one account's login. */
+  env?: Record<string, string>;
 }
 
 /**
@@ -61,6 +63,7 @@ export class ExternalAgentAdapter implements AgentAdapter {
       const child = spawn(this.spec.command, args, {
         cwd: request.projectRoot,
         stdio: ['ignore', 'pipe', 'pipe'],
+        env: this.spec.env ? { ...process.env, ...this.spec.env } : undefined,
         detached,
       });
       const stop = (reason: 'timeout' | 'cancelled') => {

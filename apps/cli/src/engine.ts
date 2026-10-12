@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   AgentRegistry,
+  governAdapter,
   ApprovalQueue,
   ComputerRegistry,
   ContextCompiler,
@@ -63,6 +64,7 @@ import { configDir, loadConfig, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
 import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
+import { createResourceSystem, type ResourceSystem } from './resources.js';
 import path from 'node:path';
 
 import { EvaluationService, BenchmarkService, MetaOptimizerService } from '@wazir/evaluation';
@@ -80,6 +82,8 @@ export interface EngineOptions {
 
 export interface RookEngine {
   config: WazirConfig;
+  /** Accounts, token budgets, ledger and resource-aware routing. */
+  resources: ResourceSystem;
   projectRoot: string;
   configDir: string;
   computers: ComputerRegistry;
@@ -211,10 +215,14 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   executions.store = store; // Attach store for Block persistence
 
   // ---- local computer + runtimes + models ------------------------------
+  // Every model request passes resource admission and accounting: adapters are governed
+  // once, here, so all call paths (CLI, TUI, fleet, worker lookups) share the same gate.
+  const resources = createResourceSystem(engineConfigDir);
+  const govern = (adapter: RuntimeAdapter) => governAdapter(adapter, { budget: resources.budget, resolveAccount: resources.resolveAccount });
   const adapterList: RuntimeAdapter[] = [
     createOllamaAdapter(config.ollamaUrl ?? 'http://localhost:11434'),
     createLMStudioAdapter(config.lmstudioUrl ?? 'http://localhost:1234/v1'),
-  ];
+  ].map(govern);
 
   // await executions.ready;
 
@@ -253,9 +261,10 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // since the worker's own discovery list is strictly local/hardware-bound.
   const secretBroker = await createSecretBroker({ secretsDir: engineConfigDir });
   const hostedAdapters = createHostedProviders(config, secretBroker);
-  for (const [id, adapter] of hostedAdapters) {
+  for (const [id, rawAdapter] of hostedAdapters) {
+    const adapter = govern(rawAdapter);
     adapterById.set(id, adapter);
-    await applyHostedProvider(id, adapter, { runtimes, models, config });
+    await applyHostedProvider(id, rawAdapter, { runtimes, models, config });
   }
 
   // ---- remote inventory (optional distributed mode) ---------------------
@@ -306,6 +315,19 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   for (const spec of acpAgentSpecs()) {
     if (!onPath(spec.requires) || agents.get(spec.name)) continue;
     agents.register(new AcpAgentAdapter({ ...spec, permissionMode: acpPermissionMode }), 'external');
+  }
+
+  // Additional subscription logins: a configured subscription account may name an agent
+  // instance like `claude-code@work`, with env selecting that login (CLAUDE_CONFIG_DIR,
+  // CODEX_HOME, ...). Each instance is its own agent, so its usage is accounted separately.
+  for (const account of resources.accounts.list().filter((a) => a.kind === 'subscription' && a.enabled !== false)) {
+    for (const instance of account.agents ?? []) {
+      const [base] = instance.split('@');
+      if (!instance.includes('@') || agents.get(instance)) continue;
+      const spec = acpAgentSpecs().find((s) => s.name === base);
+      if (!spec || !onPath(spec.requires)) continue;
+      agents.register(new AcpAgentAdapter({ ...spec, name: instance, description: `${spec.description} — account ${account.id}`, env: account.env, permissionMode: acpPermissionMode }), 'external');
+    }
   }
 
   // Antigravity (`agy`) has no ACP mode, so it runs as a headless external process and its
@@ -375,6 +397,14 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const classifier = new TaskCapabilityClassifier();
   const modelIntelligence = new ModelIntelligenceService({ classifier, store });
   const reliability = new ModelReliabilityTracker();
+  // Accounts for anything not configured: local runtimes, hosted APIs (paid only if hosted
+  // providers were already authorised), and delegated agents (subscriptions, limits unknown).
+  resources.accounts.addImplicit({
+    localRuntimes: adapterList.map((a) => a.id),
+    hostedRuntimes: [...hostedAdapters.keys()],
+    agents: agents.list().filter((a) => a.source === 'external').map((a) => a.descriptor.name),
+    hostedAuthorized: config.providers?.allowHostedProviders ?? false,
+  });
   const scheduler = new Scheduler({
     computers,
     runtimes,
@@ -383,6 +413,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     agents,
     reliability,
     modelIntelligence,
+    resources: { router: resources.router },
   });
 
   // ---- jobs & orchestration -----------------------------------------------
@@ -503,6 +534,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   await optimizer.hydrate();
 
   return {
+    resources,
     config,
     projectRoot,
     configDir: engineConfigDir,
