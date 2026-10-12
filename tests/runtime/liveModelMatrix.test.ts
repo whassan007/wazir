@@ -205,7 +205,9 @@ describe('Section 17 Matrix: LM Studio Live Execution', () => {
         taskId: 'lmstudio-live-coding-task',
         modelId: lmstudioLoadedModel,
         messages: [{ role: 'user', content: 'Write a TypeScript function: function add(a: number, b: number): number' }],
-        maxTokens: 30,
+        // Reasoning models spend a small budget entirely on thinking, which is not answer
+        // output; 30 tokens only "passed" while reasoning was misreported as content.
+        maxTokens: 1024,
       },
       (ev) => {
         if (ev.type === 'token' && ev.content) {
