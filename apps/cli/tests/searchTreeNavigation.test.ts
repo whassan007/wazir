@@ -23,6 +23,8 @@ interface MockScreen {
   hideCursor(): void;
   showCursor(): void;
   getScreenBuffer(): string;
+  getSize(): { columns: number; rows: number };
+  render(buffer: string, cursorCol?: number): void;
 }
 
 function createMockScreen(width = 120, height = 40): MockScreen {
@@ -39,10 +41,38 @@ function createMockScreen(width = 120, height = 40): MockScreen {
     hideCursor() {},
     showCursor() {},
     getScreenBuffer() { return writes.join(''); },
+    // Mirror TerminalScreen's contract so FleetTui.draw() can lay out frames.
+    getSize() { return { columns: this.width, rows: this.height }; },
+    render(buffer: string) { writes.push(buffer); },
   };
 }
 
+// Engine services the SEARCH view does not exercise resolve to inert stubs:
+// list-style calls return [], everything else returns undefined.
+function inertService(explicit: Record<string, unknown> = {}): any {
+  return new Proxy(explicit, {
+    get(target, prop) {
+      if (prop in target) return (target as any)[prop];
+      if (typeof prop !== 'string') return undefined;
+      return (..._args: unknown[]) => (/^(list|get[A-Z]\w*s$|find)/.test(prop) ? [] : undefined);
+    },
+  });
+}
+
 function createMockEngine() {
+  const services = Object.fromEntries(
+    Object.entries(createExplicitEngine()).map(([k, v]) => [k, v && typeof v === 'object' ? inertService(v as any) : v]),
+  );
+  return new Proxy(services, {
+    get(target, prop) {
+      if (prop in target) return (target as any)[prop];
+      if (typeof prop !== 'string' || prop === 'then') return undefined;
+      return ((target as any)[prop] = inertService());
+    },
+  });
+}
+
+function createExplicitEngine() {
   const searches = new Map<string, any>();
   return {
     solutionSearch: {

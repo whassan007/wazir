@@ -310,8 +310,9 @@ describe('Acceptance Gates: G74, G75, G76, G77 — Wazir Mission Control', () =>
     expect(harness.tui.isWhyModalOpen()).toBe(true);
     buf = harness.getScreenBuffer();
     expect(buf).toContain('WHY MODEL?');
-    expect(buf).toContain('Empirical capability matching for task');
-    expect(buf).toContain('Scheduler / ModelIntelligenceService');
+    expect(buf).toContain('Model assignment for selected task');
+    expect(buf).toContain('Routing Confidence');
+    expect(buf).not.toContain('sha256:');
     expect(buf).toContain('MODEL CLAIM != EXECUTION EVIDENCE');
     harness.sendKey('\x1b'); // Dismiss modal
     expect(harness.tui.isWhyModalOpen()).toBe(false);

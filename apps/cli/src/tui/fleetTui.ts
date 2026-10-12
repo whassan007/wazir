@@ -47,6 +47,7 @@ import { promptCacheReuse, promptCacheSource } from '@wazir/runtimes-interfaces'
 import {
   renderTaskView,
   renderSearchView,
+  renderCanaryView,
   renderFleetView,
   renderImprovementView,
   renderContextView,
@@ -70,6 +71,7 @@ import {
   type ModelProfileItem,
   type ModelIntelligenceViewData,
   type EvidenceModalData,
+  type CanaryViewTab,
   type SearchNodeInspection,
 } from './observabilityViews.js';
 
@@ -165,7 +167,7 @@ function diffLines(oldText: string, newText: string): DiffLine[] {
   return result;
 }
 
-export type TuiView = 'task' | 'search' | 'fleet' | 'improvement' | 'context' | 'evidence' | 'tail' | 'approval' | 'worktrees' | 'help' | 'models';
+export type TuiView = 'task' | 'search' | 'fleet' | 'improvement' | 'context' | 'evidence' | 'tail' | 'approval' | 'worktrees' | 'help' | 'models' | 'canary';
 
 export type NavCategory = 'MCP' | 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
 
@@ -549,6 +551,10 @@ export class FleetTui {
   private unsubscribeSolutionSearch?: () => void;
   private unsubscribeOptimizer?: () => void;
   private unsubscribeCanaryEvents?: () => void;
+  // /canary view: projection of CanaryDeploymentService records (read-only).
+  private canaryTab: CanaryViewTab = 'dashboard';
+  private canaryHistoryIndex = 0;
+  private selectedCanaryId?: string;
 
   // Model Readiness & Startup Selector state
   private startupSelector?: StartupSelectorState;
@@ -1133,29 +1139,24 @@ export class FleetTui {
     const maxRows = 24;
 
     switch (t) {
+      // Each branch reports only state observed in engine records. Absent evidence is
+      // UNKNOWN and carries no immutableHash: a fabricated digest would read as proof.
       case 'model': {
-        const modelId = card?.modelId ?? this.selectedModelId ?? 'claude-3-5-sonnet';
+        const modelId = card?.modelId ?? this.selectedModelId;
         return {
           topic: 'model',
-          headline: 'Empirical capability matching for task',
-          decision: `Assigned model [${modelId}]`,
+          headline: 'Model assignment for selected task',
+          decision: modelId ? `Assigned model [${modelId}]` : 'UNKNOWN — no model assignment recorded',
           rationale: [
-            'Task classified as requiring capabilities: architecture_reasoning, implementation',
-            'Candidate models evaluated against empirical benchmark evidence (no subjective rankings)',
-            `Selected ${modelId} based on highest measured capability confidence within token budget`,
+            modelId
+              ? 'Assignment read from the task card; routing scores are not persisted for this view.'
+              : 'No task card with a model assignment is selected.',
           ],
           evidence: [
-            { label: 'Selected Model', value: modelId },
-            { label: 'Required Capability', value: 'architecture_reasoning' },
-            { label: 'Benchmark Confidence', value: '0.94 (n=120)' },
-            { label: 'Context Budget', value: '64k tokens' },
-            { label: 'Routing Constraint', value: 'cost_and_resource_governance' },
+            { label: 'Selected Model', value: modelId ?? 'UNKNOWN' },
+            { label: 'Routing Confidence', value: 'UNKNOWN' },
           ],
-          controllerAudit: {
-            source: 'Scheduler / ModelIntelligenceService',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:model-route-7f9a8b1c',
-          },
+          controllerAudit: { source: 'Task card (FleetTui)', verifiedAt: new Date() },
           width,
           maxRows,
         };
@@ -1163,27 +1164,23 @@ export class FleetTui {
 
       case 'worker': {
         const comp = this.engine.computers.list()[0];
-        const workerId = comp?.id ?? 'worker-local';
         return {
           topic: 'worker',
-          headline: 'Resource admission & locality placement',
-          decision: `Placed execution on node [${workerId}]`,
+          headline: 'Worker placement',
+          decision: comp ? `Registered worker [${comp.id}]` : 'UNKNOWN — no worker registered',
           rationale: [
-            `Worker node ${workerId} has required CPU/GPU capabilities and healthy status`,
-            'Node load average is below 85% admission ceiling; memory headroom is guaranteed',
-            'Worktree locality: local disk partition mounted with zero network overhead',
+            comp
+              ? 'Values read from ComputerRegistry; per-task placement decisions are not recorded here.'
+              : 'ComputerRegistry has no registered computers.',
           ],
           evidence: [
-            { label: 'Node Identifier', value: workerId },
-            { label: 'Available Memory', value: `${comp?.hardware?.memoryGB ?? 32}GB` },
-            { label: 'Active Reservations', value: 1 },
-            { label: 'Health Status', value: '100% HEALTHY' },
+            { label: 'Node Identifier', value: comp?.id ?? 'UNKNOWN' },
+            { label: 'Memory', value: comp?.hardware?.memoryGB !== undefined ? `${comp.hardware.memoryGB}GB` : 'UNKNOWN' },
+            { label: 'Active Reservations', value: comp?.reservations?.length ?? 'UNKNOWN' },
+            { label: 'Health Status', value: comp?.status ? String(comp.status).toUpperCase() : 'UNKNOWN' },
+            { label: 'Placement Decision', value: 'UNKNOWN' },
           ],
-          controllerAudit: {
-            source: 'ComputerRegistry / ResourceAdmissionPolicy',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:worker-admit-3e4f5a6b',
-          },
+          controllerAudit: { source: 'ComputerRegistry', verifiedAt: new Date() },
           width,
           maxRows,
         };
@@ -1192,24 +1189,14 @@ export class FleetTui {
       case 'tool': {
         return {
           topic: 'tool',
-          headline: 'Policy Engine authorization & sandbox validation',
-          decision: 'Authorized tool execution (ALLOW)',
+          headline: 'Policy Engine authorization',
+          decision: 'UNKNOWN — no policy decision record is attached to this view',
           rationale: [
-            'Tool invocation verified against deterministic PolicyEngine whitelist',
-            'Target paths strictly bounded to active git worktree workspace directory',
-            'No unauthorized outbound network egress or shell escalation detected',
+            'Tool authorization is decided per call by PolicyEngine / ApprovalQueue.',
+            'Open /evidence for the recorded tool receipts of a task.',
           ],
-          evidence: [
-            { label: 'Policy Decision', value: 'ALLOW' },
-            { label: 'Sandbox Isolation', value: 'git_worktree_contained' },
-            { label: 'Policy Rule', value: 'workspace_boundary_enforcement' },
-            { label: 'Audit Log Status', value: 'persisted to provenance store' },
-          ],
-          controllerAudit: {
-            source: 'PolicyEngine / ApprovalQueue',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:policy-allow-9b8c7d6e',
-          },
+          evidence: [{ label: 'Policy Decision', value: 'UNKNOWN' }],
+          controllerAudit: { source: 'PolicyEngine / ApprovalQueue', verifiedAt: new Date() },
           width,
           maxRows,
         };
@@ -1261,7 +1248,6 @@ export class FleetTui {
           controllerAudit: {
             source: 'ContextRevisionService / TelemetryService',
             verifiedAt: new Date(),
-            immutableHash: 'sha256:context-telemetry-7c8d9e',
           },
           width,
           maxRows,
@@ -1271,54 +1257,45 @@ export class FleetTui {
       case 'candidate': {
         const searches = this.engine.solutionSearch?.listSearches() ?? [];
         const activeSearch = searches[searches.length - 1];
-        const candId = activeSearch?.selectedCandidate?.candidateId ?? 'C1';
+        const cand = activeSearch?.selectedCandidate;
+        const check = (name: string) => {
+          const c = cand?.checks?.find((r: { name: string }) => r.name === name);
+          return c ? (c.ok ? 'PASS' : 'FAIL') : 'UNKNOWN';
+        };
+        const onFrontier = cand && activeSearch?.paretoFrontier?.candidates
+          ? activeSearch.paretoFrontier.candidates.some((c: { candidateId: string }) => c.candidateId === cand.candidateId)
+          : 'UNKNOWN';
         return {
           topic: 'candidate',
-          headline: 'Pareto frontier membership & multi-objective selection',
-          decision: `Promoted candidate [${candId}]`,
-          rationale: [
-            `Candidate ${candId} satisfies deterministic build and test verification oracles`,
-            'Non-dominated on multi-objective vector: (tokens, wall_time_ms, AST stability)',
-            'Dominates alternative candidates without introducing regression on protected metrics',
-          ],
+          headline: 'Candidate selection',
+          decision: cand ? `Selected candidate [${cand.candidateId}]` : 'UNKNOWN — no candidate selected',
+          rationale: [activeSearch?.selectionReason || 'No selection reason recorded.'],
           evidence: [
-            { label: 'Candidate ID', value: candId },
-            { label: 'Pareto Frontier', value: true },
-            { label: 'Build Oracle', value: 'PASS (exit 0)' },
-            { label: 'Test Oracle', value: 'PASS (42/42 passed)' },
-            { label: 'Selection Reason', value: activeSearch?.selectionReason ?? 'Pareto non-dominated' },
+            { label: 'Candidate ID', value: cand?.candidateId ?? 'UNKNOWN' },
+            { label: 'Pareto Frontier', value: onFrontier },
+            { label: 'Build Check', value: check('build') },
+            { label: 'Test Check', value: check('test') },
           ],
-          controllerAudit: {
-            source: 'SolutionSearchService / MultiObjectiveOptimizer',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:pareto-cand-2a3b4c5d',
-          },
+          controllerAudit: { source: 'SolutionSearchService', verifiedAt: new Date() },
           width,
           maxRows,
         };
       }
 
       case 'prune': {
+        const searches = this.engine.solutionSearch?.listSearches() ?? [];
+        const pruned = (searches[searches.length - 1]?.candidates ?? []).filter(
+          (c: { isPruned?: boolean; prunedReason?: string }) => c.isPruned || c.prunedReason,
+        );
         return {
           topic: 'prune',
-          headline: 'Search branch pruning & early termination',
-          decision: 'Pruned candidate branch (HARD/SOFT PRUNE)',
-          rationale: [
-            'Hard pruning triggered: deterministic build/compiler oracle failed with fatal diagnostic',
-            'Repair budget limit reached: candidate failed to converge within allowed cycles',
-            'Soft pruning: candidate vector strictly dominated by existing frontier node',
-          ],
-          evidence: [
-            { label: 'Prune Status', value: 'PRUNED' },
-            { label: 'Triggering Oracle', value: 'compiler_typecheck (exit 1)' },
-            { label: 'Repair Cycles Used', value: '3/3 (exhausted)' },
-            { label: 'Dominated By', value: 'Candidate C1' },
-          ],
-          controllerAudit: {
-            source: 'HierarchicalMctsService / SolutionSearchService',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:prune-audit-5e6f7a8b',
-          },
+          headline: 'Search branch pruning',
+          decision: pruned.length ? `Pruned ${pruned.length} candidate(s)` : 'UNKNOWN — no pruned candidates recorded',
+          rationale: pruned.length
+            ? pruned.slice(0, 5).map((c: { candidateId: string; prunedReason?: string }) => `${c.candidateId}: ${c.prunedReason ?? 'reason not recorded'}`)
+            : ['The active search has no pruned candidates on record.'],
+          evidence: [{ label: 'Pruned Count', value: pruned.length ? pruned.length : 'UNKNOWN' }],
+          controllerAudit: { source: 'SolutionSearchService', verifiedAt: new Date() },
           width,
           maxRows,
         };
@@ -1375,25 +1352,11 @@ export class FleetTui {
         }
         return {
           topic: 'rollback',
-          headline: 'RegressionGuard threshold violation & canary rollback',
-          decision: 'Rolled back to pre-experiment checkpoint',
-          rationale: [
-            'Canary candidate evaluated on distributed shard triggered protected metric violation',
-            'RegressionGuard detected statistically significant degradation in task success rate',
-            'Automated rollback restores immutable workspace revision with zero persistent state drift',
-          ],
-          evidence: [
-            { label: 'Triggering Metric', value: 'task_success_rate' },
-            { label: 'Baseline Rate', value: '0.94' },
-            { label: 'Canary Observed', value: '0.72 (< 0.90 threshold)' },
-            { label: 'Rollback Target', value: 'Checkpoint r1 (clean)' },
-            { label: 'Rollback Status', value: 'COMPLETED' },
-          ],
-          controllerAudit: {
-            source: 'CanaryDeploymentService / RegressionGuard',
-            verifiedAt: new Date(),
-            immutableHash: 'sha256:rollback-guard-8a9b0c1d',
-          },
+          headline: 'Canary rollback',
+          decision: 'UNKNOWN — no rolled-back canary on record',
+          rationale: ['CanaryDeploymentService has no deployment with a rollback reason.'],
+          evidence: [{ label: 'Rollback Status', value: 'UNKNOWN' }],
+          controllerAudit: { source: 'CanaryDeploymentService / RegressionGuard', verifiedAt: new Date() },
           width,
           maxRows,
         };
@@ -2219,10 +2182,20 @@ export class FleetTui {
         this.draw();
         return;
       }
+      if (this.currentView === 'canary' && this.canaryTab !== 'dashboard') {
+        this.canaryTab = 'dashboard';
+        this.draw();
+        return;
+      }
       this.currentView = 'fleet';
       this.focusedPane = 'nav';
       this.screen.clearLastBuffer();
       this.draw();
+      return;
+    }
+
+    // 2.5 Canary view keys. Runs before global letter shortcuts ('c' cancels a job).
+    if (this.currentView === 'canary' && this.inputBuffer.length === 0 && this.handleCanaryViewKey(keyStr, keyName)) {
       return;
     }
 
@@ -3496,6 +3469,14 @@ export class FleetTui {
 
     if (trimmed === '/model-intelligence') {
       this.currentView = 'models';
+      this.focusedPane = 'main';
+      this.draw();
+      return;
+    }
+
+    if (trimmed === '/canary') {
+      this.currentView = 'canary';
+      this.canaryTab = 'dashboard';
       this.focusedPane = 'main';
       this.draw();
       return;
@@ -4866,6 +4847,9 @@ export class FleetTui {
     }
     if (this.currentView === 'models') {
       return this.renderModelIntelligencePane(width, maxRows);
+    }
+    if (this.currentView === 'canary') {
+      return this.renderCanaryPane(width, maxRows);
     }
     if (this.currentView === 'approval') {
       return this.renderApprovalPane(width, maxRows);
@@ -6817,6 +6801,60 @@ export class FleetTui {
     };
     this.evidenceRefresh = (this.evidenceRefresh ?? Promise.resolve()).then(run, run);
     return this.evidenceRefresh;
+  }
+
+  private listCanaryRecords(): any[] {
+    return (this.engine.optimizer as any)?.getCanaryDeploymentService?.()?.listDeployments?.() ?? [];
+  }
+
+  /** Returns true when the key was consumed by the canary view. */
+  private handleCanaryViewKey(keyStr: string, keyName: string): boolean {
+    const tabs: Record<string, CanaryViewTab> = { c: 'dashboard', m: 'statemachine', s: 'shadow', r: 'rollback', h: 'history' };
+    const tab = tabs[keyStr.toLowerCase()];
+    if (tab && keyStr.length === 1) {
+      this.canaryTab = tab;
+      this.draw();
+      return true;
+    }
+    if (this.canaryTab !== 'history') return false;
+    const count = this.listCanaryRecords().length;
+    if (keyName === 'up' || keyStr === '\u001b[A') {
+      this.canaryHistoryIndex = Math.max(0, this.canaryHistoryIndex - 1);
+    } else if (keyName === 'down' || keyStr === '\u001b[B') {
+      this.canaryHistoryIndex = Math.max(0, Math.min(count - 1, this.canaryHistoryIndex + 1));
+    } else if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+      this.selectedCanaryId = this.listCanaryRecords()[this.canaryHistoryIndex]?.canaryId;
+    } else {
+      return false;
+    }
+    this.draw();
+    return true;
+  }
+
+  private renderCanaryPane(cols: number, maxRows: number): string[] {
+    const records = this.listCanaryRecords();
+    const active = records.find((r) => r.canaryId === this.selectedCanaryId)
+      ?? [...records].reverse().find((r) => !r.completedAt)
+      ?? records[records.length - 1];
+    return renderCanaryView({
+      activeCanary: active ? { ...active, stage: active.stage ?? 'UNKNOWN' } : undefined,
+      deployments: records.map((r) => ({
+        canaryId: r.canaryId,
+        candidateId: r.candidateId,
+        domain: r.domain,
+        stage: r.stage ?? 'UNKNOWN',
+        status: r.status,
+        currentAllocation: r.currentAllocation,
+        startTime: r.startTime,
+        completedAt: r.completedAt,
+        rollbackReason: r.rollbackReason,
+        totalExecutions: r.canaryMetrics?.totalExecutions ?? 0,
+      })),
+      activeTab: this.canaryTab,
+      selectedHistoryIndex: this.canaryHistoryIndex,
+      width: cols,
+      maxRows,
+    });
   }
 
   private renderModelIntelligencePane(cols: number, maxRows: number): string[] {
