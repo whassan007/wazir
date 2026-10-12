@@ -326,11 +326,13 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
 
   const worktrees = new WorktreeManager();
   const checkpoints = new CheckpointService({
+    store,
     executionEngine: executions,
     worktreeManager: worktrees,
     provenanceManager: provenance,
     defaultWorkspaceRoot: projectRoot,
   });
+  await checkpoints.ready;
 
   const orchestrator = new JobOrchestrator({
     scheduler,
