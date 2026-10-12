@@ -3905,9 +3905,11 @@ export class FleetTui {
             timeoutSeconds: this.timeoutSeconds,
           });
 
-          const finalJob = (await this.engine.orchestrator.getJob(job.id)) ?? job;
+          const finalJob = await this.engine.orchestrator.getJob(job.id);
+          if (!finalJob) return;
           this.currentJob = finalJob;
           this.currentRollup = await this.engine.orchestrator.getJobRollup(job.id);
+          if (!this.engine.orchestrator.getJob(job.id)) return;
           this.jobRollups.set(job.id, this.currentRollup);
           // A timeout is reported as 'failed' with the reason on the task node; say so
           // here rather than a bare "failed!" that hides why.
