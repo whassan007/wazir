@@ -808,12 +808,15 @@ export class CodingAgent implements AgentAdapter {
       return `context compacted: ${collapsedCount} turn(s) -> 1 summary (~${before}->~${after} tokens, ${reduction}% smaller)`;
     };
 
+    let pendingNativeCall: { id: string; name: string; input: Record<string, unknown> } | undefined;
     const modelTurn = async (): Promise<{
       content: string;
       toolCall?: { name: string; input: Record<string, unknown> };
       timedOut: boolean;
       retryNotes: string[];
       usage?: { inputTokens: number; outputTokens: number; totalTokens?: number };
+      /** >1 when the provider emitted a parallel batch; none of it is executed. */
+      parallelCalls?: number;
     }> => {
       let content = '';
       let toolCall: { name: string; input: Record<string, unknown> } | undefined;
@@ -821,6 +824,9 @@ export class CodingAgent implements AgentAdapter {
       let timedOut = false;
       let usage: { inputTokens: number; outputTokens: number; totalTokens?: number } | undefined;
       const retryNotes: string[] = [];
+      pendingNativeCall = undefined;
+      let finishReason: string | undefined;
+      let toolCallCount = 0;
       const timer = setTimeout(() => {
         timedOut = true;
         runtime.cancelCurrentTurn?.();
@@ -844,6 +850,11 @@ export class CodingAgent implements AgentAdapter {
             }
           }
           if (event.type === 'tool_call' && event.toolName) {
+            // This executor admits one action per turn. A parallel batch is rejected as
+            // a whole (no call in it runs, none is silently dropped); the caller asks the
+            // model to reissue one call.
+            toolCallCount += 1;
+            if (toolCall) continue;
             let input: Record<string, unknown> = {};
             if (event.toolInput && typeof event.toolInput === 'object' && !Array.isArray(event.toolInput)) {
               input = event.toolInput as Record<string, unknown>;
@@ -851,7 +862,9 @@ export class CodingAgent implements AgentAdapter {
               input = tryParseObject(event.toolInput) ?? { command: event.toolInput };
             }
             toolCall = { name: event.toolName, input };
+            if (event.toolCallId) pendingNativeCall = { id: event.toolCallId, name: event.toolName, input };
           }
+          if (event.type === 'completed') finishReason = event.finishReason;
           if (event.type === 'completed' && event.usage) usage = event.usage;
           if (event.type === 'error' && event.error) error = event.error;
           if (event.type === 'retry') {
@@ -866,6 +879,17 @@ export class CodingAgent implements AgentAdapter {
       // A cancel-induced 'completed' with partial content is not an error —
       // only surface `error` when the turn didn't just hit its own timeout.
       if (error && !timedOut) throw new Error(error);
+      if (toolCallCount > 1) {
+        pendingNativeCall = undefined;
+        return { content, toolCall: undefined, timedOut, retryNotes, usage, parallelCalls: toolCallCount };
+      }
+      // Native function-calling providers finish with plain assistant text. Treat
+      // that as a proposed answer; the normal deterministic verification still runs.
+      if (!toolCall && !timedOut && finishReason === 'stop' &&
+          currentToolSurface.selectedProtocol === 'native_tool_call' && content.trim() &&
+          !/^\s*(\{|```)/.test(content)) {
+        content = JSON.stringify({ action: 'answer', content });
+      }
       return { content, toolCall, timedOut, retryNotes, usage };
     };
 
@@ -939,7 +963,11 @@ export class CodingAgent implements AgentAdapter {
         }
         pendingRepair = null;
       }
-      pushAssistant(raw);
+      if (pendingNativeCall) {
+        messages.push({ role: 'assistant', content: raw, toolCalls: [{
+          id: pendingNativeCall.id, name: pendingNativeCall.name, arguments: pendingNativeCall.input,
+        }] });
+      } else pushAssistant(raw);
     };
 
     /**
@@ -1058,6 +1086,11 @@ export class CodingAgent implements AgentAdapter {
         while (webEvidence.size > 4) webEvidence.delete(webEvidence.keys().next().value!);
       }
       const body = result.ok || observation.compacted ? observation.text : `ERROR: ${observation.text}`;
+      if (pendingNativeCall) {
+        messages.push({ role: 'tool', toolCallId: pendingNativeCall.id, name: tool, content: body });
+        pendingNativeCall = undefined;
+        return;
+      }
       messages.push({
         role: 'user',
         content: `[tool result for ${tool} (ok=${result.ok})]\n${body}\n${stateLine(`${tool}(${result.ok ? 'ok' : 'failed'})`)}\nContinue. Respond with exactly one JSON object.`,
@@ -1138,7 +1171,7 @@ export class CodingAgent implements AgentAdapter {
       }
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
-      const { content: raw, toolCall, timedOut, retryNotes, overflowNote, usage } = await modelTurnWithOverflowRecovery();
+      const { content: raw, toolCall, timedOut, retryNotes, overflowNote, usage, parallelCalls } = await modelTurnWithOverflowRecovery();
       if (overflowNote) yield { kind: 'message', content: overflowNote };
       for (const note of retryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
@@ -1150,6 +1183,13 @@ export class CodingAgent implements AgentAdapter {
       }
       turnsUsed += 1;
       actionAttempts += 1;
+
+      if (parallelCalls) {
+        malformedActions += 1;
+        yield { kind: 'message', content: `PARALLEL_TOOL_CALLS_REJECTED: ${parallelCalls} calls in one turn; none were executed` };
+        rejectAttempt(`You issued ${parallelCalls} tool calls at once. None were executed. Issue exactly one tool call per turn.`);
+        continue;
+      }
 
       const activeToolNames = new Set(currentToolSurface.tools.map((t) => t.descriptor.name));
       const { envelope, error: normalizationError } = normalizeToActionEnvelope({
@@ -1332,7 +1372,7 @@ export class CodingAgent implements AgentAdapter {
       }
       const compactionNote = compactIfNeeded();
       if (compactionNote) yield { kind: 'message', content: compactionNote };
-      const { content: raw, toolCall, timedOut, retryNotes, overflowNote, usage } = await modelTurnWithOverflowRecovery();
+      const { content: raw, toolCall, timedOut, retryNotes, overflowNote, usage, parallelCalls } = await modelTurnWithOverflowRecovery();
       if (overflowNote) yield { kind: 'message', content: overflowNote };
       for (const note of retryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
@@ -1344,6 +1384,13 @@ export class CodingAgent implements AgentAdapter {
       }
       turnsUsed += 1;
       actionAttempts += 1;
+
+      if (parallelCalls) {
+        malformedActions += 1;
+        yield { kind: 'message', content: `PARALLEL_TOOL_CALLS_REJECTED: ${parallelCalls} calls in one turn; none were executed` };
+        rejectAttempt(`You issued ${parallelCalls} tool calls at once. None were executed. Issue exactly one tool call per turn.`);
+        continue;
+      }
 
       const activeToolNames = new Set(currentToolSurface.tools.map((t) => t.descriptor.name));
       const { envelope, error: normalizationError } = normalizeToActionEnvelope({
@@ -1394,13 +1441,13 @@ export class CodingAgent implements AgentAdapter {
       if (action.action === 'done') {
         acceptAttempt(raw);
         validActions += 1;
-        modelSummary = action.summary ?? 'completed';
+        modelSummary = action.summary ?? action.content ?? 'completed';
         break;
       }
       if (action.action === 'answer') {
         acceptAttempt(raw);
         validActions += 1;
-        modelSummary = action.content ?? 'completed';
+        modelSummary = action.content ?? action.summary ?? 'completed';
         break;
       }
       if (action.action === 'plan') {
