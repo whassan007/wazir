@@ -226,11 +226,14 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     const buffer = createSSEBuffer();
 
     try {
+      // One decoder per stream: {stream: true} only reassembles multi-byte characters
+      // split across chunks when the same decoder instance sees every chunk.
+      const decoder = new TextDecoder();
       const reader = response.body.getReader();
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer.push(new TextDecoder().decode(value, { stream: true }));
+        buffer.push(decoder.decode(value, { stream: true }));
         for (const payload of buffer.drain()) {
           let event: any;
           try {
@@ -285,6 +288,9 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }
     } finally {
+      // Also reached when the consumer stops iterating early: abort so the provider
+      // stops generating instead of streaming into a closed reader. No-op once done.
+      controller.abort();
       this.controllers.delete(requestId);
     }
   }

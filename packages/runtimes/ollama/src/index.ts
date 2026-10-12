@@ -110,7 +110,7 @@ export class OllamaAdapter implements RuntimeAdapter {
   }
 
   async listModels(): Promise<DiscoveredModel[]> {
-    const response = await fetch(`${this.baseURL}/api/tags`);
+    const response = await fetch(`${this.baseURL}/api/tags`, { signal: AbortSignal.timeout(5000) });
     if (!response.ok) {
       return [];
     }
@@ -317,11 +317,14 @@ export class OllamaAdapter implements RuntimeAdapter {
     const buffer = createLineBuffer();
 
     try {
+      // One decoder per stream: {stream: true} only reassembles multi-byte characters
+      // split across chunks when the same decoder instance sees every chunk.
+      const decoder = new TextDecoder();
       const reader = response.body.getReader();
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer.push(new TextDecoder().decode(value, { stream: true }));
+        buffer.push(decoder.decode(value, { stream: true }));
         for (const line of buffer.drain()) {
           let parsed: OllamaChatLine;
           try {
@@ -407,6 +410,9 @@ export class OllamaAdapter implements RuntimeAdapter {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }
     } finally {
+      // Also reached when the consumer stops iterating early: abort so the provider
+      // stops generating instead of streaming into a closed reader. No-op once done.
+      controller.abort();
       this.controllers.delete(requestId);
     }
   }
