@@ -58,6 +58,13 @@ export class SqliteMemoryStore {
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
 
+      CREATE TABLE IF NOT EXISTS memory_records (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        payload TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS libraries (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -212,5 +219,18 @@ export class SqliteMemoryStore {
 
   close(): void {
     this.db.close();
+  }
+
+  /** Full records, rather than lossy observation strings, support restart recovery. */
+  putMemoryRecord(kind: 'episode' | 'procedure', record: { id: string }): void {
+    this.db.prepare('INSERT INTO memory_records (id, kind, version, payload) VALUES (?, ?, 1, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload')
+      .run(record.id, kind, JSON.stringify(record));
+  }
+
+  listMemoryRecords(kind: 'episode' | 'procedure'): unknown[] {
+    return this.db.prepare('SELECT version, payload FROM memory_records WHERE kind = ?').all(kind).map((row: any) => {
+      if (row.version !== 1) throw new Error(`UNSUPPORTED_MEMORY_VERSION: ${row.version}`);
+      return JSON.parse(row.payload);
+    });
   }
 }

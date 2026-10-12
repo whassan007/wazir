@@ -65,7 +65,19 @@ export class MemoryService {
   private readonly episodes = new Map<string, EpisodicRecord>();
   private readonly procedures = new Map<string, ProceduralRecipe>();
 
-  constructor(private readonly sqliteStore?: SqliteMemoryStore) {}
+  constructor(private readonly sqliteStore?: SqliteMemoryStore) {
+    this.refresh();
+  }
+
+  private refresh(): void {
+    if (!this.sqliteStore) return;
+    const episodes = this.sqliteStore.listMemoryRecords('episode') as EpisodicRecord[];
+    const procedures = this.sqliteStore.listMemoryRecords('procedure') as ProceduralRecipe[];
+    for (const e of episodes) { e.createdAt = new Date(e.createdAt); this.episodes.set(e.id, e); }
+    for (const p of procedures) {
+      p.createdAt = new Date(p.createdAt); p.lastUsedAt = new Date(p.lastUsedAt); this.procedures.set(p.id, p);
+    }
+  }
 
   public getSqliteStore(): SqliteMemoryStore | undefined {
     return this.sqliteStore;
@@ -102,6 +114,7 @@ export class MemoryService {
       metadata: params.metadata,
     };
 
+    this.sqliteStore?.putMemoryRecord('episode', episode);
     this.episodes.set(id, episode);
     if (this.sqliteStore) {
       this.sqliteStore.addEnvObservation({
@@ -145,6 +158,7 @@ export class MemoryService {
       metadata: params.metadata,
     };
 
+    this.sqliteStore?.putMemoryRecord('procedure', recipe);
     this.procedures.set(id, recipe);
     if (this.sqliteStore) {
       this.sqliteStore.addEnvObservation({
@@ -162,6 +176,7 @@ export class MemoryService {
    * Queries episodic memories scoped to a repository and task context.
    */
   public queryEpisodic(options: EpisodicQueryOptions): EpisodicRecord[] {
+    this.refresh();
     const onlyValid = options.onlyValid ?? true;
     let list = Array.from(this.episodes.values()).filter(
       (e) => e.repositoryScope === options.repositoryScope,
@@ -199,6 +214,7 @@ export class MemoryService {
    * Queries procedural recipes scoped to a repository and trigger/kind.
    */
   public queryProcedural(options: ProceduralQueryOptions): ProceduralRecipe[] {
+    this.refresh();
     const onlyValid = options.onlyValid ?? true;
     let list = Array.from(this.procedures.values()).filter(
       (p) => p.repositoryScope === options.repositoryScope,
@@ -231,6 +247,7 @@ export class MemoryService {
     const now = new Date();
     for (const item of list) {
       item.lastUsedAt = now;
+      this.sqliteStore?.putMemoryRecord('procedure', item);
     }
 
     const limit = options.limit ?? 10;
@@ -245,6 +262,7 @@ export class MemoryService {
     repositoryScope: string,
     changedFiles: string[],
   ): { invalidatedEpisodes: number; invalidatedProcedures: number } {
+    this.refresh();
     const normalizedChanged = new Set(changedFiles.map((f) => f.replace(/\\/g, '/')));
     let invalidatedEpisodes = 0;
     let invalidatedProcedures = 0;
@@ -257,6 +275,7 @@ export class MemoryService {
         );
         if (overlaps) {
           episode.valid = false;
+          this.sqliteStore?.putMemoryRecord('episode', episode);
           invalidatedEpisodes += 1;
         }
       }
@@ -270,6 +289,7 @@ export class MemoryService {
         );
         if (overlaps) {
           procedure.valid = false;
+          this.sqliteStore?.putMemoryRecord('procedure', procedure);
           invalidatedProcedures += 1;
         }
       }
@@ -279,7 +299,7 @@ export class MemoryService {
   }
 
   private hashFiles(files: string[]): string {
-    return createHash('sha256').update(files.sort().join(';')).digest('hex');
+    return createHash('sha256').update([...files].sort().join(';')).digest('hex');
   }
 
   private scoreMatch(text: string, tokens: string[]): number {
