@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
+    "@wazir/memory": "*",
     "@wazir/runtimes-interfaces": "*",
     "@wazir/shared": "*",
     "ajv": "^8.20.0",
