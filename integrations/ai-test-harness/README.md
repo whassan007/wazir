@@ -13,6 +13,7 @@ retry, cancellation and argument validation.
 ```bash
 npm run build                                   # in this repo
 git clone https://github.com/schubergphilis/ai-test-harness.git
+git -C ai-test-harness checkout "$(node -p 'require("./integrations/ai-test-harness/upstream-revisions.json")["ai-test-harness"].commit')"   # install.sh requires the pinned revision
 integrations/ai-test-harness/install.sh ./ai-test-harness
 cd ai-test-harness && cp .env.example .env
 make native-up

@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.1.57 — 2026-10-12
+
+A persistence release. Checkpoints and long-term memory now survive restarts, the coding
+agent keeps native tool-call history, and the web dashboard is no longer exposed beyond
+localhost by default.
+
+**Verification:** typecheck and build pass; 1964 tests pass, 0 fail (18 skipped:
+PostgreSQL, bwrap sandbox and live lifecycle infrastructure); acceptance gates
+80/80 PASS, verdict READY FOR RELEASE. Live (LM Studio `qwen/qwen3.8-27b`): every
+`wa run` outcome matched an independent `npm test`.
+
+### ⚠️ Behaviour changes
+
+- **Web dashboard binds `127.0.0.1` by default.** Set `WAZIR_WEB_HOST=0.0.0.0` to
+  restore network access.
+- **A corrupt or unsupported persisted checkpoint stops engine startup** with
+  `INVALID_CHECKPOINT` or `CHECKPOINT_DIGEST_MISMATCH` naming the record. Wazir fails
+  closed rather than overwrite evidence. Move the named record aside to recover.
+- **`integrations/ai-test-harness/install.sh` requires the pinned upstream revision**
+  listed in `upstream-revisions.json`.
+
+### Added
+
+- **Durable checkpoints:** persisted to the host store with a version and digest,
+  restored and verified at startup.
+- **Durable episodic and procedural memory** in the SQLite store, reloaded on startup.
+- **Native tool-call history in the coding agent:** provider call IDs are kept through
+  assistant and tool messages, and a plain-text final answer from a native
+  function-calling provider is accepted, subject to the usual verification.
+- **Pinned upstream revisions** for ai-test-harness and Qwen-Live-Harness.
+
+### Fixed
+
+- A parallel batch of tool calls (common with Qwen models) aborted the whole run. It
+  is now rejected as one invalid attempt: nothing in it executes, and the model is
+  asked to issue one call. Live runs with 3 and 6 batches completed.
+- The web dashboard never timed out stalled API requests, and kept proxying after the
+  client disconnected.
+- Checkpoint digests could collide for different path/content pairs.
+
 ## v0.1.56 — 2026-10-12
 
 A reliability release. It adds the Qwen-Live-Harness integrations and fixes 22 defects
