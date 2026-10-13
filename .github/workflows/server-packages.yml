@@ -25,7 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22.x, cache: npm }
+        with:
+          node-version: 22.x
+          cache: npm
       - run: npm ci
       - run: npm run build
       - name: Build current and upgrade-target packages
@@ -59,12 +61,13 @@ jobs:
           [ "$(docker run --rm --entrypoint id wazir-cli:ci -un)" = node ]
           # The API must refuse to start on 0.0.0.0 without a token.
           if docker run --rm wazir-api:ci; then echo "API started without a token"; exit 1; fi
-          export WAZIR_API_TOKEN=$(openssl rand -hex 32) WAZIR_REGISTRATION_TOKEN=$(openssl rand -hex 32)
+          WAZIR_API_TOKEN=$(openssl rand -hex 32); WAZIR_REGISTRATION_TOKEN=$(openssl rand -hex 32)
+          export WAZIR_API_TOKEN WAZIR_REGISTRATION_TOKEN
           docker network create wz
           docker run -d --name api --network wz -e WAZIR_API_TOKEN -e WAZIR_REGISTRATION_TOKEN -p 127.0.0.1:4800:4800 wazir-api:ci
           for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' api)" = healthy ] && break; sleep 2; done
-          [ "$(curl -s -o /dev/null -w %{http_code} 127.0.0.1:4800/api/v1/overview)" = 401 ]
-          [ "$(curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer $WAZIR_API_TOKEN" 127.0.0.1:4800/api/v1/overview)" = 200 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:4800/api/v1/overview)" = 401 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $WAZIR_API_TOKEN" 127.0.0.1:4800/api/v1/overview)" = 200 ]
           docker run -d --name worker --network wz -e WAZIR_SERVER_URL=http://api:4800 -e WAZIR_REGISTRATION_TOKEN -e WAZIR_COMPUTER_ID=ci-worker wazir-worker:ci
           sleep 10
           curl -s -H "Authorization: Bearer $WAZIR_API_TOKEN" 127.0.0.1:4800/api/v1/computers | grep -q ci-worker
