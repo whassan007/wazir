@@ -125,7 +125,8 @@ Discovered on this host:
 - `/home/wael/.local/bin/agy`, `/home/wael/.gemini/settings.json`,
   `/home/wael/.gemini/antigravity-cli/settings.json`; model unknown.
 
-TypeScript compilation passed. The full regression run had 2,082 passed, 18 skipped and four
+TypeScript compilation passed. The final focused run passed all 208 tests across 39 files.
+The full regression run had 2,082 passed, 18 skipped and four
 failed tests. After fixing the strict-probe fixture, rerunning all agent tests and the four
 failing suites produced 228 passed and one remaining failure: the real-PTY Ctrl+P quick-actions
 palette assertion in `apps/cli/tests/sessionEof.test.ts`. The full suite is therefore **not green**.
@@ -151,8 +152,10 @@ This is not full acceptance of every requested scenario. Native cross-platform e
 the remaining terminal regression block full acceptance. Effective model catalogs, provider
 endpoint metadata, managed-policy/profile resolution, Antigravity profile/schema support,
 desktop-only Antigravity discovery, and project-scoped model verification are not fully
-implemented. `agy models` is advertised by the installed CLI, but no catalog parser is wired
-into discovery yet. No context limits or provider subscription balances are invented.
+implemented. Connection checks query the supported `agy models` interface for installed 1.3.x
+versions; returned IDs are labeled AVAILABLE, not VERIFIED. Codex provider endpoint origins are
+reported when declared; credentials and URL paths/query strings are withheld. No context limits
+or provider subscription balances are invented.
 
 Passive inspect/explain currently covers base agents; configured account instances appear
 through the engine-backed list/connection manager. Native CLIs determine execution-time

@@ -28,6 +28,7 @@ export interface AgentTaskRecord {
 export type AgentPreflightStage = 'environment' | 'start' | 'answer';
 
 export interface AgentPreflightResult {
+  availableModels?: Array<{ id: string; status: 'AVAILABLE'; source: string }>;
   version?: string;
   /** Discovery scope and configuration identity used to invalidate cached results. */
   fingerprint?: string;

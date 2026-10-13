@@ -93,6 +93,17 @@ export async function checkAgents(
         for await (const turn of versionAdapter.run({ taskDescription: '--version', projectRoot: os.tmpdir(), maxWallClockMs: 3000 } as any, {} as any)) {
           if (turn.kind === 'message') result.version = turn.content?.match(/\b\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?\b/)?.[0];
         }
+        // The installed agy 1.3 CLI documents `models` and emits id<TAB>label rows.
+        // This is a catalog declaration, not proof that each listed model can execute.
+        if (name.split('@')[0] === 'antigravity' && result.version?.startsWith('1.3.')) {
+          for await (const turn of versionAdapter.run({ taskDescription: 'models', projectRoot: os.tmpdir(), maxWallClockMs: 3000 } as any, {} as any)) {
+            if (turn.kind !== 'message') continue;
+            result.availableModels = (turn.content ?? '').split('\n').flatMap(line => {
+              const match = /^([a-z][a-z0-9.-]{0,100})\t[^\r\n]+$/.exec(line);
+              return match && !/secret|token|key/i.test(match[1]) ? [{ id: match[1], status: 'AVAILABLE' as const, source: 'agy models' }] : [];
+            });
+          }
+        }
       } catch { /* Version inspection is optional and does not invalidate a completed task. */ }
     }
     // Vendor errors may echo secrets. Persist only controlled diagnostics for discovered agents.

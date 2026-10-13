@@ -123,6 +123,15 @@ export class AgentConfigurationDiscovery {
             const value = safeIdentifier(parsed[key]);
             if (value) source.settings[key] = value;
           }
+          const provider = safeIdentifier(parsed.model_provider);
+          const endpoint = provider && parsed.model_providers?.[provider]?.base_url;
+          if (typeof endpoint === 'string') {
+            try {
+              const url = new URL(endpoint);
+              // Credentials, query strings, fragments and endpoint paths are never emitted.
+              if (['http:', 'https:'].includes(url.protocol)) source.settings.providerEndpointOrigin = url.origin;
+            } catch { diagnostics.push('Provider endpoint declaration is not a valid URL.'); }
+          }
           if (parsed.permissions && typeof parsed.permissions === 'object') {
             const mode = safeIdentifier(parsed.permissions.defaultMode);
             if (mode) source.settings.permissionMode = mode;

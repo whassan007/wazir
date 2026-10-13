@@ -41,6 +41,13 @@ describe('passive native configuration discovery', () => {
     expect(JSON.stringify(result)).not.toContain('SECRET_SENTINEL');
   });
 
+  it('reports only the origin of a declared provider endpoint', () => {
+    writeFileSync(path.join(home, '.codex/config.toml'), 'model_provider="custom"\n[model_providers.custom]\nbase_url="https://user:SECRET_SENTINEL@example.com/SECRET_SENTINEL?key=SECRET_SENTINEL#SECRET_SENTINEL"');
+    const result = run();
+    expect(result[0].sources.find(s => s.kind === 'settings')?.settings?.providerEndpointOrigin).toBe('https://example.com');
+    expect(JSON.stringify(result)).not.toContain('SECRET_SENTINEL');
+  });
+
   it('fingerprints configuration edits, environment and project identity', () => {
     const first = run()[0].fingerprint;
     writeFileSync(path.join(home, '.codex/config.toml'), 'model="one"');
