@@ -26,6 +26,7 @@ import { color } from './colors.js';
 import type { RookEngine } from './engine.js';
 import { StatusLoader } from './spinner.js';
 import { recordTermination } from './termination.js';
+import { recordAgentTask } from './agentPreflight.js';
 import { captureDelegationBaseline, verifyDelegatedWork, type DelegationBaseline } from './delegationVerification.js';
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
 
@@ -789,6 +790,7 @@ export async function executeTask(
   }
 
   // ---- delegated work: observe and check it ourselves ----------------------
+  const agentErrors = [...errors];
   if (baseline && !cancelled) {
     if (baseline instanceof Error) {
       const message = `UNVERIFIED: cannot observe the workspace before delegation (${baseline.message})`;
@@ -819,6 +821,13 @@ export async function executeTask(
     executionId,
     cancelled ? 'cancelled' : evaluation.success ? 'completed' : 'failed',
   );
+  if (externalAgent && !cancelled) {
+    recordAgentTask(agent.descriptor.name, {
+      at: new Date().toISOString(), executionId,
+      outcome: agentErrors.length > 0 ? 'agent_error' : evaluation.success ? 'verified' : 'rejected',
+      detail: (agentErrors[0] ?? (evaluation.success ? undefined : evaluation.reasons.find((r) => /missing|failed|PROTECTED|UNVERIFIED/.test(r)) ?? errors[0]))?.slice(0, 200),
+    }, path.join(engine.configDir, 'agent-preflight.json'));
+  }
 
   emitJson({
     type: 'complete',

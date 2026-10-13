@@ -69,7 +69,8 @@ async function run(body: string, task = 'fix the add function in src/add.js') {
   try {
     const outcome = await executeTask(engine, task, { quiet: true, agent: 'scripted' });
     const record = engine.executions.require(outcome.executionId);
-    return { outcome, record, ledger };
+    const preflight = JSON.parse(await fs.readFile(path.join(dir, '.wazir', 'agent-preflight.json'), 'utf8')).results.scripted;
+    return { outcome, record, ledger, preflight };
   } finally {
     await cleanup();
   }
@@ -82,6 +83,18 @@ describe('delegated work is verified by Wazir, not by the agent', () => {
     expect(record.execution.status).toBe('failed');
     expect(record.filesChanged).toEqual(['src/add.js']);
     expect(record.checks).toEqual([expect.objectContaining({ name: 'test', ok: false, command: 'npm run test' })]);
+  }, 60_000);
+
+  it('real task outcomes are recorded for preflight: rejected work, verified work, and agent failures differ', async () => {
+    const wrong = await run(`echo "exports.add = (a, b) => a * b;" > src/add.js`);
+    expect(wrong.preflight.lastTask).toMatchObject({ outcome: 'rejected', executionId: wrong.outcome.executionId });
+    expect(wrong.preflight.lastVerifiedTask).toBeUndefined();
+    const right = await run(`printf '${FIXED}' > src/add.js`);
+    expect(right.preflight.lastTask).toMatchObject({ outcome: 'verified' });
+    expect(right.preflight.lastVerifiedTask).toMatchObject({ executionId: right.outcome.executionId });
+    const crashed = await run(`echo "model endpoint unreachable" >&2; exit 3`);
+    expect(crashed.outcome.success).toBe(false);
+    expect(crashed.preflight.lastTask).toMatchObject({ outcome: 'agent_error', detail: expect.stringMatching(/exited with code 3/) });
   }, 60_000);
 
   it('a correct fix passes on the evidence of a test run at the new revision', async () => {
