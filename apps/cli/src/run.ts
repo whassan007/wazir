@@ -111,7 +111,7 @@ const WRITE_TOOLS = new Set(['write', 'edit']);
 // word transition for \b to anchor on) — confirmed live: this exact bug
 // let a real `g++ ... && ./a.out` compile slip through undetected.
 const BUILD_INVOCATION_PATTERN =
-  /(^|&&|\|\||;)\s*(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)(?=\s|$)/;
+  /(^|&&|\|\||;)\s*(?:npx\s+)?(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)(?=\s|$)/;
 // Same visibility gap as BUILD_INVOCATION_PATTERN above, for test runs: a model that
 // verifies a fix by invoking the test suite through a raw `shell` call (e.g.
 // `node add.test.js`, `pytest`) rather than a dedicated `test` tool call was invisible

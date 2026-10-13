@@ -89,6 +89,7 @@ describe('EncryptedFileBackend', () => {
   });
 
   it('sets directory mode 0700 and file mode 0600', async () => {
+    if (process.platform === 'win32') return;
     const backend = new EncryptedFileBackend(dir);
     await backend.set('anthropic', 'value');
 

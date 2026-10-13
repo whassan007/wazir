@@ -7,7 +7,7 @@ import { runShell } from '../src/process.js';
 import { shellTool } from '../src/process-tools.js';
 
 /** Security review F-27: OS-level isolation of tool subprocesses. */
-describe('sandbox argument construction (pure)', () => {
+describe.skipIf(process.platform === 'win32')('sandbox argument construction (pure)', () => {
   let home: string;
   let project: string;
 
@@ -24,7 +24,7 @@ describe('sandbox argument construction (pure)', () => {
     await fs.rm(home, { recursive: true, force: true });
   });
 
-  it('bwrap: read-only root, masked home with toolchains re-exposed, writable project, no network by default', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: read-only root, masked home with toolchains re-exposed, writable project, no network by default', () => {
     const args = bwrapArgs({ projectRoot: project, cwd: project }, home, '/tmp');
     const joined = args.join(' ');
     expect(args.slice(0, 2)).toEqual(['--ro-bind', '/']);
@@ -35,7 +35,9 @@ describe('sandbox argument construction (pure)', () => {
     // it, a sandboxed compile can fail outright with "Operation not permitted".
     expect(joined).toContain(`--bind ${path.join(home, 'Library', 'Caches')} ${path.join(home, 'Library', 'Caches')}`);
     expect(joined).not.toContain('.ssh');
-    expect(joined).toContain('--tmpfs /run');
+    if (process.platform === 'linux') {
+      expect(joined).toContain('--tmpfs /run');
+    }
     expect(joined).toContain('--tmpfs /tmp');
     expect(joined).toContain('--unshare-net');
     expect(joined).toContain('--die-with-parent');
@@ -46,31 +48,32 @@ describe('sandbox argument construction (pure)', () => {
     expect(joined).toContain(`--chdir ${project}`);
   });
 
-  it('bwrap: shares the network only when the policy allows it', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: shares the network only when the policy allows it', () => {
     const args = bwrapArgs({ projectRoot: project, cwd: project, networkAllowed: true }, home, '/tmp');
     expect(args).not.toContain('--unshare-net');
     expect(args).toContain('--unshare-pid');
   });
 
-  it('bwrap: a cwd outside the project falls back to the project root', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: a cwd outside the project falls back to the project root', () => {
     const args = bwrapArgs({ projectRoot: project, cwd: '/etc' }, home, '/tmp');
     expect(args[args.indexOf('--chdir') + 1]).toBe(project);
   });
 
   it('seatbelt: denies home, allows project + tmp writes, denies network by default', () => {
     const profile = seatbeltProfile({ projectRoot: project, cwd: project }, home, '/tmp');
+    const q = (p: string) => path.resolve(p).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     expect(profile).toContain('(version 1)');
-    expect(profile).toContain(`(deny file-read* file-write* (subpath "${home}"))`);
-    expect(profile).toContain(`(allow file-read* (subpath "${path.join(home, '.nvm')}"))`);
-    expect(profile).toContain(`(allow file-write* (subpath "${project}"))`);
-    expect(profile).toContain(`(allow file-read* file-write* (subpath "${path.join(home, 'Library', 'Caches')}"))`);
+    expect(profile).toContain(`(deny file-read* file-write* (subpath "${q(home)}"))`);
+    expect(profile).toContain(`(allow file-read* (subpath "${q(path.join(home, '.nvm'))}"))`);
+    expect(profile).toContain(`(allow file-write* (subpath "${q(project)}"))`);
+    expect(profile).toContain(`(allow file-read* file-write* (subpath "${q(path.join(home, 'Library', 'Caches'))}"))`);
     expect(profile).toContain('(deny file-write*)');
     expect(profile).toContain('(deny network*)');
     expect(profile).not.toContain('.ssh');
     expect(seatbeltProfile({ projectRoot: project, cwd: project, networkAllowed: true }, home, '/tmp')).not.toContain('(deny network*)');
   });
 
-  it('bwrap: masks other users\' homes and mount points', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: masks other users\' homes and mount points', () => {
     const joined = bwrapArgs({ projectRoot: project, cwd: project }, home, '/tmp').join(' ');
     for (const dir of ['/home', '/mnt', '/media', '/srv']) {
       if (existsSync(dir)) expect(joined).toContain(`--tmpfs ${dir}`);
@@ -209,7 +212,7 @@ describe('seccomp filter (pure BPF assembly)', () => {
 // says why. `wa doctor` reports the same.
 const live = (() => {
   resetSandboxProbe();
-  return sandboxStatus().mode !== 'none';
+  return sandboxStatus().mode === 'bwrap';
 })();
 
 describe.skipIf(!live)('sandbox enforcement (live backend)', () => {

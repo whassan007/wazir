@@ -31,6 +31,21 @@ import type {
 const MIN_MEASURED_SAMPLES = 3;
 const pct = (rate: number): string => `${Math.round(rate * 100)}%`;
 
+export function normalizePlatform(p: string): string {
+  const s = p.toLowerCase().trim();
+  if (['darwin', 'macos', 'mac', 'osx'].includes(s)) return 'darwin';
+  if (['win32', 'windows', 'win'].includes(s)) return 'win32';
+  if (['linux', 'ubuntu', 'debian'].includes(s)) return 'linux';
+  return s;
+}
+
+export function normalizeArch(a: string): string {
+  const s = a.toLowerCase().trim();
+  if (['arm64', 'aarch64'].includes(s)) return 'arm64';
+  if (['x64', 'x86_64', 'amd64'].includes(s)) return 'x64';
+  return s;
+}
+
 export interface SchedulerDeps {
   computers: ComputerRegistry;
   runtimes: RuntimeRegistry;
@@ -521,6 +536,22 @@ export class Scheduler {
           failures.push(gate.reason);
           continue;
         }
+        if (task.requirements?.os) {
+          failures.push(`${instance.runtimeId}: hosted provider has no OS identity, cannot satisfy OS requirement '${task.requirements.os}'`);
+          continue;
+        }
+        if (task.requirements?.architecture) {
+          failures.push(`${instance.runtimeId}: hosted provider has no CPU architecture, cannot satisfy architecture requirement '${task.requirements.architecture}'`);
+          continue;
+        }
+        if (task.requirements?.requiresCuda) {
+          failures.push(`${instance.runtimeId}: hosted provider cannot satisfy CUDA GPU requirement`);
+          continue;
+        }
+        if (task.requirements?.requiresGpu) {
+          failures.push(`${instance.runtimeId}: hosted provider cannot satisfy local GPU requirement`);
+          continue;
+        }
         // allowedComputers/allowedRuntimes still apply — a hosted provider
         // simply has no computer identity to check against allowedComputers.
         if (policy?.allowedComputers) {
@@ -562,6 +593,38 @@ export class Scheduler {
         continue;
       }
 
+      // Heterogeneous OS Compatibility
+      if (task.requirements?.os) {
+        const rawReqOs = task.requirements.os;
+        const reqOsList = (Array.isArray(rawReqOs) ? rawReqOs : [rawReqOs]).map(normalizePlatform);
+        const compOs = normalizePlatform(computer.os.platform);
+        if (!reqOsList.includes(compOs)) {
+          failures.push(`${computer.id}: OS platform '${computer.os.platform}' does not match required OS '${Array.isArray(rawReqOs) ? rawReqOs.join(',') : rawReqOs}'`);
+          continue;
+        }
+      }
+
+      // Heterogeneous CPU Architecture Compatibility
+      if (task.requirements?.architecture) {
+        const rawArch = task.requirements.architecture;
+        const reqArchList = (Array.isArray(rawArch) ? rawArch : [rawArch]).map(normalizeArch);
+        const compArch = normalizeArch(computer.os.architecture);
+        if (!reqArchList.includes(compArch)) {
+          failures.push(`${computer.id}: architecture '${computer.os.architecture}' does not match required architecture '${Array.isArray(rawArch) ? rawArch.join(',') : rawArch}'`);
+          continue;
+        }
+      }
+
+      // Heterogeneous GPU & CUDA Requirements
+      if (task.requirements?.requiresGpu && !computer.hardware.gpu) {
+        failures.push(`${computer.id}: task requires GPU acceleration, but computer has no GPU`);
+        continue;
+      }
+      if (task.requirements?.requiresCuda && (!computer.hardware.gpu || !computer.hardware.gpu.cuda)) {
+        failures.push(`${computer.id}: task requires NVIDIA CUDA, but computer GPU does not support CUDA`);
+        continue;
+      }
+
       const policy = task.policy;
       if (policy?.allowedComputers && !policy.allowedComputers.includes(computer.id)) {
         failures.push(`${computer.id}: not in allowedComputers`);
@@ -593,7 +656,8 @@ export class Scheduler {
         }
       }
 
-      const requiredSystemGB = record.memory?.minSystemGB ?? 0;
+      const taskMinSystemGB = task.requirements?.minimumMemoryGB ?? 0;
+      const requiredSystemGB = Math.max(record.memory?.minSystemGB ?? 0, taskMinSystemGB);
       if (requiredSystemGB > computer.hardware.memoryGB) {
         failures.push(`${computer.id}: memory ${computer.hardware.memoryGB}GB < required ${requiredSystemGB}GB`);
         continue;
@@ -604,7 +668,8 @@ export class Scheduler {
         continue;
       }
 
-      const requiredGpuGB = record.memory?.minGpuGB ?? 0;
+      const taskMinGpuGB = task.requirements?.minimumGPUMemoryGB ?? 0;
+      const requiredGpuGB = Math.max(record.memory?.minGpuGB ?? 0, taskMinGpuGB);
       if (requiredGpuGB > 0) {
         const gpuGB = computer.hardware.gpu?.memoryGB ?? 0;
         if (gpuGB < requiredGpuGB) {
@@ -647,6 +712,24 @@ export class Scheduler {
       if (computer.health === 'degraded') {
         score -= 1;
         reasons.push('computer reports degraded health');
+      }
+
+      // Heterogeneous affinity bonuses
+      if (task.requirements?.os) {
+        score += 1.5;
+        reasons.push(`OS '${computer.os.platform}' matches task requirements`);
+      }
+      if (task.requirements?.architecture) {
+        score += 1.0;
+        reasons.push(`architecture '${computer.os.architecture}' matches task requirements`);
+      }
+      if (task.requirements?.requiresCuda && computer.hardware.gpu?.cuda) {
+        score += 2.0;
+        reasons.push(`NVIDIA CUDA acceleration active (${computer.hardware.gpu.model})`);
+      }
+      if (computer.hardware.gpu?.unifiedMemory) {
+        score += 0.5;
+        reasons.push('unified memory architecture available for model working set');
       }
 
       placements.push({ instance, computer, score, reasons });

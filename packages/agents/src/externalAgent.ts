@@ -1,12 +1,13 @@
-import { spawn } from 'node:child_process';
+import spawn from 'cross-spawn';
+import { killProcessTree, resolveExecutable, getSpawnCommand, sanitizeChildEnvironment } from '@wazir/shared';
 import { spawnGroupWatchdog } from './processWatchdog.js';
-import type {
-  AgentAdapter,
-  AgentDescriptor,
-  AgentRunRequest,
-  AgentRuntime,
-  AgentTurn,
-  TaskType,
+import {
+  type AgentAdapter,
+  type AgentDescriptor,
+  type AgentRunRequest,
+  type AgentRuntime,
+  type AgentTurn,
+  type TaskType,
 } from '@wazir/core';
 
 const MAX_CAPTURE = 20_000;
@@ -53,29 +54,27 @@ export class ExternalAgentAdapter implements AgentAdapter {
   async *run(request: AgentRunRequest, _runtime: AgentRuntime): AsyncIterable<AgentTurn> {
     const args = [...(this.spec.args ?? []), request.taskDescription];
 
-    const timeoutMs = this.spec.timeoutMs ?? 600_000;
+    const timeoutMs = Math.min(this.spec.timeoutMs ?? 600_000, request.maxWallClockMs ?? Infinity);
     const output = await new Promise<string | undefined>((resolve, reject) => {
       let captured = '';
+      let stderr = '';
       let stopReason: 'timeout' | 'cancelled' | undefined;
       // Own process group (POSIX) so timeout/cancel reaches the harness's children too:
       // killing only the direct child leaves grandchildren holding the stdout pipe,
       // and 'close' then never fires.
       const detached = process.platform !== 'win32';
-      const child = spawn(this.spec.command, args, {
+      const spawnCmd = getSpawnCommand(this.spec.command, args, { cwd: request.projectRoot });
+      const child = spawn(spawnCmd.command, spawnCmd.args, {
         cwd: request.projectRoot,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: this.spec.env ? { ...process.env, ...this.spec.env } : undefined,
+        env: this.spec.env ? sanitizeChildEnvironment(this.spec.env) : undefined,
         detached,
+        shell: spawnCmd.useShell,
       });
       const stop = (reason: 'timeout' | 'cancelled') => {
         if (stopReason) return;
         stopReason = reason;
-        try {
-          if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
-          else child.kill('SIGKILL');
-        } catch {
-          try { child.kill('SIGKILL'); } catch { /* already gone */ }
-        }
+        killProcessTree(child.pid, 'SIGKILL', detached);
       };
       // If Wazir itself dies, the detached group must not keep running unsupervised.
       const watchdog = detached && child.pid !== undefined ? spawnGroupWatchdog(process.pid, child.pid) : undefined;
@@ -91,7 +90,7 @@ export class ExternalAgentAdapter implements AgentAdapter {
         if (captured.length < MAX_CAPTURE) captured += chunk.slice(0, MAX_CAPTURE - captured.length);
       };
       child.stdout.setEncoding('utf8').on('data', append);
-      child.stderr.setEncoding('utf8').on('data', append);
+      child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-MAX_CAPTURE); });
       child.on('error', (error) => {
         settle();
         reject(error);
@@ -103,7 +102,7 @@ export class ExternalAgentAdapter implements AgentAdapter {
         else if (code === 0) resolve(captured);
         else {
           // The agent's own last words say why; an exit code alone is not diagnosable.
-          const tail = captured.trim().split('\n').slice(-3).join(' ').slice(-300);
+          const tail = (stderr || captured).trim().split('\n').slice(-3).join(' ').slice(-300);
           reject(new Error(`'${this.spec.command}' exited with code ${code}${tail ? `: ${tail}` : ''}`));
         }
       });

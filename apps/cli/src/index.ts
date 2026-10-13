@@ -18,10 +18,25 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version('0.1.59');
+  .version('0.1.60');
 
 registerMCPCommands(program);
 registerWebCommands(program);
+
+program
+  .command('version')
+  .description('Display detailed Wazir build and runtime version information')
+  .option('-j, --json', 'Output version information in JSON format')
+  .action(async (options) => {
+    const { getBuildInfo, formatBuildInfo } = await import('./version.js');
+    const info = getBuildInfo();
+    if (options.json) {
+      console.log(JSON.stringify(info, null, 2));
+    } else {
+      console.log(formatBuildInfo(info));
+    }
+  });
+
 program.hook('postAction', async () => { await closeMCPRegistries(); });
 
 // computers command
@@ -657,11 +672,50 @@ const agentsCmd = new Command()
 agentsCmd
   .command('list')
   .description('List registered agents')
-  .action(async () => {
+  .option('--json', 'Output JSON including discovery and connection states')
+  .action(async (options) => {
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { listAgents } = await import('./commands.js');
-    console.log(listAgents(engine));
+    const { AgentConnectionManager } = await import('./agentConnectionManager.js');
+    const discovered = new AgentConnectionManager(engine).discover();
+    console.log(options.json ? JSON.stringify({ registered: engine.agents.list(), agents: discovered }, null, 2) : `${listAgents(engine)}\n${discovered.map(a => `${a.agent}: ${a.state}`).join('\n')}`);
+  });
+
+for (const verb of ['discover', 'refresh', 'inspect', 'explain']) {
+  agentsCmd.command(verb).argument('[name]', 'Agent name')
+    .option('--json', 'Output JSON')
+    .option('--trust-project', 'Authorize reading project settings for inspection; does not execute them')
+    .description('Inspect native configuration declarations and provenance without launching agents')
+    .action(async (name, options) => {
+      const { AgentConfigurationDiscovery } = await import('@wazir/agents');
+      const { loadPreflightCache, invalidateAgentPreflight } = await import('./agentPreflight.js');
+      const { isPreflightFresh, effectivePreflightStatus } = await import('@wazir/agents');
+      if (verb === 'refresh') invalidateAgentPreflight(name);
+      const cache = loadPreflightCache();
+      const agents = new AgentConfigurationDiscovery().discover({ trustedProject: options.trustProject }).filter(a => !name || a.agent === name).map(a => {
+        const connection = cache[a.agent];
+        const fresh = connection?.fingerprint === a.fingerprint && isPreflightFresh(connection);
+        return { ...a, state: fresh ? effectivePreflightStatus(connection) : a.state, connection: fresh ? connection : undefined,
+          authentication: fresh && connection.status === 'READY' ? 'VERIFIED' : 'UNKNOWN',
+          verificationScope: 'Connection probes use an empty temporary workspace, not project instructions or project model overrides.' };
+      });
+      console.log(options.json ? JSON.stringify({ agents }, null, 2) : agents.map(a => `${a.agent}: ${a.state}\nExecutable: ${a.executable ?? 'not found'}\nModel: ${a.model.value ?? 'unknown'} (${a.model.status})\n${a.sources.map(s => `  ${s.path} [${s.scope}, ${s.trusted ? 'trusted' : 'untrusted'}]`).join('\n')}\n${a.diagnostics.join('\n')}`).join('\n\n'));
+      if (!agents.length) process.exitCode = 1;
+    });
+}
+
+agentsCmd.command('connect').argument('<name>', 'Agent or configured account instance')
+  .option('--json', 'Output JSON').option('--timeout <seconds>', 'Bounded preflight timeout', '90')
+  .description('Verify the existing vendor login through a real bounded agent task')
+  .action(async (name, options) => {
+    const { createEngine } = await import('./engine.js');
+    const { AgentConnectionManager } = await import('./agentConnectionManager.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const results = await new AgentConnectionManager(engine).connect([name], { fresh: true, timeoutMs: Number(options.timeout) * 1000 });
+    const { renderPreflight } = await import('./agentPreflight.js');
+    console.log(options.json ? JSON.stringify({ agents: results }, null, 2) : renderPreflight(results));
+    process.exit(results.every(r => r.status === 'READY') ? 0 : 1);
   });
 
 agentsCmd.command('capabilities').description('List registered agent capabilities and their providers')
@@ -1526,4 +1580,88 @@ canaryCmd
 
 program.addCommand(canaryCmd);
 
+// service command
+const serviceCmd = new Command()
+  .name('service')
+  .description('Manage Wazir background daemon services (systemd / launchd / Windows)');
+
+serviceCmd
+  .command('install')
+  .description('Install Wazir as a system background service')
+  .option('--type <type>', 'Service type: worker or api', 'worker')
+  .option('--user <user>', 'System user to run the service under (if running as root)')
+  .option('--port <port>', 'Port number (for api service)')
+  .option('--api-url <url>', 'Control plane API URL (for worker service)')
+  .option('--name <name>', 'Custom service name', 'wazir')
+  .action(async (options) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const result = await sm.install(options);
+    console.log(result.message);
+  });
+
+serviceCmd
+  .command('start [name]')
+  .description('Start the Wazir system service')
+  .action(async (name) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const result = await sm.start(name);
+    console.log(result.message);
+  });
+
+serviceCmd
+  .command('stop [name]')
+  .description('Stop the Wazir system service')
+  .action(async (name) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const result = await sm.stop(name);
+    console.log(result.message);
+  });
+
+serviceCmd
+  .command('restart [name]')
+  .description('Restart the Wazir system service')
+  .action(async (name) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const result = await sm.restart(name);
+    console.log(result.message);
+  });
+
+serviceCmd
+  .command('status [name]')
+  .description('Display status of the Wazir system service')
+  .option('--json', 'Output status in JSON format')
+  .action(async (name, options) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const status = await sm.status(name);
+    if (options.json) {
+      console.log(JSON.stringify(status, null, 2));
+    } else {
+      console.log(`Backend:   ${status.backend} (${status.platform})`);
+      console.log(`Service:   ${status.serviceName}`);
+      console.log(`Installed: ${status.installed ? chalk.green('yes') : chalk.red('no')}`);
+      console.log(`Status:    ${status.active ? chalk.green('active (running)') : chalk.yellow(status.details || 'inactive')}`);
+      if (status.unitFile) {
+        console.log(`Unit File: ${status.unitFile}`);
+      }
+    }
+  });
+
+serviceCmd
+  .command('uninstall [name]')
+  .description('Uninstall and remove the Wazir system service')
+  .action(async (name) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const result = await sm.uninstall(name);
+    console.log(result.message);
+  });
+
+program.addCommand(serviceCmd);
+
 program.parse();
+

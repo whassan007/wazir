@@ -1,11 +1,15 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { effectivePreflightStatus, isPreflightFresh, preflightAgent, type AgentPreflightResult, type AgentTaskRecord } from '@wazir/agents';
-import type { AgentAdapter } from '@wazir/core';
+import os from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { AgentConfigurationDiscovery, ExternalAgentAdapter, effectivePreflightStatus, isPreflightFresh, preflightAgent, type AgentPreflightResult, type AgentTaskRecord } from '@wazir/agents';
+import type { AgentAdapter, TokenBudgetManager } from '@wazir/core';
 import { color } from './colors.js';
 import { configDir } from './config.js';
 
 type PreflightEngine = {
+  projectRoot?: string;
+  resources?: { accounts: { candidates(target: { agent: string }): Array<{ id?: string; env?: Record<string, string> }> }; budget?: TokenBudgetManager };
   agents: { list(): Array<{ descriptor: { name: string }; source: string }>; get(name: string): AgentAdapter | undefined };
 };
 
@@ -32,6 +36,12 @@ function savePreflightCache(results: Record<string, AgentPreflightResult>, file 
   }
 }
 
+export function invalidateAgentPreflight(name?: string, file = cacheFile()): void {
+  const cache = loadPreflightCache(file);
+  if (name) delete cache[name];
+  savePreflightCache(name ? cache : {}, file);
+}
+
 /** External agents only: native agents run on Wazir's own runtimes, covered by `wa doctor`. */
 export function externalAgentNames(engine: PreflightEngine): string[] {
   return engine.agents.list().filter((a) => a.source === 'external').map((a) => a.descriptor.name);
@@ -46,6 +56,7 @@ export async function checkAgents(
   names: string[] = [],
   options: { fresh?: boolean; timeoutMs?: number; file?: string } = {},
 ): Promise<AgentPreflightResult[]> {
+  if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)) throw new Error('Preflight timeout must be a positive finite number');
   const external = externalAgentNames(engine);
   const targets = names.length ? names : external;
   const cache = loadPreflightCache(options.file);
@@ -54,10 +65,50 @@ export async function checkAgents(
     if (!adapter) {
       return { agent: name, status: 'UNKNOWN', detail: 'not a registered external agent (is its CLI installed?)', durationMs: 0, checkedAt: new Date().toISOString() };
     }
+    const env = { ...process.env, ...engine.resources?.accounts.candidates({ agent: name })[0]?.env };
+    const config = new AgentConfigurationDiscovery().discover({ cwd: engine.projectRoot, env }).find(a => a.agent === name.split('@')[0]);
     const cached = cache[name];
-    if (!options.fresh && cached && isPreflightFresh(cached) && cached.status !== 'UNKNOWN') return cached;
-    // Real-task history outlives each probe.
-    return { ...await preflightAgent(adapter, { timeoutMs: options.timeoutMs }), lastTask: cached?.lastTask, lastVerifiedTask: cached?.lastVerifiedTask };
+    if (!options.fresh && cached && isPreflightFresh(cached) && cached.status !== 'UNKNOWN' && (!config?.fingerprint || cached.fingerprint === config.fingerprint)) return cached;
+    if (config?.state === 'BLOCKED') return { agent: name, status: 'BLOCKED', detail: 'Invalid native configuration; validate it with the vendor CLI.', durationMs: 0, checkedAt: new Date().toISOString(), fingerprint: config.fingerprint, lastTask: cached?.lastTask, lastVerifiedTask: cached?.lastVerifiedTask };
+    const budget = engine.resources?.budget;
+    const accountId = engine.resources?.accounts.candidates({ agent: name })[0]?.id;
+    const requestId = `agent-preflight:${randomUUID()}`;
+    if (budget) {
+      const admission = accountId ? budget.admit({ requestId, accountId, modelId: `agent:${name}`, agent: name, workload: 'routine', requests: 1, estimatedInputTokens: 4096, estimatedOutputTokens: 32 }) : undefined;
+      if (admission?.outcome !== 'admitted') return { agent: name, status: 'BLOCKED', detail: 'Resource governance blocked the probe; inspect wa resources.', durationMs: 0, checkedAt: new Date().toISOString(), fingerprint: config?.fingerprint };
+    }
+    let result: AgentPreflightResult;
+    const stopLease = budget?.holdLease(requestId);
+    try {
+      result = await preflightAgent(adapter, { timeoutMs: options.timeoutMs, env });
+      if (result.status === 'READY') budget?.reconcile(requestId, { inputTokens: 4096, outputTokens: 32, source: 'estimated' }, { agent: name, durationMs: result.durationMs });
+      else budget?.fail(requestId, { ambiguous: result.stage !== 'environment' && result.stage !== 'start' });
+    } catch (error) {
+      budget?.fail(requestId, { ambiguous: true });
+      throw error;
+    } finally { stopLease?.(); }
+    if (config?.executable) {
+      const versionAdapter = new ExternalAgentAdapter({ name: 'version-inspection', version: '', description: '', command: config.executable, taskTypes: [], capabilities: [], timeoutMs: 3000, env });
+      try {
+        for await (const turn of versionAdapter.run({ taskDescription: '--version', projectRoot: os.tmpdir(), maxWallClockMs: 3000 } as any, {} as any)) {
+          if (turn.kind === 'message') result.version = turn.content?.match(/\b\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?\b/)?.[0];
+        }
+        // The installed agy 1.3 CLI documents `models` and emits id<TAB>label rows.
+        // This is a catalog declaration, not proof that each listed model can execute.
+        if (name.split('@')[0] === 'antigravity' && result.version?.startsWith('1.3.')) {
+          for await (const turn of versionAdapter.run({ taskDescription: 'models', projectRoot: os.tmpdir(), maxWallClockMs: 3000 } as any, {} as any)) {
+            if (turn.kind !== 'message') continue;
+            result.availableModels = (turn.content ?? '').split('\n').flatMap(line => {
+              const match = /^([a-z][a-z0-9.-]{0,100})\t[^\r\n]+$/.exec(line);
+              return match && !/secret|token|key/i.test(match[1]) ? [{ id: match[1], status: 'AVAILABLE' as const, source: 'agy models' }] : [];
+            });
+          }
+        }
+      } catch { /* Version inspection is optional and does not invalidate a completed task. */ }
+    }
+    // Vendor errors may echo secrets. Persist only controlled diagnostics for discovered agents.
+    if (config && result.status !== 'READY') result.detail = result.hint ?? 'Agent execution failed; inspect diagnostics using the vendor CLI.';
+    return { ...result, fingerprint: config?.fingerprint, lastTask: cached?.lastTask, lastVerifiedTask: cached?.lastVerifiedTask };
   }));
   for (const r of results) if (r.status !== 'UNKNOWN' || r.lastTask) cache[r.agent] = r;
   savePreflightCache(cache, options.file);
@@ -80,6 +131,12 @@ export function recordAgentTask(name: string, task: AgentTaskRecord, file?: stri
 /** The cached result for an agent if it is fresh and says the agent cannot run; else undefined. */
 export function knownAgentFailure(name: string, file?: string): AgentPreflightResult | undefined {
   const cached = loadPreflightCache(file)[name];
+  if (cached?.fingerprint) {
+    // Profile environments must be resolved by checkAgents with the account registry.
+    if (name.includes('@')) return undefined;
+    const config = new AgentConfigurationDiscovery().discover().find(a => a.agent === name);
+    if (config?.fingerprint !== cached.fingerprint) return undefined;
+  }
   return cached && isPreflightFresh(cached) && (cached.status === 'FAILED' || cached.status === 'BLOCKED') ? cached : undefined;
 }
 

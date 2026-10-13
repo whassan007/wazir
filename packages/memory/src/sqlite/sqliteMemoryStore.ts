@@ -9,7 +9,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 // Load Node.js 22 built-in node:sqlite cleanly in both CommonJS and ESM
-const nodeSqlite = typeof require !== 'undefined' ? require('node:sqlite') : undefined;
+const nodeSqlite = (process as any).getBuiltinModule?.('node:sqlite') ?? (typeof require !== 'undefined' ? require('node:sqlite') : undefined);
 const DatabaseSync = nodeSqlite?.DatabaseSync;
 
 export interface DialogueSegment {

@@ -327,9 +327,13 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.sendLine('/fanout setup database; build auth endpoints; write e2e tests');
 
     // Allow orchestrator to pick up tasks and start agents
-    await new Promise((r) => setTimeout(r, 60));
+    let agents: any[] = [];
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      agents = harness.tui.getAgents();
+      if (agents.length >= 3) break;
+    }
 
-    const agents = harness.tui.getAgents();
     expect(agents).toHaveLength(3);
     expect(agents.some((a) => a.title.includes('setup database'))).toBe(true);
     expect(agents.some((a) => a.title.includes('build auth endpoints'))).toBe(true);
@@ -352,14 +356,18 @@ describe('FleetTui — interactive terminal UI harness', () => {
     expect(harness.tui.getCurrentView()).toBe('fleet');
 
     // Wait for tasks to complete
-    await new Promise((r) => setTimeout(r, 100));
+    let completedAgent;
+    for (let i = 0; i < 40; i++) {
+      completedAgent = harness.tui.getAgents().find((a) => a.status === 'completed' && a.usage?.total);
+      if (completedAgent) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
     const job = harness.tui.getCurrentJob();
     expect(job).toBeDefined();
 
     // Completed tasks carry the model's token usage (input/output/total) forwarded from
     // the task:completed event — the Tail view should show it, not just status/duration.
-    const completedAgent = harness.tui.getAgents().find((a) => a.status === 'completed');
     expect(completedAgent?.usage?.total).toBeGreaterThan(0);
 
     harness.sendKey('\r');
@@ -511,8 +519,12 @@ describe('FleetTui — interactive terminal UI harness', () => {
     await harness.start();
 
     harness.sendLine('quick job');
-    await new Promise((r) => setTimeout(r, 100));
-    const job = harness.tui.getCurrentJob();
+    let job;
+    for (let i = 0; i < 40; i++) {
+      job = harness.tui.getCurrentJob();
+      if (job?.status === 'completed') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
     expect(job?.status).toBe('completed');
 
     for (let i = 0; i < 5; i++) harness.sendKey('\u001b[A'); // up to the JOBS entry

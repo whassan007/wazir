@@ -1,56 +1,81 @@
 # syntax=docker/dockerfile:1
-#
-# Multi-target build for the Wazir meta-harness. Build one of the runnable
-# services with `--target`:
-#
-#   docker build --target api    -t wazir-api    .
-#   docker build --target worker -t wazir-worker .
-#   docker build --target web    -t wazir-web    .
-#
-# `docker-compose.yml` builds all three from this same file. This ships the
-# full npm workspace (all packages + devDependencies) in the final image
-# rather than a pruned/slimmed one — correct and simple over minimal image
-# size, matching the scope of the rest of this remediation pass.
+# Multi-stage Dockerfile for Wazir
+# Supports linux/amd64 and linux/arm64 (DGX Spark)
 
-FROM node:22-alpine AS builder
-WORKDIR /app
+# --- Stage 1: Build & Bundle ---
+FROM node:22-bookworm-slim AS builder
 
-COPY package.json package-lock.json tsconfig.json tsconfig.base.json ./
-COPY packages ./packages
-COPY apps ./apps
+WORKDIR /build
 
-RUN npm ci
-RUN npm run build
+# Install build prerequisites
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# ---- API server -------------------------------------------------------
-FROM builder AS api
-ENV NODE_ENV=production
-ENV PORT=4800
-# The API defaults to binding 127.0.0.1, which is correct for a bare-metal
-# install but unreachable from outside a container (Docker's port mapping
-# forwards to the container's external interface, not its loopback) — must
-# bind all interfaces here. Because of that, `apps/api/src/main.ts` refuses
-# to start on a non-loopback bind unless WAZIR_API_TOKEN is set (or
-# WAZIR_ALLOW_UNAUTHENTICATED=1 is passed explicitly); docker-compose.yml
-# supplies the token and publishes the port on the host's loopback only.
-ENV WAZIR_HOST=0.0.0.0
-EXPOSE 4800
-CMD ["node", "apps/api/dist/main.js"]
+COPY package*.json ./
+COPY packages/ ./packages/
+COPY apps/ ./apps/
+COPY scripts/ ./scripts/
 
-# ---- Worker daemon ------------------------------------------------------
-FROM builder AS worker
-ENV NODE_ENV=production
-CMD ["node", "apps/worker/dist/index.js"]
+# Install dependencies and build bundle
+RUN npm ci && npm run build
 
-# ---- Web dashboard --------------------------------------------------------
-FROM builder AS web
-ENV NODE_ENV=production
-ENV PORT=4801
-EXPOSE 4801
-CMD ["node", "apps/web/server.js"]
+# --- Stage 2: Minimal Production Runtime ---
+FROM node:22-bookworm-slim AS runtime
 
-# ---- CLI (run one-off commands: `docker compose run --rm cli wa ...`) ----
-FROM builder AS cli
-ENV NODE_ENV=production
-ENTRYPOINT ["node", "apps/cli/dist/index.js"]
-CMD ["--help"]
+# OCI Image Annotations
+LABEL org.opencontainers.image.title="Wazir" \
+      org.opencontainers.image.description="Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator" \
+      org.opencontainers.image.url="https://github.com/whassan007/wazir" \
+      org.opencontainers.image.source="https://github.com/whassan007/wazir" \
+      org.opencontainers.image.vendor="Wazir Contributors" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+
+# Install production utilities (Git is required for worktree & agent coordination; curl/ca-certificates for HTTPS)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root system user and group
+RUN groupadd -g 1000 wazir && \
+    useradd -u 1000 -g wazir -m -s /bin/bash wazir
+
+# Setup app directories
+WORKDIR /home/wazir
+
+# Install standalone bundled CLI
+COPY --from=builder /build/bin/wa.js /usr/local/lib/wazir/wa.js
+COPY README.md LICENSE /usr/local/lib/wazir/
+RUN printf '#!/bin/sh\nexec node /usr/local/lib/wazir/wa.js "$@"\n' > /usr/local/bin/wa && \
+    chmod +x /usr/local/bin/wa
+
+# Entrypoint script
+COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Persistent data directory
+RUN mkdir -p /home/wazir/.wazir /home/wazir/.wazir/logs && \
+    chown -R wazir:wazir /home/wazir
+
+VOLUME ["/home/wazir/.wazir"]
+
+# Expose API and Dashboard ports
+EXPOSE 3000 3001
+
+USER wazir
+ENV HOME=/home/wazir \
+    WAZIR_HOME=/home/wazir/.wazir \
+    NODE_ENV=production
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD wa --version >/dev/null 2>&1 || exit 1
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["api"]

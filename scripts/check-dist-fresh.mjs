@@ -12,9 +12,10 @@
  *   node scripts/check-dist-fresh.mjs --quiet
  */
 import { readdirSync, statSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = resolve(new URL('..', import.meta.url).pathname);
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const quiet = process.argv.includes('--quiet');
 
 function newestMtime(dir) {

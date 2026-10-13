@@ -8,3 +8,4 @@ export * from './retry.js';
 export * from './failure.js';
 export * from './text.js';
 export * from './faultInjection.js';
+export * from './platform.js';

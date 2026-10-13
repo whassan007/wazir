@@ -30,14 +30,16 @@ describe('wa agents check', () => {
     const engine = engineWith({ good: 'normal', bad: 'session-error' });
     const first = await checkAgents(engine, [], { file });
     expect(first.map((r) => [r.agent, r.status]).sort()).toEqual([['bad', 'FAILED'], ['good', 'READY']]);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    }
 
     const cached = await checkAgents(engine, ['good'], { file });
     expect(cached[0].checkedAt).toBe(first.find((r) => r.agent === 'good')!.checkedAt);
 
     const fresh = await checkAgents(engine, ['good'], { file, fresh: true });
     expect(fresh[0].checkedAt).not.toBe(cached[0].checkedAt);
-  });
+  }, 15_000);
 
   it('reports unknown names without probing', async () => {
     const r = await checkAgents(engineWith({}), ['nope'], { file });
@@ -98,5 +100,5 @@ describe('wa agents check', () => {
     const [fresh] = await checkAgents(engine, ['codex'], { file, fresh: true });
     expect(fresh.status).toBe('READY');
     expect(fresh.lastVerifiedTask).toMatchObject({ executionId: 'exec-2' });
-  });
+  }, 15_000);
 });

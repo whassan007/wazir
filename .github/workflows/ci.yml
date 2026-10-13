@@ -9,11 +9,17 @@ on:
 
 jobs:
   build-and-test:
-    name: Build, Typecheck, and Test
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} (Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node-version: [22.x]
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,6 +33,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Ensure node-pty helper is executable on macOS
+        if: runner.os == 'macOS'
+        run: find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} + || true
+
       - name: Build packages and apps
         run: npm run build
 
@@ -37,6 +47,12 @@ jobs:
       # from this commit (security review F-16).
       - name: Verify dist is fresh
         run: npm run check-dist -- --quiet
+
+      - name: Validate distribution package metadata and exclusions
+        run: npm run package:check
+
+      - name: Run distribution package smoke test (isolated install & execution)
+        run: npm run release:verify
 
       - name: Run unit and integration test suite
         run: npm test
@@ -50,11 +66,62 @@ jobs:
       - name: Run agent execution test plan (55 cases)
         run: npm run test:plan:agent
 
+      - name: Run Automated Release Validation Gate
+        run: npm run release:gate
+
+      # Platform Installation and CLI Smoke Test
+      - name: Test Native Unix Installation (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          bash scripts/install.sh
+          ~/.local/bin/wa --help
+          ~/.local/bin/wa doctor || true
+
+      - name: Test Native Windows Installation (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & .\scripts\install.ps1
+          $binDir = if ($env:WAZIR_BIN_DIR) { $env:WAZIR_BIN_DIR } else { Join-Path $env:USERPROFILE ".wazir\bin" }
+          & "$binDir\wa.cmd" --help
+          & "$binDir\wa.cmd" doctor
+          if ($LASTEXITCODE -ne 0) { Write-Host "wa doctor reported optional runtime warnings; the installation smoke test still passed." }
+          $global:LASTEXITCODE = 0
+
+      - name: Smoke test installed launcher from normal and Unicode paths (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          node scripts/smoke-test.mjs
+
+      - name: Smoke test installed launcher from normal and Unicode paths (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binDir = if ($env:WAZIR_BIN_DIR) { $env:WAZIR_BIN_DIR } else { Join-Path $env:USERPROFILE ".wazir\bin" }
+          $env:Path = "$binDir;$env:Path"
+          node scripts\smoke-test.mjs
+
+      # Standalone Native Single Executable Application (SEA) Packaging
+      - name: Build Native Standalone Binary
+        run: npm run build:binary
+
+      - name: Verify Standalone Binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./dist/wa --help
+
+      - name: Verify Standalone Binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & .\dist\wa.exe --help
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports-node-${{ matrix.node-version }}
+          name: test-reports-${{ matrix.os }}-node-${{ matrix.node-version }}
           path: |
             acceptance-test-report.json
             test-plan-report.json

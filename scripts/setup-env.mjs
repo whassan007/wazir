@@ -5,10 +5,19 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 const homedir = os.homedir();
-const binDir = process.env.WAZIR_BIN_DIR || path.join(homedir, '.local', 'bin');
+const binDir = process.env.WAZIR_BIN_DIR || (process.platform === 'win32'
+  ? path.join(homedir, '.wazir', 'bin')
+  : path.join(homedir, '.local', 'bin'));
 const wazirDir = process.env.WAZIR_HOME || path.join(homedir, '.wazir');
 const envFile = path.join(wazirDir, '.env');
 const configFile = path.join(wazirDir, 'config.json');
+
+function safeChmod(target, mode) {
+  if (process.platform === 'win32') return;
+  try {
+    chmodSync(target, mode);
+  } catch {}
+}
 
 console.log('==> Configuring Wazir environment and configuration files...');
 
@@ -17,9 +26,7 @@ if (!existsSync(wazirDir)) {
   mkdirSync(wazirDir, { recursive: true, mode: 0o700 });
   console.log(`✓ Created Wazir config directory: ${wazirDir}`);
 } else {
-  try {
-    chmodSync(wazirDir, 0o700);
-  } catch {}
+  safeChmod(wazirDir, 0o700);
 }
 
 // 2. Ensure ~/.wazir/.env exists with secure defaults & tokens
@@ -92,7 +99,7 @@ if (!existsSync(envFile)) {
     } else {
       console.log(`✓ Environment file already configured: ${envFile}`);
     }
-    chmodSync(envFile, 0o600);
+    safeChmod(envFile, 0o600);
   } catch (err) {
     console.warn(`! Warning: could not verify or update ${envFile}:`, err.message);
   }
@@ -110,7 +117,8 @@ if (!existsSync(configFile)) {
     denyCommands: [],
     allowedMcpServers: [],
   };
-  writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2), { encoding: 'utf8', mode: 0o600 });
+  writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2), { encoding: 'utf8' });
+  safeChmod(configFile, 0o600);
   console.log(`✓ Created default configuration file: ${configFile}`);
 } else {
   console.log(`✓ Configuration file already exists: ${configFile}`);
@@ -125,6 +133,7 @@ const shellFiles = [
   path.join(homedir, '.zshrc'),
   path.join(homedir, '.profile'),
   path.join(homedir, '.bash_profile'),
+  path.join(homedir, '.zprofile'),
 ];
 
 let updatedShellFiles = 0;

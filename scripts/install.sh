@@ -5,6 +5,13 @@
 # The `wa` launcher is installed as a shim in ~/.local/bin that pins the
 # absolute Node binary used at install time, so it keeps working regardless
 # of which node (nvm version, conda, system) a later shell has on PATH.
+#
+# Uninstall instructions:
+#   1. Remove the launcher:
+#      rm -f "${WAZIR_BIN_DIR:-$HOME/.local/bin}/wa"
+#   2. Remove PATH additions from ~/.bashrc, ~/.zshrc, ~/.bash_profile, etc.
+#   3. (Optional) Remove data and configuration:
+#      rm -rf "${WAZIR_HOME:-$HOME/.wazir}"
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,8 +32,11 @@ if ! command -v node >/dev/null 2>&1; then
   echo "error: node is not installed. Wazir needs Node.js >= 22.5 (https://nodejs.org or nvm)." >&2
   exit 1
 fi
+
 NODE_BIN="$(command -v node)"
-NODE_BIN="$(readlink -f "$NODE_BIN" 2>/dev/null || echo "$NODE_BIN")"
+# Dereference any symlinks portably via Node's process.execPath (compatible with macOS and Linux)
+NODE_BIN="$("$NODE_BIN" -e 'console.log(process.execPath)' 2>/dev/null || echo "$NODE_BIN")"
+
 # 22.5 is the first release with the built-in node:sqlite used by @wazir/memory.
 if ! "$NODE_BIN" -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=5)?0:1)'; then
   echo "error: Node.js >= 22.5 required, found $("$NODE_BIN" -v) at $NODE_BIN" >&2
@@ -34,31 +44,34 @@ if ! "$NODE_BIN" -e 'const [a,b]=process.versions.node.split(".").map(Number); p
 fi
 echo "==> Using Node $("$NODE_BIN" -v) at $NODE_BIN"
 
-CLI_ENTRY="$REPO_ROOT/bin/wa.js"
-if [[ ! -f "$CLI_ENTRY" && -f "$REPO_ROOT/apps/cli/dist/index.js" ]]; then
-  CLI_ENTRY="$REPO_ROOT/apps/cli/dist/index.js"
+if ! command -v git >/dev/null 2>&1; then
+  echo "error: git is not installed. Wazir requires git (https://git-scm.com)." >&2
+  exit 1
 fi
+
+CLI_ENTRY="$REPO_ROOT/bin/wa.js"
 BUILD_LOG="${TMPDIR:-/tmp}/wazir-install-build.log"
-BUILD_STATUS="ok"
 
 if [[ "${WAZIR_SKIP_BUILD:-0}" == "1" ]]; then
-  echo "==> WAZIR_SKIP_BUILD=1: skipping npm install / build"
-  BUILD_STATUS="skipped"
+  echo "==> WAZIR_SKIP_BUILD=1: skipping npm ci / build"
 else
-  echo "==> Installing dependencies"
-  if ! npm install; then
-    echo "error: npm install failed. Check your network and Node/npm setup, then re-run." >&2
+  echo "==> Installing dependencies via npm ci"
+  if ! npm ci; then
+    echo "error: npm ci failed. Check your network and Node/npm setup, then re-run." >&2
     exit 1
+  fi
+
+  if [ "$(uname -s)" = "Darwin" ]; then
+    find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} + 2>/dev/null || true
   fi
 
   echo "==> Building all workspaces (log: $BUILD_LOG)"
   if ! npm run build 2>&1 | tee "$BUILD_LOG"; then
-    BUILD_STATUS="failed"
     # tsc --build reports the same diagnostic once per dependent workspace with a
     # different relative path; normalise to basename+position and dedupe.
     ERRORS="$(grep -E 'error TS[0-9]+' "$BUILD_LOG" | sed -E 's#^([^(]*/)?([^/(]+)\(#\2(#' | sort -u || true)"
     ERROR_COUNT="$(printf '%s' "$ERRORS" | grep -c . || true)"
-    echo
+    echo >&2
     echo "==> BUILD FAILED ($ERROR_COUNT TypeScript error(s))" >&2
     if [[ -n "$ERRORS" ]]; then
       echo "    Files with errors:" >&2
@@ -72,19 +85,20 @@ else
       echo "      git -C \"$REPO_ROOT\" stash -u && bash \"$REPO_ROOT/scripts/install.sh\" && git -C \"$REPO_ROOT\" stash pop" >&2
     fi
     echo "    Full log: $BUILD_LOG" >&2
+    echo "error: build failed. Refusing to install stale or broken build." >&2
+    exit 1
   fi
+fi
+
+if [[ ! -f "$CLI_ENTRY" && -f "$REPO_ROOT/apps/cli/dist/index.js" ]]; then
+  CLI_ENTRY="$REPO_ROOT/apps/cli/dist/index.js"
 fi
 
 if [[ ! -f "$CLI_ENTRY" ]]; then
   echo >&2
   echo "error: no CLI build found at $CLI_ENTRY — cannot install 'wa'." >&2
-  [[ "$BUILD_STATUS" == "skipped" ]] && echo "       (WAZIR_SKIP_BUILD=1 was set; run without it to build)" >&2
+  [[ "${WAZIR_SKIP_BUILD:-0}" == "1" ]] && echo "       (WAZIR_SKIP_BUILD=1 was set; run without it to build)" >&2
   exit 1
-fi
-if [[ "$BUILD_STATUS" == "failed" ]]; then
-  echo "    A previous build exists at $CLI_ENTRY; installing the 'wa' launcher against it" >&2
-  echo "    so the CLI stays usable. It does NOT include your uncommitted changes." >&2
-  echo
 fi
 
 echo "==> Configuring environment files and shell profiles"
@@ -98,14 +112,14 @@ cat > "$BIN_DIR/wa" <<SHIM
 NODE_BIN="$NODE_BIN"
 CLI="$CLI_ENTRY"
 if [[ ! -x "\$NODE_BIN" ]]; then
-  NODE_BIN="\$(command -v node || true)"
+  NODE_BIN="\$(command -v node 2>/dev/null || true)"
 fi
 if [[ -z "\$NODE_BIN" ]]; then
-  echo "wa: node not found (expected $NODE_BIN). Re-run: bash $REPO_ROOT/scripts/install.sh" >&2
+  echo "wa: node not found (expected $NODE_BIN). Re-run: bash \"$REPO_ROOT/scripts/install.sh\"" >&2
   exit 127
 fi
 if [[ ! -f "\$CLI" ]]; then
-  echo "wa: Wazir build missing at \$CLI. Re-run: bash $REPO_ROOT/scripts/install.sh" >&2
+  echo "wa: Wazir build missing at \$CLI. Re-run: bash \"$REPO_ROOT/scripts/install.sh\"" >&2
   exit 127
 fi
 
@@ -113,7 +127,8 @@ fi
 ENV_FILE="\${WAZIR_HOME:-\$HOME/.wazir}/.env"
 if [[ -f "\$ENV_FILE" ]]; then
   set -a
-  source "\$ENV_FILE" 2>/dev/null || true
+  # shellcheck disable=SC1090
+  . "\$ENV_FILE" 2>/dev/null || true
   set +a
 fi
 
@@ -131,7 +146,7 @@ case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
     PATH_LINE="export PATH=\"$BIN_DIR:\$PATH\""
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.zprofile"; do
       [[ -f "$rc" ]] || continue
       if ! grep -qF "$PATH_LINE" "$rc"; then
         printf '\n# Added by Wazir install\n%s\n' "$PATH_LINE" >> "$rc"
@@ -145,17 +160,10 @@ case ":$PATH:" in
 esac
 
 echo
-if [[ "$BUILD_STATUS" == "failed" ]]; then
-  echo "Done with warnings: 'wa' launcher installed against the previous build; the current source did not compile."
-  echo "Re-run this script after fixing the errors to refresh the build."
-  echo
-else
-  echo "Done."
-fi
+echo "Done."
 echo "Next steps (with Ollama or LM Studio running):"
 echo "  wa doctor"
 echo "  wa models list"
 echo "  wa ask \"explain what this repository does\""
 
-[[ "$BUILD_STATUS" == "failed" ]] && exit 2
 exit 0

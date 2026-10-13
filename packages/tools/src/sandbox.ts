@@ -152,8 +152,10 @@ function probeSandboxExec(): { ok: boolean; reason?: string } {
   if (process.platform !== 'darwin') return { ok: false, reason: 'sandbox-exec is macOS-only' };
   const bin = onPath('sandbox-exec') ?? (existsSync('/usr/bin/sandbox-exec') ? '/usr/bin/sandbox-exec' : undefined);
   if (!bin) return { ok: false, reason: 'sandbox-exec is not available' };
-  const result = spawnSync(bin, ['-p', '(version 1)(allow default)', '/usr/bin/true'], { stdio: 'ignore', timeout: 5_000 });
-  return result.status === 0 ? { ok: true } : { ok: false, reason: `sandbox-exec cannot start (exit ${result.status})` };
+  const tmp = os.tmpdir();
+  const profile = seatbeltProfile({ projectRoot: tmp, cwd: tmp });
+  const result = spawnSync(bin, ['-p', profile, process.execPath, '-e', 'process.exit(0)'], { stdio: 'ignore', timeout: 5_000 });
+  return result.status === 0 ? { ok: true } : { ok: false, reason: `sandbox-exec cannot run node with seatbelt profile (exit ${result.status})` };
 }
 
 /** Resolves (once) which sandbox backend this process can actually use. */

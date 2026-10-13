@@ -200,7 +200,7 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
     }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000);
   });
 
-  describe('real TTY (PTY)', () => {
+  describe.skipIf(process.platform === 'win32')('real TTY (PTY)', () => {
     it('/exit exits 0', async () => {
       const env = await isolatedEnv(dir);
       const result = await runPtyChat(

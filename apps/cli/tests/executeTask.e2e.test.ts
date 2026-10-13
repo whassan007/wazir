@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
+import { execSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -260,7 +261,7 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     expect(outcome.result).toContain('Verification checks passed');
   });
 
-  it('a task that compiles source code via a raw `shell` call IS recorded as a real check and can succeed', async () => {
+  it.skipIf(process.platform === 'win32')('a task that compiles source code via a raw `shell` call IS recorded as a real check and can succeed', async () => {
     // Companion regression test: the compiler must actually be *recognized*
     // as a check. This also pins the exact live bug found while verifying
     // the fix — BUILD_INVOCATION_PATTERN originally used a trailing `\b`
@@ -268,15 +269,28 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     // /`clang++` (neither the trailing '+' nor the following space is a
     // \w character, so there is no word/non-word transition for \b to
     // anchor on) — `(?=\s|$)` is required instead.
+    const hasGpp = (() => {
+      try {
+        execSync(process.platform === 'win32' ? 'where g++' : 'which g++', { stdio: 'ignore' });
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+
+    const [srcFile, content, cmd] = hasGpp
+      ? ['main.cpp', 'int main(){return 0;}', process.platform === 'win32' ? 'g++ -std=c++17 -o main.exe main.cpp && main.exe' : 'g++ -std=c++17 -o main main.cpp && ./main']
+      : ['main.ts', 'const x: number = 0;', 'npx tsc main.ts --noEmit'];
+
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-verified-'));
     const engine = await buildTestEngine(projectRoot, [
-      '{"action":"plan","content":"write and compile main.cpp"}',
-      '{"action":"tool","tool":"write","input":{"path":"main.cpp","content":"int main(){return 0;}"}}',
-      '{"action":"tool","tool":"shell","input":{"command":"g++ -std=c++17 -o main main.cpp && ./main"}}',
+      `{"action":"plan","content":"write and compile ${srcFile}"}`,
+      `{"action":"tool","tool":"write","input":{"path":"${srcFile}","content":${JSON.stringify(content)}}}`,
+      `{"action":"tool","tool":"shell","input":{"command":${JSON.stringify(cmd)}}}`,
       '{"action":"done","summary":"compiled and ran successfully"}',
     ]);
 
-    const outcome = await executeTask(engine, 'write and compile a c++ program', { quiet: true });
+    const outcome = await executeTask(engine, 'write and compile program', { quiet: true });
 
     expect(outcome.success).toBe(true);
     expect(outcome.reasons.some((r) => r.includes('all checks passed'))).toBe(true);
