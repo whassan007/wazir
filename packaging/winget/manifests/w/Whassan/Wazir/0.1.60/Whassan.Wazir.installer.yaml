@@ -16,11 +16,11 @@ Commands:
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/whassan007/wazir/releases/download/v0.1.60/wazir-v0.1.60-windows-x64.zip
-    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+    InstallerSha256: 412987ed0d5a727738118494dc500e3e64e8bd4786b1e346b0736db28e8b735e
     UpgradeBehavior: install
   - Architecture: arm64
     InstallerUrl: https://github.com/whassan007/wazir/releases/download/v0.1.60/wazir-v0.1.60-windows-arm64.zip
-    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+    InstallerSha256: 14c489532cbe685824661645e193c6e2e11369bdbc6f89a2881c0ff86db06f7d
     UpgradeBehavior: install
 ManifestType: installer
 ManifestVersion: 1.6.0
