@@ -324,7 +324,7 @@ describe('Worker 6: Normalized Prompt-Cache Telemetry', () => {
       }
     });
 
-    it('recovers from corrupt JSON lines in SSE stream without throwing', async () => {
+    it('reports corrupt SSE JSON without claiming successful completion', async () => {
       const { url } = await createHttpServer((req, res) => {
         if (req.url === '/v1/chat/completions') {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -348,9 +348,8 @@ describe('Worker 6: Normalized Prompt-Cache Telemetry', () => {
       }
 
       const completed = events.find((e) => e.type === 'completed');
-      expect(completed).toBeDefined();
-      expect(completed?.content).toBe('Valid token');
-      expect(completed?.promptCache?.cacheReadTokens.status).toBe('UNKNOWN');
+      expect(completed).toBeUndefined();
+      expect(events.at(-1)).toMatchObject({ type: 'error', error: 'INVALID_PROVIDER_STREAM: malformed JSON chunk' });
     });
   });
 

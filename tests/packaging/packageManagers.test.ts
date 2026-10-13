@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import os from 'node:os';
@@ -162,9 +162,15 @@ describe('Cross-Platform Package Manager Integration', () => {
 
       writeFileSync(testSumsFile, sumsContent);
 
+      // Run the real generator in a disposable checkout; never rewrite release metadata.
+      mkdirSync(path.join(tempDir, 'scripts'), { recursive: true });
+      copyFileSync(path.join(rootDir, 'package.json'), path.join(tempDir, 'package.json'));
+      copyFileSync(path.join(rootDir, 'scripts/update-package-managers.mjs'), path.join(tempDir, 'scripts/update-package-managers.mjs'));
+      const sandboxRoot = tempDir;
+
       try {
         const updateOutput = execSync(`node scripts/update-package-managers.mjs --sums "${testSumsFile}"`, {
-          cwd: rootDir,
+          cwd: sandboxRoot,
           stdio: ['ignore', 'pipe', 'pipe'],
         }).toString();
 
@@ -173,23 +179,18 @@ describe('Cross-Platform Package Manager Integration', () => {
         expect(updateOutput).toContain('Updated WinGet manifests');
 
         // Check that mockHash was injected
-        const fbContent = readFileSync(path.resolve(rootDir, 'Formula/wazir.rb'), 'utf8');
+        const fbContent = readFileSync(path.resolve(sandboxRoot, 'Formula/wazir.rb'), 'utf8');
         expect(fbContent).toContain(mockHash);
 
-        const scoopContent = readFileSync(path.resolve(rootDir, 'bucket/wazir.json'), 'utf8');
+        const scoopContent = readFileSync(path.resolve(sandboxRoot, 'bucket/wazir.json'), 'utf8');
         expect(scoopContent).toContain(mockHash);
 
         const wingetContent = readFileSync(
-          path.resolve(rootDir, `packaging/winget/manifests/w/Whassan/Wazir/${currentVersion}/Whassan.Wazir.installer.yaml`),
+          path.resolve(sandboxRoot, `packaging/winget/manifests/w/Whassan/Wazir/${currentVersion}/Whassan.Wazir.installer.yaml`),
           'utf8'
         );
         expect(wingetContent).toContain(mockHash);
       } finally {
-        // Restore placeholder manifests cleanly
-        execSync('node scripts/update-package-managers.mjs', {
-          cwd: rootDir,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
         rmSync(tempDir, { recursive: true, force: true });
       }
     });

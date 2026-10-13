@@ -1674,6 +1674,14 @@ export class CodingAgent implements AgentAdapter {
       }
     }
 
+    if (turnBudgetExhausted) {
+      yield {
+        kind: 'error', error: `MAX_TURNS: reached ${maxTurns} turns without completing the task` +
+          (failures.length ? `\nverification failed:\n${failures.join('\n---\n')}` : ''),
+        errorKind: 'other', terminationReason: 'MAX_TURNS', protocolMetrics: currentMetrics(),
+      };
+      return;
+    }
     if (failures.length === 0) {
       yield { kind: 'phase', phase: 'complete' as AgentPhase };
       yield {

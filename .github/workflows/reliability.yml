@@ -1,0 +1,92 @@
+name: Reliability evidence
+on:
+  pull_request:
+    paths:
+      - 'packages/**'
+      - 'apps/**'
+      - 'tests/reliability/**'
+      - 'integrations/ai-test-harness/**'
+      - '.github/workflows/reliability.yml'
+  workflow_dispatch:
+    inputs:
+      live_model:
+        description: 'Exact model ID on the configured self-hosted local runner (empty skips live inference)'
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  deterministic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Process persistence, socket faults, and authorization
+        run: npx vitest run tests/reliability tests/integration/policyBypassSweep.test.ts apps/api/tests/durableDispatch.test.ts --reporter=json --outputFile=reliability-results.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deterministic-reliability
+          path: reliability-results.json
+  upstream-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci && npm run build
+      - name: Install pinned external harness
+        shell: bash
+        run: |
+          git clone https://github.com/schubergphilis/ai-test-harness.git "$RUNNER_TEMP/ai-test-harness"
+          revision=$(node -p 'require("./integrations/ai-test-harness/upstream-revisions.json")["ai-test-harness"].commit')
+          git -C "$RUNNER_TEMP/ai-test-harness" checkout "$revision"
+          bash integrations/ai-test-harness/install.sh "$RUNNER_TEMP/ai-test-harness"
+          cp "$RUNNER_TEMP/ai-test-harness/.env.example" "$RUNNER_TEMP/ai-test-harness/.env"
+      - name: Validate reference and real Wazir agent contract with deterministic model
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/ai-test-harness"
+          make native-up
+          make test-native HARNESS=strands
+          make test-native HARNESS=wazir
+      - name: Stop owned test services
+        if: always()
+        run: make -C "$RUNNER_TEMP/ai-test-harness" native-down
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upstream-contract
+          path: ${{ runner.temp }}/ai-test-harness/runs/
+  live:
+    if: github.event_name == 'workflow_dispatch' && inputs.live_model != ''
+    runs-on: [self-hosted, wazir-live]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci && npm run build
+      - name: Independently scored real-model tasks
+        env:
+          BENCHMARK_MODEL: ${{ inputs.live_model }}
+        run: node scripts/reliability-benchmark.mjs --model "$BENCHMARK_MODEL" --output live-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-reliability
+          path: live-results/
