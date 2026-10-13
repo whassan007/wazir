@@ -315,7 +315,9 @@ exit 0
       expect(log.args).toEqual(['run', '--format', 'json', 'Implement feature X in src/feature.ts']);
 
       // Verify working directory matches projectRoot exactly
-      expect(path.resolve(log.cwd)).toBe(path.resolve(targetProjectDir));
+      const realCwd = await fs.realpath(log.cwd);
+      const realTarget = await fs.realpath(targetProjectDir);
+      expect(realCwd).toBe(realTarget);
     });
 
     it('propagates failure exit code cleanly', async () => {

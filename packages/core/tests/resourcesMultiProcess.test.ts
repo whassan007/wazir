@@ -20,8 +20,8 @@ const accounts: AccountConfig[] = [{
 beforeAll(() => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'wazir-mp-'));
   worker = path.join(dir, 'worker.mjs');
-  const esbuild = path.join(root, 'node_modules/.bin/esbuild');
-  const r = spawnSync(esbuild, [path.join(here, 'fixtures/ledgerWorker.ts'), '--bundle', '--platform=node', '--format=esm', `--outfile=${worker}`, '--log-level=error']);
+  const esbuild = path.join(root, 'node_modules/.bin', process.platform === 'win32' ? 'esbuild.cmd' : 'esbuild');
+  const r = spawnSync(esbuild, [path.join(here, 'fixtures/ledgerWorker.ts'), '--bundle', '--platform=node', '--format=esm', `--outfile=${worker}`, '--log-level=error'], { shell: process.platform === 'win32' });
   if (r.status !== 0) throw new Error(`esbuild failed: ${r.stderr}`);
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

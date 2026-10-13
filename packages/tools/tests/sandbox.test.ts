@@ -24,7 +24,7 @@ describe.skipIf(process.platform === 'win32')('sandbox argument construction (pu
     await fs.rm(home, { recursive: true, force: true });
   });
 
-  it('bwrap: read-only root, masked home with toolchains re-exposed, writable project, no network by default', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: read-only root, masked home with toolchains re-exposed, writable project, no network by default', () => {
     const args = bwrapArgs({ projectRoot: project, cwd: project }, home, '/tmp');
     const joined = args.join(' ');
     expect(args.slice(0, 2)).toEqual(['--ro-bind', '/']);
@@ -46,13 +46,13 @@ describe.skipIf(process.platform === 'win32')('sandbox argument construction (pu
     expect(joined).toContain(`--chdir ${project}`);
   });
 
-  it('bwrap: shares the network only when the policy allows it', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: shares the network only when the policy allows it', () => {
     const args = bwrapArgs({ projectRoot: project, cwd: project, networkAllowed: true }, home, '/tmp');
     expect(args).not.toContain('--unshare-net');
     expect(args).toContain('--unshare-pid');
   });
 
-  it('bwrap: a cwd outside the project falls back to the project root', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: a cwd outside the project falls back to the project root', () => {
     const args = bwrapArgs({ projectRoot: project, cwd: '/etc' }, home, '/tmp');
     expect(args[args.indexOf('--chdir') + 1]).toBe(project);
   });
@@ -70,7 +70,7 @@ describe.skipIf(process.platform === 'win32')('sandbox argument construction (pu
     expect(seatbeltProfile({ projectRoot: project, cwd: project, networkAllowed: true }, home, '/tmp')).not.toContain('(deny network*)');
   });
 
-  it('bwrap: masks other users\' homes and mount points', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: masks other users\' homes and mount points', () => {
     const joined = bwrapArgs({ projectRoot: project, cwd: project }, home, '/tmp').join(' ');
     for (const dir of ['/home', '/mnt', '/media', '/srv']) {
       if (existsSync(dir)) expect(joined).toContain(`--tmpfs ${dir}`);

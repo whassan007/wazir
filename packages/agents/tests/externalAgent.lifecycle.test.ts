@@ -70,7 +70,7 @@ describe('ExternalAgentAdapter lifecycle', () => {
     const pids = await readPids(pidFile);
     for (const pid of pids) expect(isAlive(pid)).toBe(true);
     wazir.kill('SIGKILL');
-    for (let i = 0; i < 50 && pids.some(isAlive); i++) await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 100 && pids.some(isAlive); i++) await new Promise((r) => setTimeout(r, 100));
     for (const pid of pids) expect(isAlive(pid)).toBe(false);
   }, 15_000);
 });

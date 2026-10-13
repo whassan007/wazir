@@ -356,14 +356,18 @@ describe('FleetTui — interactive terminal UI harness', () => {
     expect(harness.tui.getCurrentView()).toBe('fleet');
 
     // Wait for tasks to complete
-    await new Promise((r) => setTimeout(r, 100));
+    let completedAgent;
+    for (let i = 0; i < 40; i++) {
+      completedAgent = harness.tui.getAgents().find((a) => a.status === 'completed' && a.usage?.total);
+      if (completedAgent) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
     const job = harness.tui.getCurrentJob();
     expect(job).toBeDefined();
 
     // Completed tasks carry the model's token usage (input/output/total) forwarded from
     // the task:completed event — the Tail view should show it, not just status/duration.
-    const completedAgent = harness.tui.getAgents().find((a) => a.status === 'completed');
     expect(completedAgent?.usage?.total).toBeGreaterThan(0);
 
     harness.sendKey('\r');

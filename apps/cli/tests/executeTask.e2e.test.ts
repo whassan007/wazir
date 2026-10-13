@@ -260,7 +260,7 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     expect(outcome.result).toContain('Verification checks passed');
   });
 
-  it('a task that compiles source code via a raw `shell` call IS recorded as a real check and can succeed', async () => {
+  it.skipIf(process.platform === 'win32')('a task that compiles source code via a raw `shell` call IS recorded as a real check and can succeed', async () => {
     // Companion regression test: the compiler must actually be *recognized*
     // as a check. This also pins the exact live bug found while verifying
     // the fix — BUILD_INVOCATION_PATTERN originally used a trailing `\b`
