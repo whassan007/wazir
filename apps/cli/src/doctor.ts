@@ -415,6 +415,39 @@ function checkRuntimeModelHealth(engine: RookEngine): DoctorCheck {
   }
 }
 
+/** External agents, from cached preflight results only: doctor stays fast and spends no quota. */
+async function checkExternalAgents(engine: RookEngine): Promise<DoctorCheck> {
+  // Like every other check, report a failure instead of throwing: one broken check must not
+  // take down the whole doctor report.
+  try {
+    return await checkExternalAgentsUnsafe(engine);
+  } catch (error) {
+    return { name: 'external agents', status: 'UNAVAILABLE', message: 'agent registry unavailable', details: (error as Error).message };
+  }
+}
+
+async function checkExternalAgentsUnsafe(engine: RookEngine): Promise<DoctorCheck> {
+  const { externalAgentNames, loadPreflightCache } = await import('./agentPreflight.js');
+  const { isPreflightFresh } = await import('@wazir/agents');
+  const names = externalAgentNames(engine);
+  if (names.length === 0) return { name: 'external agents', status: 'NOT INSTALLED', message: 'no external agent CLIs found' };
+  const cache = loadPreflightCache();
+  const rows = names.map((n) => ({ n, r: cache[n] && isPreflightFresh(cache[n]) ? cache[n] : undefined }));
+  const ready = rows.filter((x) => x.r?.status === 'READY').length;
+  const bad = rows.filter((x) => x.r && x.r.status !== 'READY');
+  const unchecked = rows.filter((x) => !x.r).map((x) => x.n);
+  const details = [
+    ...rows.filter((x) => x.r).map((x) => `${x.n}: ${x.r!.status}${x.r!.status === 'READY' ? '' : ` — ${x.r!.detail}`}`),
+    ...(unchecked.length ? [`not checked recently: ${unchecked.join(', ')} (run \`wa agents check\`)`] : []),
+  ].join('\n');
+  return {
+    name: 'external agents',
+    status: bad.length ? 'WARN' : unchecked.length ? 'WARN' : 'PASS',
+    message: `${ready}/${names.length} ready`,
+    details,
+  };
+}
+
 export async function doctor(engine: RookEngine): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [
     checkConfig(engine),
@@ -430,6 +463,7 @@ export async function doctor(engine: RookEngine): Promise<DoctorReport> {
     checkSchedulerReadiness(engine),
     checkSecurity(engine),
     checkSandbox(),
+    await checkExternalAgents(engine),
   ];
   
   const summary = {

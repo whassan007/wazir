@@ -810,11 +810,26 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   type?: TaskType;
   model?: string;
   agent?: string;
+  /** Run even when the agent's last (fresh) preflight check failed. */
+  force?: boolean;
   maxTurns?: number;
   expectedFiles?: string[];
   json?: boolean;
   preset?: string;
 }): Promise<{ code: number; output: string }> {
+  // A fresh, failed preflight means this agent would fail too: say why now rather than after
+  // a full launch. Agents never checked (or with an expired result) run normally.
+  if (options.agent && !options.force) {
+    const { knownAgentFailure, refusalMessage } = await import('./agentPreflight.js');
+    const failure = knownAgentFailure(options.agent);
+    if (failure) {
+      const message = refusalMessage(failure);
+      return {
+        code: 1,
+        output: options.json ? JSON.stringify({ success: false, reasons: [message], filesChanged: [], errors: [message] }, null, 2) : message,
+      };
+    }
+  }
   const outcome = await executeTask(engine, description, {
     type: options.type,
     model: options.model,
