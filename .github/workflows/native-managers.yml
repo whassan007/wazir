@@ -161,13 +161,16 @@ jobs:
           ./install-scoop.ps1 -RunAsAdmin
           $env:Path = "$env:USERPROFILE\scoop\shims;$env:Path"
           node scripts/render-manifests.mjs --version $v --sums out/SHA256SUMS --base-url http://localhost:8765 --out m1
-          scoop install ./m1/packaging/scoop/wazir.json
+          if ($LASTEXITCODE) { throw 'render failed' }
+          scoop install (Resolve-Path ./m1/packaging/scoop/wazir.json).Path
+          if ($LASTEXITCODE) { throw "scoop install failed ($LASTEXITCODE)" }
           if ((wa --version).Trim() -ne $v) { throw 'scoop install: version mismatch' }
           wa resources validate --json | Out-Null
           Set-Content (Join-Path $env:WAZIR_HOME 'resources.json') '{"version":1,"accounts":[]}'
           node scripts/render-manifests.mjs --version $env:UPGRADE_VERSION --sums out/SHA256SUMS --base-url http://localhost:8765 --out m2
           scoop uninstall wazir
-          scoop install ./m2/packaging/scoop/wazir.json
+          scoop install (Resolve-Path ./m2/packaging/scoop/wazir.json).Path
+          if ($LASTEXITCODE) { throw "scoop install (upgrade) failed ($LASTEXITCODE)" }
           if ((wa --version).Trim() -ne $env:UPGRADE_VERSION) { throw 'scoop upgrade: version mismatch' }
           scoop uninstall wazir
           if (Get-Command wa -ErrorAction SilentlyContinue) { throw 'wa still on PATH after uninstall' }
