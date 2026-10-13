@@ -2,6 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { ExternalAgentAdapter } from '../src/externalAgent.js';
 
 const isAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -52,4 +54,20 @@ describe('ExternalAgentAdapter lifecycle', () => {
     const run = async () => { for await (const _ of adapter.run({ taskDescription: 'x', projectRoot: dir! } as any, {} as any)) { /* drain */ } };
     await expect(run()).rejects.toThrow(/timed out after 300ms/);
   });
+
+  it.skipIf(process.platform === 'win32')('if Wazir is killed, the agent and its children die with it instead of running on unsupervised', async () => {
+    const { command, pidFile } = await hangingAgent();
+    // A separate process plays Wazir, so it can be SIGKILLed without cleanup handlers.
+    const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/externalAgent.ts');
+    const host = path.join(dir!, 'host.mts');
+    await fs.writeFile(host, `import { ExternalAgentAdapter } from ${JSON.stringify(src)};\n` +
+      `const a = new ExternalAgentAdapter({ name: 'hang', version: '1', description: '', command: ${JSON.stringify(command)}, taskTypes: [], capabilities: [] });\n` +
+      `for await (const _ of a.run({ taskDescription: 'x', projectRoot: ${JSON.stringify(dir)} }, {})) {}\n`);
+    const wazir = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', host], { stdio: 'ignore' });
+    const pids = await readPids(pidFile);
+    for (const pid of pids) expect(isAlive(pid)).toBe(true);
+    wazir.kill('SIGKILL');
+    for (let i = 0; i < 50 && pids.some(isAlive); i++) await new Promise((r) => setTimeout(r, 100));
+    for (const pid of pids) expect(isAlive(pid)).toBe(false);
+  }, 15_000);
 });
