@@ -44,6 +44,12 @@ jobs:
       - name: Verify dist is fresh
         run: npm run check-dist -- --quiet
 
+      - name: Validate distribution package metadata and exclusions
+        run: npm run package:check
+
+      - name: Run distribution package smoke test (isolated install & execution)
+        run: npm run release:verify
+
       - name: Run unit and integration test suite
         run: npm test
 

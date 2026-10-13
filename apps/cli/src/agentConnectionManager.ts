@@ -1,4 +1,4 @@
-import { AgentConfigurationDiscovery, isPreflightFresh } from '@wazir/agents';
+import { AgentConfigurationDiscovery, effectivePreflightStatus, isPreflightFresh } from '@wazir/agents';
 import { checkAgents, loadPreflightCache } from './agentPreflight.js';
 import type { RookEngine } from './engine.js';
 
@@ -20,7 +20,7 @@ export class AgentConnectionManager {
     return configurations.map(config => {
       const cached = cache[config.agent];
       const valid = cached?.fingerprint === config.fingerprint && isPreflightFresh(cached);
-      const state = valid ? cached.status : config.state;
+      const state = valid ? effectivePreflightStatus(cached) : config.state;
       const account = this.engine.resources.accounts.candidates({ agent: config.agent })[0];
       return {
         ...config, state, authentication: valid && state === 'READY' ? 'VERIFIED' : 'UNKNOWN',

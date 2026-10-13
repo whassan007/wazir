@@ -513,9 +513,12 @@ describe('Terminal & Control-Plane Integrity Acceptance Suite (15 Deterministic 
     await harness.start();
 
     harness.sendLine('task verify provenance tracking');
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    let blocks = await listBlocks(engine);
+    for (let i = 0; i < 20 && (blocks.length === 0 || !blocks[0].jobId); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      blocks = await listBlocks(engine);
+    }
 
-    const blocks = await listBlocks(engine);
     expect(blocks.length).toBe(1);
     const b = blocks[0];
     expect(b.source).toBe('keyboard-submit');

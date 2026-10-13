@@ -50,6 +50,8 @@ import {
   JsonFileStore,
   type KeyValueStore,
   isExecutableOnPath,
+  resolveExecutable,
+  getSpawnCommand,
 } from '@wazir/shared';
 import { ToolRegistry, defaultTools, createWebTools } from '@wazir/tools';
 import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
@@ -158,7 +160,7 @@ function onPath(bin: string): boolean {
  */
 function acpAgentSpecs(): Array<{ name: string; description: string; requires: string; command: string; args: string[]; initTimeoutMs?: number }> {
   const npx = path.join(path.dirname(process.execPath), process.platform === 'win32' ? 'npx.cmd' : 'npx');
-  const npxCommand = existsSync(npx) ? npx : 'npx';
+  const npxCommand = existsSync(npx) ? npx : (resolveExecutable('npx') ?? 'npx');
   return [
     { name: 'claude-code', description: 'Claude Code over ACP (@zed-industries/claude-code-acp)', requires: 'claude',
       command: npxCommand, args: ['-y', '@zed-industries/claude-code-acp@0.16.2'], initTimeoutMs: 180_000 },
@@ -170,8 +172,11 @@ function acpAgentSpecs(): Array<{ name: string; description: string; requires: s
 }
 
 async function detectOpenCode(): Promise<boolean> {
+  const resolved = resolveExecutable('opencode');
+  if (!resolved) return false;
   try {
-    await execFileAsync('opencode', ['--version'], { timeout: 3_000 });
+    const spawnCmd = getSpawnCommand('opencode', ['--version']);
+    await execFileAsync(spawnCmd.command, spawnCmd.args, { timeout: 3_000, shell: spawnCmd.useShell });
     return true;
   } catch {
     return false;

@@ -27,7 +27,7 @@ export interface DiscoveredAgentConfiguration {
 }
 
 /** No shell, executable launch, credential-store reads, or implicit current-directory PATH. */
-export function resolveAgentExecutables(bin: string, env = process.env, platform = process.platform): string[] {
+export function agentExecutableCandidates(bin: string, env = process.env, platform = process.platform): string[] {
   const p = platform === 'win32' ? path.win32 : path;
   const get = (key: string) => Object.entries(env).find(([k]) => platform === 'win32' ? k.toUpperCase() === key : k === key)?.[1];
   const extensions = platform === 'win32' ? (get('PATHEXT') ?? '.COM;.EXE;.BAT;.CMD').split(';') : [''];
@@ -36,14 +36,19 @@ export function resolveAgentExecutables(bin: string, env = process.env, platform
     const dir = entry.replace(/^"|"$/g, '');
     if (!p.isAbsolute(dir)) continue;
     for (const ext of extensions) {
-      const file = p.join(dir, bin + ext);
-      try {
-        accessSync(file, platform === 'win32' ? constants.F_OK : constants.X_OK);
-        if (statSync(file).isFile()) found.add(file);
-      } catch { /* absent */ }
+      found.add(p.join(dir, bin + ext));
     }
   }
   return [...found];
+}
+
+export function resolveAgentExecutables(bin: string, env = process.env, platform = process.platform): string[] {
+  return agentExecutableCandidates(bin, env, platform).filter(file => {
+    try {
+      accessSync(file, platform === 'win32' ? constants.F_OK : constants.X_OK);
+      return statSync(file).isFile();
+    } catch { return false; }
+  });
 }
 
 function repositoryRoot(cwd: string): string {
@@ -84,8 +89,10 @@ export class AgentConfigurationDiscovery {
       }
       const installations = resolveAgentExecutables(bin!, env);
       for (const executable of installations) {
-        const stat = statSync(executable);
-        hash.update(executable).update(realpathSync(executable)).update(`${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
+        try {
+          const stat = statSync(executable);
+          hash.update(executable).update(realpathSync(executable)).update(`${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
+        } catch { hash.update('executable-changed'); diagnostics.push('Executable changed during discovery; refresh before connecting.'); }
       }
       const add = (file: string, scope: ConfigurationSource['scope'], kind: ConfigurationSource['kind']) => {
         hash.update(file);
@@ -160,7 +167,7 @@ export class AgentConfigurationDiscovery {
       const modelValue = agent === 'claude-code' ? safeIdentifier(env.ANTHROPIC_MODEL) : undefined;
       return {
         agent: agent!, executable: installations[0], installations, sources, projectRoot: root,
-        state: !installations.length ? 'UNSUPPORTED' : sources.some(s => s.valid === false) ? 'BLOCKED' : 'DISCOVERED',
+        state: !installations.length ? 'UNSUPPORTED' : sources.some(s => s.valid === false) ? 'BLOCKED' : sources.some(s => s.valid) ? 'CONFIGURED' : 'DISCOVERED',
         authentication: 'UNKNOWN',
         model: selected || modelValue ? { status: 'CONFIGURED', value: modelValue ?? String(selected!.settings!.model), source: modelValue ? 'environment:ANTHROPIC_MODEL' : selected!.path } : { status: 'UNKNOWN' },
         fingerprint: hash.digest('hex'), diagnostics,

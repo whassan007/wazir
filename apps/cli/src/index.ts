@@ -22,6 +22,21 @@ program
 
 registerMCPCommands(program);
 registerWebCommands(program);
+
+program
+  .command('version')
+  .description('Display detailed Wazir build and runtime version information')
+  .option('-j, --json', 'Output version information in JSON format')
+  .action(async (options) => {
+    const { getBuildInfo, formatBuildInfo } = await import('./version.js');
+    const info = getBuildInfo();
+    if (options.json) {
+      console.log(JSON.stringify(info, null, 2));
+    } else {
+      console.log(formatBuildInfo(info));
+    }
+  });
+
 program.hook('postAction', async () => { await closeMCPRegistries(); });
 
 // computers command
@@ -675,13 +690,13 @@ for (const verb of ['discover', 'refresh', 'inspect', 'explain']) {
     .action(async (name, options) => {
       const { AgentConfigurationDiscovery } = await import('@wazir/agents');
       const { loadPreflightCache, invalidateAgentPreflight } = await import('./agentPreflight.js');
-      const { isPreflightFresh } = await import('@wazir/agents');
+      const { isPreflightFresh, effectivePreflightStatus } = await import('@wazir/agents');
       if (verb === 'refresh') invalidateAgentPreflight(name);
       const cache = loadPreflightCache();
       const agents = new AgentConfigurationDiscovery().discover({ trustedProject: options.trustProject }).filter(a => !name || a.agent === name).map(a => {
         const connection = cache[a.agent];
         const fresh = connection?.fingerprint === a.fingerprint && isPreflightFresh(connection);
-        return { ...a, state: fresh ? connection.status : a.state, connection: fresh ? connection : undefined,
+        return { ...a, state: fresh ? effectivePreflightStatus(connection) : a.state, connection: fresh ? connection : undefined,
           authentication: fresh && connection.status === 'READY' ? 'VERIFIED' : 'UNKNOWN',
           verificationScope: 'Connection probes use an empty temporary workspace, not project instructions or project model overrides.' };
       });

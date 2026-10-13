@@ -35,6 +35,8 @@ export interface WorkerOptions {
   token?: string;
   adapters?: RuntimeAdapter[];
   heartbeatIntervalMs?: number;
+  os?: OSInfo;
+  hardware?: HardwareInfo;
 }
 
 /**
@@ -67,6 +69,8 @@ export class Worker {
   private taskStreamRetryTimer: NodeJS.Timeout | undefined;
 
   private readonly configuredAdapters?: RuntimeAdapter[];
+  private readonly configuredOs?: OSInfo;
+  private readonly configuredHardware?: HardwareInfo;
 
   constructor(options: WorkerOptions = {}) {
     this.computerId = options.computerId ?? generateId('computer-');
@@ -77,6 +81,8 @@ export class Worker {
     this.token = options.token || undefined;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
     this.configuredAdapters = options.adapters;
+    this.configuredOs = options.os;
+    this.configuredHardware = options.hardware;
     this.info = {
       id: this.id,
       computerId: this.computerId,
@@ -108,7 +114,11 @@ export class Worker {
     this.running = true;
 
     const adapters = this.configuredAdapters ?? defaultAdapters();
-    const hardware = await discoverHardware();
+    const discoveredHw = await discoverHardware();
+    const hardware: HardwareReport = {
+      os: this.configuredOs ? { ...discoveredHw.os, ...this.configuredOs } : discoveredHw.os,
+      hardware: this.configuredHardware ? { ...discoveredHw.hardware, ...this.configuredHardware } : discoveredHw.hardware,
+    };
     this._hardware = hardware;
     this.adapters = await discoverRuntimes(adapters);
 
@@ -357,8 +367,8 @@ export class Worker {
   private async handleDispatchedTask(request: WorkerExecutionRequest): Promise<void> {
     if (!this.serverUrl) return;
     const endpoint = `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}`;
-    const claimed = await fetch(`${endpoint}/claim`, { method: 'POST', headers: this.authHeaders() });
-    if (!claimed.ok) return; // A duplicate delivery or another worker already owns this attempt.
+    const claimed = await fetch(`${endpoint}/claim`, { method: 'POST', headers: this.authHeaders() }).catch(() => undefined);
+    if (!claimed || !claimed.ok) return; // A duplicate delivery, closed server, or another worker already owns this attempt.
     const lease = await claimed.json() as { token: string; leaseMs: number };
     request = { ...request, leaseToken: lease.token };
     let lost = false;

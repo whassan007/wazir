@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_draft:
+        description: 'Create draft release on GitHub'
+        type: boolean
+        default: true
+      publish_npm:
+        description: 'Publish npm package to registry'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify Quality Gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run check-dist -- --quiet
+      - run: npm run package:check
+      - run: npm run release:verify
+      - run: npm test
+
+  build-artifacts:
+    name: Build Artifacts (${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: macos-13
+            target: darwin-x64
+          - os: windows-latest
+            target: windows-x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+      - name: Generate release archives
+        run: node scripts/package-release-artifacts.mjs
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ matrix.target }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  publish:
+    name: Create Release & Publish
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Consolidate artifacts and generate unified SHA256SUMS
+        run: |
+          mkdir -p release-dist
+          find all-artifacts -type f ! -name "*.sha256" ! -name "SHA256SUMS.txt" -exec cp {} release-dist/ \;
+          cd release-dist
+          sha256sum * > SHA256SUMS.txt
+          echo "=== Release Artifacts & Checksums ==="
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release (Draft)
+        if: github.event_name == 'push' || inputs.publish_draft == true
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: false
+          files: release-dist/*
+          generate_release_notes: true
+          name: Wazir ${{ github.ref_name || 'Release' }}
+
+      - name: Publish to npm registry (Requires explicit authorization)
+        if: inputs.publish_npm == true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          TGZ=$(find release-dist -name "wazir-*.tgz" | head -n 1)
+          if [ -n "$TGZ" ]; then
+            echo "Publishing $TGZ to npm..."
+            npm publish "$TGZ" --access public
+          else
+            echo "Error: No npm tarball found in release-dist"
+            exit 1
+          fi

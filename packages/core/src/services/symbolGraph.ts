@@ -179,11 +179,13 @@ export class SymbolGraph {
 
   findCallees(sourceNodeIdOrName: string): SymbolNode[] {
     const callees = new Set<SymbolNode>();
+    const normalizedQuery = sourceNodeIdOrName.replace(/\\/g, '/');
     for (const edge of this.edges) {
       if (edge.type === 'CALLS') {
+        const normalizedFrom = edge.from.replace(/\\/g, '/');
         const matches =
-          edge.from === sourceNodeIdOrName ||
-          edge.from.includes(sourceNodeIdOrName) ||
+          normalizedFrom === normalizedQuery ||
+          normalizedFrom.includes(normalizedQuery) ||
           this.getNode(edge.from)?.name === sourceNodeIdOrName;
         if (matches) {
           const directNode = this.getNode(edge.to);

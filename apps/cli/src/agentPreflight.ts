@@ -1,14 +1,15 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { AgentConfigurationDiscovery, ExternalAgentAdapter, effectivePreflightStatus, isPreflightFresh, preflightAgent, type AgentPreflightResult, type AgentTaskRecord } from '@wazir/agents';
-import type { AgentAdapter } from '@wazir/core';
+import type { AgentAdapter, TokenBudgetManager } from '@wazir/core';
 import { color } from './colors.js';
 import { configDir } from './config.js';
 
 type PreflightEngine = {
   projectRoot?: string;
-  resources?: { accounts: { candidates(target: { agent: string }): Array<{ env?: Record<string, string> }> } };
+  resources?: { accounts: { candidates(target: { agent: string }): Array<{ id?: string; env?: Record<string, string> }> }; budget?: TokenBudgetManager };
   agents: { list(): Array<{ descriptor: { name: string }; source: string }>; get(name: string): AgentAdapter | undefined };
 };
 
@@ -55,6 +56,7 @@ export async function checkAgents(
   names: string[] = [],
   options: { fresh?: boolean; timeoutMs?: number; file?: string } = {},
 ): Promise<AgentPreflightResult[]> {
+  if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)) throw new Error('Preflight timeout must be a positive finite number');
   const external = externalAgentNames(engine);
   const targets = names.length ? names : external;
   const cache = loadPreflightCache(options.file);
@@ -68,7 +70,23 @@ export async function checkAgents(
     const cached = cache[name];
     if (!options.fresh && cached && isPreflightFresh(cached) && cached.status !== 'UNKNOWN' && (!config?.fingerprint || cached.fingerprint === config.fingerprint)) return cached;
     if (config?.state === 'BLOCKED') return { agent: name, status: 'BLOCKED', detail: 'Invalid native configuration; validate it with the vendor CLI.', durationMs: 0, checkedAt: new Date().toISOString(), fingerprint: config.fingerprint, lastTask: cached?.lastTask, lastVerifiedTask: cached?.lastVerifiedTask };
-    const result = await preflightAgent(adapter, { timeoutMs: options.timeoutMs, env });
+    const budget = engine.resources?.budget;
+    const accountId = engine.resources?.accounts.candidates({ agent: name })[0]?.id;
+    const requestId = `agent-preflight:${randomUUID()}`;
+    if (budget) {
+      const admission = accountId ? budget.admit({ requestId, accountId, modelId: `agent:${name}`, agent: name, workload: 'routine', requests: 1, estimatedInputTokens: 4096, estimatedOutputTokens: 32 }) : undefined;
+      if (admission?.outcome !== 'admitted') return { agent: name, status: 'BLOCKED', detail: 'Resource governance blocked the probe; inspect wa resources.', durationMs: 0, checkedAt: new Date().toISOString(), fingerprint: config?.fingerprint };
+    }
+    let result: AgentPreflightResult;
+    const stopLease = budget?.holdLease(requestId);
+    try {
+      result = await preflightAgent(adapter, { timeoutMs: options.timeoutMs, env });
+      if (result.status === 'READY') budget?.reconcile(requestId, { inputTokens: 4096, outputTokens: 32, source: 'estimated' }, { agent: name, durationMs: result.durationMs });
+      else budget?.fail(requestId, { ambiguous: result.stage !== 'environment' && result.stage !== 'start' });
+    } catch (error) {
+      budget?.fail(requestId, { ambiguous: true });
+      throw error;
+    } finally { stopLease?.(); }
     if (config?.executable) {
       const versionAdapter = new ExternalAgentAdapter({ name: 'version-inspection', version: '', description: '', command: config.executable, taskTypes: [], capabilities: [], timeoutMs: 3000, env });
       try {

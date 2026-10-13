@@ -1,12 +1,24 @@
 #!/usr/bin/env node
 import * as esbuild from 'esbuild';
-import { chmodSync, mkdirSync, existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = resolve(__dirname, '..');
+
+const pkg = JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8'));
+let commit = process.env.WAZIR_BUILD_COMMIT || '';
+if (!commit) {
+  try {
+    commit = execSync('git rev-parse HEAD', { cwd: rootDir, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    commit = 'unknown';
+  }
+}
+const buildDate = process.env.WAZIR_BUILD_DATE || new Date().toISOString();
 
 const entryPoint = resolve(rootDir, 'apps/cli/src/index.ts');
 const outDir = resolve(rootDir, 'bin');
@@ -30,6 +42,11 @@ try {
     sourcemap: true,
     minify: false,
     logLevel: 'info',
+    define: {
+      '__WAZIR_VERSION__': JSON.stringify(pkg.version),
+      '__WAZIR_COMMIT__': JSON.stringify(commit),
+      '__WAZIR_BUILD_DATE__': JSON.stringify(buildDate),
+    },
   });
 
   try {

@@ -35,7 +35,9 @@ describe('sandbox argument construction (pure)', () => {
     // it, a sandboxed compile can fail outright with "Operation not permitted".
     expect(joined).toContain(`--bind ${path.join(home, 'Library', 'Caches')} ${path.join(home, 'Library', 'Caches')}`);
     expect(joined).not.toContain('.ssh');
-    expect(joined).toContain('--tmpfs /run');
+    if (process.platform === 'linux') {
+      expect(joined).toContain('--tmpfs /run');
+    }
     expect(joined).toContain('--tmpfs /tmp');
     expect(joined).toContain('--unshare-net');
     expect(joined).toContain('--die-with-parent');
@@ -59,11 +61,12 @@ describe('sandbox argument construction (pure)', () => {
 
   it('seatbelt: denies home, allows project + tmp writes, denies network by default', () => {
     const profile = seatbeltProfile({ projectRoot: project, cwd: project }, home, '/tmp');
+    const q = (p: string) => path.resolve(p).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     expect(profile).toContain('(version 1)');
-    expect(profile).toContain(`(deny file-read* file-write* (subpath "${home}"))`);
-    expect(profile).toContain(`(allow file-read* (subpath "${path.join(home, '.nvm')}"))`);
-    expect(profile).toContain(`(allow file-write* (subpath "${project}"))`);
-    expect(profile).toContain(`(allow file-read* file-write* (subpath "${path.join(home, 'Library', 'Caches')}"))`);
+    expect(profile).toContain(`(deny file-read* file-write* (subpath "${q(home)}"))`);
+    expect(profile).toContain(`(allow file-read* (subpath "${q(path.join(home, '.nvm'))}"))`);
+    expect(profile).toContain(`(allow file-write* (subpath "${q(project)}"))`);
+    expect(profile).toContain(`(allow file-read* file-write* (subpath "${q(path.join(home, 'Library', 'Caches'))}"))`);
     expect(profile).toContain('(deny file-write*)');
     expect(profile).toContain('(deny network*)');
     expect(profile).not.toContain('.ssh');

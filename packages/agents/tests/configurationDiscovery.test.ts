@@ -2,9 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { AgentConfigurationDiscovery, resolveAgentExecutables } from '../src/configurationDiscovery.js';
+import { AgentConfigurationDiscovery, agentExecutableCandidates, resolveAgentExecutables } from '../src/configurationDiscovery.js';
 
 describe('passive native configuration discovery', () => {
+  it('constructs Windows PATH/PATHEXT candidates with quoted spaces, Unicode and mixed-case environment names', () => {
+    expect(agentExecutableCandidates('codex', { Path: '"C:\\Program Files\\工具";.;', Pathext: '.EXE;.CMD' }, 'win32')).toEqual(['C:\\Program Files\\工具\\codex.EXE', 'C:\\Program Files\\工具\\codex.CMD']);
+    expect(agentExecutableCandidates('claude', { PATH: '/opt/homebrew/bin:/usr/local/bin' }, 'darwin')).toEqual(['/opt/homebrew/bin/claude', '/usr/local/bin/claude']);
+  });
   let dir: string;
   let home: string;
   let project: string;

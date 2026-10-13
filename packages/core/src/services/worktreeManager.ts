@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { GIT_NO_HOOKS, isWindowsReservedName, isPathInside } from '@wazir/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -48,13 +49,6 @@ export interface WorktreeManagerOptions {
  *   - 'auto' (optional flag): Merges successfully completed worktrees back into
  *     the target branch automatically.
  */
-/**
- * Orchestrator git invocations run without policy authorization, so they
- * must not execute repository hooks: a model that gets a file into
- * `.git/hooks/` (now an 'ask' path, but defence in depth) would otherwise run
- * it on the next `worktree add`/`commit` (security review F-11).
- */
-const GIT_NO_HOOKS = ['-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`, '-c', 'core.fsmonitor=false'];
 
 export class WorktreeManager {
   private readonly rootOverride?: string;
@@ -384,15 +378,14 @@ export class WorktreeManager {
     // override); never a path handed in from elsewhere.
     const resolved = path.resolve(targetPath);
     const allowedRoot = this.rootOverride ? path.resolve(this.rootOverride) : undefined;
-    const relOverride = allowedRoot !== undefined ? path.relative(allowedRoot, resolved) : undefined;
-    const underOverride = relOverride !== undefined && relOverride !== '' && !relOverride.startsWith('..') && !path.isAbsolute(relOverride);
-    const parts = resolved.split(/[/\\]/);
+    const underOverride = allowedRoot !== undefined && isPathInside(allowedRoot, resolved) && resolved !== allowedRoot;
+    const parts = resolved.split(/[/\\]/).map((p) => p.toLowerCase());
     const underDefault = parts.includes('worktrees') && parts.includes('.wazir');
     if (!underOverride && !underDefault) {
       throw new Error(`refusing to remove '${resolved}': not a Wazir worktree directory`);
     }
     try {
-      await fs.rm(resolved, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      await fs.rm(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     } catch {
       // ignore
     }
@@ -403,8 +396,8 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 /** Ids become path segments and git branch names; keep them boring. */
 function assertSafeId(label: string, value: string): void {
-  if (!SAFE_ID.test(value) || value.includes('..')) {
-    throw new Error(`invalid ${label} '${value}': must match ${SAFE_ID}`);
+  if (!SAFE_ID.test(value) || value.includes('..') || isWindowsReservedName(value) || value.endsWith('.') || value.endsWith(' ')) {
+    throw new Error(`invalid ${label} '${value}': must match ${SAFE_ID} and not be a Windows reserved name or contain trailing dots/spaces`);
   }
 }
 
