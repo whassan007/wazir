@@ -91,7 +91,7 @@ Native behavior was checked against installed CLI help and official documentatio
 ## Verification report — 2026-10-13 UTC
 
 Starting commit and initially fetched main: `cd010dcc2e6bec66ddd305f8ef382c43b2c42545`.
-Report-time HEAD: `f255fba9b5011a9f850deed93a43078cdf25f3b1`.
+Report-time HEAD: `f6c9482429409681d2058663c8f921e17bd93c3f`.
 Other active work committed and merged this shared checkout during implementation, including
 some overlapping changes. These revisions are workspace snapshots, not an isolated commit
 containing only this feature. No commit or publication was performed by this implementation run.
@@ -126,6 +126,9 @@ Discovered on this host:
   `/home/wael/.gemini/antigravity-cli/settings.json`; model unknown.
 
 TypeScript compilation passed. The final focused run passed all 208 tests across 39 files.
+The subsequent endpoint-redaction check passed all eight discovery tests. Antigravity's final
+connection check returned READY and ten CLI-reported AVAILABLE model IDs. `git diff --check`
+passed.
 The full regression run had 2,082 passed, 18 skipped and four
 failed tests. After fixing the strict-probe fixture, rerunning all agent tests and the four
 failing suites produced 228 passed and one remaining failure: the real-PTY Ctrl+P quick-actions

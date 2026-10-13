@@ -90,6 +90,45 @@ describe('Phase 5: End-to-End Heterogeneous Coding Task Verification', () => {
     workersToStop.push(worker);
     await worker.start();
 
+    // Register worker runtime and model in controller registries
+    state.runtimes.register({
+      id: 'ollama-dgx',
+      type: 'ollama',
+      name: 'Ollama DGX',
+      computerId: 'dgx-spark-worker',
+      status: 'active',
+      models: ['qwen2.5-coder:32b'],
+      capabilities: ['chat', 'toolCalling', 'streaming'],
+    });
+    state.models.register({
+      id: 'qwen2.5-coder:32b',
+      name: 'qwen2.5-coder:32b',
+      provider: 'ollama-dgx',
+      family: 'qwen',
+      contextMax: 32768,
+      capabilities: ['coding', 'generalChat'],
+      toolCalling: true,
+      structuredOutput: true,
+      vision: false,
+      audio: false,
+      embedding: false,
+      reasoning: true,
+      runtimeCompatibility: 'any',
+      local: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    state.models.upsertInstance({
+      id: 'qwen2.5-coder:32b::dgx-spark-worker::ollama-dgx',
+      modelId: 'qwen2.5-coder:32b',
+      computerId: 'dgx-spark-worker',
+      runtimeId: 'ollama-dgx',
+      runtimeModelId: 'qwen2.5-coder:32b',
+      loaded: false,
+      health: 'healthy',
+      state: 'INSTALLED',
+    });
+
     // 1. Submit task
     const task: Task = {
       id: 'task-e2e-cuda',
@@ -102,9 +141,9 @@ describe('Phase 5: End-to-End Heterogeneous Coding Task Verification', () => {
         requiresCuda: true,
         minimumMemoryGB: 32,
       },
-      model: 'qwen2.5-coder:32b',
       execution: {
         targetComputerId: 'dgx-spark-worker',
+        targetModelId: 'qwen2.5-coder:32b',
       },
       priority: 'high',
       status: 'pending',

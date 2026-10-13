@@ -1,0 +1,12 @@
+Package: wazir
+Version: 0.1.59
+Section: devel
+Priority: optional
+Architecture: all
+Maintainer: Wazir Contributors <wazir@wazir.ai>
+Homepage: https://github.com/whassan007/wazir
+Depends: nodejs (>= 22.5.0) | nodejs-legacy (>= 22.5.0)
+Description: Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator
+ Wazir is a cross-platform, resource-governed autonomous agent orchestration platform.
+ It enables scalable AI coding execution across local nodes, edge devices, and compute fleets,
+ featuring intelligent resource admission, multi-process memory management, and deterministic recovery.

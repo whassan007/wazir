@@ -50,6 +50,8 @@
     "postinstall": "node scripts/setup-env.mjs || true",
     "build": "npm run build --workspaces --if-present && npm run bundle",
     "build:binary": "node scripts/build-binary.mjs",
+    "build:deb": "node scripts/build-deb.mjs",
+    "build:rpm": "node scripts/build-rpm.mjs",
     "dev": "npm run dev --workspace @wazir/cli",
     "start:web": "npm run start --workspace @wazir/web",
     "start:api": "npm run start --workspace @wazir/api",

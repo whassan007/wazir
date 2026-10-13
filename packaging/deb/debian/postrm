@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  purge)
+    # Purge: clean up state and user account
+    rm -rf /var/lib/wazir /var/log/wazir
+    if getent passwd wazir >/dev/null 2>&1; then
+      userdel wazir >/dev/null 2>&1 || true
+    fi
+    if getent group wazir >/dev/null 2>&1; then
+      groupdel wazir >/dev/null 2>&1 || true
+    fi
+    ;;
+  remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    # Ordinary remove/upgrade: preserve user databases and state in /var/lib/wazir
+    ;;
+esac
+
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

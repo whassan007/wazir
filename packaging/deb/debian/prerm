@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+# Stop running services before package removal or upgrade
+if [ -d /run/systemd/system ]; then
+  systemctl stop wazir-api.service >/dev/null 2>&1 || true
+  systemctl stop wazir-worker.service >/dev/null 2>&1 || true
+  systemctl disable wazir-api.service >/dev/null 2>&1 || true
+  systemctl disable wazir-worker.service >/dev/null 2>&1 || true
+fi
+
+exit 0

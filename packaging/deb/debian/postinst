@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+# Setup dedicated system user for background service daemons
+if ! getent group wazir >/dev/null 2>&1; then
+  groupadd --system wazir
+fi
+
+if ! getent passwd wazir >/dev/null 2>&1; then
+  useradd --system --gid wazir --home-dir /var/lib/wazir --shell /usr/sbin/nologin wazir
+fi
+
+# Ensure persistent directory exists with correct ownership
+mkdir -p /var/lib/wazir /var/log/wazir
+chown -R wazir:wazir /var/lib/wazir /var/log/wazir
+chmod 750 /var/lib/wazir
+
+# Reload systemd if present
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

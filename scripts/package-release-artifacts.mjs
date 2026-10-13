@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, copyFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
@@ -84,7 +84,6 @@ try {
 
 // 5. Compute SHA-256 checksums
 console.log('\n--- 4. Computing SHA-256 checksums ---');
-import { readdirSync } from 'node:fs';
 const releaseFiles = readdirSync(releaseDir).filter(f => !f.endsWith('.txt') && !f.endsWith('.sha256'));
 const checksums = [];
 

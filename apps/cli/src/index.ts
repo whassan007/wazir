@@ -1580,4 +1580,88 @@ canaryCmd
 
 program.addCommand(canaryCmd);
 
+// service command
+const serviceCmd = new Command()
+  .name('service')
+  .description('Manage Wazir background daemon services (systemd / launchd / Windows)');
+
+serviceCmd
+  .command('install')
+  .description('Install Wazir as a system background service')
+  .option('--type <type>', 'Service type: worker or api', 'worker')
+  .option('--user <user>', 'System user to run the service under (if running as root)')
+  .option('--port <port>', 'Port number (for api service)')
+  .option('--api-url <url>', 'Control plane API URL (for worker service)')
+  .option('--name <name>', 'Custom service name', 'wazir')
+  .action(async (options) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const result = await sm.install(options);
+    console.log(result.message);
+  });
+
+serviceCmd
+  .command('start [name]')
+  .description('Start the Wazir system service')
+  .action(async (name) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const result = await sm.start(name);
+    console.log(result.message);
+  });
+
+serviceCmd
+  .command('stop [name]')
+  .description('Stop the Wazir system service')
+  .action(async (name) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const result = await sm.stop(name);
+    console.log(result.message);
+  });
+
+serviceCmd
+  .command('restart [name]')
+  .description('Restart the Wazir system service')
+  .action(async (name) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const result = await sm.restart(name);
+    console.log(result.message);
+  });
+
+serviceCmd
+  .command('status [name]')
+  .description('Display status of the Wazir system service')
+  .option('--json', 'Output status in JSON format')
+  .action(async (name, options) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const status = await sm.status(name);
+    if (options.json) {
+      console.log(JSON.stringify(status, null, 2));
+    } else {
+      console.log(`Backend:   ${status.backend} (${status.platform})`);
+      console.log(`Service:   ${status.serviceName}`);
+      console.log(`Installed: ${status.installed ? chalk.green('yes') : chalk.red('no')}`);
+      console.log(`Status:    ${status.active ? chalk.green('active (running)') : chalk.yellow(status.details || 'inactive')}`);
+      if (status.unitFile) {
+        console.log(`Unit File: ${status.unitFile}`);
+      }
+    }
+  });
+
+serviceCmd
+  .command('uninstall [name]')
+  .description('Uninstall and remove the Wazir system service')
+  .action(async (name) => {
+    const { ServiceManager } = await import('./serviceManager.js');
+    const sm = new ServiceManager();
+    const result = await sm.uninstall(name);
+    console.log(result.message);
+  });
+
+program.addCommand(serviceCmd);
+
 program.parse();
+
