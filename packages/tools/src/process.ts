@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { killProcessTree, sanitizeChildEnvironment, getSpawnCommand } from '@wazir/shared';
 
 import { sandboxDegraded, sandboxStatus, wrapInSandbox, type SandboxMode, type WrappedCommand } from './sandbox.js';
 import { defaultResourceLimits, wrapWithResourceLimits, type ResourceLimits } from './resourceLimits.js';
@@ -47,86 +48,20 @@ export interface RunOptions {
 
 /**
  * Kills `child` and everything it spawned, not just the direct child.
- *
- * Before this, a timeout/cancel/maxBuffer kill only ever hit the immediate
- * child (`child.kill(signal)`), which on POSIX only signals that one PID —
- * anything it forked (a test runner's workers, a dev server, `npm`'s own
- * child) inherits the parent's process group and keeps running as an orphan
- * once the immediate child dies. Spawning with `detached: true` makes the
- * child the leader of its own new process group (pgid === its pid), so
- * `process.kill(-pid, signal)` reaches every descendant in one call. Windows
- * has no equivalent of process groups; `taskkill /T` walks the actual
- * process tree instead.
  */
 function killProcessGroup(child: import('node:child_process').ChildProcess, signal: NodeJS.Signals, wasDetached: boolean): void {
-  const pid = child.pid;
-  if (pid === undefined) return;
-  if (process.platform === 'win32') {
-    try {
-      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-    } catch {
-      // best effort — fall through to killing just the direct child
-      try { child.kill(signal); } catch { /* already gone */ }
-    }
-    return;
-  }
-  if (!wasDetached) {
-    // Not its own group leader (bwrap path — see the spawn() call): a direct
-    // kill is bwrap's own documented shutdown path, not a fallback.
-    try { child.kill(signal); } catch { /* already gone */ }
-    return;
-  }
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    // Group kill fails if the child never actually became its own group
-    // leader (e.g. exited before spawn finished setpgid) — the direct kill
-    // below is what child.kill() would have done anyway.
-    try { child.kill(signal); } catch { /* already gone */ }
-  }
+  killProcessTree(child.pid, signal, wasDetached);
 }
 
 let warnedDegraded = false;
 
-// Variables a child needs to behave like a normal shell session. Everything
-// else in the operator's environment (API keys, database URLs, cloud
-// credentials) stays out of the child so a tool call cannot read it back
-// into an execution record (security review F-13). Extra names can be
-// forwarded with WAZIR_CHILD_ENV=NAME1,NAME2.
-const CHILD_ENV_ALLOW = new Set([
-  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TERM', 'TZ', 'LANG', 'LANGUAGE',
-  'TMPDIR', 'TMP', 'TEMP', 'PWD', 'COLUMNS', 'LINES', 'DISPLAY', 'EDITOR', 'PAGER',
-  'NODE_ENV', 'NODE_OPTIONS', 'NODE_PATH', 'NVM_DIR', 'NVM_BIN', 'VOLTA_HOME', 'FNM_DIR',
-  'CI', 'FORCE_COLOR', 'NO_COLOR', 'SYSTEMROOT', 'SystemRoot', 'COMSPEC', 'ComSpec', 'PATHEXT', 'WINDIR', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
-  'npm_config_cache', 'NPM_CONFIG_CACHE', 'PNPM_HOME', 'YARN_CACHE_FOLDER', 'CARGO_HOME', 'RUSTUP_HOME', 'GOPATH', 'GOROOT', 'GOCACHE', 'PYTHONPATH', 'VIRTUAL_ENV', 'JAVA_HOME',
-]);
-const CHILD_ENV_ALLOW_PREFIXES = ['LC_', 'XDG_'];
-
-/** The reduced environment tool subprocesses run with. */
 export function childEnvironment(extra: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = {};
-  const passthrough = new Set(
-    (process.env.WAZIR_CHILD_ENV ?? '').split(',').map((name) => name.trim()).filter(Boolean),
-  );
-  const allowUpper = new Set(Array.from(CHILD_ENV_ALLOW).map((k) => k.toUpperCase()));
-  const prefixUpper = CHILD_ENV_ALLOW_PREFIXES.map((p) => p.toUpperCase());
-  for (const [name, value] of Object.entries(process.env)) {
-    if (value === undefined) continue;
-    const upper = name.toUpperCase();
-    if (CHILD_ENV_ALLOW.has(name) || allowUpper.has(upper) || passthrough.has(name) || prefixUpper.some((prefix) => upper.startsWith(prefix))) {
-      env[name] = value;
-    }
-  }
-  if (process.platform === 'win32') {
-    if (!env.PATH && env.Path) env.PATH = env.Path;
-    if (!env.Path && env.PATH) env.Path = env.PATH;
-  }
-  return { ...env, ...extra };
+  return sanitizeChildEnvironment(extra);
 }
 
 export function runShell(command: string, options: RunOptions): Promise<CommandResult> {
-  const shell = process.platform === 'win32' ? 'cmd' : 'sh';
-  const args = process.platform === 'win32' ? ['/c', command] : ['-c', command];
+  const shell = process.platform === 'win32' ? (process.env.ComSpec || process.env.COMSPEC || 'cmd.exe') : 'sh';
+  const args = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command];
   return runProcess(shell, args, options);
 }
 
@@ -198,24 +133,18 @@ function runProcess(
 
     const childEnv = childEnvironment({ ...normalizedEnv, ...(options.env ?? {}) });
 
+    const spawnCmd = wrapped.mode === 'none'
+      ? getSpawnCommand(wrapped.file, wrapped.args, { cwd: spawnCwd, envPath: childEnv.PATH || childEnv.Path })
+      : { command: wrapped.file, args: wrapped.args, useShell: false };
     const detachedGroup = process.platform !== 'win32' && wrapped.mode !== 'bwrap';
-    const isWin = process.platform === 'win32';
-    const isBatch = isWin && (
-      wrapped.file.toLowerCase() === 'npm' ||
-      wrapped.file.toLowerCase() === 'npx' ||
-      wrapped.file.toLowerCase().endsWith('.cmd') ||
-      wrapped.file.toLowerCase().endsWith('.bat')
-    );
-    const targetFile = isBatch && !wrapped.file.toLowerCase().endsWith('.cmd') && !wrapped.file.toLowerCase().endsWith('.bat')
-      ? `${wrapped.file}.cmd`
-      : wrapped.file;
-    const child = spawn(targetFile, wrapped.args, {
+
+    const child = spawn(spawnCmd.command, spawnCmd.args, {
       cwd: spawnCwd,
       env: childEnv,
       // fd 3 carries the seccomp program to bwrap (`--seccomp 3`).
       stdio: wrapped.seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
       detached: detachedGroup,
-      shell: isBatch,
+      shell: spawnCmd.useShell,
     });
     if (wrapped.seccomp) {
       const feed = child.stdio[3] as NodeJS.WritableStream;

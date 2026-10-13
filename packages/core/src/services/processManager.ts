@@ -1,5 +1,6 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import type { HealthStatus } from '@wazir/runtimes-interfaces';
+import { killProcessTree, isProcessAlive, terminateProcessTree, getSpawnCommand, sanitizeChildEnvironment } from '@wazir/shared';
 
 export interface ProcessConfig {
   id: string;
@@ -67,16 +68,11 @@ export class ProcessManager {
     record.stdout = [];
     record.stderr = [];
 
-    // Detached (POSIX) so the child becomes the leader of its own process
-    // group: stop() below kills that whole group, not just this one pid.
-    // Previously this was `detached: false`, which meant the child shared
-    // *this* process's own group — `process.kill(-record.pid!, ...)` in
-    // stop() was therefore targeting the wrong group entirely (this
-    // process's, or nothing at all, depending on OS group assignment), a
-    // pre-existing bug independent of the missing grace/verify logic below.
-    const child = spawn(record.config.command, record.config.args ?? [], {
-      env: { ...process.env, ...record.config.env },
+    const spawnCmd = getSpawnCommand(record.config.command, record.config.args ?? []);
+    const child = spawn(spawnCmd.command, spawnCmd.args, {
+      env: sanitizeChildEnvironment(record.config.env),
       detached: process.platform !== 'win32',
+      shell: spawnCmd.useShell,
     });
 
     record.process = child;
@@ -130,43 +126,15 @@ export class ProcessManager {
     const child = record.process;
     const pid = record.pid;
 
-    let exited = false;
-    child.once('exit', () => { exited = true; });
+    const stopped = await terminateProcessTree(child, {
+      graceMs,
+      wasDetached: process.platform !== 'win32',
+    });
 
-    if (process.platform === 'win32') {
-      if (pid !== undefined) killWindowsTree(pid);
-    } else if (pid !== undefined) {
-      try {
-        process.kill(-pid, 'SIGTERM');
-      } catch {
-        try { child.kill('SIGTERM'); } catch { /* already gone */ }
-      }
-    }
-
-    const deadline = Date.now() + graceMs;
-    while (!exited && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-
-    if (!exited) {
-      if (process.platform === 'win32') {
-        if (pid !== undefined) killWindowsTree(pid);
-      } else if (pid !== undefined) {
-        try { process.kill(-pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
-      }
-      const killDeadline = Date.now() + 2000;
-      while (!exited && Date.now() < killDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    }
-
-    // Verify death rather than assume it: a signal delivery failure (wrong
-    // pid re-used by an unrelated process, permission error, ...) should
-    // surface as a real failure, not a silently-wrong 'stopped' status.
-    const stillAlive = pid !== undefined && !exited && isAlive(pid);
     record.process = null;
     record.pid = undefined;
-    if (stillAlive) {
+
+    if (!stopped) {
       record.status = 'failed';
       record.health = { status: 'degraded', message: `Process ${pid} did not exit after SIGTERM/SIGKILL` };
       throw new Error(`PROCESS_STOP_FAILED: '${id}' (pid ${pid}) is still running after SIGKILL`);
@@ -284,23 +252,4 @@ export class ProcessManager {
 
 export function createProcessManager(options: ProcessManagerOptions = {}): ProcessManager {
   return new ProcessManager(options);
-}
-
-/** Terminates a process and everything it spawned. Node's own child.kill() on Windows only reaches the direct process. */
-function killWindowsTree(pid: number): void {
-  try {
-    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-  } catch {
-    // best effort
-  }
-}
-
-/** Existence check (kill -0) — throws if the pid is gone or not ours, which is exactly what "is it dead yet" needs. */
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
