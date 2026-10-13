@@ -60,28 +60,37 @@ A production-quality local and fleet-scale AI meta-harness that orchestrates mul
 
 ## Quick Start
 
+Requires **Node.js 22.13 or newer** (Wazir's resource ledger uses `node:sqlite`).
+
 ```bash
-git clone <this-repo> ~/Code/Wazir
+npm install -g wazir        # once published; until then use a release tarball:
+npm install -g ./wazir-<version>.tgz
+wa doctor                   # check runtimes, agents and sandbox
+wa init                     # optional: initialise the local control plane
+```
+
+Installing never writes to `~/.wazir` or your shell profile; `wa` creates its state on first
+use and upgrades and uninstalls leave it in place. The package bundles the CLI into one file
+(`bin/wa.js`); three native modules are optional and only disable their own feature when they
+cannot be installed: `node-pty` (interactive terminal tool), `@napi-rs/keyring` (OS keychain;
+falls back to the encrypted file store) and `pg-native` (not installed; the pure-JS Postgres
+driver is used).
+
+From a source checkout instead:
+
+```bash
+git clone https://github.com/whassan007/wazir ~/Code/Wazir
 bash ~/Code/Wazir/scripts/install.sh
 ```
 
-The script works from any directory: it finds the repository from its own path, checks for Node.js ≥ 22.5, runs `npm install` and `npm run build`, creates a self-contained CLI bundle (`bin/wa.js`), and installs the `wa` launcher into `~/.local/bin/wa` (override with `WAZIR_BIN_DIR`), ensuring it is on your PATH.
-
 ### Alternative Installation & Packaging Methods
 
-#### 1. NPM Global Install / Link
-Because the CLI is now bundled into `bin/wa.js`, you can install or link it globally via npm:
+#### 1. npm package from a checkout
 ```bash
-# Link the current build globally
+npm ci
 npm run build
-npm link
-
-# Or install globally from checkout
-npm install -g .
-
-# Or build an npm package tarball for distribution
-npm pack
-npm install -g wazir-0.1.0.tgz
+npm run package:pack     # writes dist/npm/wazir-<version>.tgz (the publishable package)
+npm run package:check    # packs, scans, installs it in isolation, smoke-tests, upgrades, uninstalls
 ```
 
 #### 2. Homebrew (macOS / Linux)

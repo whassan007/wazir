@@ -8,6 +8,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = resolve(__dirname, '..');
 
+// Runs before any bundled module: fail with a clear message on an unsupported runtime
+// instead of a stack trace from deep inside the ledger.
+const RUNTIME_GUARD = `
+(() => {
+  // node:sqlite is still flagged experimental; that one warning would print on every command.
+  const emit = process.emitWarning;
+  process.emitWarning = function (warning, ...rest) {
+    const type = typeof rest[0] === 'string' ? rest[0] : rest[0] && rest[0].type;
+    if (type === 'ExperimentalWarning' && /SQLite/.test(String(warning))) return;
+    return emit.call(this, warning, ...rest);
+  };
+  const [maj, min] = process.versions.node.split('.').map(Number);
+  let sqlite = false;
+  try { sqlite = !!(process.getBuiltinModule && process.getBuiltinModule('node:sqlite')); } catch {}
+  if (maj < 22 || (maj === 22 && min < 13) || !sqlite) {
+    process.stderr.write('wa: Node.js >= 22.13.0 with node:sqlite is required (found ' + process.versions.node + ').\\n');
+    process.exit(1);
+  }
+})();`;
+
 const entryPoint = resolve(rootDir, 'apps/cli/src/index.ts');
 const outDir = resolve(rootDir, 'bin');
 const outFile = resolve(outDir, 'wa.js');
@@ -23,10 +43,16 @@ try {
     entryPoints: [entryPoint],
     bundle: true,
     platform: 'node',
-    target: 'node20',
+    // Must match package.json engines: node:sqlite (the resource ledger) needs >= 22.13 unflagged.
+    target: 'node22.13',
     format: 'cjs',
     outfile: outFile,
-    external: ['pg-native', '@napi-rs/keyring'],
+    // Native modules cannot be inlined: their loaders find a platform .node binary relative
+    // to their own package directory. They ship as optionalDependencies of the published
+    // package and every call site loads them lazily, so a missing one disables only its
+    // feature (PTY terminal tool, OS keychain, native Postgres driver).
+    external: ['pg-native', '@napi-rs/keyring', 'node-pty'],
+    banner: { js: RUNTIME_GUARD },
     sourcemap: true,
     minify: false,
     logLevel: 'info',
