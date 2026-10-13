@@ -108,18 +108,25 @@ export function childEnvironment(extra: Record<string, string> = {}): Record<str
   const passthrough = new Set(
     (process.env.WAZIR_CHILD_ENV ?? '').split(',').map((name) => name.trim()).filter(Boolean),
   );
+  const allowUpper = new Set(Array.from(CHILD_ENV_ALLOW).map((k) => k.toUpperCase()));
+  const prefixUpper = CHILD_ENV_ALLOW_PREFIXES.map((p) => p.toUpperCase());
   for (const [name, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
-    if (CHILD_ENV_ALLOW.has(name) || passthrough.has(name) || CHILD_ENV_ALLOW_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+    const upper = name.toUpperCase();
+    if (CHILD_ENV_ALLOW.has(name) || allowUpper.has(upper) || passthrough.has(name) || prefixUpper.some((prefix) => upper.startsWith(prefix))) {
       env[name] = value;
     }
+  }
+  if (process.platform === 'win32') {
+    if (!env.PATH && env.Path) env.PATH = env.Path;
+    if (!env.Path && env.PATH) env.Path = env.PATH;
   }
   return { ...env, ...extra };
 }
 
 export function runShell(command: string, options: RunOptions): Promise<CommandResult> {
   const shell = process.platform === 'win32' ? 'cmd' : 'sh';
-  const args = process.platform === 'win32' ? ['/c', command] : ['-c', command];
+  const args = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command];
   return runProcess(shell, args, options);
 }
 
@@ -192,21 +199,25 @@ function runProcess(
     const childEnv = childEnvironment({ ...normalizedEnv, ...(options.env ?? {}) });
 
     const detachedGroup = process.platform !== 'win32' && wrapped.mode !== 'bwrap';
-    const child = spawn(wrapped.file, wrapped.args, {
+    const isWin = process.platform === 'win32';
+    const isBatch = isWin && (
+      wrapped.file.toLowerCase() === 'npm' ||
+      wrapped.file.toLowerCase() === 'npx' ||
+      wrapped.file.toLowerCase().endsWith('.cmd') ||
+      wrapped.file.toLowerCase().endsWith('.bat')
+    );
+    const targetFile = isBatch && !wrapped.file.toLowerCase().endsWith('.cmd') && !wrapped.file.toLowerCase().endsWith('.bat')
+      ? `${wrapped.file}.cmd`
+      : wrapped.file;
+    const isCmd = isWin && (wrapped.file.toLowerCase() === 'cmd' || wrapped.file.toLowerCase() === 'cmd.exe');
+    const child = spawn(targetFile, wrapped.args, {
       cwd: spawnCwd,
       env: childEnv,
       // fd 3 carries the seccomp program to bwrap (`--seccomp 3`).
       stdio: wrapped.seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
-      // Makes the child the leader of its own process group on POSIX, so a
-      // timeout/cancel/overflow kill can reach its descendants too (see
-      // killProcessGroup). Skipped for bwrap: it calls setsid() itself for
-      // --new-session, which can conflict with Node's pre-exec setpgid()
-      // on the same process — bwrap already has its own kill safety net
-      // (--die-with-parent, PID-namespace teardown), so a direct SIGKILL to
-      // it (killProcessGroup's fallback when there's no group) is sufficient
-      // and doesn't fight bwrap's own session setup. No effect on Windows;
-      // taskkill /T there doesn't need it.
       detached: detachedGroup,
+      shell: isBatch,
+      windowsVerbatimArguments: isCmd,
     });
     if (wrapped.seccomp) {
       const feed = child.stdio[3] as NodeJS.WritableStream;

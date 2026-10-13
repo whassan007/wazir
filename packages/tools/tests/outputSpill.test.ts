@@ -67,9 +67,10 @@ describe('runProcess output spilling (real subprocess)', () => {
 
   it('does not kill a process whose output exceeds maxBuffer — it completes normally and stdout is spilled', async () => {
     projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-spill-proc-'));
+    const script = path.join(projectDir, 'spill.cjs');
+    await fs.writeFile(script, 'for(let i=1;i<=4000;i++) console.log("line-" + i + "-0123456789012345678901234567890123456789");\n');
     const result = await runShell(
-      // ~200KB of output, well past a small maxBuffer, printed then a clean exit.
-      'for i in $(seq 1 4000); do echo "line-$i-0123456789012345678901234567890123456789"; done; exit 0',
+      `node "${script}"`,
       { cwd: projectDir, projectRoot: projectDir, unsandboxed: true, maxBuffer: 10_000, runId: 'test-run' },
     );
 
@@ -86,8 +87,10 @@ describe('runProcess output spilling (real subprocess)', () => {
 
   it('places the spill file under .wazir/runs/<runId>/outputs/', async () => {
     projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-spill-proc-'));
+    const script2 = path.join(projectDir, 'spill2.cjs');
+    await fs.writeFile(script2, 'for(let i=1;i<=2000;i++) console.log("0123456789012345678901234567890123456789");\n');
     const result = await runShell(
-      'for i in $(seq 1 2000); do echo "0123456789012345678901234567890123456789"; done',
+      `node "${script2}"`,
       { cwd: projectDir, projectRoot: projectDir, unsandboxed: true, maxBuffer: 5_000, runId: 'my-run-id' },
     );
     expect(result.spillPaths?.stdout).toBe(

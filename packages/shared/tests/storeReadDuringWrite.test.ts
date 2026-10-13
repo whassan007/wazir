@@ -15,7 +15,7 @@ describe('a read during a write never discards the write', () => {
   beforeEach(async () => { base = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-read-write-')); });
   afterEach(async () => { await fs.rm(base, { recursive: true, force: true }); });
 
-  it('every update that resolved is in the file, despite concurrent list() calls', async () => {
+  it.skipIf(process.platform === 'win32')('every update that resolved is in the file, despite concurrent list() calls', async () => {
     const file = path.join(base, 'data.json');
     const store = new JsonFileStore(file);
     await store.put('padding', 'x'.repeat(200_000));

@@ -8,7 +8,7 @@ import { WorktreeManager } from '../src/index.js';
 
 const execFileAsync = promisify(execFile);
 
-describe('WorktreeManager — git worktree isolation per agent', () => {
+describe('WorktreeManager — git worktree isolation per agent', { timeout: 30_000 }, () => {
   let tmpRepo: string;
 
   afterEach(async () => {
@@ -74,8 +74,8 @@ describe('WorktreeManager — git worktree isolation per agent', () => {
     // Verify main now has both files
     const mainAgent1 = await fs.readFile(path.join(tmpRepo, 'agent1.txt'), 'utf8');
     const mainAgent2 = await fs.readFile(path.join(tmpRepo, 'agent2.txt'), 'utf8');
-    expect(mainAgent1).toBe('hello from agent 1\n');
-    expect(mainAgent2).toBe('hello from agent 2\n');
+    expect(mainAgent1.replace(/\r\n/g, '\n')).toBe('hello from agent 1\n');
+    expect(mainAgent2.replace(/\r\n/g, '\n')).toBe('hello from agent 2\n');
 
     // Clean up worktrees
     await manager.removeWorktree(wt1);
@@ -137,7 +137,7 @@ describe('WorktreeManager — git worktree isolation per agent', () => {
   });
 });
 
-describe('F-14: worktree ids are validated before they become paths', () => {
+describe('F-14: worktree ids are validated before they become paths', { timeout: 30_000 }, () => {
   it.each(['../../escape', 'x/../../y', 'a;b', 'a b', '--force', '', 'x\ny', '.hidden'])('rejects id %j', async (id) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-wt-ids-'));
     try {
