@@ -1,0 +1,27 @@
+# Debian and RPM packages of the standalone `wa` executable (scripts/build-sea.mjs output).
+# Rendered with env: WAZIR_VERSION, WAZIR_ARCH (amd64|arm64). No maintainer scripts: installing
+# creates no users, services or files outside the package; user data stays in ~/.wazir.
+name: wazir
+arch: ${WAZIR_ARCH}
+platform: linux
+version: ${WAZIR_VERSION}
+version_schema: semver
+section: devel
+priority: optional
+maintainer: whassan007 <noreply@github.com>
+description: |
+  Wazir: model- and runtime-agnostic AI agent harness and control plane.
+  Standalone `wa` executable (embeds Node.js); talks to local runtimes such as
+  Ollama and LM Studio and to installed coding-agent CLIs.
+vendor: whassan007
+homepage: https://github.com/whassan007/wazir
+license: AGPL-3.0-only
+contents:
+  - src: dist/sea/wa
+    dst: /usr/bin/wa
+    file_info:
+      mode: 0755
+  - src: LICENSE
+    dst: /usr/share/doc/wazir/LICENSE
+  - src: README.md
+    dst: /usr/share/doc/wazir/README.md
