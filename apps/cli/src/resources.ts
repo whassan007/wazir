@@ -21,6 +21,8 @@ export interface ResourceSystem {
   ledgerPath: string;
   /** Set when resources.json exists but is invalid; cloud dispatch is then stopped. */
   configError?: string;
+  /** Ids of accounts defined in resources.json (the rest are implicit). */
+  configuredIds: ReadonlySet<string>;
   resolveAccount: (runtimeId: string, modelId: string) => string | undefined;
   resolveAgentAccount: (agent: string) => string | undefined;
 }
@@ -52,5 +54,5 @@ export function createResourceSystem(configDir: string): ResourceSystem {
   const resolveAccount = (runtimeId: string, modelId: string) => registry.candidates({ runtimeId, modelId })[0]?.id;
   const resolveAgentAccount = (agent: string) => registry.candidates({ agent })[0]?.id;
   const router = new ResourceRouter({ budget, resolveAccount });
-  return { ledger, accounts: registry, budget, router, policy, configPath, ledgerPath, configError, resolveAccount, resolveAgentAccount };
+  return { ledger, accounts: registry, budget, router, policy, configPath, ledgerPath, configError, configuredIds: new Set(accounts.map((a) => a.id)), resolveAccount, resolveAgentAccount };
 }

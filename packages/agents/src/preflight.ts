@@ -6,9 +6,23 @@ import type { AgentAdapter, AgentTurn } from '@wazir/core';
 /**
  * READY: the agent answered a probe prompt. FAILED: it could not (detail says why).
  * BLOCKED: it must not be launched in this environment (nothing was started).
+ * DEGRADED: it answered the probe, but its most recent real task failed in the agent itself
+ * (a probe answer does not prove the agent can do work).
  * UNKNOWN: never checked, or the cached result expired.
  */
-export type AgentPreflightStatus = 'READY' | 'FAILED' | 'BLOCKED' | 'UNKNOWN';
+export type AgentPreflightStatus = 'READY' | 'DEGRADED' | 'FAILED' | 'BLOCKED' | 'UNKNOWN';
+
+/**
+ * Outcome of the agent's latest real (non-probe) task. `verified`: Wazir's own checks accepted
+ * the work. `rejected`: the agent finished but verification refused the result. `agent_error`:
+ * the agent itself failed (protocol, auth, model endpoint, crash).
+ */
+export interface AgentTaskRecord {
+  at: string;
+  executionId: string;
+  outcome: 'verified' | 'rejected' | 'agent_error';
+  detail?: string;
+}
 
 /** How far the probe got: `start` = launch/handshake/session, `answer` = the probe prompt. */
 export type AgentPreflightStage = 'environment' | 'start' | 'answer';
@@ -24,6 +38,16 @@ export interface AgentPreflightResult {
   hint?: string;
   durationMs: number;
   checkedAt: string;
+  /** Last real task outcome, kept across probes. */
+  lastTask?: AgentTaskRecord;
+  /** Last real task Wazir verified as successful. */
+  lastVerifiedTask?: AgentTaskRecord;
+}
+
+/** READY is downgraded to DEGRADED when a real task failed in the agent after the probe. */
+export function effectivePreflightStatus(r: Pick<AgentPreflightResult, 'status' | 'checkedAt' | 'lastTask'>): AgentPreflightStatus {
+  if (r.status === 'READY' && r.lastTask?.outcome === 'agent_error' && Date.parse(r.lastTask.at) >= Date.parse(r.checkedAt)) return 'DEGRADED';
+  return r.status;
 }
 
 const PROBE_PROMPT = 'Reply with the single word OK. Do not use any tools.';

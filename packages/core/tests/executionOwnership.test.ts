@@ -71,4 +71,34 @@ describe('a starting process never recovers an execution another live process is
     record.execution.owner = { pid: 1001, host: 'host-b' };
     expect(starting.ownedByAnotherLiveProcess(record)).toBe(false);
   });
+
+  it('an execution left running by a dead owner is marked failed as interrupted, not left running forever', async () => {
+    const dead = engine(1001, () => true);
+    await dead.ready;
+    const record = await dead.create({
+      task: { id: 't2', type: 'coding', input: 'x', requirements: {}, priority: 'normal', status: 'pending', createdAt: new Date() },
+      computerId: 'local', runtimeId: 'external', modelId: 'external:codex',
+    });
+    await dead.setStatus(record.execution.id, 'running'); // a delegated agent: no tool checkpoints at all
+
+    const live = engine(1002, (pid) => pid === 1001 ? false : true);
+    await live.ready;
+    const r = live.require(record.execution.id);
+    expect(r.execution.status).toBe('failed');
+    expect(r.errors.at(-1)).toMatch(/^INTERRUPTED: owning process 1001 exited while this execution was running/);
+    expect((await live.events(record.execution.id)).map((e) => e.eventType)).toContain('execution.failed');
+
+    // Durable: a third process sees it failed and does not re-mark it.
+    const third = engine(1003, () => false);
+    await third.ready;
+    expect(third.require(record.execution.id).errors.filter((e) => e.startsWith('INTERRUPTED'))).toHaveLength(1);
+  });
+
+  it('a live owner\'s running execution is not touched', async () => {
+    const live = engine(1001, () => true);
+    const id = await liveRunMidRead(live);
+    const starting = engine(1002, () => true);
+    await starting.ready;
+    expect(starting.require(id).execution.status).toBe('running');
+  });
 });

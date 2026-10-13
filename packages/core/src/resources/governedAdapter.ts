@@ -12,8 +12,6 @@ export interface GovernorOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const LEASE_RENEW_MS = 60_000;
-
 /**
  * Wraps a RuntimeAdapter so that every generate() call passes resource admission and is
  * accounted: estimate → reserve → dispatch → reconcile (or fail/release). All other adapter
@@ -67,7 +65,7 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
     }
 
     const started = ledger.now();
-    let lastRenew = started;
+    const stopLease = budget.holdLease(requestId);
     let outputSeen = false;
     let outputText = '';
     let settled = false;
@@ -77,10 +75,6 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
     try {
       for await (const event of inner.generate(req)) {
         const now = ledger.now();
-        if (now - lastRenew > LEASE_RENEW_MS) {
-          ledger.renewLease(requestId, now + budget.policy.leaseMs);
-          lastRenew = now;
-        }
         if (event.type === 'token' || event.type === 'reasoning' || event.type === 'tool_call') {
           outputSeen = true;
           if (event.content) outputText += event.content;
@@ -119,6 +113,7 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
         yield event;
       }
     } finally {
+      stopLease();
       if (!settled) {
         // Consumer stopped early or the stream threw: the prompt was sent and some output
         // produced, so charge what can be estimated rather than releasing.

@@ -63,6 +63,9 @@ function signalZeroAlive(pid: number): boolean {
   }
 }
 
+/** Statuses that mean "a live process is working on this". */
+const INTERRUPTIBLE = new Set<ExecutionStatus>(['assigned', 'running', 'waiting']);
+
 let idCounter = 0;
 
 function nextId(prefix: string): string {
@@ -137,6 +140,17 @@ export class ExecutionEngine {
           const data = { tool: call.toolName, input: call.input, startedAt: call.startedAt, callId: call.callId, sideEffectClass: call.sideEffectClass, failureClass: 'TOOL_OUTCOME_UNKNOWN' };
           this.pushEvent(record, 'tool.unknownOutcome', data, { callId: call.callId, stepId: call.stepId });
           this.pushEvent(record, 'tool.call.outcome_unknown', data, { callId: call.callId, stepId: call.stepId });
+        }
+        // An execution whose process died (SIGKILL, OOM, closed terminal) would otherwise
+        // read as active forever. Its outcome is unknown, so it fails with that reason;
+        // whether it may be retried is planTaskResume's decision, never automatic here.
+        const owner = record.execution.owner;
+        const previous = record.execution.status;
+        if (INTERRUPTIBLE.has(previous) && owner && owner.host === this.owner.host && owner.pid !== this.owner.pid && !this.isProcessAlive(owner.pid)) {
+          record.errors.push(`INTERRUPTED: owning process ${owner.pid} exited while this execution was ${previous}; its outcome is unknown`);
+          record.execution.status = 'failed';
+          record.execution.completedAt = new Date();
+          this.pushEvent(record, 'execution.failed', { status: 'failed', reason: 'OWNER_PROCESS_EXITED', ownerPid: owner.pid, previousStatus: previous });
         }
         // Persist legacy envelope migration and recovered unknown outcomes before ready.
         const loadedRecord = loaded.find(item => item.execution.id === record.execution.id)!;

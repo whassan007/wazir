@@ -1,5 +1,6 @@
 import spawn from 'cross-spawn';
 import { killProcessTree, resolveExecutable, getSpawnCommand, sanitizeChildEnvironment } from '@wazir/shared';
+import { spawnGroupWatchdog } from './processWatchdog.js';
 import type {
   AgentAdapter,
   AgentDescriptor,
@@ -75,9 +76,15 @@ export class ExternalAgentAdapter implements AgentAdapter {
         stopReason = reason;
         killProcessTree(child.pid, 'SIGKILL', detached);
       };
+      // If Wazir itself dies, the detached group must not keep running unsupervised.
+      const watchdog = detached && child.pid !== undefined ? spawnGroupWatchdog(process.pid, child.pid) : undefined;
       const timer = setTimeout(() => stop('timeout'), timeoutMs);
       const cancelPoll = setInterval(() => { if (request.isCancelled?.()) stop('cancelled'); }, 250);
-      const settle = () => { clearTimeout(timer); clearInterval(cancelPoll); };
+      const settle = () => {
+        clearTimeout(timer);
+        clearInterval(cancelPoll);
+        try { watchdog?.kill('SIGKILL'); } catch { /* already gone */ }
+      };
       // Only the first MAX_CAPTURE chars are reported, so stop buffering past that.
       const append = (chunk: string) => {
         if (captured.length < MAX_CAPTURE) captured += chunk.slice(0, MAX_CAPTURE - captured.length);
@@ -110,3 +117,4 @@ export class ExternalAgentAdapter implements AgentAdapter {
     yield { kind: 'done', content: `external agent '${this.descriptor.name}' completed` };
   }
 }
+
