@@ -1074,6 +1074,27 @@ program
     });
   });
 
+// service command — run the control plane as a per-user background service (opt-in)
+const serviceCmd = new Command()
+  .name('service')
+  .description('Run `wa dashboard` as a per-user background service (systemd --user, launchd, or a logon task on Windows)');
+for (const action of ['install', 'uninstall', 'start', 'stop', 'status'] as const) {
+  serviceCmd.command(action)
+    .description({ install: 'Install (not start) the service for this user', uninstall: 'Stop and remove the service (keeps ~/.wazir)', start: 'Start the service', stop: 'Stop the service', status: 'Show whether the service is running' }[action])
+    .option('--name <name>', 'Service name', 'wazir')
+    .option('-p, --port <port>', 'Dashboard port (install only)', '4801')
+    .action(async (options: { name: string; port: string }) => {
+      const { runService } = await import('./service.js');
+      try {
+        console.log(runService(action, { name: options.name, port: Number(options.port) }));
+      } catch (error) {
+        console.error(`wa service ${action}: ${(error as Error).message}`);
+        process.exit(1);
+      }
+    });
+}
+program.addCommand(serviceCmd);
+
 // jobs command — manage distributed fleet jobs
 const jobsCmd = new Command()
   .name('jobs')
