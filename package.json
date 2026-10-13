@@ -22,7 +22,6 @@
     "package:pack": "node scripts/pack-npm.mjs",
     "package:check": "node scripts/package-check.mjs",
     "setup:env": "node scripts/setup-env.mjs",
-    "postinstall": "node scripts/setup-env.mjs || true",
     "build": "npm run build --workspaces --if-present && npm run bundle",
     "build:binary": "bash scripts/build-binary.sh",
     "dev": "npm run dev --workspace @wazir/cli",

@@ -49,7 +49,12 @@ if (!tarball) {
     src = path.join(work, 'clone');
     execFileSync('git', ['clone', '--quiet', '--no-hardlinks', repo, src], { stdio: 'inherit' });
     execFileSync('git', ['checkout', '--quiet', report.commit], { cwd: src, stdio: 'inherit' });
-    const ci = run(npm, ['ci', '--no-audit', '--no-fund'], { cwd: src, stdio: 'inherit' });
+    // An isolated HOME: building must not read or write the developer's ~/.wazir or shell profiles.
+    const fakeHome = path.join(work, 'build-home');
+    mkdirSync(fakeHome);
+    const cache = run(npm, ['config', 'get', 'cache']).stdout.trim();
+    const buildEnv = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, WAZIR_HOME: path.join(fakeHome, '.wazir'), npm_config_cache: cache };
+    const ci = run(npm, ['ci', '--no-audit', '--no-fund'], { cwd: src, stdio: 'inherit', env: buildEnv });
     if (ci.status !== 0) throw new Error('npm ci failed in clean clone');
   }
   if (!flag('--skip-build')) {
