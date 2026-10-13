@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { GIT_NO_HOOKS, isWindowsReservedName, isPathInside } from '@wazir/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -48,13 +49,6 @@ export interface WorktreeManagerOptions {
  *   - 'auto' (optional flag): Merges successfully completed worktrees back into
  *     the target branch automatically.
  */
-/**
- * Orchestrator git invocations run without policy authorization, so they
- * must not execute repository hooks: a model that gets a file into
- * `.git/hooks/` (now an 'ask' path, but defence in depth) would otherwise run
- * it on the next `worktree add`/`commit` (security review F-11).
- */
-const GIT_NO_HOOKS = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
 
 export class WorktreeManager {
   private readonly rootOverride?: string;
@@ -118,7 +112,8 @@ export class WorktreeManager {
     const worktreeDir = path.resolve(rootDir, taskId ? `${jobId}-${taskId}` : jobId);
     // Belt and braces: the ids are validated above, but the directory that
     // gets `rm -rf`'d below must never be anything but a child of rootDir.
-    if (!worktreeDir.startsWith(rootDir + path.sep)) {
+    const rel = path.relative(rootDir, worktreeDir);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
       throw new Error(`worktree path '${worktreeDir}' escapes '${rootDir}'`);
     }
     const branch = taskId ? `wazir/${jobId}/${taskId}` : `wazir/${jobId}`;
@@ -368,7 +363,7 @@ export class WorktreeManager {
       try {
         await execFileAsync(
           'git',
-          ['worktree', 'remove', '--force', info.worktreeDir],
+          [...GIT_NO_HOOKS, 'worktree', 'remove', '--force', info.worktreeDir],
           { cwd: path.dirname(info.worktreeDir) },
         );
       } catch {
@@ -383,13 +378,14 @@ export class WorktreeManager {
     // override); never a path handed in from elsewhere.
     const resolved = path.resolve(targetPath);
     const allowedRoot = this.rootOverride ? path.resolve(this.rootOverride) : undefined;
-    const underOverride = allowedRoot !== undefined && resolved.startsWith(allowedRoot + path.sep);
-    const underDefault = resolved.split(path.sep).includes('worktrees') && resolved.split(path.sep).includes('.wazir');
+    const underOverride = allowedRoot !== undefined && isPathInside(allowedRoot, resolved) && resolved !== allowedRoot;
+    const parts = resolved.split(/[/\\]/).map((p) => p.toLowerCase());
+    const underDefault = parts.includes('worktrees') && parts.includes('.wazir');
     if (!underOverride && !underDefault) {
       throw new Error(`refusing to remove '${resolved}': not a Wazir worktree directory`);
     }
     try {
-      await fs.rm(resolved, { recursive: true, force: true });
+      await fs.rm(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     } catch {
       // ignore
     }
@@ -400,8 +396,8 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 /** Ids become path segments and git branch names; keep them boring. */
 function assertSafeId(label: string, value: string): void {
-  if (!SAFE_ID.test(value) || value.includes('..')) {
-    throw new Error(`invalid ${label} '${value}': must match ${SAFE_ID}`);
+  if (!SAFE_ID.test(value) || value.includes('..') || isWindowsReservedName(value) || value.endsWith('.') || value.endsWith(' ')) {
+    throw new Error(`invalid ${label} '${value}': must match ${SAFE_ID} and not be a Windows reserved name or contain trailing dots/spaces`);
   }
 }
 

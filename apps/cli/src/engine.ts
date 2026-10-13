@@ -48,6 +48,9 @@ import {
   appendAuditEvent,
   MemoryStore,
   JsonFileStore,
+  isExecutableOnPath,
+  resolveExecutable,
+  getSpawnCommand,
   type KeyValueStore,
 } from '@wazir/shared';
 import { ToolRegistry, defaultTools, createWebTools } from '@wazir/tools';
@@ -145,16 +148,7 @@ const execFileAsync = promisify(execFile);
 
 /** True when `bin` is an executable on PATH. A lookup, not a launch: startup stays fast. */
 function onPath(bin: string): boolean {
-  const exts = process.platform === 'win32' ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';') : [''];
-  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
-    for (const ext of exts) {
-      try {
-        accessSync(path.join(dir, bin + ext), fsConstants.X_OK);
-        return true;
-      } catch { /* keep looking */ }
-    }
-  }
-  return false;
+  return isExecutableOnPath(bin);
 }
 
 /**
@@ -164,7 +158,7 @@ function onPath(bin: string): boolean {
  */
 function acpAgentSpecs(): Array<{ name: string; description: string; requires: string; command: string; args: string[]; initTimeoutMs?: number }> {
   const npx = path.join(path.dirname(process.execPath), process.platform === 'win32' ? 'npx.cmd' : 'npx');
-  const npxCommand = existsSync(npx) ? npx : 'npx';
+  const npxCommand = resolveExecutable('npx') ?? (existsSync(npx) ? npx : 'npx');
   return [
     { name: 'claude-code', description: 'Claude Code over ACP (@zed-industries/claude-code-acp)', requires: 'claude',
       command: npxCommand, args: ['-y', '@zed-industries/claude-code-acp@0.16.2'], initTimeoutMs: 180_000 },
@@ -176,8 +170,11 @@ function acpAgentSpecs(): Array<{ name: string; description: string; requires: s
 }
 
 async function detectOpenCode(): Promise<boolean> {
+  const resolved = resolveExecutable('opencode');
+  if (!resolved) return false;
   try {
-    await execFileAsync('opencode', ['--version'], { timeout: 3_000 });
+    const cmd = getSpawnCommand(resolved, ['--version']);
+    await execFileAsync(cmd.command, cmd.args, { timeout: 3_000, shell: cmd.useShell });
     return true;
   } catch {
     return false;
