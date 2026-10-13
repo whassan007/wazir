@@ -192,21 +192,23 @@ function runProcess(
     const childEnv = childEnvironment({ ...normalizedEnv, ...(options.env ?? {}) });
 
     const detachedGroup = process.platform !== 'win32' && wrapped.mode !== 'bwrap';
-    const child = spawn(wrapped.file, wrapped.args, {
+    const isWin = process.platform === 'win32';
+    const isBatch = isWin && (
+      wrapped.file.toLowerCase() === 'npm' ||
+      wrapped.file.toLowerCase() === 'npx' ||
+      wrapped.file.toLowerCase().endsWith('.cmd') ||
+      wrapped.file.toLowerCase().endsWith('.bat')
+    );
+    const targetFile = isBatch && !wrapped.file.toLowerCase().endsWith('.cmd') && !wrapped.file.toLowerCase().endsWith('.bat')
+      ? `${wrapped.file}.cmd`
+      : wrapped.file;
+    const child = spawn(targetFile, wrapped.args, {
       cwd: spawnCwd,
       env: childEnv,
       // fd 3 carries the seccomp program to bwrap (`--seccomp 3`).
       stdio: wrapped.seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
-      // Makes the child the leader of its own process group on POSIX, so a
-      // timeout/cancel/overflow kill can reach its descendants too (see
-      // killProcessGroup). Skipped for bwrap: it calls setsid() itself for
-      // --new-session, which can conflict with Node's pre-exec setpgid()
-      // on the same process — bwrap already has its own kill safety net
-      // (--die-with-parent, PID-namespace teardown), so a direct SIGKILL to
-      // it (killProcessGroup's fallback when there's no group) is sufficient
-      // and doesn't fight bwrap's own session setup. No effect on Windows;
-      // taskkill /T there doesn't need it.
       detached: detachedGroup,
+      shell: isBatch,
     });
     if (wrapped.seccomp) {
       const feed = child.stdio[3] as NodeJS.WritableStream;

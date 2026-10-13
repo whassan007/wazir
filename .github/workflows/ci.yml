@@ -29,6 +29,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Ensure native binary permissions on macOS
+        if: runner.os == 'macOS'
+        run: find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} + || true
+
       - name: Build packages and apps
         run: npm run build
 

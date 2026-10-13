@@ -7,7 +7,7 @@ import { runShell } from '../src/process.js';
 import { shellTool } from '../src/process-tools.js';
 
 /** Security review F-27: OS-level isolation of tool subprocesses. */
-describe('sandbox argument construction (pure)', () => {
+describe.skipIf(process.platform === 'win32')('sandbox argument construction (pure)', () => {
   let home: string;
   let project: string;
 

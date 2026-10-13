@@ -327,9 +327,13 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.sendLine('/fanout setup database; build auth endpoints; write e2e tests');
 
     // Allow orchestrator to pick up tasks and start agents
-    await new Promise((r) => setTimeout(r, 60));
+    let agents: any[] = [];
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      agents = harness.tui.getAgents();
+      if (agents.length >= 3) break;
+    }
 
-    const agents = harness.tui.getAgents();
     expect(agents).toHaveLength(3);
     expect(agents.some((a) => a.title.includes('setup database'))).toBe(true);
     expect(agents.some((a) => a.title.includes('build auth endpoints'))).toBe(true);

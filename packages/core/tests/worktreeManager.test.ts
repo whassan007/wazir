@@ -74,8 +74,8 @@ describe('WorktreeManager — git worktree isolation per agent', () => {
     // Verify main now has both files
     const mainAgent1 = await fs.readFile(path.join(tmpRepo, 'agent1.txt'), 'utf8');
     const mainAgent2 = await fs.readFile(path.join(tmpRepo, 'agent2.txt'), 'utf8');
-    expect(mainAgent1).toBe('hello from agent 1\n');
-    expect(mainAgent2).toBe('hello from agent 2\n');
+    expect(mainAgent1.replace(/\r\n/g, '\n')).toBe('hello from agent 1\n');
+    expect(mainAgent2.replace(/\r\n/g, '\n')).toBe('hello from agent 2\n');
 
     // Clean up worktrees
     await manager.removeWorktree(wt1);

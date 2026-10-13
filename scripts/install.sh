@@ -61,6 +61,10 @@ else
     exit 1
   fi
 
+  if [ "$(uname -s)" = "Darwin" ]; then
+    find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} + 2>/dev/null || true
+  fi
+
   echo "==> Building all workspaces (log: $BUILD_LOG)"
   if ! npm run build 2>&1 | tee "$BUILD_LOG"; then
     # tsc --build reports the same diagnostic once per dependent workspace with a

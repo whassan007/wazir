@@ -21,7 +21,10 @@ describe('tool timeout terminates the process and determines the outcome', () =>
   it('kills a timed-out shell command: TOOL_TIMEOUT with observed mutations, and no later side effect', async () => {
     const quickShell: Tool = { descriptor: { ...shellTool.descriptor, name: 'quick_shell', timeoutMs: 300 }, execute: shellTool.execute };
     const registry = new ToolRegistry([quickShell]);
-    const result = await executeTool(registry, 'quick_shell', { command: 'echo early > early.txt; sleep 2; echo late > late.txt' }, { projectRoot: root, verifyWorkspace: true });
+    const timeoutCmd = process.platform === 'win32'
+      ? 'node -e "const fs=require(\'fs\'); fs.writeFileSync(\'early.txt\',\'early\\n\'); setTimeout(()=>{ fs.writeFileSync(\'late.txt\',\'late\\n\'); }, 2000);"'
+      : 'echo early > early.txt; sleep 2; echo late > late.txt';
+    const result = await executeTool(registry, 'quick_shell', { command: timeoutCmd }, { projectRoot: root, verifyWorkspace: true });
 
     expect(result.ok).toBe(false);
     expect(result.failureClass).toBe('TOOL_TIMEOUT');

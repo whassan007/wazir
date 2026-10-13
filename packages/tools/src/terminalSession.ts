@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type * as nodePtyType from 'node-pty';
 import { Terminal } from '@xterm/headless';
@@ -12,6 +12,21 @@ export function loadNodePty(): typeof import('node-pty') {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     cachedPty = require('node-pty');
+    if (process.platform === 'darwin') {
+      try {
+        const ptyEntry = require.resolve('node-pty');
+        const ptyDir = path.dirname(ptyEntry);
+        const candidates = [
+          path.join(ptyDir, '..', 'build', 'Release', 'spawn-helper'),
+          path.join(ptyDir, 'build', 'Release', 'spawn-helper'),
+        ];
+        for (const candidate of candidates) {
+          if (existsSync(candidate)) {
+            try { chmodSync(candidate, 0o755); } catch {}
+          }
+        }
+      } catch {}
+    }
     return cachedPty!;
   } catch (err) {
     throw new Error(

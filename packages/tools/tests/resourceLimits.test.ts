@@ -13,7 +13,7 @@ describe('wrapWithResourceLimits (pure)', () => {
     expect(result.args).toEqual(['hi']);
   });
 
-  it('wraps with a ulimit-setting bash script that execs the original command', () => {
+  it.skipIf(process.platform === 'win32')('wraps with a ulimit-setting bash script that execs the original command', () => {
     const result = wrapWithResourceLimits('echo', ['hi'], { maxCpuSeconds: 30, maxFileSizeMB: 10 });
     expect(result.applied).toBe(true);
     expect(result.file).toBe('bash');
@@ -24,7 +24,7 @@ describe('wrapWithResourceLimits (pure)', () => {
     expect(result.args.slice(2)).toEqual(['wazir-limited', 'echo', 'hi']);
   });
 
-  it('only emits ulimit lines for limits that are actually set', () => {
+  it.skipIf(process.platform === 'win32')('only emits ulimit lines for limits that are actually set', () => {
     const result = wrapWithResourceLimits('echo', [], { maxCpuSeconds: 5 });
     expect(result.args[1]).toContain('ulimit -t 5');
     expect(result.args[1]).not.toContain('ulimit -v');

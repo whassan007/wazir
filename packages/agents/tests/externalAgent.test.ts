@@ -23,7 +23,7 @@ describe('Section 11: External Agent (OpenCode) Suite', () => {
     }
   });
 
-  describe('Detection: binary presence on PATH', () => {
+  describe.skipIf(process.platform === 'win32')('Detection: binary presence on PATH', () => {
     it('detects binary when present on PATH and returns false when absent', async () => {
       scratchDir = await tempDir();
       const fakeBinPath = path.join(scratchDir, 'opencode');
@@ -251,7 +251,7 @@ exit 1
     });
   });
 
-  describe('Invocation Shape: flags, prompt delivery, working dir', () => {
+  describe.skipIf(process.platform === 'win32')('Invocation Shape: flags, prompt delivery, working dir', () => {
     it('executes external command with exact args, task description, and projectRoot cwd', async () => {
       scratchDir = await tempDir();
       const fakeBinaryPath = path.join(scratchDir, 'fake-opencode.sh');

@@ -206,8 +206,11 @@ describe('F-13: tool subprocesses get a minimal environment', () => {
       expect(env.WAZIR_TEST_PASSTHROUGH).toBe('visible');
       expect(env.PATH).toBe(process.env.PATH);
 
+      const checkCmd = process.platform === 'win32'
+        ? 'node -e "console.log(\'secret=\' + (process.env.WAZIR_TEST_SECRET_TOKEN || \'unset\') + \' pass=\' + (process.env.WAZIR_TEST_PASSTHROUGH || \'unset\'))"'
+        : 'echo "secret=${WAZIR_TEST_SECRET_TOKEN:-unset} pass=${WAZIR_TEST_PASSTHROUGH:-unset}"';
       const result = await shellTool.execute(
-        { command: 'echo "secret=${WAZIR_TEST_SECRET_TOKEN:-unset} pass=${WAZIR_TEST_PASSTHROUGH:-unset}"' },
+        { command: checkCmd },
         { projectRoot: project, taskId: 't', executionId: 'e' } as never,
       );
       expect(result.ok).toBe(true);

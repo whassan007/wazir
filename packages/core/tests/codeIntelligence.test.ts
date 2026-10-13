@@ -119,7 +119,7 @@ describe('Code Intelligence & Symbol Graph', () => {
     });
 
     it('finds callees called by a function/method', async () => {
-      const callees = await service.findCallees('packages/core/src/client.ts:Scheduler.route:method');
+      const callees = await service.findCallees(`${clientFile}:Scheduler.route:method`);
       expect(callees.length).toBeGreaterThan(0);
     });
 
