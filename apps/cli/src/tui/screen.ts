@@ -1,6 +1,7 @@
 import readline from 'node:readline';
 import { FrameDiffer } from './differ.js';
 import { TerminalFrame } from './frame.js';
+import { stringDisplayWidth } from './unicode.js';
 
 export interface TerminalSize {
   columns: number;
@@ -132,10 +133,9 @@ export class TerminalScreen {
         };
       } else {
         const lastLine = lines[lines.length - 1] ?? '';
-        const strippedLast = lastLine.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
         frame.cursor = {
           row: Math.min(lines.length - 1, size.rows - 1),
-          col: Math.max(0, strippedLast.length),
+          col: Math.max(0, stringDisplayWidth(lastLine)),
           visible: true,
         };
       }
