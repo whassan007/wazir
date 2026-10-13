@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -154,9 +154,17 @@ function probeSandboxExec(): { ok: boolean; reason?: string } {
   const bin = onPath('sandbox-exec') ?? (existsSync('/usr/bin/sandbox-exec') ? '/usr/bin/sandbox-exec' : undefined);
   if (!bin) return { ok: false, reason: 'sandbox-exec is not available' };
   const tmp = os.tmpdir();
-  const profile = seatbeltProfile({ projectRoot: tmp, cwd: tmp });
-  const result = spawnSync(bin, ['-p', profile, '/bin/sh', '-c', `"${process.execPath}" -e "process.exit(0)"`], { stdio: 'ignore', timeout: 5_000 });
-  return result.status === 0 ? { ok: true } : { ok: false, reason: `sandbox-exec cannot run node with seatbelt profile (exit ${result.status})` };
+  const testScript = path.join(tmp, `probe-sbx-${process.pid}.js`);
+  try {
+    writeFileSync(testScript, 'process.exit(0);');
+    const profile = seatbeltProfile({ projectRoot: tmp, cwd: tmp });
+    const result = spawnSync(bin, ['-p', profile, process.execPath, testScript], { stdio: 'ignore', timeout: 5_000 });
+    return result.status === 0 ? { ok: true } : { ok: false, reason: `sandbox-exec cannot run node with seatbelt profile (exit ${result.status})` };
+  } catch (e) {
+    return { ok: false, reason: `sandbox-exec probe failed: ${String(e)}` };
+  } finally {
+    try { unlinkSync(testScript); } catch { /* ignore */ }
+  }
 }
 
 /** Resolves (once) which sandbox backend this process can actually use. */
@@ -325,6 +333,10 @@ export function seatbeltProfile(options: SandboxOptions, home: string = os.homed
     // Home is hidden except for toolchains/caches and the project itself.
     `(deny file-read* file-write* (subpath ${q(resolvedHome)}))`,
     ...(realHome && realHome !== resolvedHome ? [`(deny file-read* file-write* (subpath ${q(realHome)}))`] : []),
+    `(allow file-read-metadata (literal ${q(resolvedHome)}))`,
+    ...(realHome && realHome !== resolvedHome ? [`(allow file-read-metadata (literal ${q(realHome)}))`] : []),
+    `(allow file-read* (literal ${q(resolvedHome)}))`,
+    ...(realHome && realHome !== resolvedHome ? [`(allow file-read* (literal ${q(realHome)}))`] : []),
     ...existingDirs(resolvedHome, HOME_TOOLCHAIN_DIRS).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
     ...existingDirs(resolvedHome, HOME_CACHE_DIRS).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
     ...(isInside(resolvedHome, path.dirname(path.dirname(process.execPath))) ? [`(allow file-read* (subpath ${q(path.dirname(path.dirname(process.execPath)))}))`] : []),
