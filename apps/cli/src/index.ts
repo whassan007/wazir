@@ -691,6 +691,112 @@ agentsCmd
 
 program.addCommand(agentsCmd);
 
+// resources command: accounts, budgets, ledger, DGX Spark capacity, routing economics
+const resourcesCmd = new Command()
+  .name('resources')
+  .description('Accounts, token budgets, quotas, local GPU capacity and routing economics')
+  .option('--json', 'Output the snapshot as JSON')
+  .option('--watch [seconds]', 'Refresh continuously (reads the ledger and local probes; never polls providers)')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ quiet: true });
+    const { resourceSnapshot, renderResourceSnapshot } = await import('./resourceDashboard.js');
+    const show = async () => {
+      const snap = await resourceSnapshot(engine);
+      return options.json ? JSON.stringify(snap, null, 2) : renderResourceSnapshot(snap);
+    };
+    if (!options.watch) {
+      console.log(await show());
+      process.exit(0);
+    }
+    const every = Math.max(1, Number(options.watch === true ? 5 : options.watch)) * 1000;
+    for (;;) {
+      const out = await show();
+      process.stdout.write('\x1b[2J\x1b[H' + out + '\n');
+      await new Promise((r) => setTimeout(r, every));
+    }
+  });
+
+resourcesCmd.command('stop').argument('[reason...]', 'Why').description('Emergency stop: block new cloud dispatches (local inference continues)')
+  .action(async (reason: string[]) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ quiet: true });
+    engine.resources.budget.emergencyStop(reason.join(' ') || 'operator emergency stop');
+    console.log('Emergency stop active: no new cloud or subscription dispatches. Local inference continues. Undo with `wa resources resume`.');
+    process.exit(0);
+  });
+
+resourcesCmd.command('resume').description('Lift the emergency stop')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ quiet: true });
+    if (engine.resources.configError) {
+      console.error(`Not resuming: ${engine.resources.configError}`);
+      process.exit(1);
+    }
+    engine.resources.budget.resume();
+    console.log('Emergency stop lifted.');
+    process.exit(0);
+  });
+
+resourcesCmd.command('reset').argument('<account>', 'Account id').description('Clear an account\'s auth/quota/cooldown block after fixing it')
+  .action(async (account: string) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ quiet: true });
+    if (!engine.resources.accounts.get(account)) { console.error(`unknown account '${account}'`); process.exit(1); }
+    engine.resources.budget.resetHealth(account);
+    console.log(`Account '${account}' health reset.`);
+    process.exit(0);
+  });
+
+resourcesCmd.command('validate').description('Validate resources.json')
+  .action(async () => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ quiet: true });
+    if (engine.resources.configError) { console.error(engine.resources.configError); process.exit(1); }
+    console.log(`OK: ${engine.resources.configPath} — ${engine.resources.accounts.list().length} account(s), policy ${engine.resources.policy.mode}`);
+    process.exit(0);
+  });
+
+resourcesCmd.command('init').option('--force', 'Overwrite an existing resources.json').description('Write an example resources.json from detected runtimes and agents')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ quiet: true });
+    const { existsSync, writeFileSync } = await import('node:fs');
+    const path = engine.resources.configPath;
+    if (existsSync(path) && !options.force) { console.error(`${path} exists; use --force to overwrite`); process.exit(1); }
+    const { exampleResourceConfig } = await import('./resourceConfigExample.js');
+    writeFileSync(path, JSON.stringify(exampleResourceConfig(engine), null, 2) + '\n', { mode: 0o600 });
+    console.log(`Wrote ${path}. Limits are recorded but not enforced until you set "enforce": true in policy. Review the limits (subscription quotas are unknown until you set them), then run \`wa resources validate\`.`);
+    process.exit(0);
+  });
+
+resourcesCmd.command('explain').argument('<task>', 'Task id or execution id').option('--json', 'JSON output').description('Show routing decisions, admissions and usage for a task')
+  .action(async (taskId: string, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ quiet: true });
+    const { ledger } = engine.resources;
+    const events = ledger.events({ taskId, limit: 500 }).reverse();
+    const usage = ledger.usageRows({ taskId });
+    if (options.json) { console.log(JSON.stringify({ events, usage }, null, 2)); process.exit(0); }
+    if (!events.length && !usage.length) { console.log(`No resource records for '${taskId}'.`); process.exit(0); }
+    for (const e of events) console.log(`${new Date(e.at).toISOString()}  ${e.kind.padEnd(12)} ${e.accountId ?? ''}  ${JSON.stringify(e.data).slice(0, 600)}`);
+    for (const u of usage) console.log(`usage ${u.requestId}: ${u.accountId} ${u.modelId} ${u.inputTokens} in / ${u.outputTokens} out (${u.source}) $${u.costUsd.toFixed(4)}`);
+    process.exit(0);
+  });
+
+resourcesCmd.command('events').option('--kind <kind>', 'Filter by event kind').option('--limit <n>', 'Max rows', '50').description('Tail the append-only resource audit trail')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ quiet: true });
+    for (const e of engine.resources.ledger.events({ kind: options.kind, limit: Number(options.limit) }).reverse()) {
+      console.log(`${new Date(e.at).toISOString()}  ${e.kind.padEnd(14)} ${(e.accountId ?? '').padEnd(18)} ${e.taskId ?? ''} ${JSON.stringify(e.data).slice(0, 300)}`);
+    }
+    process.exit(0);
+  });
+
+program.addCommand(resourcesCmd);
+
 // tools command
 const toolsCmd = new Command()
   .name('tools')

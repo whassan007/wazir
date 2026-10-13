@@ -1,6 +1,6 @@
 import { executeMCPForAgent } from './mcp.js';
 import path from 'node:path';
-import { effectiveContextTokens, SchedulingError, taskAuthorizesVerificationChanges } from '@wazir/core';
+import { classifyWorkload, effectiveContextTokens, estimateOutputTokens, estimateTextTokens, padEstimate, SchedulingError, taskAuthorizesVerificationChanges } from '@wazir/core';
 import type {
   AgentAdapter,
   AgentRuntime,
@@ -173,6 +173,23 @@ export async function planTask(
   const activeContextParts = await buildContextPartsFromActive(engine);
   const parts = [...baseParts, ...activeContextParts];
   const budget = engine.compiler.budget(parts, OUTPUT_RESERVE_TOKENS);
+
+  // A delegated (external) agent selects and runs its own model on its vendor's account, so
+  // no local model is placed or loaded for it: planning one could only refuse the task.
+  const pinnedAgent = options.agent ? engine.agents.get(options.agent) : undefined;
+  if (pinnedAgent?.descriptor.strategy === 'external') {
+    const name = pinnedAgent.descriptor.name;
+    const reasons = [`delegated to external agent '${name}'; it selects its own model`];
+    const computerId = engine.worker.computerId;
+    const scheduling = {
+      agentId: name, modelId: `external:${name}`, modelInstanceId: `external:${name}`, runtimeId: 'external', computerId,
+      readiness: 'READY_NOW', reasons, decidedAt: new Date(),
+      modelDecision: { modelId: `external:${name}`, modelInstanceId: `external:${name}`, strategy: 'explicit', score: 0, reasons },
+      computerDecision: { computerId, runtimeId: 'external', reasons },
+    } as unknown as SchedulerDecision;
+    const context = engine.compiler.compile(parts, { tokens: 1_000_000, source: 'configured' }, OUTPUT_RESERVE_TOKENS);
+    return { ok: true, plan: { task, scheduling, context, agent: pinnedAgent } };
+  }
 
   let scheduling: SchedulerDecision;
   try {
@@ -408,6 +425,7 @@ export async function executeTask(
             contextTokens: placement.contextTokens,
             stream: true,
             tools: request.tools,
+            resourceContext: { taskId: task.id, workload: classifyWorkload(task), agent: agent.descriptor.name },
           })) {
             await engine.executions.recordProviderEvent(executionId, event, retryContext);
             observe(event);
@@ -652,6 +670,35 @@ export async function executeTask(
     },
   };
 
+  // ---- subscription admission (delegated agents) ---------------------------
+  // Delegated agents run on their vendor's account, not through a runtime adapter, so they
+  // are admitted here: one request plus estimated tokens against the agent's account. The
+  // vendor CLI reports no usage, so the settlement is always labelled an estimate.
+  let delegation: { requestId: string; rawInput: number } | undefined;
+  if (externalAgent) {
+    const name = agent.descriptor.name;
+    const accountId = engine.resources.resolveAgentAccount(name);
+    const workload = classifyWorkload(task);
+    const requestId = `${executionId}:delegation`;
+    const rawInput = estimateTextTokens(description);
+    const decision = accountId
+      ? engine.resources.budget.admit({
+        requestId, accountId, modelId: `agent:${name}`, workload, taskId: task.id, agent: name, requests: 1,
+        estimatedInputTokens: padEstimate(rawInput, 1, engine.resources.policy.estimateMargin),
+        estimatedOutputTokens: estimateOutputTokens({}, workload),
+      })
+      : undefined;
+    if (!decision || decision.outcome !== 'admitted') {
+      const reason = decision ? `RESOURCE_ADMISSION_${decision.outcome.toUpperCase()}: ${decision.reasons.join('; ')}` : `no resource account is configured for agent '${name}'`;
+      await engine.executions.recordError(executionId, reason);
+      await engine.executions.setStatus(executionId, 'failed');
+      emitJson({ type: 'error', error: reason, executionId });
+      log(color.red(`    ${reason}`));
+      return { success: false, reasons: [reason], filesChanged: [], executionId, errors: [reason] };
+    }
+    delegation = { requestId, rawInput };
+  }
+
   // ---- run the agent ------------------------------------------------------
   await engine.executions.setStatus(executionId, 'running');
   let summary: string | undefined;
@@ -715,6 +762,15 @@ export async function executeTask(
   } finally {
     loader.stop();
     process.off('SIGINT', onSigint);
+    if (delegation) {
+      const output = estimateTextTokens(summary ?? '');
+      if (errors.length === 0 && !cancelled) {
+        engine.resources.budget.reconcile(delegation.requestId, { inputTokens: delegation.rawInput, outputTokens: output, source: 'estimated' }, { agent: agent.descriptor.name });
+      } else {
+        // The vendor CLI may have consumed quota before failing: charge conservatively.
+        engine.resources.budget.fail(delegation.requestId, { ambiguous: true, message: errors[0] ?? (cancelled ? 'cancelled' : undefined) });
+      }
+    }
   }
 
   // The durable record refused a write (another process changed it). Nothing this run
@@ -887,6 +943,7 @@ export async function runSubagent(
         temperature: req.temperature,
         stream: true,
         tools: req.tools,
+        resourceContext: { taskId: childExecId, workload: 'routine' },
       })) {
         await engine.executions.recordProviderEvent(childExecId, event, {
           requestId, model: req.modelId, provider: engine.models.get(req.modelId)?.provider,

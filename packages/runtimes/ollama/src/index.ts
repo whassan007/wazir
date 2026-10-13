@@ -10,7 +10,7 @@ import type {
   RuntimeInfo,
 } from '@wazir/runtimes-interfaces';
 import { normalizePromptCacheTelemetry } from '@wazir/runtimes-interfaces';
-import { classifyFailure, isProviderRetryable, providerRetryDecision, resolveRetryPolicy, waitForRetry } from '@wazir/shared';
+import { classifyFailure, classifyHttpFailure, isProviderRetryable, providerRetryDecision, resolveRetryPolicy, waitForRetry } from '@wazir/shared';
 
 interface OllamaModelDetails {
   parent_model?: string;
@@ -303,9 +303,10 @@ export class OllamaAdapter implements RuntimeAdapter {
     }
 
     if (!response || !response.ok || !response.body) {
+      const body = await response?.text().catch(() => '') ?? '';
       this.controllers.delete(requestId);
-      const failureClass = classifyFailure({ status: response?.status });
-      yield { type: 'error', requestId, retryAttempt: maxAttempts, failureClass, retryExhausted: isProviderRetryable(failureClass), error: `Ollama API error: HTTP ${response?.status ?? 'unknown'}` };
+      const failureClass = response ? classifyHttpFailure(response.status, body) : classifyFailure({ status: undefined });
+      yield { type: 'error', requestId, status: response?.status, retryAttempt: maxAttempts, failureClass, retryExhausted: isProviderRetryable(failureClass), error: `Ollama API error: HTTP ${response?.status ?? 'unknown'} ${body.slice(0, 300)}` };
       return;
     }
 

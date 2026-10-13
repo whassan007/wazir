@@ -1,0 +1,13 @@
+# Resource Orchestration — Remaining Limitations and Risks
+
+1. **Subscription quotas are unknowable.** Vendors don't publish or expose consumer plan limits, and their CLIs report no token usage. Subscription accounting counts requests (one per delegated task) plus *estimated* tokens. Set limits from your plan; treat the numbers as Wazir's own enforcement, not the vendor's view.
+2. **Budgets are internal dispatch limits, not billing ceilings.** Provider accounting can lag, and usage of the same account outside Wazir is invisible. Use the provider's own hard limits for absolute protection against charges.
+3. **One API key per provider.** Hosted adapters still hold one credential per provider (`api:<provider>`). Multiple API accounts for the same provider would need one adapter instance per credential. Multiple *subscriptions* are supported through vendor-CLI instances (`claude-code@work`).
+4. **Token estimates are heuristic.** Characters/3.2 plus per-message overhead and a 25% margin, calibrated upward per model from provider-reported input counts. There is no exact tokenizer, which is deliberate: none exists for Anthropic or arbitrary local GGUF models. Output reservations use `max_tokens`, or a per-workload default.
+5. **`wa ask` and some secondary commands select their own model.** They are governed (admission and accounting apply), but they bypass the scheduler's resource-aware routing; seen live, `wa ask` picked an unloaded model. `wa run`, the TUI and fleet jobs use the scheduler.
+6. **Auto-delegation to subscription agents is not enabled.** Routing chooses among models. Delegation to a subscription agent stays explicit (`--agent`), and is then admitted against that subscription's budget. Automatic agent selection by workload is a follow-up.
+7. **GPU admission covers concurrency and model loads, not KV-cache memory per request.** Model-load memory admission (existing `ModelLifecycleService`) and per-account concurrency are enforced. Per-request KV-cache growth is not modelled; on vLLM, the dashboard shows KV-cache usage.
+8. **No background telemetry.** The dashboard probes on demand and reads the ledger; provider quota state is learned only from responses (headers, 429s). This is intentional: no extra provider polling.
+9. **Ledger growth.** The audit trail is append-only and has no retention policy yet.
+10. **Live coverage gaps.** Paid APIs, Claude Code and Codex subscriptions, vLLM and Ollama were not exercised live on this host (see TEST_REPORT.md).
+11. **Limits are not enforced by default.** `policy.enforce` defaults to false, so only accounting and routing happen until you set it to true. The emergency stop applies either way.

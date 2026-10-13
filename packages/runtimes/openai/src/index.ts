@@ -12,7 +12,7 @@ import type {
   RuntimeInfo,
   StoredCredential,
 } from '@wazir/runtimes-interfaces';
-import { isStoredCredential } from '@wazir/runtimes-interfaces';
+import { httpFailureEvent, isStoredCredential, readRateLimitHeaders } from '@wazir/runtimes-interfaces';
 import type { SecretBroker } from '@wazir/secrets';
 
 const API_BASE = 'https://api.openai.com';
@@ -56,7 +56,8 @@ interface StreamDelta {
 
 interface StreamChunk {
   choices?: Array<{ delta?: StreamDelta; finish_reason?: string | null }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number }; completion_tokens_details?: { reasoning_tokens?: number } };
 }
 
 interface SSEBuffer {
@@ -229,7 +230,7 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     if (!response.ok || !response.body) {
       const body = await response.text().catch(() => '');
       this.controllers.delete(requestId);
-      yield { type: 'error', error: `OpenAI API error: HTTP ${response.status} ${body.slice(0, 300)}` };
+      yield httpFailureEvent('OpenAI', response, body, requestId);
       return;
     }
 
@@ -273,6 +274,8 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
               inputTokens: chunk.usage.prompt_tokens ?? 0,
               outputTokens: chunk.usage.completion_tokens ?? 0,
               totalTokens: chunk.usage.total_tokens,
+              cacheReadTokens: chunk.usage.prompt_tokens_details?.cached_tokens,
+              reasoningTokens: chunk.usage.completion_tokens_details?.reasoning_tokens,
             };
           }
         }
@@ -288,10 +291,10 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
         yield { type: 'tool_call', toolCallId: entry.id ?? `tool-${index}`, toolName: entry.name ?? 'unknown', toolInput: parsed };
       }
 
-      yield { type: 'completed', content: full, usage: usage ?? { inputTokens: 0, outputTokens: 0 } };
+      yield { type: 'completed', content: full, usage: usage ?? { inputTokens: 0, outputTokens: 0 }, rateLimit: readRateLimitHeaders(response.headers) };
     } catch (error) {
       if (controller.signal.aborted) {
-        yield { type: 'completed', content: full, usage: usage ?? { inputTokens: 0, outputTokens: 0 } };
+        yield { type: 'completed', content: full, usage: usage ?? { inputTokens: 0, outputTokens: 0 }, rateLimit: readRateLimitHeaders(response.headers) };
       } else {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }

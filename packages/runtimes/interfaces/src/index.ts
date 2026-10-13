@@ -1,3 +1,4 @@
+import { classifyHttpFailure, parseRetryAfterMs } from '@wazir/shared';
 export interface RuntimeInfo {
   id: string;
   name: string;
@@ -149,6 +150,8 @@ export interface GenerationRequest {
   responseFormat?: { type: 'text' | 'json_object' | 'json_schema'; json_schema?: Record<string, unknown> };
   /** Host-generated id used for cancellation. */
   requestId?: string;
+  /** Attribution for resource accounting (task, workload class, agent). Never sent to the model. */
+  resourceContext?: { taskId?: string; workload?: string; agent?: string };
 }
 
 /**
@@ -349,7 +352,25 @@ export interface Usage {
   totalTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  /** Hidden reasoning tokens billed as output, when the provider reports them. */
+  reasoningTokens?: number;
   promptCache?: PromptCacheMetrics;
+}
+
+/**
+ * Rate-limit state read from provider response headers (OpenAI `x-ratelimit-*`, Anthropic
+ * `anthropic-ratelimit-*`). Provider-reported, so authoritative for API rate limits only:
+ * it says nothing about subscription quotas or billing.
+ */
+export interface RateLimitObservation {
+  source: 'provider-headers';
+  limitRequests?: number;
+  remainingRequests?: number;
+  limitTokens?: number;
+  remainingTokens?: number;
+  /** ISO timestamps. */
+  resetRequestsAt?: string;
+  resetTokensAt?: string;
 }
 
 export interface GenerationEvent {
@@ -358,6 +379,12 @@ export interface GenerationEvent {
   requestId?: string;
   /** 'reasoning': model thinking, streamed for progress only; never part of the answer. */
   type: 'token' | 'reasoning' | 'tool_call' | 'completed' | 'error' | 'retry';
+  /** 'error' from an HTTP response: its status code. */
+  status?: number;
+  /** 'error': provider-requested wait (Retry-After), in milliseconds. */
+  retryAfterMs?: number;
+  /** 'completed' / 'error': rate-limit headers the provider returned, if any. */
+  rateLimit?: RateLimitObservation;
   /** 'completed' only: provider finish reason (e.g. stop, tool_calls, length, content_filter), or 'cancelled' when the stream was aborted. */
   finishReason?: string;
   content?: string;
@@ -421,3 +448,61 @@ export interface RuntimeAdapter {
 }
 
 export * from './auth.js';
+
+const num = (v: string | null): number | undefined => {
+  if (v === null || v.trim() === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+
+/** Converts a reset value (RFC 3339 timestamp, seconds, or durations like "1m30s", "250ms") to ISO. */
+function resetToIso(v: string | null, now: number): string | undefined {
+  if (!v) return undefined;
+  const t = v.trim();
+  if (/^\d{4}-\d{2}-\d{2}T/.test(t)) {
+    const at = Date.parse(t);
+    return Number.isFinite(at) ? new Date(at).toISOString() : undefined;
+  }
+  if (/^\d+(\.\d+)?$/.test(t)) return new Date(now + Number(t) * 1000).toISOString();
+  let ms = 0;
+  let matched = false;
+  for (const [, n, unit] of t.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)) {
+    matched = true;
+    ms += Number(n) * (unit === 'h' ? 3_600_000 : unit === 'm' ? 60_000 : unit === 's' ? 1000 : 1);
+  }
+  return matched ? new Date(now + ms).toISOString() : undefined;
+}
+
+/** Reads OpenAI- or Anthropic-style rate-limit headers; undefined when none are present. */
+export function readRateLimitHeaders(headers: Headers | undefined, now = Date.now()): RateLimitObservation | undefined {
+  if (!headers) return undefined;
+  const h = (name: string) => headers.get(name);
+  const obs: RateLimitObservation = {
+    source: 'provider-headers',
+    limitRequests: num(h('x-ratelimit-limit-requests') ?? h('anthropic-ratelimit-requests-limit')),
+    remainingRequests: num(h('x-ratelimit-remaining-requests') ?? h('anthropic-ratelimit-requests-remaining')),
+    limitTokens: num(h('x-ratelimit-limit-tokens') ?? h('anthropic-ratelimit-tokens-limit')),
+    remainingTokens: num(h('x-ratelimit-remaining-tokens') ?? h('anthropic-ratelimit-tokens-remaining')),
+    resetRequestsAt: resetToIso(h('x-ratelimit-reset-requests') ?? h('anthropic-ratelimit-requests-reset'), now),
+    resetTokensAt: resetToIso(h('x-ratelimit-reset-tokens') ?? h('anthropic-ratelimit-tokens-reset'), now),
+  };
+  const any = Object.entries(obs).some(([k, v]) => k !== 'source' && v !== undefined);
+  return any ? obs : undefined;
+}
+
+/**
+ * The error event for a failed HTTP response: status, failure class (auth, quota, rate
+ * limit, context overflow, ...), Retry-After and rate-limit headers, plus a bounded body.
+ */
+export function httpFailureEvent(provider: string, response: Response, body: string, requestId?: string): GenerationEvent {
+  const failureClass = classifyHttpFailure(response.status, body);
+  return {
+    type: 'error',
+    requestId,
+    status: response.status,
+    failureClass,
+    retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after')),
+    rateLimit: readRateLimitHeaders(response.headers),
+    error: `${provider} API error: HTTP ${response.status} ${body.slice(0, 300)}`,
+  };
+}
