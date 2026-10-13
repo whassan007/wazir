@@ -58,6 +58,9 @@ const runOutside = (args, options = {}) => {
     env,
     encoding: 'utf8',
     timeout: 30000,
+    // npm installs Windows `bin` entries as `.cmd` wrappers. Node cannot spawn
+    // those directly without a command shell, even though the wrapper exists.
+    shell: process.platform === 'win32',
     ...options,
   });
 };
