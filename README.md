@@ -366,6 +366,18 @@ Wazir is engineered to run with zero OS emulation layers across Linux, macOS, an
 3. **Command Resolution**: Resolves commands on Windows taking `PATHEXT` (`.EXE`, `.CMD`, `.BAT`) into account without fragile shell wrapping.
 4. **Git Hook Isolation**: Replaces POSIX-only `/dev/null` with `GIT_NULL_DEVICE` (`NUL` on Windows) for `core.hooksPath`.
 5. **Native Packaging**: `npm run build:binary` compiles standalone self-contained binaries using Node.js Single Executable Application (SEA) targeting ELF on Linux, Mach-O on macOS, and PE on Windows.
+6. **Heterogeneous Fleet & DGX Spark**: Two-phase resource-aware scheduler routes workloads across macOS, Windows, and Linux ARM64 (NVIDIA DGX Spark GB10 with 122 GB ATS unified memory).
+7. **Durable Recovery & Lease Fencing**: WAL-backed dispatch with cryptographically fenced lease tokens (`LEASE_LOST`), orphan sweeps, and safe retries preventing duplicate mutating side effects.
+
+### Documentation & Guides
+
+- [Distributed Fleet Setup Guide](docs/fleet-setup.md)
+- [Linux ARM64 NVIDIA DGX Spark Worker Guide](docs/dgx-spark-worker.md)
+- [Windows Worker Setup Guide](docs/windows-worker.md)
+- [macOS Worker Setup Guide](docs/macos-worker.md)
+- [Cross-Platform Compatibility Matrix](docs/compatibility-matrix.md)
+- [Troubleshooting Guide](docs/troubleshooting.md)
+- [Release Notes v0.1.59](docs/release-notes.md)
 
 ---
 

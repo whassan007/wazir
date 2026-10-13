@@ -34,6 +34,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import signal
 import struct
@@ -144,7 +145,14 @@ def main():
         return True
 
     def needle_in(needle):
-        return needle.encode("utf-8") in bytes(buf[-WINDOW:])
+        # Terminal colors and cursor controls can split visible text across ANSI
+        # sequences. Match what an operator sees, not the raw escape-coded bytes.
+        visible = re.sub(rb"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", b"", bytes(buf[-WINDOW:]))
+        # Box-drawing layout may also insert padding inside a title while the
+        # renderer updates individual screen cells. Ignore whitespace for waits.
+        compact_visible = re.sub(rb"\s+", b"", visible)
+        compact_needle = re.sub(rb"\s+", b"", needle.encode("utf-8"))
+        return compact_needle in compact_visible
 
     def pump_until(needle, timeout):
         deadline = time.time() + timeout

@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.1.60 — 2026-10-12
+
+A cross-platform fleet and distribution release. Wazir can run work across heterogeneous
+machines with platform-aware process cleanup, and now ships release artifacts and native
+install paths for more operating systems.
+
+### Added
+
+- **Cross-platform agent and worker execution** with Windows process-tree cleanup, executable
+  resolution, filesystem handling and hardware discovery across Linux, macOS and Windows.
+- **Heterogeneous fleet scheduling** that matches tasks to registered workers and their runtime
+  capabilities.
+- **Native package distribution** for npm, standalone archives, Homebrew, Scoop, WinGet,
+  Debian and RPM, with package checks, release verification, SBOM generation and checksums.
+- **Container and service support** with Docker Compose, Debian/RPM service integration and
+  platform worker setup guides.
+- **Agent configuration discovery** for local Codex, Claude Code and Antigravity CLIs, with
+  configuration provenance, project trust boundaries and bounded connection checks.
+
+### Security and compatibility
+
+- Existing vendor CLI sessions are tested through their own executables; authentication tokens
+  are not imported into Wazir.
+- Codex uses its native CLI in a read-only sandbox because the pinned ACP bridge did not support
+  the installed model. Write tasks through this fallback are unavailable.
+- Release artifacts are built on Linux x64/ARM64, macOS ARM64/x64 and Windows x64/ARM64 runners.
+
+**Verification:** pending the v0.1.60 release workflow. See the release workflow run for build,
+package, distribution and regression results.
+
 ## v0.1.59 — 2026-10-12
 
 A reliability release. Delegated agents are now judged on evidence Wazir gathers itself, not

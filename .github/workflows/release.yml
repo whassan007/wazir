@@ -46,12 +46,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
           - os: macos-latest
             target: darwin-arm64
-          - os: macos-13
+          - os: macos-15-intel
             target: darwin-x64
           - os: windows-latest
             target: windows-x64
+          - os: windows-11-arm
+            target: windows-arm64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

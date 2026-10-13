@@ -1,25 +1,25 @@
 class Wazir < Formula
   desc "Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator"
   homepage "https://github.com/whassan007/wazir"
-  version "0.1.59"
+  version "0.1.60"
   license "AGPL-3.0-or-later"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/whassan007/wazir/releases/download/v0.1.59/wazir-v0.1.59-darwin-arm64.tar.gz"
+      url "https://github.com/whassan007/wazir/releases/download/v0.1.60/wazir-v0.1.60-darwin-arm64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     else
-      url "https://github.com/whassan007/wazir/releases/download/v0.1.59/wazir-v0.1.59-darwin-x64.tar.gz"
+      url "https://github.com/whassan007/wazir/releases/download/v0.1.60/wazir-v0.1.60-darwin-x64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/whassan007/wazir/releases/download/v0.1.59/wazir-v0.1.59-linux-arm64.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      url "https://github.com/whassan007/wazir/releases/download/v0.1.60/wazir-v0.1.60-linux-arm64.tar.gz"
+      sha256 "e6fd5d2b00a6fe375d6932ed1bcf5d143f318a44320e807cafa33e93b942d541"
     else
-      url "https://github.com/whassan007/wazir/releases/download/v0.1.59/wazir-v0.1.59-linux-x64.tar.gz"
+      url "https://github.com/whassan007/wazir/releases/download/v0.1.60/wazir-v0.1.60-linux-x64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end

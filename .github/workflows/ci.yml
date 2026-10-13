@@ -62,6 +62,9 @@ jobs:
       - name: Run agent execution test plan (55 cases)
         run: npm run test:plan:agent
 
+      - name: Run Automated Release Validation Gate
+        run: npm run release:gate
+
       # Platform Installation and CLI Smoke Test
       - name: Test Native Unix Installation (Linux / macOS)
         if: runner.os != 'Windows'

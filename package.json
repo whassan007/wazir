@@ -1,6 +1,6 @@
 {
   "name": "wazir",
-  "version": "0.1.59",
+  "version": "0.1.60",
   "description": "Wazir is a model- and runtime-agnostic meta-harness that schedules AI agents, models, tools, and compute to execute tasks across local and distributed environments.",
   "license": "AGPL-3.0",
   "author": "Wazir Maintainers",
@@ -46,6 +46,8 @@
     "package:check": "node scripts/package-check.mjs",
     "package:manifests": "node scripts/update-package-managers.mjs",
     "release:verify": "node scripts/release-verify.mjs",
+    "release:gate": "node scripts/release-gate.mjs",
+    "benchmark:fleet": "node scripts/cross-platform-benchmark.mjs",
     "setup:env": "node scripts/setup-env.mjs",
     "postinstall": "node scripts/setup-env.mjs || true",
     "build": "npm run build --workspaces --if-present && npm run bundle",
