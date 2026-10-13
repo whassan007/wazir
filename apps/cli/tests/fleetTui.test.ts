@@ -519,8 +519,12 @@ describe('FleetTui — interactive terminal UI harness', () => {
     await harness.start();
 
     harness.sendLine('quick job');
-    await new Promise((r) => setTimeout(r, 100));
-    const job = harness.tui.getCurrentJob();
+    let job;
+    for (let i = 0; i < 40; i++) {
+      job = harness.tui.getCurrentJob();
+      if (job?.status === 'completed') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
     expect(job?.status).toBe('completed');
 
     for (let i = 0; i < 5; i++) harness.sendKey('\u001b[A'); // up to the JOBS entry

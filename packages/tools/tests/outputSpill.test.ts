@@ -87,11 +87,10 @@ describe('runProcess output spilling (real subprocess)', () => {
 
   it('places the spill file under .wazir/runs/<runId>/outputs/', async () => {
     projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-spill-proc-'));
-    const spillCmd2 = process.platform === 'win32'
-      ? 'node -e "for(let i=1;i<=2000;i++) console.log(\'0123456789012345678901234567890123456789\')"'
-      : 'for i in $(seq 1 2000); do echo "0123456789012345678901234567890123456789"; done';
+    const script2 = path.join(projectDir, 'spill2.cjs');
+    await fs.writeFile(script2, 'for(let i=1;i<=2000;i++) console.log("0123456789012345678901234567890123456789");\n');
     const result = await runShell(
-      spillCmd2,
+      `node "${script2}"`,
       { cwd: projectDir, projectRoot: projectDir, unsandboxed: true, maxBuffer: 5_000, runId: 'my-run-id' },
     );
     expect(result.spillPaths?.stdout).toBe(

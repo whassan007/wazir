@@ -108,11 +108,18 @@ export function childEnvironment(extra: Record<string, string> = {}): Record<str
   const passthrough = new Set(
     (process.env.WAZIR_CHILD_ENV ?? '').split(',').map((name) => name.trim()).filter(Boolean),
   );
+  const allowUpper = new Set(Array.from(CHILD_ENV_ALLOW).map((k) => k.toUpperCase()));
+  const prefixUpper = CHILD_ENV_ALLOW_PREFIXES.map((p) => p.toUpperCase());
   for (const [name, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
-    if (CHILD_ENV_ALLOW.has(name) || passthrough.has(name) || CHILD_ENV_ALLOW_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+    const upper = name.toUpperCase();
+    if (CHILD_ENV_ALLOW.has(name) || allowUpper.has(upper) || passthrough.has(name) || prefixUpper.some((prefix) => upper.startsWith(prefix))) {
       env[name] = value;
     }
+  }
+  if (process.platform === 'win32') {
+    if (!env.PATH && env.Path) env.PATH = env.Path;
+    if (!env.Path && env.PATH) env.Path = env.PATH;
   }
   return { ...env, ...extra };
 }

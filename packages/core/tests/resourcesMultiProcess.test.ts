@@ -31,7 +31,7 @@ function run(args: string[], env: Record<string, string> = {}): Promise<{ code: 
     const p = spawn(process.execPath, [worker, ...args], { env: { ...process.env, ...env } });
     let out = '';
     p.stdout.on('data', (d) => (out += d));
-    p.on('exit', (code) => resolve({ code, out }));
+    p.on('close', (code) => resolve({ code, out }));
   });
 }
 
