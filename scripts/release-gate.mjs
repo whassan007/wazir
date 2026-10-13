@@ -282,7 +282,8 @@ async function main() {
   // Release Gate policy check:
   // Current host MUST be PASS.
   const hostId = getHostPlatformId();
-  const hostRow = results.find((r) => `${r.Platform.toLowerCase()}-${r.Architecture}`.includes(process.arch));
+  const hostTarget = TARGET_PLATFORMS.find((target) => target.id === hostId);
+  const hostRow = hostTarget && results.find((r) => r.Platform === hostTarget.platform && r.Architecture === hostTarget.architecture);
   
   if (hostRow && hostRow.Status !== 'PASS') {
     console.error(`✗ RELEASE BLOCKED: Current host ${hostId} evaluation status is ${hostRow.Status}`);

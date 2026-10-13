@@ -212,10 +212,10 @@ describe('F-13: tool subprocesses get a minimal environment', () => {
         'console.log("secret=" + (process.env.WAZIR_TEST_SECRET_TOKEN || "unset") + " pass=" + (process.env.WAZIR_TEST_PASSTHROUGH || "unset"));\n',
       );
       const result = await shellTool.execute(
-        { command: `node "${checkScript}"` },
+        { command: `"${process.execPath}" "${checkScript}"` },
         { projectRoot: project, taskId: 't', executionId: 'e' } as never,
       );
-      expect(result.ok).toBe(true);
+      expect(result.ok, JSON.stringify({ error: result.error, output: result.output, metadata: result.metadata })).toBe(true);
       expect(result.output.trim()).toBe('secret=unset pass=visible');
     } finally {
       delete process.env.WAZIR_TEST_SECRET_TOKEN;
