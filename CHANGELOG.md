@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.1.58 — 2026-10-12
+
+A delegation and resource-orchestration release. Wazir can hand a task to Claude Code, Codex,
+Qwen Code, Gemini or Antigravity, checks those agents before use, and puts every model request
+through one budget-aware gate with a persistent ledger and a resource dashboard.
+
+**Verification:** CI (build, typecheck, test) passes on PR #3 and PR #4. Locally 2053 tests
+pass, 0 fail (18 skipped: PostgreSQL, bwrap sandbox and live lifecycle infrastructure);
+acceptance gates 80/80 PASS. Live on the DGX Spark: governed LM Studio requests recorded with
+provider-reported usage; an Antigravity delegation fixed a bug end to end; governance overhead
++0.14 ms p50 per request. Not tested live: paid APIs, Claude Code and Codex subscriptions,
+vLLM, Ollama.
+
+### ⚠️ Behaviour changes
+
+- **Every model request is recorded** in `~/.wazir/resources.db` (SQLite, WAL). Set
+  `WAZIR_IN_MEMORY=1` to keep it in memory.
+- **Limits are not enforced by default.** `policy.enforce` is `false`: usage is estimated,
+  recorded, routed and shown, but nothing is refused for budget reasons. Set
+  `"enforce": true` in `~/.wazir/resources.json` to enforce quotas, spend ceilings, GPU
+  concurrency and cooldowns. The emergency stop (`wa resources stop`) applies either way.
+- **Routing prefers already-loaded local models** over ones that need a load or a reload.
+
+### Added
+
+- **Delegation to external coding agents:** `wa run --agent <name>` for Claude Code, Codex,
+  Qwen Code, Gemini and Antigravity, through their own CLIs and logins. Second logins run as
+  instances such as `claude-code@work`.
+- **`wa agents check`:** preflight for delegated agents (installed, version, signed in).
+- **Resource orchestration:** account registry (local, API, subscription), token budget
+  manager with advisory/conserve/critical/exhausted modes, reservations reconciled against
+  provider-reported usage, idempotent settlement, lease recovery after a crash, and an
+  append-only audit trail.
+- **Resource-aware routing** inside the existing scheduler: quality, reliability, capacity,
+  cost, latency and quota risk, weighted by mode (`balanced`, `local-first`,
+  `quality-first`, `budget-first`).
+- **DGX Spark capacity probe:** GPU, temperature, power, unified memory, LM Studio, Ollama
+  and vLLM state.
+- **`wa resources`:** dashboard (`--watch`, `--json`) plus `init`, `validate`, `stop`,
+  `resume`, `reset`, `explain` and `events`.
+- **Structured provider failures:** auth, quota, rate limit (with `Retry-After` and
+  rate-limit headers), server and context overflow; cache and reasoning token usage.
+- Docs: `docs/resources/` (architecture, runbook, test report, limitations) and
+  `scripts/bench-resource-governor.mjs`.
+
+### Fixed
+
+- Delegating to an external agent no longer tries to load a local model first.
+- External agent exit errors include the agent's last output.
+
+### Known limitations
+
+- `wa ask` is governed but bypasses resource-aware routing.
+- Subscription usage is estimated: vendor CLIs report no token counts.
+
+
 ## v0.1.57 — 2026-10-12
 
 A persistence release. Checkpoints and long-term memory now survive restarts, the coding

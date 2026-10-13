@@ -7,9 +7,9 @@ Run on 2026-10-12, on the DGX Spark (NVIDIA GB10, 121.7 GiB unified memory), wit
 | Check | Result |
 |---|---|
 | Typecheck | pass |
-| Full vitest | **2051 passed, 0 failed**, 18 skipped (818 files; skips are PostgreSQL, bwrap sandbox and live-lifecycle infrastructure) |
+| Full vitest | **2053 passed, 0 failed**, 18 skipped (818 files; skips are PostgreSQL, bwrap sandbox and live-lifecycle infrastructure) |
 | Acceptance gates | 80/80 PASS, "READY FOR RELEASE" |
-| New resource tests | `packages/core/tests/resources.test.ts` (33), `packages/runtimes/openai/tests/providerSignals.test.ts` (12) |
+| New resource tests | `packages/core/tests/resources.test.ts` (35), `packages/runtimes/openai/tests/providerSignals.test.ts` (12) |
 
 ### Required scenarios (deterministic mocks, injectable clock)
 
