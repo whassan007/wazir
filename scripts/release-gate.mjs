@@ -39,6 +39,9 @@ function runStep(name, cmd, args, cwd = rootDir) {
     cwd,
     encoding: 'utf8',
     env: { ...process.env, PATH: `${process.env.PATH}` },
+    // npx is a .cmd wrapper on Windows; spawn it through cmd.exe just like the
+    // CLI package smoke test does, rather than treating the wrapper as a PE exe.
+    shell: process.platform === 'win32',
     timeout: 120000,
   });
   const elapsed = Date.now() - start;
@@ -47,6 +50,7 @@ function runStep(name, cmd, args, cwd = rootDir) {
     return 'PASS';
   } else {
     console.log(`FAIL (${elapsed}ms) - code ${res.status}`);
+    if (res.error) console.error(`    ${res.error.message}`);
     if (res.stderr) console.error(`    ${res.stderr.trim().slice(0, 300)}`);
     return 'FAIL';
   }
