@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type * as nodePtyType from 'node-pty';
 import { Terminal } from '@xterm/headless';
+import { killProcessTree } from '@wazir/shared';
 import { childEnvironment } from './process.js';
 
 let cachedPty: typeof import('node-pty') | null = null;
@@ -113,7 +114,7 @@ export class TerminalSession {
     if (existsSync(wazirHome)) normalizedEnv.HOME = wazirHome;
 
     const shell = options.shell ?? (process.platform === 'win32' ? 'powershell.exe' : 'bash');
-    const args = process.platform === 'win32' ? [] : ['--noprofile'];
+    const args = process.platform === 'win32' ? ['-NoLogo', '-NoProfile'] : ['--noprofile'];
     // PROMPT_COMMAND fires after every command completes (before the next
     // prompt is drawn), so a marker printed there is an exact readiness
     // signal, not a heuristic — the shell only runs it once it's back at the
@@ -279,20 +280,14 @@ export class TerminalSession {
     let exited = false;
     this.pty.onExit(() => { exited = true; });
 
-    try {
-      // Negative pid targets the whole process group node-pty put the shell
-      // in, so a foreground job the shell spawned dies too, not just bash.
-      process.kill(-pid, 'SIGTERM');
-    } catch {
-      try { this.pty.kill('SIGTERM'); } catch { /* already gone */ }
-    }
+    killProcessTree(pid, 'SIGTERM', true);
 
     const deadline = Date.now() + disposeGraceMs;
     while (!exited && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 50));
     }
     if (!exited) {
-      try { process.kill(-pid, 'SIGKILL'); } catch { /* ignore */ }
+      killProcessTree(pid, 'SIGKILL', true);
       try { this.pty.kill('SIGKILL'); } catch { /* ignore */ }
     }
   }

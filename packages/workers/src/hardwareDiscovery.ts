@@ -27,17 +27,23 @@ export async function discoverHardware(): Promise<HardwareReport> {
 
 function discoverCpu(): string {
   try {
+    if (process.platform === 'win32') {
+      const model = os.cpus()[0]?.model?.trim();
+      if (model && model !== 'Unknown CPU') return model;
+      try {
+        const out = execSync('wmic cpu get name /value', { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+        const match = out.match(/Name=(.+)/);
+        if (match) return match[1].trim();
+      } catch {
+        // wmic deprecated or not installed
+      }
+    }
     if (process.platform === 'darwin') {
       return execSync('sysctl -n machdep.cpu.brand_string', { timeout: 5000 }).toString().trim();
     }
     if (process.platform === 'linux') {
       const info = readFileSync('/proc/cpuinfo', 'utf8');
       const match = info.match(/model name\s*:\s*(.+)/);
-      if (match) return match[1].trim();
-    }
-    if (process.platform === 'win32') {
-      const out = execSync('wmic cpu get name /value', { timeout: 5000 }).toString();
-      const match = out.match(/Name=(.+)/);
       if (match) return match[1].trim();
     }
   } catch {

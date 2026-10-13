@@ -271,7 +271,8 @@ const FILE_TOOLS_WRITE = new Set(['write', 'edit']);
 function isInside(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(target);
-  return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + path.sep);
+  const rel = path.relative(resolvedRoot, resolvedTarget);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 /**
@@ -907,7 +908,7 @@ export class PolicyEngine {
     // resolveCommand() basenames its result (so `wrapper` unwrapping works uniformly),
     // which strips the very `./`/`/` prefix this check needs — read it off the raw word.
     const rawFirstWord = stripAssignments(segment.words)[0] ?? '';
-    if ((rawFirstWord.startsWith('./') || rawFirstWord.startsWith('/')) && !rawFirstWord.includes('..')) {
+    if ((rawFirstWord.startsWith('./') || rawFirstWord.startsWith('.\\') || rawFirstWord.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(rawFirstWord)) && !rawFirstWord.includes('..')) {
       const absolute = path.resolve(projectRoot, rawFirstWord);
       if (this.isTrackedCompiledOutput(executionId, absolute)) {
         decisions.push({
@@ -972,7 +973,7 @@ export class PolicyEngine {
     if (args.length !== 1) return null;
     const target = args[0];
     if (!target || target.startsWith('-')) return null;
-    if (target.includes('$') || target.startsWith('~') || target.split('/').includes('..')) return null;
+    if (target.includes('$') || target.startsWith('~') || target.split(/[/\\]/).includes('..')) return null;
     if (!TEST_FILE_NAME_PATTERN.test(target)) return null;
 
     const absolute = path.resolve(projectRoot, target);

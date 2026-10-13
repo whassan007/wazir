@@ -15,7 +15,7 @@ function table(headers: string[], rows: string[][]): string {
     Math.max(h.length, ...rows.map((r) => String(r[i] ?? '').length)),
   );
   const line = (cells: string[]) =>
-    cells.map((c, i) => c.padEnd(widths[i])).join('  ');
+    cells.map((c, i) => String(c ?? '').padEnd(widths[i] ?? 0)).join('  ');
   const out = [line(headers), widths.map((w) => '-'.repeat(w)).join('  ')];
   for (const row of rows) {
     out.push(line(row));

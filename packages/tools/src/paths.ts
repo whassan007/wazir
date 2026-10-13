@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto';
 export function isInside(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(target);
-  return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + path.sep);
+  const rel = path.relative(resolvedRoot, resolvedTarget);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 export const IGNORED_DIRECTORIES = new Set([

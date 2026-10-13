@@ -49,11 +49,12 @@ import {
   MemoryStore,
   JsonFileStore,
   type KeyValueStore,
+  isExecutableOnPath,
 } from '@wazir/shared';
 import { ToolRegistry, defaultTools, createWebTools } from '@wazir/tools';
 import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
 import { createConfiguredWeb } from './web.js';
-import { AcpAgentAdapter, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
+import { AgentConfigurationDiscovery, AcpAgentAdapter, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
@@ -126,6 +127,8 @@ export interface RookEngine {
   hostedAdapters: Map<ProviderId, HostedAdapter>;
 }
 
+export type Engine = RookEngine;
+
 function guessFamily(id: string, provider: string): ModelRecord['family'] {
   const lower = id.toLowerCase();
   if (lower.includes('qwen')) return 'qwen';
@@ -145,16 +148,7 @@ const execFileAsync = promisify(execFile);
 
 /** True when `bin` is an executable on PATH. A lookup, not a launch: startup stays fast. */
 function onPath(bin: string): boolean {
-  const exts = process.platform === 'win32' ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';') : [''];
-  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
-    for (const ext of exts) {
-      try {
-        accessSync(path.join(dir, bin + ext), fsConstants.X_OK);
-        return true;
-      } catch { /* keep looking */ }
-    }
-  }
-  return false;
+  return isExecutableOnPath(bin);
 }
 
 /**
@@ -312,7 +306,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // Wazir answers every permission request the agent makes, under WAZIR_ACP_PERMISSIONS
   // (read | edit | full; default edit, which never allows shell commands).
   const acpPermissionMode = parseAcpPermissionMode(process.env.WAZIR_ACP_PERMISSIONS);
+  const agentConfigurations = new AgentConfigurationDiscovery().discover({ cwd: projectRoot });
   for (const spec of acpAgentSpecs()) {
+    if (agentConfigurations.find(a => a.agent === spec.name)?.state === 'BLOCKED') continue;
     if (!onPath(spec.requires) || agents.get(spec.name)) continue;
     agents.register(new AcpAgentAdapter({ ...spec, permissionMode: acpPermissionMode }), 'external');
   }

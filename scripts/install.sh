@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Install Wazir from source: deps, build, and put `wa` on PATH.
-#
+# ==============================================================================
+# Wazir Cross-Platform Installer for macOS and Linux (scripts/install.sh)
+# ==============================================================================
 # Safe to run from any directory — it locates the repo from its own path.
-# The `wa` launcher is installed as a shim in ~/.local/bin that pins the
-# absolute Node binary used at install time, so it keeps working regardless
-# of which node (nvm version, conda, system) a later shell has on PATH.
+# The `wa` launcher is installed as a shim in ~/.local/bin (or $WAZIR_BIN_DIR)
+# that pins the absolute Node binary used at install time.
+#
+# Supported platforms:
+#   - macOS ARM64 (Apple Silicon) & x86_64 (Intel)
+#   - Linux x86_64 & aarch64 (including DGX Spark)
+# ==============================================================================
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,41 +26,68 @@ if [[ "$PWD" != "$REPO_ROOT" ]]; then
 fi
 cd "$REPO_ROOT"
 
+# 1. Platform Detection
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+case "$OS" in
+  Darwin)
+    if [[ "$ARCH" == "arm64" ]]; then
+      echo "==> Detected platform: macOS Apple Silicon ($ARCH)"
+    else
+      echo "==> Detected platform: macOS Intel ($ARCH)"
+    fi
+    ;;
+  Linux)
+    if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
+      echo "==> Detected platform: Linux ARM64 ($ARCH, including DGX Spark)"
+    else
+      echo "==> Detected platform: Linux x86_64 ($ARCH)"
+    fi
+    ;;
+  *)
+    echo "==> Detected platform: $OS ($ARCH)"
+    ;;
+esac
+
+# 2. Node.js Validation
 if ! command -v node >/dev/null 2>&1; then
-  echo "error: node is not installed. Wazir needs Node.js >= 22.5 (https://nodejs.org or nvm)." >&2
+  echo "error: node is not installed. Wazir needs Node.js >= 22.5.0 (https://nodejs.org or nvm)." >&2
   exit 1
 fi
-NODE_BIN="$(command -v node)"
-NODE_BIN="$(readlink -f "$NODE_BIN" 2>/dev/null || echo "$NODE_BIN")"
-# 22.5 is the first release with the built-in node:sqlite used by @wazir/memory.
+
+NODE_RAW="$(command -v node)"
+# Portable realpath resolution via Node itself (works on BSD macOS and Linux without GNU coreutils)
+NODE_BIN="$("$NODE_RAW" -e 'process.stdout.write(process.execPath)')"
+
+# 22.5 is required for built-in node:sqlite DatabaseSync
 if ! "$NODE_BIN" -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=5)?0:1)'; then
-  echo "error: Node.js >= 22.5 required, found $("$NODE_BIN" -v) at $NODE_BIN" >&2
+  echo "error: Node.js >= 22.5.0 required, found $("$NODE_BIN" -v) at $NODE_BIN" >&2
   exit 1
 fi
 echo "==> Using Node $("$NODE_BIN" -v) at $NODE_BIN"
 
-CLI_ENTRY="$REPO_ROOT/bin/wa.js"
-if [[ ! -f "$CLI_ENTRY" && -f "$REPO_ROOT/apps/cli/dist/index.js" ]]; then
-  CLI_ENTRY="$REPO_ROOT/apps/cli/dist/index.js"
-fi
+# 3. Dependencies and Build
 BUILD_LOG="${TMPDIR:-/tmp}/wazir-install-build.log"
-BUILD_STATUS="ok"
 
 if [[ "${WAZIR_SKIP_BUILD:-0}" == "1" ]]; then
   echo "==> WAZIR_SKIP_BUILD=1: skipping npm install / build"
-  BUILD_STATUS="skipped"
 else
-  echo "==> Installing dependencies"
-  if ! npm install; then
-    echo "error: npm install failed. Check your network and Node/npm setup, then re-run." >&2
-    exit 1
+  if [[ -f "$REPO_ROOT/package-lock.json" ]]; then
+    echo "==> Installing dependencies (npm ci)"
+    if ! npm ci; then
+      echo "error: npm ci failed. Check your network and Node/npm setup, then re-run." >&2
+      exit 1
+    fi
+  else
+    echo "==> Installing dependencies (npm install)"
+    if ! npm install; then
+      echo "error: npm install failed. Check your network and Node/npm setup, then re-run." >&2
+      exit 1
+    fi
   fi
 
   echo "==> Building all workspaces (log: $BUILD_LOG)"
   if ! npm run build 2>&1 | tee "$BUILD_LOG"; then
-    BUILD_STATUS="failed"
-    # tsc --build reports the same diagnostic once per dependent workspace with a
-    # different relative path; normalise to basename+position and dedupe.
     ERRORS="$(grep -E 'error TS[0-9]+' "$BUILD_LOG" | sed -E 's#^([^(]*/)?([^/(]+)\(#\2(#' | sort -u || true)"
     ERROR_COUNT="$(printf '%s' "$ERRORS" | grep -c . || true)"
     echo
@@ -64,32 +96,23 @@ else
       echo "    Files with errors:" >&2
       printf '%s\n' "$ERRORS" | sed -E 's/\(.*//' | sort | uniq -c | sort -rn | sed 's/^/      /' >&2
     fi
-    if ! git -C "$REPO_ROOT" diff --quiet -- packages apps 2>/dev/null || \
-       [[ -n "$(git -C "$REPO_ROOT" ls-files --others --exclude-standard -- packages apps 2>/dev/null)" ]]; then
-      echo "    Your working tree has uncommitted changes under packages/ or apps/ — the failure" >&2
-      echo "    is most likely in that in-progress code, not in the install. Fix the errors above," >&2
-      echo "    or install the last committed state with:" >&2
-      echo "      git -C \"$REPO_ROOT\" stash -u && bash \"$REPO_ROOT/scripts/install.sh\" && git -C \"$REPO_ROOT\" stash pop" >&2
-    fi
+    echo "    Aborting installation. Stale artifacts will NOT be installed." >&2
     echo "    Full log: $BUILD_LOG" >&2
+    exit 1
   fi
 fi
 
+CLI_ENTRY="$REPO_ROOT/bin/wa.js"
 if [[ ! -f "$CLI_ENTRY" ]]; then
-  echo >&2
-  echo "error: no CLI build found at $CLI_ENTRY — cannot install 'wa'." >&2
-  [[ "$BUILD_STATUS" == "skipped" ]] && echo "       (WAZIR_SKIP_BUILD=1 was set; run without it to build)" >&2
+  echo "error: CLI bundle was not created at $CLI_ENTRY. Build failed." >&2
   exit 1
 fi
-if [[ "$BUILD_STATUS" == "failed" ]]; then
-  echo "    A previous build exists at $CLI_ENTRY; installing the 'wa' launcher against it" >&2
-  echo "    so the CLI stays usable. It does NOT include your uncommitted changes." >&2
-  echo
-fi
 
+# 4. Environment and configuration
 echo "==> Configuring environment files and shell profiles"
 "$NODE_BIN" "$REPO_ROOT/scripts/setup-env.mjs"
 
+# 5. Install launcher shim
 echo "==> Installing 'wa' launcher to $BIN_DIR/wa"
 mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/wa" <<SHIM
@@ -101,11 +124,11 @@ if [[ ! -x "\$NODE_BIN" ]]; then
   NODE_BIN="\$(command -v node || true)"
 fi
 if [[ -z "\$NODE_BIN" ]]; then
-  echo "wa: node not found (expected $NODE_BIN). Re-run: bash $REPO_ROOT/scripts/install.sh" >&2
+  echo "wa: node not found (expected $NODE_BIN). Re-run: bash \"$REPO_ROOT/scripts/install.sh\"" >&2
   exit 127
 fi
 if [[ ! -f "\$CLI" ]]; then
-  echo "wa: Wazir build missing at \$CLI. Re-run: bash $REPO_ROOT/scripts/install.sh" >&2
+  echo "wa: Wazir build missing at \$CLI. Re-run: bash \"$REPO_ROOT/scripts/install.sh\"" >&2
   exit 127
 fi
 
@@ -121,17 +144,17 @@ exec "\$NODE_BIN" "\$CLI" "\$@"
 SHIM
 chmod +x "$BIN_DIR/wa"
 
-# Remove a stale npm-link `wa` from any nvm-managed node so it can't shadow the shim.
+# Remove any stale npm-link `wa` from nvm-managed nodes so it can't shadow the shim.
 for stale in "$HOME"/.nvm/versions/node/*/bin/wa; do
   [[ -L "$stale" ]] && rm -f "$stale" && echo "    removed stale npm link $stale"
 done
 
-# Make sure the shim directory is on PATH for future shells.
+# 6. Ensure $BIN_DIR is on PATH for future shells
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
     PATH_LINE="export PATH=\"$BIN_DIR:\$PATH\""
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
       [[ -f "$rc" ]] || continue
       if ! grep -qF "$PATH_LINE" "$rc"; then
         printf '\n# Added by Wazir install\n%s\n' "$PATH_LINE" >> "$rc"
@@ -144,18 +167,29 @@ case ":$PATH:" in
     ;;
 esac
 
+# 7. Run `wa doctor`
 echo
-if [[ "$BUILD_STATUS" == "failed" ]]; then
-  echo "Done with warnings: 'wa' launcher installed against the previous build; the current source did not compile."
-  echo "Re-run this script after fixing the errors to refresh the build."
-  echo
-else
-  echo "Done."
-fi
+echo "==> Running 'wa doctor' to verify installation..."
+"$BIN_DIR/wa" doctor || true
+
+echo
+echo "=============================================================================="
+echo "✓ Wazir installed successfully!"
+echo "=============================================================================="
+echo "Launcher: $BIN_DIR/wa"
+echo "Command:  wa"
+echo
 echo "Next steps (with Ollama or LM Studio running):"
 echo "  wa doctor"
 echo "  wa models list"
 echo "  wa ask \"explain what this repository does\""
+echo
+echo "To upgrade Wazir:"
+echo "  git pull && bash \"$REPO_ROOT/scripts/install.sh\""
+echo
+echo "To uninstall Wazir:"
+echo "  1. Remove $BIN_DIR/wa"
+echo "  2. (Optional) Remove ~/.wazir to clear all configuration and history"
+echo "=============================================================================="
 
-[[ "$BUILD_STATUS" == "failed" ]] && exit 2
 exit 0

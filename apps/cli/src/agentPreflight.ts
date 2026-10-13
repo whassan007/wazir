@@ -1,11 +1,13 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { isPreflightFresh, preflightAgent, type AgentPreflightResult } from '@wazir/agents';
+import { AgentConfigurationDiscovery, isPreflightFresh, preflightAgent, type AgentPreflightResult } from '@wazir/agents';
 import type { AgentAdapter } from '@wazir/core';
 import { color } from './colors.js';
 import { configDir } from './config.js';
 
 type PreflightEngine = {
+  projectRoot?: string;
+  resources?: { accounts: { candidates(target: { agent: string }): Array<{ env?: Record<string, string> }> } };
   agents: { list(): Array<{ descriptor: { name: string }; source: string }>; get(name: string): AgentAdapter | undefined };
 };
 
@@ -54,9 +56,15 @@ export async function checkAgents(
     if (!adapter) {
       return { agent: name, status: 'UNKNOWN', detail: 'not a registered external agent (is its CLI installed?)', durationMs: 0, checkedAt: new Date().toISOString() };
     }
+    const env = { ...process.env, ...engine.resources?.accounts.candidates({ agent: name })[0]?.env };
+    const config = new AgentConfigurationDiscovery().discover({ cwd: engine.projectRoot, env }).find(a => a.agent === name.split('@')[0]);
     const cached = cache[name];
-    if (!options.fresh && cached && isPreflightFresh(cached)) return cached;
-    return preflightAgent(adapter, { timeoutMs: options.timeoutMs });
+    if (!options.fresh && cached && cached.fingerprint === config?.fingerprint && isPreflightFresh(cached)) return cached;
+    if (config?.state === 'BLOCKED') return { agent: name, status: 'BLOCKED', detail: 'Invalid native configuration; validate it with the vendor CLI.', durationMs: 0, checkedAt: new Date().toISOString(), fingerprint: config.fingerprint };
+    const result = await preflightAgent(adapter, { timeoutMs: options.timeoutMs, env });
+    // Vendor errors may echo secrets. Persist only controlled diagnostics for discovered agents.
+    if (config && result.status !== 'READY') result.detail = result.hint ?? 'Agent execution failed; inspect diagnostics using the vendor CLI.';
+    return { ...result, fingerprint: config?.fingerprint };
   }));
   for (const r of results) if (r.status !== 'UNKNOWN') cache[r.agent] = r;
   savePreflightCache(cache, options.file);

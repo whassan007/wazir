@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { killProcessTree, resolveExecutable } from '@wazir/shared';
 import type {
   AgentAdapter,
   AgentDescriptor,
@@ -52,7 +53,7 @@ export class ExternalAgentAdapter implements AgentAdapter {
   async *run(request: AgentRunRequest, _runtime: AgentRuntime): AsyncIterable<AgentTurn> {
     const args = [...(this.spec.args ?? []), request.taskDescription];
 
-    const timeoutMs = this.spec.timeoutMs ?? 600_000;
+    const timeoutMs = Math.min(this.spec.timeoutMs ?? 600_000, request.maxWallClockMs ?? Infinity);
     const output = await new Promise<string | undefined>((resolve, reject) => {
       let captured = '';
       let stopReason: 'timeout' | 'cancelled' | undefined;
@@ -60,7 +61,8 @@ export class ExternalAgentAdapter implements AgentAdapter {
       // killing only the direct child leaves grandchildren holding the stdout pipe,
       // and 'close' then never fires.
       const detached = process.platform !== 'win32';
-      const child = spawn(this.spec.command, args, {
+      const command = resolveExecutable(this.spec.command) ?? this.spec.command;
+      const child = spawn(command, args, {
         cwd: request.projectRoot,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: this.spec.env ? { ...process.env, ...this.spec.env } : undefined,
@@ -69,12 +71,7 @@ export class ExternalAgentAdapter implements AgentAdapter {
       const stop = (reason: 'timeout' | 'cancelled') => {
         if (stopReason) return;
         stopReason = reason;
-        try {
-          if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
-          else child.kill('SIGKILL');
-        } catch {
-          try { child.kill('SIGKILL'); } catch { /* already gone */ }
-        }
+        killProcessTree(child.pid, 'SIGKILL', detached);
       };
       const timer = setTimeout(() => stop('timeout'), timeoutMs);
       const cancelPoll = setInterval(() => { if (request.isCancelled?.()) stop('cancelled'); }, 250);

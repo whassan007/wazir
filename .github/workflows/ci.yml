@@ -9,11 +9,17 @@ on:
 
 jobs:
   build-and-test:
-    name: Build, Typecheck, and Test
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} (Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node-version: [22.x]
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -50,11 +56,43 @@ jobs:
       - name: Run agent execution test plan (55 cases)
         run: npm run test:plan:agent
 
+      # Platform Installation and CLI Smoke Test
+      - name: Test Native Unix Installation (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          bash scripts/install.sh
+          ~/.local/bin/wa --help
+          ~/.local/bin/wa doctor || true
+
+      - name: Test Native Windows Installation (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & .\scripts\install.ps1
+          $binDir = Join-Path $env:LOCALAPPDATA "Programs\Wazir\bin"
+          & "$binDir\wa.cmd" --help
+          & "$binDir\wa.cmd" doctor
+
+      # Standalone Native Single Executable Application (SEA) Packaging
+      - name: Build Native Standalone Binary
+        run: npm run build:binary
+
+      - name: Verify Standalone Binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./dist/wa --help
+
+      - name: Verify Standalone Binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & .\dist\wa.exe --help
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports-node-${{ matrix.node-version }}
+          name: test-reports-${{ matrix.os }}-node-${{ matrix.node-version }}
           path: |
             acceptance-test-report.json
             test-plan-report.json

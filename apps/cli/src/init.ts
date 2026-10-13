@@ -19,18 +19,24 @@ interface InitResult {
 
 function discoverCpu(): string {
   try {
+    if (process.platform === 'win32') {
+      const model = os.cpus()[0]?.model?.trim();
+      if (model && model !== 'Unknown CPU') return model;
+      try {
+        const { execSync } = require('node:child_process');
+        const out = execSync('wmic cpu get name /value', { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+        const match = out.match(/Name=(.+)/);
+        if (match) return match[1].trim();
+      } catch {
+        // wmic deprecated or not installed
+      }
+    }
     if (process.platform === 'darwin') {
       return os.cpus()[0]?.model ?? 'Apple Silicon';
     }
     if (process.platform === 'linux') {
       const cpuInfo = readFileSync('/proc/cpuinfo', 'utf8');
       const match = cpuInfo.match(/model name\s*:\s*(.+)/);
-      if (match) return match[1].trim();
-    }
-    if (process.platform === 'win32') {
-      const { execSync } = require('node:child_process');
-      const out = execSync('wmic cpu get name /value', { timeout: 5000 }).toString();
-      const match = out.match(/Name=(.+)/);
       if (match) return match[1].trim();
     }
   } catch {

@@ -657,11 +657,40 @@ const agentsCmd = new Command()
 agentsCmd
   .command('list')
   .description('List registered agents')
-  .action(async () => {
+  .option('--json', 'Output JSON including discovery and connection states')
+  .action(async (options) => {
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { listAgents } = await import('./commands.js');
-    console.log(listAgents(engine));
+    const { AgentConnectionManager } = await import('./agentConnectionManager.js');
+    const discovered = new AgentConnectionManager(engine).discover();
+    console.log(options.json ? JSON.stringify({ registered: engine.agents.list(), agents: discovered }, null, 2) : `${listAgents(engine)}\n${discovered.map(a => `${a.agent}: ${a.state}`).join('\n')}`);
+  });
+
+for (const verb of ['discover', 'refresh', 'inspect', 'explain']) {
+  agentsCmd.command(verb).argument('[name]', 'Agent name')
+    .option('--json', 'Output JSON')
+    .option('--trust-project', 'Authorize reading project settings for inspection; does not execute them')
+    .description('Inspect native configuration declarations and provenance without launching agents')
+    .action(async (name, options) => {
+      const { AgentConfigurationDiscovery } = await import('@wazir/agents');
+      const agents = new AgentConfigurationDiscovery().discover({ trustedProject: options.trustProject }).filter(a => !name || a.agent === name);
+      console.log(options.json ? JSON.stringify({ agents }, null, 2) : agents.map(a => `${a.agent}: ${a.state}\nExecutable: ${a.executable ?? 'not found'}\nModel: ${a.model.value ?? 'unknown'} (${a.model.status})\n${a.sources.map(s => `  ${s.path} [${s.scope}, ${s.trusted ? 'trusted' : 'untrusted'}]`).join('\n')}\n${a.diagnostics.join('\n')}`).join('\n\n'));
+      if (!agents.length) process.exitCode = 1;
+    });
+}
+
+agentsCmd.command('connect').argument('<name>', 'Agent or configured account instance')
+  .option('--json', 'Output JSON').option('--timeout <seconds>', 'Bounded preflight timeout', '90')
+  .description('Verify the existing vendor login through a real bounded agent task')
+  .action(async (name, options) => {
+    const { createEngine } = await import('./engine.js');
+    const { AgentConnectionManager } = await import('./agentConnectionManager.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const results = await new AgentConnectionManager(engine).connect([name], { fresh: true, timeoutMs: Number(options.timeout) * 1000 });
+    const { renderPreflight } = await import('./agentPreflight.js');
+    console.log(options.json ? JSON.stringify({ agents: results }, null, 2) : renderPreflight(results));
+    process.exit(results.every(r => r.status === 'READY') ? 0 : 1);
   });
 
 agentsCmd.command('capabilities').description('List registered agent capabilities and their providers')

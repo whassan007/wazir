@@ -147,7 +147,8 @@ for (const f of activeFiles) {
 }
 
 function run(cmd, args) {
-  const r = spawnSync(cmd, args, { cwd: root, stdio: 'inherit' });
+  const resolvedCmd = process.platform === 'win32' && (cmd === 'npm' || cmd === 'npx') ? `${cmd}.cmd` : cmd;
+  const r = spawnSync(resolvedCmd, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
   return r.status ?? 1;
 }
 

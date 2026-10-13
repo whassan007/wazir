@@ -23,7 +23,7 @@ try {
     entryPoints: [entryPoint],
     bundle: true,
     platform: 'node',
-    target: 'node20',
+    target: 'node22',
     format: 'cjs',
     outfile: outFile,
     external: ['pg-native', '@napi-rs/keyring'],
@@ -32,7 +32,11 @@ try {
     logLevel: 'info',
   });
 
-  chmodSync(outFile, 0o755);
+  try {
+    chmodSync(outFile, 0o755);
+  } catch {
+    // best-effort on Windows
+  }
   console.log(`✓ Standalone CLI bundle created at: ${outFile}`);
 } catch (error) {
   console.error('Bundle failed:', error);

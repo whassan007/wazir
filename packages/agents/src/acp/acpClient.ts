@@ -7,6 +7,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
+import { killProcessTree, resolveExecutable } from '@wazir/shared';
 import {
   ClientSideConnection,
   ndJsonStream,
@@ -91,12 +92,7 @@ export class AcpClientAdapter {
   }
 
   private signal(child: ChildProcess, sig: NodeJS.Signals): void {
-    try {
-      if (this.detached && child.pid !== undefined) process.kill(-child.pid, sig);
-      else child.kill(sig);
-    } catch {
-      try { child.kill(sig); } catch { /* already gone */ }
-    }
+    killProcessTree(child.pid, sig, this.detached);
   }
 
   constructor(options: AcpClientOptions) {
@@ -121,7 +117,8 @@ export class AcpClientAdapter {
     // which a signal to the direct child alone would orphan. stderr is captured (bounded)
     // rather than inherited so agent logs never corrupt the host terminal or TUI.
     const detached = process.platform !== 'win32';
-    const child = spawn(this.options.command, this.options.args ?? [], {
+    const command = resolveExecutable(this.options.command) ?? this.options.command;
+    const child = spawn(command, this.options.args ?? [], {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env },
       stdio: ['pipe', 'pipe', 'pipe'],

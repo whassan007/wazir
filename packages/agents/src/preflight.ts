@@ -14,6 +14,8 @@ export type AgentPreflightStatus = 'READY' | 'FAILED' | 'BLOCKED' | 'UNKNOWN';
 export type AgentPreflightStage = 'environment' | 'start' | 'answer';
 
 export interface AgentPreflightResult {
+  /** Discovery scope and configuration identity used to invalidate cached results. */
+  fingerprint?: string;
   agent: string;
   status: AgentPreflightStatus;
   stage?: AgentPreflightStage;
@@ -103,10 +105,11 @@ export async function preflightAgent(
     ({ agent, ...r, durationMs: Date.now() - started, checkedAt: new Date().toISOString() });
 
   const env = options.env ?? process.env;
-  const blocker = BLOCKERS.find((b) => b.agent === agent && env[b.env]);
+  const blocker = BLOCKERS.find((b) => b.agent === agent.split('@')[0] && env[b.env]);
   if (blocker) return finish({ status: 'BLOCKED', stage: 'environment', detail: blocker.detail, hint: blocker.hint });
 
   const timeoutMs = options.timeoutMs ?? 90_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Preflight timeout must be a positive finite number');
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wazir-preflight-'));
   const deadline = started + timeoutMs;
   let sessionOpened = false;

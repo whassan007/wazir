@@ -7,3 +7,4 @@ export * from './stopConditions.js';
 export * from './acp/acpClient.js';
 export * from './acp/acpAgentAdapter.js';
 export * from './preflight.js';
+export * from './configurationDiscovery.js';

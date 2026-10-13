@@ -21,7 +21,7 @@
     "setup:env": "node scripts/setup-env.mjs",
     "postinstall": "node scripts/setup-env.mjs || true",
     "build": "npm run build --workspaces --if-present && npm run bundle",
-    "build:binary": "bash scripts/build-binary.sh",
+    "build:binary": "node scripts/build-binary.mjs",
     "dev": "npm run dev --workspace @wazir/cli",
     "start:web": "npm run start --workspace @wazir/web",
     "start:api": "npm run start --workspace @wazir/api",

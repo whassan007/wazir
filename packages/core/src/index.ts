@@ -1,8 +1,28 @@
 export * from './types/index.js';
 export * from './services/index.js';
 export * from './fixtures/deterministicSemanticCorpus.js';
-// Text bounding shared with tools and agents, which depend on core but not shared.
-export { keepEnds } from '@wazir/shared';
+// Platform and text utilities shared with tools and agents, which depend on core but not shared.
+export {
+  keepEnds,
+  isWindows,
+  isMacOS,
+  isLinux,
+  GIT_NULL_DEVICE,
+  GIT_NO_HOOKS,
+  isPathInside,
+  isProcessAlive,
+  killProcessTree,
+  terminateProcessTree,
+  resolveExecutable,
+  isExecutableOnPath,
+  sanitizeChildEnvironment,
+  isBatchScript,
+  getSpawnCommand,
+  isWindowsReservedName,
+  normalizePathForComparison,
+  quoteWindowsArg,
+  quotePosixArg,
+} from '@wazir/shared';
 
 // Qwen-Live-Harness adapted components
 export * from './subagents/types.js';
