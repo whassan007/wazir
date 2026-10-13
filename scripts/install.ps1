@@ -1,270 +1,310 @@
-# ==============================================================================
-# Wazir Native Windows Installer (scripts/install.ps1)
-# ==============================================================================
-# Installs Wazir from source on Windows (no WSL2 required).
-# Validates environment, installs dependencies via npm ci, builds packages,
-# installs native 'wa' launchers (wa.cmd, wa.ps1, wa), configures User PATH,
-# and runs `wa doctor`.
-# ==============================================================================
+<#
+.SYNOPSIS
+Installs Wazir from source on Windows natively.
+
+.DESCRIPTION
+Native PowerShell installer for Wazir. Validates Node.js >= 22.5 and Git,
+installs dependencies via npm ci, builds all workspaces, configures Wazir
+environment files, and installs the `wa` CLI launchers (`wa.cmd` and `wa.ps1`)
+into $env:USERPROFILE\.wazir\bin (or $env:WAZIR_BIN_DIR if defined), safely
+configuring the Windows User PATH.
+
+Requirements:
+- Windows 10/11 or Windows Server (no WSL2 required)
+- PowerShell 5.1 or PowerShell Core 7+
+- Node.js >= 22.5.0 (https://nodejs.org or 'winget install OpenJS.NodeJS.LTS')
+- Git for Windows (https://git-scm.com or 'winget install Git.Git')
+
+Usage:
+  powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+
+Uninstall instructions:
+  1. Remove launcher directory from User PATH:
+     $p = [Environment]::GetEnvironmentVariable('Path', 'User')
+     $bin = if ($env:WAZIR_BIN_DIR) { $env:WAZIR_BIN_DIR } else { "$env:USERPROFILE\.wazir\bin" }
+     $newP = ($p.Split(';') | Where-Object { $_.TrimEnd('\') -ine $bin.TrimEnd('\') }) -join ';'
+     [Environment]::SetEnvironmentVariable('Path', $newP, 'User')
+  2. Remove the launcher directory:
+     Remove-Item -Recurse -Force "$env:USERPROFILE\.wazir\bin"
+  3. (Optional) Remove Wazir state and configuration:
+     Remove-Item -Recurse -Force "$env:USERPROFILE\.wazir"
+#>
 
 [CmdletBinding()]
 param(
-    [switch]$SkipBuild,
-    [string]$BinDir,
-    [switch]$Help
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
 
-if ($Help) {
-    Write-Host @"
-Usage: .\scripts\install.ps1 [options]
-
-Options:
-  -SkipBuild    Skip 'npm ci' and 'npm run build' steps
-  -BinDir <dir> Custom directory to install launcher (default: %LOCALAPPDATA%\Programs\Wazir\bin)
-  -Help         Show this help message
-"@
-    exit 0
-}
-
-Write-Host "==> Wazir Native Windows Installer" -ForegroundColor Cyan
-
-# 1. Detect Windows version and architecture
-$osVer = [System.Environment]::OSVersion
-$arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-Write-Host "==> OS: Windows ($arch), Version: $($osVer.VersionString)"
-
-# 2. Locate Repository Root
+# 1. Locate repository root
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-if (-not (Test-Path (Join-Path $RepoRoot "package.json")) -or -not (Test-Path (Join-Path $RepoRoot "apps\cli\package.json"))) {
-    Write-Error "Could not find Wazir repository at $RepoRoot. Please run this script from inside a Wazir checkout."
+$PackageJson = Join-Path $RepoRoot "package.json"
+$CliPackageJson = Join-Path $RepoRoot "apps\cli\package.json"
+
+if (-not (Test-Path $PackageJson) -or -not (Test-Path $CliPackageJson)) {
+    Write-Error "Could not find Wazir repository at $RepoRoot.`nPlease run this script from a Wazir checkout: powershell -File scripts\install.ps1"
     exit 1
 }
-Set-Location $RepoRoot
-Write-Host "==> Repository Root: $RepoRoot"
+
+Write-Host "==> Wazir repository root: $RepoRoot"
+
+# 2. Validate Node.js >= 22.5
+$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+if (-not $nodeCmd) {
+    Write-Error @"
+Node.js is not installed or not found on PATH.
+Wazir requires Node.js >= 22.5 with built-in SQLite support.
+Please install Node.js >= 22.5 from:
+  https://nodejs.org
+or via winget:
+  winget install OpenJS.NodeJS.LTS
+"@
+    exit 1
+}
+
+$NodeBin = $nodeCmd.Source
+try {
+    $versionOutput = & $NodeBin -v
+} catch {
+    Write-Error "Failed to execute Node.js binary at $NodeBin"
+    exit 1
+}
+
+# 22.5 is the first release with the built-in node:sqlite used by @wazir/memory.
+$verCheckScript = 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=5)?0:1)'
+& $NodeBin -e $verCheckScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Error @"
+Node.js >= 22.5 is required, found $versionOutput at:
+  $NodeBin
+Please upgrade Node.js from https://nodejs.org or via winget:
+  winget install OpenJS.NodeJS.LTS
+"@
+    exit 1
+}
+Write-Host "==> Using Node $versionOutput at $NodeBin"
 
 # 3. Validate Git
-Write-Host "==> Validating Git..."
-$gitCmd = Get-Command "git" -ErrorAction SilentlyContinue
+$gitCmd = Get-Command git -ErrorAction SilentlyContinue
 if (-not $gitCmd) {
-    Write-Error "Git is not installed or not found on PATH. Please install Git for Windows: https://git-scm.com/download/win"
+    Write-Error @"
+Git is not installed or not found on PATH.
+Wazir requires Git for workspace tracking and versioning.
+Please install Git for Windows from:
+  https://git-scm.com
+or via winget:
+  winget install Git.Git
+"@
     exit 1
 }
-$gitVersion = (& git --version)
-Write-Host "✓ Found $gitVersion" -ForegroundColor Green
 
-# 4. Validate Node.js (>= 22.5.0 required for node:sqlite DatabaseSync)
-Write-Host "==> Validating Node.js..."
-$nodeCmd = Get-Command "node" -ErrorAction SilentlyContinue
-if (-not $nodeCmd) {
-    Write-Error "Node.js is not installed or not found on PATH. Wazir requires Node.js >= 22.5.0: https://nodejs.org/"
-    exit 1
-}
-$nodeBin = $nodeCmd.Source
-
-$nodeVersionCheck = & "$nodeBin" -e "const [a, b] = process.versions.node.split('.').map(Number); process.exit(a > 22 || (a === 22 && b >= 5) ? 0 : 1)"
-if ($LASTEXITCODE -ne 0) {
-    $currentVer = & "$nodeBin" -v
-    Write-Error "Node.js >= 22.5.0 required, but found $currentVer at $nodeBin. Please install Node.js 22.5+ from https://nodejs.org/"
-    exit 1
-}
-$nodeVersionStr = & "$nodeBin" -v
-Write-Host "✓ Using Node.js $nodeVersionStr at $nodeBin" -ForegroundColor Green
-
-# 5. Validate npm
-$npmCmd = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
+# 4. Resolve npm executable
+$npmCmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if (-not $npmCmd) {
-    $npmCmd = Get-Command "npm" -ErrorAction SilentlyContinue
+    $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
 }
 if (-not $npmCmd) {
-    Write-Error "npm is not installed or not found on PATH."
+    Write-Error "npm is not installed or not found on PATH. Ensure your Node.js installation includes npm."
     exit 1
 }
-$npmBin = $npmCmd.Source
+$NpmBin = $npmCmd.Source
 
-# 6. Install dependencies and build Wazir
-$cliEntry = Join-Path $RepoRoot "bin\wa.js"
+# 5. Install dependencies and build workspaces
+$shouldSkipBuild = $SkipBuild -or ($env:WAZIR_SKIP_BUILD -eq "1")
 
-if ($SkipBuild) {
-    Write-Host "==> -SkipBuild specified: skipping npm ci and build" -ForegroundColor Yellow
+if ($shouldSkipBuild) {
+    Write-Host "==> WAZIR_SKIP_BUILD=1: skipping npm ci and build"
 } else {
-    Write-Host "==> Installing dependencies using npm ci..."
-    & "$npmBin" ci
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "npm ci failed. Check your network and Node.js setup, then re-run."
-        exit 1
-    }
-    Write-Host "✓ Dependencies installed" -ForegroundColor Green
-
-    Write-Host "==> Building all workspaces..."
-    & "$npmBin" run build
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Build failed! Stale artifacts will NOT be installed. Fix build errors and retry."
-        exit 1
-    }
-    Write-Host "✓ Build succeeded" -ForegroundColor Green
-}
-
-if (-not (Test-Path $cliEntry)) {
-    Write-Error "No CLI bundle found at $cliEntry. Build may have failed."
-    exit 1
-}
-
-# 7. Configure environment files (~/.wazir/.env and config.json)
-Write-Host "==> Configuring environment files..."
-& "$nodeBin" (Join-Path $RepoRoot "scripts\setup-env.mjs")
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "setup-env.mjs exited with non-zero code."
-}
-
-# 8. Determine Installation Directory
-if (-not $BinDir) {
-    if ($env:WAZIR_BIN_DIR) {
-        $BinDir = $env:WAZIR_BIN_DIR
-    } else {
-        $localAppData = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData)
-        if ($localAppData) {
-            $BinDir = Join-Path $localAppData "Programs\Wazir\bin"
-        } else {
-            $BinDir = Join-Path $env:USERPROFILE ".local\bin"
+    Write-Host "==> Installing dependencies via npm ci"
+    Push-Location $RepoRoot
+    try {
+        & $NpmBin ci
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "npm ci failed with exit code $LASTEXITCODE. Check network and npm configuration, then re-run."
+            exit 1
         }
+
+        Write-Host "==> Building all workspaces"
+        & $NpmBin run build
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error @"
+BUILD FAILED with exit code $LASTEXITCODE.
+Refusing to install an outdated or broken build. Fix the compilation errors above and re-run.
+"@
+            exit 1
+        }
+    } finally {
+        Pop-Location
     }
+}
+
+# 6. Verify CLI bundle output
+$CliEntry = Join-Path $RepoRoot "bin\wa.js"
+if (-not (Test-Path $CliEntry)) {
+    $AltEntry = Join-Path $RepoRoot "apps\cli\dist\index.js"
+    if (Test-Path $AltEntry) {
+        $CliEntry = $AltEntry
+    } else {
+        Write-Error "No CLI build found at $CliEntry or $AltEntry. Build may have failed."
+        exit 1
+    }
+}
+
+# 7. Configure environment files & security tokens
+Write-Host "==> Configuring Wazir environment and configuration files"
+$setupEnvScript = Join-Path $RepoRoot "scripts\setup-env.mjs"
+& $NodeBin $setupEnvScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "setup-env.mjs reported non-zero status ($LASTEXITCODE), continuing with launcher installation."
+}
+
+# 8. Determine launcher bin directory
+$BinDir = if ($env:WAZIR_BIN_DIR) {
+    $env:WAZIR_BIN_DIR
+} else {
+    Join-Path $env:USERPROFILE ".wazir\bin"
 }
 
 if (-not (Test-Path $BinDir)) {
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+    Write-Host "✓ Created launcher directory: $BinDir"
 }
-Write-Host "==> Installing launcher to $BinDir"
 
-# 9. Create native wa.cmd launcher
-$waCmdPath = Join-Path $BinDir "wa.cmd"
-$waCmdContent = @"
+# 9. Install wa.cmd (Batch launcher for Command Prompt and generic shells)
+$WaCmdPath = Join-Path $BinDir "wa.cmd"
+$WaCmdContent = @"
 @echo off
-setlocal
-set "NODE_BIN=$nodeBin"
-if not exist "%NODE_BIN%" set "NODE_BIN=node"
-set "CLI_ENTRY=$cliEntry"
-if not exist "%CLI_ENTRY%" (
-  echo wa: CLI bundle missing at %CLI_ENTRY%. Re-run .\scripts\install.ps1 1>&2
+setlocal enabledelayedexpansion
+
+set "NODE_BIN=$NodeBin"
+set "CLI=$CliEntry"
+
+if not exist "!NODE_BIN!" (
+  for %%X in (node.exe) do (set "NODE_BIN=%%~`$PATH:X")
+)
+if "!NODE_BIN!"=="" set "NODE_BIN=node"
+
+if not exist "!CLI!" (
+  echo wa: Wazir build missing at "!CLI!". Re-run: powershell -File "$PSScriptRoot\install.ps1" >&2
   exit /b 127
 )
-set "ENV_FILE=%USERPROFILE%\.wazir\.env"
-if exist "%ENV_FILE%" (
-  for /f "usebackq tokens=*" %%i in ("%ENV_FILE%") do (
-    set "%%i" 2>nul
+
+rem Source Wazir environment if present
+if defined WAZIR_HOME (
+  set "ENV_FILE=%WAZIR_HOME%\.env"
+) else (
+  set "ENV_FILE=%USERPROFILE%\.wazir\.env"
+)
+
+if exist "!ENV_FILE!" (
+  for /f "usebackq tokens=1,* delims==" %%A in ("!ENV_FILE!") do (
+    set "line=%%A"
+    if not "!line:~0,1!"=="#" if not "%%B"=="" set "%%A=%%B"
   )
 )
-"%NODE_BIN%" "%CLI_ENTRY%" %*
+
+"!NODE_BIN!" "!CLI!" %*
 exit /b %ERRORLEVEL%
 "@
-Set-Content -Path $waCmdPath -Value $waCmdContent -Encoding ASCII
-Write-Host "✓ Created $waCmdPath" -ForegroundColor Green
 
-# 10. Create native wa.ps1 launcher (for PowerShell users with scripts execution enabled)
-$waPs1Path = Join-Path $BinDir "wa.ps1"
-$waPs1Content = @"
+[System.IO.File]::WriteAllText($WaCmdPath, $WaCmdContent, [System.Text.Encoding]::ASCII)
+Write-Host "✓ Created Command Prompt launcher: $WaCmdPath"
+
+# 10. Install wa.ps1 (PowerShell launcher)
+$WaPs1Path = Join-Path $BinDir "wa.ps1"
+$WaPs1Content = @"
+# Wazir CLI launcher for PowerShell — generated by scripts/install.ps1
 `$ErrorActionPreference = 'Stop'
-`$node = '$nodeBin'
-if (-not (Test-Path `$node)) { `$node = 'node' }
-`$cli = '$cliEntry'
-if (-not (Test-Path `$cli)) {
-    Write-Error "wa: CLI bundle missing at `$cli. Re-run .\scripts\install.ps1"
+
+`$NodeBin = '$NodeBin'
+`$CliEntry = '$CliEntry'
+
+if (-not (Test-Path `$NodeBin)) {
+    `$cmd = Get-Command node -ErrorAction SilentlyContinue
+    if (`$cmd) { `$NodeBin = `$cmd.Source }
+}
+
+if (-not `$NodeBin -or -not (Test-Path `$NodeBin)) {
+    Write-Error "wa: Node.js executable not found. Expected: `$NodeBin"
     exit 127
 }
-`$envFile = Join-Path `$env:USERPROFILE ".wazir\.env"
-if (Test-Path `$envFile) {
-    Get-Content `$envFile | ForEach-Object {
+
+if (-not (Test-Path `$CliEntry)) {
+    Write-Error "wa: Wazir build missing at `$CliEntry. Re-run: powershell -File '$PSScriptRoot\install.ps1'"
+    exit 127
+}
+
+`$WazirHome = if (`$env:WAZIR_HOME) { `$env:WAZIR_HOME } else { Join-Path `$env:USERPROFILE ".wazir" }
+`$EnvFile = Join-Path `$WazirHome ".env"
+
+if (Test-Path `$EnvFile) {
+    Get-Content `$EnvFile | ForEach-Object {
         `$line = `$_.Trim()
         if (`$line -and -not `$line.StartsWith('#') -and `$line.Contains('=')) {
             `$parts = `$line.Split('=', 2)
-            [System.Environment]::SetEnvironmentVariable(`$parts[0].Trim(), `$parts[1].Trim(), 'Process')
+            `$varName = `$parts[0].Trim()
+            `$varVal = `$parts[1].Trim()
+            if (`$varName) {
+                [Environment]::SetEnvironmentVariable(`$varName, `$varVal, 'Process')
+            }
         }
     }
 }
-& `$node `$cli `$args
+
+& `$NodeBin `$CliEntry @args
 exit `$LASTEXITCODE
 "@
-Set-Content -Path $waPs1Path -Value $waPs1Content -Encoding UTF8
-Write-Host "✓ Created $waPs1Path" -ForegroundColor Green
 
-# 11. Create wa bash shim (for Git Bash / MSYS2 / MinGW users on Windows)
-$waBashPath = Join-Path $BinDir "wa"
-$waBashContent = @"
-#!/usr/bin/env bash
-NODE_BIN="$nodeBin"
-CLI="$cliEntry"
-if [ ! -f "`$CLI" ]; then
-  echo "wa: CLI bundle missing at `$CLI. Re-run .\scripts\install.ps1" >&2
-  exit 127
-fi
-ENV_FILE="`$USERPROFILE/.wazir/.env"
-if [ -f "`$ENV_FILE" ]; then
-  set -a
-  source "`$ENV_FILE" 2>/dev/null || true
-  set +a
-fi
-exec "`$NODE_BIN" "`$CLI" "`$@"
-"@
-Set-Content -Path $waBashPath -Value $waBashContent -Encoding ASCII
-Write-Host "✓ Created $waBashPath" -ForegroundColor Green
+[System.IO.File]::WriteAllText($WaPs1Path, $WaPs1Content, [System.Text.Encoding]::UTF8)
+Write-Host "✓ Created PowerShell launcher: $WaPs1Path"
 
-# 12. Safely configure User PATH (without touching Machine PATH or requiring admin)
-$userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
-$pathParts = if ($userPath) { $userPath.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries) } else { @() }
-$normalizedBinDir = (Resolve-Path $BinDir).Path
+# 11. Safe user PATH configuration (Registry User PATH only, never weakens Machine PATH)
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+$CleanBinDir = $BinDir.TrimEnd('\')
+$Paths = if ($UserPath) {
+    $UserPath.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { $_.Trim() }
+} else {
+    @()
+}
 
-$foundInPath = $false
-foreach ($part in $pathParts) {
-    if ($part.Trim().TrimEnd('\') -eq $normalizedBinDir.TrimEnd('\')) {
-        $foundInPath = $true
+$AlreadyPresent = $false
+foreach ($p in $Paths) {
+    if ($p.TrimEnd('\') -ieq $CleanBinDir) {
+        $AlreadyPresent = $true
         break
     }
 }
 
-if (-not $foundInPath) {
-    $newUserPath = ($pathParts + $normalizedBinDir) -join ';'
-    [System.Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
-    Write-Host "✓ Added $normalizedBinDir to User PATH." -ForegroundColor Green
-    Write-Host "  Note: Restart your terminal session for User PATH updates to take effect in new windows." -ForegroundColor Yellow
+if (-not $AlreadyPresent) {
+    $NewUserPath = if ([string]::IsNullOrWhiteSpace($UserPath)) {
+        $CleanBinDir
+    } else {
+        "$UserPath;$CleanBinDir"
+    }
+    [Environment]::SetEnvironmentVariable("Path", $NewUserPath, "User")
+    Write-Host "✓ Added $BinDir to User PATH environment variable."
 } else {
-    Write-Host "✓ $normalizedBinDir is already in User PATH." -ForegroundColor Green
+    Write-Host "✓ $BinDir is already present in User PATH."
 }
 
-# Update current PowerShell process PATH so wa runs immediately
-$env:PATH = "$normalizedBinDir;$env:PATH"
-
-# 13. Run `wa doctor`
-Write-Host "`n==> Running 'wa doctor' to verify installation..." -ForegroundColor Cyan
-& "$waCmdPath" doctor
-$doctorStatus = $LASTEXITCODE
+# Update current session PATH so wa is immediately runnable
+$SessionPaths = $env:Path.Split(';') | ForEach-Object { $_.TrimEnd('\') }
+if ($SessionPaths -notcontains $CleanBinDir) {
+    $env:Path = "$CleanBinDir;$env:Path"
+}
 
 Write-Host @"
 
-==============================================================================
-✓ Wazir installed successfully!
-==============================================================================
+Done. Wazir installed successfully!
 
-Launcher directory: $BinDir
-Command: wa
-
-Next steps:
+To verify installation, open a new Command Prompt or PowerShell and run:
+  wa --help
   wa doctor
+  wa status
+  wa agents list
   wa models list
-  wa ask "explain what this repository does"
+  wa resources
+"@
 
-To upgrade Wazir:
-  git pull
-  .\scripts\install.ps1
-
-To uninstall Wazir:
-  1. Remove '$BinDir' from your User PATH environment variable.
-  2. Remove '$BinDir'.
-  3. (Optional) Remove '%USERPROFILE%\.wazir' to delete all local history and settings.
-==============================================================================
-"@ -ForegroundColor Green
-
-if ($doctorStatus -ne 0) {
-    exit 0 # Installation itself succeeded even if some optional doctor runtimes are offline
-}
 exit 0

@@ -7,7 +7,7 @@ import { runShell } from '../src/process.js';
 import { shellTool } from '../src/process-tools.js';
 
 /** Security review F-27: OS-level isolation of tool subprocesses. */
-describe('sandbox argument construction (pure)', () => {
+describe.skipIf(process.platform === 'win32')('sandbox argument construction (pure)', () => {
   let home: string;
   let project: string;
 
@@ -24,7 +24,7 @@ describe('sandbox argument construction (pure)', () => {
     await fs.rm(home, { recursive: true, force: true });
   });
 
-  it('bwrap: read-only root, masked home with toolchains re-exposed, writable project, no network by default', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: read-only root, masked home with toolchains re-exposed, writable project, no network by default', () => {
     const args = bwrapArgs({ projectRoot: project, cwd: project }, home, '/tmp');
     const joined = args.join(' ');
     expect(args.slice(0, 2)).toEqual(['--ro-bind', '/']);
@@ -48,13 +48,13 @@ describe('sandbox argument construction (pure)', () => {
     expect(joined).toContain(`--chdir ${project}`);
   });
 
-  it('bwrap: shares the network only when the policy allows it', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: shares the network only when the policy allows it', () => {
     const args = bwrapArgs({ projectRoot: project, cwd: project, networkAllowed: true }, home, '/tmp');
     expect(args).not.toContain('--unshare-net');
     expect(args).toContain('--unshare-pid');
   });
 
-  it('bwrap: a cwd outside the project falls back to the project root', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: a cwd outside the project falls back to the project root', () => {
     const args = bwrapArgs({ projectRoot: project, cwd: '/etc' }, home, '/tmp');
     expect(args[args.indexOf('--chdir') + 1]).toBe(project);
   });
@@ -73,7 +73,7 @@ describe('sandbox argument construction (pure)', () => {
     expect(seatbeltProfile({ projectRoot: project, cwd: project, networkAllowed: true }, home, '/tmp')).not.toContain('(deny network*)');
   });
 
-  it('bwrap: masks other users\' homes and mount points', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: masks other users\' homes and mount points', () => {
     const joined = bwrapArgs({ projectRoot: project, cwd: project }, home, '/tmp').join(' ');
     for (const dir of ['/home', '/mnt', '/media', '/srv']) {
       if (existsSync(dir)) expect(joined).toContain(`--tmpfs ${dir}`);
@@ -212,7 +212,7 @@ describe('seccomp filter (pure BPF assembly)', () => {
 // says why. `wa doctor` reports the same.
 const live = (() => {
   resetSandboxProbe();
-  return sandboxStatus().mode !== 'none';
+  return sandboxStatus().mode === 'bwrap';
 })();
 
 describe.skipIf(!live)('sandbox enforcement (live backend)', () => {

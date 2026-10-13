@@ -33,6 +33,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Ensure node-pty helper is executable on macOS
+        if: runner.os == 'macOS'
+        run: find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} + || true
+
       - name: Build packages and apps
         run: npm run build
 
@@ -78,9 +82,23 @@ jobs:
         shell: pwsh
         run: |
           & .\scripts\install.ps1
-          $binDir = Join-Path $env:LOCALAPPDATA "Programs\Wazir\bin"
+          $binDir = if ($env:WAZIR_BIN_DIR) { $env:WAZIR_BIN_DIR } else { Join-Path $env:USERPROFILE ".wazir\bin" }
           & "$binDir\wa.cmd" --help
           & "$binDir\wa.cmd" doctor
+
+      - name: Smoke test installed launcher from normal and Unicode paths (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          node scripts/smoke-test.mjs
+
+      - name: Smoke test installed launcher from normal and Unicode paths (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binDir = if ($env:WAZIR_BIN_DIR) { $env:WAZIR_BIN_DIR } else { Join-Path $env:USERPROFILE ".wazir\bin" }
+          $env:Path = "$binDir;$env:Path"
+          node scripts\smoke-test.mjs
 
       # Standalone Native Single Executable Application (SEA) Packaging
       - name: Build Native Standalone Binary

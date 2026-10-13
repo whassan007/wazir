@@ -1,13 +1,13 @@
 import spawn from 'cross-spawn';
 import { killProcessTree, resolveExecutable, getSpawnCommand, sanitizeChildEnvironment } from '@wazir/shared';
 import { spawnGroupWatchdog } from './processWatchdog.js';
-import type {
-  AgentAdapter,
-  AgentDescriptor,
-  AgentRunRequest,
-  AgentRuntime,
-  AgentTurn,
-  TaskType,
+import {
+  type AgentAdapter,
+  type AgentDescriptor,
+  type AgentRunRequest,
+  type AgentRuntime,
+  type AgentTurn,
+  type TaskType,
 } from '@wazir/core';
 
 const MAX_CAPTURE = 20_000;

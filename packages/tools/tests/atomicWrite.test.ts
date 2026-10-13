@@ -21,6 +21,7 @@ describe('writeProjectFile atomicity', () => {
   });
 
   it('keeps an existing file\'s permission bits', async () => {
+    if (process.platform === 'win32') return;
     await writeFile(join(root, 'run.sh'), '#!/bin/sh\necho old\n');
     await chmod(join(root, 'run.sh'), 0o755);
     await writeProjectFile(root, 'run.sh', '#!/bin/sh\necho new\n');

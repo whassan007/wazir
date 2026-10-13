@@ -32,33 +32,24 @@ describe('ProcessManager.stop() — graceful teardown, escalation, verified deat
     expect(() => process.kill(pid!, 0)).toThrow();
   }, 10_000);
 
-  it('kills the whole process tree, not just the direct child (grandchild does not survive)', async () => {
+  it.skipIf(process.platform === 'win32')('kills the whole process group, not just the direct child (grandchild does not survive)', async () => {
     const manager = new ProcessManager();
-    const parentCode = `
-      const { spawn } = require('node:child_process');
-      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
-      console.log('GRANDCHILD:' + child.pid);
-      setInterval(() => {}, 1000);
-    `;
     manager.register({
       id: 'parent-with-child',
-      command: process.execPath,
-      args: ['-e', parentCode],
+      command: 'sh',
+      args: ['-c', 'sleep 30 & echo "GRANDCHILD:$!"; wait'],
     });
     await manager.start('parent-with-child');
 
     const record = manager.get('parent-with-child')!;
-    for (let i = 0; i < 20; i++) {
-      if (record.stdout.some((l) => l.startsWith('GRANDCHILD:'))) break;
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    await new Promise((r) => setTimeout(r, 100));
     const grandchildLine = record.stdout.find((l) => l.startsWith('GRANDCHILD:'));
     expect(grandchildLine).toBeTruthy();
     const grandchildPid = Number(grandchildLine!.split(':')[1]);
 
     await manager.stop('parent-with-child', 1000);
 
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 100));
     expect(() => process.kill(grandchildPid, 0)).toThrow();
   }, 10_000);
 

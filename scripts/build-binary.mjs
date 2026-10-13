@@ -1,105 +1,136 @@
 #!/usr/bin/env node
-// ==============================================================================
-// Cross-Platform Standalone Binary Builder using Node.js SEA
-// (scripts/build-binary.mjs)
-// Works natively on macOS (Mach-O), Linux (ELF), and Windows (PE .exe).
-// ==============================================================================
-
-import { execFileSync, spawnSync } from 'node:child_process';
-import { copyFileSync, chmodSync, existsSync, mkdirSync, rmSync, writeFileSync, statSync } from 'node:fs';
-import path from 'node:path';
+/**
+ * Build a standalone native executable for Wazir using Node.js Single Executable Application (SEA)
+ * Supported platforms: Linux, macOS (Darwin), Windows (win32)
+ */
+import { existsSync, mkdirSync, writeFileSync, copyFileSync, rmSync, statSync, chmodSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, '..');
+const __dirname = dirname(__filename);
+const repoRoot = resolve(__dirname, '..');
 
-const isWin = process.platform === 'win32';
-const isMac = process.platform === 'darwin';
+function run(cmd, args, opts = {}) {
+  const isWin = process.platform === 'win32';
+  const execCmd = isWin && (cmd === 'npm' || cmd === 'npx') ? `${cmd}.cmd` : cmd;
+  const res = spawnSync(execCmd, args, {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    shell: isWin,
+    ...opts,
+  });
+  if (res.status !== 0) {
+    throw new Error(`Command failed with exit code ${res.status}: ${cmd} ${args.join(' ')}`);
+  }
+  return res;
+}
 
-console.log(`==> Building standalone native binary on ${process.platform} (${process.arch})...`);
+console.log('==> Configuring environment files and shell profiles...');
+run(process.execPath, [join(repoRoot, 'scripts', 'setup-env.mjs')]);
 
-// 1. Run setup-env and bundle
-console.log('==> Configuring environment files...');
-execFileSync(process.execPath, [path.join(rootDir, 'scripts', 'setup-env.mjs')], { stdio: 'inherit', cwd: rootDir });
+console.log('==> Building CLI bundle...');
+run(process.execPath, [join(repoRoot, 'scripts', 'bundle.mjs')]);
 
-console.log('==> Bundling CLI bundle...');
-execFileSync(process.execPath, [path.join(rootDir, 'scripts', 'bundle.mjs')], { stdio: 'inherit', cwd: rootDir });
-
-const distDir = path.join(rootDir, 'dist');
+const distDir = join(repoRoot, 'dist');
 if (!existsSync(distDir)) {
   mkdirSync(distDir, { recursive: true });
 }
 
-const outBin = path.join(distDir, isWin ? 'wa.exe' : 'wa');
-const seaConfig = path.join(distDir, 'sea-config.json');
-const seaBlob = path.join(distDir, 'sea-prep.blob');
+const isWin = process.platform === 'win32';
+const isMac = process.platform === 'darwin';
+const outBin = join(distDir, isWin ? 'wa.exe' : 'wa');
+const seaConfig = join(distDir, 'sea-config.json');
+const seaBlob = join(distDir, 'sea-prep.blob');
 
-// 2. Write SEA config
-const configContent = {
-  main: path.join('bin', 'wa.js'),
-  output: path.join('dist', 'sea-prep.blob'),
-  disableExperimentalSEAWarning: true,
-};
-writeFileSync(seaConfig, JSON.stringify(configContent, null, 2), 'utf8');
+writeFileSync(
+  seaConfig,
+  JSON.stringify(
+    {
+      main: 'bin/wa.js',
+      output: 'dist/sea-prep.blob',
+      disableExperimentalSEAWarning: true,
+    },
+    null,
+    2,
+  ),
+  'utf8',
+);
 
-// 3. Generate SEA blob
 console.log('==> Generating SEA blob...');
-execFileSync(process.execPath, ['--experimental-sea-config', seaConfig], { stdio: 'inherit', cwd: rootDir });
+run(process.execPath, ['--experimental-sea-config', seaConfig]);
 
-// 4. Copy node executable to output binary
-console.log(`==> Copying Node binary (${process.execPath}) -> ${outBin}...`);
+console.log(`==> Packaging standalone binary: ${outBin}...`);
 copyFileSync(process.execPath, outBin);
-try {
-  chmodSync(outBin, 0o755);
-} catch {
-  // best effort on Windows
+if (!isWin) {
+  try {
+    chmodSync(outBin, 0o755);
+  } catch {}
 }
 
-// 5. Inject blob using postject
-console.log('==> Injecting SEA blob with postject...');
-const postjectArgs = [
-  '--yes',
-  'postject',
-  outBin,
-  'NODE_SEA_BLOB',
-  seaBlob,
-  '--sentinel-fuse',
-  'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2',
-];
+const sentinelFuse = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 
 if (isMac) {
-  // macOS requires removing code signature before postject and re-signing after
+  // macOS requires removing existing signature before injection, then re-signing
   try {
     spawnSync('codesign', ['--remove-signature', outBin], { stdio: 'ignore' });
   } catch {}
-  postjectArgs.push('--macho-segment-name', 'NODE_SEA');
-}
-
-const npx = isWin ? 'npx.cmd' : 'npx';
-const postjectResult = spawnSync(npx, postjectArgs, { stdio: 'inherit', cwd: rootDir });
-if (postjectResult.status !== 0) {
-  console.error('error: postject failed to inject SEA blob.');
-  process.exit(1);
-}
-
-if (isMac) {
+  run('npx', [
+    '--yes',
+    'postject',
+    outBin,
+    'NODE_SEA_BLOB',
+    seaBlob,
+    '--sentinel-fuse',
+    sentinelFuse,
+    '--macho-segment-name',
+    'NODE_SEA',
+  ]);
   try {
-    spawnSync('codesign', ['--sign', '-', outBin], { stdio: 'inherit' });
+    spawnSync('codesign', ['--sign', '-', outBin], { stdio: 'ignore' });
   } catch {}
+} else if (isWin) {
+  run('npx', [
+    '--yes',
+    'postject',
+    outBin,
+    'NODE_SEA_BLOB',
+    seaBlob,
+    '--sentinel-fuse',
+    sentinelFuse,
+  ]);
+} else {
+  // Linux
+  run('npx', [
+    '--yes',
+    'postject',
+    outBin,
+    'NODE_SEA_BLOB',
+    seaBlob,
+    '--sentinel-fuse',
+    sentinelFuse,
+  ]);
 }
 
 try {
-  chmodSync(outBin, 0o755);
+  rmSync(seaConfig, { force: true });
+  rmSync(seaBlob, { force: true });
 } catch {}
 
-// 6. Cleanup temporary artifacts
-rmSync(seaConfig, { force: true });
-rmSync(seaBlob, { force: true });
+if (!isWin) {
+  try {
+    chmodSync(outBin, 0o755);
+  } catch {}
+}
 
-const stat = statSync(outBin);
-const sizeMB = (stat.size / (1024 * 1024)).toFixed(1);
+const stats = statSync(outBin);
+const sizeMb = (stats.size / (1024 * 1024)).toFixed(1);
 
-console.log('\n==============================================================================');
-console.log(`✓ Standalone binary created at: ${outBin} (${sizeMB} MB)`);
-console.log('==============================================================================');
+console.log(`\n✓ Standalone binary created at: ${outBin} (${sizeMb} MB)`);
+if (isWin) {
+  console.log(`  To install: copy ${outBin} to a directory on your PATH`);
+} else {
+  console.log(`  To install globally: sudo cp ${outBin} /usr/local/bin/wa`);
+  console.log(`  Or user-local:       cp ${outBin} ~/.local/bin/wa`);
+}

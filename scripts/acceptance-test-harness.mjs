@@ -173,8 +173,9 @@ async function probeLiveEndpoints() {
 }
 
 function runCommand(cmd, args) {
-  const resolvedCmd = process.platform === 'win32' && (cmd === 'npm' || cmd === 'npx') ? `${cmd}.cmd` : cmd;
-  const r = spawnSync(resolvedCmd, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
+  const isWin = process.platform === 'win32';
+  const execCmd = isWin && (cmd === 'npm' || cmd === 'npx') ? `${cmd}.cmd` : cmd;
+  const r = spawnSync(execCmd, args, { cwd: root, stdio: 'inherit', shell: isWin });
   return r.status ?? 1;
 }
 

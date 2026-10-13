@@ -76,7 +76,7 @@ git clone https://github.com/whassan007/wazir.git $HOME\Code\Wazir
 & "$HOME\Code\Wazir\scripts\install.ps1"
 ```
 
-The installer verifies Node.js ≥ 22.5, installs dependencies with `npm ci`, builds all workspaces, installs the native `wa` CLI launcher to `~/.local/bin` (or `%USERPROFILE%\.local\bin` on Windows), ensures it is configured in your user PATH, and executes `wa doctor`. Failures halt immediately without installing stale artifacts.
+The installer verifies Node.js ≥ 22.5, installs dependencies with `npm ci`, builds all workspaces, installs the native `wa` CLI launcher to `~/.local/bin` on macOS/Linux or `%USERPROFILE%\.wazir\bin` on Windows, configures it in your user PATH, and executes `wa doctor`. Failures halt immediately without installing stale artifacts.
 
 ### Alternative Installation & Packaging Methods
 

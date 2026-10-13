@@ -106,7 +106,9 @@ export class ComputerRegistry {
     c.reservations = (c.reservations ?? []).filter(r => !r.settledAt || observedAt <= r.settledAt);
     return {
       computerId: id, totalMemoryBytes: bytes(c.hardware.memoryGB) ?? 0,
-      availableMemoryBytes: c.local ? os.freemem() : fresh ? bytes(c.load?.memoryAvailableGB) : undefined,
+      availableMemoryBytes: c.local
+        ? (c.load?.memoryAvailableGB !== undefined && fresh ? bytes(c.load.memoryAvailableGB) : os.freemem())
+        : fresh ? bytes(c.load?.memoryAvailableGB) : undefined,
       totalVramBytes: unifiedMemory ? undefined : bytes(c.hardware.gpu?.memoryGB),
       availableVramBytes: unifiedMemory ? undefined : fresh ? bytes(c.load?.gpuMemoryAvailableGB) : undefined,
       unifiedMemory, cpuUtilization: c.load?.cpuPercent, gpuUtilization: c.load?.gpuUtilizationPercent,

@@ -55,7 +55,6 @@ function killProcessGroup(child: import('node:child_process').ChildProcess, sign
 
 let warnedDegraded = false;
 
-/** The reduced environment tool subprocesses run with. */
 export function childEnvironment(extra: Record<string, string> = {}): Record<string, string> {
   return sanitizeChildEnvironment(extra);
 }
@@ -137,8 +136,8 @@ function runProcess(
     const spawnCmd = wrapped.mode === 'none'
       ? getSpawnCommand(wrapped.file, wrapped.args, { cwd: spawnCwd, envPath: childEnv.PATH || childEnv.Path })
       : { command: wrapped.file, args: wrapped.args, useShell: false };
-
     const detachedGroup = process.platform !== 'win32' && wrapped.mode !== 'bwrap';
+
     const child = spawn(spawnCmd.command, spawnCmd.args, {
       cwd: spawnCwd,
       env: childEnv,
