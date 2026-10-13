@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { spawnGroupWatchdog } from './processWatchdog.js';
 import type {
   AgentAdapter,
   AgentDescriptor,
@@ -76,10 +77,8 @@ export class ExternalAgentAdapter implements AgentAdapter {
           try { child.kill('SIGKILL'); } catch { /* already gone */ }
         }
       };
-      // If Wazir itself dies (SIGKILL, OOM, closed terminal) the detached group would keep
-      // running and editing the workspace unsupervised. A watchdog outside the group kills
-      // it once this process is gone, and exits on its own when the group finishes.
-      const watchdog = detached && child.pid !== undefined ? spawnWatchdog(process.pid, child.pid) : undefined;
+      // If Wazir itself dies, the detached group must not keep running unsupervised.
+      const watchdog = detached && child.pid !== undefined ? spawnGroupWatchdog(process.pid, child.pid) : undefined;
       const timer = setTimeout(() => stop('timeout'), timeoutMs);
       const cancelPoll = setInterval(() => { if (request.isCancelled?.()) stop('cancelled'); }, 250);
       const settle = () => {
@@ -120,18 +119,3 @@ export class ExternalAgentAdapter implements AgentAdapter {
   }
 }
 
-/**
- * Kills process group `pgid` when `ownerPid` exits. Polls once a second; stops when the group
- * is gone. Runs in its own session so it survives the owner and is not in the group it kills.
- */
-function spawnWatchdog(ownerPid: number, pgid: number): ChildProcess | undefined {
-  const script = `while kill -0 ${ownerPid} 2>/dev/null; do kill -0 -${pgid} 2>/dev/null || exit 0; sleep 1; done; kill -KILL -${pgid} 2>/dev/null; exit 0`;
-  try {
-    const w = spawn('/bin/sh', ['-c', script], { stdio: 'ignore', detached: true });
-    w.on('error', () => undefined);
-    w.unref();
-    return w;
-  } catch {
-    return undefined;
-  }
-}

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ExternalAgentAdapter } from '../src/externalAgent.js';
 
@@ -59,11 +59,14 @@ describe('ExternalAgentAdapter lifecycle', () => {
     const { command, pidFile } = await hangingAgent();
     // A separate process plays Wazir, so it can be SIGKILLed without cleanup handlers.
     const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/externalAgent.ts');
-    const host = path.join(dir!, 'host.mts');
-    await fs.writeFile(host, `import { ExternalAgentAdapter } from ${JSON.stringify(src)};\n` +
+    const entry = path.join(dir!, 'host.ts');
+    await fs.writeFile(entry, `import { ExternalAgentAdapter } from ${JSON.stringify(src)};\n` +
       `const a = new ExternalAgentAdapter({ name: 'hang', version: '1', description: '', command: ${JSON.stringify(command)}, taskTypes: [], capabilities: [] });\n` +
-      `for await (const _ of a.run({ taskDescription: 'x', projectRoot: ${JSON.stringify(dir)} }, {})) {}\n`);
-    const wazir = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', host], { stdio: 'ignore' });
+      `void (async () => { for await (const _ of a.run({ taskDescription: 'x', projectRoot: ${JSON.stringify(dir)} } as any, {} as any)) {} })();\n`);
+    const host = path.join(dir!, 'host.cjs');
+    const esbuild = path.resolve(path.dirname(src), '../../../node_modules/.bin/esbuild');
+    expect(spawnSync(esbuild, [entry, '--bundle', '--platform=node', '--format=cjs', `--outfile=${host}`, '--log-level=error']).status).toBe(0);
+    const wazir = spawn(process.execPath, [host], { stdio: 'ignore' });
     const pids = await readPids(pidFile);
     for (const pid of pids) expect(isAlive(pid)).toBe(true);
     wazir.kill('SIGKILL');
