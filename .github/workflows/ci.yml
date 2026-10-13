@@ -9,10 +9,12 @@ on:
 
 jobs:
   build-and-test:
-    name: Build, Typecheck, and Test
-    runs-on: ubuntu-latest
+    name: Build, Typecheck, and Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node-version: [22.x]
     steps:
       - name: Checkout repository
@@ -41,7 +43,7 @@ jobs:
       - name: Run unit and integration test suite
         run: npm test
 
-      - name: Run Wazir acceptance test library (10 Release Gates G0..G9)
+      - name: Run Wazir acceptance test library
         run: npm run test:plan:acceptance
 
       - name: Run TUI regression test plan (50 cases)
@@ -50,11 +52,28 @@ jobs:
       - name: Run agent execution test plan (55 cases)
         run: npm run test:plan:agent
 
+      # Installation smoke tests (POSIX: Linux and macOS)
+      - name: Run installer and CLI smoke tests (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          bash scripts/install.sh
+          export PATH="$HOME/.local/bin:$PATH"
+          node scripts/smoke-test.mjs
+
+      # Installation smoke tests (Windows: Native PowerShell)
+      - name: Run installer and CLI smoke tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+          $env:Path = "$env:USERPROFILE\.wazir\bin;$env:Path"
+          node scripts\smoke-test.mjs
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports-node-${{ matrix.node-version }}
+          name: test-reports-${{ matrix.os }}-node-${{ matrix.node-version }}
           path: |
             acceptance-test-report.json
             test-plan-report.json

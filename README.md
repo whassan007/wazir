@@ -58,19 +58,81 @@ A production-quality local and fleet-scale AI meta-harness that orchestrates mul
 
 ---
 
-## Quick Start
+## Supported Platforms & Prerequisites
+
+| Operating System | Supported Architectures | Shell / Environment | Prerequisites |
+| ---------------- | ----------------------- | ------------------- | ------------- |
+| **Linux** | `x86_64`, `aarch64` / `arm64` | Bash, Zsh, Dash, Fish | Node.js >= 22.5.0, Git |
+| **macOS** | Apple Silicon (`arm64`), Intel (`x86_64`) | Zsh, Bash, Fish | Node.js >= 22.5.0, Git |
+| **Windows** | `x64` / `x86_64`, `arm64` | PowerShell 5.1+, pwsh 7+, Cmd | Node.js >= 22.5.0, Git (No WSL2 required) |
+
+> [!IMPORTANT]
+> **Node.js >= 22.5.0** is required on all platforms. Wazir uses the native `node:sqlite` database module introduced in Node.js 22.5.0 for low-latency session and memory persistence without external native compilation dependencies.
+
+---
+
+## Quick Start & Installation
+
+Clone the repository to your local machine:
 
 ```bash
-git clone <this-repo> ~/Code/Wazir
-bash ~/Code/Wazir/scripts/install.sh
+git clone https://github.com/whassan007/wazir.git
+cd wazir
 ```
 
-The script works from any directory: it finds the repository from its own path, checks for Node.js ≥ 22.5, runs `npm install` and `npm run build`, creates a self-contained CLI bundle (`bin/wa.js`), and installs the `wa` launcher into `~/.local/bin/wa` (override with `WAZIR_BIN_DIR`), ensuring it is on your PATH.
+### macOS and Linux (Native POSIX)
+
+Run the installer script:
+
+```bash
+bash scripts/install.sh
+```
+
+What this does:
+1. Validates Node.js >= 22.5 and Git.
+2. Installs workspace dependencies via `npm ci`.
+3. Builds all packages and bundles the CLI.
+4. Initializes Wazir security tokens and environment configuration in `~/.wazir`.
+5. Installs the `wa` launcher shim in `~/.local/bin/wa` (or `$WAZIR_BIN_DIR`) and configures your shell `PATH` (`.bashrc`, `.zshrc`, `.profile`, `.bash_profile`, `.zprofile`).
+
+### Windows (Native PowerShell — No WSL2 Required)
+
+Run the native PowerShell installer:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+```
+
+What this does:
+1. Validates Node.js >= 22.5 and Git for Windows natively without requiring WSL2.
+2. Installs workspace dependencies via `npm ci`.
+3. Builds all packages and creates the CLI bundle.
+4. Initializes Wazir configuration in `$env:USERPROFILE\.wazir`.
+5. Installs `wa.cmd` and `wa.ps1` launchers into `$env:USERPROFILE\.wazir\bin` (or `$env:WAZIR_BIN_DIR`).
+6. Safely appends the launcher directory to your Windows User `PATH` (preserving machine PATH and avoiding duplicate entries).
+
+### Uninstallation
+
+- **macOS & Linux**:
+  ```bash
+  rm -f "${WAZIR_BIN_DIR:-$HOME/.local/bin}/wa"
+  # (Optional) Remove data and configs:
+  rm -rf "${WAZIR_HOME:-$HOME/.wazir}"
+  ```
+- **Windows**:
+  ```powershell
+  # Remove launcher directory:
+  Remove-Item -Recurse -Force "$env:USERPROFILE\.wazir\bin"
+  # (Optional) Remove data and configs:
+  Remove-Item -Recurse -Force "$env:USERPROFILE\.wazir"
+  ```
+
+---
 
 ### Alternative Installation & Packaging Methods
 
 #### 1. NPM Global Install / Link
-Because the CLI is now bundled into `bin/wa.js`, you can install or link it globally via npm:
+Because the CLI is bundled into `bin/wa.js`, you can install or link it globally via npm:
 ```bash
 # Link the current build globally
 npm run build
@@ -95,12 +157,12 @@ brew tap whassan007/wazir https://github.com/whassan007/wazir
 brew install wazir
 ```
 
-#### 3. Standalone Native Binary (Zero-dependency)
-Package Wazir into a self-contained native binary using Node Single Executable Application (SEA):
+#### 3. Standalone Native Binary (Zero-dependency Single Executable)
+Package Wazir into a self-contained native binary (`dist/wa` on POSIX or `dist/wa.exe` on Windows) using Node.js Single Executable Application (SEA):
 ```bash
 npm run build:binary
-# Standalone binary is produced at dist/wa (runs with no external Node.js required)
-sudo cp dist/wa /usr/local/bin/wa
+# Standalone binary is produced at dist/wa (or dist/wa.exe on Windows)
+# Run without any external Node.js runtime required
 ```
 
 To run the test suite: `npm test`.
