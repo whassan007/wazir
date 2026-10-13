@@ -26,6 +26,7 @@ import { color } from './colors.js';
 import type { RookEngine } from './engine.js';
 import { StatusLoader } from './spinner.js';
 import { recordTermination } from './termination.js';
+import { captureDelegationBaseline, verifyDelegatedWork, type DelegationBaseline } from './delegationVerification.js';
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
 
 /** Maps a control-plane-reported worker event onto the local `GenerationEvent` shape,
@@ -675,6 +676,7 @@ export async function executeTask(
   // are admitted here: one request plus estimated tokens against the agent's account. The
   // vendor CLI reports no usage, so the settlement is always labelled an estimate.
   let delegation: { requestId: string; rawInput: number; stopLease: () => void } | undefined;
+  let baseline: DelegationBaseline | Error | undefined;
   if (externalAgent) {
     const name = agent.descriptor.name;
     const accountId = engine.resources.resolveAgentAccount(name);
@@ -697,6 +699,8 @@ export async function executeTask(
       return { success: false, reasons: [reason], filesChanged: [], executionId, errors: [reason] };
     }
     delegation = { requestId, rawInput, stopLease: engine.resources.budget.holdLease(requestId) };
+    // The agent edits files with its own tools; only a before/after comparison shows what it did.
+    baseline = await captureDelegationBaseline(engine.projectRoot).catch((error: Error) => error);
   }
 
   // ---- run the agent ------------------------------------------------------
@@ -782,6 +786,23 @@ export async function executeTask(
     const reason = `execution record could not be written (${storageError.message}); this run stopped rather than overwrite history another process recorded`;
     emitJson({ type: 'complete', success: false, executionId, filesChanged: [], result: summary, errors: [...errors, reason] });
     return { success: false, reasons: [reason], filesChanged: [], executionId, result: summary, errors: [...errors, reason] };
+  }
+
+  // ---- delegated work: observe and check it ourselves ----------------------
+  if (baseline && !cancelled) {
+    if (baseline instanceof Error) {
+      const message = `UNVERIFIED: cannot observe the workspace before delegation (${baseline.message})`;
+      errors.push(message);
+      await engine.executions.recordError(executionId, message);
+    } else {
+      const verified = await verifyDelegatedWork({
+        executions: engine.executions, tools: engine.tools, executionId, projectRoot: engine.projectRoot,
+        networkAllowed: engine.config.networkAllowed && task.policy?.networkAccess !== false,
+        allowVerificationChanges: taskAuthorizesVerificationChanges(description), touchesSourceCode,
+      }, baseline);
+      errors.push(...verified.problems);
+      log(color.gray(`    delegated agent changed ${verified.changed.length} file(s)${verified.changed.length ? `: ${verified.changed.slice(0, 5).join(', ')}${verified.changed.length > 5 ? ', ...' : ''}` : ''}`));
+    }
   }
 
   // ---- deterministic evaluation -------------------------------------------
