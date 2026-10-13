@@ -103,10 +103,26 @@ export class TerminalSession {
   private disposed = false;
   private readonly marker: string;
   private markerHit: { exitCode: number } | undefined;
+  private initialPromptSettled = false;
+  private readonly initialPromptPromise: Promise<void>;
+  private resolveInitialPrompt!: () => void;
 
   constructor(options: TerminalSessionOptions) {
     this.id = `term-${randomBytes(6).toString('hex')}`;
     this.marker = `\u0001WAZIR:${randomBytes(8).toString('hex')}`;
+    this.initialPromptPromise = new Promise((resolve) => {
+      let timer: NodeJS.Timeout | undefined;
+      this.resolveInitialPrompt = () => {
+        if (timer) clearTimeout(timer);
+        this.initialPromptSettled = true;
+        resolve();
+      };
+      timer = setTimeout(() => {
+        this.initialPromptSettled = true;
+        resolve();
+      }, 2000);
+      timer.unref?.();
+    });
     this.terminal = new Terminal({
       cols: options.cols ?? 120,
       rows: options.rows ?? 40,
@@ -167,10 +183,15 @@ export class TerminalSession {
       const after = this.incomingBuffer.slice(markerIdx + this.marker.length);
       const match = /^:(\d+)(?:\r?\n)?/.exec(after);
       if (match) {
-        this.markerHit = { exitCode: Number(match[1]) };
+        const exitCode = Number(match[1]);
         const preMarker = this.incomingBuffer.slice(0, markerIdx);
         this.incomingBuffer = after.slice(match[0].length);
         this.appendClean(preMarker);
+        if (!this.initialPromptSettled) {
+          this.resolveInitialPrompt();
+        } else {
+          this.markerHit = { exitCode };
+        }
         return;
       }
       if (after.length < 15 && (!after.includes('\n') || after.startsWith(':'))) {
@@ -222,6 +243,12 @@ export class TerminalSession {
    */
   async send(input: string, options: { maxWaitMs?: number; newline?: boolean } = {}): Promise<SendResult> {
     if (this.disposed) throw new Error('TERMINAL_SESSION_DISPOSED');
+    if (!this.initialPromptSettled) {
+      await this.initialPromptPromise;
+      this.pending = '';
+      this.pendingBytes = 0;
+      this.pendingNewlines = 0;
+    }
     this.markerHit = undefined;
     const sendAt = Date.now();
     this.pty.write(options.newline === false ? input : `${input}\r`);
@@ -288,6 +315,7 @@ export class TerminalSession {
   async dispose(disposeGraceMs = 2000): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.resolveInitialPrompt?.();
     TerminalSessionRegistry.unregister(this);
 
     const pid = this.pty.pid;

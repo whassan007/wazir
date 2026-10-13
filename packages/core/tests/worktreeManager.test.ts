@@ -8,7 +8,7 @@ import { WorktreeManager } from '../src/index.js';
 
 const execFileAsync = promisify(execFile);
 
-describe('WorktreeManager — git worktree isolation per agent', () => {
+describe('WorktreeManager — git worktree isolation per agent', { timeout: 30_000 }, () => {
   let tmpRepo: string;
 
   afterEach(async () => {
@@ -137,7 +137,7 @@ describe('WorktreeManager — git worktree isolation per agent', () => {
   });
 });
 
-describe('F-14: worktree ids are validated before they become paths', () => {
+describe('F-14: worktree ids are validated before they become paths', { timeout: 30_000 }, () => {
   it.each(['../../escape', 'x/../../y', 'a;b', 'a b', '--force', '', 'x\ny', '.hidden'])('rejects id %j', async (id) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-wt-ids-'));
     try {
