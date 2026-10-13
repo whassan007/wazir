@@ -8,6 +8,7 @@
 // `wa init` / `wa doctor` are the explicit first-run steps.
 //
 //   node scripts/pack-npm.mjs [--name <npm-name>] [--skip-bundle]
+// WAZIR_BUILD_VERSION=<v> stamps a different version into the bundle and manifest (upgrade tests).
 // Prints the tarball path. WAZIR_NPM_NAME overrides the package name (default: wazir).
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -37,7 +38,7 @@ for (const f of ['README.md', 'LICENSE']) copyFileSync(path.join(root, f), path.
 
 const pkg = {
   name,
-  version: rootPkg.version,
+  version: process.env.WAZIR_BUILD_VERSION || rootPkg.version,
   description: rootPkg.description,
   license: rootPkg.license,
   homepage: 'https://github.com/whassan007/wazir#readme',

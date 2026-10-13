@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import * as esbuild from 'esbuild';
-import { chmodSync, mkdirSync, existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,6 +28,9 @@ const RUNTIME_GUARD = `
   }
 })();`;
 
+// One canonical version: package.json. WAZIR_BUILD_VERSION overrides it for upgrade tests only.
+const version = process.env.WAZIR_BUILD_VERSION || JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8')).version;
+
 const entryPoint = resolve(rootDir, 'apps/cli/src/index.ts');
 const outDir = resolve(rootDir, 'bin');
 const outFile = resolve(outDir, 'wa.js');
@@ -53,6 +56,7 @@ try {
     // feature (PTY terminal tool, OS keychain, native Postgres driver).
     external: ['pg-native', '@napi-rs/keyring', 'node-pty'],
     banner: { js: RUNTIME_GUARD },
+    define: { __WAZIR_VERSION__: JSON.stringify(version) },
     sourcemap: true,
     minify: false,
     logLevel: 'info',

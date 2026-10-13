@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+
+/** Injected by scripts/bundle.mjs from package.json (the canonical version); the literal is for unbundled dev runs. */
+declare const __WAZIR_VERSION__: string | undefined;
 import chalk from 'chalk';
 import { registerMCPCommands } from './mcp.js';
 import { registerWebCommands } from './web.js';
@@ -18,7 +21,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version('0.1.59');
+  .version(typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.1.59');
 
 registerMCPCommands(program);
 registerWebCommands(program);
