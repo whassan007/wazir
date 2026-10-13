@@ -22,6 +22,31 @@ ceilings, concurrency queues, 429 cooldowns, auth/quota blocks and the paid-API 
 ignored. The **emergency stop** (`wa resources stop`) still applies: it is an operator switch,
 not a limit. Set `"enforce": true` in `resources.json` to turn enforcement on.
 
+## Production profile
+
+Enforcement stays opt-in; nothing turns it on for you. Before relying on Wazir to hold a budget,
+run `wa resources validate --profile production`. It exits non-zero unless:
+
+- `policy.enforce` is `true`;
+- every delegated agent and hosted runtime is served by an account **defined in
+  `resources.json`** (implicit accounts have unknown limits);
+- every non-local account has at least one limit. No limits means **unlimited**; a limit of
+  `null` means **unknown**, and production rejects `unknownLimitPolicy: "allow"` on unknown
+  limits because that is unlimited in practice;
+- every paid API account has `pricing`, and when paid dispatch is authorised
+  (`paidApiFallback` or `allowPaid`), a `dailySpendUsd` or `monthlySpendUsd` ceiling is set.
+
+The default profile reports the same problems as warnings. Both list an admission preview for a
+1-token request per account, so you can see what enforcement would do right now.
+
+Limits are Wazir's own dispatch ceilings. Subscription usage is estimated from prompt and output
+text (vendor CLIs report no token counts), so a configured subscription limit is a conservative
+local budget, not the vendor's quota. With `unknownLimitPolicy: "deny"` an account with an
+unknown limit is **blocked** (not deferred: waiting does not make the limit known).
+
+**Rollback:** set `"enforce": false` (accounting continues, nothing is refused) or
+`wa resources stop` to halt all cloud and subscription dispatch immediately.
+
 ## Commands
 
 | Command | Use |
@@ -30,7 +55,7 @@ not a limit. Set `"enforce": true` in `resources.json` to turn enforcement on.
 | `wa resources --watch [s]` | live refresh (reads the ledger and local probes; never polls providers) |
 | `wa resources --json` | machine-readable snapshot |
 | `wa resources init [--force]` | write a starting `resources.json` from detected runtimes and agents |
-| `wa resources validate` | check `resources.json` |
+| `wa resources validate [--profile production] [--json]` | check policy, account mappings, limits and pricing, and preview admission per account (reserves nothing); exit 1 on errors |
 | `wa resources stop [reason]` | **emergency stop**: no new cloud/subscription dispatch; local inference continues |
 | `wa resources resume` | lift the stop |
 | `wa resources reset <account>` | clear an auth/quota/cooldown block after fixing the cause |

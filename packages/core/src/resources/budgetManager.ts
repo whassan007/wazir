@@ -215,10 +215,10 @@ export class TokenBudgetManager {
         const s = this.limitStatus(account, limit, add, now);
         mode = worse(mode, s.mode);
         if (s.mode === 'exhausted') {
-          return deny('deferred', limit.limit === null
-            ? `account '${account.id}' has an unknown ${limit.unit}/${limit.window} limit and its policy is 'deny'`
-            : `${limit.unit} limit ${limit.limit}/${limit.window} (${limit.source}) would be exceeded: used ${round(s.used)}, reserved ${round(s.reserved)}, request ~${round(add)}`,
-          'exhausted', s.windowEnd);
+          // An unknown limit does not become known by waiting: refuse, with no retry time.
+          if (limit.limit === null) return deny('blocked', `account '${account.id}' has an unknown ${limit.unit}/${limit.window} limit and its policy is 'deny'; configure the limit or change unknownLimitPolicy`, 'exhausted');
+          return deny('deferred', `${limit.unit} limit ${limit.limit}/${limit.window} (${limit.source}) would be exceeded: used ${round(s.used)}, reserved ${round(s.reserved)}, request ~${round(add)}`,
+            'exhausted', s.windowEnd);
         }
         if (s.utilization !== undefined && s.mode !== 'normal') reasons.push(`${limit.unit}/${limit.window} at ${Math.round(s.utilization * 100)}% (${s.mode})`);
         if (limit.limit === null) reasons.push(`${limit.unit}/${limit.window} limit unknown (${limit.source}); using local accounting`);

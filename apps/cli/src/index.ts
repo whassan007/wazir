@@ -749,13 +749,33 @@ resourcesCmd.command('reset').argument('<account>', 'Account id').description('C
     process.exit(0);
   });
 
-resourcesCmd.command('validate').description('Validate resources.json')
-  .action(async () => {
+resourcesCmd.command('validate')
+  .description('Check resources.json, account mappings, limits and what admission would do now')
+  .option('--profile <profile>', "'default' reports problems; 'production' also requires enforcement and known, configured limits", 'default')
+  .option('--json', 'Output the report as JSON')
+  .action(async (options: { profile: string; json?: boolean }) => {
+    if (options.profile !== 'default' && options.profile !== 'production') { console.error("--profile must be 'default' or 'production'"); process.exit(2); }
     const { createEngine } = await import('./engine.js');
+    const { validateResourceSetup } = await import('@wazir/core');
     const engine = await createEngine({ quiet: true });
-    if (engine.resources.configError) { console.error(engine.resources.configError); process.exit(1); }
-    console.log(`OK: ${engine.resources.configPath} — ${engine.resources.accounts.list().length} account(s), policy ${engine.resources.policy.mode}`);
-    process.exit(0);
+    const r = engine.resources;
+    const report = validateResourceSetup({
+      budget: r.budget, configError: r.configError, configuredIds: r.configuredIds, profile: options.profile,
+      agents: engine.agents.list().filter((a) => a.source === 'external').map((a) => a.descriptor.name),
+      runtimes: [...new Set([...engine.adapters.keys(), ...engine.discovered.map((d) => d.id)])],
+    });
+    if (options.json) {
+      console.log(JSON.stringify({ configPath: r.configPath, ...report }, null, 2));
+      process.exit(report.ok ? 0 : 1);
+    }
+    const mark = { error: chalk.red('ERROR'), warn: chalk.yellow('WARN '), ok: chalk.green('ok   ') } as const;
+    console.log(`${r.configPath} (profile: ${report.profile})`);
+    for (const f of report.findings) console.log(`  ${mark[f.level]} ${f.subject}: ${f.message}`);
+    console.log('\n  Admission preview (1-token request, nothing reserved):');
+    for (const p of report.probes) console.log(`    ${p.accountId} ${p.workload}: ${p.outcome}${p.reasons.length ? ` — ${p.reasons.join('; ')}` : ''}`);
+    const errors = report.findings.filter((f) => f.level === 'error').length;
+    console.log(`\n${report.ok ? chalk.green('VALID') : chalk.red(`INVALID: ${errors} error(s)`)}${report.ok && errors === 0 && report.findings.some((f) => f.level === 'warn') ? ' with warnings' : ''}`);
+    process.exit(report.ok ? 0 : 1);
   });
 
 resourcesCmd.command('init').option('--force', 'Overwrite an existing resources.json').description('Write an example resources.json from detected runtimes and agents')
