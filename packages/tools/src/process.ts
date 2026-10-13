@@ -62,7 +62,7 @@ export function childEnvironment(extra: Record<string, string> = {}): Record<str
 export function runShell(command: string, options: RunOptions): Promise<CommandResult> {
   const shell = process.platform === 'win32' ? (process.env.ComSpec || process.env.COMSPEC || 'cmd.exe') : 'sh';
   const args = process.platform === 'win32' ? ['/d', '/c', command] : ['-c', command];
-  return runProcess(shell, args, options);
+  return runProcess(shell, args, options, process.platform === 'win32');
 }
 
 export function runFile(
@@ -77,6 +77,7 @@ function runProcess(
   file: string,
   args: string[],
   options: RunOptions,
+  windowsVerbatimArguments = false,
 ): Promise<CommandResult> {
   const started = Date.now();
   const maxBuffer = options.maxBuffer ?? 1024 * 1024;
@@ -149,6 +150,10 @@ function runProcess(
       stdio: wrapped.seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
       detached: detachedGroup,
       shell: spawnCmd.useShell,
+      // cmd.exe parses a command string itself. Node's usual Windows argument
+      // escaping rewrites embedded quotes to backslash-quote, which cmd treats
+      // literally and then fails to find quoted executables/paths.
+      windowsVerbatimArguments,
     });
     if (wrapped.seccomp) {
       const feed = child.stdio[3] as NodeJS.WritableStream;
