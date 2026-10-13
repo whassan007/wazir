@@ -126,7 +126,7 @@ export function childEnvironment(extra: Record<string, string> = {}): Record<str
 
 export function runShell(command: string, options: RunOptions): Promise<CommandResult> {
   const shell = process.platform === 'win32' ? 'cmd' : 'sh';
-  const args = process.platform === 'win32' ? ['/c', command] : ['-c', command];
+  const args = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command];
   return runProcess(shell, args, options);
 }
 
@@ -209,6 +209,7 @@ function runProcess(
     const targetFile = isBatch && !wrapped.file.toLowerCase().endsWith('.cmd') && !wrapped.file.toLowerCase().endsWith('.bat')
       ? `${wrapped.file}.cmd`
       : wrapped.file;
+    const isCmd = isWin && (wrapped.file.toLowerCase() === 'cmd' || wrapped.file.toLowerCase() === 'cmd.exe');
     const child = spawn(targetFile, wrapped.args, {
       cwd: spawnCwd,
       env: childEnv,
@@ -216,6 +217,7 @@ function runProcess(
       stdio: wrapped.seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
       detached: detachedGroup,
       shell: isBatch,
+      windowsVerbatimArguments: isCmd,
     });
     if (wrapped.seccomp) {
       const feed = child.stdio[3] as NodeJS.WritableStream;

@@ -93,6 +93,7 @@ export class SandboxUnavailableError extends Error {
 const HOME_TOOLCHAIN_DIRS = [
   '.nvm', '.volta', '.fnm', '.n', '.bun', '.deno', '.local/bin', '.local/share/pnpm', '.local/share/mise', '.asdf',
   '.cargo', '.rustup', '.go', 'go', '.pyenv', '.rbenv', '.sdkman', '.gradle', '.m2', '.yarn', '.config/yarn',
+  'hostedtoolcache', '.hostedtoolcache',
 ];
 // Caches under $HOME that package managers write to. `Library/Caches` is macOS's
 // general-purpose per-user cache directory — notably where Apple's clang/Xcode
@@ -154,7 +155,7 @@ function probeSandboxExec(): { ok: boolean; reason?: string } {
   if (!bin) return { ok: false, reason: 'sandbox-exec is not available' };
   const tmp = os.tmpdir();
   const profile = seatbeltProfile({ projectRoot: tmp, cwd: tmp });
-  const result = spawnSync(bin, ['-p', profile, process.execPath, '-e', 'process.exit(0)'], { stdio: 'ignore', timeout: 5_000 });
+  const result = spawnSync(bin, ['-p', profile, '/bin/sh', '-c', `"${process.execPath}" -e "process.exit(0)"`], { stdio: 'ignore', timeout: 5_000 });
   return result.status === 0 ? { ok: true } : { ok: false, reason: `sandbox-exec cannot run node with seatbelt profile (exit ${result.status})` };
 }
 
@@ -326,6 +327,7 @@ export function seatbeltProfile(options: SandboxOptions, home: string = os.homed
     ...(realHome && realHome !== resolvedHome ? [`(deny file-read* file-write* (subpath ${q(realHome)}))`] : []),
     ...existingDirs(resolvedHome, HOME_TOOLCHAIN_DIRS).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
     ...existingDirs(resolvedHome, HOME_CACHE_DIRS).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
+    ...(isInside(resolvedHome, path.dirname(path.dirname(process.execPath))) ? [`(allow file-read* (subpath ${q(path.dirname(path.dirname(process.execPath)))}))`] : []),
     ...(options.readOnlyPaths ?? []).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
     // Everything outside the project and temp dirs is read-only.
     '(deny file-write*)',
