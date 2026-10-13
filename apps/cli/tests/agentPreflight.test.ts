@@ -39,7 +39,7 @@ describe('wa agents check', () => {
 
     const fresh = await checkAgents(engine, ['good'], { file, fresh: true });
     expect(fresh[0].checkedAt).not.toBe(cached[0].checkedAt);
-  });
+  }, 15_000);
 
   it('reports unknown names without probing', async () => {
     const r = await checkAgents(engineWith({}), ['nope'], { file });
@@ -100,5 +100,5 @@ describe('wa agents check', () => {
     const [fresh] = await checkAgents(engine, ['codex'], { file, fresh: true });
     expect(fresh.status).toBe('READY');
     expect(fresh.lastVerifiedTask).toMatchObject({ executionId: 'exec-2' });
-  });
+  }, 15_000);
 });

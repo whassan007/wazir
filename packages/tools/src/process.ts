@@ -61,7 +61,9 @@ export function childEnvironment(extra: Record<string, string> = {}): Record<str
 
 export function runShell(command: string, options: RunOptions): Promise<CommandResult> {
   const shell = process.platform === 'win32' ? (process.env.ComSpec || process.env.COMSPEC || 'cmd.exe') : 'sh';
-  const args = process.platform === 'win32' ? ['/d', '/c', command] : ['-c', command];
+  // With /s, cmd strips this outer pair and preserves quotes inside the command.
+  // Passing the unwrapped string makes paths containing spaces parse as syntax.
+  const args = process.platform === 'win32' ? ['/d', '/s', '/c', `"${command}"`] : ['-c', command];
   return runProcess(shell, args, options, process.platform === 'win32');
 }
 
