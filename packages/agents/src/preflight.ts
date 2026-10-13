@@ -89,7 +89,7 @@ export function classifyAgentFailure(agent: string, text: string): { status: 'FA
   if (/no longer supported for Gemini Code Assist for individuals/i.test(text)) {
     return { status: 'FAILED', hint: 'Google retired this tier; use --agent antigravity' };
   }
-  if (/ENOENT|command not found|not installed/i.test(text)) {
+  if (/ENOENT|command not found|not installed|could not start ACP agent/i.test(text)) {
     return { status: 'FAILED', hint: `install the ${agent} CLI and make sure it is on PATH` };
   }
   if (/connection error|ECONNREFUSED|fetch failed|ENOTFOUND|EHOSTUNREACH|socket hang up/i.test(text)) {

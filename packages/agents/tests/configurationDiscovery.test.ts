@@ -75,8 +75,13 @@ describe('passive native configuration discovery', () => {
 
   it('resolves executable paths with spaces without executing them or accepting relative PATH entries', () => {
     const bin = path.join(dir, 'bin ü'); mkdirSync(bin);
-    const executable = path.join(bin, 'codex'); writeFileSync(executable, 'not a program'); chmodSync(executable, 0o755);
-    expect(resolveAgentExecutables('codex', { PATH: bin }, 'linux')).toEqual([executable]);
-    expect(resolveAgentExecutables('codex', { PATH: '.:' }, 'linux')).toEqual([]);
+    const isWindows = process.platform === 'win32';
+    const executable = path.join(bin, isWindows ? 'codex.EXE' : 'codex');
+    writeFileSync(executable, 'not a program');
+    if (!isWindows) chmodSync(executable, 0o755);
+    const env = { PATH: bin, ...(isWindows ? { PATHEXT: '.EXE' } : {}) };
+    expect(resolveAgentExecutables('codex', env)).toEqual([executable]);
+    expect(resolveAgentExecutables('codex', { PATH: `.${path.delimiter}${bin}`, ...(isWindows ? { PATHEXT: '.EXE' } : {}) })).toEqual([executable]);
+    expect(agentExecutableCandidates('codex', { PATH: '.' }, process.platform)).toEqual([]);
   });
 });

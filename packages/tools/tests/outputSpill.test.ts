@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SpillingBuffer } from '../src/outputSpill.js';
-import { runShell } from '../src/process.js';
+import { runFile } from '../src/process.js';
 
 describe('SpillingBuffer', () => {
   let dir: string;
@@ -69,8 +69,8 @@ describe('runProcess output spilling (real subprocess)', () => {
     projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-spill-proc-'));
     const script = path.join(projectDir, 'spill.cjs');
     await fs.writeFile(script, 'for(let i=1;i<=4000;i++) console.log("line-" + i + "-0123456789012345678901234567890123456789");\n');
-    const result = await runShell(
-      `node "${script}"`,
+    const result = await runFile(
+      process.execPath, [script],
       { cwd: projectDir, projectRoot: projectDir, unsandboxed: true, maxBuffer: 10_000, runId: 'test-run' },
     );
 
@@ -89,8 +89,8 @@ describe('runProcess output spilling (real subprocess)', () => {
     projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-spill-proc-'));
     const script2 = path.join(projectDir, 'spill2.cjs');
     await fs.writeFile(script2, 'for(let i=1;i<=2000;i++) console.log("0123456789012345678901234567890123456789");\n');
-    const result = await runShell(
-      `node "${script2}"`,
+    const result = await runFile(
+      process.execPath, [script2],
       { cwd: projectDir, projectRoot: projectDir, unsandboxed: true, maxBuffer: 5_000, runId: 'my-run-id' },
     );
     expect(result.spillPaths?.stdout).toBe(

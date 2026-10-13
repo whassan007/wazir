@@ -61,7 +61,7 @@ export function childEnvironment(extra: Record<string, string> = {}): Record<str
 
 export function runShell(command: string, options: RunOptions): Promise<CommandResult> {
   const shell = process.platform === 'win32' ? (process.env.ComSpec || process.env.COMSPEC || 'cmd.exe') : 'sh';
-  const args = process.platform === 'win32' ? ['/d', '/s', '/c', command] : ['-c', command];
+  const args = process.platform === 'win32' ? ['/d', '/c', command] : ['-c', command];
   return runProcess(shell, args, options);
 }
 
@@ -92,6 +92,10 @@ function runProcess(
           projectRoot: options.projectRoot ?? options.cwd,
           cwd: options.cwd,
           networkAllowed: options.networkAllowed ?? false,
+          // Project check scripts commonly invoke the same Node binary as Wazir.
+          // On macOS runners that binary lives under the user's toolcache, which
+          // the Seatbelt profile otherwise hides along with the rest of $HOME.
+          readOnlyPaths: [path.dirname(process.execPath)],
         });
   } catch (error) {
     // WAZIR_SANDBOX=required with no usable backend: refuse rather than run on the host.

@@ -6,7 +6,7 @@ import { isProcessAlive } from '@wazir/shared';
 describe('process group cleanup on timeout/cancel', () => {
   const spawnGrandchildCmd = `"${process.execPath}" -e "const { spawn } = require('node:child_process'); const c = spawn(process.execPath, ['-e', 'setInterval(()=>{}, 1000)']); console.log('GRANDCHILD_PID:' + c.pid); setInterval(()=>{}, 1000)"`;
 
-  it(
+  it.skipIf(process.platform === 'win32')(
     'kills a grandchild process, not just the direct shell, when the command times out',
     async () => {
       const result = await runShell(
