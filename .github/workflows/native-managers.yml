@@ -31,7 +31,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22.x, cache: npm }
+        with:
+          node-version: 22.x
+          cache: npm
       - run: npm ci
       - run: npm run build
       - name: Current version artifacts
@@ -42,12 +44,15 @@ jobs:
           else node scripts/pack-npm.mjs --skip-bundle; cp dist/npm/*.tgz out/; fi
       - name: Upgrade-target artifacts (same code, version ${{ env.UPGRADE_VERSION }})
         shell: bash
-        env: { WAZIR_BUILD_VERSION: '${{ env.UPGRADE_VERSION }}' }
+        env:
+          WAZIR_BUILD_VERSION: ${{ env.UPGRADE_VERSION }}
         run: |
           if [ "$RUNNER_OS" = Windows ]; then node scripts/build-sea.mjs; cp dist/sea/*.zip out/;
           else node scripts/pack-npm.mjs; cp dist/npm/*.tgz out/; fi
       - uses: actions/upload-artifact@v4
-        with: { name: artifacts-${{ runner.os }}, path: out/ }
+        with:
+          name: artifacts-${{ runner.os }}
+          path: out/
 
   homebrew:
     name: Homebrew (${{ matrix.os }})
@@ -60,7 +65,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with: { name: artifacts-Linux, path: out }
+        with:
+          name: artifacts-Linux
+          path: out
       - name: Homebrew on PATH (Linuxbrew is preinstalled on ubuntu runners)
         if: runner.os == 'Linux'
         run: echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
@@ -89,7 +96,7 @@ jobs:
           after="$(cd "$WAZIR_HOME" && find . -type f ! -name '*-wal' ! -name '*-shm' -exec shasum -a 256 {} + | sort)"
           [ "$before" = "$after" ] || { echo "user state changed by upgrade"; diff <(echo "$before") <(echo "$after"); exit 1; }
           brew uninstall local/wazir/wazir
-          ! command -v wa
+          if command -v wa; then echo "wa still installed after uninstall"; exit 1; fi
           [ -f "$WAZIR_HOME/resources.json" ]
           echo "Homebrew: install $v, upgrade to $UPGRADE_VERSION, uninstall — PASS"
 
@@ -100,9 +107,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22.x }
+        with:
+          node-version: 22.x
       - uses: actions/download-artifact@v4
-        with: { name: artifacts-Windows, path: out }
+        with:
+          name: artifacts-Windows
+          path: out
       - name: Checksums and local server
         shell: pwsh
         run: |
