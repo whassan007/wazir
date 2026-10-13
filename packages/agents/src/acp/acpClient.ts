@@ -5,21 +5,26 @@
  * Adapted for Wazir.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import spawn from 'cross-spawn';
 import { Readable, Writable } from 'node:stream';
 import { spawnGroupWatchdog } from '../processWatchdog.js';
+import {
+  killProcessTree,
+  terminateProcessTree,
+  getSpawnCommand,
+  sanitizeChildEnvironment,
+  classifyOption,
+  redactPermissionText,
+  type PermissionOption,
+  type SubagentActivity,
+} from '@wazir/core';
 import {
   ClientSideConnection,
   ndJsonStream,
   PROTOCOL_VERSION,
   type Client,
 } from '@agentclientprotocol/sdk';
-import {
-  classifyOption,
-  redactPermissionText,
-  type PermissionOption,
-  type SubagentActivity,
-} from '@wazir/core';
 
 export const ACP_INIT_TIMEOUT_MS = 30_000;
 const KILL_GRACE_MS = 2_000;
@@ -92,12 +97,7 @@ export class AcpClientAdapter {
   }
 
   private signal(child: ChildProcess, sig: NodeJS.Signals): void {
-    try {
-      if (this.detached && child.pid !== undefined) process.kill(-child.pid, sig);
-      else child.kill(sig);
-    } catch {
-      try { child.kill(sig); } catch { /* already gone */ }
-    }
+    killProcessTree(child.pid, sig, this.detached);
   }
 
   constructor(options: AcpClientOptions) {
@@ -122,11 +122,13 @@ export class AcpClientAdapter {
     // which a signal to the direct child alone would orphan. stderr is captured (bounded)
     // rather than inherited so agent logs never corrupt the host terminal or TUI.
     const detached = process.platform !== 'win32';
-    const child = spawn(this.options.command, this.options.args ?? [], {
+    const spawnCmd = getSpawnCommand(this.options.command, this.options.args ?? [], { cwd: this.options.cwd });
+    const child = spawn(spawnCmd.command, spawnCmd.args, {
       cwd: this.options.cwd,
-      env: { ...process.env, ...this.options.env },
+      env: sanitizeChildEnvironment(this.options.env),
       stdio: ['pipe', 'pipe', 'pipe'],
       detached,
+      // cross-spawn escapes Windows wrappers itself; shell:true would bypass its escaping.
     });
     this.detached = detached;
     // If Wazir itself dies, the agent and any commands it started must not keep running.
@@ -302,18 +304,9 @@ export class AcpClientAdapter {
     const child = this.child;
     this.connection = undefined;
     if (child && child.exitCode === null && child.signalCode === null) {
-      await new Promise<void>((resolve) => {
-        const finish = () => {
-          clearTimeout(escalate);
-          clearTimeout(deadline);
-          resolve();
-        };
-        const escalate = setTimeout(() => {
-          this.signal(child, 'SIGKILL');
-        }, KILL_GRACE_MS);
-        const deadline = setTimeout(finish, KILL_GRACE_MS * 2);
-        child.once('exit', finish);
-        this.signal(child, 'SIGTERM');
+      await terminateProcessTree(child, {
+        graceMs: KILL_GRACE_MS,
+        wasDetached: this.detached,
       });
     }
   }
@@ -385,7 +378,24 @@ export class AcpClientAdapter {
 
         const toolCall = (params.toolCall ?? {}) as Record<string, unknown>;
         const title = redactPermissionText(String(toolCall.title ?? params.title ?? 'Permission requested'));
-        const toolKind = typeof toolCall.kind === 'string' ? toolCall.kind : undefined;
+        let toolKind = typeof toolCall.kind === 'string' ? toolCall.kind
+          : typeof params.toolKind === 'string' ? params.toolKind
+          : typeof params.kind === 'string' ? params.kind : undefined;
+
+        if (!toolKind) {
+          const lowerTitle = title.toLowerCase();
+          const toolName = String(toolCall.name ?? toolCall.tool ?? '').toLowerCase();
+          if (/^edit|^write|^modify|^create|^delete|^move|^rename|edit_file|write_file|str_replace/i.test(lowerTitle) || /edit|write|replace|modify/i.test(toolName)) {
+            toolKind = 'edit';
+          } else if (/^read|^search|^find|^view|^inspect|read_file|grep|glob/i.test(lowerTitle) || /read|view|search/i.test(toolName)) {
+            toolKind = 'read';
+          } else if (/^run|^exec|^bash|^terminal|^sh|command/i.test(lowerTitle) || /bash|terminal|exec|run/i.test(toolName)) {
+            toolKind = 'execute';
+          } else if (/^fetch|^http|^curl|^download|^web/i.test(lowerTitle) || /fetch|http|web/i.test(toolName)) {
+            toolKind = 'fetch';
+          }
+        }
+
         const requestId = String(params.requestId ?? `req-${Date.now()}`);
         const sessionId = String(params.sessionId ?? '');
 
