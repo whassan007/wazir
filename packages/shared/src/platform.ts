@@ -326,8 +326,8 @@ const WINDOWS_RESERVED_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
  */
 export function isWindowsReservedName(name: string): boolean {
   if (!isWindows) return false;
-  const base = path.basename(name).trim();
-  if (WINDOWS_RESERVED_NAMES.test(base)) return true;
+  const base = path.basename(name);
+  if (WINDOWS_RESERVED_NAMES.test(base.trim())) return true;
   if (base.endsWith('.') || base.endsWith(' ')) return true;
   return false;
 }

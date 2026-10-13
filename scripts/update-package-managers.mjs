@@ -337,9 +337,9 @@ const wgInstallerPath = path.resolve(rootDir, `packaging/winget/manifests/w/Whas
 const wgLocalePath = path.resolve(rootDir, `packaging/winget/manifests/w/Whassan/Wazir/${targetVersion}/Whassan.Wazir.locale.en-US.yaml`);
 
 if (existsSync(wgVersionPath) && existsSync(wgInstallerPath) && existsSync(wgLocalePath)) {
-  const vContent = readFileSync(wgVersionPath, 'utf8');
-  const iContent = readFileSync(wgInstallerPath, 'utf8');
-  const lContent = readFileSync(wgLocalePath, 'utf8');
+  const vContent = readFileSync(wgVersionPath, 'utf8').replace(/\r\n/g, '\n');
+  const iContent = readFileSync(wgInstallerPath, 'utf8').replace(/\r\n/g, '\n');
+  const lContent = readFileSync(wgLocalePath, 'utf8').replace(/\r\n/g, '\n');
 
   if (!vContent.includes(`PackageVersion: ${targetVersion}`) ||
       !iContent.includes(`PackageVersion: ${targetVersion}`) ||

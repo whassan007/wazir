@@ -32,7 +32,7 @@ describe('check tools cannot run arbitrary commands', () => {
 
     const result = await testTool.execute({ command: `touch ${marker}` } as Record<string, unknown>, { projectRoot: project });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.error).toBe(true);
     expect(result.output).toContain('ran-test');
     await expect(fs.access(marker)).rejects.toThrow();
   });
@@ -66,7 +66,7 @@ describe('check tools cannot run arbitrary commands', () => {
 
     const result = await testTool.execute({ script: 'test:unit' }, { projectRoot: project });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.error).toBe(true);
     expect(result.output).toContain('ran-unit');
   });
 
@@ -78,7 +78,7 @@ describe('check tools cannot run arbitrary commands', () => {
     );
 
     const result = await testTool.execute({ script: 'audit:full' }, { projectRoot: project });
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.error).toBe(true);
     expect(result.output).toContain('start');
     expect(result.output).toContain('finished');
   });

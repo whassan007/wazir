@@ -29,7 +29,7 @@ describe('tool timeout terminates the process and determines the outcome', () =>
     expect(result.failureClass).toBe('TOOL_TIMEOUT');
     expect(result.metadata?.processTerminated).toBe(true);
     // The write that happened before the timeout is recorded as a physical mutation...
-    expect(result.fileMutations?.map(m => m.path)).toEqual(['early.txt']);
+    expect(result.fileMutations?.map(m => m.path), JSON.stringify({ output: result.output, error: result.error, metadata: result.metadata })).toEqual(['early.txt']);
     // ...and the killed process can never add one after the result was recorded.
     await new Promise(r => setTimeout(r, 2500));
     expect(existsSync(join(root, 'late.txt'))).toBe(false);

@@ -28,7 +28,9 @@ export interface DiscoveredAgentConfiguration {
 
 /** No shell, executable launch, credential-store reads, or implicit current-directory PATH. */
 export function agentExecutableCandidates(bin: string, env = process.env, platform = process.platform): string[] {
-  const p = platform === 'win32' ? path.win32 : path;
+  // The explicit platform parameter is also used by cross-platform tests. Do not
+  // accidentally use the host's path flavor when simulating another OS.
+  const p = platform === 'win32' ? path.win32 : path.posix;
   const get = (key: string) => Object.entries(env).find(([k]) => platform === 'win32' ? k.toUpperCase() === key : k === key)?.[1];
   const extensions = platform === 'win32' ? (get('PATHEXT') ?? '.COM;.EXE;.BAT;.CMD').split(';') : [''];
   const found = new Set<string>();
