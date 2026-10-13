@@ -55,8 +55,12 @@ async function main(): Promise<void> {
   console.log(`  health: ${scheme}://${host}:${port}/health`);
   console.log(`  api:    ${scheme}://${host}:${port}/api/v1/overview`);
 
+  // close() alone never finishes while a worker holds its long-lived task stream open, so
+  // `docker stop` always ended in SIGKILL after 10s. Drop open connections; workers reconnect.
   const shutdown = () => {
     server.close(() => process.exit(0));
+    server.closeAllConnections();
+    setTimeout(() => process.exit(0), 5_000).unref();
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

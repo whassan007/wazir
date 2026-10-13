@@ -28,6 +28,10 @@ services:
     build:
       context: .
       target: api
+    # Linux has no host.docker.internal by default; map it to the host gateway so the
+    # containers can reach Ollama / LM Studio running on the host (they must listen on 0.0.0.0).
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     environment:
       WAZIR_COMPUTER_ID: api-host
       WAZIR_OLLAMA_URL: ${WAZIR_OLLAMA_URL:-http://host.docker.internal:11434}
@@ -36,18 +40,27 @@ services:
       WAZIR_REGISTRATION_TOKEN: ${WAZIR_REGISTRATION_TOKEN:?set WAZIR_REGISTRATION_TOKEN (worker registration secret)}
     ports:
       - '127.0.0.1:4800:4800'
+    volumes:
+      - wazir-api-data:/data # registrations, execution history (WAZIR_HOME)
     restart: unless-stopped
 
   worker:
     build:
       context: .
       target: worker
+    # Linux has no host.docker.internal by default; map it to the host gateway so the
+    # containers can reach Ollama / LM Studio running on the host (they must listen on 0.0.0.0).
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     environment:
       WAZIR_COMPUTER_ID: worker-host
       WAZIR_SERVER_URL: http://api:4800
       WAZIR_REGISTRATION_TOKEN: ${WAZIR_REGISTRATION_TOKEN:?set WAZIR_REGISTRATION_TOKEN (worker registration secret)}
+    volumes:
+      - wazir-worker-data:/data
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
   web:
@@ -60,12 +73,13 @@ services:
     ports:
       - '127.0.0.1:4801:4801'
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
   # One-off CLI commands against the stack above, e.g.:
-  #   docker compose run --rm cli wa doctor
-  #   docker compose run --rm cli wa task run "add a health endpoint"
+  #   docker compose run --rm cli doctor
+  #   docker compose run --rm cli task run "add a health endpoint"
   cli:
     build:
       context: .
@@ -74,6 +88,8 @@ services:
       WAZIR_API_URL: http://api:4800
       WAZIR_API_TOKEN: ${WAZIR_API_TOKEN:?set WAZIR_API_TOKEN (operator token for /api/v1)}
       WAZIR_DATABASE_URL: postgres://wazir:wazir@postgres:5432/wazir
+    volumes:
+      - wazir-cli-data:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,3 +99,6 @@ services:
 
 volumes:
   wazir-postgres-data:
+  wazir-api-data:
+  wazir-worker-data:
+  wazir-cli-data:
