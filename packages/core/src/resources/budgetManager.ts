@@ -162,6 +162,12 @@ export class TokenBudgetManager {
       const reasons: string[] = [];
       const reserveAndAdmit = (mode: BudgetMode): ResourceAdmissionDecision => {
         if (!reserve) return { ...base, outcome: 'admitted', mode, reasons };
+        // Request ids are unique per dispatch (idempotent settlement depends on it). A second
+        // admission of the same id is a caller bug or a re-entrant wrapper: refuse it plainly
+        // instead of failing on the ledger's unique constraint.
+        if (this.ledger.getReservation(req.requestId)) {
+          return { ...base, outcome: 'blocked', mode, reasons: [...reasons, `DUPLICATE_REQUEST_ID: request '${req.requestId}' was already admitted`] };
+        }
         const reservationId = randomUUID();
         this.ledger.insertReservation({
           id: reservationId, requestId: req.requestId, accountId: account.id, modelId: req.modelId, taskId: req.taskId,

@@ -30,9 +30,11 @@ for time and bytes for diff size. Unavailable measurements are `null`, never zer
 
 All LS-01–LS-36 objectives, fault schedules, acceptance assertions and gate membership
 are catalogued in `scripts/live-session-harness/catalog.mjs`. The runnable cases are
-LS-01, LS-02, LS-03, LS-04, LS-05, LS-16, LS-17, LS-31 and LS-32. Other cases return `BLOCKED` with unfired fault
-schedules; they are specifications, not implemented live qualifications. In particular,
-LIVE-SMOKE has executable scenarios; the other three gates remain incomplete.
+LS-01, LS-02, LS-03, LS-04, LS-05, LS-16, LS-17, LS-19, LS-20, LS-21, LS-22, LS-31 and LS-32.
+Other cases return `BLOCKED` with unfired fault schedules; they are specifications, not
+implemented live qualifications. LIVE-SMOKE is fully runnable. LIVE-RESILIENCE now has
+LS-19 to LS-22 runnable, but LS-28 to LS-30 (human steering) are still missing, so the gate
+still blocks. LIVE-ENGINEERING and LIVE-AUTONOMY are incomplete.
 Unsupported cases are included in aggregate
 scorecards and prevent qualification.
 
@@ -51,6 +53,52 @@ the registered `edit` tool with a numeric path (Wazir calls it `edit`, not `edit
 Driver JSONL records distinguish injected faults from model output. An unfired fault fails
 its session. This driver exercises verification and protocol recovery, not the human
 steering API or durable user-message persistence required by LS-27–LS-30.
+
+### Crash, disconnect and worker-loss scenarios
+
+- **LS-19, Kill Wazir mid-tool.**
+  - **Fault:** the driver `SIGKILL`s Wazir inside the first `write`/`edit` call. The call's
+    durable `STARTED` checkpoint already exists at that point, and the file is untouched.
+  - **Restart:** a second process on the same `WAZIR_HOME` and workspace runs Wazir's own
+    startup reconciliation, then completes the request as a fresh execution with the real
+    model.
+  - **Checks:**
+    - The killed call has a durable checkpoint and is no longer `STARTED`.
+    - Its verdict agrees with the physical oracle captured at the kill: `APPLIED` only if the
+      file had changed, `NOT_APPLIED` only if it had not, and otherwise left `UNDETERMINED`
+      (blocked).
+    - It was not replayed under its call id.
+    - The killed execution is not recorded `completed`.
+- **LS-20, Kill after mutation, before persistence.**
+  - **Fault:** the production `AFTER_TOOL_EXECUTION_BEFORE_PERSIST` fault point kills Wazir
+    after a mutating tool changed the file, but before its completion event was persisted.
+  - **Checks:** the same as LS-19. In addition, the file must actually have changed at the
+    kill.
+- **LS-21, Model disconnection.**
+  - **Fault:** once a tool call has succeeded, the next real generation is cut after 40
+    streamed characters with `ECONNRESET`, at the adapter boundary. The harness does not own
+    LM Studio, so this simulates a connection reset rather than killing the runtime process.
+  - **Checks:** the disconnect must appear in the execution provenance, and a later real
+    generation must follow it.
+- **LS-22, Worker disappears.** This is a protocol-level adapter
+  (`scripts/live-session-harness/workerLoss.mjs`), not a coding session.
+  - **Setup:** it starts the real API (`apps/api/dist/main.js`, file store, operator and
+    registration tokens) and a real worker process (`apps/worker/dist/index.js`) with a
+    pre-shared token. It then dispatches a real model generation.
+  - **Faults:**
+    1. `SIGKILL` the worker's process group while it holds the lease.
+    2. `SIGKILL` and restart the API.
+    3. Start a replacement worker with the same identity.
+  - **Checks:**
+    - The lease is re-acquired as a later attempt after expiry.
+    - The real model output is committed.
+    - The terminal outcome does not change after commit.
+  - **Not covered live:** rejection of the dead worker's late result, because the harness
+    cannot recover that worker's lease token. `apps/api/tests/p0Remediation.test.ts` covers
+    it with the real HTTP API.
+
+Tool authorization (LS-17, an unknown tool) and protected verification artifacts (protected
+file hashes plus the hidden oracle in every fixture session) are covered by the existing cases.
 
 The next adapters must support tool-boundary fault injection, persistent user steering,
 owned runtime/worker lifecycle control, local MCP disconnects, candidate isolation and

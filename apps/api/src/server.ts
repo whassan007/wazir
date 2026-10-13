@@ -153,11 +153,24 @@ export class TaskDispatcher {
     this.records.set(id, record); return true;
   }
   async resolve(id: string, outcome: ExecutionOutcome, token: string): Promise<boolean> {
+    await this.commit(id, outcome, token);
+    return true;
+  }
+  /**
+   * Commits the terminal outcome at most once. Only the current lease holder may commit; a
+   * repeat from that holder (a retried POST) is reported as `duplicate` and changes nothing,
+   * so callers record history and metrics only for `committed`.
+   */
+  async commit(id: string, outcome: ExecutionOutcome, token: string): Promise<'committed' | 'duplicate'> {
+    let committed = false;
     const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
       const r = this.validate(current, token);
-      return r.outcome ? r : { ...r, outcome };
+      if (r.outcome) return r;
+      committed = true;
+      return { ...r, outcome };
     });
-    this.records.set(id, record); return true;
+    this.records.set(id, record);
+    return committed ? 'committed' : 'duplicate';
   }
   async assignments(): Promise<Array<{ id: string; modelId: string; computerId: string; runtimeId?: string }>> {
     await this.refresh();
@@ -203,14 +216,15 @@ export interface ApiStateOptions {
 }
 
 export async function createApiState(options: ApiStateOptions = {}): Promise<ApiState> {
-  const auth = new ApiAuth(options.auth ?? {
+  const store = options.store ?? new MemoryStore();
+  // Worker credentials live in the same store as registrations, so both survive (or are
+  // lost) together.
+  const auth = new ApiAuth({ ...(options.auth ?? {
     operatorToken: process.env.WAZIR_API_TOKEN,
     viewerToken: process.env.WAZIR_API_VIEWER_TOKEN,
     registrationToken: process.env.WAZIR_REGISTRATION_TOKEN,
-    store: options.store,
-  });
+  }), store: options.auth?.store ?? store });
   await auth.init();
-  const store = options.store ?? new MemoryStore();
   const computers = new ComputerRegistry();
   for (const entry of await store.list('computer/registration/')) {
     const registration = entry.value as Parameters<ComputerRegistry['register']>[0];
@@ -243,7 +257,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   computers.heartbeat(localId, { load: currentLoad() });
   // The in-process computer holds a token nobody else knows, so a network
   // peer cannot re-register `local` and take over its record (F-3).
-  auth.issueComputerToken(localId);
+  await auth.issueComputerToken(localId);
 
   for (const discoveredRuntime of discovered) {
     runtimes.register({
@@ -601,7 +615,12 @@ export function createApp(state: ApiState) {
     // Anything registering over HTTP is by definition not this process;
     // `local` is derived from the transport, never trusted from the payload
     // (F-15) — otherwise a `localOnly` task could be routed off-machine.
-    await state.store.put(`computer/registration/${registration.id}`, { ...registration, local: false });
+    try {
+      await state.store.put(`computer/registration/${registration.id}`, { ...registration, local: false });
+    } catch (error) {
+      res.status(503).json({ error: `registration could not be persisted: ${error instanceof Error ? error.message : String(error)}` });
+      return;
+    }
     const computer = state.computers.register({ ...registration, local: false });
     let token: string;
     if (byComputerToken && !preferred) {
@@ -609,8 +628,15 @@ export function createApp(state: ApiState) {
     } else {
       // Fresh registration or replacement: rotate the token so any stream a
       // previous holder still has open stops receiving work.
+      // The token is durably stored before it is returned: a 200 here means the worker
+      // can authenticate after an API restart. On a storage failure nothing changes.
+      try {
+        token = await auth.issueComputerToken(registration.id, preferred);
+      } catch (error) {
+        res.status(503).json({ error: `credential could not be persisted: ${error instanceof Error ? error.message : String(error)}` });
+        return;
+      }
       state.dispatcher.disconnect(registration.id);
-      token = auth.issueComputerToken(registration.id, preferred);
     }
     res.json({ ok: true, id: computer.id, token });
   });
@@ -770,11 +796,12 @@ export function createApp(state: ApiState) {
       return;
     }
     const requestId = String(req.params.requestId);
-    let known: boolean;
-    try { known = await state.dispatcher.resolve(requestId, outcome, String(req.body?.leaseToken ?? '')); }
+    let committed: 'committed' | 'duplicate';
+    try { committed = await state.dispatcher.commit(requestId, outcome, String(req.body?.leaseToken ?? '')); }
     catch (error) { res.status(409).json({ error: (error as Error).message }); return; }
-    if (!known) {
-      res.status(404).json({ error: `request '${requestId}' unknown` });
+    if (committed === 'duplicate') {
+      // A retried result POST: the first outcome stands and is not recorded twice.
+      res.json({ ok: true, duplicate: true });
       return;
     }
     recordExecution(state, {
@@ -808,10 +835,11 @@ export function createApp(state: ApiState) {
     res.status(201).json({ id, record });
   });
 
-  // Agent Protocol (ACP) Standard Endpoints
+  // Agent Protocol (ACP) Standard Endpoints. Viewers may read; every POST creates tasks,
+  // executes steps (tools, model calls) or writes artifacts and needs operator scope.
   app.use('/ap/v1', auth.requireViewerOrOperator);
 
-  app.post('/ap/v1/agent/tasks', async (req, res) => {
+  app.post('/ap/v1/agent/tasks', auth.requireOperator, async (req, res) => {
     try {
       const task = await state.editorProtocol.createTask(req.body ?? {});
       res.status(201).json(task);
@@ -834,9 +862,9 @@ export function createApp(state: ApiState) {
     res.json(task);
   });
 
-  app.post('/ap/v1/agent/tasks/:task_id/steps', async (req, res) => {
+  app.post('/ap/v1/agent/tasks/:task_id/steps', auth.requireOperator, async (req, res) => {
     try {
-      const step = await state.editorProtocol.executeStep(req.params.task_id, req.body);
+      const step = await state.editorProtocol.executeStep(String(req.params.task_id), req.body);
       res.json(step);
     } catch (err) {
       const msg = (err as Error).message;
@@ -871,9 +899,9 @@ export function createApp(state: ApiState) {
     }
   });
 
-  app.post('/ap/v1/agent/tasks/:task_id/artifacts', async (req, res) => {
+  app.post('/ap/v1/agent/tasks/:task_id/artifacts', auth.requireOperator, async (req, res) => {
     try {
-      const artifact = await state.editorProtocol.createArtifact(req.params.task_id, req.body ?? {});
+      const artifact = await state.editorProtocol.createArtifact(String(req.params.task_id), req.body ?? {});
       res.status(201).json(artifact);
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
@@ -892,7 +920,21 @@ export function createApp(state: ApiState) {
   // Model Context Protocol (MCP) Server JSON-RPC 2.0 Endpoint
   app.use('/mcp', auth.requireViewerOrOperator);
 
+  // JSON-RPC methods a viewer may call. Everything else (notably `tools/call`, which runs
+  // tools with side effects) needs operator scope, including inside a batch.
+  const MCP_READ_ONLY = new Set(['initialize', 'notifications/initialized', 'ping', 'tools/list',
+    'resources/list', 'resources/read', 'prompts/list', 'prompts/get']);
+  const mcpNeedsOperator = (body: unknown): boolean => {
+    const calls = Array.isArray(body) ? body : [body];
+    return calls.some((call) => !MCP_READ_ONLY.has(String((call as { method?: unknown } | null)?.method ?? '')));
+  };
   const mcpHandler = async (req: express.Request, res: Response) => {
+    if (mcpNeedsOperator(req.body) && !auth.isOperatorRequest(req)) {
+      auth.recordAuthFailure();
+      const id = Array.isArray(req.body) ? null : (req.body as { id?: unknown } | null)?.id ?? null;
+      res.status(403).json({ jsonrpc: '2.0', id, error: { code: -32001, message: 'operator scope required (viewer token is read-only)' } });
+      return;
+    }
     const response = await state.editorProtocol.handleJsonRpc(req.body);
     if (response === null) {
       res.status(204).end();

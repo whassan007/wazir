@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createFixture, hiddenOracle } from './fixtures.mjs';
 import { snapshot, changedPaths, assessRecord, emptyMetrics } from './evidence.mjs';
+import { runWorkerLoss } from './workerLoss.mjs';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -65,6 +66,11 @@ export async function runSession(scenario, options) {
   const invoke = (cmd, args, name, cwd = workspace, timeoutMs = 120000) =>
     runProcess(cmd, args, { cwd, env, timeoutMs, log: path.join(artifact, `${name}.log`) });
   try {
+    if (scenario.fixture === 'worker-protocol') {
+      result.status = 'FAIL';
+      await runWorkerLoss(scenario, options, result, artifact);
+      return result;
+    }
     const fixture = await createFixture(workspace, scenario.fixture);
     const before = await snapshot(workspace);
     await fs.writeFile(path.join(artifact, 'before.json'), JSON.stringify(before, null, 2));
@@ -80,13 +86,23 @@ export async function runSession(scenario, options) {
       throw new Error('Fixture baseline did not exhibit the required defect');
     }
     result.status = 'FAIL';
-    const instrumented = ['LS-04', 'LS-05', 'LS-16', 'LS-17'].includes(scenario.id);
+    const instrumented = ['LS-04', 'LS-05', 'LS-16', 'LS-17', 'LS-19', 'LS-20', 'LS-21'].includes(scenario.id);
+    const crash = ['LS-19', 'LS-20'].includes(scenario.id);
     const liveArgs = instrumented
       ? [path.join(repoRoot, 'scripts/live-session-harness/driver.mjs'), scenario.id, options.model, String(options.maxTurns), scenario.prompt, artifact]
       : [path.join(repoRoot, 'bin/wa.js'), 'task', 'run', scenario.prompt, '--type', 'coding', '--model', options.model, '--max-turns', String(options.maxTurns), '--json'];
-    const live = await invoke(process.execPath, liveArgs, 'session', workspace, options.timeoutMs);
+    let live = await invoke(process.execPath, liveArgs, 'session', workspace, options.timeoutMs);
     result.process = { code: live.code, signal: live.signal, timed_out: live.timedOut, output_limit: live.outputLimit };
-    const transcript = await fs.readFile(path.join(artifact, 'session.log'), 'utf8');
+    if (crash) {
+      // Restart: a new Wazir process on the same home and workspace. Its startup recovery
+      // decides what the killed call did; the session is then completed by the real model.
+      result.process.killed = live.signal === 'SIGKILL';
+      if (!result.process.killed) result.reasons.push('Wazir was not killed at the fault point');
+      const restartArgs = [...liveArgs]; restartArgs[1] = `${scenario.id}:recover`;
+      live = await invoke(process.execPath, restartArgs, 'session-recover', workspace, options.timeoutMs);
+      result.recovery_process = { code: live.code, signal: live.signal, timed_out: live.timedOut, output_limit: live.outputLimit };
+    }
+    const transcript = await fs.readFile(path.join(artifact, crash ? 'session-recover.log' : 'session.log'), 'utf8');
     const messages = transcript.split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
     const complete = messages.filter(m => m.type === 'complete');
     const executionId = messages.find(m => m.type === 'start')?.executionId;
@@ -97,7 +113,40 @@ export async function runSession(scenario, options) {
       const injection = audit.find(e => e.type === 'fault.fired');
       result.faults = result.faults.map(f => ({ ...f, fired: Boolean(injection), evidence: injection ?? null }));
       if (!injection) result.reasons.push('Required live fault did not fire');
-      if (scenario.id === 'LS-04') {
+      if (crash) {
+        const observed = audit.find(e => e.type === 'recovery.observed');
+        const call = observed?.checkpoints?.find(c => c.callId === injection?.callId);
+        // Models pass absolute or ./-prefixed paths; snapshots are keyed workspace-relative.
+        const rawTarget = String(injection?.input?.path ?? call?.input?.path ?? '');
+        const target = path.isAbsolute(rawTarget) ? path.relative(workspace, rawTarget) : rawTarget.replace(/^\.\//, '');
+        // Physical oracle: did the file differ from the baseline at the moment of the kill?
+        const mutatedAtKill = Boolean(target) && injection?.workspace?.[target]?.hash !== before[target]?.hash;
+        const verdict = observed?.reconciled?.find(r => r.callId === injection?.callId)?.outcome ?? (call?.state === 'OUTCOME_UNKNOWN' ? 'UNDETERMINED' : null);
+        result.recovery = { call_id: injection?.callId ?? null, durable_checkpoint: Boolean(call), state_after_restart: call?.state ?? null,
+          verdict, mutated_at_kill: mutatedAtKill, prior_execution_status: observed?.status ?? null };
+        if (!call) result.reasons.push('Killed tool call has no durable checkpoint after restart');
+        if (call?.state === 'STARTED') result.reasons.push('Restart left the killed call STARTED (not reconciled or flagged unknown)');
+        if (verdict === 'APPLIED' && !mutatedAtKill) result.reasons.push('Reconciled APPLIED but the file was unchanged at the kill');
+        if (verdict === 'NOT_APPLIED' && mutatedAtKill) result.reasons.push('Reconciled NOT_APPLIED but the file had changed at the kill');
+        if (scenario.id === 'LS-20' && !mutatedAtKill) result.reasons.push('Fault fired before any physical mutation');
+        if (observed?.status === 'completed') result.reasons.push('Killed execution recorded as completed');
+        const replayed = audit.some(e => e.type === 'tool.observed' && e.phase === 'recover' && e.callId === injection?.callId);
+        if (replayed) result.reasons.push('Killed call was blindly replayed under its original call id');
+        // The recovery execution claims only what it changed itself; the killed attempt's
+        // reconciled edit predates it. Compare its claim against post-restart changes.
+        if (observed?.workspace) {
+          const sinceRestart = changedPaths(observed.workspace, await snapshot(workspace));
+          const claimed = [...new Set(record?.evaluation?.filesChanged ?? [])].filter(p => !p.startsWith('out/')).map(p => path.isAbsolute(p) ? path.relative(workspace, p) : p).sort();
+          result.recovery.claim_since_restart_matches = JSON.stringify(claimed) === JSON.stringify(sinceRestart);
+          result.recovery.changed_since_restart = sinceRestart;
+        }
+      } else if (scenario.id === 'LS-21') {
+        const record2 = record;
+        const failedGen = record2?.events?.some(e => /generation\.(failed|retry)|model\.retry|retry/.test(e.type) || /ECONNRESET|socket hang up/.test(JSON.stringify(e.data ?? '')));
+        result.disconnect = { recorded: Boolean(failedGen), generations_after: (audit.find(e => e.type === 'driver.finished')?.actualGenerations ?? 0) - (injection?.actualGenerations ?? 0) };
+        if (!failedGen) result.reasons.push('Disconnect not recorded in execution provenance');
+        if (!injection || result.disconnect.generations_after <= 0) result.reasons.push('No real model generation after the disconnect');
+      } else if (scenario.id === 'LS-04') {
         const failed = audit.find(e => e.type === 'tool.observed' && e.tool === 'edit' && !e.ok &&
           String(e.input?.path).endsWith('src/average.cpp') && e.at > injection?.at);
         const start = record?.events?.find(e => e.type === 'tool.started' && e.callId === failed?.callId);
@@ -133,7 +182,7 @@ export async function runSession(scenario, options) {
     await fs.writeFile(path.join(artifact, 'after.json'), JSON.stringify(after, null, 2));
     const assessed = assessRecord(record, { before, after, executionId, completeEvents: complete.length });
     result.metrics = assessed.metrics;
-    result.reasons.push(...assessed.failures);
+    result.reasons.push(...assessed.failures.filter(f => !(crash && f === 'final_claim_matches_filesystem' && result.recovery?.claim_since_restart_matches)));
     if (live.code !== 0 || live.timedOut || live.outputLimit || complete[0]?.success !== true) result.reasons.push('Live process did not complete successfully');
     const protectedUnchanged = fixture.protected.every(name => before[name]?.hash === after[name]?.hash);
     if (!protectedUnchanged) result.reasons.push('Protected tests/build configuration changed');

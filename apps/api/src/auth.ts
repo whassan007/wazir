@@ -47,7 +47,6 @@ export class ApiAuth {
   readonly registrationToken?: string;
   readonly allowUnauthenticated: boolean;
   private readonly store?: KeyValueStore;
-  private readonly computerTokens = new Map<string, string>();
   private readonly computerTokenHashes = new Map<string, string>();
   private authFailureCount = 0;
 
@@ -80,59 +79,59 @@ export class ApiAuth {
   }
 
   /**
-   * Initializes stored computer token hashes from KeyValueStore so registered
-   * workers survive API restarts without re-registration.
+   * Loads stored computer token hashes so registered workers survive API restarts without
+   * re-registering. A store that cannot be read fails startup: silently starting with no
+   * credentials would lock every worker out, or let a peer claim a registered id.
    */
   async init(): Promise<void> {
     if (!this.store) return;
-    try {
-      const entries = await this.store.list('auth:computer:');
-      for (const entry of entries) {
-        const val = entry.value as { hash?: string; computerId?: string };
-        const id = val?.computerId ?? entry.key.replace(/^auth:computer:/, '');
-        if (val?.hash) {
-          this.computerTokenHashes.set(id, val.hash);
-        }
+    const entries = await this.store.list('auth:computer:');
+    for (const entry of entries) {
+      const val = entry.value as { hash?: string; computerId?: string };
+      const id = val?.computerId ?? entry.key.replace(/^auth:computer:/, '');
+      if (val?.hash) {
+        this.computerTokenHashes.set(id, val.hash);
       }
-    } catch {
-      // Store listing is best-effort on startup
     }
   }
 
-  /** Mints (or adopts a worker-supplied) token for `computerId`, replacing any previous one. */
-  issueComputerToken(computerId: string, preferred?: string): string {
+  /**
+   * Mints (or adopts a worker-supplied) token for `computerId`, replacing any previous one.
+   * Resolves only after the hash is durably stored; if the write fails it rejects and the
+   * previous credential stays in force, so a returned token always survives a restart.
+   */
+  async issueComputerToken(computerId: string, preferred?: string): Promise<string> {
     const token = preferred && preferred.length >= 16 ? preferred : randomBytes(32).toString('hex');
-    this.computerTokens.set(computerId, token);
     const hash = createHash('sha256').update(token).digest('hex');
-    this.computerTokenHashes.set(computerId, hash);
     if (this.store) {
-      void this.store.put(`auth:computer:${computerId}`, {
+      await this.store.put(`auth:computer:${computerId}`, {
         computerId,
         hash,
         updatedAt: new Date().toISOString(),
       });
     }
+    this.computerTokenHashes.set(computerId, hash);
     return token;
   }
 
   hasComputerToken(computerId: string): boolean {
-    return this.computerTokens.has(computerId) || this.computerTokenHashes.has(computerId);
+    return this.computerTokenHashes.has(computerId);
   }
 
-  revokeComputerToken(computerId: string): void {
-    this.computerTokens.delete(computerId);
+  /**
+   * Revokes `computerId`'s credential. It stops working in this process immediately (fail
+   * closed); the returned promise rejects if the durable delete failed, in which case the
+   * credential would come back after a restart and the revocation must be retried.
+   */
+  async revokeComputerToken(computerId: string): Promise<void> {
     this.computerTokenHashes.delete(computerId);
     if (this.store) {
-      void this.store.delete(`auth:computer:${computerId}`);
+      await this.store.delete(`auth:computer:${computerId}`);
     }
   }
 
   isComputerToken(computerId: string, presented: string | undefined): boolean {
     if (!presented) return false;
-    const expected = this.computerTokens.get(computerId);
-    if (expected !== undefined && safeEqual(expected, presented)) {
-      return true;
-    }
     const expectedHash = this.computerTokenHashes.get(computerId);
     if (expectedHash !== undefined) {
       const presentedHash = createHash('sha256').update(presented).digest('hex');
@@ -153,14 +152,16 @@ export class ApiAuth {
     return this.viewerToken !== undefined && presented !== undefined && safeEqual(this.viewerToken, presented);
   }
 
+  /** Whether `req` carries operator scope (the same rule `requireOperator` applies). */
+  isOperatorRequest(req: Request): boolean {
+    if (this.isAllowedUnauthenticated && !this.operatorToken) return true;
+    return this.isOperatorToken(bearerToken(req));
+  }
+
   /** Express middleware: operator token required for mutations and dispatch. */
   requireOperator = (req: Request, res: Response, next: NextFunction): void => {
-    if (this.isAllowedUnauthenticated && !this.operatorToken) {
-      next();
-      return;
-    }
     const presented = bearerToken(req);
-    if (this.isOperatorToken(presented)) {
+    if (this.isOperatorRequest(req)) {
       next();
       return;
     }
