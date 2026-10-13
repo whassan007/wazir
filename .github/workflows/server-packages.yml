@@ -1,0 +1,75 @@
+name: Server packages
+
+# amd64 coverage for what was tested natively on arm64 (DGX Spark): Debian/RPM packages
+# installed, upgraded and removed in clean distribution containers, and the OCI images built
+# for linux/amd64 + linux/arm64, with the amd64 image started and smoke-tested. Nothing is pushed.
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-compose.yml'
+      - 'packaging/**'
+      - 'scripts/**'
+      - 'apps/api/**'
+      - '.github/workflows/server-packages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-packages:
+    name: deb/rpm (amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x, cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - name: Build current and upgrade-target packages
+        run: |
+          node scripts/build-sea.mjs --skip-bundle && node scripts/build-linux-packages.mjs
+          mkdir -p pk/cur pk/up && mv dist/linux/* pk/cur/
+          WAZIR_BUILD_VERSION=99.0.0 node scripts/build-sea.mjs && WAZIR_BUILD_VERSION=99.0.0 node scripts/build-linux-packages.mjs
+          mv dist/linux/* pk/up/ && ls -la pk/*
+      - name: Install, upgrade, remove in clean containers
+        run: |
+          for img in debian:12 ubuntu:24.04 ubuntu:22.04 rockylinux:9 fedora:41; do
+            docker run --rm -v "$PWD/pk/cur:/pkgs/cur:ro" -v "$PWD/pk/up:/pkgs/up:ro" -v "$PWD/scripts/test-linux-packages.sh:/t.sh:ro" "$img" sh /t.sh | tail -1
+          done
+
+  images:
+    name: OCI images (linux/amd64, linux/arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build all targets for both architectures
+        run: |
+          for t in cli api worker web; do
+            docker buildx build --platform linux/amd64,linux/arm64 --target "$t" -t "wazir-$t:ci" .
+          done
+      - name: Smoke-test the amd64 images
+        run: |
+          for t in cli api worker; do docker buildx build --load --platform linux/amd64 --target "$t" -t "wazir-$t:ci" . ; done
+          [ "$(docker run --rm wazir-cli:ci --version)" = "$(node -p "require('./package.json').version")" ]
+          [ "$(docker run --rm --entrypoint id wazir-cli:ci -un)" = node ]
+          # The API must refuse to start on 0.0.0.0 without a token.
+          if docker run --rm wazir-api:ci; then echo "API started without a token"; exit 1; fi
+          export WAZIR_API_TOKEN=$(openssl rand -hex 32) WAZIR_REGISTRATION_TOKEN=$(openssl rand -hex 32)
+          docker network create wz
+          docker run -d --name api --network wz -e WAZIR_API_TOKEN -e WAZIR_REGISTRATION_TOKEN -p 127.0.0.1:4800:4800 wazir-api:ci
+          for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' api)" = healthy ] && break; sleep 2; done
+          [ "$(curl -s -o /dev/null -w %{http_code} 127.0.0.1:4800/api/v1/overview)" = 401 ]
+          [ "$(curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer $WAZIR_API_TOKEN" 127.0.0.1:4800/api/v1/overview)" = 200 ]
+          docker run -d --name worker --network wz -e WAZIR_SERVER_URL=http://api:4800 -e WAZIR_REGISTRATION_TOKEN -e WAZIR_COMPUTER_ID=ci-worker wazir-worker:ci
+          sleep 10
+          curl -s -H "Authorization: Bearer $WAZIR_API_TOKEN" 127.0.0.1:4800/api/v1/computers | grep -q ci-worker
+          docker restart api && sleep 8
+          curl -s -H "Authorization: Bearer $WAZIR_API_TOKEN" 127.0.0.1:4800/api/v1/computers | grep -q ci-worker
+          start=$(date +%s%N); docker stop api >/dev/null; ms=$(( ($(date +%s%N)-start)/1000000 ))
+          echo "api stop: ${ms}ms exit $(docker inspect -f '{{.State.ExitCode}}' api)"
+          [ "$(docker inspect -f '{{.State.ExitCode}}' api)" = 0 ] && [ "$ms" -lt 8000 ]
