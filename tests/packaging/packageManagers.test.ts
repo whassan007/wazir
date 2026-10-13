@@ -105,7 +105,7 @@ describe('Cross-Platform Package Manager Integration', () => {
     });
 
     it('installer manifest configures portable zip for x64 and arm64 with wa alias', () => {
-      const content = readFileSync(path.resolve(wingetDir, 'Whassan.Wazir.installer.yaml'), 'utf8');
+      const content = readFileSync(path.resolve(wingetDir, 'Whassan.Wazir.installer.yaml'), 'utf8').replace(/\r\n/g, '\n');
       expect(content).toContain('PackageIdentifier: Whassan.Wazir');
       expect(content).toContain(`PackageVersion: ${currentVersion}`);
       expect(content).toContain('InstallerType: zip');
