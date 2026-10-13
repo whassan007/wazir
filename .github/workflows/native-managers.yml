@@ -95,8 +95,10 @@ jobs:
           [ "$(wa --version)" = "$UPGRADE_VERSION" ]
           after="$(cd "$WAZIR_HOME" && find . -type f ! -name '*-wal' ! -name '*-shm' -exec shasum -a 256 {} + | sort)"
           [ "$before" = "$after" ] || { echo "user state changed by upgrade"; diff <(echo "$before") <(echo "$after"); exit 1; }
-          brew uninstall local/wazir/wazir
-          if command -v wa; then echo "wa still installed after uninstall"; exit 1; fi
+          # --force: every installed version (HOMEBREW_NO_INSTALL_CLEANUP keeps the pre-upgrade keg).
+          brew uninstall --force local/wazir/wazir
+          hash -r
+          if [ -e "$(brew --prefix)/bin/wa" ] || command -v wa; then echo "wa still installed after uninstall"; exit 1; fi
           [ -f "$WAZIR_HOME/resources.json" ]
           echo "Homebrew: install $v, upgrade to $UPGRADE_VERSION, uninstall — PASS"
 
@@ -192,5 +194,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "winget install failed ($LASTEXITCODE)" }
           $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
           if ((wa --version).Trim() -ne $v) { throw 'winget install: version mismatch' }
-          winget uninstall --id whassan007.Wazir --disable-interactivity
+          winget uninstall --id whassan007.Wazir --disable-interactivity --accept-source-agreements
+          if ($LASTEXITCODE -ne 0) { throw "winget uninstall failed ($LASTEXITCODE)" }
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+          if (Get-Command wa -ErrorAction SilentlyContinue) { throw 'wa still available after winget uninstall' }
           'WinGet: validate, install, uninstall — PASS'
