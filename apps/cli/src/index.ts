@@ -674,7 +674,17 @@ for (const verb of ['discover', 'refresh', 'inspect', 'explain']) {
     .description('Inspect native configuration declarations and provenance without launching agents')
     .action(async (name, options) => {
       const { AgentConfigurationDiscovery } = await import('@wazir/agents');
-      const agents = new AgentConfigurationDiscovery().discover({ trustedProject: options.trustProject }).filter(a => !name || a.agent === name);
+      const { loadPreflightCache, invalidateAgentPreflight } = await import('./agentPreflight.js');
+      const { isPreflightFresh } = await import('@wazir/agents');
+      if (verb === 'refresh') invalidateAgentPreflight(name);
+      const cache = loadPreflightCache();
+      const agents = new AgentConfigurationDiscovery().discover({ trustedProject: options.trustProject }).filter(a => !name || a.agent === name).map(a => {
+        const connection = cache[a.agent];
+        const fresh = connection?.fingerprint === a.fingerprint && isPreflightFresh(connection);
+        return { ...a, state: fresh ? connection.status : a.state, connection: fresh ? connection : undefined,
+          authentication: fresh && connection.status === 'READY' ? 'VERIFIED' : 'UNKNOWN',
+          verificationScope: 'Connection probes use an empty temporary workspace, not project instructions or project model overrides.' };
+      });
       console.log(options.json ? JSON.stringify({ agents }, null, 2) : agents.map(a => `${a.agent}: ${a.state}\nExecutable: ${a.executable ?? 'not found'}\nModel: ${a.model.value ?? 'unknown'} (${a.model.status})\n${a.sources.map(s => `  ${s.path} [${s.scope}, ${s.trusted ? 'trusted' : 'untrusted'}]`).join('\n')}\n${a.diagnostics.join('\n')}`).join('\n\n'));
       if (!agents.length) process.exitCode = 1;
     });

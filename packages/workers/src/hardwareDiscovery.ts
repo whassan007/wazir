@@ -31,6 +31,15 @@ function discoverCpu(): string {
       const model = os.cpus()[0]?.model?.trim();
       if (model && model !== 'Unknown CPU') return model;
       try {
+        const out = execSync('powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name"', {
+          timeout: 5000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).toString().trim();
+        if (out) return out.split('\n')[0].trim();
+      } catch {
+        // powershell or CIM unavailable
+      }
+      try {
         const out = execSync('wmic cpu get name /value', { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
         const match = out.match(/Name=(.+)/);
         if (match) return match[1].trim();
@@ -42,21 +51,34 @@ function discoverCpu(): string {
       return execSync('sysctl -n machdep.cpu.brand_string', { timeout: 5000 }).toString().trim();
     }
     if (process.platform === 'linux') {
-      const info = readFileSync('/proc/cpuinfo', 'utf8');
-      const match = info.match(/model name\s*:\s*(.+)/);
-      if (match) return match[1].trim();
+      try {
+        const info = readFileSync('/proc/cpuinfo', 'utf8');
+        const match = info.match(/model name\s*:\s*(.+)/);
+        if (match) return match[1].trim();
+      } catch {
+        // /proc/cpuinfo read failed
+      }
+      // On ARM64 (e.g. DGX Spark / Grace / Ampere), /proc/cpuinfo often lacks 'model name'
+      try {
+        const lscpu = execSync('lscpu', { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+        const matchLscpu = lscpu.match(/Model name:\s*(.+)/);
+        if (matchLscpu) return matchLscpu[1].trim();
+      } catch {
+        // lscpu unavailable
+      }
     }
   } catch {
     // fall through
   }
-  return os.cpus()[0]?.model ?? 'Unknown CPU';
+  const defaultModel = os.cpus()[0]?.model?.trim();
+  return defaultModel && defaultModel !== 'unknown' ? defaultModel : 'Unknown CPU';
 }
 
 async function discoverGpu(): Promise<GPUInfo | undefined> {
   try {
     if (process.platform === 'darwin' && process.arch === 'arm64') {
       // Apple Silicon: unified memory is shared with the GPU
-      const totalGB = Math.round(os.totalmem() / (1024 ** 3));
+      const totalGB = Math.max(1, Math.round(os.totalmem() / (1024 ** 3)));
       return {
         vendor: 'apple',
         model: 'Apple GPU (unified memory)',
@@ -67,19 +89,25 @@ async function discoverGpu(): Promise<GPUInfo | undefined> {
     if (process.platform === 'linux' || process.platform === 'win32') {
       const info = execSync('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader', {
         timeout: 5000,
+        stdio: ['ignore', 'pipe', 'ignore'],
       }).toString().trim();
       if (info) {
         const [model, memoryMB] = info.split(',').map((part) => part.trim());
         const dedicatedMiB = Number.parseFloat(memoryMB ?? '');
         const report = !Number.isFinite(dedicatedMiB)
-          ? execSync('nvidia-smi -q', { timeout: 5000 }).toString() : '';
+          ? execSync('nvidia-smi -q', { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).toString() : '';
         // ATS alone can coexist with discrete memory. Require absent framebuffer
         // capacity and a coherent CPU/GPU link before treating the pool as shared.
         const unifiedMemory = !Number.isFinite(dedicatedMiB) && /Addressing Mode\s*:\s*ATS/.test(report) && /GPU C2C Mode\s*:\s*Enabled/.test(report);
+        const memGB = unifiedMemory
+          ? Math.max(1, Math.round(os.totalmem() / (1024 ** 3)))
+          : Number.isFinite(dedicatedMiB)
+            ? Math.max(0, Math.round(dedicatedMiB / 1024))
+            : 0;
         return {
           vendor: 'nvidia',
           model: model ?? 'NVIDIA GPU',
-          memoryGB: unifiedMemory ? os.totalmem() / 1024 ** 3 : Number.isFinite(dedicatedMiB) ? dedicatedMiB / 1024 : 0,
+          memoryGB: memGB,
           unifiedMemory,
           cuda: true,
         };

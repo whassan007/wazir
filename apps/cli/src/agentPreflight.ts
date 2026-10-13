@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { AgentConfigurationDiscovery, isPreflightFresh, preflightAgent, type AgentPreflightResult } from '@wazir/agents';
+import os from 'node:os';
+import { AgentConfigurationDiscovery, ExternalAgentAdapter, isPreflightFresh, preflightAgent, type AgentPreflightResult } from '@wazir/agents';
 import type { AgentAdapter } from '@wazir/core';
 import { color } from './colors.js';
 import { configDir } from './config.js';
@@ -34,6 +35,12 @@ function savePreflightCache(results: Record<string, AgentPreflightResult>, file 
   }
 }
 
+export function invalidateAgentPreflight(name?: string, file = cacheFile()): void {
+  const cache = loadPreflightCache(file);
+  if (name) delete cache[name];
+  savePreflightCache(name ? cache : {}, file);
+}
+
 /** External agents only: native agents run on Wazir's own runtimes, covered by `wa doctor`. */
 export function externalAgentNames(engine: PreflightEngine): string[] {
   return engine.agents.list().filter((a) => a.source === 'external').map((a) => a.descriptor.name);
@@ -62,6 +69,14 @@ export async function checkAgents(
     if (!options.fresh && cached && cached.fingerprint === config?.fingerprint && isPreflightFresh(cached)) return cached;
     if (config?.state === 'BLOCKED') return { agent: name, status: 'BLOCKED', detail: 'Invalid native configuration; validate it with the vendor CLI.', durationMs: 0, checkedAt: new Date().toISOString(), fingerprint: config.fingerprint };
     const result = await preflightAgent(adapter, { timeoutMs: options.timeoutMs, env });
+    if (config?.executable) {
+      const versionAdapter = new ExternalAgentAdapter({ name: 'version-inspection', version: '', description: '', command: config.executable, taskTypes: [], capabilities: [], timeoutMs: 3000, env });
+      try {
+        for await (const turn of versionAdapter.run({ taskDescription: '--version', projectRoot: os.tmpdir(), maxWallClockMs: 3000 } as any, {} as any)) {
+          if (turn.kind === 'message') result.version = turn.content?.match(/\b\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?\b/)?.[0];
+        }
+      } catch { /* Version inspection is optional and does not invalidate a completed task. */ }
+    }
     // Vendor errors may echo secrets. Persist only controlled diagnostics for discovered agents.
     if (config && result.status !== 'READY') result.detail = result.hint ?? 'Agent execution failed; inspect diagnostics using the vendor CLI.';
     return { ...result, fingerprint: config?.fingerprint };
@@ -74,6 +89,12 @@ export async function checkAgents(
 /** The cached result for an agent if it is fresh and says the agent cannot run; else undefined. */
 export function knownAgentFailure(name: string, file?: string): AgentPreflightResult | undefined {
   const cached = loadPreflightCache(file)[name];
+  if (cached?.fingerprint) {
+    // Profile environments must be resolved by checkAgents with the account registry.
+    if (name.includes('@')) return undefined;
+    const config = new AgentConfigurationDiscovery().discover().find(a => a.agent === name);
+    if (config?.fingerprint !== cached.fingerprint) return undefined;
+  }
   return cached && isPreflightFresh(cached) && (cached.status === 'FAILED' || cached.status === 'BLOCKED') ? cached : undefined;
 }
 

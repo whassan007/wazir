@@ -41,6 +41,16 @@ export interface TaskRequirements {
   mutationRequired?: boolean;
   expectedArtifacts?: string[];
   runtimePreset?: string;
+  /** Operating system requirement (e.g. 'darwin', 'win32', 'linux', 'macos', 'windows'). */
+  os?: string | string[];
+  /** CPU architecture requirement (e.g. 'arm64', 'x64'). */
+  architecture?: string | string[];
+  /** Requires GPU acceleration. */
+  requiresGpu?: boolean;
+  /** Requires NVIDIA CUDA support. */
+  requiresCuda?: boolean;
+  /** Specific agent required. */
+  agent?: string;
 }
 
 export interface PolicyRequirements {

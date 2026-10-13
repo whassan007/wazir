@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process';
-import { killProcessTree, resolveExecutable } from '@wazir/shared';
+import spawn from 'cross-spawn';
+import { killProcessTree, resolveExecutable, getSpawnCommand, sanitizeChildEnvironment } from '@wazir/shared';
 import type {
   AgentAdapter,
   AgentDescriptor,
@@ -56,17 +56,19 @@ export class ExternalAgentAdapter implements AgentAdapter {
     const timeoutMs = Math.min(this.spec.timeoutMs ?? 600_000, request.maxWallClockMs ?? Infinity);
     const output = await new Promise<string | undefined>((resolve, reject) => {
       let captured = '';
+      let stderr = '';
       let stopReason: 'timeout' | 'cancelled' | undefined;
       // Own process group (POSIX) so timeout/cancel reaches the harness's children too:
       // killing only the direct child leaves grandchildren holding the stdout pipe,
       // and 'close' then never fires.
       const detached = process.platform !== 'win32';
-      const command = resolveExecutable(this.spec.command) ?? this.spec.command;
-      const child = spawn(command, args, {
+      const spawnCmd = getSpawnCommand(this.spec.command, args, { cwd: request.projectRoot });
+      const child = spawn(spawnCmd.command, spawnCmd.args, {
         cwd: request.projectRoot,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: this.spec.env ? { ...process.env, ...this.spec.env } : undefined,
+        env: this.spec.env ? sanitizeChildEnvironment(this.spec.env) : undefined,
         detached,
+        shell: spawnCmd.useShell,
       });
       const stop = (reason: 'timeout' | 'cancelled') => {
         if (stopReason) return;
@@ -81,7 +83,7 @@ export class ExternalAgentAdapter implements AgentAdapter {
         if (captured.length < MAX_CAPTURE) captured += chunk.slice(0, MAX_CAPTURE - captured.length);
       };
       child.stdout.setEncoding('utf8').on('data', append);
-      child.stderr.setEncoding('utf8').on('data', append);
+      child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-MAX_CAPTURE); });
       child.on('error', (error) => {
         settle();
         reject(error);
@@ -93,7 +95,7 @@ export class ExternalAgentAdapter implements AgentAdapter {
         else if (code === 0) resolve(captured);
         else {
           // The agent's own last words say why; an exit code alone is not diagnosable.
-          const tail = captured.trim().split('\n').slice(-3).join(' ').slice(-300);
+          const tail = (stderr || captured).trim().split('\n').slice(-3).join(' ').slice(-300);
           reject(new Error(`'${this.spec.command}' exited with code ${code}${tail ? `: ${tail}` : ''}`));
         }
       });

@@ -78,7 +78,7 @@ export class AgentConfigurationDiscovery {
       const sources: ConfigurationSource[] = [];
       const diagnostics: string[] = [];
       const hash = createHash('sha256');
-      hash.update(JSON.stringify({ cwd, root, home, trusted: !!options.trustedProject, platform: process.platform }));
+      hash.update(JSON.stringify({ schema: 2, cwd, root, home, trusted: !!options.trustedProject, platform: process.platform }));
       for (const key of ['PATH', 'PATHEXT', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'APPDATA', 'CLAUDECODE', 'ANTHROPIC_MODEL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', 'WAZIR_ACP_PERMISSIONS']) {
         hash.update(key).update(env[key] ?? '');
       }

@@ -54,7 +54,7 @@ import {
 import { ToolRegistry, defaultTools, createWebTools } from '@wazir/tools';
 import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
 import { createConfiguredWeb } from './web.js';
-import { AgentConfigurationDiscovery, AcpAgentAdapter, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
+import { AgentConfigurationDiscovery, resolveAgentExecutables, AcpAgentAdapter, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
@@ -307,6 +307,19 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // (read | edit | full; default edit, which never allows shell commands).
   const acpPermissionMode = parseAcpPermissionMode(process.env.WAZIR_ACP_PERMISSIONS);
   const agentConfigurations = new AgentConfigurationDiscovery().discover({ cwd: projectRoot });
+  // Use the installed Codex CLI and its native configuration/authentication. The pinned ACP
+  // bridge bundles a different Codex version and can reject models supported by this CLI.
+  // Read-only + never is intentionally stricter than Wazir's edit/full modes, never a bypass.
+  const codexConfiguration = agentConfigurations.find(a => a.agent === 'codex');
+  const registerCodex = (name: string, env?: Record<string, string>) => {
+    const executable = resolveAgentExecutables('codex', { ...process.env, ...env })[0];
+    if (!executable) return;
+    agents.register(new ExternalAgentAdapter({ name, version: 'native-cli', description: 'Installed Codex CLI; native configuration and login, read-only sandbox', command: executable,
+      args: ['exec', '--skip-git-repo-check', '--sandbox', 'read-only', '-c', 'approval_policy="never"'],
+      taskTypes: [], capabilities: ['coding'], env,
+    }), 'external');
+  };
+  if (codexConfiguration?.executable && codexConfiguration.state !== 'BLOCKED') registerCodex('codex');
   for (const spec of acpAgentSpecs()) {
     if (agentConfigurations.find(a => a.agent === spec.name)?.state === 'BLOCKED') continue;
     if (!onPath(spec.requires) || agents.get(spec.name)) continue;
@@ -320,6 +333,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     for (const instance of account.agents ?? []) {
       const [base] = instance.split('@');
       if (!instance.includes('@') || agents.get(instance)) continue;
+      if (base === 'codex') { registerCodex(instance, account.env); continue; }
       const spec = acpAgentSpecs().find((s) => s.name === base);
       if (!spec || !onPath(spec.requires)) continue;
       agents.register(new AcpAgentAdapter({ ...spec, name: instance, description: `${spec.description} — account ${account.id}`, env: account.env, permissionMode: acpPermissionMode }), 'external');

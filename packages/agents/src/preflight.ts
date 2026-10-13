@@ -14,6 +14,7 @@ export type AgentPreflightStatus = 'READY' | 'FAILED' | 'BLOCKED' | 'UNKNOWN';
 export type AgentPreflightStage = 'environment' | 'start' | 'answer';
 
 export interface AgentPreflightResult {
+  version?: string;
   /** Discovery scope and configuration identity used to invalidate cached results. */
   fingerprint?: string;
   agent: string;
@@ -114,6 +115,8 @@ export async function preflightAgent(
   const deadline = started + timeoutMs;
   let sessionOpened = false;
   let last: AgentTurn | undefined;
+  let answeredProbe = false;
+  const requiresProbeAnswer = ['codex', 'claude-code', 'antigravity'].includes(agent.split('@')[0]);
   try {
     for await (const turn of adapter.run({
       modelId: 'external',
@@ -125,6 +128,7 @@ export async function preflightAgent(
     } as Parameters<AgentAdapter['run']>[0], {} as Parameters<AgentAdapter['run']>[1])) {
       if (turn.kind === 'message' && /^delegated to /.test(turn.content ?? '')) sessionOpened = true;
       last = turn;
+      if ((turn.kind === 'message' || turn.kind === 'done') && /(^|\n)\s*OK[.!]?\s*($|\n)/.test(turn.content ?? '')) answeredProbe = true;
     }
   } catch (error) {
     last = { kind: 'error', error: error instanceof Error ? error.message : String(error) };
@@ -132,7 +136,7 @@ export async function preflightAgent(
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
 
-  if (last?.kind === 'done') {
+  if (last?.kind === 'done' && (!requiresProbeAnswer || answeredProbe)) {
     return finish({ status: 'READY', stage: 'answer', detail: `answered in ${((Date.now() - started) / 1000).toFixed(1)}s` });
   }
   const detail = last?.kind === 'error'

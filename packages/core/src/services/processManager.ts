@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { HealthStatus } from '@wazir/runtimes-interfaces';
-import { killProcessTree, isProcessAlive } from '@wazir/shared';
+import { killProcessTree, isProcessAlive, terminateProcessTree, getSpawnCommand, sanitizeChildEnvironment } from '@wazir/shared';
 
 export interface ProcessConfig {
   id: string;
@@ -68,16 +68,11 @@ export class ProcessManager {
     record.stdout = [];
     record.stderr = [];
 
-    // Detached (POSIX) so the child becomes the leader of its own process
-    // group: stop() below kills that whole group, not just this one pid.
-    // Previously this was `detached: false`, which meant the child shared
-    // *this* process's own group — `process.kill(-record.pid!, ...)` in
-    // stop() was therefore targeting the wrong group entirely (this
-    // process's, or nothing at all, depending on OS group assignment), a
-    // pre-existing bug independent of the missing grace/verify logic below.
-    const child = spawn(record.config.command, record.config.args ?? [], {
-      env: { ...process.env, ...record.config.env },
+    const spawnCmd = getSpawnCommand(record.config.command, record.config.args ?? []);
+    const child = spawn(spawnCmd.command, spawnCmd.args, {
+      env: sanitizeChildEnvironment(record.config.env),
       detached: process.platform !== 'win32',
+      shell: spawnCmd.useShell,
     });
 
     record.process = child;
@@ -131,33 +126,15 @@ export class ProcessManager {
     const child = record.process;
     const pid = record.pid;
 
-    let exited = false;
-    child.once('exit', () => { exited = true; });
+    const stopped = await terminateProcessTree(child, {
+      graceMs,
+      wasDetached: process.platform !== 'win32',
+    });
 
-    if (pid !== undefined) {
-      killProcessTree(pid, 'SIGTERM', process.platform !== 'win32');
-    }
-
-    const deadline = Date.now() + graceMs;
-    while (!exited && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-
-    if (!exited && pid !== undefined) {
-      killProcessTree(pid, 'SIGKILL', process.platform !== 'win32');
-      const killDeadline = Date.now() + 2000;
-      while (!exited && Date.now() < killDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    }
-
-    // Verify death rather than assume it: a signal delivery failure (wrong
-    // pid re-used by an unrelated process, permission error, ...) should
-    // surface as a real failure, not a silently-wrong 'stopped' status.
-    const stillAlive = pid !== undefined && !exited && isProcessAlive(pid);
     record.process = null;
     record.pid = undefined;
-    if (stillAlive) {
+
+    if (!stopped) {
       record.status = 'failed';
       record.health = { status: 'degraded', message: `Process ${pid} did not exit after SIGTERM/SIGKILL` };
       throw new Error(`PROCESS_STOP_FAILED: '${id}' (pid ${pid}) is still running after SIGKILL`);
