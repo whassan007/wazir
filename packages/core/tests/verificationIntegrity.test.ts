@@ -27,6 +27,12 @@ describe('verification integrity', () => {
     expect(kinds).toContain('assertions_removed');
   });
 
+  it('counts node:assert method calls, so removing them is flagged', () => {
+    const before = "const assert = require('node:assert');\nassert.strictEqual(add(2, 3), 5);\nassert.deepStrictEqual(f(), []);\n";
+    const after = "const assert = require('node:assert');\n";
+    expect(detectOracleWeakening('add.test.js', before, after).map((f) => f.kind)).toEqual(['assertions_removed']);
+  });
+
   it('flags skipping a test', () => {
     const skipped = suite.replace("it('handles empty'", "it.skip('handles empty'");
     expect(detectOracleWeakening('src/sort.test.ts', suite, skipped).map((f) => f.kind)).toContain('tests_skipped');

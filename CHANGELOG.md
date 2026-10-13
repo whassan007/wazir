@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.1.59 — 2026-10-12
+
+A reliability release. Delegated agents are now judged on evidence Wazir gathers itself, not
+on their exit code; agents no longer outlive a crashed `wa`; and budget reservations survive
+long delegations. Full audit: `docs/audits/WAZIR_HARDENING_v0.1.58.md`.
+
+**Verification:** locally 2072 tests pass, 0 fail (18 skipped); typecheck clean. Live on the
+DGX Spark: an Antigravity delegation was verified by Wazir running the project's tests itself;
+a Codex delegation failed correctly (codex-cli 0.157.1 is too old for its default model). New
+multi-process tests race six real processes on one ledger. Not tested: benchmarks, network
+partitions, GPU saturation, agent failover (not implemented).
+
+### ⚠️ Behaviour changes
+
+- **Delegated tasks are verified by Wazir.** After a delegated agent runs, Wazir records the
+  files it changed and, when source changed, runs the project's npm `build`, `typecheck`,
+  `lint` and `test` scripts itself. The task fails if a check fails, if no check exists, if
+  the agent weakened tests (removed assertions or test cases, added skips, deleted tests), or
+  if it edited a check script in `package.json`. Previously an exit code of 0 was enough.
+  Projects without npm scripts that change source now fail with "no checks were executed".
+- **Executions left running by a dead process are marked failed** (`INTERRUPTED`) when the
+  next `wa` starts, instead of staying `running` forever.
+- **An unknown limit with `unknownLimitPolicy: "deny"` is blocked**, not deferred: waiting
+  never makes the limit known.
+
+### Added
+
+- `wa resources validate [--profile production] [--json]` checks policy, account mappings,
+  unknown vs unlimited limits, pricing and spend ceilings, and previews admission per account
+  without reserving anything. `--profile production` exits 1 unless enforcement is on and every
+  non-local account is explicitly configured with known limits. It never changes policy.
+- `wa agents check` reports **DEGRADED** when an agent answers the probe but its latest real
+  task failed in the agent, and shows each agent's last task and last verified task.
+
+### Fixed
+
+- A delegated agent (and any command it started) is killed when `wa` itself dies (SIGKILL,
+  OOM, closed terminal), for both CLI and ACP agents. Before, it kept editing the workspace.
+- Budget reservations for delegations and silent generations renew on a timer, so a run
+  longer than `leaseMs` (15 min) is no longer settled mid-flight and dropped from concurrency limits.
+- Concurrent recovery of one expired reservation records one `expired` event, not one per process.
+- The test-weakening detector counts `assert.strictEqual(...)`-style assertions.
+
 ## v0.1.58 — 2026-10-12
 
 A delegation and resource-orchestration release. Wazir can hand a task to Claude Code, Codex,

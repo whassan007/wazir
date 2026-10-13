@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { isPreflightFresh, preflightAgent, type AgentPreflightResult } from '@wazir/agents';
+import { effectivePreflightStatus, isPreflightFresh, preflightAgent, type AgentPreflightResult, type AgentTaskRecord } from '@wazir/agents';
 import type { AgentAdapter } from '@wazir/core';
 import { color } from './colors.js';
 import { configDir } from './config.js';
@@ -55,12 +55,26 @@ export async function checkAgents(
       return { agent: name, status: 'UNKNOWN', detail: 'not a registered external agent (is its CLI installed?)', durationMs: 0, checkedAt: new Date().toISOString() };
     }
     const cached = cache[name];
-    if (!options.fresh && cached && isPreflightFresh(cached)) return cached;
-    return preflightAgent(adapter, { timeoutMs: options.timeoutMs });
+    if (!options.fresh && cached && isPreflightFresh(cached) && cached.status !== 'UNKNOWN') return cached;
+    // Real-task history outlives each probe.
+    return { ...await preflightAgent(adapter, { timeoutMs: options.timeoutMs }), lastTask: cached?.lastTask, lastVerifiedTask: cached?.lastVerifiedTask };
   }));
-  for (const r of results) if (r.status !== 'UNKNOWN') cache[r.agent] = r;
+  for (const r of results) if (r.status !== 'UNKNOWN' || r.lastTask) cache[r.agent] = r;
   savePreflightCache(cache, options.file);
-  return results;
+  return results.map((r) => ({ ...r, status: effectivePreflightStatus(r) }));
+}
+
+/**
+ * Records the outcome of a real delegated task, so preflight reflects whether the agent can
+ * actually do work, not only whether it answered a probe prompt.
+ */
+export function recordAgentTask(name: string, task: AgentTaskRecord, file?: string): void {
+  const cache = loadPreflightCache(file);
+  const entry: AgentPreflightResult = cache[name] ?? { agent: name, status: 'UNKNOWN', detail: 'not probed yet', durationMs: 0, checkedAt: new Date(0).toISOString() };
+  entry.lastTask = task;
+  if (task.outcome === 'verified') entry.lastVerifiedTask = task;
+  cache[name] = entry;
+  savePreflightCache(cache, file);
 }
 
 /** The cached result for an agent if it is fresh and says the agent cannot run; else undefined. */
@@ -70,7 +84,7 @@ export function knownAgentFailure(name: string, file?: string): AgentPreflightRe
 }
 
 const paintStatus = (s: string) =>
-  s === 'READY' ? color.green(s) : s === 'BLOCKED' ? color.yellow(s) : s === 'FAILED' ? color.red(s) : color.gray(s);
+  s === 'READY' ? color.green(s) : s === 'BLOCKED' || s.startsWith('DEGRADED') ? color.yellow(s) : s === 'FAILED' ? color.red(s) : color.gray(s);
 
 export function renderPreflight(results: AgentPreflightResult[]): string {
   if (results.length === 0) return 'No external agents are registered. Install claude, codex, qwen, gemini or agy to enable delegation.';
@@ -79,6 +93,10 @@ export function renderPreflight(results: AgentPreflightResult[]): string {
   for (const r of [...results].sort((a, b) => a.agent.localeCompare(b.agent))) {
     lines.push(`${r.agent.padEnd(width)}${paintStatus(r.status.padEnd(8))} ${r.detail}`);
     if (r.hint) lines.push(`${' '.repeat(width + 9)}${color.gray(`fix: ${r.hint}`)}`);
+    const pad = ' '.repeat(width + 9);
+    if (r.lastTask) lines.push(`${pad}${color.gray(`last task: ${r.lastTask.outcome} ${new Date(r.lastTask.at).toLocaleString()} (${r.lastTask.executionId})${r.lastTask.detail ? ` — ${r.lastTask.detail}` : ''}`)}`);
+    if (r.lastVerifiedTask && r.lastVerifiedTask !== r.lastTask && r.lastVerifiedTask.at !== r.lastTask?.at) lines.push(`${pad}${color.gray(`last verified task: ${new Date(r.lastVerifiedTask.at).toLocaleString()} (${r.lastVerifiedTask.executionId})`)}`);
+    else if (!r.lastVerifiedTask) lines.push(`${pad}${color.gray('no verified real task yet')}`);
   }
   return lines.join('\n');
 }

@@ -7,6 +7,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
+import { spawnGroupWatchdog } from '../processWatchdog.js';
 import {
   ClientSideConnection,
   ndJsonStream,
@@ -128,6 +129,9 @@ export class AcpClientAdapter {
       detached,
     });
     this.detached = detached;
+    // If Wazir itself dies, the agent and any commands it started must not keep running.
+    // The watchdog exits by itself once the whole group is gone.
+    if (detached && child.pid !== undefined) spawnGroupWatchdog(process.pid, child.pid);
     child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
       this.stderrTail = (this.stderrTail + chunk).slice(-4_000);
     });

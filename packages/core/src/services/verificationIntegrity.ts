@@ -47,7 +47,7 @@ const RUNNER_CONFIG_RES: RegExp[] = [
 
 // Counted per file; a drop means cases/assertions were removed.
 const TEST_CASE_RE = /\b(?:it|test)\s*\(|\bdef\s+test_\w*|\bfunc\s+Test\w*\s*\(|\bTEST(?:_F|_P)?\s*\(|@Test\b|#\[test\]/g;
-const ASSERTION_RE = /\bexpect\s*\(|\bassert\w*\s*[(\s]|\bself\.assert\w+\s*\(|\b(?:EXPECT|ASSERT|REQUIRE|CHECK)_\w+\s*\(|\b(?:REQUIRE|CHECK)\s*\(|\bt\.(?:Error|Fatal)f?\s*\(/g;
+const ASSERTION_RE = /\bexpect\s*\(|\bassert\w*\s*[(\s]|\bassert\.\w+\s*\(|\bself\.assert\w+\s*\(|\b(?:EXPECT|ASSERT|REQUIRE|CHECK)_\w+\s*\(|\b(?:REQUIRE|CHECK)\s*\(|\bt\.(?:Error|Fatal)f?\s*\(/g;
 const SKIP_RE = /\b(?:it|test|describe)\.(?:skip|todo)\s*\(|\bx(?:it|describe|test)\s*\(|@pytest\.mark\.(?:skip|xfail)|@unittest\.skip|\bt\.Skip(?:Now|f)?\s*\(|\bGTEST_SKIP\s*\(|\bDISABLED_\w+|#\[ignore\]|@Disabled\b|@Ignore\b/g;
 const TRIVIAL_ASSERTION_RE = /expect\s*\(\s*(true|1)\s*\)\s*\.\s*(toBe|toEqual|toBeTruthy)\s*\(\s*(true|1)?\s*\)|\bassert\s*\(?\s*True\s*\)?\s*$|\bassert\s*\(\s*(true|1)\s*\)|\b(?:EXPECT|ASSERT)_TRUE\s*\(\s*(true|1)\s*\)|self\.assertTrue\s*\(\s*True\s*\)/gm;
 

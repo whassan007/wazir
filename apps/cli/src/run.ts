@@ -26,6 +26,8 @@ import { color } from './colors.js';
 import type { RookEngine } from './engine.js';
 import { StatusLoader } from './spinner.js';
 import { recordTermination } from './termination.js';
+import { recordAgentTask } from './agentPreflight.js';
+import { captureDelegationBaseline, verifyDelegatedWork, type DelegationBaseline } from './delegationVerification.js';
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
 
 /** Maps a control-plane-reported worker event onto the local `GenerationEvent` shape,
@@ -674,7 +676,8 @@ export async function executeTask(
   // Delegated agents run on their vendor's account, not through a runtime adapter, so they
   // are admitted here: one request plus estimated tokens against the agent's account. The
   // vendor CLI reports no usage, so the settlement is always labelled an estimate.
-  let delegation: { requestId: string; rawInput: number } | undefined;
+  let delegation: { requestId: string; rawInput: number; stopLease: () => void } | undefined;
+  let baseline: DelegationBaseline | Error | undefined;
   if (externalAgent) {
     const name = agent.descriptor.name;
     const accountId = engine.resources.resolveAgentAccount(name);
@@ -696,7 +699,9 @@ export async function executeTask(
       log(color.red(`    ${reason}`));
       return { success: false, reasons: [reason], filesChanged: [], executionId, errors: [reason] };
     }
-    delegation = { requestId, rawInput };
+    delegation = { requestId, rawInput, stopLease: engine.resources.budget.holdLease(requestId) };
+    // The agent edits files with its own tools; only a before/after comparison shows what it did.
+    baseline = await captureDelegationBaseline(engine.projectRoot).catch((error: Error) => error);
   }
 
   // ---- run the agent ------------------------------------------------------
@@ -763,6 +768,7 @@ export async function executeTask(
     loader.stop();
     process.off('SIGINT', onSigint);
     if (delegation) {
+      delegation.stopLease();
       const output = estimateTextTokens(summary ?? '');
       if (errors.length === 0 && !cancelled) {
         engine.resources.budget.reconcile(delegation.requestId, { inputTokens: delegation.rawInput, outputTokens: output, source: 'estimated' }, { agent: agent.descriptor.name });
@@ -783,6 +789,24 @@ export async function executeTask(
     return { success: false, reasons: [reason], filesChanged: [], executionId, result: summary, errors: [...errors, reason] };
   }
 
+  // ---- delegated work: observe and check it ourselves ----------------------
+  const agentErrors = [...errors];
+  if (baseline && !cancelled) {
+    if (baseline instanceof Error) {
+      const message = `UNVERIFIED: cannot observe the workspace before delegation (${baseline.message})`;
+      errors.push(message);
+      await engine.executions.recordError(executionId, message);
+    } else {
+      const verified = await verifyDelegatedWork({
+        executions: engine.executions, tools: engine.tools, executionId, projectRoot: engine.projectRoot,
+        networkAllowed: engine.config.networkAllowed && task.policy?.networkAccess !== false,
+        allowVerificationChanges: taskAuthorizesVerificationChanges(description), touchesSourceCode,
+      }, baseline);
+      errors.push(...verified.problems);
+      log(color.gray(`    delegated agent changed ${verified.changed.length} file(s)${verified.changed.length ? `: ${verified.changed.slice(0, 5).join(', ')}${verified.changed.length > 5 ? ', ...' : ''}` : ''}`));
+    }
+  }
+
   // ---- deterministic evaluation -------------------------------------------
   const finalRecord = engine.executions.require(executionId);
   const evaluation = evaluateExecution(finalRecord, {
@@ -797,6 +821,13 @@ export async function executeTask(
     executionId,
     cancelled ? 'cancelled' : evaluation.success ? 'completed' : 'failed',
   );
+  if (externalAgent && !cancelled) {
+    recordAgentTask(agent.descriptor.name, {
+      at: new Date().toISOString(), executionId,
+      outcome: agentErrors.length > 0 ? 'agent_error' : evaluation.success ? 'verified' : 'rejected',
+      detail: (agentErrors[0] ?? (evaluation.success ? undefined : evaluation.reasons.find((r) => /missing|failed|PROTECTED|UNVERIFIED/.test(r)) ?? errors[0]))?.slice(0, 200),
+    }, path.join(engine.configDir, 'agent-preflight.json'));
+  }
 
   emitJson({
     type: 'complete',

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AcpAgentAdapter } from '@wazir/agents';
-import { checkAgents, knownAgentFailure, renderPreflight } from '../src/agentPreflight.js';
+import { checkAgents, knownAgentFailure, recordAgentTask, renderPreflight } from '../src/agentPreflight.js';
 import { runTaskCommand } from '../src/commands.js';
 
 const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../packages/agents/tests/fixtures/fakeAcpAgent.mjs');
@@ -80,5 +80,23 @@ describe('wa agents check', () => {
     expect(json).toMatchObject({ success: false });
 
     await expect(runTaskCommand(untouchable, 'fix it', { agent: 'codex', force: true })).rejects.toThrow('engine must not be used');
+  });
+
+  it('a probe answer is not enough: a later real-task failure in the agent shows DEGRADED, and history survives re-probes', async () => {
+    const engine = engineWith({ codex: 'normal' });
+    const [first] = await checkAgents(engine, ['codex'], { file });
+    expect(first.status).toBe('READY');
+    expect(renderPreflight([first])).toMatch(/no verified real task yet/);
+
+    recordAgentTask('codex', { at: new Date(Date.now() + 1).toISOString(), executionId: 'exec-1', outcome: 'agent_error', detail: 'model endpoint 400' }, file);
+    const [degraded] = await checkAgents(engine, ['codex'], { file });
+    expect(degraded.status).toBe('DEGRADED');
+    expect(renderPreflight([degraded])).toMatch(/last task: agent_error .*exec-1.*model endpoint 400/);
+    expect(knownAgentFailure('codex', file)).toBeUndefined(); // degraded warns; it does not refuse
+
+    recordAgentTask('codex', { at: new Date(Date.now() + 2).toISOString(), executionId: 'exec-2', outcome: 'verified' }, file);
+    const [fresh] = await checkAgents(engine, ['codex'], { file, fresh: true });
+    expect(fresh.status).toBe('READY');
+    expect(fresh.lastVerifiedTask).toMatchObject({ executionId: 'exec-2' });
   });
 });

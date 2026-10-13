@@ -235,11 +235,14 @@ export class ResourceLedger {
     const rows = (this.db.prepare(`SELECT * FROM reservations WHERE status = 'active' AND lease_expires_at <= ?`).all(now) as Record<string, unknown>[]).map(toReservation);
     let recovered = 0;
     for (const r of rows) {
-      this.transaction(() => {
-        this.db.prepare(`UPDATE reservations SET status = 'expired' WHERE id = ? AND status = 'active'`).run(r.id);
-        this.appendEvent('expired', { accountId: r.accountId, requestId: r.requestId, taskId: r.taskId }, { estInput: r.estInputTokens, estOutput: r.estOutputTokens });
+      // Another process may recover (or the owner renew) the same row between the SELECT and
+      // here; only the process whose UPDATE wins records the expiry and settles it.
+      const won = this.transaction(() => {
+        const changed = Number(this.db.prepare(`UPDATE reservations SET status = 'expired' WHERE id = ? AND status = 'active' AND lease_expires_at <= ?`).run(r.id, now).changes);
+        if (changed) this.appendEvent('expired', { accountId: r.accountId, requestId: r.requestId, taskId: r.taskId }, { estInput: r.estInputTokens, estOutput: r.estOutputTokens });
+        return changed > 0;
       });
-      if (this.settle({
+      if (won && this.settle({
         requestId: r.requestId, accountId: r.accountId, modelId: r.modelId, taskId: r.taskId, workload: r.workload,
         inputTokens: r.estInputTokens, outputTokens: r.estOutputTokens, cachedInputTokens: 0, reasoningTokens: 0,
         requests: r.estRequests, costUsd: r.estCostUsd, source: 'conservative', at: now, local: r.local,

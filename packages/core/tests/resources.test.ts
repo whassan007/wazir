@@ -126,7 +126,9 @@ describe('subscription quotas', () => {
     expect(allowed.reasons.join(' ')).toMatch(/limit unknown/);
     expect(ask(budget, 'u-conserve', 10, 10).outcome).toBe('blocked');
     expect(ask(budget, 'u-conserve', 10, 10, { workload: 'complex' }).outcome).toBe('admitted');
-    expect(ask(budget, 'u-deny', 10, 10).outcome).toBe('deferred');
+    const denied = ask(budget, 'u-deny', 10, 10);
+    expect(denied.outcome).toBe('blocked'); // waiting cannot make an unknown limit known
+    expect(denied.retryAt).toBeUndefined();
   });
 
   it('10. quota resets at the window boundary', () => {

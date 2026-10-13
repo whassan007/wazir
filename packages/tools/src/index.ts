@@ -10,6 +10,7 @@ export * from './outputSpill.js';
 export * from './terminalSession.js';
 export * from './terminalTools.js';
 export * from './outcomeInspection.js';
+export { snapshotWorkspace, workspaceFingerprint, workspaceMutations, type WorkspaceSnapshot } from './workspaceSnapshot.js';
 export { createWebTools } from './web.js';
 export * from './compactionTools.js';
 export * from './codeIntelligenceTools.js';

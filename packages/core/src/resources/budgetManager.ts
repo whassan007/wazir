@@ -64,6 +64,26 @@ export class TokenBudgetManager {
     return v ? JSON.parse(v) : undefined;
   }
 
+  // ---- leases ---------------------------------------------------------------------------------
+  /**
+   * Keeps a reservation's lease alive while its request runs, on a timer rather than on
+   * provider events: a delegated agent or a silent local generation can run far longer than
+   * `leaseMs`, and an expired lease would be settled conservatively mid-flight and stop
+   * counting toward concurrency. Returns the function that stops renewing. If this process
+   * dies, renewal stops with it and the lease expires normally.
+   */
+  holdLease(requestId: string, everyMs = Math.max(1_000, Math.floor(this.policy.leaseMs / 3))): () => void {
+    const timer = setInterval(() => {
+      try {
+        this.ledger.renewLease(requestId, this.ledger.now() + this.policy.leaseMs);
+      } catch {
+        // Ledger closed or busy: the next tick retries; expiry stays the safe fallback.
+      }
+    }, everyMs);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }
+
   // ---- status ---------------------------------------------------------------------------------
   private unitsOf(unit: LimitUnit, req: Pick<ResourceAdmissionRequest, 'estimatedInputTokens' | 'estimatedOutputTokens' | 'requests'>, cost: number): number {
     switch (unit) {
@@ -195,10 +215,10 @@ export class TokenBudgetManager {
         const s = this.limitStatus(account, limit, add, now);
         mode = worse(mode, s.mode);
         if (s.mode === 'exhausted') {
-          return deny('deferred', limit.limit === null
-            ? `account '${account.id}' has an unknown ${limit.unit}/${limit.window} limit and its policy is 'deny'`
-            : `${limit.unit} limit ${limit.limit}/${limit.window} (${limit.source}) would be exceeded: used ${round(s.used)}, reserved ${round(s.reserved)}, request ~${round(add)}`,
-          'exhausted', s.windowEnd);
+          // An unknown limit does not become known by waiting: refuse, with no retry time.
+          if (limit.limit === null) return deny('blocked', `account '${account.id}' has an unknown ${limit.unit}/${limit.window} limit and its policy is 'deny'; configure the limit or change unknownLimitPolicy`, 'exhausted');
+          return deny('deferred', `${limit.unit} limit ${limit.limit}/${limit.window} (${limit.source}) would be exceeded: used ${round(s.used)}, reserved ${round(s.reserved)}, request ~${round(add)}`,
+            'exhausted', s.windowEnd);
         }
         if (s.utilization !== undefined && s.mode !== 'normal') reasons.push(`${limit.unit}/${limit.window} at ${Math.round(s.utilization * 100)}% (${s.mode})`);
         if (limit.limit === null) reasons.push(`${limit.unit}/${limit.window} limit unknown (${limit.source}); using local accounting`);
