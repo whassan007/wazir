@@ -64,6 +64,26 @@ export class TokenBudgetManager {
     return v ? JSON.parse(v) : undefined;
   }
 
+  // ---- leases ---------------------------------------------------------------------------------
+  /**
+   * Keeps a reservation's lease alive while its request runs, on a timer rather than on
+   * provider events: a delegated agent or a silent local generation can run far longer than
+   * `leaseMs`, and an expired lease would be settled conservatively mid-flight and stop
+   * counting toward concurrency. Returns the function that stops renewing. If this process
+   * dies, renewal stops with it and the lease expires normally.
+   */
+  holdLease(requestId: string, everyMs = Math.max(1_000, Math.floor(this.policy.leaseMs / 3))): () => void {
+    const timer = setInterval(() => {
+      try {
+        this.ledger.renewLease(requestId, this.ledger.now() + this.policy.leaseMs);
+      } catch {
+        // Ledger closed or busy: the next tick retries; expiry stays the safe fallback.
+      }
+    }, everyMs);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }
+
   // ---- status ---------------------------------------------------------------------------------
   private unitsOf(unit: LimitUnit, req: Pick<ResourceAdmissionRequest, 'estimatedInputTokens' | 'estimatedOutputTokens' | 'requests'>, cost: number): number {
     switch (unit) {

@@ -674,7 +674,7 @@ export async function executeTask(
   // Delegated agents run on their vendor's account, not through a runtime adapter, so they
   // are admitted here: one request plus estimated tokens against the agent's account. The
   // vendor CLI reports no usage, so the settlement is always labelled an estimate.
-  let delegation: { requestId: string; rawInput: number } | undefined;
+  let delegation: { requestId: string; rawInput: number; stopLease: () => void } | undefined;
   if (externalAgent) {
     const name = agent.descriptor.name;
     const accountId = engine.resources.resolveAgentAccount(name);
@@ -696,7 +696,7 @@ export async function executeTask(
       log(color.red(`    ${reason}`));
       return { success: false, reasons: [reason], filesChanged: [], executionId, errors: [reason] };
     }
-    delegation = { requestId, rawInput };
+    delegation = { requestId, rawInput, stopLease: engine.resources.budget.holdLease(requestId) };
   }
 
   // ---- run the agent ------------------------------------------------------
@@ -763,6 +763,7 @@ export async function executeTask(
     loader.stop();
     process.off('SIGINT', onSigint);
     if (delegation) {
+      delegation.stopLease();
       const output = estimateTextTokens(summary ?? '');
       if (errors.length === 0 && !cancelled) {
         engine.resources.budget.reconcile(delegation.requestId, { inputTokens: delegation.rawInput, outputTokens: output, source: 'estimated' }, { agent: agent.descriptor.name });
