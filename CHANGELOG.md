@@ -27,8 +27,12 @@ install paths for more operating systems.
   the installed model. Write tasks through this fallback are unavailable.
 - Release artifacts are built on Linux x64/ARM64, macOS ARM64/x64 and Windows x64/ARM64 runners.
 
-**Verification:** pending the v0.1.60 release workflow. See the release workflow run for build,
-package, distribution and regression results.
+**Verification:** CI passed on Linux x64, macOS ARM64 and Windows x64 (Node 22), including
+build, typecheck, distribution/package checks, 2,138 unit and integration tests (18 skipped),
+acceptance and agent execution plans, native installer smoke tests and standalone binary checks.
+The full run is [CI #38357922769](https://github.com/whassan007/wazir/actions/runs/38357922769).
+A local Linux run also passed the same 2,138-test suite. Agent discovery tests used controlled
+CLI fixtures; provider live execution was not part of this release validation.
 
 ## v0.1.59 — 2026-10-12
 
