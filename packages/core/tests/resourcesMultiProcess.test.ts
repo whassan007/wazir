@@ -26,12 +26,15 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-function run(args: string[], env: Record<string, string> = {}): Promise<{ code: number | null; out: string }> {
+function run(args: string[], env: Record<string, string> = {}): Promise<{ code: number | null; out: string; err: string }> {
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [worker, ...args], { env: { ...process.env, ...env } });
     let out = '';
+    let err = '';
     p.stdout.on('data', (d) => (out += d));
-    p.on('close', (code) => resolve({ code, out }));
+    p.stderr.on('data', (d) => (err += d));
+    p.on('error', (error) => resolve({ code: null, out, err: `${err}${error.message}` }));
+    p.on('close', (code) => resolve({ code, out, err }));
   });
 }
 
@@ -61,6 +64,7 @@ describe('ledger across real processes', () => {
 
     const startAt = Date.now() + 1_000;
     const recoverers = await Promise.all(Array.from({ length: 4 }, () => run(['recover', file, JSON.stringify(accounts), String(startAt)])));
+    expect(recoverers.every((r) => r.code === 0), JSON.stringify(recoverers)).toBe(true);
     expect(recoverers.reduce((n, r) => n + JSON.parse(r.out).recovered, 0)).toBe(1);
 
     const ledger = new ResourceLedger(file);

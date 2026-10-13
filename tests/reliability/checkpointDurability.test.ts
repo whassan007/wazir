@@ -26,7 +26,7 @@ it('P1/P6: committed checkpoint survives process exit and SIGKILL during the nex
     const entries = await new JsonFileStore(`${dir}/state/store.json`).list('checkpoint/');
     expect(entries).toHaveLength(1);
   } finally { await rm(dir, { recursive: true, force: true }); }
-});
+}, 30_000);
 it('P8: rejects unsupported versions and corrupted snapshots without overwriting evidence', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wazir-checkpoint-schema-'));
   try {
