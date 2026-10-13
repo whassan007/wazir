@@ -1,0 +1,183 @@
+name: Native package managers
+
+# Installs the real release artifacts with each package manager on native runners:
+# Homebrew (macOS arm64, macOS x64, Linux), scripts/install.ps1, Scoop and WinGet (Windows).
+# Each test: install, run, upgrade to a second build stamped with a higher version, verify user
+# state in WAZIR_HOME is untouched, uninstall, verify the command is gone and state remains.
+# Artifacts are served from localhost; nothing is published.
+on:
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - 'Formula/**'
+      - 'packaging/**'
+      - '.github/workflows/native-managers.yml'
+      - 'package.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UPGRADE_VERSION: 99.0.0
+
+jobs:
+  artifacts:
+    name: Build artifacts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x, cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - name: Current version artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          if [ "$RUNNER_OS" = Windows ]; then node scripts/build-sea.mjs --skip-bundle; cp dist/sea/*.zip out/;
+          else node scripts/pack-npm.mjs --skip-bundle; cp dist/npm/*.tgz out/; fi
+      - name: Upgrade-target artifacts (same code, version ${{ env.UPGRADE_VERSION }})
+        shell: bash
+        env: { WAZIR_BUILD_VERSION: '${{ env.UPGRADE_VERSION }}' }
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then node scripts/build-sea.mjs; cp dist/sea/*.zip out/;
+          else node scripts/pack-npm.mjs; cp dist/npm/*.tgz out/; fi
+      - uses: actions/upload-artifact@v4
+        with: { name: artifacts-${{ runner.os }}, path: out/ }
+
+  homebrew:
+    name: Homebrew (${{ matrix.os }})
+    needs: artifacts
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-13, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: artifacts-Linux, path: out }
+      - name: Homebrew on PATH (Linuxbrew is preinstalled on ubuntu runners)
+        if: runner.os == 'Linux'
+        run: echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+      - name: Install, upgrade, uninstall
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./package.json').version")"
+          (cd out && sha256sum *.tgz > SHA256SUMS 2>/dev/null || shasum -a 256 *.tgz > SHA256SUMS)
+          (cd out && python3 -m http.server 8765 >/dev/null 2>&1 &) ; sleep 2
+          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_ANALYTICS=1
+          export WAZIR_HOME="$RUNNER_TEMP/wazir-home"
+          brew tap-new --no-git local/wazir
+          tap="$(brew --repository)/Library/Taps/local/homebrew-wazir"
+          render() { node scripts/render-manifests.mjs --version "$1" --sums out/SHA256SUMS --base-url http://localhost:8765 --out "$RUNNER_TEMP/m-$1"; cp "$RUNNER_TEMP/m-$1/Formula/wazir.rb" "$tap/Formula/wazir.rb"; }
+          render "$v"
+          brew install --formula local/wazir/wazir
+          [ "$(wa --version)" = "$v" ]
+          brew test local/wazir/wazir
+          wa resources validate --json >/dev/null
+          printf '{"version":1,"policy":{"enforce":true},"accounts":[]}' > "$WAZIR_HOME/resources.json"
+          before="$(cd "$WAZIR_HOME" && find . -type f ! -name '*-wal' ! -name '*-shm' -exec shasum -a 256 {} + | sort)"
+          render "$UPGRADE_VERSION"
+          brew upgrade local/wazir/wazir
+          [ "$(wa --version)" = "$UPGRADE_VERSION" ]
+          after="$(cd "$WAZIR_HOME" && find . -type f ! -name '*-wal' ! -name '*-shm' -exec shasum -a 256 {} + | sort)"
+          [ "$before" = "$after" ] || { echo "user state changed by upgrade"; diff <(echo "$before") <(echo "$after"); exit 1; }
+          brew uninstall local/wazir/wazir
+          ! command -v wa
+          [ -f "$WAZIR_HOME/resources.json" ]
+          echo "Homebrew: install $v, upgrade to $UPGRADE_VERSION, uninstall — PASS"
+
+  windows:
+    name: Windows (install.ps1, Scoop, WinGet)
+    needs: artifacts
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.x }
+      - uses: actions/download-artifact@v4
+        with: { name: artifacts-Windows, path: out }
+      - name: Checksums and local server
+        shell: pwsh
+        run: |
+          Get-ChildItem out -Filter *.zip | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content out/SHA256SUMS -Encoding ascii
+          Get-Content out/SHA256SUMS
+          Start-Process -FilePath python -ArgumentList '-m','http.server','8765' -WorkingDirectory out -WindowStyle Hidden
+          Start-Sleep 3
+      - name: install.ps1 (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = (node -p "require('./package.json').version").Trim()
+          $env:WAZIR_HOME = Join-Path $env:RUNNER_TEMP 'wazir-home-ps'
+          $dir = Join-Path $env:RUNNER_TEMP 'wazir-install'
+          ./scripts/install.ps1 -InstallDir $dir -ZipPath "out/wazir-$v-windows-x64.zip" -ChecksumsPath out/SHA256SUMS
+          $wa = Join-Path $dir 'bin\wa.exe'
+          if ((& $wa --version).Trim() -ne $v) { throw 'version mismatch after install' }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ($userPath -notlike "*$dir\bin*") { throw 'bin dir not added to user PATH' }
+          & $wa resources validate --json | Out-Null
+          Set-Content (Join-Path $env:WAZIR_HOME 'resources.json') '{"version":1,"policy":{"enforce":true},"accounts":[]}'
+          $before = Get-ChildItem $env:WAZIR_HOME -File | Where-Object Name -notmatch '-(wal|shm)$' | ForEach-Object { "$($_.Name) $((Get-FileHash $_.FullName).Hash)" }
+          # Tampered checksum must be refused, and must leave the installed version alone.
+          'deadbeef' * 8 + "  wazir-$env:UPGRADE_VERSION-windows-x64.zip" | Set-Content bad.sums
+          $refused = $false
+          try { ./scripts/install.ps1 -InstallDir $dir -ZipPath "out/wazir-$env:UPGRADE_VERSION-windows-x64.zip" -ChecksumsPath bad.sums } catch { $refused = $true }
+          if (-not $refused) { throw 'checksum mismatch was not refused' }
+          if ((& $wa --version).Trim() -ne $v) { throw 'failed upgrade changed the installed version' }
+          ./scripts/install.ps1 -InstallDir $dir -ZipPath "out/wazir-$env:UPGRADE_VERSION-windows-x64.zip" -ChecksumsPath out/SHA256SUMS
+          if ((& $wa --version).Trim() -ne $env:UPGRADE_VERSION) { throw 'upgrade did not activate the new version' }
+          if (@(Get-ChildItem (Join-Path $dir 'versions')).Count -ne 1) { throw 'stale versions left behind' }
+          $after = Get-ChildItem $env:WAZIR_HOME -File | Where-Object Name -notmatch '-(wal|shm)$' | ForEach-Object { "$($_.Name) $((Get-FileHash $_.FullName).Hash)" }
+          if (Compare-Object $before $after) { throw 'upgrade changed user state' }
+          ./scripts/install.ps1 -InstallDir $dir -Uninstall
+          if (Test-Path $dir) { throw 'install dir left behind' }
+          if ([Environment]::GetEnvironmentVariable('Path', 'User') -like "*$dir\bin*") { throw 'PATH entry left behind' }
+          if (-not (Test-Path (Join-Path $env:WAZIR_HOME 'resources.json'))) { throw 'uninstall removed user data' }
+          'install.ps1: install, checksum refusal, upgrade, uninstall — PASS'
+      - name: Scoop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = (node -p "require('./package.json').version").Trim()
+          $env:WAZIR_HOME = Join-Path $env:RUNNER_TEMP 'wazir-home-scoop'
+          Invoke-RestMethod get.scoop.sh -OutFile install-scoop.ps1
+          ./install-scoop.ps1 -RunAsAdmin
+          $env:Path = "$env:USERPROFILE\scoop\shims;$env:Path"
+          node scripts/render-manifests.mjs --version $v --sums out/SHA256SUMS --base-url http://localhost:8765 --out m1
+          scoop install ./m1/packaging/scoop/wazir.json
+          if ((wa --version).Trim() -ne $v) { throw 'scoop install: version mismatch' }
+          wa resources validate --json | Out-Null
+          Set-Content (Join-Path $env:WAZIR_HOME 'resources.json') '{"version":1,"accounts":[]}'
+          node scripts/render-manifests.mjs --version $env:UPGRADE_VERSION --sums out/SHA256SUMS --base-url http://localhost:8765 --out m2
+          scoop uninstall wazir
+          scoop install ./m2/packaging/scoop/wazir.json
+          if ((wa --version).Trim() -ne $env:UPGRADE_VERSION) { throw 'scoop upgrade: version mismatch' }
+          scoop uninstall wazir
+          if (Get-Command wa -ErrorAction SilentlyContinue) { throw 'wa still on PATH after uninstall' }
+          if (-not (Test-Path (Join-Path $env:WAZIR_HOME 'resources.json'))) { throw 'uninstall removed user data' }
+          'Scoop: install, upgrade, uninstall — PASS'
+      - name: WinGet manifest validation and local install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = (node -p "require('./package.json').version").Trim()
+          node scripts/render-manifests.mjs --version $v --sums out/SHA256SUMS --base-url http://localhost:8765 --out wg
+          $m = "wg/packaging/winget/manifests/w/whassan007/Wazir/$v"
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw 'BLOCKED: winget is not available on this runner image' }
+          winget --version
+          winget validate --manifest $m
+          if ($LASTEXITCODE -ne 0) { throw 'winget validate failed' }
+          winget settings --enable LocalManifestFiles
+          winget install --manifest $m --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { throw "winget install failed ($LASTEXITCODE)" }
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+          if ((wa --version).Trim() -ne $v) { throw 'winget install: version mismatch' }
+          winget uninstall --id whassan007.Wazir --disable-interactivity
+          'WinGet: validate, install, uninstall — PASS'
