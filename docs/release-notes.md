@@ -1,3 +1,68 @@
+# Wazir Release Notes - v0.1.64
+
+**Release**: `v0.1.64`  
+**Theme**: Cross-Process Protocol Transaction Integrity, Unknown-Outcome Reconciliation, Verification Provenance, and CLI/Runtime Defect Remediation
+
+This release merges cross-process Agent Protocol and MCP transaction integrity hardening,
+PostgreSQL and worker fault qualification (v0.1.63), and post-audit CLI and runtime defect
+remediations with full live validation evidence.
+
+## Cross-process task integrity
+
+- **One authoritative task record.** Steps, artifacts and task status live in the task record and
+  change only through one atomic store update (a file lock across processes for the JSON store, a
+  locked transaction for Postgres). Two API processes no longer lose steps or artifacts, complete
+  the same task twice, or let a long-running step overwrite changes made meanwhile. A store
+  without atomic update is refused (`UNSUPPORTED_STORE`, HTTP 501).
+- **One step in flight per task.** A step holds a heartbeat-renewed lease
+  (`WAZIR_PROTOCOL_STEP_LEASE_MS`, default 120s). Another request waits up to
+  `WAZIR_PROTOCOL_ADMISSION_WAIT_MS` (default 30s) and then gets HTTP 409 `TASK_BUSY`.
+- A step held by a process that has died on the same host is recovered immediately; leases held
+  from other hosts still expire after the lease period.
+- **Optional `idempotency_key`** on a step request returns the original step instead of running
+  the tool again.
+
+## Unknown outcomes are never guessed
+
+- If an API process dies before dispatching a tool, the step is recovered as `ABANDONED` and the
+  task continues. If it dies after dispatch, or a tool reports an unknown outcome, the step is
+  `OUTCOME_UNKNOWN` and the task is **paused**. Nothing is retried.
+- New `POST /ap/v1/agent/tasks/:task_id/steps/:step_id/reconcile` (operator only) resolves a paused
+  step as `succeeded`, `failed` or `not_executed`, and requires evidence. Reconciling never
+  completes a task.
+- A step's result, its verification evidence and the task status are saved in one write. If that
+  write fails, the caller gets HTTP 503 `PERSISTENCE_FAILED` stating whether the tool was dispatched.
+
+## Verification provenance and audit
+
+- Verification records the workspace change counter, the requested checks and the principal. The
+  global status reports `STALE` after any later mutating protocol tool call, and is never
+  `verified: true` without a configured engine. A PASS is rejected if a requested check did not
+  run or the workspace changed while checks ran.
+- Verification is also bound to a fingerprint of the workspace's contents, so changes made outside
+  the protocol (CLI agents, editors, git) make a PASS `STALE`. Calls refused by policy no longer
+  count as workspace changes.
+- Viewers reading tasks and steps see outcomes and statuses, but not tool inputs, tool output or
+  check output. Viewers get verification statuses without check output.
+- Every controlled tool result reports `dispatched` and `audit.recorded`. An audit write that fails
+  after a tool ran is reported on the result and to stderr instead of being dropped. A failed
+  pre-dispatch audit write is `AUDIT_UNAVAILABLE` and the tool does not run.
+
+## CLI and runtime defect remediations
+
+- **DEF-01 (`wa policy inspect`):** Fixed `TypeError` when policy rules omit optional `scope` or
+  `pattern` fields by falling back to `rule.id` and `''`.
+- **DEF-02 (`wa task status <id>`):** Look up real execution records instead of returning a stub
+  `queued` status; exit with code `1` when the task ID is not found.
+- **DEF-04 (`LMStudioAdapter`):** Default base URL now honors `WAZIR_LMSTUDIO_URL` and falls back to
+  standard LM Studio port `http://localhost:1234/v1` (instead of port `1235`).
+- **DEF-05 (CLI entity inspection exit codes):** `wa computers inspect`, `wa executions inspect`,
+  `wa artifacts inspect`, `wa runtimes inspect`, and `wa models inspect` now exit with code `1` when
+  the requested entity does not exist (`apps/cli/tests/cliDefectRemediation.test.ts`).
+- Recorded live hardware & operational audit evidence under `test-results/live-audit-20261013/`.
+
+---
+
 # Wazir Release Notes - v0.1.63
 
 **Release**: `v0.1.63`
