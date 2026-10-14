@@ -1,8 +1,8 @@
 # Changelog
 
-## v0.1.62 — 2026-10-14
+## v0.1.63 — 2026-10-14
 
-**Release**: `v0.1.62`
+**Release**: `v0.1.63`
 **Theme**: PostgreSQL integration and production worker fault qualification
 
 This release adds real PostgreSQL and production-process verification, with explicit

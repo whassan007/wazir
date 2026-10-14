@@ -1,6 +1,6 @@
-# Wazir Release Notes - v0.1.62
+# Wazir Release Notes - v0.1.63
 
-**Release**: `v0.1.62`
+**Release**: `v0.1.63`
 **Theme**: PostgreSQL integration and production worker fault qualification
 
 This release adds real PostgreSQL and production-process verification, with explicit
