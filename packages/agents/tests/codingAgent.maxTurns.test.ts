@@ -65,7 +65,9 @@ describe('CodingAgent.run — maxTurns', () => {
     // Before the fix, `run()` only ever read `this.maxTurns` (the
     // constructor value, 30), so this would be 30 instead of 5.
     expect(counters.generateCalls).toBe(5);
-    expect(turns.at(-1)?.kind).toBe('done'); // files were changed and checks pass, so it still completes cleanly
+    // Passing repository checks do not establish that all requested work finished.
+    expect(turns.at(-1)).toMatchObject({ kind: 'error', terminationReason: 'MAX_TURNS' });
+    expect(turns.some(turn => turn.kind === 'done')).toBe(false);
   });
 
   it('falls back to the constructor default when the request specifies no maxTurns', async () => {

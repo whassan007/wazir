@@ -256,8 +256,12 @@ export class Worker {
     };
     // Re-registration proves ownership with the token we already hold;
     // first registration (or a restart without state) uses the cluster
-    // registration token when one is configured.
-    const credential = this.token ?? this.registrationToken;
+    // registration token when one is configured. A pre-shared token the
+    // control plane has never seen is refused for a new id, so on 401/403
+    // the registration token is tried next (the pre-shared token is still
+    // sent in the body and adopted as this computer's token).
+    const credentials = [...new Set([this.token, this.registrationToken].filter((c): c is string => Boolean(c)))];
+    let credential: string | undefined = credentials.shift();
 
     // The control plane and its workers are typically started together by
     // an orchestrator (Docker Compose, systemd, Kubernetes) with no
@@ -280,7 +284,10 @@ export class Worker {
           const body = (await response.json().catch(() => ({}))) as { error?: string };
           const error = new Error(`registration failed: HTTP ${response.status}${body.error ? ` (${body.error})` : ''}`);
           // Auth failures are not transient; retrying only delays the report.
-          if (response.status === 401 || response.status === 403) throw Object.assign(error, { fatal: true });
+          if (response.status === 401 || response.status === 403) {
+            if (credentials.length > 0) { credential = credentials.shift(); attempt--; continue; }
+            throw Object.assign(error, { fatal: true });
+          }
           throw error;
         }
         const body = (await response.json()) as { token?: string };

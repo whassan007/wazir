@@ -135,6 +135,9 @@ export interface CodingAgentOptions {
 // words, so this is a broad heuristic rather than an exact-string match
 // against any one provider's error shape.
 const CONTEXT_OVERFLOW_PATTERN = /context.{0,25}(length|window|size).{0,25}(exceed|too (long|large)|maximum)|maximum context length|reduce the (length|number) of (the )?messages|prompt is too long|input is too long/i;
+/** Transport failures of an accepted model stream; safe to re-request (see modelTurnWithStreamRetry). */
+const TRANSIENT_STREAM_PATTERN = /ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|ECONNABORTED|UND_ERR_SOCKET|socket hang up|fetch failed|other side closed/i;
+const MAX_STREAM_RETRIES = 2;
 
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
 const FILE_TOOLS = new Set(['write', 'edit']);
@@ -894,6 +897,30 @@ export class CodingAgent implements AgentAdapter {
     };
 
     /**
+     * A model stream cut by the transport (runtime restarted, connection reset) after the
+     * request was accepted. Adapters retry only the connect phase, so without this one
+     * dropped socket failed the whole task. A generation has no side effects and nothing
+     * from the interrupted turn is executed, so it is re-requested — bounded, with backoff,
+     * and recorded as a retry note in the execution history.
+     */
+    const modelTurnWithStreamRetry = async (): Promise<Awaited<ReturnType<typeof modelTurn>>> => {
+      const notes: string[] = [];
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const result = await modelTurn();
+          return notes.length ? { ...result, retryNotes: [...notes, ...result.retryNotes] } : result;
+        } catch (error) {
+          const code = (error as { code?: unknown } | null)?.code;
+          const message = error instanceof Error ? error.message : String(error);
+          if (attempt > MAX_STREAM_RETRIES || !(TRANSIENT_STREAM_PATTERN.test(message) || TRANSIENT_STREAM_PATTERN.test(String(code ?? '')))) throw error;
+          const delayMs = 500 * 2 ** (attempt - 1);
+          notes.push(`model stream interrupted (${code ? `${String(code)}: ` : ''}${message}); retry ${attempt}/${MAX_STREAM_RETRIES} after ${delayMs}ms`);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+    };
+
+    /**
      * Reactive context-overflow recovery: modelTurn() throwing with wording
      * matching CONTEXT_OVERFLOW_PATTERN means the runtime itself just
      * rejected the request as too large — authoritative in a way our rough
@@ -908,7 +935,7 @@ export class CodingAgent implements AgentAdapter {
       Awaited<ReturnType<typeof modelTurn>> & { overflowNote?: string }
     > => {
       try {
-        return await modelTurn();
+        return await modelTurnWithStreamRetry();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!CONTEXT_OVERFLOW_PATTERN.test(message)) throw error;
@@ -1674,6 +1701,14 @@ export class CodingAgent implements AgentAdapter {
       }
     }
 
+    if (turnBudgetExhausted) {
+      yield {
+        kind: 'error', error: `MAX_TURNS: reached ${maxTurns} turns without completing the task` +
+          (failures.length ? `\nverification failed:\n${failures.join('\n---\n')}` : ''),
+        errorKind: 'other', terminationReason: 'MAX_TURNS', protocolMetrics: currentMetrics(),
+      };
+      return;
+    }
     if (failures.length === 0) {
       yield { kind: 'phase', phase: 'complete' as AgentPhase };
       yield {

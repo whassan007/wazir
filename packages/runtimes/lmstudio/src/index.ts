@@ -487,7 +487,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
       } catch (error) {
         if (controller.signal.aborted) {
           this.controllers.delete(requestId);
-          yield { type: 'error', error: 'cancelled' };
+          yield { type: 'error', requestId, failureClass: 'CANCELLED', error: 'cancelled' };
           return;
         }
         const decision = providerRetryDecision(classifyFailure(error), attempt, retryPolicy);
@@ -523,6 +523,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     const responseHeaders = response.headers;
     const pendingToolCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
     let finishReason: string | undefined;
+    let streamDone = false;
     const buffer = createSSEBuffer();
 
     try {
@@ -535,13 +536,12 @@ export class LMStudioAdapter implements RuntimeAdapter {
         if (done) break;
         buffer.push(decoder.decode(value, { stream: true }));
         for (const payload of buffer.drain()) {
-          if (payload === '[DONE]') continue;
+          if (payload === '[DONE]') { streamDone = true; continue; }
           let chunk: StreamChunk;
           try {
             chunk = JSON.parse(payload) as StreamChunk;
           } catch {
-            // Malformed chunk should not crash the stream
-            continue;
+            throw new Error('INVALID_PROVIDER_STREAM: malformed JSON chunk');
           }
 
           const finish = (chunk.choices?.[0] as { finish_reason?: string | null } | undefined)?.finish_reason;
@@ -578,6 +578,9 @@ export class LMStudioAdapter implements RuntimeAdapter {
         }
       }
 
+      // A clean socket EOF is not proof of a completed inference. In particular,
+      // never dispatch a partially received tool call after a truncated response.
+      if (!streamDone && !finishReason) throw new Error('INCOMPLETE_PROVIDER_STREAM: missing completion marker');
       for (const [index, entry] of [...pendingToolCalls.entries()].sort((a, b) => a[0] - b[0])) {
         let parsed: unknown = entry.arguments;
         try {
