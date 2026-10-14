@@ -1,3 +1,51 @@
+# Wazir Release Notes - v0.1.62
+
+**Release**: `v0.1.62`  
+**Theme**: Cross-Process Protocol Integrity, Unknown-Outcome Reconciliation, and Verification Provenance
+
+A reliability release for the Agent Protocol and MCP endpoints when several API processes share
+one store. It also includes everything listed under v0.1.61, which was never published separately.
+
+## Cross-process task integrity
+
+- **One authoritative task record.** Steps, artifacts and task status live in the task record and
+  change only through one atomic store update (a file lock across processes for the JSON store, a
+  locked transaction for Postgres). Two API processes no longer lose steps or artifacts, complete
+  the same task twice, or let a long-running step overwrite changes made meanwhile. A store
+  without atomic update is refused (`UNSUPPORTED_STORE`, HTTP 501).
+- **One step in flight per task.** A step holds a heartbeat-renewed lease
+  (`WAZIR_PROTOCOL_STEP_LEASE_MS`, default 120s). Another request waits up to
+  `WAZIR_PROTOCOL_ADMISSION_WAIT_MS` (default 30s) and then gets HTTP 409 `TASK_BUSY`.
+- **Optional `idempotency_key`** on a step request returns the original step instead of running
+  the tool again.
+
+## Unknown outcomes are never guessed
+
+- If an API process dies before dispatching a tool, the step is recovered as `ABANDONED` and the
+  task continues. If it dies after dispatch, or a tool reports an unknown outcome, the step is
+  `OUTCOME_UNKNOWN` and the task is **paused**. Nothing is retried.
+- New `POST /ap/v1/agent/tasks/:task_id/steps/:step_id/reconcile` (operator only) resolves a paused
+  step as `succeeded`, `failed` or `not_executed`, and requires evidence. Reconciling never
+  completes a task.
+- A step's result, its verification evidence and the task status are saved in one write. If that
+  write fails, the caller gets HTTP 503 `PERSISTENCE_FAILED` stating whether the tool was dispatched.
+
+## Verification provenance
+
+- Verification records the workspace change counter, the requested checks and the principal. The
+  global status reports `STALE` after any later mutating protocol tool call, and is never
+  `verified: true` without a configured engine. A PASS is rejected if a requested check did not
+  run or the workspace changed while checks ran.
+- Viewers get verification statuses without check output.
+
+## Audit
+
+- Every controlled tool result reports `dispatched` and `audit.recorded`. An audit write that fails
+  after a tool ran is reported on the result and to stderr instead of being dropped. A failed
+  pre-dispatch audit write is `AUDIT_UNAVAILABLE` and the tool does not run.
+
+---
+
 # Wazir Release Notes - v0.1.61
 
 **Release**: `v0.1.61`  

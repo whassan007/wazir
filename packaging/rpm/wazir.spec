@@ -1,5 +1,5 @@
 Name:           wazir
-Version:        0.1.61
+Version:        0.1.62
 Release:        1%{?dist}
 Summary:        Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator
 License:        AGPL-3.0-or-later
@@ -71,6 +71,9 @@ fi
 %attr(0750, wazir, wazir) %dir %{_localstatedir}/log/wazir
 
 %changelog
+* Wed Oct 14 2026 Wazir Contributors <wazir@wazir.ai> - 0.1.62-1
+- Cross-process protocol task integrity, unknown-outcome reconciliation, verification provenance
+
 * Tue Oct 13 2026 Wazir Contributors <wazir@wazir.ai> - 0.1.61-1
 - Protocol authorization, policy-enforced tool execution and evidence-based completion
 
