@@ -152,7 +152,7 @@ describe('authorization matrix', () => {
   it('viewer cannot invoke MCP shell', async () => {
     const res = await rpc(h, VIEWER, 'tools/call', { name: 'shell', arguments: { command: 'echo pwned > shell-canary.txt' } });
     expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe(-32003);
+    expect(res.body.error.code).toBe(-32001);
     expect(existsSync(path.join(h.root, 'shell-canary.txt'))).toBe(false);
   });
 
@@ -221,7 +221,7 @@ describe('authorization matrix', () => {
   it('unknown MCP methods gain no permission: forbidden for viewer, not-found for operator', async () => {
     const viewer = await rpc(h, VIEWER, 'tools/execute_privileged', { name: 'write' });
     expect(viewer.status).toBe(403);
-    expect(viewer.body.error.code).toBe(-32003);
+    expect(viewer.body.error.code).toBe(-32001);
     const operator = await rpc(h, OPERATOR, 'tools/execute_privileged');
     expect(operator.body.error.code).toBe(-32601);
   });
@@ -237,7 +237,8 @@ describe('authorization matrix', () => {
     const viewerBatch = await call(h, 'POST', '/mcp', VIEWER, [
       { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'write', arguments: { path: 'canary.txt', content: 'PWNED' } } },
     ]);
-    expect(viewerBatch.body.error.code).toBe(-32600);
+    expect(viewerBatch.status).toBe(403);
+    expect(viewerBatch.body.error.code).toBe(-32001);
     expect(canary(h)).toBe(CANARY);
   });
 });

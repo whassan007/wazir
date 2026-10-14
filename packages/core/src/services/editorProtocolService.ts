@@ -60,7 +60,7 @@ export function hasScope(principal: ProtocolPrincipal | undefined, scope: Protoc
 }
 
 /** JSON-RPC error code for an authenticated caller lacking the method's scope. */
-export const JSONRPC_FORBIDDEN = -32003;
+export const JSONRPC_FORBIDDEN = -32001;
 
 const VERIFICATION_STATUS_KEY = 'editor_protocol/verification/latest';
 const CHECK_NAMES = new Set(['test', 'lint', 'typecheck', 'build']);
@@ -441,6 +441,12 @@ export class EditorProtocolService {
 
   async handleJsonRpc(request: JsonRpcRequest, ctx: ProtocolRequestContext = {}): Promise<JsonRpcResponse | null> {
     if (Array.isArray(request)) {
+      // Batches are unsupported, but a batch carrying a method the caller may not call
+      // is reported as forbidden rather than merely malformed.
+      const denied = (request as unknown[]).find((r) => !hasScope(ctx.principal, mcpMethodScope(String((r as { method?: unknown } | null)?.method ?? ''))));
+      if (denied !== undefined) {
+        return { jsonrpc: '2.0', id: null, error: { code: JSONRPC_FORBIDDEN, message: 'Forbidden: batch contains a method that requires execute scope' } };
+      }
       return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request: batch requests are not supported' } };
     }
     if (!request || typeof request !== 'object' || request.jsonrpc !== '2.0' || typeof request.method !== 'string') {
