@@ -40,6 +40,12 @@ export interface AgentProtocolTask {
   steps: AgentProtocolStep[];
   created_at: string;
   status: AgentProtocolTaskStatus;
+  /** Evidence-backed summary: VERIFIED only when the final step carried passing verification. */
+  additional_output?: {
+    outcome?: 'IN_PROGRESS' | 'UNVERIFIED' | 'VERIFIED' | 'FAILED';
+    last_step_id?: string;
+    failed_step_id?: string;
+  };
 }
 
 export interface CreateTaskRequestBody {
@@ -134,3 +140,111 @@ export interface McpPromptDescriptor {
   description?: string;
   arguments?: McpPromptArgument[];
 }
+
+// ---------------------------------------------------------------------------
+// Authorization and controlled execution
+// ---------------------------------------------------------------------------
+
+/** Scopes a control-plane credential carries. Only the server assigns them. */
+export type ProtocolScope = 'read' | 'mutate' | 'execute';
+
+/**
+ * The authenticated caller, resolved by the transport from its credential.
+ * Never read from a request body or tool arguments.
+ */
+export interface ProtocolPrincipal {
+  kind: 'operator' | 'viewer' | 'local-dev';
+  id: string;
+  scopes: readonly ProtocolScope[];
+}
+
+export interface ProtocolRequestContext {
+  principal?: ProtocolPrincipal;
+  signal?: AbortSignal;
+}
+
+export interface ControlledToolRequest {
+  name: string;
+  input: Record<string, unknown>;
+  principal: ProtocolPrincipal;
+  executionId: string;
+  source: 'mcp' | 'agent-protocol' | 'verification';
+  taskId?: string;
+  stepId?: string;
+  signal?: AbortSignal;
+}
+
+/** Outcome of one controlled tool call, with the policy decision that admitted or refused it. */
+export interface ControlledToolResult {
+  ok: boolean;
+  output: string;
+  error?: string;
+  failureClass?: string;
+  durationMs: number;
+  callId: string;
+  policy?: { decision: 'allow' | 'ask' | 'deny'; rule: string; reasons: string[] };
+  workspaceBeforeHash?: string;
+  workspaceAfterHash?: string;
+  fileMutations?: unknown[];
+}
+
+/**
+ * The single policy-enforced execution boundary (authorization, PolicyEngine,
+ * approval, schema, tool surface, oracle protection, timeout, cancellation,
+ * audit). Injected by the host so core never dispatches a tool directly.
+ */
+export type ControlledToolExecutor = (request: ControlledToolRequest) => Promise<ControlledToolResult>;
+
+export type StepVerificationStatus = 'PASS' | 'FAIL' | 'ERROR' | 'UNAVAILABLE';
+
+export interface StepVerificationCheck {
+  name: string;
+  status: 'PASS' | 'FAIL' | 'ERROR';
+  callId?: string;
+  failureClass?: string;
+  error?: string;
+  output?: string;
+  durationMs: number;
+  startedAt: string;
+  completedAt: string;
+  workspaceAfterHash?: string;
+}
+
+/** Evidence produced by independently executed checks; PASS needs at least one check and all passing. */
+export interface StepVerificationReport {
+  status: StepVerificationStatus;
+  executionId: string;
+  taskId: string;
+  stepId: string;
+  checks: StepVerificationCheck[];
+  workspaceRevision?: string;
+  startedAt: string;
+  completedAt: string;
+  reasons: string[];
+}
+
+export type StepVerifier = (request: {
+  checks: string[];
+  principal: ProtocolPrincipal;
+  executionId: string;
+  taskId: string;
+  stepId: string;
+  signal?: AbortSignal;
+}) => Promise<StepVerificationReport>;
+
+/**
+ * What a step actually did. RECORDED means text was stored and nothing was
+ * executed; only VERIFIED carries independent evidence of correctness.
+ */
+export type AgentProtocolStepOutcome =
+  | 'RECORDED'
+  | 'TOOL_SUCCEEDED'
+  | 'TOOL_FAILED'
+  | 'POLICY_DENIED'
+  | 'CANCELLED'
+  | 'TIMED_OUT'
+  | 'OUTCOME_UNKNOWN'
+  | 'EXECUTION_UNAVAILABLE'
+  | 'VERIFIED'
+  | 'VERIFICATION_FAILED'
+  | 'VERIFICATION_UNAVAILABLE';
