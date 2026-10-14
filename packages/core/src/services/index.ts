@@ -134,7 +134,7 @@ export {
   PLAN_ALLOWED_TOOLS,
 } from './toolSurfaceCompiler.js';
 export type { ToolSurfaceCompilerOptions } from './toolSurfaceCompiler.js';
-export { EditorProtocolService } from './editorProtocolService.js';
+export { EditorProtocolService, ProtocolError, mcpMethodScope, hasScope, JSONRPC_FORBIDDEN, MCP_READ_ONLY_METHODS } from './editorProtocolService.js';
 export type { EditorProtocolServiceOptions } from './editorProtocolService.js';
 export { SemanticIndexService } from './semanticIndexService.js';
 export type { SemanticIndexOptions } from './semanticIndexService.js';

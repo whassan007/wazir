@@ -20,6 +20,7 @@ import type { Request, Response, NextFunction } from 'express';
  *   register a new id or replace an existing registration.
  */
 import type { KeyValueStore } from '@wazir/shared';
+import type { ProtocolPrincipal } from '@wazir/core';
 
 /**
  * Control-plane authentication and RBAC.
@@ -185,6 +186,39 @@ export class ApiAuth {
     }
     this.recordAuthFailure();
     res.status(401).json({ error: 'viewer or operator token required (Authorization: Bearer <WAZIR_API_TOKEN> or <WAZIR_API_VIEWER_TOKEN>)' });
+  };
+
+  /**
+   * The authenticated control-plane principal for `req`, or undefined. Scopes come
+   * only from which credential matched — never from the request body.
+   * Unauthenticated local development (no tokens configured, explicitly allowed)
+   * keeps its existing operator-equivalent boundary.
+   */
+  principalFor(req: Request): ProtocolPrincipal | undefined {
+    const presented = bearerToken(req);
+    if (this.isOperatorToken(presented)) return { kind: 'operator', id: 'operator', scopes: ['read', 'mutate', 'execute'] };
+    if (this.isViewerToken(presented)) return { kind: 'viewer', id: 'viewer', scopes: ['read'] };
+    if (this.isAllowedUnauthenticated && !this.operatorToken && !this.viewerToken) {
+      return { kind: 'local-dev', id: 'local-dev', scopes: ['read', 'mutate', 'execute'] };
+    }
+    return undefined;
+  }
+
+  /**
+   * Express middleware for protocol surfaces: authenticates and attaches
+   * `res.locals.principal`. Per-operation scope checks (route-level
+   * `requireOperator`, JSON-RPC method classification) happen downstream
+   * against the attached principal.
+   */
+  requireProtocolPrincipal = (req: Request, res: Response, next: NextFunction): void => {
+    const principal = this.principalFor(req);
+    if (!principal) {
+      this.recordAuthFailure();
+      res.status(401).json({ error: 'viewer or operator token required (Authorization: Bearer <WAZIR_API_TOKEN> or <WAZIR_API_VIEWER_TOKEN>)' });
+      return;
+    }
+    res.locals.principal = principal;
+    next();
   };
 
   /** Express middleware: the caller must hold the token issued to `req.params.id`. */
