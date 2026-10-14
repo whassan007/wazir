@@ -31,7 +31,7 @@ export async function snapshotWorkspace(root: string, targets?: string[]): Promi
   const walk = async (directory: string): Promise<void> => {
     const entries = await fs.readdir(path.resolve(root, directory), { withFileTypes: true });
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      const relative = path.join(directory, entry.name);
+      const relative = path.join(directory, entry.name).replace(/\\/g, '/');
       if (entry.isDirectory()) {
         if (!IGNORED_DIRECTORIES.has(entry.name)) await walk(relative);
       } else await capture(relative);
@@ -40,7 +40,7 @@ export async function snapshotWorkspace(root: string, targets?: string[]): Promi
   if (targets) {
     for (const target of targets) {
       const { resolved } = await resolveInsideProject(root, target);
-      await capture(path.relative(root, resolved), true);
+      await capture(path.relative(root, resolved).replace(/\\/g, '/'), true);
     }
   } else await walk('');
   return snapshot;

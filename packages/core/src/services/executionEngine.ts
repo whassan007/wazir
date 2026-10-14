@@ -658,6 +658,7 @@ export class ExecutionEngine {
 
   async recordFilesChanged(executionId: string, files: string[], evidence?: { mutations: FileMutationResult[]; contentFingerprint?: string }): Promise<void> {
     if (!files || files.length === 0) return;
+    files = files.map((f) => f.replace(/\\/g, '/'));
     const record = this.require(executionId);
     if (!record.workspaceState) {
       record.workspaceState = {

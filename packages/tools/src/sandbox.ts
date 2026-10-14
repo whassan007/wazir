@@ -330,15 +330,57 @@ export function seatbeltProfile(options: SandboxOptions, home: string = os.homed
   const realTmp = safeRealpath(tmp);
   const realHome = safeRealpath(resolvedHome);
 
+  const toolchainDirs = existingDirs(resolvedHome, HOME_TOOLCHAIN_DIRS);
+  const cacheDirs = existingDirs(resolvedHome, HOME_CACHE_DIRS);
+  const roDirs = (options.readOnlyPaths ?? []).map((d) => path.resolve(d));
+  const rwDirs = (options.readWritePaths ?? []).map((d) => path.resolve(d));
+
+  // Collect literal parent directories inside resolvedHome/realHome that must
+  // allow `file-read-metadata` (lstat) so Node's `realpathSync()` can walk
+  // from `/` through `$HOME` to reach allowed subdirectories (e.g.
+  // `~/hostedtoolcache/.../bin/npm` or `~/.nvm/.../bin/npm`) without allowing
+  // `readdir` (`file-read-data`) on `$HOME`.
+  const metadataLiterals = new Set<string>([resolvedHome]);
+  if (realHome) metadataLiterals.add(realHome);
+  const addParentLiterals = (targetDir: string) => {
+    for (const baseHome of [resolvedHome, realHome].filter((h): h is string => Boolean(h))) {
+      if (isInside(baseHome, targetDir)) {
+        let cur = path.dirname(targetDir);
+        while (cur.length >= baseHome.length && isInside(baseHome, cur)) {
+          metadataLiterals.add(cur);
+          const next = path.dirname(cur);
+          if (next === cur) break;
+          cur = next;
+        }
+      }
+    }
+  };
+  for (const d of [...toolchainDirs, ...cacheDirs, ...roDirs, ...rwDirs, project, ...(realProject ? [realProject] : [])]) {
+    addParentLiterals(d);
+    const rd = safeRealpath(d);
+    if (rd) addParentLiterals(rd);
+  }
+
+  const withReal = (dirs: string[]): string[] => {
+    const out = new Set<string>();
+    for (const d of dirs) {
+      out.add(d);
+      const rd = safeRealpath(d);
+      if (rd) out.add(rd);
+    }
+    return [...out];
+  };
+
   const rules: string[] = [
     '(version 1)',
     '(allow default)',
     // Home is hidden except for toolchains/caches and the project itself.
     `(deny file-read* file-write* (subpath ${q(resolvedHome)}))`,
     ...(realHome && realHome !== resolvedHome ? [`(deny file-read* file-write* (subpath ${q(realHome)}))`] : []),
-    ...existingDirs(resolvedHome, HOME_TOOLCHAIN_DIRS).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
-    ...existingDirs(resolvedHome, HOME_CACHE_DIRS).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
-    ...(options.readOnlyPaths ?? []).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
+    ...Array.from(metadataLiterals).map((dir) => `(allow file-read-metadata (literal ${q(dir)}))`),
+    ...withReal(toolchainDirs).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
+    ...withReal(cacheDirs).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
+    ...withReal(roDirs).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
     // Everything outside the project and temp dirs is read-only.
     '(deny file-write*)',
     `(allow file-write* (subpath ${q(project)}))`,
@@ -354,7 +396,7 @@ export function seatbeltProfile(options: SandboxOptions, home: string = os.homed
     '(allow file-write* (subpath "/dev"))',
     `(allow file-read* (subpath ${q(project)}))`,
     ...(realProject && realProject !== project ? [`(allow file-read* (subpath ${q(realProject)}))`] : []),
-    ...(options.readWritePaths ?? []).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
+    ...withReal(rwDirs).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
     // Runtime sockets.
     `(deny file-read* file-write* (subpath "/private/var/run/docker.sock"))`,
     `(deny file-read* file-write* (subpath "/var/run/docker.sock"))`,
