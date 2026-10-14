@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.1.62 — 2026-10-14
+
+**Release**: `v0.1.62`
+**Theme**: PostgreSQL integration and production worker fault qualification
+
+This release adds real PostgreSQL and production-process verification, with explicit
+limits on distributed recovery guarantees. It includes the security and reliability
+changes documented below for the previously unpublished v0.1.61 candidate.
+
+Inherited security changes enforce operator/viewer authorization on Agent Protocol
+and MCP mutations, route protocol tools through shared policy enforcement, persist
+worker credentials before returning them, and require evidence for successful
+completion. Provider stream resets have bounded retries and terminal worker result
+posts are recorded once.
+
+### Added and verified
+
+- Mandatory Ubuntu PostgreSQL 16 CI integration in `postgres-distributed.yml`,
+  using a disposable dedicated database. Missing configuration or an unreachable
+  database fails the job. Tests refuse database names outside `wazir_*_test`.
+- `npm run test:postgres`, `npm run test:distributed`, and dedicated test typechecks.
+- Production API and two independent worker processes exercise registration,
+  authentication, heartbeat, SSE dispatch, claims, SIGKILL, durable controller restart,
+  and same-computer recovery. Retained evidence includes PID logs, exit signals,
+  task IDs, lease attempts/deadlines, responses, and final outcomes.
+- Authenticated stale results are rejected with HTTP 409 `LEASE_LOST` after expiry
+  and replacement. Competing claims select one winner; duplicate result submissions
+  preserve the first authoritative outcome, including acknowledgment loss/restart.
+- Expired-renewal/claim races, surviving-worker reconnect, tasks running beyond the
+  original lease deadline, and observable mutation-before-acknowledgment replay.
+
+### Distributed safety limits
+
+The production API does not automatically sweep missing workers or mark abandoned
+expired dispatches failed/orphaned. A different computer cannot take over a dispatch;
+recovery requires a replacement worker with the original computer identity.
+
+Lease fencing protects result authority, **not exactly-once external execution**.
+A crash after mutation but before acknowledgment can replay an opaque provider
+request. The live test observes two effects without external idempotency and one
+with it, in both cases with two executions and one authoritative result.
+Known-tool `UNKNOWN_OUTCOME` unit handling remains covered, but is not automatic
+physical reconciliation for opaque API dispatch. Distributed cancellation has no
+public API, so its completion race is not qualified.
+
+### Validation
+
+Local Linux ARM64: build and repository/test typechecks passed; PostgreSQL 16.15
+integration passed 20 tests; the complete distributed suite passed 17 tests.
+Strengthened reconnect and beyond-original-deadline scenarios also passed.
+The broad regression run passed 2,210 tests and found seven missing-native-PTY
+failures; rebuilding `node-pty` resolved them and all eight affected tests passed
+on rerun. Ordinary CI dependency installation builds the native module.
+
+Full report and reproduction: `tests/distributed/evidence-report.md` and
+`tests/distributed/README.md`; actual traces: `tests/distributed/evidence/`.
+No universal distributed-safety or exactly-once claim is made.
+
+---
+
 ## v0.1.61 — 2026-10-13
 
 A security and reliability release. Network clients of the Agent Protocol and MCP endpoints can
