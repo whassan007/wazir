@@ -52,6 +52,14 @@ The broad regression run passed 2,210 tests and found seven missing-native-PTY
 failures; rebuilding `node-pty` resolved them and all eight affected tests passed
 on rerun. Ordinary CI dependency installation builds the native module.
 
+**CI verification:** [Release workflow](https://github.com/whassan007/wazir/actions/runs/38561969821)
+passed all quality gates (2,217 tests passed; 44 intentional skips) and built all
+six native targets. [PostgreSQL/distributed workflow](https://github.com/whassan007/wazir/actions/runs/38561969750)
+passed 20 real PostgreSQL tests, 17 distributed tests, and 2,217 regression tests
+(27 intentional skips). All eight release assets matched `SHA256SUMS.txt`; the
+Linux ARM64 standalone binary reported `0.1.63`. Native manifests contain the
+verified artifact hashes on `release/v0.1.63`.
+
 Full report and reproduction: `tests/distributed/evidence-report.md` and
 `tests/distributed/README.md`; actual traces: `tests/distributed/evidence/`.
 No universal distributed-safety or exactly-once claim is made.

@@ -6,11 +6,11 @@
   "architecture": {
     "64bit": {
       "url": "https://github.com/whassan007/wazir/releases/download/v0.1.63/wazir-v0.1.63-windows-x64.zip",
-      "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      "hash": "251090d4878315ea8eb3aa9a825f78e4ca87157406831b37afaac0a002ec4d93"
     },
     "arm64": {
       "url": "https://github.com/whassan007/wazir/releases/download/v0.1.63/wazir-v0.1.63-windows-arm64.zip",
-      "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+      "hash": "35f3b8a73da97a77ad27565a39d797416956d068549fdfb6c8ff7cc8ff08ca8f"
     }
   },
   "bin": "wa.exe",
