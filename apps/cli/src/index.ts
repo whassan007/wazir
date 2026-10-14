@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { registerMCPCommands } from './mcp.js';
 import { registerWebCommands } from './web.js';
+import { registerMobileCommands } from './mobile.js';
 import { closeMCPRegistries } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
 
@@ -22,6 +23,7 @@ program
 
 registerMCPCommands(program);
 registerWebCommands(program);
+registerMobileCommands(program);
 
 program
   .command('version')

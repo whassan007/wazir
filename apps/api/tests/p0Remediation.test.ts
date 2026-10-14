@@ -20,7 +20,24 @@ const OP = 'op-secret-token';
 const VIEW = 'view-secret-token';
 const REG = 'reg-secret-token';
 
-type Scope = 'public' | 'viewer' | 'operator' | 'registration' | 'computer' | 'mcp';
+type Scope =
+  | 'public'
+  | 'viewer'
+  | 'operator'
+  | 'registration'
+  | 'computer'
+  | 'mcp'
+  // Mobile companion surface (apps/api/src/mobile.ts): a paired device credential is
+  // structurally narrower than operator/viewer (`isOperatorToken`/`isViewerToken` never
+  // match it — see auth.ts) and only reaches routes gated by these two dedicated scopes.
+  | 'operator-or-device'
+  | 'viewer-or-device'
+  // No bearer token at all: protected by a one-time pairing secret or refresh token
+  // carried in the request body instead of an Authorization header.
+  | 'pairing-secret'
+  // `requireProtocolPrincipal` alone: any authenticated principal (operator, viewer,
+  // device, or local-dev), no further scope check.
+  | 'protocol-principal';
 
 /**
  * The complete authorization matrix. Every route the app registers must appear here (the
@@ -72,6 +89,37 @@ const MATRIX: Record<string, Scope> = {
   'GET /ap/v1/agent/tasks/:task_id/artifacts/:artifact_id': 'viewer',
   'POST /mcp': 'mcp',
   'POST /mcp/v1': 'mcp',
+
+  // Mobile companion surface (apps/api/src/mobile.ts)
+  'POST /api/v1/mobile/pair/request': 'pairing-secret',
+  'POST /api/v1/mobile/pair/complete': 'pairing-secret',
+  'POST /api/v1/mobile/auth/rotate': 'pairing-secret',
+  'POST /api/v1/mobile/pair/sessions': 'operator',
+  'GET /api/v1/mobile/pair/sessions/:id': 'operator',
+  'POST /api/v1/mobile/pair/sessions/:id/approve': 'operator',
+  'POST /api/v1/mobile/pair/sessions/:id/reject': 'operator',
+  'GET /api/v1/mobile/handshake': 'protocol-principal',
+  'POST /api/v1/mobile/auth/unpair': 'protocol-principal',
+  'GET /api/v1/mobile/devices': 'viewer',
+  'DELETE /api/v1/mobile/devices/:deviceId': 'operator',
+  'GET /api/v1/mobile/dashboard': 'viewer-or-device',
+  'GET /api/v1/mobile/events': 'viewer-or-device',
+  'GET /api/v1/mobile/events/recent': 'viewer-or-device',
+  'GET /api/v1/mobile/tasks': 'viewer-or-device',
+  'GET /api/v1/mobile/tasks/:id': 'viewer-or-device',
+  'GET /api/v1/mobile/tasks/:id/logs': 'viewer-or-device',
+  'POST /api/v1/mobile/tasks': 'operator-or-device',
+  'POST /api/v1/mobile/tasks/:id/cancel': 'operator-or-device',
+  'POST /api/v1/mobile/tasks/:id/retry': 'operator-or-device',
+  'POST /api/v1/mobile/tasks/:id/resume': 'operator-or-device',
+  'GET /api/v1/mobile/approvals': 'viewer-or-device',
+  'GET /api/v1/mobile/approvals/:id': 'viewer-or-device',
+  'POST /api/v1/mobile/approvals/:id/resolve': 'operator-or-device',
+  'GET /api/v1/mobile/computers': 'viewer-or-device',
+  'GET /api/v1/mobile/computers/:id': 'viewer-or-device',
+  'GET /api/v1/mobile/resources': 'viewer-or-device',
+  'POST /api/v1/mobile/resources/emergency-stop': 'operator',
+  'POST /api/v1/mobile/resources/resume': 'operator',
 };
 
 function routes(app: Express): string[] {
@@ -179,6 +227,77 @@ describe('P0/P1 remediation', { timeout: 30_000 }, () => {
       expect(failures).toEqual([]);
     });
 
+    it('mobile operator-or-device routes: anonymous is denied, authenticated-but-insufficient-scope is forbidden, operator and a mutate-scope device pass', async () => {
+      // 401 = no/invalid credential; 403 = authenticated but lacking `mutate` scope
+      // (a plain viewer token, or a read-only-scoped device) — see requireOperatorOrDevice.
+      const { app, baseUrl, state } = await start();
+      const mutateDevice = await state.auth.issueMobileDeviceCredential({ deviceId: 'dev-mutate', deviceName: 'Pixel' });
+      const readDevice = await state.auth.issueMobileDeviceCredential({ deviceId: 'dev-read', deviceName: 'Tablet', scopes: ['read'] });
+      const failures: string[] = [];
+      for (const route of routes(app).filter((r) => MATRIX[r] === 'operator-or-device')) {
+        const [method, path] = route.split(' ');
+        const url = baseUrl + concrete(path);
+        const anon = (await fetch(url, json({}, undefined, method))).status;
+        const viewer = (await fetch(url, json({}, VIEW, method))).status;
+        const readOnly = (await fetch(url, json({}, readDevice.accessToken, method))).status;
+        const operator = (await fetch(url, json({}, OP, method))).status;
+        const mutate = (await fetch(url, json({}, mutateDevice.accessToken, method))).status;
+        if (anon !== 401) failures.push(`${route}: anonymous got ${anon}`);
+        if (viewer !== 403) failures.push(`${route}: viewer-only token got ${viewer} (must not satisfy operator-or-device)`);
+        if (readOnly !== 403) failures.push(`${route}: read-only device got ${readOnly} (mutate scope required)`);
+        if (operator === 401 || operator === 403) failures.push(`${route}: operator got ${operator}`);
+        if (mutate === 401 || mutate === 403) failures.push(`${route}: mutate-scope device got ${mutate}`);
+      }
+      expect(failures).toEqual([]);
+    });
+
+    it('mobile viewer-or-device routes: anonymous is denied; viewer, operator, and any paired device pass', async () => {
+      const { app, baseUrl, state } = await start();
+      const device = await state.auth.issueMobileDeviceCredential({ deviceId: 'dev-reader', deviceName: 'Watch', scopes: ['read'] });
+      const failures: string[] = [];
+      for (const route of routes(app).filter((r) => MATRIX[r] === 'viewer-or-device')) {
+        const [method, path] = route.split(' ');
+        const url = baseUrl + concrete(path);
+        const anon = (await fetch(url, json({}, undefined, method))).status;
+        const viewer = (await fetch(url, json({}, VIEW, method))).status;
+        const operator = (await fetch(url, json({}, OP, method))).status;
+        const paired = (await fetch(url, json({}, device.accessToken, method))).status;
+        if (anon !== 401) failures.push(`${route}: anonymous got ${anon}`);
+        if (viewer === 401) failures.push(`${route}: viewer got ${viewer}`);
+        if (operator === 401) failures.push(`${route}: operator got ${operator}`);
+        if (paired === 401) failures.push(`${route}: paired device got ${paired}`);
+      }
+      expect(failures).toEqual([]);
+    });
+
+    it('a mobile device credential never satisfies a true operator-only route (model load/unload, worker admin, pairing admin, emergency controls, ...)', async () => {
+      // Deliberately 'operator' only, not 'viewer': viewer-only routes split into two
+      // families. Token-gated ones (e.g. `GET /api/v1/mobile/devices`, via
+      // `requireViewerOrOperator`) are already covered — `isViewerToken` never matches a
+      // device (see auth.ts), so a device gets 401 there too. Scope-gated ones under
+      // `/ap/v1` (`requireProtocolPrincipal` + `hasScope(principal, 'read')`) are
+      // intentionally reachable by anything holding `read` scope, device included — the
+      // same privilege a viewer token already has there. That's the existing protocol
+      // scope model, not a new escalation; the operator boundary below is the real
+      // invariant this feature must not weaken.
+      const { app, baseUrl, state } = await start();
+      const device = await state.auth.issueMobileDeviceCredential({ deviceId: 'dev-escalation-check', deviceName: 'Pixel' });
+      const failures: string[] = [];
+      for (const route of routes(app).filter((r) => MATRIX[r] === 'operator')) {
+        const [method, path] = route.split(' ');
+        const status = (await fetch(baseUrl + concrete(path), json({}, device.accessToken, method))).status;
+        // 401 or 403 depending on which layer rejects first — a route behind the blanket
+        // `/api/v1` gate (`requireViewerOrOperator`, no device awareness) gets 401 there
+        // before its own `requireOperator` ever runs; a route reached directly (e.g.
+        // mobile.ts's own operator-only routes) gets 403 from `requireOperator` itself,
+        // which recognizes a device credential as real-but-insufficient. Either way, the
+        // security property under test — a device is never granted access — holds; only
+        // the exact denial code is a layering detail.
+        if (status !== 401 && status !== 403) failures.push(`${route}: mobile device got ${status}, expected 401 or 403`);
+      }
+      expect(failures).toEqual([]);
+    });
+
     it('a viewer cannot create Agent Protocol tasks, execute steps or write artifacts', async () => {
       const { state, baseUrl } = await start();
       const tasksBefore = (await state.editorProtocol.listTasks()).length;
@@ -233,7 +352,14 @@ describe('P0/P1 remediation', { timeout: 30_000 }, () => {
         const second = await start(new JsonFileStore(file));
         expect((await fetch(`${second.baseUrl}/computers/w1/heartbeat`, json({}, token))).status).toBe(200);
         expect((await fetch(`${second.baseUrl}/computers/w1/heartbeat`, json({}, 'x'.repeat(64)))).status).toBe(401);
-      } finally { await rm(dir, { recursive: true, force: true }); }
+      } finally {
+        // maxRetries/retryDelay: a worker connect/disconnect publishes a mobile event
+        // (apps/api/src/mobile.ts MobileEventHub.publish) via an unawaited `void` call that
+        // writes into this same JsonFileStore file; that write can still be in flight when
+        // this cleanup runs. Node's built-in retry absorbs that transient ENOTEMPTY instead
+        // of failing the test on an unrelated timing race.
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
     });
 
     it('a storage failure fails registration and rotation; the previous credential stays valid', async () => {
@@ -312,7 +438,12 @@ describe('P0/P1 remediation', { timeout: 30_000 }, () => {
         expect((await fetch(`${second.baseUrl}/computers/pre/heartbeat`, json({}, preshared))).status).toBe(200);
       } finally {
         for (const w of workers) await w.stop().catch(() => undefined);
-        await rm(dir, { recursive: true, force: true });
+        // maxRetries/retryDelay: a worker connect/disconnect publishes a mobile event
+        // (apps/api/src/mobile.ts MobileEventHub.publish) via an unawaited `void` call that
+        // writes into this same JsonFileStore file; that write can still be in flight when
+        // this cleanup runs. Node's built-in retry absorbs that transient ENOTEMPTY instead
+        // of failing the test on an unrelated timing race.
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
     });
   });
@@ -406,7 +537,14 @@ describe('P0/P1 remediation', { timeout: 30_000 }, () => {
         const third = new TaskDispatcher(new JsonFileStore(file));
         await third.ready;
         expect(third.totalQueued).toBe(0);
-      } finally { await rm(dir, { recursive: true, force: true }); }
+      } finally {
+        // maxRetries/retryDelay: a worker connect/disconnect publishes a mobile event
+        // (apps/api/src/mobile.ts MobileEventHub.publish) via an unawaited `void` call that
+        // writes into this same JsonFileStore file; that write can still be in flight when
+        // this cleanup runs. Node's built-in retry absorbs that transient ENOTEMPTY instead
+        // of failing the test on an unrelated timing race.
+        await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
     });
 
     it('a worker restart without its lease token waits for expiry, then re-acquires as a new attempt', async () => {

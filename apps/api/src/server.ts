@@ -30,6 +30,7 @@ import { createCodingAgent } from '@wazir/agents';
 import { generateId, sanitizeUntrustedOutput, MemoryStore, type KeyValueStore } from '@wazir/shared';
 import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
 import { createControlledExecution } from './toolExecution.js';
+import { MobileServices, registerMobileRoutes } from './mobile.js';
 
 // Bounds on in-memory state so an unauthenticated peer (or a runaway client)
 // cannot grow the control plane without limit (security review F-19).
@@ -213,6 +214,7 @@ export interface ApiState {
   store: KeyValueStore;
   auth: ApiAuth;
   editorProtocol: EditorProtocolService;
+  mobile: MobileServices;
 }
 
 export interface ApiStateOptions {
@@ -225,6 +227,10 @@ export interface ApiStateOptions {
   /** Human approval for policy `ask` decisions on protocol tool calls; absent, `ask` is denied. */
   approveTool?: (request: PolicyActionRequest, decision: PolicyDecision) => Promise<boolean | 'unavailable'>;
   auditPath?: string;
+  /** Explicitly enable durable mobile approval queue even before a mobile device pairs. */
+  enableMobileApprovals?: boolean;
+  /** SQLite path for ResourceLedger (defaults to :memory:). */
+  ledgerPath?: string;
 }
 
 export async function createApiState(options: ApiStateOptions = {}): Promise<ApiState> {
@@ -338,7 +344,28 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   lifecycle.startReconciliation();
 
   const projectRoot = options.projectRoot ?? process.env.WAZIR_PROJECT_ROOT ?? process.cwd();
-  const controlled = createControlledExecution({ tools, projectRoot, approve: options.approveTool, auditPath: options.auditPath });
+  let mobileRef: MobileServices | undefined;
+  const approveCallback = async (
+    request: PolicyActionRequest,
+    decision: PolicyDecision,
+  ): Promise<boolean | 'unavailable'> => {
+    if (options.approveTool) {
+      const explicit = await options.approveTool(request, decision);
+      if (explicit === true || explicit === false) {
+        return explicit;
+      }
+    }
+    if (mobileRef && mobileRef.shouldUseMobileApprovalQueue()) {
+      return mobileRef.approvals.requestApproval(request, decision);
+    }
+    return 'unavailable';
+  };
+  const controlled = createControlledExecution({
+    tools,
+    projectRoot,
+    approve: approveCallback,
+    auditPath: options.auditPath,
+  });
   const editorProtocol = new EditorProtocolService({
     store,
     tools,
@@ -348,7 +375,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     projectRoot,
   });
 
-  return {
+  const state: ApiState = {
     computers,
     runtimes,
     models,
@@ -361,7 +388,24 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     store,
     auth,
     editorProtocol,
+    mobile: undefined as unknown as MobileServices,
   };
+
+  const mobile = new MobileServices(state, {
+    projectRoot,
+    executeTool: controlled.executeTool,
+    verify: controlled.verify,
+    policy: controlled.policy,
+    ledgerPath: options.ledgerPath,
+  });
+  if (options.enableMobileApprovals) {
+    mobile.approvals.enableDurableQueue = true;
+  }
+  await mobile.init();
+  state.mobile = mobile;
+  mobileRef = mobile;
+
+  return state;
 }
 
 function recordExecution(state: ApiState, record: Record<string, unknown>): void {
@@ -470,8 +514,15 @@ export function createApp(state: ApiState) {
     res.send(lines.join('\n'));
   });
 
-  // Read-only control routes allow viewer or operator tokens.
-  // Mutating endpoints (dispatch, executions) explicitly enforce operator scope.
+  // Mobile companion routes (public pairing endpoints + authenticated mobile endpoints)
+  registerMobileRoutes(app, state, state.mobile);
+
+  // Read-only control routes allow viewer or operator tokens. Mutating endpoints
+  // explicitly enforce operator scope. A paired mobile device is deliberately NOT
+  // granted blanket access to this whole surface (computers, workers, runtimes, models,
+  // agents, tools, executions, task dispatch) — only the specific `/api/v1/mobile/*`
+  // routes it needs, gated individually by `requireOperatorOrDevice`/
+  // `requireViewerOperatorOrDevice` in mobile.ts.
   app.use('/api/v1', auth.requireViewerOrOperator);
   app.use('/executions', auth.requireOperator);
 
@@ -553,12 +604,34 @@ export function createApp(state: ApiState) {
     catch (error) { lifecycleError(res, error); }
   });
   app.post('/api/v1/models/:id/load', auth.requireOperator, async (req, res) => {
-    try { res.json(await state.lifecycle.load(String(req.params.id), req.body ?? {})); }
-    catch (error) { lifecycleError(res, error); }
+    try {
+      const modelId = String(req.params.id);
+      const loaded = await state.lifecycle.load(modelId, req.body ?? {});
+      void state.mobile.eventHub.publish({
+        type: 'model.loaded',
+        modelId,
+        computerId: req.body?.computerId ?? localId,
+        status: 'LOADED',
+        summary: `Model loaded: ${modelId}`,
+        payload: { modelId, instance: loaded },
+      });
+      res.json(loaded);
+    } catch (error) { lifecycleError(res, error); }
   });
   app.post('/api/v1/models/:id/unload', auth.requireOperator, async (req, res) => {
-    try { await state.lifecycle.unload(String(req.params.id), req.body ?? {}); res.json({ state: 'UNLOADED' }); }
-    catch (error) { lifecycleError(res, error); }
+    try {
+      const modelId = String(req.params.id);
+      await state.lifecycle.unload(modelId, req.body ?? {});
+      void state.mobile.eventHub.publish({
+        type: 'model.unloaded',
+        modelId,
+        computerId: req.body?.computerId ?? localId,
+        status: 'UNLOADED',
+        summary: `Model unloaded: ${modelId}`,
+        payload: { modelId },
+      });
+      res.json({ state: 'UNLOADED' });
+    } catch (error) { lifecycleError(res, error); }
   });
   for (const operation of ['pin', 'unpin'] as const) {
     app.post(`/api/v1/models/:id/${operation}`, auth.requireOperator, async (req, res) => {
@@ -656,6 +729,13 @@ export function createApp(state: ApiState) {
       }
       state.dispatcher.disconnect(registration.id);
     }
+    void state.mobile.eventHub.publish({
+      type: 'worker.connected',
+      computerId: computer.id,
+      status: 'online',
+      summary: `Worker connected: ${computer.name} (${computer.id})`,
+      payload: { computerId: computer.id, name: computer.name },
+    });
     res.json({ ok: true, id: computer.id, token });
   });
 
@@ -696,6 +776,13 @@ export function createApp(state: ApiState) {
     req.on('close', () => {
       clearInterval(keepAlive);
       state.dispatcher.unsubscribe(computerId, res);
+      void state.mobile.eventHub.publish({
+        type: 'worker.disconnected',
+        computerId,
+        status: 'offline',
+        summary: `Worker stream disconnected: ${computerId}`,
+        payload: { computerId },
+      });
     });
     try {
       await state.dispatcher.subscribe(computerId, res);
