@@ -356,6 +356,11 @@ export class ExecutionEngine {
     callId?: string; stepId?: string; sideEffectClass?: ToolSideEffectClass; argumentsHash?: string;
   } = {}): Promise<string> {
     const record = this.require(executionId);
+    // A settled execution dispatches nothing: a worker that keeps going after it was
+    // cancelled, orphaned or completed must not add side effects to a closed record.
+    if (['completed', 'failed', 'cancelled'].includes(record.execution.status)) {
+      throw Object.assign(new Error(`EXECUTION_NOT_ACTIVE: execution '${executionId}' is ${record.execution.status}; it cannot dispatch tool calls`), { code: 'EXECUTION_NOT_ACTIVE' });
+    }
     const callId = options.callId ?? `call-${randomUUID()}`;
     await injectFault('BEFORE_TOOL_EXECUTION', { executionId, callId, tool, input, sideEffectClass: options.sideEffectClass });
     if (this.toolCheckpoints(executionId).some(call => call.callId === callId)) {

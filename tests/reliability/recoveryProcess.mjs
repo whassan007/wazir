@@ -29,7 +29,9 @@ if(mode.startsWith('queue')) {
  }else {
   const id=await readFile(`${dir}/id`,'utf8');
   const before=await planTaskResume(engine,id,async()=>({outcome:'UNDETERMINED',evidence:'No physical inspection yet'}));
-  let replay='unexpected';try{await engine.recordToolStart(id,'shell',{command:'append marker'},{callId:'effect-2',sideEffectClass:'NON_IDEMPOTENT_WRITE'});}catch(e){replay=e.message;}
+  // A blind replay: a caller ignoring the refusal re-opens the interrupted execution and
+  // dispatches the write again. The unresolved call must still block it.
+  let replay='unexpected';try{await engine.recordEvent(id,'execution.resumed',{forced:true});await engine.setStatus(id,'running');await engine.recordToolStart(id,'shell',{command:'append marker'},{callId:'effect-2',sideEffectClass:'NON_IDEMPOTENT_WRITE'});}catch(e){replay=e.message;}
   const physical=await readFile(`${dir}/effect`,'utf8');
   if(physical!=='once\n')throw new Error('Side effect evidence mismatch');
   const after=await planTaskResume(engine,id,async()=>({outcome:'APPLIED',evidence:'Isolated effect file contains exactly one expected record'}));
