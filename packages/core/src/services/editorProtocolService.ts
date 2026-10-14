@@ -234,6 +234,11 @@ export class EditorProtocolService {
     };
 
     const persist = async (): Promise<void> => {
+      // Another process may have finished the task meanwhile; never overwrite a terminal state.
+      const stored = await this.getTask(taskId);
+      if (stored && (stored.status === 'completed' || stored.status === 'failed') && stored.additional_output?.last_step_id !== stepId) {
+        throw new ProtocolError('TASK_TERMINAL', `${taskId} became ${stored.status} during execution`);
+      }
       const index = task.steps.findIndex((s) => s.step_id === stepId);
       if (index >= 0) task.steps[index] = step; else task.steps.push(step);
       await this.store.put(this.stepKey(taskId, stepId), step);
@@ -248,6 +253,7 @@ export class EditorProtocolService {
     try {
       return await this.runStep(task, step, persist, { toolCall, checks, isLast, executionId, input: body?.input }, ctx);
     } catch (error) {
+      if (error instanceof ProtocolError && error.code === 'TASK_TERMINAL') throw error;
       // Never leave an accepted step running: an unexpected fault is a failure.
       step.status = 'failed';
       step.output = `Step failed: ${error instanceof Error ? error.message : String(error)}`;

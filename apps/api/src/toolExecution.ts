@@ -95,6 +95,14 @@ export function createControlledExecution(options: ControlledExecutionOptions): 
       allowVerificationChanges: false,
       networkAllowed: options.networkAllowed ?? false,
       signal: request.signal,
+      // Durable intent record before dispatch: if it cannot be written, the tool does not run.
+      checkpoint: async () => {
+        await appendAuditEvent({
+          type: 'policy_decision', tool: request.name, decision: 'allow', rule: decision.rule, reasons: decision.reasons,
+          executionId: request.executionId, taskId: request.taskId, agentId: `${request.source}:${request.principal.id}`,
+          details: { callId, phase: 'pre-dispatch' },
+        }, { auditPath: options.auditPath });
+      },
     });
     const metadata = (result.metadata ?? {}) as Record<string, unknown>;
     await audit({

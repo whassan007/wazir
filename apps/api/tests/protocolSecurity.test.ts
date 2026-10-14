@@ -5,7 +5,7 @@
  * are the real registered tools dispatched through the controlled boundary.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -352,6 +352,39 @@ describe('tool enforcement (operator, real registered tools)', () => {
       h.state.tools.register(original);
     }
   });
+});
+
+describe('audit and cross-process state integrity', () => {
+  it('does not dispatch a tool when the pre-dispatch audit record cannot be written', async () => {
+    const h = await start();
+    // Make the audit path a directory so appending fails.
+    rmSync(h.auditPath, { force: true });
+    mkdirSync(h.auditPath);
+    try {
+      const res = await rpc(h, OPERATOR, 'tools/call', { name: 'write', arguments: { path: 'canary.txt', content: 'PWNED' } });
+      expect(res.body.result.isError).toBe(true);
+      expect(canary(h)).toBe(CANARY);
+    } finally {
+      rmSync(h.auditPath, { recursive: true, force: true });
+    }
+  });
+
+  it('a task finished by another process during execution is not overwritten', async () => {
+    const h = await start();
+    approver = async () => true;
+    const taskId = await newTask(h);
+    const pending = step(h, taskId, { tool: { name: 'shell', input: { command: 'sleep 1' } }, is_last: true });
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && (await getTask(h, taskId)).status !== 'running') await new Promise((r) => setTimeout(r, 20));
+    // Simulate another API instance sharing the store marking the task failed.
+    const stored = await h.state.store.get<any>(`editor_protocol/tasks/${taskId}`);
+    await h.state.store.put(`editor_protocol/tasks/${taskId}`, { ...stored, status: 'failed', additional_output: { outcome: 'FAILED', last_step_id: 'other-instance' } });
+    const res = await pending;
+    expect(res.status).toBe(409);
+    const task = await getTask(h, taskId);
+    expect(task.status).toBe('failed');
+    expect(task.additional_output.last_step_id).toBe('other-instance');
+  }, 20_000);
 });
 
 describe('client cancellation', () => {
