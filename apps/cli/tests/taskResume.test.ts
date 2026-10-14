@@ -75,4 +75,31 @@ describe('planTaskResume', () => {
     await executions.setStatus(execution.id, 'completed');
     expect((await planTaskResume(executions, execution.id, inspect())).action).toBe('refuse');
   });
+
+  it('stops resuming after an explicit bound, whatever the caller retry policy', async () => {
+    const { executions, id } = await failedExecution();
+    await executions.setStatus(id, 'failed');
+    for (let i = 0; i < 2; i++) {
+      expect((await planTaskResume(executions, id, inspect(), { maxResumes: 2 })).action).toBe('resume');
+      await executions.setStatus(id, 'running');
+      await executions.setStatus(id, 'failed');
+    }
+    const plan = await planTaskResume(executions, id, inspect(), { maxResumes: 2 });
+    expect(plan.action).toBe('refuse');
+    expect(plan.reasons[0]).toContain('RESUME_LIMIT_EXCEEDED');
+  });
+
+  it('refuses to resume an execution another live process still owns', async () => {
+    const saved = new Map<string, unknown>();
+    const owner = new ExecutionEngine({ owner: { pid: 101, host: 'h' }, persist: (r) => { saved.set(r.execution.id, structuredClone(r)); } });
+    const { execution } = await owner.create({
+      task: { id: 't', type: 'coding', input: 'x', requirements: {}, priority: 'normal', status: 'pending', createdAt: new Date() },
+      computerId: 'local', runtimeId: 'r', modelId: 'm', workspaceRoot: root,
+    });
+    await owner.setStatus(execution.id, 'running');
+    const other = new ExecutionEngine({ owner: { pid: 202, host: 'h' }, isProcessAlive: () => true, load: () => [...saved.values()] as never });
+    await other.ready;
+    const plan = await planTaskResume(other, execution.id, inspect());
+    expect(plan).toEqual({ action: 'refuse', reasons: ['execution is still owned by live process 101 on h'] });
+  });
 });

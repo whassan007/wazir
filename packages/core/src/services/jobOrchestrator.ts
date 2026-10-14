@@ -448,14 +448,22 @@ export class JobOrchestrator {
       };
       this.activeJobs.set(jobId, handle);
 
-      // Reuses cancelJob() rather than aborting jobAbortController directly, so a timeout
-      // gets exactly the same cleanup a manual cancel already gets — every active task's
-      // own AbortController is aborted too, not just the top-level job one.
+      // A timeout stops the job the way cancelJob() does (the job and every active task's
+      // AbortController), but it is a failure, not a cancellation: it never records the
+      // job or its tasks as 'cancelled', because 'cancelled' is final and the timeout's
+      // outcome is 'failed'. Each aborted task settles as failed (see settleAborted).
       const timeoutTimer =
         timeoutSeconds !== undefined
           ? setTimeout(() => {
               timedOut = true;
-              void this.cancelJob(jobId, `exceeded the ${timeoutSeconds}s timeout`);
+              jobAbortController.abort();
+              for (const [taskId, taskAbort] of activeTasks.entries()) {
+                taskAbort.abort();
+                // Same event (with the reason) cancelJob() emits, so a UI reports the stop
+                // as the timeout; the durable status recorded is still 'failed'.
+                this.emit(jobId, { type: 'task:cancelled', jobId, taskId, error: `exceeded the ${timeoutSeconds}s timeout` });
+              }
+              handle.wakePump?.();
             }, Math.max(1, timeoutSeconds) * 1000)
           : undefined;
       timeoutTimer?.unref?.();
@@ -472,16 +480,19 @@ export class JobOrchestrator {
           // cancelJob() to actually stop it — that's not a genuine user cancellation, so
           // it's overridden here too (unlike the ordinary non-timeout path below, which
           // leaves a real cancellation as 'cancelled').
+          // Work that never finished fails with the timeout reason. Anything already
+          // settled — including a task an operator explicitly cancelled — keeps its outcome.
           const reason = `Task exceeded the ${timeoutSeconds}s timeout and was automatically stopped`;
+          const settled = (state: string) => state === 'completed' || state === 'failed' || state === 'cancelled';
           for (const node of job.graph.nodes) {
-            if (node.state !== 'completed' && node.state !== 'failed') {
+            if (!settled(node.state)) {
               node.state = 'failed';
               node.error = node.error ?? reason;
               node.completedAt = node.completedAt ?? new Date();
             }
           }
           for (const task of job.tasks) {
-            if (task.status !== 'completed' && task.status !== 'failed') {
+            if (!settled(task.status)) {
               task.status = 'failed';
             }
           }
@@ -504,6 +515,17 @@ export class JobOrchestrator {
         }
 
         resolve(job);
+      };
+
+      // An in-flight task stopped by the job timeout settles as failed, not cancelled.
+      // A task the operator cancelled explicitly before the timeout stays cancelled.
+      const settleTimedOut = async (node: JobNode, taskId: string): Promise<boolean> => {
+        if (!timedOut || handle.cancelledTaskIds.has(taskId)) return false;
+        const reason = `Task exceeded the ${timeoutSeconds}s timeout and was automatically stopped`;
+        node.state = 'failed';
+        node.error = node.error ?? reason;
+        await this.failTask(job.id, taskId, reason, Infinity);
+        return true;
       };
 
       let isPumping = false;
@@ -693,6 +715,7 @@ export class JobOrchestrator {
                   this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
                 }
               } else if (taskAbort.signal.aborted) {
+                if (await settleTimedOut(node, taskId)) return;
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 // cancelJob()/cancelTask() already emitted this task's cancellation (with
@@ -822,6 +845,7 @@ export class JobOrchestrator {
                   this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
                 }
               } else if (taskAbort.signal.aborted) {
+                if (await settleTimedOut(node, taskId)) return;
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 this.emit(jobId, { type: 'task:cancelled', jobId, taskId });

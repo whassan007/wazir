@@ -51,6 +51,7 @@ export { Scheduler, createScheduler } from './scheduler.js';
 export type { SchedulerDeps, ScheduleInput } from './scheduler.js';
 export { JobManager, createJobManager } from './jobManager.js';
 export type { JobManagerOptions, JobTaskInput } from './jobManager.js';
+export { InvalidTransitionError, canTransitionTask, canTransitionNode, canTransitionJob, canTransitionExecution } from './lifecycleTransitions.js';
 export { JobOrchestrator, createJobOrchestrator } from './jobOrchestrator.js';
 export type { JobOrchestratorOptions, OrchestratorTaskAssignment } from './jobOrchestrator.js';
 export { ApprovalQueue, createApprovalQueue } from './approvalQueue.js';

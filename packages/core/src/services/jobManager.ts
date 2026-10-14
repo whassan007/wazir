@@ -16,6 +16,7 @@ import type {
   ExecutionPreferences,
   WorkspaceMode,
 } from '../types/index.js';
+import { assertJobTransition, assertNodeTransition, assertTaskTransition } from './lifecycleTransitions.js';
 
 export interface JobManagerOptions {
   store?: KeyValueStore;
@@ -76,9 +77,11 @@ export class JobManager {
         if (node.state === 'running' || node.state === 'assigned') {
           node.attempts = [...(node.attempts ?? []), { state: 'failed', error: 'OWNER_LEASE_EXPIRED', executedAt: node.executedAt, completedAt: new Date(this.now()) }];
           node.retryCount = (node.retryCount ?? 0) + 1;
-          node.state = node.retryCount <= (next.maxRetries ?? 3) ? 'idle' : 'failed';
-          node.error = node.state === 'failed' ? 'RETRY_LIMIT_EXCEEDED' : undefined;
           const task = next.tasks.find(t => t.id === (node.taskId ?? node.id));
+          // Same bound runOwnedJob applies to an ordinary retry, so a crash loop can't
+          // re-run a task more often than a plain failure could.
+          node.state = node.retryCount <= (task?.maxRetries ?? next.maxRetries ?? 3) ? 'idle' : 'failed';
+          node.error = node.state === 'failed' ? 'RETRY_LIMIT_EXCEEDED' : undefined;
           if (task) task.status = node.state === 'idle' ? 'pending' : 'failed';
         }
       }
@@ -384,6 +387,8 @@ export class JobManager {
     if (!task) {
       throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
     }
+    assertTaskTransition(taskId, task.status, 'completed');
+    this.assertNode(job, taskId, 'completed');
     task.status = 'completed';
     this.updateNodeState(job, taskId, 'completed', result);
     await this.flush(job);
@@ -401,7 +406,10 @@ export class JobManager {
       throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
     }
     const maxRetries = job.maxRetries ?? 3;
-    if ((retryCount ?? 0) < maxRetries) {
+    const retrying = (retryCount ?? 0) < maxRetries;
+    assertTaskTransition(taskId, task.status, retrying ? 'pending' : 'failed');
+    if (!retrying) this.assertNode(job, taskId, 'failed');
+    if (retrying) {
       task.status = 'pending';
     } else {
       task.status = 'failed';
@@ -442,6 +450,7 @@ export class JobManager {
     extra?: { startedAt?: Date; completedAt?: Date },
   ): Promise<void> {
     const job = this.require(jobId);
+    assertJobTransition(jobId, job.status, status);
     job.status = status;
     if (extra?.startedAt) job.startedAt = extra.startedAt;
     if (extra?.completedAt) job.completedAt = extra.completedAt;
@@ -458,6 +467,7 @@ export class JobManager {
     if (!task) {
       throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
     }
+    assertTaskTransition(taskId, task.status, status);
     task.status = status;
     await this.flush(job);
   }
@@ -470,6 +480,7 @@ export class JobManager {
     error?: string,
   ): Promise<void> {
     const job = this.require(jobId);
+    this.assertNode(job, nodeId, state);
     this.updateNodeState(job, nodeId, state, result, error);
     await this.flush(job);
   }
@@ -706,6 +717,11 @@ export class JobManager {
     }
   }
 
+  private assertNode(job: Job, nodeId: string, state: AgentState): void {
+    const node = job.graph.nodes.find((n) => n.id === nodeId || n.taskId === nodeId);
+    if (node) assertNodeTransition(nodeId, node.state, state);
+  }
+
   private require(jobId: string): Job {
     const job = this.jobs.get(jobId);
     if (!job) {
@@ -716,6 +732,22 @@ export class JobManager {
 
   private async flush(job: Job): Promise<void> {
     if (this.store) {
+      try {
+        await this.writeToStore(job);
+      } catch (error) {
+        // The mutation was already applied to the in-memory job. A write the store refused
+        // (lost lease, revision conflict) must not linger locally as if it had happened.
+        const stored = await this.store.get<Job>(`job/${job.id}`).catch(() => undefined);
+        if (stored) this.jobs.set(job.id, stored);
+        throw error;
+      }
+    } else if (this.persist) {
+      await this.persist(job);
+    }
+  }
+
+  private async writeToStore(job: Job): Promise<void> {
+    if (this.store) {
       await this.store.update!<Job>(`job/${job.id}`, current => {
         if (current) {
           if (this.claims.has(job.id)) this.assertOwnership(current);
@@ -725,8 +757,6 @@ export class JobManager {
         job.revision = (current?.revision ?? 0) + 1;
         return structuredClone({ ...job, control: current?.control ?? job.control, ownership: current?.ownership ?? job.ownership });
       });
-    } else if (this.persist) {
-      await this.persist(job);
     }
   }
 }
