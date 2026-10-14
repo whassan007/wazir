@@ -16,6 +16,8 @@ one store. It also includes everything listed under v0.1.61, which was never pub
 - **One step in flight per task.** A step holds a heartbeat-renewed lease
   (`WAZIR_PROTOCOL_STEP_LEASE_MS`, default 120s). Another request waits up to
   `WAZIR_PROTOCOL_ADMISSION_WAIT_MS` (default 30s) and then gets HTTP 409 `TASK_BUSY`.
+- A step held by a process that has died on the same host is recovered immediately; leases held
+  from other hosts still expire after the lease period.
 - **Optional `idempotency_key`** on a step request returns the original step instead of running
   the tool again.
 
@@ -36,6 +38,11 @@ one store. It also includes everything listed under v0.1.61, which was never pub
   global status reports `STALE` after any later mutating protocol tool call, and is never
   `verified: true` without a configured engine. A PASS is rejected if a requested check did not
   run or the workspace changed while checks ran.
+- Verification is also bound to a fingerprint of the workspace's contents, so changes made outside
+  the protocol (CLI agents, editors, git) make a PASS `STALE`. Calls refused by policy no longer
+  count as workspace changes.
+- Viewers reading tasks and steps see outcomes and statuses, but not tool inputs, tool output or
+  check output.
 - Viewers get verification statuses without check output.
 
 ## Audit

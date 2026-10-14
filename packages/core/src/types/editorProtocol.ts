@@ -194,6 +194,11 @@ export interface ControlledToolRequest {
   taskId?: string;
   stepId?: string;
   signal?: AbortSignal;
+  /**
+   * Called after authorization and policy admit the call, immediately before
+   * dispatch. If it throws, the tool must not be dispatched.
+   */
+  beforeDispatch?: () => Promise<void>;
 }
 
 /** Outcome of one controlled tool call, with the policy decision that admitted or refused it. */
@@ -254,6 +259,8 @@ export interface StepVerificationReport {
   workspaceRevision?: string;
   /** Workspace mutation epoch the checks ran against (set by the service, not the verifier). */
   workspaceEpoch?: number;
+  /** Workspace content fingerprint after the checks ran (when the host provides one). */
+  workspaceFingerprint?: string;
   /** Checks the caller asked for; PASS requires every one of them to have executed and passed. */
   requestedChecks?: string[];
   /** Principal on whose authority the checks ran. */

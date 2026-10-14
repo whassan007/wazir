@@ -93,6 +93,13 @@ export function createControlledExecution(options: ControlledExecutionOptions): 
       return deny(`policy ${decision.decision} (${decision.rule}): ${decision.reasons.join('; ')}`, 'POLICY_DENIED', decision);
     }
 
+    if (request.beforeDispatch) {
+      try {
+        await request.beforeDispatch();
+      } catch (error) {
+        return deny(`pre-dispatch hook failed; tool not dispatched: ${error instanceof Error ? error.message : String(error)}`, 'EXECUTION_UNAVAILABLE', decision);
+      }
+    }
     // Durable intent record before dispatch: if it cannot be written, the tool does not run.
     let intentRecorded = false;
     let intentError: string | undefined;

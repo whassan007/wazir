@@ -25,7 +25,7 @@ import {
 import { currentLoad, discoverHardware, discoverRuntimes, type DiscoveredRuntime } from '@wazir/workers';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
-import { ToolRegistry, defaultTools } from '@wazir/tools';
+import { ToolRegistry, defaultTools, snapshotWorkspace, workspaceFingerprint } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
 import { generateId, sanitizeUntrustedOutput, MemoryStore, type KeyValueStore } from '@wazir/shared';
 import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
@@ -346,6 +346,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     verify: controlled.verify,
     toolSurface: controlled.toolSurface,
     projectRoot,
+    workspaceRevision: async () => workspaceFingerprint(await snapshotWorkspace(projectRoot)),
   });
 
   return {
@@ -882,8 +883,11 @@ export function createApp(state: ApiState) {
     }
   });
 
+  // Reads are open to viewers; what they may see of executed steps is decided by the service.
+  const viewer = (res: Response) => res.locals.principal as ProtocolPrincipal | undefined;
+
   app.get('/ap/v1/agent/tasks', async (_req, res) => {
-    const tasks = await state.editorProtocol.listTasks();
+    const tasks = (await state.editorProtocol.listTasks()).map((t) => state.editorProtocol.viewTask(t, viewer(res)));
     res.json({ tasks, pagination: { total: tasks.length, pages: 1, current: 1, page_size: tasks.length } });
   });
 
@@ -893,7 +897,7 @@ export function createApp(state: ApiState) {
       res.status(404).json({ error: `Task not found: ${req.params.task_id}` });
       return;
     }
-    res.json(task);
+    res.json(state.editorProtocol.viewTask(task, viewer(res)));
   });
 
   app.post('/ap/v1/agent/tasks/:task_id/steps', auth.requireOperator, async (req, res) => {
@@ -917,7 +921,7 @@ export function createApp(state: ApiState) {
 
   app.get('/ap/v1/agent/tasks/:task_id/steps', async (req, res) => {
     try {
-      const steps = await state.editorProtocol.listSteps(req.params.task_id);
+      const steps = (await state.editorProtocol.listSteps(req.params.task_id)).map((s) => state.editorProtocol.viewStep(s, viewer(res)));
       res.json({ steps, pagination: { total: steps.length, pages: 1, current: 1, page_size: steps.length } });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
@@ -930,7 +934,7 @@ export function createApp(state: ApiState) {
       res.status(404).json({ error: `Step not found: ${req.params.step_id}` });
       return;
     }
-    res.json(step);
+    res.json(state.editorProtocol.viewStep(step, viewer(res)));
   });
 
   app.get('/ap/v1/agent/tasks/:task_id/artifacts', async (req, res) => {

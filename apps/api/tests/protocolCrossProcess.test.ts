@@ -24,6 +24,9 @@ interface Node { child: ChildProcess; base: string; log: string[]; exited: Promi
 let dir: string;
 let root: string;
 let nodes: Node[] = [];
+/** Postgres runs only when WAZIR_TEST_DATABASE_URL points at a scratch database. */
+const PG_URL = process.env.WAZIR_TEST_DATABASE_URL;
+let pgUrl: string | undefined;
 
 beforeEach(() => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'wazir-xproc-'));
@@ -52,6 +55,7 @@ async function startNode(env: Record<string, string> = {}): Promise<Node> {
       WAZIR_HOME: path.join(dir, 'home'),
       WAZIR_PROTOCOL_STEP_LEASE_MS: String(LEASE_MS),
       WAZIR_PROTOCOL_ADMISSION_WAIT_MS: '20000',
+      ...(pgUrl ? { NODE_PG_URL: pgUrl } : {}),
       ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -114,217 +118,284 @@ async function until<T>(fn: () => Promise<T>, ok: (v: T) => boolean, ms = 20_000
   return value;
 }
 
-describe('two API processes, one store', () => {
-  it('concurrent step creation loses no steps', async () => {
-    const [a, b] = await Promise.all([startNode(), startNode()]);
-    const taskId = await newTask(a);
-    const results = await Promise.all(Array.from({ length: 16 }, (_, i) => step(i % 2 ? b : a, taskId, {}, `s${i}`)));
-    expect(results.map((r) => r.status)).toEqual(Array(16).fill(200));
-    for (const n of [a, b]) {
-      const task = await getTask(n, taskId);
-      expect(task.steps.map((s: any) => s.step_id).sort()).toEqual(results.map((r) => r.body.step_id).sort());
-      expectConsistent(task);
+const BACKENDS = ['json', ...(PG_URL ? ['postgres'] : [])];
+
+describe.each(BACKENDS)('%s store', (backend) => {
+  beforeEach(async () => {
+    pgUrl = backend === 'postgres' ? PG_URL : undefined;
+    if (!pgUrl) return;
+    // Global keys (verification pointer, workspace epoch) must not leak between tests.
+    const { createPool, runKvMigration } = await import('@wazir/database');
+    const pool = createPool({ connectionString: pgUrl });
+    try {
+      await runKvMigration(pool);
+      await pool.query("DELETE FROM wazir_kv_store WHERE key LIKE 'editor_protocol/%'");
+    } finally {
+      await pool.end();
     }
-    // Every created step is individually addressable from either process.
-    for (const r of results) expect((await call(b, 'GET', `/ap/v1/agent/tasks/${taskId}/steps/${r.body.step_id}`, undefined, VIEWER)).status).toBe(200);
-  }, 120_000);
+  });
 
-  it('concurrent artifact creation loses no artifacts', async () => {
-    const [a, b] = await Promise.all([startNode(), startNode()]);
-    const taskId = await newTask(a);
-    const results = await Promise.all(Array.from({ length: 20 }, (_, i) =>
-      call(i % 2 ? b : a, 'POST', `/ap/v1/agent/tasks/${taskId}/artifacts`, { file_name: `f${i}.txt`, content: String(i) })));
-    expect(results.map((r) => r.status)).toEqual(Array(20).fill(201));
-    const task = await getTask(a, taskId);
-    expect(task.artifacts.map((x: any) => x.artifact_id).sort()).toEqual(results.map((r) => r.body.artifact_id).sort());
-  }, 120_000);
-
-  it('a long-running step does not overwrite artifacts added meanwhile by another process (stale write)', async () => {
-    const [a, b] = await Promise.all([startNode(), startNode()]);
-    const taskId = await newTask(a);
-    const running = step(a, taskId, { tool: { name: 'shell', input: { command: 'sleep 1' } } });
-    await until(() => getTask(b, taskId), (t) => t.status === 'running');
-    const added = await Promise.all(Array.from({ length: 5 }, (_, i) =>
-      call(b, 'POST', `/ap/v1/agent/tasks/${taskId}/artifacts`, { file_name: `late${i}.txt` })));
-    expect(added.map((r) => r.status)).toEqual(Array(5).fill(201));
-    const done = await running;
-    expect(done.status).toBe(200);
-    expect(done.body.status).toBe('completed');
-    const task = await getTask(a, taskId);
-    expect(task.artifacts).toHaveLength(5);
-    expect(task.steps.find((s: any) => s.step_id === done.body.step_id).status).toBe('completed');
-    expectConsistent(task);
-  }, 120_000);
-
-  it('simultaneous completion yields exactly one authoritative terminal outcome', async () => {
-    const [a, b] = await Promise.all([startNode(), startNode()]);
-    for (let round = 0; round < 5; round++) {
+  describe('two API processes, one store', () => {
+    it('concurrent step creation loses no steps', async () => {
+      const [a, b] = await Promise.all([startNode(), startNode()]);
       const taskId = await newTask(a);
-      const [ra, rb] = await Promise.all([step(a, taskId, { is_last: true }, 'a'), step(b, taskId, { is_last: true }, 'b')]);
-      const winners = [ra, rb].filter((r) => r.status === 200);
-      expect(winners).toHaveLength(1);
-      const loser = [ra, rb].find((r) => r.status !== 200)!;
-      expect(loser.status).toBe(409);
-      expect(loser.body.code).toBe('TASK_TERMINAL');
-      const task = await getTask(b, taskId);
-      expect(task.status).toBe('completed');
-      expect(task.additional_output.last_step_id).toBe(winners[0].body.step_id);
-      expect(task.steps.filter((s: any) => s.is_last)).toHaveLength(1);
-      expectConsistent(task);
-    }
-  }, 120_000);
+      const results = await Promise.all(Array.from({ length: 16 }, (_, i) => step(i % 2 ? b : a, taskId, {}, `s${i}`)));
+      expect(results.map((r) => r.status)).toEqual(Array(16).fill(200));
+      for (const n of [a, b]) {
+        const task = await getTask(n, taskId);
+        expect(task.steps.map((s: any) => s.step_id).sort()).toEqual(results.map((r) => r.body.step_id).sort());
+        expectConsistent(task);
+      }
+      // Every created step is individually addressable from either process.
+      for (const r of results) expect((await call(b, 'GET', `/ap/v1/agent/tasks/${taskId}/steps/${r.body.step_id}`, undefined, VIEWER)).status).toBe(200);
+    }, 120_000);
 
-  it('a failing step racing a successful completion never produces contradictory terminal state', async () => {
-    const [a, b] = await Promise.all([startNode(), startNode()]);
-    for (let round = 0; round < 5; round++) {
+    it('concurrent artifact creation loses no artifacts', async () => {
+      const [a, b] = await Promise.all([startNode(), startNode()]);
       const taskId = await newTask(a);
-      const [fail, ok] = await Promise.all([
-        step(a, taskId, { tool: { name: 'read', input: { path: 'missing.txt' } } }, 'fail'),
-        step(b, taskId, { is_last: true }, 'ok'),
-      ]);
+      const results = await Promise.all(Array.from({ length: 20 }, (_, i) =>
+        call(i % 2 ? b : a, 'POST', `/ap/v1/agent/tasks/${taskId}/artifacts`, { file_name: `f${i}.txt`, content: String(i) })));
+      expect(results.map((r) => r.status)).toEqual(Array(20).fill(201));
       const task = await getTask(a, taskId);
+      expect(task.artifacts.map((x: any) => x.artifact_id).sort()).toEqual(results.map((r) => r.body.artifact_id).sort());
+    }, 120_000);
+
+    it('a long-running step does not overwrite artifacts added meanwhile by another process (stale write)', async () => {
+      const [a, b] = await Promise.all([startNode(), startNode()]);
+      const taskId = await newTask(a);
+      const running = step(a, taskId, { tool: { name: 'shell', input: { command: 'sleep 1' } } });
+      await until(() => getTask(b, taskId), (t) => t.status === 'running');
+      const added = await Promise.all(Array.from({ length: 5 }, (_, i) =>
+        call(b, 'POST', `/ap/v1/agent/tasks/${taskId}/artifacts`, { file_name: `late${i}.txt` })));
+      expect(added.map((r) => r.status)).toEqual(Array(5).fill(201));
+      const done = await running;
+      expect(done.status).toBe(200);
+      expect(done.body.status).toBe('completed');
+      const task = await getTask(a, taskId);
+      expect(task.artifacts).toHaveLength(5);
+      expect(task.steps.find((s: any) => s.step_id === done.body.step_id).status).toBe('completed');
       expectConsistent(task);
-      expect(['completed', 'failed']).toContain(task.status);
-      const accepted = [fail, ok].filter((r) => r.status === 200);
-      expect(accepted).toHaveLength(1);
-      expect([fail, ok].find((r) => r.status !== 200)!.body.code).toBe('TASK_TERMINAL');
-      expect(task.additional_output.last_step_id).toBe(accepted[0].body.step_id);
-      // Monotonic: re-reading later shows the same terminal outcome.
-      await new Promise((r) => setTimeout(r, 200));
-      expect((await getTask(b, taskId)).status).toBe(task.status);
-    }
-  }, 120_000);
+    }, 120_000);
 
-  it('a duplicate request (same idempotency key) to two processes executes the tool once', async () => {
-    const [a, b] = await Promise.all([startNode(), startNode()]);
-    const taskId = await newTask(a);
-    const body = { idempotency_key: 'req-1', tool: { name: 'shell', input: { command: 'echo x >> dup.txt' } } };
-    const [ra, rb] = await Promise.all([step(a, taskId, body), step(b, taskId, body)]);
-    expect(ra.status).toBe(200);
-    expect(rb.status).toBe(200);
-    expect(ra.body.step_id).toBe(rb.body.step_id);
-    expect(readFileSync(path.join(root, 'dup.txt'), 'utf8').trim().split('\n')).toEqual(['x']);
-    expect((await getTask(a, taskId)).steps).toHaveLength(1);
-  }, 120_000);
-});
+    it('simultaneous completion yields exactly one authoritative terminal outcome', async () => {
+      const [a, b] = await Promise.all([startNode(), startNode()]);
+      for (let round = 0; round < 5; round++) {
+        const taskId = await newTask(a);
+        const [ra, rb] = await Promise.all([step(a, taskId, { is_last: true }, 'a'), step(b, taskId, { is_last: true }, 'b')]);
+        const winners = [ra, rb].filter((r) => r.status === 200);
+        expect(winners).toHaveLength(1);
+        const loser = [ra, rb].find((r) => r.status !== 200)!;
+        expect(loser.status).toBe(409);
+        expect(loser.body.code).toBe('TASK_TERMINAL');
+        const task = await getTask(b, taskId);
+        expect(task.status).toBe('completed');
+        expect(task.additional_output.last_step_id).toBe(winners[0].body.step_id);
+        expect(task.steps.filter((s: any) => s.is_last)).toHaveLength(1);
+        expectConsistent(task);
+      }
+    }, 120_000);
 
-describe('process termination and persistence faults', () => {
-  it('API killed before the dispatch intent is durable: step ABANDONED, tool never ran, task continues', async () => {
-    const a = await startNode();
-    const b = await startNode({ NODE_CRASH: 'after-intent' });
-    const taskId = await newTask(a);
-    const crashed = await step(b, taskId, { tool: { name: 'write', input: { path: 'never.txt', content: 'x' } } }).catch((e) => e);
-    expect(crashed).toBeInstanceOf(Error);
-    expect(await b.exited).toBeNull();
-    const next = await step(a, taskId, { is_last: true });
-    expect(next.status).toBe(200);
-    const task = await getTask(a, taskId);
-    const abandoned = task.steps.find((s: any) => s.step_id !== next.body.step_id);
-    expect(abandoned.additional_output.outcome).toBe('ABANDONED');
-    expect(existsSync(path.join(root, 'never.txt'))).toBe(false);
-    expect(task.status).toBe('completed');
-    expectConsistent(task);
-  }, 120_000);
+    it('a failing step racing a successful completion never produces contradictory terminal state', async () => {
+      const [a, b] = await Promise.all([startNode(), startNode()]);
+      for (let round = 0; round < 5; round++) {
+        const taskId = await newTask(a);
+        const [fail, ok] = await Promise.all([
+          step(a, taskId, { tool: { name: 'read', input: { path: 'missing.txt' } } }, 'fail'),
+          step(b, taskId, { is_last: true }, 'ok'),
+        ]);
+        const task = await getTask(a, taskId);
+        expectConsistent(task);
+        expect(['completed', 'failed']).toContain(task.status);
+        const accepted = [fail, ok].filter((r) => r.status === 200);
+        expect(accepted).toHaveLength(1);
+        expect([fail, ok].find((r) => r.status !== 200)!.body.code).toBe('TASK_TERMINAL');
+        expect(task.additional_output.last_step_id).toBe(accepted[0].body.step_id);
+        // Monotonic: re-reading later shows the same terminal outcome.
+        await new Promise((r) => setTimeout(r, 200));
+        expect((await getTask(b, taskId)).status).toBe(task.status);
+      }
+    }, 120_000);
 
-  it('API killed after a filesystem mutation but before its outcome is recorded: OUTCOME_UNKNOWN, no blind retry', async () => {
-    const a = await startNode({ WAZIR_PROTOCOL_ADMISSION_WAIT_MS: '300' });
-    const b = await startNode({ NODE_CRASH: 'after-dispatch' });
-    const taskId = await newTask(a);
-    const crashed = await step(b, taskId, { tool: { name: 'shell', input: { command: 'echo once >> mutated.txt' } } }).catch((e) => e);
-    expect(crashed).toBeInstanceOf(Error);
-    expect(b.log.join('')).toContain('CRASH after-dispatch');
-    expect(readFileSync(path.join(root, 'mutated.txt'), 'utf8')).toBe('once\n');
+    it('a duplicate request (same idempotency key) to two processes executes the tool once', async () => {
+      const [a, b] = await Promise.all([startNode(), startNode()]);
+      const taskId = await newTask(a);
+      const body = { idempotency_key: 'req-1', tool: { name: 'shell', input: { command: 'echo x >> dup.txt' } } };
+      const [ra, rb] = await Promise.all([step(a, taskId, body), step(b, taskId, body)]);
+      expect(ra.status).toBe(200);
+      expect(rb.status).toBe(200);
+      expect(ra.body.step_id).toBe(rb.body.step_id);
+      expect(readFileSync(path.join(root, 'dup.txt'), 'utf8').trim().split('\n')).toEqual(['x']);
+      expect((await getTask(a, taskId)).steps).toHaveLength(1);
+    }, 120_000);
+  });
 
-    // While the lease is live the task is busy; once it expires it needs reconciliation.
-    const blocked = await until(() => step(a, taskId, { is_last: true }), (r) => r.body?.code === 'RECONCILIATION_REQUIRED');
-    expect(blocked.status).toBe(409);
-    let task = await getTask(a, taskId);
-    expect(task.status).toBe('paused');
-    expect(task.additional_output.outcome).toBe('OUTCOME_UNKNOWN');
-    const unknown = task.steps[0];
-    expect(unknown.additional_output.outcome).toBe('OUTCOME_UNKNOWN');
-    expect(task.additional_output.reconciliation_required.step_id).toBe(unknown.step_id);
-    expect(readFileSync(path.join(root, 'mutated.txt'), 'utf8')).toBe('once\n');
+  describe('process termination and persistence faults', () => {
+    it('API killed before the dispatch intent is durable: step ABANDONED, tool never ran, task continues', async () => {
+      const a = await startNode();
+      const b = await startNode({ NODE_CRASH: 'after-intent' });
+      const taskId = await newTask(a);
+      const crashed = await step(b, taskId, { tool: { name: 'write', input: { path: 'never.txt', content: 'x' } } }).catch((e) => e);
+      expect(crashed).toBeInstanceOf(Error);
+      expect(await b.exited).toBeNull();
+      const next = await step(a, taskId, { is_last: true });
+      expect(next.status).toBe(200);
+      const task = await getTask(a, taskId);
+      const abandoned = task.steps.find((s: any) => s.step_id !== next.body.step_id);
+      expect(abandoned.additional_output.outcome).toBe('ABANDONED');
+      expect(existsSync(path.join(root, 'never.txt'))).toBe(false);
+      expect(task.status).toBe('completed');
+      expectConsistent(task);
+    }, 120_000);
 
-    // Reconciliation needs evidence, resumes (never completes) the task.
-    expect((await call(a, 'POST', `/ap/v1/agent/tasks/${taskId}/steps/${unknown.step_id}/reconcile`, { resolution: 'succeeded' })).status).toBe(400);
-    expect((await call(a, 'POST', `/ap/v1/agent/tasks/${taskId}/steps/${unknown.step_id}/reconcile`, { resolution: 'succeeded', evidence: 'x' }, VIEWER)).status).toBe(403);
-    const reconciled = await call(a, 'POST', `/ap/v1/agent/tasks/${taskId}/steps/${unknown.step_id}/reconcile`,
-      { resolution: 'succeeded', evidence: 'mutated.txt contains one line' });
-    expect(reconciled.status).toBe(200);
-    expect(reconciled.body.status).toBe('running');
-    const done = await step(a, taskId, { is_last: true });
-    expect(done.status).toBe(200);
-    task = await getTask(a, taskId);
-    expect(task.status).toBe('completed');
-    expect(task.additional_output.outcome).toBe('UNVERIFIED');
-    expectConsistent(task);
-  }, 120_000);
+    it('API killed after a filesystem mutation but before its outcome is recorded: OUTCOME_UNKNOWN, no blind retry', async () => {
+      const a = await startNode({ WAZIR_PROTOCOL_ADMISSION_WAIT_MS: '300' });
+      const b = await startNode({ NODE_CRASH: 'after-dispatch' });
+      const taskId = await newTask(a);
+      const crashed = await step(b, taskId, { tool: { name: 'shell', input: { command: 'echo once >> mutated.txt' } } }).catch((e) => e);
+      expect(crashed).toBeInstanceOf(Error);
+      expect(b.log.join('')).toContain('CRASH after-dispatch');
+      expect(readFileSync(path.join(root, 'mutated.txt'), 'utf8')).toBe('once\n');
 
-  it('tool succeeded but outcome persistence failed: caller told it WAS dispatched; state becomes OUTCOME_UNKNOWN', async () => {
-    const a = await startNode({ WAZIR_PROTOCOL_ADMISSION_WAIT_MS: '300' });
-    const b = await startNode({ NODE_FAIL_WRITE: 'after-dispatch' });
-    const taskId = await newTask(a);
-    const res = await step(b, taskId, { tool: { name: 'write', input: { path: 'out.txt', content: 'done' } }, is_last: true });
-    expect(res.status).toBe(503);
-    expect(res.body.code).toBe('PERSISTENCE_FAILED');
-    expect(res.body.error).toContain('WAS dispatched');
-    expect(readFileSync(path.join(root, 'out.txt'), 'utf8')).toBe('done');
-    const task = await until(async () => { await step(a, taskId); return getTask(a, taskId); }, (t) => t.status === 'paused');
-    expect(task.additional_output.outcome).toBe('OUTCOME_UNKNOWN');
-    expect(task.status).not.toBe('completed');
-    expectConsistent(task);
-  }, 120_000);
+      // While the lease is live the task is busy; once it expires it needs reconciliation.
+      const blocked = await until(() => step(a, taskId, { is_last: true }), (r) => r.body?.code === 'RECONCILIATION_REQUIRED');
+      expect(blocked.status).toBe(409);
+      let task = await getTask(a, taskId);
+      expect(task.status).toBe('paused');
+      expect(task.additional_output.outcome).toBe('OUTCOME_UNKNOWN');
+      const unknown = task.steps[0];
+      expect(unknown.additional_output.outcome).toBe('OUTCOME_UNKNOWN');
+      expect(task.additional_output.reconciliation_required.step_id).toBe(unknown.step_id);
+      expect(readFileSync(path.join(root, 'mutated.txt'), 'utf8')).toBe('once\n');
 
-  it('verification evidence and task completion commit together or not at all', async () => {
-    const a = await startNode({ WAZIR_PROTOCOL_ADMISSION_WAIT_MS: '300' });
-    const b = await startNode({ NODE_FAIL_WRITE: 'before-verify-record' });
-    const taskId = await newTask(a);
-    const res = await step(b, taskId, { verify: true, is_last: true });
-    expect(res.status).toBe(503);
-    expect(res.body.code).toBe('PERSISTENCE_FAILED');
-    let task = await getTask(a, taskId);
-    expect(task.status).not.toBe('completed');
-    expect(task.steps[0].additional_output.verification).toBeUndefined();
-    expect((await verificationStatus(a)).verified).toBe(false);
-    // After the dead owner's lease expires, the step is ABANDONED and the task can continue.
-    const next = await until(() => step(a, taskId, { verify: true, is_last: true }), (r) => r.status === 200);
-    expect(next.body.additional_output.outcome).toBe('VERIFIED');
-    task = await getTask(a, taskId);
-    expect(task.steps[0].additional_output.outcome).toBe('ABANDONED');
-    expect(task.additional_output.outcome).toBe('VERIFIED');
-    expectConsistent(task);
-  }, 120_000);
-});
+      // Reconciliation needs evidence, resumes (never completes) the task.
+      expect((await call(a, 'POST', `/ap/v1/agent/tasks/${taskId}/steps/${unknown.step_id}/reconcile`, { resolution: 'succeeded' })).status).toBe(400);
+      expect((await call(a, 'POST', `/ap/v1/agent/tasks/${taskId}/steps/${unknown.step_id}/reconcile`, { resolution: 'succeeded', evidence: 'x' }, VIEWER)).status).toBe(403);
+      const reconciled = await call(a, 'POST', `/ap/v1/agent/tasks/${taskId}/steps/${unknown.step_id}/reconcile`,
+        { resolution: 'succeeded', evidence: 'mutated.txt contains one line' });
+      expect(reconciled.status).toBe(200);
+      expect(reconciled.body.status).toBe('running');
+      const done = await step(a, taskId, { is_last: true });
+      expect(done.status).toBe(200);
+      task = await getTask(a, taskId);
+      expect(task.status).toBe('completed');
+      expect(task.additional_output.outcome).toBe('UNVERIFIED');
+      expectConsistent(task);
+    }, 120_000);
 
-describe('verification provenance across processes', () => {
-  it('a PASS is stale after a mutation from another process, and viewers see no check output', async () => {
-    const [a, b] = await Promise.all([startNode(), startNode()]);
-    const t1 = await newTask(a);
-    const verified = await step(a, t1, { verify: true, is_last: true });
-    expect(verified.body.additional_output.outcome).toBe('VERIFIED');
-    expect(verified.body.additional_output.verification.principal).toBe('operator');
-    expect(verified.body.additional_output.verification.requestedChecks).toEqual(['test']);
+    it('tool succeeded but outcome persistence failed: caller told it WAS dispatched; state becomes OUTCOME_UNKNOWN', async () => {
+      const a = await startNode({ WAZIR_PROTOCOL_ADMISSION_WAIT_MS: '300' });
+      const b = await startNode({ NODE_FAIL_WRITE: 'after-dispatch' });
+      const taskId = await newTask(a);
+      const res = await step(b, taskId, { tool: { name: 'write', input: { path: 'out.txt', content: 'done' } }, is_last: true });
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('PERSISTENCE_FAILED');
+      expect(res.body.error).toContain('WAS dispatched');
+      expect(readFileSync(path.join(root, 'out.txt'), 'utf8')).toBe('done');
+      const task = await until(async () => { await step(a, taskId); return getTask(a, taskId); }, (t) => t.status === 'paused');
+      expect(task.additional_output.outcome).toBe('OUTCOME_UNKNOWN');
+      expect(task.status).not.toBe('completed');
+      expectConsistent(task);
+    }, 120_000);
 
-    let status = await verificationStatus(b);
-    expect(status).toMatchObject({ verified: true, status: 'PASS' });
-    expect(status.evidence.checks[0].output).toContain('ok');
-    const viewer = await verificationStatus(b, VIEWER);
-    expect(viewer.verified).toBe(true);
-    expect(viewer.evidence.redacted).toBe(true);
-    expect(viewer.evidence.checks[0].output).toBeUndefined();
+    it('verification evidence and task completion commit together or not at all', async () => {
+      const a = await startNode({ WAZIR_PROTOCOL_ADMISSION_WAIT_MS: '300' });
+      const b = await startNode({ NODE_FAIL_WRITE: 'before-verify-record' });
+      const taskId = await newTask(a);
+      const res = await step(b, taskId, { verify: true, is_last: true });
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('PERSISTENCE_FAILED');
+      let task = await getTask(a, taskId);
+      expect(task.status).not.toBe('completed');
+      expect(task.steps[0].additional_output.verification).toBeUndefined();
+      expect((await verificationStatus(a)).verified).toBe(false);
+      // After the dead owner's lease expires, the step is ABANDONED and the task can continue.
+      const next = await until(() => step(a, taskId, { verify: true, is_last: true }), (r) => r.status === 200);
+      expect(next.body.additional_output.outcome).toBe('VERIFIED');
+      task = await getTask(a, taskId);
+      expect(task.steps[0].additional_output.outcome).toBe('ABANDONED');
+      expect(task.additional_output.outcome).toBe('VERIFIED');
+      expectConsistent(task);
+    }, 120_000);
+  });
 
-    // A mutation through the other process invalidates the earlier PASS.
-    const write = await rpc(b, 'tools/call', { name: 'write', arguments: { path: 'src.js', content: 'exports.add = (a, b) => a - b;\n' } });
-    expect(write.body.result.isError).toBe(false);
-    status = await verificationStatus(a);
-    expect(status.verified).toBe(false);
-    expect(status.status).toBe('STALE');
+  describe('verification provenance across processes', () => {
+    it('a PASS is stale after a mutation from another process, and viewers see no check output', async () => {
+      const [a, b] = await Promise.all([startNode(), startNode()]);
+      const t1 = await newTask(a);
+      const verified = await step(a, t1, { verify: true, is_last: true });
+      expect(verified.body.additional_output.outcome).toBe('VERIFIED');
+      expect(verified.body.additional_output.verification.principal).toBe('operator');
+      expect(verified.body.additional_output.verification.requestedChecks).toEqual(['test']);
 
-    // Fresh verification against the new revision reports the real (failing) result.
-    const t2 = await newTask(b);
-    const reverified = await step(b, t2, { verify: true, is_last: true });
-    expect(reverified.body.additional_output.outcome).toBe('VERIFICATION_FAILED');
-    expect((await verificationStatus(a)).verified).toBe(false);
-  }, 120_000);
+      let status = await verificationStatus(b);
+      expect(status).toMatchObject({ verified: true, status: 'PASS' });
+      expect(status.evidence.checks[0].output).toContain('ok');
+      const viewer = await verificationStatus(b, VIEWER);
+      expect(viewer.verified).toBe(true);
+      expect(viewer.evidence.redacted).toBe(true);
+      expect(viewer.evidence.checks[0].output).toBeUndefined();
+
+      // A mutation through the other process invalidates the earlier PASS.
+      const write = await rpc(b, 'tools/call', { name: 'write', arguments: { path: 'src.js', content: 'exports.add = (a, b) => a - b;\n' } });
+      expect(write.body.result.isError).toBe(false);
+      status = await verificationStatus(a);
+      expect(status.verified).toBe(false);
+      expect(status.status).toBe('STALE');
+
+      // Fresh verification against the new revision reports the real (failing) result.
+      const t2 = await newTask(b);
+      const reverified = await step(b, t2, { verify: true, is_last: true });
+      expect(reverified.body.additional_output.outcome).toBe('VERIFICATION_FAILED');
+      expect((await verificationStatus(a)).verified).toBe(false);
+    }, 120_000);
+  });
+
+  describe('lease recovery, provenance and visibility', () => {
+    it('a dead local owner is recovered immediately, not after its lease expires', async () => {
+      const a = await startNode({ WAZIR_PROTOCOL_STEP_LEASE_MS: '120000', WAZIR_PROTOCOL_ADMISSION_WAIT_MS: '300' });
+      const b = await startNode({ WAZIR_PROTOCOL_STEP_LEASE_MS: '120000', NODE_CRASH: 'after-intent' });
+      const taskId = await newTask(a);
+      await step(b, taskId, { tool: { name: 'write', input: { path: 'never.txt', content: 'x' } } }).catch(() => undefined);
+      await b.exited;
+      const started = Date.now();
+      const next = await step(a, taskId, { is_last: true });
+      expect(next.status).toBe(200);
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect((await getTask(a, taskId)).steps[0].additional_output.outcome).toBe('ABANDONED');
+    }, 120_000);
+
+    it('a change made outside the protocol makes an earlier PASS stale', async () => {
+      const a = await startNode();
+      const verified = await step(a, await newTask(a), { verify: true, is_last: true });
+      expect(verified.body.additional_output.outcome).toBe('VERIFIED');
+      expect((await verificationStatus(a)).verified).toBe(true);
+      writeFileSync(path.join(root, 'src.js'), 'exports.add = (a, b) => a * b;\n');
+      const status = await verificationStatus(a);
+      expect(status).toMatchObject({ verified: false, status: 'STALE' });
+      expect(status.reasons.join(' ')).toContain('content changed');
+    }, 120_000);
+
+    it('a policy-denied call does not invalidate verification', async () => {
+      const a = await startNode();
+      await step(a, await newTask(a), { verify: true, is_last: true });
+      const denied = await rpc(a, 'tools/call', { name: 'write', arguments: { path: '../outside.txt', content: 'x' } });
+      expect(denied.body.result.isError).toBe(true);
+      expect(denied.body.result._meta.dispatched).toBe(false);
+      expect((await verificationStatus(a)).verified).toBe(true);
+    }, 120_000);
+
+    it('viewers see step outcomes but not tool inputs, output or check output', async () => {
+      const a = await startNode();
+      const taskId = await newTask(a);
+      const res = await step(a, taskId, { tool: { name: 'shell', input: { command: 'echo VIEWER-SECRET-OUT' } }, verify: true });
+      expect(res.body.output).toContain('VIEWER-SECRET-OUT');
+      for (const route of [`/ap/v1/agent/tasks/${taskId}`, `/ap/v1/agent/tasks/${taskId}/steps`, `/ap/v1/agent/tasks/${taskId}/steps/${res.body.step_id}`, '/ap/v1/agent/tasks']) {
+        const seen = await call(a, 'GET', route, undefined, VIEWER);
+        expect(seen.status).toBe(200);
+        expect(JSON.stringify(seen.body)).not.toContain('VIEWER-SECRET-OUT');
+        expect(JSON.stringify(seen.body)).toContain('VERIFIED');
+      }
+      expect(JSON.stringify((await call(a, 'GET', `/ap/v1/agent/tasks/${taskId}`)).body)).toContain('VIEWER-SECRET-OUT');
+    }, 120_000);
+  });
 });

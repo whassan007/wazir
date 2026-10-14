@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import os from 'node:os';
 import type { KeyValueStore } from '@wazir/shared';
 import type {
   AgentProtocolTask,
@@ -42,6 +43,11 @@ export interface EditorProtocolServiceOptions {
   stepLeaseMs?: number;
   /** How long a step request waits for another in-flight step of the same task before TASK_BUSY. */
   admissionWaitMs?: number;
+  /**
+   * Content fingerprint of the workspace. When provided, verification is bound to
+   * it and reported STALE after any change, including ones made outside the protocol.
+   */
+  workspaceRevision?: () => Promise<string>;
 }
 
 /** JSON-RPC methods a read-only (viewer) principal may call. Everything else needs `execute`. */
@@ -137,6 +143,30 @@ function parseIdempotencyKey(raw: unknown): string | undefined {
   return raw;
 }
 
+const HOST = os.hostname();
+
+/**
+ * True when the lease's owner is provably gone: a process on this host whose pid
+ * no longer exists. Owners on other hosts (or legacy owner ids) are only
+ * recovered by lease expiry, since their liveness cannot be observed here.
+ */
+function ownerIsDead(owner: string): boolean {
+  const match = /^(.*):(\d+):[^:]+$/.exec(owner);
+  if (!match || match[1] !== HOST) return false;
+  const pid = Number(match[2]);
+  if (pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
+
+/** A lease another process may take over: expired, or held by a dead local process. */
+const leaseRecoverable = (lease: { expires_at_ms: number; owner: string; lease_id: string }, now: number): boolean =>
+  lease.expires_at_ms <= now || ownerIsDead(lease.owner);
+
 const isTerminal = (task: AgentProtocolTask): boolean => task.status === 'completed' || task.status === 'failed';
 
 /** JsonFileStore revives ISO strings as Dates; compare instants whatever the stored shape. */
@@ -146,7 +176,7 @@ const instant = (value: unknown): number => (value instanceof Date ? value.getTi
 function redactReport(report: StepVerificationReport): Record<string, unknown> {
   return {
     status: report.status, executionId: report.executionId, taskId: report.taskId, stepId: report.stepId,
-    workspaceRevision: report.workspaceRevision, workspaceEpoch: report.workspaceEpoch, requestedChecks: report.requestedChecks,
+    workspaceRevision: report.workspaceRevision, workspaceEpoch: report.workspaceEpoch, workspaceFingerprint: report.workspaceFingerprint, requestedChecks: report.requestedChecks,
     startedAt: report.startedAt, completedAt: report.completedAt,
     checks: report.checks.map((c) => ({ name: c.name, status: c.status, durationMs: c.durationMs, startedAt: c.startedAt, completedAt: c.completedAt })),
     redacted: true,
@@ -173,7 +203,8 @@ export class EditorProtocolService {
   private readonly projectRoot: string;
   private readonly stepLeaseMs: number;
   private readonly admissionWaitMs: number;
-  private readonly instanceId = `${process.pid}-${randomUUID()}`;
+  private readonly instanceId = `${HOST}:${process.pid}:${randomUUID()}`;
+  private readonly workspaceRevision?: () => Promise<string>;
   /**
    * Queues this process's own requests per task so they wait in order instead
    * of polling the store. It is an optimisation only: cross-process exclusion
@@ -189,6 +220,7 @@ export class EditorProtocolService {
     this.toolSurface = options.toolSurface;
     this.projectRoot = options.projectRoot ?? process.cwd();
     this.stepLeaseMs = options.stepLeaseMs ?? (Number(process.env.WAZIR_PROTOCOL_STEP_LEASE_MS) || DEFAULT_STEP_LEASE_MS);
+    this.workspaceRevision = options.workspaceRevision;
     this.admissionWaitMs = options.admissionWaitMs ?? (Number(process.env.WAZIR_PROTOCOL_ADMISSION_WAIT_MS) || DEFAULT_ADMISSION_WAIT_MS);
   }
 
@@ -255,19 +287,24 @@ export class EditorProtocolService {
       ({ ok: false, output: '', error, failureClass, durationMs: 0, callId: '', dispatched: false });
     if (!this.executeTool) return denied('controlled tool execution is not configured; refusing to dispatch', 'EXECUTION_UNAVAILABLE');
     if (!hasScope(meta.principal, 'execute')) return denied('caller is not authorized to execute tools');
-    try {
+    // The epoch moves only once policy has admitted the call, immediately before dispatch.
+    let epochRecorded = false;
+    const beforeDispatch = async (): Promise<void> => {
       await this.bumpWorkspaceEpoch(name, meta.executionId);
-    } catch (error) {
-      return denied(`workspace mutation epoch could not be recorded; refusing to dispatch: ${error instanceof Error ? error.message : String(error)}`, 'EXECUTION_UNAVAILABLE');
-    }
+      epochRecorded = true;
+    };
+    let result: ControlledToolResult;
     try {
-      return await this.executeTool({ name, input, principal: meta.principal, executionId: meta.executionId,
-        source: meta.source, taskId: meta.taskId, stepId: meta.stepId, signal: meta.signal });
+      result = await this.executeTool({ name, input, principal: meta.principal, executionId: meta.executionId,
+        source: meta.source, taskId: meta.taskId, stepId: meta.stepId, signal: meta.signal, beforeDispatch });
     } catch (error) {
       // The boundary threw instead of reporting: whether the tool ran is not known.
-      return { ok: false, output: '', error: error instanceof Error ? error.message : String(error),
+      result = { ok: false, output: '', error: error instanceof Error ? error.message : String(error),
         failureClass: 'TOOL_OUTCOME_UNKNOWN', durationMs: 0, callId: '' };
     }
+    // An executor that ignores `beforeDispatch` may still have dispatched: move the epoch late rather than never.
+    if (!epochRecorded && result.dispatched !== false) await this.bumpWorkspaceEpoch(name, meta.executionId).catch(() => undefined);
+    return result;
   }
 
   // =========================================================================
@@ -333,7 +370,7 @@ export class EditorProtocolService {
   private recoverExpiredLease(task: AgentProtocolTask, now: number): void {
     const control = task.additional_output ?? {};
     const lease = control.active_step;
-    if (!lease || lease.expires_at_ms > now) return;
+    if (!lease || !leaseRecoverable(lease, now)) return;
     const at = new Date(now).toISOString();
     const step = task.steps.find((s) => s.step_id === lease.step_id);
     task.additional_output = { ...control, active_step: undefined };
@@ -366,7 +403,7 @@ export class EditorProtocolService {
       const seen = await this.getTask(taskId);
       if (!seen) throw new ProtocolError('TASK_NOT_FOUND', taskId);
       const seenLease = seen.additional_output?.active_step;
-      const looksFree = !seenLease || seenLease.expires_at_ms <= Date.now() || isTerminal(seen)
+      const looksFree = !seenLease || leaseRecoverable(seenLease, Date.now()) || isTerminal(seen)
         || Boolean(idempotencyKey && seen.additional_output?.idempotency?.[idempotencyKey]);
       if (looksFree) {
         const { result } = await this.mutateTask(taskId, (task) => {
@@ -645,6 +682,13 @@ export class EditorProtocolService {
       const missing = checks.filter((c) => !executed.has(c));
       if (missing.length) problems.push(`requested check(s) not executed: ${missing.join(', ')}`);
       if ((await this.workspaceEpoch()) !== epochBefore) problems.push('the workspace was mutated while verification ran');
+      if (this.workspaceRevision) {
+        try {
+          report.workspaceFingerprint = await this.workspaceRevision();
+        } catch (error) {
+          problems.push(`workspace fingerprint unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       return problems.length
         ? { ...report, status: 'ERROR', reasons: [...report.reasons, ...problems.map((p) => `PASS rejected: ${p}`)] }
         : report;
@@ -695,6 +739,34 @@ export class EditorProtocolService {
         task.additional_output = { ...control, outcome: 'IN_PROGRESS' };
       }
     })).task);
+  }
+
+  /**
+   * The view of a step a principal may see. Without `execute`, tool output, tool
+   * inputs, errors and check output are withheld; outcomes and statuses remain.
+   */
+  viewStep(step: AgentProtocolStep, principal: ProtocolPrincipal | undefined): AgentProtocolStep {
+    if (hasScope(principal, 'execute')) return step;
+    const out = step.additional_output;
+    if (!out) return step;
+    const view: AgentProtocolStep = { ...step, additional_output: { ...out } };
+    const v = view.additional_output!;
+    const executedSomething = out.tool !== undefined || out.verification !== undefined || out.intent !== undefined;
+    if (executedSomething) view.output = `[output withheld: requires execute scope] outcome=${String(out.outcome ?? 'pending')}`;
+    delete v.custom;
+    if (out.tool && typeof out.tool === 'object') {
+      const { error: _error, ...tool } = out.tool as Record<string, unknown>;
+      v.tool = tool;
+    }
+    if (out.verification) v.verification = redactReport(out.verification as StepVerificationReport);
+    if (out.late_outcome && typeof out.late_outcome === 'object') v.late_outcome = { outcome: (out.late_outcome as { outcome?: unknown }).outcome };
+    if (out.audit_error !== undefined) v.audit_error = '[withheld]';
+    return view;
+  }
+
+  viewTask(task: AgentProtocolTask, principal: ProtocolPrincipal | undefined): AgentProtocolTask {
+    if (hasScope(principal, 'execute')) return task;
+    return { ...task, steps: task.steps.map((s) => this.viewStep(s, principal)) };
   }
 
   async listSteps(taskId: string): Promise<AgentProtocolStep[]> {
@@ -765,11 +837,22 @@ export class EditorProtocolService {
     const passed = latest.status === 'PASS' && latest.checks.length > 0 && latest.checks.every((c) => c.status === 'PASS');
     const reasons: string[] = [];
     if (!engineAvailable) reasons.push('no verification engine is configured; a recorded PASS is not current evidence');
-    const stale = typeof latest.workspaceEpoch !== 'number' || latest.workspaceEpoch !== epoch;
-    if (passed && stale) {
-      reasons.push(typeof latest.workspaceEpoch !== 'number'
-        ? 'recorded PASS is not bound to a workspace revision'
-        : `workspace mutated since verification (epoch ${latest.workspaceEpoch} -> ${epoch}); re-verify`);
+    let stale = false;
+    if (typeof latest.workspaceEpoch !== 'number') {
+      stale = true;
+      if (passed) reasons.push('recorded PASS is not bound to a workspace revision');
+    } else if (latest.workspaceEpoch !== epoch) {
+      stale = true;
+      if (passed) reasons.push(`workspace mutated since verification (epoch ${latest.workspaceEpoch} -> ${epoch}); re-verify`);
+    }
+    // The content fingerprint also catches changes made outside the protocol (CLI agents, editors, git).
+    if (!stale && passed && this.workspaceRevision) {
+      const current = await this.workspaceRevision().catch(() => undefined);
+      if (!latest.workspaceFingerprint || current === undefined || current !== latest.workspaceFingerprint) {
+        stale = true;
+        reasons.push(!latest.workspaceFingerprint ? 'recorded PASS has no workspace content fingerprint'
+          : current === undefined ? 'current workspace fingerprint unavailable' : 'workspace content changed since verification; re-verify');
+      }
     }
     const verified = passed && !stale && engineAvailable;
     const status = verified ? 'PASS' : !engineAvailable ? 'UNAVAILABLE' : passed ? 'STALE' : latest.status === 'PASS' ? 'ERROR' : latest.status;

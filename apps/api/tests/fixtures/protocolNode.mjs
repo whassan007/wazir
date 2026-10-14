@@ -3,6 +3,7 @@
 //
 // env:
 //   NODE_STORE        path of the shared JsonFileStore file
+//   NODE_PG_URL       use a shared PostgresStore at this URL instead
 //   NODE_ROOT         project root tool calls are confined to
 //   NODE_AUDIT        audit log path
 //   NODE_CRASH        optional fault: SIGKILL this process when a store write matches
@@ -43,19 +44,33 @@ function check(key, value) {
   if (matches(failWrite, key, value)) throw new Error(`injected store write failure (${failWrite}) for ${key}`);
 }
 
-class FaultyStore extends JsonFileStore {
-  async put(key, value) { check(key, value); return super.put(key, value); }
+/** Wraps any KeyValueStore with the configured fault; mutations are previewed before the real write. */
+class FaultyStore {
+  constructor(inner) { this.inner = inner; }
+  async put(key, value) { check(key, value); return this.inner.put(key, value); }
   async update(key, mutate) {
-    // Preview the write against the current value so a crash happens before the lock is taken.
-    const preview = mutate(structuredClone(await this.get(key)));
+    // Preview the write against the current value so a crash happens before any lock is taken.
+    const preview = mutate(structuredClone(await this.inner.get(key)));
     check(key, preview);
-    return super.update(key, mutate);
+    return this.inner.update(key, mutate);
   }
+  get(key) { return this.inner.get(key); }
+  list(prefix) { return this.inner.list(prefix); }
+  delete(key) { return this.inner.delete(key); }
+  clear() { return this.inner.clear(); }
+}
+
+async function backingStore() {
+  if (!process.env.NODE_PG_URL) return new JsonFileStore(process.env.NODE_STORE);
+  const { createPool, runKvMigration, PostgresStore } = await import('@wazir/database');
+  const pool = createPool({ connectionString: process.env.NODE_PG_URL });
+  await runKvMigration(pool);
+  return new PostgresStore(pool);
 }
 
 const state = await createApiState({
   auth: { operatorToken: 'operator-token-0123456789', viewerToken: 'viewer-token-0123456789' },
-  store: new FaultyStore(process.env.NODE_STORE),
+  store: new FaultyStore(await backingStore()),
   projectRoot: process.env.NODE_ROOT,
   auditPath: process.env.NODE_AUDIT,
   approveTool: async () => true,
