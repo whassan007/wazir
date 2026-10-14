@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.1.61 — 2026-10-13
+
+A security and reliability release. Network clients of the Agent Protocol and MCP endpoints can
+no longer act beyond their credential, every tool they reach runs through the same policy path as
+coding agents, and a task is reported successful only when there is evidence for it.
+
+### Security
+
+- **Protocol authorization.** Viewer tokens are read-only on `/ap/v1` and `/mcp`. Creating
+  tasks, executing steps, creating artifacts, `tools/call`, unknown JSON-RPC methods and batches
+  containing them need operator scope (HTTP 403, JSON-RPC `-32001`). Caller identity comes only
+  from the credential, never from the request body.
+- **One policy-enforced tool path.** MCP and Agent Protocol tool calls now go through scope
+  checks, a fixed protocol tool surface, schema validation, PolicyEngine with human approval
+  (`ask` is denied when no approver is configured), test-file protection, workspace snapshots,
+  timeout, cancellation on client disconnect, and a durable audit record written before dispatch.
+  The direct `tool.execute()` fallback is removed.
+- **Worker credentials** are persisted before they are returned; revocation and unreadable
+  credential stores fail closed.
+
+### Truthful completion
+
+- A failed, denied, cancelled or timed-out tool fails its step and the parent task, whatever
+  `is_last` says. Text-only steps are recorded as `RECORDED`, not as executed work.
+- Verification runs the project's checks through the same tool path. PASS needs at least one
+  check actually run, all passing, bound to the step, with a workspace revision hash.
+  `wazir://verification/status` no longer reports `verified: true` without that evidence.
+- Finished tasks reject late or duplicate steps (409); steps are serialized per task.
+
+### Reliability
+
+- Tool receipts fingerprint the tool name and input (previously every call hashed the same) and
+  never cache failed attempts; duplicate worker result posts are recorded once.
+- Model streams cut by a transport reset are re-requested (up to 2 times).
+- Checkpoint boundary validation, provider fault tests, a recovery-process test and a reliability
+  benchmark workflow.
+
+**Verification:** locally on Linux ARM64 — build, typecheck, `npm test`, `test:agent`,
+`test:plan:acceptance` (80/80) and `release:gate` pass; 35 black-box protocol security tests.
+
 ## v0.1.60 — 2026-10-12
 
 A cross-platform fleet and distribution release. Wazir can run work across heterogeneous
