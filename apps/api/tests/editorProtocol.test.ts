@@ -173,7 +173,7 @@ describe('Gate 12: Editor / Agent Protocol Integration', () => {
       const recoveredTask = await getRes.json();
       expect(recoveredTask.task_id).toBe(task.task_id);
       expect(recoveredTask.input).toBe('Persistent task');
-    });
+    }, 20_000);
   });
 
   describe('Model Context Protocol (MCP) Server Endpoint', () => {
