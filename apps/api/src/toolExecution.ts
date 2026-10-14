@@ -56,18 +56,27 @@ export function createControlledExecution(options: ControlledExecutionOptions): 
     approveCallback: options.approve,
   });
 
-  const audit = (event: Parameters<typeof appendAuditEvent>[0]): Promise<void> =>
-    appendAuditEvent(event, { auditPath: options.auditPath }).then(() => undefined, () => undefined);
+  // An audit write that fails is reported on the result and to stderr, never dropped:
+  // the caller still learns what the tool did, and that its record is missing.
+  const audit = (event: Parameters<typeof appendAuditEvent>[0]): Promise<{ recorded: boolean; error?: string }> =>
+    appendAuditEvent(event, { auditPath: options.auditPath }).then(
+      () => ({ recorded: true }),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`wazir-api: AUDIT WRITE FAILED for ${event.type} ${event.tool ?? ''} (${event.executionId ?? 'no execution'}): ${message}\n`);
+        return { recorded: false, error: message };
+      });
 
   const executeControlled: ControlledToolExecutor = async (request) => {
     const callId = `call-${randomUUID()}`;
     const deny = async (error: string, failureClass: string, decision?: PolicyDecision): Promise<ControlledToolResult> => {
-      await audit({
+      // Refusal stands whether or not its audit record could be written.
+      const audited = await audit({
         type: 'tool_call', tool: request.name, decision: 'deny', rule: decision?.rule ?? failureClass,
         reasons: decision?.reasons ?? [error], executionId: request.executionId, taskId: request.taskId,
         agentId: `${request.source}:${request.principal?.id ?? 'anonymous'}`, details: { callId, dispatched: false },
       });
-      return { ok: false, output: '', error, failureClass, durationMs: 0, callId,
+      return { ok: false, output: '', error, failureClass, durationMs: 0, callId, dispatched: false, audit: audited,
         policy: decision ? { decision: decision.decision, rule: decision.rule, reasons: decision.reasons } : undefined };
     };
 
@@ -84,31 +93,53 @@ export function createControlledExecution(options: ControlledExecutionOptions): 
       return deny(`policy ${decision.decision} (${decision.rule}): ${decision.reasons.join('; ')}`, 'POLICY_DENIED', decision);
     }
 
-    const result = await executeTool(options.tools, request.name, request.input, {
-      callId,
-      projectRoot: options.projectRoot,
-      executionId: request.executionId,
-      requester: request.principal.id,
-      agentId: `${request.source}:${request.principal.id}`,
-      allowedTools: toolSurface,
-      verifyWorkspace: true,
-      allowVerificationChanges: false,
-      networkAllowed: options.networkAllowed ?? false,
-      signal: request.signal,
-      // Durable intent record before dispatch: if it cannot be written, the tool does not run.
-      checkpoint: async () => {
-        await appendAuditEvent({
-          type: 'policy_decision', tool: request.name, decision: 'allow', rule: decision.rule, reasons: decision.reasons,
-          executionId: request.executionId, taskId: request.taskId, agentId: `${request.source}:${request.principal.id}`,
-          details: { callId, phase: 'pre-dispatch' },
-        }, { auditPath: options.auditPath });
-      },
-    });
+    // Durable intent record before dispatch: if it cannot be written, the tool does not run.
+    let intentRecorded = false;
+    let intentError: string | undefined;
+    let result: Awaited<ReturnType<typeof executeTool>>;
+    try {
+      result = await executeTool(options.tools, request.name, request.input, {
+        callId,
+        projectRoot: options.projectRoot,
+        executionId: request.executionId,
+        requester: request.principal.id,
+        agentId: `${request.source}:${request.principal.id}`,
+        allowedTools: toolSurface,
+        verifyWorkspace: true,
+        allowVerificationChanges: false,
+        networkAllowed: options.networkAllowed ?? false,
+        signal: request.signal,
+        checkpoint: async () => {
+          try {
+            await appendAuditEvent({
+              type: 'policy_decision', tool: request.name, decision: 'allow', rule: decision.rule, reasons: decision.reasons,
+              executionId: request.executionId, taskId: request.taskId, agentId: `${request.source}:${request.principal.id}`,
+              details: { callId, phase: 'pre-dispatch' },
+            }, { auditPath: options.auditPath });
+          } catch (error) {
+            intentError = error instanceof Error ? error.message : String(error);
+            throw error;
+          }
+          intentRecorded = true;
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!intentRecorded) {
+        // Failed before dispatch (pre-dispatch audit or setup): the tool did not run.
+        return deny(intentError !== undefined ? `AUDIT_UNAVAILABLE: pre-dispatch audit record could not be written; tool not dispatched: ${intentError}`
+          : `tool setup failed before dispatch: ${message}`, intentError !== undefined ? 'AUDIT_UNAVAILABLE' : 'TOOL_EXECUTION_FAILED', decision);
+      }
+      // Dispatched, then the boundary threw: the side effect may have happened.
+      result = { ok: false, output: '', error: `outcome unknown after dispatch: ${message}`, failureClass: 'TOOL_OUTCOME_UNKNOWN', durationMs: 0 };
+    }
+    // The registry reports a cancellation it observed after the checkpoint but before dispatch.
+    const dispatched = intentRecorded && !(result.failureClass === 'CANCELLED' && result.error === 'cancelled before tool dispatch');
     const metadata = (result.metadata ?? {}) as Record<string, unknown>;
-    await audit({
+    const audited = await audit({
       type: 'tool_call', tool: request.name, decision: 'allow', rule: decision.rule, reasons: decision.reasons,
       executionId: request.executionId, taskId: request.taskId, agentId: `${request.source}:${request.principal.id}`,
-      details: { callId, dispatched: true, ok: result.ok, failureClass: result.failureClass, durationMs: result.durationMs,
+      details: { callId, dispatched, ok: result.ok, failureClass: result.failureClass, durationMs: result.durationMs,
         workspaceAfterHash: metadata.workspaceAfterHash },
     });
     return {
@@ -122,6 +153,9 @@ export function createControlledExecution(options: ControlledExecutionOptions): 
       workspaceBeforeHash: typeof metadata.workspaceBeforeHash === 'string' ? metadata.workspaceBeforeHash : undefined,
       workspaceAfterHash: typeof metadata.workspaceAfterHash === 'string' ? metadata.workspaceAfterHash : undefined,
       fileMutations: result.fileMutations,
+      dispatched,
+      // A post-dispatch audit failure is surfaced, but never turns a performed call into a non-event.
+      audit: audited,
     };
   };
 
@@ -136,7 +170,7 @@ export function createControlledExecution(options: ControlledExecutionOptions): 
         name, input: {}, principal: request.principal, executionId: request.executionId,
         source: 'verification', taskId: request.taskId, stepId: request.stepId, signal: request.signal,
       });
-      const dispatched = result.policy?.decision === 'allow';
+      const dispatched = result.dispatched ?? result.policy?.decision === 'allow';
       checks.push({
         name,
         // Not dispatched (policy, schema, cancellation) is an ERROR, never a FAIL or PASS.

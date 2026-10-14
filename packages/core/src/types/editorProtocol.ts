@@ -41,11 +41,33 @@ export interface AgentProtocolTask {
   created_at: string;
   status: AgentProtocolTaskStatus;
   /** Evidence-backed summary: VERIFIED only when the final step carried passing verification. */
-  additional_output?: {
-    outcome?: 'IN_PROGRESS' | 'UNVERIFIED' | 'VERIFIED' | 'FAILED';
-    last_step_id?: string;
-    failed_step_id?: string;
-  };
+  additional_output?: AgentProtocolTaskControl;
+}
+
+/** Lease held by the one step a task may have in flight, across every API process. */
+export interface AgentProtocolStepLease {
+  step_id: string;
+  lease_id: string;
+  owner: string;
+  expires_at_ms: number;
+}
+
+/**
+ * Task summary plus the control state every API process coordinates through.
+ * The task record is the single authoritative document: steps, artifacts and
+ * these fields change only together, in one atomic store update.
+ */
+export interface AgentProtocolTaskControl {
+  /** OUTCOME_UNKNOWN: a dispatched tool's effect was never recorded; the task is paused for reconciliation. */
+  outcome?: 'IN_PROGRESS' | 'UNVERIFIED' | 'VERIFIED' | 'FAILED' | 'OUTCOME_UNKNOWN';
+  last_step_id?: string;
+  failed_step_id?: string;
+  /** Incremented by every committed update. */
+  revision?: number;
+  active_step?: AgentProtocolStepLease;
+  reconciliation_required?: { step_id: string; reason: string; detected_at: string };
+  /** Client idempotency key -> the step it created. */
+  idempotency?: Record<string, string>;
 }
 
 export interface CreateTaskRequestBody {
@@ -186,6 +208,10 @@ export interface ControlledToolResult {
   workspaceBeforeHash?: string;
   workspaceAfterHash?: string;
   fileMutations?: unknown[];
+  /** Whether the tool was actually dispatched. Absent from older executors. */
+  dispatched?: boolean;
+  /** Whether the audit record for this call was persisted; a failure is reported, never swallowed. */
+  audit?: { recorded: boolean; error?: string };
 }
 
 /**
@@ -196,6 +222,14 @@ export interface ControlledToolResult {
 export type ControlledToolExecutor = (request: ControlledToolRequest) => Promise<ControlledToolResult>;
 
 export type StepVerificationStatus = 'PASS' | 'FAIL' | 'ERROR' | 'UNAVAILABLE';
+
+/** Monotonic counter of workspace-mutating protocol tool dispatches; verification is bound to one value. */
+export interface WorkspaceMutationEpoch {
+  seq: number;
+  at: string;
+  executionId: string;
+  tool: string;
+}
 
 export interface StepVerificationCheck {
   name: string;
@@ -218,6 +252,12 @@ export interface StepVerificationReport {
   stepId: string;
   checks: StepVerificationCheck[];
   workspaceRevision?: string;
+  /** Workspace mutation epoch the checks ran against (set by the service, not the verifier). */
+  workspaceEpoch?: number;
+  /** Checks the caller asked for; PASS requires every one of them to have executed and passed. */
+  requestedChecks?: string[];
+  /** Principal on whose authority the checks ran. */
+  principal?: string;
   startedAt: string;
   completedAt: string;
   reasons: string[];
@@ -247,4 +287,9 @@ export type AgentProtocolStepOutcome =
   | 'EXECUTION_UNAVAILABLE'
   | 'VERIFIED'
   | 'VERIFICATION_FAILED'
-  | 'VERIFICATION_UNAVAILABLE';
+  | 'VERIFICATION_UNAVAILABLE'
+  /** The owning API process stopped before dispatching anything; nothing ran. */
+  | 'ABANDONED';
+
+/** How an operator resolved an OUTCOME_UNKNOWN step after inspecting the workspace. */
+export type StepReconciliation = 'succeeded' | 'failed' | 'not_executed';

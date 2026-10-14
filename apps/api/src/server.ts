@@ -866,7 +866,10 @@ export function createApp(state: ApiState) {
   };
   const protocolError = (res: Response, err: unknown): void => {
     const code = err instanceof ProtocolError ? err.code : undefined;
-    const status = code === 'TASK_NOT_FOUND' ? 404 : code === 'TASK_TERMINAL' ? 409 : code === 'FORBIDDEN' ? 403 : code === 'STEP_INVALID' ? 400 : 500;
+    const status = code === 'TASK_NOT_FOUND' ? 404 : code === 'FORBIDDEN' ? 403 : code === 'STEP_INVALID' ? 400
+      : code === 'TASK_TERMINAL' || code === 'TASK_BUSY' || code === 'RECONCILIATION_REQUIRED' || code === 'STATE_CONFLICT' ? 409
+      // The message says whether a tool was dispatched, so the caller does not retry blindly.
+      : code === 'PERSISTENCE_FAILED' ? 503 : code === 'UNSUPPORTED_STORE' ? 501 : 500;
     res.status(status).json({ error: status === 500 ? 'internal error' : (err as Error).message, code });
   };
 
@@ -897,6 +900,16 @@ export function createApp(state: ApiState) {
     try {
       const step = await state.editorProtocol.executeStep(String(req.params.task_id), req.body, protocolContext(req, res));
       res.json(step);
+    } catch (err) {
+      protocolError(res, err);
+    }
+  });
+
+  // Operator resolution of a step whose tool outcome is unknown (body: { resolution, evidence }).
+  app.post('/ap/v1/agent/tasks/:task_id/steps/:step_id/reconcile', auth.requireOperator, async (req, res) => {
+    try {
+      const task = await state.editorProtocol.reconcileStep(String(req.params.task_id), String(req.params.step_id), req.body ?? {}, protocolContext(req, res));
+      res.json(task);
     } catch (err) {
       protocolError(res, err);
     }
