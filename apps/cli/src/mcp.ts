@@ -177,8 +177,10 @@ async function startDaemon(id: string): Promise<MCPDaemonState> {
   try {
     const existing = await readDaemonState(id); if (existing?.state === 'CONNECTED') return existing;
     await stopDaemon(id, true);
-    const entry = process.argv[1]; if (!entry) throw new Error('Cannot locate the Wazir CLI entry point.');
-    const child = spawn(process.execPath, [entry, 'mcp', 'serve', id], { detached: true, stdio: 'ignore', env: process.env });
+    // In the standalone executable (Node SEA) the executable *is* the CLI; otherwise re-run the script.
+    const sea = (process.getBuiltinModule?.('node:sea') as { isSea?: () => boolean } | undefined)?.isSea?.() === true;
+    const entry = process.argv[1]; if (!sea && !entry) throw new Error('Cannot locate the Wazir CLI entry point.');
+    const child = spawn(process.execPath, sea ? ['mcp', 'serve', id] : [entry, 'mcp', 'serve', id], { detached: true, stdio: 'ignore', env: process.env });
     child.unref();
     let spawnFailed = false; child.once('error', () => { spawnFailed = true; });
     const deadline = Date.now() + 15_000;

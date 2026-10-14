@@ -1,0 +1,60 @@
+name: Update package manifests
+
+# After a release is published (a human publishes the draft), render the Homebrew formula,
+# Scoop manifest and WinGet manifests from that release's exact artifacts and open a PR in this
+# repository for review. Nothing is pushed to Homebrew taps, Scoop buckets or winget-pkgs; those
+# submissions are separate, manual steps (docs/distribution/PACKAGE_MANAGERS.md).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag (e.g. v0.1.60)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  manifests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push the manifest branch
+      pull-requests: write   # open the PR
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - name: Download and verify release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p rel
+          gh release download "$TAG" --dir rel --pattern 'wazir-*' --pattern SHA256SUMS
+          (cd rel && sha256sum -c SHA256SUMS)
+          gh attestation verify "rel/wazir-${TAG#v}.tgz" --repo "$GITHUB_REPOSITORY"
+      - name: Render manifests
+        env:
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        run: node scripts/render-manifests.mjs --version "${TAG#v}" --sums rel/SHA256SUMS
+      - name: Open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="manifests/$TAG"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add Formula packaging
+          git commit -m "chore(packaging): manifests for $TAG" -m "Rendered by update-manifests from the verified $TAG release assets (SHA256SUMS and build provenance)."
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title "Package manifests for $TAG" \
+            --body "Homebrew formula, Scoop manifest and WinGet manifests for $TAG, rendered from the published assets after verifying SHA256SUMS and the build-provenance attestation. Review, merge, then submit to external repositories manually (docs/distribution/PACKAGE_MANAGERS.md)."

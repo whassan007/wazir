@@ -31,8 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write      # provenance attestations
-      attestations: write
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
@@ -61,30 +59,81 @@ jobs:
       - run: npm run typecheck
       - name: Package check
         run: npm run package:check -- --skip-build
-      - name: Assemble release files
+      - name: Collect npm artifacts
         shell: bash
         run: |
           v="${{ steps.meta.outputs.version }}"
           mkdir -p release
           cp "dist/npm/wazir-$v.tgz" "release/wazir-$v.tgz"
-          cp dist/package-check-linux-x64.json "release/package-check-linux-x64.json"
+          cp dist/package-check-linux-x64.json release/
           # SBOM of the published package's dependency tree (its optional native modules).
           (cd dist/npm/package && npm install --package-lock-only --ignore-scripts --no-audit --no-fund >/dev/null \
             && npm sbom --sbom-format cyclonedx --package-lock-only) > "release/wazir-$v.cdx.json"
-          (cd release && sha256sum wazir-* > SHA256SUMS)
-          cat release/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: part-npm
+          path: release/
+          if-no-files-found: error
+
+  windows:
+    name: Windows executable
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Build wa.exe and smoke-test it
+        shell: pwsh
+        run: |
+          node scripts/build-sea.mjs --skip-bundle
+          $v = "${{ needs.build.outputs.version }}"
+          $env:WAZIR_HOME = Join-Path $env:RUNNER_TEMP 'h'
+          if ((dist/sea/wa.exe --version).Trim() -ne $v) { throw 'version mismatch' }
+          dist/sea/wa.exe resources validate --json | Out-Null
+          New-Item -ItemType Directory release | Out-Null
+          Copy-Item "dist/sea/wazir-$v-windows-x64.zip" release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: part-windows
+          path: release/
+          if-no-files-found: error
+
+  assemble:
+    name: Checksums and provenance
+    needs: [build, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write      # provenance attestations
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: part-*
+          merge-multiple: true
+          path: release
+      - name: SHA256SUMS
+        run: |
+          cd release && sha256sum wazir-* > SHA256SUMS && cat SHA256SUMS
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: release/wazir-*
       - uses: actions/upload-artifact@v4
         with:
-          name: release-${{ steps.meta.outputs.version }}
+          name: release-${{ needs.build.outputs.version }}
           path: release/
           if-no-files-found: error
 
   draft-release:
     name: Draft GitHub release
-    needs: build
+    needs: [build, assemble]
     runs-on: ubuntu-latest
     permissions:
       contents: write

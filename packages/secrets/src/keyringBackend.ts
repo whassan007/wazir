@@ -56,6 +56,10 @@ export function probeKeyringInSubprocess(
   timeoutMs = Number(process.env.WAZIR_KEYRING_PROBE_TIMEOUT_MS) || DEFAULT_PROBE_TIMEOUT_MS,
   script = PROBE_SCRIPT,
 ): Promise<void> {
+  // The standalone executable cannot load native addons, and its execPath is the CLI itself.
+  if ((process.getBuiltinModule?.('node:sea') as { isSea?: () => boolean } | undefined)?.isSea?.() === true) {
+    return Promise.reject(new Error('OS keychain is not available in the standalone executable; using the encrypted file store'));
+  }
   return new Promise((resolve, reject) => {
     // cwd = this package, so the child resolves @napi-rs/keyring the same way we do.
     execFile(process.execPath, ['-e', script], { cwd: __dirname, timeout: timeoutMs, killSignal: 'SIGKILL', windowsHide: true }, (error) => {
