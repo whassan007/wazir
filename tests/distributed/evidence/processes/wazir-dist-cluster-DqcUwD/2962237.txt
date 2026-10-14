@@ -1,0 +1,6 @@
+worker worker-comp-recon-63493b744f741ed59ba5a00439dbe68e online
+  computer: comp-recon
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:34591
+waiting for work… (Ctrl+C to stop)

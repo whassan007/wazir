@@ -71,7 +71,10 @@
     "test:plan:acceptance": "node scripts/acceptance-test-harness.mjs --all",
     "typecheck": "tsc --build --force",
     "dmg": "bash scripts/build-dmg.sh",
-    "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\""
+    "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\"",
+    "test:distributed": "vitest run --config tests/distributed/vitest.config.ts",
+    "test:postgres": "WAZIR_REQUIRE_DATABASE=1 vitest run packages/database/tests/postgresStore.test.ts",
+    "test:distributed:typecheck": "tsc --noEmit --esModuleInterop --module commonjs --moduleResolution node --target es2022 --skipLibCheck tests/distributed/*.test.ts tests/distributed/harness/*.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/node": "^2.0.0",

@@ -1,0 +1,6 @@
+worker worker-long-worker-2be639449872de2f650cbb76f6f1b103 online
+  computer: long-worker
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:41107
+waiting for work… (Ctrl+C to stop)

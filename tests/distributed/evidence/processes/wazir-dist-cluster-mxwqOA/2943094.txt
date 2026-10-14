@@ -1,0 +1,6 @@
+worker worker-comp-stale-6e72ab74c79f29a1f29b959eee33a19b online
+  computer: comp-stale
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:45743
+waiting for work… (Ctrl+C to stop)

@@ -1,0 +1,6 @@
+worker worker-comp-b-3951689ae721fd7b375136f2a7d5c184 online
+  computer: comp-b
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:43005
+waiting for work… (Ctrl+C to stop)

@@ -1,0 +1,242 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2951612,
+    "at": 1791978816858
+  },
+  {
+    "event": "spawn",
+    "pid": 2951815,
+    "at": 1791978818929
+  },
+  {
+    "event": "spawn",
+    "pid": 2951909,
+    "at": 1791978819195
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "req-crash-1791978819384",
+      "connected": true
+    },
+    "at": 1791978819393
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-crash-1791978819384/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:53:39.398Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-crash-1791978819384"
+        }
+      ]
+    },
+    "at": 1791978819404
+  },
+  {
+    "event": "exit",
+    "pid": 2951815,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978819435
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-a/executions/req-crash-1791978819384/result",
+    "status": 409,
+    "body": {
+      "error": "LEASE_LOST"
+    },
+    "at": 1791978849409
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-b/executions/req-crash-1791978819384/claim",
+    "status": 403,
+    "body": {
+      "error": "request 'req-crash-1791978819384' was not dispatched to computer 'comp-b'"
+    },
+    "at": 1791978849414
+  },
+  {
+    "event": "missing_worker_gap",
+    "requestId": "req-crash-1791978819384",
+    "computerStatus": "online",
+    "lastHeartbeat": "2026-10-14T11:53:39.182Z",
+    "observedAt": 1791978879195,
+    "attempt": 1,
+    "expiresAt": 1791978849398,
+    "terminalOutcomePresent": false,
+    "limitation": "No API RecoveryManager sweep or cross-computer reassignment; abandoned dispatch remains durable and pending."
+  },
+  {
+    "event": "spawn",
+    "pid": 2956227,
+    "at": 1791978879198
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-crash-1791978819384/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:53:39.398Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-crash-1791978819384"
+        },
+        {
+          "at": "2026-10-14T11:53:39.404Z",
+          "type": "started",
+          "executionId": "exec-crash-1791978819384"
+        }
+      ]
+    },
+    "at": 1791978879413
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-crash-1791978819384/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:53:39.398Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-crash-1791978819384"
+        },
+        {
+          "at": "2026-10-14T11:53:39.404Z",
+          "type": "started",
+          "executionId": "exec-crash-1791978819384"
+        },
+        {
+          "at": "2026-10-14T11:54:39.415Z",
+          "data": {
+            "attempt": 2
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-crash-1791978819384"
+        },
+        {
+          "at": "2026-10-14T11:54:39.422Z",
+          "type": "started",
+          "executionId": "exec-crash-1791978819384"
+        },
+        {
+          "at": "2026-10-14T11:54:39.435Z",
+          "data": {
+            "type": "token",
+            "content": "simulated model completion"
+          },
+          "type": "token",
+          "executionId": "exec-crash-1791978819384"
+        },
+        {
+          "at": "2026-10-14T11:54:39.440Z",
+          "data": {
+            "type": "completed",
+            "usage": {
+              "inputTokens": 8,
+              "promptCache": {
+                "source": "UNKNOWN",
+                "provider": "ollama",
+                "inputTokens": {
+                  "value": 8,
+                  "status": "OBSERVED"
+                },
+                "cacheReadTokens": {
+                  "status": "UNKNOWN"
+                },
+                "cacheWriteTokens": {
+                  "status": "UNKNOWN"
+                }
+              },
+              "totalTokens": 24,
+              "outputTokens": 16
+            },
+            "content": "simulated model completion"
+          },
+          "type": "completed",
+          "executionId": "exec-crash-1791978819384"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "simulated model completion",
+        "durationMs": 15,
+        "inputTokens": 8,
+        "outputTokens": 16
+      }
+    },
+    "at": 1791978879515
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-a/executions/req-crash-1791978819384/result",
+    "status": 409,
+    "body": {
+      "error": "LEASE_LOST"
+    },
+    "at": 1791978879518
+  },
+  {
+    "event": "fencing",
+    "requestId": "req-crash-1791978819384",
+    "originalAttempt": 1,
+    "replacementAttempt": 2,
+    "holder": "comp-a",
+    "originalExpiresAt": 1791978849398,
+    "replacementExpiresAt": 1791978909415,
+    "staleResponse": {
+      "status": 409,
+      "body": {
+        "error": "LEASE_LOST"
+      }
+    },
+    "finalOutcome": {
+      "ok": true,
+      "output": "simulated model completion",
+      "durationMs": 15,
+      "inputTokens": 8,
+      "outputTokens": 16
+    }
+  },
+  {
+    "event": "exit",
+    "pid": 2956227,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978879526
+  },
+  {
+    "event": "exit",
+    "pid": 2951909,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978879527
+  },
+  {
+    "event": "exit",
+    "pid": 2951612,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978879540
+  }
+]

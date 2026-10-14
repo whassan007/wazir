@@ -1,0 +1,6 @@
+worker worker-comp-ctrl-31ac4b41491d56fddcf168b902e9a1e6 online
+  computer: comp-ctrl
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:41735
+waiting for work… (Ctrl+C to stop)

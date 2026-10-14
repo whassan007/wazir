@@ -1,0 +1,44 @@
+name: PostgreSQL and distributed processes
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+jobs:
+  postgres-distributed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wazir
+          POSTGRES_PASSWORD: disposable-ci-only
+          POSTGRES_DB: wazir_distributed_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wazir -d wazir_distributed_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      WAZIR_TEST_DATABASE_URL: postgres://wazir:disposable-ci-only@127.0.0.1:5432/wazir_distributed_test
+      WAZIR_REQUIRE_DATABASE: '1'
+      WAZIR_SECRETS_BACKEND: encrypted-file
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run test:distributed:typecheck
+      - run: npm run test:postgres
+      - run: npm run test:distributed
+      - name: Regression tests
+        run: env -u WAZIR_TEST_DATABASE_URL -u WAZIR_REQUIRE_DATABASE npx vitest run --exclude 'tests/distributed/**'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: distributed-process-evidence
+          path: test-results/distributed

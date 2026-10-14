@@ -1,0 +1,168 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2942830,
+    "at": 1791978712177
+  },
+  {
+    "event": "spawn",
+    "pid": 2943094,
+    "at": 1791978714198
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "req-stale-1791978714447",
+      "connected": true
+    },
+    "at": 1791978714459
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-stale-1791978714447/status",
+    "status": 200,
+    "body": {
+      "events": []
+    },
+    "at": 1791978714463
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-stale-1791978714447/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:51:54.473Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-stale-1791978714447"
+        },
+        {
+          "at": "2026-10-14T11:51:54.482Z",
+          "type": "started",
+          "executionId": "exec-stale-1791978714447"
+        }
+      ]
+    },
+    "at": 1791978714566
+  },
+  {
+    "event": "exit",
+    "pid": 2943094,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978714571
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-stale/executions/req-stale-1791978714447/result",
+    "status": 409,
+    "body": {
+      "error": "LEASE_LOST"
+    },
+    "at": 1791978744541
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-stale/executions/req-stale-1791978714447/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978774545,
+      "attempt": 2,
+      "leaseMs": 30000
+    },
+    "at": 1791978744558
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-stale/executions/req-stale-1791978714447/result",
+    "status": 409,
+    "body": {
+      "error": "LEASE_LOST"
+    },
+    "at": 1791978744564
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-stale/executions/req-stale-1791978714447/result",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978744572
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-stale-1791978714447/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:51:54.473Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-stale-1791978714447"
+        },
+        {
+          "at": "2026-10-14T11:51:54.482Z",
+          "type": "started",
+          "executionId": "exec-stale-1791978714447"
+        },
+        {
+          "at": "2026-10-14T11:52:24.545Z",
+          "data": {
+            "attempt": 2
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-stale-1791978714447"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "replacement outcome",
+        "durationMs": 0,
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    },
+    "at": 1791978744574
+  },
+  {
+    "event": "LS22_independent_stale_result",
+    "requestId": "req-stale-1791978714447",
+    "originalAttempt": 1,
+    "originalExpiresAt": 1791978744474,
+    "replacementAttempt": 2,
+    "holder": "comp-stale",
+    "replacementExpiresAt": 1791978774545,
+    "staleSubmissionResponse": {
+      "status": 409,
+      "body": {
+        "error": "LEASE_LOST"
+      }
+    },
+    "finalOutcome": {
+      "ok": true,
+      "output": "replacement outcome",
+      "durationMs": 0,
+      "inputTokens": 0,
+      "outputTokens": 0
+    }
+  },
+  {
+    "event": "exit",
+    "pid": 2942830,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978744587
+  }
+]

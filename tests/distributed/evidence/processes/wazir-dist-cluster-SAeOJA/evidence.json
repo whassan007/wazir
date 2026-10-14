@@ -1,0 +1,88 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2945210,
+    "at": 1791978746957
+  },
+  {
+    "event": "spawn",
+    "pid": 2945285,
+    "at": 1791978748921
+  },
+  {
+    "event": "exit",
+    "pid": 2945285,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978749155
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "req-renew-1791978749155",
+      "connected": false
+    },
+    "at": 1791978749162
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-renew/executions/req-renew-1791978749155/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978779166,
+      "attempt": 1,
+      "leaseMs": 30000
+    },
+    "at": 1791978749169
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-renew/executions/req-renew-1791978749155/renew",
+    "status": 409,
+    "body": {
+      "error": "LEASE_LOST"
+    },
+    "at": 1791978779224
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-renew/executions/req-renew-1791978749155/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978809226,
+      "attempt": 2,
+      "leaseMs": 30000
+    },
+    "at": 1791978779229
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-renew/executions/req-renew-1791978749155/result",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978779233
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-renew/executions/req-renew-1791978749155/renew",
+    "status": 409,
+    "body": {
+      "error": "EXECUTION_TERMINAL"
+    },
+    "at": 1791978779234
+  },
+  {
+    "event": "exit",
+    "pid": 2945210,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978779245
+  }
+]

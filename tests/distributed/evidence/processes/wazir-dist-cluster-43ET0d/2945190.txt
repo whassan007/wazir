@@ -1,0 +1,6 @@
+worker worker-comp-competing-b369b25449ee89496bf87695d76bd27a online
+  computer: comp-competing
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:38421
+waiting for work… (Ctrl+C to stop)

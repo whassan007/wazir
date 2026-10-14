@@ -1,0 +1,6 @@
+worker worker-effect-worker-5f8a416074d44436c2d2757c2ab2ff73 online
+  computer: effect-worker
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:35751
+waiting for work… (Ctrl+C to stop)

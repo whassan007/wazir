@@ -1,0 +1,176 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2964710,
+    "at": 1791978964850
+  },
+  {
+    "event": "spawn",
+    "pid": 2964847,
+    "at": 1791978966882
+  },
+  {
+    "event": "exit",
+    "pid": 2964710,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978967078
+  },
+  {
+    "event": "spawn",
+    "pid": 2964880,
+    "at": 1791978967081
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "surviving-reconnect-1791978969178",
+      "connected": false
+    },
+    "at": 1791978969197
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/surviving-reconnect-1791978969178/status",
+    "status": 200,
+    "body": {
+      "events": []
+    },
+    "at": 1791978969201
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/surviving-reconnect-1791978969178/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:56:11.092Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-surviving-reconnect-1791978969178"
+        },
+        {
+          "at": "2026-10-14T11:56:11.109Z",
+          "type": "started",
+          "executionId": "exec-surviving-reconnect-1791978969178"
+        },
+        {
+          "at": "2026-10-14T11:56:11.120Z",
+          "data": {
+            "type": "token",
+            "content": "simulated model completion"
+          },
+          "type": "token",
+          "executionId": "exec-surviving-reconnect-1791978969178"
+        }
+      ]
+    },
+    "at": 1791978971130
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/surviving-reconnect-1791978969178/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:56:11.092Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-surviving-reconnect-1791978969178"
+        },
+        {
+          "at": "2026-10-14T11:56:11.109Z",
+          "type": "started",
+          "executionId": "exec-surviving-reconnect-1791978969178"
+        },
+        {
+          "at": "2026-10-14T11:56:11.120Z",
+          "data": {
+            "type": "token",
+            "content": "simulated model completion"
+          },
+          "type": "token",
+          "executionId": "exec-surviving-reconnect-1791978969178"
+        },
+        {
+          "at": "2026-10-14T11:56:11.128Z",
+          "data": {
+            "type": "completed",
+            "usage": {
+              "inputTokens": 8,
+              "promptCache": {
+                "source": "UNKNOWN",
+                "provider": "ollama",
+                "inputTokens": {
+                  "value": 8,
+                  "status": "OBSERVED"
+                },
+                "cacheReadTokens": {
+                  "status": "UNKNOWN"
+                },
+                "cacheWriteTokens": {
+                  "status": "UNKNOWN"
+                }
+              },
+              "totalTokens": 24,
+              "outputTokens": 16
+            },
+            "content": "simulated model completion"
+          },
+          "type": "completed",
+          "executionId": "exec-surviving-reconnect-1791978969178"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "simulated model completion",
+        "durationMs": 18,
+        "inputTokens": 8,
+        "outputTokens": 16
+      }
+    },
+    "at": 1791978971184
+  },
+  {
+    "event": "surviving_worker_reconnected",
+    "requestId": "surviving-reconnect-1791978969178",
+    "workerPid": 2964847,
+    "controllerPid": 2964880,
+    "finalOutcome": {
+      "ok": true,
+      "output": "simulated model completion",
+      "durationMs": 18,
+      "inputTokens": 8,
+      "outputTokens": 16
+    }
+  },
+  {
+    "event": "credential_rejection",
+    "computerId": "comp-auth",
+    "unauthorizedReplacementStatus": 403,
+    "invalidStreamTokenStatus": 401
+  },
+  {
+    "event": "exit",
+    "pid": 2964847,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978971192
+  },
+  {
+    "event": "exit",
+    "pid": 2964880,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978971198
+  }
+]

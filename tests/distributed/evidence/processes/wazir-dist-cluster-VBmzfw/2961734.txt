@@ -1,0 +1,6 @@
+worker worker-submit-worker-7e1bfc86b3d32758017b112a89a6a020 online
+  computer: submit-worker
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:41173
+waiting for work… (Ctrl+C to stop)

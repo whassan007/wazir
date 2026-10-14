@@ -1,0 +1,419 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2956718,
+    "at": 1791978882731
+  },
+  {
+    "event": "spawn",
+    "pid": 2956879,
+    "at": 1791978884946
+  },
+  {
+    "event": "exit",
+    "pid": 2956879,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978885220
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "expiry-race-1791978885220-0",
+      "connected": false
+    },
+    "at": 1791978885227
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978915230,
+      "attempt": 1,
+      "leaseMs": 30000
+    },
+    "at": 1791978885232
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "expiry-race-1791978885232-1",
+      "connected": false
+    },
+    "at": 1791978885236
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978915239,
+      "attempt": 1,
+      "leaseMs": 30000
+    },
+    "at": 1791978885242
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "expiry-race-1791978885242-2",
+      "connected": false
+    },
+    "at": 1791978885246
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978915249,
+      "attempt": 1,
+      "leaseMs": 30000
+    },
+    "at": 1791978885252
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978945266,
+      "attempt": 2,
+      "leaseMs": 30000
+    },
+    "at": 1791978915279
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915280
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915281
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915283
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915285
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915287
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/renew",
+    "status": 409,
+    "body": {
+      "error": "LEASE_LOST"
+    },
+    "at": 1791978915289
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915291
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915292
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885220-0/result",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978915302
+  },
+  {
+    "event": "expiry_race",
+    "requestId": "expiry-race-1791978885220-0",
+    "originalAttempt": 1,
+    "originalExpiresAt": 1791978915230,
+    "replacementAttempt": 2,
+    "replacementExpiresAt": 1791978945266,
+    "staleRenewalResponse": {
+      "status": 409,
+      "body": {
+        "error": "LEASE_LOST"
+      }
+    },
+    "winningClaims": 1
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978945309,
+      "attempt": 2,
+      "leaseMs": 30000
+    },
+    "at": 1791978915312
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915314
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915317
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915319
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915320
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915321
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/renew",
+    "status": 409,
+    "body": {
+      "error": "LEASE_LOST"
+    },
+    "at": 1791978915322
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915323
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915325
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885232-1/result",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978915335
+  },
+  {
+    "event": "expiry_race",
+    "requestId": "expiry-race-1791978885232-1",
+    "originalAttempt": 1,
+    "originalExpiresAt": 1791978915239,
+    "replacementAttempt": 2,
+    "replacementExpiresAt": 1791978945309,
+    "staleRenewalResponse": {
+      "status": 409,
+      "body": {
+        "error": "LEASE_LOST"
+      }
+    },
+    "winningClaims": 1
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978945340,
+      "attempt": 2,
+      "leaseMs": 30000
+    },
+    "at": 1791978915344
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915344
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915346
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915348
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915349
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915351
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915353
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978915355
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/renew",
+    "status": 409,
+    "body": {
+      "error": "LEASE_LOST"
+    },
+    "at": 1791978915356
+  },
+  {
+    "event": "http",
+    "url": "/computers/expiry-race-worker/executions/expiry-race-1791978885242-2/result",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978915362
+  },
+  {
+    "event": "expiry_race",
+    "requestId": "expiry-race-1791978885242-2",
+    "originalAttempt": 1,
+    "originalExpiresAt": 1791978915249,
+    "replacementAttempt": 2,
+    "replacementExpiresAt": 1791978945340,
+    "staleRenewalResponse": {
+      "status": 409,
+      "body": {
+        "error": "LEASE_LOST"
+      }
+    },
+    "winningClaims": 1
+  },
+  {
+    "event": "exit",
+    "pid": 2956718,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978915375
+  }
+]
