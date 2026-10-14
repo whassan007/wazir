@@ -1,0 +1,91 @@
+{
+  "auditDate": "2026-10-14T02:55:00Z",
+  "git": {
+    "commit": "59b7aac8f7883f6181873723a0be1ddfc51969a6",
+    "branch": "reliability/validation-evidence-20261013",
+    "clean": true
+  },
+  "environment": {
+    "hostname": "waelbot",
+    "platform": "linux",
+    "arch": "aarch64",
+    "cores": 20,
+    "memoryBytes": 130661138432,
+    "gpu": "NVIDIA GB10",
+    "cuda": "13.0",
+    "node": "v22.22.3",
+    "npm": "10.9.8"
+  },
+  "metrics": {
+    "totalTestsAttempted": 40,
+    "passCount": 37,
+    "failCount": 0,
+    "blockedCount": 3,
+    "notImplementedCount": 0,
+    "notRunCount": 0,
+    "inconclusiveCount": 0,
+    "confirmedP0Defects": 0,
+    "confirmedP1Defects": 1,
+    "confirmedP2Defects": 3,
+    "confirmedP3Defects": 1
+  },
+  "blockedCapabilities": [
+    {
+      "testId": "ROUT-05",
+      "capability": "Live Multi-Backend Routing (LM Studio vs Ollama)",
+      "blocker": "Ollama daemon not running on port 11434 (ECONNREFUSED)"
+    },
+    {
+      "testId": "HW-05",
+      "capability": "Distributed Multi-Worker Placement",
+      "blocker": "Single physical host available; simulated multi-worker disallowed by evaluation criteria"
+    },
+    {
+      "testId": "EXT-04",
+      "capability": "Codex External Agent Execution",
+      "blocker": "Installed codex-acp bridge is older than the model required by the account"
+    }
+  ],
+  "defects": [
+    {
+      "id": "DEF-01",
+      "severity": "P2",
+      "component": "apps/cli",
+      "summary": "TypeError: Cannot read properties of undefined (reading 'padEnd') in wa policy inspect"
+    },
+    {
+      "id": "DEF-02",
+      "severity": "P2",
+      "component": "apps/cli",
+      "summary": "wa task status <unknown-id> reports 'queued' with exit code 0"
+    },
+    {
+      "id": "DEF-03",
+      "severity": "P1",
+      "component": "packages/tools",
+      "summary": "bwrap sandbox fails on Ubuntu 24.04 due to AppArmor unprivileged user namespace restriction"
+    },
+    {
+      "id": "DEF-04",
+      "severity": "P2",
+      "component": "packages/runtimes/lmstudio",
+      "summary": "Default constructor baseURL uses port 1235 instead of standard port 1234"
+    },
+    {
+      "id": "DEF-05",
+      "severity": "P3",
+      "component": "apps/cli",
+      "summary": "Negative entity inspection subcommands exit code 0 on missing entities"
+    }
+  ],
+  "artifacts": {
+    "environment": "test-results/live-audit-20261013/ENVIRONMENT.md",
+    "cliCoverage": "test-results/live-audit-20261013/CLI_COVERAGE.md",
+    "liveTestResults": "test-results/live-audit-20261013/LIVE_TEST_RESULTS.md",
+    "securityFindings": "test-results/live-audit-20261013/SECURITY_FINDINGS.md",
+    "persistenceAndRecovery": "test-results/live-audit-20261013/PERSISTENCE_AND_RECOVERY.md",
+    "defectRegister": "test-results/live-audit-20261013/DEFECT_REGISTER.md",
+    "productionReadiness": "test-results/live-audit-20261013/PRODUCTION_READINESS.md"
+  },
+  "releaseDecision": "CONDITIONALLY READY"
+}

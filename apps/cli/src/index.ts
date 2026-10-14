@@ -58,8 +58,22 @@ computersCmd
   .command('inspect')
   .argument('<id>', 'Computer ID')
   .description('Inspect a specific computer')
-  .action((id) => {
-    console.log(chalk.green(`Computer: ${id}`));
+  .action(async (id) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const computer = engine.computers.get(id);
+    if (!computer) {
+      console.error(chalk.red(`computer '${id}' not found`));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(chalk.green(`Computer: ${computer.id} (${computer.name})`));
+    console.log(`OS:       ${computer.os}`);
+    console.log(`CPU:      ${computer.hardware?.cpuCores ?? '-'} cores`);
+    console.log(`RAM:      ${computer.hardware?.memoryGB ?? '-'} GB`);
+    if (computer.hardware?.gpu?.model) {
+      console.log(`GPU:      ${computer.hardware.gpu.model}`);
+    }
   });
 
 program.addCommand(computersCmd);
@@ -210,7 +224,13 @@ for (const operation of ['inspect', 'estimate', 'pin', 'unpin'] as const) {
       const { createEngine } = await import('./engine.js');
       const { lifecycleOptions, formatModelLoadPlan } = await import('./commands.js');
       const engine = await createEngine({ readOnlyLifecycle: true });
-      if (operation === 'inspect') console.log(JSON.stringify(engine.lifecycle.inspect(modelId), null, 2));
+      if (operation === 'inspect') {
+        const info = engine.lifecycle.inspect(modelId);
+        if ((!info.installations || info.installations.length === 0) && (!info.instances || info.instances.length === 0)) {
+          process.exitCode = 1;
+        }
+        console.log(JSON.stringify(info, null, 2));
+      }
       else if (operation === 'estimate') {
         const plan = await engine.lifecycle.estimate(modelId, lifecycleOptions(options));
         console.log(options.json ? JSON.stringify(plan, null, 2) : formatModelLoadPlan(plan));
@@ -372,8 +392,17 @@ taskCmd
   .command('status')
   .argument('<id>', 'Task ID')
   .description('Show task status')
-  .action((id) => {
-    console.log(chalk.green(`Task ${id}: queued`));
+  .action(async (id) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const executions = await engine.executions.list();
+    const match = executions.find((e) => e.task?.id === id || e.execution.taskId === id || e.execution.id === id);
+    if (!match) {
+      console.error(chalk.red(`Task '${id}' not found`));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(chalk.green(`Task ${id}: ${match.execution.status}`));
   });
 
 program.addCommand(taskCmd);

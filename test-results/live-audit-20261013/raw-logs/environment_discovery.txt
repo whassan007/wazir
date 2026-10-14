@@ -1,0 +1,239 @@
+=== TIMESTAMP ===
+2026-10-14T02:15:41Z
+=== HOSTNAME ===
+waelbot
+=== OS & KERNEL ===
+Linux waelbot 7.0.0-1019-nvidia #19~24.04.2-Ubuntu SMP PREEMPT_DYNAMIC Sun Sep  6 18:35:11 UTC 2 aarch64 aarch64 aarch64 GNU/Linux
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+NAME="Ubuntu"
+VERSION_ID="24.04"
+VERSION="24.04.5 LTS (Noble Numbat)"
+VERSION_CODENAME=noble
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=noble
+LOGO=ubuntu-logo
+=== CPU INFO ===
+Architecture:                            aarch64
+CPU op-mode(s):                          64-bit
+Byte Order:                              Little Endian
+CPU(s):                                  20
+On-line CPU(s) list:                     0-19
+Vendor ID:                               ARM
+Model name:                              Cortex-X925
+Model:                                   1
+Thread(s) per core:                      1
+Core(s) per socket:                      10
+Socket(s):                               1
+Stepping:                                r0p1
+Frequency boost:                         disabled
+CPU(s) scaling MHz:                      100%
+CPU max MHz:                             3900.0000
+CPU min MHz:                             1378.0000
+BogoMIPS:                                2000.00
+Flags:                                   fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp sve2 sveaes svepmull svebitperm svesha3 svesm4 flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti ecv afp wfxt
+Model name:                              Cortex-A725
+Model:                                   1
+Thread(s) per core:                      1
+Core(s) per socket:                      10
+Socket(s):                               1
+Stepping:                                r0p1
+CPU(s) scaling MHz:                      100%
+CPU max MHz:                             2808.0000
+CPU min MHz:                             338.0000
+BogoMIPS:                                2000.00
+Flags:                                   fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp sve2 sveaes svepmull svebitperm svesha3 svesm4 flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti ecv afp wfxt
+L1d cache:                               1.3 MiB (20 instances)
+L1i cache:                               1.3 MiB (20 instances)
+L2 cache:                                25 MiB (20 instances)
+L3 cache:                                24 MiB (2 instances)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-19
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; CSV2, BHB
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+=== MEMORY INFO ===
+               total        used        free      shared  buff/cache   available
+Mem:           121Gi       101Gi       7.3Gi       425Mi        14Gi        20Gi
+Swap:           15Gi       1.3Gi        14Gi
+MemTotal:       127598768 kB
+MemFree:         7694688 kB
+MemAvailable:   21396344 kB
+Buffers:         1375948 kB
+Cached:         12111088 kB
+SwapCached:       180336 kB
+Active:         25404656 kB
+Inactive:       10760936 kB
+Active(anon):   22122804 kB
+Inactive(anon):  1000292 kB
+=== GPU & CUDA ===
+/usr/bin/nvidia-smi
+Tue Oct 13 19:15:41 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.178.04             Driver Version: 580.178.04     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GB10                    On  |   0000000F:01:00.0 Off |                  N/A |
+| N/A   51C    P0             12W /  N/A  | Not Supported          |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            3703      G   /usr/lib/xorg/Xorg                       18MiB |
+|    0   N/A  N/A            4134      G   /usr/bin/gnome-shell                      6MiB |
+|    0   N/A  N/A         2896277      C   ...lmstudio/.internal/utils/node      47514MiB |
+|    0   N/A  N/A         2896460      C   ...lmstudio/.internal/utils/node      25400MiB |
++-----------------------------------------------------------------------------------------+
+/usr/local/cuda/bin/nvcc
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Wed_Aug_20_01:57:39_PM_PDT_2025
+Cuda compilation tools, release 13.0, V13.0.88
+Build cuda_13.0.r13.0/compiler.36424714_0
+=== RUNTIMES & TOOLS ===
+node: v22.22.3
+npm: 10.9.8
+python3: Python 3.13.13
+git: git version 2.43.0
+=== GIT INFO ===
+branch: reliability/validation-evidence-20261013
+commit: 59b7aac8f7883f6181873723a0be1ddfc51969a6
+status: ?? test-results/
+=== NETWORK CONNECTIVITY ===
+PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.
+64 bytes from 8.8.8.8: icmp_seq=1 ttl=113 time=11.7 ms
+64 bytes from 8.8.8.8: icmp_seq=2 ttl=113 time=11.8 ms
+
+--- 8.8.8.8 ping statistics ---
+2 packets transmitted, 2 received, 0% packet loss, time 1001ms
+rtt min/avg/max/mdev = 11.742/11.761/11.781/0.019 ms
+HTTP/2 200 
+content-type: text/html; charset=ISO-8859-1
+content-security-policy-report-only: object-src 'none';base-uri 'self';script-src 'nonce-FCvFJ-Rii7BJuLJx1E3unA' 'strict-dynamic' 'report-sample' 'unsafe-eval' 'unsafe-inline' https: http:;report-uri https://csp.withgoogle.com/csp/gws/other-hp
+accept-ch: Sec-CH-Prefers-Color-Scheme
+p3p: CP="This is not a P3P policy! See g.co/p3phelp for more info."
+=== LOCAL INFERENCE ENDPOINTS ===
+{
+  "data": [
+    {
+      "id": "qwen/qwen3-coder-next",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-omni",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "transformer",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "text_encoder",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "qwen2.5-7b-instruct",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "unsloth/qwen3-coder-next",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "qwen/qwen3.8-27b",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "gemma-4-26b-a4b-it-qat",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "nvidia/nemotron-3-super",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "text-embedding-nomic-embed-text-v1.5",
+      "object": "model",
+      "owned_by": "organization_owner"
+    }
+  ],
+  "object": "list"
+}
+Ollama (11434) not responding
+
+=== INSTALLED AI CODING AGENTS ===
+/home/wael/.opencode/bin/opencode
+1.19.0
+/home/wael/.local/bin/codex
+codex-cli 0.162.1
+/home/wael/.local/bin/claude
+2.1.296 (Claude Code)
+=== RUNNING PROCESSES (FILTERED) ===
+root        3061  0.0  0.0   2288  1644 ?        Ss   Oct11   0:00 fusermount3 -o rw,nosuid,nodev,fsname=portal,auto_unmount,subtype=portal -- /run/user/1000/doc
+root        3780  0.0  0.0   2288  1624 ?        Ss   Oct11   0:00 fusermount3 -o rw,nosuid,nodev,fsname=portal,auto_unmount,subtype=portal -- /run/user/126/doc
+70          4713  0.0  0.0 175704  3636 ?        Ss   Oct11   0:02 postgres
+70          4836  0.0  0.0 175856  1572 ?        Ss   Oct11   0:00 postgres: checkpointer 
+70          4837  0.0  0.0 175800  1340 ?        Ss   Oct11   0:01 postgres: background writer 
+70          4839  0.0  0.0 175768   728 ?        Ss   Oct11   0:01 postgres: walwriter 
+70          4840  0.0  0.0 177384  3364 ?        Ss   Oct11   0:00 postgres: autovacuum launcher 
+70          4841  0.0  0.0 177304  2932 ?        Ss   Oct11   0:00 postgres: logical replication launcher 
+wael       39616  1.4  0.4 10572504 628808 ?     Ssl  Oct11  40:20 llmster
+wael       39796  0.3  0.0 1251304 27848 ?       Sl   Oct11  10:36 /home/wael/.lmstudio/.internal/utils/node -e  function connectPort(port) {   const handlersMap = new Map();   return {     postMessage: data => process.send({ port: port, data }),     on: (event, handler) => {       if (event !== "message") {         throw new Error("Unsupported event: " + event);       }       const innerHandler = payload => {         if (payload.port === port) {           handler({ data: payload.data });         }       }       handlersMap.set(handler, innerHandler);       process.on('message', innerHandler);     },     off: (event, handler) => {       if (event !== "message") {         throw new Error("Unsupported event: " + event);       }       const innerHandler = handlersMap.get(handler);       if (innerHandler) {         process.off('message', innerHandler);         handlersMap.delete(handler);       }     },   }; } process.parentPort = connectPort(0); process.rcPort = connectPort(1); process.resourcesPath = undefined; require("/home/wael/.lmstudio/llmster/0.0.18-1/.bundle/lib/systemresourcesworker.js"); /home/wael/.lmstudio/llmster/0.0.18-1/.bundle/lib/systemresourcesworker.js /home/wael/.lmstudio/llmster/0.0.18-1/.bundle/bin/liblmstudio/cpu/liblmstudio_bindings.node
+wael       39928  0.0  0.0 2645848 27876 ?       Sl   Oct11   0:11 /home/wael/.lmstudio/extensions/frameworks/lmlink-connector-linux-arm64-0.1.0/lmlink-connector
+wael     2521985  0.0  0.0  20852  3064 ?        Ss   Oct12   0:00 /bin/bash -c source /home/wael/.claude/shell-snapshots/snapshot-bash-1791855995722-2veyew.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'S=/tmp/claude-1000/-home-wael-Code-Wazir/9a2c3833-9012-4925-9fb9-d69b033d15eb/scratchpad && cd $S/mproj && export PATH=$HOME/.nvm/versions/node/v22.22.3/bin:$PATH && WAZIR_HOME=$S/wr node /home/wael/Code/Wazir-mobile/apps/cli/dist/index.js remote serve --origin https://dgx-spark.tail16d8d9.ts.net:8443 > $S/serve.log 2>&1' < /dev/null && pwd -P >| /tmp/claude-cfff-cwd
+wael     2521986  0.2  0.0 22101236 125208 ?     Sl   Oct12   2:53 node /home/wael/Code/Wazir-mobile/apps/cli/dist/index.js remote serve --origin https://dgx-spark.tail16d8d9.ts.net:8443
+wael     2539052  0.0  0.0 796284 17380 ?        Sl   Oct12   0:00 node /home/wael/.npm/_npx/8e2f889e245897c3/node_modules/.bin/claude-code-acp
+wael     2896277 14.6  7.8 236519384 10021088 ?  SLl  07:30 103:29 /home/wael/.lmstudio/.internal/utils/node -e  function connectPort(port) {   const handlersMap = new Map();   return {     postMessage: data => process.send({ port: port, data }),     on: (event, handler) => {       if (event !== "message") {         throw new Error("Unsupported event: " + event);       }       const innerHandler = payload => {         if (payload.port === port) {           handler({ data: payload.data });         }       }       handlersMap.set(handler, innerHandler);       process.on('message', innerHandler);     },     off: (event, handler) => {       if (event !== "message") {         throw new Error("Unsupported event: " + event);       }       const innerHandler = handlersMap.get(handler);       if (innerHandler) {         process.off('message', innerHandler);         handlersMap.delete(handler);       }     },   }; } process.parentPort = connectPort(0); process.rcPort = connectPort(1); process.resourcesPath = undefined; require("/home/wael/.lmstudio/llmster/0.0.18-1/.bundle/lib/llmworker.js"); /home/wael/.lmstudio/llmster/0.0.18-1/.bundle/lib/llmworker.js
+wael     2896460 20.8  7.3 84848468 9431868 ?    SLl  07:31 147:04 /home/wael/.lmstudio/.internal/utils/node -e  function connectPort(port) {   const handlersMap = new Map();   return {     postMessage: data => process.send({ port: port, data }),     on: (event, handler) => {       if (event !== "message") {         throw new Error("Unsupported event: " + event);       }       const innerHandler = payload => {         if (payload.port === port) {           handler({ data: payload.data });         }       }       handlersMap.set(handler, innerHandler);       process.on('message', innerHandler);     },     off: (event, handler) => {       if (event !== "message") {         throw new Error("Unsupported event: " + event);       }       const innerHandler = handlersMap.get(handler);       if (innerHandler) {         process.off('message', innerHandler);         handlersMap.delete(handler);       }     },   }; } process.parentPort = connectPort(0); process.rcPort = connectPort(1); process.resourcesPath = undefined; require("/home/wael/.lmstudio/llmster/0.0.18-1/.bundle/lib/llmworker.js"); /home/wael/.lmstudio/llmster/0.0.18-1/.bundle/lib/llmworker.js
+wael     3017769  7.0  0.2 33787572 368732 pts/17 Sl+ 19:12   0:11 node (vitest)
+wael     3017793  0.6  0.0 722920 17392 pts/17   Sl+  19:12   0:01 /home/wael/Code/Wazir/node_modules/vite/node_modules/@esbuild/linux-arm64/bin/esbuild --service=0.21.5 --ping
+wael     3031602  2.1  0.0 11486380 84276 pts/17 Sl+  19:15   0:00 node (vitest 1)
+wael     3032228  5.5  0.0  31652 11336 pts/17   S+   19:15   0:00 python3 /home/wael/Code/Wazir/.worktrees/p1-independent-qualification/apps/cli/tests/ptyDriver.py --json {"steps":[{"op":"wait","text":"wa>","timeout":15},{"op":"send","data":"/exit\r"},{"op":"exit","timeout":15,"expectCode":0}],"env":{"TEST":"true","VITEST":"true","NODE_ENV":"test","VITEST_MODE":"RUN","JJ_PAGER":"cat","LESSOPEN":"| /usr/bin/lesspipe %s","CONDA_PROMPT_MODIFIER":"(base) ","MAIL":"/var/mail/wael","USER":"wael","ANTIGRAVITY_SOURCE_METADATA":"{\"tool\":{\"conversationId\":\"76a8fae7-d548-4624-9fa9-0c305148928a\",\"stepIndex\":84,\"toolCall\":{\"id\":\"call_225884\",\"name\":\"run_command\",\"argumentsJson\":\"{\\\"CommandLine\\\":\\\"export PATH=\\\\\\\"/home/wael/.nvm/versions/node/v22.22.3/bin:$PATH\\\\\\\"\\\\nnpm test\\\",\\\"Cwd\\\":\\\"/home/wael/Code/Wazir/.worktrees/p1-independent-qualification\\\",\\\"WaitMsBeforeAsync\\\":10000,\\\"toolAction\\\":\\\"Running test suite\\\",\\\"toolSummary\\\":\\\"Run npm test\\\"}\",\"thinkingSignature\":\"EuQBCuEBAWkUfRMIRdjxk8kFMaF+WwDPt7CFzgPI4ucSW8YB6s/xS+DAHmFFUmitVW81NeXySBXjXiT7Im/WpGX0DIanvbrKUWR/4ghAdlr9kTeGIZLT4N9n5kSJD5X1wiZ4DH6/isCZ8TbYjYOvi6S0He24SoDOr8M8gk4HQBnPaFbgwreqf4F6ioygn8v7XKqtjs4VlrpGWbw6M2IRPr6lF1TY8ORWhYbr/DLNVwkCRahLaiJJy1ov/yAwfzVWgPd8gAW2Wz7VTSr/yVpmVS+YeaCA5l0VQSB5HVRu2qfJpAOL9t3O\"}}}","SSH_CLIENT":"100.80.184.43 56961 22","npm_config_user_agent":"npm/10.9.8 node/v22.22.3 linux arm64 workspaces/false","XDG_SESSION_TYPE":"tty","npm_node_execpath":"/home/wael/.nvm/versions/node/v22.22.3/bin/node","ANTIGRAVITY_AGENTAPI_EXE":"/home/wael/.local/bin/agy","SHLVL":"1","LD_LIBRARY_PATH":"/usr/local/cuda/lib64:","npm_config_noproxy":"","HOME":"/home/wael","CONDA_SHLVL":"1","OLDPWD":"/home/wael","SSH_TTY":"/dev/pts/12","npm_package_json":"/home/wael/Code/Wazir/.worktrees/p1-independent-qualification/package.json","HUSHLOGIN":"FALSE","npm_package_engines_node":">=22.5.0","HF_HOME":"/opt/huggingface_cache","PAGER":"cat","npm_config_userconfig":"/home/wael/.npmrc","npm_config_local_prefix":"/home/wael/Code/Wazir/.worktrees/p1-independent-qualification","DBUS_SESSION_BUS_ADDRESS":"unix:path=/run/user/1000/bus","_CE_M":"","_CONDA_ROOT":"/home/wael/miniconda3","ANTIGRAVITY_AGENT":"1","COLOR":"1","NVM_DIR":"/home/wael/.nvm","DEBUGINFOD_URLS":"https://debuginfod.ubuntu.com ","npm_config_prefer_workspace_packages":"true","LOGNAME":"wael","_":"/home/wael/.nvm/versions/node/v22.22.3/bin/npm","npm_config_prefix":"/home/wael/.nvm/versions/node/v22.22.3","npm_config_npm_version":"10.9.8","XDG_SESSION_CLASS":"user","TERM":"dumb","XDG_SESSION_ID":"937","npm_config_cache":"/home/wael/.npm","_CE_CONDA":"","ANTIGRAVITY_APP_DATA_DIR":"/home/wael/.gemini/antigravity-cli","ANTIGRAVITY_LS_VERSION":"cli-1.3.4","npm_config_node_gyp":"/home/wael/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js","PATH":"/home/wael/Code/Wazir/.worktrees/p1-independent-qualification/node_modules/.bin:/home/wael/Code/Wazir/.worktrees/node_modules/.bin:/home/wael/Code/Wazir/node_modules/.bin:/home/wael/Code/node_modules/.bin:/home/wael/node_modules/.bin:/home/node_modules/.bin:/node_modules/.bin:/home/wael/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin:/home/wael/.nvm/versions/node/v22.22.3/bin:/home/wael/.gemini/antigravity-cli/bin:/home/wael/Code/Wazir/.worktrees/ci/test-bin:/home/wael/.local/bin:/home/wael/.local/bin:/home/wael/Code/Wazir/.worktrees/ci/test-bin:/home/wael/.opencode/bin:/usr/local/cuda/bin:/home/wael/miniconda3/bin:/home/wael/miniconda3/condabin:/home/wael/.local/bin:/home/wael/.npm-global/bin:/home/wael/.local/bin:/usr/local/cuda/bin:/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/wael/.lmstudio/bin:/home/wael/Setup:/home/wael/.lmstudio/bin","NODE":"/home/wael/.nvm/versions/node/v22.22.3/bin/node","npm_package_name":"wazir","XDG_RUNTIME_DIR":"/run/user/1000","REMOTEHOST":"100.80.184.43","LANG":"en_US.utf8","ANTIGRAVITY_CONVERSATION_ID":"76a8fae7-d548-4624-9fa9-0c305148928a","LS_COLORS":"rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=00:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.avif=01;35:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:*~=00;90:*#=00;90:*.bak=00;90:*.crdownload=00;90:*.dpkg-dist=00;90:*.dpkg-new=00;90:*.dpkg-old=00;90:*.dpkg-tmp=00;90:*.old=00;90:*.orig=00;90:*.part=00;90:*.rej=00;90:*.rpmnew=00;90:*.rpmorig=00;90:*.rpmsave=00;90:*.swp=00;90:*.tmp=00;90:*.ucf-dist=00;90:*.ucf-new=00;90:*.ucf-old=00;90:","npm_lifecycle_script":"npm run build && vitest run","CONDA_PYTHON_EXE":"/home/wael/miniconda3/bin/python","ANTIGRAVITY_PROJECT_ID":"default-cli-project","SHELL":"/bin/bash","ANTIGRAVITY_LS_ADDRESS":"localhost:33111","npm_package_version":"0.1.60","npm_lifecycle_event":"test","LESSCLOSE":"/usr/bin/lesspipe %s %s","CONDA_DEFAULT_ENV":"base","_CONDA_EXE":"/home/wael/miniconda3/bin/conda","GIT_PAGER":"cat","ANTIGRAVITY_TRAJECTORY_ID":"35bd3d87-d193-4bd0-a71b-ac7da9acb739","npm_config_globalconfig":"/home/wael/.nvm/versions/node/v22.22.3/etc/npmrc","npm_config_init_module":"/home/wael/.npm-init.js","PWD":"/home/wael/Code/Wazir/.worktrees/p1-independent-qualification","CUDA_HOME":"/usr/local/cuda","npm_config_link_workspace_packages":"true","npm_execpath":"/home/wael/.nvm/versions/node/v22.22.3/lib/node_modules/npm/bin/npm-cli.js","npm_package_bin_wa":"bin/wa.js","CONDA_EXE":"/home/wael/miniconda3/bin/conda","SSH_CONNECTION":"100.80.184.43 56961 100.113.62.112 22","XDG_DATA_DIRS":"/usr/share/gnome:/usr/local/share:/usr/share:/var/lib/snapd/desktop","npm_config_global_prefix":"/home/wael/.nvm/versions/node/v22.22.3","npm_command":"test","CONDA_PREFIX":"/home/wael/miniconda3","WAZIR_HOME":"/tmp/wazir-session-eof-YyFHpo","ANTIGRAVITY_CSRF_TOKEN":"fffbf84d-b6e6-4206-bac7-0379fdd8e803","INIT_CWD":"/home/wael/Code/Wazir/.worktrees/p1-independent-qualification","EDITOR":"vi","PROD":"","DEV":"1","BASE_URL":"/","MODE":"test","WAZIR_SECRETS_BACKEND":"encrypted-file","TINYPOOL_WORKER_ID":"1","VITEST_WORKER_ID":"79","VITEST_POOL_ID":"1","SSR":"1","WAZIR_COMPUTER_ID":"session-eof-1791944142504","WAZIR_OLLAMA_URL":"http://127.0.0.1:1","WAZIR_LMSTUDIO_URL":"http://127.0.0.1:1"},"cols":200,"rows":50,"stepTimeout":15} -- /home/wael/.nvm/versions/node/v22.22.3/bin/node /home/wael/Code/Wazir/.worktrees/p1-independent-qualification/apps/cli/dist/index.js chat
+wael     3032229  141  0.0 875964 97420 ?        Rsl  19:15   0:00 /home/wael/.nvm/versions/node/v22.22.3/bin/node /home/wael/Code/Wazir/.worktrees/p1-independent-qualification/apps/cli/dist/index.js chat
+70       3281888  0.0  0.0 175704 27320 ?        Ss   09:09   0:00 postgres
+70       3282264  0.0  0.0 175900 10024 ?        Ss   09:09   0:00 postgres: checkpointer 
+70       3282265  0.0  0.0 175800  7192 ?        Ss   09:09   0:00 postgres: background writer 
+70       3282267  0.0  0.0 175768  9804 ?        Ss   09:09   0:00 postgres: walwriter 
+70       3282268  0.0  0.0 177356  8276 ?        Ss   09:09   0:00 postgres: autovacuum launcher 
+70       3282269  0.0  0.0 177304  7728 ?        Ss   09:09   0:00 postgres: logical replication launcher 
