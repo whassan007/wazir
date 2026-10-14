@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ExecutionEngine, PolicyEngine, type ToolResult } from '@wazir/core';
+import { ExecutionEngine, PolicyEngine, assessCompletionEvidence, type ToolResult } from '@wazir/core';
 import { executeTool, ToolRegistry } from '../src/registry.js';
 
 describe('physical mutation and revision-fenced controller completion', () => {
@@ -76,7 +76,9 @@ describe('physical mutation and revision-fenced controller completion', () => {
     await writeFile(join(root, 'main.js'), 'if (1 + 1 !== 2) throw new Error("bad");\n');
     expect((await check('build', 'node --check main.js')).ok).toBe(true);
     expect((await check('test', 'node main.js')).ok).toBe(true);
-    await engine.setStatus(id, 'completed', { targetRevision: 0 });
+    // Eligible at revision 0 (not committed: a completed execution is final and would
+    // refuse the later edits).
+    expect(assessCompletionEvidence(engine.require(id))).toMatchObject({ workspaceRevision: 0, eligible: true });
     await run('write', { path: 'main.js', content: 'throw new Error("regression");\n' });
     await expect(engine.setStatus(id, 'completed', { targetRevision: 1 })).rejects.toThrow('current verification');
     expect((await check('build', 'node --check main.js')).ok).toBe(true);
