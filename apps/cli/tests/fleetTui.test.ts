@@ -449,7 +449,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
     await harness.start();
 
     harness.sendLine('solo job');
-    for (let i = 0; i < 60 && !harness.tui.getCurrentJob(); i++) {
+    for (let i = 0; i < 60 && !['completed', 'failed'].includes(harness.tui.getCurrentJob()?.status ?? ''); i++) {
       await new Promise((r) => setTimeout(r, 50));
     }
     const job = harness.tui.getCurrentJob();
@@ -497,7 +497,13 @@ describe('FleetTui — interactive terminal UI harness', () => {
     expect(flat[0]).toMatchObject({ category: 'JOBS', id: orphanJob.id });
 
     harness.sendKey('c');
-    for (let i = 0; i < 60 && engine.orchestrator.getJob(orphanJob.id)?.status !== 'cancelled'; i++) {
+    for (
+      let i = 0;
+      i < 60 &&
+      (engine.orchestrator.getJob(orphanJob.id)?.status !== 'cancelled' ||
+        !harness.tui.getStatusMessage()?.includes(`Cancelled job ${orphanJob.id}`));
+      i++
+    ) {
       await new Promise((r) => setTimeout(r, 25)); // cancelJob() is async
     }
     expect(engine.orchestrator.getJob(orphanJob.id)?.status).toBe('cancelled');

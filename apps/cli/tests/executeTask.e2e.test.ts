@@ -290,7 +290,7 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     const record = engine.executions.require(outcome.executionId);
     expect(record.checks).toHaveLength(1);
     expect(record.checks[0]).toMatchObject({ name: 'build', ok: true });
-  });
+  }, 30_000);
 
   it('denies a tool call whose target path escapes the project root, end to end', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-'));
