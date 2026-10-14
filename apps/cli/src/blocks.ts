@@ -7,6 +7,7 @@ const MAX_STDOUT_SIZE = 64 * 1024; // 64KB
 
 export interface BlockStartResult {
   block: Block;
+  update: (patch: Partial<Block>) => Promise<void>;
   finish: (status: BlockStatus, patch?: Partial<Block>) => Promise<void>;
 }
 
@@ -71,6 +72,11 @@ export async function createBlock(
   // Persist immediately so it shows up in history even if command fails early
   await store.put(`${BLOCK_PREFIX}${block.id}`, block);
 
+  const update = async (patch: Partial<Block>) => {
+    Object.assign(block, patch);
+    await store.put(`${BLOCK_PREFIX}${block.id}`, { ...block });
+  };
+
   const finish = async (status: BlockStatus, patch?: Partial<Block>) => {
     const updated: Block = {
       ...block,
@@ -89,7 +95,7 @@ export async function createBlock(
     await store.put(`${BLOCK_PREFIX}${block.id}`, updated);
   };
 
-  return { block, finish };
+  return { block, update, finish };
 }
 
 /**

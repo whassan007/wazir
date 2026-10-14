@@ -269,10 +269,16 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     // \w character, so there is no word/non-word transition for \b to
     // anchor on) — `(?=\s|$)` is required instead.
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-verified-'));
+    // On Windows cmd.exe, `./main` fails because `.` is parsed as the command
+    // and `/main` as an option switch; `g++ -std=c++17 -o main main.cpp` alone
+    // exercises the compiler invocation and BUILD_INVOCATION_PATTERN on win32.
+    const compileCmd = process.platform === 'win32'
+      ? 'g++ -std=c++17 -o main main.cpp'
+      : 'g++ -std=c++17 -o main main.cpp && ./main';
     const engine = await buildTestEngine(projectRoot, [
       '{"action":"plan","content":"write and compile main.cpp"}',
       '{"action":"tool","tool":"write","input":{"path":"main.cpp","content":"int main(){return 0;}"}}',
-      '{"action":"tool","tool":"shell","input":{"command":"g++ -std=c++17 -o main main.cpp && ./main"}}',
+      JSON.stringify({ action: 'tool', tool: 'shell', input: { command: compileCmd } }),
       '{"action":"done","summary":"compiled and ran successfully"}',
     ]);
 

@@ -148,6 +148,7 @@ export class SymbolGraph {
   }
 
   findCallers(targetNodeIdOrName: string): SymbolNode[] {
+    const normalizedTarget = targetNodeIdOrName.replace(/\\/g, '/');
     const targetIds = new Set<string>();
     if (this.nodes.has(targetNodeIdOrName)) {
       targetIds.add(targetNodeIdOrName);
@@ -156,15 +157,21 @@ export class SymbolGraph {
       targetIds.add(node.id);
     }
     targetIds.add(targetNodeIdOrName);
+    targetIds.add(normalizedTarget);
 
     const callers = new Set<SymbolNode>();
     for (const edge of this.edges) {
       if (edge.type === 'CALLS') {
+        const normalizedTo = edge.to.replace(/\\/g, '/');
         const matches =
           targetIds.has(edge.to) ||
+          targetIds.has(normalizedTo) ||
           edge.to === targetNodeIdOrName ||
+          normalizedTo === normalizedTarget ||
           edge.to.endsWith(`.${targetNodeIdOrName}`) ||
+          normalizedTo.endsWith(`.${normalizedTarget}`) ||
           targetNodeIdOrName.endsWith(`.${edge.to}`) ||
+          normalizedTarget.endsWith(`.${normalizedTo}`) ||
           this.getNode(edge.to)?.name === targetNodeIdOrName;
         if (matches) {
           const callerNode = this.nodes.get(edge.from);
@@ -179,11 +186,13 @@ export class SymbolGraph {
 
   findCallees(sourceNodeIdOrName: string): SymbolNode[] {
     const callees = new Set<SymbolNode>();
+    const normalizedSource = sourceNodeIdOrName.replace(/\\/g, '/');
     for (const edge of this.edges) {
       if (edge.type === 'CALLS') {
+        const normalizedFrom = edge.from.replace(/\\/g, '/');
         const matches =
-          edge.from === sourceNodeIdOrName ||
-          edge.from.includes(sourceNodeIdOrName) ||
+           normalizedFrom === normalizedSource ||
+          normalizedFrom.includes(normalizedSource) ||
           this.getNode(edge.from)?.name === sourceNodeIdOrName;
         if (matches) {
           const directNode = this.getNode(edge.to);
@@ -213,6 +222,7 @@ export class SymbolGraph {
   }
 
   findImplementations(interfaceNodeIdOrName: string): SymbolNode[] {
+    const normalizedTarget = interfaceNodeIdOrName.replace(/\\/g, '/');
     const targetIds = new Set<string>();
     if (this.nodes.has(interfaceNodeIdOrName)) {
       targetIds.add(interfaceNodeIdOrName);
@@ -221,10 +231,12 @@ export class SymbolGraph {
       targetIds.add(node.id);
     }
     targetIds.add(interfaceNodeIdOrName);
+    targetIds.add(normalizedTarget);
 
     const impls = new Set<SymbolNode>();
     for (const edge of this.edges) {
-      if (edge.type === 'IMPLEMENTS' && (targetIds.has(edge.to) || edge.to === interfaceNodeIdOrName)) {
+      const normalizedTo = edge.to.replace(/\\/g, '/');
+      if (edge.type === 'IMPLEMENTS' && (targetIds.has(edge.to) || targetIds.has(normalizedTo) || edge.to === interfaceNodeIdOrName || normalizedTo === normalizedTarget)) {
         const node = this.nodes.get(edge.from);
         if (node) impls.add(node);
       }
@@ -233,6 +245,7 @@ export class SymbolGraph {
   }
 
   findTests(targetNodeIdOrNameOrFile: string): SymbolNode[] {
+    const normalizedTarget = targetNodeIdOrNameOrFile.replace(/\\/g, '/');
     const targetIds = new Set<string>();
     if (this.nodes.has(targetNodeIdOrNameOrFile)) {
       targetIds.add(targetNodeIdOrNameOrFile);
@@ -241,10 +254,12 @@ export class SymbolGraph {
       targetIds.add(node.id);
     }
     targetIds.add(targetNodeIdOrNameOrFile);
+    targetIds.add(normalizedTarget);
 
     const testNodes = new Set<SymbolNode>();
     for (const edge of this.edges) {
-      if (edge.type === 'TESTS' && targetIds.has(edge.to)) {
+      const normalizedTo = edge.to.replace(/\\/g, '/');
+      if (edge.type === 'TESTS' && (targetIds.has(edge.to) || targetIds.has(normalizedTo))) {
         const node = this.nodes.get(edge.from);
         if (node) testNodes.add(node);
       }
@@ -253,9 +268,10 @@ export class SymbolGraph {
   }
 
   findDependencies(packageOrFile: string): string[] {
+    const normalized = packageOrFile.replace(/\\/g, '/');
     const deps = new Set<string>();
     for (const edge of this.edges) {
-      if ((edge.type === 'DEPENDS_ON' || edge.type === 'IMPORTS') && edge.from === packageOrFile) {
+      if ((edge.type === 'DEPENDS_ON' || edge.type === 'IMPORTS') && (edge.from === packageOrFile || edge.from.replace(/\\/g, '/') === normalized)) {
         deps.add(edge.to);
       }
     }
@@ -263,9 +279,10 @@ export class SymbolGraph {
   }
 
   findDependents(packageOrFile: string): string[] {
+    const normalized = packageOrFile.replace(/\\/g, '/');
     const deps = new Set<string>();
     for (const edge of this.edges) {
-      if ((edge.type === 'DEPENDS_ON' || edge.type === 'IMPORTS') && edge.to === packageOrFile) {
+      if ((edge.type === 'DEPENDS_ON' || edge.type === 'IMPORTS') && (edge.to === packageOrFile || edge.to.replace(/\\/g, '/') === normalized)) {
         deps.add(edge.from);
       }
     }

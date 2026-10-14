@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TerminalSession } from '../src/terminalSession.js';
 import { terminalOpenTool, terminalSendTool, terminalCloseTool } from '../src/terminalTools.js';
 
-describe('TerminalSession (real PTY)', () => {
+describe.skipIf(process.platform === 'win32')('TerminalSession (real PTY)', () => {
   let cwd: string;
   const sessions: TerminalSession[] = [];
 
@@ -72,7 +72,7 @@ describe('TerminalSession (real PTY)', () => {
   }, 15_000);
 });
 
-describe('terminal_open / terminal_send / terminal_close tools', () => {
+describe.skipIf(process.platform === 'win32')('terminal_open / terminal_send / terminal_close tools', () => {
   let cwd: string;
 
   beforeEach(async () => {

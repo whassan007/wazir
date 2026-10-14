@@ -108,6 +108,7 @@ export class ResourceLedger {
   constructor(readonly file: string, private readonly clock: () => number = Date.now) {
     if (file !== ':memory:') mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(file);
+    this.db.exec('PRAGMA busy_timeout = 10000;');
     this.db.exec(SCHEMA);
   }
 

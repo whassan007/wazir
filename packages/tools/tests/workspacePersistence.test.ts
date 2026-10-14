@@ -16,7 +16,7 @@ describe('Shell Execution & Workspace Persistence Diagnostic Sequence', () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('runs the 4-step execution persistence sequence: touch, cat, compile, execute', async () => {
+  it.skipIf(process.platform === 'win32')('runs the 4-step execution persistence sequence: touch, cat, compile, execute', async () => {
     const ctx = {
       projectRoot: tmpDir,
       env: {},

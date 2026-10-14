@@ -24,7 +24,9 @@ describe('writeProjectFile atomicity', () => {
     await writeFile(join(root, 'run.sh'), '#!/bin/sh\necho old\n');
     await chmod(join(root, 'run.sh'), 0o755);
     await writeProjectFile(root, 'run.sh', '#!/bin/sh\necho new\n');
-    expect((await stat(join(root, 'run.sh'))).mode & 0o777).toBe(0o755);
+    if (process.platform !== 'win32') {
+      expect((await stat(join(root, 'run.sh'))).mode & 0o777).toBe(0o755);
+    }
   });
 
   it('creates new files and parent directories', async () => {

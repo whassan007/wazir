@@ -54,7 +54,7 @@ export interface WorktreeManagerOptions {
  * `.git/hooks/` (now an 'ask' path, but defence in depth) would otherwise run
  * it on the next `worktree add`/`commit` (security review F-11).
  */
-const GIT_NO_HOOKS = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+const GIT_NO_HOOKS = ['-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`, '-c', 'core.fsmonitor=false'];
 
 export class WorktreeManager {
   private readonly rootOverride?: string;
@@ -389,7 +389,7 @@ export class WorktreeManager {
       throw new Error(`refusing to remove '${resolved}': not a Wazir worktree directory`);
     }
     try {
-      await fs.rm(resolved, { recursive: true, force: true });
+      await fs.rm(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     } catch {
       // ignore
     }

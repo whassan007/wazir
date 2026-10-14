@@ -295,7 +295,19 @@ export class JsonFileStore implements KeyValueStore {
       await handle.close();
     }
     await injectFault('DURING_STORE_WRITE', { filePath: this.file, tmp });
-    await fs.rename(tmp, this.file);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await fs.rename(tmp, this.file);
+        break;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (attempt < 4 && (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) {
+          await new Promise((r) => setTimeout(r, 20 * (attempt + 1)));
+          continue;
+        }
+        throw err;
+      }
+    }
     await fs.chmod(this.file, 0o600).catch(() => undefined);
     await fsyncDir(dir);
     this.observedFile = true;

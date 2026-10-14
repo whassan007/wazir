@@ -92,7 +92,7 @@ export class SandboxUnavailableError extends Error {
 // else in the home directory is masked.
 const HOME_TOOLCHAIN_DIRS = [
   '.nvm', '.volta', '.fnm', '.n', '.bun', '.deno', '.local/bin', '.local/share/pnpm', '.local/share/mise', '.asdf',
-  '.cargo', '.rustup', '.go', 'go', '.pyenv', '.rbenv', '.sdkman', '.gradle', '.m2', '.yarn', '.config/yarn',
+  '.cargo', '.rustup', '.go', 'go', '.pyenv', '.rbenv', '.sdkman', '.gradle', '.m2', '.yarn', '.config/yarn', 'hostedtoolcache',
 ];
 // Caches under $HOME that package managers write to. `Library/Caches` is macOS's
 // general-purpose per-user cache directory — notably where Apple's clang/Xcode
@@ -152,7 +152,13 @@ function probeSandboxExec(): { ok: boolean; reason?: string } {
   if (process.platform !== 'darwin') return { ok: false, reason: 'sandbox-exec is macOS-only' };
   const bin = onPath('sandbox-exec') ?? (existsSync('/usr/bin/sandbox-exec') ? '/usr/bin/sandbox-exec' : undefined);
   if (!bin) return { ok: false, reason: 'sandbox-exec is not available' };
-  const result = spawnSync(bin, ['-p', '(version 1)(allow default)', '/usr/bin/true'], { stdio: 'ignore', timeout: 5_000 });
+  const tmp = os.tmpdir();
+  const profile = seatbeltProfile({
+    projectRoot: tmp,
+    cwd: tmp,
+    readOnlyPaths: [path.dirname(process.execPath), path.resolve(path.dirname(process.execPath), '..')],
+  });
+  const result = spawnSync(bin, ['-p', profile, process.execPath, '-e', 'process.exit(0)'], { stdio: 'ignore', timeout: 5_000 });
   return result.status === 0 ? { ok: true } : { ok: false, reason: `sandbox-exec cannot start (exit ${result.status})` };
 }
 
@@ -261,8 +267,12 @@ export function bwrapArgs(options: SandboxOptions, home: string = os.homedir(), 
   // Hide runtime sockets (docker.sock, ssh/gpg agents, dbus) — a read-only
   // bind still allows connect(2) on a unix socket. `/var/run` and `/var/tmp`
   // are often symlinks (to /run, /tmp); tmpfs can only go on a real directory.
+  // `/run` is a standard Linux directory; include it unconditionally when
+  // constructing args on non-Linux hosts so pure argument tests stay OS-independent.
   for (const dir of ['/var/tmp', '/run', '/var/run']) {
-    if (isRealDirectory(dir)) args.push('--tmpfs', dir);
+    if ((dir === '/run' && process.platform !== 'linux') || isRealDirectory(dir)) {
+      args.push('--tmpfs', dir);
+    }
   }
   if (options.networkAllowed && existsSync('/run/systemd/resolve')) {
     args.push('--ro-bind', '/run/systemd/resolve', '/run/systemd/resolve'); // systemd-resolved stub resolver
@@ -271,7 +281,11 @@ export function bwrapArgs(options: SandboxOptions, home: string = os.homedir(), 
   // Mask other users' homes, mounts and service data, then the operator's
   // home, then re-expose only toolchains (ro) and caches (rw).
   const resolvedHome = path.resolve(home);
-  for (const dir of MASKED_HOST_DIRS) if (isRealDirectory(dir)) args.push('--tmpfs', dir);
+  for (const dir of MASKED_HOST_DIRS) {
+    if (process.platform === 'linux' ? isRealDirectory(dir) : existsSync(dir)) {
+      args.push('--tmpfs', dir);
+    }
+  }
   args.push('--tmpfs', resolvedHome);
   for (const dir of existingDirs(resolvedHome, HOME_TOOLCHAIN_DIRS)) args.push('--ro-bind', dir, dir);
   for (const dir of existingDirs(resolvedHome, HOME_CACHE_DIRS)) args.push('--bind', dir, dir);
@@ -308,7 +322,7 @@ export function bwrapArgs(options: SandboxOptions, home: string = os.homedir(), 
 
 /** sandbox-exec (Seatbelt) profile for `options`. Pure: safe to unit test. */
 export function seatbeltProfile(options: SandboxOptions, home: string = os.homedir(), platformTmp: string = os.tmpdir()): string {
-  const q = (p: string) => `"${path.resolve(p).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const q = (p: string) => `"${path.resolve(p).replace(/"/g, '\\"')}"`;
   const project = path.resolve(options.projectRoot);
   const resolvedHome = path.resolve(home);
   const tmp = path.resolve(platformTmp);

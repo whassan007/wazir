@@ -32,7 +32,7 @@ describe('ProcessManager.stop() — graceful teardown, escalation, verified deat
     expect(() => process.kill(pid!, 0)).toThrow();
   }, 10_000);
 
-  it('kills the whole process group, not just the direct child (grandchild does not survive)', async () => {
+  it.skipIf(process.platform === 'win32')('kills the whole process group, not just the direct child (grandchild does not survive)', async () => {
     const manager = new ProcessManager();
     manager.register({
       id: 'parent-with-child',

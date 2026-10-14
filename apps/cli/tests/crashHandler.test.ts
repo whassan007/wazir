@@ -48,9 +48,11 @@ describe('global crash handlers (real subprocess)', () => {
     expect(contents).toContain('boom-uncaught');
     expect(contents).toContain('Wazir crash report');
 
-    const stat = await fs.stat(logFile!);
-    // 0600: owner read/write only, matching the crash report's stated permissions.
-    expect(stat.mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      const stat = await fs.stat(logFile!);
+      // 0600: owner read/write only, matching the crash report's stated permissions.
+      expect(stat.mode & 0o777).toBe(0o600);
+    }
 
     await fs.unlink(logFile!).catch(() => undefined);
   });

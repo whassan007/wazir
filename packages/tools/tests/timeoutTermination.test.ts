@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Tool } from '@wazir/core';
@@ -19,9 +19,11 @@ describe('tool timeout terminates the process and determines the outcome', () =>
   afterEach(async () => { vi.useRealTimers(); await rm(root, { recursive: true, force: true }); });
 
   it('kills a timed-out shell command: TOOL_TIMEOUT with observed mutations, and no later side effect', async () => {
+    const script = join(root, 'hang.cjs');
+    await writeFile(script, 'const fs = require("fs"); fs.writeFileSync("early.txt", "early"); setTimeout(() => fs.writeFileSync("late.txt", "late"), 2000);\n');
     const quickShell: Tool = { descriptor: { ...shellTool.descriptor, name: 'quick_shell', timeoutMs: 300 }, execute: shellTool.execute };
     const registry = new ToolRegistry([quickShell]);
-    const result = await executeTool(registry, 'quick_shell', { command: 'echo early > early.txt; sleep 2; echo late > late.txt' }, { projectRoot: root, verifyWorkspace: true });
+    const result = await executeTool(registry, 'quick_shell', { command: `"${process.execPath}" "${script}"` }, { projectRoot: root, verifyWorkspace: true });
 
     expect(result.ok).toBe(false);
     expect(result.failureClass).toBe('TOOL_TIMEOUT');

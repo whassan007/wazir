@@ -30,7 +30,9 @@ describe('wa agents check', () => {
     const engine = engineWith({ good: 'normal', bad: 'session-error' });
     const first = await checkAgents(engine, [], { file });
     expect(first.map((r) => [r.agent, r.status]).sort()).toEqual([['bad', 'FAILED'], ['good', 'READY']]);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    }
 
     const cached = await checkAgents(engine, ['good'], { file });
     expect(cached[0].checkedAt).toBe(first.find((r) => r.agent === 'good')!.checkedAt);

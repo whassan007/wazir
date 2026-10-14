@@ -176,11 +176,20 @@ function acpAgentSpecs(): Array<{ name: string; description: string; requires: s
 }
 
 async function detectOpenCode(): Promise<boolean> {
+  if (!onPath('opencode')) return false;
   try {
-    await execFileAsync('opencode', ['--version'], { timeout: 3_000 });
+    await execFileAsync(process.platform === 'win32' ? 'opencode.cmd' : 'opencode', ['--version'], {
+      timeout: 3_000,
+      shell: process.platform === 'win32',
+    });
     return true;
   } catch {
-    return false;
+    try {
+      await execFileAsync('opencode', ['--version'], { timeout: 3_000, shell: process.platform === 'win32' });
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

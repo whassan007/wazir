@@ -428,7 +428,7 @@ export class CheckpointService {
         if (entry.isDirectory()) {
           await walk(fullPath);
         } else if (entry.isFile()) {
-          const relPath = path.relative(workspaceRoot, fullPath);
+          const relPath = path.relative(workspaceRoot, fullPath).replace(/\\/g, '/');
           try {
             const content = await fs.readFile(fullPath, 'utf8');
             snapshot[relPath] = content;

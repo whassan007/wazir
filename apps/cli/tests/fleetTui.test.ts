@@ -327,7 +327,10 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.sendLine('/fanout setup database; build auth endpoints; write e2e tests');
 
     // Allow orchestrator to pick up tasks and start agents
-    await new Promise((r) => setTimeout(r, 60));
+    const startDeadline = Date.now() + 5_000;
+    while (harness.tui.getAgents().length < 3 && Date.now() < startDeadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
 
     const agents = harness.tui.getAgents();
     expect(agents).toHaveLength(3);
@@ -351,8 +354,15 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.sendKey('\x1b');
     expect(harness.tui.getCurrentView()).toBe('fleet');
 
-    // Wait for tasks to complete
-    await new Promise((r) => setTimeout(r, 100));
+    // Wait for tasks and job rollup to complete (avoiding fixed-sleep race on slower CI runners)
+    const doneDeadline = Date.now() + 10_000;
+    while (
+      Date.now() < doneDeadline &&
+      (harness.tui.getAgents().filter((a) => a.status === 'completed').length < 3 ||
+        harness.tui.getCurrentJob()?.status !== 'completed')
+    ) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
 
     const job = harness.tui.getCurrentJob();
     expect(job).toBeDefined();

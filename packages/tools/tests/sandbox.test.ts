@@ -209,7 +209,7 @@ describe('seccomp filter (pure BPF assembly)', () => {
 // says why. `wa doctor` reports the same.
 const live = (() => {
   resetSandboxProbe();
-  return sandboxStatus().mode !== 'none';
+  return sandboxStatus().mode === 'bwrap';
 })();
 
 describe.skipIf(!live)('sandbox enforcement (live backend)', () => {

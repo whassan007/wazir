@@ -84,6 +84,15 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - name: Ensure node-pty helper is executable on macOS
+        if: runner.os == 'macOS'
+        run: |
+          helpers="$(find node_modules/node-pty -name 'spawn-helper')"
+          if [ -z "$helpers" ]; then
+            echo "ERROR: no node-pty spawn-helper binary found under node_modules/node-pty" >&2
+            exit 1
+          fi
+          find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} +
       - run: npm run build
       - run: npm run typecheck
       - name: Package check (pack, inspect, scan, install, smoke, upgrade, uninstall)
@@ -95,12 +104,10 @@ jobs:
           path: dist/package-check-*.json
           if-no-files-found: ignore
 
-  # The existing test suite has only ever run on Linux. It runs here on macOS and Windows so
-  # the results are visible; it does not gate merges until those platforms are green.
+  # Full unit, integration, and acceptance suite on macOS and Windows.
   tests-other-os:
     name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -112,11 +119,19 @@ jobs:
           node-version: 22.x
           cache: npm
       - run: npm ci
+      - name: Ensure node-pty helper is executable on macOS
+        if: runner.os == 'macOS'
+        run: |
+          helpers="$(find node_modules/node-pty -name 'spawn-helper')"
+          if [ -z "$helpers" ]; then
+            echo "ERROR: no node-pty spawn-helper binary found under node_modules/node-pty" >&2
+            exit 1
+          fi
+          find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} +
       - run: npm run build
       - name: Unit and integration tests
         run: npx vitest run --reporter=default --reporter=json --outputFile=vitest-${{ matrix.os }}.json
       - name: Acceptance gates
-        if: always()
         run: npm run test:plan:acceptance
       - uses: actions/upload-artifact@v4
         if: always()
