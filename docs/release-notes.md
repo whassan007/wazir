@@ -1,3 +1,27 @@
+# Wazir Release Notes — Unreleased
+
+## Interactive ACP sessions
+
+Wazir's ACP client supports meaningful continuation across ordered prompt turns while
+retaining one upstream session identity. Callers can inspect lifecycle state and consume
+ordered timeline and tool telemetry callbacks. Session loading is available only when an
+agent advertises ACP `loadSession`; live in-memory records are not a persistent session store.
+
+Steering during an active generation is queued for the next prompt because stable ACP v1
+does not define a general mid-turn steering request. Cancellation records queued instructions
+that were not delivered. ACP tool results now use agent-reported output and Wazir-measured
+elapsed time when available; unknown duration is represented in metadata as `null`.
+
+Permission requests remain fail-closed and one-time grants must match an offered ACP option.
+Embedding services must persist session/timeline data and bind approvals to the session, task,
+workspace, operation and expiry. See [ACP session integration](acp-sessions.md).
+
+Validation for this workstream: 31 ACP tests passed using disposable stdio protocol fixtures,
+including cancellation and process-tree cleanup. Tests against real Codex, Claude Code and
+Antigravity accounts were not run; vendor support and readiness vary by adapter and account.
+
+---
+
 # Wazir Release Notes - v0.1.63
 
 **Release**: `v0.1.63`

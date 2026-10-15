@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Interactive ACP sessions
+
+- Added ordered multi-turn ACP sessions with stable session IDs, session status,
+  timeline callbacks, advertised mode capabilities, and capability-gated session loading.
+- Added safe steering as a queued follow-up turn. Undelivered messages are recorded as
+  failed when cancellation occurs; stable ACP does not define general mid-turn injection.
+- Corrected ACP tool telemetry to deduplicate tool updates and use reported output and
+  measured durations when available. Unknown duration is preserved as `null` metadata.
+- Documented the session API, vendor capability differences, and the higher-level durable
+  permission-broker integration contract in `docs/acp-sessions.md`.
+- Added lifecycle tests. ACP tests use a disposable stdio agent; live vendor qualification
+  remains unverified for this change.
+
 ## v0.1.63 — 2026-10-14
 
 **Release**: `v0.1.63`
