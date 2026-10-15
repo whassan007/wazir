@@ -108,7 +108,7 @@ export class AcpAgentAdapter implements AgentAdapter {
       wake?.();
     };
     let answer = '';
-    const toolTitles = new Map<string, string>();
+    const toolCalls = new Map<string, { title: string; startedAt?: number; terminal: boolean; emitted: boolean }>();
 
     const client = new AcpClientAdapter({
       name: this.spec.name,
@@ -127,14 +127,29 @@ export class AcpAgentAdapter implements AgentAdapter {
             break;
           case 'tool_call': {
             const title = String(u.title ?? u.toolCallId ?? 'tool');
-            if (u.toolCallId) toolTitles.set(String(u.toolCallId), title);
-            push({ kind: 'tool_call', tool: String(u.kind ?? 'other'), toolInput: { title, ...(u.rawInput ? { input: u.rawInput } : {}) } });
+            if (u.toolCallId) {
+              const id = String(u.toolCallId);
+              const prior = toolCalls.get(id);
+              if (prior) { prior.title = title; break; }
+              toolCalls.set(id, { title, startedAt: Date.now(), terminal: false, emitted: true });
+            }
+            push({ kind: 'tool_call', tool: String(u.kind ?? 'other'), toolInput: { ...(u.toolCallId ? { callId: String(u.toolCallId) } : {}), title, ...(u.rawInput ? { input: u.rawInput } : {}) } });
             break;
           }
           case 'tool_call_update':
-            if (u.status === 'completed' || u.status === 'failed') {
-              const title = String(u.title ?? toolTitles.get(String(u.toolCallId)) ?? 'tool');
-              push({ kind: 'tool_result', tool: title, toolResult: { ok: u.status === 'completed', output: title, durationMs: 0 } });
+            if (['completed', 'failed', 'cancelled'].includes(String(u.status))) {
+              const id = String(u.toolCallId ?? '');
+              const prior = toolCalls.get(id);
+              if (!prior?.terminal) {
+                if (prior) prior.terminal = true;
+                const title = String(u.title ?? prior?.title ?? id ?? 'tool');
+                if (!prior?.emitted) push({ kind: 'tool_call', tool: String(u.kind ?? 'other'), toolInput: { ...(id ? { callId: id } : {}), title, ...(u.rawInput ? { input: u.rawInput } : {}) } });
+                const content = Array.isArray(u.content) ? u.content.map((item: any) => item?.type === 'content' && item.content?.type === 'text' ? item.content.text : item?.type === 'text' ? item.text : '').filter(Boolean).join('\n') : '';
+                const output = typeof u.rawOutput === 'string' ? u.rawOutput : content;
+                const durationMs = prior?.startedAt === undefined ? 0 : Math.max(0, Date.now() - prior.startedAt);
+                const status = String(u.status);
+                push({ kind: 'tool_result', tool: title, toolResult: { ok: status === 'completed', output, durationMs, metadata: { acpToolCallId: id || undefined, acpStatus: status, durationMs: prior?.startedAt === undefined ? null : durationMs, ...(u.rawOutput !== undefined ? { rawOutput: u.rawOutput } : {}) }, ...(['failed', 'cancelled'].includes(status) ? { error: `ACP tool reported ${status}` } : {}) } });
+              }
             }
             break;
           case 'plan':

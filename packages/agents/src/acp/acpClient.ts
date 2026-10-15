@@ -30,10 +30,39 @@ export const ACP_INIT_TIMEOUT_MS = 30_000;
 const KILL_GRACE_MS = 2_000;
 const MAX_PENDING_PROMPTS = 8;
 
+export type AcpSessionStatus = 'idle' | 'generating' | 'tool' | 'permission' | 'completed' | 'cancelled' | 'disconnected' | 'failed';
+export interface AcpSessionMessage {
+  sequence: number;
+  id: string;
+  kind: 'user' | 'assistant' | 'tool' | 'permission' | 'status';
+  text: string;
+  status: 'queued' | 'sent' | 'completed' | 'failed';
+  at: number;
+}
+export interface AcpSessionCapabilities {
+  loadSession: boolean;
+  availableModes: Array<{ id: string; name: string }>;
+  currentModeId?: string;
+  steering: 'queued_follow_up';
+}
+export interface AcpToolTelemetry {
+  toolCallId: string;
+  kind?: string;
+  title?: string;
+  status?: string;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs: number | null;
+  rawInput?: unknown;
+  rawOutput?: unknown;
+  permissionDecision?: 'granted' | 'denied';
+}
+
 export interface AcpConnectionLike {
-  initialize(params: Record<string, unknown>): Promise<Record<string, unknown>>;
+  initialize(params: Record<string, unknown>): Promise<Record<string, any>>;
   authenticate?(params: Record<string, unknown>): Promise<unknown>;
   newSession(params: Record<string, unknown>): Promise<Record<string, unknown>>;
+  loadSession?(params: Record<string, unknown>): Promise<Record<string, unknown>>;
   prompt(params: Record<string, unknown>): Promise<{ stopReason?: string }>;
   cancel(params: Record<string, unknown>): Promise<void>;
   setSessionMode?(params: Record<string, unknown>): Promise<unknown>;
@@ -55,6 +84,8 @@ export interface AcpClientOptions {
   onActivity?: (activity: SubagentActivity) => void;
   /** Raw ACP `session/update` payloads (the `update` object), for adapters that map them. */
   onSessionUpdate?: (sessionId: string, update: Record<string, unknown>) => void;
+  onTimelineEvent?: (sessionId: string, event: AcpSessionMessage) => void;
+  onToolTelemetry?: (sessionId: string, tool: AcpToolTelemetry) => void;
   /** Bound for spawn + `initialize`; an `npx`-launched bridge may need to download first. */
   initTimeoutMs?: number;
   onRequestPermission?: (request: {
@@ -75,6 +106,11 @@ export interface AcpSessionState {
   activeJobRef?: string;
   pendingPrompts: Array<{ jobRef: string; text: string }>;
   cwd?: string;
+  status: AcpSessionStatus;
+  sequence: number;
+  messages: AcpSessionMessage[];
+  tools: Map<string, AcpToolTelemetry>;
+  capabilities: AcpSessionCapabilities;
 }
 
 export class AcpClientAdapter {
@@ -89,6 +125,7 @@ export class AcpClientAdapter {
   private detached = false;
   /** Auth method ids the agent advertised in `initialize`. */
   private authMethodIds: string[] = [];
+  private agentCapabilities: Record<string, any> = {};
   private stderrTail = '';
 
   /** Last ~4 KB of the agent's stderr, for diagnosing startup or protocol failures. */
@@ -111,9 +148,12 @@ export class AcpClientAdapter {
     if (this.options.connect) {
       this.generation += 1;
       const client = this.buildClient();
+      this.agentCapabilities = { loadSession: false };
       this.connection = await this.options.connect(client, () => {
         this.handleProcessExit();
       });
+      // Injected connections intentionally advertise no optional capabilities unless the test
+      // or embedding caller exposes them on the returned initialize result by other means.
       return this.connection;
     }
 
@@ -183,6 +223,7 @@ export class AcpClientAdapter {
       ]);
       const methods = (init as { authMethods?: Array<{ id?: unknown }> } | undefined)?.authMethods;
       this.authMethodIds = Array.isArray(methods) ? methods.map((m) => String(m?.id ?? '')).filter(Boolean) : [];
+      this.agentCapabilities = (init as { agentCapabilities?: Record<string, any> } | undefined)?.agentCapabilities ?? {};
     } catch (error) {
       this.signal(child, 'SIGKILL');
       this.handleProcessExit();
@@ -225,6 +266,7 @@ export class AcpClientAdapter {
       throw new Error(`ACP backend '${this.name}' returned invalid sessionId`);
     }
 
+    const modes = (response.modes as { availableModes?: Array<{ id: string; name: string }>; currentModeId?: string } | undefined);
     const state: AcpSessionState = {
       sessionId,
       generation: this.generation,
@@ -232,15 +274,47 @@ export class AcpClientAdapter {
       busy: false,
       pendingPrompts: [],
       cwd,
+      status: 'idle', sequence: 0, messages: [], tools: new Map(),
+      capabilities: { loadSession: Boolean(this.agentCapabilities.loadSession), availableModes: (modes?.availableModes ?? []).map((m) => ({ id: String(m.id), name: String(m.name) })), currentModeId: modes?.currentModeId, steering: 'queued_follow_up' },
     };
     this.sessions.set(sessionId, state);
     return sessionId;
+  }
+
+  /** Loads an existing ACP session only when the agent advertised loadSession. */
+  async loadSession(sessionId: string, opts?: { cwd?: string }): Promise<AcpSessionState> {
+    const conn = await this.ensureConnection();
+    const cwd = opts?.cwd ?? this.options.cwd ?? process.cwd();
+    if (!this.agentCapabilities.loadSession || !conn.loadSession) throw new Error(`ACP agent '${this.name}' does not support session/load`);
+    const response = await conn.loadSession({ sessionId, cwd, mcpServers: [] });
+    const modes = (response.modes as { availableModes?: Array<{ id: string; name: string }>; currentModeId?: string } | undefined);
+    const state: AcpSessionState = {
+      sessionId, generation: this.generation, closed: false, busy: false, pendingPrompts: [], cwd,
+      status: 'idle', sequence: 0, messages: [], tools: new Map(),
+      capabilities: { loadSession: true, availableModes: (modes?.availableModes ?? []).map((m) => ({ id: String(m.id), name: String(m.name) })), currentModeId: modes?.currentModeId, steering: 'queued_follow_up' },
+    };
+    this.sessions.set(sessionId, state);
+    return this.getSessionState(sessionId)!;
+  }
+
+  getSessionState(sessionId: string): AcpSessionState | undefined {
+    const state = this.sessions.get(sessionId);
+    return state ? { ...state, messages: state.messages.map((m) => ({ ...m })), tools: new Map([...state.tools].map(([id, tool]) => [id, { ...tool }])) } : undefined;
+  }
+
+  private record(state: AcpSessionState, kind: AcpSessionMessage['kind'], text: string, status: AcpSessionMessage['status'], id?: string): void {
+    const event = { sequence: ++state.sequence, id: id ?? `${state.sessionId}:${state.sequence}`, kind, text: text.slice(0, 4_000), status, at: Date.now() };
+    state.messages.push(event);
+    this.options.onTimelineEvent?.(state.sessionId, event);
   }
 
   async prompt(sessionId: string, promptText: string): Promise<{ jobRef: string; status: 'accepted' | 'queued' }> {
     const state = this.sessions.get(sessionId);
     if (!state || state.closed || state.generation !== this.generation) {
       throw new Error(`Session ${sessionId} is closed or invalidated`);
+    }
+    if (state.status === 'cancelled' || state.status === 'disconnected' || state.status === 'failed') {
+      throw new Error(`Session ${sessionId} cannot accept a prompt while ${state.status}`);
     }
 
     this.turnSeq += 1;
@@ -256,7 +330,16 @@ export class AcpClientAdapter {
     }
 
     state.pendingPrompts.push({ jobRef, text: promptText });
+    this.record(state, 'user', promptText, 'queued', jobRef);
     return { jobRef, status: 'queued' };
+  }
+
+  /** An active turn cannot be interrupted through stable ACP; steering is a queued follow-up. */
+  steer(sessionId: string, instruction: string): Promise<{ jobRef: string; status: 'accepted' | 'queued' }> {
+    const state = this.sessions.get(sessionId);
+    if (!state || state.closed) throw new Error(`Session ${sessionId} is closed or invalidated`);
+    if (state.status === 'disconnected' || state.status === 'failed' || state.status === 'cancelled') throw new Error(`Session ${sessionId} cannot accept steering while ${state.status}`);
+    return this.prompt(sessionId, instruction);
   }
 
   /**
@@ -272,6 +355,8 @@ export class AcpClientAdapter {
     }
     if (state.busy) throw new Error(`Session ${sessionId} already has an active turn`);
     state.busy = true;
+    state.status = 'generating';
+    this.record(state, 'user', promptText, 'sent');
     try {
       const exited = new Promise<never>((_, reject) => {
         this.child?.once('exit', (code, signal) => reject(new Error(
@@ -282,17 +367,25 @@ export class AcpClientAdapter {
       exited.catch(() => undefined);
       const response = await Promise.race([conn.prompt({ sessionId, prompt: [{ type: 'text', text: promptText }] }), exited]);
       return { stopReason: String(response?.stopReason ?? 'end_turn') };
+    } catch (error) {
+      state.status = 'failed';
+      throw error;
     } finally {
       state.busy = false;
+      if (state.status === 'generating') state.status = 'idle';
     }
   }
 
   async cancelSession(sessionId: string): Promise<void> {
     const state = this.sessions.get(sessionId);
     if (!state || !this.connection) return;
+    state.status = 'cancelled';
+    for (const pending of state.pendingPrompts.splice(0)) this.record(state, 'user', pending.text, 'failed', pending.jobRef);
+    for (const event of state.messages) {
+      if (event.kind === 'user' && event.status === 'queued') event.status = 'failed';
+    }
     await this.connection.cancel({ sessionId });
     state.busy = false;
-    state.pendingPrompts = [];
   }
 
   async close(): Promise<void> {
@@ -332,6 +425,8 @@ export class AcpClientAdapter {
 
     state.busy = true;
     state.activeJobRef = jobRef;
+    state.status = 'generating';
+    this.record(state, 'user', text, 'sent', jobRef);
 
     this.options.onActivity?.({
       at: Date.now(),
@@ -350,14 +445,23 @@ export class AcpClientAdapter {
         kind: 'status',
         text: `Turn ended (${jobRef}): ${response?.stopReason ?? 'completed'}`,
       });
+      state.status = response?.stopReason === 'cancelled' ? 'cancelled' : 'completed';
+      this.record(state, 'status', `Turn ended: ${response?.stopReason ?? 'completed'}`, 'completed', jobRef);
+    } catch (error) {
+      state.status = 'failed';
+      this.record(state, 'status', `Turn failed: ${redactPermissionText(error instanceof Error ? error.message : String(error))}`, 'failed', jobRef);
+      throw error;
     } finally {
       state.busy = false;
       state.activeJobRef = undefined;
 
       // Drain next pending prompt if queued
       const next = state.pendingPrompts.shift();
-      if (next && !state.closed) {
+      if (next && !state.closed && !['cancelled', 'disconnected', 'failed'].includes(state.status)) {
         this.startTurn(state, next.jobRef, next.text);
+      } else if (next) {
+        this.record(state, 'user', next.text, 'failed', next.jobRef);
+        for (const pending of state.pendingPrompts.splice(0)) this.record(state, 'user', pending.text, 'failed', pending.jobRef);
       }
     }
   }
@@ -368,11 +472,13 @@ export class AcpClientAdapter {
         const update = params?.update as Record<string, any> | undefined;
         if (!update || typeof update !== 'object') return;
         this.options.onSessionUpdate?.(String(params.sessionId ?? ''), update);
+        const state = this.sessions.get(String(params.sessionId ?? ''));
+        if (state) this.recordSessionUpdate(state, update);
         const activity = describeSessionUpdate(update);
         if (activity) this.options.onActivity?.({ at: Date.now(), ...activity });
       },
       requestPermission: async (params: Record<string, unknown>) => {
-        const optionsList = Array.isArray(params.options)
+        const optionsList: PermissionOption[] = Array.isArray(params.options)
           ? params.options.filter((o): o is Record<string, unknown> => typeof o === 'object' && o !== null).map(classifyOption)
           : [];
 
@@ -403,7 +509,12 @@ export class AcpClientAdapter {
         // option. No resolver, no decision, a resolver error, or an unknown optionId
         // all deny — a delegated agent must never be approved by default.
         const deny = { outcome: { outcome: 'cancelled' as const } };
-        if (!this.options.onRequestPermission) return deny;
+        const state = this.sessions.get(sessionId);
+        if (!this.options.onRequestPermission) {
+          if (state) this.record(state, 'permission', `${toolKind ?? 'other'}: ${title}`, 'failed', requestId);
+          return deny;
+        }
+        if (state) state.status = 'permission';
         let decision: { optionId?: string; cancelled?: boolean };
         try {
           decision = await this.options.onRequestPermission({
@@ -414,10 +525,17 @@ export class AcpClientAdapter {
             options: optionsList,
           });
         } catch {
+          if (state) this.record(state, 'permission', `${toolKind ?? 'other'}: ${title}`, 'failed', requestId);
           return deny;
         }
-        if (decision.cancelled || !decision.optionId) return deny;
-        if (!optionsList.some((o) => o.optionId === decision.optionId)) return deny;
+        if (decision.cancelled || !decision.optionId || !optionsList.some((o) => o.optionId === decision.optionId)) {
+          if (state) this.record(state, 'permission', `${toolKind ?? 'other'}: ${title}`, 'failed', requestId);
+          return deny;
+        }
+        if (state) {
+          state.status = 'tool';
+          this.record(state, 'permission', `${toolKind ?? 'other'}: ${title}`, 'completed', requestId);
+        }
         return { outcome: { outcome: 'selected', optionId: decision.optionId } };
       },
     };
@@ -429,6 +547,35 @@ export class AcpClientAdapter {
     for (const state of this.sessions.values()) {
       state.closed = true;
       state.busy = false;
+      state.status = 'disconnected';
+    }
+  }
+
+  private recordSessionUpdate(state: AcpSessionState, update: Record<string, any>): void {
+    if (update.sessionUpdate === 'agent_message' || update.sessionUpdate === 'agent_message_chunk') {
+      const text = update.content?.type === 'text' && typeof update.content.text === 'string' ? update.content.text : '';
+      if (text) this.record(state, 'assistant', text, 'completed');
+    }
+    if (update.sessionUpdate === 'tool_call') {
+      const id = String(update.toolCallId ?? '');
+      if (!id) return;
+      const existing = state.tools.get(id);
+      const tool = { ...existing, toolCallId: id, kind: update.kind ?? existing?.kind, title: update.title ?? existing?.title, status: update.status ?? existing?.status, startedAt: existing?.startedAt ?? Date.now(), durationMs: null, rawInput: update.rawInput ?? existing?.rawInput };
+      state.tools.set(id, tool);
+      state.status = 'tool';
+      this.options.onToolTelemetry?.(state.sessionId, { ...tool });
+      this.record(state, 'tool', tool.title ?? id, 'sent', id);
+    } else if (update.sessionUpdate === 'tool_call_update') {
+      const id = String(update.toolCallId ?? '');
+      if (!id) return;
+      const existing = state.tools.get(id) ?? { toolCallId: id, durationMs: null };
+      const isTerminal = ['completed', 'failed', 'cancelled'].includes(String(update.status));
+      const completedAt = isTerminal ? existing.completedAt ?? Date.now() : existing.completedAt;
+      const durationMs = existing.startedAt !== undefined && completedAt !== undefined ? Math.max(0, completedAt - existing.startedAt) : null;
+      const tool = { ...existing, kind: update.kind ?? existing.kind, title: update.title ?? existing.title, status: update.status ?? existing.status, rawInput: update.rawInput ?? existing.rawInput, rawOutput: update.rawOutput ?? existing.rawOutput, completedAt, durationMs };
+      state.tools.set(id, tool);
+      if (isTerminal && !existing.completedAt) this.record(state, 'tool', `${tool.title ?? id}: ${String(update.status)}`, update.status === 'failed' ? 'failed' : 'completed', id);
+      this.options.onToolTelemetry?.(state.sessionId, { ...tool });
     }
   }
 }
