@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.66 — 2026-10-14
+
+**Release**: `v0.1.66`
+**Theme**: Verified integration for parallel coding agents and cross-platform package validation
+
+- Add traceable merge readiness manifests, conflict planning, disposable integration candidates, combined-result qualification, durable recovery journaling, and operator reports for parallel agent worktrees.
+- Fix Windows package archive extraction when the tarball path contains a drive letter.
+
 ## v0.1.65 — 2026-10-14
 
 **Release**: `v0.1.65`
