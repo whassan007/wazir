@@ -94,11 +94,15 @@ describe('EncryptedFileBackend', () => {
     await backend.set('anthropic', 'value');
 
     const dirStat = await fs.stat(dir);
-    expect(dirStat.mode & 0o777).toBe(0o700);
+    if (process.platform !== 'win32') {
+      expect(dirStat.mode & 0o777).toBe(0o700);
+    }
 
     const filePath = path.join(dir, 'credentials.enc.json');
     const fileStat = await fs.stat(filePath);
-    expect(fileStat.mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect(fileStat.mode & 0o777).toBe(0o600);
+    }
   });
 
   it('a corrupted/hand-edited file does not throw — get() returns undefined for the unreadable entry', async () => {

@@ -1,16 +1,94 @@
-import spawn from 'cross-spawn';
-import { killProcessTree, resolveExecutable, getSpawnCommand, sanitizeChildEnvironment } from '@wazir/shared';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { spawnGroupWatchdog } from './processWatchdog.js';
-import {
-  type AgentAdapter,
-  type AgentDescriptor,
-  type AgentRunRequest,
-  type AgentRuntime,
-  type AgentTurn,
-  type TaskType,
+import type {
+  AgentAdapter,
+  AgentDescriptor,
+  AgentRunRequest,
+  AgentRuntime,
+  AgentTurn,
+  TaskType,
 } from '@wazir/core';
 
 const MAX_CAPTURE = 20_000;
+
+function quoteWindowsCmdArg(arg: string): string {
+  if (!arg) return '""';
+  if (!/[\s"&|<>^()]/.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+function findBashOnWindows(envPath?: string): string {
+  const dirs = (envPath ?? process.env.PATH ?? process.env.Path ?? '').split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, 'bash.exe');
+    if (existsSync(candidate)) return candidate;
+  }
+  const fallbacks = [
+    'C:\\Program Files\\Git\\bin\\bash.exe',
+    'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+  ];
+  return fallbacks.find((f) => existsSync(f)) ?? 'bash';
+}
+
+export function resolveExternalCommand(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): { command: string; args: string[]; windowsVerbatimArguments: boolean } {
+  if (process.platform !== 'win32') {
+    return { command, args, windowsVerbatimArguments: false };
+  }
+  const env = options.env ?? process.env;
+  const pathEnv = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? '';
+  const pathExt = (env.PATHEXT ?? process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
+  const hasSep = command.includes('/') || command.includes('\\');
+  const candidates: string[] = [];
+  if (hasSep) {
+    const base = path.isAbsolute(command) ? command : path.resolve(options.cwd ?? process.cwd(), command);
+    candidates.push(base);
+    if (!path.extname(base)) {
+      for (const ext of pathExt) {
+        candidates.push(`${base}${ext}`);
+        candidates.push(`${base}${ext.toLowerCase()}`);
+      }
+    }
+  } else {
+    const dirs = pathEnv.split(path.delimiter).map((d) => d.trim().replace(/^"|"$/g, '')).filter(Boolean);
+    for (const dir of dirs) {
+      const base = path.join(dir, command);
+      if (path.extname(command)) {
+        candidates.push(base);
+      } else {
+        for (const ext of pathExt) {
+          candidates.push(`${base}${ext}`);
+          candidates.push(`${base}${ext.toLowerCase()}`);
+        }
+        candidates.push(base);
+      }
+    }
+  }
+  const resolved = candidates.find((c) => existsSync(c)) ?? command;
+  if (/\.(cmd|bat)$/i.test(resolved)) {
+    const comspec = env.ComSpec || env.COMSPEC || process.env.ComSpec || process.env.COMSPEC || 'cmd.exe';
+    const cmdLine = [quoteWindowsCmdArg(resolved), ...args.map(quoteWindowsCmdArg)].join(' ');
+    return { command: comspec, args: ['/d', '/s', '/c', `"${cmdLine}"`], windowsVerbatimArguments: true };
+  }
+  let isShellScript = /\.sh$/i.test(resolved);
+  if (!isShellScript && existsSync(resolved)) {
+    try {
+      const head = readFileSync(resolved, { encoding: 'utf8', flag: 'r' }).slice(0, 64);
+      if (head.startsWith('#!')) isShellScript = true;
+    } catch {
+      // ignore
+    }
+  }
+  if (isShellScript) {
+    return { command: findBashOnWindows(pathEnv), args: [resolved, ...args], windowsVerbatimArguments: false };
+  }
+  return { command: resolved, args, windowsVerbatimArguments: false };
+}
 
 export interface ExternalAgentSpec {
   name: string;
@@ -54,7 +132,7 @@ export class ExternalAgentAdapter implements AgentAdapter {
   async *run(request: AgentRunRequest, _runtime: AgentRuntime): AsyncIterable<AgentTurn> {
     const args = [...(this.spec.args ?? []), request.taskDescription];
 
-    const timeoutMs = Math.min(this.spec.timeoutMs ?? 600_000, request.maxWallClockMs ?? Infinity);
+    const timeoutMs = this.spec.timeoutMs ?? 600_000;
     const output = await new Promise<string | undefined>((resolve, reject) => {
       let captured = '';
       let stderr = '';
@@ -63,18 +141,32 @@ export class ExternalAgentAdapter implements AgentAdapter {
       // killing only the direct child leaves grandchildren holding the stdout pipe,
       // and 'close' then never fires.
       const detached = process.platform !== 'win32';
-      const spawnCmd = getSpawnCommand(this.spec.command, args, { cwd: request.projectRoot });
-      const child = spawn(spawnCmd.command, spawnCmd.args, {
+      const childEnv = this.spec.env ? { ...process.env, ...this.spec.env } : undefined;
+      const resolved = resolveExternalCommand(this.spec.command, args, { cwd: request.projectRoot, env: childEnv });
+      const child = spawn(resolved.command, resolved.args, {
         cwd: request.projectRoot,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: this.spec.env ? sanitizeChildEnvironment(this.spec.env) : undefined,
+        env: childEnv,
         detached,
-        shell: spawnCmd.useShell,
+        windowsVerbatimArguments: resolved.windowsVerbatimArguments,
       });
       const stop = (reason: 'timeout' | 'cancelled') => {
         if (stopReason) return;
         stopReason = reason;
-        killProcessTree(child.pid, 'SIGKILL', detached);
+        if (process.platform === 'win32' && child.pid !== undefined) {
+          try {
+            spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+            return;
+          } catch {
+            // fall through
+          }
+        }
+        try {
+          if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+          else child.kill('SIGKILL');
+        } catch {
+          try { child.kill('SIGKILL'); } catch { /* already gone */ }
+        }
       };
       // If Wazir itself dies, the detached group must not keep running unsupervised.
       const watchdog = detached && child.pid !== undefined ? spawnGroupWatchdog(process.pid, child.pid) : undefined;
@@ -90,7 +182,10 @@ export class ExternalAgentAdapter implements AgentAdapter {
         if (captured.length < MAX_CAPTURE) captured += chunk.slice(0, MAX_CAPTURE - captured.length);
       };
       child.stdout.setEncoding('utf8').on('data', append);
-      child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-MAX_CAPTURE); });
+      child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+        append(chunk);
+        stderr = (stderr + chunk).slice(-MAX_CAPTURE);
+      });
       child.on('error', (error) => {
         settle();
         reject(error);

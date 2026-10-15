@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+
+/** Injected by scripts/bundle.mjs from package.json (the canonical version); the literal is for unbundled dev runs. */
+declare const __WAZIR_VERSION__: string | undefined;
 import chalk from 'chalk';
 import { registerMCPCommands } from './mcp.js';
 import { registerWebCommands } from './web.js';
@@ -19,7 +22,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version('0.1.63');
+  .version(typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.1.64');
 
 registerMCPCommands(program);
 registerWebCommands(program);
@@ -809,7 +812,9 @@ resourcesCmd.command('validate')
   .description('Check resources.json, account mappings, limits and what admission would do now')
   .option('--profile <profile>', "'default' reports problems; 'production' also requires enforcement and known, configured limits", 'default')
   .option('--json', 'Output the report as JSON')
-  .action(async (options: { profile: string; json?: boolean }) => {
+  .action(async (options: { profile: string; json?: boolean }, cmd: Command) => {
+    // The parent `resources` command also has --json, and commander gives it the flag.
+    options.json = options.json ?? cmd.parent?.opts().json;
     if (options.profile !== 'default' && options.profile !== 'production') { console.error("--profile must be 'default' or 'production'"); process.exit(2); }
     const { createEngine } = await import('./engine.js');
     const { validateResourceSetup } = await import('@wazir/core');

@@ -383,7 +383,7 @@ export class CodeIntelligenceService {
   }
 
   private extractPackage(relativePath: string): string | undefined {
-    const parts = relativePath.split(path.sep);
+    const parts = relativePath.split(/[/\\]/);
     if (parts[0] === 'packages' && parts.length > 1) {
       return `packages/${parts[1]}`;
     }

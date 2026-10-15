@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AgentRegistry, Scheduler, ComputerRegistry, RuntimeRegistry, ModelRegistry, type Task } from '@wazir/core';
-import { ExternalAgentAdapter, type ExternalAgentSpec } from '../src/externalAgent.js';
+import { ExternalAgentAdapter, resolveExternalCommand, type ExternalAgentSpec } from '../src/externalAgent.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -23,7 +23,7 @@ describe('Section 11: External Agent (OpenCode) Suite', () => {
     }
   });
 
-  describe.skipIf(process.platform === 'win32')('Detection: binary presence on PATH', () => {
+  describe('Detection: binary presence on PATH', () => {
     it('detects binary when present on PATH and returns false when absent', async () => {
       scratchDir = await tempDir();
       const isWin = process.platform === 'win32';
@@ -32,16 +32,25 @@ describe('Section 11: External Agent (OpenCode) Suite', () => {
       // Create a mock executable binary
       const scriptContent = isWin
         ? `@echo off\r\nif "%~1"=="--version" (\r\n  echo opencode version 0.5.2\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n`
-        : `#!/usr/bin/env bash\nif [ "$1" = "--version" ]; then\n  echo "opencode version 0.5.2"\n  exit 0\nfi\nexit 1\n`;
-
+        : `#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then
+  echo "opencode version 0.5.2"
+  exit 0
+fi
+exit 1
+`;
       await fs.writeFile(fakeBinPath, scriptContent, { mode: 0o755 });
 
       const checkDetection = async (pathEnv: string): Promise<boolean> => {
         try {
-          await execFileAsync(isWin ? 'opencode.cmd' : 'opencode', ['--version'], {
-            env: { ...process.env, PATH: pathEnv },
+          const resolved = resolveExternalCommand('opencode', ['--version'], {
+            env: { ...process.env, PATH: pathEnv, Path: pathEnv },
+          });
+          if (isWin && resolved.command === 'opencode') return false;
+          await execFileAsync(resolved.command, resolved.args, {
+            env: { ...process.env, PATH: pathEnv, Path: pathEnv },
             timeout: 2000,
-            shell: isWin,
+            windowsVerbatimArguments: resolved.windowsVerbatimArguments,
           });
           return true;
         } catch {
@@ -54,7 +63,8 @@ describe('Section 11: External Agent (OpenCode) Suite', () => {
       expect(absent).toBe(false);
 
       // When present on PATH
-      const present = await checkDetection(`${scratchDir}${path.delimiter}${process.env.PATH ?? ''}`);
+      const hostPath = process.env.PATH ?? process.env.Path ?? '';
+      const present = await checkDetection(`${scratchDir}${path.delimiter}${hostPath}`);
       expect(present).toBe(true);
     });
   });
@@ -247,30 +257,28 @@ describe('Section 11: External Agent (OpenCode) Suite', () => {
     });
   });
 
-  describe.skipIf(process.platform === 'win32')('Invocation Shape: flags, prompt delivery, working dir', () => {
+  describe('Invocation Shape: flags, prompt delivery, working dir', () => {
     it('executes external command with exact args, task description, and projectRoot cwd', async () => {
       scratchDir = await tempDir();
       const isWin = process.platform === 'win32';
       const fakeBinaryPath = path.join(scratchDir, isWin ? 'fake-opencode.cmd' : 'fake-opencode.sh');
+      const helperScriptPath = path.join(scratchDir, 'record-invocation.cjs');
       const logFilePath = path.join(scratchDir, 'invocation-log.json');
-      const escapedLog = logFilePath.replace(/\\/g, '\\\\');
 
-      // Create fake opencode binary that logs argv and cwd to a JSON file
+      await fs.writeFile(
+        helperScriptPath,
+        `const fs = require('node:fs');
+const data = { args: process.argv.slice(2), cwd: process.cwd() };
+fs.writeFileSync(${JSON.stringify(logFilePath)}, JSON.stringify(data), 'utf8');
+console.log('OpenCode session completed successfully');
+`,
+        'utf8',
+      );
+
       const scriptContent = isWin
-        ? `@echo off\r\nnode -e "const fs = require('fs'); const data = { args: process.argv.slice(1), cwd: process.cwd() }; fs.writeFileSync('${escapedLog}', JSON.stringify(data));" %*\r\necho OpenCode session completed successfully\r\nexit /b 0\r\n`
-        : `#!/usr/bin/env bash
-python3 -c "
-import sys, json, os
-data = {
-    'args': sys.argv[1:],
-    'cwd': os.getcwd()
-}
-with open('${logFilePath}', 'w') as f:
-    json.dump(data, f)
-" "$@"
-echo "OpenCode session completed successfully"
-exit 0
-`;
+        ? `@echo off\r\n"${process.execPath}" "${helperScriptPath}" %*\r\nexit /b %ERRORLEVEL%\r\n`
+        : `#!/usr/bin/env bash\n"${process.execPath}" "${helperScriptPath}" "$@"\n`;
+
       await fs.writeFile(fakeBinaryPath, scriptContent, { mode: 0o755 });
 
       const targetProjectDir = path.join(scratchDir, 'target-project');
@@ -311,10 +319,8 @@ exit 0
       // Verify exact arguments: configured args + taskDescription appended
       expect(log.args).toEqual(['run', '--format', 'json', 'Implement feature X in src/feature.ts']);
 
-      // Verify working directory matches projectRoot exactly
-      const realCwd = await fs.realpath(log.cwd);
-      const realTarget = await fs.realpath(targetProjectDir);
-      expect(realCwd).toBe(realTarget);
+      // Verify working directory matches projectRoot (resolving macOS /var -> /private/var symlink)
+      expect(await fs.realpath(log.cwd)).toBe(await fs.realpath(targetProjectDir));
     });
 
     it('propagates failure exit code cleanly', async () => {
@@ -324,8 +330,10 @@ exit 0
 
       const scriptContent = isWin
         ? `@echo off\r\necho Fatal error: syntax error in config 1>&2\r\nexit /b 42\r\n`
-        : `#!/usr/bin/env bash\necho "Fatal error: syntax error in config" >&2\nexit 42\n`;
-
+        : `#!/usr/bin/env bash
+echo "Fatal error: syntax error in config" >&2
+exit 42
+`;
       await fs.writeFile(failingBinary, scriptContent, { mode: 0o755 });
 
       const adapter = new ExternalAgentAdapter({

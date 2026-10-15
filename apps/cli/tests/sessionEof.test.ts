@@ -126,9 +126,14 @@ interface PtyResult {
 }
 
 /**
- * Run `wa chat` under a real pseudo-terminal via ptyDriver.py.
+ * Run `wa chat` under a real pseudo-terminal via ptyDriver.py on POSIX,
+ * or via node-pty (Windows ConPTY) on Windows where Python's `fcntl`/`pty`/`termios`
+ * stdlib modules do not exist.
  */
 async function runPtyChat(script: Record<string, unknown>, env: NodeJS.ProcessEnv): Promise<PtyResult> {
+  if (process.platform === 'win32') {
+    return runConPtyChat(script, env);
+  }
   await fs.access(ptyDriver).catch(() => {
     throw new Error(`${ptyDriver} is missing — this test drives the TUI through a PTY`);
   });
@@ -141,11 +146,11 @@ async function runPtyChat(script: Record<string, unknown>, env: NodeJS.ProcessEn
     stepTimeout: 15,
   };
 
-  const { stdout, stderr } = await execFileAsync(
+  const { stdout } = await execFileAsync(
     'python3',
     [ptyDriver, '--json', JSON.stringify(full), '--', process.execPath, cliEntry, 'chat'],
     { env: { ...process.env, ...env }, maxBuffer: 8 * 1024 * 1024 },
-  ).catch((err: { stdout?: string; stderr?: string }) => {
+  ).catch((err: { stdout?: string; stderr?: string; message?: string }) => {
     // The driver always emits one JSON line on stdout, even when a step fails.
     const out = (err?.stdout ?? '').trim();
     if (out) {
@@ -163,6 +168,112 @@ async function runPtyChat(script: Record<string, unknown>, env: NodeJS.ProcessEn
   const parsed = JSON.parse(jsonLine);
   if (parsed.error) throw new Error(`ptyDriver: ${parsed.error}`);
   return parsed as PtyResult;
+}
+
+async function runConPtyChat(script: Record<string, unknown>, env: NodeJS.ProcessEnv): Promise<PtyResult> {
+  const { createRequire } = await import('node:module');
+  const req = createRequire(import.meta.url);
+  const nodePty = req('node-pty') as typeof import('node-pty');
+
+  const cols = typeof script.cols === 'number' ? script.cols : 200;
+  const rows = typeof script.rows === 'number' ? script.rows : 50;
+  const defaultTimeout = typeof script.stepTimeout === 'number' ? script.stepTimeout : 15;
+  const steps = (script.steps as Array<Record<string, unknown>>) ?? [];
+
+  const mergedEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries({ ...process.env, ...env })) {
+    if (v !== undefined) mergedEnv[k] = v;
+  }
+
+  const ptyProc = nodePty.spawn(process.execPath, [cliEntry, 'chat'], {
+    name: 'xterm-256color',
+    cols,
+    rows,
+    cwd: process.cwd(),
+    env: mergedEnv,
+  });
+
+  let rawOutput = '';
+  let strippedOutput = '';
+  let alive = true;
+  let exitCode: number | null = null;
+  let signalName: string | null = null;
+  let killed = false;
+  const results: Array<{ op: string; ok: boolean; detail?: string }> = [];
+
+  const stripAnsi = (s: string) =>
+    s.replace(/\u001b\[[0-9;?]*[A-Za-z]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '');
+
+  ptyProc.onData((chunk: string) => {
+    rawOutput += chunk;
+    strippedOutput += stripAnsi(chunk);
+    if (rawOutput.length > 524_288) rawOutput = rawOutput.slice(-262_144);
+    if (strippedOutput.length > 524_288) strippedOutput = strippedOutput.slice(-262_144);
+  });
+
+  ptyProc.onExit((e) => {
+    alive = false;
+    exitCode = e.exitCode;
+    signalName = e.signal !== undefined && e.signal !== 0 ? String(e.signal) : null;
+  });
+
+  const hasNeedle = (needle: string) => rawOutput.includes(needle) || strippedOutput.includes(needle);
+
+  for (const step of steps) {
+    const op = String(step.op ?? '');
+    const rec: { op: string; ok: boolean; detail?: string } = { op, ok: true };
+    try {
+      if (op === 'wait') {
+        const text = String(step.text ?? '');
+        const timeoutSec = typeof step.timeout === 'number' ? step.timeout : defaultTimeout;
+        const deadline = Date.now() + timeoutSec * 1000;
+        while (Date.now() < deadline && !hasNeedle(text) && alive) {
+          await new Promise((r) => setTimeout(r, 40));
+        }
+        const ok = hasNeedle(text);
+        rec.ok = ok;
+        rec.detail = `found=${ok} needle=${JSON.stringify(text)}`;
+      } else if (op === 'send') {
+        ptyProc.write(String(step.data ?? ''));
+        const delayMs = typeof step.delayMs === 'number' ? step.delayMs : 0;
+        if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+      } else if (op === 'resize') {
+        ptyProc.resize(Number(step.cols ?? 80), Number(step.rows ?? 24));
+        await new Promise((r) => setTimeout(r, 200));
+      } else if (op === 'sleep') {
+        await new Promise((r) => setTimeout(r, Number(step.ms ?? 0)));
+      } else if (op === 'exit') {
+        const timeoutSec = typeof step.timeout === 'number' ? step.timeout : defaultTimeout;
+        const deadline = Date.now() + timeoutSec * 1000;
+        while (alive && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 40));
+        }
+        rec.detail = `exitCode=${exitCode} signal=${signalName}`;
+        if (step.expectCode !== undefined && exitCode !== step.expectCode) {
+          rec.ok = false;
+          rec.detail += ` (expected exitCode=${step.expectCode})`;
+        }
+      }
+    } catch (err) {
+      rec.ok = false;
+      rec.detail = `error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    results.push(rec);
+  }
+
+  if (alive) {
+    killed = true;
+    try { ptyProc.kill(); } catch { /* ignore */ }
+  }
+  await new Promise((r) => setTimeout(r, 150));
+
+  return {
+    exitCode,
+    signalName,
+    killed,
+    steps: results,
+    outputTail: rawOutput.slice(-32768),
+  };
 }
 
 describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regression)', () => {
@@ -259,23 +370,30 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
       expect(paletteWait?.ok).toBe(true);
     }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 10_000);
 
-    it('a dead terminal (PTY master closed) exits gracefully — previously hung or crashed exit 1', async () => {
-      const env = await isolatedEnv(dir);
-      const result = await runPtyChat(
-        {
-          steps: [
-            { op: 'wait', text: 'wa>', timeout: 15 },
-            { op: 'closemaster' },
-            { op: 'exit', timeout: 15, expectCode: 0 },
-          ],
-        },
-        env,
-      );
-      // killed=true would mean the app ignored the dead terminal and had to be
-      // SIGKILLed by the driver — the exact hang this suite guards against.
-      expect(result.killed).toBe(false);
-      expect(result.exitCode).toBe(0);
-    }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000);
+    // Closing the POSIX PTY master fd (producing SIGHUP / EIO on the slave fd)
+    // is a POSIX-specific kernel mechanism; Windows ConPTY does not expose a
+    // master fd whose close leaves the child alive to observe EIO on stdout.
+    it.skipIf(process.platform === 'win32')(
+      'a dead terminal (PTY master closed) exits gracefully — previously hung or crashed exit 1',
+      async () => {
+        const env = await isolatedEnv(dir);
+        const result = await runPtyChat(
+          {
+            steps: [
+              { op: 'wait', text: 'wa>', timeout: 15 },
+              { op: 'closemaster' },
+              { op: 'exit', timeout: 15, expectCode: 0 },
+            ],
+          },
+          env,
+        );
+        // killed=true would mean the app ignored the dead terminal and had to be
+        // SIGKILLed by the driver — the exact hang this suite guards against.
+        expect(result.killed).toBe(false);
+        expect(result.exitCode).toBe(0);
+      },
+      STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000,
+    );
 
     it('survives a window resize and still exits 0 on /exit', async () => {
       const env = await isolatedEnv(dir);

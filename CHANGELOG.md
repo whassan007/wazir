@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.64 — 2026-10-14
+
+**Release**: `v0.1.64`
+**Theme**: Complete npm distribution package, cross-platform CI gating, and macOS/Windows parity
+
+- **Publishable npm package (`scripts/pack-npm.mjs` & `scripts/package-check.mjs`)**: Stages a self-contained npm package (`bin/wa.js`, `README.md`, `LICENSE`) with external native modules (`node-pty`, `@napi-rs/keyring`) declared as `optionalDependencies` and zero install lifecycle scripts.
+- **Runtime startup guard & canonical version**: Enforces Node.js `>=22.13.0` with `node:sqlite`, suppresses the experimental SQLite warning on CLI startup, and injects a single canonical version from `package.json`.
+- **Cross-platform CI & test suite gating**: Resolved all 14 macOS and Windows unit, integration, PTY/ConPTY, Seatbelt `file-read-metadata`, and acceptance test failures, and made macOS and Windows test jobs fully gating in `.github/workflows/ci.yml`.
+
 ## v0.1.63 — 2026-10-14
 
 **Release**: `v0.1.63`

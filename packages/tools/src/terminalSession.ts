@@ -1,9 +1,9 @@
+import { execSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type * as nodePtyType from 'node-pty';
 import { Terminal } from '@xterm/headless';
-import { killProcessTree } from '@wazir/shared';
 import { childEnvironment } from './process.js';
 
 let cachedPty: typeof import('node-pty') | null = null;
@@ -11,23 +11,29 @@ let cachedPty: typeof import('node-pty') | null = null;
 export function loadNodePty(): typeof import('node-pty') {
   if (cachedPty) return cachedPty;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    cachedPty = require('node-pty');
     if (process.platform === 'darwin') {
       try {
-        const ptyEntry = require.resolve('node-pty');
-        const ptyDir = path.dirname(ptyEntry);
-        const candidates = [
-          path.join(ptyDir, '..', 'build', 'Release', 'spawn-helper'),
-          path.join(ptyDir, 'build', 'Release', 'spawn-helper'),
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const ptyPkgPath = require.resolve('node-pty/package.json');
+        const ptyRoot = path.dirname(ptyPkgPath);
+        const helperCandidates = [
+          path.join(ptyRoot, 'prebuilds', `darwin-${process.arch}`, 'spawn-helper'),
+          path.join(ptyRoot, 'prebuilds', 'darwin-arm64', 'spawn-helper'),
+          path.join(ptyRoot, 'prebuilds', 'darwin-x64', 'spawn-helper'),
+          path.join(ptyRoot, 'build', 'Release', 'spawn-helper'),
+          path.join(ptyRoot, 'build', 'Debug', 'spawn-helper'),
         ];
-        for (const candidate of candidates) {
-          if (existsSync(candidate)) {
-            try { chmodSync(candidate, 0o755); } catch {}
+        for (const helperPath of helperCandidates) {
+          if (existsSync(helperPath)) {
+            chmodSync(helperPath, 0o755);
           }
         }
-      } catch {}
+      } catch {
+        // Ignore errors when resolving or chmodding helper
+      }
     }
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    cachedPty = require('node-pty');
     return cachedPty!;
   } catch (err) {
     throw new Error(
@@ -105,14 +111,14 @@ export class TerminalSession {
   private readonly marker: string;
   private markerHit: { exitCode: number } | undefined;
   private initialPromptSeen = false;
-  private readyResolver?: () => void;
-  public readonly ready: Promise<void>;
+  private ready: Promise<void>;
+  private resolveReady!: () => void;
 
   constructor(options: TerminalSessionOptions) {
     this.id = `term-${randomBytes(6).toString('hex')}`;
     this.marker = `\u0001WAZIR:${randomBytes(8).toString('hex')}`;
-    this.ready = new Promise<void>((resolve) => {
-      this.readyResolver = resolve;
+    this.ready = new Promise((r) => {
+      this.resolveReady = r;
     });
     this.terminal = new Terminal({
       cols: options.cols ?? 120,
@@ -135,7 +141,7 @@ export class TerminalSession {
     if (existsSync(wazirHome)) normalizedEnv.HOME = wazirHome;
 
     const shell = options.shell ?? (process.platform === 'win32' ? 'powershell.exe' : 'bash');
-    const args = process.platform === 'win32' ? ['-NoLogo', '-NoProfile'] : ['--noprofile'];
+    const args = process.platform === 'win32' ? [] : ['--noprofile'];
     // PROMPT_COMMAND fires after every command completes (before the next
     // prompt is drawn), so a marker printed there is an exact readiness
     // signal, not a heuristic — the shell only runs it once it's back at the
@@ -160,6 +166,13 @@ export class TerminalSession {
 
     this.pty.onData((data: string) => this.onData(data));
     TerminalSessionRegistry.register(this);
+
+    setTimeout(() => {
+      if (!this.initialPromptSeen) {
+        this.initialPromptSeen = true;
+        this.resolveReady();
+      }
+    }, 2000).unref?.();
   }
 
   private incomingBuffer = '';
@@ -169,34 +182,40 @@ export class TerminalSession {
     this.terminal.write(data);
     this.incomingBuffer += data;
 
-    const markerIdx = this.incomingBuffer.indexOf(this.marker);
-    if (markerIdx !== -1) {
-      const after = this.incomingBuffer.slice(markerIdx + this.marker.length);
-      const match = /^:(\d+)(?:\r?\n)?/.exec(after);
-      if (match) {
-        const exitCode = Number(match[1]);
-        const preMarker = this.incomingBuffer.slice(0, markerIdx);
-        this.incomingBuffer = after.slice(match[0].length);
-        this.appendClean(preMarker);
-        if (!this.initialPromptSeen) {
-          this.initialPromptSeen = true;
-          this.readyResolver?.();
+    while (true) {
+      const markerIdx = this.incomingBuffer.indexOf(this.marker);
+      if (markerIdx !== -1) {
+        const after = this.incomingBuffer.slice(markerIdx + this.marker.length);
+        const match = /^:(\d+)(?:\r?\n)?/.exec(after);
+        if (match) {
+          const preMarker = this.incomingBuffer.slice(0, markerIdx);
+          this.incomingBuffer = after.slice(match[0].length);
+          if (!this.initialPromptSeen) {
+            this.initialPromptSeen = true;
+            this.resolveReady();
+          } else {
+            this.markerHit = { exitCode: Number(match[1]) };
+            this.appendClean(preMarker);
+          }
+          continue;
+        }
+        if (after.length < 15 && (!after.includes('\n') || after.startsWith(':'))) {
           return;
         }
-        this.markerHit = { exitCode };
-        return;
       }
-      if (after.length < 15 && (!after.includes('\n') || after.startsWith(':'))) {
-        return;
-      }
+      break;
     }
 
     const controlIdx = this.incomingBuffer.indexOf('\u0001');
     if (controlIdx === -1) {
-      this.appendClean(this.incomingBuffer);
+      if (this.initialPromptSeen) {
+        this.appendClean(this.incomingBuffer);
+      }
       this.incomingBuffer = '';
     } else if (controlIdx > 0) {
-      this.appendClean(this.incomingBuffer.slice(0, controlIdx));
+      if (this.initialPromptSeen) {
+        this.appendClean(this.incomingBuffer.slice(0, controlIdx));
+      }
       this.incomingBuffer = this.incomingBuffer.slice(controlIdx);
     }
   }
@@ -235,15 +254,8 @@ export class TerminalSession {
    */
   async send(input: string, options: { maxWaitMs?: number; newline?: boolean } = {}): Promise<SendResult> {
     if (this.disposed) throw new Error('TERMINAL_SESSION_DISPOSED');
-    if (!this.initialPromptSeen) {
-      await Promise.race([
-        this.ready,
-        new Promise((r) => setTimeout(r, 1000)),
-      ]);
-      this.pending = '';
-      this.pendingBytes = 0;
-      this.pendingNewlines = 0;
-    }
+    await this.ready;
+    if (this.disposed) throw new Error('TERMINAL_SESSION_DISPOSED');
     this.markerHit = undefined;
     const sendAt = Date.now();
     this.pty.write(options.newline === false ? input : `${input}\r`);
@@ -316,14 +328,31 @@ export class TerminalSession {
     let exited = false;
     this.pty.onExit(() => { exited = true; });
 
-    killProcessTree(pid, 'SIGTERM', true);
+    if (process.platform === 'win32') {
+      try {
+        execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
+      } catch {
+        // Ignore if already dead
+      }
+      try { this.pty.kill(); } catch { /* already gone */ }
+    } else {
+      try {
+        // Negative pid targets the whole process group node-pty put the shell
+        // in, so a foreground job the shell spawned dies too, not just bash.
+        process.kill(-pid, 'SIGTERM');
+      } catch {
+        try { this.pty.kill('SIGTERM'); } catch { /* already gone */ }
+      }
+    }
 
     const deadline = Date.now() + disposeGraceMs;
     while (!exited && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 50));
     }
     if (!exited) {
-      killProcessTree(pid, 'SIGKILL', true);
+      if (process.platform !== 'win32') {
+        try { process.kill(-pid, 'SIGKILL'); } catch { /* ignore */ }
+      }
       try { this.pty.kill('SIGKILL'); } catch { /* ignore */ }
     }
   }

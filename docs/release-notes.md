@@ -1,3 +1,12 @@
+# Wazir Release Notes - v0.1.64
+
+**Release**: `v0.1.64`
+**Theme**: Complete npm distribution package, cross-platform CI gating, and macOS/Windows parity
+
+This release merges the npm distribution packaging and verification pipeline (PR #9) with the `v0.1.63` distributed PostgreSQL and worker fault-qualification baseline, resolves all 14 macOS and Windows test and sandbox parity issues, and enables full cross-OS CI gating across Linux, macOS, and Windows.
+
+---
+
 # Wazir Release Notes - v0.1.63
 
 **Release**: `v0.1.63`

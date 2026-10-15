@@ -76,7 +76,7 @@ async function run(body: string, task = 'fix the add function in src/add.js') {
   }
 }
 
-describe.skipIf(process.platform === 'win32')('delegated work is verified by Wazir, not by the agent', () => {
+describe('delegated work is verified by Wazir, not by the agent', () => {
   it('an agent that exits 0 with a wrong fix fails: Wazir runs the tests itself', async () => {
     const { outcome, record } = await run(`echo "exports.add = (a, b) => a * b;" > src/add.js`);
     expect(outcome.success).toBe(false);
@@ -115,7 +115,10 @@ describe.skipIf(process.platform === 'win32')('delegated work is verified by Waz
   }, 60_000);
 
   it('rewriting the test script so the check cannot fail is refused', async () => {
-    const { outcome, record } = await run(`echo "exports.add = (a, b) => a * b;" > src/add.js; node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.scripts.test='true';fs.writeFileSync('package.json',JSON.stringify(p,null,2));"`);
+    const nodeBin = process.execPath.replace(/\\/g, '/');
+    const { outcome, record } = await run(
+      `echo "exports.add = (a, b) => a * b;" > src/add.js; "${nodeBin}" -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.scripts.test='true';fs.writeFileSync('package.json',JSON.stringify(p,null,2));"`,
+    );
     expect(outcome.success).toBe(false);
     expect(record.errors.join('\n')).toMatch(/changed the 'test' script/);
     expect(record.checks.filter((c) => c.name === 'test')).toHaveLength(0);

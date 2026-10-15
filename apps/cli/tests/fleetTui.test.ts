@@ -327,13 +327,12 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.sendLine('/fanout setup database; build auth endpoints; write e2e tests');
 
     // Allow orchestrator to pick up tasks and start agents
-    let agents: any[] = [];
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      agents = harness.tui.getAgents();
-      if (agents.length >= 3) break;
+    const startDeadline = Date.now() + 5_000;
+    while (harness.tui.getAgents().length < 3 && Date.now() < startDeadline) {
+      await new Promise((r) => setTimeout(r, 20));
     }
 
+    const agents = harness.tui.getAgents();
     expect(agents).toHaveLength(3);
     expect(agents.some((a) => a.title.includes('setup database'))).toBe(true);
     expect(agents.some((a) => a.title.includes('build auth endpoints'))).toBe(true);
@@ -355,12 +354,14 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.sendKey('\x1b');
     expect(harness.tui.getCurrentView()).toBe('fleet');
 
-    // Wait for tasks to complete
-    let completedAgent;
-    for (let i = 0; i < 40; i++) {
-      completedAgent = harness.tui.getAgents().find((a) => a.status === 'completed' && a.usage?.total);
-      if (completedAgent) break;
-      await new Promise((r) => setTimeout(r, 50));
+    // Wait for tasks and job rollup to complete (avoiding fixed-sleep race on slower CI runners)
+    const doneDeadline = Date.now() + 10_000;
+    while (
+      Date.now() < doneDeadline &&
+      (harness.tui.getAgents().filter((a) => a.status === 'completed').length < 3 ||
+        harness.tui.getCurrentJob()?.status !== 'completed')
+    ) {
+      await new Promise((r) => setTimeout(r, 25));
     }
 
     const job = harness.tui.getCurrentJob();
@@ -368,6 +369,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // Completed tasks carry the model's token usage (input/output/total) forwarded from
     // the task:completed event — the Tail view should show it, not just status/duration.
+    const completedAgent = harness.tui.getAgents().find((a) => a.status === 'completed');
     expect(completedAgent?.usage?.total).toBeGreaterThan(0);
 
     harness.sendKey('\r');
@@ -447,7 +449,9 @@ describe('FleetTui — interactive terminal UI harness', () => {
     await harness.start();
 
     harness.sendLine('solo job');
-    await new Promise((r) => setTimeout(r, 100));
+    for (let i = 0; i < 60 && !['completed', 'failed'].includes(harness.tui.getCurrentJob()?.status ?? ''); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
     const job = harness.tui.getCurrentJob();
     expect(job).toBeDefined();
 
@@ -493,13 +497,23 @@ describe('FleetTui — interactive terminal UI harness', () => {
     expect(flat[0]).toMatchObject({ category: 'JOBS', id: orphanJob.id });
 
     harness.sendKey('c');
-    await new Promise((r) => setTimeout(r, 10)); // cancelJob() is async
+    for (
+      let i = 0;
+      i < 60 &&
+      (engine.orchestrator.getJob(orphanJob.id)?.status !== 'cancelled' ||
+        !harness.tui.getStatusMessage()?.includes(`Cancelled job ${orphanJob.id}`));
+      i++
+    ) {
+      await new Promise((r) => setTimeout(r, 25)); // cancelJob() is async
+    }
     expect(engine.orchestrator.getJob(orphanJob.id)?.status).toBe('cancelled');
     expect(harness.tui.getStatusMessage()).toContain(`Cancelled job ${orphanJob.id}`);
 
     // Now deletable, since it's no longer active
     harness.sendKey('x');
-    await new Promise((r) => setTimeout(r, 10));
+    for (let i = 0; i < 60 && engine.orchestrator.getJob(orphanJob.id) !== undefined; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
     expect(engine.orchestrator.getJob(orphanJob.id)).toBeUndefined();
 
     harness.stop();
@@ -519,19 +533,19 @@ describe('FleetTui — interactive terminal UI harness', () => {
     await harness.start();
 
     harness.sendLine('quick job');
-    let job;
-    for (let i = 0; i < 40; i++) {
-      job = harness.tui.getCurrentJob();
-      if (job?.status === 'completed') break;
+    for (let i = 0; i < 100 && harness.tui.getCurrentJob()?.status !== 'completed'; i++) {
       await new Promise((r) => setTimeout(r, 50));
     }
+    const job = harness.tui.getCurrentJob();
     expect(job?.status).toBe('completed');
 
     for (let i = 0; i < 5; i++) harness.sendKey('\u001b[A'); // up to the JOBS entry
     expect(harness.tui.getFlatNavItems()[harness.tui.getFlatNavItems().findIndex((it) => it.id === job!.id)]).toBeDefined();
 
     harness.sendKey('c');
-    await new Promise((r) => setTimeout(r, 10));
+    for (let i = 0; i < 60 && !harness.tui.getStatusMessage()?.includes('Could not cancel job'); i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
 
     expect(harness.tui.getStatusMessage()).toContain('Could not cancel job');
     expect(engine.orchestrator.getJob(job!.id)?.status).toBe('completed'); // unchanged
@@ -945,7 +959,9 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // Launch a task prompt which records a block
     harness.sendLine('verify system health');
-    await new Promise((r) => setTimeout(r, 60));
+    for (let i = 0; i < 60 && !harness.getScreenBuffer().includes('[#1 '); i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
 
     // History strip should show the recorded block
     const buf = harness.getScreenBuffer();
@@ -954,7 +970,9 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // Open block modal via /block 1
     harness.sendLine('/block 1');
-    await new Promise((r) => setTimeout(r, 20));
+    for (let i = 0; i < 40 && !harness.getScreenBuffer().includes('BLOCK DETAILS #1'); i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
 
     const modalBuf = harness.getScreenBuffer();
     expect(modalBuf).toContain('BLOCK DETAILS #1');
@@ -1278,7 +1296,9 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // Launch a task prompt
     harness.sendLine('verify service integration');
-    await new Promise((r) => setTimeout(r, 60));
+    for (let i = 0; i < 60 && (!harness.tui.getCurrentJob() || harness.tui.getAgents().length === 0); i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
 
     const job = harness.tui.getCurrentJob()!;
     const jobId = job.id;
@@ -1658,7 +1678,9 @@ describe('FleetTui — interactive terminal UI harness', () => {
     harness.sendLine('/fanout build frontend; run tests');
 
     // Wait for job to register
-    await new Promise((r) => setTimeout(r, 80));
+    for (let i = 0; i < 60 && !harness.tui.getCurrentJob(); i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
 
     const job = harness.tui.getCurrentJob();
     expect(job).toBeDefined();
@@ -1870,7 +1892,9 @@ describe('FleetTui — runtime health visibility and model selection', () => {
     expect((harness.tui as any).selectedModelId).toBe('fake-model');
 
     harness.sendLine('build something');
-    await new Promise((r) => setTimeout(r, 30));
+    for (let i = 0; i < 60 && !harness.tui.getCurrentJob()?.tasks[0]?.execution?.targetModelId; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
 
     const job = harness.tui.getCurrentJob();
     expect(job?.tasks[0]?.execution?.targetModelId).toBe('fake-model');

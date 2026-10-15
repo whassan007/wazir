@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: ${{ matrix.os }} (Node ${{ matrix.node-version }})
@@ -127,3 +130,82 @@ jobs:
             test-plan-report.json
             agent-execution-test-plan-report.json
           if-no-files-found: ignore
+
+  # The published npm package, installed and run the way users get it, on every OS, natively
+  # (PowerShell/cmd on Windows, no WSL). Linux also runs the minimum supported Node exactly.
+  package:
+    name: Package (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: 22.x }
+          - { os: ubuntu-latest, node: 22.13.0 }
+          - { os: macos-latest, node: 22.x }
+          - { os: windows-latest, node: 22.x }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Ensure node-pty helper is executable on macOS
+        if: runner.os == 'macOS'
+        run: |
+          helpers="$(find node_modules/node-pty -name 'spawn-helper')"
+          if [ -z "$helpers" ]; then
+            echo "ERROR: no node-pty spawn-helper binary found under node_modules/node-pty" >&2
+            exit 1
+          fi
+          find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} +
+      - run: npm run build
+      - run: npm run typecheck
+      - name: Package check (pack, inspect, scan, install, smoke, upgrade, uninstall)
+        run: npm run package:check -- --skip-build
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: package-check-${{ matrix.os }}-${{ matrix.node }}
+          path: dist/package-check-*.json
+          if-no-files-found: ignore
+
+  # Full unit, integration, and acceptance suite on macOS and Windows.
+  tests-other-os:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - name: Ensure node-pty helper is executable on macOS
+        if: runner.os == 'macOS'
+        run: |
+          helpers="$(find node_modules/node-pty -name 'spawn-helper')"
+          if [ -z "$helpers" ]; then
+            echo "ERROR: no node-pty spawn-helper binary found under node_modules/node-pty" >&2
+            exit 1
+          fi
+          find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} +
+      - run: npm run build
+      - name: Unit and integration tests
+        run: npx vitest run --reporter=default --reporter=json --outputFile=vitest-${{ matrix.os }}.json
+      - name: Acceptance gates
+        run: npm run test:plan:acceptance
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-${{ matrix.os }}
+          path: |
+            vitest-${{ matrix.os }}.json
+            acceptance-test-report.json
+          if-no-files-found: ignore
+

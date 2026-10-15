@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
+      tag:
+        description: 'Existing tag to build (optional when triggered via push)'
+        required: false
       publish_draft:
         description: 'Create draft release on GitHub'
         type: boolean
@@ -18,21 +21,40 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     name: Verify Quality Gates
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
           cache: 'npm'
+      - name: Verify tag and version
+        id: meta
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="$(node -p "require('./package.json').version")"
+          [ "$tag" = "v$version" ] || { echo "::error::tag $tag does not match package.json version $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - run: npm ci
       - run: npm run build
       - run: npm run typecheck
       - run: npm run check-dist -- --quiet
-      - run: npm run package:check
+      - run: npm run package:check -- --skip-build
       - run: npm run release:verify
       - run: npm test
 
@@ -58,11 +80,22 @@ jobs:
             target: windows-arm64
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
           cache: 'npm'
       - run: npm ci
+      - name: Ensure node-pty helper is executable on macOS
+        if: runner.os == 'macOS'
+        run: |
+          helpers="$(find node_modules/node-pty -name 'spawn-helper')"
+          if [ -z "$helpers" ]; then
+            echo "ERROR: no node-pty spawn-helper binary found under node_modules/node-pty" >&2
+            exit 1
+          fi
+          find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} +
       - run: npm run build
       - name: Generate release archives
         run: node scripts/package-release-artifacts.mjs
@@ -75,13 +108,16 @@ jobs:
 
   publish:
     name: Create Release & Publish
-    needs: build-artifacts
+    needs: [verify, build-artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
@@ -101,15 +137,20 @@ jobs:
           echo "=== Release Artifacts & Checksums ==="
           cat SHA256SUMS.txt
 
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-dist/wazir-*
+
       - name: Create GitHub Release (Draft)
         if: github.event_name == 'push' || inputs.publish_draft == true
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.verify.outputs.tag }}
           draft: true
           prerelease: false
           files: release-dist/*
           generate_release_notes: true
-          name: Wazir ${{ github.ref_name || 'Release' }}
+          name: Wazir ${{ needs.verify.outputs.tag }}
 
       - name: Publish to npm registry (Requires explicit authorization)
         if: inputs.publish_npm == true
@@ -124,3 +165,4 @@ jobs:
             echo "Error: No npm tarball found in release-dist"
             exit 1
           fi
+

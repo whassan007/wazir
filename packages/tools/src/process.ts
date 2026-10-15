@@ -1,7 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { killProcessTree, sanitizeChildEnvironment, getSpawnCommand } from '@wazir/shared';
 
 import { sandboxDegraded, sandboxStatus, wrapInSandbox, type SandboxMode, type WrappedCommand } from './sandbox.js';
 import { defaultResourceLimits, wrapWithResourceLimits, type ResourceLimits } from './resourceLimits.js';
@@ -48,21 +47,144 @@ export interface RunOptions {
 
 /**
  * Kills `child` and everything it spawned, not just the direct child.
+ *
+ * Before this, a timeout/cancel/maxBuffer kill only ever hit the immediate
+ * child (`child.kill(signal)`), which on POSIX only signals that one PID —
+ * anything it forked (a test runner's workers, a dev server, `npm`'s own
+ * child) inherits the parent's process group and keeps running as an orphan
+ * once the immediate child dies. Spawning with `detached: true` makes the
+ * child the leader of its own new process group (pgid === its pid), so
+ * `process.kill(-pid, signal)` reaches every descendant in one call. Windows
+ * has no equivalent of process groups; `taskkill /T` walks the actual
+ * process tree instead.
  */
 function killProcessGroup(child: import('node:child_process').ChildProcess, signal: NodeJS.Signals, wasDetached: boolean): void {
-  killProcessTree(child.pid, signal, wasDetached);
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } catch {
+      // best effort — fall through to killing just the direct child
+      try { child.kill(signal); } catch { /* already gone */ }
+    }
+    return;
+  }
+  if (!wasDetached) {
+    // Not its own group leader (bwrap path — see the spawn() call): a direct
+    // kill is bwrap's own documented shutdown path, not a fallback.
+    try { child.kill(signal); } catch { /* already gone */ }
+    return;
+  }
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // Group kill fails if the child never actually became its own group
+    // leader (e.g. exited before spawn finished setpgid) — the direct kill
+    // below is what child.kill() would have done anyway.
+    try { child.kill(signal); } catch { /* already gone */ }
+  }
 }
 
 let warnedDegraded = false;
 
+// Variables a child needs to behave like a normal shell session. Everything
+// else in the operator's environment (API keys, database URLs, cloud
+// credentials) stays out of the child so a tool call cannot read it back
+// into an execution record (security review F-13). Extra names can be
+// forwarded with WAZIR_CHILD_ENV=NAME1,NAME2.
+const CHILD_ENV_ALLOW = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TERM', 'TZ', 'LANG', 'LANGUAGE',
+  'TMPDIR', 'TMP', 'TEMP', 'PWD', 'COLUMNS', 'LINES', 'DISPLAY', 'EDITOR', 'PAGER',
+  'NODE_ENV', 'NODE_OPTIONS', 'NODE_PATH', 'NVM_DIR', 'NVM_BIN', 'VOLTA_HOME', 'FNM_DIR',
+  'CI', 'FORCE_COLOR', 'NO_COLOR', 'SYSTEMROOT', 'SystemRoot', 'COMSPEC', 'ComSpec', 'PATHEXT', 'WINDIR', 'APPDATA', 'LOCALAPPDATA',
+  'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'COMMONPROGRAMFILES',
+  'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
+  'npm_config_cache', 'NPM_CONFIG_CACHE', 'PNPM_HOME', 'YARN_CACHE_FOLDER', 'CARGO_HOME', 'RUSTUP_HOME', 'GOPATH', 'GOROOT', 'GOCACHE', 'PYTHONPATH', 'VIRTUAL_ENV', 'JAVA_HOME',
+]);
+const CHILD_ENV_ALLOW_UPPER = new Set(Array.from(CHILD_ENV_ALLOW, (k) => k.toUpperCase()));
+const CHILD_ENV_ALLOW_PREFIXES = ['LC_', 'XDG_'];
+
+function quoteWindowsCmdArg(arg: string): string {
+  if (!arg) return '""';
+  if (!/[\s"&|<>^()]/.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+function resolveWindowsSpawn(
+  command: string,
+  args: string[],
+  envPath?: string,
+  cwd?: string,
+): { command: string; args: string[]; windowsVerbatimArguments: boolean } {
+  if (process.platform !== 'win32') return { command, args, windowsVerbatimArguments: false };
+  const pathEnv = envPath ?? process.env.PATH ?? process.env.Path ?? '';
+  const pathExt = (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
+  const hasSep = command.includes('/') || command.includes('\\');
+  const candidates: string[] = [];
+  if (hasSep) {
+    const base = path.isAbsolute(command) ? command : path.resolve(cwd ?? process.cwd(), command);
+    candidates.push(base);
+    if (!path.extname(base)) {
+      for (const ext of pathExt) {
+        candidates.push(`${base}${ext}`);
+        candidates.push(`${base}${ext.toLowerCase()}`);
+      }
+    }
+  } else {
+    const dirs = pathEnv.split(path.delimiter).map((d) => d.trim().replace(/^"|"$/g, '')).filter(Boolean);
+    for (const dir of dirs) {
+      const base = path.join(dir, command);
+      if (path.extname(command)) {
+        candidates.push(base);
+      } else {
+        for (const ext of pathExt) {
+          candidates.push(`${base}${ext}`);
+          candidates.push(`${base}${ext.toLowerCase()}`);
+        }
+        candidates.push(base);
+      }
+    }
+  }
+  const resolved = candidates.find((c) => existsSync(c)) ?? command;
+  if (/\.(cmd|bat)$/i.test(resolved)) {
+    const comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe';
+    const cmdLine = [quoteWindowsCmdArg(resolved), ...args.map(quoteWindowsCmdArg)].join(' ');
+    return { command: comspec, args: ['/d', '/s', '/c', `"${cmdLine}"`], windowsVerbatimArguments: true };
+  }
+  return { command: resolved, args, windowsVerbatimArguments: false };
+}
+
+/** The reduced environment tool subprocesses run with. */
 export function childEnvironment(extra: Record<string, string> = {}): Record<string, string> {
-  return sanitizeChildEnvironment(extra);
+  const env: Record<string, string> = {};
+  const passthrough = new Set(
+    (process.env.WAZIR_CHILD_ENV ?? '').split(',').map((name) => name.trim()).filter(Boolean),
+  );
+  const passthroughUpper = new Set(Array.from(passthrough, (k) => k.toUpperCase()));
+  for (const [name, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    const upper = name.toUpperCase();
+    const allowed = process.platform === 'win32'
+      ? (CHILD_ENV_ALLOW_UPPER.has(upper) || passthroughUpper.has(upper))
+      : (CHILD_ENV_ALLOW.has(name) || passthrough.has(name));
+    if (allowed || CHILD_ENV_ALLOW_PREFIXES.some((prefix) => upper.startsWith(prefix))) {
+      env[name] = value;
+    }
+  }
+  const merged = { ...env, ...extra };
+  if (process.platform === 'win32') {
+    const pathVal = merged.PATH ?? merged.Path ?? process.env.PATH ?? process.env.Path;
+    if (pathVal !== undefined) {
+      merged.PATH = pathVal;
+      merged.Path = pathVal;
+    }
+  }
+  return merged;
 }
 
 export function runShell(command: string, options: RunOptions): Promise<CommandResult> {
   const shell = process.platform === 'win32' ? (process.env.ComSpec || process.env.COMSPEC || 'cmd.exe') : 'sh';
-  // With /s, cmd strips this outer pair and preserves quotes inside the command.
-  // Passing the unwrapped string makes paths containing spaces parse as syntax.
   const args = process.platform === 'win32' ? ['/d', '/s', '/c', `"${command}"`] : ['-c', command];
   return runProcess(shell, args, options, process.platform === 'win32');
 }
@@ -95,10 +217,7 @@ function runProcess(
           projectRoot: options.projectRoot ?? options.cwd,
           cwd: options.cwd,
           networkAllowed: options.networkAllowed ?? false,
-          // Project check scripts commonly invoke the same Node binary as Wazir.
-          // On macOS runners that binary lives under the user's toolcache, which
-          // the Seatbelt profile otherwise hides along with the rest of $HOME.
-          readOnlyPaths: [path.dirname(process.execPath)],
+          readOnlyPaths: [path.dirname(process.execPath), path.resolve(path.dirname(process.execPath), '..')],
         });
   } catch (error) {
     // WAZIR_SANDBOX=required with no usable backend: refuse rather than run on the host.
@@ -140,22 +259,18 @@ function runProcess(
 
     const childEnv = childEnvironment({ ...normalizedEnv, ...(options.env ?? {}) });
 
-    const spawnCmd = wrapped.mode === 'none'
-      ? getSpawnCommand(wrapped.file, wrapped.args, { cwd: spawnCwd, envPath: childEnv.PATH || childEnv.Path })
-      : { command: wrapped.file, args: wrapped.args, useShell: false };
-    const detachedGroup = process.platform !== 'win32' && wrapped.mode !== 'bwrap';
+    const resolvedExec = wrapped.mode === 'none' && !windowsVerbatimArguments
+      ? resolveWindowsSpawn(wrapped.file, wrapped.args, childEnv.PATH ?? childEnv.Path, spawnCwd)
+      : { command: wrapped.file, args: wrapped.args, windowsVerbatimArguments };
 
-    const child = spawn(spawnCmd.command, spawnCmd.args, {
+    const detachedGroup = process.platform !== 'win32' && wrapped.mode !== 'bwrap';
+    const child = spawn(resolvedExec.command, resolvedExec.args, {
       cwd: spawnCwd,
       env: childEnv,
       // fd 3 carries the seccomp program to bwrap (`--seccomp 3`).
       stdio: wrapped.seccomp ? ['ignore', 'pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
       detached: detachedGroup,
-      shell: spawnCmd.useShell,
-      // cmd.exe parses a command string itself. Node's usual Windows argument
-      // escaping rewrites embedded quotes to backslash-quote, which cmd treats
-      // literally and then fails to find quoted executables/paths.
-      windowsVerbatimArguments,
+      windowsVerbatimArguments: resolvedExec.windowsVerbatimArguments,
     });
     if (wrapped.seccomp) {
       const feed = child.stdio[3] as NodeJS.WritableStream;

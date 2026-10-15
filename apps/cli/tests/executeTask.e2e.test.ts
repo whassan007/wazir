@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
-import { execSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -261,7 +260,7 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     expect(outcome.result).toContain('Verification checks passed');
   });
 
-  it.skipIf(process.platform === 'win32')('a task that compiles source code via a raw `shell` call IS recorded as a real check and can succeed', async () => {
+  it('a task that compiles source code via a raw `shell` call IS recorded as a real check and can succeed', async () => {
     // Companion regression test: the compiler must actually be *recognized*
     // as a check. This also pins the exact live bug found while verifying
     // the fix — BUILD_INVOCATION_PATTERN originally used a trailing `\b`
@@ -269,28 +268,21 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     // /`clang++` (neither the trailing '+' nor the following space is a
     // \w character, so there is no word/non-word transition for \b to
     // anchor on) — `(?=\s|$)` is required instead.
-    const hasGpp = (() => {
-      try {
-        execSync(process.platform === 'win32' ? 'where g++' : 'which g++', { stdio: 'ignore' });
-        return true;
-      } catch {
-        return false;
-      }
-    })();
-
-    const [srcFile, content, cmd] = hasGpp
-      ? ['main.cpp', 'int main(){return 0;}', process.platform === 'win32' ? 'g++ -std=c++17 -o main.exe main.cpp && main.exe' : 'g++ -std=c++17 -o main main.cpp && ./main']
-      : ['main.ts', 'const x: number = 0;', 'npx tsc main.ts --noEmit'];
-
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-verified-'));
+    // On Windows cmd.exe, `./main` fails because `.` is parsed as the command
+    // and `/main` as an option switch; `g++ -std=c++17 -o main main.cpp` alone
+    // exercises the compiler invocation and BUILD_INVOCATION_PATTERN on win32.
+    const compileCmd = process.platform === 'win32'
+      ? 'g++ -std=c++17 -o main main.cpp'
+      : 'g++ -std=c++17 -o main main.cpp && ./main';
     const engine = await buildTestEngine(projectRoot, [
-      `{"action":"plan","content":"write and compile ${srcFile}"}`,
-      `{"action":"tool","tool":"write","input":{"path":"${srcFile}","content":${JSON.stringify(content)}}}`,
-      `{"action":"tool","tool":"shell","input":{"command":${JSON.stringify(cmd)}}}`,
+      '{"action":"plan","content":"write and compile main.cpp"}',
+      '{"action":"tool","tool":"write","input":{"path":"main.cpp","content":"int main(){return 0;}"}}',
+      JSON.stringify({ action: 'tool', tool: 'shell', input: { command: compileCmd } }),
       '{"action":"done","summary":"compiled and ran successfully"}',
     ]);
 
-    const outcome = await executeTask(engine, 'write and compile program', { quiet: true });
+    const outcome = await executeTask(engine, 'write and compile a c++ program', { quiet: true });
 
     expect(outcome.success).toBe(true);
     expect(outcome.reasons.some((r) => r.includes('all checks passed'))).toBe(true);
@@ -298,7 +290,7 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     const record = engine.executions.require(outcome.executionId);
     expect(record.checks).toHaveLength(1);
     expect(record.checks[0]).toMatchObject({ name: 'build', ok: true });
-  });
+  }, 30_000);
 
   it('denies a tool call whose target path escapes the project root, end to end', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-'));

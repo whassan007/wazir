@@ -92,7 +92,7 @@ export class SandboxUnavailableError extends Error {
 // else in the home directory is masked.
 const HOME_TOOLCHAIN_DIRS = [
   '.nvm', '.volta', '.fnm', '.n', '.bun', '.deno', '.local/bin', '.local/share/pnpm', '.local/share/mise', '.asdf',
-  '.cargo', '.rustup', '.go', 'go', '.pyenv', '.rbenv', '.sdkman', '.gradle', '.m2', '.yarn', '.config/yarn',
+  '.cargo', '.rustup', '.go', 'go', '.pyenv', '.rbenv', '.sdkman', '.gradle', '.m2', '.yarn', '.config/yarn', 'hostedtoolcache',
 ];
 // Caches under $HOME that package managers write to. `Library/Caches` is macOS's
 // general-purpose per-user cache directory — notably where Apple's clang/Xcode
@@ -153,9 +153,13 @@ function probeSandboxExec(): { ok: boolean; reason?: string } {
   const bin = onPath('sandbox-exec') ?? (existsSync('/usr/bin/sandbox-exec') ? '/usr/bin/sandbox-exec' : undefined);
   if (!bin) return { ok: false, reason: 'sandbox-exec is not available' };
   const tmp = os.tmpdir();
-  const profile = seatbeltProfile({ projectRoot: tmp, cwd: tmp });
+  const profile = seatbeltProfile({
+    projectRoot: tmp,
+    cwd: tmp,
+    readOnlyPaths: [path.dirname(process.execPath), path.resolve(path.dirname(process.execPath), '..')],
+  });
   const result = spawnSync(bin, ['-p', profile, process.execPath, '-e', 'process.exit(0)'], { stdio: 'ignore', timeout: 5_000 });
-  return result.status === 0 ? { ok: true } : { ok: false, reason: `sandbox-exec cannot run node with seatbelt profile (exit ${result.status})` };
+  return result.status === 0 ? { ok: true } : { ok: false, reason: `sandbox-exec cannot start (exit ${result.status})` };
 }
 
 /** Resolves (once) which sandbox backend this process can actually use. */
@@ -263,8 +267,12 @@ export function bwrapArgs(options: SandboxOptions, home: string = os.homedir(), 
   // Hide runtime sockets (docker.sock, ssh/gpg agents, dbus) — a read-only
   // bind still allows connect(2) on a unix socket. `/var/run` and `/var/tmp`
   // are often symlinks (to /run, /tmp); tmpfs can only go on a real directory.
+  // `/run` is a standard Linux directory; include it unconditionally when
+  // constructing args on non-Linux hosts so pure argument tests stay OS-independent.
   for (const dir of ['/var/tmp', '/run', '/var/run']) {
-    if (isRealDirectory(dir)) args.push('--tmpfs', dir);
+    if ((dir === '/run' && process.platform !== 'linux') || isRealDirectory(dir)) {
+      args.push('--tmpfs', dir);
+    }
   }
   if (options.networkAllowed && existsSync('/run/systemd/resolve')) {
     args.push('--ro-bind', '/run/systemd/resolve', '/run/systemd/resolve'); // systemd-resolved stub resolver
@@ -273,7 +281,11 @@ export function bwrapArgs(options: SandboxOptions, home: string = os.homedir(), 
   // Mask other users' homes, mounts and service data, then the operator's
   // home, then re-expose only toolchains (ro) and caches (rw).
   const resolvedHome = path.resolve(home);
-  for (const dir of MASKED_HOST_DIRS) if (isRealDirectory(dir)) args.push('--tmpfs', dir);
+  for (const dir of MASKED_HOST_DIRS) {
+    if (process.platform === 'linux' ? isRealDirectory(dir) : existsSync(dir)) {
+      args.push('--tmpfs', dir);
+    }
+  }
   args.push('--tmpfs', resolvedHome);
   for (const dir of existingDirs(resolvedHome, HOME_TOOLCHAIN_DIRS)) args.push('--ro-bind', dir, dir);
   for (const dir of existingDirs(resolvedHome, HOME_CACHE_DIRS)) args.push('--bind', dir, dir);
@@ -310,7 +322,7 @@ export function bwrapArgs(options: SandboxOptions, home: string = os.homedir(), 
 
 /** sandbox-exec (Seatbelt) profile for `options`. Pure: safe to unit test. */
 export function seatbeltProfile(options: SandboxOptions, home: string = os.homedir(), platformTmp: string = os.tmpdir()): string {
-  const q = (p: string) => `"${path.resolve(p).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const q = (p: string) => `"${path.resolve(p).replace(/"/g, '\\"')}"`;
   const project = path.resolve(options.projectRoot);
   const resolvedHome = path.resolve(home);
   const tmp = path.resolve(platformTmp);
@@ -318,15 +330,57 @@ export function seatbeltProfile(options: SandboxOptions, home: string = os.homed
   const realTmp = safeRealpath(tmp);
   const realHome = safeRealpath(resolvedHome);
 
+  const toolchainDirs = existingDirs(resolvedHome, HOME_TOOLCHAIN_DIRS);
+  const cacheDirs = existingDirs(resolvedHome, HOME_CACHE_DIRS);
+  const roDirs = (options.readOnlyPaths ?? []).map((d) => path.resolve(d));
+  const rwDirs = (options.readWritePaths ?? []).map((d) => path.resolve(d));
+
+  // Collect literal parent directories inside resolvedHome/realHome that must
+  // allow `file-read-metadata` (lstat) so Node's `realpathSync()` can walk
+  // from `/` through `$HOME` to reach allowed subdirectories (e.g.
+  // `~/hostedtoolcache/.../bin/npm` or `~/.nvm/.../bin/npm`) without allowing
+  // `readdir` (`file-read-data`) on `$HOME`.
+  const metadataLiterals = new Set<string>([resolvedHome]);
+  if (realHome) metadataLiterals.add(realHome);
+  const addParentLiterals = (targetDir: string) => {
+    for (const baseHome of [resolvedHome, realHome].filter((h): h is string => Boolean(h))) {
+      if (isInside(baseHome, targetDir)) {
+        let cur = path.dirname(targetDir);
+        while (cur.length >= baseHome.length && isInside(baseHome, cur)) {
+          metadataLiterals.add(cur);
+          const next = path.dirname(cur);
+          if (next === cur) break;
+          cur = next;
+        }
+      }
+    }
+  };
+  for (const d of [...toolchainDirs, ...cacheDirs, ...roDirs, ...rwDirs, project, ...(realProject ? [realProject] : [])]) {
+    addParentLiterals(d);
+    const rd = safeRealpath(d);
+    if (rd) addParentLiterals(rd);
+  }
+
+  const withReal = (dirs: string[]): string[] => {
+    const out = new Set<string>();
+    for (const d of dirs) {
+      out.add(d);
+      const rd = safeRealpath(d);
+      if (rd) out.add(rd);
+    }
+    return [...out];
+  };
+
   const rules: string[] = [
     '(version 1)',
     '(allow default)',
     // Home is hidden except for toolchains/caches and the project itself.
     `(deny file-read* file-write* (subpath ${q(resolvedHome)}))`,
     ...(realHome && realHome !== resolvedHome ? [`(deny file-read* file-write* (subpath ${q(realHome)}))`] : []),
-    ...existingDirs(resolvedHome, HOME_TOOLCHAIN_DIRS).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
-    ...existingDirs(resolvedHome, HOME_CACHE_DIRS).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
-    ...(options.readOnlyPaths ?? []).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
+    ...Array.from(metadataLiterals).map((dir) => `(allow file-read-metadata (literal ${q(dir)}))`),
+    ...withReal(toolchainDirs).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
+    ...withReal(cacheDirs).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
+    ...withReal(roDirs).map((dir) => `(allow file-read* (subpath ${q(dir)}))`),
     // Everything outside the project and temp dirs is read-only.
     '(deny file-write*)',
     `(allow file-write* (subpath ${q(project)}))`,
@@ -342,7 +396,7 @@ export function seatbeltProfile(options: SandboxOptions, home: string = os.homed
     '(allow file-write* (subpath "/dev"))',
     `(allow file-read* (subpath ${q(project)}))`,
     ...(realProject && realProject !== project ? [`(allow file-read* (subpath ${q(realProject)}))`] : []),
-    ...(options.readWritePaths ?? []).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
+    ...withReal(rwDirs).map((dir) => `(allow file-read* file-write* (subpath ${q(dir)}))`),
     // Runtime sockets.
     `(deny file-read* file-write* (subpath "/private/var/run/docker.sock"))`,
     `(deny file-read* file-write* (subpath "/var/run/docker.sock"))`,

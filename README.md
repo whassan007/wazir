@@ -60,7 +60,23 @@ A production-quality local and fleet-scale AI meta-harness that orchestrates mul
 
 ## Quick Start
 
-### macOS & Linux (Apple Silicon, Intel x64, Linux x64, Linux ARM64 / DGX Spark)
+Requires **Node.js 22.13 or newer** (Wazir's resource ledger uses `node:sqlite`).
+
+```bash
+npm install -g wazir        # once published; until then use a release tarball:
+npm install -g ./wazir-<version>.tgz
+wa doctor                   # check runtimes, agents and sandbox
+wa init                     # optional: initialise the local control plane
+```
+
+Installing via npm never writes to `~/.wazir` or your shell profile; `wa` creates its state on first
+use and upgrades and uninstalls leave it in place. The package bundles the CLI into one file
+(`bin/wa.js`); three native modules are optional and only disable their own feature when they
+cannot be installed: `node-pty` (interactive terminal tool), `@napi-rs/keyring` (OS keychain;
+falls back to the encrypted file store) and `pg-native` (not installed; the pure-JS Postgres
+driver is used).
+
+### From a Source Checkout (macOS & Linux — Apple Silicon, Intel x64, Linux x64, Linux ARM64 / DGX Spark)
 
 ```bash
 git clone https://github.com/whassan007/wazir.git ~/Code/Wazir
@@ -76,23 +92,16 @@ git clone https://github.com/whassan007/wazir.git $HOME\Code\Wazir
 & "$HOME\Code\Wazir\scripts\install.ps1"
 ```
 
-The installer verifies Node.js ≥ 22.5, installs dependencies with `npm ci`, builds all workspaces, installs the native `wa` CLI launcher to `~/.local/bin` on macOS/Linux or `%USERPROFILE%\.wazir\bin` on Windows, configures it in your user PATH, and executes `wa doctor`. Failures halt immediately without installing stale artifacts.
+The source installer verifies Node.js ≥ 22.13, installs dependencies with `npm ci`, builds all workspaces, installs the native `wa` CLI launcher to `~/.local/bin` on macOS/Linux or `%USERPROFILE%\.wazir\bin` on Windows, configures it in your user PATH, and executes `wa doctor`. Failures halt immediately without installing stale artifacts.
 
 ### Alternative Installation & Packaging Methods
 
-#### 1. NPM Global Install / Link
-Because the CLI is now bundled into `bin/wa.js`, you can install or link it globally via npm:
+#### 1. npm package from a checkout
 ```bash
-# Link the current build globally
+npm ci
 npm run build
-npm link
-
-# Or install globally from checkout
-npm install -g .
-
-# Or build an npm package tarball for distribution
-npm pack
-npm install -g wazir-0.1.0.tgz
+npm run package:pack     # writes dist/npm/wazir-<version>.tgz (the publishable package)
+npm run package:check    # packs, scans, installs it in isolation, smoke-tests, upgrades, uninstalls
 ```
 
 #### 2. Homebrew (macOS / Linux)
