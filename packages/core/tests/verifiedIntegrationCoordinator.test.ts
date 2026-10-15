@@ -82,8 +82,8 @@ describe('VerifiedIntegrationCoordinator', () => {
     });
     expect(report.state).toBe('READY');
     expect(report.appliedBranches).toEqual([a.branch, b.branch]);
-    expect(await fs.readFile(path.join(report.candidatePath, 'a.txt'), 'utf8')).toBe('from a\n');
-    expect(await fs.readFile(path.join(report.candidatePath, 'b.txt'), 'utf8')).toBe('from b\n');
+    expect((await fs.readFile(path.join(report.candidatePath, 'a.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('from a\n');
+    expect((await fs.readFile(path.join(report.candidatePath, 'b.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('from b\n');
     expect(await git(root, ['rev-parse', 'main'])).toBe(targetBefore);
     expect((await coordinator.inspectJournal(root, report.integrationId)).candidateTreeSha).toBe(report.candidateTreeSha);
   });
@@ -143,7 +143,7 @@ describe('VerifiedIntegrationCoordinator', () => {
     expect(plan.candidates[0]?.staleBase).toBe(true);
     const report = await coordinator.qualify(root, { targetBranch: 'main', expectedTargetSha: targetSha, candidates: [candidate], verifyCandidate: validateCandidate });
     expect(report.state).toBe('READY');
-    expect(await fs.readFile(path.join(report.candidatePath, 'target.txt'), 'utf8')).toBe('target advanced\n');
+    expect((await fs.readFile(path.join(report.candidatePath, 'target.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('target advanced\n');
   });
 
   it('rejects stale manifest evidence after an agent branch advances', async () => {
