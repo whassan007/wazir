@@ -1,0 +1,101 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2944880,
+    "at": 1791978744616
+  },
+  {
+    "event": "spawn",
+    "pid": 2945190,
+    "at": 1791978746696
+  },
+  {
+    "event": "exit",
+    "pid": 2945190,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978746881
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "req-competing-1791978746881",
+      "connected": false
+    },
+    "at": 1791978746886
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-competing/executions/req-competing-1791978746881/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978776890,
+      "attempt": 1,
+      "leaseMs": 30000
+    },
+    "at": 1791978746892
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-competing/executions/req-competing-1791978746881/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978746895
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-competing/executions/req-competing-1791978746881/result",
+    "status": 409,
+    "body": {
+      "error": "LEASE_LOST"
+    },
+    "at": 1791978746900
+  },
+  {
+    "event": "http",
+    "url": "/computers/comp-competing/executions/req-competing-1791978746881/result",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978746906
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-competing-1791978746881/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:52:26.890Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-competing-1791978746881"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "authentic outcome",
+        "durationMs": 0,
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    },
+    "at": 1791978746907
+  },
+  {
+    "event": "exit",
+    "pid": 2944880,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978746926
+  }
+]

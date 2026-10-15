@@ -1,0 +1,26 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2965315,
+    "at": 1791978971226
+  },
+  {
+    "event": "spawn",
+    "pid": 2965464,
+    "at": 1791978973336
+  },
+  {
+    "event": "exit",
+    "pid": 2965464,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978973525
+  },
+  {
+    "event": "exit",
+    "pid": 2965315,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978973530
+  }
+]

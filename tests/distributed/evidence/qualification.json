@@ -1,0 +1,278 @@
+{
+  "baseSha": "cdea8aa125731765ca789dd6de13f35a0aa8b61f",
+  "distributedTests": 17,
+  "postgresTests": 20,
+  "acceptance": "blocked_on_API_recovery_integration",
+  "observations": [
+    {
+      "source": "processes/wazir-dist-cluster-8HU508/evidence.json",
+      "event": "expiry_race",
+      "requestId": "expiry-race-1791978885220-0",
+      "originalAttempt": 1,
+      "originalExpiresAt": 1791978915230,
+      "replacementAttempt": 2,
+      "replacementExpiresAt": 1791978945266,
+      "staleRenewalResponse": {
+        "status": 409,
+        "body": {
+          "error": "LEASE_LOST"
+        }
+      },
+      "winningClaims": 1
+    },
+    {
+      "source": "processes/wazir-dist-cluster-8HU508/evidence.json",
+      "event": "expiry_race",
+      "requestId": "expiry-race-1791978885232-1",
+      "originalAttempt": 1,
+      "originalExpiresAt": 1791978915239,
+      "replacementAttempt": 2,
+      "replacementExpiresAt": 1791978945309,
+      "staleRenewalResponse": {
+        "status": 409,
+        "body": {
+          "error": "LEASE_LOST"
+        }
+      },
+      "winningClaims": 1
+    },
+    {
+      "source": "processes/wazir-dist-cluster-8HU508/evidence.json",
+      "event": "expiry_race",
+      "requestId": "expiry-race-1791978885242-2",
+      "originalAttempt": 1,
+      "originalExpiresAt": 1791978915249,
+      "replacementAttempt": 2,
+      "replacementExpiresAt": 1791978945340,
+      "staleRenewalResponse": {
+        "status": 409,
+        "body": {
+          "error": "LEASE_LOST"
+        }
+      },
+      "winningClaims": 1
+    },
+    {
+      "source": "processes/wazir-dist-cluster-8bxcjf/evidence.json",
+      "event": "missing_worker_gap",
+      "requestId": "req-crash-1791978819384",
+      "computerStatus": "online",
+      "lastHeartbeat": "2026-10-14T11:53:39.182Z",
+      "observedAt": 1791978879195,
+      "attempt": 1,
+      "expiresAt": 1791978849398,
+      "terminalOutcomePresent": false,
+      "limitation": "No API RecoveryManager sweep or cross-computer reassignment; abandoned dispatch remains durable and pending."
+    },
+    {
+      "source": "processes/wazir-dist-cluster-8bxcjf/evidence.json",
+      "event": "fencing",
+      "requestId": "req-crash-1791978819384",
+      "originalAttempt": 1,
+      "replacementAttempt": 2,
+      "holder": "comp-a",
+      "originalExpiresAt": 1791978849398,
+      "replacementExpiresAt": 1791978909415,
+      "staleResponse": {
+        "status": 409,
+        "body": {
+          "error": "LEASE_LOST"
+        }
+      },
+      "finalOutcome": {
+        "ok": true,
+        "output": "simulated model completion",
+        "durationMs": 15,
+        "inputTokens": 8,
+        "outputTokens": 16
+      }
+    },
+    {
+      "source": "processes/wazir-dist-cluster-9qCd6i/evidence.json",
+      "event": "credential_rejection",
+      "computerId": "comp-auth",
+      "unauthorizedReplacementStatus": 403,
+      "invalidStreamTokenStatus": 401
+    },
+    {
+      "source": "processes/wazir-dist-cluster-BobicH/evidence.json",
+      "event": "external_effect_replay",
+      "requestId": "effect-op-1791978976221",
+      "operationId": "op-1791978976221",
+      "idempotent": false,
+      "duplicateDeliveryRejected": true,
+      "executions": 2,
+      "effects": 2,
+      "resultCommitments": 1,
+      "automaticPhysicalReconciliation": false,
+      "originalAttempt": 1,
+      "replacementAttempt": 2,
+      "finalOutcome": {
+        "ok": true,
+        "output": "mutation acknowledged",
+        "durationMs": 22,
+        "inputTokens": 8,
+        "outputTokens": 16
+      },
+      "limitation": "Dispatcher replays opaque provider requests; external idempotency is required. UNKNOWN_OUTCOME checkpoints in RecoveryManager are tested separately."
+    },
+    {
+      "source": "processes/wazir-dist-cluster-E2vmgA/evidence.json",
+      "event": "surviving_worker_reconnected",
+      "requestId": "surviving-reconnect-1791978969178",
+      "workerPid": 2964847,
+      "controllerPid": 2964880,
+      "finalOutcome": {
+        "ok": true,
+        "output": "simulated model completion",
+        "durationMs": 18,
+        "inputTokens": 8,
+        "outputTokens": 16
+      }
+    },
+    {
+      "source": "processes/wazir-dist-cluster-E2vmgA/evidence.json",
+      "event": "credential_rejection",
+      "computerId": "comp-auth",
+      "unauthorizedReplacementStatus": 403,
+      "invalidStreamTokenStatus": 401
+    },
+    {
+      "source": "processes/wazir-dist-cluster-MEFTWM/evidence.json",
+      "event": "heartbeat_and_renewal",
+      "computerId": "long-worker",
+      "requestId": "long-1791978917734",
+      "heartbeatBefore": "2026-10-14T11:55:17.727Z",
+      "heartbeatAfter": "2026-10-14T11:55:28.916Z",
+      "originalExpiresAt": 1791978947748,
+      "renewedExpiresAt": 1791978957759
+    },
+    {
+      "source": "processes/wazir-dist-cluster-SdNWr5/evidence.json",
+      "event": "race_round",
+      "round": 0,
+      "requestId": "race-1791978882501-0",
+      "winningClaims": 1,
+      "duplicateCommitments": 0,
+      "final": {
+        "ok": true,
+        "output": "winner-0",
+        "durationMs": 0,
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    },
+    {
+      "source": "processes/wazir-dist-cluster-SdNWr5/evidence.json",
+      "event": "race_round",
+      "round": 1,
+      "requestId": "race-1791978882558-1",
+      "winningClaims": 1,
+      "duplicateCommitments": 0,
+      "final": {
+        "ok": true,
+        "output": "winner-1",
+        "durationMs": 0,
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    },
+    {
+      "source": "processes/wazir-dist-cluster-SdNWr5/evidence.json",
+      "event": "race_round",
+      "round": 2,
+      "requestId": "race-1791978882620-2",
+      "winningClaims": 1,
+      "duplicateCommitments": 0,
+      "final": {
+        "ok": true,
+        "output": "winner-2",
+        "durationMs": 0,
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    },
+    {
+      "source": "processes/wazir-dist-cluster-VBmzfw/evidence.json",
+      "event": "result_ack_lost",
+      "requestId": "submit-1791978931402",
+      "oldPid": 2961602,
+      "restartedPid": 2961752,
+      "replay": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "duplicate": true
+        }
+      },
+      "authoritativeOutcome": {
+        "ok": true,
+        "output": "durable before restart"
+      }
+    },
+    {
+      "source": "processes/wazir-dist-cluster-ddlwvY/evidence.json",
+      "event": "external_effect_replay",
+      "requestId": "effect-op-1791978941547",
+      "operationId": "op-1791978941547",
+      "idempotent": true,
+      "duplicateDeliveryRejected": true,
+      "executions": 2,
+      "effects": 1,
+      "resultCommitments": 1,
+      "automaticPhysicalReconciliation": false,
+      "originalAttempt": 1,
+      "replacementAttempt": 2,
+      "finalOutcome": {
+        "ok": true,
+        "output": "mutation acknowledged",
+        "durationMs": 17,
+        "inputTokens": 8,
+        "outputTokens": 16
+      },
+      "limitation": "Dispatcher replays opaque provider requests; external idempotency is required. UNKNOWN_OUTCOME checkpoints in RecoveryManager are tested separately."
+    },
+    {
+      "source": "processes/wazir-dist-cluster-mxwqOA/evidence.json",
+      "event": "LS22_independent_stale_result",
+      "requestId": "req-stale-1791978714447",
+      "originalAttempt": 1,
+      "originalExpiresAt": 1791978744474,
+      "replacementAttempt": 2,
+      "holder": "comp-stale",
+      "replacementExpiresAt": 1791978774545,
+      "staleSubmissionResponse": {
+        "status": 409,
+        "body": {
+          "error": "LEASE_LOST"
+        }
+      },
+      "finalOutcome": {
+        "ok": true,
+        "output": "replacement outcome",
+        "durationMs": 0,
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    },
+    {
+      "source": "processes/wazir-dist-cluster-q2GCx8/evidence.json",
+      "event": "heartbeat_and_renewal",
+      "computerId": "long-worker",
+      "requestId": "long-1791978991777",
+      "heartbeatBefore": "2026-10-14T11:56:31.769Z",
+      "heartbeatAfter": "2026-10-14T11:56:43.061Z",
+      "originalExpiresAt": 1791979021793,
+      "renewedExpiresAt": 1791979031803
+    },
+    {
+      "source": "processes/wazir-dist-cluster-q2GCx8/evidence.json",
+      "event": "long_task_beyond_original_deadline",
+      "requestId": "long-1791978991777",
+      "originalExpiresAt": 1791979021793,
+      "currentExpiresAt": 1791979051802,
+      "observedAt": 1791979021819,
+      "attempt": 1
+    }
+  ]
+}

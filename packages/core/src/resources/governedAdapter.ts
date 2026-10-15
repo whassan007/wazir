@@ -122,9 +122,16 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
     }
   }
 
+  // Instrumentation that replaces `generate` on the governed adapter wraps the governed call;
+  // writing through to `inner` instead would route every request through admission twice.
+  let outerGenerate: RuntimeAdapter['generate'] | undefined;
   return new Proxy(inner, {
+    set(target, prop, value, receiver) {
+      if (prop === 'generate') { outerGenerate = value; return true; }
+      return Reflect.set(target, prop, value, receiver);
+    },
     get(target, prop, receiver) {
-      if (prop === 'generate') return governedGenerate;
+      if (prop === 'generate') return outerGenerate ?? governedGenerate;
       if (prop === '__governed') return true;
       const value = Reflect.get(target, prop, receiver);
       return typeof value === 'function' ? value.bind(target) : value;

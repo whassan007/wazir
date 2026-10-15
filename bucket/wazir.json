@@ -1,0 +1,31 @@
+{
+  "version": "0.1.64",
+  "description": "Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator",
+  "homepage": "https://github.com/whassan007/wazir",
+  "license": "AGPL-3.0-or-later",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/whassan007/wazir/releases/download/v0.1.64/wazir-v0.1.64-windows-x64.zip",
+      "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "arm64": {
+      "url": "https://github.com/whassan007/wazir/releases/download/v0.1.64/wazir-v0.1.64-windows-arm64.zip",
+      "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "bin": "wa.exe",
+  "checkver": {
+    "github": "https://github.com/whassan007/wazir"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/whassan007/wazir/releases/download/v$version/wazir-v$version-windows-x64.zip"
+      },
+      "arm64": {
+        "url": "https://github.com/whassan007/wazir/releases/download/v$version/wazir-v$version-windows-arm64.zip"
+      }
+    }
+  },
+  "notes": "Wazir state, resource ledger (~/.wazir/resources.db), and configuration (~/.wazir/config.json) persist across upgrades and uninstalls."
+}

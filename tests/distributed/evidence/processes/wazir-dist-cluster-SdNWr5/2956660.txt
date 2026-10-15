@@ -1,0 +1,6 @@
+worker worker-race-worker-97edb30b20311de66c8886a54546f9bf online
+  computer: race-worker
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:38589
+waiting for work… (Ctrl+C to stop)

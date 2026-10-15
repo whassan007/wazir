@@ -1,0 +1,5 @@
+(node:2966718) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+wazir-api listening on http://127.0.0.1:41107
+  health: http://127.0.0.1:41107/health
+  api:    http://127.0.0.1:41107/api/v1/overview

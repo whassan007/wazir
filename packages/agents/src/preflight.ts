@@ -28,6 +28,10 @@ export interface AgentTaskRecord {
 export type AgentPreflightStage = 'environment' | 'start' | 'answer';
 
 export interface AgentPreflightResult {
+  availableModels?: Array<{ id: string; status: 'AVAILABLE'; source: string }>;
+  version?: string;
+  /** Discovery scope and configuration identity used to invalidate cached results. */
+  fingerprint?: string;
   agent: string;
   status: AgentPreflightStatus;
   stage?: AgentPreflightStage;
@@ -85,7 +89,7 @@ export function classifyAgentFailure(agent: string, text: string): { status: 'FA
   if (/no longer supported for Gemini Code Assist for individuals/i.test(text)) {
     return { status: 'FAILED', hint: 'Google retired this tier; use --agent antigravity' };
   }
-  if (/ENOENT|command not found|not installed/i.test(text)) {
+  if (/ENOENT|command not found|not installed|could not start ACP agent/i.test(text)) {
     return { status: 'FAILED', hint: `install the ${agent} CLI and make sure it is on PATH` };
   }
   if (/connection error|ECONNREFUSED|fetch failed|ENOTFOUND|EHOSTUNREACH|socket hang up/i.test(text)) {
@@ -127,14 +131,17 @@ export async function preflightAgent(
     ({ agent, ...r, durationMs: Date.now() - started, checkedAt: new Date().toISOString() });
 
   const env = options.env ?? process.env;
-  const blocker = BLOCKERS.find((b) => b.agent === agent && env[b.env]);
+  const blocker = BLOCKERS.find((b) => b.agent === agent.split('@')[0] && env[b.env]);
   if (blocker) return finish({ status: 'BLOCKED', stage: 'environment', detail: blocker.detail, hint: blocker.hint });
 
   const timeoutMs = options.timeoutMs ?? 90_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Preflight timeout must be a positive finite number');
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wazir-preflight-'));
   const deadline = started + timeoutMs;
   let sessionOpened = false;
   let last: AgentTurn | undefined;
+  let answeredProbe = false;
+  const requiresProbeAnswer = ['codex', 'claude-code', 'antigravity'].includes(agent.split('@')[0]);
   try {
     for await (const turn of adapter.run({
       modelId: 'external',
@@ -146,6 +153,7 @@ export async function preflightAgent(
     } as Parameters<AgentAdapter['run']>[0], {} as Parameters<AgentAdapter['run']>[1])) {
       if (turn.kind === 'message' && /^delegated to /.test(turn.content ?? '')) sessionOpened = true;
       last = turn;
+      if ((turn.kind === 'message' || turn.kind === 'done') && /(^|\n)\s*OK[.!]?\s*($|\n)/.test(turn.content ?? '')) answeredProbe = true;
     }
   } catch (error) {
     last = { kind: 'error', error: error instanceof Error ? error.message : String(error) };
@@ -153,7 +161,7 @@ export async function preflightAgent(
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
 
-  if (last?.kind === 'done') {
+  if (last?.kind === 'done' && (!requiresProbeAnswer || answeredProbe)) {
     return finish({ status: 'READY', stage: 'answer', detail: `answered in ${((Date.now() - started) / 1000).toFixed(1)}s` });
   }
   const detail = last?.kind === 'error'

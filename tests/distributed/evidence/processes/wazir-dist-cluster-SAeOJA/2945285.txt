@@ -1,0 +1,6 @@
+worker worker-comp-renew-e5d4a2a340da3cc9e77c4257fb31fc35 online
+  computer: comp-renew
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:37043
+waiting for work… (Ctrl+C to stop)

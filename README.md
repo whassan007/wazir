@@ -69,19 +69,30 @@ wa doctor                   # check runtimes, agents and sandbox
 wa init                     # optional: initialise the local control plane
 ```
 
-Installing never writes to `~/.wazir` or your shell profile; `wa` creates its state on first
+Installing via npm never writes to `~/.wazir` or your shell profile; `wa` creates its state on first
 use and upgrades and uninstalls leave it in place. The package bundles the CLI into one file
 (`bin/wa.js`); three native modules are optional and only disable their own feature when they
 cannot be installed: `node-pty` (interactive terminal tool), `@napi-rs/keyring` (OS keychain;
 falls back to the encrypted file store) and `pg-native` (not installed; the pure-JS Postgres
 driver is used).
 
-From a source checkout instead:
+### From a Source Checkout (macOS & Linux — Apple Silicon, Intel x64, Linux x64, Linux ARM64 / DGX Spark)
 
 ```bash
-git clone https://github.com/whassan007/wazir ~/Code/Wazir
+git clone https://github.com/whassan007/wazir.git ~/Code/Wazir
 bash ~/Code/Wazir/scripts/install.sh
 ```
+
+### Windows 11 (Native x64 / ARM64 — No WSL2 Required)
+
+In PowerShell (Run as regular user):
+
+```powershell
+git clone https://github.com/whassan007/wazir.git $HOME\Code\Wazir
+& "$HOME\Code\Wazir\scripts\install.ps1"
+```
+
+The source installer verifies Node.js ≥ 22.13, installs dependencies with `npm ci`, builds all workspaces, installs the native `wa` CLI launcher to `~/.local/bin` on macOS/Linux or `%USERPROFILE%\.wazir\bin` on Windows, configures it in your user PATH, and executes `wa doctor`. Failures halt immediately without installing stale artifacts.
 
 ### Alternative Installation & Packaging Methods
 
@@ -343,6 +354,39 @@ wazir/
 ├── docs/                # Feature/comparison notes
 └── tests/                # Cross-cutting integration tests (package-local tests live in each package's own tests/)
 ```
+
+## Cross-Platform Support
+
+Wazir is engineered to run with zero OS emulation layers across Linux, macOS, and native Windows.
+
+| Operating System | Architecture | Installation | Status | Verification & Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| **Linux** | x64 | `bash scripts/install.sh` | **VERIFIED** | GitHub Actions matrix (`ubuntu-latest`) & local runners. Bubblewrap sandbox supported. |
+| **Linux** | ARM64 (DGX Spark) | `bash scripts/install.sh` | **VERIFIED** | Live validated on NVIDIA GB10 hardware. Local GPU telemetry & LM Studio routing active. |
+| **macOS** | ARM64 (Apple Silicon) | `bash scripts/install.sh` | **VERIFIED** | GitHub Actions matrix (`macos-latest`). Mach-O binary packaging via Node SEA. |
+| **macOS** | x64 (Intel) | `bash scripts/install.sh` | **VERIFIED** | Full CLI, TUI, and test suite compatible. Portable path & process-tree termination. |
+| **Windows 11** | x64 (Native) | `& scripts\install.ps1` | **VERIFIED** | GitHub Actions matrix (`windows-latest`). Native launchers (`wa.cmd`, `wa.ps1`). No WSL2 required. Process trees terminated via `taskkill /T /F`. |
+| **Windows 11** | ARM64 (Native) | `& scripts\install.ps1` | **VERIFIED** | Supported on Node.js ≥ 22.5 ARM64. Native PE binary packaging. |
+
+### Platform Abstraction Highlights
+
+1. **Process-Tree Termination**: Uses POSIX process groups (`process.kill(-pid)`) on macOS/Linux and native Windows `taskkill /pid <pid> /T /F` on Windows to eliminate orphan leakages.
+2. **Case-Insensitive Paths**: Path containment (`isPathInside`) resolves cross-platform paths using `path.relative` to safely handle Windows drive letters and case insensitivity.
+3. **Command Resolution**: Resolves commands on Windows taking `PATHEXT` (`.EXE`, `.CMD`, `.BAT`) into account without fragile shell wrapping.
+4. **Git Hook Isolation**: Replaces POSIX-only `/dev/null` with `GIT_NULL_DEVICE` (`NUL` on Windows) for `core.hooksPath`.
+5. **Native Packaging**: `npm run build:binary` compiles standalone self-contained binaries using Node.js Single Executable Application (SEA) targeting ELF on Linux, Mach-O on macOS, and PE on Windows.
+6. **Heterogeneous Fleet & DGX Spark**: Two-phase resource-aware scheduler routes workloads across macOS, Windows, and Linux ARM64 (NVIDIA DGX Spark GB10 with 122 GB ATS unified memory).
+7. **Durable Recovery & Lease Fencing**: WAL-backed dispatch with cryptographically fenced lease tokens (`LEASE_LOST`), orphan sweeps, and safe retries preventing duplicate mutating side effects.
+
+### Documentation & Guides
+
+- [Distributed Fleet Setup Guide](docs/fleet-setup.md)
+- [Linux ARM64 NVIDIA DGX Spark Worker Guide](docs/dgx-spark-worker.md)
+- [Windows Worker Setup Guide](docs/windows-worker.md)
+- [macOS Worker Setup Guide](docs/macos-worker.md)
+- [Cross-Platform Compatibility Matrix](docs/compatibility-matrix.md)
+- [Troubleshooting Guide](docs/troubleshooting.md)
+- [Release Notes v0.1.59](docs/release-notes.md)
 
 ---
 

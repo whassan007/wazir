@@ -1,0 +1,6 @@
+worker worker-expiry-race-worker-317b396dbf24b33710e1f818b91041cc online
+  computer: expiry-race-worker
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:43071
+waiting for work… (Ctrl+C to stop)

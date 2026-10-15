@@ -1,0 +1,6 @@
+worker worker-comp-dup-f8267b9db2658f6a136a66b97145c3b5 online
+  computer: comp-dup
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:38667
+waiting for work… (Ctrl+C to stop)

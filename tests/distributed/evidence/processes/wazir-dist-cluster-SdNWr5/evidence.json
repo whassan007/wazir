@@ -1,0 +1,555 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2956366,
+    "at": 1791978880102
+  },
+  {
+    "event": "spawn",
+    "pid": 2956660,
+    "at": 1791978882293
+  },
+  {
+    "event": "exit",
+    "pid": 2956660,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978882501
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "race-1791978882501-0",
+      "connected": false
+    },
+    "at": 1791978882507
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978912514,
+      "attempt": 1,
+      "leaseMs": 30000
+    },
+    "at": 1791978882517
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882521
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882522
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882523
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882524
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882526
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882527
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882527
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/renew",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978882538
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/result",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978882543
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/result",
+    "status": 200,
+    "body": {
+      "ok": true,
+      "duplicate": true
+    },
+    "at": 1791978882547
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/race-1791978882501-0/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:54:42.514Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-race-1791978882501-0"
+        },
+        {
+          "at": "2026-10-14T11:54:42.533Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_renewed",
+          "executionId": "exec-race-1791978882501-0"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "winner-0",
+        "durationMs": 0,
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    },
+    "at": 1791978882551
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882556
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882501-0/result",
+    "status": 401,
+    "body": {
+      "error": "not authorised for computer 'race-worker'"
+    },
+    "at": 1791978882558
+  },
+  {
+    "event": "race_round",
+    "round": 0,
+    "requestId": "race-1791978882501-0",
+    "winningClaims": 1,
+    "duplicateCommitments": 0,
+    "final": {
+      "ok": true,
+      "output": "winner-0",
+      "durationMs": 0,
+      "inputTokens": 0,
+      "outputTokens": 0
+    }
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "race-1791978882558-1",
+      "connected": false
+    },
+    "at": 1791978882566
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978912571,
+      "attempt": 1,
+      "leaseMs": 30000
+    },
+    "at": 1791978882576
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882578
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882580
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882582
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882584
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882587
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882589
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882591
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/result",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978882602
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/result",
+    "status": 200,
+    "body": {
+      "ok": true,
+      "duplicate": true
+    },
+    "at": 1791978882608
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/renew",
+    "status": 409,
+    "body": {
+      "error": "EXECUTION_TERMINAL"
+    },
+    "at": 1791978882611
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/race-1791978882558-1/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:54:42.571Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-race-1791978882558-1"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "winner-1",
+        "durationMs": 0,
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    },
+    "at": 1791978882614
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882618
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882558-1/result",
+    "status": 401,
+    "body": {
+      "error": "not authorised for computer 'race-worker'"
+    },
+    "at": 1791978882620
+  },
+  {
+    "event": "race_round",
+    "round": 1,
+    "requestId": "race-1791978882558-1",
+    "winningClaims": 1,
+    "duplicateCommitments": 0,
+    "final": {
+      "ok": true,
+      "output": "winner-1",
+      "durationMs": 0,
+      "inputTokens": 0,
+      "outputTokens": 0
+    }
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "race-1791978882620-2",
+      "connected": false
+    },
+    "at": 1791978882630
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978912634,
+      "attempt": 1,
+      "leaseMs": 30000
+    },
+    "at": 1791978882638
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882641
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882644
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882647
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882648
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882650
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882651
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882654
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/renew",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978882662
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/result",
+    "status": 200,
+    "body": {
+      "ok": true
+    },
+    "at": 1791978882665
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/result",
+    "status": 200,
+    "body": {
+      "ok": true,
+      "duplicate": true
+    },
+    "at": 1791978882669
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/race-1791978882620-2/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:54:42.633Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-race-1791978882620-2"
+        },
+        {
+          "at": "2026-10-14T11:54:42.659Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_renewed",
+          "executionId": "exec-race-1791978882620-2"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "winner-2",
+        "durationMs": 0,
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    },
+    "at": 1791978882672
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/claim",
+    "status": 409,
+    "body": {
+      "error": "RESOURCE_BUSY"
+    },
+    "at": 1791978882676
+  },
+  {
+    "event": "http",
+    "url": "/computers/race-worker/executions/race-1791978882620-2/result",
+    "status": 401,
+    "body": {
+      "error": "not authorised for computer 'race-worker'"
+    },
+    "at": 1791978882677
+  },
+  {
+    "event": "race_round",
+    "round": 2,
+    "requestId": "race-1791978882620-2",
+    "winningClaims": 1,
+    "duplicateCommitments": 0,
+    "final": {
+      "ok": true,
+      "output": "winner-2",
+      "durationMs": 0,
+      "inputTokens": 0,
+      "outputTokens": 0
+    }
+  },
+  {
+    "event": "exit",
+    "pid": 2956366,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978882697
+  }
+]

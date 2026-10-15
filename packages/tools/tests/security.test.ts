@@ -32,7 +32,7 @@ describe('check tools cannot run arbitrary commands', () => {
 
     const result = await testTool.execute({ command: `touch ${marker}` } as Record<string, unknown>, { projectRoot: project });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.error).toBe(true);
     expect(result.output).toContain('ran-test');
     await expect(fs.access(marker)).rejects.toThrow();
   });
@@ -66,7 +66,7 @@ describe('check tools cannot run arbitrary commands', () => {
 
     const result = await testTool.execute({ script: 'test:unit' }, { projectRoot: project });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.error).toBe(true);
     expect(result.output).toContain('ran-unit');
   });
 
@@ -78,7 +78,7 @@ describe('check tools cannot run arbitrary commands', () => {
     );
 
     const result = await testTool.execute({ script: 'audit:full' }, { projectRoot: project });
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.error).toBe(true);
     expect(result.output).toContain('start');
     expect(result.output).toContain('finished');
   });
@@ -210,13 +210,12 @@ describe('F-13: tool subprocesses get a minimal environment', () => {
       await fs.writeFile(
         checkScript,
         'console.log("secret=" + (process.env.WAZIR_TEST_SECRET_TOKEN || "unset") + " pass=" + (process.env.WAZIR_TEST_PASSTHROUGH || "unset"));\n',
-        'utf8',
       );
       const result = await shellTool.execute(
         { command: `"${process.execPath}" "${checkScript}"` },
         { projectRoot: project, taskId: 't', executionId: 'e' } as never,
       );
-      expect(result.ok).toBe(true);
+      expect(result.ok, JSON.stringify({ error: result.error, output: result.output, metadata: result.metadata })).toBe(true);
       expect(result.output.trim()).toBe('secret=unset pass=visible');
     } finally {
       delete process.env.WAZIR_TEST_SECRET_TOKEN;

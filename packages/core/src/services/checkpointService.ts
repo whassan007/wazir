@@ -447,6 +447,25 @@ export class CheckpointService {
     dir: string,
     snapshot: Record<string, string>,
   ): Promise<string[]> {
+    // Validate the entire snapshot before deleting or replacing any file. A remote
+    // digest verifies content integrity, not authority to write outside the workspace.
+    for (const [relative, content] of Object.entries(snapshot)) {
+      const parts = relative.split('/');
+      if (typeof content !== 'string' || !relative || relative.includes('\\') || relative.includes('\0') ||
+          path.posix.isAbsolute(relative) || path.win32.isAbsolute(relative) ||
+          parts.some(p => !p || p === '.' || p === '..' || ['.git', '.wazir', 'node_modules'].includes(p))) {
+        throw new Error(`UNSAFE_CHECKPOINT_PATH: ${relative}`);
+      }
+      let candidate = path.resolve(dir);
+      for (const part of parts) {
+        candidate = path.join(candidate, part);
+        try {
+          if ((await fs.lstat(candidate)).isSymbolicLink()) throw new Error(`UNSAFE_CHECKPOINT_PATH: symlink ${relative}`);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+      }
+    }
     // 1. Remove files currently in dir that are not in snapshot
     const currentFiles = await this.snapshotWorkspaceFiles(dir);
     for (const currentRelPath of Object.keys(currentFiles)) {

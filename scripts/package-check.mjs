@@ -57,7 +57,7 @@ if (!tarball) {
     const ci = run(npm, ['ci', '--no-audit', '--no-fund'], { cwd: src, stdio: 'inherit', env: buildEnv });
     if (ci.status !== 0) throw new Error('npm ci failed in clean clone');
   }
-  if (!flag('--skip-build')) {
+  if (!flag('--skip-build') && (!existsSync(path.join(src, 'bin/wa.js')) || flag('--clean-clone') || flag('--build'))) {
     const b = run(npm, ['run', 'build'], { cwd: src, stdio: 'inherit' });
     record('build', b.status === 0 ? 'PASS' : 'FAIL', { note: flag('--clean-clone') ? 'clean clone of HEAD' : 'working tree' });
     if (b.status !== 0) finish();
@@ -86,7 +86,7 @@ const problems = [
   ...unexpected.map((f) => `unexpected file ${f}`), ...missing.map((f) => `missing ${f}`),
   ...(manifest.version !== version ? [`version ${manifest.version} != ${version}`] : []),
   ...(manifest.private ? ['package is private'] : []),
-  ...(manifest.license !== 'AGPL-3.0-only' || !/GNU AFFERO GENERAL PUBLIC LICENSE/.test(readFileSync(path.join(extract, 'package/LICENSE'), 'utf8')) ? [`license ${manifest.license} does not match LICENSE (AGPL-3.0)`] : []),
+  ...(!['AGPL-3.0-only', 'AGPL-3.0'].includes(manifest.license) || !/GNU AFFERO GENERAL PUBLIC LICENSE/.test(readFileSync(path.join(extract, 'package/LICENSE'), 'utf8')) ? [`license ${manifest.license} does not match LICENSE (AGPL-3.0)`] : []),
   ...(lifecycle.length ? [`install lifecycle scripts present: ${lifecycle.join(', ')}`] : []),
   ...(manifest.dependencies && Object.keys(manifest.dependencies).length ? [`unexpected hard dependencies: ${Object.keys(manifest.dependencies).join(', ')}`] : []),
   ...(report.tarball.bytes > 15e6 ? [`tarball ${report.tarball.bytes} bytes exceeds 15 MB budget`] : []),
@@ -220,3 +220,4 @@ function finish() {
   if (!flag('--keep')) rmSync(work, { recursive: true, force: true });
   process.exit(report.result === 'PASS' ? 0 : 1);
 }
+

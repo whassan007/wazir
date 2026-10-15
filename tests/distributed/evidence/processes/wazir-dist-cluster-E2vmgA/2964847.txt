@@ -1,0 +1,6 @@
+worker worker-comp-auth-7ce96df02f0da3203eb35f3824502761 online
+  computer: comp-auth
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:44597
+waiting for work… (Ctrl+C to stop)

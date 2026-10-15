@@ -1,0 +1,209 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2948273,
+    "at": 1791978779275
+  },
+  {
+    "event": "spawn",
+    "pid": 2948458,
+    "at": 1791978781430
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "req-ctrl-1791978781643",
+      "connected": true
+    },
+    "at": 1791978781652
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-ctrl-1791978781643/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:53:01.655Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-ctrl-1791978781643"
+        },
+        {
+          "at": "2026-10-14T11:53:01.661Z",
+          "type": "started",
+          "executionId": "exec-ctrl-1791978781643"
+        }
+      ]
+    },
+    "at": 1791978781676
+  },
+  {
+    "event": "exit",
+    "pid": 2948458,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978781681
+  },
+  {
+    "event": "exit",
+    "pid": 2948273,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978781697
+  },
+  {
+    "event": "spawn",
+    "pid": 2948474,
+    "at": 1791978781700
+  },
+  {
+    "event": "spawn",
+    "pid": 2948555,
+    "at": 1791978783836
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-ctrl-1791978781643/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:53:01.655Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-ctrl-1791978781643"
+        },
+        {
+          "at": "2026-10-14T11:53:01.661Z",
+          "type": "started",
+          "executionId": "exec-ctrl-1791978781643"
+        },
+        {
+          "at": "2026-10-14T11:53:34.044Z",
+          "data": {
+            "attempt": 2
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-ctrl-1791978781643"
+        },
+        {
+          "at": "2026-10-14T11:53:34.062Z",
+          "type": "started",
+          "executionId": "exec-ctrl-1791978781643"
+        },
+        {
+          "at": "2026-10-14T11:53:34.073Z",
+          "data": {
+            "type": "token",
+            "content": "simulated model completion"
+          },
+          "type": "token",
+          "executionId": "exec-ctrl-1791978781643"
+        }
+      ]
+    },
+    "at": 1791978814084
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-ctrl-1791978781643/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:53:01.655Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-ctrl-1791978781643"
+        },
+        {
+          "at": "2026-10-14T11:53:01.661Z",
+          "type": "started",
+          "executionId": "exec-ctrl-1791978781643"
+        },
+        {
+          "at": "2026-10-14T11:53:34.044Z",
+          "data": {
+            "attempt": 2
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-ctrl-1791978781643"
+        },
+        {
+          "at": "2026-10-14T11:53:34.062Z",
+          "type": "started",
+          "executionId": "exec-ctrl-1791978781643"
+        },
+        {
+          "at": "2026-10-14T11:53:34.073Z",
+          "data": {
+            "type": "token",
+            "content": "simulated model completion"
+          },
+          "type": "token",
+          "executionId": "exec-ctrl-1791978781643"
+        },
+        {
+          "at": "2026-10-14T11:53:34.081Z",
+          "data": {
+            "type": "completed",
+            "usage": {
+              "inputTokens": 8,
+              "promptCache": {
+                "source": "UNKNOWN",
+                "provider": "ollama",
+                "inputTokens": {
+                  "value": 8,
+                  "status": "OBSERVED"
+                },
+                "cacheReadTokens": {
+                  "status": "UNKNOWN"
+                },
+                "cacheWriteTokens": {
+                  "status": "UNKNOWN"
+                }
+              },
+              "totalTokens": 24,
+              "outputTokens": 16
+            },
+            "content": "simulated model completion"
+          },
+          "type": "completed",
+          "executionId": "exec-ctrl-1791978781643"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "simulated model completion",
+        "durationMs": 20,
+        "inputTokens": 8,
+        "outputTokens": 16
+      }
+    },
+    "at": 1791978814190
+  },
+  {
+    "event": "exit",
+    "pid": 2948555,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978814205
+  },
+  {
+    "event": "exit",
+    "pid": 2948474,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978814214
+  }
+]

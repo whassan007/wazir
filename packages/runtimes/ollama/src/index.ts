@@ -331,12 +331,10 @@ export class OllamaAdapter implements RuntimeAdapter {
           try {
             parsed = JSON.parse(line) as OllamaChatLine;
           } catch {
-            // Malformed line should not crash stream
-            continue;
+            throw new Error('INVALID_PROVIDER_STREAM: malformed JSON line');
           }
           if (parsed.error) {
-            yield { type: 'error', error: parsed.error };
-            continue;
+            throw new Error(parsed.error);
           }
           const content = parsed.message?.content;
           if (content) {
@@ -358,6 +356,7 @@ export class OllamaAdapter implements RuntimeAdapter {
         }
       }
 
+      if (!lastDoneLine) throw new Error('INCOMPLETE_PROVIDER_STREAM: missing done marker');
       const promptCache = normalizePromptCacheTelemetry({
         provider: 'ollama',
         inputTokens,

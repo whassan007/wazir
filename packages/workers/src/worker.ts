@@ -35,6 +35,8 @@ export interface WorkerOptions {
   token?: string;
   adapters?: RuntimeAdapter[];
   heartbeatIntervalMs?: number;
+  os?: OSInfo;
+  hardware?: HardwareInfo;
 }
 
 /**
@@ -67,6 +69,8 @@ export class Worker {
   private taskStreamRetryTimer: NodeJS.Timeout | undefined;
 
   private readonly configuredAdapters?: RuntimeAdapter[];
+  private readonly configuredOs?: OSInfo;
+  private readonly configuredHardware?: HardwareInfo;
 
   constructor(options: WorkerOptions = {}) {
     this.computerId = options.computerId ?? generateId('computer-');
@@ -77,6 +81,8 @@ export class Worker {
     this.token = options.token || undefined;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
     this.configuredAdapters = options.adapters;
+    this.configuredOs = options.os;
+    this.configuredHardware = options.hardware;
     this.info = {
       id: this.id,
       computerId: this.computerId,
@@ -108,7 +114,11 @@ export class Worker {
     this.running = true;
 
     const adapters = this.configuredAdapters ?? defaultAdapters();
-    const hardware = await discoverHardware();
+    const discoveredHw = await discoverHardware();
+    const hardware: HardwareReport = {
+      os: this.configuredOs ? { ...discoveredHw.os, ...this.configuredOs } : discoveredHw.os,
+      hardware: this.configuredHardware ? { ...discoveredHw.hardware, ...this.configuredHardware } : discoveredHw.hardware,
+    };
     this._hardware = hardware;
     this.adapters = await discoverRuntimes(adapters);
 
@@ -246,8 +256,12 @@ export class Worker {
     };
     // Re-registration proves ownership with the token we already hold;
     // first registration (or a restart without state) uses the cluster
-    // registration token when one is configured.
-    const credential = this.token ?? this.registrationToken;
+    // registration token when one is configured. A pre-shared token the
+    // control plane has never seen is refused for a new id, so on 401/403
+    // the registration token is tried next (the pre-shared token is still
+    // sent in the body and adopted as this computer's token).
+    const credentials = [...new Set([this.token, this.registrationToken].filter((c): c is string => Boolean(c)))];
+    let credential: string | undefined = credentials.shift();
 
     // The control plane and its workers are typically started together by
     // an orchestrator (Docker Compose, systemd, Kubernetes) with no
@@ -270,7 +284,10 @@ export class Worker {
           const body = (await response.json().catch(() => ({}))) as { error?: string };
           const error = new Error(`registration failed: HTTP ${response.status}${body.error ? ` (${body.error})` : ''}`);
           // Auth failures are not transient; retrying only delays the report.
-          if (response.status === 401 || response.status === 403) throw Object.assign(error, { fatal: true });
+          if (response.status === 401 || response.status === 403) {
+            if (credentials.length > 0) { credential = credentials.shift(); attempt--; continue; }
+            throw Object.assign(error, { fatal: true });
+          }
           throw error;
         }
         const body = (await response.json()) as { token?: string };
@@ -357,8 +374,8 @@ export class Worker {
   private async handleDispatchedTask(request: WorkerExecutionRequest): Promise<void> {
     if (!this.serverUrl) return;
     const endpoint = `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}`;
-    const claimed = await fetch(`${endpoint}/claim`, { method: 'POST', headers: this.authHeaders() });
-    if (!claimed.ok) return; // A duplicate delivery or another worker already owns this attempt.
+    const claimed = await fetch(`${endpoint}/claim`, { method: 'POST', headers: this.authHeaders() }).catch(() => undefined);
+    if (!claimed || !claimed.ok) return; // A duplicate delivery, closed server, or another worker already owns this attempt.
     const lease = await claimed.json() as { token: string; leaseMs: number };
     request = { ...request, leaseToken: lease.token };
     let lost = false;

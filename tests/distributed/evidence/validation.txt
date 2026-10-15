@@ -1,0 +1,201 @@
+PostgreSQL integration (exit 0)
+
+> wazir@0.1.61 test:postgres
+> WAZIR_REQUIRE_DATABASE=1 vitest run packages/database/tests/postgresStore.test.ts
+
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+ RUN  v2.1.9 /home/wael/Code/Wazir-pg-worker
+
+ ✓ packages/database/tests/postgresStore.test.ts (20 tests) 521ms
+
+ Test Files  1 passed (1)
+      Tests  20 passed (20)
+   Start at  04:51:53
+   Duration  706ms (transform 41ms, setup 0ms, collect 54ms, tests 521ms, environment 0ms, prepare 22ms)
+
+
+
+Distributed complete suite (exit 0)
+
+> wazir@0.1.61 test:distributed
+> vitest run --config tests/distributed/vitest.config.ts
+
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+ RUN  v2.1.9 /home/wael/Code/Wazir-pg-worker
+
+ ✓ tests/distributed/leaseFencing.test.ts (5 tests) 104544ms
+   ✓ B4 — Lease-Fencing Integrity & Concurrency Races > rejects stale result submissions when a worker loses its lease 32460ms
+   ✓ B4 — Lease-Fencing Integrity & Concurrency Races > serializes competing claims and ensures only a valid lease holder can commit outcome 2339ms
+   ✓ B4 — Lease-Fencing Integrity & Concurrency Races > prevents stale lease renewals from resurrecting expired or completed leases 32318ms
+   ✓ B4 — Lease-Fencing Integrity & Concurrency Races > controller restart preserves durable task state and workers re-register cleanly 34969ms
+   ✓ B4 — Lease-Fencing Integrity & Concurrency Races > rejects duplicate task delivery through the dispatch interface 2457ms
+stdout | tests/distributed/crashRecovery.test.ts > B3 — Multi-Process Worker Crash & Recovery (SIGKILL) > detects SIGKILL crash mid-execution, fences stale lease, prevents late result, and recovers upon worker restart
+[EVIDENCE] B3 SIGKILL Recovery:
+      Dead Worker PID: 2951815
+      Restarted Worker PID: 2956227
+      tClaimed: 1791978819429
+      tKilled: 1791978819435 (delta: 6ms)
+      tExpired: 1791978849399 (delta: 29964ms)
+      tRecovered: 1791978879516 (delta: 30117ms)
+      Final Outcome: {"ok":true,"output":"simulated model completion","durationMs":15,"inputTokens":8,"outputTokens":16}
+
+
+ ✓ tests/distributed/crashRecovery.test.ts (1 test) 62733ms
+   ✓ B3 — Multi-Process Worker Crash & Recovery (SIGKILL) > detects SIGKILL crash mid-execution, fences stale lease, prevents late result, and recovers upon worker restart 62733ms
+(node:2956291) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ tests/distributed/duplicateSideEffect.test.ts (2 tests) 4ms
+ ✓ tests/distributed/races.test.ts (4 tests) 53442ms
+   ✓ bounded protocol races through production HTTP server > repeats competing claims and renewal/completion races with one authoritative outcome 2635ms
+   ✓ bounded protocol races through production HTTP server > repeats expired-renewal versus replacement-claim races after persisted deadline barriers 32678ms
+   ✓ bounded protocol races through production HTTP server > renews a long-running real execution before allowing the provider response 13641ms
+   ✓ bounded protocol races through production HTTP server > replays an in-flight result after controller dies between commit and acknowledgment 4486ms
+ ✓ tests/distributed/reconnect.test.ts (3 tests) 7739ms
+   ✓ B6 — Worker Graceful Disconnect, Reconnect & Authentication Integrity > handles graceful disconnect, reconnects cleanly without duplicate identity, and resumes work 3045ms
+   ✓ B6 — Worker Graceful Disconnect, Reconnect & Authentication Integrity > rejects unauthorized registration replacements and enforces token semantics 2286ms
+   ✓ B6 — Worker Graceful Disconnect, Reconnect & Authentication Integrity > ensures sensitive tokens are redacted from all diagnostic logs 2408ms
+ ✓ tests/distributed/processSideEffect.test.ts (2 tests) 69365ms
+   ✓ mutation before acknowledgment across SIGKILL > records duplicate execution and external effect with idempotency=true 34687ms
+   ✓ mutation before acknowledgment across SIGKILL > records duplicate execution and external effect with idempotency=false 34677ms
+
+ Test Files  6 passed (6)
+      Tests  17 passed (17)
+   Start at  04:51:51
+   Duration  298.99s (transform 156ms, setup 0ms, collect 549ms, tests 297.83s, environment 0ms, prepare 149ms)
+
+
+
+Surviving worker reconnect strengthening (exit 0)
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+ RUN  v2.1.9 /home/wael/Code/Wazir-pg-worker
+
+ ✓ tests/distributed/reconnect.test.ts (3 tests) 11526ms
+   ✓ B6 — Worker Graceful Disconnect, Reconnect & Authentication Integrity > handles graceful disconnect, reconnects cleanly without duplicate identity, and resumes work 2816ms
+   ✓ B6 — Worker Graceful Disconnect, Reconnect & Authentication Integrity > rejects unauthorized registration replacements and enforces token semantics 6377ms
+   ✓ B6 — Worker Graceful Disconnect, Reconnect & Authentication Integrity > ensures sensitive tokens are redacted from all diagnostic logs 2332ms
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  04:56:01
+   Duration  11.84s (transform 183ms, setup 0ms, collect 213ms, tests 11.53s, environment 0ms, prepare 23ms)
+
+
+
+Long task beyond initial deadline strengthening (exit 0)
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+ RUN  v2.1.9 /home/wael/Code/Wazir-pg-worker
+
+ ✓ tests/distributed/races.test.ts (4 tests | 3 skipped) 32443ms
+   ✓ bounded protocol races through production HTTP server > renews a long-running real execution before allowing the provider response 32442ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 3 skipped (4)
+   Start at  04:56:29
+   Duration  32.80s (transform 206ms, setup 0ms, collect 235ms, tests 32.44s, environment 0ms, prepare 23ms)
+
+
+
+Test typecheck (exit 0)
+
+> wazir@0.1.61 test:distributed:typecheck
+> tsc --noEmit --esModuleInterop --module commonjs --moduleResolution node --target es2022 --skipLibCheck tests/distributed/*.test.ts tests/distributed/harness/*.ts
+
+
+
+Missing mandatory database (expected exit 1)
+
+> wazir@0.1.61 test:postgres
+> WAZIR_REQUIRE_DATABASE=1 vitest run packages/database/tests/postgresStore.test.ts
+
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+ RUN  v2.1.9 /home/wael/Code/Wazir-pg-worker
+
+ ❯ packages/database/tests/postgresStore.test.ts (0 test)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/database/tests/postgresStore.test.ts [ packages/database/tests/postgresStore.test.ts ]
+Error: WAZIR_REQUIRE_DATABASE=1 was specified, but WAZIR_TEST_DATABASE_URL is not set!
+ ❯ packages/database/tests/postgresStore.test.ts:25:9
+     23|
+     24| if (process.env.WAZIR_REQUIRE_DATABASE === '1' && !connectionString) {
+     25|   throw new Error('WAZIR_REQUIRE_DATABASE=1 was specified, but WAZIR_T…
+       |         ^
+     26| }
+     27|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed (1)
+      Tests  no tests
+   Start at  04:48:54
+   Duration  186ms (transform 57ms, setup 0ms, collect 0ms, tests 0ms, environment 0ms, prepare 23ms)
+
+
+
+Unreachable mandatory database (expected exit 1)
+
+> wazir@0.1.61 test:postgres
+> WAZIR_REQUIRE_DATABASE=1 vitest run packages/database/tests/postgresStore.test.ts
+
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+ RUN  v2.1.9 /home/wael/Code/Wazir-pg-worker
+
+ ❯ packages/database/tests/postgresStore.test.ts (20 tests | 19 skipped) 11ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/database/tests/postgresStore.test.ts > PostgresStore (real Postgres)
+Error: could not reach test database: connect ECONNREFUSED 127.0.0.1:1
+ ❯ packages/database/tests/postgresStore.test.ts:36:13
+     34|     const health = await checkHealth(pool);
+     35|     if (!health.ok) {
+     36|       throw new Error(`could not reach test database: ${health.error}`…
+       |             ^
+     37|     }
+     38|     await runKvMigration(pool);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed (1)
+      Tests  1 passed | 19 skipped (20)
+   Start at  04:48:55
+   Duration  188ms (transform 47ms, setup 0ms, collect 68ms, tests 11ms, environment 0ms, prepare 25ms)
+
+
+
+PTY dependency repair (exit 0)
+rebuilt dependencies successfully
+
+
+PTY affected regression rerun (exit 0)
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+ RUN  v2.1.9 /home/wael/Code/Wazir-pg-worker
+
+ ✓ packages/tools/tests/terminalSession.test.ts (8 tests) 3782ms
+   ✓ TerminalSession (real PTY) > gracefully disposes and kills the underlying PTY 531ms
+   ✓ terminal_open / terminal_send / terminal_close tools > opens, sends, and closes a session end to end 2044ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  04:51:12
+   Duration  4.02s (transform 72ms, setup 0ms, collect 115ms, tests 3.78s, environment 0ms, prepare 22ms)
+
+
+
+Broad regression original run (exit 1, missing native PTY)
+ Test Files  1 failed | 295 passed | 1 skipped (297)
+      Tests  7 failed | 2210 passed | 27 skipped (2244)
+   Start at  04:44:25
+   Duration  405.81s (transform 3.92s, setup 0ms, collect 64.97s, tests 310.87s, environment 22ms, prepare 6.95s)
+
+
+
+Build: exit 0; repository typecheck: exit 0. PostgreSQL server: 16.15, aarch64 Linux. No remote CI run/publication.

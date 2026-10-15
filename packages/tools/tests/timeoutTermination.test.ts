@@ -19,17 +19,17 @@ describe('tool timeout terminates the process and determines the outcome', () =>
   afterEach(async () => { vi.useRealTimers(); await rm(root, { recursive: true, force: true }); });
 
   it('kills a timed-out shell command: TOOL_TIMEOUT with observed mutations, and no later side effect', async () => {
-    const script = join(root, 'hang.cjs');
-    await writeFile(script, 'const fs = require("fs"); fs.writeFileSync("early.txt", "early"); setTimeout(() => fs.writeFileSync("late.txt", "late"), 2000);\n');
     const quickShell: Tool = { descriptor: { ...shellTool.descriptor, name: 'quick_shell', timeoutMs: 300 }, execute: shellTool.execute };
     const registry = new ToolRegistry([quickShell]);
+    const script = join(root, 'hang.cjs');
+    await writeFile(script, 'const fs = require("fs"); fs.writeFileSync("early.txt", "early\\n"); setTimeout(() => { fs.writeFileSync("late.txt", "late\\n"); }, 2000);\n');
     const result = await executeTool(registry, 'quick_shell', { command: `"${process.execPath}" "${script}"` }, { projectRoot: root, verifyWorkspace: true });
 
     expect(result.ok).toBe(false);
-    expect(result.failureClass).toBe('TOOL_TIMEOUT');
+    expect(result.failureClass, JSON.stringify({ error: result.error, output: result.output, metadata: result.metadata })).toBe('TOOL_TIMEOUT');
     expect(result.metadata?.processTerminated).toBe(true);
     // The write that happened before the timeout is recorded as a physical mutation...
-    expect(result.fileMutations?.map(m => m.path)).toEqual(['early.txt']);
+    expect(result.fileMutations?.map(m => m.path), JSON.stringify({ output: result.output, error: result.error, metadata: result.metadata })).toEqual(['early.txt']);
     // ...and the killed process can never add one after the result was recorded.
     await new Promise(r => setTimeout(r, 2500));
     expect(existsSync(join(root, 'late.txt'))).toBe(false);

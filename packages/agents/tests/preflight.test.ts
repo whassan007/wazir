@@ -12,6 +12,17 @@ const fake = (mode: string, name = 'fake') =>
   new AcpAgentAdapter({ name, description: '', command: process.execPath, args: [FAKE], env: { FAKE_ACP_MODE: mode }, cancelGraceMs: 300 });
 
 describe('preflightAgent', () => {
+  it('requires an actual probe answer from discovered vendors, excluding stderr', async () => {
+    const spec = (code: string) => new ExternalAgentAdapter({ name: 'codex', version: 'test', description: '', command: process.execPath, args: ['-e', code], taskTypes: [], capabilities: [] });
+    expect((await preflightAgent(spec('process.stderr.write("OK")'))).status).toBe('FAILED');
+    expect((await preflightAgent(spec('process.stdout.write("OK")'))).status).toBe('READY');
+    expect((await preflightAgent(spec('process.exit(0)'))).status).toBe('FAILED');
+  });
+
+  it('blocks nested Claude profiles and rejects invalid time bounds', async () => {
+    expect((await preflightAgent(fake('normal', 'claude-code@work'), { env: { CLAUDECODE: '1' } })).status).toBe('BLOCKED');
+    await expect(preflightAgent(fake('normal'), { timeoutMs: NaN })).rejects.toThrow('positive finite');
+  });
   it('reports READY when the agent answers the probe', async () => {
     const r = await preflightAgent(fake('normal'));
     expect(r).toMatchObject({ agent: 'fake', status: 'READY', stage: 'answer' });

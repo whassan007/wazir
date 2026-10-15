@@ -12,9 +12,11 @@
 // Prints the tarball path. WAZIR_NPM_NAME overrides the package name (default: wazir).
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const arg = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
@@ -23,7 +25,16 @@ const rootPkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 // Native modules kept external by scripts/bundle.mjs, pinned to the versions the build was tested with.
-const installed = (m) => JSON.parse(readFileSync(path.join(root, 'node_modules', m, 'package.json'), 'utf8')).version;
+const installed = (m) => {
+  const localPath = path.join(root, 'node_modules', m, 'package.json');
+  if (existsSync(localPath)) return JSON.parse(readFileSync(localPath, 'utf8')).version;
+  try {
+    return JSON.parse(readFileSync(require.resolve(`${m}/package.json`), 'utf8')).version;
+  } catch {
+    const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+    return lock.packages?.[`node_modules/${m}`]?.version;
+  }
+};
 const optionalDependencies = { '@napi-rs/keyring': installed('@napi-rs/keyring'), 'node-pty': installed('node-pty') };
 
 if (!args.includes('--skip-bundle')) execFileSync(process.execPath, [path.join(root, 'scripts/bundle.mjs')], { stdio: 'inherit' });

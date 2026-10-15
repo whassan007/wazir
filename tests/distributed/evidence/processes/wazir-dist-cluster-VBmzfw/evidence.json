@@ -1,0 +1,113 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2961602,
+    "at": 1791978929046
+  },
+  {
+    "event": "spawn",
+    "pid": 2961734,
+    "at": 1791978931153
+  },
+  {
+    "event": "exit",
+    "pid": 2961734,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978931402
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "submit-1791978931402",
+      "connected": false
+    },
+    "at": 1791978931409
+  },
+  {
+    "event": "http",
+    "url": "/computers/submit-worker/executions/submit-1791978931402/claim",
+    "status": 200,
+    "body": {
+      "token": "[REDACTED]",
+      "expiresAt": 1791978961413,
+      "attempt": 1,
+      "leaseMs": 30000
+    },
+    "at": 1791978931416
+  },
+  {
+    "event": "exit",
+    "pid": 2961602,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978931445
+  },
+  {
+    "event": "spawn",
+    "pid": 2961752,
+    "at": 1791978931447
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/submit-1791978931402/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:55:31.413Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-submit-1791978931402"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "durable before restart",
+        "durationMs": 0,
+        "inputTokens": 0,
+        "outputTokens": 0
+      }
+    },
+    "at": 1791978933481
+  },
+  {
+    "event": "http",
+    "url": "/computers/submit-worker/executions/submit-1791978931402/result",
+    "status": 200,
+    "body": {
+      "ok": true,
+      "duplicate": true
+    },
+    "at": 1791978933488
+  },
+  {
+    "event": "result_ack_lost",
+    "requestId": "submit-1791978931402",
+    "oldPid": 2961602,
+    "restartedPid": 2961752,
+    "replay": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "duplicate": true
+      }
+    },
+    "authoritativeOutcome": {
+      "ok": true,
+      "output": "durable before restart"
+    }
+  },
+  {
+    "event": "exit",
+    "pid": 2961752,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978933504
+  }
+]

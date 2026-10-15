@@ -5,10 +5,22 @@ compat contract (`GET /ping`, `POST /invocations`) and the same conformance, Ins
 (repeatability, prompt injection) and behaviour-scenario suites as Strands, LangGraph,
 OpenAI Agents and the other reference harnesses.
 
-The harness loop runs on Wazir's own OpenAI-compatible runtime adapter
-(`@wazir/runtimes-lmstudio`) and validates tool arguments with Wazir's
-`compileToolSchema`, so the suites exercise Wazir's streaming, tool-call parsing,
-retry, cancellation and argument validation.
+The compatibility adapter invokes Wazir's production `CodingAgent.run`, through
+`LMStudioAdapter.generate`. It preserves the upstream simulated tool implementations,
+validates arguments, propagates user/session identifiers into OpenTelemetry spans,
+reports runtime token usage, and cancels generation on disconnect. Native runs bind
+loopback. Session identifiers are correlation identifiers; this upstream interface
+does not provide persistent conversation memory or a production authorization boundary.
+
+The original adapter implemented its own tool loop. Its old results established runtime
+adapter coverage only. Current results exercise the production agent loop; CLI/scheduler,
+physical tools, persistence, and browser wiring require the separate Wazir suites.
+Both pinned upstreams are Apache-2.0; generated upstream files retain their attribution.
+
+Wazir can stop a runaway task before `AGENT_MAX_TURNS` when its repeat-action guard
+fires. The pinned upstream `perf/respects_turn_limit` scorer requires exactly the
+configured call count, so it reports a failure for this stricter bound. Keep that
+failure visible; do not disable Wazir's guard to improve the upstream score.
 
 ```bash
 npm run build                                   # in this repo

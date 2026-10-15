@@ -1,9 +1,33 @@
 {
   "name": "wazir",
-  "version": "0.1.59",
+  "version": "0.1.64",
   "description": "Wazir is a model- and runtime-agnostic meta-harness that schedules AI agents, models, tools, and compute to execute tasks across local and distributed environments.",
-  "private": true,
   "license": "AGPL-3.0-only",
+  "author": "Wazir Maintainers",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/whassan007/wazir.git"
+  },
+  "homepage": "https://github.com/whassan007/wazir#readme",
+  "bugs": {
+    "url": "https://github.com/whassan007/wazir/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "coding-agent",
+    "meta-harness",
+    "distributed",
+    "scheduler",
+    "llm",
+    "cli",
+    "tui",
+    "orchestration",
+    "dgx-spark"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "workspaces": [
     "packages/*",
     "packages/runtimes/*",
@@ -13,7 +37,7 @@
     "wa": "./bin/wa.js"
   },
   "files": [
-    "bin",
+    "bin/wa.js",
     "README.md",
     "LICENSE"
   ],
@@ -21,9 +45,15 @@
     "bundle": "node scripts/bundle.mjs",
     "package:pack": "node scripts/pack-npm.mjs",
     "package:check": "node scripts/package-check.mjs",
+    "package:manifests": "node scripts/update-package-managers.mjs",
+    "release:verify": "node scripts/release-verify.mjs",
+    "release:gate": "node scripts/release-gate.mjs",
+    "benchmark:fleet": "node scripts/cross-platform-benchmark.mjs",
     "setup:env": "node scripts/setup-env.mjs",
     "build": "npm run build --workspaces --if-present && npm run bundle",
-    "build:binary": "bash scripts/build-binary.sh",
+    "build:binary": "node scripts/build-binary.mjs",
+    "build:deb": "node scripts/build-deb.mjs",
+    "build:rpm": "node scripts/build-rpm.mjs",
     "dev": "npm run dev --workspace @wazir/cli",
     "start:web": "npm run start --workspace @wazir/web",
     "start:api": "npm run start --workspace @wazir/api",
@@ -41,7 +71,10 @@
     "test:plan:acceptance": "node scripts/acceptance-test-harness.mjs --all",
     "typecheck": "tsc --build --force",
     "dmg": "bash scripts/build-dmg.sh",
-    "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\""
+    "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\"",
+    "test:distributed": "vitest run --config tests/distributed/vitest.config.ts",
+    "test:postgres": "WAZIR_REQUIRE_DATABASE=1 vitest run packages/database/tests/postgresStore.test.ts",
+    "test:distributed:typecheck": "tsc --noEmit --esModuleInterop --module commonjs --moduleResolution node --target es2022 --skipLibCheck tests/distributed/*.test.ts tests/distributed/harness/*.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/node": "^2.0.0",

@@ -28,7 +28,7 @@ new AgentSideConnection((conn) => ({
     return { sessionId };
   },
   async cancel() { cancelHook?.(); },
-  async prompt({ sessionId }) {
+  async prompt({ sessionId, prompt }) {
     const cwd = sessions.get(sessionId);
     const update = (u) => conn.sessionUpdate({ sessionId, update: u });
     const options = [
@@ -44,6 +44,10 @@ new AgentSideConnection((conn) => ({
       const child = spawn('sleep', ['60'], { stdio: 'ignore' });
       writeFileSync(process.env.FAKE_ACP_PIDS, `${process.pid} ${child.pid}`);
       await new Promise(() => {});
+    }
+    if (mode === 'normal' && prompt?.some(part => part.type === 'text' && part.text.includes('Reply with the single word OK.'))) {
+      await update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'OK' } });
+      return { stopReason: 'end_turn' };
     }
     await update({ sessionUpdate: 'plan', entries: [{ content: 'write out.txt', status: 'in_progress', priority: 'high' }] });
     await update({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Write out.txt', kind: 'edit', status: 'pending' });

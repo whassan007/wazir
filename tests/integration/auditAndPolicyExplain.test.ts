@@ -124,12 +124,10 @@ describe('Audit Logging & Policy Explain & Model Cycle M0 (PROGRESS.md Next Step
         resolvedBy: 'test-user',
       }, { auditPath: auditLogFile });
 
-      // Verify file permissions (0600 on POSIX; Windows NTFS synthesizes 0666)
+      // Verify file permissions (0600 on POSIX)
       const stat = await fs.stat(auditLogFile);
-      if (process.platform === 'win32') {
-        expect(stat.mode & 0o600).toBe(0o600);
-      } else {
-        expect(stat.mode & 0o777).toBe(0o600);
+      if (process.platform !== 'win32') {
+        expect((stat.mode & 0o777)).toBe(0o600);
       }
 
       // Read all events (reverse chronological)

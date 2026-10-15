@@ -1,0 +1,212 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2964344,
+    "at": 1791978962059
+  },
+  {
+    "event": "spawn",
+    "pid": 2964645,
+    "at": 1791978964183
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "req-recon-1-1791978964372",
+      "connected": true
+    },
+    "at": 1791978964387
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-recon-1-1791978964372/status",
+    "status": 200,
+    "body": {
+      "events": []
+    },
+    "at": 1791978964393
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-recon-1-1791978964372/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:56:04.403Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-recon-1-1791978964372"
+        },
+        {
+          "at": "2026-10-14T11:56:04.413Z",
+          "type": "started",
+          "executionId": "exec-recon-1-1791978964372"
+        },
+        {
+          "at": "2026-10-14T11:56:04.425Z",
+          "data": {
+            "type": "token",
+            "content": "simulated model completion"
+          },
+          "type": "token",
+          "executionId": "exec-recon-1-1791978964372"
+        },
+        {
+          "at": "2026-10-14T11:56:04.433Z",
+          "data": {
+            "type": "completed",
+            "usage": {
+              "inputTokens": 8,
+              "promptCache": {
+                "source": "UNKNOWN",
+                "provider": "ollama",
+                "inputTokens": {
+                  "value": 8,
+                  "status": "OBSERVED"
+                },
+                "cacheReadTokens": {
+                  "status": "UNKNOWN"
+                },
+                "cacheWriteTokens": {
+                  "status": "UNKNOWN"
+                }
+              },
+              "totalTokens": 24,
+              "outputTokens": 16
+            },
+            "content": "simulated model completion"
+          },
+          "type": "completed",
+          "executionId": "exec-recon-1-1791978964372"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "simulated model completion",
+        "durationMs": 20,
+        "inputTokens": 8,
+        "outputTokens": 16
+      }
+    },
+    "at": 1791978964499
+  },
+  {
+    "event": "exit",
+    "pid": 2964645,
+    "code": 0,
+    "signal": null,
+    "at": 1791978964513
+  },
+  {
+    "event": "spawn",
+    "pid": 2964664,
+    "at": 1791978964516
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "req-recon-2-1791978964688",
+      "connected": true
+    },
+    "at": 1791978964694
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-recon-2-1791978964688/status",
+    "status": 200,
+    "body": {
+      "events": []
+    },
+    "at": 1791978964696
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-recon-2-1791978964688/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:56:04.696Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-recon-2-1791978964688"
+        },
+        {
+          "at": "2026-10-14T11:56:04.702Z",
+          "type": "started",
+          "executionId": "exec-recon-2-1791978964688"
+        },
+        {
+          "at": "2026-10-14T11:56:04.710Z",
+          "data": {
+            "type": "token",
+            "content": "simulated model completion"
+          },
+          "type": "token",
+          "executionId": "exec-recon-2-1791978964688"
+        },
+        {
+          "at": "2026-10-14T11:56:04.715Z",
+          "data": {
+            "type": "completed",
+            "usage": {
+              "inputTokens": 8,
+              "promptCache": {
+                "source": "UNKNOWN",
+                "provider": "ollama",
+                "inputTokens": {
+                  "value": 8,
+                  "status": "OBSERVED"
+                },
+                "cacheReadTokens": {
+                  "status": "UNKNOWN"
+                },
+                "cacheWriteTokens": {
+                  "status": "UNKNOWN"
+                }
+              },
+              "totalTokens": 24,
+              "outputTokens": 16
+            },
+            "content": "simulated model completion"
+          },
+          "type": "completed",
+          "executionId": "exec-recon-2-1791978964688"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "simulated model completion",
+        "durationMs": 13,
+        "inputTokens": 8,
+        "outputTokens": 16
+      }
+    },
+    "at": 1791978964799
+  },
+  {
+    "event": "exit",
+    "pid": 2964664,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978964807
+  },
+  {
+    "event": "exit",
+    "pid": 2964344,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978964819
+  }
+]

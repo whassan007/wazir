@@ -1,0 +1,32 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2962271,
+    "at": 1791978936712
+  },
+  {
+    "event": "spawn",
+    "pid": 2962403,
+    "at": 1791978938716
+  },
+  {
+    "event": "credential_rejection",
+    "computerId": "comp-auth",
+    "unauthorizedReplacementStatus": 403,
+    "invalidStreamTokenStatus": 401
+  },
+  {
+    "event": "exit",
+    "pid": 2962403,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978938956
+  },
+  {
+    "event": "exit",
+    "pid": 2962271,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978938967
+  }
+]

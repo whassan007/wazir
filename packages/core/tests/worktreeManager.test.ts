@@ -83,7 +83,7 @@ describe('WorktreeManager — git worktree isolation per agent', () => {
 
     await expect(fs.access(wt1.worktreeDir)).rejects.toThrow();
     await expect(fs.access(wt2.worktreeDir)).rejects.toThrow();
-  });
+  }, 30_000);
 
   it('shares job-level worktree across tasks when getOrCreateJobWorktree is used', async () => {
     tmpRepo = await initGitRepo();

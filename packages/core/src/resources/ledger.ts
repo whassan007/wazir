@@ -108,6 +108,8 @@ export class ResourceLedger {
   constructor(readonly file: string, private readonly clock: () => number = Date.now) {
     if (file !== ':memory:') mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(file);
+    // Set the wait policy before journal_mode/schema changes, since those can
+    // contend during concurrent process startup before SCHEMA reaches its pragma.
     this.db.exec('PRAGMA busy_timeout = 10000;');
     this.db.exec(SCHEMA);
   }

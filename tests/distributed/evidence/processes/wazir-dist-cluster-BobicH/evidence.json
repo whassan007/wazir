@@ -1,0 +1,222 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2965818,
+    "at": 1791978976224
+  },
+  {
+    "event": "spawn",
+    "pid": 2965961,
+    "at": 1791978978274
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "effect-op-1791978976221",
+      "connected": true
+    },
+    "at": 1791978978468
+  },
+  {
+    "event": "exit",
+    "pid": 2965961,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978978515
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 429,
+    "body": {
+      "error": "REQUEST_ALREADY_DISPATCHED",
+      "requestId": "effect-op-1791978976221"
+    },
+    "at": 1791978978522
+  },
+  {
+    "event": "exit",
+    "pid": 2965818,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791979008503
+  },
+  {
+    "event": "spawn",
+    "pid": 2968463,
+    "at": 1791979008506
+  },
+  {
+    "event": "spawn",
+    "pid": 2968599,
+    "at": 1791979010558
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/effect-op-1791978976221/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:56:18.474Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-effect-op-1791978976221"
+        },
+        {
+          "at": "2026-10-14T11:56:18.483Z",
+          "type": "started",
+          "executionId": "exec-effect-op-1791978976221"
+        },
+        {
+          "at": "2026-10-14T11:56:50.784Z",
+          "data": {
+            "attempt": 2
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-effect-op-1791978976221"
+        }
+      ]
+    },
+    "at": 1791979010790
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/effect-op-1791978976221/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:56:18.474Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-effect-op-1791978976221"
+        },
+        {
+          "at": "2026-10-14T11:56:18.483Z",
+          "type": "started",
+          "executionId": "exec-effect-op-1791978976221"
+        },
+        {
+          "at": "2026-10-14T11:56:50.784Z",
+          "data": {
+            "attempt": 2
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-effect-op-1791978976221"
+        },
+        {
+          "at": "2026-10-14T11:56:50.793Z",
+          "type": "started",
+          "executionId": "exec-effect-op-1791978976221"
+        },
+        {
+          "at": "2026-10-14T11:56:50.805Z",
+          "data": {
+            "type": "token",
+            "content": "mutation acknowledged"
+          },
+          "type": "token",
+          "executionId": "exec-effect-op-1791978976221"
+        },
+        {
+          "at": "2026-10-14T11:56:50.814Z",
+          "data": {
+            "type": "completed",
+            "usage": {
+              "inputTokens": 8,
+              "promptCache": {
+                "source": "UNKNOWN",
+                "provider": "ollama",
+                "inputTokens": {
+                  "value": 8,
+                  "status": "OBSERVED"
+                },
+                "cacheReadTokens": {
+                  "status": "UNKNOWN"
+                },
+                "cacheWriteTokens": {
+                  "status": "UNKNOWN"
+                }
+              },
+              "totalTokens": 24,
+              "outputTokens": 16
+            },
+            "content": "mutation acknowledged"
+          },
+          "type": "completed",
+          "executionId": "exec-effect-op-1791978976221"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "mutation acknowledged",
+        "durationMs": 22,
+        "inputTokens": 8,
+        "outputTokens": 16
+      }
+    },
+    "at": 1791979010843
+  },
+  {
+    "event": "http",
+    "url": "/computers/effect-worker/executions/effect-op-1791978976221/result",
+    "status": 200,
+    "body": {
+      "ok": true,
+      "duplicate": true
+    },
+    "at": 1791979010849
+  },
+  {
+    "event": "http",
+    "url": "/computers/effect-worker/executions/effect-op-1791978976221/result",
+    "status": 409,
+    "body": {
+      "error": "LEASE_LOST"
+    },
+    "at": 1791979010852
+  },
+  {
+    "event": "external_effect_replay",
+    "requestId": "effect-op-1791978976221",
+    "operationId": "op-1791978976221",
+    "idempotent": false,
+    "duplicateDeliveryRejected": true,
+    "executions": 2,
+    "effects": 2,
+    "resultCommitments": 1,
+    "automaticPhysicalReconciliation": false,
+    "originalAttempt": 1,
+    "replacementAttempt": 2,
+    "finalOutcome": {
+      "ok": true,
+      "output": "mutation acknowledged",
+      "durationMs": 22,
+      "inputTokens": 8,
+      "outputTokens": 16
+    },
+    "limitation": "Dispatcher replays opaque provider requests; external idempotency is required. UNKNOWN_OUTCOME checkpoints in RecoveryManager are tested separately."
+  },
+  {
+    "event": "exit",
+    "pid": 2968599,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791979010861
+  },
+  {
+    "event": "exit",
+    "pid": 2968463,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791979010867
+  }
+]

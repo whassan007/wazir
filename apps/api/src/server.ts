@@ -9,6 +9,12 @@ import {
   ModelLifecycleError,
   RuntimeRegistry,
   EditorProtocolService,
+  ProtocolError,
+  JSONRPC_FORBIDDEN,
+  type ProtocolPrincipal,
+  type ProtocolRequestContext,
+  type PolicyActionRequest,
+  type PolicyDecision,
   type ModelRecord,
   type ModelCapability,
   type RuntimeType,
@@ -23,6 +29,7 @@ import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
 import { generateId, sanitizeUntrustedOutput, MemoryStore, type KeyValueStore } from '@wazir/shared';
 import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
+import { createControlledExecution } from './toolExecution.js';
 
 // Bounds on in-memory state so an unauthenticated peer (or a runaway client)
 // cannot grow the control plane without limit (security review F-19).
@@ -153,11 +160,24 @@ export class TaskDispatcher {
     this.records.set(id, record); return true;
   }
   async resolve(id: string, outcome: ExecutionOutcome, token: string): Promise<boolean> {
+    await this.commit(id, outcome, token);
+    return true;
+  }
+  /**
+   * Commits the terminal outcome at most once. Only the current lease holder may commit; a
+   * repeat from that holder (a retried POST) is reported as `duplicate` and changes nothing,
+   * so callers record history and metrics only for `committed`.
+   */
+  async commit(id: string, outcome: ExecutionOutcome, token: string): Promise<'committed' | 'duplicate'> {
+    let committed = false;
     const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
       const r = this.validate(current, token);
-      return r.outcome ? r : { ...r, outcome };
+      if (r.outcome) return r;
+      committed = true;
+      return { ...r, outcome };
     });
-    this.records.set(id, record); return true;
+    this.records.set(id, record);
+    return committed ? 'committed' : 'duplicate';
   }
   async assignments(): Promise<Array<{ id: string; modelId: string; computerId: string; runtimeId?: string }>> {
     await this.refresh();
@@ -200,17 +220,23 @@ export interface ApiStateOptions {
   modelStartup?: Parameters<ModelLifecycleService['applyStartupPolicy']>[0];
   auth?: ApiAuthOptions;
   store?: KeyValueStore;
+  /** Workspace protocol tool calls are confined to. Defaults to WAZIR_PROJECT_ROOT, then cwd. */
+  projectRoot?: string;
+  /** Human approval for policy `ask` decisions on protocol tool calls; absent, `ask` is denied. */
+  approveTool?: (request: PolicyActionRequest, decision: PolicyDecision) => Promise<boolean | 'unavailable'>;
+  auditPath?: string;
 }
 
 export async function createApiState(options: ApiStateOptions = {}): Promise<ApiState> {
-  const auth = new ApiAuth(options.auth ?? {
+  const store = options.store ?? new MemoryStore();
+  // Worker credentials live in the same store as registrations, so both survive (or are
+  // lost) together.
+  const auth = new ApiAuth({ ...(options.auth ?? {
     operatorToken: process.env.WAZIR_API_TOKEN,
     viewerToken: process.env.WAZIR_API_VIEWER_TOKEN,
     registrationToken: process.env.WAZIR_REGISTRATION_TOKEN,
-    store: options.store,
-  });
+  }), store: options.auth?.store ?? store });
   await auth.init();
-  const store = options.store ?? new MemoryStore();
   const computers = new ComputerRegistry();
   for (const entry of await store.list('computer/registration/')) {
     const registration = entry.value as Parameters<ComputerRegistry['register']>[0];
@@ -243,7 +269,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   computers.heartbeat(localId, { load: currentLoad() });
   // The in-process computer holds a token nobody else knows, so a network
   // peer cannot re-register `local` and take over its record (F-3).
-  auth.issueComputerToken(localId);
+  await auth.issueComputerToken(localId);
 
   for (const discoveredRuntime of discovered) {
     runtimes.register({
@@ -311,9 +337,15 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   await lifecycle.applyStartupPolicy(options.modelStartup);
   lifecycle.startReconciliation();
 
+  const projectRoot = options.projectRoot ?? process.env.WAZIR_PROJECT_ROOT ?? process.cwd();
+  const controlled = createControlledExecution({ tools, projectRoot, approve: options.approveTool, auditPath: options.auditPath });
   const editorProtocol = new EditorProtocolService({
     store,
     tools,
+    executeTool: controlled.executeTool,
+    verify: controlled.verify,
+    toolSurface: controlled.toolSurface,
+    projectRoot,
   });
 
   return {
@@ -601,7 +633,12 @@ export function createApp(state: ApiState) {
     // Anything registering over HTTP is by definition not this process;
     // `local` is derived from the transport, never trusted from the payload
     // (F-15) — otherwise a `localOnly` task could be routed off-machine.
-    await state.store.put(`computer/registration/${registration.id}`, { ...registration, local: false });
+    try {
+      await state.store.put(`computer/registration/${registration.id}`, { ...registration, local: false });
+    } catch (error) {
+      res.status(503).json({ error: `registration could not be persisted: ${error instanceof Error ? error.message : String(error)}` });
+      return;
+    }
     const computer = state.computers.register({ ...registration, local: false });
     let token: string;
     if (byComputerToken && !preferred) {
@@ -609,8 +646,15 @@ export function createApp(state: ApiState) {
     } else {
       // Fresh registration or replacement: rotate the token so any stream a
       // previous holder still has open stops receiving work.
+      // The token is durably stored before it is returned: a 200 here means the worker
+      // can authenticate after an API restart. On a storage failure nothing changes.
+      try {
+        token = await auth.issueComputerToken(registration.id, preferred);
+      } catch (error) {
+        res.status(503).json({ error: `credential could not be persisted: ${error instanceof Error ? error.message : String(error)}` });
+        return;
+      }
       state.dispatcher.disconnect(registration.id);
-      token = auth.issueComputerToken(registration.id, preferred);
     }
     res.json({ ok: true, id: computer.id, token });
   });
@@ -770,11 +814,12 @@ export function createApp(state: ApiState) {
       return;
     }
     const requestId = String(req.params.requestId);
-    let known: boolean;
-    try { known = await state.dispatcher.resolve(requestId, outcome, String(req.body?.leaseToken ?? '')); }
+    let committed: 'committed' | 'duplicate';
+    try { committed = await state.dispatcher.commit(requestId, outcome, String(req.body?.leaseToken ?? '')); }
     catch (error) { res.status(409).json({ error: (error as Error).message }); return; }
-    if (!known) {
-      res.status(404).json({ error: `request '${requestId}' unknown` });
+    if (committed === 'duplicate') {
+      // A retried result POST: the first outcome stands and is not recorded twice.
+      res.json({ ok: true, duplicate: true });
       return;
     }
     recordExecution(state, {
@@ -808,15 +853,29 @@ export function createApp(state: ApiState) {
     res.status(201).json({ id, record });
   });
 
-  // Agent Protocol (ACP) Standard Endpoints
-  app.use('/ap/v1', auth.requireViewerOrOperator);
+  // Agent Protocol (ACP) Standard Endpoints.
+  // Authorization matrix: GETs need viewer or operator; every POST (task,
+  // step, artifact) needs operator. The service re-checks the principal's
+  // scope, so a route added without the middleware still fails closed.
+  app.use('/ap/v1', auth.requireProtocolPrincipal);
+  const protocolContext = (req: express.Request, res: Response): ProtocolRequestContext => {
+    const controller = new AbortController();
+    // A client that disconnects mid-execution cancels the dispatched tool.
+    res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+    return { principal: res.locals.principal as ProtocolPrincipal | undefined, signal: controller.signal };
+  };
+  const protocolError = (res: Response, err: unknown): void => {
+    const code = err instanceof ProtocolError ? err.code : undefined;
+    const status = code === 'TASK_NOT_FOUND' ? 404 : code === 'TASK_TERMINAL' ? 409 : code === 'FORBIDDEN' ? 403 : code === 'STEP_INVALID' ? 400 : 500;
+    res.status(status).json({ error: status === 500 ? 'internal error' : (err as Error).message, code });
+  };
 
-  app.post('/ap/v1/agent/tasks', async (req, res) => {
+  app.post('/ap/v1/agent/tasks', auth.requireOperator, async (req, res) => {
     try {
-      const task = await state.editorProtocol.createTask(req.body ?? {});
+      const task = await state.editorProtocol.createTask(req.body ?? {}, protocolContext(req, res));
       res.status(201).json(task);
     } catch (err) {
-      res.status(400).json({ error: (err as Error).message });
+      protocolError(res, err);
     }
   });
 
@@ -834,13 +893,12 @@ export function createApp(state: ApiState) {
     res.json(task);
   });
 
-  app.post('/ap/v1/agent/tasks/:task_id/steps', async (req, res) => {
+  app.post('/ap/v1/agent/tasks/:task_id/steps', auth.requireOperator, async (req, res) => {
     try {
-      const step = await state.editorProtocol.executeStep(req.params.task_id, req.body);
+      const step = await state.editorProtocol.executeStep(String(req.params.task_id), req.body, protocolContext(req, res));
       res.json(step);
     } catch (err) {
-      const msg = (err as Error).message;
-      res.status(msg.startsWith('TASK_NOT_FOUND') ? 404 : 400).json({ error: msg });
+      protocolError(res, err);
     }
   });
 
@@ -871,12 +929,12 @@ export function createApp(state: ApiState) {
     }
   });
 
-  app.post('/ap/v1/agent/tasks/:task_id/artifacts', async (req, res) => {
+  app.post('/ap/v1/agent/tasks/:task_id/artifacts', auth.requireOperator, async (req, res) => {
     try {
-      const artifact = await state.editorProtocol.createArtifact(req.params.task_id, req.body ?? {});
+      const artifact = await state.editorProtocol.createArtifact(String(req.params.task_id), req.body ?? {}, protocolContext(req, res));
       res.status(201).json(artifact);
     } catch (err) {
-      res.status(400).json({ error: (err as Error).message });
+      protocolError(res, err);
     }
   });
 
@@ -889,13 +947,17 @@ export function createApp(state: ApiState) {
     res.json(artifact);
   });
 
-  // Model Context Protocol (MCP) Server JSON-RPC 2.0 Endpoint
-  app.use('/mcp', auth.requireViewerOrOperator);
+  // Model Context Protocol (MCP) Server JSON-RPC 2.0 Endpoint. Any valid
+  // credential may connect; each JSON-RPC method is then classified on its
+  // own (read-only metadata vs. tool execution) against the principal.
+  app.use('/mcp', auth.requireProtocolPrincipal);
 
   const mcpHandler = async (req: express.Request, res: Response) => {
-    const response = await state.editorProtocol.handleJsonRpc(req.body);
+    const response = await state.editorProtocol.handleJsonRpc(req.body, protocolContext(req, res));
     if (response === null) {
       res.status(204).end();
+    } else if (response.error?.code === JSONRPC_FORBIDDEN) {
+      res.status(403).json(response);
     } else {
       res.json(response);
     }
@@ -903,6 +965,17 @@ export function createApp(state: ApiState) {
 
   app.post('/mcp', mcpHandler);
   app.post('/mcp/v1', mcpHandler);
+
+  // Malformed JSON bodies: JSON-RPC parse error on MCP, plain 400 elsewhere —
+  // never Express's default HTML page.
+  app.use((err: unknown, req: express.Request, res: Response, next: express.NextFunction) => {
+    if ((err as { type?: string })?.type !== 'entity.parse.failed') { next(err); return; }
+    if (req.path.startsWith('/mcp')) {
+      res.status(400).json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+      return;
+    }
+    res.status(400).json({ error: 'malformed JSON body' });
+  });
 
   return app;
 }

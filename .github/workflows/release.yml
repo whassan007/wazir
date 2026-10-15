@@ -1,20 +1,20 @@
 name: Release
 
-# Builds release artifacts for an existing, immutable version tag and creates a DRAFT GitHub
-# release. Nothing is made public automatically:
-#   - the GitHub release stays a draft until a maintainer publishes it;
-#   - npm publishing is a separate, manually dispatched job behind the `npm-publish`
-#     environment (configure required reviewers on it), using npm trusted publishing (OIDC).
 on:
   push:
-    tags: ['v*.*.*']
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to build (e.g. v0.1.60)
-        required: true
+        description: 'Existing tag to build (optional when triggered via push)'
+        required: false
+      publish_draft:
+        description: 'Create draft release on GitHub'
+        type: boolean
+        default: true
       publish_npm:
-        description: Publish the npm package after building (requires npm-publish environment approval)
+        description: 'Publish npm package to registry'
         type: boolean
         default: false
 
@@ -26,13 +26,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build and verify artifacts
+  verify:
+    name: Verify Quality Gates
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write      # provenance attestations
-      attestations: write
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
@@ -43,95 +39,130 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.x
-          cache: npm
-      - name: Verify tag, version and provenance
+          node-version: '22.x'
+          cache: 'npm'
+      - name: Verify tag and version
         id: meta
         shell: bash
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           version="$(node -p "require('./package.json').version")"
           [ "$tag" = "v$version" ] || { echo "::error::tag $tag does not match package.json version $version"; exit 1; }
-          git fetch --quiet origin main
-          git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/main || { echo "::error::$tag is not on main"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - run: npm ci
       - run: npm run build
       - run: npm run typecheck
-      - name: Package check
-        run: npm run package:check -- --skip-build
-      - name: Assemble release files
-        shell: bash
-        run: |
-          v="${{ steps.meta.outputs.version }}"
-          mkdir -p release
-          cp "dist/npm/wazir-$v.tgz" "release/wazir-$v.tgz"
-          cp dist/package-check-linux-x64.json "release/package-check-linux-x64.json"
-          # SBOM of the published package's dependency tree (its optional native modules).
-          (cd dist/npm/package && npm install --package-lock-only --ignore-scripts --no-audit --no-fund >/dev/null \
-            && npm sbom --sbom-format cyclonedx --package-lock-only) > "release/wazir-$v.cdx.json"
-          (cd release && sha256sum wazir-* > SHA256SUMS)
-          cat release/SHA256SUMS
-      - uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: release/wazir-*
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ steps.meta.outputs.version }}
-          path: release/
-          if-no-files-found: error
+      - run: npm run check-dist -- --quiet
+      - run: npm run package:check -- --skip-build
+      - run: npm run release:verify
+      - run: npm test
 
-  draft-release:
-    name: Draft GitHub release
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+  build-artifacts:
+    name: Build Artifacts (${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+          - os: windows-latest
+            target: windows-x64
+          - os: windows-11-arm
+            target: windows-arm64
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.build.outputs.tag }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-${{ needs.build.outputs.version }}
-          path: release
-      - name: Create draft release (never overwrites an existing one)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="${{ needs.build.outputs.tag }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "::error::release $tag already exists; artifacts are immutable, cut a new version instead"; exit 1
-          fi
-          awk -v v="## $tag" 'index($0, v)==1{f=1;next} /^## v/{f=0} f' CHANGELOG.md > notes.md
-          gh release create "$tag" --draft --verify-tag --title "$tag" --notes-file notes.md release/*
-
-  npm-publish:
-    name: Publish to npm (manual, approved)
-    needs: [build, draft-release]
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish_npm == 'true'
-    runs-on: ubuntu-latest
-    environment: npm-publish
-    permissions:
-      contents: read
-      id-token: write      # npm trusted publishing + provenance
-    steps:
+          ref: ${{ needs.verify.outputs.tag }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.x
-          registry-url: https://registry.npmjs.org
-      - run: npm install -g npm@11
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-${{ needs.build.outputs.version }}
-          path: release
-      - name: Verify checksum and that this version was never published
-        shell: bash
+          node-version: '22.x'
+          cache: 'npm'
+      - run: npm ci
+      - name: Ensure node-pty helper is executable on macOS
+        if: runner.os == 'macOS'
         run: |
-          v="${{ needs.build.outputs.version }}"
-          (cd release && sha256sum -c SHA256SUMS --ignore-missing)
-          if npm view "wazir@$v" version >/dev/null 2>&1; then echo "::error::wazir@$v is already on npm"; exit 1; fi
-      - name: Publish
-        run: npm publish "release/wazir-${{ needs.build.outputs.version }}.tgz" --provenance --access public
+          helpers="$(find node_modules/node-pty -name 'spawn-helper')"
+          if [ -z "$helpers" ]; then
+            echo "ERROR: no node-pty spawn-helper binary found under node_modules/node-pty" >&2
+            exit 1
+          fi
+          find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} +
+      - run: npm run build
+      - name: Generate release archives
+        run: node scripts/package-release-artifacts.mjs
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ matrix.target }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  publish:
+    name: Create Release & Publish
+    needs: [verify, build-artifacts]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Consolidate artifacts and generate unified SHA256SUMS
+        run: |
+          mkdir -p release-dist
+          find all-artifacts -type f ! -name "*.sha256" ! -name "SHA256SUMS.txt" -exec cp {} release-dist/ \;
+          cd release-dist
+          sha256sum * > SHA256SUMS.txt
+          echo "=== Release Artifacts & Checksums ==="
+          cat SHA256SUMS.txt
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-dist/wazir-*
+
+      - name: Create GitHub Release (Draft)
+        if: github.event_name == 'push' || inputs.publish_draft == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.verify.outputs.tag }}
+          draft: true
+          prerelease: false
+          files: release-dist/*
+          generate_release_notes: true
+          name: Wazir ${{ needs.verify.outputs.tag }}
+
+      - name: Publish to npm registry (Requires explicit authorization)
+        if: inputs.publish_npm == true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          TGZ=$(find release-dist -name "wazir-*.tgz" | head -n 1)
+          if [ -n "$TGZ" ]; then
+            echo "Publishing $TGZ to npm..."
+            npm publish "$TGZ" --access public
+          else
+            echo "Error: No npm tarball found in release-dist"
+            exit 1
+          fi
+

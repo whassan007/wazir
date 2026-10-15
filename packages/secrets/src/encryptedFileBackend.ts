@@ -114,15 +114,20 @@ export class EncryptedFileBackend implements SecretBackend {
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
     await this.ensureDir();
     const lockPath = `${this.filePath}.lock`;
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 15_000;
     for (;;) {
       try {
         const handle = await fs.open(lockPath, 'wx');
         await handle.close();
         break;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || Date.now() > deadline) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 20));
+        const code = (error as NodeJS.ErrnoException).code;
+        // Windows can report a transient sharing violation as EPERM/EACCES
+        // while another process owns the exclusive-create lock. Retry those
+        // only on Windows; elsewhere they indicate a real permissions issue.
+        const lockBusy = code === 'EEXIST' || (process.platform === 'win32' && ['EPERM', 'EACCES', 'EBUSY'].includes(code ?? ''));
+        if (!lockBusy || Date.now() > deadline) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 15 + Math.random() * 35));
       }
     }
     try {

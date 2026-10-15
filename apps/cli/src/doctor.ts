@@ -3,6 +3,7 @@ import { color } from './colors.js';
 import { createBlock } from './blocks.js';
 import { sandboxStatus } from '@wazir/tools';
 import { collectHealthReport } from './health.js';
+import { checkRuntimeDependencies, checkGitAvailability, checkPackageVersion } from './version.js';
 
 export type DoctorStatus = 'PASS' | 'WARN' | 'FAIL' | 'NOT INSTALLED' | 'UNAVAILABLE';
 
@@ -450,6 +451,9 @@ async function checkExternalAgentsUnsafe(engine: RookEngine): Promise<DoctorChec
 
 export async function doctor(engine: RookEngine): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [
+    checkPackageVersion(),
+    checkRuntimeDependencies(),
+    checkGitAvailability(),
     checkConfig(engine),
     checkPersistence(engine),
     checkControlPlane(engine),

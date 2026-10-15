@@ -1,0 +1,123 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2951452,
+    "at": 1791978814245
+  },
+  {
+    "event": "spawn",
+    "pid": 2951544,
+    "at": 1791978816331
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "req-dup-1791978816529",
+      "connected": true
+    },
+    "at": 1791978816539
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 429,
+    "body": {
+      "error": "REQUEST_ALREADY_DISPATCHED",
+      "requestId": "req-dup-1791978816529"
+    },
+    "at": 1791978816545
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-dup-1791978816529/status",
+    "status": 200,
+    "body": {
+      "events": []
+    },
+    "at": 1791978816549
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/req-dup-1791978816529/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:53:36.554Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-dup-1791978816529"
+        },
+        {
+          "at": "2026-10-14T11:53:36.560Z",
+          "type": "started",
+          "executionId": "exec-dup-1791978816529"
+        },
+        {
+          "at": "2026-10-14T11:53:36.568Z",
+          "data": {
+            "type": "token",
+            "content": "simulated model completion"
+          },
+          "type": "token",
+          "executionId": "exec-dup-1791978816529"
+        },
+        {
+          "at": "2026-10-14T11:53:36.576Z",
+          "data": {
+            "type": "completed",
+            "usage": {
+              "inputTokens": 8,
+              "promptCache": {
+                "source": "UNKNOWN",
+                "provider": "ollama",
+                "inputTokens": {
+                  "value": 8,
+                  "status": "OBSERVED"
+                },
+                "cacheReadTokens": {
+                  "status": "UNKNOWN"
+                },
+                "cacheWriteTokens": {
+                  "status": "UNKNOWN"
+                }
+              },
+              "totalTokens": 24,
+              "outputTokens": 16
+            },
+            "content": "simulated model completion"
+          },
+          "type": "completed",
+          "executionId": "exec-dup-1791978816529"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "simulated model completion",
+        "durationMs": 17,
+        "inputTokens": 8,
+        "outputTokens": 16
+      }
+    },
+    "at": 1791978816652
+  },
+  {
+    "event": "exit",
+    "pid": 2951544,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978816661
+  },
+  {
+    "event": "exit",
+    "pid": 2951452,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791978816671
+  }
+]

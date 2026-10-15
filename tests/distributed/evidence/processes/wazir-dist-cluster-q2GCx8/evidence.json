@@ -1,0 +1,192 @@
+[
+  {
+    "event": "spawn",
+    "pid": 2966718,
+    "at": 1791978989486
+  },
+  {
+    "event": "spawn",
+    "pid": 2966940,
+    "at": 1791978991555
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/dispatch?wait=0",
+    "status": 202,
+    "body": {
+      "accepted": true,
+      "requestId": "long-1791978991777",
+      "connected": true
+    },
+    "at": 1791978991788
+  },
+  {
+    "event": "heartbeat_and_renewal",
+    "computerId": "long-worker",
+    "requestId": "long-1791978991777",
+    "heartbeatBefore": "2026-10-14T11:56:31.769Z",
+    "heartbeatAfter": "2026-10-14T11:56:43.061Z",
+    "originalExpiresAt": 1791979021793,
+    "renewedExpiresAt": 1791979031803
+  },
+  {
+    "event": "long_task_beyond_original_deadline",
+    "requestId": "long-1791978991777",
+    "originalExpiresAt": 1791979021793,
+    "currentExpiresAt": 1791979051802,
+    "observedAt": 1791979021819,
+    "attempt": 1
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/long-1791978991777/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:56:31.793Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-long-1791978991777"
+        },
+        {
+          "at": "2026-10-14T11:56:31.800Z",
+          "type": "started",
+          "executionId": "exec-long-1791978991777"
+        },
+        {
+          "at": "2026-10-14T11:56:41.803Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_renewed",
+          "executionId": "exec-long-1791978991777"
+        },
+        {
+          "at": "2026-10-14T11:56:51.802Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_renewed",
+          "executionId": "exec-long-1791978991777"
+        },
+        {
+          "at": "2026-10-14T11:57:01.802Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_renewed",
+          "executionId": "exec-long-1791978991777"
+        }
+      ]
+    },
+    "at": 1791979021824
+  },
+  {
+    "event": "http",
+    "url": "/api/v1/tasks/long-1791978991777/status",
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "at": "2026-10-14T11:56:31.793Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_acquired",
+          "executionId": "exec-long-1791978991777"
+        },
+        {
+          "at": "2026-10-14T11:56:31.800Z",
+          "type": "started",
+          "executionId": "exec-long-1791978991777"
+        },
+        {
+          "at": "2026-10-14T11:56:41.803Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_renewed",
+          "executionId": "exec-long-1791978991777"
+        },
+        {
+          "at": "2026-10-14T11:56:51.802Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_renewed",
+          "executionId": "exec-long-1791978991777"
+        },
+        {
+          "at": "2026-10-14T11:57:01.802Z",
+          "data": {
+            "attempt": 1
+          },
+          "type": "lease_renewed",
+          "executionId": "exec-long-1791978991777"
+        },
+        {
+          "at": "2026-10-14T11:57:01.833Z",
+          "data": {
+            "type": "token",
+            "content": "long task completed"
+          },
+          "type": "token",
+          "executionId": "exec-long-1791978991777"
+        },
+        {
+          "at": "2026-10-14T11:57:01.838Z",
+          "data": {
+            "type": "completed",
+            "usage": {
+              "inputTokens": 8,
+              "promptCache": {
+                "source": "UNKNOWN",
+                "provider": "ollama",
+                "inputTokens": {
+                  "value": 8,
+                  "status": "OBSERVED"
+                },
+                "cacheReadTokens": {
+                  "status": "UNKNOWN"
+                },
+                "cacheWriteTokens": {
+                  "status": "UNKNOWN"
+                }
+              },
+              "totalTokens": 24,
+              "outputTokens": 16
+            },
+            "content": "long task completed"
+          },
+          "type": "completed",
+          "executionId": "exec-long-1791978991777"
+        }
+      ],
+      "outcome": {
+        "ok": true,
+        "output": "long task completed",
+        "durationMs": 30037,
+        "inputTokens": 8,
+        "outputTokens": 16
+      }
+    },
+    "at": 1791979021877
+  },
+  {
+    "event": "exit",
+    "pid": 2966940,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791979021884
+  },
+  {
+    "event": "exit",
+    "pid": 2966718,
+    "code": null,
+    "signal": "SIGKILL",
+    "at": 1791979021890
+  }
+]

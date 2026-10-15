@@ -173,7 +173,9 @@ describe('Gate 12: Editor / Agent Protocol Integration', () => {
       const recoveredTask = await getRes.json();
       expect(recoveredTask.task_id).toBe(task.task_id);
       expect(recoveredTask.input).toBe('Persistent task');
-    });
+      // Two full API startups (each runs real runtime discovery) take ~4.7 s unloaded; the
+      // 5 s default made this fail whenever the machine was busy.
+    }, 30_000);
   });
 
   describe('Model Context Protocol (MCP) Server Endpoint', () => {

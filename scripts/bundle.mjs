@@ -3,6 +3,7 @@ import * as esbuild from 'esbuild';
 import { chmodSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,8 +29,18 @@ const RUNTIME_GUARD = `
   }
 })();`;
 
+const pkg = JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8'));
 // One canonical version: package.json. WAZIR_BUILD_VERSION overrides it for upgrade tests only.
-const version = process.env.WAZIR_BUILD_VERSION || JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8')).version;
+const version = process.env.WAZIR_BUILD_VERSION || pkg.version;
+let commit = process.env.WAZIR_BUILD_COMMIT || '';
+if (!commit) {
+  try {
+    commit = execSync('git rev-parse HEAD', { cwd: rootDir, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    commit = 'unknown';
+  }
+}
+const buildDate = process.env.WAZIR_BUILD_DATE || new Date().toISOString();
 
 const entryPoint = resolve(rootDir, 'apps/cli/src/index.ts');
 const outDir = resolve(rootDir, 'bin');
@@ -56,13 +67,21 @@ try {
     // feature (PTY terminal tool, OS keychain, native Postgres driver).
     external: ['pg-native', '@napi-rs/keyring', 'node-pty'],
     banner: { js: RUNTIME_GUARD },
-    define: { __WAZIR_VERSION__: JSON.stringify(version) },
     sourcemap: true,
     minify: false,
     logLevel: 'info',
+    define: {
+      '__WAZIR_VERSION__': JSON.stringify(version),
+      '__WAZIR_COMMIT__': JSON.stringify(commit),
+      '__WAZIR_BUILD_DATE__': JSON.stringify(buildDate),
+    },
   });
 
-  chmodSync(outFile, 0o755);
+  try {
+    chmodSync(outFile, 0o755);
+  } catch {
+    // best-effort on Windows
+  }
   console.log(`✓ Standalone CLI bundle created at: ${outFile}`);
 } catch (error) {
   console.error('Bundle failed:', error);

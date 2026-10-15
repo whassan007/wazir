@@ -426,3 +426,29 @@ describe('routing', () => {
     expect(classifyWorkload({ type: 'chat', priority: 'normal', input: 'Summarize this log' } as any)).toBe('summarization');
   });
 });
+
+describe('governed adapter instrumentation', () => {
+  it('a wrapper assigned to generate wraps the governed call once (no double admission)', async () => {
+    const { ledger, budget } = setup([local], { enforce: false });
+    const { adapter, seen } = fakeAdapter('lmstudio', () => [{ type: 'token', content: 'hi' }, { type: 'completed', content: 'hi', usage: { inputTokens: 3, outputTokens: 1 } }]);
+    const governed = governAdapter(adapter, { budget, resolveAccount: () => 'dgx' });
+    const generate = governed.generate.bind(governed);
+    let wrapped = 0;
+    governed.generate = async function* (req: GenerationRequest) { wrapped++; yield* generate(req); };
+    const events = await drain(governed.generate({ requestId: 'req-once', modelId: 'm', messages: [{ role: 'user', content: 'x' }] }));
+    expect(events.map((e) => e.type)).toEqual(['token', 'completed']);
+    expect(wrapped).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(ledger.getReservation('req-once')).toBeDefined();
+  });
+
+  it('a second admission of the same request id is refused plainly, not a SQLite error', () => {
+    // Default policy (enforce=false) is what reached the unique constraint live.
+    const { budget } = setup([local], { enforce: false });
+    const req = { requestId: 'dup-1', accountId: 'dgx', modelId: 'm', workload: 'routine' as const, estimatedInputTokens: 1, estimatedOutputTokens: 1 };
+    expect(budget.admit(req).outcome).toBe('admitted');
+    const again = budget.admit(req);
+    expect(again.outcome).toBe('blocked');
+    expect(again.reasons.join(' ')).toContain('DUPLICATE_REQUEST_ID');
+  });
+});

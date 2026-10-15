@@ -1,0 +1,6 @@
+worker worker-comp-redact-f8f203fb842d490f2a5e4e9de67f407c online
+  computer: comp-redact
+  runtimes: lmstudio, ollama
+  models:   1 discovered
+  server:   http://127.0.0.1:37097
+waiting for work… (Ctrl+C to stop)
