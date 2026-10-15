@@ -463,14 +463,16 @@ export function validationFailureMessage(
   };
 }
 
-export function buildSystemPrompt(projectRoot: string, tools: AgentRuntime['tools'], extra?: string): string {
+export function buildSystemPrompt(projectRoot: string, tools: AgentRuntime['tools'], extra?: string, native = false): string {
   const toolLines = tools
-    .map((t) => `- ${t.name}: ${t.description} input: ${JSON.stringify(t.inputSchema).slice(0, 240)}`)
+    .map((t) => `- ${t.name}: ${t.description} input: ${JSON.stringify(t.inputSchema)}`)
     .join('\n');
   return [
     "You are Wazir's native coding agent, executing inside a sandboxed project.",
     'You act in phases: plan, inspect, implement, test, debug, repair, verify, complete.',
-    'Each turn you MUST output exactly one JSON object and nothing else. No markdown fences, no commentary.',
+    native
+      ? 'Invoke exactly one available native function per turn. For plan or done, emit the JSON control object below. No markdown fences or commentary.'
+      : 'Each turn you MUST output exactly one JSON object and nothing else. No markdown fences, no commentary.',
     'Allowed shapes:',
     '{"action":"plan","content":"short step list"}',
     '{"action":"tool","tool":"<tool name>","input":{...}}',
@@ -485,6 +487,7 @@ export function buildSystemPrompt(projectRoot: string, tools: AgentRuntime['tool
     '- Make minimal, correct changes.',
     '- After implementing, run the test/lint/typecheck tools and fix any failures.',
     '- Never fabricate tool results or claim checks you did not run.',
+    '- Only use the tools listed above for the current phase. Never invent tools or invoke SDK methods as tools.',
     '- Respond with a tool call until the work is done, then respond with {"action":"done",...}.',
     `Project root: ${projectRoot}`,
     extra ? extra : '',
@@ -821,6 +824,10 @@ export class CodingAgent implements AgentAdapter {
       /** >1 when the provider emitted a parallel batch; none of it is executed. */
       parallelCalls?: number;
     }> => {
+      // The text contract and native schemas must describe the same current surface.
+      messages[0].content = buildSystemPrompt(request.projectRoot, currentToolSurface.tools.map(t => ({
+        name: t.descriptor.name, description: t.descriptor.description, inputSchema: t.descriptor.inputSchema,
+      })), this.systemPromptExtra, currentToolSurface.selectedProtocol === 'native_tool_call');
       let content = '';
       let toolCall: { name: string; input: Record<string, unknown> } | undefined;
       let error: string | undefined;
@@ -842,7 +849,7 @@ export class CodingAgent implements AgentAdapter {
           messages: messages.map((m) => ({ ...m })),
           maxTokens: this.maxTokensPerTurn,
           temperature: this.temperature,
-          tools: currentToolSurface.serializedSchemas,
+          tools: currentToolSurface.selectedProtocol === 'native_tool_call' ? currentToolSurface.serializedSchemas : undefined,
         })) {
           if (event.type === 'token' && event.content) {
             content += event.content;
@@ -1028,6 +1035,7 @@ export class CodingAgent implements AgentAdapter {
       currentModelId = decision.modelId;
       triedModelIds.push(decision.modelId);
       correctionCount = 0;
+      incompatibleActions = 0;
       consecutiveValidationFailures = 0;
       lastValidationKey = '';
       noProgressCount = 0;
@@ -1052,7 +1060,7 @@ export class CodingAgent implements AgentAdapter {
         `after ${failureClass}: ${reason}. Continue the task from the current workspace state; do not repeat the previous strategy.`;
       const last = messages[messages.length - 1];
       if (last && last.role === 'user') last.content = `${last.content}\n\n${note}`;
-      else messages.push({ role: 'user', content: `${note} ${stateLine()}\nRespond with exactly one JSON object.` });
+      else messages.push({ role: 'user', content: `${note} ${stateLine()}\n${responseInstruction()}` });
       yield { kind: 'message', content: `model escalated: ${routeChange.previousModel} -> ${routeChange.newModel} (${failureClass})`, routeChange };
       return true;
     };
@@ -1094,8 +1102,11 @@ export class CodingAgent implements AgentAdapter {
 
     // Chat templates treat a trailing assistant message as finished, so every
     // model turn must be preceded by a user message or the model replies with nothing.
+    const responseInstruction = (): string => currentToolSurface.selectedProtocol === 'native_tool_call'
+      ? 'Invoke exactly one available native function, or emit a plan/done JSON control object.'
+      : 'Respond with exactly one JSON object.';
     const pushContinue = (content: string): void => {
-      messages.push({ role: 'user', content: `${content} ${stateLine()}\nRespond with exactly one JSON object.` });
+      messages.push({ role: 'user', content: `${content} ${stateLine()}\n${responseInstruction()}` });
     };
 
     // Model context gets a compact projection of large observations; the raw result
@@ -1120,10 +1131,11 @@ export class CodingAgent implements AgentAdapter {
       }
       messages.push({
         role: 'user',
-        content: `[tool result for ${tool} (ok=${result.ok})]\n${body}\n${stateLine(`${tool}(${result.ok ? 'ok' : 'failed'})`)}\nContinue. Respond with exactly one JSON object.`,
+        content: `[tool result for ${tool} (ok=${result.ok})]\n${body}\n${stateLine(`${tool}(${result.ok ? 'ok' : 'failed'})`)}\nContinue. ${responseInstruction()}`,
       });
     };
 
+    let incompatibleActions = 0;
     let actionAttempts = 0;
     let validActions = 0;
     let validationErrors = 0;
@@ -1236,7 +1248,13 @@ export class CodingAgent implements AgentAdapter {
           content: `ACTION_VALIDATION_FAILED: ${normalizationError}`,
           raw: toolCall ? JSON.stringify(toolCall) : raw,
         };
-        rejectAttempt(`Invalid tool action: ${normalizationError}`);
+        incompatibleActions += 1;
+        if (incompatibleActions >= 3) {
+          if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', normalizationError)) continue;
+          yield { kind: 'error', error: `Protocol incompatible after 3 rejected actions: ${normalizationError}. Select a runtime/model that passes the coding smoke test.`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', protocolMetrics: currentMetrics() };
+          return;
+        }
+        rejectAttempt(`Invalid tool action: ${normalizationError}. Available tools: ${[...activeToolNames].join(', ')}`);
         continue;
       }
 
@@ -1250,6 +1268,24 @@ export class CodingAgent implements AgentAdapter {
       const action = envelope
         ? (envelopeToCanonicalAction(envelope) as ParsedAction)
         : (toolCall ? normalizeAction({ action: 'tool', tool: toolCall.name, input: toolCall.input }, toolNames) : readAction(raw));
+
+      // Enforce the compiled surface before dispatch, including legacy compatibility actions.
+      // Count different unknown names together; alternating hallucinations is not progress.
+      if (action?.action === 'tool' && action.tool && !activeToolNames.has(action.tool)) {
+        validationErrors += 1;
+        incompatibleActions += 1;
+        const reason = currentPhase === 'plan' && MUTATING_FILE_TOOLS.has(action.tool)
+          ? `'${action.tool}' is not permitted during the planning phase. Establish a plan or inspect with read/glob/search first.`
+          : `Tool '${action.tool}' is unavailable in phase '${currentPhase}'. Available tools: ${[...activeToolNames].join(', ')}`;
+        if (incompatibleActions >= 3) {
+          if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', reason)) continue;
+          yield { kind: 'error', error: `${reason}. Three incompatible actions rejected; select a smoke-tested model/runtime.`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', protocolMetrics: currentMetrics() };
+          return;
+        }
+        yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: ${reason}`, raw: toolCall ? JSON.stringify(toolCall) : raw };
+        rejectAttempt(reason);
+        continue;
+      }
 
       if (!action) {
         correctionCount += 1;
@@ -1437,7 +1473,13 @@ export class CodingAgent implements AgentAdapter {
           content: `ACTION_VALIDATION_FAILED: ${normalizationError}`,
           raw: toolCall ? JSON.stringify(toolCall) : raw,
         };
-        rejectAttempt(`Invalid tool action: ${normalizationError}`);
+        incompatibleActions += 1;
+        if (incompatibleActions >= 3) {
+          if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', normalizationError)) continue;
+          yield { kind: 'error', error: `Protocol incompatible after 3 rejected actions: ${normalizationError}. Select a runtime/model that passes the coding smoke test.`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', protocolMetrics: currentMetrics() };
+          return;
+        }
+        rejectAttempt(`Invalid tool action: ${normalizationError}. Available tools: ${[...activeToolNames].join(', ')}`);
         continue;
       }
 
@@ -1451,6 +1493,24 @@ export class CodingAgent implements AgentAdapter {
       const action = envelope
         ? (envelopeToCanonicalAction(envelope) as ParsedAction)
         : (toolCall ? normalizeAction({ action: 'tool', tool: toolCall.name, input: toolCall.input }, toolNames) : readAction(raw));
+
+      // Enforce the compiled surface before dispatch, including legacy compatibility actions.
+      // Count different unknown names together; alternating hallucinations is not progress.
+      if (action?.action === 'tool' && action.tool && !activeToolNames.has(action.tool)) {
+        validationErrors += 1;
+        incompatibleActions += 1;
+        const reason = currentPhase === 'plan' && MUTATING_FILE_TOOLS.has(action.tool)
+          ? `'${action.tool}' is not permitted during the planning phase. Establish a plan or inspect with read/glob/search first.`
+          : `Tool '${action.tool}' is unavailable in phase '${currentPhase}'. Available tools: ${[...activeToolNames].join(', ')}`;
+        if (incompatibleActions >= 3) {
+          if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', reason)) continue;
+          yield { kind: 'error', error: `${reason}. Three incompatible actions rejected; select a smoke-tested model/runtime.`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', protocolMetrics: currentMetrics() };
+          return;
+        }
+        yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: ${reason}`, raw: toolCall ? JSON.stringify(toolCall) : raw };
+        rejectAttempt(reason);
+        continue;
+      }
 
       if (!action) {
         correctionCount += 1;
