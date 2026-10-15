@@ -331,7 +331,7 @@ run_worker() {
   for phase in 1 2 3 4; do
     if [[ -s "$STATE_DIR/done-$phase" ]]; then
       local completed_sha; completed_sha="$(head -1 "$STATE_DIR/done-$phase")"
-      if git merge-base --is-ancestor "$completed_sha" HEAD 2>/dev/null; then
+      if git merge-base --is-ancestor "$completed_sha" HEAD 2>/dev/null && node "$WORKTREE/scripts/self-improvement-phase-receipt.mjs" "$STATE_DIR/review-$phase.json" "$phase" "$completed_sha" "$PROMPT_DIR/$phase.txt"; then
         logline "Skipping verified phase $phase at $completed_sha"; continue
       fi
       fail "Invalid phase checkpoint $phase; inspect before resuming"

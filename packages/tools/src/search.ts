@@ -112,7 +112,7 @@ export const searchTool: Tool = {
       properties: {
         pattern: { type: 'string', description: 'Regular expression (legacy, use regex or glob instead)' },
         regex: { type: 'string', description: 'Regular expression pattern' },
-        glob: { type: 'string', description: 'Glob pattern (e.g., "*.cpp")' },
+        glob: { type: 'string', description: 'File glob filter when pattern or regex is supplied (e.g. "src/**/*.ts"). When used alone, legacy content-glob matching is preserved.' },
         path: { type: 'string', description: 'Directory to search in (default: project root)' },
         include: { type: 'string', description: 'File glob filter, e.g. "*.ts"' },
       },
@@ -126,12 +126,14 @@ export const searchTool: Tool = {
     try {
       let regex: RegExp;
       try {
-        if (input.glob) {
-          regex = globToRegExp(String(input.glob));
-        } else if (input.regex) {
+        if (input.regex) {
           regex = new RegExp(String(input.regex));
         } else if (input.pattern) {
           regex = new RegExp(String(input.pattern));
+        } else if (input.glob) {
+          // Preserve glob-only content matching for existing callers. A supplied
+          // content regex must never be replaced by its file filter.
+          regex = globToRegExp(String(input.glob));
         } else {
           return { ok: false, output: '', error: 'Must provide regex or glob', durationMs: Date.now() - started };
         }
@@ -148,11 +150,13 @@ export const searchTool: Tool = {
       }
 
       const results: string[] = [];
+      const fileGlob = (input.regex || input.pattern) && typeof input.glob === 'string' ? input.glob : undefined;
       let filesScanned = 0;
 
       for await (const file of walkFiles(searchRoot, path.relative(ctx.projectRoot, searchRoot).split(path.sep).join('/'))) {
         const relative = path.relative(ctx.projectRoot, file).split(path.sep).join('/');
         if (!matchesInclude(relative, typeof input.include === 'string' ? input.include : undefined)) continue;
+        if (fileGlob && !matchesInclude(relative, fileGlob)) continue;
         const stat = await fs.stat(file).catch(() => null);
         if (!stat || stat.size > MAX_FILE_BYTES) continue;
         filesScanned += 1;
@@ -172,7 +176,9 @@ export const searchTool: Tool = {
 
       return {
         ok: true,
-        output: results.length > 0 ? results.join('\n') : '(no matches)',
+        output: results.length > 0 ? results.join('\n') : filesScanned === 0 && fileGlob
+          ? `(no files matched glob '${fileGlob}'; use path to select a directory or a glob such as **/*.ts)`
+          : '(no matches)',
         durationMs: Date.now() - started,
         metadata: { filesScanned, matches: results.length },
       };

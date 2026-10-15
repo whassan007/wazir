@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { execSync } from 'node:child_process';
 import os from 'node:os';
@@ -204,7 +204,17 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     });
     const engine = await buildTestEngine(projectRoot, undefined, executions);
 
+    const run = vi.spyOn(engine.agents.get('wazir-coding')!, 'run');
     const outcome = await executeTask(engine, 'write a hello file', { quiet: true });
+    expect(run.mock.calls[0][0].contextTokens).toBe(32768);
+    expect(run.mock.calls[0][1].getContextTokens?.()).toBe(32768);
+    // These tools exist in ToolRegistry but lack a supported policy execution path.
+    expect(engine.tools.get('code_mode')).toBeDefined();
+    const advertised = run.mock.calls[0][1].tools.map(t => t.name);
+    expect(advertised).toContain('shell');
+    expect(advertised).not.toContain('code_mode');
+    expect(advertised).not.toContain('documentSymbols');
+    expect(advertised).not.toContain('terminal_open');
 
     expect(conflicted).toBe(true);
     expect(outcome.success).toBe(false);

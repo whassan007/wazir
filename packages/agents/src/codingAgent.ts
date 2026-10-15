@@ -746,7 +746,7 @@ export class CodingAgent implements AgentAdapter {
      */
     const webEvidence = new Map<string, GroundedResult>();
     const compactIfNeeded = (force = false): string | null => {
-      const contextTokens = request.contextTokens;
+      const contextTokens = runtime.getContextTokens?.() ?? request.contextTokens;
       const KEEP_RECENT = 2; // only the last action and result
       const KEEP_HEAD = 2; // system prompt + initial task message
       if (messages.length <= KEEP_HEAD + KEEP_RECENT) return null;

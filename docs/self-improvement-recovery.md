@@ -33,7 +33,7 @@ Nemotron Nano Omni: **PASS for the small coding compatibility task only**, execu
 ## Verification and phase outcomes
 
 - Candidate `npm run build`: PASS after syntax repair. Node 22.22.3 must be on PATH.
-- Initial protocol regression set: 11/11 PASS. Full agent suite initially 205 PASS / 3 FAIL; fixed native fixture setup and retained phase-denial diagnostic, rerun pending.
+- Initial protocol regression set: 11/11 PASS. Full agent suite initially 205 PASS / 3 FAIL; corrected native fixture setup and retained phase-denial diagnostics. Rerun: 208/208 PASS. After further root-cause fixes, combined agent/tool/CLI routing suites: 319 PASS, 6 SKIPPED, 59 files. Builder receipt/resume tests: 2/2 PASS.
 - Evaluation/improve baseline suite: **109 PASS / 12 FAIL**, 15 test files. Full log retained at `/home/wael/.local/state/wazir-self-improvement-builder/recovery-evidence/wazir-recovery-evaluation-tests.log`. Failures include legacy implicit promotion expectations and qualification without physical workspace/oracles. These remain unresolved; no weakening of assertions or PASS claim.
 - Phase 1: UNACCEPTED. Integrity changes partial; real config execution adapter and comprehensive regression fixes still required.
 - Phase 2: UNACCEPTED. Supervisor/CLI partial; lifecycle and process/service qualification required.
@@ -52,3 +52,22 @@ Resume preserves the original prompts under `~/.local/share/wazir-self-improveme
 After an implemented phase passes checks, the recovery supervisor must independently review every original requirement and write `~/.local/state/wazir-self-improvement-builder/review-N.json` with phase, exact head, promptSha256, decision PASS, reviewer recovery-supervisor, and requirement-by-requirement PASS/evidence artifact paths. Resume then reruns verification without replaying the coding task. Never create this receipt for incomplete requirements. The future native supervisor is not yet qualified for unattended operation.
 
 No protected branch merge, push, deployment or destructive Git command occurred. Resource usage is measurable per execution using `wa executions inspect ID`; dollar cost for local inference is recorded as zero, not a measurement of electricity or hardware cost.
+
+## Supervised attempt and additional root causes
+
+Recovery commit: `a09b281024dcda34c8b4c8618893570bd1672224`. Resumed real Phase 1 as `exec-mv985i4m-1`; service remained running after its launching command returned. A second `run-worker` exited 1 with the singleton lock held; the original MainPID stayed active. Phase attempt eventually stopped safely with NO_PROGRESS, 36 requests / 33 tool calls, 547574 input + 7551 output = 555125 tokens, no new source edits/checks. Original candidate modifications remained intact. No phase marker created.
+
+Exact failures uncovered from persisted tool evidence:
+
+1. `search` calls with both a content `pattern` and a file `glob` discarded the content regex and searched source lines for the filename. Corrected precedence: a content regex uses glob as a file filter; glob-only legacy content matching remains supported. Empty file filters now produce actionable diagnostics. Regression tests use real files, both regex aliases, scoped filters and legacy behavior.
+2. CLI discovered effective model context but omitted it from AgentRunRequest, disabling proactive context compaction. Propagated initial context and added a runtime hook for updated placement ceilings after escalation; host and agent regression coverage added.
+3. ToolRegistry registration and PolicyEngine support were inconsistent. Code intelligence, code_mode and terminal schemas were advertised despite having no supported policy handler. Root, planning and nested CLI surfaces now omit unsupported handlers and disabled web/MCP tools; the original dispatch policy remains unchanged. No extra tool authorization was granted. This is the confirmed registry mismatch, rather than evidence that these tools were absent from source registration.
+4. Installed `~/.local/bin/wa` launcher targets `/home/wael/Code/Run/Wazir/bin/wa.js`, a third checkout at `a8cf4e087922496e4a0f91f33c718b991da0fdb8`. Candidate begins from `d0bd587b8e6b5ee840dbac2bb30fdd1a32051730`. Builder now pins the candidate bundle. Current deployed source does contain registry entries, so stale deployment alone is not asserted to explain policy denial.
+
+Qwen retest after substantive repairs: `exec-mv98rsxz-1` again FAILED, source unchanged, oracle unchanged. Raw diagnostic proves native name `run` with input command `npm test` instead of an available tool. Remains rejected; no unsafe alias/registration added.
+
+Configuration metadata only inspected: Codex gpt-6-astra (low effort, default provider), Claude opus. No credentials printed. No external coding task dispatched. Existing resource policy has unknown subscription limits and enforcement disabled; finite authorized external budget not established.
+
+Standalone builder validation: `node --test scripts/self-improvement-builder.test.mjs` passed 2/2. Completed-phase skipping now also checks the original reviewed receipt; an ancestry marker alone is insufficient.
+
+At this point the next authorized action is one targeted Phase 1 retry using Nemotron and the rebuilt, regression-tested routing/search/context repairs. This is a new execution, not replay of a possibly mutating unknown outcome. All earlier phase outcomes remain unaccepted.
