@@ -38,6 +38,7 @@ import { planRecovery, reconstructExecutionState } from './executionRecovery.js'
 import type { ReconstructedExecutionState, RecoveryBudgetLimits, RecoveryPlan, ToolOutcomeInspection } from './executionRecovery.js';
 import type { ToolSideEffectClass } from '../types/tool.js';
 import type { FileMutationResult } from '../types/tool.js';
+import { canTransitionExecution, InvalidTransitionError } from './lifecycleTransitions.js';
 
 export interface ExecutionEngineOptions {
   /** Persists a record after every mutation. */
@@ -237,6 +238,7 @@ export class ExecutionEngine {
 
   async setStatus(executionId: string, status: ExecutionStatus, options?: { targetRevision?: number }): Promise<void> {
     const record = this.require(executionId);
+    this.assertTransition(record, status);
     if (status === 'completed' && this.toolCheckpoints(executionId).some(call => call.state === 'STARTED' || call.state === 'OUTCOME_UNKNOWN')) {
       this.pushEvent(record, 'completion.rejected', { reason: 'TOOL_OUTCOME_UNKNOWN' });
       await this.flush(record);
@@ -354,6 +356,11 @@ export class ExecutionEngine {
     callId?: string; stepId?: string; sideEffectClass?: ToolSideEffectClass; argumentsHash?: string;
   } = {}): Promise<string> {
     const record = this.require(executionId);
+    // A settled execution dispatches nothing: a worker that keeps going after it was
+    // cancelled, orphaned or completed must not add side effects to a closed record.
+    if (['completed', 'failed', 'cancelled'].includes(record.execution.status)) {
+      throw Object.assign(new Error(`EXECUTION_NOT_ACTIVE: execution '${executionId}' is ${record.execution.status}; it cannot dispatch tool calls`), { code: 'EXECUTION_NOT_ACTIVE' });
+    }
     const callId = options.callId ?? `call-${randomUUID()}`;
     await injectFault('BEFORE_TOOL_EXECUTION', { executionId, callId, tool, input, sideEffectClass: options.sideEffectClass });
     if (this.toolCheckpoints(executionId).some(call => call.callId === callId)) {
@@ -1035,6 +1042,9 @@ export class ExecutionEngine {
    */
   async pause(executionId: string, reason?: string): Promise<void> {
     const record = this.require(executionId);
+    if (!ExecutionEngine.NON_TERMINAL.includes(record.execution.status) && record.execution.status !== 'paused') {
+      throw new InvalidTransitionError('execution', executionId, record.execution.status, 'paused');
+    }
     this.pausedExecutions.add(executionId);
     record.execution.status = 'paused';
     this.pushEvent(record, 'execution.paused', {
@@ -1165,6 +1175,11 @@ export class ExecutionEngine {
    */
   async resume(executionId: string, reason?: string): Promise<void> {
     const record = this.require(executionId);
+    // Operator resume continues a paused execution only. Recovering a failed one is
+    // planTaskResume's decision (it records its own execution.resumed with the reasons).
+    if (record.execution.status !== 'paused') {
+      throw new InvalidTransitionError('execution', executionId, record.execution.status, 'running');
+    }
     this.pausedExecutions.delete(executionId);
     record.execution.status = 'running';
     this.pushEvent(record, 'execution.resumed', {
@@ -1189,6 +1204,27 @@ export class ExecutionEngine {
     if (!cancelled) return false;
     if (cancelled.has('*')) return true;
     return callId ? cancelled.has(callId) : false;
+  }
+
+  /**
+   * Rejects terminal-state corruption (see lifecycleTransitions.ts). A failed or cancelled
+   * execution may become active again only when its latest lifecycle event is an
+   * explicit `execution.resumed` (recorded by planTaskResume): a late or stale writer
+   * can't revive it, and nothing overwrites a completed outcome.
+   */
+  private assertTransition(record: ExecutionRecord, status: ExecutionStatus): void {
+    const from = record.execution.status;
+    if (from === status) return;
+    let resumeAuthorized = false;
+    const history = this.histories.get(record.execution.id) ?? [];
+    for (let i = history.length - 1; i >= 0; i--) {
+      const type = history[i].eventType ?? history[i].type;
+      if (type === 'execution.resumed') { resumeAuthorized = true; break; }
+      if (type === 'execution.failed' || type === 'execution.cancelled' || type === 'execution.completed') break;
+    }
+    if (!canTransitionExecution(from, status, resumeAuthorized)) {
+      throw new InvalidTransitionError('execution', record.execution.id, from, status);
+    }
   }
 
   ownedByAnotherLiveProcess(record: ExecutionRecord): boolean {

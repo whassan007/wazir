@@ -1191,6 +1191,29 @@ jobsCmd
     console.log(await mergeJob(engine, id, options.target));
   });
 
+jobsCmd.command('verification <id>').description('Print the machine-readable verification report written when the job settled')
+  .action(async (id: string) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const job = engine.orchestrator.getJob(id);
+    if (!job) { console.error(`Job '${id}' not found`); process.exitCode = 1; return; }
+    if (!job.verification) { console.error(`Job '${id}' has no verification report (status: ${job.status})`); process.exitCode = 1; return; }
+    console.log(JSON.stringify(job.verification, null, 2));
+    if (job.verification.verdict !== 'VERIFIED') process.exitCode = 2;
+  });
+
+jobsCmd.command('feedback').description('Show recorded task failure feedback, recurring signatures and gated improvement candidates')
+  .option('--min <n>', 'Occurrences for a signature to count as recurring', '3')
+  .option('--candidates', 'Print proposed improvement candidates instead of raw records')
+  .action(async (options: { min: string; candidates?: boolean }) => {
+    const { createEngine } = await import('./engine.js');
+    const { FailureFeedbackLog } = await import('@wazir/core');
+    const engine = await createEngine();
+    const log = new FailureFeedbackLog(engine.store);
+    const min = Math.max(1, Number(options.min) || 3);
+    console.log(JSON.stringify(options.candidates ? await log.proposeCandidates(min) : { records: await log.list(), recurring: await log.incidents(min) }, null, 2));
+  });
+
 jobsCmd.command('resume <id>').description('Resume a persisted job after its owner lease expires')
   .action(async (id: string) => {
     const { createEngine } = await import('./engine.js');

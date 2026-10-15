@@ -9,6 +9,8 @@ import {
   effectiveContextTokens,
   type AgentAdapter,
   type AgentErrorKind,
+  type TerminationReason,
+  buildTaskVerificationReport,
   type AgentRuntime,
   type CheckRunRecord,
   type ContextPart,
@@ -542,6 +544,8 @@ export function createFleetTaskExecutor(
     let summary: string | undefined;
     const errors: string[] = [];
     let errorKind: AgentErrorKind | undefined;
+    let terminationReason: TerminationReason | undefined;
+    const toolCalls = { total: 0, failed: 0 };
 
     try {
       for await (const turn of agent.run(
@@ -572,6 +576,11 @@ export function createFleetTaskExecutor(
         const turnContent = turn.content ?? (turn.kind === 'tool_call' && turn.toolResult?.ok ? turn.toolResult.output : undefined);
         const turnError = turn.error ?? (turn.kind === 'tool_call' && turn.toolResult && !turn.toolResult.ok ? turn.toolResult.error : undefined);
         const turnMeta = turn.kind === 'tool_call' && turn.toolResult?.metadata ? turn.toolResult.metadata : undefined;
+        if (turn.terminationReason) terminationReason = turn.terminationReason;
+        if (turn.kind === 'tool_call' && turn.toolResult) {
+          toolCalls.total++;
+          if (!turn.toolResult.ok) toolCalls.failed++;
+        }
         if (turn.terminationReason) await recordTermination(engine, executionId, turn.terminationReason, currentModelId, task.type, turn.protocolMetrics, turn.runStats);
 
         await engine.executions.recordEvent(executionId, 'agent.turn', {
@@ -639,6 +648,21 @@ export function createFleetTaskExecutor(
       }
     }
 
+    const verification = buildTaskVerificationReport({
+      modelReportedSuccess: summary !== undefined,
+      evaluation,
+      checks: finalRecord.checks,
+      toolCalls,
+      filesChanged: finalRecord.filesChanged,
+      expectedEvidence: task.expectedEvidence,
+      mutationRequired: context.mutationRequired ?? task.mutationRequired ?? task.requirements?.mutationRequired,
+      blockedReason: wasCancelled ? 'CANCELLED: verification did not run to completion'
+        : errorKind === 'policy' ? `POLICY_DENIED: ${errors[0] ?? 'policy stopped the run'}` : undefined,
+      workspaceRevision: finalRecord.workspaceState?.revision,
+      executionId,
+    });
+    await engine.executions.recordEvent(executionId, 'verification.report', verification);
+
     let supervisorDecision: JobTaskOutcome['supervisorDecision'];
     if (context.node.type === 'supervisor' && summary) {
       try {
@@ -654,6 +678,8 @@ export function createFleetTaskExecutor(
       result: summary ?? (evaluation.success ? 'completed' : 'failed'),
       error: errors[0],
       errorKind,
+      terminationReason,
+      verification,
       reasons: evaluation.reasons,
       filesChanged: finalRecord.filesChanged,
       usage: finalRecord.usage

@@ -9,13 +9,23 @@ import type {
   JobTaskExecutor,
   JobTaskOutcome,
   Task,
+  TaskAttemptRecovery,
   TokenUsage,
   ExecutionCheckpoint,
   CheckpointCreateOptions,
   ForkExecutionResult,
   RollbackResult,
 } from '../types/index.js';
-import { tokensPerSecond } from '@wazir/shared';
+import { tokensPerSecond, waitForRetry } from '@wazir/shared';
+import {
+  TaskRecoveryPolicy,
+  classifyTaskError,
+  classifyTaskOutcome,
+  failureSignature,
+  type TaskFailureClassification,
+} from './taskRecoveryPolicy.js';
+import { buildJobVerificationReport } from './verificationReport.js';
+import { feedbackFromJob, type FailureFeedbackLog } from './failureFeedback.js';
 import { JobManager, type JobTaskInput } from './jobManager.js';
 import type { Scheduler, ScheduleInput } from './scheduler.js';
 import type { ExecutionEngine } from './executionEngine.js';
@@ -30,6 +40,10 @@ export interface JobOrchestratorOptions {
   scheduler: Scheduler;
   executionEngine: ExecutionEngine;
   checkpointService?: CheckpointService;
+  /** Bounded retry/backoff policy for failed task attempts. */
+  recoveryPolicy?: TaskRecoveryPolicy;
+  /** Durable failure feedback for the self-improvement loop; best effort. */
+  feedback?: FailureFeedbackLog;
   policy?: PolicyEngine;
   agents?: AgentRegistry;
   models?: ModelRegistry;
@@ -70,12 +84,42 @@ interface ActiveJobHandle {
   reject: (err: Error) => void;
 }
 
+const DEFAULT_MAX_REPLAN_GENERATION = 2;
+const ORPHANED_REASON = 'Orphaned: the worker running this task stopped responding';
+const REPLANNABLE: ReadonlySet<string> = new Set(['model_protocol', 'code_or_test', 'unclassified']);
+
+function orphanedClassification(): TaskFailureClassification {
+  return { category: 'transient_infrastructure', failureClass: 'TRANSPORT', signature: failureSignature('transient_infrastructure', ORPHANED_REASON) };
+}
+
+/**
+ * A model or executor claiming success is a hypothesis. A FAILED or BLOCKED verification
+ * report always overrides it; INCONCLUSIVE does too when the run requires verified
+ * completion. Outcomes without a report keep their legacy meaning.
+ */
+export function enforceVerification(outcome: JobTaskOutcome, requireVerified: boolean): JobTaskOutcome {
+  const report = outcome.verification;
+  if (!outcome.success || !report) return outcome;
+  const verdict = report.verdict;
+  if (verdict === 'VERIFIED' || (verdict === 'INCONCLUSIVE' && !requireVerified)) return outcome;
+  const detail = report.reasons.filter((r) => /missing|fail|stale|blocked/i.test(r)).slice(0, 3).join('; ');
+  return {
+    ...outcome,
+    success: false,
+    error: `VERIFICATION_${verdict}${detail ? `: ${detail}` : ''}`,
+    errorKind: verdict === 'BLOCKED' ? 'policy' : 'verification',
+    failureClass: verdict === 'BLOCKED' ? 'APPROVAL_REQUIRED' : 'ARTIFACT_CONTRACT_FAILED',
+  };
+}
+
 export class JobOrchestrator {
   private readonly scheduler: Scheduler;
   private readonly executionEngine: ExecutionEngine;
   private readonly jobManager: JobManager;
   private readonly taskExecutor?: JobTaskExecutor;
   private checkpointService?: CheckpointService;
+  private readonly recoveryPolicy: TaskRecoveryPolicy;
+  private readonly feedback?: FailureFeedbackLog;
 
   private readonly listeners = new Map<string, Set<(event: JobOrchestratorEvent) => void>>();
   private readonly steeringQueues = new Map<string, string[]>();
@@ -85,6 +129,8 @@ export class JobOrchestrator {
     this.scheduler = options.scheduler;
     this.executionEngine = options.executionEngine;
     this.checkpointService = options.checkpointService;
+    this.recoveryPolicy = options.recoveryPolicy ?? new TaskRecoveryPolicy();
+    this.feedback = options.feedback;
     this.jobManager = options.jobManager ?? new JobManager();
     this.taskExecutor = options.taskExecutor;
   }
@@ -368,7 +414,13 @@ export class JobOrchestrator {
 
   async runJob(jobId: string, options: JobRunOptions = {}): Promise<Job> {
     if (this.activeJobs.has(jobId)) throw new Error('JOB_ALREADY_RUNNING');
-    await this.jobManager.acquire(jobId);
+    try {
+      await this.jobManager.acquire(jobId);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== 'JOB_CANCELLED') throw error;
+      this.emit(jobId, { type: 'job:cancelled', jobId, error: 'cancel requested before this process took ownership' });
+      return this.jobManager.get(jobId)!;
+    }
     const abort = new AbortController();
     const onAbort = () => abort.abort();
     options.signal?.addEventListener('abort', onAbort, { once: true });
@@ -427,6 +479,8 @@ export class JobOrchestrator {
     const activeTasks = new Map<string, AbortController>();
     const retryCounts = new Map<string, number>(job.graph.nodes.map(n => [n.taskId ?? n.id, n.retryCount ?? 0]));
     const supersededTaskIds = new Set<string>();
+    const placements = new Map<string, { modelId?: string; runtimeId?: string; computerId?: string }>();
+    const taskUsage = new Map<string, { input: number; output: number; total: number }>();
 
     this.emit(jobId, { type: 'job:started', jobId });
 
@@ -448,14 +502,22 @@ export class JobOrchestrator {
       };
       this.activeJobs.set(jobId, handle);
 
-      // Reuses cancelJob() rather than aborting jobAbortController directly, so a timeout
-      // gets exactly the same cleanup a manual cancel already gets — every active task's
-      // own AbortController is aborted too, not just the top-level job one.
+      // A timeout stops the job the way cancelJob() does (the job and every active task's
+      // AbortController), but it is a failure, not a cancellation: it never records the
+      // job or its tasks as 'cancelled', because 'cancelled' is final and the timeout's
+      // outcome is 'failed'. Each aborted task settles as failed (see settleAborted).
       const timeoutTimer =
         timeoutSeconds !== undefined
           ? setTimeout(() => {
               timedOut = true;
-              void this.cancelJob(jobId, `exceeded the ${timeoutSeconds}s timeout`);
+              jobAbortController.abort();
+              for (const [taskId, taskAbort] of activeTasks.entries()) {
+                taskAbort.abort();
+                // Same event (with the reason) cancelJob() emits, so a UI reports the stop
+                // as the timeout; the durable status recorded is still 'failed'.
+                this.emit(jobId, { type: 'task:cancelled', jobId, taskId, error: `exceeded the ${timeoutSeconds}s timeout` });
+              }
+              handle.wakePump?.();
             }, Math.max(1, timeoutSeconds) * 1000)
           : undefined;
       timeoutTimer?.unref?.();
@@ -472,16 +534,19 @@ export class JobOrchestrator {
           // cancelJob() to actually stop it — that's not a genuine user cancellation, so
           // it's overridden here too (unlike the ordinary non-timeout path below, which
           // leaves a real cancellation as 'cancelled').
+          // Work that never finished fails with the timeout reason. Anything already
+          // settled — including a task an operator explicitly cancelled — keeps its outcome.
           const reason = `Task exceeded the ${timeoutSeconds}s timeout and was automatically stopped`;
+          const settled = (state: string) => state === 'completed' || state === 'failed' || state === 'cancelled';
           for (const node of job.graph.nodes) {
-            if (node.state !== 'completed' && node.state !== 'failed') {
+            if (!settled(node.state)) {
               node.state = 'failed';
               node.error = node.error ?? reason;
               node.completedAt = node.completedAt ?? new Date();
             }
           }
           for (const task of job.tasks) {
-            if (task.status !== 'completed' && task.status !== 'failed') {
+            if (!settled(task.status)) {
               task.status = 'failed';
             }
           }
@@ -490,7 +555,15 @@ export class JobOrchestrator {
         }
         isFinished = true;
         const completedAt = new Date();
+        // Persisted with the final status write below; the whole job document is flushed.
+        job.verification = buildJobVerificationReport(job, supersededTaskIds, () => completedAt);
         await this.jobManager.setJobStatus(job.id, finalStatus, { completedAt });
+        if (this.feedback) {
+          for (const entry of feedbackFromJob(job, placements, taskUsage)) {
+            // Feedback is evidence for later improvement work; losing it must never fail a job.
+            await this.feedback.record(entry).catch(() => undefined);
+          }
+        }
         this.activeJobs.delete(jobId);
 
         if (finalStatus === 'completed') {
@@ -504,6 +577,75 @@ export class JobOrchestrator {
         }
 
         resolve(job);
+      };
+
+      // An in-flight task stopped by the job timeout settles as failed, not cancelled.
+      // A task the operator cancelled explicitly before the timeout stays cancelled.
+      const recoveryPolicy = options.recoveryPolicy ?? this.recoveryPolicy;
+      const maxReplanGeneration = Math.max(0, options.maxReplanGeneration ?? DEFAULT_MAX_REPLAN_GENERATION);
+
+      // Single place a failed attempt is settled: the recovery policy decides retry vs stop
+      // from the failure class, the decision is persisted with the attempt before any
+      // backoff (so a crash mid-wait keeps it), and the wait is cancellable.
+      const handleFailedAttempt = async (node: JobNode, task: Task, taskId: string, error: string,
+        classification: TaskFailureClassification): Promise<void> => {
+        const retries = retryCounts.get(taskId) ?? 0;
+        const maxRetries = task.maxRetries ?? job.maxRetries ?? 3;
+        const previous = (node.attempts ?? []).flatMap((a) => (a.recovery ? [a.recovery.signature] : []));
+        const decision = recoveryPolicy.decide(classification, retries, maxRetries, previous);
+        const recovery: TaskAttemptRecovery = {
+          category: decision.category,
+          failureClass: decision.failureClass,
+          terminationReason: decision.terminationReason,
+          signature: decision.signature,
+          strategy: decision.strategy,
+          reason: decision.reason,
+          delayMs: decision.delayMs,
+        };
+        this.emit(jobId, { type: 'task:recovery', jobId, taskId, error, retryCount: retries, maxRetries, event: recovery });
+        if (!decision.retry) {
+          node.lastRecovery = recovery;
+          node.state = 'failed';
+          node.error = error;
+          await this.failTask(job.id, taskId, error, Infinity);
+          this.emit(jobId, { type: 'task:failed', jobId, taskId, error });
+          return;
+        }
+        retryCounts.set(taskId, retries + 1);
+        node.retryCount = retries + 1;
+        if (!node.attempts) node.attempts = [];
+        node.attempts.push({ state: 'failed', error, executedAt: node.executedAt, completedAt: new Date(), recovery });
+        await this.jobManager.save(job.id);
+        if (decision.delayMs > 0) {
+          // The job signal, not the task's: orphan reporting aborts the task signal to stop
+          // the dead attempt, and that must not read as a cancellation of the retry.
+          try { await waitForRetry(decision.delayMs, jobAbortController.signal); }
+          catch { /* job cancelled or timed out during backoff: settled below */ }
+        }
+        if (handle.cancelledTaskIds.has(taskId) || jobAbortController.signal.aborted) {
+          if (await settleTimedOut(node, taskId)) return;
+          node.state = 'cancelled';
+          await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
+          await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
+          return;
+        }
+        node.executedAt = undefined;
+        node.completedAt = undefined;
+        node.error = undefined;
+        node.result = undefined;
+        node.state = 'idle';
+        await this.jobManager.updateAgentState(job.id, node.id, 'idle');
+        await this.jobManager.updateTaskStatus(job.id, taskId, 'pending');
+        this.emit(jobId, { type: 'task:retry', jobId, taskId, retryCount: retries + 1, maxRetries });
+      };
+
+      const settleTimedOut = async (node: JobNode, taskId: string): Promise<boolean> => {
+        if (!timedOut || handle.cancelledTaskIds.has(taskId)) return false;
+        const reason = `Task exceeded the ${timeoutSeconds}s timeout and was automatically stopped`;
+        node.state = 'failed';
+        node.error = node.error ?? reason;
+        await this.failTask(job.id, taskId, reason, Infinity);
+        return true;
       };
 
       let isPumping = false;
@@ -604,6 +746,7 @@ export class JobOrchestrator {
             break;
           }
 
+          placements.set(taskId, { modelId: assignment.modelId, runtimeId: assignment.runtimeId, computerId: assignment.computerId });
           node.state = 'running';
           node.executedAt = new Date();
           await this.jobManager.updateAgentState(job.id, node.id, 'running');
@@ -667,32 +810,18 @@ export class JobOrchestrator {
                     errorKind: decision.decision === 'reject' ? 'verification' : outcome.errorKind };
                 }
               }
+              outcome = enforceVerification(outcome, options.requireVerifiedCompletion === true);
+              if (outcome.usage) {
+                const prior = taskUsage.get(taskId) ?? { input: 0, output: 0, total: 0 };
+                taskUsage.set(taskId, { input: prior.input + outcome.usage.input, output: prior.output + outcome.usage.output, total: prior.total + outcome.usage.total });
+              }
+              if (outcome.verification) node.verification = outcome.verification;
 
               if (handle.orphanedTaskIds.has(taskId)) {
                 handle.orphanedTaskIds.delete(taskId);
-                const reason = 'Orphaned: the worker running this task stopped responding';
-                const retries = retryCounts.get(taskId) ?? 0;
-                const maxRetries = task.maxRetries ?? job.maxRetries ?? 3;
-                if (retries < maxRetries) {
-                  retryCounts.set(taskId, retries + 1);
-                  node.retryCount = retries + 1;
-                  if (!node.attempts) node.attempts = [];
-                  node.attempts.push({ state: 'failed', error: reason, executedAt: node.executedAt, completedAt: new Date() });
-                  node.executedAt = undefined;
-                  node.completedAt = undefined;
-                  node.error = undefined;
-                  node.result = undefined;
-                  node.state = 'idle';
-                  await this.jobManager.updateAgentState(job.id, node.id, 'idle');
-                  await this.jobManager.updateTaskStatus(job.id, taskId, 'pending');
-                  this.emit(jobId, { type: 'task:retry', jobId, taskId, retryCount: retries + 1, maxRetries });
-                } else {
-                  node.state = 'failed';
-                  node.error = reason;
-                  await this.failTask(job.id, taskId, reason, Infinity);
-                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
-                }
+                await handleFailedAttempt(node, task, taskId, ORPHANED_REASON, orphanedClassification());
               } else if (taskAbort.signal.aborted) {
+                if (await settleTimedOut(node, taskId)) return;
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 // cancelJob()/cancelTask() already emitted this task's cancellation (with
@@ -713,18 +842,13 @@ export class JobOrchestrator {
                   usage: outcome.usage,
                 });
               } else {
-                // Prefer the executor's own structured classification when it set one —
-                // falls back to sniffing the free-text error/reasons for executors (or
-                // thrown-exception paths) that don't.
-                const isPolicyDenial = outcome.errorKind
-                  ? outcome.errorKind === 'policy'
-                  : Boolean(
-                      outcome.error?.toLowerCase().includes('policy') ||
-                      outcome.error?.toLowerCase().includes('denied') ||
-                      outcome.reasons?.some((r) => r.toLowerCase().includes('policy') || r.toLowerCase().includes('deny')),
-                    );
-
-                if (options.replanner && !isPolicyDenial) {
+                const classification = classifyTaskOutcome(outcome);
+                // Replanning is a retry with a different plan, so it obeys the same stops:
+                // never for policy, budget, cancellation or nonrecoverable failures (a fresh
+                // repair task would silently reset the boundary), and never past the
+                // generation bound (a repair task's own failure must not replan forever).
+                const generation = node.replanGeneration ?? 0;
+                if (options.replanner && REPLANNABLE.has(classification.category) && generation < maxReplanGeneration) {
                   try {
                     const replanResult = await options.replanner({
                       job,
@@ -741,6 +865,7 @@ export class JobOrchestrator {
 
                       const added = await this.jobManager.addTasksToJob(job.id, replanResult.repairTasks, {
                         replacesTaskId: taskId,
+                        replanGeneration: generation + 1,
                       });
 
                       this.emit(jobId, {
@@ -748,7 +873,7 @@ export class JobOrchestrator {
                         jobId,
                         taskId,
                         error: outcome.error,
-                        event: { repairTaskIds: added.map((t) => t.id) },
+                        event: { repairTaskIds: added.map((t) => t.id), category: classification.category, replanGeneration: generation + 1 },
                       });
                       return;
                     }
@@ -757,113 +882,20 @@ export class JobOrchestrator {
                   }
                 }
 
-                const retries = retryCounts.get(taskId) ?? 0;
-                const maxRetries = isPolicyDenial ? 0 : (task.maxRetries ?? job.maxRetries ?? 3);
-                if (retries < maxRetries) {
-                  retryCounts.set(taskId, retries + 1);
-                  node.retryCount = retries + 1;
-                  if (!node.attempts) node.attempts = [];
-                  node.attempts.push({
-                    state: 'failed',
-                    error: outcome.error,
-                    executedAt: node.executedAt,
-                    completedAt: new Date()
-                  });
-                  node.executedAt = undefined;
-                  node.completedAt = undefined;
-                  node.error = undefined;
-                  node.result = undefined;
-                  node.state = 'idle';
-                  await this.jobManager.updateAgentState(job.id, node.id, 'idle');
-                  await this.jobManager.updateTaskStatus(job.id, taskId, 'pending');
-                  this.emit(jobId, {
-                    type: 'task:retry',
-                    jobId,
-                    taskId,
-                    retryCount: retries + 1,
-                    maxRetries,
-                  });
-                } else {
-                  node.state = 'failed';
-                  node.error = outcome.error ?? 'Task failed';
-                  await this.failTask(job.id, taskId, outcome.error ?? 'Task failed', Infinity);
-                  this.emit(jobId, {
-                    type: 'task:failed',
-                    jobId,
-                    taskId,
-                    error: outcome.error ?? 'Task failed',
-                  });
-                }
+                await handleFailedAttempt(node, task, taskId, outcome.error ?? 'Task failed', classification);
               }
             } catch (err) {
               const errMessage = err instanceof Error ? err.message : String(err);
               if (handle.orphanedTaskIds.has(taskId)) {
                 handle.orphanedTaskIds.delete(taskId);
-                const reason = 'Orphaned: the worker running this task stopped responding';
-                const retries = retryCounts.get(taskId) ?? 0;
-                const maxRetries = task.maxRetries ?? job.maxRetries ?? 3;
-                if (retries < maxRetries) {
-                  retryCounts.set(taskId, retries + 1);
-                  node.retryCount = retries + 1;
-                  if (!node.attempts) node.attempts = [];
-                  node.attempts.push({ state: 'failed', error: reason, executedAt: node.executedAt, completedAt: new Date() });
-                  node.executedAt = undefined;
-                  node.completedAt = undefined;
-                  node.error = undefined;
-                  node.result = undefined;
-                  node.state = 'idle';
-                  await this.jobManager.updateAgentState(job.id, node.id, 'idle');
-                  await this.jobManager.updateTaskStatus(job.id, taskId, 'pending');
-                  this.emit(jobId, { type: 'task:retry', jobId, taskId, retryCount: retries + 1, maxRetries });
-                } else {
-                  node.state = 'failed';
-                  node.error = reason;
-                  await this.failTask(job.id, taskId, reason, Infinity);
-                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
-                }
+                await handleFailedAttempt(node, task, taskId, ORPHANED_REASON, orphanedClassification());
               } else if (taskAbort.signal.aborted) {
+                if (await settleTimedOut(node, taskId)) return;
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
               } else {
-                const isPolicyDenial = errMessage.toLowerCase().includes('policy') || errMessage.toLowerCase().includes('denied');
-                const retries = retryCounts.get(taskId) ?? 0;
-                const maxRetries = isPolicyDenial ? 0 : (task.maxRetries ?? job.maxRetries ?? 3);
-                if (retries < maxRetries) {
-                  retryCounts.set(taskId, retries + 1);
-                  node.retryCount = retries + 1;
-                  if (!node.attempts) node.attempts = [];
-                  node.attempts.push({
-                    state: 'failed',
-                    error: errMessage,
-                    executedAt: node.executedAt,
-                    completedAt: new Date()
-                  });
-                  node.executedAt = undefined;
-                  node.completedAt = undefined;
-                  node.error = undefined;
-                  node.result = undefined;
-                  node.state = 'idle';
-                  await this.jobManager.updateAgentState(job.id, node.id, 'idle');
-                  await this.jobManager.updateTaskStatus(job.id, taskId, 'pending');
-                  this.emit(jobId, {
-                    type: 'task:retry',
-                    jobId,
-                    taskId,
-                    retryCount: retries + 1,
-                    maxRetries,
-                  });
-                } else {
-                  node.state = 'failed';
-                  node.error = errMessage;
-                  await this.failTask(job.id, taskId, errMessage, Infinity);
-                  this.emit(jobId, {
-                    type: 'task:failed',
-                    jobId,
-                    taskId,
-                    error: errMessage,
-                  });
-                }
+                await handleFailedAttempt(node, task, taskId, errMessage, classifyTaskError(err));
               }
             } finally {
               activeTasks.delete(taskId);

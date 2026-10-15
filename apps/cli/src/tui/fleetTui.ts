@@ -595,7 +595,10 @@ export class FleetTui {
   private recentBlocks: Block[] = [];
   private expandedBlock?: Block;
   private expandedJobId?: string;
-  private currentBlockTracker?: { finish: (status: BlockStatus, patch?: Partial<Block>) => Promise<void> };
+  private currentBlockTracker?: {
+    finish: (status: BlockStatus, patch?: Partial<Block>) => Promise<void>;
+    annotate?: (patch: Pick<Partial<Block>, 'jobId' | 'executionId'>) => Promise<void>;
+  };
 
   // @ Reference fuzzy picker
   private isPickerActive = false;
@@ -3843,6 +3846,7 @@ export class FleetTui {
         concurrencyLimit: this.concurrencyLimit,
         tasks: jobTasks,
       });
+      await this.currentBlockTracker?.annotate?.({ jobId: job.id }).catch(() => undefined);
 
       this.currentJob = job;
       this.agents.clear();

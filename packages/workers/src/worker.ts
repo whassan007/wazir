@@ -35,6 +35,14 @@ export interface WorkerOptions {
   token?: string;
   adapters?: RuntimeAdapter[];
   heartbeatIntervalMs?: number;
+  /**
+   * Delivery attempts for a final result whose POST failed in transit (network error,
+   * 5xx, 429), with exponential backoff from `resultRetryBaseMs`. The control plane
+   * commits a result at most once per lease, so a re-sent result is acknowledged as a
+   * duplicate rather than recorded twice. Defaults: 5 attempts, 200ms.
+   */
+  resultRetryAttempts?: number;
+  resultRetryBaseMs?: number;
   os?: OSInfo;
   hardware?: HardwareInfo;
 }
@@ -63,6 +71,10 @@ export class Worker {
   private readonly heartbeatIntervalMs: number;
   private adapters: DiscoveredRuntime[] = [];
   private readonly activeClaims = new Map<string, () => void>();
+  /** Requests this process is claiming or executing; a redelivered frame for one is ignored. */
+  private readonly inFlight = new Set<string>();
+  private readonly resultRetryAttempts: number;
+  private readonly resultRetryBaseMs: number;
   private heartbeatTimer: NodeJS.Timeout | undefined;
   private running = false;
   private taskStreamAbort?: AbortController;
@@ -80,6 +92,8 @@ export class Worker {
     this.registrationToken = options.registrationToken || undefined;
     this.token = options.token || undefined;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
+    this.resultRetryAttempts = Math.max(1, options.resultRetryAttempts ?? 5);
+    this.resultRetryBaseMs = Math.max(0, options.resultRetryBaseMs ?? 200);
     this.configuredAdapters = options.adapters;
     this.configuredOs = options.os;
     this.configuredHardware = options.hardware;
@@ -373,6 +387,18 @@ export class Worker {
   /** Executes a control-plane-dispatched request and reports events/outcome back. */
   private async handleDispatchedTask(request: WorkerExecutionRequest): Promise<void> {
     if (!this.serverUrl) return;
+    // The control plane redelivers unleased requests; a frame for a request this process is
+    // already claiming or running must not start a second local execution of it.
+    if (this.inFlight.has(request.requestId)) return;
+    this.inFlight.add(request.requestId);
+    try {
+      await this.runDispatchedTask(request);
+    } finally {
+      this.inFlight.delete(request.requestId);
+    }
+  }
+
+  private async runDispatchedTask(request: WorkerExecutionRequest): Promise<void> {
     const endpoint = `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}`;
     const claimed = await fetch(`${endpoint}/claim`, { method: 'POST', headers: this.authHeaders() }).catch(() => undefined);
     if (!claimed || !claimed.ok) return; // A duplicate delivery, closed server, or another worker already owns this attempt.
@@ -442,19 +468,32 @@ export class Worker {
     ).catch(() => undefined);
   }
 
+  /**
+   * Delivers the final result at least once while it can still be committed: a transport
+   * failure, 5xx or 429 is retried with backoff (bounded); any other response is final —
+   * 2xx (committed, or acknowledged as a duplicate) or a 4xx such as 409 LEASE_LOST, where
+   * this attempt was superseded and its result must not be pushed again.
+   */
   private async reportResult(
     request: WorkerExecutionRequest,
     outcome: { ok: boolean; output: string; inputTokens: number; outputTokens: number; durationMs: number; error?: string },
-  ): Promise<void> {
-    if (!this.serverUrl) return;
-    await fetch(
-      `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}/result`,
-      {
+  ): Promise<'delivered' | 'rejected' | 'undelivered'> {
+    if (!this.serverUrl) return 'undelivered';
+    const url = `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}/result`;
+    const body = JSON.stringify({ ...outcome, leaseToken: request.leaseToken });
+    for (let attempt = 1; attempt <= this.resultRetryAttempts; attempt++) {
+      const response = await fetch(url, {
         method: 'POST',
         headers: this.authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ ...outcome, leaseToken: request.leaseToken }),
-      },
-    ).catch(() => undefined);
+        body,
+        signal: AbortSignal.timeout(30_000),
+      }).catch(() => undefined);
+      if (response && response.status < 500 && response.status !== 429) return response.ok ? 'delivered' : 'rejected';
+      if (attempt < this.resultRetryAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, this.resultRetryBaseMs * 2 ** (attempt - 1)));
+      }
+    }
+    return 'undelivered';
   }
 }
 

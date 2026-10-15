@@ -19,6 +19,7 @@ import {
   JobManager,
   RecoveryManager,
   JobOrchestrator,
+  FailureFeedbackLog,
   ModelRegistry,
   ModelLifecycleService,
   HealthEvidenceLog,
@@ -437,6 +438,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     runtimes,
     computers,
     jobManager,
+    feedback: new FailureFeedbackLog(store),
   }) as any;
   orchestrator.store = store; // Attach store for Block persistence
   const planner = createTaskPlanner();

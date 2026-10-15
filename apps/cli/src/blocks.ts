@@ -8,6 +8,7 @@ const MAX_STDOUT_SIZE = 64 * 1024; // 64KB
 export interface BlockStartResult {
   block: Block;
   finish: (status: BlockStatus, patch?: Partial<Block>) => Promise<void>;
+  annotate: (patch: Pick<Partial<Block>, 'jobId' | 'executionId'>) => Promise<void>;
 }
 
 export interface CreateBlockOptions {
@@ -89,7 +90,15 @@ export async function createBlock(
     await store.put(`${BLOCK_PREFIX}${block.id}`, updated);
   };
 
-  return { block, finish };
+  /** Records provenance (e.g. the job a submission created) while the block is still running,
+   *  so history links to the job without waiting for it to settle. */
+  const annotate = async (patch: Pick<Partial<Block>, 'jobId' | 'executionId'>) => {
+    if (patch.jobId !== undefined) block.jobId = patch.jobId;
+    if (patch.executionId !== undefined) block.executionId = patch.executionId;
+    await store.put(`${BLOCK_PREFIX}${block.id}`, block);
+  };
+
+  return { block, finish, annotate };
 }
 
 /**

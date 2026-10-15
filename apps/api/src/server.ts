@@ -68,7 +68,9 @@ export class TaskDispatcher {
   readonly ready: Promise<void>;
 
   constructor(private readonly store: KeyValueStore = new MemoryStore(),
-    private readonly now: () => number = Date.now, readonly leaseMs = 30_000) {
+    private readonly now: () => number = Date.now, readonly leaseMs = 30_000,
+    /** Claims allowed per request; the next one commits DELIVERY_ATTEMPTS_EXHAUSTED instead. */
+    readonly maxAttempts = 5) {
     if (!store.update) throw new Error('ATOMIC_STORE_REQUIRED');
     if (!Number.isFinite(leaseMs) || leaseMs < 100) throw new Error('INVALID_LEASE_DURATION');
     this.ready = this.refresh();
@@ -131,11 +133,18 @@ export class TaskDispatcher {
     const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
       if (!current || current.computerId !== computerId) throw new Error('UNKNOWN_DISPATCH');
       if (current.outcome || (current.lease && current.lease.expiresAt > this.now())) throw new Error('RESOURCE_BUSY');
+      // Every earlier attempt lost its lease without a result. Stop replaying: settle it as
+      // a failure the caller can see, instead of redelivering after every disconnection.
+      if (current.attempt >= this.maxAttempts) {
+        return { ...current, lease: undefined, outcome: { ok: false, output: '', inputTokens: 0, outputTokens: 0, durationMs: 0,
+          error: `DELIVERY_ATTEMPTS_EXHAUSTED: ${current.attempt} attempt(s) ended without a result` } };
+      }
       return { ...current, attempt: current.attempt + 1,
         events: [...current.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), { executionId: current.request.executionId, type: 'lease_acquired' as const, at: new Date(this.now()), data: { attempt: current.attempt + 1 } }],
         lease: { token: randomUUID(), expiresAt: this.now() + this.leaseMs } };
     });
     this.records.set(id, record);
+    if (!record.lease) throw new Error('DELIVERY_ATTEMPTS_EXHAUSTED');
     return { ...record.lease!, attempt: record.attempt, leaseMs: this.leaseMs };
   }
   private validate(current: DurableDispatch | undefined, token: string): DurableDispatch {
