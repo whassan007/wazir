@@ -181,13 +181,9 @@ export class ExternalAgentAdapter implements AgentAdapter {
       const append = (chunk: string) => {
         if (captured.length < MAX_CAPTURE) captured += chunk.slice(0, MAX_CAPTURE - captured.length);
       };
-      // stderr is kept only for the failure-tail diagnostic below, never merged into
-      // `captured` — callers (preflightAgent's "excluding stderr" probe check) rely on
-      // the turn's message content reflecting stdout only, not incidental stderr noise.
       child.stdout.setEncoding('utf8').on('data', append);
-      child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-        stderr = (stderr + chunk).slice(-MAX_CAPTURE);
-      });
+      // stderr is diagnostic only: it must never count as the agent's answer.
+      child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-MAX_CAPTURE); });
       child.on('error', (error) => {
         settle();
         reject(error);

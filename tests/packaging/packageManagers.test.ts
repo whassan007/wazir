@@ -7,6 +7,9 @@ import os from 'node:os';
 const rootDir = path.resolve(__dirname, '../..');
 const pkg = JSON.parse(readFileSync(path.resolve(rootDir, 'package.json'), 'utf8'));
 const currentVersion = pkg.version;
+// Native manifests track the latest artifact set with published checksums;
+// they advance in the artifact follow-up after release assets are built.
+const packageManagerVersion = readFileSync(path.resolve(rootDir, 'packaging/package-manager-version.txt'), 'utf8').trim();
 
 describe('Cross-Platform Package Manager Integration', () => {
   describe('1. Homebrew Formula', () => {
@@ -21,17 +24,17 @@ describe('Cross-Platform Package Manager Integration', () => {
 
       // Formula class & metadata
       expect(content).toContain('class Wazir < Formula');
-      expect(content).toContain(`version "${currentVersion}"`);
+      expect(content).toContain(`version "${packageManagerVersion}"`);
       expect(content).toContain('license "AGPL-3.0-or-later"');
       expect(content).toContain('homepage "https://github.com/whassan007/wazir"');
 
       // Platform binary blocks
       expect(content).toContain('on_macos do');
-      expect(content).toContain('wazir-v' + currentVersion + '-darwin-arm64.tar.gz');
-      expect(content).toContain('wazir-v' + currentVersion + '-darwin-x64.tar.gz');
+      expect(content).toContain('wazir-v' + packageManagerVersion + '-darwin-arm64.tar.gz');
+      expect(content).toContain('wazir-v' + packageManagerVersion + '-darwin-x64.tar.gz');
       expect(content).toContain('on_linux do');
-      expect(content).toContain('wazir-v' + currentVersion + '-linux-arm64.tar.gz');
-      expect(content).toContain('wazir-v' + currentVersion + '-linux-x64.tar.gz');
+      expect(content).toContain('wazir-v' + packageManagerVersion + '-linux-arm64.tar.gz');
+      expect(content).toContain('wazir-v' + packageManagerVersion + '-linux-x64.tar.gz');
 
       // Install block
       expect(content).toContain('bin.install "wa"');
@@ -59,7 +62,7 @@ describe('Cross-Platform Package Manager Integration', () => {
       const content = readFileSync(scoopPath, 'utf8');
       const manifest = JSON.parse(content);
 
-      expect(manifest.version).toBe(currentVersion);
+      expect(manifest.version).toBe(packageManagerVersion);
       expect(manifest.description).toContain('Autonomous');
       expect(manifest.license).toBe('AGPL-3.0-or-later');
       expect(manifest.homepage).toBe('https://github.com/whassan007/wazir');
@@ -69,8 +72,8 @@ describe('Cross-Platform Package Manager Integration', () => {
       expect(manifest.architecture['64bit']).toBeDefined();
       expect(manifest.architecture['arm64']).toBeDefined();
 
-      expect(manifest.architecture['64bit'].url).toContain(`wazir-v${currentVersion}-windows-x64.zip`);
-      expect(manifest.architecture['arm64'].url).toContain(`wazir-v${currentVersion}-windows-arm64.zip`);
+      expect(manifest.architecture['64bit'].url).toContain(`wazir-v${packageManagerVersion}-windows-x64.zip`);
+      expect(manifest.architecture['arm64'].url).toContain(`wazir-v${packageManagerVersion}-windows-arm64.zip`);
 
       // Binary shim & checkver
       expect(manifest.bin).toBe('wa.exe');
@@ -84,7 +87,7 @@ describe('Cross-Platform Package Manager Integration', () => {
   });
 
   describe('3. WinGet Manifests', () => {
-    const wingetDir = path.resolve(rootDir, `packaging/winget/manifests/w/Whassan/Wazir/${currentVersion}`);
+    const wingetDir = path.resolve(rootDir, `packaging/winget/manifests/w/Whassan/Wazir/${packageManagerVersion}`);
 
     it('all three WinGet manifests exist for the current version', () => {
       const vPath = path.resolve(wingetDir, 'Whassan.Wazir.yaml');
@@ -99,7 +102,7 @@ describe('Cross-Platform Package Manager Integration', () => {
     it('version manifest is valid', () => {
       const content = readFileSync(path.resolve(wingetDir, 'Whassan.Wazir.yaml'), 'utf8');
       expect(content).toContain('PackageIdentifier: Whassan.Wazir');
-      expect(content).toContain(`PackageVersion: ${currentVersion}`);
+      expect(content).toContain(`PackageVersion: ${packageManagerVersion}`);
       expect(content).toContain('ManifestType: version');
       expect(content).toContain('ManifestVersion: 1.6.0');
     });
@@ -107,7 +110,7 @@ describe('Cross-Platform Package Manager Integration', () => {
     it('installer manifest configures portable zip for x64 and arm64 with wa alias', () => {
       const content = readFileSync(path.resolve(wingetDir, 'Whassan.Wazir.installer.yaml'), 'utf8').replace(/\r\n/g, '\n');
       expect(content).toContain('PackageIdentifier: Whassan.Wazir');
-      expect(content).toContain(`PackageVersion: ${currentVersion}`);
+      expect(content).toContain(`PackageVersion: ${packageManagerVersion}`);
       expect(content).toContain('InstallerType: zip');
       expect(content).toContain('NestedInstallerType: portable');
       expect(content).toContain('RelativeFilePath: wa.exe');
@@ -115,16 +118,16 @@ describe('Cross-Platform Package Manager Integration', () => {
       expect(content).toContain('Commands:\n  - wa');
 
       expect(content).toContain('Architecture: x64');
-      expect(content).toContain(`wazir-v${currentVersion}-windows-x64.zip`);
+      expect(content).toContain(`wazir-v${packageManagerVersion}-windows-x64.zip`);
       expect(content).toContain('Architecture: arm64');
-      expect(content).toContain(`wazir-v${currentVersion}-windows-arm64.zip`);
+      expect(content).toContain(`wazir-v${packageManagerVersion}-windows-arm64.zip`);
       expect(content).toContain('UpgradeBehavior: install');
     });
 
     it('locale manifest contains descriptions, tags, and license', () => {
       const content = readFileSync(path.resolve(wingetDir, 'Whassan.Wazir.locale.en-US.yaml'), 'utf8');
       expect(content).toContain('PackageIdentifier: Whassan.Wazir');
-      expect(content).toContain(`PackageVersion: ${currentVersion}`);
+      expect(content).toContain(`PackageVersion: ${packageManagerVersion}`);
       expect(content).toContain('PackageLocale: en-US');
       expect(content).toContain('Publisher: Wazir');
       expect(content).toContain('PackageName: Wazir');
@@ -137,7 +140,7 @@ describe('Cross-Platform Package Manager Integration', () => {
 
   describe('4. Automated Manifest Generation & Verification Pipeline', () => {
     it('executes update-package-managers.mjs --verify successfully', () => {
-      const res = execSync('node scripts/update-package-managers.mjs --verify', {
+      const res = execSync(`node scripts/update-package-managers.mjs --verify --version ${packageManagerVersion}`, {
         cwd: rootDir,
         stdio: ['ignore', 'pipe', 'pipe'],
       }).toString();

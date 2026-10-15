@@ -73,7 +73,9 @@ record('pack', 'PASS', { note: `${report.tarball.file} ${(report.tarball.bytes /
 // ---- 3. contents --------------------------------------------------------------------------
 const extract = path.join(work, 'extract');
 mkdirSync(extract);
-execFileSync('tar', ['-xzf', tarball, '-C', extract]);
+  // Windows GNU tar may interpret an absolute drive path as a remote host.
+  // Extract by basename from the archive's directory to keep the path local.
+  execFileSync('tar', ['-xzf', path.basename(tarball), '-C', extract], { cwd: path.dirname(tarball) });
 const files = [];
 const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else files.push(path.relative(path.join(extract, 'package'), f).split(path.sep).join('/')); } };
 walk(path.join(extract, 'package'));

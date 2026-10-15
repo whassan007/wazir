@@ -1,0 +1,32 @@
+# Created using Wazir release pipeline
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: Whassan.Wazir
+PackageVersion: 0.1.65
+PackageLocale: en-US
+Publisher: Wazir
+PublisherUrl: https://github.com/whassan007/wazir
+PublisherSupportUrl: https://github.com/whassan007/wazir/issues
+Author: Wazir Contributors
+PackageName: Wazir
+PackageUrl: https://github.com/whassan007/wazir
+License: AGPL-3.0-or-later
+LicenseUrl: https://raw.githubusercontent.com/whassan007/wazir/main/LICENSE
+Copyright: Copyright (c) 2026 Wazir Contributors
+ShortDescription: Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator
+Description: |
+  Wazir is a cross-platform, resource-governed autonomous agent orchestration platform.
+  It enables scalable AI coding execution across local nodes, edge devices, and compute fleets,
+  featuring intelligent resource admission, multi-process memory management, and deterministic recovery.
+Moniker: wa
+Tags:
+  - ai
+  - agent
+  - coding
+  - orchestration
+  - cli
+  - developer-tools
+ReleaseNotesUrl: https://github.com/whassan007/wazir/releases/tag/v0.1.65
+PurchaseUrl: https://github.com/whassan007/wazir
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

@@ -63,7 +63,13 @@ async function withFileLock<T>(lockFile: string, fn: () => Promise<T>): Promise<
       await handle.close();
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      // Windows can report EPERM for open('wx') when another process has
+      // already created the lock file. Treat it as contention only when the
+      // path exists; a genuine permission failure must still surface.
+      const windowsLockContention = code === 'EPERM' && process.platform === 'win32'
+        && await fs.stat(lockFile).then(() => true).catch(() => false);
+      if (code !== 'EEXIST' && !windowsLockContention) throw error;
       const staleSince = await fs.stat(lockFile).then((s) => s.mtimeMs).catch(() => undefined);
       const old = staleSince !== undefined && Date.now() - staleSince > LOCK_STALE_AFTER_MS;
       blockedBy = old ? await liveForeignHolder(lockFile) : undefined;

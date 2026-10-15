@@ -1,3 +1,16 @@
+# Wazir Release Notes - v0.1.66
+
+**Release**: `v0.1.66`
+**Theme**: Verified integration for parallel coding agents and cross-platform package validation
+
+This release adds traceable integration manifests and conflict planning for parallel agent branches. Candidate changes are combined in a disposable worktree and qualified together before promotion, with a durable journal for safe recovery. It also fixes Windows package validation for archives under drive-letter paths.
+
+## Validation
+
+Release verification and platform CI results are recorded with the published release assets after the v0.1.66 workflows complete.
+
+---
+
 # Wazir Release Notes - v0.1.64
 
 **Release**: `v0.1.64`

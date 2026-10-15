@@ -48,7 +48,7 @@ export function detectInstallChannel(): string {
 }
 
 export function getBuildInfo(): BuildInfo {
-  let version = typeof __WAZIR_VERSION__ !== 'undefined' ? __WAZIR_VERSION__ : '0.1.64';
+  let version = typeof __WAZIR_VERSION__ !== 'undefined' ? __WAZIR_VERSION__ : '0.1.66';
   let commit = typeof __WAZIR_COMMIT__ !== 'undefined' ? __WAZIR_COMMIT__ : '';
   let buildDate = typeof __WAZIR_BUILD_DATE__ !== 'undefined' ? __WAZIR_BUILD_DATE__ : '';
 

@@ -77,7 +77,11 @@ if (sumsPath && existsSync(sumsPath)) {
     }
   }
 } else {
-  console.log('ℹ No SHA256SUMS.txt found; preserving existing or placeholder hashes.');
+  console.log('ℹ No SHA256SUMS.txt found; no hashes were loaded.');
+}
+const missingHashes = Object.entries(hashes).filter(([, hash]) => !/^[a-f0-9]{64}$/i.test(hash) || /^0{64}$/.test(hash)).map(([target]) => target);
+if (!verifyOnly && missingHashes.length) {
+  throw new Error(`Refusing to generate manifests without verified checksums for: ${missingHashes.join(', ')}`);
 }
 
 // 1. Generate Homebrew Formula content
@@ -301,6 +305,11 @@ if (existsSync(hbPath)) {
     console.error('✗ Homebrew formula missing class definition!');
     hasError = true;
   } else {
+    const found = [...content.matchAll(/sha256 "([a-f0-9]{64})"/gi)].map((match) => match[1]);
+    if (found.length < 4 || found.some((hash) => /^0{64}$/i.test(hash))) {
+      console.error('✗ Homebrew formula contains missing or placeholder checksums');
+      hasError = true;
+    }
     console.log('✓ Homebrew formula valid and matches target version.');
   }
 } else {
@@ -320,6 +329,11 @@ if (existsSync(scoopPath)) {
       console.error('✗ Scoop manifest missing wa.exe bin mapping!');
       hasError = true;
     } else {
+      const hashesInManifest = [parsed.architecture?.['64bit']?.hash, parsed.architecture?.arm64?.hash];
+      if (hashesInManifest.some((hash) => !/^[a-f0-9]{64}$/i.test(hash ?? '') || /^0{64}$/i.test(hash))) {
+        console.error('✗ Scoop manifest contains missing or placeholder checksums');
+        hasError = true;
+      }
       console.log('✓ Scoop manifest valid JSON and matches target version.');
     }
   } catch (err) {
@@ -350,6 +364,11 @@ if (existsSync(wgVersionPath) && existsSync(wgInstallerPath) && existsSync(wgLoc
     console.error('✗ WinGet installer manifest missing command alias mapping!');
     hasError = true;
   } else {
+    const installerHashes = [...iContent.matchAll(/InstallerSha256: ([a-f0-9]{64})/gi)].map((match) => match[1]);
+    if (installerHashes.length < 2 || installerHashes.some((hash) => /^0{64}$/i.test(hash))) {
+      console.error('✗ WinGet installer manifest contains missing or placeholder checksums');
+      hasError = true;
+    }
     console.log('✓ WinGet manifests valid and match target version.');
   }
 } else {
