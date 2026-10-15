@@ -128,8 +128,14 @@ describe('retried fleet task resumes the same execution (e2e)', () => {
     const executor = createFleetTaskExecutor(engine, { useWorktrees: false });
     await executor(task, { jobId: 'job-1', taskId: task.id, node, assignment });
     const [record] = await engine.executions.listByTask(task.id);
-    // A crash mid-commit in the previous attempt: dispatched, never recorded.
-    await engine.executions.recordToolStart(record.execution.id, 'git', { command: 'commit -m notes' }, { callId: 'commit-1', sideEffectClass: 'NON_IDEMPOTENT_WRITE' });
+    // A crash mid-commit in the previous attempt: dispatched while it was live, never
+    // recorded. (A settled execution refuses tool dispatch, so the attempt is re-opened
+    // to stage that history, then ended as the crash would have left it.)
+    const id = record.execution.id;
+    await engine.executions.recordEvent(id, 'execution.resumed', { staged: true });
+    await engine.executions.setStatus(id, 'running');
+    await engine.executions.recordToolStart(id, 'git', { command: 'commit -m notes' }, { callId: 'commit-1', sideEffectClass: 'NON_IDEMPOTENT_WRITE' });
+    await engine.executions.setStatus(id, 'failed');
     const before = requests.length;
 
     const retry = await executor(task, { jobId: 'job-1', taskId: task.id, node, assignment });

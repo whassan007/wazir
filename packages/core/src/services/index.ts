@@ -51,7 +51,8 @@ export { Scheduler, createScheduler } from './scheduler.js';
 export type { SchedulerDeps, ScheduleInput } from './scheduler.js';
 export { JobManager, createJobManager } from './jobManager.js';
 export type { JobManagerOptions, JobTaskInput } from './jobManager.js';
-export { JobOrchestrator, createJobOrchestrator } from './jobOrchestrator.js';
+export { InvalidTransitionError, canTransitionTask, canTransitionNode, canTransitionJob, canTransitionExecution } from './lifecycleTransitions.js';
+export { JobOrchestrator, createJobOrchestrator, enforceVerification } from './jobOrchestrator.js';
 export type { JobOrchestratorOptions, OrchestratorTaskAssignment } from './jobOrchestrator.js';
 export { ApprovalQueue, createApprovalQueue } from './approvalQueue.js';
 export type { ApprovalQueueOptions, PendingApprovalRequest } from './approvalQueue.js';
@@ -185,3 +186,9 @@ export {
   digest,
 } from './distributedSearchCoordinator.js';
 export type { DistributedSearchCoordinatorOptions } from '../types/distributedSearch.js';
+export { TaskRecoveryPolicy, classifyTaskOutcome, classifyTaskError, failureSignature } from './taskRecoveryPolicy.js';
+export type { RecoveryCategory, RecoveryStrategy, TaskFailureClassification, TaskRecoveryDecision, TaskRecoveryPolicyOptions } from './taskRecoveryPolicy.js';
+export { buildTaskVerificationReport, buildJobVerificationReport } from './verificationReport.js';
+export type { TaskVerificationInput } from './verificationReport.js';
+export { FailureFeedbackLog, feedbackFromJob, judgeImprovementCandidate, REQUIRED_CANDIDATE_GATES } from './failureFeedback.js';
+export type { FailureFeedbackRecord, ImprovementCandidate, CandidateGate, CandidateEvidence, CandidateVerdict } from './failureFeedback.js';

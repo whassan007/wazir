@@ -512,7 +512,9 @@ export function listTools(engine: RookEngine): string {
 export function inspectPolicy(engine: RookEngine): string {
   const lines: string[] = [color.bold('Policy rules'), ''];
   for (const rule of engine.policy.rules) {
-    lines.push(`  ${rule.scope.padEnd(12)} ${rule.pattern.padEnd(10)} → ${rule.effect.padEnd(6)} ${color.gray(rule.description)}`);
+    const scope = (rule.scope ?? rule.id).padEnd(28);
+    const pattern = (rule.pattern ?? '').padEnd(10);
+    lines.push(`  ${scope} ${pattern} → ${rule.effect.padEnd(6)} ${color.gray(rule.description)}`);
   }
   lines.push('');
   lines.push(color.bold('Policy options'));
@@ -547,6 +549,7 @@ export async function inspectExecution(engine: RookEngine, id: string, json: boo
     const all = await engine.executions.list();
     const fuzzy = all.find((r) => r.execution.id.includes(id));
     if (!fuzzy) {
+      process.exitCode = 1;
       return color.red(`execution '${id}' not found`);
     }
     record = fuzzy;
@@ -1431,6 +1434,7 @@ export async function listArtifacts(engine: RookEngine, options: ArtifactListOpt
 }
 
 function artifactNotFound(id: string, json?: boolean): string {
+  process.exitCode = 1;
   return json ? JSON.stringify({ error: `artifact not found: ${id}` }) : color.red(`artifact not found: ${id}`);
 }
 
@@ -2022,6 +2026,7 @@ export async function inspectRuntime(engine: RookEngine, id: string): Promise<vo
   const runtime = engine.discovered.find((r) => r.id === id);
   if (!runtime) {
     console.error(color.red(`Runtime '${id}' not found.`));
+    process.exitCode = 1;
     return;
   }
   

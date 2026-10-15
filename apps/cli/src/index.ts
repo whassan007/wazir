@@ -21,7 +21,7 @@ const program = new Command();
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version(typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.1.66');
+  .version(typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.1.67');
 
 registerMCPCommands(program);
 registerWebCommands(program);
@@ -61,8 +61,22 @@ computersCmd
   .command('inspect')
   .argument('<id>', 'Computer ID')
   .description('Inspect a specific computer')
-  .action((id) => {
-    console.log(chalk.green(`Computer: ${id}`));
+  .action(async (id) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const computer = engine.computers.get(id);
+    if (!computer) {
+      console.error(chalk.red(`computer '${id}' not found`));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(chalk.green(`Computer: ${computer.id} (${computer.name})`));
+    console.log(`OS:       ${computer.os}`);
+    console.log(`CPU:      ${computer.hardware?.cpuCores ?? '-'} cores`);
+    console.log(`RAM:      ${computer.hardware?.memoryGB ?? '-'} GB`);
+    if (computer.hardware?.gpu?.model) {
+      console.log(`GPU:      ${computer.hardware.gpu.model}`);
+    }
   });
 
 program.addCommand(computersCmd);
@@ -213,7 +227,13 @@ for (const operation of ['inspect', 'estimate', 'pin', 'unpin'] as const) {
       const { createEngine } = await import('./engine.js');
       const { lifecycleOptions, formatModelLoadPlan } = await import('./commands.js');
       const engine = await createEngine({ readOnlyLifecycle: true });
-      if (operation === 'inspect') console.log(JSON.stringify(engine.lifecycle.inspect(modelId), null, 2));
+      if (operation === 'inspect') {
+        const info = engine.lifecycle.inspect(modelId);
+        if ((!info.installations || info.installations.length === 0) && (!info.instances || info.instances.length === 0)) {
+          process.exitCode = 1;
+        }
+        console.log(JSON.stringify(info, null, 2));
+      }
       else if (operation === 'estimate') {
         const plan = await engine.lifecycle.estimate(modelId, lifecycleOptions(options));
         console.log(options.json ? JSON.stringify(plan, null, 2) : formatModelLoadPlan(plan));
@@ -375,8 +395,17 @@ taskCmd
   .command('status')
   .argument('<id>', 'Task ID')
   .description('Show task status')
-  .action((id) => {
-    console.log(chalk.green(`Task ${id}: queued`));
+  .action(async (id) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const executions = await engine.executions.list();
+    const match = executions.find((e) => e.task?.id === id || e.execution.taskId === id || e.execution.id === id);
+    if (!match) {
+      console.error(chalk.red(`Task '${id}' not found`));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(chalk.green(`Task ${id}: ${match.execution.status}`));
   });
 
 program.addCommand(taskCmd);
@@ -1165,6 +1194,29 @@ jobsCmd
     const engine = await createEngine();
     const { mergeJob } = await import('./commands.js');
     console.log(await mergeJob(engine, id, options.target));
+  });
+
+jobsCmd.command('verification <id>').description('Print the machine-readable verification report written when the job settled')
+  .action(async (id: string) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine();
+    const job = engine.orchestrator.getJob(id);
+    if (!job) { console.error(`Job '${id}' not found`); process.exitCode = 1; return; }
+    if (!job.verification) { console.error(`Job '${id}' has no verification report (status: ${job.status})`); process.exitCode = 1; return; }
+    console.log(JSON.stringify(job.verification, null, 2));
+    if (job.verification.verdict !== 'VERIFIED') process.exitCode = 2;
+  });
+
+jobsCmd.command('feedback').description('Show recorded task failure feedback, recurring signatures and gated improvement candidates')
+  .option('--min <n>', 'Occurrences for a signature to count as recurring', '3')
+  .option('--candidates', 'Print proposed improvement candidates instead of raw records')
+  .action(async (options: { min: string; candidates?: boolean }) => {
+    const { createEngine } = await import('./engine.js');
+    const { FailureFeedbackLog } = await import('@wazir/core');
+    const engine = await createEngine();
+    const log = new FailureFeedbackLog(engine.store);
+    const min = Math.max(1, Number(options.min) || 3);
+    console.log(JSON.stringify(options.candidates ? await log.proposeCandidates(min) : { records: await log.list(), recurring: await log.incidents(min) }, null, 2));
   });
 
 jobsCmd.command('resume <id>').description('Resume a persisted job after its owner lease expires')

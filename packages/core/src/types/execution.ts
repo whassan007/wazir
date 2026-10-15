@@ -165,6 +165,8 @@ export interface ExecutionRecord {
 
 export type ExecutionEventType =
   | 'execution.started'
+  /** Machine-readable TaskVerificationReport for an attempt (see verificationReport.ts). */
+  | 'verification.report'
   | 'execution.resumed'
   | 'execution.paused'
   | 'execution.steered'

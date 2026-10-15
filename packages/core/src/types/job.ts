@@ -52,7 +52,20 @@ export interface JobNode {
   evidence?: string[];
   error?: string;
   retryCount?: number;
-  attempts?: Array<{ state: AgentState; error?: string; executedAt?: Date; completedAt?: Date }>;
+  attempts?: Array<{
+    state: AgentState;
+    error?: string;
+    executedAt?: Date;
+    completedAt?: Date;
+    /** Recovery controller decision for this failed attempt (absent on records written before it existed). */
+    recovery?: TaskAttemptRecovery;
+  }>;
+  /** Recovery decision that stopped this node, when it failed terminally. */
+  lastRecovery?: TaskAttemptRecovery;
+  /** 0 for planned tasks; n for a repair task created by the n-th replan in its lineage. */
+  replanGeneration?: number;
+  /** Verification report of the attempt that settled this node, when the executor produced one. */
+  verification?: TaskVerificationReport;
   executedAt?: Date;
   completedAt?: Date;
   workspaceRevision?: string;
@@ -141,6 +154,8 @@ export interface Job {
   createdAt: Date;
   startedAt?: Date;
   completedAt?: Date;
+  /** Written by the orchestrator when the job settles. */
+  verification?: JobVerificationReport;
 }
 
 export interface OrchestratorState {
@@ -211,6 +226,70 @@ export interface JobTaskExecutionContext {
   previousOutcomes?: Map<string, JobTaskOutcome>;
 }
 
+/** Outcome of checking a task against deterministic evidence, never against model prose. */
+export type VerificationVerdict =
+  /** Every evaluated criterion passed and at least one criterion had evidence. */
+  | 'VERIFIED'
+  /** At least one criterion failed. */
+  | 'FAILED'
+  /** Nothing could be checked (no checks, artifacts or acceptance criteria): success is unproven. */
+  | 'INCONCLUSIVE'
+  /** Verification could not run (policy, approval, cancellation, unreconciled side effects). */
+  | 'BLOCKED';
+
+export interface AcceptanceCriterionResult {
+  id: string;
+  description: string;
+  status: 'passed' | 'failed' | 'unverified';
+  evidence: string[];
+}
+
+export interface TaskVerificationReport {
+  schemaVersion: 1;
+  verdict: VerificationVerdict;
+  /** What the model said: it ended with a completion turn. A hypothesis, not evidence. */
+  modelReportedSuccess: boolean;
+  /** Every tool call the controller executed returned ok (undefined when none ran). */
+  toolExecutionSuccess?: boolean;
+  /** Every test check passed (undefined when no test ran). */
+  testSuccess?: boolean;
+  /** The deterministic evaluator accepted the execution. */
+  evaluationSuccess: boolean;
+  criteria: AcceptanceCriterionResult[];
+  workspaceRevision?: number;
+  executionId?: string;
+  reasons: string[];
+  generatedAt: string;
+}
+
+export interface TaskAttemptRecovery {
+  category: string;
+  failureClass?: string;
+  terminationReason?: string;
+  signature: string;
+  strategy: string;
+  reason: string;
+  delayMs: number;
+}
+
+/** Machine-readable verification summary persisted on the job when it settles. */
+export interface JobVerificationReport {
+  schemaVersion: 1;
+  jobId: string;
+  verdict: VerificationVerdict | 'UNVERIFIED';
+  tasks: Array<{
+    taskId: string;
+    state: AgentState;
+    superseded: boolean;
+    /** 'UNVERIFIED' when the executor did not produce a report (legacy/custom executors). */
+    verdict: VerificationVerdict | 'UNVERIFIED' | 'NOT_RUN';
+    attempts: number;
+    recoveries: TaskAttemptRecovery[];
+    report?: TaskVerificationReport;
+  }>;
+  generatedAt: string;
+}
+
 export interface SupervisorDecision {
   decision: 'approve' | 'reject';
   reason: string;
@@ -231,6 +310,13 @@ export interface JobTaskOutcome {
   reasons?: string[];
   filesChanged?: string[];
   usage?: { input: number; output: number; total: number };
+  /** Shared failure taxonomy class, when the executor knows it precisely. */
+  failureClass?: import('@wazir/shared').FailureClass;
+  /** Why the agent loop stopped, when it ran one. */
+  terminationReason?: import('./agent.js').TerminationReason;
+  /** Evidence-based verification of this attempt. A FAILED or BLOCKED verdict is never
+   *  accepted as success by the orchestrator, whatever `success` says. */
+  verification?: TaskVerificationReport;
 }
 
 export type JobTaskExecutor = (
@@ -254,6 +340,8 @@ export type JobOrchestratorEventType =
   | 'task:completed'
   | 'task:failed'
   | 'task:retry'
+  /** A failed attempt was classified and a bounded recovery decision taken (event = TaskAttemptRecovery). */
+  | 'task:recovery'
   | 'task:replan'
   | 'task:cancelled'
   | 'task:steered'
@@ -299,5 +387,11 @@ export interface JobRunOptions {
   /** Overrides job.timeoutSeconds for this run; falls back to a built-in default if neither is set. */
   timeoutSeconds?: number;
   replanner?: TaskReplanner;
+  /** Overrides the default bounded recovery policy (backoff, no-progress detection). */
+  recoveryPolicy?: import('../services/taskRecoveryPolicy.js').TaskRecoveryPolicy;
+  /** Replans allowed along one task lineage before failures fall back to bounded retry. Default 2. */
+  maxReplanGeneration?: number;
+  /** When true, an INCONCLUSIVE verification report fails the task instead of passing it. */
+  requireVerifiedCompletion?: boolean;
 }
 

@@ -1,0 +1,298 @@
+[
+  {
+    "command": "version",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "{   \"version\": \"0.1.60\",   \"commit\": \"59b7aac8f7883f6181873723a0be1ddfc51969a6\",   \"buildDate\": \"202",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--invalid-flag-xyz' "
+  },
+  {
+    "command": "doctor",
+    "help": "PASS",
+    "live": "FAIL(1)",
+    "liveSnippet": "(node:3253458) ExperimentalWarning: SQLite is an experimental feature and might change at any time (",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--bogus-opt' "
+  },
+  {
+    "command": "status",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "Wazir Status  Control Plane   version:   0.1.2   configDir: /tmp/wazir-test-home-eval   project:   /",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--bogus' "
+  },
+  {
+    "command": "config",
+    "help": "PASS",
+    "live": "FAIL(1)",
+    "liveSnippet": "Usage: wa config [options] [command]  Show configuration  Options:   -h, --help      display help fo",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--bogus' "
+  },
+  {
+    "command": "resources",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "{   \"generatedAt\": \"2026-10-14T02:48:09.179Z\",   \"policy\": {     \"enforce\": false,     \"mode\": \"bala",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--bogus' "
+  },
+  {
+    "command": "computers",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "id     name     scope  os     cpu       ram    gpu          load  status -----  -------  -----  ----",
+    "negative": "FAIL(accepted)",
+    "negSnippet": "Computer: nonexistent-pc-id "
+  },
+  {
+    "command": "workers",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "Local worker   id:        worker-local-54d73213b4c7b5b7579133c84521c459   computer:  local   name:  ",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'inspect' "
+  },
+  {
+    "command": "runtimes",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "runtime   name       version  url                    health       models    --------  ---------  ---",
+    "negative": "FAIL(accepted)",
+    "negSnippet": ""
+  },
+  {
+    "command": "models",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "WAZIR MODELS  Fleet Capacity COMPUTER  MEMORY                     RUNTIME    INSTALLED  LOADED  READ",
+    "negative": "FAIL(accepted)",
+    "negSnippet": "{   \"installations\": [],   \"instances\": [] } "
+  },
+  {
+    "command": "agents",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "{   \"registered\": [     {       \"descriptor\": {         \"name\": \"antigravity\",         \"version\": \"e",
+    "negative": "PASS(rejected)",
+    "negSnippet": "(node:3256796) ExperimentalWarning: SQLite is an experimental feature and might change at any time ("
+  },
+  {
+    "command": "policy",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "Policy Explanation   Command:   ls   Decision:  ALLOW   Rule:      shell-safe-allow   Reasons:     -",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: missing required argument 'command' "
+  },
+  {
+    "command": "tools",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "tool               permissions       risk    description                                            ",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'inspect' "
+  },
+  {
+    "command": "task",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "  Scheduling decision     agent:     wazir-coding     model:     nvidia/nemotron-3-nano-omni (empiri",
+    "negative": "FAIL(accepted)",
+    "negSnippet": "Task bogus-task-id: queued "
+  },
+  {
+    "command": "run",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "  Scheduling decision     agent:     wazir-coding     model:     nvidia/nemotron-3-nano-omni (empiri",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: missing required argument 'prompt' "
+  },
+  {
+    "command": "executions",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "[   {     \"execution\": {       \"id\": \"exec-mv7i6zsm-1\",       \"taskId\": \"task-9595988049455591a4cb54",
+    "negative": "FAIL(accepted)",
+    "negSnippet": "execution 'nonexistent-exec-id' not found "
+  },
+  {
+    "command": "history",
+    "help": "PASS",
+    "live": "FAIL(1)",
+    "liveSnippet": "Usage: wa history [options] [command]  View command history (blocks)  Options:   -h, --help         ",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--bogus' "
+  },
+  {
+    "command": "context",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "no active context blocks ",
+    "negative": "PASS(rejected)",
+    "negSnippet": "(node:3259385) ExperimentalWarning: SQLite is an experimental feature and might change at any time ("
+  },
+  {
+    "command": "mcp",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "MCP SERVERS SERVER          TRANSPORT AUTH       STATUS          TOOLS github          http      bea",
+    "negative": "PASS(rejected)",
+    "negSnippet": "(node:3259889) ExperimentalWarning: SQLite is an experimental feature and might change at any time ("
+  },
+  {
+    "command": "web",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "{   \"enabled\": false,   \"networkAllowed\": false,   \"providers\": [     {       \"id\": \"http\",       \"t",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'inspect' "
+  },
+  {
+    "command": "auth",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "PROVIDER       AUTH                     MODELS ------------------------------------------------ Anth",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'bogus' (Did you mean logout?) "
+  },
+  {
+    "command": "audit",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "timestamp            type             tool  decision  target  detail -------------------  ----------",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--bogus' "
+  },
+  {
+    "command": "ask",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "  Scheduling decision     agent:     wazir-coding     model:     nvidia/nemotron-3-nano-omni (empiri",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: missing required argument 'prompt' "
+  },
+  {
+    "command": "jobs",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "no jobs recorded yet ",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'status' "
+  },
+  {
+    "command": "artifacts",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "id                                         type            name                               locati",
+    "negative": "FAIL(accepted)",
+    "negSnippet": "artifact not found: bogus "
+  },
+  {
+    "command": "explain",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "EXECUTION: exec-mv7hietx-1  Requested capabilities: (none)  Selected model   nvidia/nemotron-3-nano-",
+    "negative": "PASS(rejected)",
+    "negSnippet": "(node:3261948) ExperimentalWarning: SQLite is an experimental feature and might change at any time ("
+  },
+  {
+    "command": "evidence",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "VERIFICATION EVIDENCE   Execution     exec-mv7hietx-1   Revision      R1   Workspace     UNKNOWN   S",
+    "negative": "PASS(rejected)",
+    "negSnippet": "(node:3262761) ExperimentalWarning: SQLite is an experimental feature and might change at any time ("
+  },
+  {
+    "command": "search",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "Usage: wa search [options] [command]  Systematically explore multiple independent solution trajector",
+    "negative": "PASS(rejected)",
+    "negSnippet": "Usage: wa search [options] [command]  Systematically explore multiple independent solution trajector"
+  },
+  {
+    "command": "improve",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "WAZIR SELF-IMPROVEMENT STATUS ------------------------------------------------------- Active Config:",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'bogus' "
+  },
+  {
+    "command": "canary",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "No active canary deployment. ",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'bogus' "
+  },
+  {
+    "command": "service",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "Backend:   systemd (linux) Service:   wazir Installed: no Status:    inactive Unit File: /home/wael/",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'bogus' "
+  },
+  {
+    "command": "test",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "Action protocol matrix (no model invoked)  case                                                     ",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'bogus' "
+  },
+  {
+    "command": "init",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "Usage: wa init [options]  Initialize Wazir control plane  Options:   --force     Force re-initializa",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--bogus' "
+  },
+  {
+    "command": "evaluation",
+    "help": "PASS",
+    "live": "FAIL(1)",
+    "liveSnippet": "error: unknown command 'list' ",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'bogus' "
+  },
+  {
+    "command": "benchmark",
+    "help": "PASS",
+    "live": "FAIL(1)",
+    "liveSnippet": "error: unknown command 'list' ",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown command 'bogus' "
+  },
+  {
+    "command": "discover",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "Usage: wa discover [options] [command]  Discover runtimes and models  Options:   -h, --help      dis",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--bogus' "
+  },
+  {
+    "command": "chat",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "Usage: wa chat|fleet [options]  Open interactive fleet-scale coding agent TUI session  Options:   --",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--bogus' "
+  },
+  {
+    "command": "dashboard",
+    "help": "PASS",
+    "live": "PASS",
+    "liveSnippet": "Usage: wa dashboard|ui [options]  Launch the Wazir web control plane & dashboard  Options:   -p, --p",
+    "negative": "PASS(rejected)",
+    "negSnippet": "error: unknown option '--bogus' "
+  }
+]

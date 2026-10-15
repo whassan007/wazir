@@ -336,7 +336,7 @@ describe('tool enforcement (operator, real registered tools)', () => {
     }
   });
 
-  it('records a tool exception as a failed step, never completion', async () => {
+  it('records a side-effecting tool exception as an unknown outcome awaiting reconciliation, never completion', async () => {
     const original = h.state.tools.get('lint')!;
     h.state.tools.register({ descriptor: { ...original.descriptor }, execute: async () => { throw new Error('boom from tool'); } });
     try {
@@ -346,9 +346,15 @@ describe('tool enforcement (operator, real registered tools)', () => {
       expect(res.body.status).toBe('failed');
       expect(res.body.output).toContain('boom from tool');
       expect(res.body.additional_output.tool.ok).toBe(false);
+      // The registry cannot tell whether a throwing side-effecting tool acted.
+      expect(res.body.additional_output.outcome).toBe('OUTCOME_UNKNOWN');
       const task = await getTask(h, taskId);
-      expect(task.status).toBe('failed');
-      expect(task.additional_output.outcome).toBe('FAILED');
+      expect(task.status).toBe('paused');
+      expect(task.additional_output.outcome).toBe('OUTCOME_UNKNOWN');
+      expect(task.additional_output.reconciliation_required.step_id).toBe(res.body.step_id);
+      const next = await step(h, taskId, { is_last: true });
+      expect(next.status).toBe(409);
+      expect(next.body.code).toBe('RECONCILIATION_REQUIRED');
     } finally {
       h.state.tools.register(original);
     }
