@@ -12,6 +12,8 @@ export interface WorktreeInfo {
   worktreeDir: string;
   branch: string;
   baseBranch: string;
+  /** Exact commit this worktree was created from (undefined for legacy/non-Git workspaces). */
+  baseSha?: string;
   isGit: boolean;
   createdAt: Date;
 }
@@ -116,8 +118,14 @@ export class WorktreeManager {
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
       throw new Error(`worktree path '${worktreeDir}' escapes '${rootDir}'`);
     }
+    if (await fs.access(worktreeDir).then(() => true).catch(() => false)) {
+      throw new Error(`refusing to replace existing worktree path '${worktreeDir}'`);
+    }
     const branch = taskId ? `wazir/${jobId}/${taskId}` : `wazir/${jobId}`;
     const baseBranch = isGit ? await this.getCurrentBranch(projectRoot) : 'none';
+    const baseSha = isGit
+      ? (await execFileAsync('git', [...GIT_NO_HOOKS, 'rev-parse', 'HEAD^{commit}'], { cwd: projectRoot })).stdout.trim()
+      : undefined;
 
     if (!isGit) {
       // Fallback for non-git projects: copy directory entries excluding .wazir
@@ -145,9 +153,6 @@ export class WorktreeManager {
       };
     }
 
-    // Clean up any stale worktree directory if it exists
-    await this.cleanupDirectory(worktreeDir);
-
     // Ensure .wazir is excluded from git tracking so worktree directories do not dirty git status
     try {
       const excludeFile = path.join(projectRoot, '.git', 'info', 'exclude');
@@ -163,10 +168,10 @@ export class WorktreeManager {
     }
 
     try {
-      // Create new branch and worktree from HEAD
+      // Create new branch and worktree from the exact commit recorded above.
       await execFileAsync(
         'git',
-        [...GIT_NO_HOOKS, 'worktree', 'add', '-b', branch, worktreeDir, 'HEAD'],
+        [...GIT_NO_HOOKS, 'worktree', 'add', '-b', branch, worktreeDir, baseSha!],
         { cwd: projectRoot },
       );
     } catch (error) {
@@ -174,16 +179,11 @@ export class WorktreeManager {
       try {
         await execFileAsync(
           'git',
-          ['worktree', 'add', worktreeDir, branch],
+          [...GIT_NO_HOOKS, 'worktree', 'add', worktreeDir, branch],
           { cwd: projectRoot },
         );
-      } catch {
-        // Fallback: force create worktree
-        await execFileAsync(
-          'git',
-          ['worktree', 'add', '--force', '-B', branch, worktreeDir, 'HEAD'],
-          { cwd: projectRoot },
-        );
+      } catch (attachError) {
+        throw new Error(`could not create or attach worktree '${worktreeDir}' on '${branch}'; refusing to reset an existing branch: ${attachError instanceof Error ? attachError.message : String(attachError)}`);
       }
     }
 
@@ -197,6 +197,7 @@ export class WorktreeManager {
       worktreeDir,
       branch,
       baseBranch,
+      baseSha,
       isGit: true,
       createdAt: new Date(),
     };
@@ -314,6 +315,8 @@ export class WorktreeManager {
   ): Promise<WorktreeMergeResult> {
     const target = targetBranch ?? (await this.getCurrentBranch(projectRoot));
     try {
+      const { stdout: status } = await execFileAsync('git', [...GIT_NO_HOOKS, 'status', '--porcelain'], { cwd: projectRoot });
+      if (status.trim()) throw new Error('refusing to merge into a dirty target worktree');
       // Checkout target branch
       await execFileAsync('git', [...GIT_NO_HOOKS, 'checkout', target], { cwd: projectRoot });
 

@@ -62,6 +62,21 @@ export type {
   WorktreeManagerOptions,
   WorktreeMergeResult,
 } from './worktreeManager.js';
+export { VerifiedIntegrationCoordinator } from './verifiedIntegrationCoordinator.js';
+export type {
+  AgentIntegrationManifest,
+  ConflictAnalysisContext,
+  ConflictAnalysisProposal,
+  ConflictAssistant,
+  IntegrationCandidateInput,
+  IntegrationCheckResult,
+  IntegrationConflict,
+  IntegrationEvidenceStatus,
+  IntegrationPlan,
+  IntegrationQualificationReport,
+  QualifyOptions,
+  VerifiedIntegrationCoordinatorOptions,
+} from './verifiedIntegrationCoordinator.js';
 export { TaskPlanner, createTaskPlanner } from './planner.js';
 export type { ExecutionPlan, PlanStep, PlanOptions, PlannerModelCaller } from './planner.js';
 export { classifyComplexity, budgetFor } from './complexity.js';

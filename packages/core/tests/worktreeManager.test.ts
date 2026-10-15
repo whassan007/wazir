@@ -135,6 +135,17 @@ describe('WorktreeManager — git worktree isolation per agent', () => {
     await manager.removeWorktree(wt1);
     await manager.removeWorktree(wt2);
   });
+
+  it('refuses to replace an existing worktree path and preserves its uncommitted files', async () => {
+    tmpRepo = await initGitRepo();
+    const manager = new WorktreeManager();
+    const first = await manager.createWorktree(tmpRepo, 'job-existing', 'task-1');
+    const marker = path.join(first.worktreeDir, 'uncommitted.txt');
+    await fs.writeFile(marker, 'keep this work\n');
+    await expect(manager.createWorktree(tmpRepo, 'job-existing', 'task-1')).rejects.toThrow('refusing to replace existing worktree path');
+    expect(await fs.readFile(marker, 'utf8')).toBe('keep this work\n');
+    await manager.removeWorktree(first);
+  });
 });
 
 describe('F-14: worktree ids are validated before they become paths', () => {
