@@ -182,10 +182,8 @@ export class ExternalAgentAdapter implements AgentAdapter {
         if (captured.length < MAX_CAPTURE) captured += chunk.slice(0, MAX_CAPTURE - captured.length);
       };
       child.stdout.setEncoding('utf8').on('data', append);
-      child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-        append(chunk);
-        stderr = (stderr + chunk).slice(-MAX_CAPTURE);
-      });
+      // stderr is diagnostic only: it must never count as the agent's answer.
+      child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-MAX_CAPTURE); });
       child.on('error', (error) => {
         settle();
         reject(error);

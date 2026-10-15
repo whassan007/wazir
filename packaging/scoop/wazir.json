@@ -1,15 +1,15 @@
 {
-  "version": "0.1.64",
+  "version": "0.1.65",
   "description": "Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator",
   "homepage": "https://github.com/whassan007/wazir",
   "license": "AGPL-3.0-or-later",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/whassan007/wazir/releases/download/v0.1.64/wazir-v0.1.64-windows-x64.zip",
+      "url": "https://github.com/whassan007/wazir/releases/download/v0.1.65/wazir-v0.1.65-windows-x64.zip",
       "hash": "0000000000000000000000000000000000000000000000000000000000000000"
     },
     "arm64": {
-      "url": "https://github.com/whassan007/wazir/releases/download/v0.1.64/wazir-v0.1.64-windows-arm64.zip",
+      "url": "https://github.com/whassan007/wazir/releases/download/v0.1.65/wazir-v0.1.65-windows-arm64.zip",
       "hash": "0000000000000000000000000000000000000000000000000000000000000000"
     }
   },

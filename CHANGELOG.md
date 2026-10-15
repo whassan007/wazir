@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.65 — 2026-10-14
+
+**Release**: `v0.1.65`
+**Theme**: Supersedes v0.1.64 (release gate failed; never published)
+
+- Restore v0.1.63 behaviour in the external agent adapter: stderr is kept for diagnostics and never counted as the agent's answer, so a vendor agent cannot pass the preflight probe by writing to stderr. The v0.1.64 merge had reintroduced stderr into captured output.
+- Includes everything listed for v0.1.64.
+
 ## v0.1.64 — 2026-10-14
 
 **Release**: `v0.1.64`
