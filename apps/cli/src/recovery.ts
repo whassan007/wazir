@@ -66,13 +66,29 @@ export type TaskResumePlan =
  * happened, so re-running the agent could repeat it. The refusal is recorded on the
  * execution; the resumption is recorded as `execution.resumed`.
  */
+/** Upper bound on resumptions of one execution, independent of the caller's retry policy. */
+export const MAX_EXECUTION_RESUMES = 8;
+
 export async function planTaskResume(
   executions: ExecutionEngine,
   executionId: string,
   inspect: (record: ExecutionRecord, call: ToolCallCheckpoint) => Promise<ToolOutcomeInspection>,
+  options: { maxResumes?: number } = {},
 ): Promise<TaskResumePlan> {
   const reconciled: string[] = [];
   const record = executions.require(executionId);
+  // Its in-flight calls belong to that process; resuming here would run the task twice.
+  if (executions.ownedByAnotherLiveProcess(record)) {
+    const owner = record.execution.owner!;
+    return { action: 'refuse', reasons: [`execution is still owned by live process ${owner.pid} on ${owner.host}`] };
+  }
+  const maxResumes = options.maxResumes ?? MAX_EXECUTION_RESUMES;
+  const resumedSoFar = (await executions.events(executionId)).filter((e) => (e.eventType ?? e.type) === 'execution.resumed').length;
+  if (resumedSoFar >= maxResumes) {
+    const reasons = [`RESUME_LIMIT_EXCEEDED: execution was already resumed ${resumedSoFar} time(s) (limit ${maxResumes})`];
+    await executions.recordError(executionId, `RESUME_REFUSED: ${reasons[0]}`);
+    return { action: 'refuse', reasons };
+  }
   for (const call of executions.toolCheckpoints(executionId)) {
     if (call.state !== 'STARTED' && call.state !== 'OUTCOME_UNKNOWN') continue;
     const inspection = await inspect(record, call).catch((): ToolOutcomeInspection => ({ outcome: 'UNDETERMINED', evidence: 'inspection failed' }));

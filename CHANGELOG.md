@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.67 — 2026-10-15
+
+**Release**: `v0.1.67`
+**Theme**: Bounded autonomous recovery, evidence-based verification reports, and cross-process protocol transaction integrity
+
+- **Recovery controller**: failed task attempts are classified with the shared `FailureClass` taxonomy. Transient infrastructure failures retry with cancellable exponential backoff; budget, policy, approval, auth, quota and cancellation stops are never retried or replanned; repeated identical failures stop as `no_progress`; replanning is bounded (default depth 2). Each decision is persisted on the attempt before backoff and emitted as `task:recovery`.
+- **Verification reports**: every fleet task attempt produces a `TaskVerificationReport` separating model-reported, tool, test and evaluator success with per-criterion evidence (`VERIFIED`/`FAILED`/`INCONCLUSIVE`/`BLOCKED`). A failed or blocked report overrides a success claim; `requireVerifiedCompletion` also fails `INCONCLUSIVE`. Settled jobs persist a `JobVerificationReport` — `wa jobs verification <id>`.
+- **Failure feedback**: one record per failed task (signature, category, model/runtime, strategies, attempts, verdict, regression, usage) with bounded retention; inert, gated improvement candidates — `wa jobs feedback [--candidates]`.
+- **Durability**: lifecycle transition guards, injective tool-receipt fingerprints, bounded worker result redelivery, crash-point process tests; remote dispatch stops after 5 lost leases with `DELIVERY_ATTEMPTS_EXHAUSTED`.
+- **Fixes**: a cancel requested just before the owning process died was ignored by recovery; two replans in the same millisecond produced colliding repair task ids.
+- **Protocol transaction integrity** (previously unreleased): single authoritative task record with per-task step leases, `OUTCOME_UNKNOWN` pause and reconcile route, workspace mutation epochs for verification staleness, plus post-audit CLI/runtime defect fixes.
+
 ## v0.1.66 — 2026-10-14
 
 **Release**: `v0.1.66`

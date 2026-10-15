@@ -16,6 +16,7 @@ import type {
   ExecutionPreferences,
   WorkspaceMode,
 } from '../types/index.js';
+import { assertJobTransition, assertNodeTransition, assertTaskTransition } from './lifecycleTransitions.js';
 
 export interface JobManagerOptions {
   store?: KeyValueStore;
@@ -66,26 +67,40 @@ export class JobManager {
   async acquire(jobId: string): Promise<void> {
     await this.ready;
     if (!this.store) return;
+    let cancelledOnAcquire = false;
     const job = await this.store.update!<Job>(`job/${jobId}`, current => {
       if (!current) throw new Error('JOB_NOT_FOUND');
       if (['completed', 'failed', 'cancelled'].includes(current.status)) throw new Error('JOB_TERMINAL');
       if (current.ownership && current.ownership.expiresAt > this.now()) throw new Error('JOB_LEASE_BUSY');
+      // A cancel requested while the previous owner held the lease (it then died before
+      // acting on it) is applied here, in the same atomic update that would otherwise hand
+      // the job to a new owner — recovery must never start work an operator cancelled.
+      if (current.control?.cancelRequestedAt !== undefined) {
+        cancelledOnAcquire = true;
+        return { ...current, status: 'cancelled', ownership: undefined, completedAt: new Date(this.now()),
+          revision: (current.revision ?? 0) + 1,
+          tasks: current.tasks.map(t => ['completed', 'failed', 'cancelled'].includes(t.status) ? t : { ...t, status: 'cancelled' as const }),
+          graph: { ...current.graph, nodes: current.graph.nodes.map(n => ['completed', 'failed', 'cancelled'].includes(n.state) ? n : { ...n, state: 'cancelled' as const }) } };
+      }
       const next = structuredClone(current);
       next.ownership = { ownerId: this.ownerId, epoch: (current.ownership?.epoch ?? 0) + 1, expiresAt: this.now() + this.leaseMs };
       for (const node of next.graph.nodes) {
         if (node.state === 'running' || node.state === 'assigned') {
           node.attempts = [...(node.attempts ?? []), { state: 'failed', error: 'OWNER_LEASE_EXPIRED', executedAt: node.executedAt, completedAt: new Date(this.now()) }];
           node.retryCount = (node.retryCount ?? 0) + 1;
-          node.state = node.retryCount <= (next.maxRetries ?? 3) ? 'idle' : 'failed';
-          node.error = node.state === 'failed' ? 'RETRY_LIMIT_EXCEEDED' : undefined;
           const task = next.tasks.find(t => t.id === (node.taskId ?? node.id));
+          // Same bound runOwnedJob applies to an ordinary retry, so a crash loop can't
+          // re-run a task more often than a plain failure could.
+          node.state = node.retryCount <= (task?.maxRetries ?? next.maxRetries ?? 3) ? 'idle' : 'failed';
+          node.error = node.state === 'failed' ? 'RETRY_LIMIT_EXCEEDED' : undefined;
           if (task) task.status = node.state === 'idle' ? 'pending' : 'failed';
         }
       }
       return next;
     });
-    this.claims.set(jobId, job.ownership!.epoch);
     this.jobs.set(jobId, job);
+    if (cancelledOnAcquire) throw new Error('JOB_CANCELLED');
+    this.claims.set(jobId, job.ownership!.epoch);
   }
 
   async renew(jobId: string): Promise<void> {
@@ -384,6 +399,8 @@ export class JobManager {
     if (!task) {
       throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
     }
+    assertTaskTransition(taskId, task.status, 'completed');
+    this.assertNode(job, taskId, 'completed');
     task.status = 'completed';
     this.updateNodeState(job, taskId, 'completed', result);
     await this.flush(job);
@@ -401,7 +418,10 @@ export class JobManager {
       throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
     }
     const maxRetries = job.maxRetries ?? 3;
-    if ((retryCount ?? 0) < maxRetries) {
+    const retrying = (retryCount ?? 0) < maxRetries;
+    assertTaskTransition(taskId, task.status, retrying ? 'pending' : 'failed');
+    if (!retrying) this.assertNode(job, taskId, 'failed');
+    if (retrying) {
       task.status = 'pending';
     } else {
       task.status = 'failed';
@@ -442,6 +462,7 @@ export class JobManager {
     extra?: { startedAt?: Date; completedAt?: Date },
   ): Promise<void> {
     const job = this.require(jobId);
+    assertJobTransition(jobId, job.status, status);
     job.status = status;
     if (extra?.startedAt) job.startedAt = extra.startedAt;
     if (extra?.completedAt) job.completedAt = extra.completedAt;
@@ -458,6 +479,7 @@ export class JobManager {
     if (!task) {
       throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
     }
+    assertTaskTransition(taskId, task.status, status);
     task.status = status;
     await this.flush(job);
   }
@@ -470,6 +492,7 @@ export class JobManager {
     error?: string,
   ): Promise<void> {
     const job = this.require(jobId);
+    this.assertNode(job, nodeId, state);
     this.updateNodeState(job, nodeId, state, result, error);
     await this.flush(job);
   }
@@ -479,6 +502,8 @@ export class JobManager {
     newTasks: JobTaskInput[],
     rewireOptions?: {
       replacesTaskId?: string;
+      /** Lineage depth recorded on each created node (see JobNode.replanGeneration). */
+      replanGeneration?: number;
     },
   ): Promise<Task[]> {
     const job = this.require(jobId);
@@ -487,7 +512,10 @@ export class JobManager {
 
     for (let i = 0; i < newTasks.length; i++) {
       const input = newTasks[i];
-      const taskId = input.task.id ?? `task-${jobId}-dyn-${Date.now().toString(36)}-${i}`;
+      // A timestamp alone collided when two replans landed in the same millisecond: the
+      // second repair task then reused the first one's (already settled) node.
+      const taskId = input.task.id ?? `task-${jobId}-dyn-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}-${i}`;
+      if (job.tasks.some((t) => t.id === taskId)) throw new Error(`DUPLICATE_TASK_ID: task '${taskId}' already exists in job '${jobId}'`);
       input.task.id = taskId;
 
       const task: Task = {
@@ -539,6 +567,7 @@ export class JobManager {
         state: 'idle',
         dependencies: input.dependencies ?? [],
         children: [],
+        ...(rewireOptions?.replanGeneration !== undefined ? { replanGeneration: rewireOptions.replanGeneration } : {}),
       };
 
       job.graph.nodes.push(node);
@@ -706,6 +735,11 @@ export class JobManager {
     }
   }
 
+  private assertNode(job: Job, nodeId: string, state: AgentState): void {
+    const node = job.graph.nodes.find((n) => n.id === nodeId || n.taskId === nodeId);
+    if (node) assertNodeTransition(nodeId, node.state, state);
+  }
+
   private require(jobId: string): Job {
     const job = this.jobs.get(jobId);
     if (!job) {
@@ -716,6 +750,22 @@ export class JobManager {
 
   private async flush(job: Job): Promise<void> {
     if (this.store) {
+      try {
+        await this.writeToStore(job);
+      } catch (error) {
+        // The mutation was already applied to the in-memory job. A write the store refused
+        // (lost lease, revision conflict) must not linger locally as if it had happened.
+        const stored = await this.store.get<Job>(`job/${job.id}`).catch(() => undefined);
+        if (stored) this.jobs.set(job.id, stored);
+        throw error;
+      }
+    } else if (this.persist) {
+      await this.persist(job);
+    }
+  }
+
+  private async writeToStore(job: Job): Promise<void> {
+    if (this.store) {
       await this.store.update!<Job>(`job/${job.id}`, current => {
         if (current) {
           if (this.claims.has(job.id)) this.assertOwnership(current);
@@ -725,8 +775,6 @@ export class JobManager {
         job.revision = (current?.revision ?? 0) + 1;
         return structuredClone({ ...job, control: current?.control ?? job.control, ownership: current?.ownership ?? job.ownership });
       });
-    } else if (this.persist) {
-      await this.persist(job);
     }
   }
 }

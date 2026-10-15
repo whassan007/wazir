@@ -1,3 +1,18 @@
+# Wazir Release Notes - v0.1.67
+
+**Release**: `v0.1.67`
+**Theme**: Bounded autonomous recovery, evidence-based verification reports, and cross-process protocol transaction integrity
+
+The job orchestrator now decides retries from the failure class instead of retrying every failure: transient faults back off, budget and policy stops are final, no-progress loops stop early, and replanning is bounded. A job can no longer report success on a model's claim alone when evidence says otherwise, and every settled job carries a machine-readable verification report. Failure feedback is recorded for gated self-improvement. This release also ships the cross-process protocol transaction integrity work that had not been published.
+
+See `docs/reliability/autonomous-recovery.md` for behaviour, invariants and known limitations.
+
+## Validation
+
+Release verification and platform CI results are recorded with the published release assets after the v0.1.67 workflows complete.
+
+---
+
 # Wazir Release Notes - v0.1.66
 
 **Release**: `v0.1.66`

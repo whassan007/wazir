@@ -89,7 +89,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
    * `apiKey` is sent as a Bearer token. Any authenticated OpenAI-compatible endpoint
    * (LiteLLM, vLLM --api-key, LM Studio with auth enabled) rejects requests without it.
    */
-  constructor(baseURL: string = 'http://localhost:1235/v1', options: { apiKey?: string } = {}) {
+  constructor(baseURL: string = process.env.WAZIR_LMSTUDIO_URL ?? 'http://localhost:1234/v1', options: { apiKey?: string } = {}) {
     this.baseURL = baseURL.replace(/\/+$/, '');
     this.apiKey = options.apiKey ?? (process.env.WAZIR_LMSTUDIO_API_KEY || undefined);
   }

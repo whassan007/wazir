@@ -65,6 +65,7 @@ const MATRIX: Record<string, Scope> = {
   'GET /ap/v1/agent/tasks': 'viewer',
   'GET /ap/v1/agent/tasks/:task_id': 'viewer',
   'POST /ap/v1/agent/tasks/:task_id/steps': 'operator',
+  'POST /ap/v1/agent/tasks/:task_id/steps/:step_id/reconcile': 'operator',
   'GET /ap/v1/agent/tasks/:task_id/steps': 'viewer',
   'GET /ap/v1/agent/tasks/:task_id/steps/:step_id': 'viewer',
   'GET /ap/v1/agent/tasks/:task_id/artifacts': 'viewer',

@@ -25,7 +25,7 @@ import {
 import { currentLoad, discoverHardware, discoverRuntimes, type DiscoveredRuntime } from '@wazir/workers';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
-import { ToolRegistry, defaultTools } from '@wazir/tools';
+import { ToolRegistry, defaultTools, snapshotWorkspace, workspaceFingerprint } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
 import { generateId, sanitizeUntrustedOutput, MemoryStore, type KeyValueStore } from '@wazir/shared';
 import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
@@ -68,7 +68,9 @@ export class TaskDispatcher {
   readonly ready: Promise<void>;
 
   constructor(private readonly store: KeyValueStore = new MemoryStore(),
-    private readonly now: () => number = Date.now, readonly leaseMs = 30_000) {
+    private readonly now: () => number = Date.now, readonly leaseMs = 30_000,
+    /** Claims allowed per request; the next one commits DELIVERY_ATTEMPTS_EXHAUSTED instead. */
+    readonly maxAttempts = 5) {
     if (!store.update) throw new Error('ATOMIC_STORE_REQUIRED');
     if (!Number.isFinite(leaseMs) || leaseMs < 100) throw new Error('INVALID_LEASE_DURATION');
     this.ready = this.refresh();
@@ -131,11 +133,18 @@ export class TaskDispatcher {
     const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
       if (!current || current.computerId !== computerId) throw new Error('UNKNOWN_DISPATCH');
       if (current.outcome || (current.lease && current.lease.expiresAt > this.now())) throw new Error('RESOURCE_BUSY');
+      // Every earlier attempt lost its lease without a result. Stop replaying: settle it as
+      // a failure the caller can see, instead of redelivering after every disconnection.
+      if (current.attempt >= this.maxAttempts) {
+        return { ...current, lease: undefined, outcome: { ok: false, output: '', inputTokens: 0, outputTokens: 0, durationMs: 0,
+          error: `DELIVERY_ATTEMPTS_EXHAUSTED: ${current.attempt} attempt(s) ended without a result` } };
+      }
       return { ...current, attempt: current.attempt + 1,
         events: [...current.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), { executionId: current.request.executionId, type: 'lease_acquired' as const, at: new Date(this.now()), data: { attempt: current.attempt + 1 } }],
         lease: { token: randomUUID(), expiresAt: this.now() + this.leaseMs } };
     });
     this.records.set(id, record);
+    if (!record.lease) throw new Error('DELIVERY_ATTEMPTS_EXHAUSTED');
     return { ...record.lease!, attempt: record.attempt, leaseMs: this.leaseMs };
   }
   private validate(current: DurableDispatch | undefined, token: string): DurableDispatch {
@@ -346,6 +355,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     verify: controlled.verify,
     toolSurface: controlled.toolSurface,
     projectRoot,
+    workspaceRevision: async () => workspaceFingerprint(await snapshotWorkspace(projectRoot)),
   });
 
   return {
@@ -866,7 +876,10 @@ export function createApp(state: ApiState) {
   };
   const protocolError = (res: Response, err: unknown): void => {
     const code = err instanceof ProtocolError ? err.code : undefined;
-    const status = code === 'TASK_NOT_FOUND' ? 404 : code === 'TASK_TERMINAL' ? 409 : code === 'FORBIDDEN' ? 403 : code === 'STEP_INVALID' ? 400 : 500;
+    const status = code === 'TASK_NOT_FOUND' ? 404 : code === 'FORBIDDEN' ? 403 : code === 'STEP_INVALID' ? 400
+      : code === 'TASK_TERMINAL' || code === 'TASK_BUSY' || code === 'RECONCILIATION_REQUIRED' || code === 'STATE_CONFLICT' ? 409
+      // The message says whether a tool was dispatched, so the caller does not retry blindly.
+      : code === 'PERSISTENCE_FAILED' ? 503 : code === 'UNSUPPORTED_STORE' ? 501 : 500;
     res.status(status).json({ error: status === 500 ? 'internal error' : (err as Error).message, code });
   };
 
@@ -879,8 +892,11 @@ export function createApp(state: ApiState) {
     }
   });
 
+  // Reads are open to viewers; what they may see of executed steps is decided by the service.
+  const viewer = (res: Response) => res.locals.principal as ProtocolPrincipal | undefined;
+
   app.get('/ap/v1/agent/tasks', async (_req, res) => {
-    const tasks = await state.editorProtocol.listTasks();
+    const tasks = (await state.editorProtocol.listTasks()).map((t) => state.editorProtocol.viewTask(t, viewer(res)));
     res.json({ tasks, pagination: { total: tasks.length, pages: 1, current: 1, page_size: tasks.length } });
   });
 
@@ -890,7 +906,7 @@ export function createApp(state: ApiState) {
       res.status(404).json({ error: `Task not found: ${req.params.task_id}` });
       return;
     }
-    res.json(task);
+    res.json(state.editorProtocol.viewTask(task, viewer(res)));
   });
 
   app.post('/ap/v1/agent/tasks/:task_id/steps', auth.requireOperator, async (req, res) => {
@@ -902,9 +918,19 @@ export function createApp(state: ApiState) {
     }
   });
 
+  // Operator resolution of a step whose tool outcome is unknown (body: { resolution, evidence }).
+  app.post('/ap/v1/agent/tasks/:task_id/steps/:step_id/reconcile', auth.requireOperator, async (req, res) => {
+    try {
+      const task = await state.editorProtocol.reconcileStep(String(req.params.task_id), String(req.params.step_id), req.body ?? {}, protocolContext(req, res));
+      res.json(task);
+    } catch (err) {
+      protocolError(res, err);
+    }
+  });
+
   app.get('/ap/v1/agent/tasks/:task_id/steps', async (req, res) => {
     try {
-      const steps = await state.editorProtocol.listSteps(req.params.task_id);
+      const steps = (await state.editorProtocol.listSteps(req.params.task_id)).map((s) => state.editorProtocol.viewStep(s, viewer(res)));
       res.json({ steps, pagination: { total: steps.length, pages: 1, current: 1, page_size: steps.length } });
     } catch (err) {
       res.status(404).json({ error: (err as Error).message });
@@ -917,7 +943,7 @@ export function createApp(state: ApiState) {
       res.status(404).json({ error: `Step not found: ${req.params.step_id}` });
       return;
     }
-    res.json(step);
+    res.json(state.editorProtocol.viewStep(step, viewer(res)));
   });
 
   app.get('/ap/v1/agent/tasks/:task_id/artifacts', async (req, res) => {
