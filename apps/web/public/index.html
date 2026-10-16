@@ -249,6 +249,39 @@
     display: none;
   }
 
+  /* Connection Diagnostics */
+  .link-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 4px;
+    text-decoration: underline;
+  }
+  .diag-panel {
+    padding: 0 20px;
+    margin-bottom: 16px;
+  }
+  .diag-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    padding: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .diag-label {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+  .diag-actions {
+    padding: 12px 14px;
+  }
+
   /* Card & Tables */
   .card {
     background: var(--panel);
@@ -605,6 +638,7 @@
     <span id="global-status-pill" class="badge muted">connecting…</span>
     <span id="last-refresh-text" class="tag">never</span>
     <span id="countdown-text" class="tag"></span>
+    <button id="diag-toggle-btn" type="button" class="link-btn" title="Show connection diagnostics">View Diagnostics</button>
   </div>
 
   <div class="header-controls">
@@ -620,6 +654,35 @@
     <button id="refresh-btn" title="Refresh all sections now">↻ Refresh</button>
   </div>
 </header>
+
+<!-- Connection Diagnostics Panel: every field here comes from state the
+     dashboard already tracks (per-endpoint success/failure, last successful
+     sync, consecutive-failure count, selected host) — no invented request
+     IDs or attempt counters that don't exist anywhere in the API. -->
+<div id="diag-panel" class="diag-panel" style="display:none;">
+  <div class="card">
+    <div class="section-header">
+      <h2>Connection Diagnostics</h2>
+      <button id="diag-close-btn" type="button" class="link-btn">Close</button>
+    </div>
+    <div class="diag-summary">
+      <div><span class="diag-label">Connection</span><span id="diag-connection" class="badge muted">—</span></div>
+      <div><span class="diag-label">Host</span><span id="diag-host">—</span></div>
+      <div><span class="diag-label">Last fully successful sync</span><span id="diag-last-success">never</span></div>
+      <div><span class="diag-label">Consecutive failed checks</span><span id="diag-consecutive">0</span></div>
+      <div><span class="diag-label">Next check</span><span id="diag-next-check">—</span></div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Endpoint</th><th>Status</th><th>Last success</th><th>Error</th></tr></thead>
+        <tbody id="diag-endpoint-rows"></tbody>
+      </table>
+    </div>
+    <div class="diag-actions">
+      <button id="diag-retry-btn" type="button">Retry Connection</button>
+    </div>
+  </div>
+</div>
 
 <main>
   <!-- KPI Row: Overview stats as horizontal bar -->
@@ -877,6 +940,7 @@ let consecutiveErrors = 0;
 let refreshTimerId = null;
 let countdownTimerId = null;
 let nextRefreshTime = 0;
+let lastFullSuccess = null; // Date of the last load() cycle where every endpoint succeeded
 
 // Executions filtering & pagination state
 let executionsRawList = [];
@@ -1002,6 +1066,7 @@ async function load() {
   // label instead of folding into the generic failure states below.
   if (failCount === 0) {
     consecutiveErrors = 0;
+    lastFullSuccess = now;
     $('global-status-pill').textContent = 'online';
     $('global-status-pill').className = 'badge ok';
   } else if (authFailCount === failCount) {
@@ -1022,6 +1087,7 @@ async function load() {
   // where every endpoint fails must still show '—' for a group that has
   // never loaded, rather than freezing on stale "0" markup.
   updateTabBadges();
+  renderDiagnosticsPanel();
 
   $('last-refresh-text').textContent = `Last check: ${timeStr}`;
   inFlight = false;
@@ -1062,11 +1128,40 @@ function scheduleNextRefresh() {
       const backoffNote = consecutiveErrors > 0 ? ` [backoff ${sec}s]` : `in ${sec}s`;
       $('countdown-text').textContent = `(next ${backoffNote})`;
     }
+    if ($('diag-panel').style.display !== 'none') renderDiagnosticsPanel();
   };
 
   updateCountdown();
   countdownTimerId = setInterval(updateCountdown, 1000);
   refreshTimerId = setTimeout(load, delayMs);
+}
+
+function renderDiagnosticsPanel() {
+  const connectionEl = $('global-status-pill');
+  $('diag-connection').textContent = connectionEl.textContent;
+  $('diag-connection').className = connectionEl.className;
+
+  const hostSelect = $('host-instance-select');
+  $('diag-host').textContent = hostSelect?.selectedOptions?.[0]?.textContent || selectedHostId;
+
+  $('diag-last-success').textContent = lastFullSuccess ? lastFullSuccess.toLocaleTimeString() : 'never';
+  $('diag-consecutive').textContent = String(consecutiveErrors);
+
+  const remainMs = nextRefreshTime - Date.now();
+  $('diag-next-check').textContent = autoRefreshInterval <= 0
+    ? 'auto-refresh off'
+    : remainMs > 0 ? `in ${Math.ceil(remainMs / 1000)}s` : 'now';
+
+  $('diag-endpoint-rows').innerHTML = ENDPOINTS.map((ep) => {
+    const state = sectionState[ep.id];
+    const ok = !state.error;
+    return `<tr>
+      <td>${esc(ep.id)}</td>
+      <td>${badge(ok ? 'ok' : 'failed', 'ok', 'failed')}</td>
+      <td>${state.lastUpdated ? esc(state.lastUpdated.toLocaleTimeString()) : 'never'}</td>
+      <td>${state.error ? esc(state.error) : '—'}</td>
+    </tr>`;
+  }).join('');
 }
 
 // Section Rendering
@@ -1545,6 +1640,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Manual Refresh
   $('refresh-btn').addEventListener('click', () => {
+    load();
+  });
+
+  // Connection Diagnostics Panel
+  $('diag-toggle-btn').addEventListener('click', () => {
+    const panel = $('diag-panel');
+    const opening = panel.style.display === 'none';
+    panel.style.display = opening ? 'block' : 'none';
+    if (opening) renderDiagnosticsPanel();
+  });
+  $('diag-close-btn').addEventListener('click', () => {
+    $('diag-panel').style.display = 'none';
+  });
+  $('diag-retry-btn').addEventListener('click', () => {
     load();
   });
 
