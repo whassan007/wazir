@@ -37,7 +37,7 @@ struct PairingRequestPayload: Codable {
     var publicKeyFingerprint: String?
 }
 
-struct PairingRequestResponse: Decodable {
+struct PairingRequestResponse: Codable {
     var ok: Bool
     var sessionId: String?
     var status: String?
@@ -64,7 +64,7 @@ struct PairingRequestResponse: Decodable {
     }
 }
 
-struct PairedControllerMetadata: Decodable {
+struct PairedControllerMetadata: Codable {
     var id: String
     var name: String
     var version: String
@@ -83,7 +83,7 @@ struct PairedControllerMetadata: Decodable {
     }
 }
 
-struct PairingCompleteResponse: Decodable {
+struct PairingCompleteResponse: Codable {
     var ok: Bool
     var status: String?
     var confirmationCode: String?
@@ -116,7 +116,7 @@ struct PairingCompleteResponse: Decodable {
     }
 }
 
-struct TokenRotationResponse: Decodable {
+struct TokenRotationResponse: Codable {
     var ok: Bool
     var deviceId: String?
     var accessToken: String?
@@ -141,7 +141,7 @@ struct TokenRotationResponse: Decodable {
     }
 }
 
-struct HandshakePrincipal: Decodable {
+struct HandshakePrincipal: Codable {
     var id: String
     var kind: String
     var scopes: [String]
@@ -158,7 +158,7 @@ struct HandshakePrincipal: Decodable {
     }
 }
 
-struct HandshakeResponse: Decodable {
+struct HandshakeResponse: Codable {
     var compatible: Bool
     var apiVersion: String
     var minMobileVersion: String
@@ -185,7 +185,7 @@ struct HandshakeResponse: Decodable {
 
 // MARK: - Dashboard
 
-struct DashboardResourceStatus: Decodable {
+struct DashboardResourceStatus: Codable {
     var mode: String
     var emergencyStop: Bool
     var inFlightRequests: Int
@@ -214,7 +214,7 @@ struct DashboardResourceStatus: Decodable {
     }
 }
 
-struct DashboardCards: Decodable {
+struct DashboardCards: Codable {
     var runningTasks: Int
     var queuedTasks: Int
     var completedTasks: Int
@@ -247,7 +247,7 @@ struct DashboardCards: Decodable {
     }
 }
 
-struct DashboardControllerInfo: Decodable {
+struct DashboardControllerInfo: Codable {
     var id: String
     var hostname: String
     var version: String
@@ -268,7 +268,7 @@ struct DashboardControllerInfo: Decodable {
     }
 }
 
-struct MobileStreamEvent: Decodable, Identifiable {
+struct MobileStreamEvent: Codable, Identifiable {
     var sequence: Int64
     var eventId: String
     var timestamp: String
@@ -305,7 +305,7 @@ struct MobileStreamEvent: Decodable, Identifiable {
     }
 }
 
-struct DashboardSnapshot: Decodable {
+struct DashboardSnapshot: Codable {
     var controller: DashboardControllerInfo
     var cards: DashboardCards
     var recentActivity: [MobileStreamEvent]
@@ -324,7 +324,7 @@ struct DashboardSnapshot: Decodable {
 
 // MARK: - Tasks
 
-struct MobileTaskSummary: Decodable, Identifiable, Equatable {
+struct MobileTaskSummary: Codable, Identifiable, Equatable {
     var taskId: String
     var executionId: String?
     var jobId: String?
@@ -383,7 +383,7 @@ struct MobileTaskSummary: Decodable, Identifiable, Equatable {
     }
 }
 
-struct TaskListResponse: Decodable {
+struct TaskListResponse: Codable {
     var tasks: [MobileTaskSummary]
     var timestamp: String
 
@@ -398,7 +398,7 @@ struct TaskListResponse: Decodable {
     }
 }
 
-struct TimelineStep: Decodable, Identifiable {
+struct TimelineStep: Codable, Identifiable {
     var id: String
     var phase: String
     var title: String
@@ -423,7 +423,7 @@ struct TimelineStep: Decodable, Identifiable {
     }
 }
 
-struct ToolCallRecord: Decodable, Identifiable {
+struct ToolCallRecord: Codable, Identifiable {
     var callId: String
     var tool: String
     var status: String
@@ -450,7 +450,7 @@ struct ToolCallRecord: Decodable, Identifiable {
     }
 }
 
-struct VerificationCheckItem: Decodable, Identifiable {
+struct VerificationCheckItem: Codable, Identifiable {
     var name: String
     var status: String
     var durationMs: Int64
@@ -473,7 +473,7 @@ struct VerificationCheckItem: Decodable, Identifiable {
     }
 }
 
-struct VerificationReport: Decodable {
+struct VerificationReport: Codable {
     var status: String
     var checks: [VerificationCheckItem]
     var reasons: [String]
@@ -494,7 +494,7 @@ struct VerificationReport: Decodable {
     }
 }
 
-struct TaskResourceConsumption: Decodable {
+struct TaskResourceConsumption: Codable {
     var inputTokens: Int64
     var outputTokens: Int64
     var totalTokens: Int64
@@ -517,7 +517,7 @@ struct TaskResourceConsumption: Decodable {
     }
 }
 
-struct TaskLogEntry: Decodable, Identifiable {
+struct TaskLogEntry: Codable, Identifiable {
     var sequence: Int
     var timestamp: String
     var level: String
@@ -540,7 +540,7 @@ struct TaskLogEntry: Decodable, Identifiable {
     }
 }
 
-struct MobileTaskDetail: Decodable, Identifiable {
+struct MobileTaskDetail: Codable, Identifiable {
     var taskId: String
     var executionId: String?
     var jobId: String?
@@ -619,7 +619,7 @@ struct MobileTaskDetail: Decodable, Identifiable {
     }
 }
 
-struct TaskDetailEnvelope: Decodable {
+struct TaskDetailEnvelope: Codable {
     var task: MobileTaskDetail
 }
 
@@ -650,7 +650,7 @@ struct CreateTaskRequest: Codable {
     var policy: TaskPolicyRequest?
 }
 
-struct SubmitTaskResponse: Decodable {
+struct SubmitTaskResponse: Codable {
     var taskId: String?
     var duplicate: Bool
     var task: MobileTaskDetail?
@@ -673,7 +673,7 @@ struct SubmitTaskResponse: Decodable {
 
 // MARK: - Approvals
 
-struct MobileApprovalRecord: Decodable, Identifiable {
+struct MobileApprovalRecord: Codable, Identifiable {
     var id: String
     var taskId: String?
     var taskTitle: String?
@@ -730,9 +730,38 @@ struct MobileApprovalRecord: Decodable, Identifiable {
         resolvedBy = try c.decodeIfPresent(String.self, forKey: .resolvedBy)
         resolutionNote = try c.decodeIfPresent(String.self, forKey: .resolutionNote)
     }
+
+    /// Hand-written because `redactedArgumentsDescription` (a flattened display string)
+    /// doesn't map 1:1 to the `redactedArguments` wire key the way every other field maps
+    /// directly to its CodingKeys case — synthesis can't bridge that, so this type is the
+    /// one exception that needs a manual `encode(to:)` alongside its manual `init(from:)`.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encodeIfPresent(taskId, forKey: .taskId)
+        try c.encodeIfPresent(taskTitle, forKey: .taskTitle)
+        try c.encodeIfPresent(executionId, forKey: .executionId)
+        try c.encodeIfPresent(agentId, forKey: .agentId)
+        try c.encode(tool, forKey: .tool)
+        try c.encode(operation, forKey: .operation)
+        try c.encode(argumentsHash, forKey: .argumentsHash)
+        try c.encode(redactedArgumentsDescription, forKey: .redactedArguments)
+        try c.encode(relevantResources, forKey: .relevantResources)
+        try c.encode(riskClassification, forKey: .riskClassification)
+        try c.encode(requiresBiometric, forKey: .requiresBiometric)
+        try c.encode(rule, forKey: .rule)
+        try c.encode(reasons, forKey: .reasons)
+        try c.encode(expectedSideEffects, forKey: .expectedSideEffects)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(expiresAt, forKey: .expiresAt)
+        try c.encode(status, forKey: .status)
+        try c.encodeIfPresent(resolvedAt, forKey: .resolvedAt)
+        try c.encodeIfPresent(resolvedBy, forKey: .resolvedBy)
+        try c.encodeIfPresent(resolutionNote, forKey: .resolutionNote)
+    }
 }
 
-struct ApprovalListResponse: Decodable {
+struct ApprovalListResponse: Codable {
     var approvals: [MobileApprovalRecord]
     var pendingCount: Int
     var timestamp: String
@@ -757,7 +786,7 @@ struct ResolveApprovalRequest: Codable {
     var note: String?
 }
 
-struct ResolveApprovalResponse: Decodable {
+struct ResolveApprovalResponse: Codable {
     var ok: Bool
     var approval: MobileApprovalRecord?
     var error: String?
@@ -778,7 +807,7 @@ struct ResolveApprovalResponse: Decodable {
 
 // MARK: - Models, runtimes, agents (read-only on mobile — see WazirControllerApi)
 
-struct ModelCatalogItem: Decodable, Identifiable {
+struct ModelCatalogItem: Codable, Identifiable {
     var id: String
     var name: String
     var provider: String
@@ -814,7 +843,7 @@ struct ModelCatalogItem: Decodable, Identifiable {
     }
 }
 
-struct ModelInstanceItem: Decodable, Identifiable {
+struct ModelInstanceItem: Codable, Identifiable {
     var id: String
     var modelId: String
     var computerId: String?
@@ -841,7 +870,7 @@ struct ModelInstanceItem: Decodable, Identifiable {
     }
 }
 
-struct ModelsApiResponse: Decodable {
+struct ModelsApiResponse: Codable {
     var models: [ModelCatalogItem]
     var instances: [ModelInstanceItem]
 
@@ -856,7 +885,7 @@ struct ModelsApiResponse: Decodable {
     }
 }
 
-struct RuntimeItem: Decodable, Identifiable {
+struct RuntimeItem: Codable, Identifiable {
     var id: String
     var name: String
     var type: String
@@ -881,7 +910,7 @@ struct RuntimeItem: Decodable, Identifiable {
     }
 }
 
-struct RuntimesApiResponse: Decodable {
+struct RuntimesApiResponse: Codable {
     var runtimes: [RuntimeItem]
 
     private enum CodingKeys: String, CodingKey {
@@ -894,7 +923,7 @@ struct RuntimesApiResponse: Decodable {
     }
 }
 
-struct AgentDescriptorItem: Decodable, Identifiable {
+struct AgentDescriptorItem: Codable, Identifiable {
     var name: String
     var description: String
     var source: String
@@ -912,7 +941,7 @@ struct AgentDescriptorItem: Decodable, Identifiable {
     }
 }
 
-struct AgentsApiResponse: Decodable {
+struct AgentsApiResponse: Codable {
     var agents: [AgentDescriptorItem]
 
     private enum CodingKeys: String, CodingKey {
@@ -927,7 +956,7 @@ struct AgentsApiResponse: Decodable {
 
 // MARK: - Compute & workers
 
-struct ComputerOsInfo: Decodable {
+struct ComputerOsInfo: Codable {
     var platform: String
     var architecture: String
     var version: String
@@ -944,7 +973,7 @@ struct ComputerOsInfo: Decodable {
     }
 }
 
-struct ComputerGpuSummary: Decodable, Identifiable {
+struct ComputerGpuSummary: Codable, Identifiable {
     var vendor: String
     var model: String
     var vramGB: Double?
@@ -962,7 +991,7 @@ struct ComputerGpuSummary: Decodable, Identifiable {
     }
 }
 
-struct ComputerHardwareSummary: Decodable {
+struct ComputerHardwareSummary: Codable {
     var cpuModel: String?
     var cpuCores: Int?
     var gpus: [ComputerGpuSummary]
@@ -985,7 +1014,7 @@ struct ComputerHardwareSummary: Decodable {
     }
 }
 
-struct ComputerLiveTelemetry: Decodable {
+struct ComputerLiveTelemetry: Codable {
     var cpuUtilizationPercent: Double?
     var memoryUsedGB: Double?
     var memoryTotalGB: Double?
@@ -1021,7 +1050,7 @@ struct ComputerLiveTelemetry: Decodable {
     }
 }
 
-struct ComputerModelAssignment: Decodable, Identifiable {
+struct ComputerModelAssignment: Codable, Identifiable {
     var instanceId: String
     var modelId: String
     var loaded: Bool
@@ -1041,7 +1070,7 @@ struct ComputerModelAssignment: Decodable, Identifiable {
     }
 }
 
-struct ComputerTelemetryItem: Decodable, Identifiable {
+struct ComputerTelemetryItem: Codable, Identifiable {
     var id: String
     var name: String
     var type: String
@@ -1074,7 +1103,7 @@ struct ComputerTelemetryItem: Decodable, Identifiable {
     }
 }
 
-struct ComputersApiResponse: Decodable {
+struct ComputersApiResponse: Codable {
     var computers: [ComputerTelemetryItem]
     var timestamp: String
 
@@ -1091,7 +1120,7 @@ struct ComputersApiResponse: Decodable {
 
 // MARK: - Resources & budgets
 
-struct EmergencyStopInfo: Decodable {
+struct EmergencyStopInfo: Codable {
     var at: Int64
     var reason: String
 
@@ -1106,7 +1135,7 @@ struct EmergencyStopInfo: Decodable {
     }
 }
 
-struct ResourceTotalsSummary: Decodable {
+struct ResourceTotalsSummary: Codable {
     var inputTokens: Int64
     var outputTokens: Int64
     var totalTokens: Int64
@@ -1137,7 +1166,7 @@ struct ResourceTotalsSummary: Decodable {
     }
 }
 
-struct LocalVsHostedSummary: Decodable {
+struct LocalVsHostedSummary: Codable {
     var localTokens: Int64
     var hostedTokens: Int64
     var localRequests: Int64
@@ -1160,7 +1189,7 @@ struct LocalVsHostedSummary: Decodable {
     }
 }
 
-struct UsageBySourceSummary: Decodable {
+struct UsageBySourceSummary: Codable {
     var providerReportedTokens: Int64
     var estimatedTokens: Int64
     var conservativeTokens: Int64
@@ -1181,7 +1210,7 @@ struct UsageBySourceSummary: Decodable {
     }
 }
 
-struct ActiveReservationItem: Decodable, Identifiable {
+struct ActiveReservationItem: Codable, Identifiable {
     var id: String
     var modelId: String
     var workload: String
@@ -1202,7 +1231,7 @@ struct ActiveReservationItem: Decodable, Identifiable {
     }
 }
 
-struct AccountLimitStatusItem: Decodable, Identifiable {
+struct AccountLimitStatusItem: Codable, Identifiable {
     var unit: String
     var window: String
     var limit: Double?
@@ -1226,7 +1255,7 @@ struct AccountLimitStatusItem: Decodable, Identifiable {
     }
 }
 
-struct AccountBudgetStatusItem: Decodable, Identifiable {
+struct AccountBudgetStatusItem: Codable, Identifiable {
     var id: String
     var provider: String
     var kind: String
@@ -1247,7 +1276,7 @@ struct AccountBudgetStatusItem: Decodable, Identifiable {
     }
 }
 
-struct ResourceWarningItem: Decodable, Identifiable {
+struct ResourceWarningItem: Codable, Identifiable {
     var severity: String
     var accountId: String?
     var message: String
@@ -1265,7 +1294,7 @@ struct ResourceWarningItem: Decodable, Identifiable {
     }
 }
 
-struct ResourceBudgetSnapshot: Decodable {
+struct ResourceBudgetSnapshot: Codable {
     var overallMode: String
     var emergencyStop: EmergencyStopInfo?
     var totals: ResourceTotalsSummary
