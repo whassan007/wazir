@@ -665,13 +665,13 @@
   <!-- Navigation Tabs -->
   <nav class="tabs-nav" role="tablist">
     <button class="tab-btn active" role="tab" data-tab="activity" id="tab-activity">
-      Activity <span class="tab-badge" id="badge-activity">0</span>
+      Activity <span class="tab-badge" id="badge-activity">—</span>
     </button>
     <button class="tab-btn" role="tab" data-tab="infrastructure" id="tab-infrastructure">
-      Infrastructure <span class="tab-badge" id="badge-infrastructure">0</span>
+      Infrastructure <span class="tab-badge" id="badge-infrastructure">—</span>
     </button>
     <button class="tab-btn" role="tab" data-tab="catalog" id="tab-catalog">
-      Catalog <span class="tab-badge" id="badge-catalog">0</span>
+      Catalog <span class="tab-badge" id="badge-catalog">—</span>
     </button>
   </nav>
 
@@ -694,7 +694,7 @@
           <button class="filter-pill" data-status-filter="running">Running</button>
         </div>
         <input type="search" id="exec-search" class="exec-search" placeholder="Search executions (id, type, agent, model)..." />
-        <span class="exec-counter" id="exec-counter">Showing 0 of 0</span>
+        <span class="exec-counter" id="exec-counter">No data yet</span>
       </div>
 
       <div class="card">
@@ -893,7 +893,11 @@ async function fetchJsonWithTimeout(url, timeoutMs = 8000) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      const err = new Error(`${res.status} ${res.statusText}`);
+      err.status = res.status;
+      throw err;
+    }
     return await res.json();
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -933,6 +937,7 @@ async function load() {
 
   let successCount = 0;
   let failCount = 0;
+  let authFailCount = 0;
 
   for (const res of results) {
     if (res.status === 'fulfilled') {
@@ -960,6 +965,7 @@ async function load() {
     } else {
       failCount++;
       const { id, error } = res.reason;
+      if (error.status === 401 || error.status === 403) authFailCount++;
       const state = sectionState[id];
       state.error = error.message || 'Unknown network error';
 
@@ -990,11 +996,18 @@ async function load() {
     }
   }
 
-  // Determine global connection status
+  // Determine global connection status. Auth failures (401/403) mean the
+  // backend is reachable but rejecting the configured token — a different
+  // fix than "offline" (restart/reconnect) implies, so they get their own
+  // label instead of folding into the generic failure states below.
   if (failCount === 0) {
     consecutiveErrors = 0;
     $('global-status-pill').textContent = 'online';
     $('global-status-pill').className = 'badge ok';
+  } else if (authFailCount === failCount) {
+    consecutiveErrors++;
+    $('global-status-pill').textContent = 'authentication required';
+    $('global-status-pill').className = 'badge err';
   } else if (successCount > 0) {
     consecutiveErrors++;
     $('global-status-pill').textContent = `degraded (${failCount} failing)`;
@@ -1004,6 +1017,11 @@ async function load() {
     $('global-status-pill').textContent = 'offline';
     $('global-status-pill').className = 'badge err';
   }
+
+  // Unconditional, not just a side effect of a successful render: a cycle
+  // where every endpoint fails must still show '—' for a group that has
+  // never loaded, rather than freezing on stale "0" markup.
+  updateTabBadges();
 
   $('last-refresh-text').textContent = `Last check: ${timeStr}`;
   inFlight = false;
@@ -1096,18 +1114,30 @@ function renderOverview(overview) {
   updateTabBadges();
 }
 
+// A badge shows '—' only while every section feeding it has never once
+// loaded successfully — otherwise a cold start (or an outage) reads as
+// "confirmed zero" instead of "unknown", which is what sent the original
+// 502/offline investigation down the wrong path.
 function updateTabBadges() {
-  const infraCount = (sectionState.computers.data?.computers?.length ?? 0) +
-                     (sectionState.workers.data?.workers?.length ?? 0) +
-                     (sectionState.runtimes.data?.runtimes?.length ?? 0);
-  const catalogCount = (sectionState.models.data?.models?.length ?? 0) +
-                       (sectionState.agents.data?.agents?.length ?? 0) +
-                       (sectionState.tools.data?.tools?.length ?? 0);
-  const activityCount = sectionState.executions.data?.executions?.length ?? 0;
+  const neverLoaded = (...states) => states.every((s) => s.data === null);
 
-  $('badge-infrastructure').textContent = String(infraCount);
-  $('badge-catalog').textContent = String(catalogCount);
-  $('badge-activity').textContent = String(activityCount);
+  const infraStates = [sectionState.computers, sectionState.workers, sectionState.runtimes];
+  $('badge-infrastructure').textContent = neverLoaded(...infraStates) ? '—' : String(
+    (sectionState.computers.data?.computers?.length ?? 0) +
+    (sectionState.workers.data?.workers?.length ?? 0) +
+    (sectionState.runtimes.data?.runtimes?.length ?? 0)
+  );
+
+  const catalogStates = [sectionState.models, sectionState.agents, sectionState.tools];
+  $('badge-catalog').textContent = neverLoaded(...catalogStates) ? '—' : String(
+    (sectionState.models.data?.models?.length ?? 0) +
+    (sectionState.agents.data?.agents?.length ?? 0) +
+    (sectionState.tools.data?.tools?.length ?? 0)
+  );
+
+  $('badge-activity').textContent = neverLoaded(sectionState.executions) ? '—' : String(
+    sectionState.executions.data?.executions?.length ?? 0
+  );
 }
 
 function renderComputers(data) {
