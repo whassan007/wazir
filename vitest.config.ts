@@ -14,6 +14,6 @@ export default defineConfig({
     // Deterministic tests must not reach the host's OS keychain — including through a
     // spawned real `wa` CLI, which inherits this. A locked keychain (e.g. over SSH) costs
     // every CLI start the full keychain-probe timeout. Tests of backend selection opt back in.
-    env: { WAZIR_SECRETS_BACKEND: 'encrypted-file' },
+    env: { WAZIR_SECRETS_BACKEND: 'encrypted-file', WAZIR_LMS_DISABLE: '1' },
   },
 });

@@ -13,10 +13,16 @@ const codes = {
 
 type Color = keyof typeof codes;
 
-const enabled = process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
+export function isColorEnabled(): boolean {
+  if (process.argv.includes('--no-color')) return false;
+  if (process.env.NO_COLOR !== undefined && process.env.NO_COLOR !== '') return false;
+  if (process.env.FORCE_COLOR === '0') return false;
+  if (process.env.FORCE_COLOR && process.env.FORCE_COLOR !== '0') return true;
+  return process.stdout?.isTTY === true;
+}
 
 export function paint(text: string, color: Color): string {
-  if (!enabled) return text;
+  if (!isColorEnabled()) return text;
   return `${codes[color]}${text}${codes.reset}`;
 }
 

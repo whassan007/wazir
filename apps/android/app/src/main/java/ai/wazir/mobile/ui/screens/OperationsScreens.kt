@@ -34,79 +34,249 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import ai.wazir.mobile.domain.ComputerTelemetryItem
+import ai.wazir.mobile.domain.CreateScheduleRequest
 import ai.wazir.mobile.domain.MobileApprovalRecord
+import ai.wazir.mobile.domain.MobileAutonomyState
+import ai.wazir.mobile.domain.MobileScheduleItem
 import ai.wazir.mobile.domain.ModelCatalogItem
 import ai.wazir.mobile.domain.ModelInstanceItem
 import ai.wazir.mobile.domain.ResourceBudgetSnapshot
 import ai.wazir.mobile.domain.RuntimeItem
 import ai.wazir.mobile.ui.components.StatusBadge
 import ai.wazir.mobile.ui.components.formatShortTimestamp
+import androidx.compose.material3.OutlinedTextField
 
 @Composable
 fun ApprovalCenterScreen(
     approvals: List<MobileApprovalRecord>,
     canMutate: Boolean,
     onDecide: (MobileApprovalRecord, String) -> Unit,
+    autonomy: MobileAutonomyState = MobileAutonomyState(),
+    schedules: List<MobileScheduleItem> = emptyList(),
+    onUpdateAutonomy: (String?, String?) -> Unit = { _, _ -> },
+    onCreateSchedule: (CreateScheduleRequest) -> Unit = {},
+    onToggleSchedule: (String, Boolean) -> Unit = { _, _ -> },
+    onRunScheduleNow: (String) -> Unit = {},
+    onDeleteSchedule: (String) -> Unit = {},
 ) {
     var tab by remember { mutableStateOf(0) }
+    var showCreateSchedule by remember { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
     val pending = approvals.filter { it.status == "pending" && it.expiresAt > now }
     val resolved = approvals.filter { it !in pending }
-    val list = if (tab == 0) pending else resolved
 
     Column(Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = tab) {
             Tab(tab == 0, { tab = 0 }, text = { Text("Pending (${pending.size})") })
             Tab(tab == 1, { tab = 1 }, text = { Text("Resolved (${resolved.size})") })
+            Tab(tab == 2, { tab = 2 }, text = { Text("Schedules (${schedules.size})") })
         }
-        if (list.isEmpty()) {
-            Text("No ${if (tab == 0) "pending" else "resolved"} approvals.", Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(list, key = { it.id }) { a ->
-                var confirm by remember { mutableStateOf<String?>(null) }
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text("${a.tool}: ${a.operation}", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                            StatusBadge(a.riskClassification)
-                        }
-                        Text("Task: ${a.taskTitle ?: a.taskId ?: "—"} • Agent: ${a.agentId ?: "—"}", style = MaterialTheme.typography.bodySmall)
-                        Text("Rule: ${a.rule}", style = MaterialTheme.typography.bodySmall)
-                        a.reasons.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
-                        if (a.expectedSideEffects.isNotBlank()) Text("Side effects: ${a.expectedSideEffects}", style = MaterialTheme.typography.bodySmall)
-                        if (a.relevantResources.isNotEmpty()) Text("Resources: ${a.relevantResources.joinToString()}", style = MaterialTheme.typography.bodySmall)
-                        Text("Arguments (redacted): ${a.redactedArguments}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
-                        if (a.status == "pending" && a.expiresAt > now) {
-                            val secs = ((a.expiresAt - now) / 1000).coerceAtLeast(0)
-                            Text("Expires in ${secs / 60}m ${secs % 60}s", style = MaterialTheme.typography.labelMedium)
-                            if (a.requiresBiometric) Text("Biometric confirmation required", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        if (tab == 2) {
+            LazyColumn(
+                Modifier.fillMaxSize().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Autonomy & Cellular Guard", fontWeight = FontWeight.Bold)
+                                StatusBadge("${autonomy.posture} • ${autonomy.networkGuard}")
+                            }
                             if (canMutate) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(onClick = { confirm = "approve" }) { Text("Approve") }
-                                    OutlinedButton(onClick = { confirm = "reject" }) { Text("Reject") }
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    OutlinedButton(onClick = { onUpdateAutonomy("read-only", null) }) { Text("Read-Only") }
+                                    OutlinedButton(onClick = { onUpdateAutonomy("request-review", null) }) { Text("Review") }
+                                    OutlinedButton(onClick = { onUpdateAutonomy("auto-sandbox", null) }) { Text("Sandbox") }
                                 }
-                            } else Text("Read-only device: cannot resolve approvals", style = MaterialTheme.typography.labelSmall)
-                        } else {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                StatusBadge(if (a.status == "pending") "expired" else a.status)
-                                Text(formatShortTimestamp(a.resolvedAt), style = MaterialTheme.typography.labelSmall)
+                                val nextGuard = if (autonomy.networkGuard == "cellular-strict") "normal" else "cellular-strict"
+                                OutlinedButton(onClick = { onUpdateAutonomy(null, nextGuard) }) {
+                                    Text(
+                                        if (autonomy.networkGuard == "cellular-strict") {
+                                            "Disable Cellular Strict Guard"
+                                        } else {
+                                            "Enable Cellular Strict Guard (Require Approval on Cellular)"
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
                 }
-                confirm?.let { decision ->
-                    AlertDialog(
-                        onDismissRequest = { confirm = null },
-                        title = { Text(if (decision == "approve") "Approve operation?" else "Reject operation?") },
-                        text = { Text("${a.tool}: ${a.operation}\nHash ${a.argumentsHash.take(12)}…") },
-                        confirmButton = { TextButton(onClick = { confirm = null; onDecide(a, decision) }) { Text("Confirm") } },
-                        dismissButton = { TextButton(onClick = { confirm = null }) { Text("Back") } },
-                    )
+                item {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Recurring Tasks (@wazir/scheduler)",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        if (canMutate) {
+                            Button(onClick = { showCreateSchedule = true }) { Text("+ Schedule") }
+                        }
+                    }
+                }
+                if (schedules.isEmpty()) {
+                    item {
+                        Text(
+                            "No scheduled tasks configured.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                items(schedules, key = { it.id }) { sched ->
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(sched.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                                StatusBadge(if (sched.enabled) "enabled" else "paused")
+                            }
+                            Text(
+                                "Cron: ${sched.cronExpression} • ${sched.nextRunDescription}",
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            Text(sched.prompt, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Agent: ${sched.agentId} • Posture: ${sched.autonomyPosture}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (canMutate) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(onClick = { onRunScheduleNow(sched.id) }) { Text("Run Now") }
+                                    OutlinedButton(onClick = { onToggleSchedule(sched.id, !sched.enabled) }) {
+                                        Text(if (sched.enabled) "Pause" else "Resume")
+                                    }
+                                    OutlinedButton(onClick = { onDeleteSchedule(sched.id) }) { Text("Delete") }
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            item { Spacer(Modifier.height(16.dp)) }
+            if (showCreateSchedule) {
+                var schedName by remember { mutableStateOf("") }
+                var schedCron by remember { mutableStateOf("0 9 * * *") }
+                var schedPrompt by remember { mutableStateOf("") }
+                AlertDialog(
+                    onDismissRequest = { showCreateSchedule = false },
+                    title = { Text("New Scheduled Task") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = schedName,
+                                onValueChange = { schedName = it },
+                                label = { Text("Task Name") },
+                                singleLine = true,
+                            )
+                            OutlinedTextField(
+                                value = schedCron,
+                                onValueChange = { schedCron = it },
+                                label = { Text("Cron Expression") },
+                                singleLine = true,
+                            )
+                            OutlinedTextField(
+                                value = schedPrompt,
+                                onValueChange = { schedPrompt = it },
+                                label = { Text("Agent Prompt") },
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                if (schedName.isNotBlank() && schedPrompt.isNotBlank()) {
+                                    onCreateSchedule(
+                                        CreateScheduleRequest(
+                                            name = schedName.trim(),
+                                            prompt = schedPrompt.trim(),
+                                            cronExpression = schedCron.trim().ifBlank { "0 9 * * *" },
+                                        )
+                                    )
+                                    showCreateSchedule = false
+                                }
+                            }
+                        ) { Text("Create") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showCreateSchedule = false }) { Text("Cancel") }
+                    },
+                )
+            }
+        } else {
+            val list = if (tab == 0) pending else resolved
+            if (list.isEmpty()) {
+                Text(
+                    "No ${if (tab == 0) "pending" else "resolved"} approvals.",
+                    Modifier.padding(24.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            LazyColumn(
+                Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(list, key = { it.id }) { a ->
+                    var confirm by remember { mutableStateOf<String?>(null) }
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("${a.tool}: ${a.operation}", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                                StatusBadge(a.riskClassification)
+                            }
+                            Text("Task: ${a.taskTitle ?: a.taskId ?: "—"} • Agent: ${a.agentId ?: "—"}", style = MaterialTheme.typography.bodySmall)
+                            Text("Rule: ${a.rule}", style = MaterialTheme.typography.bodySmall)
+                            a.reasons.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
+                            if (a.expectedSideEffects.isNotBlank()) Text("Side effects: ${a.expectedSideEffects}", style = MaterialTheme.typography.bodySmall)
+                            if (a.relevantResources.isNotEmpty()) Text("Resources: ${a.relevantResources.joinToString()}", style = MaterialTheme.typography.bodySmall)
+                            Text("Arguments (redacted): ${a.redactedArguments}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
+                            if (a.status == "pending" && a.expiresAt > now) {
+                                val secs = ((a.expiresAt - now) / 1000).coerceAtLeast(0)
+                                Text("Expires in ${secs / 60}m ${secs % 60}s", style = MaterialTheme.typography.labelMedium)
+                                if (a.requiresBiometric) Text("Biometric confirmation required", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                if (canMutate) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = { confirm = "approve" }) { Text("Approve") }
+                                        OutlinedButton(onClick = { confirm = "reject" }) { Text("Reject") }
+                                    }
+                                } else Text("Read-only device: cannot resolve approvals", style = MaterialTheme.typography.labelSmall)
+                            } else {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    StatusBadge(if (a.status == "pending") "expired" else a.status)
+                                    Text(formatShortTimestamp(a.resolvedAt), style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+                    confirm?.let { decision ->
+                        AlertDialog(
+                            onDismissRequest = { confirm = null },
+                            title = { Text(if (decision == "approve") "Approve operation?" else "Reject operation?") },
+                            text = { Text("${a.tool}: ${a.operation}\nHash ${a.argumentsHash.take(12)}…") },
+                            confirmButton = { TextButton(onClick = { confirm = null; onDecide(a, decision) }) { Text("Confirm") } },
+                            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Back") } },
+                        )
+                    }
+                }
+                item { Spacer(Modifier.height(16.dp)) }
+            }
         }
     }
 }

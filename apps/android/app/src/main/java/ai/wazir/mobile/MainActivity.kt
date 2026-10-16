@@ -57,6 +57,7 @@ import kotlinx.coroutines.launch
 class MainActivity : FragmentActivity() {
     private val viewModel: MainViewModel by viewModels { MainViewModel.Factory(applicationContext) }
     private var pendingRoute by androidx.compose.runtime.mutableStateOf<String?>(null)
+    private var pendingNotificationApproval by androidx.compose.runtime.mutableStateOf<Pair<String, String>?>(null)
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -69,7 +70,16 @@ class MainActivity : FragmentActivity() {
         handleIntent(intent)
         setContent {
             WazirMobileTheme {
-                Surface { WazirApp(viewModel, this, pendingRoute) { pendingRoute = null } }
+                Surface {
+                    WazirApp(
+                        vm = viewModel,
+                        activity = this,
+                        pendingRoute = pendingRoute,
+                        pendingNotificationApproval = pendingNotificationApproval,
+                        onRouteConsumed = { pendingRoute = null },
+                        onNotificationApprovalConsumed = { pendingNotificationApproval = null },
+                    )
+                }
             }
         }
     }
@@ -82,6 +92,11 @@ class MainActivity : FragmentActivity() {
     private fun handleIntent(intent: Intent?) {
         intent?.getStringExtra(WazirNotificationManager.EXTRA_TARGET_ROUTE)?.let { pendingRoute = it }
         intent?.getStringExtra(WazirNotificationManager.EXTRA_CONTROLLER_ID)?.let { viewModel.selectController(it) }
+        val approvalId = intent?.getStringExtra(WazirNotificationManager.EXTRA_APPROVAL_ID)
+        val decision = intent?.getStringExtra(WazirNotificationManager.EXTRA_APPROVAL_DECISION)
+        if (!approvalId.isNullOrBlank() && (decision == "approve" || decision == "reject")) {
+            pendingNotificationApproval = approvalId to decision
+        }
         val data = intent?.data
         if (data != null && data.scheme == "wazir" && data.host == "pair") {
             viewModel.pairFromQrUri(data.toString())
@@ -107,7 +122,9 @@ private fun WazirApp(
     vm: MainViewModel,
     activity: FragmentActivity,
     pendingRoute: String?,
+    pendingNotificationApproval: Pair<String, String>? = null,
     onRouteConsumed: () -> Unit,
+    onNotificationApprovalConsumed: () -> Unit = {},
 ) {
     val state by vm.uiState.collectAsState()
     val nav = rememberNavController()
@@ -117,6 +134,21 @@ private fun WazirApp(
     val canExecute = active?.canExecute == true
     val backEntry by nav.currentBackStackEntryAsState()
     val route = backEntry?.destination?.route
+
+    suspend fun authenticate(title: String, desc: String): Boolean =
+        BiometricAuthGate.canAuthenticate(activity) &&
+            BiometricAuthGate.authenticate(activity, title, "Wazir Mobile", desc).getOrDefault(false)
+
+    fun resolveWithBiometricGate(approval: ai.wazir.mobile.domain.MobileApprovalRecord, decision: String) {
+        scope.launch {
+            var biometric = false
+            if (decision == "approve" && approval.requiresBiometric) {
+                biometric = authenticate("Approve ${approval.tool}", approval.operation)
+                if (!biometric) return@launch
+            }
+            vm.resolveApproval(approval, decision, biometric)
+        }
+    }
 
     LaunchedEffect(active == null) {
         if (active == null) nav.navigate(Routes.PAIR) { popUpTo(0) }
@@ -135,6 +167,14 @@ private fun WazirApp(
             onRouteConsumed()
         }
     }
+    LaunchedEffect(pendingNotificationApproval, state.approvals) {
+        val pendingAction = pendingNotificationApproval ?: return@LaunchedEffect
+        val targetApproval = state.approvals.firstOrNull { it.id == pendingAction.first }
+        if (targetApproval != null) {
+            onNotificationApprovalConsumed()
+            resolveWithBiometricGate(targetApproval, pendingAction.second)
+        }
+    }
 
     val tabs = listOf(
         Triple(Routes.DASHBOARD, "Home", Icons.Default.Dashboard),
@@ -145,10 +185,6 @@ private fun WazirApp(
     )
 
     fun go(r: String) = nav.navigate(r) { launchSingleTop = true }
-
-    suspend fun authenticate(title: String, desc: String): Boolean =
-        BiometricAuthGate.canAuthenticate(activity) &&
-            BiometricAuthGate.authenticate(activity, title, "Wazir Mobile", desc).getOrDefault(false)
 
     Scaffold(
         topBar = {
@@ -211,6 +247,11 @@ private fun WazirApp(
                     onInspectWorkers = { go(Routes.WORKERS) },
                     onViewResources = { go(Routes.RESOURCES) },
                     onOpenTaskDetail = { vm.loadTaskDetail(it); go("task/$it") },
+                    pendingApprovals = state.pendingApprovals,
+                    autonomy = state.autonomy,
+                    canMutate = canMutate,
+                    onResolveApproval = ::resolveWithBiometricGate,
+                    onUpdateAutonomy = vm::updateAutonomy,
                 )
             }
             composable(Routes.TASKS) {
@@ -238,6 +279,8 @@ private fun WazirApp(
                     onCancelTask = vm::cancelTask,
                     onRetryTask = { vm.retryTask(it) { newId -> vm.loadTaskDetail(newId); go("task/$newId") } },
                     onResumeTask = vm::resumeTask,
+                    artifacts = state.activeTaskArtifacts,
+                    onReviewDiffFile = vm::reviewTaskDiffFile,
                 )
             }
             composable(Routes.MONITOR) { entry ->
@@ -271,16 +314,14 @@ private fun WazirApp(
                 ApprovalCenterScreen(
                     approvals = state.approvals,
                     canMutate = canMutate,
-                    onDecide = { approval, decision ->
-                        scope.launch {
-                            var biometric = false
-                            if (decision == "approve" && approval.requiresBiometric) {
-                                biometric = authenticate("Approve ${approval.tool}", approval.operation)
-                                if (!biometric) return@launch
-                            }
-                            vm.resolveApproval(approval, decision, biometric)
-                        }
-                    },
+                    onDecide = ::resolveWithBiometricGate,
+                    autonomy = state.autonomy,
+                    schedules = state.schedules,
+                    onUpdateAutonomy = vm::updateAutonomy,
+                    onCreateSchedule = vm::createSchedule,
+                    onToggleSchedule = vm::toggleSchedule,
+                    onRunScheduleNow = vm::runScheduleNow,
+                    onDeleteSchedule = vm::deleteSchedule,
                 )
             }
             composable(Routes.MODELS) {

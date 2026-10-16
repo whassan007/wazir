@@ -50,11 +50,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ai.wazir.mobile.domain.MobileTaskDetail
 import ai.wazir.mobile.domain.MobileTaskSummary
+import ai.wazir.mobile.domain.MobileVerifiableArtifact
 import ai.wazir.mobile.ui.components.StatusBadge
 import ai.wazir.mobile.ui.components.formatDurationMs
 import ai.wazir.mobile.ui.components.formatShortTimestamp
 import ai.wazir.mobile.ui.theme.WazirAmber
 import ai.wazir.mobile.ui.theme.WazirCrimson
+import ai.wazir.mobile.ui.theme.WazirEmerald
 
 private val TASK_TABS = listOf(
     "all" to "All",
@@ -267,6 +269,8 @@ fun TaskDetailScreen(
     onCancelTask: (String) -> Unit,
     onRetryTask: (String) -> Unit,
     onResumeTask: (String) -> Unit,
+    artifacts: List<MobileVerifiableArtifact> = emptyList(),
+    onReviewDiffFile: (String, String, String) -> Unit = { _, _, _ -> },
 ) {
     var showFullLogs by remember { mutableStateOf(false) }
 
@@ -418,6 +422,140 @@ fun TaskDetailScreen(
                             Icon(Icons.Default.Terminal, contentDescription = null)
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(if (showFullLogs) "Hide Logs" else "View Logs (${task.logs.size})")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Verifiable Artifacts & Code Diff Review (Keep / Skip)
+        if (artifacts.isNotEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = "Verifiable Artifacts (${artifacts.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    artifacts.forEach { artifact ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "${artifact.kind.uppercase()} • ${artifact.title}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    StatusBadge(label = artifact.status)
+                                }
+                                if (artifact.summary.isNotBlank()) {
+                                    Text(
+                                        text = artifact.summary,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                if (artifact.kind == "plan" && artifact.steps.isNotEmpty()) {
+                                    artifact.steps.forEach { step ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = "• ${step.title}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                            StatusBadge(label = step.status)
+                                        }
+                                    }
+                                }
+                                if (artifact.kind == "code_diff" && artifact.files.isNotEmpty()) {
+                                    artifact.files.forEach { file ->
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = file.path,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                )
+                                                Text(
+                                                    text = "+${file.additions} / -${file.deletions} (${file.changeType})",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                            StatusBadge(label = file.status)
+                                        }
+                                        if (file.patch.isNotBlank()) {
+                                            Text(
+                                                text = file.patch,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontFamily = FontFamily.Monospace,
+                                                maxLines = 6,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        if (canMutate) {
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Button(
+                                                    onClick = { onReviewDiffFile(task.taskId, file.path, "keep") },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = WazirEmerald),
+                                                ) {
+                                                    Text("Keep")
+                                                }
+                                                OutlinedButton(
+                                                    onClick = { onReviewDiffFile(task.taskId, file.path, "skip") },
+                                                ) {
+                                                    Text("Skip")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if (artifact.kind == "test_summary" && artifact.checks.isNotEmpty()) {
+                                    artifact.checks.forEach { check ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = "${check.name} (${check.durationMs}ms)",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontFamily = FontFamily.Monospace,
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                            StatusBadge(label = check.status)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

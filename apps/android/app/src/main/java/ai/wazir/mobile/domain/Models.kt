@@ -629,3 +629,131 @@ data class ResourceWarningItem(
     val accountId: String? = null,
     val message: String,
 )
+
+@Serializable
+data class MobileAutonomyState(
+    val ok: Boolean = true,
+    val posture: String = "request-review",
+    val networkGuard: String = "normal",
+    val updatedAt: String = "",
+    val updatedBy: String = "operator",
+)
+
+@Serializable
+data class UpdateAutonomyRequest(
+    val posture: String? = null,
+    val networkGuard: String? = null,
+    val updatedBy: String = "mobile-operator",
+)
+
+@Serializable
+data class ArtifactPlanStep(
+    val id: String = "",
+    val title: String = "",
+    val status: String = "pending",
+)
+
+@Serializable
+data class MobileDiffFileItem(
+    val path: String,
+    val changeType: String = "modified",
+    val additions: Int = 0,
+    val deletions: Int = 0,
+    val status: String = "pending",
+    val patch: String = "",
+)
+
+@Serializable
+data class ArtifactTestCheck(
+    val name: String,
+    val status: String,
+    val durationMs: Long = 0,
+    val output: String? = null,
+)
+
+@Serializable
+data class MobileVerifiableArtifact(
+    val id: String,
+    val executionId: String = "",
+    val kind: String,
+    val title: String,
+    val status: String = "pending",
+    val createdAt: String = "",
+    val summary: String = "",
+    val steps: List<ArtifactPlanStep> = emptyList(),
+    val files: List<MobileDiffFileItem> = emptyList(),
+    val checks: List<ArtifactTestCheck> = emptyList(),
+    val previewHtml: String? = null,
+)
+
+@Serializable
+data class TaskArtifactsResponse(
+    val ok: Boolean = true,
+    val taskId: String = "",
+    val executionId: String = "",
+    val artifacts: List<MobileVerifiableArtifact> = emptyList(),
+)
+
+@Serializable
+data class DiffReviewRequest(
+    val path: String,
+    val decision: String,
+)
+
+@Serializable
+data class DiffReviewDecisionItem(
+    val path: String,
+    val decision: String,
+    val updatedAt: String = "",
+)
+
+@Serializable
+data class TaskDiffReviewResponse(
+    val ok: Boolean = true,
+    val taskId: String = "",
+    val executionId: String = "",
+    val reviews: List<DiffReviewDecisionItem> = emptyList(),
+    val artifacts: List<MobileVerifiableArtifact> = emptyList(),
+)
+
+@Serializable
+data class MobileScheduleItem(
+    val id: String,
+    val name: String,
+    val prompt: String,
+    val cronExpression: String,
+    val agentId: String = "coding-agent",
+    val modelId: String = "local-default",
+    val autonomyPosture: String = "request-review",
+    val enabled: Boolean = true,
+    val lastRunAt: String? = null,
+    val lastExecutionId: String? = null,
+    val nextRunDescription: String = "",
+    val createdAt: String = "",
+)
+
+@Serializable
+data class ScheduleListResponse(
+    val schedules: List<MobileScheduleItem> = emptyList(),
+    val count: Int = 0,
+)
+
+@Serializable
+data class CreateScheduleRequest(
+    val name: String,
+    val prompt: String,
+    val cronExpression: String,
+    val agentId: String = "coding-agent",
+    val modelId: String = "local-default",
+    val autonomyPosture: String = "request-review",
+    val enabled: Boolean = true,
+)
+
+@Serializable
+data class ScheduleMutationResponse(
+    val ok: Boolean = true,
+    val schedule: MobileScheduleItem? = null,
+    val executionId: String? = null,
+    val deleted: Boolean = false,
+)
+

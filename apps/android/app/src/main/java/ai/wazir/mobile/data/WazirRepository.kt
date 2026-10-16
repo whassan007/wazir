@@ -6,12 +6,16 @@ import ai.wazir.mobile.domain.ApprovalListResponse
 import ai.wazir.mobile.domain.ComputerTelemetryItem
 import ai.wazir.mobile.domain.ComputersApiResponse
 import ai.wazir.mobile.domain.ControllerProfile
+import ai.wazir.mobile.domain.CreateScheduleRequest
 import ai.wazir.mobile.domain.CreateTaskRequest
 import ai.wazir.mobile.domain.DashboardSnapshot
 import ai.wazir.mobile.domain.MobileApprovalRecord
+import ai.wazir.mobile.domain.MobileAutonomyState
+import ai.wazir.mobile.domain.MobileScheduleItem
 import ai.wazir.mobile.domain.MobileStreamEvent
 import ai.wazir.mobile.domain.MobileTaskDetail
 import ai.wazir.mobile.domain.MobileTaskSummary
+import ai.wazir.mobile.domain.MobileVerifiableArtifact
 import ai.wazir.mobile.domain.ModelCatalogItem
 import ai.wazir.mobile.domain.ModelInstanceItem
 import ai.wazir.mobile.domain.ModelsApiResponse
@@ -23,8 +27,11 @@ import ai.wazir.mobile.domain.ResolveApprovalResponse
 import ai.wazir.mobile.domain.ResourceBudgetSnapshot
 import ai.wazir.mobile.domain.RuntimeItem
 import ai.wazir.mobile.domain.RuntimesApiResponse
+import ai.wazir.mobile.domain.ScheduleMutationResponse
 import ai.wazir.mobile.domain.SubmitTaskResponse
+import ai.wazir.mobile.domain.TaskDiffReviewResponse
 import ai.wazir.mobile.domain.TaskListResponse
+import ai.wazir.mobile.domain.UpdateAutonomyRequest
 import ai.wazir.mobile.network.WazirControllerApi
 import ai.wazir.mobile.persistence.CachedControllerSnapshotEntity
 import ai.wazir.mobile.persistence.CachedTaskDetailEntity
@@ -49,6 +56,8 @@ data class ControllerCachedState(
     val agents: List<AgentDescriptorItem> = emptyList(),
     val computers: List<ComputerTelemetryItem> = emptyList(),
     val resources: ResourceBudgetSnapshot? = null,
+    val autonomy: MobileAutonomyState = MobileAutonomyState(),
+    val schedules: List<MobileScheduleItem> = emptyList(),
     val lastSequence: Long = 0L,
     val syncedAtMs: Long? = null,
 )
@@ -197,6 +206,8 @@ class WazirRepository(
             val agentsRes = api.getAgents(profile)
             val computersRes = api.getComputers(profile)
             val resourcesRes = api.getResourceBudget(profile)
+            val autonomyRes = api.getAutonomy(profile)
+            val schedulesRes = api.listSchedules(profile)
 
             // If the primary dashboard + tasks endpoints both failed, surface the error so the UI
             // marks the view as offline/cached.
@@ -241,7 +252,13 @@ class WazirRepository(
                 )
             )
 
-            Result.success(loadCachedState(profile.id))
+            val loaded = loadCachedState(profile.id)
+            Result.success(
+                loaded.copy(
+                    autonomy = autonomyRes.getOrNull() ?: loaded.autonomy,
+                    schedules = schedulesRes.getOrNull()?.schedules ?: loaded.schedules,
+                )
+            )
         }
 
     suspend fun getTaskDetailWithOfflineFallback(
@@ -319,4 +336,56 @@ class WazirRepository(
 
     suspend fun resumeEmergencyStop(profile: ControllerProfile): Result<Boolean> =
         api.emergencyResume(profile)
+
+    suspend fun getAutonomy(profile: ControllerProfile): Result<MobileAutonomyState> =
+        api.getAutonomy(profile)
+
+    suspend fun updateAutonomy(
+        profile: ControllerProfile,
+        posture: String? = null,
+        networkGuard: String? = null,
+    ): Result<MobileAutonomyState> =
+        api.updateAutonomy(profile, UpdateAutonomyRequest(posture = posture, networkGuard = networkGuard))
+
+    suspend fun getTaskArtifacts(
+        profile: ControllerProfile,
+        taskId: String,
+    ): Result<List<MobileVerifiableArtifact>> =
+        api.getTaskArtifacts(profile, taskId).map { it.artifacts }
+
+    suspend fun reviewTaskDiffFile(
+        profile: ControllerProfile,
+        taskId: String,
+        path: String,
+        decision: String,
+    ): Result<TaskDiffReviewResponse> =
+        api.reviewTaskDiffFile(profile, taskId, path, decision)
+
+    suspend fun listSchedules(profile: ControllerProfile): Result<List<MobileScheduleItem>> =
+        api.listSchedules(profile).map { it.schedules }
+
+    suspend fun createSchedule(
+        profile: ControllerProfile,
+        request: CreateScheduleRequest,
+    ): Result<ScheduleMutationResponse> =
+        api.createSchedule(profile, request)
+
+    suspend fun toggleSchedule(
+        profile: ControllerProfile,
+        scheduleId: String,
+        enabled: Boolean,
+    ): Result<ScheduleMutationResponse> =
+        api.toggleSchedule(profile, scheduleId, enabled)
+
+    suspend fun runScheduleNow(
+        profile: ControllerProfile,
+        scheduleId: String,
+    ): Result<ScheduleMutationResponse> =
+        api.runScheduleNow(profile, scheduleId)
+
+    suspend fun deleteSchedule(
+        profile: ControllerProfile,
+        scheduleId: String,
+    ): Result<ScheduleMutationResponse> =
+        api.deleteSchedule(profile, scheduleId)
 }

@@ -179,8 +179,8 @@ class WazirNotificationManager(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val notification = NotificationCompat.Builder(appContext, channelId)
-            .setSmallIcon(R.drawable.ic_wazir_logo)
+        val builder = NotificationCompat.Builder(appContext, channelId)
+            .setSmallIcon(R.drawable.ic_stat_wazir)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -189,10 +189,42 @@ class WazirNotificationManager(private val context: Context) {
             )
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .build()
+
+        if (!approvalId.isNullOrBlank()) {
+            val approveIntent = Intent(appContext, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_TARGET_ROUTE, "approvals")
+                putExtra(EXTRA_CONTROLLER_ID, controllerId)
+                putExtra(EXTRA_APPROVAL_ID, approvalId)
+                putExtra(EXTRA_APPROVAL_DECISION, "approve")
+            }
+            val approvePending = PendingIntent.getActivity(
+                appContext,
+                (id xor 0x1111),
+                approveIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            val rejectIntent = Intent(appContext, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_TARGET_ROUTE, "approvals")
+                putExtra(EXTRA_CONTROLLER_ID, controllerId)
+                putExtra(EXTRA_APPROVAL_ID, approvalId)
+                putExtra(EXTRA_APPROVAL_DECISION, "reject")
+            }
+            val rejectPending = PendingIntent.getActivity(
+                appContext,
+                (id xor 0x2222),
+                rejectIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            builder.addAction(0, "Approve", approvePending)
+            builder.addAction(0, "Reject", rejectPending)
+        }
 
         try {
-            NotificationManagerCompat.from(appContext).notify(id, notification)
+            NotificationManagerCompat.from(appContext).notify(id, builder.build())
         } catch (_: SecurityException) {
             // Permission revoked at runtime
         }
@@ -207,6 +239,7 @@ class WazirNotificationManager(private val context: Context) {
         const val EXTRA_CONTROLLER_ID = "extra_controller_id"
         const val EXTRA_TASK_ID = "extra_task_id"
         const val EXTRA_APPROVAL_ID = "extra_approval_id"
+        const val EXTRA_APPROVAL_DECISION = "extra_approval_decision"
     }
 }
 

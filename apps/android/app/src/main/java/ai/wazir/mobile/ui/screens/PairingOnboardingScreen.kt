@@ -51,10 +51,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.Image
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -63,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import ai.wazir.mobile.R
 import ai.wazir.mobile.network.DiscoveredWazirController
 import ai.wazir.mobile.ui.PairingStage
 import com.google.zxing.BarcodeFormat
@@ -155,16 +158,21 @@ fun PairingOnboardingScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Surface(
-            color = MaterialTheme.colorScheme.primaryContainer,
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.size(72.dp),
+            color = MaterialTheme.colorScheme.background,
+            shape = RoundedCornerShape(22.dp),
+            modifier = Modifier
+                .size(88.dp)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(22.dp),
+                ),
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = Icons.Default.Lock,
-                    contentDescription = "Wazir Mobile Security Shield",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(36.dp),
+                Image(
+                    painter = painterResource(id = R.drawable.ic_wazir_logo),
+                    contentDescription = "Wazir Crowned Circuit-Shield",
+                    modifier = Modifier.size(76.dp),
                 )
             }
         }
@@ -172,13 +180,25 @@ fun PairingOnboardingScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Welcome to Wazir Mobile",
+            text = "WAZIR",
             style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = 4.sp,
             textAlign = TextAlign.Center,
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "A LOCAL AI FLEET COUNSELOR",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            letterSpacing = 2.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         Text(
             text = "Connect to your Wazir installation to monitor and manage your AI agents from anywhere.",

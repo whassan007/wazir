@@ -1,24 +1,67 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Wazir — meta-harness</title>
+<title>Wazir — A Local AI Fleet Counselor</title>
+<meta name="description" content="Wazir — A Local AI Fleet Counselor &amp; Autonomous Agent Orchestration" />
+<meta name="theme-color" content="#0f131a" />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="/favicon.ico" sizes="any" />
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+<link rel="manifest" href="/site.webmanifest" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Wazir" />
+<meta property="og:title" content="Wazir — A Local AI Fleet Counselor" />
+<meta property="og:description" content="Autonomous Agent Orchestration &amp; Local AI Fleet Counselor" />
+<meta property="og:image" content="/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Wazir — A Local AI Fleet Counselor" />
+<meta name="twitter:description" content="Autonomous Agent Orchestration &amp; Local AI Fleet Counselor" />
+<meta name="twitter:image" content="/og-image.png" />
 <style>
-  :root {
-    --bg: #0d1117;
-    --panel: #161b22;
-    --panel-hover: #1c2128;
-    --border: #30363d;
-    --border-subtle: #21262d;
-    --text: #e6edf3;
-    --muted: #8b949e;
-    --accent: #58a6ff;
-    --accent-hover: #79b8ff;
-    --ok: #3fb950;
-    --warn: #d29922;
-    --err: #f85149;
-    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  :root,
+  [data-theme="dark"] {
+    /* Official Wazir CVI Palette */
+    --cvi-dark-abyss: #0f131a;
+    --cvi-electric-blue: #38bdf8;
+    --cvi-metallic-silver: #94a3b8;
+    --cvi-data-green: #22c55e;
+    --bg: #0f131a;
+    --header-bg: rgba(15, 19, 26, 0.94);
+    --panel: #162032;
+    --panel-hover: #1e293b;
+    --border: #2f4469;
+    --border-subtle: #1e293b;
+    --text: #f8fafc;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-hover: #67e8f9;
+    --ok: #22c55e;
+    --warn: #eab308;
+    --err: #ef4444;
+    --font-display: 'Archon Bold', 'SF Pro Display', 'Inter', system-ui, -apple-system, sans-serif;
+    --font-sans: 'Nexus Light', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  [data-theme="light"] {
+    --bg: #f8fafc;
+    --header-bg: rgba(248, 250, 252, 0.94);
+    --panel: #ffffff;
+    --panel-hover: #f1f5f9;
+    --border: #cbd5e1;
+    --border-subtle: #e2e8f0;
+    --text: #0f131a;
+    --muted: #475569;
+    --accent: #0284c7;
+    --accent-hover: #0369a1;
+    --ok: #16a34a;
+    --warn: #ca8a04;
+    --err: #dc2626;
   }
   * { box-sizing: border-box; }
   body {
@@ -33,9 +76,9 @@
     position: sticky;
     top: 0;
     z-index: 100;
-    background: rgba(13, 17, 23, 0.95);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    background: var(--header-bg);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
     padding: 12px 24px;
     display: flex;
@@ -46,15 +89,44 @@
   }
   .header-left {
     display: flex;
-    align-items: baseline;
-    gap: 14px;
+    align-items: center;
+    gap: 12px;
     flex-wrap: wrap;
+  }
+  .brand-emblem-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+  }
+  .brand-emblem-svg {
+    width: 36px;
+    height: 36px;
+    display: block;
+    filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.28));
+  }
+  .brand-title-stack {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
   }
   .header-left h1 {
     margin: 0;
-    font-size: 18px;
-    letter-spacing: 1px;
+    font-family: var(--font-display);
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: 2.5px;
     color: var(--text);
+  }
+  .brand-subtitle {
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: var(--muted);
   }
   .header-status {
     display: flex;
@@ -572,12 +644,149 @@
     gap: 2px;
     min-width: 0;
   }
-  .child-prompt {
+    .child-prompt {
     color: var(--muted);
     font-size: 11px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Verifiable Artifacts, Diff Review, Approvals Banner & Schedules */
+  .approval-fastpath-banner {
+    display: none;
+    background: rgba(210, 153, 34, 0.14);
+    border: 1px solid rgba(210, 153, 34, 0.45);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .approval-fastpath-banner.active {
+    display: flex;
+  }
+  .approval-fastpath-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .approval-fastpath-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .btn-approve {
+    background: rgba(63, 185, 80, 0.2);
+    border-color: rgba(63, 185, 80, 0.5);
+    color: var(--ok);
+    font-weight: 600;
+  }
+  .btn-reject {
+    background: rgba(248, 81, 73, 0.2);
+    border-color: rgba(248, 81, 73, 0.5);
+    color: var(--err);
+    font-weight: 600;
+  }
+  .artifact-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .artifact-card {
+    background: rgba(0, 0, 0, 0.22);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .artifact-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .artifact-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .diff-file-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    margin-top: 8px;
+    overflow: hidden;
+    background: #0b0f14;
+  }
+  .diff-file-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--border-subtle);
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+  .diff-file-actions {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .diff-btn-keep.active {
+    background: rgba(63, 185, 80, 0.25);
+    border-color: var(--ok);
+    color: var(--ok);
+  }
+  .diff-btn-skip.active {
+    background: rgba(248, 81, 73, 0.25);
+    border-color: var(--err);
+    color: var(--err);
+  }
+  .diff-hunk-pre {
+    margin: 0;
+    padding: 8px 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.45;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .diff-line-add {
+    color: #3fb950;
+    background: rgba(63, 185, 80, 0.1);
+    display: block;
+  }
+  .diff-line-del {
+    color: #f85149;
+    background: rgba(248, 81, 73, 0.1);
+    display: block;
+  }
+  .sandbox-iframe {
+    width: 100%;
+    height: 180px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #0d1117;
+  }
+  .schedule-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.15);
+  }
+  .schedule-form input, .schedule-form select {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
   }
 
   /* Responsive Adjustments (<900px) */
@@ -630,8 +839,31 @@
 
 <header class="app-header">
   <div class="header-left">
-    <h1>WAZIR</h1>
-    <span class="tag">meta-harness</span>
+    <a href="/" class="brand-emblem-link" aria-label="Wazir Home">
+      <svg class="brand-emblem-svg" width="36" height="36" viewBox="0 0 512 512" fill="none" role="img" aria-label="Wazir Crowned Circuit-Shield">
+        <path d="M256 36 L204 128 L256 172 L308 128 Z" fill="#f8fafc"/>
+        <path d="M114 58 L128 158 L194 180 L190 132 Z" fill="#cbd5e1"/>
+        <path d="M398 58 L384 158 L318 180 L322 132 Z" fill="#cbd5e1"/>
+        <path d="M118 164 L196 196 L256 150 L316 196 L394 164 L394 274 C394 362 332 428 256 476 C180 428 118 362 118 274 Z" fill="#94a3b8"/>
+        <path d="M138 184 L198 210 L256 168 L314 210 L374 184 L374 272 C374 348 320 406 256 450 C192 406 138 348 138 272 Z" fill="#162032" stroke="#38bdf8" stroke-opacity="0.55" stroke-width="5"/>
+        <g stroke="#38bdf8" stroke-width="10" stroke-linecap="round">
+          <line x1="226" y1="266" x2="182" y2="222"/>
+          <line x1="286" y1="266" x2="330" y2="222"/>
+          <line x1="226" y1="326" x2="188" y2="364"/>
+          <line x1="286" y1="326" x2="324" y2="364"/>
+          <line x1="256" y1="246" x2="256" y2="202"/>
+          <line x1="256" y1="346" x2="256" y2="396"/>
+          <line x1="206" y1="296" x2="162" y2="296"/>
+          <line x1="306" y1="296" x2="350" y2="296"/>
+        </g>
+        <circle cx="256" cy="296" r="42" fill="#0f131a" stroke="#f8fafc" stroke-width="12"/>
+        <circle cx="256" cy="296" r="18" fill="#67e8f9"/>
+      </svg>
+    </a>
+    <div class="brand-title-stack">
+      <h1>WAZIR</h1>
+      <span class="tag brand-subtitle">A Local AI Fleet Counselor</span>
+    </div>
   </div>
 
   <div class="header-status">
@@ -643,6 +875,21 @@
 
   <div class="header-controls">
     <div class="control-group">
+      <label for="host-instance-select">Host:</label>
+      <select id="host-instance-select" aria-label="Target Wazir controller host">
+        <option value="local">Local Controller</option>
+      </select>
+      <button id="pair-host-btn" type="button" title="Pair or add remote Wazir host">+ Host</button>
+    </div>
+    <div class="control-group">
+      <label for="autonomy-posture-select">Autonomy:</label>
+      <select id="autonomy-posture-select" aria-label="Agent autonomy posture">
+        <option value="read-only">Read-Only (Strict)</option>
+        <option value="request-review" selected>Request-Review (Balanced)</option>
+        <option value="auto-sandbox">Auto-Sandbox (Permissive)</option>
+      </select>
+    </div>
+    <div class="control-group">
       <label for="interval-select">Auto-refresh:</label>
       <select id="interval-select" aria-label="Auto-refresh interval">
         <option value="5">5s</option>
@@ -651,6 +898,7 @@
         <option value="0">Off</option>
       </select>
     </div>
+    <button id="theme-toggle-btn" type="button" title="Toggle Dark/Light Theme" aria-label="Toggle Dark or Light Theme">☾ Dark</button>
     <button id="refresh-btn" title="Refresh all sections now">↻ Refresh</button>
   </div>
 </header>
@@ -685,6 +933,18 @@
 </div>
 
 <main>
+  <!-- Fast-Path Pending Approvals Banner -->
+  <div id="pending-approvals-banner" class="approval-fastpath-banner" role="region" aria-label="Pending Tool Approvals">
+    <div class="approval-fastpath-info">
+      <div><span class="badge warn" id="pending-approval-risk">HIGH RISK</span> <strong id="pending-approval-title">Tool approval required</strong></div>
+      <div class="tag" id="pending-approval-desc">Waiting for operator decision</div>
+    </div>
+    <div class="approval-fastpath-actions">
+      <button type="button" class="btn-approve" id="fastpath-approve-btn">✓ Approve</button>
+      <button type="button" class="btn-reject" id="fastpath-reject-btn">✕ Reject</button>
+    </div>
+  </div>
+
   <!-- KPI Row: Overview stats as horizontal bar -->
   <div class="kpi-row" id="kpi-row">
     <div class="kpi-card">
@@ -735,6 +995,9 @@
     </button>
     <button class="tab-btn" role="tab" data-tab="catalog" id="tab-catalog">
       Catalog <span class="tab-badge" id="badge-catalog">—</span>
+    </button>
+    <button class="tab-btn" role="tab" data-tab="schedules" id="tab-schedules">
+      Schedules <span class="tab-badge" id="badge-schedules">—</span>
     </button>
   </nav>
 
@@ -831,6 +1094,31 @@
       <div class="card"><div class="table-scroll" id="tools"><div class="empty">loading…</div></div></div>
     </section>
   </div>
+
+  <!-- TAB PANE: Schedules -->
+  <div id="pane-schedules" class="tab-pane" style="display:none;">
+    <section>
+      <div class="section-header">
+        <h2>scheduled tasks (@wazir/scheduler)</h2>
+        <div class="section-meta"><span class="tag" id="updated-schedules">—</span></div>
+      </div>
+      <div class="inline-error" id="error-schedules"></div>
+      <div class="card">
+        <form id="schedule-create-form" class="schedule-form">
+          <input type="text" id="sched-name" placeholder="Schedule name (e.g. Nightly test audit)" required style="flex:1 1 180px;" />
+          <input type="text" id="sched-prompt" placeholder="Task prompt or instruction..." required style="flex:2 1 260px;" />
+          <select id="sched-cadence" aria-label="Schedule cadence">
+            <option value="15">Every 15m</option>
+            <option value="60" selected>Hourly (60m)</option>
+            <option value="360">Every 6h</option>
+            <option value="1440">Daily (24h)</option>
+          </select>
+          <button type="submit">+ Create Schedule</button>
+        </form>
+        <div class="table-scroll" id="schedules"><div class="empty">loading…</div></div>
+      </div>
+    </section>
+  </div>
 </main>
 
 <!-- Slide-Over Drawer Panel (Replacing alert) -->
@@ -920,7 +1208,8 @@ const ENDPOINTS = [
   { id: 'models', url: '/api/v1/models' },
   { id: 'agents', url: '/api/v1/agents' },
   { id: 'tools', url: '/api/v1/tools' },
-  { id: 'executions', url: '/api/v1/executions' },
+  { id: 'executions', url: '/api/v1/executions?summary=1&limit=200' },
+  { id: 'schedules', url: '/api/v1/schedules' },
 ];
 
 const sectionState = {};
@@ -935,6 +1224,8 @@ for (const ep of ENDPOINTS) {
 
 let autoRefreshInterval = parseInt(localStorage.getItem('wazir_refresh_interval') || '5', 10);
 let activeTab = localStorage.getItem('wazir_active_tab') || 'activity';
+let selectedHostId = localStorage.getItem('wazir_target_host') || 'local';
+let currentPendingApproval = null;
 let inFlight = false;
 let consecutiveErrors = 0;
 let refreshTimerId = null;
@@ -951,12 +1242,24 @@ let executionsDisplayLimit = 30;
 // Persistent drawer cache for quick lookup
 let latestRuntimesData = [];
 
+function buildHeaders(extra = {}) {
+  const headers = { ...extra };
+  if (selectedHostId && selectedHostId !== 'local') {
+    headers['X-Wazir-Target-Host'] = selectedHostId;
+  }
+  return headers;
+}
+
 // Timeout-wrapped fetch
-async function fetchJsonWithTimeout(url, timeoutMs = 8000) {
+async function fetchJsonWithTimeout(url, timeoutMs = 8000, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, {
+      ...options,
+      headers: buildHeaders(options.headers || {}),
+      signal: controller.signal,
+    });
     if (!res.ok) {
       const err = new Error(`${res.status} ${res.statusText}`);
       err.status = res.status;
@@ -970,6 +1273,49 @@ async function fetchJsonWithTimeout(url, timeoutMs = 8000) {
     throw err;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function syncMultiSurfaceState() {
+  try {
+    const [autonomyRes, hostsRes, approvalsRes] = await Promise.allSettled([
+      fetchJsonWithTimeout('/api/v1/autonomy', 5000),
+      fetchJsonWithTimeout('/api/v1/hosts', 5000),
+      fetchJsonWithTimeout('/api/v1/mobile/approvals?status=pending', 5000),
+    ]);
+
+    if (autonomyRes.status === 'fulfilled' && autonomyRes.value?.autonomy?.mode) {
+      const sel = $('autonomy-posture-select');
+      if (sel && sel.value !== autonomyRes.value.autonomy.mode) {
+        sel.value = autonomyRes.value.autonomy.mode;
+      }
+    }
+
+    if (hostsRes.status === 'fulfilled' && Array.isArray(hostsRes.value?.hosts)) {
+      const sel = $('host-instance-select');
+      if (sel) {
+        const hosts = hostsRes.value.hosts;
+        const activeId = hostsRes.value.activeHost?.id || selectedHostId || 'local';
+        sel.innerHTML = hosts.map((h) =>
+          `<option value="${esc(h.id)}" ${h.id === activeId ? 'selected' : ''}>${esc(h.name || h.id)} (${esc(h.status || 'online')})</option>`
+        ).join('');
+      }
+    }
+
+    const banner = $('pending-approvals-banner');
+    if (approvalsRes.status === 'fulfilled' && Array.isArray(approvalsRes.value?.approvals) && approvalsRes.value.approvals.length > 0) {
+      const top = approvalsRes.value.approvals[0];
+      currentPendingApproval = top;
+      $('pending-approval-risk').textContent = `${String(top.riskClassification || 'high').toUpperCase()} RISK`;
+      $('pending-approval-title').textContent = `${top.tool || 'tool'}: ${top.operation || 'requires approval'}`;
+      $('pending-approval-desc').textContent = `${top.expectedSideEffects || (top.reasons || []).join('; ') || 'Waiting for operator approval'} (${approvalsRes.value.approvals.length} pending)`;
+      banner.classList.add('active');
+    } else if (banner) {
+      currentPendingApproval = null;
+      banner.classList.remove('active');
+    }
+  } catch {
+    // Non-blocking background sync
   }
 }
 
@@ -987,6 +1333,8 @@ async function load() {
   $('global-status-pill').textContent = 'refreshing…';
   $('global-status-pill').className = 'badge warn';
   $('countdown-text').textContent = '';
+
+  void syncMultiSurfaceState();
 
   const promises = ENDPOINTS.map((ep) =>
     fetchJsonWithTimeout(ep.url, 8000).then(
@@ -1191,6 +1539,9 @@ function renderSection(id, data) {
     case 'executions':
       renderExecutions(data);
       break;
+    case 'schedules':
+      renderSchedules(data);
+      break;
   }
 }
 
@@ -1233,6 +1584,12 @@ function updateTabBadges() {
   $('badge-activity').textContent = neverLoaded(sectionState.executions) ? '—' : String(
     sectionState.executions.data?.executions?.length ?? 0
   );
+
+  if ($('badge-schedules')) {
+    $('badge-schedules').textContent = neverLoaded(sectionState.schedules) ? '—' : String(
+      sectionState.schedules.data?.schedules?.length ?? 0
+    );
+  }
 }
 
 function renderComputers(data) {
@@ -1418,6 +1775,148 @@ function applyExecutionsFilter() {
   }
 }
 
+function renderSchedules(data) {
+  const list = data.schedules ?? [];
+  const el = $('schedules');
+  if (!el) return;
+  el.innerHTML = table(
+    ['id', 'name', 'cadence', 'routing (@wazir/scheduler)', 'status', 'next run', 'runs', 'actions'],
+    list.map((s) => [
+      monoId(s.id),
+      `<strong>${esc(s.name)}</strong><div class="tag">${truncateCell(s.prompt, 44)}</div>`,
+      `every ${esc(s.cadenceMinutes)}m`,
+      truncateCell(s.schedulerExplanation || `${s.agentId} · ${s.modelId} @ ${s.computerId}`, 48),
+      badge(s.enabled ? 'enabled' : 'paused', 'enabled', 'paused'),
+      `<span title="${esc(s.nextRunAt)}">${esc(timeAgo(s.nextRunAt))}</span>`,
+      String(s.runCount ?? 0),
+      `<button type="button" class="schedule-action" data-sched-op="run" data-sched-id="${esc(s.id)}">▶ Run Now</button> ` +
+      `<button type="button" class="schedule-action" data-sched-op="toggle" data-sched-id="${esc(s.id)}" data-sched-enabled="${s.enabled ? 'true' : 'false'}">${s.enabled ? 'Pause' : 'Resume'}</button> ` +
+      `<button type="button" class="schedule-action" data-sched-op="delete" data-sched-id="${esc(s.id)}">✕</button>`,
+    ]),
+    [6],
+  );
+  updateTabBadges();
+}
+
+function renderVerifiableArtifacts(execId, artifacts) {
+  if (!Array.isArray(artifacts) || artifacts.length === 0) return '';
+  const blocks = artifacts.map((art) => {
+    const statusBadge = badge(art.status, 'verified|ready', 'failed');
+    if (art.kind === 'plan') {
+      const steps = Array.isArray(art.plan?.steps) ? art.plan.steps : (Array.isArray(art.steps) ? art.steps : []);
+      const summary = art.summary || art.plan?.objective || `${steps.length} planned step(s)`;
+      return `
+        <div class="artifact-card" data-artifact-kind="plan">
+          <div class="artifact-header">
+            <span class="artifact-title">📋 ${esc(art.title)}</span>
+            ${statusBadge}
+          </div>
+          <div class="tag" style="margin-bottom:6px;">${esc(summary)}</div>
+          ${steps.length > 0 ? `<ul class="reason-list">${steps.map((st, idx) => `<li><strong>Step ${esc(st.index ?? idx + 1)} (${esc(st.phase)})</strong>: ${esc(st.description || st.title)} ${badge(st.status, 'completed', 'failed')}</li>`).join('')}</ul>` : ''}
+        </div>
+      `;
+    }
+    if (art.kind === 'code_diff') {
+      const files = Array.isArray(art.codeDiff?.files) ? art.codeDiff.files : (Array.isArray(art.files) ? art.files : []);
+      const diffSum = art.codeDiff?.summary;
+      const summary = art.summary || (diffSum ? `${diffSum.totalFiles} file(s): ${diffSum.keptCount} kept, ${diffSum.skippedCount} skipped, ${diffSum.pendingCount} pending` : `${files.length} file(s)`);
+      return `
+        <div class="artifact-card" data-artifact-kind="code_diff">
+          <div class="artifact-header">
+            <span class="artifact-title">🔀 ${esc(art.title)}</span>
+            ${statusBadge}
+          </div>
+          <div class="tag">${esc(summary)} — Review and mark each file Keep or Skip</div>
+          ${files.length === 0 ? '<div class="tag" style="margin-top:6px;">No workspace file mutations recorded.</div>' : files.map((f) => {
+            const dec = f.reviewDecision || f.decision || 'pending';
+            const hunkLines = (f.hunks || []).flatMap((h) => h.lines || []);
+            const formattedLines = hunkLines.map((line) => {
+              const text = typeof line === 'object' && line !== null ? `${line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '} ${line.text ?? ''}` : String(line);
+              const cls = text.startsWith('+') ? 'diff-line-add' : text.startsWith('-') ? 'diff-line-del' : '';
+              return `<span class="${cls}">${esc(text)}</span>`;
+            }).join('\n');
+            return `
+              <div class="diff-file-card" data-diff-path="${esc(f.path)}">
+                <div class="diff-file-header">
+                  <span>${esc(f.path)} <span class="tag">(+${esc(f.additions ?? 0)} / -${esc(f.deletions ?? 0)})</span></span>
+                  <span class="diff-file-actions">
+                    <span class="badge ${dec === 'keep' ? 'ok' : dec === 'skip' ? 'err' : 'muted'}" data-diff-badge="${esc(f.path)}">${esc(dec)}</span>
+                    <button type="button" class="diff-review-btn diff-btn-keep ${dec === 'keep' ? 'active' : ''}" data-exec-id="${esc(execId)}" data-file-path="${esc(f.path)}" data-decision="keep">Keep</button>
+                    <button type="button" class="diff-review-btn diff-btn-skip ${dec === 'skip' ? 'active' : ''}" data-exec-id="${esc(execId)}" data-file-path="${esc(f.path)}" data-decision="skip">Skip</button>
+                  </span>
+                </div>
+                <pre class="diff-hunk-pre">${formattedLines || esc('@@ no diff lines @@')}</pre>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+    if (art.kind === 'test_summary') {
+      const rep = art.testSummary || art.testReport || {};
+      const checks = Array.isArray(rep.checks) ? rep.checks : [];
+      const dur = rep.totalDurationMs ?? rep.durationMs ?? 0;
+      const summary = art.summary || `Status: ${rep.overallStatus || art.status}`;
+      return `
+        <div class="artifact-card" data-artifact-kind="test_summary">
+          <div class="artifact-header">
+            <span class="artifact-title">🧪 ${esc(art.title)}</span>
+            ${badge(rep.overallStatus || art.status, 'pass|verified|ready', 'fail|error|failed')}
+          </div>
+          <div class="tag" style="margin-bottom:6px;">${esc(summary)} (${esc(dur)}ms)</div>
+          ${checks.length > 0 ? `<ul class="reason-list">${checks.map((c) => `<li><strong>${esc(c.name)}</strong>: ${badge(c.status, 'pass|completed', 'fail|failed|error')} <span class="tag">${esc(c.durationMs ?? 0)}ms</span>${c.error ? `<div class="detail err">${esc(c.error)}</div>` : ''}</li>`).join('')}</ul>` : ''}
+        </div>
+      `;
+    }
+    if (art.kind === 'sandbox_preview') {
+      const htmlSnippet = art.sandboxPreview?.htmlDoc || art.previewHtml || '<div>No preview output</div>';
+      const encodedHtml = encodeURIComponent(htmlSnippet);
+      return `
+        <div class="artifact-card" data-artifact-kind="sandbox_preview">
+          <div class="artifact-header">
+            <span class="artifact-title">🖼️ ${esc(art.title)}</span>
+            ${statusBadge}
+          </div>
+          <div class="tag" style="margin-bottom:6px;">${esc(art.summary || 'Isolated CSP sandbox preview')}</div>
+          <iframe class="sandbox-iframe" sandbox="allow-scripts" src="/sandbox/preview?html=${encodedHtml}" title="Sandboxed Execution Preview"></iframe>
+        </div>
+      `;
+    }
+    return '';
+  }).join('');
+
+  return `
+    <div class="drawer-section">
+      <h4>Verifiable Artifacts (${artifacts.length})</h4>
+      <div class="artifact-grid">${blocks}</div>
+    </div>
+  `;
+}
+
+function openPairHostDrawer() {
+  const html = `
+    <div class="drawer-section" style="border-top:none;margin-top:0;padding-top:0;">
+      <h4>Connect or Pair Remote Wazir Host (Mode B)</h4>
+      <p class="tag" style="margin-bottom:12px;">Connect this Web / Desktop console to a remote Wazir controller using a pairing code or direct operator token.</p>
+      <form id="pair-host-form" style="display:flex;flex-direction:column;gap:10px;">
+        <label class="tag">Host Display Name</label>
+        <input type="text" id="pair-host-name" placeholder="e.g. Linux GPU Workstation" required />
+        <label class="tag">Controller URL</label>
+        <input type="url" id="pair-host-url" placeholder="http://192.168.1.50:4800" required />
+        <label class="tag">Operator Token (or leave blank to use Pairing Session below)</label>
+        <input type="password" id="pair-host-token" placeholder="Optional Bearer token..." />
+        <label class="tag">Pairing Session ID (Optional Mode B QR/Code)</label>
+        <input type="text" id="pair-session-id" placeholder="pair-..." />
+        <label class="tag">Pairing Secret</label>
+        <input type="text" id="pair-secret" placeholder="One-time pairing secret..." />
+        <div id="pair-host-status" class="tag"></div>
+        <button type="submit">+ Connect & Select Host</button>
+      </form>
+    </div>
+  `;
+  openDrawer('Host Instance Manager', html);
+}
+
 // Drawer: Open / Close / Render
 function openDrawer(title, contentHtml) {
   $('drawer-title').textContent = title;
@@ -1436,10 +1935,11 @@ function closeDrawer() {
 async function showExecutionDrawer(execId) {
   openDrawer(`Execution: ${execId}`, '<div class="empty">Loading execution details…</div>');
   try {
-    const [execRes, eventsRes, childrenRes] = await Promise.allSettled([
+    const [execRes, eventsRes, childrenRes, artifactsRes] = await Promise.allSettled([
       fetchJsonWithTimeout(`/api/v1/executions/${encodeURIComponent(execId)}`, 8000),
       fetchJsonWithTimeout(`/api/v1/executions/${encodeURIComponent(execId)}/events`, 8000),
       fetchJsonWithTimeout(`/api/v1/executions/${encodeURIComponent(execId)}/children`, 8000),
+      fetchJsonWithTimeout(`/api/v1/executions/${encodeURIComponent(execId)}/artifacts`, 8000),
     ]);
 
     if (execRes.status !== 'fulfilled' || !execRes.value?.execution) {
@@ -1447,8 +1947,11 @@ async function showExecutionDrawer(execId) {
       return;
     }
     const e = execRes.value.execution;
-    const events = (eventsRes.status === 'fulfilled' && Array.isArray(eventsRes.value?.events)) ? eventsRes.value.events : [];
-    const children = (childrenRes.status === 'fulfilled' && Array.isArray(childrenRes.value?.children)) ? childrenRes.value.children : [];
+    const eventsFailed = eventsRes.status !== 'fulfilled' || !Array.isArray(eventsRes.value?.events);
+    const childrenFailed = childrenRes.status !== 'fulfilled' || !Array.isArray(childrenRes.value?.children);
+    const events = !eventsFailed ? eventsRes.value.events : [];
+    const children = !childrenFailed ? childrenRes.value.children : [];
+    const artifacts = (artifactsRes.status === 'fulfilled' && Array.isArray(artifactsRes.value?.artifacts)) ? artifactsRes.value.artifacts : [];
 
     const ex = e.execution ?? {};
     const task = e.task ?? {};
@@ -1460,7 +1963,7 @@ async function showExecutionDrawer(execId) {
       <dl class="drawer-dl">
         <dt>ID</dt><dd>${monoId(ex.id ?? execId)}</dd>
         <dt>Status</dt><dd>${badge(ex.status, 'completed|ok', 'failed|error')}</dd>
-        ${ex.parentExecutionId ? `<dt>Parent Execution</dt><dd><button type="button" style="background:transparent;border:none;color:var(--accent);padding:0;text-decoration:underline;cursor:pointer;" onclick="showExecutionDrawer('${esc(ex.parentExecutionId)}')">${monoId(ex.parentExecutionId)}</button></dd>` : ''}
+        ${ex.parentExecutionId ? `<dt>Parent Execution</dt><dd><button type="button" style="background:transparent;border:none;color:var(--accent);padding:0;text-decoration:underline;cursor:pointer;" class="exec-open-btn" data-exec-id="${esc(ex.parentExecutionId)}">${monoId(ex.parentExecutionId)}</button></dd>` : ''}
         <dt>Task Type</dt><dd>${esc(task.type ?? '—')}</dd>
         <dt>Preset</dt><dd><span class="badge ok">${esc(task.requirements?.runtimePreset ?? 'standard')}</span></dd>
         <dt>Task Input</dt><dd>${esc(task.input ?? '—')}</dd>
@@ -1476,8 +1979,18 @@ async function showExecutionDrawer(execId) {
       </dl>
     `;
 
+    // Verifiable Artifacts (Plan, Code Diff Review with Keep/Skip, Test Summary, Sandboxed Preview)
+    html += renderVerifiableArtifacts(ex.id ?? execId, artifacts);
+
     // Subsection: Child Subagent Executions
-    if (children.length > 0) {
+    if (childrenFailed) {
+      html += `
+        <div class="drawer-section">
+          <h4>Nested Subagent Executions</h4>
+          <div class="detail err">Subagent execution details unavailable (${esc(childrenRes.reason?.message ?? 'request failed')}).</div>
+        </div>
+      `;
+    } else if (children.length > 0) {
       html += `
         <div class="drawer-section">
           <h4>Nested Subagent Executions (${children.length})</h4>
@@ -1491,7 +2004,7 @@ async function showExecutionDrawer(execId) {
                     <div><strong>${monoId(cEx.id)}</strong> ${badge(cEx.status, 'completed|ok', 'failed|error')}</div>
                     <div class="child-prompt">${esc(cTask.input ?? '—')}</div>
                   </div>
-                  <button type="button" onclick="showExecutionDrawer('${esc(cEx.id)}')">Inspect</button>
+                  <button type="button" class="exec-open-btn" data-exec-id="${esc(cEx.id)}">Inspect</button>
                 </li>
               `;
             }).join('')}
@@ -1532,22 +2045,30 @@ async function showExecutionDrawer(execId) {
     }
 
     // Subsection: Trajectory Timeline
-    if (events.length > 0) {
+    if (eventsFailed) {
+      html += `
+        <div class="drawer-section">
+          <h4>Execution Trajectory Timeline</h4>
+          <div class="detail err">Execution event timeline unavailable (${esc(eventsRes.reason?.message ?? 'request failed')}).</div>
+        </div>
+      `;
+    } else if (events.length > 0) {
       html += `
         <div class="drawer-section">
           <h4>Execution Trajectory Timeline (${events.length} events)</h4>
           <ul class="timeline-list">
             ${events.map((evt) => {
-              const ts = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : '';
+              const ts = (evt.timestamp || evt.at) ? new Date(evt.timestamp || evt.at).toLocaleTimeString() : '';
               const isErr = evt.type.includes('error') || evt.type.includes('failed');
-              const isOk = evt.type.includes('completed') || evt.type.includes('success');
+              const isOk = evt.type.includes('completed') || evt.type.includes('success') || evt.type.includes('finish');
               const itemClass = isErr ? 'timeline-item item-error' : isOk ? 'timeline-item item-ok' : 'timeline-item';
               let dataStr = '';
-              if (evt.data && Object.keys(evt.data).length > 0) {
+              const payload = evt.data || evt.payload;
+              if (payload && Object.keys(payload).length > 0) {
                 try {
-                  dataStr = JSON.stringify(evt.data, null, 1).slice(0, 300);
+                  dataStr = JSON.stringify(payload, null, 1).slice(0, 300);
                 } catch {
-                  dataStr = String(evt.data).slice(0, 300);
+                  dataStr = String(payload).slice(0, 300);
                 }
               }
               return `
@@ -1632,6 +2153,37 @@ function switchTab(tabId) {
   });
 }
 
+async function setAutonomyPosture(mode) {
+  await fetchJsonWithTimeout('/api/v1/autonomy', 6000, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  const sel = $('autonomy-posture-select');
+  if (sel) sel.value = mode;
+}
+
+async function selectTargetHost(hostId) {
+  selectedHostId = hostId;
+  localStorage.setItem('wazir_target_host', hostId);
+  await fetchJsonWithTimeout('/api/v1/hosts/select', 6000, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: hostId }),
+  }).catch(() => {});
+  await load();
+}
+
+// Expose shared multi-surface controller hook for Desktop (Tauri native menu/notifications) & tests
+window.__WAZIR_SURFACE__ = {
+  switchTab,
+  setAutonomyPosture,
+  selectTargetHost,
+  openPairHostDrawer,
+  showExecutionDrawer,
+  refresh: load,
+};
+
 // Event Listeners Initialization
 document.addEventListener('DOMContentLoaded', () => {
   // Restore preferences
@@ -1656,6 +2208,80 @@ document.addEventListener('DOMContentLoaded', () => {
   $('diag-retry-btn').addEventListener('click', () => {
     load();
   });
+
+  // Host Instance Switcher
+  if ($('host-instance-select')) {
+    $('host-instance-select').addEventListener('change', (e) => {
+      void selectTargetHost(e.target.value);
+    });
+  }
+
+  if ($('pair-host-btn')) {
+    $('pair-host-btn').addEventListener('click', () => {
+      openPairHostDrawer();
+    });
+  }
+
+  // Autonomy Posture Selector
+  if ($('autonomy-posture-select')) {
+    $('autonomy-posture-select').addEventListener('change', (e) => {
+      void setAutonomyPosture(e.target.value);
+    });
+  }
+
+  // Fast-Path Pending Approvals Banner Actions
+  const resolveTopApproval = async (decision) => {
+    if (!currentPendingApproval?.id) return;
+    try {
+      await fetchJsonWithTimeout(`/api/v1/mobile/approvals/${encodeURIComponent(currentPendingApproval.id)}/decision`, 6000, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          decision,
+          argumentsHash: currentPendingApproval.argumentsHash,
+          taskId: currentPendingApproval.taskId,
+          biometricVerified: true,
+        }),
+      });
+      await load();
+    } catch {
+      // Refresh state on next tick
+    }
+  };
+  if ($('fastpath-approve-btn')) {
+    $('fastpath-approve-btn').addEventListener('click', () => void resolveTopApproval('approve'));
+  }
+  if ($('fastpath-reject-btn')) {
+    $('fastpath-reject-btn').addEventListener('click', () => void resolveTopApproval('reject'));
+  }
+
+  // Create Scheduled Task Form
+  if ($('schedule-create-form')) {
+    $('schedule-create-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = $('sched-name').value.trim();
+      const prompt = $('sched-prompt').value.trim();
+      const cadenceMinutes = parseInt($('sched-cadence').value, 10) || 60;
+      if (!name || !prompt) return;
+      try {
+        await fetchJsonWithTimeout('/api/v1/schedules', 6000, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, prompt, cadenceMinutes }),
+        });
+        $('sched-name').value = '';
+        $('sched-prompt').value = '';
+        sectionState.schedules.snapshot = '';
+        await load();
+      } catch (err) {
+        const banner = $('error-schedules');
+        if (banner) {
+          banner.textContent = err.message;
+          banner.style.display = 'block';
+        }
+      }
+    });
+  }
 
   // Interval Change
   $('interval-select').addEventListener('change', (e) => {
@@ -1695,15 +2321,113 @@ document.addEventListener('DOMContentLoaded', () => {
     applyExecutionsFilter();
   });
 
-  // Delegated Clicks for Links (No inline onclick for security)
+  // Delegated Submit for Pair Host Form inside Drawer
+  document.addEventListener('submit', async (e) => {
+    if (e.target && e.target.id === 'pair-host-form') {
+      e.preventDefault();
+      const name = $('pair-host-name')?.value?.trim() || 'Remote Host';
+      const controllerUrl = $('pair-host-url')?.value?.trim();
+      const token = $('pair-host-token')?.value?.trim();
+      const sessionId = $('pair-session-id')?.value?.trim();
+      const pairingSecret = $('pair-secret')?.value?.trim();
+      const statusEl = $('pair-host-status');
+      if (!controllerUrl) return;
+      try {
+        if (statusEl) statusEl.textContent = 'Connecting to host…';
+        if (sessionId && pairingSecret) {
+          await fetchJsonWithTimeout('/api/v1/hosts/pair', 8000, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, controllerUrl, sessionId, pairingSecret }),
+          });
+        } else {
+          const res = await fetchJsonWithTimeout('/api/v1/hosts', 8000, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, url: controllerUrl, token, selected: true }),
+          });
+          if (res?.host?.id) {
+            selectedHostId = res.host.id;
+            localStorage.setItem('wazir_target_host', selectedHostId);
+          }
+        }
+        closeDrawer();
+        await load();
+      } catch (err) {
+        if (statusEl) statusEl.textContent = `Connection failed: ${err.message}`;
+      }
+    }
+  });
+
+  // Delegated Clicks for Links & Actions (No inline onclick for security)
   document.addEventListener('click', (e) => {
+    const execOpenBtn = e.target.closest('.exec-open-btn');
+    if (execOpenBtn) {
+      const id = execOpenBtn.dataset.execId;
+      // IDs are read from a data attribute (never evaluated as code) and must
+      // still look like an identifier before we issue a request for them.
+      if (id && /^[A-Za-z0-9._:-]{1,200}$/.test(id)) void showExecutionDrawer(id);
+      return;
+    }
+    const diffBtn = e.target.closest('.diff-review-btn');
+    if (diffBtn) {
+      const { execId, filePath, decision } = diffBtn.dataset;
+      if (!execId || !filePath || !decision) return;
+      diffBtn.disabled = true;
+      fetchJsonWithTimeout(`/api/v1/executions/${encodeURIComponent(execId)}/diff-review`, 6000, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, decision }),
+      }).then(() => {
+        const card = diffBtn.closest('.diff-file-card');
+        if (card) {
+          card.querySelectorAll('.diff-review-btn').forEach((b) => {
+            b.disabled = false;
+            b.classList.toggle('active', b.dataset.decision === decision);
+          });
+          const badgeEl = card.querySelector('[data-diff-badge]');
+          if (badgeEl) {
+            badgeEl.textContent = decision;
+            badgeEl.className = `badge ${decision === 'keep' ? 'ok' : 'err'}`;
+          }
+        }
+      }).catch(() => {
+        diffBtn.disabled = false;
+      });
+      return;
+    }
+
+    const schedBtn = e.target.closest('.schedule-action');
+    if (schedBtn) {
+      const { schedOp, schedId, schedEnabled } = schedBtn.dataset;
+      if (!schedId) return;
+      schedBtn.disabled = true;
+      const req = schedOp === 'run'
+        ? fetchJsonWithTimeout(`/api/v1/schedules/${encodeURIComponent(schedId)}/run`, 8000, { method: 'POST' })
+        : schedOp === 'toggle'
+          ? fetchJsonWithTimeout(`/api/v1/schedules/${encodeURIComponent(schedId)}`, 6000, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: schedEnabled !== 'true' }),
+            })
+          : fetchJsonWithTimeout(`/api/v1/schedules/${encodeURIComponent(schedId)}`, 6000, { method: 'DELETE' });
+      req.then(async () => {
+        sectionState.schedules.snapshot = '';
+        sectionState.executions.snapshot = '';
+        await load();
+      }).catch(() => {
+        schedBtn.disabled = false;
+      });
+      return;
+    }
+
     const modelAction = e.target.closest('.model-action');
     if (modelAction) {
       const { operation, modelId, computerId, runtimeId } = modelAction.dataset;
       if (!['load', 'unload', 'pin', 'unpin'].includes(operation)) return;
       modelAction.disabled = true;
       fetch(`/api/v1/models/${encodeURIComponent(modelId)}/${operation}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: buildHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ computerId, runtimeId }),
       }).then(async response => {
         const result = await response.json();
@@ -1759,6 +2483,27 @@ document.addEventListener('DOMContentLoaded', () => {
       load();
     }
   });
+
+  // Theme Toggle (Dark Abyss default, Light theme supported)
+  const themeBtn = $('theme-toggle-btn');
+  const applyTheme = (theme) => {
+    const normalized = theme === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', normalized);
+    if (themeBtn) {
+      themeBtn.textContent = normalized === 'light' ? '☀ Light' : '☾ Dark';
+    }
+  };
+  const savedTheme = localStorage.getItem('wazir_theme') ||
+    (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  applyTheme(savedTheme);
+  if (themeBtn) {
+    themeBtn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('wazir_theme', next);
+      applyTheme(next);
+    });
+  }
 
   // Initial Load
   load();

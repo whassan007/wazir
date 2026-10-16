@@ -260,4 +260,101 @@ class WazirControllerApiTest {
         assertTrue(result.isFailure)
         assertNull(server.takeRequest(1, java.util.concurrent.TimeUnit.MILLISECONDS))
     }
+
+    @Test
+    fun `getAutonomy and updateAutonomy hit the mobile autonomy endpoint`() = runTest {
+        server.enqueue(MockResponse().setBody("""{"ok":true,"posture":"request-review","networkGuard":"normal"}"""))
+        server.enqueue(MockResponse().setBody("""{"ok":true,"posture":"auto-sandbox","networkGuard":"cellular-strict"}"""))
+
+        val getRes = api.getAutonomy(profile)
+        assertTrue(getRes.isSuccess)
+        assertEquals("request-review", getRes.getOrThrow().posture)
+        val req1 = server.takeRequest()
+        assertEquals("/api/v1/mobile/autonomy", req1.path)
+        assertEquals("GET", req1.method)
+
+        val updateRes = api.updateAutonomy(
+            profile,
+            ai.wazir.mobile.domain.UpdateAutonomyRequest(posture = "auto-sandbox", networkGuard = "cellular-strict"),
+        )
+        assertTrue(updateRes.isSuccess)
+        assertEquals("auto-sandbox", updateRes.getOrThrow().posture)
+        assertEquals("cellular-strict", updateRes.getOrThrow().networkGuard)
+        val req2 = server.takeRequest()
+        assertEquals("/api/v1/mobile/autonomy", req2.path)
+        assertEquals("POST", req2.method)
+    }
+
+    @Test
+    fun `getTaskArtifacts and reviewTaskDiffFile hit mobile task artifact and diff-review routes`() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"ok":true,"taskId":"t-100","executionId":"exec-100","artifacts":[{"id":"art-diff-exec-100","kind":"code_diff","title":"Code Diff Review","status":"pending","files":[{"path":"src/index.ts","changeType":"modified","additions":12,"deletions":3,"status":"pending","patch":"@@ -1,3 +1,12 @@"}]}]}""",
+            ),
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                """{"ok":true,"taskId":"t-100","executionId":"exec-100","reviews":[{"path":"src/index.ts","decision":"keep"}],"artifacts":[{"id":"art-diff-exec-100","kind":"code_diff","title":"Code Diff Review","status":"reviewed","files":[{"path":"src/index.ts","changeType":"modified","additions":12,"deletions":3,"status":"keep","patch":"@@ -1,3 +1,12 @@"}]}]}""",
+            ),
+        )
+
+        val artRes = api.getTaskArtifacts(profile, "t-100")
+        assertTrue(artRes.isSuccess)
+        assertEquals(1, artRes.getOrThrow().artifacts.size)
+        val req1 = server.takeRequest()
+        assertEquals("/api/v1/mobile/tasks/t-100/artifacts", req1.path)
+        assertEquals("GET", req1.method)
+
+        val reviewRes = api.reviewTaskDiffFile(profile, "t-100", "src/index.ts", "keep")
+        assertTrue(reviewRes.isSuccess)
+        assertEquals("keep", reviewRes.getOrThrow().artifacts.first().files.first().status)
+        val req2 = server.takeRequest()
+        assertEquals("/api/v1/mobile/tasks/t-100/diff-review", req2.path)
+        assertEquals("POST", req2.method)
+    }
+
+    @Test
+    fun `schedule endpoints hit mobile schedules routes`() = runTest {
+        server.enqueue(MockResponse().setBody("""{"schedules":[{"id":"sched-1","name":"Nightly Audit","prompt":"Audit repo","cronExpression":"0 9 * * *","enabled":true}],"count":1}"""))
+        server.enqueue(MockResponse().setBody("""{"ok":true,"schedule":{"id":"sched-2","name":"Daily Triage","prompt":"Triage","cronExpression":"*/30 * * * *","enabled":true}}"""))
+        server.enqueue(MockResponse().setBody("""{"ok":true,"schedule":{"id":"sched-2","name":"Daily Triage","prompt":"Triage","cronExpression":"*/30 * * * *","enabled":false}}"""))
+        server.enqueue(MockResponse().setBody("""{"ok":true,"executionId":"exec-sched-2"}"""))
+        server.enqueue(MockResponse().setBody("""{"ok":true,"deleted":true}"""))
+
+        val listRes = api.listSchedules(profile)
+        assertTrue(listRes.isSuccess)
+        assertEquals(1, listRes.getOrThrow().schedules.size)
+        assertEquals("/api/v1/mobile/schedules", server.takeRequest().path)
+
+        val createRes = api.createSchedule(
+            profile,
+            ai.wazir.mobile.domain.CreateScheduleRequest(
+                name = "Daily Triage",
+                prompt = "Triage",
+                cronExpression = "*/30 * * * *",
+            ),
+        )
+        assertTrue(createRes.isSuccess)
+        val createReq = server.takeRequest()
+        assertEquals("/api/v1/mobile/schedules", createReq.path)
+        assertEquals("POST", createReq.method)
+
+        val toggleRes = api.toggleSchedule(profile, "sched-2", enabled = false)
+        assertTrue(toggleRes.isSuccess)
+        val toggleReq = server.takeRequest()
+        assertEquals("/api/v1/mobile/schedules/sched-2/toggle", toggleReq.path)
+        assertEquals("POST", toggleReq.method)
+
+        val runRes = api.runScheduleNow(profile, "sched-2")
+        assertTrue(runRes.isSuccess)
+        val runReq = server.takeRequest()
+        assertEquals("/api/v1/mobile/schedules/sched-2/run", runReq.path)
+        assertEquals("POST", runReq.method)
+
+        val deleteRes = api.deleteSchedule(profile, "sched-2")
+        assertTrue(deleteRes.isSuccess)
+        val deleteReq = server.takeRequest()
+        assertEquals("/api/v1/mobile/schedules/sched-2", deleteReq.path)
+        assertEquals("DELETE", deleteReq.method)
+    }
 }

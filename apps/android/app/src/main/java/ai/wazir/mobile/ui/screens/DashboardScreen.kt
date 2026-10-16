@@ -39,6 +39,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ai.wazir.mobile.domain.DashboardCards
 import ai.wazir.mobile.domain.DashboardSnapshot
+import ai.wazir.mobile.domain.MobileApprovalRecord
+import ai.wazir.mobile.domain.MobileAutonomyState
 import ai.wazir.mobile.domain.MobileStreamEvent
 import ai.wazir.mobile.ui.components.StatusBadge
 import ai.wazir.mobile.ui.components.formatShortTimestamp
@@ -47,6 +49,8 @@ import ai.wazir.mobile.ui.theme.WazirCrimson
 import ai.wazir.mobile.ui.theme.WazirCyan
 import ai.wazir.mobile.ui.theme.WazirEmerald
 import ai.wazir.mobile.ui.theme.WazirGold
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -62,6 +66,11 @@ fun DashboardScreen(
     onInspectWorkers: () -> Unit,
     onViewResources: () -> Unit,
     onOpenTaskDetail: (String) -> Unit,
+    pendingApprovals: List<MobileApprovalRecord> = emptyList(),
+    autonomy: MobileAutonomyState = MobileAutonomyState(),
+    canMutate: Boolean = false,
+    onResolveApproval: (MobileApprovalRecord, String) -> Unit = { _, _ -> },
+    onUpdateAutonomy: (String?, String?) -> Unit = { _, _ -> },
 ) {
     val cards = dashboard?.cards ?: DashboardCards()
 
@@ -71,6 +80,71 @@ fun DashboardScreen(
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (pendingApprovals.isNotEmpty()) {
+            val topApproval = pendingApprovals.first()
+            item {
+                Spacer(modifier = Modifier.height(4.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = WazirAmber.copy(alpha = 0.16f)),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Approval Gate (${pendingApprovals.size} pending)",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = WazirAmber,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            StatusBadge(label = topApproval.riskClassification)
+                        }
+                        Text(
+                            text = "${topApproval.tool}: ${topApproval.operation}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        if (topApproval.requiresBiometric) {
+                            Text(
+                                text = "Biometric verification required before execution",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (canMutate) {
+                                Button(
+                                    onClick = { onResolveApproval(topApproval, "approve") },
+                                    colors = ButtonDefaults.buttonColors(containerColor = WazirEmerald),
+                                ) {
+                                    Text("Approve")
+                                }
+                                OutlinedButton(
+                                    onClick = { onResolveApproval(topApproval, "reject") },
+                                ) {
+                                    Text("Reject")
+                                }
+                            }
+                            OutlinedButton(onClick = onViewApprovals) {
+                                Text("View All")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         item {
             Spacer(modifier = Modifier.height(4.dp))
             Row(
@@ -99,6 +173,70 @@ fun DashboardScreen(
                         Icon(Icons.Default.Add, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("New Task")
+                    }
+                }
+            }
+        }
+
+        // Supervision Posture & Cellular Network Guard Bar
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Autonomy & Network Guard",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            StatusBadge(label = autonomy.posture)
+                            StatusBadge(label = autonomy.networkGuard)
+                        }
+                    }
+                    if (canMutate) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            listOf(
+                                "read-only" to "Read-Only",
+                                "request-review" to "Request Review",
+                                "auto-sandbox" to "Auto (Sandbox)",
+                            ).forEach { (postureKey, label) ->
+                                AssistChip(
+                                    onClick = { onUpdateAutonomy(postureKey, null) },
+                                    label = {
+                                        Text(
+                                            text = if (autonomy.posture == postureKey) "✓ $label" else label
+                                        )
+                                    },
+                                )
+                            }
+                            val nextGuard = if (autonomy.networkGuard == "cellular-strict") "normal" else "cellular-strict"
+                            AssistChip(
+                                onClick = { onUpdateAutonomy(null, nextGuard) },
+                                label = {
+                                    Text(
+                                        text = if (autonomy.networkGuard == "cellular-strict") {
+                                            "✓ Cellular Strict Guard"
+                                        } else {
+                                            "Enable Cellular Strict"
+                                        }
+                                    )
+                                },
+                            )
+                        }
                     }
                 }
             }

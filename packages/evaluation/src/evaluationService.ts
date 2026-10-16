@@ -1,3 +1,4 @@
+import { oracleSatisfied, evidencePassed, latestEvidenceAtRevision, missingAcceptanceCriteria } from '@wazir/core';
 import type {
   ExecutionRecord,
   EvaluationResult,
@@ -605,30 +606,22 @@ export class EvaluationService {
     currentRevision: number,
     contractOverride?: AcceptanceContract,
   ): boolean {
-    const contract = contractOverride ?? record.acceptanceContract ?? record.task?.acceptanceContract;
+    const contract = record.executionContract?.acceptance ?? contractOverride ?? record.acceptanceContract ?? record.task?.acceptanceContract;
     const requiredEvidence = contract?.requiredEvidence ?? [];
 
     const evidenceList = record.evidence ?? evaluationResult.evidence ?? [];
     const checks = record.checks ?? evaluationResult.checks ?? [];
 
-    // If an acceptance contract requires evidence (BUILD, TEST, etc.)
+    if (missingAcceptanceCriteria(contract, evidenceList, currentRevision).length > 0) return false;
     if (requiredEvidence.length > 0) {
-      for (const required of requiredEvidence) {
-        const matches = evidenceList.filter((e) => e.type === required && e.exitCode === 0);
-        const atCurrentRevision = matches.find((e) => e.revision === currentRevision);
-        if (!atCurrentRevision) {
-          return false;
-        }
-      }
-      return true;
+      return requiredEvidence.every(type => oracleSatisfied(evidenceList, currentRevision, type));
     }
 
     // If mutations happened, did any checks run and pass for the current revision?
     if (currentRevision > 0 && record.filesChanged && record.filesChanged.length > 0) {
       if (evidenceList.length > 0) {
-        const currentPassing = evidenceList.filter((e) => e.revision === currentRevision && e.exitCode === 0);
-        const currentFailing = evidenceList.filter((e) => e.revision === currentRevision && e.exitCode !== 0);
-        return currentFailing.length === 0 && currentPassing.length > 0;
+        const current = latestEvidenceAtRevision(evidenceList, currentRevision);
+        return current.length > 0 && current.every(evidencePassed);
       }
       if (checks.length > 0) {
         return checks.every((c) => c.ok);

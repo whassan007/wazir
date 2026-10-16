@@ -175,7 +175,15 @@ export type SidebarMode = 'full' | 'focused' | 'hidden';
 
 export type FocusPane = 'nav' | 'main' | 'prompt';
 
-export type TuiMode = 'NORMAL' | 'COMPOSER' | 'COPY' | 'PASTE' | 'PALETTE' | 'APPROVAL';
+export type TuiMode = 'NORMAL' | 'COMPOSER' | 'COPY' | 'PASTE' | 'PALETTE' | 'APPROVAL' | 'SHELL';
+
+export interface ShellExecutionSummary {
+  command: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  blockId?: string;
+}
 
 export interface StructuredError {
   phase: string;
@@ -430,6 +438,12 @@ function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
   if (keyStr === '\x12' || keyStr === '\u0012') {
     return { name: 'r', ctrl: true, meta: false, shift: false, sequence: '\x12' };
   }
+  if (keyStr === '\x0b' || keyStr === '\u000b') {
+    return { name: 'k', ctrl: true, meta: false, shift: false, sequence: '\x0b' };
+  }
+  if (keyStr === '\x0e' || keyStr === '\u000e') {
+    return { name: 'n', ctrl: true, meta: false, shift: false, sequence: '\x0e' };
+  }
   if (keyStr === '\u0003') {
     return { name: 'c', ctrl: true, meta: false, shift: false, sequence: '\u0003' };
   }
@@ -605,6 +619,7 @@ export class FleetTui {
   private pickerIndex = 0;
   private pickerCandidates: string[] = [];
   private lastResolvedReferences: ResolvedReference[] = [];
+  private lastShellOutput?: ShellExecutionSummary;
 
   private currentJob?: Job;
   private currentRollup?: JobRollup;
@@ -1416,6 +1431,7 @@ export class FleetTui {
   getMode(): TuiMode {
     if (this.pendingApprovals.length > 0) return 'APPROVAL';
     if (this.quickActionsOpen) return 'PALETTE';
+    if (this.tuiMode === 'NORMAL' && this.inputBuffer.startsWith('!')) return 'SHELL';
     return this.tuiMode;
   }
 
@@ -1494,6 +1510,55 @@ export class FleetTui {
 
   getLastResolvedReferences(): ResolvedReference[] {
     return this.lastResolvedReferences;
+  }
+
+  getLastShellOutput(): ShellExecutionSummary | undefined {
+    return this.lastShellOutput;
+  }
+
+  getSelectedTaskId(): string | undefined {
+    return this.selectedTaskId;
+  }
+
+  /**
+   * Fast-path navigation across pending approvals or active/recorded tasks (Ctrl+J / Ctrl+N / ']' and Ctrl+K / '[').
+   */
+  cycleActiveTask(direction: 1 | -1): void {
+    if (this.pendingApprovals.length > 1) {
+      if (direction === 1) {
+        const first = this.pendingApprovals.shift()!;
+        this.pendingApprovals.push(first);
+      } else {
+        const last = this.pendingApprovals.pop()!;
+        this.pendingApprovals.unshift(last);
+      }
+      const focused = this.pendingApprovals[0];
+      this.statusMessage = `Approval queue: focused ${focused.tool} (${focused.taskId ?? 'fleet-task'})`;
+      this.draw();
+      return;
+    }
+
+    const list = this.getAgents();
+    if (list.length === 0) {
+      this.statusMessage = 'No active or recorded tasks to cycle.';
+      this.draw();
+      return;
+    }
+
+    this.highlightedIndex = (this.highlightedIndex + direction + list.length) % list.length;
+    const target = list[this.highlightedIndex];
+    this.selectedTaskId = target.taskId;
+    this.selectedCategory = 'EXECUTIONS';
+    this.selectedNavId = target.taskId;
+
+    const allNav = this.getFlatNavItems();
+    const navIdx = allNav.findIndex((it) => it.category === 'EXECUTIONS' && it.id === target.taskId);
+    if (navIdx !== -1) {
+      this.navSelectionIndex = navIdx;
+    }
+
+    this.statusMessage = `Focused task ${target.taskId} [${target.status.toUpperCase()}] (${this.highlightedIndex + 1}/${list.length})`;
+    this.draw();
   }
 
   getCurrentJob(): Job | undefined {

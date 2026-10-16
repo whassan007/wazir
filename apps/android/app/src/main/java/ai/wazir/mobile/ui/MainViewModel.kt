@@ -8,12 +8,16 @@ import ai.wazir.mobile.data.WazirRepository
 import ai.wazir.mobile.domain.AgentDescriptorItem
 import ai.wazir.mobile.domain.ComputerTelemetryItem
 import ai.wazir.mobile.domain.ControllerProfile
+import ai.wazir.mobile.domain.CreateScheduleRequest
 import ai.wazir.mobile.domain.CreateTaskRequest
 import ai.wazir.mobile.domain.DashboardSnapshot
 import ai.wazir.mobile.domain.MobileApprovalRecord
+import ai.wazir.mobile.domain.MobileAutonomyState
+import ai.wazir.mobile.domain.MobileScheduleItem
 import ai.wazir.mobile.domain.MobileStreamEvent
 import ai.wazir.mobile.domain.MobileTaskDetail
 import ai.wazir.mobile.domain.MobileTaskSummary
+import ai.wazir.mobile.domain.MobileVerifiableArtifact
 import ai.wazir.mobile.domain.ModelCatalogItem
 import ai.wazir.mobile.domain.ModelInstanceItem
 import ai.wazir.mobile.domain.ResolveApprovalRequest
@@ -72,6 +76,7 @@ data class WazirUiState(
     val selectedTaskTab: String = "all",
     val activeTaskDetail: MobileTaskDetail? = null,
     val activeTaskDetailCached: Boolean = false,
+    val activeTaskArtifacts: List<MobileVerifiableArtifact> = emptyList(),
     val isSubmittingTask: Boolean = false,
     val approvals: List<MobileApprovalRecord> = emptyList(),
     val models: List<ModelCatalogItem> = emptyList(),
@@ -80,6 +85,8 @@ data class WazirUiState(
     val agents: List<AgentDescriptorItem> = emptyList(),
     val computers: List<ComputerTelemetryItem> = emptyList(),
     val resources: ResourceBudgetSnapshot? = null,
+    val autonomy: MobileAutonomyState = MobileAutonomyState(),
+    val schedules: List<MobileScheduleItem> = emptyList(),
 ) {
     val pendingApprovals: List<MobileApprovalRecord>
         get() = approvals.filter { it.status == "pending" }
@@ -181,6 +188,8 @@ class MainViewModel(
                 agents = cached.agents,
                 computers = cached.computers,
                 resources = cached.resources,
+                autonomy = cached.autonomy,
+                schedules = cached.schedules,
                 lastSyncedAtMs = cached.syncedAtMs,
                 isOfflineCached = cached.syncedAtMs != null,
             )
@@ -214,6 +223,8 @@ class MainViewModel(
                         agents = fresh.agents,
                         computers = fresh.computers,
                         resources = fresh.resources,
+                        autonomy = fresh.autonomy,
+                        schedules = fresh.schedules,
                     )
                 }
                 val activeTaskId = _uiState.value.activeTaskDetail?.taskId
@@ -420,11 +431,13 @@ class MainViewModel(
         val profile = _uiState.value.activeController ?: return
         viewModelScope.launch {
             val (detail, fromCache) = repository.getTaskDetailWithOfflineFallback(profile, taskId)
+            val artifactsRes = repository.getTaskArtifacts(profile, taskId)
             if (detail != null) {
                 _uiState.update {
                     it.copy(
                         activeTaskDetail = detail,
                         activeTaskDetailCached = fromCache,
+                        activeTaskArtifacts = artifactsRes.getOrNull() ?: it.activeTaskArtifacts,
                     )
                 }
             }
@@ -440,11 +453,13 @@ class MainViewModel(
             while (isActive) {
                 val profile = _uiState.value.activeController ?: break
                 val (detail, fromCache) = repository.getTaskDetailWithOfflineFallback(profile, taskId)
+                val artifactsRes = repository.getTaskArtifacts(profile, taskId)
                 if (detail != null) {
                     _uiState.update {
                         it.copy(
                             activeTaskDetail = detail,
                             activeTaskDetailCached = fromCache,
+                            activeTaskArtifacts = artifactsRes.getOrNull() ?: it.activeTaskArtifacts,
                         )
                     }
                     if (detail.state in listOf("completed", "failed", "cancelled")) {
@@ -701,6 +716,152 @@ class MainViewModel(
                 .onFailure { err ->
                     _uiState.update {
                         it.copy(bannerMessage = err.message ?: "Emergency resume failed", bannerIsError = true)
+                    }
+                }
+        }
+    }
+
+    // ─── Multi-Surface Autonomy, Diff Review & Schedules ─────────────
+
+    fun updateAutonomy(posture: String? = null, networkGuard: String? = null) {
+        val profile = _uiState.value.activeController ?: return
+        viewModelScope.launch {
+            repository.updateAutonomy(profile, posture = posture, networkGuard = networkGuard)
+                .onSuccess { updated ->
+                    _uiState.update {
+                        it.copy(
+                            autonomy = updated,
+                            bannerMessage = "Autonomy set to ${updated.posture} (${updated.networkGuard})",
+                            bannerIsError = false,
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = err.message ?: "Failed to update autonomy posture",
+                            bannerIsError = true,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun reviewTaskDiffFile(taskId: String, path: String, decision: String) {
+        val profile = _uiState.value.activeController ?: return
+        viewModelScope.launch {
+            repository.reviewTaskDiffFile(profile, taskId, path, decision)
+                .onSuccess { resp ->
+                    _uiState.update {
+                        it.copy(
+                            activeTaskArtifacts = resp.artifacts,
+                            bannerMessage = "Diff file $path marked as ${decision.uppercase()}",
+                            bannerIsError = false,
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = err.message ?: "Diff review failed",
+                            bannerIsError = true,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun createSchedule(request: CreateScheduleRequest) {
+        val profile = _uiState.value.activeController ?: return
+        viewModelScope.launch {
+            repository.createSchedule(profile, request)
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = "Scheduled task '${request.name}' created",
+                            bannerIsError = false,
+                        )
+                    }
+                    refreshAll(silent = true)
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = err.message ?: "Failed to create schedule",
+                            bannerIsError = true,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun toggleSchedule(scheduleId: String, enabled: Boolean) {
+        val profile = _uiState.value.activeController ?: return
+        viewModelScope.launch {
+            repository.toggleSchedule(profile, scheduleId, enabled)
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = "Schedule ${if (enabled) "enabled" else "paused"}",
+                            bannerIsError = false,
+                        )
+                    }
+                    refreshAll(silent = true)
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = err.message ?: "Failed to toggle schedule",
+                            bannerIsError = true,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun runScheduleNow(scheduleId: String) {
+        val profile = _uiState.value.activeController ?: return
+        viewModelScope.launch {
+            repository.runScheduleNow(profile, scheduleId)
+                .onSuccess { resp ->
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = "Schedule dispatched (${resp.executionId ?: scheduleId})",
+                            bannerIsError = false,
+                        )
+                    }
+                    refreshAll(silent = true)
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = err.message ?: "Failed to run schedule",
+                            bannerIsError = true,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun deleteSchedule(scheduleId: String) {
+        val profile = _uiState.value.activeController ?: return
+        viewModelScope.launch {
+            repository.deleteSchedule(profile, scheduleId)
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = "Schedule deleted",
+                            bannerIsError = false,
+                        )
+                    }
+                    refreshAll(silent = true)
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = err.message ?: "Failed to delete schedule",
+                            bannerIsError = true,
+                        )
                     }
                 }
         }

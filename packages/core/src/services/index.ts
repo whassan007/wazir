@@ -51,6 +51,15 @@ export { Scheduler, createScheduler } from './scheduler.js';
 export type { SchedulerDeps, ScheduleInput } from './scheduler.js';
 export { JobManager, createJobManager } from './jobManager.js';
 export type { JobManagerOptions, JobTaskInput } from './jobManager.js';
+export {
+  InvalidStatusTransitionError,
+  assertJobTransition,
+  assertTaskTransition,
+  canTransitionJob,
+  canTransitionTask,
+  isTerminalJobStatus,
+  isTerminalTaskStatus,
+} from './statusTransitions.js';
 export { JobOrchestrator, createJobOrchestrator } from './jobOrchestrator.js';
 export type { JobOrchestratorOptions, OrchestratorTaskAssignment } from './jobOrchestrator.js';
 export { ApprovalQueue, createApprovalQueue } from './approvalQueue.js';
@@ -185,3 +194,6 @@ export {
   digest,
 } from './distributedSearchCoordinator.js';
 export type { DistributedSearchCoordinatorOptions } from '../types/distributedSearch.js';
+
+export * from './evidencePolicy.js';
+export * from './executionContract.js';

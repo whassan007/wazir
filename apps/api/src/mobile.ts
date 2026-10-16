@@ -29,6 +29,7 @@ import {
 } from '@wazir/core';
 import { appendAuditEvent, sanitizeUntrustedOutput, type KeyValueStore } from '@wazir/shared';
 import type { ApiState } from './server.js';
+import { MultiSurfaceService, registerMultiSurfaceRoutes } from './multiSurface.js';
 
 export const MOBILE_API_VERSION = '1.0.0';
 export const MIN_SUPPORTED_MOBILE_VERSION = '1.0.0';
@@ -1113,6 +1114,7 @@ export class MobileServices {
   readonly jobManager: JobManager;
   readonly scheduler: Scheduler;
   readonly policyEngine: PolicyEngine;
+  readonly multiSurface: MultiSurfaceService;
 
   private readonly tasks = new Map<string, ManagedMobileTask>();
   private readonly activeAbortControllers = new Map<string, AbortController>();
@@ -1171,6 +1173,7 @@ export class MobileServices {
       agents: state.agents,
       resources: { router: this.router },
     });
+    this.multiSurface = new MultiSurfaceService(state, this, now);
   }
 
   async init(): Promise<void> {
@@ -1179,6 +1182,7 @@ export class MobileServices {
     await this.pairing.init();
     await this.executionEngine.ready;
     await this.jobManager.ready;
+    await this.multiSurface.init();
 
     const savedTasks = await this.state.store.list('mobile/tasks/');
     for (const entry of savedTasks) {
@@ -2866,4 +2870,7 @@ export function registerMobileRoutes(app: Express, state: ApiState, mobile: Mobi
     });
     res.json(mobile.getResourceSnapshot());
   });
+
+  // 9. Unified Multi-Surface Routes (Verifiable Artifacts, Diff Review, Autonomy Posture, Host Switching, Schedules)
+  registerMultiSurfaceRoutes(app, state, mobile, mobile.multiSurface);
 }

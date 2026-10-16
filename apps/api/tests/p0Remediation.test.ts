@@ -45,6 +45,7 @@ type Scope =
  */
 const MATRIX: Record<string, Scope> = {
   'GET /health': 'public',
+  'GET /ready': 'public',
   'GET /metrics': 'viewer',
   'GET /api/v1/overview': 'viewer',
   'GET /api/v1/computers': 'viewer',
@@ -68,6 +69,8 @@ const MATRIX: Record<string, Scope> = {
   'GET /api/v1/tools': 'viewer',
   'GET /api/v1/executions': 'viewer',
   'GET /api/v1/executions/:id': 'viewer',
+  'GET /api/v1/executions/:id/events': 'viewer',
+  'GET /api/v1/executions/:id/children': 'viewer',
   'POST /computers/register': 'registration',
   'POST /computers/:id/heartbeat': 'computer',
   'GET /computers/:id/tasks/stream': 'computer',
@@ -120,6 +123,31 @@ const MATRIX: Record<string, Scope> = {
   'GET /api/v1/mobile/resources': 'viewer-or-device',
   'POST /api/v1/mobile/resources/emergency-stop': 'operator',
   'POST /api/v1/mobile/resources/resume': 'operator',
+
+  // Unified multi-surface routes (apps/api/src/multiSurface.ts)
+  'GET /api/v1/autonomy': 'viewer-or-device',
+  'POST /api/v1/autonomy': 'operator-or-device',
+  'GET /api/v1/mobile/autonomy': 'viewer-or-device',
+  'POST /api/v1/mobile/autonomy': 'operator-or-device',
+  'GET /api/v1/hosts': 'viewer-or-device',
+  'POST /api/v1/hosts': 'operator',
+  'POST /api/v1/hosts/select': 'operator',
+  'POST /api/v1/hosts/pair': 'operator',
+  'DELETE /api/v1/hosts/:id': 'operator',
+  'GET /api/v1/schedules': 'viewer-or-device',
+  'POST /api/v1/schedules': 'operator-or-device',
+  'PATCH /api/v1/schedules/:id': 'operator-or-device',
+  'POST /api/v1/schedules/:id/run': 'operator-or-device',
+  'DELETE /api/v1/schedules/:id': 'operator-or-device',
+  'GET /api/v1/mobile/schedules': 'viewer-or-device',
+  'POST /api/v1/mobile/schedules': 'operator-or-device',
+  'PATCH /api/v1/mobile/schedules/:id': 'operator-or-device',
+  'POST /api/v1/mobile/schedules/:id/run': 'operator-or-device',
+  'DELETE /api/v1/mobile/schedules/:id': 'operator-or-device',
+  'GET /api/v1/executions/:id/artifacts': 'viewer-or-device',
+  'POST /api/v1/executions/:id/diff-review': 'operator-or-device',
+  'GET /api/v1/mobile/tasks/:id/artifacts': 'viewer-or-device',
+  'POST /api/v1/mobile/tasks/:id/diff-review': 'operator-or-device',
 };
 
 function routes(app: Express): string[] {

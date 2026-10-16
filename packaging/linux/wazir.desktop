@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wazir
+GenericName=Local AI Fleet Counselor
+Comment=Autonomous Agent Orchestration & Local AI Fleet Counselor
+Exec=wazir
+Icon=wazir
+Terminal=false
+Categories=Development;Utility;ArtificialIntelligence;
+Keywords=AI;Agent;LLM;Orchestration;Wazir;
+StartupWMClass=wazir

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "Wazir",
+  "subtitle": "A Local AI Fleet Counselor",
+  "tagline": "Autonomous Agent Orchestration",
+  "version": "1.0.0",
+  "authoritativeSource": {
+    "logo": "assets/brand/logo.jpeg",
+    "guidelines": "assets/brand/Wazir_CVI_Guidelines.pdf",
+    "dimensions": {
+      "width": 2816,
+      "height": 1536
+    },
+    "geometry": {
+      "centerX": 1408,
+      "emblemBounds": {
+        "left": 1180,
+        "top": 314,
+        "right": 1636,
+        "bottom": 918,
+        "width": 456,
+        "height": 604
+      },
+      "wordmarkBounds": {
+        "left": 1028,
+        "top": 970,
+        "right": 1780,
+        "bottom": 1108,
+        "width": 752,
+        "height": 138
+      },
+      "subtitleBounds": {
+        "left": 1032,
+        "top": 1138,
+        "right": 1782,
+        "bottom": 1168,
+        "width": 750,
+        "height": 30
+      },
+      "accentBarBounds": {
+        "left": 1328,
+        "top": 1212,
+        "right": 1488,
+        "bottom": 1218,
+        "width": 160,
+        "height": 6
+      },
+      "keyLandmarks": {
+        "crownCenterPeak": [1408, 314],
+        "crownLeftPeak": [1185, 345],
+        "crownRightPeak": [1631, 345],
+        "crownLeftValley": [1285, 480],
+        "crownRightValley": [1531, 480],
+        "shieldLeftShoulder": [1190, 475],
+        "shieldRightShoulder": [1626, 475],
+        "coreCenter": [1408, 660],
+        "shieldBottomTip": [1408, 918]
+      }
+    }
+  },
+  "colors": {
+    "primary": {
+      "darkAbyss": {
+        "hex": "#0f131a",
+        "rgb": [15, 19, 26],
+        "role": "Primary background across all terminals and dashboards"
+      },
+      "electricBlue": {
+        "hex": "#38bdf8",
+        "rgb": [56, 189, 248],
+        "role": "Active states, primary CTA, and counselor intelligence indicators"
+      },
+      "metallicSilver": {
+        "hex": "#94a3b8",
+        "rgb": [148, 163, 184],
+        "role": "Secondary typography, borders, and inactive iconography"
+      },
+      "dataGreen": {
+        "hex": "#22c55e",
+        "rgb": [34, 197, 94],
+        "role": "Operational fleet status and verified execution hooks"
+      }
+    },
+    "extended": {
+      "iceWhite": {
+        "hex": "#f8fafc",
+        "rgb": [248, 250, 252],
+        "role": "Primary wordmark, crown highlights, and high-contrast headings"
+      },
+      "cyanCoreGlow": {
+        "hex": "#67e8f9",
+        "rgb": [103, 232, 249],
+        "role": "Central AI core and active circuit node highlights"
+      },
+      "shieldInteriorNavy": {
+        "hex": "#162032",
+        "rgb": [22, 32, 50],
+        "role": "Shield body interior and elevated card surface"
+      },
+      "shieldLowerSteel": {
+        "hex": "#2f4469",
+        "rgb": [47, 68, 105],
+        "role": "Lower shield facet shading and secondary structural accents"
+      }
+    }
+  },
+  "typography": {
+    "display": {
+      "family": "Archon Bold, SF Pro Display, Inter, system-ui, sans-serif",
+      "weight": 700,
+      "usage": "Primary Branding, Hero Headers, Module Titles"
+    },
+    "secondary": {
+      "family": "Nexus Light, Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+      "weights": [400, 500],
+      "usage": "UI Controls, Body Copy, Fleet Metrics, Documentation"
+    },
+    "monospace": {
+      "family": "JetBrains Mono, Fira Code, ui-monospace, SFMono-Regular, monospace",
+      "weights": [400, 700],
+      "usage": "Terminal Output, Agent Logs, Configuration Files"
+    }
+  },
+  "usageRules": {
+    "minimumDigitalEmblemSizePx": 96,
+    "minimumPrintEmblemSizeMm": 25,
+    "clearSpaceRatio": 0.25,
+    "alwaysPairSubtitleInTechnicalContexts": true,
+    "prohibitedModifications": [
+      "Never modify core proportions of the shield geometry",
+      "Never substitute unauthorized neon accent colors",
+      "Never stretch the 16:9 presentation card directly into a 1:1 square icon",
+      "Never replace the Crowned Circuit-Shield emblem with a generic monogram"
+    ]
+  }
+}

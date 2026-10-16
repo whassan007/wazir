@@ -4,9 +4,12 @@ import ai.wazir.mobile.domain.AgentsApiResponse
 import ai.wazir.mobile.domain.ApprovalListResponse
 import ai.wazir.mobile.domain.ComputersApiResponse
 import ai.wazir.mobile.domain.ControllerProfile
+import ai.wazir.mobile.domain.CreateScheduleRequest
 import ai.wazir.mobile.domain.CreateTaskRequest
 import ai.wazir.mobile.domain.DashboardSnapshot
+import ai.wazir.mobile.domain.DiffReviewRequest
 import ai.wazir.mobile.domain.HandshakeResponse
+import ai.wazir.mobile.domain.MobileAutonomyState
 import ai.wazir.mobile.domain.MobileTaskDetail
 import ai.wazir.mobile.domain.ModelsApiResponse
 import ai.wazir.mobile.domain.PairingCompleteResponse
@@ -16,10 +19,15 @@ import ai.wazir.mobile.domain.ResolveApprovalRequest
 import ai.wazir.mobile.domain.ResolveApprovalResponse
 import ai.wazir.mobile.domain.ResourceBudgetSnapshot
 import ai.wazir.mobile.domain.RuntimesApiResponse
+import ai.wazir.mobile.domain.ScheduleListResponse
+import ai.wazir.mobile.domain.ScheduleMutationResponse
 import ai.wazir.mobile.domain.SubmitTaskResponse
+import ai.wazir.mobile.domain.TaskArtifactsResponse
 import ai.wazir.mobile.domain.TaskDetailEnvelope
+import ai.wazir.mobile.domain.TaskDiffReviewResponse
 import ai.wazir.mobile.domain.TaskListResponse
 import ai.wazir.mobile.domain.TokenRotationResponse
+import ai.wazir.mobile.domain.UpdateAutonomyRequest
 import ai.wazir.mobile.security.CredentialVault
 import ai.wazir.mobile.security.StoredDeviceCredential
 import ai.wazir.mobile.security.TlsPinningClientFactory
@@ -396,6 +404,118 @@ class WazirControllerApi(
             decode = { true },
         )
 
+    suspend fun getAutonomy(profile: ControllerProfile): Result<MobileAutonomyState> =
+        executeAuthenticated(
+            profile = profile,
+            method = "GET",
+            path = "/api/v1/mobile/autonomy",
+            decode = { json.decodeFromString(it) },
+        )
+
+    suspend fun updateAutonomy(
+        profile: ControllerProfile,
+        request: UpdateAutonomyRequest,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): Result<MobileAutonomyState> =
+        executeAuthenticated(
+            profile = profile,
+            method = "POST",
+            path = "/api/v1/mobile/autonomy",
+            bodyJson = json.encodeToString(request),
+            idempotencyKey = idempotencyKey,
+            decode = { json.decodeFromString(it) },
+        )
+
+    suspend fun getTaskArtifacts(profile: ControllerProfile, taskId: String): Result<TaskArtifactsResponse> =
+        executeAuthenticated(
+            profile = profile,
+            method = "GET",
+            path = "/api/v1/mobile/tasks/${URLEncoder.encode(taskId, "UTF-8")}/artifacts",
+            decode = { json.decodeFromString(it) },
+        )
+
+    suspend fun reviewTaskDiffFile(
+        profile: ControllerProfile,
+        taskId: String,
+        path: String,
+        decision: String,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): Result<TaskDiffReviewResponse> =
+        executeAuthenticated(
+            profile = profile,
+            method = "POST",
+            path = "/api/v1/mobile/tasks/${URLEncoder.encode(taskId, "UTF-8")}/diff-review",
+            bodyJson = json.encodeToString(DiffReviewRequest(path = path, decision = decision)),
+            idempotencyKey = idempotencyKey,
+            decode = { json.decodeFromString(it) },
+        )
+
+    suspend fun listSchedules(profile: ControllerProfile): Result<ScheduleListResponse> =
+        executeAuthenticated(
+            profile = profile,
+            method = "GET",
+            path = "/api/v1/mobile/schedules",
+            decode = { json.decodeFromString(it) },
+        )
+
+    suspend fun createSchedule(
+        profile: ControllerProfile,
+        request: CreateScheduleRequest,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): Result<ScheduleMutationResponse> =
+        executeAuthenticated(
+            profile = profile,
+            method = "POST",
+            path = "/api/v1/mobile/schedules",
+            bodyJson = json.encodeToString(request),
+            idempotencyKey = idempotencyKey,
+            decode = { json.decodeFromString(it) },
+        )
+
+    suspend fun toggleSchedule(
+        profile: ControllerProfile,
+        scheduleId: String,
+        enabled: Boolean,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): Result<ScheduleMutationResponse> {
+        val body = buildJsonObject { put("enabled", enabled) }
+        return executeAuthenticated(
+            profile = profile,
+            method = "POST",
+            path = "/api/v1/mobile/schedules/${URLEncoder.encode(scheduleId, "UTF-8")}/toggle",
+            bodyJson = json.encodeToString(body),
+            idempotencyKey = idempotencyKey,
+            decode = { json.decodeFromString(it) },
+        )
+    }
+
+    suspend fun runScheduleNow(
+        profile: ControllerProfile,
+        scheduleId: String,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): Result<ScheduleMutationResponse> =
+        executeAuthenticated(
+            profile = profile,
+            method = "POST",
+            path = "/api/v1/mobile/schedules/${URLEncoder.encode(scheduleId, "UTF-8")}/run",
+            bodyJson = "{}",
+            idempotencyKey = idempotencyKey,
+            decode = { json.decodeFromString(it) },
+        )
+
+    suspend fun deleteSchedule(
+        profile: ControllerProfile,
+        scheduleId: String,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): Result<ScheduleMutationResponse> =
+        executeAuthenticated(
+            profile = profile,
+            method = "DELETE",
+            path = "/api/v1/mobile/schedules/${URLEncoder.encode(scheduleId, "UTF-8")}",
+            idempotencyKey = idempotencyKey,
+            decode = { json.decodeFromString(it) },
+        )
+
     suspend fun rotateTokenIfNeeded(
         profile: ControllerProfile,
         force: Boolean = false,
@@ -473,10 +593,10 @@ class WazirControllerApi(
                     builder.header("Idempotency-Key", idempotencyKey)
                 }
 
-                if (method == "POST") {
-                    builder.post((bodyJson ?: "{}").toRequestBody(JSON_MEDIA_TYPE))
-                } else {
-                    builder.get()
+                when (method) {
+                    "POST" -> builder.post((bodyJson ?: "{}").toRequestBody(JSON_MEDIA_TYPE))
+                    "DELETE" -> builder.delete()
+                    else -> builder.get()
                 }
                 return builder.build()
             }

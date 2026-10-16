@@ -1,5 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,7 +12,33 @@ import { listenOrFail } from './listenOrFail.js';
 const port = Number(process.env.PORT ?? 4800);
 const host = process.env.WAZIR_HOST ?? '127.0.0.1';
 
+function ensureLoopbackOperatorToken(wazirHome: string, bindHost: string): void {
+  if (!isLoopbackHost(bindHost) || process.env.WAZIR_ALLOW_UNAUTHENTICATED === '1') {
+    return;
+  }
+  const tokenPath = path.join(wazirHome, 'local-operator.token');
+  try {
+    fs.mkdirSync(wazirHome, { recursive: true });
+    let token = process.env.WAZIR_API_TOKEN?.trim();
+    if (!token && fs.existsSync(tokenPath)) {
+      const existing = fs.readFileSync(tokenPath, 'utf8').trim();
+      if (existing.length >= 16) {
+        token = existing;
+      }
+    }
+    if (!token) {
+      token = randomBytes(32).toString('hex');
+    }
+    process.env.WAZIR_API_TOKEN = token;
+    fs.writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
+  } catch {
+    // Non-fatal if filesystem is read-only
+  }
+}
+
 async function main(): Promise<void> {
+  const wazirHome = process.env.WAZIR_HOME ?? path.join(os.homedir(), '.wazir');
+  ensureLoopbackOperatorToken(wazirHome, host);
   const store = process.env.WAZIR_DATABASE_URL
     ? await (async () => {
         const { createPool, runKvMigration, PostgresStore } = await import('@wazir/database');
@@ -21,8 +48,8 @@ async function main(): Promise<void> {
       })()
     : process.env.WAZIR_IN_MEMORY === '1'
       ? new MemoryStore()
-      : new JsonFileStore(path.join(process.env.WAZIR_HOME ?? path.join(os.homedir(), '.wazir'), 'wazir.json'));
-  const configPath = path.join(process.env.WAZIR_HOME ?? path.join(os.homedir(), '.wazir'), 'config.json');
+      : new JsonFileStore(path.join(wazirHome, 'wazir.json'));
+  const configPath = path.join(wazirHome, 'config.json');
   const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
   const state = await createApiState({ store, modelStartup: config.models?.startup });
   // Binding beyond loopback without an operator token exposes dispatch and

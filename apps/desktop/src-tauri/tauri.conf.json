@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "identifier": "ai.wazir.desktop",
   "build": {
-    "beforeDevCommand": "bash -c 'cd \"$(pwd)/../..\" && npm run start:dashboard'",
     "devUrl": "http://127.0.0.1:4801",
     "frontendDist": "../../web/public"
   },
@@ -12,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Wazir Desktop",
+        "title": "Wazir — A Local AI Fleet Counselor",
         "width": 1280,
         "height": 820,
         "minWidth": 960,
@@ -29,8 +28,10 @@
     "targets": [],
     "icon": [
       "icons/32x32.png",
+      "icons/64x64.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
+      "icons/icon.png",
       "icons/icon.icns",
       "icons/icon.ico"
     ]

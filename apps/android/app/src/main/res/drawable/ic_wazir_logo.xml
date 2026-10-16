@@ -1,12 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <!-- Dark Abyss Background -->
     <path
-        android:fillColor="#0D1117"
-        android:pathData="M0,0h108v108h-108z" />
+        android:fillColor="#0F131A"
+        android:pathData="M0,0h512v512h-512z" />
+    <!-- Three-Peaked W Crown -->
     <path
-        android:fillColor="#38BDF8"
-        android:pathData="M24,30 L38,78 L54,46 L70,78 L84,30 L74,30 L66,60 L54,36 L42,60 L34,30 Z" />
+        android:fillColor="#F8FAFC"
+        android:pathData="M256,44 L206,132 L256,174 L306,132 Z" />
+    <path
+        android:fillColor="#CBD5E1"
+        android:pathData="M118,64 L132,160 L196,182 L192,136 Z" />
+    <path
+        android:fillColor="#CBD5E1"
+        android:pathData="M394,64 L380,160 L316,182 L320,136 Z" />
+    <!-- Outer Metallic Shield Frame -->
+    <path
+        android:fillColor="#94A3B8"
+        android:pathData="M122,168 L198,198 L256,154 L314,198 L390,168 L390,274 C390,360 330,424 256,472 C182,424 122,360 122,274 Z" />
+    <!-- Inner Shield Cavity -->
+    <path
+        android:fillColor="#162032"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="4"
+        android:pathData="M142,188 L198,212 L256,172 L314,212 L370,188 L370,272 C370,346 318,402 256,446 C194,402 142,346 142,272 Z" />
+    <!-- Lower Shield Facets -->
+    <path
+        android:fillColor="#2F4469"
+        android:pathData="M154,318 L224,360 L256,436 C202,400 162,360 154,318 Z" />
+    <path
+        android:fillColor="#253759"
+        android:pathData="M358,318 L288,360 L256,436 C310,400 350,360 358,318 Z" />
+    <!-- Radial Circuit Traces -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="8"
+        android:strokeLineCap="round"
+        android:pathData="M226,266 L182,222 M286,266 L330,222 M226,326 L188,364 M286,326 L324,364 M256,246 L256,202 M256,346 L256,396 M206,296 L162,296 M306,296 L350,296" />
+    <!-- Circuit Terminal Nodes -->
+    <path
+        android:fillColor="#F8FAFC"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="4"
+        android:pathData="M182,222m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0 M330,222m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0 M188,364m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0 M324,364m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+    <!-- Central AI Core Ring & Node -->
+    <path
+        android:fillColor="#0F131A"
+        android:strokeColor="#E2E8F0"
+        android:strokeWidth="10"
+        android:pathData="M256,296m-42,0a42,42 0,1 1,84 0a42,42 0,1 1,-84 0" />
+    <path
+        android:fillColor="#162032"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="6"
+        android:pathData="M256,296m-28,0a28,28 0,1 1,56 0a28,28 0,1 1,-56 0" />
+    <path
+        android:fillColor="#67E8F9"
+        android:pathData="M256,296m-15,0a15,15 0,1 1,30 0a15,15 0,1 1,-30 0" />
 </vector>

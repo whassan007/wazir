@@ -1,3 +1,4 @@
+import { evidencePassed, oracleSatisfied, missingAcceptanceCriteria } from '@wazir/core';
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
@@ -54,66 +55,32 @@ export const verifier = {
     let passed = true;
 
     const buildEvidences = params.evidence.filter((e) => e.type === 'BUILD');
-    const successfulBuilds = buildEvidences.filter((e) => e.exitCode === 0);
+    const successfulBuilds = buildEvidences.filter(evidencePassed);
     let latestSuccessfulBuildRevision: number | null = null;
     if (successfulBuilds.length > 0) {
       latestSuccessfulBuildRevision = Math.max(...successfulBuilds.map((e) => e.revision));
     }
 
     const testEvidences = params.evidence.filter((e) => e.type === 'TEST');
-    const successfulTests = testEvidences.filter((e) => e.exitCode === 0);
+    const successfulTests = testEvidences.filter(evidencePassed);
     let latestSuccessfulTestRevision: number | null = null;
     if (successfulTests.length > 0) {
       latestSuccessfulTestRevision = Math.max(...successfulTests.map((e) => e.revision));
     }
 
     for (const required of params.acceptanceContract.requiredEvidence) {
-      if (required === 'BUILD') {
-        const buildAtCurrent = successfulBuilds.find((b) => b.revision === params.workspaceRevision);
-        if (!buildAtCurrent) {
-          passed = false;
-          if (latestSuccessfulBuildRevision !== null) {
-            reasons.push(
-              `BUILD_EVIDENCE_STALE: Build evidence is stale (latest successful build was revision ${latestSuccessfulBuildRevision}, current workspace revision is ${params.workspaceRevision})`,
-            );
-          } else {
-            reasons.push(
-              `NO_BUILD_EVIDENCE: No successful build exists for current workspace revision ${params.workspaceRevision}`,
-            );
-          }
-        } else {
-          reasons.push(`evidence verified: BUILD passed for revision ${params.workspaceRevision}`);
-        }
-      } else if (required === 'TEST') {
-        const testAtCurrent = successfulTests.find((t) => t.revision === params.workspaceRevision);
-        if (!testAtCurrent) {
-          passed = false;
-          if (latestSuccessfulTestRevision !== null) {
-            reasons.push(
-              `TEST_EVIDENCE_STALE: Test evidence is stale for revision ${params.workspaceRevision}`,
-            );
-          } else {
-            reasons.push(
-              `TEST_EVIDENCE_MISSING: Test evidence missing for revision ${params.workspaceRevision}`,
-            );
-          }
-        } else {
-          reasons.push(`evidence verified: TEST passed for revision ${params.workspaceRevision}`);
-        }
-      } else if (required === 'RUN') {
-        const runEvidences = params.evidence.filter((e) => e.type === 'RUN' && e.exitCode === 0);
-        const runAtCurrent = runEvidences.find((r) => r.revision === params.workspaceRevision);
-        if (!runAtCurrent) {
-          passed = false;
-          reasons.push(
-            runEvidences.length > 0
-              ? `RUN_EVIDENCE_STALE: Run evidence is stale for revision ${params.workspaceRevision}`
-              : `RUN_EVIDENCE_MISSING: Run evidence missing for revision ${params.workspaceRevision}`,
-          );
-        } else {
-          reasons.push(`evidence verified: RUN passed for revision ${params.workspaceRevision}`);
-        }
+      if (oracleSatisfied(params.evidence, params.workspaceRevision, required)) {
+        reasons.push(`evidence verified: ${required} passed for revision ${params.workspaceRevision}`);
+      } else {
+        passed = false;
+        const historical = params.evidence.some(e => (e.oracle ?? e.type) === required && evidencePassed(e) && (e.workspaceRevision ?? e.revision) < params.workspaceRevision);
+        const code = historical ? `${required}_EVIDENCE_STALE` : required === 'BUILD' ? 'NO_BUILD_EVIDENCE' : `${required}_EVIDENCE_MISSING`;
+        reasons.push(`${code}: No current all-passing ${required} evidence for revision ${params.workspaceRevision}`);
       }
+    }
+    for (const id of missingAcceptanceCriteria(params.acceptanceContract, params.evidence, params.workspaceRevision)) {
+      passed = false;
+      reasons.push(`ACCEPTANCE_EVIDENCE_MISSING: ${id}`);
     }
 
     return { passed, reasons, latestSuccessfulBuildRevision, latestSuccessfulTestRevision };
@@ -171,7 +138,7 @@ export function currentAttemptErrors(record: Pick<ExecutionRecord, 'errors'> & P
 
 export function evaluateExecution(
   record: Pick<ExecutionRecord, 'filesChanged' | 'checks' | 'errors'> &
-    Partial<Pick<ExecutionRecord, 'events' | 'workspaceState' | 'evidence' | 'acceptanceContract' | 'task' | 'result'>>,
+    Partial<Pick<ExecutionRecord, 'events' | 'workspaceState' | 'evidence' | 'acceptanceContract' | 'task' | 'result' | 'executionContract'>>,
   options: EvaluationOptions = {},
 ): EvaluationResult {
   const errors = currentAttemptErrors(record);
@@ -214,7 +181,7 @@ export function evaluateExecution(
   }
 
   const buildEvidences = evidenceList.filter((e) => e.type === 'BUILD');
-  const successfulBuilds = buildEvidences.filter((e) => e.exitCode === 0);
+  const successfulBuilds = buildEvidences.filter(evidencePassed);
   let latestSuccessfulBuildRevision: number | null = null;
   if (successfulBuilds.length > 0) {
     latestSuccessfulBuildRevision = Math.max(...successfulBuilds.map((e) => e.revision));
@@ -223,7 +190,8 @@ export function evaluateExecution(
   let success = true;
 
   // 1. Acceptance contract evaluation
-  const contract = options.acceptanceContract
+  const contract = record.executionContract?.acceptance
+    ?? options.acceptanceContract
     ?? record.acceptanceContract
     ?? record.task?.acceptanceContract;
 

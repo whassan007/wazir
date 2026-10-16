@@ -31,6 +31,7 @@ import { generateId, sanitizeUntrustedOutput, MemoryStore, type KeyValueStore } 
 import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
 import { createControlledExecution } from './toolExecution.js';
 import { MobileServices, registerMobileRoutes } from './mobile.js';
+import { wazirVersion } from './version.js';
 
 // Bounds on in-memory state so an unauthenticated peer (or a runaway client)
 // cannot grow the control plane without limit (security review F-19).
@@ -59,27 +60,96 @@ interface DurableDispatch {
   request: WorkerExecutionRequest;
   events: WorkerExecutionEvent[];
   outcome?: ExecutionOutcome;
+  /** Epoch ms at which the outcome was committed; drives completed-record retention. */
+  completedAt?: number;
   attempt: number;
   lease?: { token: string; expiresAt: number };
 }
 
+/**
+ * Secondary index of dispatches that still need a worker. `dispatch/<id>` stays
+ * the authoritative (and audit) record; `dispatch-pending/<id>` exists only
+ * while that record has no outcome, so the redelivery path, which runs every
+ * five seconds per connected worker, no longer re-reads every historical
+ * dispatch ever made.
+ */
+const PENDING_PREFIX = 'dispatch-pending/';
+/** An index entry whose record never appeared (crash mid-dispatch) is dropped after this. */
+const ORPHAN_PENDING_INDEX_MS = 60_000;
+
+export interface TaskDispatcherOptions {
+  /**
+   * Delete completed dispatch records older than this at startup. Undefined or
+   * 0 keeps them forever (the default, preserving the audit trail). Defaults to
+   * `WAZIR_DISPATCH_RETENTION_DAYS` when set.
+   */
+  completedRetentionMs?: number;
+}
+
+function retentionFromEnv(): number | undefined {
+  const days = Number(process.env.WAZIR_DISPATCH_RETENTION_DAYS);
+  return Number.isFinite(days) && days > 0 ? days * 24 * 60 * 60 * 1000 : undefined;
+}
+
 export class TaskDispatcher {
   private readonly streams = new Map<string, Response>();
+  /** Non-terminal dispatches only; terminal records are read from the store on demand. */
   private readonly records = new Map<string, DurableDispatch>();
+  private readonly completedRetentionMs?: number;
   readonly ready: Promise<void>;
 
   constructor(private readonly store: KeyValueStore = new MemoryStore(),
-    private readonly now: () => number = Date.now, readonly leaseMs = 30_000) {
+    private readonly now: () => number = Date.now, readonly leaseMs = 30_000,
+    options: TaskDispatcherOptions = {}) {
     if (!store.update) throw new Error('ATOMIC_STORE_REQUIRED');
     if (!Number.isFinite(leaseMs) || leaseMs < 100) throw new Error('INVALID_LEASE_DURATION');
-    this.ready = this.refresh();
+    this.completedRetentionMs = options.completedRetentionMs ?? retentionFromEnv();
+    this.ready = this.reconcileIndex().then(() => this.refresh());
   }
 
   private key(id: string): string { return `dispatch/${id}`; }
-  private async refresh(): Promise<void> {
+  private pendingKey(id: string): string { return `${PENDING_PREFIX}${id}`; }
+
+  /**
+   * One full scan at startup: index pending records written before the index
+   * existed (or by a process that crashed between the two writes), and apply
+   * completed-record retention. This is the only path that lists `dispatch/`.
+   */
+  private async reconcileIndex(): Promise<void> {
+    const indexed = new Set((await this.store.list(PENDING_PREFIX)).map(e => e.key.slice(PENDING_PREFIX.length)));
+    const cutoff = this.completedRetentionMs ? this.now() - this.completedRetentionMs : undefined;
     for (const entry of await this.store.list('dispatch/')) {
       const record = entry.value as DurableDispatch;
-      this.records.set(record.request.requestId, record);
+      const id = record.request.requestId;
+      if (!record.outcome) {
+        if (!indexed.has(id)) await this.store.put(this.pendingKey(id), { computerId: record.computerId, at: this.now() });
+      } else if (cutoff !== undefined && record.completedAt !== undefined && record.completedAt < cutoff) {
+        await this.store.delete(this.key(id));
+      }
+    }
+  }
+
+  private async refresh(): Promise<void> {
+    const live = new Set<string>();
+    for (const entry of await this.store.list(PENDING_PREFIX)) {
+      const id = entry.key.slice(PENDING_PREFIX.length);
+      const record = await this.store.get<DurableDispatch>(this.key(id));
+      if (!record) {
+        // The index is written before the record, so a missing record is either
+        // a dispatch still in flight in another process or a crash leftover.
+        const at = (entry.value as { at?: number } | undefined)?.at ?? 0;
+        if (this.now() - at > ORPHAN_PENDING_INDEX_MS) await this.store.delete(entry.key);
+        continue;
+      }
+      if (record.outcome) {
+        await this.store.delete(entry.key);
+        continue;
+      }
+      live.add(id);
+      this.records.set(id, record);
+    }
+    for (const id of [...this.records.keys()]) {
+      if (!live.has(id)) this.records.delete(id);
     }
   }
   isConnected(id: string): boolean { return this.streams.has(id); }
@@ -116,6 +186,9 @@ export class TaskDispatcher {
       return { ok: false, reason: 'RESOURCE_BUSY' };
     }
     try {
+      // Index first: a crash after this leaves an orphan index entry (cleaned up
+      // by refresh), never a pending record that redelivery cannot see.
+      await this.store.put(this.pendingKey(request.requestId), { computerId, at: this.now() });
       const record = await this.store.update!<DurableDispatch>(this.key(request.requestId), current => {
         if (current) throw new Error('REQUEST_ALREADY_DISPATCHED');
         return { computerId, request, events: [], attempt: 0 };
@@ -171,13 +244,14 @@ export class TaskDispatcher {
    */
   async commit(id: string, outcome: ExecutionOutcome, token: string): Promise<'committed' | 'duplicate'> {
     let committed = false;
-    const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
+    await this.store.update!<DurableDispatch>(this.key(id), current => {
       const r = this.validate(current, token);
       if (r.outcome) return r;
       committed = true;
-      return { ...r, outcome };
+      return { ...r, outcome, completedAt: this.now() };
     });
-    this.records.set(id, record);
+    this.records.delete(id);
+    await this.store.delete(this.pendingKey(id));
     return committed ? 'committed' : 'duplicate';
   }
   async assignments(): Promise<Array<{ id: string; modelId: string; computerId: string; runtimeId?: string }>> {
@@ -355,8 +429,17 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
         return explicit;
       }
     }
-    if (mobileRef && mobileRef.shouldUseMobileApprovalQueue()) {
-      return mobileRef.approvals.requestApproval(request, decision);
+    if (mobileRef) {
+      const posture = mobileRef.multiSurface.getAutonomy().effectivePosture;
+      if (posture === 'read-only') {
+        return false;
+      }
+      if (posture === 'auto-sandbox') {
+        return true;
+      }
+      if (mobileRef.shouldUseMobileApprovalQueue()) {
+        return mobileRef.approvals.requestApproval(request, decision);
+      }
     }
     return 'unavailable';
   };
@@ -375,6 +458,28 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     projectRoot,
   });
 
+  const storedExecEntries = await store.list(API_EXECUTION_PREFIX);
+  const sortedStoredExecs = storedExecEntries
+    .map((entry) => {
+      const val = entry.value as { seq?: number; record?: Record<string, unknown> } | Record<string, unknown>;
+      if (val && typeof val === 'object' && 'record' in val && val.record && typeof val.record === 'object') {
+        return { key: entry.key, seq: typeof val.seq === 'number' ? val.seq : 0, record: val.record as Record<string, unknown> };
+      }
+      return { key: entry.key, seq: 0, record: val as Record<string, unknown> };
+    })
+    .sort((a, b) => a.seq - b.seq);
+  if (sortedStoredExecs.length > MAX_EXECUTION_RECORDS) {
+    const excess = sortedStoredExecs.splice(0, sortedStoredExecs.length - MAX_EXECUTION_RECORDS);
+    for (const item of excess) {
+      await store.delete(item.key);
+    }
+  }
+  const initialExecutions = sortedStoredExecs.map((item) => item.record);
+  const maxLoadedSeq = sortedStoredExecs.reduce((max, item) => Math.max(max, item.seq), 0);
+  if (maxLoadedSeq > apiExecutionSeq) {
+    apiExecutionSeq = maxLoadedSeq;
+  }
+
   const state: ApiState = {
     computers,
     runtimes,
@@ -383,7 +488,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     agents,
     tools,
     discovered,
-    executions: [],
+    executions: initialExecutions,
     dispatcher,
     store,
     auth,
@@ -408,11 +513,113 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   return state;
 }
 
-function recordExecution(state: ApiState, record: Record<string, unknown>): void {
+const API_EXECUTION_PREFIX = 'api-execution/';
+const SUMMARY_RESULT_MAX_CHARS = 512;
+let apiExecutionSeq = 0;
+
+function extractExecutionId(record: Record<string, unknown> | undefined): string | undefined {
+  const id = (record?.execution as { id?: unknown } | undefined)?.id;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
+async function recordExecution(state: ApiState, record: Record<string, unknown>): Promise<void> {
   state.executions.push(record);
+  let evicted: Array<Record<string, unknown>> = [];
   if (state.executions.length > MAX_EXECUTION_RECORDS) {
-    state.executions.splice(0, state.executions.length - MAX_EXECUTION_RECORDS);
+    evicted = state.executions.splice(0, state.executions.length - MAX_EXECUTION_RECORDS);
   }
+  const id = extractExecutionId(record);
+  apiExecutionSeq += 1;
+  const seq = apiExecutionSeq;
+  try {
+    if (id) {
+      await state.store.put(`${API_EXECUTION_PREFIX}${id}`, { seq, record });
+    }
+    for (const old of evicted) {
+      const oldId = extractExecutionId(old);
+      if (oldId && oldId !== id) {
+        await state.store.delete(`${API_EXECUTION_PREFIX}${oldId}`);
+      }
+    }
+  } catch {
+    // Keep in-memory history intact even if the backing store is temporarily read-only.
+  }
+}
+
+/**
+ * Collects execution records from both the API's execution list and the shared
+ * ExecutionEngine / store (`execution/<id>`), ordered newest-first. Reading
+ * `execution/` from `state.store` ensures CLI executions written by another
+ * process sharing the same store appear immediately without an API restart.
+ */
+async function collectAllExecutions(state: ApiState): Promise<Array<Record<string, unknown>>> {
+  const byId = new Map<string, Record<string, unknown>>();
+  // Oldest-first insertion so reversing at the end puts newest first.
+  const engineRecords = state.mobile ? await state.mobile.executionEngine.list() : [];
+  for (let i = engineRecords.length - 1; i >= 0; i -= 1) {
+    const rec = engineRecords[i] as unknown as Record<string, unknown>;
+    const id = extractExecutionId(rec);
+    if (id) byId.set(id, rec);
+  }
+  try {
+    const storeEntries = await state.store.list('execution/');
+    for (const entry of storeEntries) {
+      const rec = entry.value as Record<string, unknown> | undefined;
+      const id = extractExecutionId(rec);
+      if (id && rec) byId.set(id, rec);
+    }
+  } catch {
+    // Ignore transient store list errors and fall back to in-memory state.
+  }
+  for (const r of state.executions) {
+    const id = extractExecutionId(r);
+    if (id) {
+      // Re-insert so newer API records move to the end before reverse().
+      byId.delete(id);
+      byId.set(id, r);
+    }
+  }
+  return [...byId.values()].reverse();
+}
+
+async function lookupExecution(state: ApiState, id: string): Promise<Record<string, unknown> | undefined> {
+  for (let i = state.executions.length - 1; i >= 0; i -= 1) {
+    if (extractExecutionId(state.executions[i]) === id) {
+      return state.executions[i];
+    }
+  }
+  if (state.mobile) {
+    const engineExec = await state.mobile.executionEngine.get(id);
+    if (engineExec && engineExec.execution?.id === id) {
+      return engineExec as unknown as Record<string, unknown>;
+    }
+  }
+  try {
+    const fromExecStore = await state.store.get<Record<string, unknown>>(`execution/${id}`);
+    if (fromExecStore && extractExecutionId(fromExecStore) === id) {
+      return fromExecStore;
+    }
+    const fromApiStore = await state.store.get<{ record?: Record<string, unknown> }>(`${API_EXECUTION_PREFIX}${id}`);
+    if (fromApiStore?.record && extractExecutionId(fromApiStore.record) === id) {
+      return fromApiStore.record;
+    }
+  } catch {
+    // Fall through
+  }
+  return undefined;
+}
+
+function summarizeExecutionRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const { events: _events, toolCalls, fileMutations: _fm, checks: _checks, context: _ctx, ...rest } = record;
+  const summary: Record<string, unknown> = { ...rest };
+  if (Array.isArray(toolCalls)) {
+    summary.toolCallCount = toolCalls.length;
+  }
+  if (typeof summary.result === 'string' && summary.result.length > SUMMARY_RESULT_MAX_CHARS) {
+    summary.result = `${summary.result.slice(0, SUMMARY_RESULT_MAX_CHARS)}…`;
+    summary.resultTruncated = true;
+  }
+  return summary;
 }
 
 function lifecycleError(res: Response, error: unknown): void {
@@ -458,13 +665,43 @@ export function createApp(state: ApiState) {
     res.json({
       status: 'ok',
       name: 'wazir-api',
-      version: '0.1.0',
+      version: wazirVersion(),
       auth: {
         operatorToken: auth.operatorTokenRequired,
         viewerToken: auth.viewerTokenRequired,
         registrationToken: auth.registrationToken !== undefined,
       },
     });
+  });
+
+  // Liveness (/health) only proves the process answers. Readiness proves the
+  // control plane can actually serve: the store round-trips, the durable
+  // dispatcher finished loading, and the mobile/control services initialized.
+  // Load balancers, the Desktop shell, and startup scripts should gate on this.
+  app.get('/ready', async (_req, res) => {
+    const withTimeout = <T,>(p: Promise<T>, ms: number) => Promise.race([
+      p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+    ]);
+    const checks: Record<string, { ok: boolean; error?: string }> = {};
+    const run = async (name: string, fn: () => Promise<unknown>) => {
+      try { await withTimeout(fn(), 2000); checks[name] = { ok: true }; }
+      catch (error) { checks[name] = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+    };
+    await Promise.all([
+      run('store', async () => {
+        const probe = `readiness/probe`;
+        const value = Date.now();
+        await state.store.put(probe, value);
+        if ((await state.store.get<number>(probe)) !== value) throw new Error('store read-back mismatch');
+      }),
+      run('dispatcher', () => state.dispatcher.ready),
+      run('controlServices', async () => {
+        if (!state.mobile) throw new Error('not initialized');
+        await state.mobile.executionEngine.ready;
+      }),
+    ]);
+    const ready = Object.values(checks).every((c) => c.ok);
+    res.status(ready ? 200 : 503).json({ status: ready ? 'ready' : 'not_ready', version: wazirVersion(), checks });
   });
 
   // Metrics reveal topology and auth-failure counts: viewer scope, like the
@@ -526,21 +763,23 @@ export function createApp(state: ApiState) {
   app.use('/api/v1', auth.requireViewerOrOperator);
   app.use('/executions', auth.requireOperator);
 
-  app.get('/api/v1/overview', (_req, res) => {
+  app.get('/api/v1/overview', async (_req, res) => {
+    const allExecutions = await collectAllExecutions(state);
     res.json({
       name: 'wazir',
-      version: '0.1.0',
+      version: wazirVersion(),
       description:
         'Wazir is a model- and runtime-agnostic meta-harness that schedules AI agents, models, tools, and compute to execute tasks across local and distributed environments.',
       computerId: localId,
       hostname: os.hostname(),
       counts: {
         computers: state.computers.list().length,
+        workers: state.computers.list().length,
         runtimes: state.runtimes.list().length,
         models: state.models.list().length,
         agents: state.agents.list().length,
         tools: state.tools.list().length,
-        executions: state.executions.length,
+        executions: allExecutions.length,
       },
     });
   });
@@ -550,21 +789,23 @@ export function createApp(state: ApiState) {
   });
 
   app.get('/api/v1/workers', (_req, res) => {
-    const local = state.computers.get(localId);
+    // Every registered computer is a worker: the in-process local host plus
+    // each remote that registered over the worker protocol. Listing only the
+    // local host made the distributed fleet invisible to the dashboard.
+    const computers = [...state.computers.list()].sort((a, b) =>
+      a.id === localId ? -1 : b.id === localId ? 1 : a.id.localeCompare(b.id));
     res.json({
-      workers: local
-        ? [
-            {
-              id: `worker-${localId}`,
-              computerId: localId,
-              name: local.name,
-              status: local.status,
-              runtimes: local.runtimes,
-              models: local.models,
-              lastHeartbeat: local.lastHeartbeat,
-            },
-          ]
-        : [],
+      workers: computers.map((c) => ({
+        id: `worker-${c.id}`,
+        computerId: c.id,
+        name: c.name,
+        status: c.status,
+        local: c.id === localId,
+        connected: c.id === localId || state.dispatcher.isConnected(c.id),
+        runtimes: c.runtimes,
+        models: c.models,
+        lastHeartbeat: c.lastHeartbeat,
+      })),
     });
   });
 
@@ -652,19 +893,119 @@ export function createApp(state: ApiState) {
     res.json({ tools: state.tools.descriptors() });
   });
 
-  app.get('/api/v1/executions', (_req, res) => {
-    res.json({ executions: state.executions.slice().reverse() });
+  app.get('/api/v1/executions', async (req, res) => {
+    const all = await collectAllExecutions(state);
+    const statusFilter = typeof req.query.status === 'string' ? req.query.status.trim().toLowerCase() : '';
+    const computerFilter = typeof req.query.computerId === 'string' ? req.query.computerId.trim() : '';
+    const agentFilter = typeof req.query.agentId === 'string' ? req.query.agentId.trim() : '';
+    const modelFilter = typeof req.query.modelId === 'string' ? req.query.modelId.trim() : '';
+    const runtimeFilter = typeof req.query.runtimeId === 'string' ? req.query.runtimeId.trim() : '';
+    const parentFilter = typeof req.query.parentExecutionId === 'string' ? req.query.parentExecutionId.trim() : '';
+    const textQuery = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+    const summaryMode = req.query.summary === '1' || req.query.summary === 'true' || req.query.fields === 'summary';
+
+    const filtered = all.filter((e) => {
+      const ex = (e.execution as Record<string, unknown> | undefined) ?? {};
+      const task = (e.task as Record<string, unknown> | undefined) ?? {};
+      if (statusFilter && statusFilter !== 'all') {
+        const st = String(ex.status ?? '').toLowerCase();
+        const allowed = statusFilter.split(',').map((s) => s.trim()).filter(Boolean);
+        const matchStatus = allowed.some((target) => {
+          if (target === 'completed') return st === 'completed' || st === 'ok';
+          if (target === 'failed') return st === 'failed' || st === 'error';
+          if (target === 'running') return ['running', 'active', 'queued', 'assigned', 'waiting'].includes(st);
+          return st === target;
+        });
+        if (!matchStatus) return false;
+      }
+      if (computerFilter && String(e.computerId ?? '') !== computerFilter) return false;
+      if (agentFilter && String(e.agentId ?? '') !== agentFilter) return false;
+      if (modelFilter && String(e.modelId ?? '') !== modelFilter) return false;
+      if (runtimeFilter && String(e.runtimeId ?? '') !== runtimeFilter) return false;
+      if (parentFilter && String(ex.parentExecutionId ?? '') !== parentFilter) return false;
+      if (textQuery) {
+        const haystack = [
+          ex.id,
+          task.type,
+          task.input,
+          e.agentId,
+          e.modelId,
+          e.runtimeId,
+          e.result,
+        ]
+          .map((v) => String(v ?? '').toLowerCase())
+          .join(' ');
+        if (!haystack.includes(textQuery)) return false;
+      }
+      return true;
+    });
+
+    const rawOffset = Number(req.query.offset ?? 0);
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+    const rawLimit = req.query.limit !== undefined ? Number(req.query.limit) : MAX_EXECUTION_RECORDS;
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(MAX_EXECUTION_RECORDS, Math.floor(rawLimit))
+      : MAX_EXECUTION_RECORDS;
+
+    const sliced = filtered.slice(offset, offset + limit);
+    const executions = summaryMode ? sliced.map(summarizeExecutionRecord) : sliced;
+    res.json({
+      executions,
+      total: filtered.length,
+      offset,
+      limit,
+      hasMore: offset + executions.length < filtered.length,
+    });
   });
 
-  app.get('/api/v1/executions/:id', (req, res) => {
+  app.get('/api/v1/executions/:id', async (req, res) => {
     // Exact match only: a substring match let `GET /executions/a` return an
     // arbitrary record (F-18).
-    const execution = state.executions.find((e) => (e.execution as { id?: string })?.id === req.params.id);
+    const id = String(req.params.id);
+    const execution = await lookupExecution(state, id);
     if (!execution) {
-      res.status(404).json({ error: `execution '${req.params.id}' not found` });
+      res.status(404).json({ error: `execution '${id}' not found` });
       return;
     }
     res.json({ execution });
+  });
+
+  app.get('/api/v1/executions/:id/events', async (req, res) => {
+    const id = String(req.params.id);
+    if (state.mobile) {
+      const engineExec = await state.mobile.executionEngine.get(id);
+      if (engineExec && engineExec.execution?.id === id) {
+        const events = await state.mobile.executionEngine.events(engineExec.execution.id);
+        res.json({ executionId: engineExec.execution.id, events });
+        return;
+      }
+    }
+    const record = await lookupExecution(state, id);
+    const dispatchStatus = await state.dispatcher.status(id);
+    if (!record && !dispatchStatus) {
+      res.status(404).json({ error: `execution '${id}' not found` });
+      return;
+    }
+    const storedEvents = Array.isArray(record?.events) ? (record.events as unknown[]) : undefined;
+    const events = storedEvents && storedEvents.length > 0
+      ? storedEvents
+      : dispatchStatus?.events ?? storedEvents ?? [];
+    res.json({ executionId: id, events });
+  });
+
+  app.get('/api/v1/executions/:id/children', async (req, res) => {
+    const id = String(req.params.id);
+    const parent = await lookupExecution(state, id);
+    if (!parent) {
+      res.status(404).json({ error: `execution '${id}' not found` });
+      return;
+    }
+    const all = await collectAllExecutions(state);
+    const children = all.filter((r) => {
+      const ex = r.execution as { parentExecutionId?: unknown } | undefined;
+      return ex?.parentExecutionId === id;
+    });
+    res.json({ executionId: id, children });
   });
 
   // Worker protocol (registration + heartbeat).
@@ -909,7 +1250,7 @@ export function createApp(state: ApiState) {
       res.json({ ok: true, duplicate: true });
       return;
     }
-    recordExecution(state, {
+    await recordExecution(state, {
       execution: { id: requestId, status: outcome.ok ? 'completed' : 'failed', createdAt: new Date() },
       computerId: String(req.params.id),
       result: outcome.output,
@@ -924,7 +1265,7 @@ export function createApp(state: ApiState) {
     res.json({ ok: true });
   });
 
-  app.post('/executions', (req, res) => {
+  app.post('/executions', async (req, res) => {
     const id = generateId('execution-');
     const record = {
       execution: { id, taskId: String(req.body?.taskId ?? id), status: 'recorded', createdAt: new Date() },
@@ -936,7 +1277,7 @@ export function createApp(state: ApiState) {
       result: typeof req.body?.result === 'string' ? sanitizeUntrustedOutput(req.body.result.slice(0, MAX_OUTPUT_CHARS)) : req.body?.result,
       usage: req.body?.usage,
     };
-    recordExecution(state, record);
+    await recordExecution(state, record);
     res.status(201).json({ id, record });
   });
 
