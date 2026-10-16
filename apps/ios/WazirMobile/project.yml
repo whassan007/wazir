@@ -1,0 +1,54 @@
+name: WazirMobile
+options:
+  bundleIdPrefix: ai.wazir
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+targets:
+  WazirMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/WazirMobile
+    resources:
+      - path: Resources/Assets.xcassets
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Wazir Mobile
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSCameraUsageDescription: "Wazir Mobile uses the camera to scan a Wazir controller's pairing QR code."
+        NSFaceIDUsageDescription: "Wazir Mobile uses Face ID to confirm high-risk approvals and emergency actions."
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [wazir]
+            CFBundleURLName: ai.wazir.mobile.pairing
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.wazir.mobile
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+        TARGETED_DEVICE_FAMILY: "1,2"
+  WazirMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: WazirMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.wazir.mobile.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+schemes:
+  WazirMobile:
+    build:
+      targets:
+        WazirMobile: all
+        WazirMobileTests: [test]
+    test:
+      targets: [WazirMobileTests]

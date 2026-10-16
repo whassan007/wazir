@@ -1,0 +1,459 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		09CFAABC8FBD0B54796B0D9B /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 707DEC96D7DB8EBA00349CF5 /* Models.swift */; };
+		1AC40F31198D82AA8C19F73F /* TlsPinning.swift in Sources */ = {isa = PBXBuildFile; fileRef = D35B9CE76B55C2ED5C903085 /* TlsPinning.swift */; };
+		244E2E52F795E6D77990D469 /* WazirControllerApi.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C9393EE65CB1A80D95379CF /* WazirControllerApi.swift */; };
+		2F0DB1E97C55B1D42CF1AB37 /* WazirControllerApiTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2136DF784E53FDE72391F65C /* WazirControllerApiTests.swift */; };
+		5508737BA6ACBF5BA9CD8D36 /* PairingUriParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C4EA79D9BE02C041D17D24D /* PairingUriParser.swift */; };
+		81FB65B248E28F993EE265A9 /* PairingUriParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF09AC3AB61B8A40101DD95A /* PairingUriParserTests.swift */; };
+		8334D31F93A142D6256DCB36 /* WazirMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18DE1CE13DFEFFA51777DCD3 /* WazirMobileApp.swift */; };
+		C3AEFD7CB173F480FE4B9112 /* CredentialVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4122D5E0C96C520F5E6545EB /* CredentialVault.swift */; };
+		FAAADB04F67A358160AF83B6 /* StubURLProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 328BEB1EB23884E71C1340BF /* StubURLProtocol.swift */; };
+		FB6443D5C0EE5483908FA6B1 /* DecodingHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00365334A14A7A43C9BEDB9E /* DecodingHelpers.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		05F1F3540171165021274DE1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 88F251D3C24F5929964D650F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 265656842EC21D2BBA9F9CD8;
+			remoteInfo = WazirMobile;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		00365334A14A7A43C9BEDB9E /* DecodingHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecodingHelpers.swift; sourceTree = "<group>"; };
+		0AF6457055246DE1A83CBD40 /* WazirMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = WazirMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0C4EA79D9BE02C041D17D24D /* PairingUriParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingUriParser.swift; sourceTree = "<group>"; };
+		18DE1CE13DFEFFA51777DCD3 /* WazirMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WazirMobileApp.swift; sourceTree = "<group>"; };
+		2136DF784E53FDE72391F65C /* WazirControllerApiTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WazirControllerApiTests.swift; sourceTree = "<group>"; };
+		328BEB1EB23884E71C1340BF /* StubURLProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubURLProtocol.swift; sourceTree = "<group>"; };
+		4122D5E0C96C520F5E6545EB /* CredentialVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialVault.swift; sourceTree = "<group>"; };
+		4C9393EE65CB1A80D95379CF /* WazirControllerApi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WazirControllerApi.swift; sourceTree = "<group>"; };
+		707DEC96D7DB8EBA00349CF5 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		A662F8148F2F9B8F323037C4 /* WazirMobileTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WazirMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AF09AC3AB61B8A40101DD95A /* PairingUriParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingUriParserTests.swift; sourceTree = "<group>"; };
+		D35B9CE76B55C2ED5C903085 /* TlsPinning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TlsPinning.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		03EC9900C808AC31AD082A91 = {
+			isa = PBXGroup;
+			children = (
+				0E92E3184B416724437CE50F /* Tests */,
+				A20212C064EF7FE54C1086AE /* WazirMobile */,
+				4DA8E39E5C3C6F78AB7FC846 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		0E92E3184B416724437CE50F /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				AF09AC3AB61B8A40101DD95A /* PairingUriParserTests.swift */,
+				328BEB1EB23884E71C1340BF /* StubURLProtocol.swift */,
+				2136DF784E53FDE72391F65C /* WazirControllerApiTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		10BEC24E2F2FD1BCC469C3CF /* Domain */ = {
+			isa = PBXGroup;
+			children = (
+				00365334A14A7A43C9BEDB9E /* DecodingHelpers.swift */,
+				707DEC96D7DB8EBA00349CF5 /* Models.swift */,
+			);
+			path = Domain;
+			sourceTree = "<group>";
+		};
+		40F9AA660D626351A347D2AC /* Network */ = {
+			isa = PBXGroup;
+			children = (
+				0C4EA79D9BE02C041D17D24D /* PairingUriParser.swift */,
+				4C9393EE65CB1A80D95379CF /* WazirControllerApi.swift */,
+			);
+			path = Network;
+			sourceTree = "<group>";
+		};
+		4DA8E39E5C3C6F78AB7FC846 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				0AF6457055246DE1A83CBD40 /* WazirMobile.app */,
+				A662F8148F2F9B8F323037C4 /* WazirMobileTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A20212C064EF7FE54C1086AE /* WazirMobile */ = {
+			isa = PBXGroup;
+			children = (
+				18DE1CE13DFEFFA51777DCD3 /* WazirMobileApp.swift */,
+				10BEC24E2F2FD1BCC469C3CF /* Domain */,
+				40F9AA660D626351A347D2AC /* Network */,
+				C70CA6807E04F0A94F6E4C96 /* Security */,
+			);
+			name = WazirMobile;
+			path = Sources/WazirMobile;
+			sourceTree = "<group>";
+		};
+		C70CA6807E04F0A94F6E4C96 /* Security */ = {
+			isa = PBXGroup;
+			children = (
+				4122D5E0C96C520F5E6545EB /* CredentialVault.swift */,
+				D35B9CE76B55C2ED5C903085 /* TlsPinning.swift */,
+			);
+			path = Security;
+			sourceTree = "<group>";
+		};
+		"TEMP_90AB48C6-42D0-4EDE-84EC-528593C35FB7" /* UI */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		265656842EC21D2BBA9F9CD8 /* WazirMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6EA5D85610EBD089C5E2CD94 /* Build configuration list for PBXNativeTarget "WazirMobile" */;
+			buildPhases = (
+				62E6F660B2F198AEB940E200 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WazirMobile;
+			packageProductDependencies = (
+			);
+			productName = WazirMobile;
+			productReference = 0AF6457055246DE1A83CBD40 /* WazirMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+		719C20C2DEE6C325E361DE7E /* WazirMobileTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BD88221069ACD5949B1C6837 /* Build configuration list for PBXNativeTarget "WazirMobileTests" */;
+			buildPhases = (
+				456D5E28F3AF4EB55B0998A4 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA7CD160E8E7E3AC7DD3BABA /* PBXTargetDependency */,
+			);
+			name = WazirMobileTests;
+			packageProductDependencies = (
+			);
+			productName = WazirMobileTests;
+			productReference = A662F8148F2F9B8F323037C4 /* WazirMobileTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		88F251D3C24F5929964D650F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					265656842EC21D2BBA9F9CD8 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					719C20C2DEE6C325E361DE7E = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 19B388C4DDEBBA0249870D2E /* Build configuration list for PBXProject "WazirMobile" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 03EC9900C808AC31AD082A91;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 4DA8E39E5C3C6F78AB7FC846 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				265656842EC21D2BBA9F9CD8 /* WazirMobile */,
+				719C20C2DEE6C325E361DE7E /* WazirMobileTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		456D5E28F3AF4EB55B0998A4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				81FB65B248E28F993EE265A9 /* PairingUriParserTests.swift in Sources */,
+				FAAADB04F67A358160AF83B6 /* StubURLProtocol.swift in Sources */,
+				2F0DB1E97C55B1D42CF1AB37 /* WazirControllerApiTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		62E6F660B2F198AEB940E200 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C3AEFD7CB173F480FE4B9112 /* CredentialVault.swift in Sources */,
+				FB6443D5C0EE5483908FA6B1 /* DecodingHelpers.swift in Sources */,
+				09CFAABC8FBD0B54796B0D9B /* Models.swift in Sources */,
+				5508737BA6ACBF5BA9CD8D36 /* PairingUriParser.swift in Sources */,
+				1AC40F31198D82AA8C19F73F /* TlsPinning.swift in Sources */,
+				244E2E52F795E6D77990D469 /* WazirControllerApi.swift in Sources */,
+				8334D31F93A142D6256DCB36 /* WazirMobileApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AA7CD160E8E7E3AC7DD3BABA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 265656842EC21D2BBA9F9CD8 /* WazirMobile */;
+			targetProxy = 05F1F3540171165021274DE1 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		004E7081CA0230BF80AE8F7C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		17AB5125D6FC3F3A889ED8F0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ai.wazir.mobile.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WazirMobile.app/WazirMobile";
+			};
+			name = Debug;
+		};
+		472B02E1A5216CBC9D95D092 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Resources/Info.plist;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ai.wazir.mobile;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		6DE36794628DEB93B3F95C4E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Resources/Info.plist;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ai.wazir.mobile;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B400856AD32291F6BD4C42B0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ai.wazir.mobile.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WazirMobile.app/WazirMobile";
+			};
+			name = Release;
+		};
+		C19C9CC1E1F81D078E3DA4ED /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		19B388C4DDEBBA0249870D2E /* Build configuration list for PBXProject "WazirMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C19C9CC1E1F81D078E3DA4ED /* Debug */,
+				004E7081CA0230BF80AE8F7C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6EA5D85610EBD089C5E2CD94 /* Build configuration list for PBXNativeTarget "WazirMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6DE36794628DEB93B3F95C4E /* Debug */,
+				472B02E1A5216CBC9D95D092 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BD88221069ACD5949B1C6837 /* Build configuration list for PBXNativeTarget "WazirMobileTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				17AB5125D6FC3F3A889ED8F0 /* Debug */,
+				B400856AD32291F6BD4C42B0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 88F251D3C24F5929964D650F /* Project object */;
+}
