@@ -1,4 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, lstatSync } from 'node:fs';
+import path from 'node:path';
 import type { KeyValueStore } from '@wazir/shared';
 import type {
   OptimizableConfig,
@@ -37,6 +40,7 @@ import type {
   OptimizationObjective,
   MultiObjectiveSelectionPolicy,
   MetricConstraint,
+  OracleType,
 } from '@wazir/core';
 import { DistributedBenchmarkFabric, type ShardWorkerDispatch } from './distributedBenchmarkFabric.js';
 import { CanaryDeploymentService } from './canaryService.js';
@@ -121,7 +125,17 @@ export interface MetaOptimizerOptions {
   causalService?: CausalAttributionService;
   distributedFabric?: DistributedBenchmarkFabric;
   canaryDeploymentService?: CanaryDeploymentService;
+  /**
+   * Oracles that MUST be registered, executed and passing before a
+   * source-modifying candidate is VERIFIED. Missing oracles fail closed.
+   */
+  requiredSourceGates?: OracleType[];
 }
+
+/** Oracles run for source candidates when registered (beyond the required set). */
+const OPTIONAL_SOURCE_GATES: OracleType[] = ['TYPECHECK', 'LINT', 'STATIC_ANALYSIS', 'STATIC_CHECK', 'ACCEPTANCE', 'RUN'];
+const FORBIDDEN_CONFIG_PATH_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
+export type VerificationGateStatus = 'PASS' | 'FAIL' | 'ERROR' | 'MISSING' | 'NOT_CONFIGURED' | 'NOT_RUN' | 'NOT_APPLICABLE';
 
 export class MetaOptimizerService {
   private readonly benchmarkService: BenchmarkService;
@@ -151,8 +165,12 @@ export class MetaOptimizerService {
   private experiments = new Map<string, ExperimentPlan>();
   private candidates = new Map<string, CandidateImplementation>();
   private history: MetaOptimizationRunResult[] = [];
+  private verifications = new Map<string, { fingerprint: string; result: CandidateVerificationResult }>();
   private events: MetaOptimizerEvent[] = [];
   private rollbackMetadata = new Map<string, OptimizableConfig>();
+  private readonly requiredSourceGates: OracleType[];
+  /** Set when persisted state could not be recovered; promotion then fails closed. */
+  private hydrationError?: string;
 
   constructor(options: MetaOptimizerOptions) {
     this.benchmarkService = options.benchmarkService;
@@ -172,6 +190,7 @@ export class MetaOptimizerService {
     this.checkpointService = options.checkpointService;
     this.policyEngine = options.policyEngine;
     this.store = options.store;
+    this.requiredSourceGates = options.requiredSourceGates?.length ? [...options.requiredSourceGates] : ['BUILD', 'TEST'];
     this.canaryDeploymentService =
       options.canaryDeploymentService ??
       new CanaryDeploymentService({
@@ -195,30 +214,57 @@ export class MetaOptimizerService {
     };
   }
 
+  /**
+   * Recovers active configuration, candidates, verification evidence, rollback
+   * provenance, run history and plans from the store. A recovery failure does
+   * not crash the host (every CLI command constructs an optimizer); it marks
+   * the service degraded so promotion refuses to act on partial state.
+   */
   public async hydrate(): Promise<void> {
     await this.canaryDeploymentService.hydrate();
     if (!this.store) return;
     try {
-      if ('list' in this.store && typeof this.store.list === 'function') {
-        const entries = await this.store.list('meta/history/');
-        for (const entry of entries) {
-          if (entry.value) {
-            const run = entry.value as MetaOptimizationRunResult;
-            if (!this.history.some((h) => h.runId === run.runId)) {
-              this.history.push(run);
-            }
-          }
-        }
-        const planEntries = await this.store.list('meta/plans/');
-        for (const entry of planEntries) {
-          if (entry.value) {
-            const plan = entry.value as ExperimentPlan;
-            this.experiments.set(plan.experimentId, plan);
-          }
+      const active = await this.store.get<OptimizableConfig>('meta_optimizer/active_config');
+      if (active) this.activeConfig = active;
+      for (const entry of await this.store.list('meta/candidates/')) {
+        const candidate = entry.value as CandidateImplementation;
+        if (candidate?.candidateId) this.candidates.set(candidate.candidateId, candidate);
+      }
+      for (const entry of await this.store.list('meta/verifications/')) {
+        this.verifications.set(entry.key.slice('meta/verifications/'.length), entry.value as { fingerprint: string; result: CandidateVerificationResult });
+      }
+      for (const entry of await this.store.list('meta/rollback/')) {
+        this.rollbackMetadata.set(entry.key.slice('meta/rollback/'.length), entry.value as OptimizableConfig);
+      }
+      for (const prefix of ['meta/history/', 'meta_optimizer/runs/']) {
+        for (const entry of await this.store.list(prefix)) {
+          const run = entry.value as MetaOptimizationRunResult | undefined;
+          if (run?.runId && !this.history.some((h) => h.runId === run.runId)) this.history.push(run);
         }
       }
-    } catch {
-      // Ignore store errors during hydration
+      this.history.sort((a, b) => new Date(a.evaluatedAt).getTime() - new Date(b.evaluatedAt).getTime());
+      for (const entry of await this.store.list('meta/plans/')) {
+        const plan = entry.value as ExperimentPlan | undefined;
+        if (plan?.experimentId) this.experiments.set(plan.experimentId, plan);
+      }
+      this.hydrationError = undefined;
+    } catch (error) {
+      this.hydrationError = `META_HYDRATION_FAILED: ${(error as Error)?.message ?? String(error)}`;
+    }
+  }
+
+  /** Non-undefined when persisted improvement state could not be recovered. */
+  public getHydrationError(): string | undefined {
+    return this.hydrationError;
+  }
+
+  private async persist(key: string, value: unknown): Promise<void> {
+    if (!this.store) return;
+    try {
+      await this.store.put(key, value);
+    } catch (error) {
+      // Evidence that cannot be made durable must not silently disappear.
+      throw new Error(`META_PERSISTENCE_FAILED: ${key}: ${(error as Error)?.message ?? String(error)}`);
     }
   }
 
@@ -565,7 +611,7 @@ export class MetaOptimizerService {
       commitSha: params.commitSha,
       workspaceHash,
       config: structuredClone(config),
-      models: ['qwen-2.5-coder', 'gemma-27b'],
+      models: [], // Only measured execution records may identify baseline models.
       runtimeVersions: { node: process.version },
       benchmarkVersion: '1.0.0',
       toolDefinitionsHash: createHash('sha256').update(JSON.stringify(config.toolPolicies ?? {})).digest('hex'),
@@ -641,6 +687,7 @@ export class MetaOptimizerService {
 
       candidates.push(candidate);
       this.candidates.set(candidateId, candidate);
+      await this.store?.put(`meta/candidates/${candidateId}`, candidate);
       this.consumption.candidatesCount++;
 
       this.emitEvent('meta.candidate.created', {
@@ -662,32 +709,118 @@ export class MetaOptimizerService {
     verificationEngine?: VerificationEngine,
   ): Promise<CandidateVerificationResult> {
     const engine = verificationEngine ?? this.verificationEngine;
-    const errors: string[] = [];
+    const errors: string[] = [...this.validateCandidateConfig(candidate)];
+    const requiresSourceVerification =
+      candidate.strategy === 'SOURCE_CODE' ||
+      Boolean(candidate.worktreePath) ||
+      Boolean(candidate.codeDiff);
 
-    let buildPassed = true;
-    let typecheckPassed = true;
-    let unitTestsPassed = true;
-    let integrationTestsPassed = true;
-    let protectedOraclesPassed = true;
-    let acceptanceTestsPassed = true;
+    let fingerprint = '';
+    try {
+      fingerprint = this.candidateFingerprint(candidate);
+    } catch (err) {
+      errors.push(
+        `WORKSPACE_MISSING: ${(err as Error)?.message ?? 'an existing candidate worktree is required'}`,
+      );
+    }
 
-    if (engine) {
-      const buildOracle = engine.getOracle('BUILD');
-      if (buildOracle) {
-        const res = await buildOracle.verify({ cwd: candidate.worktreePath });
-        if (res.exitCode !== 0) {
-          buildPassed = false;
-          errors.push(`BUILD_FAILED: ${res.output ?? 'Build oracle returned nonzero'}`);
+    const gateStatuses: Record<string, VerificationGateStatus> = {};
+    let buildPassed = false;
+    let typecheckPassed = false;
+    let unitTestsPassed = false;
+    let integrationTestsPassed = false;
+    let protectedOraclesPassed = false;
+    let acceptanceTestsPassed = false;
+
+    if (requiresSourceVerification && !candidate.worktreePath) {
+      errors.push('WORKSPACE_MISSING: source-code candidate requires an isolated git worktreePath');
+    }
+
+    if (requiresSourceVerification && !engine) {
+      errors.push(
+        'VERIFICATION_ENGINE_MISSING: source or worktree candidate requires a VerificationEngine with registered oracles',
+      );
+    } else if (engine) {
+      const runGate = async (
+        gate: OracleType,
+        required: boolean,
+      ): Promise<boolean> => {
+        const oracle = engine.getOracle(gate);
+        if (!oracle) {
+          gateStatuses[gate] = 'MISSING';
+          if (required) {
+            errors.push(`MISSING_ORACLE: ${gate}`);
+            return false;
+          }
+          return true;
+        }
+        if (requiresSourceVerification && !fingerprint) {
+          gateStatuses[gate] = 'NOT_RUN';
+          errors.push(`WORKSPACE_MISSING_FOR_ORACLE: ${gate}`);
+          return false;
+        }
+        try {
+          const evidence = await engine.runOracle(gate, { cwd: candidate.worktreePath });
+          const ok = evidence.exitCode === 0 && evidence.status === 'PASS';
+          gateStatuses[gate] = ok ? 'PASS' : 'FAIL';
+          if (!ok) {
+            errors.push(`${gate}_FAILED: ${evidence.output ?? 'oracle returned non-passing result'}`);
+          }
+          return ok;
+        } catch (err) {
+          gateStatuses[gate] = 'ERROR';
+          errors.push(`${gate}_ERROR: ${(err as Error)?.message ?? String(err)}`);
+          return false;
+        }
+      };
+
+      const requiredSet = new Set<OracleType>(this.requiredSourceGates);
+      buildPassed = await runGate('BUILD', requiredSet.has('BUILD'));
+      unitTestsPassed = await runGate('TEST', requiredSet.has('TEST'));
+      typecheckPassed = await runGate('TYPECHECK', requiredSet.has('TYPECHECK'));
+      integrationTestsPassed = await runGate('RUN', requiredSet.has('RUN'));
+
+      const staticGates: OracleType[] = ['STATIC_ANALYSIS', 'STATIC_CHECK', 'LINT'];
+      let staticOk = true;
+      for (const sg of staticGates) {
+        if (requiredSet.has(sg) || engine.getOracle(sg)) {
+          const ok = await runGate(sg, requiredSet.has(sg));
+          if (!ok) staticOk = false;
+        } else {
+          gateStatuses[sg] = 'NOT_CONFIGURED';
         }
       }
+      protectedOraclesPassed = staticOk;
+      acceptanceTestsPassed = await runGate('ACCEPTANCE', requiredSet.has('ACCEPTANCE'));
 
-      const testOracle = engine.getOracle('TEST');
-      if (testOracle) {
-        const res = await testOracle.verify({ cwd: candidate.worktreePath });
-        if (res.exitCode !== 0) {
-          unitTestsPassed = false;
-          errors.push(`TEST_FAILED: ${res.output ?? 'Test oracle returned nonzero'}`);
+      for (const extraGate of requiredSet) {
+        if (!(extraGate in gateStatuses)) {
+          const ok = await runGate(extraGate, true);
+          if (!ok) protectedOraclesPassed = false;
         }
+      }
+    } else {
+      // Configuration-only candidate with no VerificationEngine attached:
+      // pass iff configuration and mutation validation succeeded.
+      const configOk = errors.length === 0 && Boolean(fingerprint);
+      buildPassed = configOk;
+      typecheckPassed = configOk;
+      unitTestsPassed = configOk;
+      integrationTestsPassed = configOk;
+      protectedOraclesPassed = configOk;
+      acceptanceTestsPassed = configOk;
+      for (const gate of ['BUILD', 'TYPECHECK', 'TEST', 'RUN', 'STATIC_ANALYSIS', 'ACCEPTANCE'] as const) {
+        gateStatuses[gate] = 'NOT_APPLICABLE';
+      }
+    }
+
+    if (candidate.worktreePath && fingerprint) {
+      try {
+        if (fingerprint !== this.candidateFingerprint(candidate)) {
+          errors.push('WORKSPACE_CHANGED_DURING_VERIFICATION');
+        }
+      } catch {
+        errors.push('WORKSPACE_UNAVAILABLE');
       }
     }
 
@@ -698,21 +831,33 @@ export class MetaOptimizerService {
       integrationTestsPassed &&
       protectedOraclesPassed &&
       acceptanceTestsPassed &&
+       Boolean(fingerprint) &&
       errors.length === 0;
 
     candidate.status = allPassed ? 'VERIFIED' : 'FAILED_VERIFICATION';
 
     const result: CandidateVerificationResult = {
       candidateId: candidate.candidateId,
-      buildPassed,
-      typecheckPassed,
-      unitTestsPassed,
+      buildPassed: allPassed ? buildPassed : errors.some((e) => e.startsWith('BUILD_') || e.endsWith(': BUILD')) ? false : buildPassed,
+      typecheckPassed: allPassed ? typecheckPassed : errors.some((e) => e.startsWith('TYPECHECK_') || e.endsWith(': TYPECHECK')) ? false : typecheckPassed,
+      unitTestsPassed: allPassed ? unitTestsPassed : errors.some((e) => e.startsWith('TEST_') || e.endsWith(': TEST')) ? false : unitTestsPassed,
       integrationTestsPassed,
       protectedOraclesPassed,
       acceptanceTestsPassed,
       allPassed,
       errors,
+      details: {
+        fingerprint,
+        gateStatuses,
+        requiresSourceVerification,
+        evidence: engine?.getActiveVerificationSet().evidence ?? [],
+      },
     };
+
+    this.candidates.set(candidate.candidateId, structuredClone(candidate));
+    this.verifications.set(candidate.candidateId, { fingerprint, result });
+    await this.persist(`meta/candidates/${candidate.candidateId}`, candidate);
+    await this.persist(`meta/verifications/${candidate.candidateId}`, { fingerprint, result });
 
     this.emitEvent(
       allPassed ? 'meta.candidate.verified' : 'meta.candidate.rejected',
@@ -724,6 +869,85 @@ export class MetaOptimizerService {
     );
 
     return result;
+  }
+
+  public getCandidate(id: string): CandidateImplementation | undefined {
+    const candidate = this.candidates.get(id);
+    return candidate ? structuredClone(candidate) : undefined;
+  }
+
+  public getVerification(id: string): CandidateVerificationResult | undefined {
+    const entry = this.verifications.get(id);
+    return entry ? structuredClone(entry.result) : undefined;
+  }
+
+  private validateCandidateConfig(candidate: CandidateImplementation): string[] {
+    const errors: string[] = [];
+    if (!candidate?.candidateId || typeof candidate.candidateId !== 'string') {
+      errors.push('INVALID_CANDIDATE: missing candidateId');
+    }
+    if (!candidate?.experimentId || typeof candidate.experimentId !== 'string') {
+      errors.push('INVALID_CANDIDATE: missing experimentId');
+    }
+    if (!candidate?.config || typeof candidate.config.id !== 'string' || !candidate.config.id.trim()) {
+      errors.push('INVALID_CONFIG: missing config.id');
+    }
+    if (!Number.isInteger(candidate?.config?.version) || (candidate?.config?.version ?? 0) < 1) {
+      errors.push('INVALID_CONFIG: config.version must be a positive integer');
+    }
+    for (const mutation of candidate?.mutations ?? []) {
+      const parts = typeof mutation.path === 'string' ? mutation.path.split('.').filter(Boolean) : [];
+      if (parts.length === 0 || parts.some((p) => FORBIDDEN_CONFIG_PATH_SEGMENTS.has(p))) {
+        errors.push(`INVALID_MUTATION_PATH: '${mutation.path}'`);
+      }
+      if (typeof mutation.newValue === 'number' && !Number.isFinite(mutation.newValue)) {
+        errors.push(`INVALID_MUTATION_VALUE: non-finite number at '${mutation.path}'`);
+      }
+    }
+    return errors;
+  }
+
+  private candidateFingerprint(candidate: CandidateImplementation): string {
+    const hash = createHash('sha256').update(
+      JSON.stringify({
+        config: candidate.config,
+        mutations: candidate.mutations ?? [],
+        strategy: candidate.strategy,
+        filesChanged: candidate.filesChanged ?? [],
+      }),
+    );
+    const requiresWorktree =
+      candidate.strategy === 'SOURCE_CODE' ||
+      Boolean(candidate.worktreePath) ||
+      Boolean(candidate.codeDiff);
+    if (!requiresWorktree) {
+      return hash.digest('hex');
+    }
+    if (!candidate.worktreePath) {
+      throw new Error('No candidate worktree');
+    }
+    const cwd = candidate.worktreePath;
+    if (!lstatSync(cwd).isDirectory()) {
+      throw new Error('Candidate worktree is not a directory');
+    }
+    hash.update(execFileSync('git', ['rev-parse', 'HEAD'], { cwd }));
+    const files = execFileSync('git', ['ls-files', '-c', '-o', '--exclude-standard', '-z'], { cwd })
+      .toString()
+      .split('\0')
+      .filter(Boolean)
+      .sort();
+    for (const file of new Set(files)) {
+      hash.update(file).update('\0');
+      try {
+        const target = path.join(cwd, file);
+        if (lstatSync(target).isSymbolicLink()) throw new Error('Symlink cannot be verified');
+        hash.update(readFileSync(target));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        hash.update('DELETED');
+      }
+    }
+    return hash.digest('hex');
   }
 
   /**
@@ -1070,13 +1294,7 @@ export class MetaOptimizerService {
 
       results.push(runResult);
       this.history.push(runResult);
-      if (this.store && 'put' in this.store && typeof this.store.put === 'function') {
-        try {
-          await this.store.put(`meta/history/${runResult.runId}`, runResult);
-        } catch {
-          // Ignore store put failure
-        }
-      }
+      await this.persist(`meta/history/${runResult.runId}`, runResult);
 
       // Record learning in MemoryService (single-objective plans record immediately; multi-objective records after frontier computation)
       if (!plan.objectives || plan.objectives.length === 0) {
@@ -1194,41 +1412,96 @@ export class MetaOptimizerService {
     candidate: CandidateImplementation,
     options: { force?: boolean; operatorApproved?: boolean } = {},
   ): Promise<{ success: boolean; reason: string }> {
-    const domainLevel = this.getLevel(candidate.strategy === 'ROUTING' ? 'routing' : 'tool_surfaces');
+    if (this.hydrationError) {
+      return { success: false, reason: `PROMOTION_DENIED: ${this.hydrationError}` };
+    }
+    const saved = this.candidates.get(candidate.candidateId);
+    const verification = this.verifications.get(candidate.candidateId);
+    if (!saved || !verification?.result.allPassed) {
+      return { success: false, reason: 'PROMOTION_DENIED: persisted candidate and passing verification required' };
+    }
+    if (
+      saved.candidateId !== candidate.candidateId ||
+      saved.experimentId !== candidate.experimentId ||
+      saved.strategy !== candidate.strategy ||
+      JSON.stringify(saved.config) !== JSON.stringify(candidate.config) ||
+      JSON.stringify(saved.mutations ?? []) !== JSON.stringify(candidate.mutations ?? []) ||
+      (saved.worktreePath ?? '') !== (candidate.worktreePath ?? '')
+    ) {
+      return { success: false, reason: 'PROMOTION_DENIED: candidate payload does not match persisted candidate' };
+    }
+    if (saved.status !== 'VERIFIED' && saved.status !== 'EVALUATED') {
+      return { success: false, reason: `PROMOTION_DENIED: persisted candidate status is '${saved.status}'` };
+    }
+    try {
+      const currentFingerprint = this.candidateFingerprint(saved);
+      const passedFingerprint = this.candidateFingerprint(candidate);
+      if (currentFingerprint !== verification.fingerprint || passedFingerprint !== verification.fingerprint) {
+        return { success: false, reason: 'PROMOTION_DENIED: stale verification evidence' };
+      }
+    } catch {
+      return { success: false, reason: 'PROMOTION_DENIED: candidate workspace unavailable' };
+    }
+    if (saved.strategy === 'SOURCE_CODE') {
+      return { success: false, reason: 'PROMOTION_DENIED: source integration requires independent review' };
+    }
+    if (
+      !this.history.some(
+        (run) =>
+          run.experimentId === saved.experimentId &&
+          run.candidateConfig.id === saved.config.id &&
+          run.decision === 'QUALIFIED',
+      )
+    ) {
+      return { success: false, reason: 'PROMOTION_DENIED: qualified benchmark evidence required' };
+    }
+
+    const domain: SelfImprovementDomain =
+      saved.strategy === 'ROUTING'
+        ? 'routing'
+        : saved.strategy === 'TOOL_SURFACE'
+          ? 'tool_surfaces'
+          : saved.strategy === 'PROMPT'
+            ? 'prompts'
+            : 'context_policy';
+    const domainLevel = this.getLevel(domain);
 
     // Policy check: Only promote if Level 4 (guarded auto) or operator approved
-    if (domainLevel < 4 && !options.operatorApproved && !options.force) {
+    if (domainLevel < 4 && !options.operatorApproved) {
       return {
         success: false,
         reason: `PROMOTION_DENIED: Domain maturity level is ${domainLevel}; operator approval required (wa improve promote).`,
       };
     }
 
-    this.emitEvent('meta.promotion.started', { candidateId: candidate.candidateId });
+    this.emitEvent('meta.promotion.started', { candidateId: saved.candidateId });
 
     try {
       // Save rollback metadata
-      this.rollbackMetadata.set(candidate.candidateId, structuredClone(this.activeConfig));
+      this.rollbackMetadata.set(saved.candidateId, structuredClone(this.activeConfig));
+      await this.persist(`meta/rollback/${saved.candidateId}`, this.activeConfig);
 
-      // Promote configuration
-      this.activeConfig = structuredClone(candidate.config);
+      // Update candidate status and promote configuration
+      saved.status = 'EVALUATED';
+      candidate.status = 'EVALUATED';
+      this.candidates.set(saved.candidateId, structuredClone(saved));
+      await this.persist(`meta/candidates/${saved.candidateId}`, saved);
 
-      if (this.store) {
-        await this.store.put('meta_optimizer/active_config', this.activeConfig);
-      }
+      this.activeConfig = structuredClone(saved.config);
+      await this.persist('meta_optimizer/active_config', this.activeConfig);
 
       this.emitEvent('meta.promotion.completed', {
-        candidateId: candidate.candidateId,
+        candidateId: saved.candidateId,
         newConfigId: this.activeConfig.id,
       });
 
       return {
         success: true,
-        reason: `Candidate ${candidate.candidateId} successfully promoted to active baseline.`,
+        reason: `Candidate ${saved.candidateId} successfully promoted to active baseline.`,
       };
     } catch (err: any) {
       this.emitEvent('meta.promotion.failed', {
-        candidateId: candidate.candidateId,
+        candidateId: saved.candidateId,
         error: err.message,
       });
       return {
@@ -1242,17 +1515,15 @@ export class MetaOptimizerService {
     this.emitEvent('meta.rollback', { target: runIdOrCandidateId ?? 'last' });
 
     if (runIdOrCandidateId && this.rollbackMetadata.has(runIdOrCandidateId)) {
-      this.activeConfig = this.rollbackMetadata.get(runIdOrCandidateId)!;
+      this.activeConfig = structuredClone(this.rollbackMetadata.get(runIdOrCandidateId)!);
     } else if (this.history.length > 0) {
       const last = this.history[this.history.length - 1];
-      this.activeConfig = last.baselineConfig;
+      this.activeConfig = structuredClone(last.baselineConfig);
     } else {
       this.activeConfig = structuredClone(DEFAULT_OPTIMIZABLE_CONFIG);
     }
 
-    if (this.store) {
-      await this.store.put('meta_optimizer/active_config', this.activeConfig);
-    }
+    await this.persist('meta_optimizer/active_config', this.activeConfig);
 
     return this.getActiveConfig();
   }
@@ -1644,14 +1915,14 @@ export class MetaOptimizerService {
     const baselineBenchmark = await this.benchmarkService.runBenchmarkSuite(
       benchmarkTasks,
       runner,
-      { suiteName: `baseline-${baselineConfig.id}` },
+      { suiteName: `baseline-${baselineConfig.id}`, config: baselineConfig },
     );
 
     // 2. Run candidate benchmark
     const candidateBenchmark = await this.benchmarkService.runBenchmarkSuite(
       benchmarkTasks,
       runner,
-      { suiteName: `candidate-${candidate.config.id}` },
+      { suiteName: `candidate-${candidate.config.id}`, config: candidate.config },
     );
 
     // 3. Compare suites
@@ -1708,17 +1979,18 @@ export class MetaOptimizerService {
       evaluatedAt: new Date(),
     };
 
+    // 5. Promote if accepted (Gate 13 legacy interface)
     if (decision === 'ACCEPTED') {
-      this.activeConfig = candidate.config;
-      if (this.store) {
-        await this.store.put('meta_optimizer/active_config', this.activeConfig);
-      }
+      this.rollbackMetadata.set(runId, structuredClone(this.activeConfig));
+      this.rollbackMetadata.set(candidate.candidateId, structuredClone(this.activeConfig));
+      await this.persist(`meta/rollback/${runId}`, this.activeConfig);
+      await this.persist(`meta/rollback/${candidate.candidateId}`, this.activeConfig);
+      this.activeConfig = structuredClone(candidate.config);
+      await this.persist('meta_optimizer/active_config', this.activeConfig);
     }
 
     this.history.push(runResult);
-    if (this.store) {
-      await this.store.put(`meta_optimizer/runs/${runId}`, runResult);
-    }
+    await this.persist(`meta_optimizer/runs/${runId}`, runResult);
 
     return runResult;
   }

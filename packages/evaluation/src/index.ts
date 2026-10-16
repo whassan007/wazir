@@ -14,6 +14,7 @@ export * from './continuousVerification.js';
 export * from './evaluationService.js';
 export * from './benchmarkService.js';
 export * from './metaOptimizerService.js';
+export * from './selfImprovementSupervisor.js';
 export * from './canaryService.js';
 export * from './causalAttributionService.js';
 export * from './multiObjectiveOptimizer.js';

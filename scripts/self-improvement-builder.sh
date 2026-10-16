@@ -29,8 +29,13 @@ Usage:
   bash $0 logs [--follow]
   bash $0 stop
   bash $0 resume
+  bash $0 supersede --commit SHA --reason TEXT
   bash $0 path
   bash $0 help
+
+Exit statuses: 3 blocked preflight, 20 model capability (NO_PROGRESS/REPEATED_ACTION),
+21 protocol, 22 timeout, 23 runtime unavailable, 24 quota, 25 execution failed,
+26 no source changes, 27 verification failed, 28 interrupted attempt modified worktree.
 
 Starts a multi-phase Wazir coding task using a SYSTEMD USER SERVICE.
 The implementation is isolated in a separate Git worktree.
@@ -109,6 +114,16 @@ EOF
 
 load_config() { [[ -f "$CONFIG" ]] || fail "Not initialized. Run: bash $0 start"; source "$CONFIG"; }
 logline() { printf '[%s] %s\n' "$(date -Is)" "$*"; }
+# Minimal JSON string escaping for the controlled values this script emits.
+json_str() { local s="${1//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/\\n}"; s="${s//$'\t'/\\t}"; printf '"%s"' "$s"; }
+# Structured, append-only event stream (one JSON object per line).
+event() {
+  local name="$1"; shift
+  local line kv
+  line="{\"at\":$(json_str "$(date -Is)"),\"event\":$(json_str "$name")"
+  for kv in "$@"; do line+=",$(json_str "${kv%%=*}"):$(json_str "${kv#*=}")"; done
+  printf '%s}\n' "$line" >> "${EVENTS_FILE:-$STATE_DIR/events.jsonl}"
+}
 worktree_fingerprint() {
   (git rev-parse HEAD; git diff HEAD --binary; git ls-files --others --exclude-standard -z | LC_ALL=C sort -z | xargs -0 -r sha256sum) | sha256sum | cut -d' ' -f1
 }
@@ -116,19 +131,60 @@ atomic_write() {
   local target="$1"; shift
   local tmp; tmp="$(mktemp "${target}.XXXXXX")"
   printf '%s\n' "$*" > "$tmp"
-  sync -f "$tmp"
+  sync -f "$tmp" 2>/dev/null || sync
   mv -f "$tmp" "$target"
-  sync -f "$(dirname "$target")"
+  sync -f "$(dirname "$target")" 2>/dev/null || true
 }
+# Classify only from Wazir's structured error codes and transport errors.
+# Router explanation bullets ("- model: ... quota risk 0.00") are descriptive
+# text, not failures; matching them misclassified a REPEATED_ACTION as QUOTA.
 classify_failure() {
-  local code="$1" file="$2"
-  if grep -Eq 'NO_PROGRESS|MODEL_PROTOCOL_BUDGET_EXHAUSTED|INVALID_JSON_ACTION|ACTION_VALIDATION_FAILED' "$file"; then echo PROTOCOL_OR_NO_PROGRESS
-  elif [[ "$code" == 124 || "$code" == 137 ]]; then echo TIMEOUT
-  elif grep -Eqi 'ECONNREFUSED|ECONNRESET|ETIMEDOUT|temporarily unavailable|HTTP 503' "$file"; then echo RUNTIME_UNAVAILABLE
-  elif grep -Eqi 'quota|rate.limit|HTTP 429' "$file"; then echo QUOTA
+  local code="$1" file="$2" signals
+  signals="$(grep -v -E '^[[:space:]]*- ' "$file" 2>/dev/null || true)"
+  if [[ "$code" == 124 || "$code" == 137 ]]; then echo TIMEOUT
+  elif grep -Eq '^(NO_PROGRESS|REPEATED_ACTION|MODEL_PROTOCOL_BUDGET_EXHAUSTED):' <<<"$signals"; then echo MODEL_CAPABILITY
+  elif grep -Eq '^(INVALID_JSON_ACTION|ACTION_VALIDATION_FAILED|ACTION_BLOCKED_DUPLICATE):' <<<"$signals"; then echo PROTOCOL
+  elif grep -Eqi 'ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|temporarily unavailable|HTTP 50[234]' <<<"$signals"; then echo RUNTIME_UNAVAILABLE
+  elif grep -Eqi 'HTTP 429|rate[ _-]?limit(ed| exceeded| reached)|quota (exceeded|exhausted)|insufficient_quota' <<<"$signals"; then echo QUOTA
   else echo EXECUTION_FAILED; fi
 }
-set_phase() { atomic_write "$PHASE_FILE" "$*"; logline "PHASE: $*"; }
+# Only transient infrastructure faults are retried in-process. A model that
+# loops or emits invalid actions will do so again; quota needs wall-clock time.
+is_retryable() { [[ "$1" == RUNTIME_UNAVAILABLE ]]; }
+# Distinct exit statuses make `systemctl show -p ExecMainStatus` diagnostic.
+exit_code_for() {
+  case "$1" in
+    BLOCKED) echo 3;; MODEL_CAPABILITY) echo 20;; PROTOCOL) echo 21;; TIMEOUT) echo 22;;
+    RUNTIME_UNAVAILABLE) echo 23;; QUOTA) echo 24;; EXECUTION_FAILED) echo 25;;
+    NO_SOURCE_CHANGES) echo 26;; VERIFICATION_FAILED) echo 27;; INTERRUPTED_UNSAFE) echo 28;;
+    *) echo 1;;
+  esac
+}
+model_key() { printf '%s__%s' "$1" "${2:-auto}" | tr -c 'A-Za-z0-9._-' '_'; }
+# Durable capability memory: a model/agent pair with repeated MODEL_CAPABILITY
+# failures is refused until an operator explicitly overrides the gate.
+record_model_failure() {
+  local agent="$1" model="$2" class="$3" execution="$4"
+  mkdir -p "$STATE_DIR/model-failures"
+  printf '%s %s %s\n' "$(date -Is)" "$class" "${execution:-unknown}" >> "$STATE_DIR/model-failures/$(model_key "$agent" "$model")"
+}
+check_model_gate() {
+  local agent="$1" model="$2" file count
+  file="$STATE_DIR/model-failures/$(model_key "$agent" "$model")"
+  count="$(grep -c ' MODEL_CAPABILITY ' "$file" 2>/dev/null || true)"
+  count="${count:-0}"
+  if (( count >= ${BUILDER_MAX_CAPABILITY_FAILURES:-2} )) && [[ "${BUILDER_ALLOW_FAILED_MODEL:-0}" != 1 ]]; then
+    echo "BLOCKED: agent=$agent model=${model:-auto} has $count recorded MODEL_CAPABILITY failures ($file)." >&2
+    echo "Select a different coding agent/model, or set BUILDER_ALLOW_FAILED_MODEL=1 to override deliberately." >&2
+    return 1
+  fi
+}
+write_failure_record() {
+  # phase attempt class exit execution log
+  local retry=false; is_retryable "$3" && retry=true
+  atomic_write "$STATE_DIR/failure.json" "{\"at\":$(json_str "$(date -Is)"),\"phase\":$(json_str "$1"),\"attempt\":$(json_str "$2"),\"class\":$(json_str "$3"),\"retryable\":$retry,\"exitCode\":$(json_str "$4"),\"executionId\":$(json_str "$5"),\"log\":$(json_str "$6"),\"agent\":$(json_str "${WAZIR_AGENT:-}"),\"model\":$(json_str "${WAZIR_MODEL:-}")}"
+}
+set_phase() { atomic_write "$PHASE_FILE" "$*"; logline "PHASE: $*"; event phase "phase=$*"; }
 
 make_prompts() {
   mkdir -p "$PROMPT_DIR"
@@ -279,46 +335,72 @@ UNIT
   echo "SSH can be closed; linger=$([[ $(loginctl show-user "$(id -un)" -p Linger --value) == yes ]] && echo yes || echo no)."
 }
 
+blocked() {
+  # Preflight/configuration blocker: durable result, distinct exit status.
+  atomic_write "$RESULT_FILE" "BLOCKED $1"
+  event blocked "reason=$1"
+  printf 'BLOCKED: %s\n' "$*" >&2
+  exit "$(exit_code_for BLOCKED)"
+}
+
 run_worker() {
   load_config
   export PATH="$CAPTURED_PATH" NO_COLOR=1
   bootstrap_node || fail "Node.js/npm unavailable in the systemd user service"
   mkdir -p "$STATE_DIR"
+  require flock; require timeout; require git
+  # Take the singleton lock BEFORE redirecting output, so a concurrent
+  # invocation reports to its own stderr instead of the active run's log.
+  exec 9>"$STATE_DIR/worker.lock"
+  flock -n 9 || fail "Another builder worker holds the lock; not starting a second worker"
   exec >>"$LOG" 2>&1
   set -Eeuo pipefail
-  require flock; require timeout; require git
-  exec 9>"$STATE_DIR/worker.lock"
-  flock -n 9 || fail "Another builder worker holds the lock"
-  [[ -x "$WA_BIN" ]] || fail "Configured Wazir executable unavailable"
-  [[ -d "$WORKTREE/node_modules" ]] || fail "Dependencies unavailable; run npm ci in the worktree"
-  [[ "$(git -C "$WORKTREE" branch --show-current)" == "feat/native-continuous-self-improvement" ]] || fail "Unexpected implementation branch"
+  [[ -x "$WA_BIN" ]] || blocked WA_BIN_UNAVAILABLE "Configured Wazir executable unavailable: $WA_BIN"
+  [[ -d "$WORKTREE/node_modules" ]] || blocked DEPENDENCIES_MISSING "run npm ci in the worktree"
+  [[ "$(git -C "$WORKTREE" branch --show-current)" == "feat/native-continuous-self-improvement" ]] || blocked WRONG_BRANCH "Unexpected implementation branch"
   if [[ "$WAZIR_AGENT" == wazir-coding && -z "$WAZIR_MODEL" ]]; then
-    atomic_write "$RESULT_FILE" "BLOCKED MODEL_SELECTION_REQUIRED"
-    fail "Select an explicit model with measured coding capability; auto routing previously failed protocol validation"
+    blocked MODEL_SELECTION_REQUIRED "Select an explicit model with measured coding capability; auto routing previously failed protocol validation"
   fi
-  [[ -s "$STATE_DIR/runtime-compatibility.json" ]] || fail "BLOCKED: runtime compatibility receipt missing"
-  node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.argv[1])); if(r.model!==process.argv[2] || r.agent!==process.argv[3] || r.result!=="PASS") process.exit(1)' "$STATE_DIR/runtime-compatibility.json" "$WAZIR_MODEL" "$WAZIR_AGENT" || fail "BLOCKED: selected runtime has not passed compatibility"
+  check_model_gate "$WAZIR_AGENT" "$WAZIR_MODEL" || blocked MODEL_CAPABILITY_GATE "agent=$WAZIR_AGENT model=${WAZIR_MODEL:-auto}"
+  [[ -s "$STATE_DIR/runtime-compatibility.json" ]] || blocked RUNTIME_RECEIPT_MISSING "runtime compatibility receipt missing"
+  node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.argv[1])); if(r.model!==process.argv[2] || r.agent!==process.argv[3] || r.result!=="PASS") process.exit(1)' "$STATE_DIR/runtime-compatibility.json" "$WAZIR_MODEL" "$WAZIR_AGENT" || blocked RUNTIME_NOT_QUALIFIED "selected runtime has not passed compatibility"
   local start_time="$(date +%s)" rc=0
   WORKER_HEARTBEAT=""
   cleanup() {
     rc=$?
     if [[ -n "${WORKER_HEARTBEAT:-}" ]]; then kill "$WORKER_HEARTBEAT" 2>/dev/null || true; wait "$WORKER_HEARTBEAT" 2>/dev/null || true; fi
     if ((rc == 0)); then atomic_write "$RESULT_FILE" COMPLETED; logline "FINAL: COMPLETED (all phases)";
-    elif [[ "$(cat "$RESULT_FILE" 2>/dev/null)" == BLOCKED* ]]; then logline "FINAL: $(cat "$RESULT_FILE")";
-    elif ((rc == 130 || rc == 143)); then atomic_write "$RESULT_FILE" "INTERRUPTED rc=$rc";
-    else atomic_write "$RESULT_FILE" "FAILED rc=$rc"; logline "FINAL: FAILED_OR_INTERRUPTED rc=$rc; see logs, worktree and phase markers"; fi
+    elif [[ "$(cat "$RESULT_FILE" 2>/dev/null)" == BLOCKED* || "$(cat "$RESULT_FILE" 2>/dev/null)" == FAILED\ class=* ]]; then logline "FINAL: $(cat "$RESULT_FILE") rc=$rc";
+    elif ((rc == 130 || rc == 143)); then atomic_write "$RESULT_FILE" "INTERRUPTED rc=$rc"; logline "FINAL: INTERRUPTED rc=$rc";
+    else atomic_write "$RESULT_FILE" "FAILED rc=$rc"; logline "FINAL: FAILED rc=$rc; see logs, worktree and phase markers"; fi
+    event final "rc=$rc" "result=$(cat "$RESULT_FILE" 2>/dev/null)"
   }
   trap cleanup EXIT
   trap 'logline "INTERRUPTED"; exit 130' INT
   trap 'logline "SIGTERM received"; exit 143' TERM
+  cd "$WORKTREE"
+  # Crash recovery: a checkpoint left in EXECUTING means the previous worker
+  # died mid-attempt. Replaying is only safe if the worktree is unchanged.
+  local previous_checkpoint; previous_checkpoint="$(cat "$STATE_DIR/checkpoint" 2>/dev/null || true)"
+  if [[ "$previous_checkpoint" == *"state=EXECUTING"* ]]; then
+    local previous_before; previous_before="$(sed -n 's/.*before=\([0-9a-f]*\).*/\1/p' <<<"$previous_checkpoint")"
+    event recovered_interrupted_attempt "checkpoint=$previous_checkpoint"
+    if [[ -n "$previous_before" && "$(worktree_fingerprint)" != "$previous_before" ]]; then
+      atomic_write "$RESULT_FILE" "FAILED class=INTERRUPTED_UNSAFE"
+      atomic_write "$STATE_DIR/checkpoint" "state=AWAITING_REVIEW reason=interrupted_attempt_modified_worktree previous=[$previous_checkpoint]"
+      logline "Previous attempt was interrupted after modifying the worktree; refusing to replay. Review the worktree, then resume."
+      exit "$(exit_code_for INTERRUPTED_UNSAFE)"
+    fi
+    logline "Previous attempt was interrupted before modifying the worktree; safe to start a fresh attempt."
+  fi
   atomic_write "$RESULT_FILE" RUNNING
   logline "Starting phased implementation in $WORKTREE"
   logline "Model: ${WAZIR_MODEL:-auto} | Agent: $WAZIR_AGENT | Wazir CLI: $WA_BIN"
-  cd "$WORKTREE"
+  event start "agent=$WAZIR_AGENT" "model=${WAZIR_MODEL:-auto}" "worktree=$WORKTREE"
   if [[ -n "$WAZIR_MODEL" ]]; then
     local loaded_models
-    loaded_models="$(timeout 30s "$WA_BIN" models loaded)" || fail "Runtime availability check failed"
-    grep -Fq -- "$WAZIR_MODEL" <<<"$loaded_models" || fail "Selected model is not loaded"
+    loaded_models="$(timeout 30s "$WA_BIN" models loaded)" || { atomic_write "$RESULT_FILE" "FAILED class=RUNTIME_UNAVAILABLE"; exit "$(exit_code_for RUNTIME_UNAVAILABLE)"; }
+    grep -Fq -- "$WAZIR_MODEL" <<<"$loaded_models" || blocked MODEL_NOT_LOADED "Selected model is not loaded: $WAZIR_MODEL"
   fi
   # A heartbeat provides progress visibility even if wa buffers its own output.
   (while sleep 60; do logline "heartbeat: phase=$(cat "$PHASE_FILE" 2>/dev/null || echo UNKNOWN), elapsed=$(($(date +%s)-start_time))s"; done) & WORKER_HEARTBEAT="$!"
@@ -334,7 +416,7 @@ run_worker() {
       if git merge-base --is-ancestor "$completed_sha" HEAD 2>/dev/null && node "$WORKTREE/scripts/self-improvement-phase-receipt.mjs" "$STATE_DIR/review-$phase.json" "$phase" "$completed_sha" "$PROMPT_DIR/$phase.txt"; then
         logline "Skipping verified phase $phase at $completed_sha"; continue
       fi
-      fail "Invalid phase checkpoint $phase; inspect before resuming"
+      blocked INVALID_PHASE_CHECKPOINT "phase $phase; inspect before resuming"
     fi
     set_phase "PHASE_$phase/4"
     snapshot_before="$(worktree_fingerprint)"
@@ -344,44 +426,57 @@ run_worker() {
     local already_reviewed=0
     if [[ -s "$review_receipt" ]]; then
       if node "$WORKTREE/scripts/self-improvement-phase-receipt.mjs" "$review_receipt" "$phase" "$review_sha" "$PROMPT_DIR/$phase.txt"; then already_reviewed=1;
-      else fail "Stale or invalid review receipt for phase $phase"; fi
+      else blocked STALE_REVIEW_RECEIPT "phase $phase"; fi
     fi
     local args=(task run "$prompt" --type coding --agent "$WAZIR_AGENT" --max-turns "$MAX_TURNS")
     if [[ -n "$WAZIR_MODEL" ]]; then args+=(--model "$WAZIR_MODEL"); fi
-    local attempt classification attempt_log
+    local attempt classification attempt_log execution_id max_attempts="${BUILDER_MAX_ATTEMPTS:-3}"
     if ((already_reviewed == 0)); then
-    for attempt in 1 2 3; do
+    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
       attempt_log="$STATE_DIR/phase-${phase}-attempt-${attempt}-$(date +%s).log"
       atomic_write "$STATE_DIR/checkpoint" "phase=$phase attempt=$attempt state=EXECUTING head=$(git rev-parse HEAD) before=$snapshot_before log=$attempt_log"
+      event attempt_start "phase=$phase" "attempt=$attempt" "log=$attempt_log"
       set +e
-      timeout --kill-after=15s "${BUILDER_TIMEOUT_SECONDS:-1800}s" "$WA_BIN" "${args[@]}" >"$attempt_log" 2>&1
-      rc_run=$?
+      # tee streams model/tool progress to the live log while the attempt runs.
+      timeout --kill-after=15s "${BUILDER_TIMEOUT_SECONDS:-1800}s" "$WA_BIN" "${args[@]}" 2>&1 | tee "$attempt_log"
+      rc_run="${PIPESTATUS[0]}"
       set -e
-      cat "$attempt_log"
-      if ((rc_run == 0)); then break; fi
+      if ((rc_run == 0)); then event attempt_end "phase=$phase" "attempt=$attempt" "exit=0"; break; fi
       classification="$(classify_failure "$rc_run" "$attempt_log")"
-      logline "FAILURE phase=$phase attempt=$attempt class=$classification exit=$rc_run"
+      execution_id="$(grep -oE 'exec-[a-z0-9]+-[0-9]+' "$attempt_log" | head -1 || true)"
+      logline "FAILURE phase=$phase attempt=$attempt class=$classification exit=$rc_run execution=${execution_id:-unknown}"
       atomic_write "$STATE_DIR/checkpoint" "phase=$phase attempt=$attempt state=FAILED class=$classification exit=$rc_run log=$attempt_log"
-      # Never replay a possibly mutating execution or repeat a protocol failure.
-      if [[ "$classification" != RUNTIME_UNAVAILABLE || "$attempt" == 3 || "$(worktree_fingerprint)" != "$snapshot_before" ]]; then exit "$rc_run"; fi
-      sleep "$((attempt * 5))"
+      write_failure_record "$phase" "$attempt" "$classification" "$rc_run" "$execution_id" "$attempt_log"
+      event attempt_end "phase=$phase" "attempt=$attempt" "exit=$rc_run" "class=$classification" "execution=${execution_id:-}"
+      if [[ "$classification" == MODEL_CAPABILITY ]]; then record_model_failure "$WAZIR_AGENT" "$WAZIR_MODEL" "$classification" "$execution_id"; fi
+      # Never replay a possibly mutating execution or repeat a non-transient failure.
+      if ! is_retryable "$classification" || ((attempt == max_attempts)) || [[ "$(worktree_fingerprint)" != "$snapshot_before" ]]; then
+        atomic_write "$RESULT_FILE" "FAILED class=$classification phase=$phase attempt=$attempt execution=${execution_id:-unknown}"
+        exit "$(exit_code_for "$classification")"
+      fi
+      local backoff=$(( ${BUILDER_BACKOFF_SECONDS:-15} * (1 << (attempt - 1)) ))
+      logline "Retrying transient $classification in ${backoff}s (attempt $((attempt + 1))/$max_attempts)"
+      sleep "$backoff"
     done
     fi
     logline "Phase $phase command exited 0; checking for a real change and phase-level sanity tests."
     if ((already_reviewed == 0)) && [[ "$(worktree_fingerprint)" == "$snapshot_before" ]]; then
       logline "Phase $phase produced no source changes or commits in the assigned worktree. Treating as INCONCLUSIVE, not completed."
-      exit 1
+      atomic_write "$RESULT_FILE" "FAILED class=NO_SOURCE_CHANGES phase=$phase"
+      exit "$(exit_code_for NO_SOURCE_CHANGES)"
     fi
     atomic_write "$STATE_DIR/checkpoint" "phase=$phase state=VERIFYING"
-    npm run build
-    npx vitest run packages/evaluation/tests apps/cli/tests/improve.test.ts
+    if ! npm run build || ! npx vitest run ${BUILDER_VERIFY_TESTS:-packages/evaluation/tests apps/cli/tests/improvementSupervisor.test.ts}; then
+      atomic_write "$RESULT_FILE" "FAILED class=VERIFICATION_FAILED phase=$phase"
+      exit "$(exit_code_for VERIFICATION_FAILED)"
+    fi
     if [[ -n "$(git status --porcelain)" ]] || ! node "$WORKTREE/scripts/self-improvement-phase-receipt.mjs" "$review_receipt" "$phase" "$(git rev-parse HEAD)" "$PROMPT_DIR/$phase.txt"; then
-      atomic_write "$RESULT_FILE" "BLOCKED PHASE_ACCEPTANCE_REVIEW_REQUIRED phase=$phase"
       atomic_write "$STATE_DIR/checkpoint" "phase=$phase state=AWAITING_ACCEPTANCE head=$(git rev-parse HEAD)"
-      fail "Build/tests are insufficient to establish phase acceptance. Recovery supervisor must review the original prompt, commit implementation, and record requirement-by-requirement evidence at $review_receipt before resume."
+      blocked "PHASE_ACCEPTANCE_REVIEW_REQUIRED phase=$phase" "Build/tests are insufficient to establish phase acceptance. Review the original prompt, commit the implementation, and record requirement-by-requirement evidence at $review_receipt before resume."
     fi
     atomic_write "$STATE_DIR/done-$phase" "$(git rev-parse HEAD)"
     atomic_write "$STATE_DIR/checkpoint" "phase=$phase state=VERIFIED head=$(git rev-parse HEAD)"
+    event phase_verified "phase=$phase" "head=$(git rev-parse HEAD)"
     logline "Phase $phase completed. HEAD=$(git rev-parse --short HEAD); dirty=$(test -z "$(git status --porcelain)" && echo no || echo yes)."
   done
   set_phase "ALL_PHASES_FINISHED"
@@ -397,6 +492,10 @@ show_status() {
   printf 'Phase: '; cat "$PHASE_FILE" 2>/dev/null || echo UNKNOWN
   printf 'Result: '; cat "$RESULT_FILE" 2>/dev/null || echo UNKNOWN
   printf 'Completed phases: '; local i; for i in 1 2 3 4; do [[ -f "$STATE_DIR/done-$i" ]] && printf '%s ' "$i"; done; echo
+  if [[ -s "$STATE_DIR/failure.json" ]]; then printf 'Last classified failure: '; cat "$STATE_DIR/failure.json"; fi
+  if [[ -n "${WAZIR_AGENT:-}" ]] && ! check_model_gate "$WAZIR_AGENT" "${WAZIR_MODEL:-}" 2>/dev/null; then
+    echo "Model gate: BLOCKED for agent=$WAZIR_AGENT model=${WAZIR_MODEL:-auto} (repeated MODEL_CAPABILITY failures)"
+  fi
   printf 'Git worktree: %s\n' "$WORKTREE"
   git -C "$WORKTREE" status --short --branch 2>/dev/null | head -n 14 || true
   printf 'Latest log lines:\n'; tail -n 16 "$LOG" 2>/dev/null || true
@@ -408,6 +507,28 @@ show_logs() {
   if [[ "${1:-}" == "--follow" || "${1:-}" == "-f" ]]; then tail -n 35 -F "$LOG"; else tail -n 100 "$LOG"; fi
 }
 
+# Record that the remaining work was implemented outside the builder. This does
+# NOT mark any builder phase as done; it only stops status from implying that
+# the builder is still the active implementation path.
+supersede() {
+  load_config
+  local commit="" reason=""
+  while (($#)); do
+    case "$1" in
+      --commit) commit="$2"; shift 2;; --reason) reason="$2"; shift 2;;
+      *) fail "Unknown option: $1";;
+    esac
+  done
+  [[ -n "$commit" && -n "$reason" ]] || fail "supersede requires --commit SHA and --reason TEXT"
+  git -C "$WORKTREE" cat-file -e "${commit}^{commit}" 2>/dev/null || fail "Commit $commit not found in $WORKTREE"
+  if systemctl --user is-active --quiet "$SERVICE" 2>/dev/null; then fail "Service is running; stop it first"; fi
+  mkdir -p "$STATE_DIR"
+  atomic_write "$RESULT_FILE" "SUPERSEDED direct-implementation commit=$commit"
+  event superseded "commit=$commit" "reason=$reason"
+  logline "SUPERSEDED: implementation continued directly at $commit ($reason). No builder phase is marked done."
+  echo "Recorded: SUPERSEDED commit=$commit"
+}
+
 case "${1:-help}" in
   start) shift; start_job "$@";;
   resume)
@@ -417,13 +538,18 @@ case "${1:-help}" in
     # Do not call start_job: it regenerates prompts/configuration and loses resume provenance.
     [[ -d "$WORKTREE" && -x "$WA_BIN" ]] || fail "Existing worktree/runtime unavailable"
     if systemctl --user is-active --quiet "$SERVICE"; then echo "Already running"; exit 0; fi
+    check_model_gate "${WAZIR_AGENT:-}" "${WAZIR_MODEL:-}" || exit "$(exit_code_for BLOCKED)"
     systemctl --user start "$SERVICE"
     ;;
   run-worker) run_worker;;
   status) show_status;;
   logs) shift; show_logs "${1:-}";;
   stop) require systemctl; systemctl --user stop "$SERVICE"; echo "Stopped $SERVICE; current worktree and logs preserved.";;
+  supersede) shift; supersede "$@";;
   path) load_config; echo "$WORKTREE";;
+  # Test hooks (no side effects beyond reading the given files/state).
+  classify) shift; c="$(classify_failure "$1" "$2")"; printf '%s %s %s\n' "$c" "$(exit_code_for "$c")" "$(is_retryable "$c" && echo retryable || echo final)";;
+  check-model) shift; check_model_gate "$1" "${2:-}";;
   help|--help|-h) usage;;
   *) usage; exit 2;;
 esac

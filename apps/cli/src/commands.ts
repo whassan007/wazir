@@ -2394,14 +2394,14 @@ export async function improvePromoteCommand(
   const optimizer = engine.optimizer;
   if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
 
-  const candidate = {
-    candidateId,
-    experimentId: `promo-${candidateId}`,
-    strategy: 'CONFIGURATION' as const,
-    filesChanged: [],
-    config: optimizer.getActiveConfig(),
-    status: 'VERIFIED' as const,
-  };
+  const candidate = optimizer.getCandidate(candidateId);
+  if (!candidate) {
+    const missing = {
+      success: false,
+      reason: `PROMOTION_DENIED: Persisted candidate '${candidateId}' not found.`,
+    };
+    return options?.json ? JSON.stringify(missing, null, 2) : color.red(`✗ ${missing.reason}`);
+  }
 
   const res = await optimizer.promoteCandidate(candidate, {
     force: options?.force,
@@ -2434,7 +2434,7 @@ export async function improveRollbackCommand(
 
 export async function improveRunCommand(
   engine: RookEngine,
-  options?: { level?: string; json?: boolean; distributed?: boolean },
+  options?: { level?: string; json?: boolean; distributed?: boolean; runner?: any },
 ): Promise<string> {
   const optimizer = engine.optimizer;
   if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
@@ -2444,6 +2444,9 @@ export async function improveRunCommand(
   const opportunities = optimizer.observe({ executions });
 
   if (opportunities.length === 0) {
+    if (options?.json) {
+      return JSON.stringify({ decision: 'NO_OPPORTUNITIES', opportunities: [] }, null, 2);
+    }
     return color.green('MetaOptimizer cycle complete: No material improvement opportunities detected.');
   }
 
@@ -2451,6 +2454,9 @@ export async function improveRunCommand(
   const topOpp = opportunities[0];
   const hypotheses = optimizer.formulateHypotheses(topOpp);
   if (hypotheses.length === 0) {
+    if (options?.json) {
+      return JSON.stringify({ decision: 'INCONCLUSIVE', reason: 'NO_TESTABLE_HYPOTHESES', opportunity: topOpp }, null, 2);
+    }
     return color.yellow('Could not formulate testable hypotheses for detected opportunity.');
   }
 
@@ -2467,64 +2473,69 @@ export async function improveRunCommand(
   // Step 5: Verify candidate
   const verification = await optimizer.verifyCandidate(candidate);
 
-  // Step 6: Benchmark candidate against baseline
+  // Step 6: Benchmark candidate against baseline using real task execution (no synthetic results)
   const allTasks = engine.benchmark?.listTasks() ?? [];
   const matchedTasks = allTasks.filter((t) => plan.benchmarkCategories.includes(t.category));
   const tasksToRun = matchedTasks.length > 0 ? matchedTasks.slice(0, 2) : allTasks.slice(0, 2);
 
-  let evalResults: any[] = [];
-  if (tasksToRun.length > 0) {
-    let runIndex = 0;
-    const runner = {
-      id: 'cli-dogfood-runner',
-      name: 'Dogfood Evaluation Runner',
-      async run(task: any) {
-        runIndex++;
-        const isCandidate = runIndex > tasksToRun.length;
-        const tokens = isCandidate ? Math.round(topOpp.baseline * 0.72) : topOpp.baseline;
-        return {
-          execution: {
-            id: `exec-${task.id}-${runIndex}`,
-            taskId: task.id,
-            runtimeId: 'local',
-            modelId: 'qwen-2.5-coder',
-            status: 'completed' as const,
-            createdAt: new Date(),
-            completedAt: new Date(),
-          },
-          task: {
-            id: task.id,
-            type: 'coding' as const,
-            title: task.name,
-            input: task.prompt,
-            requirements: {},
-            priority: 'normal' as const,
-            status: 'completed' as const,
-            createdAt: new Date(),
-          },
-          policyDecisions: [],
-          toolCalls: [],
-          filesChanged: task.expectedFiles ?? [],
-          checks: [{ name: 'test' as const, command: 'check', ok: true, durationMs: 40, output: 'ok' }],
-          errors: [],
-          events: [],
-          usage: { input: tokens, output: 200 },
-        };
+  if (tasksToRun.length === 0) {
+    const payload = {
+      decision: 'INCONCLUSIVE',
+      reason: 'NO_BENCHMARK_TASKS_REGISTERED',
+      opportunity: topOpp,
+      plan,
+      candidateId: candidate.candidateId,
+      verification,
+      results: [],
+    };
+    if (options?.json) {
+      return JSON.stringify(payload, null, 2);
+    }
+    return [
+      color.cyan('SELF-IMPROVEMENT EXPERIMENT OBSERVED'),
+      '-------------------------------------------------------',
+      `Opportunity:   ${topOpp.category} on ${topOpp.component}`,
+      `Hypothesis:    ${hypotheses[0].proposedChange}`,
+      `Experiment ID: ${plan.experimentId}`,
+      `Candidate ID:  ${candidate.candidateId}`,
+      `Verification:  ${verification.allPassed ? color.green('PASSED') : color.red('FAILED')}`,
+      `Decision:      ${color.yellow('INCONCLUSIVE (NO_BENCHMARK_TASKS_REGISTERED)')}`,
+      '-------------------------------------------------------',
+    ].join('\n');
+  }
+
+  const liveRunner =
+    options?.runner ?? {
+      id: 'wazir-live-execution-runner',
+      name: 'Wazir Real Task Execution Benchmark Runner',
+      async run(task: any): Promise<ExecutionRecord> {
+        const outcome = await executeTask(engine, task.prompt, {
+          type: 'coding',
+          expectedFiles: task.expectedFiles,
+          maxTurns: 6,
+          quiet: true,
+          json: true,
+        });
+        if (!outcome.executionId || outcome.executionId === '—') {
+          throw new Error(
+            `Benchmark task '${task.id}' failed to execute: ${outcome.reasons.join('; ') || 'no execution created'}`,
+          );
+        }
+        const record = await engine.executions.get(outcome.executionId);
+        if (!record) {
+          throw new Error(`Execution record '${outcome.executionId}' not found for benchmark task '${task.id}'`);
+        }
+        return record;
       },
     };
 
-    const onlineWorkers = engine.computers.list().filter((c) => c.status === 'online');
-    const isDistributed = Boolean(options?.distributed && onlineWorkers.length >= 2);
-
-    evalResults = await optimizer.evaluateCandidates({
-      plan,
-      candidates,
-      runner,
-      tasks: tasksToRun,
-      distributed: isDistributed,
-      workers: isDistributed ? onlineWorkers : undefined,
-    });
-  }
+  const evalResults = await optimizer.evaluateCandidates({
+    plan,
+    candidates,
+    runner: liveRunner,
+    tasks: tasksToRun,
+    distributed: options?.distributed,
+  });
 
   const firstResult = evalResults[0];
   const decisionStr = firstResult
@@ -2537,6 +2548,7 @@ export async function improveRunCommand(
 
   if (options?.json) {
     return JSON.stringify({
+      decision: firstResult?.decision ?? 'INCONCLUSIVE',
       opportunity: topOpp,
       plan,
       candidates,
@@ -2546,7 +2558,7 @@ export async function improveRunCommand(
   }
 
   return [
-    color.cyan('✓ SELF-IMPROVEMENT EXPERIMENT COMPLETED'),
+    color.cyan('SELF-IMPROVEMENT EXPERIMENT OBSERVED'),
     '-------------------------------------------------------',
     `Opportunity:   ${topOpp.category} on ${topOpp.component}`,
     `Hypothesis:    ${hypotheses[0].proposedChange}`,
