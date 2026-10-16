@@ -311,14 +311,6 @@ class WazirRepository(
         computerId: String,
     ): Result<Boolean> = api.unloadModel(profile, modelId, runtimeId, computerId)
 
-    suspend fun pinModel(
-        profile: ControllerProfile,
-        modelId: String,
-        runtimeId: String,
-        computerId: String,
-        pinned: Boolean,
-    ): Result<Boolean> = api.pinModel(profile, modelId, runtimeId, computerId, pinned)
-
     suspend fun reconcileModels(profile: ControllerProfile): Result<Boolean> =
         api.reconcileModels(profile)
 

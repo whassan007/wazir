@@ -644,27 +644,6 @@ class MainViewModel(
         }
     }
 
-    fun togglePinModel(modelId: String, runtimeId: String, computerId: String, pinned: Boolean) {
-        val profile = _uiState.value.activeController ?: return
-        viewModelScope.launch {
-            repository.pinModel(profile, modelId, runtimeId, computerId, pinned)
-                .onSuccess {
-                    _uiState.update {
-                        it.copy(
-                            bannerMessage = "${if (pinned) "Pinned" else "Unpinned"} model $modelId",
-                            bannerIsError = false,
-                        )
-                    }
-                    refreshAll(silent = true)
-                }
-                .onFailure { err ->
-                    _uiState.update {
-                        it.copy(bannerMessage = err.message ?: "Pin model failed", bannerIsError = true)
-                    }
-                }
-        }
-    }
-
     fun reconcileModels() {
         val profile = _uiState.value.activeController ?: return
         viewModelScope.launch {

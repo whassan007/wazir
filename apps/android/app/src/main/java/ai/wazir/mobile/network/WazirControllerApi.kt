@@ -82,7 +82,7 @@ class WazirControllerApi(
             val cleanUrl = PairingUriParser.validateControllerBaseUrl(baseUrl, allowLoopbackHttp = true).getOrThrow()
             val bodyStr = json.encodeToString(payload)
             val request = Request.Builder()
-                .url("$cleanUrl/api/v1/mobile/pairing/request")
+                .url("$cleanUrl/api/v1/mobile/pair/request")
                 .header("X-Wazir-Mobile-Version", MOBILE_APP_VERSION)
                 .post(bodyStr.toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -118,7 +118,7 @@ class WazirControllerApi(
                 put("deviceId", deviceId)
             }
             val request = Request.Builder()
-                .url("$cleanUrl/api/v1/mobile/pairing/complete")
+                .url("$cleanUrl/api/v1/mobile/pair/complete")
                 .header("X-Wazir-Mobile-Version", MOBILE_APP_VERSION)
                 .post(json.encodeToString(payload).toRequestBody(JSON_MEDIA_TYPE))
                 .build()
@@ -338,29 +338,6 @@ class WazirControllerApi(
         )
     }
 
-    suspend fun pinModel(
-        profile: ControllerProfile,
-        modelId: String,
-        runtimeId: String = "ollama",
-        computerId: String = "local",
-        pinned: Boolean,
-        idempotencyKey: String = UUID.randomUUID().toString(),
-    ): Result<Boolean> {
-        val body = buildJsonObject {
-            put("runtimeId", runtimeId)
-            put("computerId", computerId)
-            put("pinned", pinned)
-        }
-        return executeAuthenticated(
-            profile = profile,
-            method = "POST",
-            path = "/api/v1/models/${URLEncoder.encode(modelId, "UTF-8")}/pin",
-            bodyJson = json.encodeToString(body),
-            idempotencyKey = idempotencyKey,
-            decode = { true },
-        )
-    }
-
     suspend fun reconcileModels(
         profile: ControllerProfile,
         idempotencyKey: String = UUID.randomUUID().toString(),
@@ -413,7 +390,7 @@ class WazirControllerApi(
         executeAuthenticated(
             profile = profile,
             method = "POST",
-            path = "/api/v1/mobile/resources/emergency-resume",
+            path = "/api/v1/mobile/resources/resume",
             bodyJson = "{}",
             idempotencyKey = idempotencyKey,
             decode = { true },

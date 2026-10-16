@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.fragment.app.FragmentActivity
@@ -287,27 +288,11 @@ private fun WazirApp(
                     models = state.models,
                     instances = state.modelInstances,
                     runtimes = state.runtimes,
-                    canMutate = canMutate,
-                    onLoad = { m, r, c -> vm.loadModel(m, r, c) },
-                    onUnload = { m, r, c -> vm.unloadModel(m, r, c) },
-                    onPin = { m, r, c, p -> vm.togglePinModel(m, r, c, p) },
-                    onReconcile = vm::reconcileModels,
                 )
             }
             composable(Routes.WORKERS) { ComputeWorkersScreen(state.computers) }
             composable(Routes.RESOURCES) {
-                ResourceBudgetsScreen(
-                    resources = state.resources,
-                    canMutate = canMutate,
-                    onEmergencyStop = {
-                        scope.launch {
-                            if (authenticate("Emergency Stop", "Halt model requests on ${active?.name}")) {
-                                vm.triggerEmergencyStop("Triggered from Wazir Mobile")
-                            }
-                        }
-                    },
-                    onResume = { vm.resumeEmergencyStop() },
-                )
+                ResourceBudgetsScreen(resources = state.resources)
             }
         }
     }

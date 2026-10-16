@@ -116,18 +116,19 @@ fun ModelsRuntimesScreen(
     models: List<ModelCatalogItem>,
     instances: List<ModelInstanceItem>,
     runtimes: List<RuntimeItem>,
-    canMutate: Boolean,
-    onLoad: (String, String, String) -> Unit,
-    onUnload: (String, String, String) -> Unit,
-    onPin: (String, String, String, Boolean) -> Unit,
-    onReconcile: () -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Models & Runtimes", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                if (canMutate) OutlinedButton(onClick = onReconcile) { Text("Reconcile") }
             }
+        }
+        item {
+            Text(
+                "Load, unload, pin, and reconcile are operator-only on the Wazir host and can't be performed from a paired mobile device.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         item { Text("Runtimes", style = MaterialTheme.typography.titleMedium) }
         if (runtimes.isEmpty()) item { Text("No runtimes reported.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -165,13 +166,6 @@ fun ModelsRuntimesScreen(
                                     if (i.pinned == true) StatusBadge("pinned")
                                 }
                                 Text("${i.runtimeId} @ $computer", style = MaterialTheme.typography.labelSmall)
-                            }
-                            if (canMutate) {
-                                Row {
-                                    if (i.loaded) TextButton(onClick = { onUnload(m.id, i.runtimeId, computer) }) { Text("Unload") }
-                                    else TextButton(onClick = { onLoad(m.id, i.runtimeId, computer) }) { Text("Load") }
-                                    TextButton(onClick = { onPin(m.id, i.runtimeId, computer, i.pinned != true) }) { Text(if (i.pinned == true) "Unpin" else "Pin") }
-                                }
                             }
                         }
                     }
@@ -236,16 +230,12 @@ fun ComputeWorkersScreen(computers: List<ComputerTelemetryItem>) {
 @Composable
 fun ResourceBudgetsScreen(
     resources: ResourceBudgetSnapshot?,
-    canMutate: Boolean,
-    onEmergencyStop: () -> Unit,
-    onResume: () -> Unit,
 ) {
     if (resources == null) {
         Text("Resource data unavailable.", Modifier.padding(24.dp))
         return
     }
     val stopped = resources.emergencyStop != null
-    var confirmStop by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -297,25 +287,16 @@ fun ResourceBudgetsScreen(
         items(resources.reservations, key = { "r-${it.id}" }) { r ->
             Text("• ${r.modelId} (${r.workload}) ~${r.estimatedInputTokens + r.estimatedOutputTokens} tok", style = MaterialTheme.typography.bodySmall)
         }
-        if (canMutate) {
-            item {
+        item {
+            Text(
                 if (stopped) {
-                    Button(onClick = onResume, modifier = Modifier.fillMaxWidth()) { Text("Resume Operations") }
+                    "Emergency stop is active. Resuming requires operator access on the Wazir host — not available from a paired mobile device."
                 } else {
-                    Button(onClick = { confirmStop = true }, modifier = Modifier.fillMaxWidth(), colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
-                        Text("Emergency Stop")
-                    }
-                }
-            }
+                    "Emergency Stop is operator-only on the Wazir host and can't be triggered from a paired mobile device."
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-    }
-    if (confirmStop) {
-        AlertDialog(
-            onDismissRequest = { confirmStop = false },
-            title = { Text("Emergency Stop?") },
-            text = { Text("This halts new model requests on the controller until resumed.") },
-            confirmButton = { TextButton(onClick = { confirmStop = false; onEmergencyStop() }) { Text("Stop") } },
-            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("Cancel") } },
-        )
     }
 }
