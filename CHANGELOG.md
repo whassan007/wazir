@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.1.69 — 2026-10-15
+
+**Release**: `v0.1.69`
+**Theme**: Dashboard state handling — stop showing "0" when the real answer is "unknown"
+
+Rounds out the v0.1.68 OFFLINE/502 fix by repairing the dashboard's own
+state handling, which had the exact bug the original report flagged: a
+failed request rendering as a confirmed zero instead of an unknown value.
+
+- Tab badges (Activity/Infrastructure/Catalog) only updated as a side
+  effect of a successful render, so a total outage froze them at a literal
+  "0". They now show "—" whenever every section feeding them has never
+  loaded, and recompute every refresh cycle regardless of success/failure.
+- The executions pagination counter's "Showing 0 of 0" was both the
+  pre-load placeholder and the genuine-empty-result text, making the two
+  indistinguishable. Placeholder is now "No data yet"; "Showing 0 of 0"
+  from a real successful response is unchanged (it's correct there).
+- The global status pill can now tell "backend reachable but rejecting our
+  token" apart from a real outage: 401/403 responses surface as
+  "authentication required" instead of folding into generic "offline".
+
+Verified in a real Chrome tab: forced a 401 via a deliberate token
+mismatch (pill read "authentication required", all counters "—"), then
+fixed the token and confirmed full recovery with real data.
+
 ## v0.1.68 — 2026-10-15
 
 **Release**: `v0.1.68`
