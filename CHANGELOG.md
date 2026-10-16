@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.67 — 2026-10-15
+
+**Release**: `v0.1.67`
+**Theme**: Wazir Desktop scaffold (dev-only)
+
+- **New `@wazir/desktop` package**: a Tauri 2 native shell that opens a window onto the existing `@wazir/web` dashboard and `@wazir/api` control plane instead of a second, duplicate frontend/runtime. `npm run desktop:dev` builds the Rust shell and boots both servers via the existing `start:dashboard` script.
+- Native menu (Reload, Open in Browser, View Logs, Quit/About) and a generated app icon set (`icon.icns`/`.ico`/PNGs) from the existing brand logo.
+- Scope is intentionally limited to a verified dev build: no installers, code signing, notarization, or CI packaging workflows yet, and no remote-host (Mode B) connection — see `apps/desktop/README.md` for what's deferred and why.
+
 ## v0.1.66 — 2026-10-14
 
 **Release**: `v0.1.66`

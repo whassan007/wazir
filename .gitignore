@@ -16,6 +16,10 @@ coverage/
 **/src/**/*.d.ts
 **/src/**/*.d.ts.map
 
+# Rust (apps/desktop/src-tauri) — Cargo.lock is committed (binary crate)
+target/
+apps/desktop/src-tauri/gen/schemas/
+
 # IDE / editors
 .vscode/
 .idea/
