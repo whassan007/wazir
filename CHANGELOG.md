@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.1.68 — 2026-10-15
+
+**Release**: `v0.1.68`
+**Theme**: Fix Wazir Desktop OFFLINE / 502 on a cold local launch
+
+Any launch of `@wazir/desktop` outside the `tauri dev` CLI (a built binary, or
+`tauri build --no-bundle` output) showed "Runtime: OFFLINE" with 502s on every
+dashboard call — `beforeDevCommand` only runs under `tauri dev`, so nothing
+had actually started the backend.
+
+- `main.rs` now health-checks ports 4800/4801 on startup and spawns `node
+  dist/main.js` (apps/api) and `node server.js` (apps/web) itself when
+  nothing's listening, logging to `~/Library/Logs/Wazir/{api,web}.log`. The
+  window stays hidden until the web port responds, then navigates to the live
+  dashboard — no more flash of the broken static page. Only child processes
+  this instance spawned are tracked and killed on quit; a pre-existing or
+  remote runtime is left untouched.
+- Fixing the connectivity race surfaced a second, previously-masked failure:
+  `apps/api`'s operator token is mandatory by default (`auth.ts`), and nothing
+  set `WAZIR_API_TOKEN` for the self-spawned backend, so every
+  `/api/v1/*`/`/executions` call 401'd even once the race was fixed. Desktop
+  now generates a random per-launch token and passes it to both spawned
+  processes; `apps/web`'s existing proxy attaches it to proxied requests
+  server-side, so it never reaches the webview.
+- Verified end-to-end on a cold launch with both ports free: dashboard loads
+  real data (`GET /api/v1/executions` → 200), and quitting the app leaves no
+  orphaned node processes or held ports.
+
 ## v0.1.67 — 2026-10-15
 
 **Release**: `v0.1.67`
