@@ -2299,4 +2299,112 @@ describe('FleetTui — protocol/validation visibility and raw response viewer', 
       harness.stop();
     });
   });
+
+  describe('Phase 4 — Inline Shell Mode (!), Cross-Task @ References, and Fast-Path Navigation', () => {
+    it('switches to SHELL mode when typing !, executes inline shell commands in projectRoot, records a Block, and exits on Esc', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-shell-'));
+      await fs.writeFile(path.join(projectRoot, 'marker.txt'), 'wazir-shell-ok\n', 'utf8');
+      const engine = await buildFleetTestEngine(projectRoot);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+      await harness.start();
+
+      // Typing '!' enters SHELL mode and updates status badge + input prompt
+      harness.sendKeys('!cat marker.txt');
+      expect(harness.tui.getMode()).toBe('SHELL');
+      expect(harness.getScreenBuffer()).toContain('[SHELL]');
+      expect(harness.getScreenBuffer()).toContain('wa [SHELL]> !cat marker.txt');
+
+      // Pressing Esc clears the shell buffer and returns to NORMAL mode
+      harness.sendKey('\x1b');
+      expect(harness.tui.getMode()).toBe('NORMAL');
+      expect(harness.tui.getStatusMessage()).toContain('Exited shell mode');
+
+      // Execute !cat marker.txt and verify output + block creation
+      harness.sendLine('!cat marker.txt');
+      for (let i = 0; i < 60 && !harness.tui.getLastShellOutput(); i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      const shellRes = harness.tui.getLastShellOutput();
+      expect(shellRes).toBeDefined();
+      expect(shellRes?.exitCode).toBe(0);
+      expect(shellRes?.stdout.trim()).toBe('wazir-shell-ok');
+      expect(shellRes?.blockId).toBe('1');
+      expect(harness.tui.getStatusMessage()).toContain('[SHELL #1] exit 0: wazir-shell-ok (ref @1)');
+
+      // Now reference @1 in a follow-up prompt
+      harness.sendLine('inspect @1 output');
+      await new Promise((r) => setTimeout(r, 40));
+      const refs = harness.tui.getLastResolvedReferences();
+      expect(refs.some((r) => r.kind === 'block' && r.id === '1')).toBe(true);
+
+      harness.stop();
+    });
+
+    it('surfaces @task:<id> and @exec:<id> in the @ fuzzy picker and resolves them on submit', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-refs-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      useSuccessfulFakeModel(engine);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+      await harness.start();
+
+      harness.sendLine('/fanout build backend; write docs');
+      for (let i = 0; i < 60 && harness.tui.getAgents().length < 2; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      const firstTaskId = harness.tui.getAgents()[0].taskId;
+
+      // Trigger @ picker with '@task:'
+      harness.sendKeys('@task:');
+      const pickerBuf = harness.getScreenBuffer();
+      expect(pickerBuf).toContain('References (@)');
+      expect(pickerBuf).toContain(`@task:${firstTaskId.slice(0, 20)}`);
+
+      // Tab-complete the @task:<id> candidate and submit
+      harness.sendKey('\t');
+      expect(harness.getScreenBuffer()).toContain(`@task:${firstTaskId}`);
+      harness.sendKey('\r');
+      await new Promise((r) => setTimeout(r, 40));
+
+      const resolved = harness.tui.getLastResolvedReferences();
+      expect(resolved.some((r) => r.kind === 'task' && r.id === firstTaskId)).toBe(true);
+
+      harness.stop();
+    });
+
+    it('supports fast-path task and approval cycling via Ctrl+N / ] and Ctrl+K / [', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-nav-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      useSuccessfulFakeModel(engine);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 3, useWorktrees: false });
+      await harness.start();
+
+      harness.sendLine('/fanout task alpha; task beta; task gamma');
+      for (let i = 0; i < 60 && harness.tui.getAgents().length < 3; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      const agents = harness.tui.getAgents();
+      expect(agents).toHaveLength(3);
+
+      // Cycle forward with ']' (or Ctrl+N \u000e)
+      harness.sendKey(']');
+      expect(harness.tui.getSelectedTaskId()).toBe(agents[1].taskId);
+      expect(harness.tui.getStatusMessage()).toContain(`Focused task ${agents[1].taskId}`);
+
+      harness.sendKey('\u000e'); // Ctrl+N
+      expect(harness.tui.getSelectedTaskId()).toBe(agents[2].taskId);
+
+      // Cycle backward with Ctrl+K (\u000b) and '['
+      harness.sendKey('\u000b'); // Ctrl+K
+      expect(harness.tui.getSelectedTaskId()).toBe(agents[1].taskId);
+
+      harness.sendKey('[');
+      expect(harness.tui.getSelectedTaskId()).toBe(agents[0].taskId);
+
+      harness.stop();
+    });
+  });
 });
+

@@ -2245,6 +2245,13 @@ export class FleetTui {
         this.draw();
         return;
       }
+      if (this.inputBuffer.startsWith('!')) {
+        this.inputBuffer = '';
+        this.inputCursor = 0;
+        this.statusMessage = 'Exited shell mode.';
+        this.draw();
+        return;
+      }
       if (this.eventScrollOffset > 0) {
         this.eventScrollOffset = 0;
         this.draw();
@@ -2405,7 +2412,7 @@ export class FleetTui {
     }
 
     // 9. Overlaid Approval Modal Actions ([A] Approve, [D] Deny, [V] View details, [I] Inspect,
-    // Ctrl+A Approve All, Ctrl+D Deny All)
+    // Ctrl+A Approve All, Ctrl+D Deny All, Ctrl+J / Ctrl+K / [ / ] cycle approvals)
     if (this.pendingApprovals.length > 0) {
       const first = this.pendingApprovals[0];
       if (key === '\u0001') {
@@ -2424,6 +2431,22 @@ export class FleetTui {
         this.engine.approvalQueue.approve(first.id);
         this.statusMessage = `Approved policy request for ${first.tool}`;
         this.draw();
+        return;
+      }
+      if (
+        (keyObj.ctrl && (keyName === 'k' || keyName === 'K')) ||
+        keyStr === '\u000b' ||
+        keyStr === '['
+      ) {
+        this.cycleActiveTask(-1);
+        return;
+      }
+      if (
+        (keyObj.ctrl && (keyName === 'n' || keyName === 'N' || ((keyName === 'j' || keyName === 'J') && keyStr !== '\n' && keyStr !== '\r'))) ||
+        keyStr === '\u000e' ||
+        keyStr === ']'
+      ) {
+        this.cycleActiveTask(1);
         return;
       }
       if (key === 'd' || key === 'D' || key === 'n' || key === 'N') {
@@ -2485,6 +2508,27 @@ export class FleetTui {
     if ((keyName === '?' || keyStr === '?') && this.inputBuffer.length === 0) {
       this.currentView = this.currentView === 'help' ? 'fleet' : 'help';
       this.draw();
+      return;
+    }
+
+    // 12. Fast-path subagent/task navigation: Ctrl+K / '[' (prev) and Ctrl+J / Ctrl+N / ']' (next)
+    if (
+      (keyObj.ctrl && (keyName === 'k' || keyName === 'K')) ||
+      keyStr === '\u000b' ||
+      (this.inputBuffer.length === 0 && keyStr === '[')
+    ) {
+      this.cycleActiveTask(-1);
+      return;
+    }
+    if (
+      (keyObj.ctrl &&
+        (keyName === 'n' ||
+          keyName === 'N' ||
+          ((keyName === 'j' || keyName === 'J') && keyStr !== '\n' && keyStr !== '\r'))) ||
+      keyStr === '\u000e' ||
+      (this.inputBuffer.length === 0 && keyStr === ']')
+    ) {
+      this.cycleActiveTask(1);
       return;
     }
 
@@ -3380,10 +3424,19 @@ export class FleetTui {
       list.push(`@${b.id}`);
     }
 
-    // Jobs: @job:<id>
+    // Jobs: @job:<id> and Tasks: @task:<id>
     const jobs = this.engine.orchestrator.listJobs?.() ?? (this.currentJob ? [this.currentJob] : []);
     for (const j of jobs) {
       list.push(`@job:${j.id}`);
+      for (const t of j.tasks ?? []) {
+        list.push(`@task:${t.id}`);
+      }
+    }
+
+    // Active/recorded agent tasks & executions: @task:<id> and @exec:<id>
+    for (const a of this.agents.values()) {
+      list.push(`@task:${a.taskId}`);
+      list.push(`@exec:${a.taskId}`);
     }
 
     // Agents: @agent:<id>
@@ -3430,6 +3483,70 @@ export class FleetTui {
   }
 
   /**
+   * Executes an inline shell command (`!<cmd>` or `/sh <cmd>`) directly in `engine.projectRoot`,
+   * capturing stdout/stderr/exitCode as a persistent Block record that can be referenced via `@<id>`.
+   */
+  private async executeInlineShellCommand(shellCmd: string, submission: InteractiveSubmission): Promise<void> {
+    this.statusMessage = `[SHELL] Running: ${shellCmd}...`;
+    this.draw();
+
+    let tracker: Awaited<ReturnType<typeof createBlock>> | undefined;
+    try {
+      if (this.engine.store) {
+        tracker = await createBlock(this.engine, `! ${shellCmd}`, ['/bin/sh', '-c', shellCmd], {
+          submissionId: submission.submissionId,
+          source: submission.source,
+          sessionId: submission.sessionId,
+        });
+      }
+    } catch {
+      // Store may not be configured
+    }
+
+    try {
+      const { stdout = '', stderr = '' } = await execFileAsync('/bin/sh', ['-c', shellCmd], {
+        cwd: this.engine.projectRoot,
+        timeout: 30_000,
+        maxBuffer: 1024 * 1024,
+      });
+      const blockId = tracker?.block.id;
+      if (tracker) {
+        await tracker.finish('success', { stdout, stderr, exitCode: 0 }).catch(() => {});
+        await this.refreshRecentBlocks();
+      }
+      this.lastShellOutput = {
+        command: shellCmd,
+        stdout,
+        stderr,
+        exitCode: 0,
+        blockId,
+      };
+      const firstLine = (stdout.trim() || stderr.trim()).split(/\r?\n/)[0] ?? '';
+      const refHint = blockId ? ` (ref @${blockId})` : '';
+      this.statusMessage = `[SHELL${blockId ? ` #${blockId}` : ''}] exit 0: ${firstLine || '(no output)'}${refHint}`;
+    } catch (err: any) {
+      const stdout = typeof err?.stdout === 'string' ? err.stdout : '';
+      const stderr = typeof err?.stderr === 'string' ? err.stderr : err instanceof Error ? err.message : String(err);
+      const exitCode = typeof err?.code === 'number' ? err.code : 1;
+      const blockId = tracker?.block.id;
+      if (tracker) {
+        await tracker.finish('failed', { stdout, stderr, exitCode, errors: [stderr] }).catch(() => {});
+        await this.refreshRecentBlocks();
+      }
+      this.lastShellOutput = {
+        command: shellCmd,
+        stdout,
+        stderr,
+        exitCode,
+        blockId,
+      };
+      const firstErr = (stderr.trim() || stdout.trim()).split(/\r?\n/)[0] ?? 'command failed';
+      this.statusMessage = `[SHELL${blockId ? ` #${blockId}` : ''}] exit ${exitCode}: ${firstErr}`;
+    }
+    this.draw();
+  }
+
+  /**
    * Submits a user command or task prompt with strict deduplication and provenance tracking.
    */
   async submitCommand(cmdOrSubmission: string | InteractiveSubmission): Promise<void> {
@@ -3468,6 +3585,19 @@ export class FleetTui {
       this.tuiMode = 'COPY';
       this.statusMessage = 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.';
       this.draw();
+      return;
+    }
+
+    // Inline Shell-Mode (`!<cmd>` or `/sh <cmd>`): execute directly in projectRoot and record as a Block
+    if (trimmed.startsWith('!') || trimmed === '/sh' || trimmed.startsWith('/sh ')) {
+      const shellCmd = (trimmed.startsWith('!') ? trimmed.slice(1) : trimmed.slice(3)).trim();
+      if (!shellCmd) {
+        this.statusMessage =
+          'Shell mode: type !<command> (e.g. !git status) to execute in project root and capture as @block.';
+        this.draw();
+        return;
+      }
+      await this.executeInlineShellCommand(shellCmd, submission);
       return;
     }
 
@@ -5310,6 +5440,7 @@ export class FleetTui {
     else if (mode === 'COPY') modeBadge = color.bold(color.cyan(`[${mode}]`));
     else if (mode === 'APPROVAL') modeBadge = color.bold(color.red(`[${mode}]`));
     else if (mode === 'PALETTE') modeBadge = color.bold(color.blue(`[${mode}]`));
+    else if (mode === 'SHELL') modeBadge = color.bold(color.yellow(`[${mode}]`));
 
     const rightPlain = `${modelPlain}${jobPlain}${alertPlain}${sidebarPlain}${contextPlain} `;
     const maxStatusLen = Math.max(10, cols - rightPlain.length - 16);
@@ -5345,8 +5476,13 @@ export class FleetTui {
       return `${promptPrefix}${hint}`;
     }
 
-    const promptPrefix = mode === 'COMPOSER' ? color.magenta('wa [COMPOSER]> ') : color.cyan('wa> ');
-    const prefixLen = mode === 'COMPOSER' ? 15 : 4;
+    const promptPrefix =
+      mode === 'COMPOSER'
+        ? color.magenta('wa [COMPOSER]> ')
+        : mode === 'SHELL'
+          ? color.yellow('wa [SHELL]> ')
+          : color.cyan('wa> ');
+    const prefixLen = mode === 'COMPOSER' ? 15 : mode === 'SHELL' ? 12 : 4;
     const available = Math.max(0, cols - prefixLen);
 
     // Strip any leading prompt prefix in the inputBuffer to prevent duplicate prompts (e.g. "wa> wa> ...")
