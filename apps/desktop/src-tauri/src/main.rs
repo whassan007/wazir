@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
+use rand::Rng;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager, Wry};
 use tauri_plugin_opener::OpenerExt;
@@ -69,15 +70,35 @@ struct OwnedBackend {
     web: Option<Child>,
 }
 
-fn spawn_logged(cwd: &std::path::Path, args: &[&str], log_file: &std::path::Path) -> std::io::Result<Child> {
+fn spawn_logged(
+    cwd: &std::path::Path,
+    args: &[&str],
+    log_file: &std::path::Path,
+    envs: &[(&str, &str)],
+) -> std::io::Result<Child> {
     let log = std::fs::File::create(log_file)?;
     let err_log = log.try_clone()?;
-    Command::new("node")
-        .args(args)
+    let mut cmd = Command::new("node");
+    cmd.args(args)
         .current_dir(cwd)
         .stdout(Stdio::from(log))
-        .stderr(Stdio::from(err_log))
-        .spawn()
+        .stderr(Stdio::from(err_log));
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    cmd.spawn()
+}
+
+/// A fresh, random operator token for the backend this launch spawns itself.
+/// apps/api/src/auth.ts refuses every `/api/v1/*` and `/executions` request
+/// without `WAZIR_API_TOKEN` (mandatory by default, security review F-1/F-2/F-3)
+/// — so without this, a cold local launch starts a backend that rejects every
+/// dashboard request with 401. Handed to both processes we spawn; never to the
+/// webview — the web server's own proxy attaches it server-side, the same way
+/// it already does for an operator-configured token (apps/web/server.js).
+fn generate_local_operator_token() -> String {
+    let bytes: [u8; 32] = rand::thread_rng().gen();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Starts the local API and/or web dashboard if nothing is already listening on
@@ -89,15 +110,26 @@ fn start_local_runtime_if_needed() -> OwnedBackend {
     let logs = logs_dir();
     let _ = std::fs::create_dir_all(&logs);
     let mut owned = OwnedBackend::default();
+    let token = generate_local_operator_token();
 
     if !is_listening(API_PORT) {
-        match spawn_logged(&root.join("apps/api"), &["dist/main.js"], &logs.join("api.log")) {
+        match spawn_logged(
+            &root.join("apps/api"),
+            &["dist/main.js"],
+            &logs.join("api.log"),
+            &[("WAZIR_API_TOKEN", token.as_str())],
+        ) {
             Ok(child) => owned.api = Some(child),
             Err(e) => eprintln!("Wazir Desktop: failed to start the local API ({e}); is Node on PATH and has `npm run build` been run?"),
         }
     }
     if !is_listening(WEB_PORT) {
-        match spawn_logged(&root.join("apps/web"), &["server.js"], &logs.join("web.log")) {
+        match spawn_logged(
+            &root.join("apps/web"),
+            &["server.js"],
+            &logs.join("web.log"),
+            &[("WAZIR_API_TOKEN", token.as_str())],
+        ) {
             Ok(child) => owned.web = Some(child),
             Err(e) => eprintln!("Wazir Desktop: failed to start the local web dashboard ({e})"),
         }
