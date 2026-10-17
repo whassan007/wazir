@@ -1,3 +1,24 @@
+# Wazir Release Notes - v0.2.4
+
+**Release**: `v0.2.4`
+**Theme**: Conversation-first terminal experience
+
+`wa chat` now opens Wazir's focused, conversation-first coding interface by default. The Mission Control fleet dashboard remains available as `wa fleet` or `wa chat --dashboard`, and `/fleet` and `/chat` switch views during an interactive session.
+
+## Highlights
+
+- **Conversation-first chat** with a persistent prompt, readable task summaries, streamed events, and execution status.
+- **Keyboard controls** for quick actions, task history, model selection, shell mode, clipboard, and dashboard navigation.
+- **Mission Control remains available** with current jobs, agents, providers, approvals, activity, and verification evidence.
+- **Terminal integrity** across narrow and wide layouts, resize, paste, cancellation, and clean exit.
+- **Rendered PTY evidence** in [`docs/verification/mission-control`](verification/mission-control/README.md), including before and after screenshots.
+
+## Validation
+
+Verified with the TUI, terminal integrity, PTY session-exit, conversation projection, and paste-barrier suites; `npm run build`, `npm run typecheck`, `npm run check-dist`, `npm run package:check`, `npm run release:verify`, and `npm run release:gate`.
+
+---
+
 # Wazir Release Notes - v0.2.3
 
 **Release**: `v0.2.3`

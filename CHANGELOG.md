@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.4 — 2026-10-17
+
+**Release**: `v0.2.4`
+**Theme**: Conversation-first terminal experience
+
+- Restored the Codex-style conversation-first interface as the default for `wa chat`.
+- Kept Mission Control available through `wa fleet` and `wa chat --dashboard`, with `/fleet` and `/chat` navigation during a session.
+- Added conversation transcript rendering, event summaries, keyboard quick actions, clipboard support, responsive terminal capabilities, and clean terminal restoration.
+- Added wide and narrow PTY screenshots and terminal regression coverage.
+
 ## v0.2.3 — 2026-10-17
 
 **Release**: `v0.2.3`
