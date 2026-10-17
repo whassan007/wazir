@@ -221,6 +221,46 @@ describe('Terminal & Control-Plane Integrity Acceptance Suite (15 Deterministic 
     }
   });
 
+  it('does not let a late model wait replace a completed job status', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-integrity-test-'));
+    const engine = await buildTestEngine(projectRoot);
+    harness = new TuiTestHarness({ engine, concurrencyLimit: 4 });
+    await harness.start();
+
+    (harness.tui as any).statusMessage = 'Job completed!';
+    (harness.tui as any).currentJob = { id: 'completed-job', status: 'completed' };
+    (harness.tui as any).handleModelLifecycleEvent({
+      type: 'WAITING_FOR_MODEL',
+      modelId: 'fake-model',
+      reason: 'delayed lifecycle event',
+    });
+
+    expect(harness.tui.getStatusMessage()).toBe('Job completed!');
+  });
+
+  it('coalesces 10k conversation event redraws and echoes a key within the 50 ms budget', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-integrity-test-'));
+    const engine = await buildTestEngine(projectRoot);
+    harness = new TuiTestHarness({ engine, concurrencyLimit: 4, presentationMode: 'conversation' });
+    await harness.start();
+    (harness.tui as any).agents.set('load-task', {
+      taskId: 'load-task', title: 'load', agentId: 'test', computerId: 'local', modelId: 'fake-model',
+      phase: 'execute', lastMessage: '', status: 'running', durationMs: 0, filesChanged: [],
+    });
+    for (let i = 0; i < 10_000; i++) {
+      (harness.tui as any).onJobEvent({
+        type: 'task:progress', jobId: 'load-job', taskId: 'load-task',
+        event: { kind: 'tool', tool: 'read', metadata: { path: `src/${i}.ts` } },
+      });
+    }
+    const started = performance.now();
+    harness.sendKey('x');
+    await Promise.resolve();
+    const latencyMs = performance.now() - started;
+    expect((harness.tui as any).inputBuffer).toBe('x');
+    expect(latencyMs).toBeLessThan(50);
+  });
+
   // Test 1: Idle Redraw (1000 redraws -> 0 submissions, 0 blocks, 0 jobs)
   it('Test 1: Idle Redraw (1000 redraws -> 0 submissions, 0 blocks, 0 jobs)', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-integrity-test-'));

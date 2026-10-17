@@ -27,6 +27,10 @@ import { refreshRuntime } from '../engine.js';
 import { color } from '../colors.js';
 import { createFleetTaskExecutor } from '../fleetRunner.js';
 import { TerminalScreen, type TerminalSize } from './screen.js';
+import { ConversationRenderer } from './conversationRenderer.js';
+import { StatusProjection } from './statusProjection.js';
+import { EventSummarizer, type TranscriptVerbosity } from './eventSummarizer.js';
+import { ClipboardController } from './clipboardController.js';
 import {
   CanaryLiveEventBuffer,
   CANARY_TIMELINE_FILTERS,
@@ -265,6 +269,7 @@ export interface FleetTuiOptions {
   /** Per-job wall-clock limit; the orchestrator's built-in default applies when unset. */
   timeoutSeconds?: number;
   enablePlanner?: boolean;
+  presentationMode?: 'conversation' | 'dashboard';
 }
 
 /**
@@ -442,6 +447,9 @@ function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
   if (keyStr === '\u0015') {
     return { name: 'u', ctrl: true, meta: false, shift: false, sequence: '\u0015' };
   }
+  if (keyStr === '\u001a') {
+    return { name: 'z', ctrl: true, meta: false, shift: false, sequence: '\u001a' };
+  }
   if (keyStr === '\u0017') {
     return { name: 'w', ctrl: true, meta: false, shift: false, sequence: '\u0017' };
   }
@@ -461,6 +469,33 @@ function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
   };
 }
 
+function previousGraphemeBoundary(text: string, cursor: number): number {
+  const Segmenter = (Intl as any).Segmenter;
+  if (Segmenter) {
+    let previous = 0;
+    for (const segment of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+      if (segment.index >= cursor) break;
+      previous = segment.index;
+      if (segment.index + segment.segment.length >= cursor) return segment.index;
+    }
+    return previous;
+  }
+  const point = text.codePointAt(Math.max(0, cursor - 1));
+  return Math.max(0, cursor - (point && point > 0xffff ? 2 : 1));
+}
+
+function nextGraphemeBoundary(text: string, cursor: number): number {
+  const Segmenter = (Intl as any).Segmenter;
+  if (Segmenter) {
+    for (const segment of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+      if (segment.index >= cursor || segment.index + segment.segment.length > cursor) return segment.index + segment.segment.length;
+    }
+    return text.length;
+  }
+  const point = text.codePointAt(cursor);
+  return Math.min(text.length, cursor + (point && point > 0xffff ? 2 : 1));
+}
+
 export class FleetTui {
   readonly engine: RookEngine;
   readonly screen: TerminalScreen;
@@ -469,6 +504,17 @@ export class FleetTui {
   private readonly autoMerge: boolean;
   private readonly timeoutSeconds?: number;
   private readonly enablePlanner: boolean;
+  private presentationMode: 'conversation' | 'dashboard';
+  private conversationRenderer: ConversationRenderer;
+  private clipboardController: ClipboardController;
+  private readonly statusProjection = new StatusProjection();
+  private eventSummarizer = new EventSummarizer();
+  private conversationDrawQueued = false;
+  private conversationStartedAt?: number;
+  private lastInterruptAt = 0;
+  private copyCursorLine = 0;
+  private copyAnchorLine?: number;
+  private copyNotice = '';
 
   private currentView: TuiView = 'fleet';
   private missionHome = true;
@@ -581,6 +627,8 @@ export class FleetTui {
     { id: 'launch-lmstudio', title: 'Launch LM Studio Server', cmd: '/launch lmstudio' },
     { id: 'help', title: 'Toggle Help & Shortcuts', cmd: '/help' },
     { id: 'repaint', title: 'Force Screen Repaint', cmd: '/repaint' },
+    { id: 'conversation', title: 'Conversation view', cmd: '/chat' },
+    { id: 'fleet-dashboard', title: 'Fleet dashboard', cmd: '/fleet' },
   ];
 
   private readonly agents = new Map<string, AgentCardState>();
@@ -631,6 +679,11 @@ export class FleetTui {
   private selectedModelId?: string;
 
   private inputBuffer = '';
+  private readonly conversationHistory: string[] = [];
+  private conversationHistoryIndex = -1;
+  private conversationHistoryDraft = '';
+  private inputUndo: string[] = [];
+  private inputRedo: string[] = [];
   /** Index into inputBuffer where typed/deleted characters land; 0..inputBuffer.length. */
   private inputCursor = 0;
   /** 1-based terminal column the hardware cursor belongs at, set by renderInputBar()'s
@@ -672,6 +725,12 @@ export class FleetTui {
       });
     }
     this.screen = options.screen ?? new TerminalScreen();
+    this.presentationMode = options.presentationMode ?? 'dashboard';
+    if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation(this.presentationMode);
+    if (this.presentationMode === 'conversation') this.focusedPane = 'prompt';
+    const output = typeof (this.screen as any).getOutputStream === 'function' ? this.screen.getOutputStream() : process.stdout;
+    this.conversationRenderer = new ConversationRenderer(output, () => typeof (this.screen as any).getSize === 'function' ? this.screen.getSize() : { columns: 80, rows: 24 });
+    this.clipboardController = new ClipboardController(output);
     this.concurrencyLimit = options.concurrencyLimit ?? 4;
     this.useWorktrees = options.useWorktrees ?? true;
     this.autoMerge = options.autoMerge ?? false;
@@ -685,6 +744,60 @@ export class FleetTui {
 
   getProcessedSubmissionIds(): Set<string> {
     return this.processedSubmissionIds;
+  }
+
+  private rememberConversationPrompt(prompt: string): void {
+    if (!prompt) return;
+    if (this.conversationHistory.at(-1) !== prompt) this.conversationHistory.push(prompt);
+    if (this.conversationHistory.length > 100) this.conversationHistory.shift();
+    this.conversationHistoryIndex = -1;
+    this.conversationHistoryDraft = '';
+  }
+
+  private moveConversationHistory(direction: -1 | 1): void {
+    if (direction < 0) {
+      if (!this.conversationHistory.length) return;
+      if (this.conversationHistoryIndex === -1) {
+        this.conversationHistoryDraft = this.inputBuffer;
+        this.conversationHistoryIndex = this.conversationHistory.length - 1;
+      } else this.conversationHistoryIndex = Math.max(0, this.conversationHistoryIndex - 1);
+      this.inputBuffer = this.conversationHistory[this.conversationHistoryIndex];
+    } else if (this.conversationHistoryIndex >= 0) {
+      if (this.conversationHistoryIndex < this.conversationHistory.length - 1) {
+        this.conversationHistoryIndex++;
+        this.inputBuffer = this.conversationHistory[this.conversationHistoryIndex];
+      } else {
+        this.conversationHistoryIndex = -1;
+        this.inputBuffer = this.conversationHistoryDraft;
+        this.conversationHistoryDraft = '';
+      }
+    }
+    this.inputCursor = this.inputBuffer.length;
+    this.focusedPane = 'prompt';
+  }
+
+  private transcriptLines(): string[] {
+    return this.conversationRenderer.transcript.list().flatMap((entry) => entry.text.split('\n'));
+  }
+
+  private copyModeStatus(): string {
+    const lines = this.transcriptLines();
+    const preview = (lines[this.copyCursorLine] ?? '').replace(/[\r\t]/g, ' ');
+    return `Copy ${this.copyCursorLine + 1}/${Math.max(1, lines.length)} · ${this.copyAnchorLine === undefined ? 'V mark' : `marked from ${this.copyAnchorLine + 1}`} · Y copy · Esc exit · ${preview}${this.copyNotice ? ` · ${this.copyNotice}` : ''}`;
+  }
+
+  private enterCopyMode(): void {
+    this.tuiMode = 'COPY';
+    this.copyCursorLine = Math.max(0, this.transcriptLines().length - 1);
+    this.copyAnchorLine = undefined;
+    this.copyNotice = '';
+    this.statusMessage = 'Copy mode: arrows move, V marks a range, Y copies when OSC52 is enabled, Esc exits.';
+  }
+
+  private snapshotInputEdit(): void {
+    if (this.inputUndo.at(-1) !== this.inputBuffer) this.inputUndo.push(this.inputBuffer);
+    if (this.inputUndo.length > 20) this.inputUndo.shift();
+    this.inputRedo = [];
   }
 
   async submitInteractive(submission: InteractiveSubmission): Promise<void> {
@@ -1452,6 +1565,7 @@ export class FleetTui {
       this.draw();
     } else {
       const sanitized = clean.replace(/^(wa(\s*\[[A-Z]+\])?>\s*)+/, '');
+      this.snapshotInputEdit();
       this.inputBuffer =
         this.inputBuffer.slice(0, this.inputCursor) + sanitized + this.inputBuffer.slice(this.inputCursor);
       this.inputCursor += sanitized.length;
@@ -1661,6 +1775,9 @@ export class FleetTui {
     // 3. Raw Mode & Keypress Binding Check:
     // Verify that stdin is correctly running in raw mode so structured key objects are passed
     this.screen.enter();
+    if (this.presentationMode === 'conversation') {
+      this.conversationRenderer.start(process.env.USER ?? process.env.USERNAME ?? 'controller', this.selectedModelId ?? 'auto-routed model');
+    }
 
     this.waitForExit();
 
@@ -1672,6 +1789,7 @@ export class FleetTui {
     // Subscribe to approval queue
     this.unsubscribeApprovals = this.engine.approvalQueue.subscribe((requests) => {
       this.pendingApprovals = requests;
+      this.statusProjection.setWaitingForApproval(requests.map((request) => request.taskId).filter((id): id is string => Boolean(id)), requests.length > 0);
       this.draw();
     });
 
@@ -1828,6 +1946,7 @@ export class FleetTui {
     // error unhandled and crashes the process (exit 1) on the exact path we're trying
     // to exit gracefully. The handler is a no-op and harmless for the process lifetime.
 
+    if (this.presentationMode === 'conversation') this.conversationRenderer.stop();
     this.screen.leave();
     this.isRunning = false;
     this.exitResolver?.();
@@ -1840,6 +1959,20 @@ export class FleetTui {
     const keyObj = resolveKeyObject(key, rawKeyObj);
     const keyName = keyObj.name ?? '';
     const keyStr = keyObj.sequence ?? key;
+
+    // Leave emulator clipboard chords to the terminal; these are distinct from Ctrl+C.
+    if (keyObj.ctrl && keyObj.shift && ['c', 'C', 'v', 'V'].includes(keyName || keyStr)) return;
+
+    if (keyObj.ctrl && (keyName.toLowerCase() === 'z' || keyStr === '\x1a')) {
+      if (keyObj.shift) {
+        const next = this.inputRedo.pop();
+        if (next !== undefined) { this.inputUndo.push(this.inputBuffer); this.inputBuffer = next; this.inputCursor = next.length; this.draw(); }
+      } else {
+        const previous = this.inputUndo.pop();
+        if (previous !== undefined) { this.inputRedo.push(this.inputBuffer); this.inputBuffer = previous; this.inputCursor = previous.length; this.draw(); }
+      }
+      return;
+    }
 
     // 0. Bracketed paste handling
     if (keyName === 'paste-start' || keyStr === '\x1b[200~' || keyStr.startsWith('\x1b[200~')) {
@@ -1885,6 +2018,15 @@ export class FleetTui {
 
     // 1. Ctrl+C: exit
     if ((keyObj.ctrl && (keyName === 'c' || keyName === 'C')) || keyStr === '\u0003') {
+      const now = Date.now();
+      const active = this.getAgents().some((agent) => agent.status === 'running' || agent.status === 'retry');
+      if (active && now - this.lastInterruptAt > 1500) {
+        this.lastInterruptAt = now;
+        if (this.currentJob) void this.engine.orchestrator.cancelJob(this.currentJob.id).catch(() => undefined);
+        this.statusMessage = 'Interrupt requested. Press Ctrl+C again to exit.';
+        this.draw();
+        return;
+      }
       this.stop();
       process.exit(0);
     }
@@ -1895,10 +2037,23 @@ export class FleetTui {
         this.startupSelector = undefined;
         this.quickActionsOpen = true;
         this.quickActionIndex = 0;
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`QUICK ACTIONS (Ctrl+P)\n${this.quickActions.map((action, index) => `${index + 1}. ${action.title}`).join('\n')}`);
+        }
         this.draw();
         return;
       }
       if (keyStr.startsWith('/') || (keyStr === '/' && this.inputBuffer === '')) {
+        this.startupSelector = undefined;
+        this.focusedPane = 'prompt';
+        this.inputBuffer = keyStr;
+        this.inputCursor = keyStr.length;
+        this.draw();
+        return;
+      }
+      if (this.presentationMode === 'conversation' && Array.from(keyStr).length === 1 && !/[\x00-\x1f\x7f-\x9f]/.test(keyStr)) {
+        // The startup selector is an optional dashboard overlay. In chat, don't
+        // make an invisible overlay consume ordinary prompt text.
         this.startupSelector = undefined;
         this.focusedPane = 'prompt';
         this.inputBuffer = keyStr;
@@ -1939,6 +2094,7 @@ export class FleetTui {
       }
       if (keyStr === 'e' || keyStr === 'E') {
         this.tuiMode = 'COMPOSER';
+        this.snapshotInputEdit();
         this.inputBuffer = this.pastedContent;
         this.inputCursor = this.inputBuffer.length;
         this.pastedContent = '';
@@ -2015,11 +2171,9 @@ export class FleetTui {
 
     // Ctrl+Y: Toggle COPY mode
     if ((keyObj.ctrl && (keyName === 'y' || keyName === 'Y')) || keyStr === '\u0019') {
-      this.tuiMode = this.tuiMode === 'COPY' ? 'NORMAL' : 'COPY';
-      this.statusMessage =
-        this.tuiMode === 'COPY'
-          ? 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.'
-          : 'Exited copy mode.';
+      if (this.tuiMode === 'COPY') { this.tuiMode = 'NORMAL'; this.copyAnchorLine = undefined; this.copyNotice = ''; this.statusMessage = 'Exited copy mode.'; }
+      else if (this.presentationMode === 'conversation') this.enterCopyMode();
+      else { this.tuiMode = 'COPY'; this.statusMessage = 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.'; }
       this.draw();
       return;
     }
@@ -2055,6 +2209,28 @@ export class FleetTui {
 
     // COPY mode handling
     if (this.tuiMode === 'COPY') {
+      if (this.presentationMode === 'conversation') {
+        const lines = this.transcriptLines();
+        if (keyName === 'up' || keyStr === '\u001b[A') this.copyCursorLine = Math.max(0, this.copyCursorLine - 1);
+        else if (keyName === 'down' || keyStr === '\u001b[B') this.copyCursorLine = Math.min(Math.max(0, lines.length - 1), this.copyCursorLine + 1);
+        else if (keyName === 'home' || keyStr === '\x1b[H' || keyStr === '\x1bOH') this.copyCursorLine = 0;
+        else if (keyName === 'end' || keyStr === '\x1b[F' || keyStr === '\x1bOF') this.copyCursorLine = Math.max(0, lines.length - 1);
+        else if (keyStr.toLowerCase() === 'v') {
+          this.copyAnchorLine = this.copyAnchorLine === undefined ? this.copyCursorLine : undefined;
+          this.copyNotice = this.copyAnchorLine === undefined ? 'mark cleared' : 'range marked';
+        } else if (keyStr.toLowerCase() === 'y') {
+          if (lines.length) {
+            const start = Math.min(this.copyAnchorLine ?? this.copyCursorLine, this.copyCursorLine);
+            const end = Math.max(this.copyAnchorLine ?? this.copyCursorLine, this.copyCursorLine);
+            const result = this.clipboardController.copy(lines.slice(start, end + 1).join('\n'));
+            this.copyNotice = result.copied ? 'copied to clipboard' : ('reason' in result ? result.reason : 'Copy blocked.');
+          }
+        } else if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
+          this.tuiMode = 'NORMAL'; this.copyAnchorLine = undefined; this.copyNotice = ''; this.statusMessage = 'Exited copy mode.';
+        }
+        this.draw();
+        return;
+      }
       if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
         this.tuiMode = 'NORMAL';
         this.statusMessage = 'Exited copy mode.';
@@ -2246,6 +2422,19 @@ export class FleetTui {
         this.draw();
         return;
       }
+      if (this.presentationMode === 'conversation') {
+        if (this.pendingApprovals.length > 0) return;
+        const active = this.getAgents().some((agent) => agent.status === 'running' || agent.status === 'retry');
+        if (active && this.currentJob) {
+          void this.engine.orchestrator.cancelJob(this.currentJob.id).catch(() => undefined);
+          this.conversationRenderer.append('Interrupt requested');
+        } else if (this.inputBuffer) {
+          this.inputBuffer = '';
+          this.inputCursor = 0;
+        }
+        this.draw();
+        return;
+      }
       if (this.eventScrollOffset > 0) {
         this.eventScrollOffset = 0;
         this.draw();
@@ -2272,6 +2461,9 @@ export class FleetTui {
     if (key === '\u0010' || key === '\x10') {
       this.quickActionsOpen = !this.quickActionsOpen;
       this.quickActionIndex = 0;
+      if (this.presentationMode === 'conversation' && this.quickActionsOpen) {
+        this.conversationRenderer.append(`QUICK ACTIONS (Ctrl+P)\n${this.quickActions.map((action, index) => `${index + 1}. ${action.title}`).join('\n')}`);
+      }
       this.draw();
       return;
     }
@@ -3023,6 +3215,18 @@ export class FleetTui {
       }
     }
 
+    if (this.presentationMode === 'conversation' && (keyName === 'up' || keyName === 'down')) {
+      const beforeCursor = this.inputBuffer.slice(0, this.inputCursor);
+      const afterCursor = this.inputBuffer.slice(this.inputCursor);
+      const atLineStart = beforeCursor.length === 0 || beforeCursor.endsWith('\n');
+      const atLineEnd = afterCursor.length === 0 || afterCursor.startsWith('\n');
+      if ((keyName === 'up' && atLineStart) || (keyName === 'down' && (this.conversationHistoryIndex >= 0 || (this.inputBuffer.length === 0 && atLineEnd)))) {
+        this.moveConversationHistory(keyName === 'up' ? -1 : 1);
+        this.draw();
+        return;
+      }
+    }
+
     // 14. Arrow keys: Generalized Navigation or Event Scrolling
     if (keyName === 'up' || keyStr === '\u001b[A') {
       // Up
@@ -3069,9 +3273,16 @@ export class FleetTui {
     if (keyName === 'left' || keyStr === '\u001b[D' || keyName === 'right' || keyStr === '\u001b[C') {
       if (this.inputBuffer.length > 0) {
         if (keyName === 'left' || keyStr === '\u001b[D') {
-          this.inputCursor = Math.max(0, this.inputCursor - 1);
+          if (keyObj.ctrl || keyObj.meta) {
+            const prefix = this.inputBuffer.slice(0, this.inputCursor).replace(/\s+$/, '');
+            this.inputCursor = Math.max(0, prefix.search(/\S+$/));
+          } else this.inputCursor = previousGraphemeBoundary(this.inputBuffer, this.inputCursor);
         } else {
-          this.inputCursor = Math.min(this.inputBuffer.length, this.inputCursor + 1);
+          if (keyObj.ctrl || keyObj.meta) {
+            const suffix = this.inputBuffer.slice(this.inputCursor);
+            const move = suffix.match(/^\s*\S+/)?.[0].length ?? suffix.length;
+            this.inputCursor = Math.min(this.inputBuffer.length, this.inputCursor + move);
+          } else this.inputCursor = nextGraphemeBoundary(this.inputBuffer, this.inputCursor);
         }
         this.draw();
         return;
@@ -3103,6 +3314,37 @@ export class FleetTui {
 
     // 16. Enter key: submit command or inspect item (§3)
     if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+      if (this.presentationMode === 'conversation') {
+        if (isCtrlEnter(keyStr, keyObj)) {
+          const command = this.inputBuffer.trim();
+          this.rememberConversationPrompt(command);
+          this.inputBuffer = '';
+          this.inputCursor = 0;
+          this.focusedPane = 'prompt';
+          if (command) void this.submitCommand(command);
+          this.draw();
+          return;
+        }
+        if (keyObj.shift || this.inputBuffer.slice(0, this.inputCursor).endsWith('\\')) {
+          this.snapshotInputEdit();
+          if (this.inputBuffer.slice(0, this.inputCursor).endsWith('\\')) {
+            this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor - 1) + this.inputBuffer.slice(this.inputCursor);
+            this.inputCursor--;
+          }
+          this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + '\n' + this.inputBuffer.slice(this.inputCursor);
+          this.inputCursor++;
+          this.draw();
+          return;
+        }
+        const command = this.inputBuffer.trim();
+        this.rememberConversationPrompt(command);
+        this.inputBuffer = '';
+        this.inputCursor = 0;
+        this.focusedPane = 'prompt';
+        if (command) void this.submitCommand(command);
+        this.draw();
+        return;
+      }
       if (this.inputBuffer.trim().length > 0) {
         const command = this.inputBuffer.trim();
         this.inputBuffer = '';
@@ -3245,9 +3487,12 @@ export class FleetTui {
       /^[\x7f\u0008]+$/.test(keyStr)
     ) {
       if (this.inputCursor > 0) {
-        const count = Math.min(this.inputCursor, /^[\x7f\u0008]+$/.test(keyStr) ? keyStr.length : 1);
-        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor - count) + this.inputBuffer.slice(this.inputCursor);
-        this.inputCursor -= count;
+        this.snapshotInputEdit();
+        let previous = this.inputCursor;
+        const repeats = /^[\x7f\u0008]+$/.test(keyStr) ? keyStr.length : 1;
+        for (let i = 0; i < repeats; i++) previous = previousGraphemeBoundary(this.inputBuffer, previous);
+        this.inputBuffer = this.inputBuffer.slice(0, previous) + this.inputBuffer.slice(this.inputCursor);
+        this.inputCursor = previous;
         this.checkReferencePicker();
         this.draw();
       }
@@ -3255,7 +3500,9 @@ export class FleetTui {
     }
     if (keyName === 'delete' || keyStr === '\x1b[3~') {
       if (this.inputCursor < this.inputBuffer.length) {
-        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(this.inputCursor + 1);
+        this.snapshotInputEdit();
+        const next = nextGraphemeBoundary(this.inputBuffer, this.inputCursor);
+        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(next);
         this.checkReferencePicker();
         this.draw();
       }
@@ -3264,6 +3511,7 @@ export class FleetTui {
 
     // 18. Ctrl+U: Clear entire input line
     if ((keyObj.ctrl && (keyName === 'u' || keyName === 'U')) || keyStr === '\u0015') {
+      this.snapshotInputEdit();
       this.inputBuffer = '';
       this.inputCursor = 0;
       this.isPickerActive = false;
@@ -3315,9 +3563,10 @@ export class FleetTui {
     // 21. Printable characters (§2):
     // Must be a single valid printable character (never an unparsed multi-byte sequence)
     if (
-      keyStr.length === 1 &&
+      Array.from(keyStr).length === 1 &&
       !/[\x00-\x1f\x7f-\x9f]/.test(keyStr)
     ) {
+      this.snapshotInputEdit();
       this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + keyStr + this.inputBuffer.slice(this.inputCursor);
       this.inputCursor += keyStr.length;
       this.focusedPane = 'prompt';
@@ -3540,6 +3789,65 @@ export class FleetTui {
     const trimmed = submission.text.trim();
     if (!trimmed) return;
 
+    if (trimmed === '/fleet') {
+      if (this.presentationMode !== 'dashboard') {
+        this.presentationMode = 'dashboard';
+        if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation('dashboard');
+        this.currentView = 'fleet';
+        this.draw();
+      } else {
+        this.currentView = 'fleet'; this.draw();
+      }
+      return;
+    }
+    if (trimmed === '/chat') {
+      if (this.presentationMode !== 'conversation') {
+        this.presentationMode = 'conversation';
+        if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation('conversation');
+        this.conversationRenderer.start(process.env.USER ?? process.env.USERNAME ?? 'controller', this.selectedModelId ?? 'auto-routed model');
+      }
+      this.focusedPane = 'prompt';
+      this.draw();
+      return;
+    }
+    if (trimmed === '/verbose' || trimmed === '/quiet' || trimmed === '/debug') {
+      const verbosity = trimmed.slice(1) as TranscriptVerbosity;
+      this.eventSummarizer.setVerbosity(verbosity);
+      this.conversationRenderer.append(`Verbosity: ${verbosity}`);
+      this.draw();
+      return;
+    }
+    if (trimmed === '/help' && this.presentationMode === 'conversation') {
+      this.conversationRenderer.append('Commands: /fleet · /chat · /tasks · /models · /logs · /details · /tail · /verbose · /quiet · /debug · /help');
+      return;
+    }
+    if ((trimmed === '/tasks' || trimmed === '/task') && this.presentationMode === 'conversation') {
+      const tasks = this.statusProjection.getTasks();
+      this.conversationRenderer.append(tasks.length ? tasks.map((task) => `${task.status} · ${task.taskId}`).join('\n') : 'No tasks in this session.');
+      return;
+    }
+    if (trimmed === '/models' && this.presentationMode === 'conversation') {
+      const models = this.engine.models.list();
+      this.conversationRenderer.append(models.length ? `Models: ${models.map((model) => model.id).join(', ')}\nUse /model <id> to select a model.` : 'No registered models.');
+      return;
+    }
+    if (trimmed === '/logs' || trimmed === '/details') {
+      const taskId = this.selectedTaskId ?? this.getAgents().at(-1)?.taskId;
+      const taskLines = taskId ? (this.agentLogs.get(taskId) ?? []).slice(-120).map((entry) => `[${entry.time}] ${entry.text}`) : [];
+      const lines = taskLines.length ? taskLines : this.eventSummarizer.logLines(80);
+      this.conversationRenderer.append(lines.length ? lines.join('\n') : 'No detailed events recorded yet.');
+      this.draw();
+      return;
+    }
+    if (trimmed === '/tail' && this.presentationMode === 'conversation') {
+      const taskId = this.selectedTaskId ?? this.getAgents().at(-1)?.taskId;
+      const raw = taskId ? this.lastRawResponse.get(taskId) : undefined;
+      const lines = taskId ? (this.agentLogs.get(taskId) ?? []).slice(-80).map((entry) => entry.text) : [];
+      this.conversationRenderer.append(raw || lines.join('\n') || 'No task output is available yet.');
+      this.draw();
+      return;
+    }
+
     if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'q') {
       this.stop();
       return;
@@ -3552,8 +3860,8 @@ export class FleetTui {
     }
 
     if (trimmed === '/copy') {
-      this.tuiMode = 'COPY';
-      this.statusMessage = 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.';
+      if (this.presentationMode === 'conversation') this.enterCopyMode();
+      else { this.tuiMode = 'COPY'; this.statusMessage = 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.'; }
       this.draw();
       return;
     }
@@ -3616,13 +3924,6 @@ export class FleetTui {
 
     if (trimmed === '/search') {
       this.currentView = 'search';
-      this.focusedPane = 'main';
-      this.draw();
-      return;
-    }
-
-    if (trimmed === '/fleet') {
-      this.currentView = 'fleet';
       this.focusedPane = 'main';
       this.draw();
       return;
@@ -3927,6 +4228,10 @@ export class FleetTui {
    * Decomposes or parses a user prompt and launches concurrent execution.
    */
   async launchJobFromPrompt(prompt: string): Promise<void> {
+    if (this.presentationMode === 'conversation') {
+      this.conversationRenderer.append(`> ${prompt}`);
+      this.conversationStartedAt = Date.now();
+    }
     // Installed models are activated on the existing execution after scheduling.
     const readiness = this.engine.lifecycle.getReadiness();
     if (readiness.installedCount === 0 && readiness.readyCount === 0) {
@@ -4020,6 +4325,8 @@ export class FleetTui {
       this.currentJob = job;
       this.agents.clear();
       this.agentLogs.clear();
+      this.eventSummarizer = new EventSummarizer(this.eventSummarizer.getVerbosity());
+      this.statusProjection.seed(job.tasks.map((task) => task.id));
       // A new job means a fresh execution context — reset dismissed-error tracking so
       // errors from this job always surface (they're new failures, not repeats of
       // something the user already acknowledged from a previous session).
@@ -4090,6 +4397,19 @@ export class FleetTui {
           const timeoutNode = finalJob.graph.nodes.find((n) => /timeout/i.test(n.error ?? ''));
           const outcome = timeoutNode ? `failed (${timeoutNode.error})` : `${finalJob.status}!`;
           this.statusMessage = `Job ${job.id} ${outcome} Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
+          if (this.presentationMode === 'conversation') {
+            if (finalJob.status === 'completed') {
+              const elapsed = Math.max(0, Math.floor(this.currentRollup.durationMs / 1000));
+              const elapsedText = elapsed >= 60 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${elapsed}s`;
+              const files = [...new Set([...this.agents.values()].flatMap((agent) => agent.filesChanged))];
+              const summaries = this.eventSummarizer.completion(files);
+              this.conversationRenderer.append([`✓ Completed in ${elapsedText}`, ...summaries.map((line) => `  ${line}`)].join('\n'));
+            } else if (finalJob.status === 'cancelled') {
+              this.conversationRenderer.append('■ Cancelled');
+            } else {
+              this.conversationRenderer.append('✗ Task failed · /logs for details');
+            }
+          }
 
           if (this.currentBlockTracker) {
             await this.currentBlockTracker.finish(finalJob.status === 'completed' ? 'success' : 'failed', {
@@ -4239,6 +4559,12 @@ export class FleetTui {
 
   private onJobEvent = (ev: JobOrchestratorEvent): void => {
     const taskId = ev.taskId;
+    const projected = taskId ? this.statusProjection.apply(ev as any) : undefined;
+    if (projected && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(projected.status)) {
+      const eventStatus: Record<string, string> = { 'task:completed': 'COMPLETED', 'task:failed': 'FAILED', 'task:cancelled': 'CANCELLED' };
+      if (eventStatus[ev.type] && eventStatus[ev.type] !== projected.status) return;
+      if (!eventStatus[ev.type] && !(ev.type === 'task:progress' && (ev.event as any)?.kind === 'usage')) return;
+    }
     const now = new Date();
     const timeStr = now.toISOString().slice(11, 19);
 
@@ -4291,6 +4617,12 @@ export class FleetTui {
           const next = prev + (p.content ?? '');
           this.streamingBuffers.set(taskId, next.length > 12_000 ? next.slice(-12_000) : next);
           return;
+        }
+
+        const summary = this.eventSummarizer.progress(p, p.metadata);
+        if (this.presentationMode === 'conversation' && summary.milestone) {
+          const icon = summary.milestone.kind === 'error' ? '✗' : summary.milestone.kind === 'success' ? '✓' : '•';
+          this.conversationRenderer.append(`${icon} ${summary.milestone.text}${summary.milestone.kind === 'error' ? '\n  /logs for details' : ''}`);
         }
 
         // The model turn just finished (its usage is known): fold the streamed text into
@@ -4393,6 +4725,9 @@ export class FleetTui {
           text: `Task completed successfully (${agent.filesChanged.length} files updated)`,
           kind: 'complete',
         });
+        if (this.presentationMode === 'conversation' && typeof ev.result === 'string' && ev.result.trim()) {
+          this.conversationRenderer.append(ev.result.trim());
+        }
       } else if (ev.type === 'task:failed') {
         this.flushStreaming(taskId, logs, timeStr);
         agent.status = 'failed';
@@ -4417,6 +4752,9 @@ export class FleetTui {
           text: isInfra ? `Infrastructure preflight failed: ${failureReason}` : `Task failed: ${failureReason}`,
           kind: isInfra ? 'infra' : 'error',
         });
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`✗ ${failureReason.split(/\r?\n/, 1)[0]}\n  /logs for details`);
+        }
 
         // Structured Error Component (§29).
         // Only open the card if the user has not already dismissed it for this
@@ -4726,6 +5064,15 @@ export class FleetTui {
    * Renders the persistent 5-region frame to the terminal screen buffer.
    */
   draw(): void {
+    if (this.presentationMode === 'conversation') {
+      if (this.conversationDrawQueued) return;
+      this.conversationDrawQueued = true;
+      queueMicrotask(() => {
+        this.conversationDrawQueued = false;
+        this.drawConversation();
+      });
+      return;
+    }
     const size = this.screen.getSize();
     const lines: string[] = [];
 
@@ -4767,6 +5114,33 @@ export class FleetTui {
       }
     }
 
+    this.drawDashboardFrame(size, lines, contentHeight);
+  }
+
+  private drawConversation(): void {
+      const active = this.statusProjection.getTasks().filter((task) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(task.status));
+      const running = active.filter((task) => task.status !== 'WAITING_FOR_APPROVAL');
+      const waiting = active.length - running.length;
+      const activity = running[0]?.activity ?? '';
+      const activeAgent = this.getAgents().find((agent) => agent.status === 'running');
+      this.conversationRenderer.render({
+        identity: process.env.USER ?? process.env.USERNAME ?? 'controller',
+        model: activeAgent ? `${activeAgent.computerId} · ${activeAgent.modelId}` : this.selectedModelId ?? 'auto-routed model',
+        prompt: this.inputBuffer,
+        cursor: this.inputCursor,
+        active: running.length,
+        waitingApproval: waiting || this.pendingApprovals.length,
+        activity,
+        elapsedSeconds: this.conversationStartedAt === undefined ? undefined : Math.floor((Date.now() - this.conversationStartedAt) / 1000),
+        approval: this.pendingApprovals[0]
+          ? `${this.pendingApprovals[0].tool}: ${String(this.pendingApprovals[0].input.command ?? this.pendingApprovals[0].input.path ?? JSON.stringify(this.pendingApprovals[0].input)).slice(0, 140)} · A approve · D deny · V details`
+          : undefined,
+        status: this.statusMessage,
+        copyMode: this.tuiMode === 'COPY' ? this.copyModeStatus() : undefined,
+      });
+  }
+
+  private drawDashboardFrame(size: TerminalSize, lines: string[], contentHeight: number): void {
     // Overlays over content region:
     if (this.startupSelector) {
       const modalLines = this.renderStartupSelectorModal(size.columns);
@@ -5572,8 +5946,12 @@ export class FleetTui {
 
   private handleModelLifecycleEvent(event: ModelLifecycleEvent): void {
     if (['MODEL_DRAINING', 'MODEL_ADMISSION_DENIED', 'MODEL_CONTEXT_DOWNSHIFTED', 'WAITING_FOR_MODEL'].includes(event.type)) {
-      this.statusMessage = `${event.type}: ${event.modelId}${event.reason ? ' — ' + event.reason : ''}`;
-      this.draw();
+      const allCurrentTasksTerminal = this.agents.size > 0 && [...this.agents.values()].every((agent) => ['completed', 'failed', 'cancelled'].includes(agent.status));
+      const jobTerminal = this.currentJob && ['completed', 'failed', 'cancelled'].includes(this.currentJob.status);
+      if (!allCurrentTasksTerminal && !jobTerminal) {
+        this.statusMessage = `${event.type}: ${event.modelId}${event.reason ? ' — ' + event.reason : ''}`;
+        this.draw();
+      }
     }
     if (this.startupSelector) {
       if (event.type === 'MODEL_LOADING') {

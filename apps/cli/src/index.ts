@@ -1117,44 +1117,53 @@ program
     process.exit(result.code);
   });
 
-// chat command — interactive fleet coding agent TUI
+// Shared interactive runner keeps conversation and dashboard on one execution source.
+async function launchInteractiveTui(options: any, presentationMode: 'conversation' | 'dashboard'): Promise<void> {
+  const { createEngine } = await import('./engine.js');
+  const engine = await createEngine();
+  const { FleetTui } = await import('./tui/index.js');
+  const timeout = options.timeout !== undefined ? Number(options.timeout) : undefined;
+  if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+    console.error(`--timeout must be a positive number of seconds, got '${options.timeout}'`);
+    process.exit(2);
+  }
+  const tui = new FleetTui({
+    engine,
+    presentationMode,
+    concurrencyLimit: options.concurrency ? Number(options.concurrency) : 4,
+    useWorktrees: options.worktrees !== false,
+    autoMerge: options.autoMerge === true,
+    timeoutSeconds: timeout,
+    enablePlanner: options.planner === true,
+  });
+  const { shutdownController } = await import('./shutdownController.js');
+  shutdownController().register('chat-tui', () => tui.stop());
+  await tui.start();
+  await tui.waitForExit();
+}
+
+// `wa chat` is the inline conversation; the full-screen fleet UI remains explicit.
 program
   .command('chat')
-  .alias('fleet')
-  .description('Open Wazir Mission Control for agents, jobs, models and approvals')
+  .description('Open the conversation-first coding assistant')
+  .option('--dashboard', 'Open the full-screen fleet dashboard')
+  .option('--legacy', 'Use the legacy full-screen fleet dashboard')
   .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
   .option('--no-worktrees', 'Disable git worktree isolation')
   .option('--auto-merge', 'Automatically merge completed agent branches into main')
   .option('--timeout <seconds>', 'Stop a job automatically after this many seconds (default: no limit)')
   .option('--planner', 'Enable 3-layer Planner-Supervisor-Executor architecture (pre-execution DAG planning)')
-  .action(async (options) => {
-    const { createEngine } = await import('./engine.js');
-    const engine = await createEngine();
-    const { FleetTui } = await import('./tui/index.js');
-    const timeout = options.timeout !== undefined ? Number(options.timeout) : undefined;
-    if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
-      console.error(`--timeout must be a positive number of seconds, got '${options.timeout}'`);
-      process.exit(2);
-    }
-    const tui = new FleetTui({
-      engine,
-      concurrencyLimit: options.concurrency ? Number(options.concurrency) : 4,
-      useWorktrees: options.worktrees !== false,
-      autoMerge: options.autoMerge === true,
-      timeoutSeconds: timeout,
-      enablePlanner: options.planner === true,
-    });
-    // A closed/dead controlling terminal (the pty itself going away — distinct from
-    // stdin's own 'end' event, which FleetTui already handles) delivers SIGHUP, and
-    // Ctrl-C delivers SIGINT. Routed through the shared ShutdownController rather
-    // than a one-off handler so both get the same bounded-timeout-then-force-exit
-    // behavior as every other long-running command, and a second interrupt during a
-    // hung tui.stop() forces exit instead of leaving the process stuck.
-    const { shutdownController } = await import('./shutdownController.js');
-    shutdownController().register('chat-tui', () => tui.stop());
-    await tui.start();
-    await tui.waitForExit();
-  });
+  .action(async (options) => launchInteractiveTui(options, options.dashboard || options.legacy ? 'dashboard' : 'conversation'));
+
+program
+  .command('fleet')
+  .description('Open the full-screen fleet dashboard (alias: wa chat --dashboard)')
+  .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
+  .option('--no-worktrees', 'Disable git worktree isolation')
+  .option('--auto-merge', 'Automatically merge completed agent branches into main')
+  .option('--timeout <seconds>', 'Stop a job automatically after this many seconds (default: no limit)')
+  .option('--planner', 'Enable 3-layer Planner-Supervisor-Executor architecture')
+  .action(async (options) => launchInteractiveTui(options, 'dashboard'));
 
 // dashboard command — launch web dashboard & control plane
 program
