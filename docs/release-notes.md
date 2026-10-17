@@ -1,3 +1,23 @@
+# Wazir Release Notes - v0.2.2
+
+**Release**: `v0.2.2`
+**Theme**: Mandatory Git Synchronization, Verification, and Commit Authorization Policy & Multi-Surface Companion Completion
+
+This release enforces Wazir's mandatory Git Synchronization, Verification, and Commit Authorization policy in code across all self-improvement workflows and completes remaining Desktop/CLI, iOS, and Android companion features.
+
+## Highlights
+
+- **Mandatory Git Preflight & 8-Boundary Checkpoint Revalidation**: `runGitPreflight` and `revalidateGitCheckpoint` inspect repository state before planning, worktree creation, applying changes, agent mutation, final verification, approval requests, staging/commit, and supervisor restart recovery.
+- **Explicit Commit Authorization Modes (`MANUAL_COMMIT` default, `AUTO_COMMIT`, `NO_COMMIT`)**: `resolveEffectiveCommitPolicy` validates provenance (`user_explicit`, `cli_flag`, `scoped_config`), repository/task/worktree scope, and expiration while `resolvePermissionMatrix` separates code execution, local commit, push, merge, and deployment permissions.
+- **Durable Manual Commit Approval Workflow & CLI**: `wa improve preflight`, `wa improve approvals`, and `wa improve approve <attemptId> --action <COMMIT|REVISE|KEEP_UNCOMMITTED|DISCARD|CANCEL>` manage candidate revisions bound to verified diff hashes, with pre-commit secret scanning (`scanCandidateForSecrets`), intended-file-only staging (`WorktreeManager.commitWorktree`), and Git hooks enabled.
+- **Desktop/CLI, iOS, and Android Feature Completion**: Full `wa canary` CLI command suite, real SSE token streaming in `LMStudioAdapter.streamTask`, and native QR pairing, task submission, approval filtering, batch low-risk approval, and `wazir://pair` deep links across iOS and Android.
+
+## Validation
+
+Verified across `@wazir/core`, `@wazir/evaluation`, and `@wazir/cli` (`gitSynchronizationPolicy.test.ts`, `selfImprovementSupervisor.test.ts`, `improveSupervisorE2E.test.ts`, `worktreeManager.test.ts`, `executeTask.e2e.test.ts`), `swift test`, and `./gradlew testDebugUnitTest assembleDebug`.
+
+---
+
 # Wazir Release Notes - v0.2.1
 
 **Release**: `v0.2.1`

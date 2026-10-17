@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.2 — 2026-10-16
+
+**Release**: `v0.2.2`
+**Theme**: Mandatory Git Synchronization, Verification, and Commit Authorization Policy & Multi-Surface Companion Completion
+
+- **Mandatory Git Synchronization, Verification, and Commit Authorization (`@wazir/evaluation`, `@wazir/core`, `@wazir/cli`)**:
+  - Added `runGitPreflight` and `revalidateGitCheckpoint` enforcing Git repository root, branch, HEAD SHA, dirty working-tree preservation, active worktrees, remote tracking, bounded `git fetch --prune origin`, and `REMOTE_UNAVAILABLE` offline policy (`allow` | `block`) across all 8 execution checkpoints.
+  - Enforced explicit commit authorization modes (`MANUAL_COMMIT` default, `AUTO_COMMIT`, `NO_COMMIT`) with provenance, scope, and expiration validation (`resolveEffectiveCommitPolicy`) and separated permission matrices (`resolvePermissionMatrix`).
+  - Added durable manual approval state machine (`IMPLEMENTING → VERIFYING → READY_FOR_REVIEW → AWAITING_COMMIT_APPROVAL → COMMITTING → COMMITTED`) supporting `COMMIT`, `REVISE`, `KEEP_UNCOMMITTED`, `DISCARD` (confirmation required), and `CANCEL` via `wa improve preflight`, `wa improve approvals`, and `wa improve approve <attemptId>`.
+  - Added pre-commit secret scanning (`scanCandidateForSecrets`), isolated intended-file staging with Git hooks enabled (`WorktreeManager.commitWorktree`), and supervisor restart reconciliation (`reconcileCandidateAfterRestart`).
+- **Desktop/CLI, iOS, and Android Feature Completion (`@wazir/cli`, `@wazir/runtime-lmstudio`, `apps/ios`, `apps/android`)**:
+  - Completed `wa canary` CLI subcommands (`status`, `inspect`, `history`, `compare`, `shadow`, `rollback`, `pause`, `resume`, `advance`, `throttle`) and `LMStudioAdapter.streamTask` real token streaming.
+  - Added iOS & Android QR camera scanner sheets, interactive task submission, approval risk filter chips, batch approve-low-risk, and custom `wazir://pair` deep-link handling.
+
 ## v0.2.1 — 2026-10-16
 
 **Release**: `v0.2.1`
