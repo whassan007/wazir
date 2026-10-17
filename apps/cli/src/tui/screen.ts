@@ -68,13 +68,19 @@ export class TerminalScreen {
 
     if ((this.outStream as any).isTTY) this.enterPresentation();
 
-    if (process.stdout.on) {
+    if (typeof (this.outStream as any).on === 'function') {
+      (this.outStream as any).on('resize', this.onResize);
+    }
+    if (this.outStream !== process.stdout && process.stdout.on) {
       process.stdout.on('resize', this.onResize);
     }
   }
 
   leave(): void {
-    if (process.stdout.off) {
+    if (typeof (this.outStream as any).off === 'function') {
+      (this.outStream as any).off('resize', this.onResize);
+    }
+    if (this.outStream !== process.stdout && process.stdout.off) {
       process.stdout.off('resize', this.onResize);
     }
 
