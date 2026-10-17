@@ -574,11 +574,10 @@ export class MetaOptimizerService {
 
     this.experiments.set(experimentId, plan);
     if (this.store && 'put' in this.store && typeof this.store.put === 'function') {
-      try {
-        void this.store.put(`meta/plans/${experimentId}`, plan);
-      } catch {
-        // Ignore store put failure
-      }
+      const store = this.store;
+      this.pendingPersistence = this.pendingPersistence
+        .then(() => Promise.resolve(store.put(`meta/plans/${experimentId}`, plan)).then(() => undefined))
+        .catch(() => undefined);
     }
     this.emitEvent('meta.experiment.started', {
       experimentId,
