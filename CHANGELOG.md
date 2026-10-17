@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.5 — 2026-10-17
+
+**Release**: `v0.2.5`
+**Theme**: Conversation Shell Visibility, NVIDIA API Catalog Provider, and Durable Execution API
+
+- **Conversation Shell Execution & Error Visibility (`@wazir/cli`)**:
+  - Appended inline shell commands (`!cmd`, `/sh cmd`) and their durable stdout/stderr, exit codes, execution duration, and block references directly into the conversation transcript without invoking an LLM.
+  - Added operational status visibility (`Command running`, `Command completed`, `Execution failed`, `Model unavailable`, `Provider disconnected`, `Scheduler rejected task`, `Waiting for approval`) to interactive TTY conversation frames.
+  - Added explicit missing-model recovery explanations and actionable recovery commands directly in the conversation transcript while keeping shell execution usable without an AI provider.
+  - Hardened terminal stdin EOF and error handling to prevent unexpected returns to the parent shell.
+- **NVIDIA API Catalog Execution Provider (`@wazir/runtimes-nvidia`, `@wazir/cli`, `@wazir/core`)**:
+  - Added `@wazir/runtimes-nvidia` runtime adapter supporting NVIDIA API Catalog (`https://integrate.api.nvidia.com/v1`), OpenAI-compatible chat completions, SSE streaming, tool calling, and curated catalog discovery.
+  - Added `wa providers` CLI commands (`list`, `inspect`, `test`), `wa auth login nvidia`, and hosted provider routing and failure diagnostics across Mission Control and `wa doctor`.
+- **Durable Execution History & Endpoints (`@wazir/api`)**:
+  - Unified durable execution history (`GET /api/executions`, `GET /api/executions/:id`, `POST /api/executions`, `POST /api/executions/:id/cancel`) with SQLite persistence across API restarts.
+
 ## v0.2.4 — 2026-10-17
 
 **Release**: `v0.2.4`

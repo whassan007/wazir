@@ -1,3 +1,23 @@
+# Wazir Release Notes - v0.2.5
+
+**Release**: `v0.2.5`
+**Theme**: Conversation Shell Visibility, NVIDIA API Catalog Provider, and Durable Execution API
+
+`v0.2.5` restores durable shell command output and visible operational/missing-model errors in `wa chat` conversation mode, adds first-class support for the NVIDIA API Catalog execution provider (`@wazir/runtimes-nvidia`), and unifies durable execution history and cancellation endpoints in `@wazir/api`.
+
+## Highlights
+
+- **Visible Inline Shell Execution in `wa chat`**: `!command` and `/sh command` submissions are recorded in the durable conversation transcript along with stdout, stderr, exit codes, duration, and block references—without invoking an LLM or losing output on redraw.
+- **Interactive Operational Status & Missing-Model Recovery**: Interactive TTY conversation frames now surface live operational statuses (`Command running`, `Command completed`, `Model unavailable`, `Provider disconnected`, `Scheduler rejected task`, `Waiting for approval`, `Execution failed`, `Tool execution failed`) and durable, actionable recovery guidance when no eligible model is registered.
+- **NVIDIA API Catalog Execution Provider (`@wazir/runtimes-nvidia`)**: First-class hosted/self-hosted NVIDIA NIM & API Catalog adapter with SSE token streaming, tool-call normalization, curated model discovery (`moonshotai/kimi-k2-instruct`, `deepseek-ai/deepseek-v3.1`, `qwen/qwen3-coder-480b-a35b-instruct`, `nvidia/llama-3.3-nemotron-super-49b-v1.5`, `meta/llama-3.3-70b-instruct`), `wa auth login nvidia`, and `wa providers list|inspect|test`.
+- **Unified Durable Execution API (`@wazir/api`)**: Consolidated SQLite-backed execution records across `POST /api/executions`, `GET /api/executions`, `GET /api/executions/:id`, and `POST /api/executions/:id/cancel`.
+
+## Validation
+
+Verified across the TUI conversation projection, PTY session-exit, fleet TUI, NVIDIA runtime adapter, provider system, auth status, hosted provider failure, and durable execution API test suites, plus `npm run build`, `npm run typecheck`, `npm run check-dist`, `npm run package:check`, `npm run release:verify`, and `npm run release:gate`.
+
+---
+
 # Wazir Release Notes - v0.2.4
 
 **Release**: `v0.2.4`
