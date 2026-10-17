@@ -20,11 +20,13 @@ export class TerminalScreen {
   public resizeListeners: Array<(size: TerminalSize) => void> = [];
   private previousFrame?: TerminalFrame;
   private forceFullRedraw = true;
+  private presentation: 'dashboard' | 'conversation';
 
   constructor(
     private readonly inStream: NodeJS.ReadableStream = process.stdin,
     private readonly outStream: NodeJS.WritableStream = process.stdout,
-  ) {}
+    presentation: 'dashboard' | 'conversation' = 'dashboard',
+  ) { this.presentation = presentation; }
 
   getInputStream(): NodeJS.ReadableStream {
     return this.inStream;
@@ -64,19 +66,21 @@ export class TerminalScreen {
       }
     }
 
-    if ((this.outStream as any).isTTY) {
-      this.outStream.write(`\x1b[?1049h\x1b[?2004h\x1b[H\x1b[2J\x1b[?25l${CURSOR_STEADY_BLOCK}`);
-      this.inAltScreen = true;
-      this.forceFullRedraw = true;
-    }
+    if ((this.outStream as any).isTTY) this.enterPresentation();
 
-    if (process.stdout.on) {
+    if (typeof (this.outStream as any).on === 'function') {
+      (this.outStream as any).on('resize', this.onResize);
+    }
+    if (this.outStream !== process.stdout && process.stdout.on) {
       process.stdout.on('resize', this.onResize);
     }
   }
 
   leave(): void {
-    if (process.stdout.off) {
+    if (typeof (this.outStream as any).off === 'function') {
+      (this.outStream as any).off('resize', this.onResize);
+    }
+    if (this.outStream !== process.stdout && process.stdout.off) {
       process.stdout.off('resize', this.onResize);
     }
 
@@ -90,10 +94,41 @@ export class TerminalScreen {
       this.rawModeActive = false;
     }
 
-    if (this.inAltScreen) {
-      this.outStream.write(`${CURSOR_DEFAULT}\x1b[?2004l\x1b[?25h\x1b[?1049l`);
+    if (this.inAltScreen) this.leaveAlternateScreen();
+    if ((this.outStream as any).isTTY) this.outStream.write('\x1b[?2004l\x1b[?25h');
+  }
+
+  setPresentation(presentation: 'dashboard' | 'conversation'): void {
+    if (this.presentation === presentation) return;
+    const wasActive = this.inAltScreen;
+    this.presentation = presentation;
+    if (!(this.outStream as any).isTTY) return;
+    if (presentation === 'dashboard' && !wasActive) this.enterPresentation();
+    else if (presentation === 'conversation' && wasActive) {
+      this.leaveAlternateScreen();
+      this.outStream.write('\x1b[?2004h');
+      this.clearLastBuffer();
+    }
+  }
+
+  private enterPresentation(): void {
+    if (this.presentation === 'dashboard') {
+      this.outStream.write('\x1b[?1049h\x1b[?2004h\x1b[H\x1b[2J\x1b[?25l\x1b[2 q');
+      this.inAltScreen = true;
+    } else {
+      // Keep the primary screen and scrollback. Mouse reporting remains disabled, so
+      // selection and copy remain owned by the terminal emulator.
+      this.outStream.write('\x1b[?2004h\x1b[?25h\x1b[0 q');
       this.inAltScreen = false;
     }
+    this.forceFullRedraw = true;
+  }
+
+  private leaveAlternateScreen(): void {
+    this.outStream.write(`${CURSOR_DEFAULT}\x1b[?25h\x1b[?1049l`);
+    this.inAltScreen = false;
+    this.forceFullRedraw = true;
+    this.clearLastBuffer();
   }
 
   isTTY(): boolean {

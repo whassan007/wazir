@@ -295,6 +295,22 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
       expect(result.exitCode).toBe(0);
     }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000);
 
+    it('uses primary-screen conversation output and restores bracketed paste/cursor modes', async () => {
+      const env = await isolatedEnv(dir);
+      const result = await runPtyChat({
+        steps: [
+          { op: 'wait', text: 'wa>', timeout: 15 },
+          { op: 'send', data: '/exit\r' },
+          { op: 'exit', timeout: 15, expectCode: 0 },
+        ],
+      }, env);
+      expect(result.exitCode).toBe(0);
+      expect(result.outputTail).toContain('WAZIR');
+      expect(result.outputTail).toContain('\x1b[?2004l');
+      expect(result.outputTail).toContain('\x1b[?25h');
+      expect(result.outputTail).not.toMatch(/\x1b\[\?(?:1049|1047|1000|1002|1003|1006)[hl]/);
+    }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000);
+
     it('runs the piped /doctor command, then exits 0 — previously hung forever', async () => {
       const env = await isolatedEnv(dir);
       const result = await runPipedChat('/doctor\r', env);

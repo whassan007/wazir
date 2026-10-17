@@ -271,6 +271,67 @@ describe('Paste Barrier & Accidental Submission Circuit Breaker', () => {
   });
 
   describe('Bracketed paste & Paste barrier', () => {
+    it('switches conversation and dashboard presentation without losing prompt state', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-paste-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      harness = new TuiTestHarness({ engine, concurrencyLimit: 2, presentationMode: 'conversation' });
+      await harness.start();
+      harness.sendKeys('draft prompt');
+      const before = harness.outStream.getOutput();
+      expect(before).not.toMatch(/\x1b\[\?(?:1049|1047|1000|1002|1003|1006)[hl]/);
+      await harness.tui.submitCommand('/fleet');
+      await Promise.resolve();
+      expect(harness.outStream.getOutput()).toContain('\x1b[?1049h');
+      await harness.tui.submitCommand('/chat');
+      await Promise.resolve();
+      expect(harness.outStream.getOutput()).toContain('\x1b[?1049l');
+      expect((harness.tui as any).inputBuffer).toBe('draft prompt');
+    });
+
+    it('supports conversation history, explicit multiline fallback, and grapheme editing', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-paste-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      harness = new TuiTestHarness({ engine, concurrencyLimit: 2, presentationMode: 'conversation' });
+      await harness.start();
+
+      harness.sendKeys('first request');
+      harness.sendKey('\r');
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      harness.tui.handleKey('\r', { name: 'return', ctrl: false, meta: false, shift: true, sequence: '\r' } as any);
+      expect((harness.tui as any).inputBuffer).toBe('\n');
+      harness.sendKeys('second line');
+      expect(engine.jobManager.list()).toHaveLength(1);
+      harness.sendKey('\x1b');
+
+      harness.sendKeys('e\u0301');
+      harness.sendKey('\x1b[D');
+      expect((harness.tui as any).inputCursor).toBe(0);
+      harness.sendKey('\x1b[3~');
+      expect((harness.tui as any).inputBuffer).toBe('');
+
+      harness.sendKey('\x1b[A');
+      expect((harness.tui as any).inputBuffer).toBe('first request');
+      expect(engine.jobManager.list()).toHaveLength(1);
+    });
+
+    it('keeps bounded large bracketed pastes editable and never submits them implicitly', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-paste-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      harness = new TuiTestHarness({ engine, concurrencyLimit: 2, presentationMode: 'conversation' });
+
+      for (const size of [1_024, 10_240, 102_400, 1_048_576]) {
+        const text = 'x'.repeat(size - 1) + '✓';
+        const before = Date.now();
+        harness.sendKey(`\x1b[200~${text}\x1b[201~`);
+        const elapsedMs = Date.now() - before;
+        expect(harness.tui.getMode()).toBe('PASTE');
+        expect(harness.tui.getPastedContent()).toBe(text);
+        expect(engine.jobManager.list()).toHaveLength(0);
+        expect(elapsedMs).toBeLessThan(2_000);
+        harness.sendKey('\x1b');
+      }
+    });
+
     it('inserts single-line paste into input buffer without auto-submitting', async () => {
       projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-paste-test-'));
       const engine = await buildFleetTestEngine(projectRoot);

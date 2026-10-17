@@ -349,11 +349,12 @@ export function selectTerminalLogo(
  * Formats a workspace path with `~` for the user's home directory and truncates
  * gracefully if the terminal is narrow.
  */
-export function formatWorkspacePath(workspace: string, maxLen: number = 42): string {
+export function formatWorkspacePath(workspace?: unknown, maxLen: number = 42): string {
+  const raw = typeof workspace === 'string' && workspace.length > 0 ? workspace : (process.cwd() || '/');
   const home = os.homedir();
-  let formatted = workspace;
-  if (home && workspace.startsWith(home)) {
-    formatted = `~${workspace.slice(home.length) || '/'}`;
+  let formatted = raw;
+  if (home && raw.startsWith(home)) {
+    formatted = `~${raw.slice(home.length) || '/'}`;
   }
   if (formatted.length <= maxLen) {
     return formatted;
