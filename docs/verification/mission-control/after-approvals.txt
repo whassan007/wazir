@@ -1,0 +1,42 @@
+ ⟪◈⟫ WAZIR  MISSION CONTROL                                                                                                                 
+ ~/Code/Wazir  [View: APPROVAL]                                                                                                             
+ 1 Home   Tab Timeline / Approvals / Worktrees   5 Models   6 Evidence   ? Help                                                             
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ JOBS                               │  POLICY APPROVAL QUEUE                                                                                
+ > + ..c5iuk8-1 build a c++ prog.   │  Review and act on pending tool approval requests:                                                    
+ EXECUTIONS                         │                                                                                                       
+   (none)                           │  + No pending approval requests.                                                                      
+ AGENTS                             │                                                                                                       
+   o antigravity                    │  All tool invocations are passing current policy rules.                                               
+   o claude-code                    │  Actions: [A] Approve  [D] Deny  [Y] Yes  [N] No  [V] Details                                         
+   o codex                          │                                                                                                       
+   o gemini                         │                                                                                                       
+   o opencode                       │                                                                                                       
+   o wazir-coding                   │                                                                                                       
+   o wazir-step                     │                                                                                                       
+ COMPUTERS                          │                                                                                                       
+   + WaelMacPro.local               │                                                                                                       
+ RUNTIMES                           │                                                                                                       
+   + Anthropic                      │                                                                                                       
+   + Google Gemini                  │                                                                                                       
+   x lmstudio                       │                                                                                                       
+   + NVIDIA API Catalog             │                                                                                                       
+   x ollama                         │                                                                                                       
+   + OpenAI                         │                                                                                                       
+ MCP                                │                                                                                                       
+   x GitHub auth_required           │                                                                                                       
+   x NVIDIA Run:ai auth_required    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+ History: [#79 + ! printf mission] [#78 + ! printf mission] [#77 + ! printf mission] [#76 + ! printf mission] [#75 + ! printf mission]      
+--------------------------------------------------------------------------------------------------------------------------------------------
+  [NORMAL] Status: Pinned model: adept/fuyu-8b  Model adept/fuyu-8b ~ Job 192.1K in / 7.1K out, Calls: 0 ~ Ctrl+T Sidebar ~ Context 0.0K/12.
+wa>                                                                                                                                         

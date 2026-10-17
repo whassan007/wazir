@@ -1,0 +1,24 @@
+ ⟪◈⟫ WAZIR  MISSION CONTROL                                     
+ ~/Code/Wazir  [View: FLEET]                                    
+ 1 Home   Tab Timeline / Approvals / Worktrees   5 Models   6 E.
+────────────────────────────────────────────────────────────────
+  ⟪◈⟫ WAZIR · AI Fleet Counselor                                
+  0 executing · 82/82 models ready · 0 approvals                
+  EXECUTION MONITOR                                             
+  COMPLETED  build a c++ program that can implement a clinic re.
+  MODELS & PROVIDERS                                            
+  READY  01-ai/yi-large  nvidia                                 
+  +81 models · 5 opens model intelligence                       
+  Session tokens 0 in / 0 out · Cost: unreported                
+  ACTIVITY & TOOL CALLS                                         
+  Waiting for execution events. Tab opens the live timeline.    
+  VERIFICATION EVIDENCE                                         
+  No verification recorded. 6 opens checks and provenance.      
+                                                                
+                                                                
+                                                                
+                                                                
+ History: [#79 + ! printf mission] [#78 + ! pr                  
+----------------------------------------------------------------
+ [NORMAL] Ready. Type a task or /fanout <t1; t2; ...> to begin. 
+wa>                                                             

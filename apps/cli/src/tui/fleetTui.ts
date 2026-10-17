@@ -1,4 +1,5 @@
 import readline from 'node:readline';
+import { renderMissionControl, missionHeader } from './missionControl.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { withScopedRejectionHandler } from '../crashHandler.js';
@@ -25,7 +26,6 @@ import type { RookEngine } from '../engine.js';
 import { refreshRuntime } from '../engine.js';
 import { color } from '../colors.js';
 import { createFleetTaskExecutor } from '../fleetRunner.js';
-import { collectHealthReport, fleetNodeHealth } from '../health.js';
 import { TerminalScreen, type TerminalSize } from './screen.js';
 import {
   CanaryLiveEventBuffer,
@@ -45,19 +45,15 @@ import { parseAction } from '@wazir/agents';
 import { inspectVerificationEvidence, explainCompletion, type VerificationInspection, type WhyCompleteAnswer, type ArtifactProvenance } from '@wazir/core';
 import { promptCacheReuse, promptCacheSource } from '@wazir/runtimes-interfaces';
 import {
-  renderTaskView,
   renderSearchView,
   renderCanaryView,
-  renderFleetView,
   renderImprovementView,
   renderContextView,
   renderEvidenceView,
   renderWhyModal,
-  renderModelIntelligenceView,
   renderEvidenceModal,
   renderSearchNodeInspection,
   flattenSearchTree,
-  type TaskViewData,
   type WhyExplanationData,
   type SearchTreeNode,
   type ImprovementExperimentItem,
@@ -66,10 +62,6 @@ import {
   type SearchViewData,
   type ContextSampleItem,
   type ContextViewData,
-  type FleetWorkerItem,
-  type FleetViewData,
-  type ModelProfileItem,
-  type ModelIntelligenceViewData,
   type EvidenceModalData,
   type CanaryViewTab,
   type SearchNodeInspection,
@@ -479,6 +471,7 @@ export class FleetTui {
   private readonly enablePlanner: boolean;
 
   private currentView: TuiView = 'fleet';
+  private missionHome = true;
   private focusedPane: FocusPane = 'nav';
   private highlightedIndex = 0;
   private selectedTaskId?: string;
@@ -1545,6 +1538,7 @@ export class FleetTui {
       return;
     }
 
+    this.missionHome = false;
     this.highlightedIndex = (this.highlightedIndex + direction + list.length) % list.length;
     const target = list[this.highlightedIndex];
     this.selectedTaskId = target.taskId;
@@ -2553,6 +2547,8 @@ export class FleetTui {
         return;
       }
       if (keyStr === '1' || keyName === 'f3') {
+        this.missionHome = true;
+        this.navSelectionIndex = 0;
         this.currentView = 'fleet';
         this.focusedPane = 'main';
         this.draw();
@@ -3009,48 +3005,19 @@ export class FleetTui {
     }
 
     if (this.currentView === 'models') {
-      const profiles = this.engine.modelIntelligence?.listProfiles?.() ?? [];
-      const profCount = Math.max(1, profiles.length);
-
-      if (keyName === 'up' || keyStr === '\u001b[A' || (this.inputBuffer.length === 0 && (keyStr === 'k' || keyStr === 'K'))) {
-        this.selectedModelProfileIndex = Math.max(0, this.selectedModelProfileIndex - 1);
+      const models = this.engine.models.list();
+      if (keyName === 'up' || keyName === 'down' || (this.inputBuffer.length === 0 && ['j', 'k'].includes(keyStr))) {
+        const direction = keyName === 'up' || keyStr === 'k' ? -1 : 1;
+        this.selectedModelProfileIndex = Math.max(0, Math.min(models.length - 1, this.selectedModelProfileIndex + direction));
         this.draw();
         return;
       }
-      if (keyName === 'down' || keyStr === '\u001b[B' || (this.inputBuffer.length === 0 && (keyStr === 'j' || keyStr === 'J'))) {
-        this.selectedModelProfileIndex = Math.min(profCount - 1, this.selectedModelProfileIndex + 1);
-        this.draw();
-        return;
-      }
-      if (this.inputBuffer.length === 0 && (keyStr === 'e' || keyStr === 'E' || keyName === 'return' || keyName === 'enter')) {
-        const selProf = profiles[this.selectedModelProfileIndex];
-        const modelId = (selProf as any)?.modelId ?? (selProf as any)?.model ?? 'qwen-2.5-coder-32b';
-        this.evidenceModalData = {
-          title: `Model Capability Profile: ${modelId}`,
-          checks: [
-            { name: 'routing-eligibility', ok: true, exitCode: 0 },
-            { name: 'confidence-threshold-met', ok: true, exitCode: 0 },
-          ],
-          evidence: [
-            { kind: 'empirical_matrix', hash: 'sha256:matrix-prof-001', command: 'evaluate-model' },
-          ],
-          provenanceChain: [
-            `Model: ${modelId}`,
-            'Capability Plan: 88% success rate (n=42, confidence=0.95)',
-            'Capability Implement: 82% success rate (n=120, confidence=0.98)',
-            'Capability Repair: 79% success rate (n=65, confidence=0.92)',
-            'Capability Tool Use: 91% success rate (n=94, confidence=0.96)',
-          ],
-          metrics: {
-            total_samples: (selProf as any)?.sampleCount ?? (selProf as any)?.sampleCounts?.total ?? 321,
-            typescript_score: 0.86,
-            python_score: 0.80,
-          },
-          width: 80,
-          maxRows: 30,
-        };
-        this.evidenceModalOpen = true;
-        this.evidenceScrollOffset = 0;
+      if (this.inputBuffer.length === 0 && (keyName === 'return' || keyName === 'enter' || keyStr === '\r')) {
+        const model = models[this.selectedModelProfileIndex];
+        if (model) {
+          this.selectedModelId = model.id;
+          this.statusMessage = `Pinned model: ${model.id}`;
+        }
         this.draw();
         return;
       }
@@ -3067,6 +3034,7 @@ export class FleetTui {
       const all = this.getFlatNavItems();
       if (all.length > 0) {
         this.navSelectionIndex = Math.max(0, this.navSelectionIndex - 1);
+        this.missionHome = false;
         this.updateNavSelection(all[this.navSelectionIndex]);
         // Enter's command-submit path never resets focus back off 'prompt' — without this,
         // arrowing down to a job after typing+submitting a task leaves focusedPane stuck at
@@ -3087,6 +3055,7 @@ export class FleetTui {
       const all = this.getFlatNavItems();
       if (all.length > 0) {
         this.navSelectionIndex = Math.min(all.length - 1, this.navSelectionIndex + 1);
+        this.missionHome = false;
         this.updateNavSelection(all[this.navSelectionIndex]);
         this.focusedPane = 'nav';
       }
@@ -3155,6 +3124,7 @@ export class FleetTui {
         void this.submitCommand(submission);
       } else {
         // Enter to inspect currently selected item or block
+        this.missionHome = false;
         const all = this.getFlatNavItems();
         const current = all[this.navSelectionIndex];
         if (current?.category === 'JOBS') {
@@ -4076,6 +4046,7 @@ export class FleetTui {
         this.agentLogs.set(t.id, []);
       }
 
+      this.missionHome = false;
       this.highlightedIndex = 0;
       this.selectedTaskId = job.tasks[0]?.id;
       this.selectedNavId = job.tasks[0]?.id;
@@ -4759,11 +4730,11 @@ export class FleetTui {
     const lines: string[] = [];
 
     // Region 1: Header Bar (Line 0) + Divider (Line 1)
-    lines.push(this.renderHeader(size.columns));
-    lines.push(color.gray('-'.repeat(size.columns)));
+    lines.push(...missionHeader(this.engine.projectRoot, this.currentView, size.columns));
+    lines.push(color.cyan('─'.repeat(size.columns)));
 
     // Region 2: Persistent Split Content or Collapsed Pane
-    const contentHeight = Math.max(5, size.rows - 6);
+    const contentHeight = Math.max(1, size.rows - 8);
 
     // Auto-recompute the sidebar mode from execution state UNLESS the user manually
     // chose one (Ctrl+B / Ctrl+Shift+B) — a manual choice must survive incoming
@@ -4786,7 +4757,7 @@ export class FleetTui {
       for (let i = 0; i < contentHeight; i++) {
         const l = leftLines[i] ?? ' '.repeat(leftWidth);
         const m = mainLines[i] ?? ' '.repeat(mainWidth);
-        lines.push(`${l}${color.gray('|')}${m}`);
+        lines.push(`${l}${color.cyan('│')}${m}`);
       }
     } else {
       // Collapsed single pane layout
@@ -4799,37 +4770,37 @@ export class FleetTui {
     // Overlays over content region:
     if (this.startupSelector) {
       const modalLines = this.renderStartupSelectorModal(size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.taskTimeModelRequired) {
       const modalLines = this.renderTaskTimeModelRequiredModal(size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.pendingApprovals.length > 0) {
       const modalLines = this.renderApprovalModal(size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.currentError) {
       // B. Structured Error Card Modal (§29)
       const modalLines = this.renderStructuredErrorCard(this.currentError, size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.quickActionsOpen) {
       // C. Quick Actions Palette Modal (§3)
       const modalLines = this.renderQuickActionsModal(size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.expandedBlock) {
       // D. Expanded Block Modal Card
       const modalLines = this.renderBlockModal(this.expandedBlock, size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.rawResponseModalOpen) {
       // D.5 Raw Model Response Modal ('r' on Tail view)
       const taskId = this.selectedTaskId ?? this.getAgents()[this.highlightedIndex]?.taskId;
       if (taskId) {
         const modalLines = this.renderRawResponseModal(taskId, size.columns);
-        const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+        const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
         this.overlayModal(lines, modalLines, size.columns, startY);
       } else {
         this.rawResponseModalOpen = false;
@@ -4840,27 +4811,27 @@ export class FleetTui {
       const job = this.engine.orchestrator.getJob(this.expandedJobId);
       if (job) {
         const modalLines = this.renderJobOutputModal(job, this.jobRollups.get(job.id), size.columns);
-        const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+        const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
         this.overlayModal(lines, modalLines, size.columns, startY);
       } else {
         this.expandedJobId = undefined;
       }
     } else if (this.whyModalOpen && this.whyModalData) {
       const modalLines = renderWhyModal(this.whyModalData);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.evidenceModalOpen && this.evidenceModalData) {
       const modalLines = renderEvidenceModal(this.evidenceModalData);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.canaryModal) {
       const modalLines = this.renderCanaryControlModal(size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.canaryTimeline) {
       const tl = this.canaryTimeline;
       const modalLines = renderCanaryTimelineModal({ ...tl, width: size.columns, maxRows: Math.max(8, contentHeight) });
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     }
 
@@ -4901,41 +4872,6 @@ export class FleetTui {
 
     const frame = clampedLines.slice(0, size.rows).join('\n');
     this.screen.render(frame, this.inputCursorScreenCol);
-  }
-
-  /**
-   * Region 1: Header Reconfiguration
-   * Format: WAZIR - CONTROL - WORKER: 3 COMPUTERS 7 AGENTS 14 MODELS    Agents 2/4 - AVAILABLE
-   */
-  private renderHeader(cols: number): string {
-    const compCount = this.engine.computers.list().length;
-    const agentCount = this.engine.agents.list().length;
-    const readiness = this.engine.lifecycle.getReadiness();
-    const readyColored = readiness.readyCount > 0 ? color.green(`${readiness.readyCount} READY`) : color.yellow(`0 READY`);
-    const modelTagColored = `${readyColored} / ${readiness.installedCount} MODELS`;
-    const modelTagPlain = `${readiness.readyCount} READY / ${readiness.installedCount} MODELS`;
-
-    const activeCount = Array.from(this.agents.values()).filter((a) => a.status === 'running').length;
-    const workerStatus = activeCount >= this.concurrencyLimit ? 'BUSY' : 'AVAILABLE';
-
-    const viewName = this.currentView.toUpperCase();
-    const viewTag = `[View: ${viewName}]`;
-    const viewTagPadded = viewTag.padEnd(20);
-
-    const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('-')} ${color.bold('CONTROL')} ${color.gray('-')} ${color.bold('WORKER:')} ${compCount} COMPUTERS ${agentCount} AGENTS ${modelTagColored}`;
-    const viewPart = color.bold(color.cyan(viewTagPadded));
-    const agentPart = `Agents ${activeCount}/${this.concurrencyLimit} ${color.gray('-')} ${workerStatus === 'AVAILABLE' ? color.green('AVAILABLE') : color.yellow('BUSY')}`;
-
-    const pendingCount = this.pendingApprovals.length;
-    const alert = pendingCount > 0 ? color.bold(color.yellow(` [! ${pendingCount} APPROVALS]`)) : '';
-
-    const titlePlain = `WAZIR - CONTROL - WORKER: ${compCount} COMPUTERS ${agentCount} AGENTS ${modelTagPlain}`;
-    const viewPlain = viewTagPadded;
-    const agentPlain = `Agents ${activeCount}/${this.concurrencyLimit} - ${workerStatus}${pendingCount > 0 ? ` [! ${pendingCount} APPROVALS]` : ''}`;
-
-    const spaces = Math.max(1, cols - titlePlain.length - viewPlain.length - agentPlain.length - 4);
-    const headerLine = ` ${titlePart} ${viewPart}${' '.repeat(spaces)}${agentPart}${alert}`;
-    return this.padRightTo(headerLine, cols);
   }
 
   /**
@@ -5030,7 +4966,7 @@ export class FleetTui {
     if (this.currentView === 'task') {
       return this.renderTaskPane(width, maxRows);
     }
-    if (!selected && this.currentView === 'fleet') {
+    if (this.currentView === 'fleet' && (this.missionHome || !selected)) {
       return this.renderFleetOverviewPane(width, maxRows);
     }
     if (this.currentView === 'evidence') {
@@ -5397,63 +5333,19 @@ export class FleetTui {
    * Region 4: Status Bar & Real-Time Context Token Budget Indicator (§20)
    */
   private renderStatusBar(cols: number): string {
-    const { used, max, jobIn, jobOut, calls } = this.getContextMetrics();
-    const usedK = (used / 1024).toFixed(1);
-    const maxK = Math.round(max / 1024);
-    const inK = (jobIn / 1024).toFixed(1);
-    const outK = (jobOut / 1024).toFixed(1);
-
-    // Semantic colors (§25): cyan = identity / active context
-    // Only shown once a model is pinned via /model — otherwise this bar stays as it
-    // was, since "auto-routed" is the common case and not worth a permanent label.
-    const modelPlain = this.selectedModelId ? `Model ${this.selectedModelId} ~ ` : '';
-    const modelIndicator = this.selectedModelId ? `${color.magenta(modelPlain.trimEnd())} ` : '';
-
-    const showJobTokens = calls > 0 || jobIn > 0;
-    const jobPlain = showJobTokens ? `Job ${inK}K in / ${outK}K out, Calls: ${calls} ~ ` : '';
-    const jobIndicator = showJobTokens ? color.gray(jobPlain) : '';
-
-    const contextPlain = `Context ${usedK}K/${maxK}K ~`;
-    const contextIndicator = color.cyan(contextPlain);
-
-    // Subtle sidebar-toggle hint (§ Show Toggle State Clearly) — a short tag, not
-    // another persistent large UI element. Alert categories still hidden from the
-    // pane surface here as a small warning glyph so a real problem stays visible
-    // even while the sidebar itself is hidden/focused.
-    const alertCats = this.sidebarMode !== 'full' ? Array.from(this.getAlertCategories()) : [];
-    const alertPlain = alertCats.length > 0 ? `${alertCats.map((c) => `!${c}`).join(' ')} ~ ` : '';
-    const alertIndicator = alertCats.length > 0 ? color.yellow(alertPlain) : '';
-    const sidebarPlain = this.sidebarMode === 'hidden' ? 'Sidebar hidden (Ctrl+T) ~ ' : 'Ctrl+T Sidebar ~ ';
-    const sidebarIndicator = color.gray(sidebarPlain);
-
-    const anyRunning =
-      Array.from(this.agents.values()).some((a) => a.status === 'running') ||
-      this.statusMessage.includes('Planning') ||
-      this.statusMessage.includes('Retrying') ||
-      this.statusMessage.includes('Executing');
-    const spinnerPrefix = anyRunning ? `${color.cyan(getCategorySpinnerFrame('JOBS', this.spinnerTick))} ` : '';
-
     const mode = this.getMode();
-    let modeBadge = color.gray(`[${mode}]`);
-    if (mode === 'PASTE') modeBadge = color.bold(color.yellow(`[${mode}]`));
-    else if (mode === 'COMPOSER') modeBadge = color.bold(color.magenta(`[${mode}]`));
-    else if (mode === 'COPY') modeBadge = color.bold(color.cyan(`[${mode}]`));
-    else if (mode === 'APPROVAL') modeBadge = color.bold(color.red(`[${mode}]`));
-    else if (mode === 'PALETTE') modeBadge = color.bold(color.blue(`[${mode}]`));
-    else if (mode === 'SHELL') modeBadge = color.bold(color.yellow(`[${mode}]`));
-
-    const rightPlain = `${modelPlain}${jobPlain}${alertPlain}${sidebarPlain}${contextPlain} `;
-    const maxStatusLen = Math.max(10, cols - rightPlain.length - 16);
-    let msg = this.statusMessage;
-    if (msg.length > maxStatusLen) {
-      msg = msg.slice(0, maxStatusLen - 3) + '...';
+    const badge = color.bold(mode === 'APPROVAL' || mode === 'SHELL' ? color.yellow(`[${mode}]`) : color.cyan(`[${mode}]`));
+    const alerts = this.sidebarMode === 'full' ? '' : Array.from(this.getAlertCategories()).map(c => `!${c}`).join(' ');
+    if (cols < 110) {
+      return this.padRightTo(` ${badge} ${alerts ? alerts + ' ' : ''}${this.statusMessage}`, cols);
     }
-
-    const statusText = `  ${modeBadge} ${color.gray('Status:')} ${spinnerPrefix}${msg}`;
-    const statusPlain = this.stripAnsi(statusText);
-
-    const spaces = Math.max(2, cols - statusPlain.length - rightPlain.length);
-    return `${statusText}${' '.repeat(spaces)}${modelIndicator}${jobIndicator}${alertIndicator}${sidebarIndicator}${contextIndicator} `;
+    const { used, max, jobIn, jobOut } = this.getContextMetrics();
+    const telemetry = `${alerts ? alerts + ' · ' : ''}Context ${(used / 1024).toFixed(1)}K/${Math.round(max / 1024)}K ~ ${jobIn.toLocaleString()} in / ${jobOut.toLocaleString()} out · Ctrl+T ${this.sidebarMode === 'hidden' ? 'Show sidebar' : 'Sidebar'}`;
+    const available = Math.max(16, cols - telemetry.length - mode.length - 7);
+    const message = this.truncateAnsi(this.statusMessage, available);
+    const left = ` ${badge} ${message}`;
+    const gap = Math.max(2, cols - this.stripAnsi(left).length - telemetry.length - 1);
+    return `${left}${' '.repeat(gap)}${color.gray(telemetry)} `;
   }
 
   private renderInputBar(cols: number): string {
@@ -6538,57 +6430,27 @@ export class FleetTui {
    */
   private renderTaskPane(cols: number, maxRows: number): string[] {
     const card = this.agents.get(this.selectedTaskId ?? '') ?? this.getAgents()[0];
-    const taskInput = this.currentJob?.tasks.find((t) => t.id === (card?.taskId ?? this.selectedTaskId));
-    const activeTaskId = card?.taskId ?? this.selectedTaskId ?? 'task-001';
-
-    const verification = (this.engine as any).verification?.getLastVerificationResult?.() ?? {
-      overall: card?.status === 'completed' ? 'PASS' : card?.status === 'failed' ? 'FAIL' : 'PENDING',
-      checksPassed: card?.status === 'completed' ? 4 : 0,
-      totalChecks: 4,
-      checks: [
-        { name: 'ast_invariants', ok: card?.status !== 'failed', exitCode: card?.status === 'failed' ? 1 : 0 },
-        { name: 'typescript_compiler', ok: card?.status !== 'failed', exitCode: 0 },
-        { name: 'unit_test_suite', ok: card?.status !== 'failed', exitCode: 0 },
-        { name: 'workspace_cleanliness', ok: true, exitCode: 0 },
-      ],
-    };
-
-    const taskData: TaskViewData = {
-      taskId: activeTaskId,
-      title: card?.title ?? taskInput?.title ?? 'Autonomous Engineering Task',
-      objective: (taskInput as any)?.prompt ?? (taskInput as any)?.task ?? 'Execute autonomous engineering workflow',
-      requirements: [
-        'Complete implementation adhering to deterministic invariants',
-        'Verify with compiler, test suite, and AST integrity check',
-        'Ensure 0 regressions and stay within token budget',
-      ],
-      currentPhase: (card?.phase?.toUpperCase() as any) ?? (card?.status === 'completed' ? 'VERIFY' : 'TASK'),
-      agentId: card?.agentId ?? 'wazir-coder',
-      modelId: card?.modelId ?? this.selectedModelId ?? 'claude-3-5-sonnet',
-      runtimeId: 'local',
-      computerId: card?.computerId ?? 'worker-local',
-      workerId: card?.computerId ?? 'worker-local',
-      workspaceRevision: (card as any)?.worktreeInfo?.revision ?? 1,
-      verificationStatus: verification,
-      budget: {
-        tokensUsed: card?.usage?.total ?? 1240,
-        maxTokens: 32768,
-        repairCycles: 0,
-        maxRepairCycles: 3,
-        costUsd: (card?.usage?.total ?? 1240) * 0.000003,
-      },
-      elapsedTimeMs: card?.durationMs ?? 0,
-      physicalMutationsCount: card?.filesChanged?.length ?? 1,
-      filesChanged: card?.filesChanged ?? ['src/engine.ts'],
-      recentEvents: (this.agentLogs.get(card?.taskId ?? '') ?? []).slice(-5).map((l) => ({
-        time: l.time,
-        kind: l.kind,
-        text: l.text,
-      })),
-      width: cols,
-      maxRows,
-    };
-    return renderTaskView(taskData);
+    if (!card) return ['  TASK DETAILS', '', '  No task selected. Submit a task or select an execution.'];
+    const model = this.engine.models.get(card.modelId);
+    const inspection = this.currentEvidenceInspection();
+    return [
+      color.bold(color.cyan('  TASK DETAILS')),
+      `  ${card.title}`,
+      `  ${card.taskId} · ${card.status.toUpperCase()} · ${card.phase}`,
+      '',
+      `  Agent ${card.agentId} · Computer ${card.computerId}`,
+      `  Model ${card.modelId} · Provider ${model?.provider ?? 'unknown'}`,
+      `  Elapsed ${(card.durationMs / 1000).toFixed(1)}s · Model calls ${card.modelCallCount ?? 0}`,
+      `  Tokens ${card.usage?.input ?? 0} in / ${card.usage?.output ?? 0} out · Cost: unreported`,
+      `  Files changed: ${card.filesChanged.length}`,
+      ...card.filesChanged.slice(0, 4).map(f => `    ${f}`),
+      '',
+      color.bold(color.cyan('  VERIFICATION')),
+      ...(inspection ? [inspection.inspection.status, ...inspection.why.chain, ...inspection.why.missing].map(t => `  ${t}`) : ['  No verification evidence loaded. Press 6 to inspect checks.']),
+      '',
+      color.bold(color.cyan('  ACTIVITY & TOOL CALLS')),
+      ...(this.agentLogs.get(card.taskId) ?? []).slice(-5).map(e => `  ${e.time} ${e.kind.toUpperCase()} ${e.text}`),
+    ].slice(0, maxRows).map(l => this.padRightTo(l, cols));
   }
 
   /**
@@ -7070,163 +6932,47 @@ export class FleetTui {
   }
 
   private renderModelIntelligencePane(cols: number, maxRows: number): string[] {
-    const profiles: ModelProfileItem[] = (this.engine.modelIntelligence?.listProfiles?.() ?? []).map((prof: any) => {
-      const caps: Record<string, { score: number; sampleCount: number; confidence: number }> = {};
-      if (prof.categoryMeasurements) {
-        for (const m of prof.categoryMeasurements) {
-          caps[m.category] = {
-            score: m.score,
-            sampleCount: m.sampleCount,
-            confidence: m.confidence,
-          };
-        }
-      }
-      return {
-        id: prof.id ?? prof.model,
-        model: prof.model ?? 'unknown-model',
-        runtime: prof.runtime ?? 'local',
-        capabilities: caps,
-        totalSamples: prof.sampleCounts?.total ?? 100,
-        phaseBreakdown: prof.conditionalMeasurements?.byPhase ? {
-          PLAN: { score: 0.88, sampleCount: 42 },
-          ACT: { score: 0.84, sampleCount: 120 },
-          REPAIR: { score: 0.79, sampleCount: 65 },
-        } : undefined,
-        languageBreakdown: prof.conditionalMeasurements?.byLanguage ? {
-          typescript: { score: 0.86, sampleCount: 150 },
-          python: { score: 0.81, sampleCount: 80 },
-        } : undefined,
-      };
-    });
-
-    const data: ModelIntelligenceViewData = {
-      profiles,
-      selectedIndex: this.selectedModelProfileIndex,
-      width: cols,
-      maxRows,
-    };
-    return renderModelIntelligenceView(data);
+    const models = this.engine.models.list();
+    const instances = this.engine.models.listInstances();
+    const lines = [color.bold(color.cyan('  MODELS & PROVIDERS')), '  ↑↓ / j k browse · Enter pin model · /model auto clears pin', ''];
+    for (const [index, m] of models.entries()) {
+      if (index < this.selectedModelProfileIndex) continue;
+      const resident = instances.filter(i => i.modelId === m.id);
+      const ready = resident.some(i => i.loaded && i.state === 'READY' && i.health === 'healthy');
+      lines.push(`  ${index === this.selectedModelProfileIndex ? ">" : " "} ${ready ? color.green('READY') : color.yellow('NOT READY')}  ${m.name}`);
+      lines.push(`    Provider ${m.provider} · ${m.local ? 'local' : 'hosted'} · Context ${m.contextMax.toLocaleString()} · Tools ${m.toolCalling ? 'yes' : 'no'}`);
+      for (const i of resident) lines.push(`    ${i.runtimeId} / ${i.computerId} · ${i.state ?? 'unknown'} · ${i.health ?? 'unknown'}`);
+    }
+    if (!models.length) lines.push('  No models discovered. /refresh to discover configured providers.');
+    return lines.slice(0, maxRows).map(l => this.padRightTo(l, cols));
   }
 
   /**
    * Dedicated Fleet Topology & Compute Fabric Pane (Mission Control View 3)
    */
   private renderFleetOverviewPane(cols: number, maxRows: number): string[] {
-    const computers = this.engine.computers?.list() ?? [];
-    const runtimes = this.engine.runtimes?.list() ?? [];
-    const models = this.engine.models?.list() ?? [];
-
-    const workers: FleetWorkerItem[] = [];
-    let healthReport: import('@wazir/core').HealthReport | undefined;
-    try {
-      healthReport = computers.length > 0 ? collectHealthReport(this.engine) : undefined;
-    } catch {
-      healthReport = undefined; // health indicators are advisory; never break the fleet view
-    }
-
-    if (computers.length > 0) {
-      for (const comp of computers) {
-        const compRuntimes = runtimes.filter((r) => r.computerId === comp.id).map((r) => r.type);
-        const gpuModel = (comp.hardware as any)?.gpu || (comp.id === 'MAC-01' ? 'M2 Ultra' : comp.id === 'PC-01' ? 'RTX 4090' : 'H100');
-        const gpuCount = (comp.hardware as any)?.gpuCount || (comp.id === 'DGX-01' ? 8 : 1);
-        const gpuInfo = comp.capabilities.includes('gpuAcceleration')
-          ? { model: gpuModel, count: gpuCount, memoryGB: comp.id === 'DGX-01' ? 640 : comp.id === 'MAC-01' ? 128 : 24 }
-          : undefined;
-
-        const shardsCount = comp.id === 'DGX-01' ? 14 : comp.id === 'MAC-01' ? 5 : comp.id === 'PC-01' ? 2 : 2;
-        const temperatureC = comp.id === 'DGX-01' ? 52 : comp.id === 'MAC-01' ? 41 : 48;
-
-        workers.push({
-          id: comp.name || comp.id,
-          name: comp.name || comp.id,
-          type: comp.type ?? 'workstation',
-          status: 'online',
-          runtimes: compRuntimes.length > 0 ? compRuntimes : ['local'],
-          loadedModels: models.map((m) => m.id),
-          gpu: gpuInfo,
-          ram: {
-            totalGB: comp.hardware?.memoryGB ?? 64,
-            availableGB: Math.round((comp.hardware?.memoryGB ?? 64) * 0.7),
-            load: 1.4,
-          },
-          capacity: comp.hardware?.cpuCores ?? 8,
-          availableCapacity: Math.max(1, (comp.hardware?.cpuCores ?? 8) - 2),
-          temperatureC,
-          reservations: 1,
-          shards: [`shard-${comp.id}-0`],
-          shardsCount,
-          health: healthReport ? fleetNodeHealth(healthReport, comp.id) : undefined,
-        });
-      }
-    }
-
-    if (workers.length < 3) {
-      if (!workers.some((w) => w.id === 'DGX-01')) {
-        workers.push({
-          id: 'DGX-01',
-          name: 'DGX-01',
-          type: 'cluster',
-          status: 'online',
-          runtimes: ['local', 'vllm'],
-          loadedModels: ['qwen-2.5-coder-32b', 'deepseek-coder', 'llama-3.1-70b'],
-          gpu: { model: 'H100', count: 8, memoryGB: 640 },
-          ram: { totalGB: 512, availableGB: 420, load: 6.8 },
-          capacity: 16,
-          availableCapacity: 2,
-          temperatureC: 52,
-          reservations: 4,
-          shards: ['shard-0', 'shard-1', 'shard-2'],
-          shardsCount: 14,
-          healthPct: 99,
-        });
-      }
-      if (!workers.some((w) => w.id === 'MAC-01')) {
-        workers.push({
-          id: 'MAC-01',
-          name: 'MAC-01',
-          type: 'workstation',
-          status: 'online',
-          runtimes: ['local', 'mlx'],
-          loadedModels: ['qwen-2.5-coder-32b', 'claude-3-5-sonnet'],
-          gpu: { model: 'M2 Ultra', count: 1, memoryGB: 128 },
-          ram: { totalGB: 128, availableGB: 96, load: 2.1 },
-          capacity: 8,
-          availableCapacity: 4,
-          temperatureC: 41,
-          reservations: 1,
-          shards: ['shard-3', 'shard-4'],
-          shardsCount: 5,
-          healthPct: 100,
-        });
-      }
-      if (!workers.some((w) => w.id === 'PC-01')) {
-        workers.push({
-          id: 'PC-01',
-          name: 'PC-01',
-          type: 'workstation',
-          status: 'online',
-          runtimes: ['local', 'ollama'],
-          loadedModels: ['deepseek-coder'],
-          gpu: { model: 'RTX 4090', count: 1, memoryGB: 24 },
-          ram: { totalGB: 64, availableGB: 40, load: 0.9 },
-          capacity: 4,
-          availableCapacity: 3,
-          temperatureC: 48,
-          reservations: 0,
-          shards: ['shard-5'],
-          shardsCount: 2,
-          healthPct: 95,
-        });
-      }
-    }
-
-    const data: FleetViewData = {
-      workers,
-      selectedIndex: this.selectedWorkerIndex,
-      width: cols,
-      maxRows,
-    };
-    return renderFleetView(data);
+    const models = this.engine.models.list();
+    const readyIds = new Set(this.engine.models.listInstances().filter(i => i.loaded && i.state === 'READY' && i.health === 'healthy').map(i => i.modelId));
+    const agents = this.getAgents();
+    const jobs = this.engine.orchestrator.listJobs?.() ?? [];
+    const metrics = this.getContextMetrics();
+    const evidence = this.currentEvidenceInspection();
+    return renderMissionControl({
+      workspace: this.engine.projectRoot,
+      agents: this.engine.agents.list().length,
+      running: agents.filter(a => a.status === 'running').length,
+      ready: readyIds.size,
+      installed: models.length,
+      computers: this.engine.computers.list().length,
+      jobs: jobs.slice(-4).reverse().map(j => ({ id: j.id, title: j.title, status: j.status })),
+      models: models.map(m => ({ name: m.name, provider: m.provider, ready: readyIds.has(m.id) })),
+      runtimes: this.engine.runtimes.list().map(r => ({ name: r.name, health: r.health ?? 'unknown' })),
+      approvals: this.pendingApprovals.length,
+      inputTokens: metrics.jobIn,
+      outputTokens: metrics.jobOut,
+      events: Array.from(this.agentLogs.values()).flat().sort((a, b) => a.time.localeCompare(b.time)).slice(-3),
+      evidence: evidence ? [`${evidence.inspection.status} · 6 inspect verification checks`] : [],
+    }, cols, maxRows);
   }
 
   /**
@@ -7268,6 +7014,9 @@ export class FleetTui {
       color.bold('  WAZIR FLEET TUI SHORTCUTS & COMMANDS'),
       '',
       '  Navigation:',
+      '    1 / 5 / 6       Mission Control / Models & Providers / Evidence',
+      '    [ / ]           Cycle tasks or pending approvals',
+      '    !cmd / /sh cmd  Run an inline workspace shell command',
       '    Tab          Cycle through views (Shift-Tab for reverse traversal)',
       '    Up / Down       Navigate categories and items across entire left index',
       '    Enter           Drill down into highlighted agent stream (Tail view)',

@@ -1,0 +1,42 @@
+ ⟪◈⟫ WAZIR  MISSION CONTROL                                                                                                                 
+ ~/Code/Wazir  [View: WORKTREES]                                                                                                            
+ 1 Home   Tab Timeline / Approvals / Worktrees   5 Models   6 Evidence   ? Help                                                             
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ JOBS                               │  GIT WORKTREE ISOLATION & MERGE-BACK                                                                  
+ > + ..c5iuk8-1 build a c++ prog.   │  Each agent runs in an isolated git branch without colliding writes:                                  
+ EXECUTIONS                         │                                                                                                       
+   (none)                           │  No active worktrees.                                                                                 
+ AGENTS                             │                                                                                                       
+   o antigravity                    │  Merge-back story: Changes are verified on isolated branches before merge into target.                
+   o claude-code                    │                                                                                                       
+   o codex                          │                                                                                                       
+   o gemini                         │                                                                                                       
+   o opencode                       │                                                                                                       
+   o wazir-coding                   │                                                                                                       
+   o wazir-step                     │                                                                                                       
+ COMPUTERS                          │                                                                                                       
+   + WaelMacPro.local               │                                                                                                       
+ RUNTIMES                           │                                                                                                       
+   + Anthropic                      │                                                                                                       
+   + Google Gemini                  │                                                                                                       
+   x lmstudio                       │                                                                                                       
+   + NVIDIA API Catalog             │                                                                                                       
+   x ollama                         │                                                                                                       
+   + OpenAI                         │                                                                                                       
+ MCP                                │                                                                                                       
+   x GitHub auth_required           │                                                                                                       
+   x NVIDIA Run:ai auth_required    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+ History: [#79 + ! printf mission] [#78 + ! printf mission] [#77 + ! printf mission] [#76 + ! printf mission] [#75 + ! printf mission]      
+--------------------------------------------------------------------------------------------------------------------------------------------
+  [NORMAL] Status: Pinned model: adept/fuyu-8b  Model adept/fuyu-8b ~ Job 192.1K in / 7.1K out, Calls: 0 ~ Ctrl+T Sidebar ~ Context 0.0K/12.
+wa>                                                                                                                                         

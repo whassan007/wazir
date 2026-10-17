@@ -1,0 +1,24 @@
+ ⟪◈⟫ WAZIR  MISSION CONTROL                                     
+ ~/Code/Wazir  [View: FLEET]                                    
+ 1 Home   Tab Timeline / Approvals / Worktrees   5 Models   6 E.
+────────────────────────────────────────────────────────────────
+  Routing: Job [job-muc5iuk8-1] - Priority [normal] - Limit [4] 
+  ------------------------------------------------------------  
+  Title: build a c++ program that can implement a clinic reserv.
++-- JOB OUTPUT: build a c++ program that can implement a clinic.
+|  [completed] task-job-muc5iuk8-1-0 - build a c++ program.|    
+|  Task completed. Verification checks passed.             |    
+|                                                          |    
+|  Tokens: In 196730 / Out 7274 (204004 total) | Duration:.|    
+|  Files changed: Reservation.h, Reservation.cpp, Calendar.|    
++------------------------------------------------------------+  
+|  [Esc] Close                                             |    
++------------------------------------------------------------+  
+                                                                
+                                                                
+                                                                
+                                                                
+ History: [#82 + ! printf mission] [#81 + ! pr                  
+----------------------------------------------------------------
+ [NORMAL] [SHELL #82] exit 0: mission-shell-verified (ref @82)  
+wa>                                                             

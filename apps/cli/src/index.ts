@@ -1121,7 +1121,7 @@ program
 program
   .command('chat')
   .alias('fleet')
-  .description('Open interactive fleet-scale coding agent TUI session')
+  .description('Open Wazir Mission Control for agents, jobs, models and approvals')
   .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
   .option('--no-worktrees', 'Disable git worktree isolation')
   .option('--auto-merge', 'Automatically merge completed agent branches into main')

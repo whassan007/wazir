@@ -269,6 +269,27 @@ describe('FleetTui — interactive terminal UI harness', () => {
     }
   });
 
+  it('browses registered models and pins the selected model without synthetic evidence', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-model-nav-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    engine.models.register({ ...engine.models.get('fake-model')!, id: 'second-model', name: 'Second Model' });
+    await engine.orchestrator.createJob({ title: 'Restored job', tasks: [{ task: { id: 'saved-task', input: 'saved task' } }] });
+    const harness = new TuiTestHarness({ engine });
+    await harness.start();
+    expect(harness.getScreenBuffer()).toContain('EXECUTION MONITOR');
+    expect(harness.getScreenBuffer()).toContain('Restored job');
+    harness.sendKey('5');
+    expect(harness.getScreenBuffer()).toContain('MODELS & PROVIDERS');
+    harness.sendKey('\x1b[B');
+    expect(harness.getScreenBuffer()).toContain('Second Model');
+    harness.sendKey('\r');
+    expect(harness.getScreenBuffer()).toContain('Pinned model: second-model');
+    expect(harness.getScreenBuffer()).not.toContain('sha256:matrix-prof');
+    harness.sendKey('1');
+    expect(harness.getScreenBuffer()).toContain('EXECUTION MONITOR');
+    harness.stop();
+  });
+
   it('renders initial dashboard, transitions between views via keyboard shortcuts, and displays help', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);
@@ -278,9 +299,11 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // 1. Initial screen render
     const initialBuf = harness.getScreenBuffer();
-    expect(initialBuf).toContain('WAZIR - CONTROL - WORKER');
+    expect(initialBuf).toContain('MISSION CONTROL');
     expect(initialBuf).toContain('[View: FLEET]');
-    expect(initialBuf).toContain('AVAILABLE');
+    expect(initialBuf).toContain('MODELS & PROVIDERS');
+    expect(initialBuf).not.toContain('H100');
+    expect(initialBuf).not.toContain('DGX-01');
     expect(initialBuf).toContain('wa> ');
     expect(harness.tui.getCurrentView()).toBe('fleet');
 
@@ -893,26 +916,26 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // 1. Initial 120 cols >= 100: 2-pane split with separator '│'
     const splitBuf = harness.getScreenBuffer();
-    expect(splitBuf).toContain('|');
+    expect(splitBuf).toContain('│');
     expect(splitBuf).toContain('JOBS');
     expect(splitBuf).toContain('EXECUTIONS');
     expect(splitBuf).toContain('AGENTS');
     expect(splitBuf).toContain('COMPUTERS');
     expect(splitBuf).toContain('RUNTIMES');
-    expect(splitBuf).toContain('Routing:');
+    expect(splitBuf).toContain('EXECUTION MONITOR');
 
     // 2. Responsive collapse: resize below 100 columns
     harness.outStream.columns = 80;
     harness.screen.onResize();
 
     const collapsedBuf = harness.getScreenBuffer();
-    expect(collapsedBuf).not.toContain('|');
-    expect(collapsedBuf).toContain('Routing:');
+    expect(collapsedBuf).not.toContain('│');
+    expect(collapsedBuf).toContain('EXECUTION MONITOR');
 
     // 3. Restore columns >= 100
     harness.outStream.columns = 120;
     harness.screen.onResize();
-    expect(harness.getScreenBuffer()).toContain('|');
+    expect(harness.getScreenBuffer()).toContain('│');
 
     harness.stop();
   });
@@ -927,7 +950,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
     // Initially cursor > points to wazir-coding in AGENTS
     let buf = harness.getScreenBuffer();
     expect(buf).toContain('> o wazir-coding');
-    expect(buf).toContain('Routing: Agent [wazir-coding]');
+    expect(buf).toContain('EXECUTION MONITOR');
 
     // Navigate Down to COMPUTERS (test-computer)
     harness.sendKey('\u001b[B');

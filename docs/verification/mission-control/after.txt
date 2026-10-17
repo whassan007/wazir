@@ -1,0 +1,42 @@
+ ⟪◈⟫ WAZIR  MISSION CONTROL                                                                                                                 
+ ~/Code/Wazir  [View: FLEET]                                                                                                                
+ 1 Home   Tab Timeline / Approvals / Worktrees   5 Models   6 Evidence   ? Help                                                             
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ JOBS                               │  ⟪◈⟫ WAZIR · AI Fleet Counselor                                                                       
+ > + ..c5iuk8-1 build a c++ prog.   │  0 executing · 82/82 models ready · 0 approvals                                                       
+ EXECUTIONS                         │                                                                                                       
+   (none)                           │  EXECUTION MONITOR                                                                                    
+ AGENTS                             │  COMPLETED  build a c++ program that can implement a clinic reservation   job-muc5iuk8-1              
+   o antigravity                    │  ↑↓ select · Enter inspect · [ / ] cycle tasks · Enter full output                                    
+   o claude-code                    │                                                                                                       
+   o codex                          │  MODELS & PROVIDERS                                                                                   
+   o gemini                         │  READY  01-ai/yi-large  nvidia                                                                        
+   o opencode                       │  READY  adept/fuyu-8b  nvidia                                                                         
+   o wazir-coding                   │  READY  ai21labs/jamba-1.5-large-instruct  nvidia                                                     
+   o wazir-step                     │  +79 models · 5 opens model intelligence                                                              
+ COMPUTERS                          │  Anthropic · unavailable                                                                              
+   + WaelMacPro.local               │  Google Gemini · unavailable                                                                          
+ RUNTIMES                           │  Session tokens 0 in / 0 out · Cost: unreported                                                       
+   + Anthropic                      │                                                                                                       
+   + Google Gemini                  │  ACTIVITY & TOOL CALLS                                                                                
+   x lmstudio                       │  Waiting for execution events. Tab opens the live timeline.                                           
+   + NVIDIA API Catalog             │                                                                                                       
+   x ollama                         │  VERIFICATION EVIDENCE                                                                                
+   + OpenAI                         │  No verification recorded. 6 opens checks and provenance.                                             
+ MCP                                │                                                                                                       
+   x GitHub auth_required           │                                                                                                       
+   x NVIDIA Run:ai auth_required    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+ History: [#82 + ! printf mission] [#81 + ! printf mission] [#80 + ! printf mission] [#79 + ! printf mission] [#78 + ! printf mission]      
+--------------------------------------------------------------------------------------------------------------------------------------------
+ [NORMAL] Ready. Type a task or /fanout <t1; t2; ...> to begin.                           Context 0.0K/128K ~ 0 in / 0 out · Ctrl+T Sidebar 
+wa>                                                                                                                                         

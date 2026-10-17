@@ -1,0 +1,42 @@
+ ⟪◈⟫ WAZIR  MISSION CONTROL                                                                                                                 
+ ~/Code/Wazir  [View: FLEET]                                                                                                                
+ 1 Home   Tab Timeline / Approvals / Worktrees   5 Models   6 Evidence   ? Help                                                             
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ JOBS                               │  Routing: Job [job-muc5iuk8-1] - Priority [normal] - Limit [4]                                        
+ > + ..c5iuk8-1 build a c++ prog.   │  ---------------------------------------------------------------------------------------------------  
+ EXECUTIONS                         │  Title: build a c++ program that can implement a clinic reservation  | Status: completed              
+   (none)                           │  Tasks (1):                                                                                           
+ AGENTS                             │    [completed] task-job-muc5iuk8-1-0 - build a c++ program that can implement a clinic re             
+   o antigravity                    │      -> Task completed. Verification checks passed.                                                   
+   o claude-code                    │  Rollup: Tokens: In 196730 / Out 7274 (204004 total) | Duration: 821.2s | Speed: 8.9 tok/s            
+   o codex                          │  Files changed: Reservation.h, Reservation.cpp, Calendar.h, Calendar.cpp, ClinicSystem.h, ClinicSyste.
+   o gemini                         │                                                                                                       
+   o opencode                       │                                                                                                       
+   o wazir-coding                   │                                                                                                       
+   o wazir-step                     │                                                                                                       
+                   +-- JOB OUTPUT: build a c++ program that can implement a clinic re [COMPLETED] --------------------+                     
+                   |  [completed] task-job-muc5iuk8-1-0 - build a c++ program that can implement a clinic re          |                     
+                   |  Task completed. Verification checks passed.                                                     |                     
+                   |                                                                                                  |                     
+                   |  Tokens: In 196730 / Out 7274 (204004 total) | Duration: 821.2s | Speed: 8.9 tok/s               |                     
+                   |  Files changed: Reservation.h, Reservation.cpp, Calendar.h, Calendar.cpp, ClinicSystem.h, Clinic.|                     
+                   +----------------------------------------------------------------------------------------------------+                   
+                   |  [Esc] Close                                                                                     |                     
+                   +----------------------------------------------------------------------------------------------------+                   
+ MCP                                │                                                                                                       
+   x GitHub auth_required           │                                                                                                       
+   x NVIDIA Run:ai auth_required    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+                                    │                                                                                                       
+ History: [#83 + ! printf mission] [#82 + ! printf mission] [#81 + ! printf mission] [#80 + ! printf mission] [#79 + ! printf mission]      
+--------------------------------------------------------------------------------------------------------------------------------------------
+ [NORMAL] [SHELL #83] exit 0: mission-shell-verified (ref @83)                  Context 0.0K/128K ~ 196,730 in / 7,274 out · Ctrl+T Sidebar 
+wa>                                                                                                                                         
