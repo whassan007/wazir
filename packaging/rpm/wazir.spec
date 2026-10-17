@@ -1,5 +1,5 @@
 Name:           wazir
-Version:        0.1.66
+Version:        0.1.69
 Release:        1%{?dist}
 Summary:        Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator
 License:        AGPL-3.0-or-later
