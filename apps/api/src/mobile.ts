@@ -225,7 +225,7 @@ export interface MobileTaskDetail extends MobileTaskSummary {
 }
 
 const SECRET_KEY_PATTERN = /(password|passwd|secret|token|api[_-]?key|authorization|private[_-]?key|credential|cookie)/i;
-const BEARER_VALUE_PATTERN = /(Bearer\s+[A-Za-z0-9._~+/=-]+|mob_(?:at|rt)_[A-Fa-f0-9]+|sk-[A-Za-z0-9_-]{12,})/g;
+const BEARER_VALUE_PATTERN = /(Bearer\s+[A-Za-z0-9._~+/=-]+|mob_(?:at|rt)_[A-Fa-f0-9]+|nvapi-[A-Za-z0-9_-]{6,}|sk-[A-Za-z0-9_-]{12,})/g;
 
 export function redactSensitiveArguments(input: unknown): unknown {
   if (input === null || input === undefined) return input;

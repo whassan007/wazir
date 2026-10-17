@@ -1,7 +1,7 @@
 {
   "name": "@wazir/cli",
   "version": "0.2.4",
-  "description": "Wazir CLI \u2014 control plane command line",
+  "description": "Wazir CLI — control plane command line",
   "main": "./dist/index.js",
   "bin": {
     "wa": "./dist/index.js"
@@ -20,6 +20,7 @@
     "@wazir/runtimes-google": "*",
     "@wazir/runtimes-interfaces": "*",
     "@wazir/runtimes-lmstudio": "*",
+    "@wazir/runtimes-nvidia": "*",
     "@wazir/runtimes-ollama": "*",
     "@wazir/runtimes-openai": "*",
     "@wazir/scheduler": "*",

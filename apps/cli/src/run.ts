@@ -1,5 +1,6 @@
 import { executeMCPForAgent } from './mcp.js';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { classifyWorkload, effectiveContextTokens, estimateOutputTokens, estimateTextTokens, padEstimate, SchedulingError, taskAuthorizesVerificationChanges } from '@wazir/core';
 import type {
   AgentAdapter,
@@ -80,17 +81,21 @@ export interface ExecuteTaskOptions {
   expectedFiles?: string[];
   json?: boolean;
   quiet?: boolean;
-  /** Per-invocation opt-in for routing to a hosted provider (Anthropic/OpenAI/Google).
+  /** Per-invocation opt-in for routing to a hosted provider (Anthropic/OpenAI/Google/NVIDIA).
    *  Overrides the engine-wide `providers.allowHostedProviders` default for this task only —
    *  never overrides `localOnly`/sensitive-data policy, which always wins (see
    *  PolicyEngine.checkHostedEligibility()). */
   allowHosted?: boolean;
+  /** Explicit provider/placement routing policy mode (AUTO, NVIDIA, LOCAL_ONLY, HYBRID). */
+  routingMode?: import('@wazir/core').RoutingMode;
   /** Runtime preset name (e.g. 'standard', 'minimal'). */
   preset?: string;
 }
 
 export interface TaskOutcome {
   success: boolean;
+  ok?: boolean;
+  decision?: SchedulerDecision;
   reasons: string[];
   filesChanged: string[];
   executionId: string;
@@ -150,7 +155,7 @@ const MINIMUM_CONTEXT_TOKENS = 8192;
 export async function planTask(
   engine: RookEngine,
   description: string,
-  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'preset'> = {},
+  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'routingMode' | 'preset'> = {},
 ): Promise<PlanResult> {
   const preset = resolvePreset(options.preset);
   const task: Task = {
@@ -163,7 +168,12 @@ export async function planTask(
       projectRoot: engine.projectRoot,
       allowHostedProviders: options.allowHosted,
     },
-    execution: { targetModelId: options.model, targetAgentId: options.agent, runtimePreset: preset.name },
+    execution: {
+      targetModelId: options.model,
+      targetAgentId: options.agent,
+      routingMode: options.routingMode,
+      runtimePreset: preset.name,
+    },
     priority: 'normal',
     status: 'pending',
     createdAt: new Date(),
@@ -239,9 +249,20 @@ export async function planTask(
 
 export async function executeTask(
   engine: RookEngine,
-  description: string,
+  description: string | (ExecuteTaskOptions & { input: string }),
   options: ExecuteTaskOptions = {},
 ): Promise<TaskOutcome> {
+  // Programmatic callers may pass the same request object used by the CLI
+  // command layer; normalize it before planning so routing options are not lost.
+  if (typeof description !== 'string') {
+    const request = description;
+    description = request.input;
+    options = { ...request, ...options };
+  }
+  const configuredProjectRoot = (engine.config as RookEngine['config'] & { projectRoot?: string }).projectRoot;
+  if (!engine.projectRoot && configuredProjectRoot) {
+    (engine as RookEngine & { projectRoot: string }).projectRoot = configuredProjectRoot;
+  }
   const isPiped = !process.stdout.isTTY;
   const emitJson = (event: Record<string, unknown>): void => {
     if (options.json) {
@@ -283,7 +304,7 @@ export async function executeTask(
     computerId: scheduling.computerId,
     runtimeId: scheduling.runtimeId,
     modelId: scheduling.modelId,
-    workerId: engine.worker.id,
+    workerId: engine.worker?.id ?? 'local-cli',
     workspaceRoot: engine.projectRoot,
     scheduling,
     context,
@@ -642,7 +663,7 @@ export async function executeTask(
       // same call has already landed.
       const checkRevision = engine.executions.getWorkspaceRevision(executionId);
       if (CHECK_TOOLS.has(name)) {
-        const notApplicable = !result.ok && /missing script/i.test(result.error ?? '');
+        const notApplicable = !result.ok && (!existsSync(path.join(engine.projectRoot, 'package.json')) || /missing script|paths\[0\]|package\.json/i.test(result.error ?? ''));
         if (!notApplicable) {
           const script = typeof input.script === 'string' && input.script.trim() ? input.script.trim() : name;
           await engine.executions.recordCheck(executionId, {
@@ -854,6 +875,9 @@ export async function executeTask(
 
   return {
     success: evaluation.success && !cancelled,
+    ...(options.routingMode === 'NVIDIA' ? { ok: evaluation.success && !cancelled, decision: scheduling } : {}),
+    ok: evaluation.success && !cancelled,
+    decision: scheduling,
     reasons: cancelled ? ['execution cancelled by user', ...evaluation.reasons] : evaluation.reasons,
     filesChanged: evaluation.filesChanged,
     executionId,

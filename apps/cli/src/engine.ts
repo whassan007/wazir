@@ -401,6 +401,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     hostedRuntimes: [...hostedAdapters.keys()],
     agents: agents.list().filter((a) => a.source === 'external').map((a) => a.descriptor.name),
     hostedAuthorized: config.providers?.allowHostedProviders ?? false,
+    hostedConcurrency: {
+      nvidia: config.providers?.nvidia?.limits?.maxConcurrentRequests ?? 2,
+    },
   });
   const scheduler = new Scheduler({
     computers,

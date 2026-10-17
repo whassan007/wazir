@@ -197,6 +197,52 @@ runtimesCmd
 
 program.addCommand(runtimesCmd);
 
+// providers command
+const providersCmd = new Command()
+  .name('providers')
+  .description('Manage local and hosted AI execution providers (Ollama, LM Studio, NVIDIA, Anthropic, OpenAI, Google)');
+
+providersCmd
+  .command('list', { isDefault: true })
+  .description('List all registered execution providers and their status')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const { listProvidersCommand } = await import('./commands.js');
+    const result = await listProvidersCommand(engine, options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+providersCmd
+  .command('inspect <provider>')
+  .description('Inspect a provider, its configuration, capabilities, and registered models')
+  .option('--json', 'Output in JSON format')
+  .action(async (provider, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const { inspectProviderCommand } = await import('./commands.js');
+    const result = await inspectProviderCommand(engine, provider, options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+providersCmd
+  .command('test <provider>')
+  .description('Test connectivity, authentication, and model discovery for a provider')
+  .option('--json', 'Output in JSON format')
+  .action(async (provider, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const { testProviderCommand } = await import('./commands.js');
+    const result = await testProviderCommand(engine, provider, options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+program.addCommand(providersCmd);
+
 // models command
 const modelsCmd = new Command()
   .name('models')
@@ -409,6 +455,8 @@ taskCmd
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
   .option('--preset <name>', 'Runtime preset (e.g. standard, minimal)')
   .option('--expected-files <files>', 'Expected changed files (comma-separated)')
+  .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
   .description('Run a new task')
   .action(async (prompt, options) => {
@@ -428,6 +476,8 @@ taskCmd
         expectedFiles: options.expectedFiles
           ? options.expectedFiles.split(',').map((s) => s.trim())
           : undefined,
+        allowHosted: options.allowHosted,
+        routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
         json: options.json,
       },
     );
@@ -441,6 +491,8 @@ taskCmd
   .option('--model <name>', 'Use specific model')
   .option('--agent <name>', 'Use specific agent')
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
+  .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
   .description('Show scheduling decision without executing')
   .action(async (prompt, options) => {
@@ -451,6 +503,8 @@ taskCmd
       type: options.type as any,
       model: options.model,
       agent: options.agent,
+      allowHosted: options.allowHosted,
+      routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
       json: options.json,
     });
     console.log(result.output);
@@ -480,6 +534,8 @@ program
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
   .option('--preset <name>', 'Runtime preset (e.g. standard, minimal)')
   .option('--expected-files <files>', 'Expected changed files (comma-separated)')
+  .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
   .description('Run a new task (alias for wa task run)')
   .action(async (prompt, options) => {
@@ -499,6 +555,8 @@ program
         expectedFiles: options.expectedFiles
           ? options.expectedFiles.split(',').map((s) => s.trim())
           : undefined,
+        allowHosted: options.allowHosted,
+        routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
         json: options.json,
       },
     );

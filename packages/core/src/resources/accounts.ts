@@ -126,7 +126,13 @@ export class AccountRegistry {
    * accounts (paid only if hosted providers were already authorised), and delegated agents
    * become subscriptions with unknown limits. Explicit configuration always wins.
    */
-  addImplicit(input: { localRuntimes: string[]; hostedRuntimes: string[]; agents: string[]; hostedAuthorized: boolean }): void {
+  addImplicit(input: {
+    localRuntimes: string[];
+    hostedRuntimes: string[];
+    agents: string[];
+    hostedAuthorized: boolean;
+    hostedConcurrency?: Record<string, number>;
+  }): void {
     const covered = (pred: (a: AccountConfig) => boolean) => this.list().some((a) => a.enabled !== false && pred(a));
     for (const r of input.localRuntimes) {
       if (!covered((a) => !!a.runtimeIds?.includes(r))) {
@@ -135,7 +141,17 @@ export class AccountRegistry {
     }
     for (const r of input.hostedRuntimes) {
       if (!covered((a) => !!a.runtimeIds?.includes(r))) {
-        this.byId.set(`api:${r}`, { id: `api:${r}`, label: `${r} API`, provider: r, kind: 'api', integration: 'api-key', runtimeIds: [r], allowPaid: input.hostedAuthorized });
+        const defaultConcurrent = input.hostedConcurrency?.[r] ?? (r === 'nvidia' ? 2 : undefined);
+        this.byId.set(`api:${r}`, {
+          id: `api:${r}`,
+          label: `${r} API`,
+          provider: r,
+          kind: 'api',
+          integration: 'api-key',
+          runtimeIds: [r],
+          allowPaid: input.hostedAuthorized,
+          ...(defaultConcurrent !== undefined ? { maxConcurrent: defaultConcurrent } : {}),
+        });
       }
     }
     for (const agent of input.agents) {

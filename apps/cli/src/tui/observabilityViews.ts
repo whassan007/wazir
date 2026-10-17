@@ -1447,6 +1447,8 @@ export function formatVerificationInspection(inspection: VerificationInspection,
   }
 
   out.push('');
+  out.push(`Eligible      ${i.completion.eligible ? color.green('YES') : color.red('NO')}`);
+  out.push('');
   out.push(color.bold('PHYSICAL MUTATIONS'));
   if (i.mutations.length === 0) out.push(color.gray('  No physical mutations recorded.'));
   for (const m of i.mutations.slice(-8)) {
@@ -1636,6 +1638,9 @@ export function renderEvidenceModal(data: EvidenceModalData): string[] {
     const scrollOffset = data.scrollOffset ?? 0;
     const maxVisible = Math.max(5, maxRows - 4);
     const visible = inspLines.slice(scrollOffset, scrollOffset + maxVisible);
+    if (provenanceChain?.length) {
+      lines.push(`│ ${color.bold('PROVENANCE'.padEnd(modalWidth - 4))} │`);
+    }
     for (const l of visible) {
       lines.push(`│ ${padRight(l, modalWidth - 4)} │`);
     }

@@ -71,7 +71,7 @@ export interface PolicyRequirements {
   projectRoot?: string;
   /**
    * Explicit opt-in for routing this task to a hosted provider
-   * (Anthropic/OpenAI/Google). Deny-by-default: routing to a hosted-only
+   * (Anthropic/OpenAI/Google/NVIDIA). Deny-by-default: routing to a hosted-only
    * model requires this to be `true` (directly, or via the engine-wide
    * `PolicyEngineOptions.allowHostedProvidersDefault`) even when `localOnly`
    * is unset. `localOnly: true` or `dataClassification` in
@@ -81,12 +81,16 @@ export interface PolicyRequirements {
   allowHostedProviders?: boolean;
 }
 
+export type RoutingMode = 'AUTO' | 'NVIDIA' | 'LOCAL_ONLY' | 'HYBRID';
+
 export interface ExecutionPreferences {
   targetComputerId?: string;
   targetRuntimeId?: string;
   targetModelId?: string;
   targetAgentId?: string;
   executionMode?: 'automatic' | 'local' | 'fastest' | 'highestQuality';
+  /** Explicit provider/placement routing policy mode (AUTO, NVIDIA, LOCAL_ONLY, HYBRID). */
+  routingMode?: RoutingMode;
   runtimePreset?: string;
 }
 

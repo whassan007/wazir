@@ -150,6 +150,7 @@ export class Scheduler {
       readiness: placed.state === 'READY' ? 'READY_NOW' : 'LOADABLE',
       runtimeId: computerDecision.runtimeId,
       computerId: computerDecision.computerId,
+      resourceType: computerDecision.resourceType,
       modelDecision,
       computerDecision,
       reasons: [
@@ -213,6 +214,24 @@ export class Scheduler {
       router.record(task.id, workload, chosen, all);
     }
 
+    if (task.execution?.routingMode === 'NVIDIA') {
+      const preferred = scored.find((s) => s.record.id === 'nvidia/nemotron-3.5-super-vl-120b-a12b');
+      // Explicit provider routing must remain deterministic when the adaptive
+      // resource router ranks another catalog model higher. Preserve hard
+      // policy/capability rejections, but clear only resource-ranking vetoes.
+      if (preferred && preferred.rejected.every((reason) => reason.startsWith('resource:'))) {
+        preferred.rejected = [];
+        preferred.score = Number.MAX_SAFE_INTEGER;
+      }
+    }
+    const hasLocalEligible = scored.some((candidate) => candidate.record.local && candidate.rejected.length === 0);
+    if (hasLocalEligible && (task.execution?.routingMode === undefined || task.execution.routingMode === 'AUTO')) {
+      for (const candidate of scored) {
+        if (!candidate.record.local && candidate.rejected.length === 0 && !task.requirements?.vision && !task.requirements?.reasoning) {
+          candidate.score -= 100;
+        }
+      }
+    }
     const eligible = scored.filter((s) => s.rejected.length === 0);
     const rejected = scored.filter((s) => s.rejected.length > 0);
 
@@ -312,7 +331,10 @@ export class Scheduler {
     }
 
     eligible.sort((a, b) => b.score - a.score || a.record.id.localeCompare(b.record.id));
-    const best = eligible[0];
+    const preferredNvidia = task.execution?.routingMode === 'NVIDIA'
+      ? eligible.find((candidate) => candidate.record.id === 'nvidia/nemotron-3.5-super-vl-120b-a12b')
+      : undefined;
+    const best = preferredNvidia ?? eligible[0];
     const instance = this.selectInstance(best.record);
 
     const explanation: EmpiricalRoutingExplanation = {
@@ -522,14 +544,33 @@ export class Scheduler {
     // see this class's docstring) and only then fail in Phase 2 with a
     // confusing "no computer can host" error, even when a perfectly good
     // local model exists and would have been picked instead.
-    if (Array.isArray(record.runtimeCompatibility) && record.runtimeCompatibility.length > 0 &&
-        record.runtimeCompatibility.every((t) => HOSTED_RUNTIME_TYPES.has(t))) {
+    const isHostedOnly =
+      Array.isArray(record.runtimeCompatibility) &&
+      record.runtimeCompatibility.length > 0 &&
+      record.runtimeCompatibility.every((t) => HOSTED_RUNTIME_TYPES.has(t));
+    if (isHostedOnly) {
       const gate = this.deps.policy.checkHostedEligibility(task.policy, record.runtimeCompatibility[0]);
       if (!gate.allowed) {
         rejected.push(gate.reason);
       } else {
         reasons.push(gate.reason);
       }
+    }
+
+    const routingMode = task.execution?.routingMode ?? (task.execution?.executionMode === 'local' ? 'LOCAL_ONLY' : undefined);
+    if (routingMode === 'LOCAL_ONLY' && (record.local === false || isHostedOnly)) {
+      rejected.push(`routingMode=LOCAL_ONLY: hosted model '${record.id}' is not permitted`);
+    } else if (routingMode === 'NVIDIA') {
+      const isNvidiaModel =
+        record.provider === 'nvidia' ||
+        (Array.isArray(record.runtimeCompatibility) && record.runtimeCompatibility.includes('nvidia'));
+      if (!isNvidiaModel && task.execution?.targetModelId !== record.id) {
+        rejected.push(`routingMode=NVIDIA: model '${record.id}' is not an NVIDIA provider model`);
+      } else if (isNvidiaModel) {
+        reasons.push('routingMode=NVIDIA: preferred NVIDIA provider model');
+      }
+    } else if (routingMode === 'HYBRID') {
+      reasons.push(`routingMode=HYBRID: ${record.local === false ? 'hosted' : 'local'} model eligible`);
     }
 
     const circuit = this.deps.reliability?.status(record.id, task.type);
@@ -546,6 +587,12 @@ export class Scheduler {
     let score = 0;
     score += requiredCapabilities.filter((c) => record.capabilities.includes(c)).length * 2;
     if (record.toolCalling) score += 1;
+    if (routingMode === 'NVIDIA' && (record.provider === 'nvidia' || (Array.isArray(record.runtimeCompatibility) && record.runtimeCompatibility.includes('nvidia')))) {
+      score += 5;
+      // NVIDIA's configured default is the stable multimodal Nemotron catalog entry.
+      // Prefer it over secondary curated catalog models for explicit NVIDIA routing.
+      if (record.id === 'nvidia/nemotron-3.5-super-vl-120b-a12b') score += 100;
+    }
 
     // Empirical Model Intelligence Profile integration
     if (this.deps.modelIntelligence && classification) {
@@ -936,10 +983,17 @@ export class Scheduler {
     );
     const best = placements[0];
 
+    const resourceType = !best.computer
+      ? 'HOSTED_API_INFERENCE'
+      : best.computer.local
+        ? 'LOCAL_GPU_INFERENCE'
+        : 'REMOTE_GPU_INFERENCE';
+
     return {
       computerId: best.computer?.id,
       runtimeId: best.instance.runtimeId,
       placementKind: best.computer ? 'local' : 'hosted',
+      resourceType,
       score: best.score,
       reasons: best.reasons,
     };

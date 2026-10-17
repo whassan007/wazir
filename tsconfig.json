@@ -10,6 +10,7 @@
     { "path": "packages/runtimes/anthropic" },
     { "path": "packages/runtimes/openai" },
     { "path": "packages/runtimes/google" },
+    { "path": "packages/runtimes/nvidia" },
     { "path": "packages/registry" },
     { "path": "packages/evaluation" },
     { "path": "packages/observability" },

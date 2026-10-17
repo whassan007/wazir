@@ -51,6 +51,8 @@ const MATRIX: Record<string, Scope> = {
   'GET /api/v1/computers': 'viewer',
   'GET /api/v1/workers': 'viewer',
   'GET /api/v1/runtimes': 'viewer',
+  'GET /api/v1/providers': 'viewer',
+  'GET /api/v1/providers/:id': 'viewer',
   'GET /api/v1/models': 'viewer',
   'GET /api/v1/model-instances': 'viewer',
   'GET /api/v1/models/:id/inspect': 'viewer',

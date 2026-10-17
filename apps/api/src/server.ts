@@ -25,6 +25,7 @@ import {
 import { currentLoad, discoverHardware, discoverRuntimes, type DiscoveredRuntime } from '@wazir/workers';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
+import { createNvidiaAdapter } from '@wazir/runtimes-nvidia';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
 import { generateId, sanitizeUntrustedOutput, MemoryStore, type KeyValueStore } from '@wazir/shared';
@@ -341,12 +342,17 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   const agents = new AgentRegistry();
   const tools = new ToolRegistry(defaultTools);
 
+  const nvidiaEnabled = Boolean(process.env.NVIDIA_API_KEY || process.env.WAZIR_NVIDIA_BASE_URL);
+  const nvidiaAdapter = createNvidiaAdapter({
+    baseURL: process.env.WAZIR_NVIDIA_BASE_URL ?? 'https://integrate.api.nvidia.com/v1',
+  });
   const adapters = [
     createOllamaAdapter(process.env.WAZIR_OLLAMA_URL ?? 'http://localhost:11434'),
     createLMStudioAdapter(process.env.WAZIR_LMSTUDIO_URL ?? 'http://localhost:1234/v1'),
+    ...(nvidiaEnabled ? [nvidiaAdapter] : []),
   ];
 
-  const discovered = await discoverRuntimes(adapters);
+  const discovered = await discoverRuntimes(adapters as any);
   const hardware = await discoverHardware();
 
   const localId = process.env.WAZIR_COMPUTER_ID ?? 'local';
@@ -365,9 +371,10 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   await auth.issueComputerToken(localId);
 
   for (const discoveredRuntime of discovered) {
+    const isHosted = discoveredRuntime.id === 'nvidia';
     runtimes.register({
       id: discoveredRuntime.id,
-      type: discoveredRuntime.id === 'ollama' ? 'ollama' : discoveredRuntime.id === 'lmstudio' ? 'lmstudio' : 'other',
+      type: discoveredRuntime.id === 'ollama' ? 'ollama' : discoveredRuntime.id === 'lmstudio' ? 'lmstudio' : discoveredRuntime.id === 'nvidia' ? 'nvidia' : 'other',
       name: discoveredRuntime.info.name,
       version: discoveredRuntime.info.version,
       url: discoveredRuntime.info.url,
@@ -392,7 +399,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
            embedding: discoveredModel.embedding ?? false,
            reasoning: discoveredModel.reasoning ?? false,
            runtimeCompatibility: [discoveredRuntime.id as RuntimeType],
-           local: true,
+           local: !isHosted,
            createdAt: new Date(),
            updatedAt: new Date(),
          });
@@ -405,9 +412,9 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
            computerId: localId,
            runtimeId: discoveredRuntime.id,
            runtimeModelId: discoveredModel.id,
-           loaded: false,
+           loaded: isHosted,
            health: discoveredRuntime.health === 'healthy' ? 'healthy' : 'degraded',
-           state: 'INSTALLED',
+           state: isHosted ? 'LOADED' : 'INSTALLED',
          });
       }
     }
@@ -894,6 +901,59 @@ export function createApp(state: ApiState) {
       };
     });
     res.json({ runtimes });
+  });
+
+  app.get('/api/v1/providers', (_req, res) => {
+    const providers = state.runtimes.list().map((r) => {
+      const discovered = state.discovered.find((d) => d.id === r.id);
+      const isHosted = r.type === 'nvidia' || r.type === 'openai' || r.type === 'anthropic' || r.type === 'google';
+      return {
+        id: r.id,
+        displayName: r.name,
+        providerType: isHosted ? 'HOSTED_INFERENCE' : 'LOCAL_INFERENCE',
+        runtimeKind: isHosted ? 'hosted' : 'local',
+        endpoint: r.url,
+        health: discovered?.health ?? r.health ?? 'unavailable',
+        healthMessage: discovered?.healthMessage,
+        modelCount: (discovered?.models ?? []).length,
+        models: (discovered?.models ?? []).map((m) => m.id),
+      };
+    });
+    if (!providers.some((p) => p.id === 'nvidia')) {
+      providers.push({
+        id: 'nvidia',
+        displayName: 'NVIDIA API Catalog',
+        providerType: 'HOSTED_INFERENCE',
+        runtimeKind: 'hosted',
+        endpoint: process.env.WAZIR_NVIDIA_BASE_URL ?? 'https://integrate.api.nvidia.com/v1',
+        health: process.env.NVIDIA_API_KEY ? 'healthy' : 'unavailable',
+        healthMessage: process.env.NVIDIA_API_KEY ? 'NVIDIA_API_KEY configured' : 'Missing NVIDIA_API_KEY',
+        modelCount: 0,
+        models: [],
+      });
+    }
+    res.json({ providers });
+  });
+
+  app.get('/api/v1/providers/:id', (req, res) => {
+    const id = String(req.params.id);
+    const runtime = state.runtimes.list().find((r) => r.id === id);
+    if (!runtime && id !== 'nvidia') {
+      res.status(404).json({ error: `provider '${id}' not found` });
+      return;
+    }
+    const discovered = state.discovered.find((d) => d.id === id);
+    const isHosted = id === 'nvidia' || runtime?.type === 'openai' || runtime?.type === 'anthropic' || runtime?.type === 'google';
+    res.json({
+      id,
+      displayName: runtime?.name ?? (id === 'nvidia' ? 'NVIDIA API Catalog' : id),
+      providerType: isHosted ? 'HOSTED_INFERENCE' : 'LOCAL_INFERENCE',
+      runtimeKind: isHosted ? 'hosted' : 'local',
+      endpoint: runtime?.url ?? (id === 'nvidia' ? (process.env.WAZIR_NVIDIA_BASE_URL ?? 'https://integrate.api.nvidia.com/v1') : undefined),
+      health: discovered?.health ?? runtime?.health ?? 'unavailable',
+      healthMessage: discovered?.healthMessage ?? (id === 'nvidia' && !process.env.NVIDIA_API_KEY ? 'Missing NVIDIA_API_KEY' : undefined),
+      models: discovered?.models ?? [],
+    });
   });
 
   app.get('/api/v1/models', (_req, res) => {

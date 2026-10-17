@@ -7021,7 +7021,16 @@ export class FleetTui {
    */
   private renderTaskPane(cols: number, maxRows: number): string[] {
     const card = this.agents.get(this.selectedTaskId ?? '') ?? this.getAgents()[0];
-    if (!card) return ['  TASK DETAILS', '', '  No task selected. Submit a task or select an execution.'];
+    if (!card) return [
+      '  TASK EXECUTION PIPELINE',
+      '  TASK → AGENT → MODEL → RUNTIME → WORKER → TOOLS → VERIFY',
+      '  Routing: pending',
+      '  Compute: pending',
+      '  Deterministic Verification: pending',
+      '  Budget Governance: active',
+      '',
+      '  No task selected. Submit a task or select an execution.',
+    ];
     const model = this.engine.models.get(card.modelId);
     const inspection = this.currentEvidenceInspection();
     return [
@@ -7556,6 +7565,13 @@ export class FleetTui {
       ready: readyIds.size,
       installed: models.length,
       computers: this.engine.computers.list().length,
+      fleetNodes: this.engine.computers.list().map((computer) => ({
+        id: computer.id,
+        gpu: typeof computer.hardware?.gpu === 'string'
+          ? computer.hardware.gpu
+          : computer.hardware?.gpu?.model,
+        health: computer.status ?? 'unknown',
+      })),
       jobs: jobs.slice(-4).reverse().map(j => ({ id: j.id, title: j.title, status: j.status })),
       models: models.map(m => ({ name: m.name, provider: m.provider, ready: readyIds.has(m.id) })),
       runtimes: this.engine.runtimes.list().map(r => ({ name: r.name, health: r.health ?? 'unknown' })),

@@ -1,0 +1,14 @@
+{
+  "name": "@wazir/runtimes-nvidia",
+  "version": "0.1.28",
+  "description": "NVIDIA API Catalog hosted runtime adapter for the Wazir meta-harness",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@wazir/runtimes-interfaces": "*",
+    "@wazir/secrets": "*"
+  }
+}

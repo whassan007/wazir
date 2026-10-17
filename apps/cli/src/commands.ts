@@ -147,14 +147,19 @@ export async function unloadModelCommand(engine: RookEngine, modelId: string, op
 }
 
 export function listRuntimes(engine: RookEngine): string {
-  const rows = engine.discovered.map((r) => [
-    r.id,
-    r.info.name,
-    r.info.version,
-    r.info.url ?? '—',
-    r.health,
-    r.models.length > 0 ? `${r.models.length} models` : '—',
-  ]);
+  const discoveredById = new Map(engine.discovered.map((d) => [d.id, d]));
+  const rows = engine.runtimes.list().map((r) => {
+    const disc = discoveredById.get(r.id);
+    const modelCount = disc ? disc.models.length : engine.models.instancesForRuntime(r.id).length;
+    return [
+      r.id,
+      r.name,
+      r.version,
+      disc?.info.url ?? r.url ?? '—',
+      disc?.health ?? r.health,
+      modelCount > 0 ? `${modelCount} models` : '—',
+    ];
+  });
   return table(['runtime', 'name', 'version', 'url', 'health', 'models'], rows);
 }
 
@@ -694,7 +699,7 @@ export async function replayExecution(engine: RookEngine, id: string): Promise<s
 const BENCHMARK_PROMPT =
   'Write a short haiku (17 syllables) about a TypeScript compiler checking types.';
 
-export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?: string): Promise<string> {
+async function runBenchmarkLegacy(engine: RookEngine, modelId?: string, prompt?: string): Promise<string> {
   const models = engine.models.list();
   if (models.length === 0) {
     return color.yellow('no models registered — cannot benchmark');
@@ -721,7 +726,7 @@ export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?
   let outputTokens = 0;
   let error: string | undefined;
 
-  const adapter = engine.worker.adapterForModel(target.id);
+  const adapter = engine.adapters.get(target.provider) ?? engine.worker.adapterForModel(target.id);
   if (!adapter) {
     return color.red(`no runtime can serve '${target.id}'`);
   }
@@ -762,11 +767,39 @@ export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?
   return lines.join('\n');
 }
 
+/** Programmatic provider/benchmark API used by the CLI and integration tests. */
+export async function runBenchmark(
+  engine: RookEngine,
+  request?: string | { models?: string[]; json?: boolean },
+  prompt?: string,
+): Promise<string | { exitCode: number; output: string }> {
+  if (typeof request === 'object') {
+    const modelIds = request.models ?? [];
+    const runs = [];
+    for (const modelId of modelIds) {
+      const output = await runBenchmarkLegacy(engine, modelId);
+      runs.push({ modelId, passed: !/failed|error|no runtime/i.test(output), output });
+    }
+    const report = { models: modelIds, runs };
+    return request.json ? { exitCode: 0, output: JSON.stringify(report) } : { exitCode: 0, output: JSON.stringify(report, null, 2) };
+  }
+  return runBenchmarkLegacy(engine, request, prompt);
+}
+
 export async function discover(engine: RookEngine): Promise<string> {
   const lines: string[] = [color.bold('Runtime discovery'), ''];
   for (const discovered of engine.discovered) {
     lines.push(`  ${discovered.info.name} (${discovered.id}) — ${discovered.health}${discovered.healthMessage ? color.gray(`: ${discovered.healthMessage}`) : ''}`);
     for (const model of discovered.models) {
+      lines.push(color.gray(`    ${model.id}${model.parameters ? color.gray(` (${model.parameters})`) : ''}${model.toolCalling ? ' tool-calling' : ''}`));
+    }
+  }
+  for (const [providerId] of engine.hostedAdapters) {
+    const rt = engine.runtimes.get(providerId);
+    if (!rt) continue;
+    const providerModels = engine.models.list().filter((m) => m.provider === providerId);
+    lines.push(`  ${rt.name} (${rt.id}) — ${rt.health} [hosted]`);
+    for (const model of providerModels) {
       lines.push(color.gray(`    ${model.id}${model.parameters ? color.gray(` (${model.parameters})`) : ''}${model.toolCalling ? ' tool-calling' : ''}`));
     }
   }
@@ -777,6 +810,8 @@ export async function planTaskCommand(engine: RookEngine, description: string, o
   type?: TaskType;
   model?: string;
   agent?: string;
+  allowHosted?: boolean;
+  routingMode?: import('@wazir/core').RoutingMode;
   json?: boolean;
 }): Promise<{ code: number; output: string }> {
   const planned = await planTask(engine, description, options);
@@ -797,6 +832,9 @@ export async function planTaskCommand(engine: RookEngine, description: string, o
   lines.push(`    model:     ${scheduling.modelId} (${scheduling.modelDecision.strategy})`);
   lines.push(`    runtime:   ${scheduling.runtimeId}`);
   lines.push(`    computer:  ${scheduling.computerId ?? `hosted (${scheduling.runtimeId})`}`);
+  if (scheduling.resourceType) {
+    lines.push(`    resource:  ${scheduling.resourceType}`);
+  }
   lines.push(`    context:   ${context.finalRequiredTokens} / ${context.available.tokens} tokens (${context.available.source})`);
   lines.push('');
   lines.push(color.bold('  Reasons'));
@@ -814,6 +852,8 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   force?: boolean;
   maxTurns?: number;
   expectedFiles?: string[];
+  allowHosted?: boolean;
+  routingMode?: import('@wazir/core').RoutingMode;
   json?: boolean;
   preset?: string;
 }): Promise<{ code: number; output: string }> {
@@ -842,6 +882,8 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
     agent: options.agent,
     maxTurns: options.maxTurns,
     expectedFiles: options.expectedFiles,
+    allowHosted: options.allowHosted,
+    routingMode: options.routingMode,
     json: options.json,
     quiet: options.json === true,
     preset: options.preset,
@@ -2020,17 +2062,34 @@ export async function modelProtocolTestCommand(modelId: string): Promise<{ code:
 
 export async function inspectRuntime(engine: RookEngine, id: string): Promise<void> {
   const runtime = engine.discovered.find((r) => r.id === id);
-  if (!runtime) {
+  const hostedAdapter = engine.hostedAdapters.get(id as any);
+  const runtimeReg = engine.runtimes.get(id);
+  if (!runtime && !hostedAdapter && !runtimeReg) {
     console.error(color.red(`Runtime '${id}' not found.`));
     return;
   }
-  
-  console.log(`\n${color.bold(runtime.info.name || id)}`);
+
+  if (!runtime && (hostedAdapter || runtimeReg)) {
+    const info = hostedAdapter ? await hostedAdapter.discover() : { id, name: runtimeReg?.name ?? id, version: runtimeReg?.version ?? 'v1', url: runtimeReg?.url };
+    const status = hostedAdapter ? await hostedAdapter.status() : { authenticated: runtimeReg?.health === 'healthy', eligible: runtimeReg?.health === 'healthy' };
+    const models = engine.models.list().filter((m) => m.provider === id);
+    console.log(`\n${color.bold(info.name || id)}`);
+    console.log('-'.repeat(48));
+    console.log(`Kind:       hosted (HOSTED_INFERENCE)`);
+    console.log(`Endpoint:   ${info.url || 'unknown'}`);
+    console.log(`Auth:       ${status.authenticated ? color.green(`authenticated (${(status as any).credentialSource ?? (status as any).method ?? 'api-key'})`) : color.yellow('unauthenticated')}`);
+    console.log(`Health:     ${runtimeReg?.health === 'healthy' ? color.green('healthy') : color.yellow(runtimeReg?.health ?? 'unavailable')}`);
+    console.log(`Models:     ${models.length} registered`);
+    console.log();
+    return;
+  }
+
+  console.log(`\n${color.bold(runtime!.info.name || id)}`);
   console.log('-'.repeat(48));
   console.log(`Computer:   ${process.env.WAZIR_COMPUTER_ID || 'local'}`);
-  
-  if (runtime.healthDiagnostics) {
-    const diag = runtime.healthDiagnostics;
+
+  if (runtime!.healthDiagnostics) {
+    const diag = runtime!.healthDiagnostics;
     console.log(`CLI:        ${diag.cliAvailable ? color.green('available') : color.red('unavailable')}`);
     console.log(`Server:     ${diag.serverRunning ? color.green('running') : color.red('stopped')}`);
     console.log(`Endpoint:   ${diag.endpoint}`);
@@ -2038,22 +2097,269 @@ export async function inspectRuntime(engine: RookEngine, id: string): Promise<vo
     console.log('');
     console.log(`Models:     ${diag.installedModels} installed | ${diag.loadedModels} loaded | ${diag.readyModels} ready`);
   } else {
-    console.log(`Endpoint:   ${runtime.info.url || 'unknown'}`);
-    console.log(`Health:     ${runtime.health === 'healthy' ? color.green('healthy') : color.red(runtime.health)}`);
+    console.log(`Endpoint:   ${runtime!.info.url || 'unknown'}`);
+    console.log(`Health:     ${runtime!.health === 'healthy' ? color.green('healthy') : color.red(runtime!.health)}`);
   }
-  
-  if (runtime.health !== 'healthy') {
+
+  if (runtime!.health !== 'healthy') {
     console.log(`\n${color.red('Error:')}`);
-    console.log(`  ${runtime.healthReason || 'UNAVAILABLE'} ${runtime.healthMessage}`);
+    console.log(`  ${runtime!.healthReason || 'UNAVAILABLE'} ${runtime!.healthMessage}`);
   }
-  
-  if (runtime.healthDiagnostics?.cliAvailable && !runtime.healthDiagnostics.serverRunning && runtime.adapter.startServer) {
+
+  if (runtime!.healthDiagnostics?.cliAvailable && !runtime!.healthDiagnostics.serverRunning && runtime!.adapter.startServer) {
     console.log(`\n${color.yellow('Suggested action:')}`);
     console.log(`  Start LM Studio API server or correct runtime endpoint.`);
-    console.log(`  Run: wa runtimes start ${id}`); // If we add a start command
+    console.log(`  Run: wa runtimes start ${id}`);
   }
-  
+
   console.log();
+}
+
+export interface ProviderSummaryEntry {
+  id: string;
+  name: string;
+  providerType: 'LOCAL_INFERENCE' | 'HOSTED_INFERENCE';
+  resourceType: 'LOCAL_GPU_INFERENCE' | 'HOSTED_API_INFERENCE';
+  endpoint?: string;
+  state: 'configured' | 'authenticated' | 'healthy' | 'degraded' | 'unavailable';
+  authenticated: boolean;
+  credentialSource?: string;
+  defaultModel?: string;
+  modelsCount: number;
+  models: string[];
+  capabilities?: Record<string, unknown>;
+}
+
+export async function collectProvidersSummary(engine: RookEngine): Promise<ProviderSummaryEntry[]> {
+  const entries: ProviderSummaryEntry[] = [];
+
+  for (const disc of engine.discovered) {
+    const rt = engine.runtimes.get(disc.id);
+    const modelIds = disc.models.map((m) => m.id);
+    entries.push({
+      id: disc.id,
+      name: disc.info.name || disc.id,
+      providerType: 'LOCAL_INFERENCE',
+      resourceType: 'LOCAL_GPU_INFERENCE',
+      endpoint: disc.info.url,
+      state: disc.health === 'healthy' ? 'healthy' : disc.health === 'degraded' ? 'degraded' : 'unavailable',
+      authenticated: disc.health !== 'unavailable',
+      credentialSource: 'local-endpoint',
+      defaultModel: modelIds[0],
+      modelsCount: modelIds.length,
+      models: modelIds,
+      capabilities: (rt?.capabilities ?? {}) as unknown as Record<string, unknown>,
+    });
+  }
+
+  for (const [id, adapter] of engine.hostedAdapters) {
+    const rt = engine.runtimes.get(id);
+    const info = await adapter.discover().catch(() => ({ id, name: rt?.name ?? id, version: 'v1', url: rt?.url }));
+    const auth = await adapter.status();
+    const models = engine.models.list().filter((m) => m.provider === id);
+    const defaultModel =
+      typeof (adapter as any).getDefaultModel === 'function'
+        ? (adapter as any).getDefaultModel()
+        : models[0]?.id;
+    let state: ProviderSummaryEntry['state'] = 'unavailable';
+    if (rt?.health === 'healthy' && auth.authenticated) {
+      state = 'healthy';
+    } else if (rt?.health === 'degraded' && auth.authenticated) {
+      state = 'degraded';
+    } else if (auth.authenticated) {
+      state = 'authenticated';
+    } else if (id === 'nvidia' && engine.config.providers?.nvidia?.enabled) {
+      state = 'configured';
+    }
+    entries.push({
+      id,
+      name: info.name || rt?.name || id,
+      providerType: 'HOSTED_INFERENCE',
+      resourceType: 'HOSTED_API_INFERENCE',
+      endpoint: info.url ?? rt?.url,
+      state,
+      authenticated: auth.authenticated,
+      credentialSource: auth.credentialSource ?? auth.method ?? 'none',
+      defaultModel,
+      modelsCount: models.length,
+      models: models.map((m) => m.id),
+      capabilities: (rt?.capabilities ?? (await adapter.getCapabilities())) as unknown as Record<string, unknown>,
+    });
+  }
+
+  return entries;
+}
+
+export async function listProvidersCommand(
+  engine: RookEngine,
+  options: { json?: boolean } = {},
+): Promise<{ code: number; output: string }> {
+  const providers = await collectProvidersSummary(engine);
+  if (options.json) {
+    return { code: 0, output: JSON.stringify({ providers }, null, 2) };
+  }
+  const rows = providers.map((p) => [
+    p.id,
+    p.name,
+    p.providerType,
+    p.state,
+    p.authenticated ? `yes (${p.credentialSource})` : 'no',
+    String(p.modelsCount),
+    p.defaultModel ?? '—',
+  ]);
+  return {
+    code: 0,
+    output: table(['ID', 'NAME', 'TYPE', 'STATE', 'AUTH', 'MODELS', 'DEFAULT MODEL'], rows),
+  };
+}
+
+export async function inspectProviderCommand(
+  engine: RookEngine,
+  providerId: string,
+  options: { json?: boolean } = {},
+): Promise<{ code: number; output: string }> {
+  const normalized = providerId.toLowerCase();
+  const providers = await collectProvidersSummary(engine);
+  const found = providers.find((p) => p.id.toLowerCase() === normalized);
+  if (!found) {
+    const err = `Provider '${providerId}' not found. Available providers: ${providers.map((p) => p.id).join(', ')}`;
+    return {
+      code: 1,
+      output: options.json ? JSON.stringify({ error: err }, null, 2) : color.red(err),
+    };
+  }
+  const modelRecords = engine.models.list().filter((m) => m.provider === found.id);
+  const account = engine.resources?.accounts?.candidates?.({ runtimeId: found.id })?.[0];
+  const detail = {
+    ...found,
+    routingPolicy: {
+      allowHostedProvidersDefault: engine.config.providers?.allowHostedProviders ?? false,
+      ...(found.id === 'nvidia' ? { nvidiaConfig: engine.config.providers?.nvidia } : {}),
+    },
+    account: account
+      ? {
+          id: account.id,
+          kind: account.kind,
+          maxConcurrent: account.maxConcurrent,
+          allowPaid: account.allowPaid,
+        }
+      : undefined,
+    modelDetails: modelRecords.map((m) => ({
+      id: m.id,
+      name: m.name,
+      family: m.family,
+      contextMax: m.contextMax,
+      capabilities: m.capabilities,
+      toolCalling: m.toolCalling,
+      vision: m.vision,
+      reasoning: m.reasoning,
+      structuredOutput: m.structuredOutput,
+    })),
+  };
+
+  if (options.json) {
+    return { code: 0, output: JSON.stringify(detail, null, 2) };
+  }
+
+  const lines = [
+    color.bold(`PROVIDER: ${found.name} (${found.id})`),
+    '-'.repeat(56),
+    `  Type:              ${found.providerType}`,
+    `  Resource Type:     ${found.resourceType}`,
+    `  State:             ${found.state}`,
+    `  Authenticated:     ${found.authenticated ? color.green(`yes (${found.credentialSource})`) : color.yellow('no')}`,
+    `  Endpoint:          ${found.endpoint ?? '—'}`,
+    `  Default Model:     ${found.defaultModel ?? '—'}`,
+    `  Registered Models: ${found.modelsCount}`,
+  ];
+  if (account) {
+    lines.push(`  Resource Account:  ${account.id} (kind=${account.kind}, maxConcurrent=${account.maxConcurrent ?? 'unlimited'})`);
+  }
+  if (modelRecords.length > 0) {
+    lines.push('');
+    lines.push(color.bold('  Models:'));
+    for (const m of modelRecords) {
+      lines.push(
+        `    - ${m.id} [ctx=${m.contextMax}, vision=${m.vision}, reasoning=${m.reasoning}, tools=${m.toolCalling}]`,
+      );
+    }
+  }
+  return { code: 0, output: lines.join('\n') };
+}
+
+export async function testProviderCommand(
+  engine: RookEngine,
+  providerId: string,
+  options: { json?: boolean; prompt?: string; model?: string } = {},
+): Promise<{ code: number; output: string }> {
+  const normalized = providerId.toLowerCase();
+  const hosted = engine.hostedAdapters.get(normalized as any);
+  const disc = engine.discovered.find((d) => d.id.toLowerCase() === normalized);
+  if (!hosted && !disc) {
+    const err = `Provider '${providerId}' not found.`;
+    return {
+      code: 1,
+      output: options.json ? JSON.stringify({ ok: false, error: err }, null, 2) : color.red(err),
+    };
+  }
+
+  const adapter = hosted ?? disc!.adapter;
+  const startedAt = Date.now();
+  const health = await adapter.healthCheck();
+  const latencyMs = Date.now() - startedAt;
+  const models = await adapter.listModels().catch(() => []);
+  const ok = health.status === 'healthy' || health.status === 'degraded';
+
+  const resultPayload = {
+    ok,
+    provider: normalized,
+    health: health.status,
+    reason: health.reason,
+    message: health.message,
+    latencyMs,
+    discoveredModelsCount: models.length,
+    sampleModels: models.slice(0, 5).map((m) => m.id),
+  };
+
+  if (options.json) {
+    return { code: ok ? 0 : 1, output: JSON.stringify(resultPayload, null, 2) };
+  }
+
+  const lines = [
+    color.bold(`Provider Connectivity Test: ${normalized}`),
+    `  status:    ${ok ? color.green(health.status) : color.red(health.status)}`,
+    `  latency:   ${latencyMs}ms`,
+    `  models:    ${models.length} discovered`,
+    ...(health.message ? [`  message:   ${health.message}`] : []),
+    ...(models.length > 0 ? [`  available: ${models.slice(0, 5).map((m) => m.id).join(', ')}`] : []),
+  ];
+  return { code: ok ? 0 : 1, output: lines.join('\n') };
+}
+
+export async function listProviders(engine: RookEngine, options: { json?: boolean } = {}) {
+  const result = await listProvidersCommand(engine, options);
+  if (options.json) {
+    const parsed = JSON.parse(result.output);
+    const providers = parsed.providers.map((p: any) => ({ ...p, displayName: p.name }));
+    return { exitCode: result.code, output: JSON.stringify(providers) };
+  }
+  return { exitCode: result.code, output: result.output };
+}
+
+export async function inspectProvider(engine: RookEngine, providerId: string, options: { json?: boolean } = {}) {
+  const result = await inspectProviderCommand(engine, providerId, options);
+  if (options.json && result.code === 0) {
+    const detail = JSON.parse(result.output);
+    detail.displayName = detail.name;
+    detail.models = (detail.modelDetails ?? []).map((m: any) => ({ id: m.id, name: m.name }));
+    return { exitCode: result.code, output: JSON.stringify(detail) };
+  }
+  return { exitCode: result.code, output: result.output };
+}
+
+export async function testProvider(engine: RookEngine, providerId: string, options: { json?: boolean } = {}) {
+  const result = await testProviderCommand(engine, providerId, options);
+  return { exitCode: result.code, output: result.output };
 }
 
 export async function checkpointCommand(

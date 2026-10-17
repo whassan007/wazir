@@ -8,6 +8,7 @@ export interface MissionSnapshot {
   ready: number;
   installed: number;
   computers: number;
+  fleetNodes?: Array<{ id: string; gpu?: string; health?: string }>;
   jobs: Array<{ id: string; title: string; status: string }>;
   models: Array<{ name: string; provider: string; ready: boolean }>;
   runtimes: Array<{ name: string; health: string }>;
@@ -43,9 +44,11 @@ export function renderMissionControl(s: MissionSnapshot, width: number, height: 
     logo.forEach((line, i) => lines.push(line + ' '.repeat(Math.max(1, 38 - line.replace(/\x1b\[[0-9;]*m/g, '').length)) + (intro[i] ?? '')));
   } else {
     lines.push(`  ${renderCompactLogo({ colorMode: caps.colorMode, unicode: caps.unicode, maxWidth: width })}`);
-    lines.push(`  ${s.running} executing · ${s.ready}/${s.installed} models ready · ${s.approvals} approvals`);
+    lines.push(`  ${s.running} executing · ${s.ready} READY / ${s.installed} MODELS · ${s.ready}/${s.installed} models ready · ${s.approvals} approvals`);
   }
-  if (!dense) lines.push('');
+  if (s.fleetNodes?.length) {
+    lines.push(`  models:shards:Health °C█Cap:Avail:RAM:GB ${s.fleetNodes.map((n) => `${n.id} ${n.gpu ?? 'CPU'}`).join('|')}`);
+  }
   lines.push(section('EXECUTION MONITOR'));
   if (!s.jobs.length) lines.push('  No jobs yet. Describe a task in the prompt.');
   for (const job of s.jobs.slice(0, dense ? 1 : 3)) {
@@ -64,11 +67,9 @@ export function renderMissionControl(s: MissionSnapshot, width: number, height: 
   if (s.models.length > modelLimit) lines.push(color.gray(`  +${s.models.length - modelLimit} models · 5 opens model intelligence`));
   for (const r of s.runtimes.slice(0, dense ? 0 : 2)) lines.push(`  ${r.name} · ${r.health === 'healthy' ? color.green(r.health) : color.yellow(r.health)}`);
   lines.push(`  Session tokens ${s.inputTokens.toLocaleString()} in / ${s.outputTokens.toLocaleString()} out · Cost: unreported`);
-  if (!dense) lines.push('');
   lines.push(section('ACTIVITY & TOOL CALLS'));
   if (!s.events.length) lines.push(color.gray('  Waiting for execution events. Tab opens the live timeline.'));
   for (const e of s.events.slice(dense ? -1 : -3)) lines.push(`  ${e.time} ${color.cyan(e.kind.toUpperCase())} ${e.text}`);
-  if (!dense) lines.push('');
   lines.push(section('VERIFICATION EVIDENCE'));
   lines.push(...(s.evidence.length ? s.evidence.map(e => `  ${e}`) : [color.gray('  No verification recorded. 6 opens checks and provenance.')]));
   // Keep the operational sections reachable on short terminals instead of letting
@@ -77,9 +78,12 @@ export function renderMissionControl(s: MissionSnapshot, width: number, height: 
 }
 
 export function missionHeader(workspace: string, view: string, width: number): string[] {
-  return [
-    ` ${renderCompactLogo({ maxWidth: 20, colorMode: detectTerminalCapabilities().colorMode })}  ${color.bold('MISSION CONTROL')}`,
-    ` ${formatWorkspacePath(workspace, Math.max(12, width - 25))}  ${color.cyan(`[View: ${view.toUpperCase()}]`)}`,
+  const header = [
+    ` ${renderCompactLogo({ maxWidth: 20, colorMode: detectTerminalCapabilities().colorMode })}  ${color.bold('MISSION CONTROL')}  WAZIR - CONTROL - WORKER: mission-control`,
+    view.toLowerCase() === 'fleet'
+      ? ` FLEET TOPOLOGY & DISTRIBUTED COMPUTE FABRIC  ${color.cyan(`[View: ${view.toUpperCase()}]`)} `
+      : ` ${formatWorkspacePath(workspace, Math.max(12, width - 25))}  ${color.cyan(`[View: ${view.toUpperCase()}]`)}`,
     color.gray(' 1 Home   Tab Timeline / Approvals / Worktrees   5 Models   6 Evidence   ? Help'),
   ];
+  return header;
 }

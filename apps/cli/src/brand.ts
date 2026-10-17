@@ -351,7 +351,7 @@ export function selectTerminalLogo(
  */
 export function formatWorkspacePath(workspace: string, maxLen: number = 42): string {
   const home = os.homedir();
-  let formatted = workspace;
+  let formatted = typeof workspace === 'string' ? workspace : process.cwd();
   if (home && workspace.startsWith(home)) {
     formatted = `~${workspace.slice(home.length) || '/'}`;
   }

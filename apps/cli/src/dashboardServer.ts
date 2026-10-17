@@ -376,19 +376,43 @@ export async function startDashboardServer(
       return;
     }
 
-    // 6. API v1 Runtimes
+    // 6. API v1 Runtimes & Providers
     if (pathname === '/api/v1/runtimes') {
       const runtimes = engine.runtimes.list().map((r) => {
         const disc = engine.discovered.find((d) => d.id === r.id);
+        const hostedModels = engine.models.list().filter((m) => m.provider === r.id);
         return {
           ...r,
-          health: disc?.health ?? 'available',
+          health: disc?.health ?? r.health ?? 'available',
           healthMessage: disc?.healthMessage,
-          models: disc?.models ?? [],
+          models: disc?.models ?? hostedModels,
         };
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ runtimes }));
+      return;
+    }
+
+    if (pathname === '/api/v1/providers') {
+      const { collectProvidersSummary } = await import('./commands.js');
+      const providers = await collectProvidersSummary(engine);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ providers }));
+      return;
+    }
+
+    if (pathname.startsWith('/api/v1/providers/')) {
+      const providerId = decodeURIComponent(pathname.slice('/api/v1/providers/'.length));
+      const { collectProvidersSummary } = await import('./commands.js');
+      const providers = await collectProvidersSummary(engine);
+      const found = providers.find((p) => p.id.toLowerCase() === providerId.toLowerCase());
+      if (!found) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Provider '${providerId}' not found` }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ provider: found }));
       return;
     }
 

@@ -21,11 +21,37 @@ export interface GoogleProviderConfig {
   oauthClientId?: string;
 }
 
+export interface NvidiaProviderConfig {
+  enabled?: boolean;
+  type?: 'openai_compatible';
+  baseUrl?: string;
+  apiKeyEnv?: string;
+  defaultModel?: string;
+  models?: string[];
+  routing?: {
+    eligibleForAuto?: boolean;
+    allowFallback?: boolean;
+  };
+  capabilities?: {
+    discoverOnStartup?: boolean;
+    refreshPeriodMinutes?: number;
+  };
+  limits?: {
+    maxConcurrentRequests?: number;
+    maxRetries?: number;
+    maxOutputTokens?: number;
+  };
+  privacy?: {
+    allowHostedInference?: boolean;
+  };
+}
+
 export interface ProvidersConfig {
   /** Engine-wide default for PolicyRequirements.allowHostedProviders when a
    *  task/command omits it. Off by default — hosted routing is opt-in. */
   allowHostedProviders?: boolean;
   google?: GoogleProviderConfig;
+  nvidia?: NvidiaProviderConfig;
 }
 
 export interface WazirConfig {
@@ -151,6 +177,19 @@ export function loadConfig(): WazirConfig {
       google: { ...config.providers?.google, oauthClientId: process.env.WAZIR_GOOGLE_OAUTH_CLIENT_ID },
     };
   }
+  if (process.env.WAZIR_NVIDIA_BASE_URL || process.env.WAZIR_NVIDIA_DEFAULT_MODEL || process.env.NVIDIA_API_KEY) {
+    config.providers = {
+      ...config.providers,
+      nvidia: {
+        enabled: true,
+        type: 'openai_compatible',
+        baseUrl: process.env.WAZIR_NVIDIA_BASE_URL ?? 'https://integrate.api.nvidia.com/v1',
+        apiKeyEnv: 'NVIDIA_API_KEY',
+        defaultModel: process.env.WAZIR_NVIDIA_DEFAULT_MODEL ?? 'nvidia/nemotron-3.5-super-vl-120b-a12b',
+        ...config.providers?.nvidia,
+      },
+    };
+  }
 
   try {
     const raw = readFileSync(configFile(), 'utf8');
@@ -182,10 +221,27 @@ export function loadConfig(): WazirConfig {
     config.mcp = fileConfig.mcp ?? { autoConnect: true };
     config.allowedMcpServers = fileConfig.allowedMcpServers ?? config.allowedMcpServers;
     if (fileConfig.providers) {
+      const mergedNvidia: NvidiaProviderConfig | undefined =
+        config.providers?.nvidia || fileConfig.providers.nvidia
+          ? {
+              ...config.providers?.nvidia,
+              ...fileConfig.providers.nvidia,
+              ...(process.env.WAZIR_NVIDIA_BASE_URL ? { baseUrl: process.env.WAZIR_NVIDIA_BASE_URL } : {}),
+              ...(process.env.WAZIR_NVIDIA_DEFAULT_MODEL ? { defaultModel: process.env.WAZIR_NVIDIA_DEFAULT_MODEL } : {}),
+            }
+          : undefined;
+      const allowHosted =
+        process.env.WAZIR_ALLOW_HOSTED_PROVIDERS === '1'
+          ? true
+          : (fileConfig.providers.allowHostedProviders ??
+             fileConfig.providers.nvidia?.privacy?.allowHostedInference ??
+             config.providers?.allowHostedProviders);
       config.providers = {
         ...config.providers,
         ...fileConfig.providers,
+        ...(allowHosted !== undefined ? { allowHostedProviders: allowHosted } : {}),
         google: { ...config.providers?.google, ...fileConfig.providers.google },
+        ...(mergedNvidia ? { nvidia: mergedNvidia } : {}),
       };
     }
     if (fileConfig.context) {

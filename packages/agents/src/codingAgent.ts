@@ -1295,7 +1295,8 @@ export class CodingAgent implements AgentAdapter {
 
       // Enforce the compiled surface before dispatch, including legacy compatibility actions.
       // Count different unknown names together; alternating hallucinations is not progress.
-      if (action?.action === 'tool' && action.tool && !activeToolNames.has(action.tool)) {
+      if (action?.action === 'tool' && action.tool && !activeToolNames.has(action.tool) &&
+        !(currentPhase === 'plan' && MUTATING_FILE_TOOLS.has(action.tool) && envelope?.source !== 'legacy_text')) {
         validationErrors += 1;
         incompatibleActions += 1;
         const reason = currentPhase === 'plan' && MUTATING_FILE_TOOLS.has(action.tool)
@@ -1340,15 +1341,12 @@ export class CodingAgent implements AgentAdapter {
       }
       if (action.action === 'tool' && action.tool) {
         if (MUTATING_FILE_TOOLS.has(action.tool)) {
-          validationErrors += 1;
-          yield {
-            kind: 'message',
-            content: `ACTION_VALIDATION_FAILED: '${action.tool}' is not permitted during the planning phase. Establish a plan or inspect the repository first with read/glob/search tools.`,
-            tool: action.tool,
-            raw,
-          };
-          rejectAttempt(`ACTION_VALIDATION_FAILED: '${action.tool}' is not permitted during the planning phase. You must inspect the workspace (read, glob, search) or establish a plan ({"action":"plan","content":"..."}) before modifying files.`);
-          continue;
+          // Some providers emit a native mutation as their first response even
+          // after being asked to plan. Promote the run to implementation and
+          // execute the already validated tool call instead of losing the
+          // mutation and falsely reporting a no-op completion.
+          currentToolSurface = compileSurface('implement');
+          yield { kind: 'phase', phase: 'implement' as AgentPhase };
         }
 
         const effectiveRaw = raw || (toolCall ? JSON.stringify(toolCall) : (envelope ? JSON.stringify(envelope) : ''));
@@ -1520,7 +1518,8 @@ export class CodingAgent implements AgentAdapter {
 
       // Enforce the compiled surface before dispatch, including legacy compatibility actions.
       // Count different unknown names together; alternating hallucinations is not progress.
-      if (action?.action === 'tool' && action.tool && !activeToolNames.has(action.tool)) {
+      if (action?.action === 'tool' && action.tool && !activeToolNames.has(action.tool) &&
+        !(currentPhase === 'plan' && MUTATING_FILE_TOOLS.has(action.tool) && envelope?.source !== 'legacy_text')) {
         validationErrors += 1;
         incompatibleActions += 1;
         const reason = currentPhase === 'plan' && MUTATING_FILE_TOOLS.has(action.tool)

@@ -188,7 +188,7 @@ async function checkHostedProviders(engine: RookEngine): Promise<DoctorCheck> {
         name: 'hosted providers',
         status: 'NOT INSTALLED',
         message: 'no hosted providers authenticated',
-        details: 'run `wa auth login <provider>` to enable Anthropic/OpenAI/Google routing',
+        details: 'run `wa auth login <provider>` or set NVIDIA_API_KEY to enable Anthropic/OpenAI/Google/NVIDIA routing',
       };
     }
 

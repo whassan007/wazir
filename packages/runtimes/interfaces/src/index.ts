@@ -7,7 +7,7 @@ export interface RuntimeInfo {
 }
 
 export interface DiscoveredModel {
-  /** Runtime-local model id, e.g. 'qwen3-coder:latest' or 'qwen/qwen3-coder-next'. */
+  /** Runtime-local model id, e.g. 'qwen3-coder:latest' or 'nvidia/nemotron-3.5-super-vl-120b-a12b'. */
   id: string;
   name?: string;
   family?: string;
@@ -15,6 +15,8 @@ export interface DiscoveredModel {
   architecture?: string;
   /** Reported context window when the runtime provides it. */
   contextWindow?: number;
+  /** Maximum output tokens supported by the model when known. */
+  maxOutputTokens?: number;
   /** Known capabilities, when the runtime/model metadata allows inference. */
   capabilities?: string[];
   toolCalling?: boolean;
@@ -114,10 +116,21 @@ export interface HealthStatus {
   diagnostics?: RuntimeDiagnostics;
 }
 
+export interface ChatImageInput {
+  /** Image URL or base64 data URI (e.g. 'data:image/png;base64,...'). */
+  url: string;
+  /** Optional media type when known (e.g. 'image/png', 'image/jpeg'). */
+  mediaType?: string;
+  /** Optional detail hint for OpenAI-compatible vision APIs ('auto' | 'low' | 'high'). */
+  detail?: 'auto' | 'low' | 'high';
+}
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   name?: string;
+  /** Optional multimodal image inputs for vision-capable models. */
+  images?: ChatImageInput[];
   /** role 'tool': id of the assistant tool call this result answers (native tool protocol). */
   toolCallId?: string;
   /** role 'assistant': tool calls the model made in this turn (native tool protocol). */
@@ -152,11 +165,19 @@ export interface GenerationRequest {
   temperature?: number;
   topP?: number;
   maxTokens?: number;
+  /** Deterministic sampling seed when supported by the provider/model. */
+  seed?: number;
   /** Context window to request from the runtime (num_ctx / context length). */
   contextTokens?: number;
   stream?: boolean;
   tools?: ToolDefinition[];
   toolChoice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } };
+  /** Whether parallel tool calls are allowed when supported by the provider/model. */
+  parallelToolCalls?: boolean;
+  /** Reasoning/thinking control for models supporting thinking mode (e.g. Nemotron enable_thinking). */
+  enableThinking?: boolean;
+  /** Provider-specific extra request body fields (merged safely when supported by the model). */
+  extraBody?: Record<string, unknown>;
   responseFormat?: { type: 'text' | 'json_object' | 'json_schema'; json_schema?: Record<string, unknown> };
   /** Host-generated id used for cancellation. */
   requestId?: string;
@@ -439,7 +460,7 @@ export interface ResourceEstimate {
  */
 export interface RuntimeAdapter {
   readonly id: string;
-  readonly type: 'ollama' | 'lmstudio' | 'openai-compatible' | 'llama-cpp' | 'anthropic' | 'openai' | 'google' | 'other';
+  readonly type: 'ollama' | 'lmstudio' | 'openai-compatible' | 'llama-cpp' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'other';
 
   discover(): Promise<RuntimeInfo>;
   healthCheck(): Promise<HealthStatus>;
@@ -461,6 +482,24 @@ export interface RuntimeAdapter {
 }
 
 export * from './auth.js';
+
+/**
+ * Redacts API keys, Bearer tokens, and provider secret prefixes (e.g. nvapi-*, sk-*)
+ * from error messages, logs, and diagnostic payloads.
+ */
+export function redactProviderSecrets(input: string, extraSecretValues: Array<string | undefined> = []): string {
+  if (!input) return input;
+  let redacted = input
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
+    .replace(/\bnvapi-[A-Za-z0-9_-]{8,}\b/g, 'nvapi-[REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, 'sk-[REDACTED]');
+  for (const secret of extraSecretValues) {
+    if (secret && secret.trim().length >= 6) {
+      redacted = redacted.split(secret.trim()).join('[REDACTED]');
+    }
+  }
+  return redacted;
+}
 
 const num = (v: string | null): number | undefined => {
   if (v === null || v.trim() === '') return undefined;
@@ -508,7 +547,8 @@ export function readRateLimitHeaders(headers: Headers | undefined, now = Date.no
  * limit, context overflow, ...), Retry-After and rate-limit headers, plus a bounded body.
  */
 export function httpFailureEvent(provider: string, response: Response, body: string, requestId?: string): GenerationEvent {
-  const failureClass = classifyHttpFailure(response.status, body);
+  const safeBody = redactProviderSecrets(body);
+  const failureClass = classifyHttpFailure(response.status, safeBody);
   return {
     type: 'error',
     requestId,
@@ -516,8 +556,9 @@ export function httpFailureEvent(provider: string, response: Response, body: str
     failureClass,
     retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after')),
     rateLimit: readRateLimitHeaders(response.headers),
-    error: `${provider} API error: HTTP ${response.status} ${body.slice(0, 300)}`,
+    error: `${provider} API error: HTTP ${response.status} ${safeBody.slice(0, 300)}`,
   };
 }
 
 export * from './generationControl.js';
+export * from './auth.js';

@@ -15,6 +15,7 @@
     "@wazir/models": "*",
     "@wazir/policies": "*",
     "@wazir/runtimes-lmstudio": "*",
+    "@wazir/runtimes-nvidia": "*",
     "@wazir/runtimes-ollama": "*",
     "@wazir/scheduler": "*",
     "@wazir/shared": "*",
