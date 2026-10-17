@@ -1,4 +1,21 @@
-# Wazir Release Notes - v0.2.2
+# Wazir Release Notes - v0.2.3
+
+**Release**: `v0.2.3`
+**Theme**: Wazir Mission Control terminal interface
+
+`wa chat` and `wa fleet` now open a cohesive Mission Control experience. It surfaces current jobs, model/provider readiness, approvals, activity and verification evidence, with the official terminal logo and responsive narrow-terminal layout. Existing task cycling, inline shell mode, job detail and approval interactions remain available. The new task and model views use recorded Wazir state and show unknown values honestly.
+
+Before/after PTY screenshots and validation evidence are in [`docs/verification/mission-control`](verification/mission-control/README.md).
+
+## Highlights
+
+- **Mission Control landing view** with the Wazir logo, workspace navigation, real-time job status, agent and provider availability, token usage, approval queue, activity and verification evidence.
+- **Keyboard-first model management**: browse registered models and pin routing from the model view.
+- **Responsive terminal layouts** with compact presentation and readable status at narrow widths.
+- **Evidence-backed status**: removed the home and task panes' fabricated fleet, model, verification and cost values.
+- **Release verification**: captured actual terminal output in wide and narrow PTYs, including before/after screens and keyboard interactions.
+
+## v0.2.2
 
 **Release**: `v0.2.2`
 **Theme**: Mandatory Git Synchronization, Verification, and Commit Authorization Policy & Multi-Surface Companion Completion

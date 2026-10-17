@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.3 — 2026-10-17
+
+**Release**: `v0.2.3`
+**Theme**: Wazir Mission Control terminal interface
+
+- Activated the Mission Control dashboard for `wa chat` and `wa fleet`, with the official Wazir terminal logo, live job and provider state, evidence, approvals, activity, and responsive layouts.
+- Added model browsing and pinning, restored-job landing coverage, and honest unknown cost and verification states.
+- Preserved inline shell execution, task cycling, job inspection, and existing terminal interactions.
+- Added real PTY before/after and narrow/wide screen captures.
+
+
 ## v0.2.2 — 2026-10-16
 
 **Release**: `v0.2.2`

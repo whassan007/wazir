@@ -41,6 +41,11 @@ jobs:
         with:
           node-version: '22.x'
           cache: 'npm'
+      - name: Install Linux desktop build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev
       - name: Verify tag and version
         id: meta
         shell: bash
@@ -56,7 +61,7 @@ jobs:
       - run: npm run check-dist -- --quiet
       - run: npm run package:check -- --skip-build
       - run: npm run release:verify
-      - run: npm test
+      - run: npm run release:gate
 
   verify-cross-platform:
     name: Verify Cross-Platform Tests (${{ matrix.os }})
@@ -77,13 +82,18 @@ jobs:
         with:
           node-version: '22.x'
           cache: 'npm'
+      - name: Install Linux desktop build dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev
       - run: npm ci
       - name: Ensure node-pty helper is executable on macOS
         if: runner.os == 'macOS'
         run: find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} + || true
       - run: npm run build
       - run: npm run typecheck
-      - run: npm test
+      - run: npm run release:gate
 
   build-artifacts:
     name: Build Artifacts (${{ matrix.target }})
@@ -113,6 +123,11 @@ jobs:
         with:
           node-version: '22.x'
           cache: 'npm'
+      - name: Install Linux desktop build dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev
       - run: npm ci
       - name: Ensure node-pty helper is executable on macOS
         if: runner.os == 'macOS'

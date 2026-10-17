@@ -6940,7 +6940,8 @@ export class FleetTui {
       const resident = instances.filter(i => i.modelId === m.id);
       const ready = resident.some(i => i.loaded && i.state === 'READY' && i.health === 'healthy');
       lines.push(`  ${index === this.selectedModelProfileIndex ? ">" : " "} ${ready ? color.green('READY') : color.yellow('NOT READY')}  ${m.name}`);
-      lines.push(`    Provider ${m.provider} · ${m.local ? 'local' : 'hosted'} · Context ${m.contextMax.toLocaleString()} · Tools ${m.toolCalling ? 'yes' : 'no'}`);
+      const contextMax = m.contextMax ?? (m as typeof m & { contextWindow?: number }).contextWindow ?? 0;
+      lines.push(`    Provider ${m.provider} · ${m.local ? 'local' : 'hosted'} · Context ${contextMax.toLocaleString()} · Tools ${m.toolCalling ? 'yes' : 'no'}`);
       for (const i of resident) lines.push(`    ${i.runtimeId} / ${i.computerId} · ${i.state ?? 'unknown'} · ${i.health ?? 'unknown'}`);
     }
     if (!models.length) lines.push('  No models discovered. /refresh to discover configured providers.');
