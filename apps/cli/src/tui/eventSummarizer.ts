@@ -43,7 +43,12 @@ export class EventSummarizer {
     this.toolCounts.set(toolName, (this.toolCounts.get(toolName) ?? 0) + 1);
     if (isCheck && typeof metadata?.exitCode === 'number') {
       if (metadata.exitCode === 0) this.passedChecks++;
-      else this.failedChecks++;
+      else {
+        this.failedChecks++;
+        const detail = `${toolName} failed (exit ${metadata.exitCode})`;
+        this.pushRecent(detail);
+        return { milestone: { kind: 'error', text: detail } };
+      }
     }
     const detail = `${toolName} succeeded${typeof metadata?.exitCode === 'number' ? ` (exit ${metadata.exitCode})` : ''}`;
     this.pushRecent(detail);
