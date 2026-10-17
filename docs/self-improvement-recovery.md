@@ -6,6 +6,7 @@
 - **Candidate worktree**: `/home/wael/Code/Wazir-self-improvement-candidate`
 - **Candidate branch**: `feat/native-continuous-self-improvement`
 - **Previous candidate commit**: `f59d380737c30d30abcbf21132473cf4cac71871`
+- **Qualified candidate commit**: `3ec8474e542e0a340b8b9218504a86f2ec4d819b`
 - **Builder script**: `/home/wael/.local/share/wazir-self-improvement-builder/builder.sh`
 - **Systemd user unit**: `~/.config/systemd/user/wazir-self-improvement-builder.service`
 
