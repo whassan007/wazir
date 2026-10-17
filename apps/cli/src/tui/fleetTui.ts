@@ -178,6 +178,7 @@ export interface ShellExecutionSummary {
   stdout: string;
   stderr: string;
   exitCode: number;
+  durationMs?: number;
   blockId?: string;
 }
 
@@ -1679,10 +1680,16 @@ export class FleetTui {
 
   private exitPromise?: Promise<void>;
   private exitResolver?: () => void;
+  private exitReason?: 'user_exit' | 'interrupt' | 'eof' | 'disconnect' | 'error';
   private keypressListener?: (ch: string | undefined, key?: readline.Key) => void;
   private inputListener?: (data: Buffer | string) => void;
   private stdinEndListener?: () => void;
+  private stdinErrorListener?: (err: Error) => void;
   private outErrorHandler?: (err: Error) => void;
+
+  getExitReason(): 'user_exit' | 'interrupt' | 'eof' | 'disconnect' | 'error' | undefined {
+    return this.exitReason;
+  }
 
   /**
    * Isolates and consumes Tab / Shift-Tab key events cleanly (§1).
@@ -1752,6 +1759,7 @@ export class FleetTui {
    */
   async start(): Promise<void> {
     this.isRunning = true;
+    this.exitReason = undefined;
 
     // Safety net (found the hard way): a fire-and-forget action here (`void this.foo()`,
     // used throughout for keypress handlers so they can stay synchronous) that rejects
@@ -1768,7 +1776,11 @@ export class FleetTui {
     // installed would make the fatal one treat every one of these recovered
     // keypress errors as a crash too. stop() restores the fatal default.
     this.restoreFatalRejectionHandler = withScopedRejectionHandler((reason) => {
-      this.statusMessage = `Internal error (recovered): ${reason instanceof Error ? reason.message : String(reason)}`;
+      const msg = reason instanceof Error ? reason.message : String(reason);
+      this.statusMessage = `Execution failed · Internal error (recovered): ${msg}`;
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(`✗ Execution failed: ${msg}`);
+      }
       this.draw();
     });
 
@@ -1790,6 +1802,10 @@ export class FleetTui {
     this.unsubscribeApprovals = this.engine.approvalQueue.subscribe((requests) => {
       this.pendingApprovals = requests;
       this.statusProjection.setWaitingForApproval(requests.map((request) => request.taskId).filter((id): id is string => Boolean(id)), requests.length > 0);
+      if (requests.length > 0) {
+        const first = requests[0];
+        this.statusMessage = `Waiting for approval: ${first.tool} (${requests.length} pending)`;
+      }
       this.draw();
     });
 
@@ -1845,16 +1861,22 @@ export class FleetTui {
     // Without this the TUI sat in waitForExit() forever — a piped command hung until
     // killed. Graceful exit here mirrors what Ctrl+C / 'q' / /exit do on a TTY.
     this.stdinEndListener = () => {
-      if (this.isRunning) this.stop();
+      if (this.isRunning) this.stop('eof');
     };
     inStream.once('end', this.stdinEndListener);
 
+    // stdin error (e.g., EIO when a controlling PTY disconnects): treat as terminal
+    // disconnection rather than an uncaught stream error crash.
+    this.stdinErrorListener = () => {
+      if (this.isRunning) this.stop('disconnect');
+    };
+    inStream.on('error', this.stdinErrorListener);
+
     // Output stream (dead) terminal / closed pipe: a failed write surfaces as an
     // asynchronous 'error' event (EIO/EPIPE). With no listener that crashes the
-    // process (exit 1) in the middle of the graceful-exit path. The session is
-    // ending anyway — the stdin-EOF handler drives the exit — so swallow it.
+    // process (exit 1) in the middle of the graceful-exit path.
     this.outErrorHandler = () => {
-      /* terminal or pipe reader gone: nothing to recover, exit path handles it */
+      if (this.isRunning) this.stop('disconnect');
     };
     this.screen.getOutputStream().on('error', this.outErrorHandler);
 
@@ -1907,11 +1929,12 @@ export class FleetTui {
     this.draw();
   }
 
-  stop(): void {
+  stop(reason: 'user_exit' | 'interrupt' | 'eof' | 'disconnect' | 'error' = 'user_exit'): void {
     // Idempotent: stop() can be triggered more than once (e.g. the user types /exit
     // and stdin also hits EOF in pipe mode, or a stray second caller). Guard on
     // isRunning so double-stops are a no-op instead of re-running unsubscribe/leave.
     if (!this.isRunning) return;
+    this.exitReason = this.exitReason ?? reason;
     if (this.renderTimer) clearInterval(this.renderTimer);
     if (this.unsubscribeApprovals) this.unsubscribeApprovals();
     if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
@@ -1940,11 +1963,11 @@ export class FleetTui {
       this.stdinEndListener = undefined;
     }
 
-    // NOTE: outErrorHandler is deliberately NOT removed here. screen.leave() below
-    // performs an outStream write whose EIO/EPIPE error arrives asynchronously on a
-    // later tick — removing the handler first (or even immediately after) leaves that
-    // error unhandled and crashes the process (exit 1) on the exact path we're trying
-    // to exit gracefully. The handler is a no-op and harmless for the process lifetime.
+    // NOTE: outErrorHandler and stdinErrorListener are deliberately NOT removed here.
+    // screen.leave() below performs an outStream write whose EIO/EPIPE error arrives
+    // asynchronously on a later tick — removing the handler first leaves that error
+    // unhandled and crashes the process (exit 1) on the exact path we're trying to
+    // exit gracefully.
 
     if (this.presentationMode === 'conversation') this.conversationRenderer.stop();
     this.screen.leave();
@@ -2012,6 +2035,18 @@ export class FleetTui {
     // either genuinely multi-line or long enough to match the bracketed-paste
     // size threshold (see handlePastedText's isLarge check).
     if (!keyStr.startsWith('\x1b') && keyStr.length > 1 && (hasInternalLineBreak(keyStr) || keyStr.length >= 200)) {
+      if (!this.screen.isTTY() && hasInternalLineBreak(keyStr) && keyStr.length < 200) {
+        const lines = keyStr.split(/\r\n|\r|\n/);
+        void (async () => {
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine) continue;
+            await this.submitCommand(trimmedLine);
+            if (!this.isRunning) break;
+          }
+        })();
+        return;
+      }
       this.handlePastedText(keyStr);
       return;
     }
@@ -2027,19 +2062,19 @@ export class FleetTui {
         this.draw();
         return;
       }
-      this.stop();
+      this.stop('interrupt');
       process.exit(0);
     }
 
-    // Model Startup Selector key routing
+    // Model Startup Selector key routing (dashboard mode only — never block conversation mode)
+    if (this.startupSelector && this.presentationMode === 'conversation') {
+      this.startupSelector = undefined;
+    }
     if (this.startupSelector) {
       if (keyObj.ctrl && (keyName === 'p' || keyName === 'P' || keyStr === '\x10')) {
         this.startupSelector = undefined;
         this.quickActionsOpen = true;
         this.quickActionIndex = 0;
-        if (this.presentationMode === 'conversation') {
-          this.conversationRenderer.append(`QUICK ACTIONS (Ctrl+P)\n${this.quickActions.map((action, index) => `${index + 1}. ${action.title}`).join('\n')}`);
-        }
         this.draw();
         return;
       }
@@ -2051,18 +2086,8 @@ export class FleetTui {
         this.draw();
         return;
       }
-      if (this.presentationMode === 'conversation' && Array.from(keyStr).length === 1 && !/[\x00-\x1f\x7f-\x9f]/.test(keyStr)) {
-        // The startup selector is an optional dashboard overlay. In chat, don't
-        // make an invisible overlay consume ordinary prompt text.
-        this.startupSelector = undefined;
-        this.focusedPane = 'prompt';
-        this.inputBuffer = keyStr;
-        this.inputCursor = keyStr.length;
-        this.draw();
-        return;
-      }
       if (this.inputBuffer === '' && (keyStr === 'q' || keyStr === 'Q')) {
-        this.stop();
+        this.stop('user_exit');
         process.exit(0);
       }
       void this.handleStartupSelectorKey(keyStr, keyObj);
@@ -3706,9 +3731,15 @@ export class FleetTui {
    * capturing stdout/stderr/exitCode as a persistent Block record that can be referenced via `@<id>`.
    */
   private async executeInlineShellCommand(shellCmd: string, submission: InteractiveSubmission): Promise<void> {
-    this.statusMessage = `[SHELL] Running: ${shellCmd}...`;
+    const rawTrimmed = submission.text.trim();
+    const displayCmd = rawTrimmed.startsWith('!') || rawTrimmed.startsWith('/sh') ? rawTrimmed : `!${shellCmd}`;
+    if (this.presentationMode === 'conversation') {
+      this.conversationRenderer.append(`> ${displayCmd}`);
+    }
+    this.statusMessage = `Command running: [SHELL] Running: ${shellCmd}...`;
     this.draw();
 
+    const startedAt = Date.now();
     let tracker: Awaited<ReturnType<typeof createBlock>> | undefined;
     try {
       if (this.engine.store) {
@@ -3728,9 +3759,10 @@ export class FleetTui {
         timeout: 30_000,
         maxBuffer: 1024 * 1024,
       });
+      const durationMs = Math.max(0, Date.now() - startedAt);
       const blockId = tracker?.block.id;
       if (tracker) {
-        await tracker.finish('success', { stdout, stderr, exitCode: 0 }).catch(() => {});
+        await tracker.finish('success', { stdout, stderr, exitCode: 0, durationMs }).catch(() => {});
         await this.refreshRecentBlocks();
       }
       this.lastShellOutput = {
@@ -3738,18 +3770,30 @@ export class FleetTui {
         stdout,
         stderr,
         exitCode: 0,
+        durationMs,
         blockId,
       };
       const firstLine = (stdout.trim() || stderr.trim()).split(/\r?\n/)[0] ?? '';
       const refHint = blockId ? ` (ref @${blockId})` : '';
-      this.statusMessage = `[SHELL${blockId ? ` #${blockId}` : ''}] exit 0: ${firstLine || '(no output)'}${refHint}`;
+      this.statusMessage = `Command completed (${durationMs}ms) · [SHELL${blockId ? ` #${blockId}` : ''}] exit 0: ${firstLine || '(no output)'}${refHint}`;
+      if (this.presentationMode === 'conversation') {
+        const outParts: string[] = [];
+        const cleanStdout = stdout.replace(/\r/g, '').trimEnd();
+        const cleanStderr = stderr.replace(/\r/g, '').trimEnd();
+        if (cleanStdout) outParts.push(cleanStdout);
+        if (cleanStderr) outParts.push(`stderr:\n${cleanStderr}`);
+        if (!cleanStdout && !cleanStderr) outParts.push('(no output)');
+        outParts.push(`✓ Command completed · exit 0 · ${durationMs}ms${blockId ? ` · ref @${blockId}` : ''}`);
+        this.conversationRenderer.append(outParts.join('\n'));
+      }
     } catch (err: any) {
+      const durationMs = Math.max(0, Date.now() - startedAt);
       const stdout = typeof err?.stdout === 'string' ? err.stdout : '';
       const stderr = typeof err?.stderr === 'string' ? err.stderr : err instanceof Error ? err.message : String(err);
       const exitCode = typeof err?.code === 'number' ? err.code : 1;
       const blockId = tracker?.block.id;
       if (tracker) {
-        await tracker.finish('failed', { stdout, stderr, exitCode, errors: [stderr] }).catch(() => {});
+        await tracker.finish('failed', { stdout, stderr, exitCode, durationMs, errors: [stderr] }).catch(() => {});
         await this.refreshRecentBlocks();
       }
       this.lastShellOutput = {
@@ -3757,10 +3801,20 @@ export class FleetTui {
         stdout,
         stderr,
         exitCode,
+        durationMs,
         blockId,
       };
       const firstErr = (stderr.trim() || stdout.trim()).split(/\r?\n/)[0] ?? 'command failed';
-      this.statusMessage = `[SHELL${blockId ? ` #${blockId}` : ''}] exit ${exitCode}: ${firstErr}`;
+      const refHint = blockId ? ` (ref @${blockId})` : '';
+      this.statusMessage = `Execution failed (${durationMs}ms) · [SHELL${blockId ? ` #${blockId}` : ''}] exit ${exitCode}: ${firstErr}${refHint}`;
+      if (this.presentationMode === 'conversation') {
+        const outParts: string[] = [`✗ Command failed · exit ${exitCode} · ${durationMs}ms${blockId ? ` · ref @${blockId}` : ''}`];
+        const cleanStdout = stdout.replace(/\r/g, '').trimEnd();
+        const cleanStderr = stderr.replace(/\r/g, '').trimEnd();
+        if (cleanStdout) outParts.push(cleanStdout);
+        if (cleanStderr) outParts.push(`stderr:\n${cleanStderr}`);
+        this.conversationRenderer.append(outParts.join('\n'));
+      }
     }
     this.draw();
   }
@@ -3871,7 +3925,10 @@ export class FleetTui {
       const shellCmd = (trimmed.startsWith('!') ? trimmed.slice(1) : trimmed.slice(3)).trim();
       if (!shellCmd) {
         this.statusMessage =
-          'Shell mode: type !<command> (e.g. !git status) to execute in project root and capture as @block.';
+          'Shell mode: type !<command> (e.g. !git status) or /sh <command> to execute in project root and capture as @block.';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
         this.draw();
         return;
       }
@@ -4015,6 +4072,14 @@ export class FleetTui {
 
     if (trimmed === '/doctor') {
       this.statusMessage = 'System diagnostics healthy: control plane, workers, and runtimes online';
+      if (this.presentationMode === 'conversation') {
+        const readiness = this.engine.lifecycle?.getReadiness();
+        const modelsCount = this.engine.models?.list().length ?? 0;
+        const summary = readiness && readiness.readyCount === 0 && modelsCount === 0
+          ? `${this.statusMessage}\n${this.formatMissingModelRecovery(readiness)}`
+          : `${this.statusMessage} (${modelsCount} model(s) registered)`;
+        this.conversationRenderer.append(summary);
+      }
       this.draw();
       return;
     }
@@ -4031,6 +4096,9 @@ export class FleetTui {
         this.statusMessage =
           `Don't know how to launch '${target}' — only 'lmstudio' is supported (LM Studio ships an ` +
           `'lms' CLI for this; Ollama is normally already running as a background service).`;
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
         this.draw();
         return;
       }
@@ -4043,6 +4111,9 @@ export class FleetTui {
         this.statusMessage = /ENOENT/.test(message)
           ? `'lms' CLI not found on PATH — install LM Studio (lmstudio.ai) or add its CLI to PATH`
           : `Failed to start LM Studio server: ${message.split('\n')[0]}`;
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`✗ ${this.statusMessage}`);
+        }
         this.draw();
         return;
       }
@@ -4056,6 +4127,9 @@ export class FleetTui {
       this.statusMessage = result.ok
         ? `LM Studio started — ${result.message}`
         : `LM Studio server started, but still not reachable: ${result.message}`;
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -4067,12 +4141,14 @@ export class FleetTui {
         const current = this.selectedModelId ?? 'auto (scheduler picks)';
         const ids = available.map((m) => m.id).join(', ') || '(none registered)';
         this.statusMessage = `Model: ${current}. Available: ${ids}. Use /model <id> to pin, /model auto to clear.`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
       if (arg === 'auto' || arg === 'clear') {
         this.selectedModelId = undefined;
         this.statusMessage = 'Cleared model pin — new tasks will be auto-routed by the scheduler again.';
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
@@ -4080,11 +4156,13 @@ export class FleetTui {
       if (!match) {
         const ids = available.map((m) => m.id).join(', ') || '(none registered)';
         this.statusMessage = `No registered model '${arg}'. Available: ${ids}.`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
       this.selectedModelId = match.id;
       this.statusMessage = `Pinned model to '${match.id}' — new tasks will use it instead of auto-routing.`;
+      if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
       this.draw();
       return;
     }
@@ -4221,7 +4299,21 @@ export class FleetTui {
     }
 
     // Submit a new task or fan-out job
-    await this.launchJobFromPrompt(trimmed);
+    try {
+      await this.launchJobFromPrompt(trimmed);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.statusMessage = `Execution failed: ${errMsg}`;
+      if (this.currentBlockTracker) {
+        await this.currentBlockTracker.finish('failed', { exitCode: 1, stderr: errMsg, errors: [errMsg] }).catch(() => {});
+        this.currentBlockTracker = undefined;
+        await this.refreshRecentBlocks();
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(`✗ Execution failed: ${errMsg}`);
+      }
+      this.draw();
+    }
   }
 
   /**
@@ -4234,9 +4326,21 @@ export class FleetTui {
     }
     // Installed models are activated on the existing execution after scheduling.
     const readiness = this.engine.lifecycle.getReadiness();
-    if (readiness.installedCount === 0 && readiness.readyCount === 0) {
-      this.statusMessage = 'No models installed. Discover models in LM Studio or Ollama.';
-      this.openModelRecoveryModal();
+    const hasSchedulable = this.hasSchedulableGenerativeModel();
+    if ((readiness.installedCount === 0 && readiness.readyCount === 0) || (this.presentationMode === 'conversation' && !hasSchedulable)) {
+      const recoveryText = this.formatMissingModelRecovery(readiness, prompt);
+      this.statusMessage = 'Model unavailable · No models installed. Discover models in LM Studio or Ollama.';
+      if (this.currentBlockTracker) {
+        await this.currentBlockTracker.finish('failed', { exitCode: 1, stderr: recoveryText, errors: [recoveryText] }).catch(() => {});
+        this.currentBlockTracker = undefined;
+        await this.refreshRecentBlocks();
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(recoveryText);
+        this.draw();
+      } else {
+        this.openModelRecoveryModal();
+      }
       return;
     }
 
@@ -4396,7 +4500,8 @@ export class FleetTui {
           // here rather than a bare "failed!" that hides why.
           const timeoutNode = finalJob.graph.nodes.find((n) => /timeout/i.test(n.error ?? ''));
           const outcome = timeoutNode ? `failed (${timeoutNode.error})` : `${finalJob.status}!`;
-          this.statusMessage = `Job ${job.id} ${outcome} Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
+          const prefix = finalJob.status === 'failed' ? 'Execution failed · ' : '';
+          this.statusMessage = `${prefix}Job ${job.id} ${outcome} Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
           if (this.presentationMode === 'conversation') {
             if (finalJob.status === 'completed') {
               const elapsed = Math.max(0, Math.floor(this.currentRollup.durationMs / 1000));
@@ -4421,21 +4526,26 @@ export class FleetTui {
           }
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          this.statusMessage = `Job execution error: ${errMsg}`;
+          const isSched = /schedul|eligible|model|capacity|admission|reject/i.test(errMsg);
+          this.statusMessage = `${isSched ? 'Scheduler rejected task · ' : 'Execution failed · '}Job execution error: ${errMsg}`;
 
-          // Structured error component (§29)
-          this.currentError = {
-            phase: 'scheduling',
-            reason: errMsg,
-            required: `Allocatable compute on workstation with loaded model`,
-            available: `Models: ${this.engine.models.list().length}, Concurrency: ${this.concurrencyLimit}`,
-            suggestedSteps: [
-              '1. Verify model instances are loaded: wa models list',
-              '2. Run system health diagnostics: wa doctor',
-              '3. Check memory & context limits in wazir.json',
-            ],
-            timestamp: new Date(),
-          };
+          if (this.presentationMode === 'conversation') {
+            this.conversationRenderer.append(`✗ ${isSched ? 'Scheduler rejected task' : 'Execution failed'}: ${errMsg}\n  Run /doctor or wa models list to inspect runtime readiness.`);
+          } else {
+            // Structured error component (§29)
+            this.currentError = {
+              phase: 'scheduling',
+              reason: errMsg,
+              required: `Allocatable compute on workstation with loaded model`,
+              available: `Models: ${this.engine.models.list().length}, Concurrency: ${this.concurrencyLimit}`,
+              suggestedSteps: [
+                '1. Verify model instances are loaded: wa models list',
+                '2. Run system health diagnostics: wa doctor',
+                '3. Check memory & context limits in wazir.json',
+              ],
+              timestamp: new Date(),
+            };
+          }
 
           if (this.currentBlockTracker) {
             await this.currentBlockTracker.finish('failed', {
@@ -4451,18 +4561,31 @@ export class FleetTui {
       })();
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      this.statusMessage = `Scheduling failed: ${errMsg}`;
-      this.currentError = {
-        phase: 'scheduling',
-        reason: errMsg,
-        required: 'Valid task definition and available agent',
-        available: 'Scheduler queue rejection',
-        suggestedSteps: [
-          '1. Verify task syntax and prompt format',
-          '2. Check active context budget with wa context list',
-        ],
-        timestamp: new Date(),
-      };
+      this.statusMessage = `Scheduler rejected task · Scheduling failed: ${errMsg}`;
+      if (this.currentBlockTracker) {
+        await this.currentBlockTracker.finish('failed', {
+          exitCode: 1,
+          stderr: errMsg,
+          errors: [errMsg],
+        }).catch(() => {});
+        this.currentBlockTracker = undefined;
+        await this.refreshRecentBlocks();
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(`✗ Scheduler rejected task: ${errMsg}\n  Verify task syntax or run /doctor to inspect system readiness.`);
+      } else {
+        this.currentError = {
+          phase: 'scheduling',
+          reason: errMsg,
+          required: 'Valid task definition and available agent',
+          available: 'Scheduler queue rejection',
+          suggestedSteps: [
+            '1. Verify task syntax and prompt format',
+            '2. Check active context budget with wa context list',
+          ],
+          timestamp: new Date(),
+        };
+      }
       this.draw();
     }
   }
@@ -4683,6 +4806,7 @@ export class FleetTui {
             if (p.error) {
               eventKind = 'error';
               eventText = `${p.tool} failed — ${this.humanizeError(p.error)}`;
+              this.statusMessage = `Tool execution failed: ${eventText}`;
             } else {
               eventKind = 'tool';
               eventText = `${p.tool} succeeded`;
@@ -4746,6 +4870,7 @@ export class FleetTui {
         }
         const failureReason = ev.error ? this.humanizeError(ev.error) : 'Task failed';
         agent.lastMessage = failureReason;
+        this.statusMessage = `Execution failed: ${failureReason.split(/\r?\n/, 1)[0]}`;
 
         logs.push({
           time: timeStr,
@@ -4753,7 +4878,7 @@ export class FleetTui {
           kind: isInfra ? 'infra' : 'error',
         });
         if (this.presentationMode === 'conversation') {
-          this.conversationRenderer.append(`✗ ${failureReason.split(/\r?\n/, 1)[0]}\n  /logs for details`);
+          this.conversationRenderer.append(`✗ Execution failed: ${failureReason.split(/\r?\n/, 1)[0]}\n  /logs for details`);
         }
 
         // Structured Error Component (§29).
@@ -5912,6 +6037,74 @@ export class FleetTui {
     this.draw();
   }
 
+  private formatMissingModelRecovery(readiness: ModelReadiness, prompt?: string): string {
+    const unavailableRuntimes: string[] = [];
+    const runtimeEntries = Object.entries(readiness.runtimeHealth ?? {});
+    for (const [runtimeId, health] of runtimeEntries) {
+      const h = health as { status?: string; message?: string };
+      if (h.status === 'unavailable' || h.status === 'unhealthy') {
+        unavailableRuntimes.push(`${runtimeId} (${h.status}${h.message ? `: ${h.message}` : ''})`);
+      }
+    }
+    for (const disc of this.engine.discovered ?? []) {
+      if (disc.health === 'unavailable' || disc.health === 'degraded') {
+        const label = `${disc.id} (${disc.health}${disc.healthMessage ? `: ${disc.healthMessage}` : ''})`;
+        if (!unavailableRuntimes.some((r) => r.startsWith(`${disc.id} (`))) {
+          unavailableRuntimes.push(label);
+        }
+      }
+    }
+    for (const rt of this.engine.runtimes?.list() ?? []) {
+      const st = (rt as { status?: string; health?: string }).status ?? (rt as { health?: string }).health;
+      if (st === 'offline' || st === 'unavailable' || st === 'degraded') {
+        if (!unavailableRuntimes.some((r) => r.startsWith(`${rt.id} (`))) {
+          unavailableRuntimes.push(`${rt.id} (${st})`);
+        }
+      } else if ((rt as { runtimeKind?: string }).runtimeKind === 'hosted' && this.engine.policy) {
+        const gate = this.engine.policy.checkHostedEligibility(undefined, rt.type);
+        if (!gate.allowed && !unavailableRuntimes.some((r) => r.startsWith(`${rt.id} (`))) {
+          unavailableRuntimes.push(`${rt.id} (hosted providers disabled by policy)`);
+        }
+      }
+    }
+    if (unavailableRuntimes.length === 0) {
+      unavailableRuntimes.push('ollama (0 models installed)', 'lmstudio (offline or 0 models installed)');
+    }
+
+    const lines: string[] = [
+      prompt
+        ? `✗ Model unavailable: cannot execute task "${prompt.slice(0, 60)}" because no eligible AI model is registered or loaded.`
+        : '⚠ Model unavailable: 0 eligible models registered across configured runtimes.',
+    ];
+    if (unavailableRuntimes.length > 0) {
+      lines.push(`  Unavailable runtimes: ${unavailableRuntimes.join(', ')}`);
+    }
+    lines.push(
+      '  Recovery commands:',
+      '    • Pull a local Ollama model:       ollama pull qwen2.5-coder',
+      '    • Start LM Studio server:          lms server start   (or /launch lmstudio)',
+      '    • Authenticate a hosted provider:  wa auth login <anthropic|openai|google>',
+      '    • Check runtime diagnostics:       wa doctor          (or /doctor)',
+      '  Shell commands (!<cmd> or /sh <cmd>, e.g. !ls -la) remain available without an AI model.',
+    );
+    return lines.join('\n');
+  }
+
+  private hasSchedulableGenerativeModel(): boolean {
+    const eligible = this.engine.lifecycle?.getEligibleModels() ?? this.engine.models?.list().filter((m) => !m.embedding) ?? [];
+    if (eligible.length === 0) return false;
+    return eligible.some((m) => {
+      const instances = this.engine.models?.instancesOf(m.id) ?? [];
+      if (instances.length === 0) return false;
+      if (m.local === false && this.engine.policy) {
+        const providerType = Array.isArray(m.runtimeCompatibility) ? m.runtimeCompatibility[0] : m.provider;
+        const gate = this.engine.policy.checkHostedEligibility(undefined, providerType as any);
+        if (!gate.allowed) return false;
+      }
+      return instances.some((i) => i.health !== 'unavailable' && i.state !== 'UNAVAILABLE');
+    });
+  }
+
   private async handleStartupModelReadiness(): Promise<void> {
     const mode = this.engine.config.models?.startup?.mode ?? 'prompt';
     if (mode === 'none') {
@@ -5921,10 +6114,29 @@ export class FleetTui {
 
     // Default: 'prompt'
     const readiness = this.engine.lifecycle.getReadiness();
-    if (readiness.readyCount > 0) {
+    const hasSchedulable = this.hasSchedulableGenerativeModel();
+    if (readiness.readyCount > 0 && hasSchedulable) {
       if (readiness.unloadedEligibleModels.length > 0) {
         this.statusMessage = `Ready: ${readiness.readyCount} model(s) loaded. Press [M] to manage models.`;
       }
+      return;
+    }
+
+    const runtimeEntries = Object.entries(readiness.runtimeHealth ?? {});
+    const allUnavailable =
+      runtimeEntries.length > 0 &&
+      runtimeEntries.every(([, h]: [string, any]) => h.status === 'unavailable' || h.status === 'unhealthy');
+
+    if (this.presentationMode === 'conversation') {
+      if (readiness.installedCount === 0 || !hasSchedulable) {
+        this.statusMessage = allUnavailable
+          ? 'Provider disconnected · Model unavailable (0 models registered). Shell commands (!cmd) available.'
+          : 'Model unavailable (0 models registered). Shell commands (!cmd) available.';
+        this.conversationRenderer.append(this.formatMissingModelRecovery(readiness));
+      } else {
+        this.statusMessage = `${readiness.installedCount} model(s) installed (0 loaded) — will activate on task submission or use /models.`;
+      }
+      this.draw();
       return;
     }
 
@@ -5933,10 +6145,6 @@ export class FleetTui {
       return;
     }
 
-    const runtimeEntries = Object.entries(readiness.runtimeHealth);
-    const allUnavailable =
-      runtimeEntries.length > 0 &&
-      runtimeEntries.every(([, h]: [string, any]) => h.status === 'unavailable' || h.status === 'unhealthy');
     if (allUnavailable) {
       this.openRuntimeRecoveryModal();
     } else {
@@ -5945,11 +6153,16 @@ export class FleetTui {
   }
 
   private handleModelLifecycleEvent(event: ModelLifecycleEvent): void {
-    if (['MODEL_DRAINING', 'MODEL_ADMISSION_DENIED', 'MODEL_CONTEXT_DOWNSHIFTED', 'WAITING_FOR_MODEL'].includes(event.type)) {
+    if (['MODEL_DRAINING', 'MODEL_ADMISSION_DENIED', 'MODEL_CONTEXT_DOWNSHIFTED', 'WAITING_FOR_MODEL', 'MODEL_LOAD_FAILED'].includes(event.type)) {
       const allCurrentTasksTerminal = this.agents.size > 0 && [...this.agents.values()].every((agent) => ['completed', 'failed', 'cancelled'].includes(agent.status));
       const jobTerminal = this.currentJob && ['completed', 'failed', 'cancelled'].includes(this.currentJob.status);
       if (!allCurrentTasksTerminal && !jobTerminal) {
-        this.statusMessage = `${event.type}: ${event.modelId}${event.reason ? ' — ' + event.reason : ''}`;
+        const prefix = event.type === 'MODEL_LOAD_FAILED'
+          ? 'Model unavailable · '
+          : event.type === 'MODEL_ADMISSION_DENIED'
+            ? 'Scheduler rejected task · '
+            : '';
+        this.statusMessage = `${prefix}${event.type}: ${event.modelId}${event.reason ? ' — ' + event.reason : ''}`;
         this.draw();
       }
     }
@@ -6820,8 +7033,8 @@ export class FleetTui {
       `  Model ${card.modelId} · Provider ${model?.provider ?? 'unknown'}`,
       `  Elapsed ${(card.durationMs / 1000).toFixed(1)}s · Model calls ${card.modelCallCount ?? 0}`,
       `  Tokens ${card.usage?.input ?? 0} in / ${card.usage?.output ?? 0} out · Cost: unreported`,
-      `  Files changed: ${card.filesChanged.length}`,
-      ...card.filesChanged.slice(0, 4).map(f => `    ${f}`),
+      `  Files changed: ${(card.filesChanged ?? []).length}`,
+      ...(card.filesChanged ?? []).slice(0, 4).map(f => `    ${f}`),
       '',
       color.bold(color.cyan('  VERIFICATION')),
       ...(inspection ? [inspection.inspection.status, ...inspection.why.chain, ...inspection.why.missing].map(t => `  ${t}`) : ['  No verification evidence loaded. Press 6 to inspect checks.']),

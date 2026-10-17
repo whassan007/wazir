@@ -2428,6 +2428,88 @@ describe('FleetTui — protocol/validation visibility and raw response viewer', 
 
       harness.stop();
     });
+
+    it('renders shell output, exit code, duration, stderr, and missing-model recovery visibly in conversation mode without invoking an LLM or opening dashboard modals', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-chat-p0-'));
+      await fs.writeFile(path.join(projectRoot, 'hello-wazir.txt'), 'chat-shell-content\n', 'utf8');
+      const engine = await buildFleetTestEngine(projectRoot);
+      // Replace with empty ModelRegistry to simulate zero registered models / no AI provider configured
+      const emptyModels = new ModelRegistry();
+      engine.models = emptyModels;
+      engine.lifecycle = new ModelLifecycleService({
+        executions: engine.executions,
+        models: emptyModels,
+        runtimes: engine.runtimes,
+        computers: engine.computers,
+        agents: engine.agents,
+        adapters: new Map(),
+        store: new MemoryStore() as any,
+      });
+      engine.discovered = [
+        {
+          id: 'ollama',
+          info: { id: 'ollama', name: 'Ollama', version: '0.0' },
+          capabilities: {} as any,
+          health: 'unavailable',
+          healthMessage: 'connection refused',
+          models: [],
+          adapter: {} as any,
+        },
+      ];
+
+      const harness = new TuiTestHarness({ engine, presentationMode: 'conversation', concurrencyLimit: 2 });
+      await harness.start();
+
+      // 1. Startup with 0 models produces a visible durable warning and never opens dashboard startupSelector
+      expect((harness.tui as any).startupSelector).toBeUndefined();
+      expect(harness.outStream.getOutput()).toContain('Model unavailable');
+      expect(harness.outStream.getOutput()).toContain('ollama (unavailable');
+      expect(harness.outStream.getOutput()).toContain('ollama pull');
+
+      // 2. Execute !pwd and !ls -la without a configured AI provider
+      harness.sendLine('!pwd');
+      for (let i = 0; i < 60 && harness.tui.getLastShellOutput()?.command !== 'pwd'; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(harness.outStream.getOutput()).toContain('> !pwd');
+      expect(harness.outStream.getOutput()).toContain(projectRoot);
+      expect(harness.outStream.getOutput()).toContain('✓ Command completed · exit 0');
+      expect(harness.outStream.getOutput()).toContain('ref @1');
+
+      harness.sendLine('!ls -la');
+      for (let i = 0; i < 60 && harness.tui.getLastShellOutput()?.command !== 'ls -la'; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(harness.outStream.getOutput()).toContain('> !ls -la');
+      expect(harness.outStream.getOutput()).toContain('hello-wazir.txt');
+      expect(harness.outStream.getOutput()).toContain('ref @2');
+
+      // 3. Execute /sh echo WAZIR_OK
+      harness.sendLine('/sh echo WAZIR_OK');
+      for (let i = 0; i < 60 && harness.tui.getLastShellOutput()?.command !== 'echo WAZIR_OK'; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(harness.outStream.getOutput()).toContain('> /sh echo WAZIR_OK');
+      expect(harness.outStream.getOutput()).toContain('WAZIR_OK');
+
+      // 4. Failing shell command displays stderr and nonzero exit status
+      harness.sendLine('!sh -c "echo ERR_DETAIL >&2; exit 9"');
+      for (let i = 0; i < 60 && harness.tui.getLastShellOutput()?.exitCode !== 9; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(harness.outStream.getOutput()).toContain('✗ Command failed · exit 9');
+      expect(harness.outStream.getOutput()).toContain('ERR_DETAIL');
+
+      // 5. Natural-language prompt fails visibly when no model is available and creates 0 jobs
+      harness.sendLine('refactor the authentication module');
+      await new Promise((r) => setTimeout(r, 50));
+      expect(harness.outStream.getOutput()).toContain('cannot execute task "refactor the authentication module"');
+      expect(harness.tui.getCurrentJob()).toBeUndefined();
+      expect((harness.tui as any).startupSelector).toBeUndefined();
+
+      harness.stop();
+      expect(harness.tui.getExitReason()).toBe('user_exit');
+    });
   });
 });
 

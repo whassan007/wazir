@@ -61,23 +61,31 @@ export class ConversationRenderer {
       : frame.active === 1
         ? `● Working${frame.elapsedSeconds === undefined ? '' : ` (${formatElapsed(frame.elapsedSeconds)}) · Esc to interrupt`}${frame.activity ? ` · ${frame.activity}` : ''}`
         : frame.waitingApproval ? `? ${frame.waitingApproval} approval${frame.waitingApproval === 1 ? '' : 's'} required · /fleet to review` : '';
+    const idleStatus = 'Ready. Type a task or /fanout <t1; t2; ...> to begin.';
+    const statusText = frame.status && frame.status !== idleStatus ? `• ${frame.status}` : '';
     const promptLines = wrapWithCursor(frame.prompt || '', frame.cursor, Math.max(1, width - 2));
-    const fixed = (active ? 1 : 0) + (frame.approval ? 1 : 0) + (frame.copyMode ? 1 : 0);
+    const fixed = (active ? 1 : 0) + (frame.approval ? 1 : 0) + (frame.copyMode ? 1 : 0) + (statusText ? 1 : 0);
     const maxRows = this.tty ? Math.max(1, Math.min(9, rows - 1)) : 9;
     const promptCapacity = Math.max(1, maxRows - fixed);
     const promptStart = Math.max(0, Math.min(promptLines.cursorRow - promptCapacity + 1, promptLines.lines.length - promptCapacity));
     const promptEnd = Math.min(promptLines.lines.length, promptStart + promptCapacity);
     const visiblePrompt = promptLines.lines.slice(promptStart, promptEnd);
-    let next = [...(active ? [fit(active, width)] : []), ...(frame.approval ? [fit(`? ${frame.approval}`, width)] : []), ...(frame.copyMode ? [fit(frame.copyMode, width)] : []), ...visiblePrompt.map((line, i) => `${promptStart + i === 0 ? '> ' : '  '}${line}`)];
-    const nextCursorRow = (active ? 1 : 0) + (frame.approval ? 1 : 0) + (frame.copyMode ? 1 : 0) + Math.max(0, promptLines.cursorRow - promptStart);
+    let next = [
+      ...(active ? [fit(active, width)] : []),
+      ...(frame.approval ? [fit(`? ${frame.approval}`, width)] : []),
+      ...(frame.copyMode ? [fit(frame.copyMode, width)] : []),
+      ...(statusText ? [fit(statusText, width)] : []),
+      ...visiblePrompt.map((line, i) => `${promptStart + i === 0 ? '> ' : '  '}${line}`),
+    ];
+    const nextCursorRow = fixed + Math.max(0, promptLines.cursorRow - promptStart);
     if (!this.tty) {
       // Redirected output is plain text and contains no transient control sequences.
       if (!this.plainRendered) {
-        const clean = next.filter(Boolean).join('\n');
+        const clean = next.filter((line) => Boolean(line) && (!statusText || line !== fit(statusText, width))).join('\n');
         if (clean) this.writeDurable(`${clean}\n`);
         this.plainRendered = true;
       }
-      if (frame.status && frame.status !== this.lastPlainStatus && frame.status !== 'Ready. Type a task or /fanout <t1; t2; ...> to begin.') {
+      if (frame.status && frame.status !== this.lastPlainStatus && frame.status !== idleStatus) {
         this.writeDurable(`${frame.status}\n`);
         this.lastPlainStatus = frame.status;
       }

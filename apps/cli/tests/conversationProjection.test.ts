@@ -161,4 +161,44 @@ describe('conversation presentation projections', () => {
     const disabled = new ClipboardController(output, { TERM: 'xterm-256color' });
     expect(disabled.copy('ordinary transcript')).toMatchObject({ copied: false });
   });
+
+  it('displays operational status in interactive TTY live frames without erasing durable transcript', () => {
+    const output = new PassThrough() as PassThrough & { isTTY: boolean };
+    output.isTTY = true;
+    let raw = '';
+    output.on('data', (chunk) => { raw += chunk.toString(); });
+    const renderer = new ConversationRenderer(output, () => ({ columns: 100, rows: 24 }));
+    renderer.start('controller', 'auto-routed model');
+    renderer.append('> !pwd\n/workspace\n✓ Command completed · exit 0 · 5ms · ref @1');
+    const durablePrefix = raw;
+
+    const statuses = [
+      'Command running: [SHELL] Running: ls -la...',
+      'Command completed (4ms) · [SHELL #1] exit 0: total 8 (ref @1)',
+      'Model unavailable (0 models registered). Shell commands (!cmd) available.',
+      'Provider disconnected · Model unavailable (0 models registered).',
+      'Scheduler rejected task · Scheduling failed: no capacity',
+      'Waiting for approval: shell (1 pending)',
+      'Execution failed: task exited with error',
+      'Tool execution failed: shell failed — non-zero exit',
+    ];
+
+    for (const status of statuses) {
+      const beforeLen = raw.length;
+      renderer.render({
+        identity: 'controller',
+        model: 'auto-routed model',
+        prompt: '',
+        cursor: 0,
+        active: 0,
+        waitingApproval: 0,
+        activity: '',
+        status,
+      });
+      const frameDelta = raw.slice(beforeLen);
+      expect(frameDelta).toContain(status.slice(0, 40));
+    }
+
+    expect(raw.slice(0, durablePrefix.length)).toBe(durablePrefix);
+  });
 });
