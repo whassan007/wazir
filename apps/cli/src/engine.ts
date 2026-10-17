@@ -70,7 +70,7 @@ import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
 import { createResourceSystem, type ResourceSystem } from './resources.js';
 import path from 'node:path';
 
-import { EvaluationService, BenchmarkService, MetaOptimizerService, LocalModelOptimizerHelper } from '@wazir/evaluation';
+import { EvaluationService, BenchmarkService, MetaOptimizerService, LocalModelOptimizerHelper, DurableImprovementSupervisor } from '@wazir/evaluation';
 import { VerificationEngine } from '@wazir/core';
 
 export interface EngineOptions {
@@ -532,6 +532,11 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
       })
     : undefined;
 
+  const supervisor = new DurableImprovementSupervisor({
+    store,
+    projectRoot,
+  });
+
   const optimizer = new MetaOptimizerService({
     benchmarkService: benchmark,
     evaluationService: evaluation,
@@ -541,6 +546,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     policyEngine: policy,
     store,
     modelHelper,
+    supervisor,
+    projectRoot,
   });
   await optimizer.hydrate();
 

@@ -1,4 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import type { KeyValueStore } from '@wazir/shared';
 import type {
   OptimizableConfig,
@@ -52,6 +54,7 @@ import {
   DEFAULT_DOMAIN_LEVELS,
   DEFAULT_META_OPTIMIZATION_BUDGET,
   OBJECTIVE_METRIC_MAP,
+  ImprovementAttemptRecord,
 } from '@wazir/core';
 import { BenchmarkService } from './benchmarkService.js';
 import { EvaluationService } from './evaluationService.js';
@@ -59,6 +62,7 @@ import { OpportunityDetector } from './opportunityDetector.js';
 import { RegressionGuard } from './regressionGuard.js';
 import { CausalAttributionService } from './causalAttributionService.js';
 import { LocalModelOptimizerHelper } from './localModelOptimizerHelper.js';
+import { DurableImprovementSupervisor } from './durableImprovementSupervisor.js';
 import type { MemoryService } from '@wazir/memory';
 import type { VerificationEngine } from '@wazir/core';
 import type { WorktreeManager } from '@wazir/core';
@@ -123,6 +127,8 @@ export interface MetaOptimizerOptions {
   distributedFabric?: DistributedBenchmarkFabric;
   canaryDeploymentService?: CanaryDeploymentService;
   modelHelper?: LocalModelOptimizerHelper;
+  supervisor?: DurableImprovementSupervisor;
+  projectRoot?: string;
 }
 
 export class MetaOptimizerService {
@@ -140,6 +146,8 @@ export class MetaOptimizerService {
   private readonly store?: KeyValueStore;
   private readonly canaryDeploymentService: CanaryDeploymentService;
   private readonly modelHelper?: LocalModelOptimizerHelper;
+  private readonly supervisor?: DurableImprovementSupervisor;
+  private readonly projectRoot?: string;
 
   private activeConfig: OptimizableConfig;
   private readonly requireStrictImprovement: boolean;
@@ -176,6 +184,8 @@ export class MetaOptimizerService {
     this.policyEngine = options.policyEngine;
     this.store = options.store;
     this.modelHelper = options.modelHelper;
+    this.supervisor = options.supervisor;
+    this.projectRoot = options.projectRoot;
     this.canaryDeploymentService =
       options.canaryDeploymentService ??
       new CanaryDeploymentService({
@@ -197,6 +207,10 @@ export class MetaOptimizerService {
       wallTimeMs: 0,
       costUSD: 0,
     };
+  }
+
+  public getSupervisor(): DurableImprovementSupervisor | undefined {
+    return this.supervisor;
   }
 
   public getModelHelper(): LocalModelOptimizerHelper | undefined {
@@ -687,6 +701,34 @@ export class MetaOptimizerService {
         status: 'CREATED',
       };
 
+      // If this is a source code candidate and worktreeManager is available, provision isolated worktree
+      if (
+        strategy === 'SOURCE_CODE' &&
+        hypothesis.codeModifications &&
+        hypothesis.codeModifications.length > 0 &&
+        this.worktreeManager
+      ) {
+        const rootDir = this.projectRoot ?? process.cwd();
+        try {
+          const worktree = await this.worktreeManager.createWorktree(rootDir, plan.experimentId, candidateId);
+          candidate.worktreePath = worktree.worktreeDir;
+          candidate.branchName = worktree.branch;
+
+          // Apply code modification patches to candidate worktree
+          for (const mod of hypothesis.codeModifications) {
+            const targetFilePath = path.resolve(worktree.worktreeDir, mod.path);
+            // Ensure target directory exists
+            await fs.mkdir(path.dirname(targetFilePath), { recursive: true });
+            await fs.writeFile(targetFilePath, mod.patch, 'utf8');
+          }
+        } catch (err: any) {
+          this.emitEvent('meta.candidate.rejected', {
+            candidateId,
+            error: `WORKTREE_PROVISION_FAILED: ${err.message}`,
+          });
+        }
+      }
+
       candidates.push(candidate);
       this.candidates.set(candidateId, candidate);
       this.consumption.candidatesCount++;
@@ -695,6 +737,8 @@ export class MetaOptimizerService {
         candidateId,
         experimentId: plan.experimentId,
         strategy,
+        worktreePath: candidate.worktreePath,
+        branchName: candidate.branchName,
       });
     }
 
@@ -1284,6 +1328,191 @@ export class MetaOptimizerService {
         reason: `Promotion failed: ${err.message}`,
       };
     }
+  }
+
+  /**
+   * Commits verified candidate changes in its isolated Git worktree branch.
+   */
+  public async commitCandidate(
+    candidate: CandidateImplementation,
+    commitMessage: string,
+  ): Promise<{ success: boolean; commitSha?: string; reason: string }> {
+    if (!this.worktreeManager || !candidate.worktreePath) {
+      return {
+        success: false,
+        reason: 'NO_WORKTREE: WorktreeManager or candidate worktreePath not available.',
+      };
+    }
+
+    try {
+      const commitRes = await this.worktreeManager.commitWorktree(
+        {
+          jobId: candidate.experimentId,
+          taskId: candidate.candidateId,
+          worktreeDir: candidate.worktreePath,
+          branch: candidate.branchName ?? `wazir/${candidate.experimentId}/${candidate.candidateId}`,
+          baseBranch: 'HEAD',
+          isGit: true,
+          createdAt: new Date(),
+        },
+        commitMessage,
+      );
+
+      if (!commitRes.committed || !commitRes.commitSha) {
+        return {
+          success: false,
+          reason: `COMMIT_FAILED: ${commitRes.message ?? 'No changes to commit'}`,
+        };
+      }
+
+      if (this.supervisor && this.supervisor.getCurrentAttempt()) {
+        await this.supervisor.transitionTo('COMMITTED', `Committed verified candidate to branch ${candidate.branchName}`, {
+          commitSha: commitRes.commitSha,
+        });
+      }
+
+      this.emitEvent('meta.candidate.verified', {
+        candidateId: candidate.candidateId,
+        commitSha: commitRes.commitSha,
+        branch: candidate.branchName,
+      });
+
+      return {
+        success: true,
+        commitSha: commitRes.commitSha,
+        reason: `Candidate committed with sha ${commitRes.commitSha} on ${candidate.branchName}`,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        reason: `COMMIT_EXCEPTION: ${err.message}`,
+      };
+    }
+  }
+
+  /**
+   * Orchestrates an end-to-end self-improvement cycle with durable state transitions,
+   * lease fencing, and crash-resilient checkpoints.
+   */
+  public async executeImprovementCycle(params: {
+    opportunity: ImprovementOpportunity;
+    hypothesis: ImprovementHypothesis;
+    runner: BenchmarkRunner;
+    tasks?: BenchmarkTask[];
+    autoCommit?: boolean;
+    commitMessage?: string;
+  }): Promise<{
+    attemptRecord?: ImprovementAttemptRecord;
+    candidate?: CandidateImplementation;
+    verification?: CandidateVerificationResult;
+    runResult?: MetaOptimizationRunResult;
+  }> {
+    const { opportunity, hypothesis, runner, tasks } = params;
+
+    // 1. DISCOVERED: Pre-register plan and initialize supervisor attempt
+    const plan = this.designExperiment({ hypothesis });
+
+    let record: ImprovementAttemptRecord | undefined;
+    if (this.supervisor) {
+      record = await this.supervisor.initAttempt({
+        opportunity,
+        plan,
+      });
+      // 2. QUALIFIED_FOR_EXPERIMENT
+      await this.supervisor.transitionTo('QUALIFIED_FOR_EXPERIMENT', `Opportunity ${opportunity.id} qualified for experiment`);
+      // 3. PLANNED
+      await this.supervisor.transitionTo('PLANNED', `Experiment plan ${plan.experimentId} registered`);
+      // 4. IMPLEMENTING
+      await this.supervisor.transitionTo('IMPLEMENTING', `Generating candidates`);
+    }
+
+    // Generate candidate
+    const candidates = await this.generateCandidates(plan, 1);
+    const candidate = candidates[0];
+
+    if (!candidate) {
+      if (this.supervisor) {
+        await this.supervisor.transitionTo('FAILED', 'No candidate could be generated');
+      }
+      return { attemptRecord: record };
+    }
+
+    // 5. VERIFYING
+    if (this.supervisor) {
+      await this.supervisor.transitionTo('VERIFYING', `Verifying candidate ${candidate.candidateId}`, {
+        candidateId: candidate.candidateId,
+        candidate,
+        worktreePath: candidate.worktreePath,
+        branchName: candidate.branchName,
+      });
+    }
+
+    const verification = await this.verifyCandidate(candidate);
+
+    if (!verification.allPassed) {
+      if (this.supervisor) {
+        await this.supervisor.transitionTo('REJECTED', `Candidate failed physical verification: ${verification.errors.join('; ')}`, {
+          verificationResult: verification,
+        });
+      }
+      return { attemptRecord: record, candidate, verification };
+    }
+
+    // 6. BENCHMARKING
+    if (this.supervisor) {
+      await this.supervisor.transitionTo('BENCHMARKING', `Running comparative benchmarks for candidate ${candidate.candidateId}`);
+    }
+
+    const benchmarkTasks = tasks ?? this.benchmarkService.listTasks();
+    const runResults = await this.evaluateCandidates({
+      plan,
+      candidates: [candidate],
+      runner,
+      tasks: benchmarkTasks,
+    });
+    const runResult = runResults[0];
+
+    if (!runResult) {
+      if (this.supervisor) {
+        await this.supervisor.transitionTo('FAILED', 'Benchmark evaluation returned empty result');
+      }
+      return { attemptRecord: record, candidate, verification };
+    }
+
+    // 7. READY_TO_COMMIT or REJECTED / INCONCLUSIVE
+    if (runResult.decision === 'QUALIFIED' || runResult.decision === 'ACCEPTED') {
+      if (this.supervisor) {
+        await this.supervisor.transitionTo('READY_TO_COMMIT', `Candidate qualified with empirical superiority`, {
+          benchmarkResult: runResult.comparison as any,
+          decision: runResult.decision,
+        });
+      }
+
+      // Auto-commit if requested and candidate has worktree
+      if (params.autoCommit && candidate.worktreePath && this.worktreeManager) {
+        const msg = params.commitMessage ?? `feat(optimizer): autonomous verified improvement ${plan.experimentId}`;
+        await this.commitCandidate(candidate, msg);
+      }
+    } else if (runResult.decision === 'INCONCLUSIVE') {
+      if (this.supervisor) {
+        await this.supervisor.transitionTo('INCONCLUSIVE', `Benchmark results were inconclusive`, {
+          decision: 'INCONCLUSIVE',
+        });
+      }
+    } else {
+      if (this.supervisor) {
+        await this.supervisor.transitionTo('REJECTED', `Candidate rejected: ${runResult.reasons.join('; ')}`, {
+          decision: 'REJECTED',
+        });
+      }
+    }
+
+    return {
+      attemptRecord: this.supervisor?.getCurrentAttempt() ?? record,
+      candidate,
+      verification,
+      runResult,
+    };
   }
 
   public async rollback(runIdOrCandidateId?: string): Promise<OptimizableConfig> {

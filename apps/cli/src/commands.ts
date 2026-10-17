@@ -2478,12 +2478,38 @@ export async function improveRunCommand(
   plan.modelId = targetModel;
   plan.runtimeId = targetRuntime;
 
+  const supervisor = optimizer.getSupervisor();
+  let attemptRecord: any;
+  if (supervisor) {
+    attemptRecord = await supervisor.initAttempt({
+      opportunity: topOpp,
+      plan,
+    });
+    await supervisor.transitionTo('QUALIFIED_FOR_EXPERIMENT', `Opportunity ${topOpp.id} qualified for experiment`);
+    await supervisor.transitionTo('PLANNED', `Experiment plan ${plan.experimentId} registered`);
+    await supervisor.transitionTo('IMPLEMENTING', `Generating candidates`);
+  }
+
   // Step 4: Generate candidate (leveraging local model if available)
   const candidates = await optimizer.generateCandidates(plan, 1, { modelId: targetModel });
   const candidate = candidates[0];
 
   // Step 5: Verify candidate
+  if (supervisor && candidate) {
+    await supervisor.transitionTo('VERIFYING', `Verifying candidate ${candidate.candidateId}`, {
+      candidateId: candidate.candidateId,
+      candidate,
+      worktreePath: candidate.worktreePath,
+      branchName: candidate.branchName,
+    });
+  }
   const verification = await optimizer.verifyCandidate(candidate);
+
+  if (!verification.allPassed && supervisor) {
+    await supervisor.transitionTo('REJECTED', `Verification failed: ${verification.errors.join('; ')}`, {
+      verificationResult: verification,
+    });
+  }
 
   // Step 6: Benchmark candidate against baseline
   const allTasks = engine.benchmark?.listTasks() ?? [];
@@ -2493,7 +2519,11 @@ export async function improveRunCommand(
   const useLiveRunner = !options?.simulated && Boolean(adapter && (options?.live || loadedModel));
 
   let evalResults: any[] = [];
-  if (tasksToRun.length > 0) {
+  if (tasksToRun.length > 0 && verification.allPassed) {
+    if (supervisor) {
+      await supervisor.transitionTo('BENCHMARKING', `Running comparative benchmarks for candidate ${candidate.candidateId}`);
+    }
+
     let runner: any;
 
     if (useLiveRunner && adapter) {
@@ -2557,6 +2587,23 @@ export async function improveRunCommand(
   }
 
   const firstResult = evalResults[0];
+  if (supervisor && firstResult) {
+    if (firstResult.decision === 'QUALIFIED' || firstResult.decision === 'ACCEPTED') {
+      await supervisor.transitionTo('READY_TO_COMMIT', `Candidate qualified with empirical superiority`, {
+        benchmarkResult: firstResult.comparison,
+        decision: firstResult.decision,
+      });
+    } else if (firstResult.decision === 'INCONCLUSIVE') {
+      await supervisor.transitionTo('INCONCLUSIVE', `Benchmark results inconclusive`, {
+        decision: 'INCONCLUSIVE',
+      });
+    } else {
+      await supervisor.transitionTo('REJECTED', `Benchmark comparison rejected candidate: ${firstResult.reasons.join('; ')}`, {
+        decision: 'REJECTED',
+      });
+    }
+  }
+
   const decisionStr = firstResult
     ? firstResult.decision === 'QUALIFIED' || firstResult.decision === 'ACCEPTED'
       ? color.green(firstResult.decision)
@@ -2565,6 +2612,8 @@ export async function improveRunCommand(
         : color.red(firstResult.decision)
     : color.yellow('NOT_EVALUATED');
 
+  const supervisorState = supervisor?.getCurrentAttempt()?.state ?? 'N/A';
+
   if (options?.json) {
     return JSON.stringify({
       opportunity: topOpp,
@@ -2572,6 +2621,7 @@ export async function improveRunCommand(
       candidates,
       verification,
       results: evalResults,
+      supervisorAttempt: supervisor?.getCurrentAttempt(),
     }, null, 2);
   }
 
@@ -2581,8 +2631,9 @@ export async function improveRunCommand(
     `Opportunity:   ${topOpp.category} on ${topOpp.component}`,
     `Hypothesis:    ${hypotheses[0].proposedChange}`,
     `Model:         ${targetModel} (${targetRuntime}) [${useLiveRunner ? color.green('LIVE LOCAL MODEL') : color.yellow('SIMULATED')}]`,
+    `Supervisor:    State=${color.bold(supervisorState)}, AttemptId=${supervisor?.getCurrentAttempt()?.attemptId ?? 'N/A'}`,
     `Experiment ID: ${plan.experimentId}`,
-    `Candidate ID:  ${candidate.candidateId}`,
+    `Candidate ID:  ${candidate?.candidateId ?? 'N/A'}`,
     `Primary:       ${plan.primaryMetric} (target: ${plan.requiredImprovement.targetValue})`,
     `Verification:  ${verification.allPassed ? color.green('PASSED') : color.red('FAILED')}`,
     `Decision:      ${decisionStr}`,
