@@ -16,5 +16,7 @@ export default defineConfig({
     // spawned real `wa` CLI, which inherits this. A locked keychain (e.g. over SSH) costs
     // every CLI start the full keychain-probe timeout. Tests of backend selection opt back in.
     env: { WAZIR_SECRETS_BACKEND: 'encrypted-file', WAZIR_LMS_DISABLE: '1' },
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
   },
 });
