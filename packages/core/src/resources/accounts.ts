@@ -108,7 +108,7 @@ export const isPaid = (a: AccountConfig) => a.kind === 'api';
 export class AccountRegistry {
   private readonly byId = new Map<string, AccountConfig>();
 
-  constructor(accounts: AccountConfig[]) {
+  constructor(accounts: AccountConfig[] = []) {
     for (const a of accounts) this.byId.set(a.id, a);
   }
 
@@ -132,6 +132,8 @@ export class AccountRegistry {
     agents: string[];
     hostedAuthorized: boolean;
     hostedConcurrency?: Record<string, number>;
+    hostedLimits?: Record<string, LimitSpec[]>;
+    hostedPricing?: Record<string, Pricing | Record<string, Pricing>>;
   }): void {
     const covered = (pred: (a: AccountConfig) => boolean) => this.list().some((a) => a.enabled !== false && pred(a));
     for (const r of input.localRuntimes) {
@@ -142,6 +144,8 @@ export class AccountRegistry {
     for (const r of input.hostedRuntimes) {
       if (!covered((a) => !!a.runtimeIds?.includes(r))) {
         const defaultConcurrent = input.hostedConcurrency?.[r] ?? (r === 'nvidia' ? 2 : undefined);
+        const limits = input.hostedLimits?.[r];
+        const pricing = input.hostedPricing?.[r];
         this.byId.set(`api:${r}`, {
           id: `api:${r}`,
           label: `${r} API`,
@@ -151,6 +155,8 @@ export class AccountRegistry {
           runtimeIds: [r],
           allowPaid: input.hostedAuthorized,
           ...(defaultConcurrent !== undefined ? { maxConcurrent: defaultConcurrent } : {}),
+          ...(limits?.length ? { limits } : {}),
+          ...(pricing !== undefined ? { pricing } : {}),
         });
       }
     }

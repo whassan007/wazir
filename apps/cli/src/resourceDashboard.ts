@@ -13,7 +13,7 @@ export interface ResourceSnapshot {
   ledgerPath: string;
   accounts: Array<Omit<AccountStatus, 'account'> & {
     id: string; label?: string; provider: string; kind: string; integration: string; quotaGroup?: string;
-    usage24h: { inputTokens: number; outputTokens: number; cachedInputTokens: number; requests: number; costUsd: number; bySource: Record<string, number> };
+    usage24h: { inputTokens: number; outputTokens: number; cachedInputTokens: number; requests: number; costUsd: number; costKnown: boolean; costStatus: 'ACTUAL' | 'ESTIMATED' | 'UNKNOWN'; bySource: Record<string, number> };
     rateLimit?: { at: string; value: unknown };
   }>;
   local: LocalCapacityReport;
@@ -24,6 +24,8 @@ export interface ResourceSnapshot {
     cloudTokens: number;
     /** Paid API cost computed from usage x configured prices; not a provider bill. */
     apiCostUsd: number;
+    apiCostKnown: boolean;
+    unpricedCloudRequests: number;
     cachedInputTokens: number;
     /** Local tokens priced at the cheapest configured API rate (undefined when no prices). */
     avoidedApiCostUsd?: number;
@@ -62,12 +64,23 @@ export async function resourceSnapshot(engine: DashEngine): Promise<ResourceSnap
     const mine = rows.filter((r) => r.accountId === a.id);
     const rl = ledger.observation(a.id, 'rate_limit');
     const { account: _account, ...rest } = st;
+    const hasUnknownCost = mine.some((r) => r.costKnown === false);
+    const costKnown = a.kind === 'local' || Boolean(a.pricing) || (mine.length > 0 && !hasUnknownCost);
+    const costStatus: 'ACTUAL' | 'ESTIMATED' | 'UNKNOWN' = a.kind === 'local'
+      ? 'ACTUAL'
+      : !costKnown
+        ? 'UNKNOWN'
+        : mine.some((r) => r.costStatus === 'ACTUAL')
+          ? 'ACTUAL'
+          : 'ESTIMATED';
     return {
       ...rest, id: a.id, label: a.label, provider: a.provider, kind: a.kind, integration: a.integration, quotaGroup: a.quotaGroup,
       usage24h: {
         inputTokens: sum(mine, (r) => r.inputTokens), outputTokens: sum(mine, (r) => r.outputTokens),
         cachedInputTokens: sum(mine, (r) => r.cachedInputTokens), requests: sum(mine, (r) => r.requests),
         costUsd: sum(mine, (r) => r.costUsd),
+        costKnown,
+        costStatus,
         bySource: mine.reduce<Record<string, number>>((m, r) => ({ ...m, [r.source]: (m[r.source] ?? 0) + 1 }), {}),
       },
       rateLimit: rl ? { at: new Date(rl.at).toISOString(), value: rl.value } : undefined,
@@ -76,6 +89,8 @@ export async function resourceSnapshot(engine: DashEngine): Promise<ResourceSnap
 
   const localRows = rows.filter((r) => r.local);
   const cloudRows = rows.filter((r) => !r.local);
+  const unpricedCloudRequests = cloudRows.filter((r) => r.costKnown === false).length;
+  const apiCostKnown = cloudRows.length === 0 || unpricedCloudRequests === 0;
   const prices = all.flatMap((a) => {
     const p = a.pricing;
     if (!p) return [];
@@ -101,6 +116,8 @@ export async function resourceSnapshot(engine: DashEngine): Promise<ResourceSnap
       localTokens: sum(localRows, (r) => r.inputTokens + r.outputTokens),
       cloudTokens: sum(cloudRows, (r) => r.inputTokens + r.outputTokens),
       apiCostUsd: sum(cloudRows, (r) => r.costUsd),
+      apiCostKnown,
+      unpricedCloudRequests,
       cachedInputTokens: sum(rows, (r) => r.cachedInputTokens),
       avoidedApiCostUsd: cheapest ? sum(localRows, (r) => (r.inputTokens * cheapest.inputPerMTok + r.outputTokens * cheapest.outputPerMTok) / 1e6) : undefined,
       requestsBySource: rows.reduce<Record<string, number>>((m, r) => ({ ...m, [r.source]: (m[r.source] ?? 0) + 1 }), {}),
@@ -132,7 +149,8 @@ export function renderResourceSnapshot(s: ResourceSnapshot): string {
     }
     if (a.limits.length === 0) L.push(color.gray('    no limits configured (local accounting only)'));
     const u = a.usage24h;
-    L.push(color.gray(`    24h computed: ${k(u.inputTokens)} in / ${k(u.outputTokens)} out / ${k(u.cachedInputTokens)} cached, ${u.requests} req, $${u.costUsd.toFixed(4)}  sources ${JSON.stringify(u.bySource)}`));
+    const costLabel = u.costKnown ? `$${u.costUsd.toFixed(4)}` : u.costUsd > 0 ? `$${u.costUsd.toFixed(4)}+ (partial, unpriced model)` : 'unknown (no pricing configured)';
+    L.push(color.gray(`    24h computed: ${k(u.inputTokens)} in / ${k(u.outputTokens)} out / ${k(u.cachedInputTokens)} cached, ${u.requests} req, cost ${costLabel}  sources ${JSON.stringify(u.bySource)}`));
     if (a.rateLimit) L.push(color.gray(`    provider rate-limit headers @ ${a.rateLimit.at}: ${JSON.stringify(a.rateLimit.value)}`));
   }
 
@@ -151,7 +169,12 @@ export function renderResourceSnapshot(s: ResourceSnapshot): string {
   L.push('', color.bold('Workflow economics (last 24h)'));
   const share = e.totalTokens ? Math.round((e.localTokens / e.totalTokens) * 100) : 0;
   L.push(`  tokens: ${k(e.totalTokens)} total — local ${k(e.localTokens)} (${share}%), cloud ${k(e.cloudTokens)}; cached input ${k(e.cachedInputTokens)}`);
-  L.push(`  paid API cost (computed from usage × configured prices, not a bill): $${e.apiCostUsd.toFixed(4)}`);
+  const apiCostText = e.apiCostKnown
+    ? `$${e.apiCostUsd.toFixed(4)}`
+    : e.apiCostUsd > 0
+      ? `$${e.apiCostUsd.toFixed(4)}+ (${e.unpricedCloudRequests} req unknown cost)`
+      : `unknown (${e.unpricedCloudRequests} req without pricing configured)`;
+  L.push(`  paid API cost (computed from usage × configured prices, not a bill): ${apiCostText}`);
   L.push(`  avoided API cost (est., local tokens at cheapest configured API price): ${e.avoidedApiCostUsd === undefined ? 'n/a (no API prices configured)' : `$${e.avoidedApiCostUsd.toFixed(4)}`}`);
   L.push(`  usage records by source: ${JSON.stringify(e.requestsBySource)}`);
   L.push(`  routing decisions: ${e.routing.decisions} (local ${e.routing.local}, cloud ${e.routing.cloud})`);

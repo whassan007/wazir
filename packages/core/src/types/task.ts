@@ -81,7 +81,7 @@ export interface PolicyRequirements {
   allowHostedProviders?: boolean;
 }
 
-export type RoutingMode = 'AUTO' | 'NVIDIA' | 'LOCAL_ONLY' | 'HYBRID';
+export type RoutingMode = 'AUTO' | 'LOCAL_ONLY' | 'NVIDIA' | 'HYBRID' | 'PROVIDER_ONLY';
 
 export interface ExecutionPreferences {
   targetComputerId?: string;
@@ -89,8 +89,14 @@ export interface ExecutionPreferences {
   targetModelId?: string;
   targetAgentId?: string;
   executionMode?: 'automatic' | 'local' | 'fastest' | 'highestQuality';
-  /** Explicit provider/placement routing policy mode (AUTO, NVIDIA, LOCAL_ONLY, HYBRID). */
+  /** Explicit provider/locality routing mode. */
   routingMode?: RoutingMode;
+  /** Target provider when routingMode is PROVIDER_ONLY (e.g. 'nvidia'). */
+  routingProvider?: string;
+  /** Preferred default model when targetModelId is not explicitly pinned. */
+  defaultModelId?: string;
+  /** Whether fallback/escalation to other models is allowed (default: true unless provider_only sets false). */
+  allowFallback?: boolean;
   runtimePreset?: string;
 }
 

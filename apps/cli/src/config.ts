@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { LimitSpec, Pricing, RoutingPolicyConfig } from '@wazir/core';
 
 export type ModelStartupMode = 'prompt' | 'recommended' | 'restore' | 'none' | 'explicit';
 
@@ -36,11 +37,16 @@ export interface NvidiaProviderConfig {
     discoverOnStartup?: boolean;
     refreshPeriodMinutes?: number;
   };
-  limits?: {
+  limits?: LimitSpec[] | {
     maxConcurrentRequests?: number;
     maxRetries?: number;
     maxOutputTokens?: number;
+    maxTokens?: number;
+    maxRequests?: number;
+    maxCostUsd?: number;
+    window?: import('@wazir/core').WindowSpec;
   };
+  pricing?: Pricing | Record<string, Pricing>;
   privacy?: {
     allowHostedInference?: boolean;
   };
@@ -53,6 +59,8 @@ export interface ProvidersConfig {
   google?: GoogleProviderConfig;
   nvidia?: NvidiaProviderConfig;
 }
+
+export type RoutingConfig = RoutingPolicyConfig;
 
 export interface WazirConfig {
   web?: import('@wazir/core').WebConfig;
@@ -79,10 +87,76 @@ export interface WazirConfig {
   allowCommands: string[];
   denyCommands: string[];
   allowedMcpServers: string[];
-  /** Hosted-provider (Anthropic/OpenAI/Google) routing configuration. */
+  /** Hosted-provider (Anthropic/OpenAI/Google/NVIDIA) routing configuration. */
   providers?: ProvidersConfig;
+  /** Deterministic model placement and provider-only routing policy. */
+  routing?: RoutingConfig;
   /** Context compaction and token optimization settings. */
   context?: import('@wazir/core').ContextConfig;
+}
+
+export function validateRoutingConfig(raw: unknown, _source?: string): RoutingConfig | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Invalid routing config: expected an object');
+  }
+  const obj = raw as Record<string, unknown>;
+  const rawMode = typeof obj.mode === 'string' ? obj.mode.trim().toLowerCase() : 'auto';
+  const validModes = new Set(['provider_only', 'auto', 'local_only', 'hybrid', 'nvidia']);
+  if (!validModes.has(rawMode)) {
+    throw new Error(`Invalid routing.mode '${String(obj.mode)}': must be one of provider_only, auto, local_only, hybrid`);
+  }
+  const mode: RoutingConfig['mode'] = rawMode === 'nvidia' ? 'provider_only' : (rawMode as RoutingConfig['mode']);
+  const provider =
+    typeof obj.provider === 'string' && obj.provider.trim()
+      ? obj.provider.trim().toLowerCase()
+      : rawMode === 'nvidia'
+      ? 'nvidia'
+      : undefined;
+  if (mode === 'provider_only' && !provider) {
+    throw new Error("Invalid routing config: routing.provider is required when routing.mode is 'provider_only'");
+  }
+  const defaultModel =
+    typeof obj.defaultModel === 'string' && obj.defaultModel.trim() ? obj.defaultModel.trim() : undefined;
+  if (obj.allowFallback !== undefined && typeof obj.allowFallback !== 'boolean') {
+    throw new Error('Invalid routing.allowFallback: expected a boolean');
+  }
+  const allowFallback = obj.allowFallback as boolean | undefined;
+  return {
+    mode,
+    ...(provider ? { provider } : {}),
+    ...(defaultModel ? { defaultModel } : {}),
+    ...(allowFallback !== undefined ? { allowFallback } : {}),
+  };
+}
+
+export function buildNvidiaHostedLimits(nvidia?: NvidiaProviderConfig): LimitSpec[] | undefined {
+  const lim = nvidia?.limits;
+  if (!lim) return undefined;
+  if (Array.isArray(lim)) {
+    return lim.map((item) => ({
+      unit: item.unit,
+      window: item.window === 'daily' ? 'day' : item.window,
+      limit: item.limit,
+      source: item.source ?? 'configured',
+      hard: item.hard,
+      thresholds: item.thresholds,
+      note: item.note,
+    }));
+  }
+  const rawWin = lim.window ?? 'day';
+  const window: import('@wazir/core').WindowSpec = rawWin === 'daily' ? 'day' : rawWin;
+  const specs: LimitSpec[] = [];
+  if (typeof lim.maxTokens === 'number' && Number.isFinite(lim.maxTokens) && lim.maxTokens > 0) {
+    specs.push({ window, unit: 'tokens', limit: lim.maxTokens, source: 'configured' });
+  }
+  if (typeof lim.maxRequests === 'number' && Number.isFinite(lim.maxRequests) && lim.maxRequests > 0) {
+    specs.push({ window, unit: 'requests', limit: lim.maxRequests, source: 'configured' });
+  }
+  if (typeof lim.maxCostUsd === 'number' && Number.isFinite(lim.maxCostUsd) && lim.maxCostUsd > 0) {
+    specs.push({ window, unit: 'cost_usd', limit: lim.maxCostUsd, source: 'configured' });
+  }
+  return specs.length > 0 ? specs : undefined;
 }
 
 export function configDir(): string {
@@ -244,11 +318,58 @@ export function loadConfig(): WazirConfig {
         ...(mergedNvidia ? { nvidia: mergedNvidia } : {}),
       };
     }
+    if (fileConfig.routing) {
+      config.routing = validateRoutingConfig(fileConfig.routing);
+    }
     if (fileConfig.context) {
       config.context = fileConfig.context;
     }
   } catch {
-    // no config file — defaults + env win
+    // no config file or invalid JSON — defaults + env win
+  }
+
+  // Env overrides for provider-only / routing configuration
+  if (process.env.WAZIR_NVIDIA_ONLY === '1' || process.env.WAZIR_ROUTING_MODE) {
+    const envMode = process.env.WAZIR_NVIDIA_ONLY === '1' ? 'provider_only' : process.env.WAZIR_ROUTING_MODE!;
+    const envProvider =
+      process.env.WAZIR_NVIDIA_ONLY === '1'
+        ? 'nvidia'
+        : (process.env.WAZIR_ROUTING_PROVIDER ?? config.routing?.provider ?? (envMode.toLowerCase() === 'nvidia' ? 'nvidia' : undefined));
+    config.routing = validateRoutingConfig({
+      ...config.routing,
+      mode: envMode,
+      provider: envProvider,
+      defaultModel:
+        process.env.WAZIR_NVIDIA_DEFAULT_MODEL ??
+        config.routing?.defaultModel ??
+        config.providers?.nvidia?.defaultModel,
+      allowFallback:
+        process.env.WAZIR_ROUTING_ALLOW_FALLBACK !== undefined
+          ? process.env.WAZIR_ROUTING_ALLOW_FALLBACK === '1'
+          : (config.routing?.allowFallback ?? (process.env.WAZIR_NVIDIA_ONLY === '1' ? false : undefined)),
+    });
+  }
+
+  // When routing.mode === 'provider_only' for nvidia, ensure providers.nvidia is enabled and defaultModel is aligned
+  if (config.routing?.mode === 'provider_only' && config.routing.provider === 'nvidia') {
+    const defaultModel =
+      config.routing.defaultModel ??
+      config.providers?.nvidia?.defaultModel ??
+      process.env.WAZIR_NVIDIA_DEFAULT_MODEL ??
+      'nvidia/nemotron-3.5-super-vl-120b-a12b';
+    config.routing.defaultModel = defaultModel;
+    config.providers = {
+      ...config.providers,
+      allowHostedProviders: config.providers?.allowHostedProviders ?? true,
+      nvidia: {
+        enabled: true,
+        type: 'openai_compatible',
+        baseUrl: process.env.WAZIR_NVIDIA_BASE_URL ?? config.providers?.nvidia?.baseUrl ?? 'https://integrate.api.nvidia.com/v1',
+        apiKeyEnv: config.providers?.nvidia?.apiKeyEnv ?? 'NVIDIA_API_KEY',
+        defaultModel,
+        ...config.providers?.nvidia,
+      },
+    };
   }
 
   // Ensure default mode is 'prompt' if not set

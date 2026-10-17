@@ -390,6 +390,7 @@ export function createFleetTaskExecutor(
           loader: { start: () => {}, stop: () => {}, setText: () => {}, clear: () => {} } as any,
           emitJson: () => {},
           parentPolicy: task.policy,
+          parentExecution: task.execution,
           signal,
         });
       }

@@ -1004,7 +1004,7 @@ resourcesCmd.command('explain').argument('<task>', 'Task id or execution id').op
     if (options.json) { console.log(JSON.stringify({ events, usage }, null, 2)); process.exit(0); }
     if (!events.length && !usage.length) { console.log(`No resource records for '${taskId}'.`); process.exit(0); }
     for (const e of events) console.log(`${new Date(e.at).toISOString()}  ${e.kind.padEnd(12)} ${e.accountId ?? ''}  ${JSON.stringify(e.data).slice(0, 600)}`);
-    for (const u of usage) console.log(`usage ${u.requestId}: ${u.accountId} ${u.modelId} ${u.inputTokens} in / ${u.outputTokens} out (${u.source}) $${u.costUsd.toFixed(4)}`);
+    for (const u of usage) console.log(`usage ${u.requestId}: ${u.accountId} ${u.modelId} ${u.inputTokens} in / ${u.outputTokens} out (${u.source}) ${u.costKnown === false ? 'cost unknown (no pricing configured)' : `$${u.costUsd.toFixed(4)}`}`);
     process.exit(0);
   });
 
@@ -1065,10 +1065,10 @@ policyCmd
 
 program.addCommand(policyCmd);
 
-// auth command — hosted provider authentication (Anthropic, OpenAI, Google)
+// auth command — hosted provider authentication (Anthropic, OpenAI, Google, NVIDIA)
 const authCmd = new Command()
   .name('auth')
-  .description('Authenticate hosted AI providers (Anthropic, OpenAI, Google)');
+  .description('Authenticate hosted AI providers (Anthropic, OpenAI, Google, NVIDIA)');
 
 authCmd
   .command('login [provider]')
@@ -1163,12 +1163,16 @@ program
   .option('--computer <id>', 'Target specific computer')
   .option('--model <name>', 'Use specific model')
   .option('--local-only', 'Only run on local computers')
-  .option('--allow-hosted', 'Allow this command to route to an authenticated hosted provider (Anthropic/OpenAI/Google)')
+  .option('--allow-hosted', 'Allow this command to route to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { askCommand } = await import('./commands.js');
-    const result = await askCommand(engine, prompt, options);
+    const result = await askCommand(engine, prompt, {
+      ...options,
+      routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
+    });
     if (result.output) {
       console.log(result.output);
     }
