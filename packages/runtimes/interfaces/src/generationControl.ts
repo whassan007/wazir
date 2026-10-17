@@ -70,8 +70,8 @@ export async function* controlledGeneration(
     control = new GenerationControl(request);
     control.assertAllowance();
     for await (const event of generate({ ...request, requestId: control.requestId }, control)) {
-      // Partial completions produced by cancellation must never become success.
-      if (event.type === 'completed' || event.type === 'error') control.assertActive();
+      // Partial completions produced by cancellation must never become normal success unless explicitly marked finishReason: 'cancelled'.
+      if (event.type === 'completed' && event.finishReason !== 'cancelled') control.assertActive();
       yield control.attempt > 0 ? {
         ...event, requestId: control.requestId, attempt: control.attempt,
         attemptId: `${control.requestId}:attempt:${control.attempt}`,

@@ -1105,6 +1105,78 @@ export function createApp(state: ApiState) {
       return;
     }
     const computer = state.computers.register({ ...registration, local: false });
+    const registerRemoteWorkerModels = (compId: string, runtimeIds: string[] = [], modelIds: string[] = [], modelHealth?: Record<string, { loaded?: boolean }>) => {
+      const effectiveRuntimes = runtimeIds.length > 0 ? runtimeIds : ['ollama'];
+      for (const rtId of effectiveRuntimes) {
+        const compositeRtId = state.runtimes.get(rtId)?.computerId && state.runtimes.get(rtId)?.computerId !== compId
+          ? `${rtId}@${compId}`
+          : rtId;
+        if (!state.runtimes.get(compositeRtId)) {
+          state.runtimes.register({
+            id: compositeRtId,
+            type: rtId === 'ollama' ? 'ollama' : rtId === 'lmstudio' ? 'lmstudio' : 'other',
+            name: `${rtId} (${compId})`,
+            version: 'remote',
+            computerId: compId,
+            capabilities: {
+              chat: true,
+              streaming: true,
+              toolCalling: true,
+              structuredOutput: false,
+              vision: false,
+              embeddings: false,
+              reasoning: false,
+              modelLoad: true,
+              modelUnload: true,
+              modelDownload: false,
+              statefulChat: false,
+              mcp: false,
+            },
+          });
+        }
+        state.runtimes.update(compositeRtId, { health: 'healthy' });
+      }
+      const primaryRt = effectiveRuntimes[0]!;
+      const runtimeForInstance = state.runtimes.get(primaryRt)?.computerId === compId ? primaryRt : (state.runtimes.get(`${primaryRt}@${compId}`) ? `${primaryRt}@${compId}` : primaryRt);
+      for (const mId of modelIds) {
+        if (!state.models.get(mId)) {
+          state.models.register({
+            id: mId,
+            name: mId,
+            provider: primaryRt,
+            family: 'other',
+            contextMax: 32_768,
+            capabilities: ['generalChat', 'coding'],
+            toolCalling: true,
+            structuredOutput: false,
+            vision: false,
+            audio: false,
+            embedding: false,
+            reasoning: false,
+            runtimeCompatibility: 'any',
+            local: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+        const isLoaded = modelHealth?.[mId]?.loaded ?? true;
+        state.models.upsertInstance({
+          id: `${mId}::${compId}::${runtimeForInstance}`,
+          modelId: mId,
+          computerId: compId,
+          runtimeId: runtimeForInstance,
+          runtimeModelId: mId,
+          loaded: isLoaded,
+          health: 'healthy',
+          state: isLoaded ? 'READY' : 'INSTALLED',
+        });
+      }
+    };
+    registerRemoteWorkerModels(
+      computer.id,
+      Array.isArray(registration.runtimes) ? registration.runtimes : [],
+      Array.isArray(registration.models) ? registration.models : [],
+    );
     let token: string;
     if (byComputerToken && !preferred) {
       token = presented as string; // re-registration with the current token keeps it
@@ -1143,6 +1215,25 @@ export function createApp(state: ApiState) {
       runtimeHealth: req.body?.runtimeHealth,
       modelHealth: req.body?.modelHealth,
     });
+    if (Array.isArray(req.body?.models) || req.body?.modelHealth) {
+      const runtimeIds = Array.isArray(req.body?.runtimes) ? req.body.runtimes : computer.runtimes;
+      const modelIds = Array.isArray(req.body?.models) ? req.body.models : Object.keys(req.body?.modelHealth ?? {});
+      const primaryRt = runtimeIds[0] ?? 'ollama';
+      const runtimeForInstance = state.runtimes.get(primaryRt)?.computerId === computerId ? primaryRt : (state.runtimes.get(`${primaryRt}@${computerId}`) ? `${primaryRt}@${computerId}` : primaryRt);
+      for (const mId of modelIds) {
+        const isLoaded = req.body?.modelHealth?.[mId]?.loaded ?? true;
+        state.models.upsertInstance({
+          id: `${mId}::${computerId}::${runtimeForInstance}`,
+          modelId: mId,
+          computerId,
+          runtimeId: runtimeForInstance,
+          runtimeModelId: mId,
+          loaded: isLoaded,
+          health: 'healthy',
+          state: isLoaded ? 'READY' : 'INSTALLED',
+        });
+      }
+    }
     res.json({ ok: true });
   });
 

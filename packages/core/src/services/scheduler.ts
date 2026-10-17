@@ -218,8 +218,12 @@ export class Scheduler {
       const preferred = scored.find((s) => s.record.id === 'nvidia/nemotron-3.5-super-vl-120b-a12b');
       // Explicit provider routing must remain deterministic when the adaptive
       // resource router ranks another catalog model higher. Preserve hard
-      // policy/capability rejections, but clear only resource-ranking vetoes.
-      if (preferred && preferred.rejected.every((reason) => reason.startsWith('resource:'))) {
+      // policy/capability rejections and hard resource safety vetoes
+      // (emergency_stop, auth_blocked, disabled, quota_exhausted), clearing only
+      // soft ranking vetoes.
+      const isHardResourceVeto = (reason: string) =>
+        /emergency[_ ]stop|auth[_ ]blocked|failed authentication|is disabled|quota[_ ]exhausted|would be exceeded|rate[_ ]limited|cooldown/i.test(reason);
+      if (preferred && preferred.rejected.every((reason) => reason.startsWith('resource:') && !isHardResourceVeto(reason))) {
         preferred.rejected = [];
         preferred.score = Number.MAX_SAFE_INTEGER;
       }
@@ -701,8 +705,8 @@ export class Scheduler {
     const placements: ScoredPlacement[] = [];
 
     for (const instance of instances) {
-      if (['DRAINING', 'UNLOADING', 'LOADING'].includes(instance.state ?? '')) {
-        failures.push(`${instance.id}: lifecycle operation in progress`); continue;
+      if (['DRAINING', 'UNLOADING', 'LOADING', 'FAILED', 'UNAVAILABLE'].includes(instance.state ?? '')) {
+        failures.push(`${instance.id}: instance state is ${instance.state}`); continue;
       }
       if (task.execution?.targetComputerId && instance.computerId !== task.execution.targetComputerId) continue;
       const runtime = this.deps.runtimes.get(instance.runtimeId);
