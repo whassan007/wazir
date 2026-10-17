@@ -2462,13 +2462,15 @@ export class FleetTui {
       }
       if (this.presentationMode === 'conversation') {
         if (this.pendingApprovals.length > 0) return;
-        const active = this.getAgents().some((agent) => agent.status === 'running' || agent.status === 'retry');
-        if (active && this.currentJob) {
-          void this.engine.orchestrator.cancelJob(this.currentJob.id).catch(() => undefined);
-          this.conversationRenderer.append('Interrupt requested');
-        } else if (this.inputBuffer) {
+        if (this.inputBuffer) {
           this.inputBuffer = '';
           this.inputCursor = 0;
+        } else {
+          const active = this.getAgents().some((agent) => agent.status === 'running' || agent.status === 'retry');
+          if (active && this.currentJob) {
+            void this.engine.orchestrator.cancelJob(this.currentJob.id).catch(() => undefined);
+            this.conversationRenderer.append('Interrupt requested');
+          }
         }
         this.draw();
         return;
@@ -3783,8 +3785,23 @@ export class FleetTui {
     this.draw();
 
     const startedAt = Date.now();
-    const shellBin = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/sh';
-    const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', shellCmd] : ['-c', shellCmd];
+    let shellBin = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/sh';
+    let shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', shellCmd] : ['-c', shellCmd];
+    if (process.platform === 'win32') {
+      const shMatch = shellCmd.match(/^sh\s+-c\s+(["'])([\s\S]*)\1$/);
+      if (shMatch) {
+        shellArgs = [
+          '-e',
+          `const { spawnSync } = require('node:child_process'); const cmd = process.argv[1].replace(/;\\s*exit\\s+/g, ' & exit /b '); const r = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', cmd], { stdio: 'inherit' }); process.exit(r.status ?? 1);`,
+          shMatch[2],
+        ];
+        shellBin = process.execPath;
+      } else if (shellCmd === 'pwd') {
+        shellArgs = ['/d', '/s', '/c', 'cd'];
+      } else if (/^ls(\s+-[a-zA-Z]+)?$/.test(shellCmd)) {
+        shellArgs = ['/d', '/s', '/c', 'dir /a'];
+      }
+    }
     let tracker: Awaited<ReturnType<typeof createBlock>> | undefined;
     try {
       if (this.engine.store) {

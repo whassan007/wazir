@@ -244,9 +244,23 @@ export async function improvementSupervisorCommand(
     );
     const isRunning = await running(directory);
     if (command === 'stop' && isRunning) {
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 40; i++) {
         if (!(await running(directory))) break;
         await delay(100);
+      }
+      if (await running(directory)) {
+        const curState = await store.get<SupervisorState>('supervisor/state');
+        if (curState?.pid && curState.pid !== process.pid) {
+          try {
+            process.kill(curState.pid, 'SIGTERM');
+          } catch {
+            // ignore if already exited
+          }
+          for (let i = 0; i < 20; i++) {
+            if (!(await running(directory))) break;
+            await delay(100);
+          }
+        }
       }
     }
     const state = await store.get<SupervisorState>('supervisor/state');
@@ -692,7 +706,6 @@ export async function improvementSupervisorCommand(
                       authorizingIdentity: 'cli-operator',
                       scope: 'task',
                       scopeTargetId: id,
-                      repositoryRoot: projectRoot,
                     }
                   : undefined,
             })

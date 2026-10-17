@@ -1778,7 +1778,7 @@ export class CodingAgent implements AgentAdapter {
       const isUnconfiguredCheck =
         !result.ok &&
         output &&
-        (/(?:missing script|no package\.json|no test specified|no .* script configured|command not found.*(?:npm|pnpm|yarn|pytest|cargo|go|tsc|eslint))/i.test(output) ||
+        (/(?:missing script|no package\.json|no test specified|no .* script configured|tool not found|command not found.*(?:npm|pnpm|yarn|pytest|cargo|go|tsc|eslint))/i.test(output) ||
           (/ENOENT/i.test(output) && /package\.json/i.test(output)));
       if (isUnconfiguredCheck) {
         // project does not define this check — not applicable, not a failure
