@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.70 — 2026-10-16
+
+**Release**: `v0.1.70`
+**Theme**: Local model self-improvement loop, worker execution recovery integrity, and multi-platform packaging alignment
+
+- **Local Model Self-Improvement (`wa improve`)**: Added empirical benchmark optimization for local LM Studio models (`LocalModelOptimizerHelper`, `LiveBenchmarkRunner`).
+- **Execution Contract Integrity**: Fixed unhandled undefined access on task requirements in `executionContract.ts` during worker recovery and model lifecycle admission.
+- **Hardware Telemetry Truthfulness**: Supported non-null GPU load telemetry when real NVIDIA physical hardware is detected.
+- **Package Distribution**: Synchronized version manifests across Debian (`.deb`) and RPM (`.rpm`) distributions.
+
 ## v0.1.69 — 2026-10-15
 
 **Release**: `v0.1.69`
