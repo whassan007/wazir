@@ -57,6 +57,9 @@ jobs:
       - name: Run distribution package smoke test (isolated install & execution)
         run: npm run release:verify
 
+      - name: Run updater tests
+        run: npm run test:updates
+
       - name: Run unit and integration test suite
         run: npm test
 

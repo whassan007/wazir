@@ -126,6 +126,79 @@ program
     }
   });
 
+const updateCmd = new Command().name('update').description('Manage verified Wazir updates and the persistent updater');
+updateCmd.command('status').description('Show installed components and updater status').option('--json', 'Output JSON').action(async (options) => {
+  const { getUpdateStatus, getUpdateConfig } = await import('./updater/service.js');
+  const status = await getUpdateStatus();
+  if (options.json) console.log(JSON.stringify(status, null, 2));
+  else {
+    const last = status.lastCheck ? new Date(status.lastCheck).toLocaleString() : 'Never';
+    console.log([
+      'WAZIR AUTO UPDATE', '',
+      `Installed:       ${status.installedVersion}`,
+      `Available:       ${status.availableVersion ?? 'Not checked'}`,
+      `Channel:         ${status.channel}`,
+      `Auto-update:     ${status.enabled ? 'ENABLED' : 'DISABLED'}`,
+      `Check interval:  ${Math.round(status.intervalSeconds / 60)} minutes`,
+      `Scheduler:       ${status.schedulerInstalled ? 'installed' : 'not installed'}`,
+      `Last checked:    ${last}`,
+      `Next check:      ${status.nextCheck ? new Date(status.nextCheck).toLocaleString() : status.enabled ? 'On scheduler startup' : 'Disabled'}`,
+      '', 'Components:',
+      ...status.components.map((component) => `  ${component.name.padEnd(14)} ${component.state}`),
+      '', `Status: ${status.error ?? status.phase ?? 'Ready'}`,
+    ].join('\n'));
+  }
+});
+updateCmd.command('check').description('Check the official release source and stage a verified update').option('--json', 'Output JSON').option('--scheduled', 'Internal persistent scheduler invocation').option('--jitter', 'Spread fleet release requests over a short randomized delay').action(async (options) => {
+  if (options.jitter) await new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 45_001)));
+  const { checkForUpdates } = await import('./updater/service.js');
+  const result = await checkForUpdates({ force: !options.scheduled, scheduled: options.scheduled });
+  console.log(options.json ? JSON.stringify(result, null, 2) : `${result.phase}: ${result.message ?? (result.availableVersion ? `Wazir ${result.availableVersion} is available.` : 'No newer release is available.')}`);
+  if (result.phase === 'FAILED') process.exitCode = 1;
+});
+updateCmd.command('now').description('Check, verify, and activate an eligible update immediately').option('--json', 'Output JSON').action(async (options) => {
+  const { checkForUpdates } = await import('./updater/service.js');
+  const result = await checkForUpdates({ install: true, force: true });
+  console.log(options.json ? JSON.stringify(result, null, 2) : `${result.phase}: ${result.message ?? result.availableVersion ?? 'No update available.'}`);
+  if (result.phase === 'FAILED') process.exitCode = 1;
+});
+updateCmd.command('enable').description('Enable five-minute automatic update checks and installs').option('--json', 'Output JSON').action(async (options) => {
+  const { enableAutoUpdates } = await import('./updater/service.js');
+  const result = await enableAutoUpdates();
+  console.log(options.json ? JSON.stringify(result, null, 2) : `Automatic updates enabled (${result.scheduler.backend}, every ${Math.round(result.config.intervalSeconds / 60)} minutes).`);
+});
+updateCmd.command('disable').description('Disable automatic updates and remove the persistent scheduler').option('--json', 'Output JSON').action(async (options) => {
+  const { disableAutoUpdates } = await import('./updater/service.js');
+  const result = disableAutoUpdates();
+  console.log(options.json ? JSON.stringify(result, null, 2) : 'Automatic updates disabled. Update history has been preserved.');
+});
+updateCmd.command('history').description('Show recent update attempts').option('--limit <count>', 'Maximum records', (n) => Math.max(1, Number(n)), 30).option('--json', 'Output JSON').action(async (options) => {
+  const { listUpdateHistory } = await import('./updater/service.js');
+  const result = listUpdateHistory(options.limit);
+  console.log(options.json ? JSON.stringify(result, null, 2) : (result.length ? result.map((entry) => `${entry.at}  ${entry.phase.padEnd(26)} ${entry.installedVersion}${entry.availableVersion ? ` → ${entry.availableVersion}` : ''}${entry.message ? ` · ${entry.message}` : ''}`).join('\n') : 'No update history yet.'));
+});
+updateCmd.command('rollback').description('Restore the last verified package-manager backup').option('--json', 'Output JSON').action(async (options) => {
+  const { rollbackUpdate } = await import('./updater/service.js');
+  const result = await rollbackUpdate();
+  console.log(options.json ? JSON.stringify(result, null, 2) : `${result.phase}: ${result.message ?? result.installedVersion}`);
+  if (result.phase === 'FAILED') process.exitCode = 1;
+});
+updateCmd.command('config').description('Show or change persistent update configuration').option('--json', 'Output JSON').option('--channel <channel>', 'stable, prerelease, or development').option('--automatic-download <boolean>', 'Automatically download new versions').option('--automatic-install <boolean>', 'Automatically install verified versions').option('--defer-while-jobs-running <boolean>', 'Defer activation while local Wazir processes run').action(async (options) => {
+  const { configureUpdates, getUpdateConfig } = await import('./updater/service.js');
+  const patch: Record<string, unknown> = {};
+  if (options.channel) patch.channel = options.channel;
+  for (const [input, target] of [['automaticDownload', 'automaticDownload'], ['automaticInstall', 'automaticInstall'], ['deferWhileJobsRunning', 'deferWhileJobsRunning']] as const) {
+    const value = options[input];
+    if (value !== undefined) {
+      if (!['true', 'false'].includes(value)) throw new Error(`--${input.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} must be true or false`);
+      patch[target] = value === 'true';
+    }
+  }
+  const config = Object.keys(patch).length ? configureUpdates(patch as any) : getUpdateConfig();
+  console.log(options.json ? JSON.stringify(config, null, 2) : JSON.stringify(config, null, 2));
+});
+program.addCommand(updateCmd);
+
 program.hook('postAction', async () => { await closeMCPRegistries(); });
 
 // computers command

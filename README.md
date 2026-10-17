@@ -137,6 +137,8 @@ wa ask "explain what this repository does"
 
 ## CLI command reference
 
+See [automatic updates](docs/auto-updates.md) for opt-in scheduling, release verification, rollback behavior, and installation-method limitations.
+
 | Command | What it does |
 | --- | --- |
 | `wa init` | Initialize the local Wazir control plane / config directory |

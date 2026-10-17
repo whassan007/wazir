@@ -141,8 +141,12 @@ function smoke(label, waCmd) {
   let resOk = false;
   try { resOk = Array.isArray(JSON.parse(r.stdout).findings); } catch { /* not JSON */ }
   results.resources = resOk ? 'PASS' : 'FAIL';
+  const u = wa('update', 'status', '--json');
+  let updateOk = false;
+  try { updateOk = JSON.parse(u.stdout).installedVersion === version; } catch { /* not JSON */ }
+  results.updateStatus = updateOk ? 'PASS' : 'FAIL';
   const failed = Object.entries(results).filter(([, s]) => s !== 'PASS').map(([k]) => k);
-  record(`smoke:${label}`, failed.length ? 'FAIL' : 'PASS', { results, note: failed.length ? `failed: ${failed.join(', ')}; stderr: ${(v.stderr + h.stderr + d.stderr + r.stderr).slice(-600)}` : 'version, help, doctor --json, resources validate --json' });
+  record(`smoke:${label}`, failed.length ? 'FAIL' : 'PASS', { results, note: failed.length ? `failed: ${failed.join(', ')}; stderr: ${(v.stderr + h.stderr + d.stderr + r.stderr + u.stderr).slice(-600)}` : 'version, help, doctor --json, resources validate --json, update status --json' });
   return !failed.length;
 }
 
