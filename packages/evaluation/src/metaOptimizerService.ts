@@ -58,6 +58,7 @@ import { EvaluationService } from './evaluationService.js';
 import { OpportunityDetector } from './opportunityDetector.js';
 import { RegressionGuard } from './regressionGuard.js';
 import { CausalAttributionService } from './causalAttributionService.js';
+import { LocalModelOptimizerHelper } from './localModelOptimizerHelper.js';
 import type { MemoryService } from '@wazir/memory';
 import type { VerificationEngine } from '@wazir/core';
 import type { WorktreeManager } from '@wazir/core';
@@ -121,6 +122,7 @@ export interface MetaOptimizerOptions {
   causalService?: CausalAttributionService;
   distributedFabric?: DistributedBenchmarkFabric;
   canaryDeploymentService?: CanaryDeploymentService;
+  modelHelper?: LocalModelOptimizerHelper;
 }
 
 export class MetaOptimizerService {
@@ -137,6 +139,7 @@ export class MetaOptimizerService {
   private readonly policyEngine?: PolicyEngine;
   private readonly store?: KeyValueStore;
   private readonly canaryDeploymentService: CanaryDeploymentService;
+  private readonly modelHelper?: LocalModelOptimizerHelper;
 
   private activeConfig: OptimizableConfig;
   private readonly requireStrictImprovement: boolean;
@@ -172,6 +175,7 @@ export class MetaOptimizerService {
     this.checkpointService = options.checkpointService;
     this.policyEngine = options.policyEngine;
     this.store = options.store;
+    this.modelHelper = options.modelHelper;
     this.canaryDeploymentService =
       options.canaryDeploymentService ??
       new CanaryDeploymentService({
@@ -193,6 +197,10 @@ export class MetaOptimizerService {
       wallTimeMs: 0,
       costUSD: 0,
     };
+  }
+
+  public getModelHelper(): LocalModelOptimizerHelper | undefined {
+    return this.modelHelper;
   }
 
   public async hydrate(): Promise<void> {
@@ -287,6 +295,27 @@ export class MetaOptimizerService {
   // ======================================================================
   // 3. HYPOTHESIS FORMULATION
   // ======================================================================
+
+  public async formulateHypothesesAsync(
+    opportunity: ImprovementOpportunity,
+    options?: { modelId?: string },
+  ): Promise<ImprovementHypothesis[]> {
+    if (this.modelHelper) {
+      try {
+        this.checkBudget('modelCalls');
+        const modelHypothesis = await this.modelHelper.formulateHypothesis(opportunity, options?.modelId);
+        if (modelHypothesis) {
+          this.consumption.modelCallsCount++;
+          this.hypotheses.push(modelHypothesis);
+          this.emitEvent('meta.hypothesis.created', { hypothesis: modelHypothesis });
+          return [modelHypothesis];
+        }
+      } catch {
+        // Fall back gracefully to deterministic rule-based formulation
+      }
+    }
+    return this.formulateHypotheses(opportunity);
+  }
 
   public formulateHypotheses(opportunity: ImprovementOpportunity): ImprovementHypothesis[] {
     const hypotheses: ImprovementHypothesis[] = [];
@@ -592,11 +621,28 @@ export class MetaOptimizerService {
   public async generateCandidates(
     plan: ExperimentPlan,
     count = 1,
+    options?: { modelId?: string },
   ): Promise<CandidateImplementation[]> {
     this.checkBudget('candidates');
 
     const candidates: CandidateImplementation[] = [];
     const hypothesis = plan.hypothesis;
+
+    let modelMutations: ConfigMutation[] | null = null;
+    if (this.modelHelper && (!hypothesis.configMutations || hypothesis.configMutations.length === 0)) {
+      try {
+        this.checkBudget('modelCalls');
+        modelMutations = await this.modelHelper.generateCandidateMutations(
+          hypothesis,
+          options?.modelId ?? plan.modelId,
+        );
+        if (modelMutations && modelMutations.length > 0) {
+          this.consumption.modelCallsCount++;
+        }
+      } catch {
+        // Fall back gracefully
+      }
+    }
 
     for (let i = 0; i < count; i++) {
       const candidateId = `cand-${randomUUID().slice(0, 8)}`;
@@ -624,7 +670,9 @@ export class MetaOptimizerService {
       candidateConfig.id = `cfg-${candidateId}`;
       candidateConfig.version += 1;
 
-      const mutations = hypothesis.configMutations ?? [];
+      const mutations = (hypothesis.configMutations && hypothesis.configMutations.length > 0)
+        ? hypothesis.configMutations
+        : (modelMutations ?? []);
       for (const m of mutations) {
         candidateConfig = this.applyMutationToConfig(candidateConfig, m);
       }
@@ -1747,12 +1795,15 @@ export class MetaOptimizerService {
     return clone;
   }
 
-  private checkBudget(operation: 'experiments' | 'candidates' | 'evaluations'): void {
+  private checkBudget(operation: 'experiments' | 'candidates' | 'evaluations' | 'modelCalls'): void {
     if (this.consumption.experimentsCount >= this.budget.maxExperiments) {
       throw new Error(`META_OPTIMIZATION_BUDGET_EXHAUSTED: Exceeded max experiments (${this.budget.maxExperiments})`);
     }
     if (this.consumption.candidatesCount >= this.budget.maxCandidatesPerExperiment * this.budget.maxExperiments) {
       throw new Error(`META_OPTIMIZATION_BUDGET_EXHAUSTED: Exceeded max candidates budget`);
+    }
+    if (operation === 'modelCalls' && this.consumption.modelCallsCount >= this.budget.maxModelCalls) {
+      throw new Error(`META_OPTIMIZATION_BUDGET_EXHAUSTED: Exceeded max model calls budget (${this.budget.maxModelCalls})`);
     }
   }
 

@@ -70,7 +70,7 @@ import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
 import { createResourceSystem, type ResourceSystem } from './resources.js';
 import path from 'node:path';
 
-import { EvaluationService, BenchmarkService, MetaOptimizerService } from '@wazir/evaluation';
+import { EvaluationService, BenchmarkService, MetaOptimizerService, LocalModelOptimizerHelper } from '@wazir/evaluation';
 import { VerificationEngine } from '@wazir/core';
 
 export interface EngineOptions {
@@ -519,6 +519,19 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     defaultProjectRoot: projectRoot,
   });
 
+  const localLmStudio = adapterById.get('lmstudio');
+  const readyModel = lifecycle.list().find(i => i.loaded && (i.state === 'READY' || i.state === 'LOADED'))?.modelId
+    ?? models.listInstallations().find(i => i.runtimeId === 'lmstudio')?.modelId
+    ?? models.list().find(m => m.provider === 'lmstudio')?.id
+    ?? 'qwen/qwen3.8-27b';
+
+  const modelHelper = localLmStudio
+    ? new LocalModelOptimizerHelper({
+        adapter: localLmStudio,
+        defaultModelId: readyModel,
+      })
+    : undefined;
+
   const optimizer = new MetaOptimizerService({
     benchmarkService: benchmark,
     evaluationService: evaluation,
@@ -527,6 +540,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     checkpointService: checkpoints,
     policyEngine: policy,
     store,
+    modelHelper,
   });
   await optimizer.hydrate();
 

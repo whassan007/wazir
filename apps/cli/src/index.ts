@@ -1515,6 +1515,10 @@ improveCmd
   .command('run')
   .description('Execute an optimization cycle under explicit budgets')
   .option('--level <level>', 'Target self-improvement maturity level')
+  .option('--model <modelId>', 'Local model to leverage for optimization (e.g. qwen/qwen3.8-27b)')
+  .option('--runtime <runtimeId>', 'Runtime adapter ID (default: lmstudio)')
+  .option('--live', 'Force live model evaluation over active runtime adapter')
+  .option('--simulated', 'Run simulated evaluation runner without invoking local model')
   .option('--distributed', 'Distribute benchmark candidate evaluation across the worker fleet')
   .option('--json', 'Output in JSON format')
   .action(async (options) => {

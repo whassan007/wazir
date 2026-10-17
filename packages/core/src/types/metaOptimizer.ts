@@ -285,6 +285,8 @@ export interface ExperimentPlan {
   selectionPolicy?: MultiObjectiveSelectionPolicy;
   weights?: Record<string, number>;
   lexicographicOrder?: string[];
+  modelId?: string;
+  runtimeId?: string;
 }
 
 // ======================================================================
