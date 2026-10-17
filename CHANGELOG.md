@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.1.71 — 2026-10-16
+
+**Release**: `v0.1.71`
+**Theme**: Self-Improvement Engine v2: durable supervisor, lease fencing, isolated worktree execution, and empirical metric integrity
+
+- **Durable Improvement Supervisor**: Implemented `DurableImprovementSupervisor` enforcing an atomic, versioned lifecycle state machine (`DISCOVERED` -> `QUALIFIED_FOR_EXPERIMENT` -> `PLANNED` -> `IMPLEMENTING` -> `VERIFYING` -> `BENCHMARKING` -> `READY_TO_COMMIT` -> `COMMITTED`).
+- **Monotonic Lease Fencing & Crash Resilience**: Added TTL leases and monotonically increasing fencing tokens to prevent dual-supervisor split-brain concurrency. In-flight volatile states automatically recover to `BLOCKED` on restart for safe inspection.
+- **Isolated Worktree Execution**: Integrated `WorktreeManager` into `MetaOptimizerService` for source-code candidates, generating dedicated isolated worktrees and committing verified changes safely.
+- **Honest Non-Synthetic Metrics**: Eliminated synthetic fallback telemetry for tool failures, malformed actions, and wall-time execution latency across `evaluationService.ts`, `benchmarkService.ts`, and `regressionGuard.ts`.
+- **Complete Opportunity Detectors**: Added dedicated statistical detectors for `HIGH_RUNTIME_LATENCY`, `REPEATED_SEARCH_BEHAVIOR`, and `UNNECESSARY_TOOL_EXPOSURE` in `OpportunityDetector`.
+
+## v0.1.70 — 2026-10-16
+
+**Release**: `v0.1.70`
+**Theme**: Local model self-improvement loop, worker execution recovery integrity, and multi-platform packaging alignment
+
+- **Local Model Self-Improvement (`wa improve`)**: Added empirical benchmark optimization for local LM Studio models (`LocalModelOptimizerHelper`, `LiveBenchmarkRunner`).
+- **Execution Contract Integrity**: Fixed unhandled undefined access on task requirements in `executionContract.ts` during worker recovery and model lifecycle admission.
+- **Hardware Telemetry Truthfulness**: Supported non-null GPU load telemetry when real NVIDIA physical hardware is detected.
+- **Package Distribution**: Synchronized version manifests across Debian (`.deb`) and RPM (`.rpm`) distributions.
+
+## v0.1.69 — 2026-10-15
+
+**Release**: `v0.1.69`
+**Theme**: Dashboard state handling — stop showing "0" when the real answer is "unknown"
+
+Rounds out the v0.1.68 OFFLINE/502 fix by repairing the dashboard's own
+state handling, which had the exact bug the original report flagged: a
+failed request rendering as a confirmed zero instead of an unknown value.
+
+- Tab badges (Activity/Infrastructure/Catalog) only updated as a side
+  effect of a successful render, so a total outage froze them at a literal
+  "0". They now show "—" whenever every section feeding them has never
+  loaded, and recompute every refresh cycle regardless of success/failure.
+- The executions pagination counter's "Showing 0 of 0" was both the
+  pre-load placeholder and the genuine-empty-result text, making the two
+  indistinguishable. Placeholder is now "No data yet"; "Showing 0 of 0"
+  from a real successful response is unchanged (it's correct there).
+- The global status pill can now tell "backend reachable but rejecting our
+  token" apart from a real outage: 401/403 responses surface as
+  "authentication required" instead of folding into generic "offline".
+
+Verified in a real Chrome tab: forced a 401 via a deliberate token
+mismatch (pill read "authentication required", all counters "—"), then
+fixed the token and confirmed full recovery with real data.
+
+## v0.1.68 — 2026-10-15
+
+**Release**: `v0.1.68`
+**Theme**: Fix Wazir Desktop OFFLINE / 502 on a cold local launch
+
+Any launch of `@wazir/desktop` outside the `tauri dev` CLI (a built binary, or
+`tauri build --no-bundle` output) showed "Runtime: OFFLINE" with 502s on every
+dashboard call — `beforeDevCommand` only runs under `tauri dev`, so nothing
+had actually started the backend.
+
+- `main.rs` now health-checks ports 4800/4801 on startup and spawns `node
+  dist/main.js` (apps/api) and `node server.js` (apps/web) itself when
+  nothing's listening, logging to `~/Library/Logs/Wazir/{api,web}.log`. The
+  window stays hidden until the web port responds, then navigates to the live
+  dashboard — no more flash of the broken static page. Only child processes
+  this instance spawned are tracked and killed on quit; a pre-existing or
+  remote runtime is left untouched.
+- Fixing the connectivity race surfaced a second, previously-masked failure:
+  `apps/api`'s operator token is mandatory by default (`auth.ts`), and nothing
+  set `WAZIR_API_TOKEN` for the self-spawned backend, so every
+  `/api/v1/*`/`/executions` call 401'd even once the race was fixed. Desktop
+  now generates a random per-launch token and passes it to both spawned
+  processes; `apps/web`'s existing proxy attaches it to proxied requests
+  server-side, so it never reaches the webview.
+- Verified end-to-end on a cold launch with both ports free: dashboard loads
+  real data (`GET /api/v1/executions` → 200), and quitting the app leaves no
+  orphaned node processes or held ports.
+
+## v0.1.67 — 2026-10-15
+
+**Release**: `v0.1.67`
+**Theme**: Wazir Desktop scaffold (dev-only)
+
+- **New `@wazir/desktop` package**: a Tauri 2 native shell that opens a window onto the existing `@wazir/web` dashboard and `@wazir/api` control plane instead of a second, duplicate frontend/runtime. `npm run desktop:dev` builds the Rust shell and boots both servers via the existing `start:dashboard` script.
+- Native menu (Reload, Open in Browser, View Logs, Quit/About) and a generated app icon set (`icon.icns`/`.ico`/PNGs) from the existing brand logo.
+- Scope is intentionally limited to a verified dev build: no installers, code signing, notarization, or CI packaging workflows yet, and no remote-host (Mode B) connection — see `apps/desktop/README.md` for what's deferred and why.
+
 ## v0.1.66 — 2026-10-14
 
 **Release**: `v0.1.66`

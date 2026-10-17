@@ -58,9 +58,36 @@ jobs:
       - run: npm run release:verify
       - run: npm test
 
+  verify-cross-platform:
+    name: Verify Cross-Platform Tests (${{ matrix.os }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+      - run: npm ci
+      - name: Ensure node-pty helper is executable on macOS
+        if: runner.os == 'macOS'
+        run: find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} + || true
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+
   build-artifacts:
     name: Build Artifacts (${{ matrix.target }})
-    needs: verify
+    needs: [verify, verify-cross-platform]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -108,7 +135,7 @@ jobs:
 
   publish:
     name: Create Release & Publish
-    needs: [verify, build-artifacts]
+    needs: [verify, verify-cross-platform, build-artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: write

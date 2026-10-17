@@ -19,7 +19,11 @@ import { classifyFailure, classifyHttpFailure, isProviderRetryable, providerRetr
 
 const execFileAsync = promisify(execFile);
 
+/** Set WAZIR_LMS_DISABLE=1 to never spawn the `lms` CLI (it starts the LM Studio/Bionic daemon). */
+const LMS_DISABLED_BIN = '/nonexistent/wazir-lms-disabled';
+
 function resolveLmsBin(): string {
+  if (process.env.WAZIR_LMS_DISABLE === '1') return LMS_DISABLED_BIN;
   if (process.env.WAZIR_LMS_BIN && existsSync(process.env.WAZIR_LMS_BIN)) return process.env.WAZIR_LMS_BIN;
   if (process.env.LMS_BIN && existsSync(process.env.LMS_BIN)) return process.env.LMS_BIN;
   const homeLms = path.join(os.homedir(), '.lmstudio/bin/lms');
@@ -207,6 +211,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     const lmsBin = resolveLmsBin();
     try {
       const child = execFile(lmsBin, ['server', 'start']);
+      child.on('error', () => { /* CLI missing/disabled: the reachability poll below reports failure */ });
       child.unref();
       for (let i = 0; i < 20; i++) {
         try {

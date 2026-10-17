@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { AgentAdapter, Block, Computer, ExecutionRecord, Job, ModelRecord } from '@wazir/core';
+import type { AgentAdapter, Block, Computer, ExecutionRecord, Job, ModelRecord, Task } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 import { getBlock } from './blocks.js';
 import { assertInsideProject } from '@wazir/tools';
@@ -14,6 +14,12 @@ export interface ResolvedJobRef {
   kind: 'job';
   id: string;
   job: Job | undefined;
+}
+export interface ResolvedTaskRef {
+  kind: 'task';
+  id: string;
+  task: Task | undefined;
+  execution: ExecutionRecord | undefined;
 }
 export interface ResolvedAgentRef {
   kind: 'agent';
@@ -49,6 +55,7 @@ export interface UnresolvedRef {
 export type ResolvedReference =
   | ResolvedBlockRef
   | ResolvedJobRef
+  | ResolvedTaskRef
   | ResolvedAgentRef
   | ResolvedModelRef
   | ResolvedComputerRef
@@ -62,6 +69,7 @@ export type ResolvedReference =
  *
  * Grammar:
  *   @<digits>       -> block           @job:<id>      -> job
+ *   @task:<id>      -> task            @exec:<id>     -> execution
  *   @agent:<name>   -> agent           @model:<id>    -> model
  *   @computer:<id>  -> computer        @file:<path>   -> file
  *   <bare id>       -> execution (tried last, since it has no @ prefix)
@@ -74,12 +82,33 @@ export async function resolveReference(engine: RookEngine, raw: string): Promise
     return { kind: 'block', id, block: await getBlock(engine, id) };
   }
 
-  const prefixed = trimmed.match(/^@(job|agent|model|computer|file):(.+)$/);
+  const prefixed = trimmed.match(/^@(job|task|exec|execution|agent|model|computer|file):(.+)$/);
   if (prefixed) {
     const [, tag, value] = prefixed;
     switch (tag) {
       case 'job':
         return { kind: 'job', id: value, job: engine.orchestrator.getJob(value) };
+      case 'task': {
+        const jobs = engine.orchestrator?.listJobs?.() ?? [];
+        let foundTask: Task | undefined;
+        for (const j of jobs) {
+          const match = j.tasks?.find((t) => t.id === value);
+          if (match) {
+            foundTask = match;
+            break;
+          }
+        }
+        const byTask = await engine.executions?.listByTask?.(value).catch(() => []);
+        const execution =
+          (Array.isArray(byTask) && byTask.length > 0 ? byTask[byTask.length - 1] : undefined) ??
+          (await engine.executions?.get?.(value).catch(() => undefined));
+        return { kind: 'task', id: value, task: foundTask, execution };
+      }
+      case 'exec':
+      case 'execution': {
+        const execution = await engine.executions?.get?.(value).catch(() => undefined);
+        return { kind: 'execution', id: value, execution };
+      }
       case 'agent':
         return { kind: 'agent', id: value, agent: engine.agents.get(value) };
       case 'model':
@@ -114,3 +143,4 @@ export async function resolveReference(engine: RookEngine, raw: string): Promise
 
   return { kind: 'unresolved', raw: trimmed };
 }
+

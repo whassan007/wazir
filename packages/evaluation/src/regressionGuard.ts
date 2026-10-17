@@ -291,21 +291,20 @@ export class RegressionGuard {
         );
       case 'wall_time':
       case 'latency':
-        return isBaseline
-          ? comparison.durationDelta < 0
-            ? 1000 - comparison.durationDelta
-            : 1000
-          : 1000;
+      case 'duration': {
+        const avgWall =
+          suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.totalWallTimeMs ?? r.durationMs ?? 0), 0) /
+          (suite.results.length || 1);
+        if (avgWall > 0) return avgWall;
+        return suite.aggregateMetrics?.totalWallTimeMs ?? 0;
+      }
       case 'monetary_cost':
-        return suite.aggregateMetrics?.totalCostUsd ?? 0;
+      case 'compute_cost':
+        return suite.aggregateMetrics?.totalCostUsd ??
+          (suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.costEstimateUsd ?? 0), 0) / (suite.results.length || 1));
       case 'tool_failures':
-      case 'tool_failure_rate': {
-        const totalTools = suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.totalToolCalls || 0), 0);
-        return totalTools > 0 ? 0.05 : 0;
-      }
-      case 'malformed_actions': {
-        return 0;
-      }
+      case 'tool_failure_rate':
+      case 'malformed_actions':
       default:
         return extractMetricValueSafe(metric, suite, comparison, isBaseline);
     }

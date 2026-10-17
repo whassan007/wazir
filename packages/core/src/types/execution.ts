@@ -124,7 +124,15 @@ export interface FileMutationHistoryEntry {
 import type { EvidenceType, VerificationEvidence } from './verification.js';
 export type { EvidenceType, VerificationEvidence };
 
+export interface AcceptanceCriterion {
+  id: string;
+  condition: string;
+  mandatory?: boolean;
+  verification: EvidenceType | 'human_review';
+}
+
 export interface AcceptanceContract {
+  criteria?: AcceptanceCriterion[];
   taskType?: string;
   requiredEvidence: EvidenceType[];
 }
@@ -160,6 +168,7 @@ export interface ExecutionRecord {
   workspaceState?: WorkspaceState;
   evidence?: VerificationEvidence[];
   acceptanceContract?: AcceptanceContract;
+  executionContract?: import('../services/executionContract.js').ExecutionContract;
   mutationHistory?: FileMutationHistoryEntry[];
 }
 

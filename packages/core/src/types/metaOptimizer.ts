@@ -1,4 +1,8 @@
-import type { BenchmarkSuiteResult, ComparativeBenchmarkResult, BenchmarkTask } from './benchmark.js';
+import type {
+  BenchmarkSuiteResult,
+  ComparativeBenchmarkResult,
+  BenchmarkTask,
+} from './benchmark.js';
 import type { ExecutionRecord } from './execution.js';
 
 // ======================================================================
@@ -285,6 +289,8 @@ export interface ExperimentPlan {
   selectionPolicy?: MultiObjectiveSelectionPolicy;
   weights?: Record<string, number>;
   lexicographicOrder?: string[];
+  modelId?: string;
+  runtimeId?: string;
 }
 
 // ======================================================================
@@ -882,5 +888,60 @@ export interface MutationMemoryRecord {
     delta: number;
     timestamp: Date;
   }>;
+}
+
+// ======================================================================
+// 13. DURABLE IMPROVEMENT SUPERVISOR STATE MACHINE & LEASE FENCING
+// ======================================================================
+
+export type ImprovementLifecycleState =
+  | 'DISCOVERED'
+  | 'QUALIFIED_FOR_EXPERIMENT'
+  | 'PLANNED'
+  | 'IMPLEMENTING'
+  | 'VERIFYING'
+  | 'BENCHMARKING'
+  | 'READY_TO_COMMIT'
+  | 'COMMITTED'
+  | 'REJECTED'
+  | 'BLOCKED'
+  | 'INCONCLUSIVE'
+  | 'CANCELLED'
+  | 'FAILED';
+
+export interface SupervisorLease {
+  leaseToken: string;
+  ownerId: string;
+  acquiredAt: Date;
+  expiresAt: Date;
+  fencingToken: number;
+}
+
+export interface ImprovementAttemptRecord {
+  attemptId: string;
+  opportunityId?: string;
+  experimentId?: string;
+  candidateId?: string;
+  state: ImprovementLifecycleState;
+  stateVersion: number;
+  fencingToken: number;
+  supervisorOwnerId: string;
+  worktreePath?: string;
+  branchName?: string;
+  commitSha?: string;
+  plan?: ExperimentPlan;
+  candidate?: CandidateImplementation;
+  verificationResult?: CandidateVerificationResult;
+  benchmarkResult?: ComparativeBenchmarkSuiteResult;
+  decision?: MetaOptimizationDecision;
+  reasons: string[];
+  history: Array<{
+    state: ImprovementLifecycleState;
+    timestamp: Date;
+    reason?: string;
+    details?: Record<string, unknown>;
+  }>;
+  createdAt: Date;
+  updatedAt: Date;
 }
 

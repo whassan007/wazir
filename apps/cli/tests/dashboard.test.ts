@@ -249,15 +249,68 @@ describe('wa dashboard server', () => {
     expect(childrenData.children).toHaveLength(1);
     expect(childrenData.children[0].execution.id).toBe(childRec.execution.id);
 
+    // 10c. Verifiable Artifacts & Diff Review
+    const artifactsRes = await fetch(`${baseUrl}/api/v1/executions/${parentRec.execution.id}/artifacts`);
+    expect(artifactsRes.status).toBe(200);
+    const artifactsData = (await artifactsRes.json()) as any;
+    expect(artifactsData.artifacts).toHaveLength(4);
+    expect(artifactsData.artifacts.map((a: any) => a.kind)).toEqual([
+      'plan',
+      'code_diff',
+      'test_summary',
+      'sandbox_preview',
+    ]);
+
+    const diffRevRes = await fetch(`${baseUrl}/api/v1/executions/${parentRec.execution.id}/diff-review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'step-1.log', decision: 'keep' }),
+    });
+    expect(diffRevRes.status).toBe(200);
+    const diffRevData = (await diffRevRes.json()) as any;
+    expect(diffRevData.ok).toBe(true);
+    expect(diffRevData.decision).toBe('keep');
+
+    // 10d. Autonomy, Hosts, Schedules, and Sandboxed Preview
+    const autoRes = await fetch(`${baseUrl}/api/v1/autonomy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'auto-sandbox' }),
+    });
+    expect(autoRes.status).toBe(200);
+    const autoData = (await autoRes.json()) as any;
+    expect(autoData.autonomy.mode).toBe('auto-sandbox');
+
+    const hostsRes = await fetch(`${baseUrl}/api/v1/hosts`);
+    expect(hostsRes.status).toBe(200);
+    const hostsData = (await hostsRes.json()) as any;
+    expect(hostsData.hosts.length).toBeGreaterThanOrEqual(1);
+
+    const schedRes = await fetch(`${baseUrl}/api/v1/schedules`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Test Audit', prompt: 'Run checks', cadenceMinutes: 15 }),
+    });
+    expect(schedRes.status).toBe(201);
+
+    const previewRes = await fetch(`${baseUrl}/sandbox/preview?html=${encodeURIComponent('<b>Preview</b>')}`);
+    expect(previewRes.status).toBe(200);
+    expect(previewRes.headers.get('content-security-policy')).toContain("sandbox allow-scripts; default-src 'none'");
+
     // 11. CORS preflight OPTIONS request
     const optionsRes = await fetch(`${baseUrl}/api/v1/overview`, { method: 'OPTIONS' });
     expect(optionsRes.status).toBe(204);
     expect(optionsRes.headers.get('access-control-allow-origin')).toBe('*');
   });
 
-  it('provides getDashboardHtml fallback function', () => {
+  it('provides getDashboardHtml fallback function with multi-surface UI controls', () => {
     const html = getDashboardHtml();
     expect(html).toContain('<!doctype html>');
     expect(html).toContain('Wazir');
+    expect(html).toContain('host-instance-select');
+    expect(html).toContain('autonomy-posture-select');
+    expect(html).toContain('pending-approvals-banner');
+    expect(html).toContain('tab-schedules');
+    expect(html).toContain('renderVerifiableArtifacts');
   });
 });

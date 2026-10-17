@@ -38,7 +38,7 @@ export class HtmlContentExtractor implements ContentExtractor {
       const html = main.length ? main.html()! : $('body').html()!;
       const converter = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
       converter.addRule('tables', { filter: 'table', replacement: (_content, node) => {
-        const table = load(node.outerHTML);
+        const table = load((node as any).outerHTML ?? '');
         const rows = table('tr').toArray().map(row => table(row).find('th,td').toArray().map(cell => table(cell).text().trim().replace(/\|/g, '\\|').replace(/\s+/g, ' ')));
         if (!rows.length) return '';
         return '\n\n' + rows.map((row, i) => `| ${row.join(' | ')} |` + (i === 0 ? '\n| ' + row.map(() => '---').join(' | ') + ' |' : '')).join('\n') + '\n\n';

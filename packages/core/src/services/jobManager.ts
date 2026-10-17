@@ -16,6 +16,7 @@ import type {
   ExecutionPreferences,
   WorkspaceMode,
 } from '../types/index.js';
+import { assertJobTransition, assertTaskTransition } from './statusTransitions.js';
 
 export interface JobManagerOptions {
   store?: KeyValueStore;
@@ -442,6 +443,7 @@ export class JobManager {
     extra?: { startedAt?: Date; completedAt?: Date },
   ): Promise<void> {
     const job = this.require(jobId);
+    assertJobTransition(jobId, job.status, status);
     job.status = status;
     if (extra?.startedAt) job.startedAt = extra.startedAt;
     if (extra?.completedAt) job.completedAt = extra.completedAt;
@@ -458,6 +460,7 @@ export class JobManager {
     if (!task) {
       throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
     }
+    assertTaskTransition(`${jobId}/${taskId}`, task.status, status);
     task.status = status;
     await this.flush(job);
   }

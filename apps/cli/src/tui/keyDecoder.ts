@@ -32,6 +32,8 @@ export type InputEvent =
   | { type: 'CTRL_G' }
   | { type: 'CTRL_T' }
   | { type: 'CTRL_B' }
+  | { type: 'CTRL_K' }
+  | { type: 'CTRL_N' }
   | { type: 'PASTE'; text: string };
 
 export class KeyDecoder {
@@ -267,6 +269,16 @@ export class KeyDecoder {
       }
       if (char === '\u0002') {
         events.push({ type: 'CTRL_B' });
+        this.buffer = this.buffer.slice(1);
+        continue;
+      }
+      if (char === '\u000b') {
+        events.push({ type: 'CTRL_K' });
+        this.buffer = this.buffer.slice(1);
+        continue;
+      }
+      if (char === '\u000e') {
+        events.push({ type: 'CTRL_N' });
         this.buffer = this.buffer.slice(1);
         continue;
       }

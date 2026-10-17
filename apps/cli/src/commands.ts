@@ -9,6 +9,7 @@ import { color } from './colors.js';
 import { executeTask, planTask } from './run.js';
 import { tokensPerSecond, readAuditEvents, stripTerminalEscapes, type AuditEvent } from '@wazir/shared';
 import { parseAction, normalizeAction, missingRequiredFields, REQUIRED_TOOL_FIELDS } from '@wazir/agents';
+import { LiveBenchmarkRunner } from '@wazir/evaluation';
 
 function table(headers: string[], rows: string[][]): string {
   const widths = headers.map((h, i) =>
@@ -2187,6 +2188,10 @@ export async function improveStatusCommand(
     color.bold('Telemetry & History:'),
     `  - Opportunities:   ${opportunities.length} detected`,
     `  - Experiments Run: ${history.length} completed`,
+    '',
+    color.bold('Local Optimization Intelligence:'),
+    `  - Local Runtime:   ${engine.adapters.has('lmstudio') ? color.green('LM Studio (port 1234)') : color.yellow('none')}`,
+    `  - Loaded / Ready:  ${engine.lifecycle.list().filter(i => i.loaded && (i.state === 'READY' || i.state === 'LOADED')).map(i => color.green(i.modelId)).join(', ') || color.yellow('none')}`,
     '-------------------------------------------------------',
   ];
 
@@ -2429,10 +2434,26 @@ export async function improveRollbackCommand(
 
 export async function improveRunCommand(
   engine: RookEngine,
-  options?: { level?: string; json?: boolean; distributed?: boolean },
+  options?: {
+    level?: string;
+    json?: boolean;
+    distributed?: boolean;
+    model?: string;
+    runtime?: string;
+    live?: boolean;
+    simulated?: boolean;
+  },
 ): Promise<string> {
   const optimizer = engine.optimizer;
   if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+
+  // Resolve target runtime & model from active local environment
+  const targetRuntime = options?.runtime ?? 'lmstudio';
+  const adapter = engine.adapters.get(targetRuntime);
+  const loadedModel = engine.lifecycle.list().find((i) => i.loaded && (i.state === 'READY' || i.state === 'LOADED'))?.modelId;
+  const installedModel = engine.models.listInstallations().find((i) => i.runtimeId === targetRuntime)?.modelId
+    ?? engine.models.list().find((m) => m.provider === targetRuntime)?.id;
+  const targetModel = options?.model ?? loadedModel ?? installedModel ?? 'qwen/qwen3.8-27b';
 
   // Step 1: Observe executions
   const executions = await engine.executions.list();
@@ -2442,9 +2463,9 @@ export async function improveRunCommand(
     return color.green('MetaOptimizer cycle complete: No material improvement opportunities detected.');
   }
 
-  // Step 2: Formulate hypotheses for top opportunity
+  // Step 2: Formulate hypotheses for top opportunity (leveraging local model if available)
   const topOpp = opportunities[0];
-  const hypotheses = optimizer.formulateHypotheses(topOpp);
+  const hypotheses = await optimizer.formulateHypothesesAsync(topOpp, { modelId: targetModel });
   if (hypotheses.length === 0) {
     return color.yellow('Could not formulate testable hypotheses for detected opportunity.');
   }
@@ -2454,59 +2475,103 @@ export async function improveRunCommand(
     hypothesis: hypotheses[0],
     sampleSize: 1,
   });
+  plan.modelId = targetModel;
+  plan.runtimeId = targetRuntime;
 
-  // Step 4: Generate candidate
-  const candidates = await optimizer.generateCandidates(plan, 1);
+  const supervisor = optimizer.getSupervisor();
+  let attemptRecord: any;
+  if (supervisor) {
+    attemptRecord = await supervisor.initAttempt({
+      opportunity: topOpp,
+      plan,
+    });
+    await supervisor.transitionTo('QUALIFIED_FOR_EXPERIMENT', `Opportunity ${topOpp.id} qualified for experiment`);
+    await supervisor.transitionTo('PLANNED', `Experiment plan ${plan.experimentId} registered`);
+    await supervisor.transitionTo('IMPLEMENTING', `Generating candidates`);
+  }
+
+  // Step 4: Generate candidate (leveraging local model if available)
+  const candidates = await optimizer.generateCandidates(plan, 1, { modelId: targetModel });
   const candidate = candidates[0];
 
   // Step 5: Verify candidate
+  if (supervisor && candidate) {
+    await supervisor.transitionTo('VERIFYING', `Verifying candidate ${candidate.candidateId}`, {
+      candidateId: candidate.candidateId,
+      candidate,
+      worktreePath: candidate.worktreePath,
+      branchName: candidate.branchName,
+    });
+  }
   const verification = await optimizer.verifyCandidate(candidate);
+
+  if (!verification.allPassed && supervisor) {
+    await supervisor.transitionTo('REJECTED', `Verification failed: ${verification.errors.join('; ')}`, {
+      verificationResult: verification,
+    });
+  }
 
   // Step 6: Benchmark candidate against baseline
   const allTasks = engine.benchmark?.listTasks() ?? [];
   const matchedTasks = allTasks.filter((t) => plan.benchmarkCategories.includes(t.category));
   const tasksToRun = matchedTasks.length > 0 ? matchedTasks.slice(0, 2) : allTasks.slice(0, 2);
 
+  const useLiveRunner = !options?.simulated && Boolean(adapter && (options?.live || loadedModel));
+
   let evalResults: any[] = [];
-  if (tasksToRun.length > 0) {
-    let runIndex = 0;
-    const runner = {
-      id: 'cli-dogfood-runner',
-      name: 'Dogfood Evaluation Runner',
-      async run(task: any) {
-        runIndex++;
-        const isCandidate = runIndex > tasksToRun.length;
-        const tokens = isCandidate ? Math.round(topOpp.baseline * 0.72) : topOpp.baseline;
-        return {
-          execution: {
-            id: `exec-${task.id}-${runIndex}`,
-            taskId: task.id,
-            runtimeId: 'local',
-            modelId: 'qwen-2.5-coder',
-            status: 'completed' as const,
-            createdAt: new Date(),
-            completedAt: new Date(),
-          },
-          task: {
-            id: task.id,
-            type: 'coding' as const,
-            title: task.name,
-            input: task.prompt,
-            requirements: {},
-            priority: 'normal' as const,
-            status: 'completed' as const,
-            createdAt: new Date(),
-          },
-          policyDecisions: [],
-          toolCalls: [],
-          filesChanged: task.expectedFiles ?? [],
-          checks: [{ name: 'test' as const, command: 'check', ok: true, durationMs: 40, output: 'ok' }],
-          errors: [],
-          events: [],
-          usage: { input: tokens, output: 200 },
-        };
-      },
-    };
+  if (tasksToRun.length > 0 && verification.allPassed) {
+    if (supervisor) {
+      await supervisor.transitionTo('BENCHMARKING', `Running comparative benchmarks for candidate ${candidate.candidateId}`);
+    }
+
+    let runner: any;
+
+    if (useLiveRunner && adapter) {
+      runner = new LiveBenchmarkRunner({
+        adapter,
+        modelId: targetModel,
+        runtimeId: targetRuntime,
+      });
+    } else {
+      let runIndex = 0;
+      runner = {
+        id: 'cli-dogfood-runner',
+        name: 'Dogfood Evaluation Runner',
+        async run(task: any) {
+          runIndex++;
+          const isCandidate = runIndex > tasksToRun.length;
+          const tokens = isCandidate ? Math.round(topOpp.baseline * 0.72) : topOpp.baseline;
+          return {
+            execution: {
+              id: `exec-${task.id}-${runIndex}`,
+              taskId: task.id,
+              runtimeId: 'local',
+              modelId: targetModel,
+              status: 'completed' as const,
+              createdAt: new Date(),
+              completedAt: new Date(),
+            },
+            task: {
+              id: task.id,
+              type: 'coding' as const,
+              title: task.name,
+              input: task.prompt,
+              requirements: {},
+              priority: 'normal' as const,
+              status: 'completed' as const,
+              createdAt: new Date(),
+            },
+            policyDecisions: [],
+            toolCalls: [],
+            filesChanged: task.expectedFiles ?? [],
+            checks: [{ name: 'test' as const, command: 'check', ok: true, durationMs: 40, output: 'ok' }],
+            errors: [],
+            events: [],
+            usage: { input: tokens, output: 200 },
+          };
+        },
+      };
+    }
 
     const onlineWorkers = engine.computers.list().filter((c) => c.status === 'online');
     const isDistributed = Boolean(options?.distributed && onlineWorkers.length >= 2);
@@ -2522,6 +2587,23 @@ export async function improveRunCommand(
   }
 
   const firstResult = evalResults[0];
+  if (supervisor && firstResult) {
+    if (firstResult.decision === 'QUALIFIED' || firstResult.decision === 'ACCEPTED') {
+      await supervisor.transitionTo('READY_TO_COMMIT', `Candidate qualified with empirical superiority`, {
+        benchmarkResult: firstResult.comparison,
+        decision: firstResult.decision,
+      });
+    } else if (firstResult.decision === 'INCONCLUSIVE') {
+      await supervisor.transitionTo('INCONCLUSIVE', `Benchmark results inconclusive`, {
+        decision: 'INCONCLUSIVE',
+      });
+    } else {
+      await supervisor.transitionTo('REJECTED', `Benchmark comparison rejected candidate: ${firstResult.reasons.join('; ')}`, {
+        decision: 'REJECTED',
+      });
+    }
+  }
+
   const decisionStr = firstResult
     ? firstResult.decision === 'QUALIFIED' || firstResult.decision === 'ACCEPTED'
       ? color.green(firstResult.decision)
@@ -2530,6 +2612,8 @@ export async function improveRunCommand(
         : color.red(firstResult.decision)
     : color.yellow('NOT_EVALUATED');
 
+  const supervisorState = supervisor?.getCurrentAttempt()?.state ?? 'N/A';
+
   if (options?.json) {
     return JSON.stringify({
       opportunity: topOpp,
@@ -2537,6 +2621,7 @@ export async function improveRunCommand(
       candidates,
       verification,
       results: evalResults,
+      supervisorAttempt: supervisor?.getCurrentAttempt(),
     }, null, 2);
   }
 
@@ -2545,8 +2630,10 @@ export async function improveRunCommand(
     '-------------------------------------------------------',
     `Opportunity:   ${topOpp.category} on ${topOpp.component}`,
     `Hypothesis:    ${hypotheses[0].proposedChange}`,
+    `Model:         ${targetModel} (${targetRuntime}) [${useLiveRunner ? color.green('LIVE LOCAL MODEL') : color.yellow('SIMULATED')}]`,
+    `Supervisor:    State=${color.bold(supervisorState)}, AttemptId=${supervisor?.getCurrentAttempt()?.attemptId ?? 'N/A'}`,
     `Experiment ID: ${plan.experimentId}`,
-    `Candidate ID:  ${candidate.candidateId}`,
+    `Candidate ID:  ${candidate?.candidateId ?? 'N/A'}`,
     `Primary:       ${plan.primaryMetric} (target: ${plan.requiredImprovement.targetValue})`,
     `Verification:  ${verification.allPassed ? color.green('PASSED') : color.red('FAILED')}`,
     `Decision:      ${decisionStr}`,

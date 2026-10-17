@@ -1,3 +1,4 @@
+import { createExecutionContract } from './executionContract.js';
 import type {
   ExecutionOwner,
   AcceptanceContract,
@@ -201,7 +202,7 @@ export class ExecutionEngine {
 
     const record: ExecutionRecord = {
       execution,
-      task: params.task,
+      task: structuredClone(params.task),
       scheduling: params.scheduling,
       context: params.context,
       policyDecisions: [],
@@ -211,7 +212,8 @@ export class ExecutionEngine {
       errors: [],
       workspaceState,
       evidence: [],
-      acceptanceContract: params.task.acceptanceContract,
+      executionContract: createExecutionContract(params.task, params.workspaceRoot),
+      acceptanceContract: params.task.acceptanceContract ? structuredClone(params.task.acceptanceContract) : undefined,
       mutationHistory: [],
       events: [],
     };
@@ -259,9 +261,9 @@ export class ExecutionEngine {
     }
 
     if (status === 'completed') {
-      const { workspaceRevision: revision, missing, evaluationInvalid, evaluationMissing } = assessCompletionEvidence(record);
-      if (missing.length > 0 || evaluationInvalid || evaluationMissing) {
-        this.pushEvent(record, 'completion.rejected', { reason: 'VERIFICATION_REQUIRED', workspaceRevision: revision, missing, evaluationInvalid, evaluationMissing });
+      const { workspaceRevision: revision, missing, missingCriteria, evaluationInvalid, evaluationMissing } = assessCompletionEvidence(record);
+      if (missing.length > 0 || missingCriteria.length > 0 || evaluationInvalid || evaluationMissing) {
+        this.pushEvent(record, 'completion.rejected', { reason: 'VERIFICATION_REQUIRED', workspaceRevision: revision, missing, missingCriteria, evaluationInvalid, evaluationMissing });
         await this.flush(record);
         throw new ExecutionFailure('ARTIFACT_CONTRACT_FAILED', `Completion requires current verification for workspace revision ${revision}`);
       }

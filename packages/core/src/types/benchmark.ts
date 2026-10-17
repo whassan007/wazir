@@ -45,6 +45,8 @@ export interface ExecutionMetrics {
   physicalVerificationSuccess: boolean;
   totalModelCalls: number;
   totalToolCalls: number;
+  toolFailures?: number;
+  malformedActions?: number;
   repairCycles: number;
   inputTokens: number;
   outputTokens: number;
@@ -89,6 +91,8 @@ export interface ComparativeEvaluation {
     toolLatencyDeltaMs: number;
     totalModelCallsDelta: number;
     totalToolCallsDelta: number;
+    toolFailuresDelta?: number;
+    malformedActionsDelta?: number;
     repairCyclesDelta: number;
     inputTokensDelta: number;
     outputTokensDelta: number;
@@ -136,6 +140,8 @@ export interface BenchmarkSuiteResult {
     totalWallTimeMs: number;
     totalModelCalls: number;
     totalToolCalls: number;
+    totalToolFailures?: number;
+    totalMalformedActions?: number;
     totalTokens: number;
     totalCostUsd: number;
     averageRepairCycles: number;

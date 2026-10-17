@@ -7,6 +7,7 @@ declare const __WAZIR_VERSION__: string | undefined;
 import chalk from 'chalk';
 import { registerMCPCommands } from './mcp.js';
 import { registerWebCommands } from './web.js';
+import { registerMobileCommands } from './mobile.js';
 import { closeMCPRegistries } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
 
@@ -16,15 +17,100 @@ import { installGlobalCrashHandlers } from './crashHandler.js';
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
+const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.1.71';
+
 const program = new Command();
 
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version(typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.1.66');
+  .version(CLI_VERSION)
+  .option('--no-banner', 'Disable the Wazir terminal startup banner')
+  .option('--no-color', 'Disable ANSI colors in terminal output')
+  .option('--ascii', 'Use plain ASCII fallback for terminal branding');
 
 registerMCPCommands(program);
 registerWebCommands(program);
+registerMobileCommands(program);
+
+program
+  .command('banner')
+  .description('Display the official Wazir terminal logo and interactive startup status')
+  .option('--logo-only', 'Render only the Wazir terminal logo without runtime status')
+  .option('--variant <variant>', 'Force logo variant: unicode-wide, unicode-medium, ascii, or compact')
+  .option('--cols <columns>', 'Simulate a specific terminal width in columns', (v) => parseInt(v, 10))
+  .option('-j, --json', 'Output startup status in JSON format (suppresses banner artwork)')
+  .action(async (options) => {
+    const globalOpts = program.opts<{ banner?: boolean; color?: boolean; ascii?: boolean }>();
+    const {
+      detectTerminalCapabilities,
+      renderStartupBanner,
+      renderUnicodeWideLogo,
+      renderUnicodeMediumLogo,
+      renderPlainAsciiLogo,
+      renderCompactLogo,
+    } = await import('./brand.js');
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const runtimes = engine.runtimes.list();
+    const onlineRuntimes = runtimes.filter(
+      (rt) => (rt as { status?: string }).status === 'online' || engine.discovered.some((d) => d.id === rt.id && d.health !== 'unavailable'),
+    );
+    const models = engine.models.list();
+
+    const status = {
+      version: CLI_VERSION,
+      workspace: process.cwd(),
+      runtimeConnected: onlineRuntimes.length > 0,
+      runtimeLabel: onlineRuntimes.length > 0 ? onlineRuntimes.map((r) => r.type).join(', ') : undefined,
+      modelsAvailable: models.length,
+      mode: 'Autonomous',
+    };
+
+    if (options.json) {
+      console.log(JSON.stringify(status, null, 2));
+      return;
+    }
+
+    if (globalOpts.banner === false) {
+      return;
+    }
+
+    const envInput = {
+      isTTY: options.variant || options.cols ? true : Boolean(process.stdout.isTTY),
+      columns: options.cols ?? process.stdout.columns ?? 80,
+      noColorFlag: globalOpts.color === false,
+      noBannerFlag: false,
+      asciiFlag: Boolean(globalOpts.ascii) || options.variant === 'ascii',
+      jsonFlag: Boolean(options.json),
+    };
+    const caps = detectTerminalCapabilities(envInput);
+
+    if (options.logoOnly || options.variant) {
+      const v = options.variant ?? caps.variant;
+      if (v === 'unicode-wide') {
+        console.log(renderUnicodeWideLogo(caps.colorMode));
+      } else if (v === 'unicode-medium') {
+        console.log(renderUnicodeMediumLogo(caps.colorMode));
+      } else if (v === 'ascii') {
+        console.log(renderPlainAsciiLogo(caps.colorMode));
+      } else {
+        console.log(
+          renderCompactLogo({
+            unicode: caps.unicode && v !== 'ascii',
+            colorMode: caps.colorMode,
+            maxWidth: caps.columns,
+          })
+        );
+      }
+      return;
+    }
+
+    const output = renderStartupBanner(status, envInput);
+    if (output) {
+      console.log(output);
+    }
+  });
 
 program
   .command('version')
@@ -1429,6 +1515,10 @@ improveCmd
   .command('run')
   .description('Execute an optimization cycle under explicit budgets')
   .option('--level <level>', 'Target self-improvement maturity level')
+  .option('--model <modelId>', 'Local model to leverage for optimization (e.g. qwen/qwen3.8-27b)')
+  .option('--runtime <runtimeId>', 'Runtime adapter ID (default: lmstudio)')
+  .option('--live', 'Force live model evaluation over active runtime adapter')
+  .option('--simulated', 'Run simulated evaluation runner without invoking local model')
   .option('--distributed', 'Distribute benchmark candidate evaluation across the worker fleet')
   .option('--json', 'Output in JSON format')
   .action(async (options) => {
@@ -1668,5 +1758,42 @@ serviceCmd
 
 program.addCommand(serviceCmd);
 
+program.action(async () => {
+  const globalOpts = program.opts<{ banner?: boolean; color?: boolean; ascii?: boolean }>();
+  if (process.stdout.isTTY && globalOpts.banner !== false) {
+    const { renderStartupBanner } = await import('./brand.js');
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const runtimes = engine.runtimes.list();
+    const onlineRuntimes = runtimes.filter(
+      (rt) => (rt as { status?: string }).status === 'online' || engine.discovered.some((d) => d.id === rt.id && d.health !== 'unavailable'),
+    );
+    const models = engine.models.list();
+    const bannerText = renderStartupBanner(
+      {
+        version: CLI_VERSION,
+        workspace: process.cwd(),
+        runtimeConnected: onlineRuntimes.length > 0,
+        runtimeLabel: onlineRuntimes.length > 0 ? onlineRuntimes.map((r) => r.type).join(', ') : undefined,
+        modelsAvailable: models.length,
+        mode: 'Autonomous',
+      },
+      {
+        isTTY: true,
+        columns: process.stdout.columns ?? 80,
+        noColorFlag: globalOpts.color === false,
+        noBannerFlag: false,
+        asciiFlag: Boolean(globalOpts.ascii),
+      }
+    );
+    if (bannerText) {
+      console.log(bannerText);
+      console.log();
+    }
+  }
+  program.outputHelp();
+});
+
 program.parse();
+
 

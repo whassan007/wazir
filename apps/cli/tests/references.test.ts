@@ -30,4 +30,36 @@ describe('@file: reference containment', () => {
       expect((resolved as { exists: boolean }).exists, raw).toBe(false);
     }
   });
+
+  it('resolves @task:<id> and @exec:<id> cross-task references deterministically', async () => {
+    const fakeTask = { id: 'task-job-1-0', title: 'build api', input: 'build api', status: 'completed' };
+    const fakeExec = { id: 'exec-101', taskId: 'task-job-1-0', status: 'completed' };
+    const engine = {
+      projectRoot: process.cwd(),
+      orchestrator: {
+        listJobs: () => [{ id: 'job-1', tasks: [fakeTask] }],
+        getJob: (id: string) => (id === 'job-1' ? { id: 'job-1', tasks: [fakeTask] } : undefined),
+      },
+      executions: {
+        listByTask: async (taskId: string) => (taskId === 'task-job-1-0' ? [fakeExec] : []),
+        get: async (id: string) => (id === 'exec-101' ? fakeExec : undefined),
+      },
+    } as unknown as RookEngine;
+
+    const taskRef = await resolveReference(engine, '@task:task-job-1-0');
+    expect(taskRef).toMatchObject({
+      kind: 'task',
+      id: 'task-job-1-0',
+      task: fakeTask,
+      execution: fakeExec,
+    });
+
+    const execRef = await resolveReference(engine, '@exec:exec-101');
+    expect(execRef).toMatchObject({
+      kind: 'execution',
+      id: 'exec-101',
+      execution: fakeExec,
+    });
+  });
 });
+

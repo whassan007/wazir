@@ -1,0 +1,17 @@
+{
+  "name": "@wazir/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Wazir Desktop — native shell around the Wazir API and web dashboard",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build --no-bundle"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.1"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-opener": "^2.5.1"
+  }
+}

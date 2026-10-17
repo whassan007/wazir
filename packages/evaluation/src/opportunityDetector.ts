@@ -111,6 +111,18 @@ export class OpportunityDetector {
     const buildFailureOpportunity = this.checkRepeatedBuildFailures(executions);
     if (buildFailureOpportunity) opportunities.push(buildFailureOpportunity);
 
+    // 8. Detect HIGH_RUNTIME_LATENCY
+    const latencyOpportunity = this.checkRuntimeLatency(executions);
+    if (latencyOpportunity) opportunities.push(latencyOpportunity);
+
+    // 9. Detect REPEATED_SEARCH_BEHAVIOR
+    const searchOpportunity = this.checkRepeatedSearch(executions);
+    if (searchOpportunity) opportunities.push(searchOpportunity);
+
+    // 10. Detect UNNECESSARY_TOOL_EXPOSURE
+    const toolExposureOpportunity = this.checkUnnecessaryToolExposure(executions);
+    if (toolExposureOpportunity) opportunities.push(toolExposureOpportunity);
+
     return opportunities;
   }
 
@@ -381,6 +393,118 @@ export class OpportunityDetector {
         suspectedCause: 'Repair guidance fails to isolate syntax errors before compiler execution',
         metric: 'repair_cycles',
         baseline: executionsWithRepeatedBuildFails,
+        detectedAt: new Date(),
+      };
+    }
+
+    return null;
+  }
+
+  private checkRuntimeLatency(executions: ExecutionRecord[]): ImprovementOpportunity | null {
+    let highLatencyCount = 0;
+    let totalWallTime = 0;
+
+    for (const exec of executions) {
+      const created = new Date(exec.execution?.createdAt ?? exec.task?.createdAt ?? Date.now()).getTime();
+      const completed = new Date(exec.execution?.completedAt ?? Date.now()).getTime();
+      const wallTimeMs = Math.max(0, completed - created);
+      totalWallTime += wallTimeMs;
+      if (wallTimeMs > 45_000) {
+        highLatencyCount++;
+      }
+    }
+
+    const avgWallTime = totalWallTime / Math.max(1, executions.length);
+    if (highLatencyCount >= Math.min(this.minExecutions, executions.length) && avgWallTime > 30_000) {
+      return {
+        id: `opp-lat-${randomUUID().slice(0, 8)}`,
+        category: 'HIGH_RUNTIME_LATENCY',
+        component: 'RuntimeAdapter',
+        domain: 'routing',
+        observation: `Average execution latency is ${(avgWallTime / 1000).toFixed(1)}s across ${executions.length} runs, exceeding target responsive thresholds in ${highLatencyCount} tasks`,
+        evidence: highLatencyCount,
+        evidenceDetails: {
+          totalExecutions: executions.length,
+          highLatencyExecutions: highLatencyCount,
+          averageWallTimeMs: avgWallTime,
+        },
+        suspectedCause: 'Model inference latency or lack of streaming tool evaluation in current runtime adapter',
+        metric: 'wall_time',
+        baseline: avgWallTime,
+        detectedAt: new Date(),
+      };
+    }
+
+    return null;
+  }
+
+  private checkRepeatedSearch(executions: ExecutionRecord[]): ImprovementOpportunity | null {
+    let executionsWithRepeatedSearch = 0;
+    let totalSearchCalls = 0;
+
+    for (const exec of executions) {
+      const calls = exec.toolCalls ?? [];
+      const searchCalls = calls.filter((c) =>
+        ['search', 'ast_grep', 'ripgrep', 'find_files'].includes(c.tool ?? (c as any).name),
+      );
+      totalSearchCalls += searchCalls.length;
+      if (searchCalls.length >= 4) {
+        executionsWithRepeatedSearch++;
+      }
+    }
+
+    if (executionsWithRepeatedSearch >= Math.min(this.minExecutions, executions.length)) {
+      return {
+        id: `opp-search-${randomUUID().slice(0, 8)}`,
+        category: 'REPEATED_SEARCH_BEHAVIOR',
+        component: 'ContextCompiler',
+        domain: 'context_policy',
+        observation: `Repetitive codebase search and discovery cycles (${totalSearchCalls} search actions) observed in ${executionsWithRepeatedSearch} tasks before editing`,
+        evidence: executionsWithRepeatedSearch,
+        evidenceDetails: {
+          totalExecutions: executions.length,
+          executionsWithRepeatedSearch,
+          totalSearchCalls,
+        },
+        suspectedCause: 'Initial prompt layout lacks structured symbol navigation or definition graph context',
+        metric: 'context_selection_relevance',
+        baseline: totalSearchCalls / Math.max(1, executions.length),
+        detectedAt: new Date(),
+      };
+    }
+
+    return null;
+  }
+
+  private checkUnnecessaryToolExposure(executions: ExecutionRecord[]): ImprovementOpportunity | null {
+    const unusedExposedTools = new Set<string>();
+    let totalToolCalls = 0;
+
+    for (const exec of executions) {
+      const calls = exec.toolCalls ?? [];
+      totalToolCalls += calls.length;
+      // If a task phase has dozens of tools exposed but only 1 or 2 are used repeatedly
+      const usedInExec = new Set(calls.map((c) => c.tool ?? (c as any).name));
+      if (calls.length > 5 && usedInExec.size <= 2) {
+        unusedExposedTools.add('unfocused_surface');
+      }
+    }
+
+    if (unusedExposedTools.size > 0 && executions.length >= this.minExecutions) {
+      return {
+        id: `opp-exposure-${randomUUID().slice(0, 8)}`,
+        category: 'UNNECESSARY_TOOL_EXPOSURE',
+        component: 'ToolSurfaceCompiler',
+        domain: 'tool_surfaces',
+        observation: `Tool surface is overly broad across ${executions.length} tasks; agents repeatedly utilize only a fraction of active tools`,
+        evidence: executions.length,
+        evidenceDetails: {
+          totalExecutions: executions.length,
+          totalToolCalls,
+        },
+        suspectedCause: 'All global tools exposed during targeted coding phases rather than phase-specific subsets',
+        metric: 'tool_failures',
+        baseline: totalToolCalls,
         detectedAt: new Date(),
       };
     }
