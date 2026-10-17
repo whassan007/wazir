@@ -27,6 +27,7 @@ struct WazirUiState {
     var selectedTaskTab = "all"
     var activeTaskDetail: MobileTaskDetail?
     var activeTaskDetailCached = false
+    var activeTaskArtifacts: [MobileVerifiableArtifact] = []
     var isSubmittingTask = false
     var approvals: [MobileApprovalRecord] = []
     var models: [ModelCatalogItem] = []
@@ -35,6 +36,10 @@ struct WazirUiState {
     var agents: [AgentDescriptorItem] = []
     var computers: [ComputerTelemetryItem] = []
     var resources: ResourceBudgetSnapshot?
+    var autonomy: MobileAutonomyState = MobileAutonomyState()
+    var schedules: [MobileScheduleItem] = []
+    var pushRegistrations: [PushRelayRegistration] = []
+    var recentPushWakeups: [PushWakeupEvent] = []
 
     var pendingApprovals: [MobileApprovalRecord] { approvals.filter { $0.status == "pending" } }
     var canMutate: Bool { activeController?.canMutate ?? false }
@@ -116,6 +121,7 @@ final class MainViewModel: ObservableObject {
         guard state.activeController?.id != target.id else { return }
         state.activeController = target
         state.activeTaskDetail = nil
+        state.activeTaskArtifacts = []
         state.bannerMessage = nil
         Task { await activateController(target) }
     }
@@ -132,6 +138,10 @@ final class MainViewModel: ObservableObject {
         state.agents = cached.agents
         state.computers = cached.computers
         state.resources = cached.resources
+        state.autonomy = cached.autonomy
+        state.schedules = cached.schedules
+        state.pushRegistrations = cached.pushRegistrations
+        state.recentPushWakeups = cached.recentPushWakeups
         state.lastSyncedAtMs = cached.syncedAtMs
         state.isOfflineCached = cached.syncedAtMs != nil
 
@@ -158,6 +168,10 @@ final class MainViewModel: ObservableObject {
             state.agents = fresh.agents
             state.computers = fresh.computers
             state.resources = fresh.resources
+            state.autonomy = fresh.autonomy
+            state.schedules = fresh.schedules
+            state.pushRegistrations = fresh.pushRegistrations
+            state.recentPushWakeups = fresh.recentPushWakeups
 
             if let activeTaskId = state.activeTaskDetail?.taskId {
                 await loadTaskDetail(activeTaskId)
@@ -168,6 +182,27 @@ final class MainViewModel: ObservableObject {
             state.bannerMessage = "Showing cached controller state (\(error.localizedDescription))"
             state.bannerIsError = true
         }
+    }
+
+    /// Background sync entry point invoked by `BGAppRefreshTask` (mirrors Android's `ControllerSyncWorker`).
+    func performBackgroundRefresh() async -> Bool {
+        guard !state.controllers.isEmpty else { return true }
+        var allSucceeded = true
+        for controller in state.controllers {
+            let cached = repository.loadCachedState(controller.id)
+            do {
+                let fresh = try await repository.refreshControllerState(controller, lastKnownSequence: cached.lastSequence)
+                let pendingCount = fresh.approvals.filter { $0.status == "pending" }.count
+                notificationManager.notifyPendingApprovalSummary(
+                    controllerId: controller.id,
+                    controllerName: controller.name,
+                    pendingCount: pendingCount
+                )
+            } catch {
+                allSucceeded = false
+            }
+        }
+        return allSucceeded
     }
 
     private func handleIncomingStreamEvent(_ event: MobileStreamEvent) {
@@ -261,16 +296,21 @@ final class MainViewModel: ObservableObject {
         state.bannerIsError = false
     }
 
-    // MARK: - Tasks
+    // MARK: - Tasks & Verifiable Artifacts
 
     func setTaskTab(_ tab: String) { state.selectedTaskTab = tab }
 
     func loadTaskDetail(_ taskId: String, startLivePolling: Bool = false) async {
         guard let profile = state.activeController else { return }
-        let (detail, fromCache) = await repository.getTaskDetailWithOfflineFallback(profile, taskId: taskId)
+        async let detailPair = repository.getTaskDetailWithOfflineFallback(profile, taskId: taskId)
+        async let artifactsRes = try? repository.getTaskArtifacts(profile, taskId: taskId)
+        let ((detail, fromCache), artifacts) = await (detailPair, artifactsRes)
         if let detail {
             state.activeTaskDetail = detail
             state.activeTaskDetailCached = fromCache
+        }
+        if let artifacts {
+            state.activeTaskArtifacts = artifacts.artifacts
         }
         if startLivePolling { startTaskLivePolling(taskId) }
     }
@@ -281,10 +321,15 @@ final class MainViewModel: ObservableObject {
             guard let self else { return }
             while !Task.isCancelled {
                 guard let profile = state.activeController else { break }
-                let (detail, fromCache) = await repository.getTaskDetailWithOfflineFallback(profile, taskId: taskId)
+                async let detailPair = repository.getTaskDetailWithOfflineFallback(profile, taskId: taskId)
+                async let artifactsRes = try? repository.getTaskArtifacts(profile, taskId: taskId)
+                let ((detail, fromCache), artifacts) = await (detailPair, artifactsRes)
                 if let detail {
                     state.activeTaskDetail = detail
                     state.activeTaskDetailCached = fromCache
+                    if let artifacts {
+                        state.activeTaskArtifacts = artifacts.artifacts
+                    }
                     if ["completed", "failed", "cancelled"].contains(detail.state) { break }
                 }
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -295,6 +340,21 @@ final class MainViewModel: ObservableObject {
     func stopTaskLivePolling() {
         taskMonitorTask?.cancel()
         taskMonitorTask = nil
+    }
+
+    func reviewTaskDiffFile(taskId: String, path: String, decision: String) {
+        guard let profile = state.activeController else { return }
+        Task {
+            do {
+                let resp = try await repository.reviewTaskDiffFile(profile, taskId: taskId, path: path, decision: decision)
+                state.activeTaskArtifacts = resp.artifacts
+                state.bannerMessage = "Marked \(path) as \(decision)"
+                state.bannerIsError = false
+            } catch {
+                state.bannerMessage = error.localizedDescription
+                state.bannerIsError = true
+            }
+        }
     }
 
     func submitNewTask(_ request: CreateTaskRequest, idempotencyKey: String = UUID().uuidString, onSubmitted: @escaping (String) -> Void) {
@@ -369,7 +429,7 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Approvals
+    // MARK: - Approvals, Autonomy, Schedules & Push Relay
 
     func resolveApproval(_ approval: MobileApprovalRecord, decision: String, biometricVerified: Bool, note: String? = nil) {
         guard let profile = state.activeController else { return }
@@ -378,6 +438,145 @@ final class MainViewModel: ObservableObject {
             do {
                 _ = try await repository.resolveApproval(profile, approvalId: approval.id, request: req)
                 state.bannerMessage = "Approval \(approval.id) \(decision == "approve" ? "approved" : "rejected")"
+                state.bannerIsError = false
+                await refreshAll(silent: true)
+            } catch {
+                state.bannerMessage = error.localizedDescription
+                state.bannerIsError = true
+            }
+        }
+    }
+
+    func updateAutonomyPosture(_ posture: String) {
+        guard let profile = state.activeController else { return }
+        Task {
+            do {
+                let updated = try await repository.updateAutonomy(profile, posture: posture)
+                state.autonomy = updated
+                state.bannerMessage = "Autonomy posture updated to \(updated.posture)"
+                state.bannerIsError = false
+            } catch {
+                state.bannerMessage = error.localizedDescription
+                state.bannerIsError = true
+            }
+        }
+    }
+
+    func toggleNetworkGuard() {
+        guard let profile = state.activeController else { return }
+        let next = state.autonomy.networkGuard == "strict-cellular" ? "normal" : "strict-cellular"
+        Task {
+            do {
+                let updated = try await repository.updateAutonomy(profile, networkGuard: next)
+                state.autonomy = updated
+                state.bannerMessage = "Network guard set to \(updated.networkGuard)"
+                state.bannerIsError = false
+            } catch {
+                state.bannerMessage = error.localizedDescription
+                state.bannerIsError = true
+            }
+        }
+    }
+
+    func createSchedule(name: String, prompt: String, cronExpression: String, autonomyPosture: String) {
+        guard let profile = state.activeController else { return }
+        Task {
+            do {
+                _ = try await repository.createSchedule(
+                    profile,
+                    request: CreateScheduleRequest(name: name, prompt: prompt, cronExpression: cronExpression, autonomyPosture: autonomyPosture)
+                )
+                state.bannerMessage = "Schedule '\(name)' created"
+                state.bannerIsError = false
+                await refreshAll(silent: true)
+            } catch {
+                state.bannerMessage = error.localizedDescription
+                state.bannerIsError = true
+            }
+        }
+    }
+
+    func toggleSchedule(scheduleId: String, enabled: Bool) {
+        guard let profile = state.activeController else { return }
+        Task {
+            do {
+                _ = try await repository.toggleSchedule(profile, scheduleId: scheduleId, enabled: enabled)
+                state.bannerMessage = enabled ? "Schedule enabled" : "Schedule paused"
+                state.bannerIsError = false
+                await refreshAll(silent: true)
+            } catch {
+                state.bannerMessage = error.localizedDescription
+                state.bannerIsError = true
+            }
+        }
+    }
+
+    func runScheduleNow(scheduleId: String) {
+        guard let profile = state.activeController else { return }
+        Task {
+            do {
+                let resp = try await repository.runScheduleNow(profile, scheduleId: scheduleId)
+                state.bannerMessage = "Schedule triggered (\(resp.executionId ?? scheduleId))"
+                state.bannerIsError = false
+                await refreshAll(silent: true)
+            } catch {
+                state.bannerMessage = error.localizedDescription
+                state.bannerIsError = true
+            }
+        }
+    }
+
+    func deleteSchedule(scheduleId: String) {
+        guard let profile = state.activeController else { return }
+        Task {
+            do {
+                _ = try await repository.deleteSchedule(profile, scheduleId: scheduleId)
+                state.bannerMessage = "Schedule deleted"
+                state.bannerIsError = false
+                await refreshAll(silent: true)
+            } catch {
+                state.bannerMessage = error.localizedDescription
+                state.bannerIsError = true
+            }
+        }
+    }
+
+    func registerPushRelay(provider: String = "apns", relayEndpointUrl: String? = nil) {
+        guard let profile = state.activeController else { return }
+        Task {
+            do {
+                _ = try await repository.registerPushRelay(profile, provider: provider, relayEndpointUrl: relayEndpointUrl)
+                state.bannerMessage = "Registered \(provider.uppercased()) out-of-band push relay"
+                state.bannerIsError = false
+                await refreshAll(silent: true)
+            } catch {
+                state.bannerMessage = error.localizedDescription
+                state.bannerIsError = true
+            }
+        }
+    }
+
+    func unregisterPushRelay() {
+        guard let profile = state.activeController else { return }
+        Task {
+            do {
+                try await repository.unregisterPushRelay(profile)
+                state.bannerMessage = "Unregistered device push relay"
+                state.bannerIsError = false
+                await refreshAll(silent: true)
+            } catch {
+                state.bannerMessage = error.localizedDescription
+                state.bannerIsError = true
+            }
+        }
+    }
+
+    func testPushWakeup() {
+        guard let profile = state.activeController else { return }
+        Task {
+            do {
+                let resp = try await repository.testPushWakeup(profile)
+                state.bannerMessage = "Dispatched \(resp.wakeups.count) push wakeup(s)"
                 state.bannerIsError = false
                 await refreshAll(silent: true)
             } catch {

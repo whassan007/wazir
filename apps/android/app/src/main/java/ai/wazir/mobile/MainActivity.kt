@@ -317,11 +317,16 @@ private fun WazirApp(
                     onDecide = ::resolveWithBiometricGate,
                     autonomy = state.autonomy,
                     schedules = state.schedules,
+                    pushRegistrations = state.pushRegistrations,
+                    recentPushWakeups = state.recentPushWakeups,
                     onUpdateAutonomy = vm::updateAutonomy,
                     onCreateSchedule = vm::createSchedule,
                     onToggleSchedule = vm::toggleSchedule,
                     onRunScheduleNow = vm::runScheduleNow,
                     onDeleteSchedule = vm::deleteSchedule,
+                    onRegisterPushRelay = { provider -> vm.registerPushRelay(provider) },
+                    onUnregisterPushRelay = vm::unregisterPushRelay,
+                    onTestPushWakeup = vm::testPushWakeup,
                 )
             }
             composable(Routes.MODELS) {

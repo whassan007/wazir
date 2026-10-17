@@ -35,6 +35,14 @@
 	<string>Wazir Mobile uses the camera to scan a Wazir controller's pairing QR code.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Wazir Mobile uses Face ID to confirm high-risk approvals and emergency actions.</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>ai.wazir.mobile.refresh</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

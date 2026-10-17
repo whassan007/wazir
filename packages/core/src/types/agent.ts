@@ -231,6 +231,8 @@ export interface AgentRuntime {
   readonly tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown>; descriptor?: any; permissions?: any[]; execute?: any }>;
   readonly runtimeCapabilities?: Partial<import('@wazir/runtimes-interfaces').RuntimeCapabilities>;
   getCapabilities?(): Partial<import('@wazir/runtimes-interfaces').RuntimeCapabilities>;
+  /** Effective context of the current placement, including after model escalation. */
+  getContextTokens?(): number | undefined;
   /**
    * Best-effort abort of whichever `generate()` call is currently in flight.
    * Lets the agent enforce a per-turn wall-clock budget independent of the

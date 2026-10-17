@@ -391,6 +391,27 @@ export class RegressionGuard {
       }
     }
 
+    const allBaselineErrored =
+      baselineSuite.results.length > 0 &&
+      baselineSuite.results.every((r) => Boolean(r.error) || !r.scoreReport);
+    const allCandidateErrored =
+      candidateSuite.results.length > 0 &&
+      candidateSuite.results.every((r) => Boolean(r.error) || !r.scoreReport);
+    if (
+      baselineSuite.results.length === 0 ||
+      candidateSuite.results.length === 0 ||
+      allBaselineErrored ||
+      allCandidateErrored
+    ) {
+      inconclusiveReasons.push(
+        'ZERO_REAL_EXECUTIONS: No benchmark tasks completed with real execution evidence; qualification requires real measured executions.',
+      );
+      if (allBaselineErrored || allCandidateErrored) {
+        regressionsDetected.length = 0;
+        protectedViolations.length = 0;
+      }
+    }
+
     // Determine overall qualification
     const qualified =
       correctnessGatesPassed &&

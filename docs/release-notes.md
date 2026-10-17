@@ -1,3 +1,27 @@
+# Wazir Release Notes - v0.2.1
+
+**Release**: `v0.2.1`
+**Theme**: Evaluation Qualification Fail-Closed Defaults, Benchmark Deadline Isolation, Dynamic Phase Routing, and Static Path Containment
+
+This release hardens Wazir's autonomous self-improvement engine, benchmark runner isolation, and web static file serving in response to the October 16, 2026 repository review (`F1`–`F5`).
+
+## Highlights
+
+- **Fail-Closed Verification & Empty-Suite Guards (`F2`)**: `RegressionGuard.evaluate` no longer defaults `candidateVerificationPassed` to `true` when omitted; every candidate run must carry explicit `physicalVerificationSuccess === true` (`MISSING_VERIFICATION_EVIDENCE`), and empty suites fail closed (`EMPTY_BENCHMARK_SUITE`).
+- **Duplicate Promotion Fencing (`F3`)**: `OptimizerStateManager.promote` prevents promoting an already-promoted `candidateId` or `runId` (`OPTIMIZER_CANDIDATE_ALREADY_PROMOTED`) in addition to atomic `baselineRevision` fencing.
+- **Canonical Static Path Containment (`F4`)**: `apps/web/server.js` enforces canonical `fs.realpath` + `path.relative` containment and regular-file checks, blocking sibling-prefix and symlink path traversal.
+- **Dynamic Phase Model Resolution (`F5`)**: `MetaOptimizerService.resolveModelForPhase` queries `Scheduler` and `ModelRegistry` to select eligible models and emit explainable fallback reasons when configured preferred models (`gemma-27b`, `qwen-2.5-coder`, `gpt-4o`) are missing, unloaded, or ineligible.
+- **Hard Benchmark Deadlines & Fixture Isolation**: `BenchmarkService.runTask` copies `customContext.workspaceRoot` into an isolated temp directory and races `runner.run(...)` against a hard timeout timer (`BENCHMARK_DEADLINE_EXCEEDED`) even when a runner ignores `abortSignal`.
+- **Native Continuous Self-Improvement Supervisor & DGX Spark 4-Phase Qualification**:
+  - Full CLI lifecycle (`wa improve start|run|status|history|stop|rollback|doctor|service`) backed by `SelfImprovementSupervisor`, singleton lock protection, candidate worktree fingerprint tamper rejection (`CANDIDATE_WORKTREE_TAMPERED`), and phase-receipt verification (`scripts/self-improvement-builder.sh`).
+  - Protocol adapter tool aliasing and fail-closed `UNSUPPORTED_TOOL_SURFACE` circuit breaking in `CodingAgent`, qualified with live local LLM execution on DGX Spark (`docs/self-improvement-recovery.md`).
+
+## Validation
+
+Verified with `npm run build && npm run typecheck && npm run check-dist && npm run package:check -- --skip-build && npm run release:verify` and evaluation/CLI self-improvement E2E suites.
+
+---
+
 # Wazir Release Notes - v0.2.0
 
 **Release**: `v0.2.0`

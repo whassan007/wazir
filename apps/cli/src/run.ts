@@ -30,6 +30,18 @@ import { recordAgentTask } from './agentPreflight.js';
 import { captureDelegationBaseline, verifyDelegatedWork, type DelegationBaseline } from './delegationVerification.js';
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
 
+/** Registration does not imply a policy execution handler exists. Inspect classification
+ * without authorizing or executing dummy arguments; argument-level policy remains enforced
+ * at dispatch. In particular, never advertise registry-only SDK/terminal tools as callable. */
+export function policySupportsModelTool(engine: Pick<RookEngine, 'policy' | 'projectRoot'>, name: string): boolean {
+  // The controller handles delegation before ordinary tool dispatch and applies parent policy.
+  if (name === 'dispatch_subagent') return true;
+  const decision = engine.policy.classify({ tool: name, input: {}, projectRoot: engine.projectRoot });
+  if (decision.rule === 'unknown-tool') return false;
+  if (/^(?:web_|mcp[.:])/.test(name) && decision.decision !== 'allow') return false;
+  return true;
+}
+
 /** Maps a control-plane-reported worker event onto the local `GenerationEvent` shape,
  * so a remotely-dispatched task streams through the same agent loop as a local one. */
 function toGenerationEvent(event: WorkerExecutionEvent): GenerationEvent | undefined {
@@ -162,7 +174,7 @@ export async function planTask(
     return { ok: false, reasons: taskPolicy.reasons };
   }
 
-  const allModelTools = engine.tools.forModel(undefined, engine.agents.get(options.agent ?? 'wazir-coding')?.descriptor.capabilities);
+  const allModelTools = engine.tools.forModel(undefined, engine.agents.get(options.agent ?? 'wazir-coding')?.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
   const allowedTools = preset.tools === 'all'
     ? allModelTools
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
@@ -349,7 +361,7 @@ export async function executeTask(
   process.once('SIGINT', onSigint);
 
   const preset = resolvePreset(options.preset);
-  const allModelTools = engine.tools.forModel(undefined, agent.descriptor.capabilities);
+  const allModelTools = engine.tools.forModel(undefined, agent.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
   const availableTools = preset.tools === 'all'
     ? allModelTools
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
@@ -374,6 +386,7 @@ export async function executeTask(
     tools: availableTools,
     runtimeCapabilities: resolvedCapabilities,
     getCapabilities: () => resolvedCapabilities,
+    getContextTokens: () => placement.contextTokens,
 
     escalate: createEscalationHandler(engine, {
       executionId,
@@ -717,6 +730,7 @@ export async function executeTask(
         taskType: task.type,
         projectRoot: engine.projectRoot,
         maxTurns: options.maxTurns,
+        contextTokens: context.available.tokens,
         isCancelled: () => cancelled,
       },
       runtime,
@@ -950,7 +964,7 @@ export async function runSubagent(
   });
 
   // Filter tools to strictly omit dispatch_subagent for child agent
-  const subagentTools = engine.tools.forModel(undefined, engine.agents.get('wazir-coding')?.descriptor.capabilities).filter((t) => t.name !== 'dispatch_subagent');
+  const subagentTools = engine.tools.forModel(undefined, engine.agents.get('wazir-coding')?.descriptor.capabilities).filter((t) => t.name !== 'dispatch_subagent' && policySupportsModelTool(engine, t.name));
 
   const subagentRuntime: AgentRuntime = {
     tools: subagentTools,

@@ -45,6 +45,10 @@ struct TaskDetailView: View {
 
             actionButtons(task)
 
+            if !viewModel.state.activeTaskArtifacts.isEmpty {
+                verifiableArtifactsSection(taskId: task.taskId, artifacts: viewModel.state.activeTaskArtifacts)
+            }
+
             if !task.timeline.isEmpty {
                 sectionHeader("Timeline")
                 ForEach(task.timeline) { step in
@@ -115,6 +119,91 @@ struct TaskDetailView: View {
             }
         }
         .padding()
+    }
+
+    @ViewBuilder
+    private func verifiableArtifactsSection(taskId: String, artifacts: [MobileVerifiableArtifact]) -> some View {
+        sectionHeader("Verifiable Artifacts (\(artifacts.count))")
+        ForEach(artifacts) { artifact in
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(artifact.title).font(.subheadline.weight(.semibold))
+                    Spacer()
+                    StatusBadge(text: artifact.status)
+                }
+                if !artifact.summary.isEmpty {
+                    Text(artifact.summary).font(.caption).foregroundStyle(.secondary)
+                }
+
+                if !artifact.steps.isEmpty {
+                    ForEach(artifact.steps) { step in
+                        HStack(spacing: 6) {
+                            StatusBadge(text: step.status)
+                            Text(step.title).font(.caption)
+                        }
+                    }
+                }
+
+                if !artifact.files.isEmpty {
+                    ForEach(artifact.files) { file in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(file.path)
+                                    .font(.system(.caption, design: .monospaced).weight(.semibold))
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("+\(file.additions) / -\(file.deletions)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                StatusBadge(text: file.status)
+                            }
+                            if !file.patch.isEmpty {
+                                Text(file.patch)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(6)
+                                    .padding(6)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(.black.opacity(0.08))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                            if viewModel.state.canMutate {
+                                HStack(spacing: 8) {
+                                    Button("Keep") {
+                                        viewModel.reviewTaskDiffFile(taskId: taskId, path: file.path, decision: "accepted")
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.mini)
+
+                                    Button("Skip", role: .destructive) {
+                                        viewModel.reviewTaskDiffFile(taskId: taskId, path: file.path, decision: "rejected")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+                                }
+                            }
+                        }
+                        .padding(8)
+                        .background(.quaternary.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+
+                if !artifact.checks.isEmpty {
+                    ForEach(artifact.checks) { check in
+                        HStack {
+                            StatusBadge(text: check.status)
+                            Text(check.name).font(.caption)
+                            Spacer()
+                            Text("\(check.durationMs) ms").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .padding(10)
+            .background(.quaternary.opacity(0.18))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
     }
 
     private func sectionHeader(_ text: String) -> some View {

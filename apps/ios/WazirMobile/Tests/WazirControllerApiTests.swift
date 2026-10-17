@@ -178,4 +178,81 @@ final class WazirControllerApiTests: XCTestCase {
         }
         XCTAssertEqual(StubURLProtocol.recorded.count, 0)
     }
+
+    func testMultiSurfaceAutonomyRoutes() async throws {
+        StubURLProtocol.enqueue(body: #"{"ok":true,"posture":"request-review","networkGuard":"normal"}"#)
+        let current = try await api.getAutonomy(profile)
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/autonomy")
+        XCTAssertEqual(StubURLProtocol.recorded.last?.httpMethod, "GET")
+        XCTAssertEqual(current.posture, "request-review")
+
+        StubURLProtocol.enqueue(body: #"{"ok":true,"posture":"auto-sandbox","networkGuard":"strict-cellular"}"#)
+        let updated = try await api.updateAutonomy(profile, request: UpdateAutonomyRequest(posture: "auto-sandbox", networkGuard: "strict-cellular"))
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/autonomy")
+        XCTAssertEqual(StubURLProtocol.recorded.last?.httpMethod, "POST")
+        XCTAssertEqual(updated.posture, "auto-sandbox")
+        XCTAssertEqual(updated.networkGuard, "strict-cellular")
+    }
+
+    func testTaskArtifactsAndDiffReviewRoutes() async throws {
+        StubURLProtocol.enqueue(body: #"{"ok":true,"taskId":"t-9","artifacts":[{"id":"art-1","kind":"code_diff","title":"Diff","files":[{"path":"src/app.ts","additions":4,"deletions":1}]}]}"#)
+        let artifacts = try await api.getTaskArtifacts(profile, taskId: "t-9")
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/tasks/t-9/artifacts")
+        XCTAssertEqual(artifacts.artifacts.count, 1)
+
+        StubURLProtocol.enqueue(body: #"{"ok":true,"taskId":"t-9","reviews":[{"path":"src/app.ts","decision":"accepted"}]}"#)
+        let review = try await api.reviewTaskDiffFile(profile, taskId: "t-9", path: "src/app.ts", decision: "accepted")
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/tasks/t-9/diff-review")
+        XCTAssertEqual(StubURLProtocol.recorded.last?.httpMethod, "POST")
+        XCTAssertEqual(review.reviews.first?.decision, "accepted")
+    }
+
+    func testScheduleManagementRoutes() async throws {
+        StubURLProtocol.enqueue(body: #"{"schedules":[{"id":"sch-1","name":"Nightly","prompt":"Audit","cronExpression":"0 * * * *","enabled":true}],"count":1}"#)
+        let listed = try await api.listSchedules(profile)
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/schedules")
+        XCTAssertEqual(listed.schedules.count, 1)
+
+        StubURLProtocol.enqueue(body: #"{"ok":true,"schedule":{"id":"sch-2","name":"Hourly","prompt":"Check","cronExpression":"0 * * * *"}}"#)
+        _ = try await api.createSchedule(profile, request: CreateScheduleRequest(name: "Hourly", prompt: "Check", cronExpression: "0 * * * *"))
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/schedules")
+        XCTAssertEqual(StubURLProtocol.recorded.last?.httpMethod, "POST")
+
+        StubURLProtocol.enqueue(body: #"{"ok":true}"#)
+        _ = try await api.toggleSchedule(profile, scheduleId: "sch-2", enabled: false)
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/schedules/sch-2/toggle")
+        XCTAssertEqual(StubURLProtocol.recorded.last?.httpMethod, "POST")
+
+        StubURLProtocol.enqueue(body: #"{"ok":true,"executionId":"exec-2"}"#)
+        _ = try await api.runScheduleNow(profile, scheduleId: "sch-2")
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/schedules/sch-2/run")
+        XCTAssertEqual(StubURLProtocol.recorded.last?.httpMethod, "POST")
+
+        StubURLProtocol.enqueue(body: #"{"ok":true,"deleted":true}"#)
+        _ = try await api.deleteSchedule(profile, scheduleId: "sch-2")
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/schedules/sch-2")
+        XCTAssertEqual(StubURLProtocol.recorded.last?.httpMethod, "DELETE")
+    }
+
+    func testPushRelayRoutes() async throws {
+        StubURLProtocol.enqueue(body: #"{"registrations":[{"deviceId":"ios-test","provider":"apns"}],"recentWakeups":[]}"#)
+        let status = try await api.getPushRelayStatus(profile, deviceId: "ios-test")
+        XCTAssertEqual(lastQueryPath(), "/api/v1/mobile/push/status?deviceId=ios-test")
+        XCTAssertEqual(status.registrations.count, 1)
+
+        StubURLProtocol.enqueue(body: #"{"ok":true,"registration":{"deviceId":"ios-test","provider":"apns"}}"#)
+        _ = try await api.registerPushRelay(profile, request: RegisterPushRelayRequest(deviceId: "ios-test", pushToken: "tok-123"))
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/push/register")
+        XCTAssertEqual(StubURLProtocol.recorded.last?.httpMethod, "POST")
+
+        StubURLProtocol.enqueue(body: #"{"ok":true,"wakeups":[{"id":"w-1","status":"delivered"}]}"#)
+        let tested = try await api.testPushWakeup(profile, deviceId: "ios-test", title: "Ping")
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/push/test")
+        XCTAssertEqual(tested.wakeups.count, 1)
+
+        StubURLProtocol.enqueue(body: #"{"ok":true}"#)
+        try await api.unregisterPushRelay(profile, deviceId: "ios-test")
+        XCTAssertEqual(lastPath(), "/api/v1/mobile/push/unregister")
+        XCTAssertEqual(StubURLProtocol.recorded.last?.httpMethod, "POST")
+    }
 }

@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.2.1 — 2026-10-16
+
+**Release**: `v0.2.1`
+**Theme**: Evaluation Qualification Fail-Closed Defaults, Benchmark Deadline Isolation, Dynamic Phase Routing, and Static Path Containment
+
+Addresses findings `F1`–`F5` and Section 2 improvements from the October 16, 2026 Wazir Repository Review:
+
+- **F1 & F2 — Fail-Closed Qualification & Verification Evidence (`RegressionGuard`)**:
+  - Removed the permissive `candidateVerificationPassed = true` default in `RegressionGuard.evaluate`; omitted verification now requires explicit `physicalVerificationSuccess === true` across all candidate runs (`MISSING_VERIFICATION_EVIDENCE`).
+  - Added fail-closed rejection (`EMPTY_BENCHMARK_SUITE`) when baseline or candidate benchmark suites contain zero results.
+- **F3 — Duplicate Promotion Fencing (`OptimizerStateManager`)**:
+  - Added explicit duplicate-candidate and duplicate-run promotion rejection (`OPTIMIZER_CANDIDATE_ALREADY_PROMOTED`) alongside atomic `baselineRevision` and `configRevision` fencing in `OptimizerStateManager.promote`.
+- **F4 — Canonical Static Path Containment (`@wazir/web`)**:
+  - Replaced `filePath.startsWith(PUBLIC)` in `apps/web/server.js` with canonical `fs.realpathSync(PUBLIC)`, `decodeURIComponent` + null-byte rejection, `path.relative` boundary verification, symlink target resolution (`fs.realpath`), and regular-file validation (`stats.isFile()`).
+- **F5 — Dynamic Phase Model Resolution (`MetaOptimizerService`)**:
+  - Added `MetaOptimizerService.resolveModelForPhase(phase, task)` backed by `Scheduler` and `ModelRegistry` to dynamically resolve `plan`, `implement`, and `repair` models with explainable fallbacks when preferred models (`gemma-27b`, `qwen-2.5-coder`, `gpt-4o`) are missing, unloaded, or ineligible.
+- **Benchmark Deadline & Workspace Isolation (`BenchmarkService`)**:
+  - `BenchmarkService.runTask` now copies `customContext.workspaceRoot` into an isolated temporary directory (`fs.cp`) cleaned up in `finally`, races `runner.run(...)` against a hard timeout timer (`BENCHMARK_DEADLINE_EXCEEDED`) even if the runner ignores `abortSignal`, and rejects empty benchmark suites in `runSuite` and `runBenchmarkSuite`.
+- **Native Continuous Self-Improvement Supervisor & DGX Spark Qualification (`SelfImprovementSupervisor`, `@wazir/cli`)**:
+  - Added durable self-improvement supervision (`wa improve start|run|status|history|stop|rollback|doctor|service`) with singleton lock protection, atomic state and attempt persistence, candidate worktree fingerprint tamper detection (`CANDIDATE_WORKTREE_TAMPERED`), and systemd user-service management (`scripts/self-improvement-builder.sh`).
+  - Repaired native tool-surface circuit breaking (`UNSUPPORTED_TOOL_SURFACE`) and protocol adapter tool-name aliasing (`documentSymbols`, `findReferences`, `code_mode`), qualified end-to-end across all four builder phases on DGX Spark (`docs/self-improvement-recovery.md`).
+- **Git Synchronization & Worktree Safety (`GitSynchronizationPolicy`, `WorktreeManager`)**:
+  - Enforced protected-branch and clean-worktree synchronization policies alongside iOS/Android companion operation workflows.
+
 ## v0.2.0 — 2026-10-16
 
 **Release**: `v0.2.0`

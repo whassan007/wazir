@@ -22,6 +22,11 @@ import ai.wazir.mobile.domain.ModelsApiResponse
 import ai.wazir.mobile.domain.PairingCompleteResponse
 import ai.wazir.mobile.domain.PairingRequestPayload
 import ai.wazir.mobile.domain.PairingRequestResponse
+import ai.wazir.mobile.domain.PushRelayRegistration
+import ai.wazir.mobile.domain.PushRelayStatusResponse
+import ai.wazir.mobile.domain.PushWakeupEvent
+import ai.wazir.mobile.domain.RegisterPushRelayRequest
+import ai.wazir.mobile.domain.RegisterPushRelayResponse
 import ai.wazir.mobile.domain.ResolveApprovalRequest
 import ai.wazir.mobile.domain.ResolveApprovalResponse
 import ai.wazir.mobile.domain.ResourceBudgetSnapshot
@@ -31,6 +36,7 @@ import ai.wazir.mobile.domain.ScheduleMutationResponse
 import ai.wazir.mobile.domain.SubmitTaskResponse
 import ai.wazir.mobile.domain.TaskDiffReviewResponse
 import ai.wazir.mobile.domain.TaskListResponse
+import ai.wazir.mobile.domain.TestPushWakeupResponse
 import ai.wazir.mobile.domain.UpdateAutonomyRequest
 import ai.wazir.mobile.network.WazirControllerApi
 import ai.wazir.mobile.persistence.CachedControllerSnapshotEntity
@@ -58,6 +64,8 @@ data class ControllerCachedState(
     val resources: ResourceBudgetSnapshot? = null,
     val autonomy: MobileAutonomyState = MobileAutonomyState(),
     val schedules: List<MobileScheduleItem> = emptyList(),
+    val pushRegistrations: List<PushRelayRegistration> = emptyList(),
+    val recentPushWakeups: List<PushWakeupEvent> = emptyList(),
     val lastSequence: Long = 0L,
     val syncedAtMs: Long? = null,
 )
@@ -208,6 +216,7 @@ class WazirRepository(
             val resourcesRes = api.getResourceBudget(profile)
             val autonomyRes = api.getAutonomy(profile)
             val schedulesRes = api.listSchedules(profile)
+            val pushStatusRes = api.getPushRelayStatus(profile)
 
             // If the primary dashboard + tasks endpoints both failed, surface the error so the UI
             // marks the view as offline/cached.
@@ -253,10 +262,13 @@ class WazirRepository(
             )
 
             val loaded = loadCachedState(profile.id)
+            val pushStatus = pushStatusRes.getOrNull()
             Result.success(
                 loaded.copy(
                     autonomy = autonomyRes.getOrNull() ?: loaded.autonomy,
                     schedules = schedulesRes.getOrNull()?.schedules ?: loaded.schedules,
+                    pushRegistrations = pushStatus?.registrations ?: loaded.pushRegistrations,
+                    recentPushWakeups = pushStatus?.recentWakeups ?: loaded.recentPushWakeups,
                 )
             )
         }
@@ -401,11 +413,35 @@ class WazirRepository(
     ): Result<RegisterPushRelayResponse> =
         api.registerPushRelay(profile, request)
 
+    suspend fun registerDevicePushRelay(
+        profile: ControllerProfile,
+        provider: String = "fcm",
+        relayEndpointUrl: String? = null,
+    ): Result<RegisterPushRelayResponse> {
+        val (deviceId, deviceName) = credentialVault.getOrCreateDeviceIdentity()
+        val targetDeviceId = profile.deviceId.ifBlank { deviceId }
+        val request = RegisterPushRelayRequest(
+            deviceId = targetDeviceId,
+            deviceName = deviceName,
+            platform = "android",
+            provider = provider,
+            pushToken = "wazir-android-$targetDeviceId",
+            relayEndpointUrl = relayEndpointUrl,
+        )
+        return api.registerPushRelay(profile, request)
+    }
+
     suspend fun unregisterPushRelay(
         profile: ControllerProfile,
         deviceId: String,
     ): Result<Boolean> =
         api.unregisterPushRelay(profile, deviceId)
+
+    suspend fun unregisterDevicePushRelay(profile: ControllerProfile): Result<Boolean> {
+        val (deviceId, _) = credentialVault.getOrCreateDeviceIdentity()
+        val targetDeviceId = profile.deviceId.ifBlank { deviceId }
+        return api.unregisterPushRelay(profile, targetDeviceId)
+    }
 
     suspend fun testPushWakeup(
         profile: ControllerProfile,

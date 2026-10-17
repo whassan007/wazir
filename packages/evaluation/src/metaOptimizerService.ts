@@ -1,4 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, lstatSync } from 'node:fs';
+import path from 'node:path';
 import type { KeyValueStore } from '@wazir/shared';
 import type {
   OptimizableConfig,
@@ -811,12 +814,69 @@ export class MetaOptimizerService {
   // 7. VERIFY EVERY CANDIDATE (CORRECTNESS GATES FIRST)
   // ======================================================================
 
+  private verifications = new Map<string, { fingerprint: string; result: CandidateVerificationResult }>();
+
+  public getCandidate(id: string): CandidateImplementation | undefined {
+    const candidate = this.candidates.get(id);
+    return candidate ? structuredClone(candidate) : undefined;
+  }
+
+  private candidateFingerprint(candidate: CandidateImplementation): string {
+    const hash = createHash('sha256').update(
+      JSON.stringify({
+        config: candidate.config,
+        mutations: candidate.mutations ?? [],
+        strategy: candidate.strategy,
+        filesChanged: candidate.filesChanged ?? [],
+      }),
+    );
+    const requiresWorktree =
+      candidate.strategy === 'SOURCE_CODE' ||
+      Boolean(candidate.worktreePath) ||
+      Boolean(candidate.codeDiff);
+    if (!requiresWorktree) {
+      return hash.digest('hex');
+    }
+    if (!candidate.worktreePath) {
+      throw new Error('No candidate worktree');
+    }
+    const cwd = candidate.worktreePath;
+    if (!lstatSync(cwd).isDirectory()) {
+      throw new Error('Candidate worktree is not a directory');
+    }
+    hash.update(execFileSync('git', ['rev-parse', 'HEAD'], { cwd }));
+    const files = execFileSync('git', ['ls-files', '-c', '-o', '--exclude-standard', '-z'], { cwd })
+      .toString()
+      .split('\0')
+      .filter(Boolean)
+      .sort();
+    for (const file of new Set(files)) {
+      hash.update(file).update('\0');
+      try {
+        const target = path.join(cwd, file);
+        if (lstatSync(target).isSymbolicLink()) throw new Error('Symlink cannot be verified');
+        hash.update(readFileSync(target));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        hash.update('DELETED');
+      }
+    }
+    return hash.digest('hex');
+  }
+
   public async verifyCandidate(
     candidate: CandidateImplementation,
     verificationEngine?: VerificationEngine,
   ): Promise<CandidateVerificationResult> {
     const engine = verificationEngine ?? this.verificationEngine;
     const errors: string[] = [];
+
+    let fingerprint = '';
+    try {
+      fingerprint = this.candidateFingerprint(candidate);
+    } catch (err) {
+      errors.push(`CANDIDATE_FINGERPRINT_FAILED: ${(err as Error)?.message ?? String(err)}`);
+    }
 
     let buildPassed = true;
     let typecheckPassed = true;
@@ -827,7 +887,10 @@ export class MetaOptimizerService {
 
     if (engine) {
       const buildOracle = engine.getOracle('BUILD');
-      if (buildOracle) {
+      if (!buildOracle) {
+        buildPassed = false;
+        errors.push('MISSING_ORACLE: BUILD');
+      } else {
         const res = await buildOracle.verify({ cwd: candidate.worktreePath });
         if (res.exitCode !== 0) {
           buildPassed = false;
@@ -836,7 +899,10 @@ export class MetaOptimizerService {
       }
 
       const testOracle = engine.getOracle('TEST');
-      if (testOracle) {
+      if (!testOracle) {
+        unitTestsPassed = false;
+        errors.push('MISSING_ORACLE: TEST');
+      } else {
         const res = await testOracle.verify({ cwd: candidate.worktreePath });
         if (res.exitCode !== 0) {
           unitTestsPassed = false;
@@ -852,9 +918,11 @@ export class MetaOptimizerService {
       integrationTestsPassed &&
       protectedOraclesPassed &&
       acceptanceTestsPassed &&
+      Boolean(fingerprint) &&
       errors.length === 0;
 
     candidate.status = allPassed ? 'VERIFIED' : 'FAILED_VERIFICATION';
+    this.candidates.set(candidate.candidateId, structuredClone(candidate));
     await this.durableState.candidateStatus(candidate);
 
     const result: CandidateVerificationResult = {
@@ -868,6 +936,10 @@ export class MetaOptimizerService {
       allPassed,
       errors,
     };
+
+    if (fingerprint) {
+      this.verifications.set(candidate.candidateId, { fingerprint, result });
+    }
 
     this.emitEvent(
       allPassed ? 'meta.candidate.verified' : 'meta.candidate.rejected',
@@ -1333,8 +1405,21 @@ export class MetaOptimizerService {
 
     try {
       await this.ready();
+      const verification = this.verifications.get(candidate.candidateId);
+      if (verification && candidate.worktreePath) {
+        try {
+          if (this.candidateFingerprint(candidate) !== verification.fingerprint) {
+            return { success: false, reason: 'PROMOTION_DENIED: stale verification evidence' };
+          }
+        } catch {
+          return { success: false, reason: 'PROMOTION_DENIED: candidate workspace unavailable' };
+        }
+      }
+      if (!this.candidates.has(candidate.candidateId)) {
+        return { success: false, reason: 'PROMOTION_DENIED: OPTIMIZER_QUALIFICATION_REQUIRED' };
+      }
       const proof = [...this.history].reverse().find((run) => JSON.stringify(run.candidateConfig) === JSON.stringify(candidate.config) && run.regressionGuard?.qualified);
-      if (!proof) throw new Error('OPTIMIZER_QUALIFICATION_REQUIRED');
+      if (!proof) throw new Error('PROMOTION_DENIED: OPTIMIZER_QUALIFICATION_REQUIRED');
       this.applyState(await this.durableState.promote(candidate.candidateId, candidate.config, proof));
 
       this.emitEvent('meta.promotion.completed', {

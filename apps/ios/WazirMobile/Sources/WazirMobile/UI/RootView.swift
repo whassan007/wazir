@@ -2,6 +2,7 @@ import SwiftUI
 
 enum Route: Hashable {
     case taskDetail(String)
+    case resources
 }
 
 struct RootView: View {
@@ -25,7 +26,9 @@ struct RootView: View {
             case "approvals": selectedTab = .approvals
             case "tasks": selectedTab = .tasks
             case "workers": selectedTab = .workers
-            case "resources": selectedTab = .models
+            case "resources":
+                selectedTab = .dashboard
+                dashboardPath = [.resources]
             default: selectedTab = .dashboard
             }
             pendingDeepLinkRoute = nil
@@ -56,14 +59,24 @@ struct RootView: View {
 
     private var dashboardTab: some View {
         NavigationStack(path: $dashboardPath) {
-            DashboardView(viewModel: viewModel, onOpenTask: { dashboardPath.append(.taskDetail($0)) }, onNewTask: { showNewTask = true })
-                .navigationTitle("Wazir")
-                .toolbar { topBarItems }
-                .navigationDestination(for: Route.self) { route in
-                    switch route {
-                    case .taskDetail(let id): TaskDetailView(viewModel: viewModel, taskId: id)
-                    }
+            DashboardView(
+                viewModel: viewModel,
+                onOpenTask: { dashboardPath.append(.taskDetail($0)) },
+                onNewTask: { showNewTask = true },
+                onOpenApprovals: { selectedTab = .approvals },
+                onOpenResources: { dashboardPath.append(.resources) },
+                onOpenModels: { selectedTab = .models },
+                onOpenWorkers: { selectedTab = .workers },
+                onOpenTasks: { selectedTab = .tasks }
+            )
+            .navigationTitle("Wazir")
+            .toolbar { topBarItems }
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .taskDetail(let id): TaskDetailView(viewModel: viewModel, taskId: id)
+                case .resources: ResourcesView(viewModel: viewModel)
                 }
+            }
             bannerOverlay
         }
     }
@@ -76,6 +89,7 @@ struct RootView: View {
                 .navigationDestination(for: Route.self) { route in
                     switch route {
                     case .taskDetail(let id): TaskDetailView(viewModel: viewModel, taskId: id)
+                    case .resources: ResourcesView(viewModel: viewModel)
                     }
                 }
         }

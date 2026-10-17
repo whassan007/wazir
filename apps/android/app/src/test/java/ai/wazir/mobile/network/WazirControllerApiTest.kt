@@ -357,4 +357,48 @@ class WazirControllerApiTest {
         assertEquals("/api/v1/mobile/schedules/sched-2", deleteReq.path)
         assertEquals("DELETE", deleteReq.method)
     }
+
+    @Test
+    fun `pushRelay endpoints hit mobile push status register unregister and test routes`() = runTest {
+        server.enqueue(MockResponse().setBody("""{"ok":true,"registrations":[{"deviceId":"and-test","deviceName":"Pixel","platform":"android","provider":"fcm","pushTokenPreview":"wazi…test","registeredAt":1000,"lastUpdatedAt":1000}],"recentWakeups":[]}"""))
+        server.enqueue(MockResponse().setBody("""{"ok":true,"registration":{"deviceId":"and-test","deviceName":"Pixel","platform":"android","provider":"fcm","pushTokenPreview":"wazi…test","registeredAt":1000,"lastUpdatedAt":1001}}"""))
+        server.enqueue(MockResponse().setBody("""{"ok":true,"dispatched":[{"id":"push-wake-1","deviceId":"and-test","provider":"fcm","eventType":"push.test","title":"Test Push","body":"Wakeup","dispatchedAt":1002,"deliveryStatus":"relayed_local"}],"count":1}"""))
+        server.enqueue(MockResponse().setBody("""{"ok":true,"removed":true}"""))
+
+        val statusRes = api.getPushRelayStatus(profile, deviceId = "and-test")
+        assertTrue(statusRes.isSuccess)
+        assertEquals(1, statusRes.getOrThrow().registrations.size)
+        val statusReq = server.takeRequest()
+        assertEquals("/api/v1/mobile/push/status?deviceId=and-test", statusReq.path)
+        assertEquals("GET", statusReq.method)
+
+        val regRes = api.registerPushRelay(
+            profile,
+            ai.wazir.mobile.domain.RegisterPushRelayRequest(
+                deviceId = "and-test",
+                deviceName = "Pixel",
+                platform = "android",
+                provider = "fcm",
+                pushToken = "wazir-android-test",
+            ),
+        )
+        assertTrue(regRes.isSuccess)
+        assertEquals("fcm", regRes.getOrThrow().registration?.provider)
+        val regReq = server.takeRequest()
+        assertEquals("/api/v1/mobile/push/register", regReq.path)
+        assertEquals("POST", regReq.method)
+
+        val testRes = api.testPushWakeup(profile, deviceId = "and-test", title = "Test Push")
+        assertTrue(testRes.isSuccess)
+        assertEquals(1, testRes.getOrThrow().count)
+        val testReq = server.takeRequest()
+        assertEquals("/api/v1/mobile/push/test", testReq.path)
+        assertEquals("POST", testReq.method)
+
+        val unregRes = api.unregisterPushRelay(profile, "and-test")
+        assertTrue(unregRes.isSuccess)
+        val unregReq = server.takeRequest()
+        assertEquals("/api/v1/mobile/push/unregister", unregReq.path)
+        assertEquals("POST", unregReq.method)
+    }
 }

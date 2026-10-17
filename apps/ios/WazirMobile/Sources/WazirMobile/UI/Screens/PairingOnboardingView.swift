@@ -1,9 +1,9 @@
 import SwiftUI
+#if canImport(AVFoundation) && canImport(UIKit)
+import AVFoundation
+import UIKit
+#endif
 
-/// Pairing has no camera-based QR scan yet (see HANDOFF.md) — a paired controller's `wa
-/// mobile pair` output includes the same `wazir://pair?...` URI the QR code encodes, so
-/// pasting it here or opening it as a link (the registered `wazir://` URL scheme) both
-/// work today; only the camera capture itself is missing.
 struct PairingOnboardingView: View {
     @ObservedObject var viewModel: MainViewModel
 
@@ -14,6 +14,7 @@ struct PairingOnboardingView: View {
     @State private var manualFingerprint = ""
     @State private var manualName = ""
     @State private var showManualForm = false
+    @State private var showQrScanner = false
 
     var body: some View {
         NavigationStack {
@@ -23,6 +24,7 @@ struct PairingOnboardingView: View {
 
                     switch viewModel.state.pairingStage {
                     case .idle:
+                        qrScanSection
                         pasteSection
                         if !viewModel.state.discoveredControllers.isEmpty {
                             discoveredSection
@@ -49,28 +51,57 @@ struct PairingOnboardingView: View {
             .navigationTitle("Connect to Wazir")
             .onAppear { viewModel.startMdnsScan() }
             .onDisappear { viewModel.stopMdnsScan() }
+            .sheet(isPresented: $showQrScanner) {
+                QrCodeScannerSheet { scannedCode in
+                    showQrScanner = false
+                    pastedUri = scannedCode
+                    viewModel.pairFromQrUri(scannedCode)
+                } onCancel: {
+                    showQrScanner = false
+                }
+            }
         }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Welcome to Wazir Mobile")
-                .font(.title2.bold())
-            Text("Connect to your Wazir installation to monitor and manage your AI agents from anywhere.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        HStack(spacing: 14) {
+            Image("WazirLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Welcome to Wazir Mobile")
+                    .font(.title2.bold())
+                Text("Connect to your Wazir installation to monitor and manage your AI agents from anywhere.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var qrScanSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Scan controller QR code").font(.headline)
+            Button {
+                showQrScanner = true
+            } label: {
+                Label("Scan QR Code with Camera", systemImage: "qrcode.viewfinder")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
         }
     }
 
     private var pasteSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Paste pairing link").font(.headline)
+            Text("Or paste pairing link").font(.headline)
             TextField("wazir://pair?sessionId=...&secret=...", text: $pastedUri, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             Button("Pair") { viewModel.pairFromQrUri(pastedUri) }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .disabled(pastedUri.trimmingCharacters(in: .whitespaces).isEmpty)
         }
     }
@@ -200,3 +231,141 @@ struct PairingOnboardingView: View {
         }
     }
 }
+
+struct QrCodeScannerSheet: View {
+    var onScanned: (String) -> Void
+    var onCancel: () -> Void
+    @State private var cameraError: String?
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                #if canImport(AVFoundation) && canImport(UIKit)
+                if let cameraError {
+                    VStack(spacing: 12) {
+                        Image(systemName: "camera.metering.unknown")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                        Text(cameraError)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    QrCameraPreview(onScanned: onScanned, onError: { cameraError = $0 })
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .padding()
+                }
+                #else
+                Text("Camera scanning is unavailable on this platform. Paste the wazir://pair URI instead.")
+                    .foregroundStyle(.secondary)
+                    .padding()
+                #endif
+                Text("Point your camera at the QR code shown by `wazir mobile pair` or the Wazir web dashboard.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                    .padding(.bottom)
+            }
+            .navigationTitle("Scan Pairing QR")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+            }
+        }
+    }
+}
+
+#if canImport(AVFoundation) && canImport(UIKit)
+private struct QrCameraPreview: UIViewControllerRepresentable {
+    var onScanned: (String) -> Void
+    var onError: (String) -> Void
+
+    func makeUIViewController(context: Context) -> QrScannerViewController {
+        let vc = QrScannerViewController()
+        vc.onScanned = onScanned
+        vc.onError = onError
+        return vc
+    }
+
+    func updateUIViewController(_ uiViewController: QrScannerViewController, context: Context) {}
+}
+
+private final class QrScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    var onScanned: ((String) -> Void)?
+    var onError: ((String) -> Void)?
+
+    private let session = AVCaptureSession()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var didEmit = false
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        configureCaptureSession()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if session.isRunning {
+            session.stopRunning()
+        }
+    }
+
+    private func configureCaptureSession() {
+        guard let videoCaptureDevice = AVCaptureDevice.default(for: .video) else {
+            onError?("No camera detected on this device. Paste the wazir://pair link on the previous screen.")
+            return
+        }
+        guard let videoInput = try? AVCaptureDeviceInput(device: videoCaptureDevice),
+              session.canAddInput(videoInput) else {
+            onError?("Unable to access camera input. Check Camera permissions in Settings or paste the pairing link.")
+            return
+        }
+        session.addInput(videoInput)
+
+        let metadataOutput = AVCaptureMetadataOutput()
+        guard session.canAddOutput(metadataOutput) else {
+            onError?("Unable to configure QR code metadata detector.")
+            return
+        }
+        session.addOutput(metadataOutput)
+        metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
+        if metadataOutput.availableMetadataObjectTypes.contains(.qr) {
+            metadataOutput.metadataObjectTypes = [.qr]
+        }
+
+        let layer = AVCaptureVideoPreviewLayer(session: session)
+        layer.frame = view.layer.bounds
+        layer.videoGravity = .resizeAspectFill
+        view.layer.addSublayer(layer)
+        previewLayer = layer
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.session.startRunning()
+        }
+    }
+
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        guard !didEmit,
+              let readableObject = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+              let stringValue = readableObject.stringValue,
+              !stringValue.isEmpty else {
+            return
+        }
+        didEmit = true
+        session.stopRunning()
+        onScanned?(stringValue)
+    }
+}
+#endif

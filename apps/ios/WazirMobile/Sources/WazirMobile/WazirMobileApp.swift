@@ -1,8 +1,13 @@
 import SwiftUI
 import UserNotifications
+#if canImport(BackgroundTasks)
+import BackgroundTasks
+#endif
 
 @MainActor
 final class AppDependencies: ObservableObject {
+    static let backgroundRefreshTaskIdentifier = "ai.wazir.mobile.refresh"
+
     let credentialVault: CredentialVault
     let store: ControllerStore
     let sseStream: MobileSseEventStream
@@ -26,6 +31,14 @@ final class AppDependencies: ObservableObject {
         self.repository = repo
         self.viewModel = vm
     }
+
+    func scheduleNextBackgroundRefresh() {
+        #if canImport(BackgroundTasks)
+        let request = BGAppRefreshTaskRequest(identifier: Self.backgroundRefreshTaskIdentifier)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        try? BGTaskScheduler.shared.submit(request)
+        #endif
+    }
 }
 
 final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
@@ -45,6 +58,7 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 
 @main
 struct WazirMobileApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var dependencies = AppDependencies()
     private let notificationDelegate = NotificationDelegate()
 
@@ -57,11 +71,21 @@ struct WazirMobileApp: App {
                     notificationDelegate.onTargetRoute = { route in
                         dependencies.pendingDeepLinkRoute = route
                     }
+                    dependencies.scheduleNextBackgroundRefresh()
                 }
                 .onOpenURL { url in
                     guard url.scheme?.lowercased() == "wazir", url.host?.lowercased() == "pair" else { return }
                     dependencies.viewModel.pairFromQrUri(url.absoluteString)
                 }
+                .onChange(of: scenePhase) { newPhase in
+                    if newPhase == .background {
+                        dependencies.scheduleNextBackgroundRefresh()
+                    }
+                }
+        }
+        .backgroundTask(.appRefresh(AppDependencies.backgroundRefreshTaskIdentifier)) {
+            await dependencies.scheduleNextBackgroundRefresh()
+            _ = await dependencies.viewModel.performBackgroundRefresh()
         }
     }
 }

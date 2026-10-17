@@ -17,7 +17,7 @@ import { installGlobalCrashHandlers } from './crashHandler.js';
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.0';
+const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.1';
 
 const program = new Command();
 
@@ -1463,6 +1463,14 @@ program.addCommand(searchCmd);
 // ======================================================================
 // IMPROVE COMMAND (Empirical self-improvement system)
 // ======================================================================
+const exitImproveOk = (): void => {
+  if (process.stdout.writableNeedDrain) {
+    process.stdout.once('drain', () => process.exit(0));
+    return;
+  }
+  process.stdout.write('', () => process.exit(0));
+};
+
 const improveCmd = new Command()
   .name('improve')
   .description('Empirical self-improvement system (observe, hypothesize, experiment, guard, promote)');
@@ -1471,11 +1479,19 @@ improveCmd
   .command('status')
   .description('Show self-improvement status, maturity levels, and budgets')
   .option('--json', 'Output in JSON format')
+  .option('--live', 'Watch durable supervisor state')
   .action(async (options) => {
+    if (options.live) {
+      const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+      await improvementSupervisorCommand('status', options);
+      exitImproveOk();
+      return;
+    }
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { improveStatusCommand } = await import('./commands.js');
     console.log(await improveStatusCommand(engine, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1487,6 +1503,7 @@ improveCmd
     const engine = await createEngine();
     const { improveOpportunitiesCommand } = await import('./commands.js');
     console.log(await improveOpportunitiesCommand(engine, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1498,6 +1515,7 @@ improveCmd
     const engine = await createEngine();
     const { improveExperimentsCommand } = await import('./commands.js');
     console.log(await improveExperimentsCommand(engine, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1509,6 +1527,7 @@ improveCmd
     const engine = await createEngine();
     const { improveInspectCommand } = await import('./commands.js');
     console.log(await improveInspectCommand(engine, experiment, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1517,11 +1536,24 @@ improveCmd
   .option('--level <level>', 'Target self-improvement maturity level')
   .option('--distributed', 'Distribute benchmark candidate evaluation across the worker fleet')
   .option('--json', 'Output in JSON format')
+  .option('--mode <modes>', 'harden, optimize, or evolve', 'harden')
+  .option('--scope <file>', 'Authorized reproducible repair scope with independent checks')
+  .option('--commit-mode <mode>', 'Commit policy mode: manual (default), auto, or no-commit')
+  .option('--auto-commit', 'Explicitly authorize automatic local commits for verified improvements in this scope')
+  .option('--no-commit', 'Preserve verified changes in the candidate worktree without committing')
+  .option('--offline-policy <policy>', 'Remote fetch offline policy: allow (default) or block', 'allow')
   .action(async (options) => {
+    if (!options.level && !options.distributed) {
+      const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+      await improvementSupervisorCommand('run', { ...options, foreground: true });
+      exitImproveOk();
+      return;
+    }
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { improveRunCommand } = await import('./commands.js');
     console.log(await improveRunCommand(engine, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1533,6 +1565,7 @@ improveCmd
     const engine = await createEngine();
     const { improveCompareCommand } = await import('./commands.js');
     console.log(await improveCompareCommand(engine, experiment, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1545,6 +1578,7 @@ improveCmd
     const engine = await createEngine();
     const { improvePromoteCommand } = await import('./commands.js');
     console.log(await improvePromoteCommand(engine, candidate, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1556,6 +1590,7 @@ improveCmd
     const engine = await createEngine();
     const { improveRollbackCommand } = await import('./commands.js');
     console.log(await improveRollbackCommand(engine, promotion, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1567,8 +1602,63 @@ improveCmd
     const engine = await createEngine();
     const { improveExplainCommand } = await import('./commands.js');
     console.log(await improveExplainCommand(engine, experiment, options));
+    exitImproveOk();
   });
 
+for (const command of ['doctor', 'failures', 'recommendations', 'history', 'pause', 'resume', 'stop', 'preflight', 'approvals']) {
+  improveCmd
+    .command(command)
+    .option('--json', 'Output JSON')
+    .option('--scope <file>', 'Authorized repair scope')
+    .option('--offline-policy <policy>', 'Remote fetch offline policy: allow or block', 'allow')
+    .option('--print-systemd-unit', 'Print optional systemd --user unit template without installing')
+    .action(async (options) => {
+      const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+      await improvementSupervisorCommand(command, options);
+      exitImproveOk();
+    });
+}
+
+improveCmd
+  .command('approve <attemptId>')
+  .description('Approve, revise, keep uncommitted, discard, or cancel a candidate awaiting manual commit approval')
+  .option('--action <action>', 'Decision: COMMIT, REVISE, KEEP_UNCOMMITTED, DISCARD, or CANCEL', 'COMMIT')
+  .option('--revision <hash>', 'Bind approval to exact candidate revision hash')
+  .option('--confirm-discard', 'Explicit confirmation required when --action DISCARD is selected')
+  .option('--json', 'Output JSON')
+  .action(async (attemptId, options) => {
+    const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+    await improvementSupervisorCommand('approve', { ...options, attemptId });
+    exitImproveOk();
+  });
+
+improveCmd
+  .command('start')
+  .description('Start the native persistent supervisor under the current user')
+  .option('--continuous', 'Observe and execute bounded cycles continuously')
+  .option('--foreground', 'Run in the foreground (for systemd or debugging)')
+  .option('--mode <modes>', 'Comma-separated harden,optimize,evolve', 'harden')
+  .option('--interval <seconds>', 'Sweep interval, minimum 1 second', '60')
+  .option('--max-cycles <count>', 'Session cycle budget', '1000')
+  .option('--scope <file>', 'Authorized repair scope')
+  .option('--commit-mode <mode>', 'Commit policy mode: manual (default), auto, or no-commit')
+  .option('--auto-commit', 'Explicitly authorize automatic local commits for verified improvements in this session')
+  .option('--no-commit', 'Preserve verified changes in the candidate worktree without committing')
+  .option('--offline-policy <policy>', 'Remote fetch offline policy: allow (default) or block', 'allow')
+  .option('--print-systemd-unit', 'Print optional systemd --user unit template without installing')
+  .action(async (options) => {
+    const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+    await improvementSupervisorCommand('start', options);
+    exitImproveOk();
+  });
+improveCmd
+  .command('logs')
+  .option('--follow', 'Follow structured supervisor logs')
+  .action(async (options) => {
+    const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+    await improvementSupervisorCommand('logs', options);
+    exitImproveOk();
+  });
 program.addCommand(improveCmd);
 
 // ======================================================================

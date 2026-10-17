@@ -62,18 +62,16 @@ rejected an Electron host).
   Now generates a random token per launch and passes it as an env var to
   both spawned processes.
 - `1de10fa`: version bump + changelog for both halves.
+- Cross-platform Desktop completion:
+  - Added cross-platform log directories (`dirs_log_dir`), Linux `secret-tool` keychain integration (`read_keychain_token` / `store_keychain_token`), Windows PowerShell toast notification fallback (`send_system_notification`), and SSH host alias import (`load_local_ssh_config_aliases` emitting `wazir://ssh-hosts-discovered`).
+  - Enabled `"targets": "all"` in `apps/desktop/src-tauri/tauri.conf.json` and updated `apps/desktop/README.md`.
+  - Verified with `cargo test` in `apps/desktop/src-tauri` (5/5 passing) and `npm run build -w @wazir/desktop`.
 
 Verified (by both sessions, independently, end-to-end): cold launch with no
 backend running → both node processes spawn, logs populate, dashboard loads
 real data; closing the window kills both children, zero orphaned processes.
 
-Still true / deliberately not done: no signed/bundled installer
-(`bundle.targets: []`, `desktop:build` passes `--no-bundle` — no signing
-certs in this environment), no remote-host connection mode (desktop is
-local-only right now; only the Android/iOS mobile API layer has
-pairing/remote-profile support).
-
-## iOS — functional slice done, committed, verified
+## iOS — full multi-surface parity done, verified
 
 `apps/ios/WazirMobile/` — a **native SwiftUI app mirroring the Android
 architecture** (same `/api/v1/mobile/*` API, same pairing flow, same
@@ -84,121 +82,56 @@ Full layer stack, all field-for-field ports of the Android sources (re-read
 fresh each time, not from memory — see the Android section for the exact
 files each mirrors):
 - `Domain/Models.swift` + `DecodingHelpers.swift` — every DTO, `Codable`
-  with hand-written `init(from:)` (the real API responses are sparse — `{}`
-  is valid for many of these — so Swift's synthesized `Decodable` would throw
-  on real traffic) **and an explicit `CodingKeys` enum on every one**: Swift
-  only synthesizes `CodingKeys` alongside a synthesized `init(from:)`/
-  `encode(to:)`, so a hand-written decoder referencing `CodingKeys.self`
-  without declaring the enum fails to compile — hit this across ~40 types,
-  full rewrite fixed it. Once `CodingKeys` already existed by hand, switching
-  `Decodable` → `Codable` let `encode(to:)` synthesize for free for caching
-  (one exception: `MobileApprovalRecord` needed a manual `encode(to:)` too,
-  since its `redactedArgumentsDescription` field doesn't map 1:1 to the
-  `redactedArguments` wire key).
+  with hand-written `init(from:)` and an explicit `CodingKeys` enum on every
+  one, including multi-surface parity models (`MobileAutonomyState`,
+  `MobileVerifiableArtifact`, `MobileDiffFileItem`, `MobileScheduleItem`,
+  `PushRelayRegistration`, `PushWakeupEvent`, etc.).
 - `Security/CredentialVault.swift` — Keychain-backed (no extra AES layer
   needed, unlike Android's `SharedPreferences` + `KeystoreCredentialVault`).
 - `Security/TlsPinning.swift` — system CA trust first, SHA-256
   leaf-fingerprint fallback for self-signed controllers.
 - `Security/BiometricAuthGate.swift` — Face ID/Touch ID/passcode via
-  `LocalAuthentication`, `.deviceOwnerAuthentication` policy (closest iOS
-  equivalent to Android's `BIOMETRIC_STRONG|WEAK|DEVICE_CREDENTIAL`).
+  `LocalAuthentication`, `.deviceOwnerAuthentication` policy.
 - `Network/PairingUriParser.swift`, `Network/WazirControllerApi.swift` —
-  **start from the already-fixed Android paths** (`pair/request`,
-  `pair/complete`, `resources/resume`), not the broken ones Android first
-  shipped with. `loadModel`/`unloadModel`/`reconcileModels`/`emergencyStop`/
-  `emergencyResume` stay client-layer-only (operator-gated server-side); no
-  screen calls them.
+  includes all mobile endpoints including `/api/v1/mobile/autonomy`,
+  `/api/v1/mobile/tasks/:id/artifacts`, `/api/v1/mobile/tasks/:id/diff-review`,
+  `/api/v1/mobile/schedules*`, and `/api/v1/mobile/push/*`.
 - `Network/MobileSseEventStream.swift` — `URLSession.bytes(for:)` line-by-line
-  SSE parsing, cursor-based resume, exponential-backoff+jitter reconnect,
-  mirrors Android's OkHttp-SSE-based stream (including its event
-  deduplicator).
+  SSE parsing, cursor-based resume, exponential-backoff+jitter reconnect.
 - `Network/MdnsControllerDiscovery.swift` — Bonjour `_wazir._tcp.` discovery
-  via `Network.framework`'s `NWBrowser` (Android uses `NsdManager`).
-- `Notifications/WazirNotificationManager.swift` — local notifications via
-  `UNUserNotificationCenter`, same event-type → title/body mapping as
-  Android's `onStreamEvent`, routes via `userInfo` instead of Android's
-  `Intent` extras. **Not ported**: Android's `ControllerSyncWorker`
-  (periodic background sync via WorkManager) — iOS background execution is
-  far more restricted; would need `BGAppRefreshTask`/`BGProcessingTask`
-  wiring as a separate piece of work if background sync turns out to matter.
-- `Data/ControllerStore.swift` — JSON-file-backed cache (controller list +
-  per-controller snapshot + a 50-entry-bounded task-detail cache) under
-  `~/Library/Application Support/WazirMobile/`, playing Room's role without
-  pulling in CoreData/SwiftData for what's a handful of small blobs. Device
-  credentials never live here — only in `CredentialVault`.
-- `Data/WazirRepository.swift` — ties the above together, mirrors
-  `WazirRepository.kt` (partial-failure tolerance: if the dashboard AND task
-  list both fail, the whole refresh fails so the UI falls back to cache;
-  otherwise it merges whatever succeeded).
-- `UI/MainViewModel.swift` — one `@Published var state: WazirUiState`,
-  `@MainActor`, mirrors `MainViewModel.kt`'s state shape and every action
-  (pairing flow incl. polling, controller switching, task CRUD, approval
-  resolution, SSE/mDNS wiring, event merge/dedup/cap-at-80).
-- `UI/Screens/*.swift` — Pairing/Onboarding (paste-a-`wazir://pair`-link +
-  manual-fields form + mDNS-discovered list + awaiting-approval view with
-  confirmation code), Dashboard, Tasks (tab-filtered list), Task Detail
-  (timeline/tool-calls/verification/logs, live-polls while visible), Create
-  Task, Approvals (pending/resolved, biometric gate on `requiresBiometric`),
-  Models & Runtimes (read-only, explanatory text — no mutate controls, see
-  above), Compute Workers, Resources (read-only, same reason). These are
-  idiomatic SwiftUI, not a pixel-for-pixel port of the Compose layouts —
-  same data, same actions, same restrictions, different presentation layer.
-- `UI/RootView.swift` — `TabView` (Home/Tasks/Approvals/Models/Workers) each
-  in its own `NavigationStack`, controller switcher + SSE-state dot in the
-  toolbar, notification-tap and `wazir://pair` deep links both route through
-  it.
-- `WazirMobileApp.swift` — builds the dependency graph, requests notification
-  authorization, registers the `UNUserNotificationCenterDelegate`, handles
-  `onOpenURL` for `wazir://pair`.
-- `Tests/` — `StubURLProtocol.swift` (records every request, serves canned
-  responses in order — the `URLProtocol`-based analog of MockWebServer) +
-  `WazirControllerApiTests.swift` + `PairingUriParserTests.swift`: the same
-  route-pinning suite Android has, **33/33 passing**, run on a real booted
-  simulator (not just `build`), including the 401→rotate→retry path and an
-  explicit regression guard on the emergency-resume path.
+  via `Network.framework`'s `NWBrowser`.
+- `Notifications/WazirNotificationManager.swift` + `BGAppRefreshTask` — local
+  notifications via `UNUserNotificationCenter` and periodic background app
+  refresh (`ai.wazir.mobile.refresh`) registered in `Info.plist` and
+  `WazirMobileApp.swift` via `.backgroundTask(.appRefresh(...))`.
+- `Data/ControllerStore.swift` & `Data/WazirRepository.swift` — JSON-file-backed
+  cache + repository methods for tasks, approvals, autonomy, artifacts/diff
+  reviews, schedules, and push relay registrations.
+- `UI/MainViewModel.swift` & `UI/Screens/*.swift` —
+  - `PairingOnboardingView.swift`: branded `WazirLogo` emblem + native
+    `AVFoundation` QR code camera scanner (`QrCodeScannerSheet`) alongside
+    paste-a-link, manual entry, and Bonjour mDNS scan.
+  - `DashboardView.swift` & `RootView.swift`: Pending approval gate banner,
+    Autonomy & Cellular Guard quick controls, and `.resources` navigation to
+    `ResourcesView`.
+  - `TaskDetailView.swift`: Verifiable Artifacts (plan steps, test checks, and
+    per-file diff review with Keep/Skip actions).
+  - `ApprovalsView.swift`: Pending/Resolved/Schedules tabs, Autonomy & Cellular
+    Guard controls, Out-of-Band Push Relay (APNs registration, test wakeup,
+    disable), and recurring schedule management (create, run now, pause/resume,
+    delete).
+- `Resources/Assets.xcassets/` — populated `AppIcon.appiconset` (all 11 iOS icon
+  sizes) and `WazirLogo.imageset` from `assets/brand/ios/`.
+- `Tests/` — `WazirControllerApiTests.swift` + `PairingUriParserTests.swift`:
+  **37/37 passing** on simulator (`xcodebuild test`), covering all core and
+  multi-surface routes.
 
-Verified end-to-end: `xcodebuild build` and `xcodebuild test` both clean (no
-warnings), app installs and launches on a real booted iOS 27.0 simulator
-(`xcrun simctl launch` + screenshots — the Pairing screen renders its real
-content: header, paste-link field, manual-entry toggle, notification
-permission prompt fires correctly).
+## Android — full multi-surface parity done
 
-**Not yet done / explicitly deferred**:
-- QR camera scanning (AVFoundation) — pairing currently only supports
-  pasting the `wazir://pair?...` URI text or opening it as a link (the `wa
-  mobile pair` CLI output includes the same URI the QR code encodes) or
-  manual field entry. No camera code exists yet.
-- Background periodic sync (`BGAppRefreshTask`) — see
-  `WazirNotificationManager` note above.
-- App icon image (still an empty `AppIcon.appiconset`) and a bespoke launch
-  screen.
-- No real device testing (simulator only) — Face ID/Touch ID and push
-  notifications behave differently on a physical device; the simulator's
-  Face ID is software-simulated (`xcrun simctl ui ... faceid`), not covered
-  here.
-- No tap-through / UI test of the full pairing → dashboard → task flow
-  against a live controller — verified by code review + unit tests +
-  confirming the app boots and renders, not by a live end-to-end click-through
-  (unlike Android/Desktop above, which *were* clicked through against a real
-  running controller).
-
-### Resuming iOS work
-1. If you want real end-to-end verification: run a Wazir controller locally
-   (`npm run start:dashboard` from repo root, or `apps/desktop`), run
-   `wa mobile pair` (or whatever the current pairing CLI command is) to get
-   a real `wazir://pair?...` URI, paste it into the simulator's pairing
-   screen, and click through to a real task.
-2. QR scanning: add an `AVFoundation`/`VisionKit` capture view, feed results
-   into the same `PairingUriParser.parse(...)` + `pairFromQrUri` path already
-   wired up for pasted text.
-3. Background sync, if it turns out to matter: `BGAppRefreshTask` registered
-   in `WazirMobileApp`, calling the same `MainViewModel.refreshAll(silent:
-   true)` path.
-4. After any change: `xcodegen generate` (if `project.yml` changed) →
-   `xcodebuild build -destination 'generic/platform=iOS Simulator'` for fast
-   compiler feedback → `xcodebuild test -destination 'platform=iOS
-   Simulator,id=<udid from xcrun simctl list devices available>'` before
-   moving on.
+- Completed end-to-end Push Relay integration across `WazirRepository.kt`,
+  `MainViewModel.kt`, `OperationsScreens.kt` (`ApprovalCenterScreen`),
+  `MainActivity.kt`, and `WazirControllerApiTest.kt` alongside the existing
+  Autonomy, Verifiable Artifacts / Diff Review, and Schedules features.
 
 ## Cross-session coordination note
 

@@ -40,6 +40,8 @@ import ai.wazir.mobile.domain.MobileAutonomyState
 import ai.wazir.mobile.domain.MobileScheduleItem
 import ai.wazir.mobile.domain.ModelCatalogItem
 import ai.wazir.mobile.domain.ModelInstanceItem
+import ai.wazir.mobile.domain.PushRelayRegistration
+import ai.wazir.mobile.domain.PushWakeupEvent
 import ai.wazir.mobile.domain.ResourceBudgetSnapshot
 import ai.wazir.mobile.domain.RuntimeItem
 import ai.wazir.mobile.ui.components.StatusBadge
@@ -53,11 +55,16 @@ fun ApprovalCenterScreen(
     onDecide: (MobileApprovalRecord, String) -> Unit,
     autonomy: MobileAutonomyState = MobileAutonomyState(),
     schedules: List<MobileScheduleItem> = emptyList(),
+    pushRegistrations: List<PushRelayRegistration> = emptyList(),
+    recentPushWakeups: List<PushWakeupEvent> = emptyList(),
     onUpdateAutonomy: (String?, String?) -> Unit = { _, _ -> },
     onCreateSchedule: (CreateScheduleRequest) -> Unit = {},
     onToggleSchedule: (String, Boolean) -> Unit = { _, _ -> },
     onRunScheduleNow: (String) -> Unit = {},
     onDeleteSchedule: (String) -> Unit = {},
+    onRegisterPushRelay: (String) -> Unit = {},
+    onUnregisterPushRelay: () -> Unit = {},
+    onTestPushWakeup: () -> Unit = {},
 ) {
     var tab by remember { mutableStateOf(0) }
     var showCreateSchedule by remember { mutableStateOf(false) }
@@ -103,6 +110,37 @@ fun ApprovalCenterScreen(
                                             "Enable Cellular Strict Guard (Require Approval on Cellular)"
                                         }
                                     )
+                                }
+                            }
+                        }
+                    }
+                }
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Out-of-Band Push Relay", fontWeight = FontWeight.Bold)
+                                StatusBadge(if (pushRegistrations.isEmpty()) "disabled" else "${pushRegistrations.size} active")
+                            }
+                            if (recentPushWakeups.isNotEmpty()) {
+                                val latest = recentPushWakeups.first()
+                                Text(
+                                    "Last wakeup: ${latest.title} (${latest.deliveryStatus})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (canMutate) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Button(onClick = { onRegisterPushRelay("fcm") }) { Text("Enable FCM Push") }
+                                    OutlinedButton(onClick = onTestPushWakeup) { Text("Test Wakeup") }
+                                    if (pushRegistrations.isNotEmpty()) {
+                                        OutlinedButton(onClick = onUnregisterPushRelay) { Text("Disable") }
+                                    }
                                 }
                             }
                         }

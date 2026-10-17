@@ -1,6 +1,6 @@
 {
   "name": "@wazir/cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Wazir CLI — control plane command line",
   "main": "./dist/index.js",
   "bin": {

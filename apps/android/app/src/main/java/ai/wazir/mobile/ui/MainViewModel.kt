@@ -20,6 +20,8 @@ import ai.wazir.mobile.domain.MobileTaskSummary
 import ai.wazir.mobile.domain.MobileVerifiableArtifact
 import ai.wazir.mobile.domain.ModelCatalogItem
 import ai.wazir.mobile.domain.ModelInstanceItem
+import ai.wazir.mobile.domain.PushRelayRegistration
+import ai.wazir.mobile.domain.PushWakeupEvent
 import ai.wazir.mobile.domain.ResolveApprovalRequest
 import ai.wazir.mobile.domain.ResourceBudgetSnapshot
 import ai.wazir.mobile.domain.RuntimeItem
@@ -87,6 +89,8 @@ data class WazirUiState(
     val resources: ResourceBudgetSnapshot? = null,
     val autonomy: MobileAutonomyState = MobileAutonomyState(),
     val schedules: List<MobileScheduleItem> = emptyList(),
+    val pushRegistrations: List<PushRelayRegistration> = emptyList(),
+    val recentPushWakeups: List<PushWakeupEvent> = emptyList(),
 ) {
     val pendingApprovals: List<MobileApprovalRecord>
         get() = approvals.filter { it.status == "pending" }
@@ -190,6 +194,8 @@ class MainViewModel(
                 resources = cached.resources,
                 autonomy = cached.autonomy,
                 schedules = cached.schedules,
+                pushRegistrations = cached.pushRegistrations,
+                recentPushWakeups = cached.recentPushWakeups,
                 lastSyncedAtMs = cached.syncedAtMs,
                 isOfflineCached = cached.syncedAtMs != null,
             )
@@ -225,6 +231,8 @@ class MainViewModel(
                         resources = fresh.resources,
                         autonomy = fresh.autonomy,
                         schedules = fresh.schedules,
+                        pushRegistrations = fresh.pushRegistrations,
+                        recentPushWakeups = fresh.recentPushWakeups,
                     )
                 }
                 val activeTaskId = _uiState.value.activeTaskDetail?.taskId
@@ -860,6 +868,85 @@ class MainViewModel(
                     _uiState.update {
                         it.copy(
                             bannerMessage = err.message ?: "Failed to delete schedule",
+                            bannerIsError = true,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun registerPushRelay(provider: String = "fcm", relayEndpointUrl: String? = null) {
+        val profile = _uiState.value.activeController ?: return
+        viewModelScope.launch {
+            repository.registerDevicePushRelay(profile, provider = provider, relayEndpointUrl = relayEndpointUrl)
+                .onSuccess { resp ->
+                    val reg = resp.registration
+                    _uiState.update { state ->
+                        val updated = if (reg != null) {
+                            listOf(reg) + state.pushRegistrations.filterNot { it.deviceId == reg.deviceId }
+                        } else {
+                            state.pushRegistrations
+                        }
+                        state.copy(
+                            pushRegistrations = updated,
+                            bannerMessage = "Push relay registered (${provider.uppercase()})",
+                            bannerIsError = false,
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = err.message ?: "Failed to register push relay",
+                            bannerIsError = true,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun unregisterPushRelay() {
+        val profile = _uiState.value.activeController ?: return
+        viewModelScope.launch {
+            repository.unregisterDevicePushRelay(profile)
+                .onSuccess {
+                    _uiState.update { state ->
+                        state.copy(
+                            pushRegistrations = state.pushRegistrations.filterNot { it.deviceId == profile.deviceId },
+                            bannerMessage = "Push relay unregistered",
+                            bannerIsError = false,
+                        )
+                    }
+                    refreshAll(silent = true)
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = err.message ?: "Failed to unregister push relay",
+                            bannerIsError = true,
+                        )
+                    }
+                }
+        }
+    }
+
+    fun testPushWakeup() {
+        val profile = _uiState.value.activeController ?: return
+        viewModelScope.launch {
+            repository.testPushWakeup(profile, deviceId = profile.deviceId.takeIf { it.isNotBlank() })
+                .onSuccess { resp ->
+                    _uiState.update { state ->
+                        state.copy(
+                            recentPushWakeups = (resp.dispatched + state.recentPushWakeups).take(25),
+                            bannerMessage = "Test push wakeup dispatched (${resp.count})",
+                            bannerIsError = false,
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            bannerMessage = err.message ?: "Failed to dispatch test push wakeup",
                             bannerIsError = true,
                         )
                     }
