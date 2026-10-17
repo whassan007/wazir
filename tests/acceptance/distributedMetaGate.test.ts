@@ -264,9 +264,11 @@ describe('G44 / G45 Acceptance: Distributed Benchmark Fabric & Worker Resilience
 
       // 5. Aggregate result consumed by RegressionGuard
       expect(result.comparison).toBeDefined();
-      expect(result.decision).toBe('QUALIFIED');
+      // Single-sample dispatch proves placement/recovery mechanics, not optimization.
+      expect(result.decision).toBe('INCONCLUSIVE');
+      expect(result.regressionGuard?.inconclusiveReasons.some((reason) => reason.includes('INSUFFICIENT_SAMPLES'))).toBe(true);
       expect(result.regressionGuard).toBeDefined();
-      expect(result.regressionGuard!.qualified).toBe(true);
+      expect(result.regressionGuard!.qualified).toBe(false);
 
       // 6. Provenance Events
       const placementEvent = events.find((e) => e.name === 'meta.distributed.placement');
@@ -390,8 +392,10 @@ describe('G44 / G45 Acceptance: Distributed Benchmark Fabric & Worker Resilience
       expect(comparison.candidateTasks).toBe(testTasks.length);
       expect(comparison.baselineTasks).toBe(testTasks.length);
 
-      // Decision remains deterministic
-      expect(result.decision).toBe('QUALIFIED');
+      // Qualification remains inconclusive without repeated evidence
+      // Single-sample dispatch proves placement/recovery mechanics, not optimization.
+      expect(result.decision).toBe('INCONCLUSIVE');
+      expect(result.regressionGuard?.inconclusiveReasons.some((reason) => reason.includes('INSUFFICIENT_SAMPLES'))).toBe(true);
     });
   });
 
@@ -432,23 +436,12 @@ describe('G44 / G45 Acceptance: Distributed Benchmark Fabric & Worker Resilience
         changes: ['Enable speculative prompt caching'],
       };
 
-      const runResults = await optimizer.evaluateCandidates({
-        plan,
-        candidates: [candidate],
-        distributed: true,
-      });
-      const runResult = runResults[0];
-
-      expect(runResult.isDistributed).toBe(true);
-      expect(runResult.workerPlacements).toBeDefined();
-      expect(runResult.workerPlacements!.length).toBeGreaterThanOrEqual(2);
-
-      // Test explainability formatting
-      const explanation = optimizer.explainExperiment(runResult.experimentId);
-      expect(explanation).toContain('Distributed Worker Placement');
-      expect(explanation).toContain('worker-dgx');
-      expect(explanation).toContain('worker-mac');
-      expect(explanation).toContain('Stratified Hardware Metrics');
+      // The dispatch fabric is exercised above. Optimizer execution must not
+      // bypass durable sample accounting through that separate dispatch path.
+      await expect(optimizer.evaluateCandidates({
+        plan, candidates: [candidate], distributed: true,
+      })).rejects.toThrow('OPTIMIZER_DISTRIBUTED_ACCOUNTING_UNAVAILABLE');
+      expect(optimizer.getConsumption().experimentsCount).toBe(0);
     });
   });
 });

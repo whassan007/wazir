@@ -352,7 +352,7 @@ export class ApiAuth {
 
   /** Whether `req` carries operator scope (the same rule `requireOperator` applies). */
   isOperatorRequest(req: Request): boolean {
-    if (this.isAllowedUnauthenticated && !this.operatorToken) return true;
+    if (this.isAllowedUnauthenticated && !this.operatorToken && !isUntrustedProxyRequest(req)) return true;
     return this.isOperatorToken(bearerToken(req));
   }
 
@@ -377,7 +377,12 @@ export class ApiAuth {
 
   /** Express middleware: viewer or operator token on read-only control routes. */
   requireViewerOrOperator = (req: Request, res: Response, next: NextFunction): void => {
-    if (this.isAllowedUnauthenticated && !this.operatorToken && !this.viewerToken) {
+    if (
+      this.isAllowedUnauthenticated &&
+      !this.operatorToken &&
+      !this.viewerToken &&
+      !isUntrustedProxyRequest(req)
+    ) {
       next();
       return;
     }
@@ -421,7 +426,12 @@ export class ApiAuth {
    * device, for read-only mobile routes.
    */
   requireViewerOperatorOrDevice = (req: Request, res: Response, next: NextFunction): void => {
-    if (this.isAllowedUnauthenticated && !this.operatorToken && !this.viewerToken) {
+    if (
+      this.isAllowedUnauthenticated &&
+      !this.operatorToken &&
+      !this.viewerToken &&
+      !isUntrustedProxyRequest(req)
+    ) {
       next();
       return;
     }
@@ -460,7 +470,12 @@ export class ApiAuth {
         scopes: mobile.scopes,
       };
     }
-    if (this.isAllowedUnauthenticated && !this.operatorToken && !this.viewerToken) {
+    if (
+      this.isAllowedUnauthenticated &&
+      !this.operatorToken &&
+      !this.viewerToken &&
+      !isUntrustedProxyRequest(req)
+    ) {
       return { kind: 'local-dev', id: 'local-dev', scopes: ['read', 'mutate', 'execute'] };
     }
     return undefined;
@@ -518,3 +533,8 @@ function safeEqual(a: string, b: string): boolean {
 export function isLoopbackHost(host: string): boolean {
   return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '::ffff:127.0.0.1';
 }
+
+export function isUntrustedProxyRequest(req: Request): boolean {
+  return req.headers['x-wazir-untrusted-proxy'] === '1';
+}
+

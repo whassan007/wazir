@@ -388,4 +388,30 @@ class WazirRepository(
         scheduleId: String,
     ): Result<ScheduleMutationResponse> =
         api.deleteSchedule(profile, scheduleId)
+
+    suspend fun getPushRelayStatus(
+        profile: ControllerProfile,
+        deviceId: String? = null,
+    ): Result<PushRelayStatusResponse> =
+        api.getPushRelayStatus(profile, deviceId)
+
+    suspend fun registerPushRelay(
+        profile: ControllerProfile,
+        request: RegisterPushRelayRequest,
+    ): Result<RegisterPushRelayResponse> =
+        api.registerPushRelay(profile, request)
+
+    suspend fun unregisterPushRelay(
+        profile: ControllerProfile,
+        deviceId: String,
+    ): Result<Boolean> =
+        api.unregisterPushRelay(profile, deviceId)
+
+    suspend fun testPushWakeup(
+        profile: ControllerProfile,
+        deviceId: String? = null,
+        title: String? = null,
+    ): Result<TestPushWakeupResponse> =
+        api.testPushWakeup(profile, deviceId, title)
 }
+

@@ -139,7 +139,7 @@ export class Scheduler {
       throw new SchedulingError(`Selected model instance '${modelDecision.modelInstanceId}' is no longer registered`);
     }
 
-    const computerDecision = this.scheduleComputer(task, record);
+    const computerDecision = this.scheduleComputer(task, record, requiredContext);
     const placed = this.deps.models.instancesOf(record.id).find(i => i.runtimeId === computerDecision.runtimeId && i.computerId === computerDecision.computerId)!;
     modelDecision.modelInstanceId = placed.id;
 
@@ -184,7 +184,20 @@ export class Scheduler {
       const capable = scored.filter((s) => s.rejected.length === 0);
       const all = router.assess({
         task, workload, estimatedInputTokens: Math.max(requiredContext, 1),
-        candidates: capable.map((s) => ({ modelId: s.record.id, runtimeId: this.preferredRuntime(s.record.id), capabilityScore: Math.max(0, s.score), residency: this.residency(s.record.id, requiredContext) })),
+        candidates: capable.map((s) => {
+          const resState = this.residency(s.record.id, requiredContext);
+          const placementEst = this.estimatePlacement(s.record, requiredContext);
+          return {
+            modelId: s.record.id,
+            runtimeId: this.preferredRuntime(s.record.id),
+            capabilityScore: Math.max(0, s.score),
+            residency: resState,
+            verifiedSuccessRate: this.measuredSuccessRate(s.record, task, requiredCapability),
+            estimatedLoadMs: resState === 'ready' ? 0 : placementEst.estimatedLoadMs,
+            evictionRequired: placementEst.evictionRequired,
+            kvCacheFits: placementEst.kvCacheFits,
+          };
+        }),
       });
       for (const a of all) {
         const s = capable.find((c) => c.record.id === a.modelId)!;
@@ -341,6 +354,125 @@ export class Scheduler {
   private preferredRuntime(modelId: string): string {
     const instances = this.deps.models.instancesOf(modelId);
     return (instances.find((i) => i.state === 'READY') ?? instances.find((i) => i.loaded) ?? instances[0])?.runtimeId ?? 'unknown';
+  }
+
+  /** Empirical verified success rate from ModelIntelligenceService or legacy record.performance. */
+  private measuredSuccessRate(
+    record: ModelRecord,
+    task: Task,
+    category: ModelCapabilityCategory,
+  ): number | undefined {
+    if (this.deps.modelIntelligence) {
+      const instances = this.deps.models.instancesOf(record.id);
+      const runtimeId = instances[0]?.runtimeId ?? 'unknown';
+      const segKey: ProfileSegmentationKey = {
+        model: record.id,
+        runtime: runtimeId,
+        quantization: record.quantization,
+        modelVersion: (record as unknown as Record<string, unknown>).version as string | undefined,
+        wazirProtocolVersion: '1.0.0',
+      };
+      const profile = this.deps.modelIntelligence.getProfile(segKey);
+      if (profile && !profile.isStale) {
+        const m = profile.categoryMeasurements.find((c) => c.category === category);
+        if (m && m.sampleCount >= 2 && Number.isFinite(m.score)) {
+          return m.score;
+        }
+      }
+    }
+    const measured = record.performance?.[task.type];
+    if (measured && measured.samples >= MIN_MEASURED_SAMPLES && Number.isFinite(measured.verifiedSuccessRate)) {
+      return measured.verifiedSuccessRate;
+    }
+    return undefined;
+  }
+
+  /**
+   * Estimates incremental KV-cache GPU memory (GB) beyond base context (default 8192 tokens
+   * or the currently loaded context window).
+   */
+  private estimateKvCacheGB(record: ModelRecord, requiredContext: number, baseCoveredContext = 8192): number {
+    if (requiredContext <= baseCoveredContext) return 0;
+    const extraTokens = requiredContext - baseCoveredContext;
+    const baseWeightGB = Math.max(4, record.memory?.minGpuGB ?? record.memory?.minSystemGB ?? 8);
+    // ~25% of base weight footprint per 32k additional context tokens
+    return Number(((extraTokens / 32768) * (baseWeightGB * 0.25)).toFixed(2));
+  }
+
+  /**
+   * Estimates cold-start load time, eviction requirement, and whether KV cache fits on at least one
+   * candidate instance for ResourceRouter assessment.
+   */
+  private estimatePlacement(
+    record: ModelRecord,
+    requiredContext: number,
+  ): { estimatedLoadMs: number; evictionRequired: boolean; kvCacheFits: boolean } {
+    const instances = this.deps.models.instancesOf(record.id);
+    if (instances.length === 0) {
+      return { estimatedLoadMs: 0, evictionRequired: false, kvCacheFits: true };
+    }
+
+    let bestLoadMs = Number.POSITIVE_INFINITY;
+    let anyEviction = false;
+    let anyKvFits = false;
+
+    for (const instance of instances) {
+      const runtime = this.deps.runtimes.get(instance.runtimeId);
+      const isHosted = runtime?.runtimeKind === 'hosted' || !instance.computerId;
+      if (isHosted) {
+        anyKvFits = true;
+        bestLoadMs = Math.min(bestLoadMs, 0);
+        continue;
+      }
+      const computer = this.deps.computers.get(instance.computerId!);
+      if (!computer || computer.status !== 'online') continue;
+
+      const baseWeightGB = record.memory?.minGpuGB ?? 0;
+      const loadMs = instance.loaded
+        ? 0
+        : (instance.loadTimeMs ?? Math.max(1500, Math.round(baseWeightGB * 400)));
+      bestLoadMs = Math.min(bestLoadMs, loadMs);
+
+      const gpuTotalGB = computer.hardware.gpu?.memoryGB;
+      const reservedGpuGB = (computer.reservations ?? []).reduce(
+        (acc, r) => acc + (r.settledAt ? 0 : (r.vramBytes ?? 0) / 1024 ** 3 + ((r as unknown as { gpuMemoryGB?: number }).gpuMemoryGB ?? 0)),
+        0,
+      );
+      const usableGpuGB =
+        computer.load?.gpuMemoryAvailableGB !== undefined
+          ? Math.max(0, computer.load.gpuMemoryAvailableGB - reservedGpuGB)
+          : gpuTotalGB !== undefined && computer.load?.gpuMemoryUsedGB !== undefined
+            ? Math.max(0, gpuTotalGB - computer.load.gpuMemoryUsedGB - reservedGpuGB)
+            : gpuTotalGB !== undefined && reservedGpuGB > 0
+              ? Math.max(0, gpuTotalGB - reservedGpuGB)
+              : undefined;
+
+      const coveredContext = instance.loaded ? (instance.contextTokens ?? 8192) : 8192;
+      const kvCacheGB =
+        computer.hardware.gpu && (baseWeightGB > 0 || usableGpuGB !== undefined)
+          ? this.estimateKvCacheGB(record, requiredContext, coveredContext)
+          : 0;
+      const neededGpuGB = (instance.loaded ? 0 : baseWeightGB) + kvCacheGB;
+
+      if (usableGpuGB !== undefined && neededGpuGB > usableGpuGB) {
+        // Check if total GPU could fit weights + KV cache if other non-reserved models were evicted
+        const unreservedTotal = Math.max(0, (gpuTotalGB ?? usableGpuGB) - reservedGpuGB);
+        if (!instance.loaded && baseWeightGB + kvCacheGB <= unreservedTotal && (computer.load?.gpuMemoryUsedGB ?? 0) > 0) {
+          anyEviction = true;
+          anyKvFits = true;
+        }
+      } else if (gpuTotalGB !== undefined && baseWeightGB > 0 && baseWeightGB + kvCacheGB > gpuTotalGB) {
+        // Total GPU cannot fit weights + KV cache
+      } else {
+        anyKvFits = true;
+      }
+    }
+
+    return {
+      estimatedLoadMs: Number.isFinite(bestLoadMs) ? bestLoadMs : 0,
+      evictionRequired: anyEviction,
+      kvCacheFits: anyKvFits,
+    };
   }
 
   private scoreModel(
@@ -516,7 +648,7 @@ export class Scheduler {
 
   // ==================== PHASE 2: COMPUTER SCHEDULING ====================
 
-  private scheduleComputer(task: Task, record: ModelRecord): ComputerRoutingDecision {
+  private scheduleComputer(task: Task, record: ModelRecord, requiredContext = 0): ComputerRoutingDecision {
     const instances = this.deps.models.instancesOf(record.id);
     const failures: string[] = [];
     const placements: ScoredPlacement[] = [];
@@ -663,29 +795,84 @@ export class Scheduler {
         continue;
       }
 
-      if (!instance.loaded && computer.load?.memoryAvailableGB !== undefined && requiredSystemGB > computer.load.memoryAvailableGB) {
-        failures.push(`${computer.id}: available memory ${computer.load.memoryAvailableGB}GB < required ${requiredSystemGB}GB`);
+      const reservedSystemGB = (computer.reservations ?? []).reduce(
+        (acc, r) => acc + (r.settledAt ? 0 : (r.memoryBytes ?? 0) / 1024 ** 3 + ((r as unknown as { memoryGB?: number }).memoryGB ?? 0)),
+        0,
+      );
+      const usableSystemGB =
+        computer.load?.memoryAvailableGB !== undefined
+          ? Math.max(0, computer.load.memoryAvailableGB - reservedSystemGB)
+          : undefined;
+
+      if (!instance.loaded && usableSystemGB !== undefined && requiredSystemGB > usableSystemGB) {
+        failures.push(`${computer.id}: available memory ${usableSystemGB}GB < required ${requiredSystemGB}GB`);
         continue;
       }
 
       const taskMinGpuGB = task.requirements?.minimumGPUMemoryGB ?? 0;
       const requiredGpuGB = Math.max(record.memory?.minGpuGB ?? 0, taskMinGpuGB);
-      if (requiredGpuGB > 0) {
-        const gpuGB = computer.hardware.gpu?.memoryGB ?? 0;
-        if (gpuGB < requiredGpuGB) {
-          failures.push(`${computer.id}: GPU memory ${gpuGB}GB < required ${requiredGpuGB}GB`);
+      const gpuGB = computer.hardware.gpu?.memoryGB ?? 0;
+      if (requiredGpuGB > 0 && gpuGB < requiredGpuGB) {
+        failures.push(`${computer.id}: GPU memory ${gpuGB}GB < required ${requiredGpuGB}GB`);
+        continue;
+      }
+
+      // KV-cache VRAM & active GPU reservation enforcement before dispatch
+      const reservedGpuGB = (computer.reservations ?? []).reduce(
+        (acc, r) => acc + (r.settledAt ? 0 : (r.vramBytes ?? 0) / 1024 ** 3 + ((r as unknown as { gpuMemoryGB?: number }).gpuMemoryGB ?? 0)),
+        0,
+      );
+      const usableGpuGB =
+        computer.load?.gpuMemoryAvailableGB !== undefined
+          ? Math.max(0, computer.load.gpuMemoryAvailableGB - reservedGpuGB)
+          : computer.hardware.gpu && computer.load?.gpuMemoryUsedGB !== undefined
+            ? Math.max(0, gpuGB - computer.load.gpuMemoryUsedGB - reservedGpuGB)
+            : computer.hardware.gpu && reservedGpuGB > 0
+              ? Math.max(0, gpuGB - reservedGpuGB)
+              : undefined;
+
+      const coveredContext = instance.loaded ? (instance.contextTokens ?? 8192) : 8192;
+      const kvCacheGB =
+        computer.hardware.gpu && (requiredGpuGB > 0 || usableGpuGB !== undefined)
+          ? this.estimateKvCacheGB(record, requiredContext, coveredContext)
+          : 0;
+      const neededGpuGB = (instance.loaded ? 0 : requiredGpuGB) + kvCacheGB;
+
+      if (computer.hardware.gpu && requiredGpuGB > 0 && requiredGpuGB + kvCacheGB > gpuGB) {
+        failures.push(
+          `${computer.id}: GPU memory ${gpuGB}GB cannot fit model (${requiredGpuGB}GB) + KV cache (${kvCacheGB}GB) for context ${requiredContext}`,
+        );
+        continue;
+      }
+
+      if (usableGpuGB !== undefined && neededGpuGB > usableGpuGB) {
+        if (kvCacheGB > 0 && (instance.loaded || requiredGpuGB <= usableGpuGB)) {
+          failures.push(
+            `${computer.id}: usable GPU memory ${usableGpuGB}GB cannot fit KV cache (${kvCacheGB}GB) for target context ${requiredContext}`,
+          );
           continue;
         }
+        failures.push(
+          `${computer.id}: usable GPU memory ${usableGpuGB}GB < required ${neededGpuGB}GB (weights ${instance.loaded ? 0 : requiredGpuGB}GB + KV cache ${kvCacheGB}GB)`,
+        );
+        continue;
       }
 
       const reasons: string[] = [];
       let score = instance.health === 'healthy' ? 1 : 0;
 
-      if (instance.state === 'READY') {
+      if (instance.state === 'READY' || instance.loaded) {
         score += 2;
         reasons.push(`model already loaded via '${instance.runtimeId}' (no load latency)`);
       } else {
-        reasons.push(`model will be loaded via '${instance.runtimeId}'`);
+        const estimatedLoadMs = instance.loadTimeMs ?? Math.max(1500, Math.round(requiredGpuGB * 400));
+        const coldStartPenalty = Math.min(1.5, estimatedLoadMs / 20_000);
+        score -= coldStartPenalty;
+        reasons.push(`model will be loaded via '${instance.runtimeId}' (est. cold start ${estimatedLoadMs}ms)`);
+      }
+
+      if (kvCacheGB > 0) {
+        reasons.push(`estimated KV cache ${kvCacheGB}GB fits for context ${requiredContext}`);
       }
 
       const cpuPercent = computer.load?.cpuPercent ?? 0;

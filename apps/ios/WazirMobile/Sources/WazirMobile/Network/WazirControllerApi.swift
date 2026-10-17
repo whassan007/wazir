@@ -165,6 +165,71 @@ actor WazirControllerApi {
         let _: EmptyOkResponse = try await executeAuthenticated(profile, method: "POST", path: "/api/v1/mobile/resources/resume", body: Data("{}".utf8), idempotencyKey: idempotencyKey)
     }
 
+    // MARK: - Multi-Surface: Autonomy, Verifiable Artifacts, Diff Review, Schedules & Push Relay
+
+    func getAutonomy(_ profile: ControllerProfile) async throws -> MobileAutonomyState {
+        try await executeAuthenticated(profile, method: "GET", path: "/api/v1/mobile/autonomy")
+    }
+
+    func updateAutonomy(_ profile: ControllerProfile, request: UpdateAutonomyRequest, idempotencyKey: String = UUID().uuidString) async throws -> MobileAutonomyState {
+        try await executeAuthenticated(profile, method: "POST", path: "/api/v1/mobile/autonomy", body: try encoder.encode(request), idempotencyKey: idempotencyKey)
+    }
+
+    func getTaskArtifacts(_ profile: ControllerProfile, taskId: String) async throws -> TaskArtifactsResponse {
+        try await executeAuthenticated(profile, method: "GET", path: "/api/v1/mobile/tasks/\(encodePathComponent(taskId))/artifacts")
+    }
+
+    func reviewTaskDiffFile(_ profile: ControllerProfile, taskId: String, path: String, decision: String, idempotencyKey: String = UUID().uuidString) async throws -> TaskDiffReviewResponse {
+        let payload = DiffReviewRequest(path: path, decision: decision)
+        return try await executeAuthenticated(profile, method: "POST", path: "/api/v1/mobile/tasks/\(encodePathComponent(taskId))/diff-review", body: try encoder.encode(payload), idempotencyKey: idempotencyKey)
+    }
+
+    func listSchedules(_ profile: ControllerProfile) async throws -> ScheduleListResponse {
+        try await executeAuthenticated(profile, method: "GET", path: "/api/v1/mobile/schedules")
+    }
+
+    func createSchedule(_ profile: ControllerProfile, request: CreateScheduleRequest, idempotencyKey: String = UUID().uuidString) async throws -> ScheduleMutationResponse {
+        try await executeAuthenticated(profile, method: "POST", path: "/api/v1/mobile/schedules", body: try encoder.encode(request), idempotencyKey: idempotencyKey)
+    }
+
+    func toggleSchedule(_ profile: ControllerProfile, scheduleId: String, enabled: Bool, idempotencyKey: String = UUID().uuidString) async throws -> ScheduleMutationResponse {
+        let body = try JSONSerialization.data(withJSONObject: ["enabled": enabled])
+        return try await executeAuthenticated(profile, method: "POST", path: "/api/v1/mobile/schedules/\(encodePathComponent(scheduleId))/toggle", body: body, idempotencyKey: idempotencyKey)
+    }
+
+    func runScheduleNow(_ profile: ControllerProfile, scheduleId: String, idempotencyKey: String = UUID().uuidString) async throws -> ScheduleMutationResponse {
+        try await executeAuthenticated(profile, method: "POST", path: "/api/v1/mobile/schedules/\(encodePathComponent(scheduleId))/run", body: Data("{}".utf8), idempotencyKey: idempotencyKey)
+    }
+
+    func deleteSchedule(_ profile: ControllerProfile, scheduleId: String, idempotencyKey: String = UUID().uuidString) async throws -> ScheduleMutationResponse {
+        try await executeAuthenticated(profile, method: "DELETE", path: "/api/v1/mobile/schedules/\(encodePathComponent(scheduleId))", idempotencyKey: idempotencyKey)
+    }
+
+    func getPushRelayStatus(_ profile: ControllerProfile, deviceId: String? = nil) async throws -> PushRelayStatusResponse {
+        var path = "/api/v1/mobile/push/status"
+        if let d = deviceId, !d.isEmpty {
+            path += "?deviceId=\(d.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? d)"
+        }
+        return try await executeAuthenticated(profile, method: "GET", path: path)
+    }
+
+    func registerPushRelay(_ profile: ControllerProfile, request: RegisterPushRelayRequest, idempotencyKey: String = UUID().uuidString) async throws -> RegisterPushRelayResponse {
+        try await executeAuthenticated(profile, method: "POST", path: "/api/v1/mobile/push/register", body: try encoder.encode(request), idempotencyKey: idempotencyKey)
+    }
+
+    func unregisterPushRelay(_ profile: ControllerProfile, deviceId: String, idempotencyKey: String = UUID().uuidString) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["deviceId": deviceId])
+        let _: EmptyOkResponse = try await executeAuthenticated(profile, method: "POST", path: "/api/v1/mobile/push/unregister", body: body, idempotencyKey: idempotencyKey)
+    }
+
+    func testPushWakeup(_ profile: ControllerProfile, deviceId: String? = nil, title: String? = nil, idempotencyKey: String = UUID().uuidString) async throws -> TestPushWakeupResponse {
+        var dict: [String: String] = [:]
+        if let d = deviceId, !d.isEmpty { dict["deviceId"] = d }
+        if let t = title, !t.isEmpty { dict["title"] = t }
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        return try await executeAuthenticated(profile, method: "POST", path: "/api/v1/mobile/push/test", body: body, idempotencyKey: idempotencyKey)
+    }
+
     // MARK: - Token rotation
 
     @discardableResult

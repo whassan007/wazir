@@ -53,11 +53,17 @@ export { JobManager, createJobManager } from './jobManager.js';
 export type { JobManagerOptions, JobTaskInput } from './jobManager.js';
 export {
   InvalidStatusTransitionError,
+  assertExecutionTransition,
   assertJobTransition,
+  assertNodeTransition,
   assertTaskTransition,
+  canTransitionExecution,
   canTransitionJob,
+  canTransitionNode,
   canTransitionTask,
+  isTerminalExecutionStatus,
   isTerminalJobStatus,
+  isTerminalNodeState,
   isTerminalTaskStatus,
 } from './statusTransitions.js';
 export { JobOrchestrator, createJobOrchestrator } from './jobOrchestrator.js';

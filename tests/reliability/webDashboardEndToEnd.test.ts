@@ -322,10 +322,10 @@ describe('Web dashboard end-to-end (Section 4 & Findings A, C, D, E, I.3)', { ti
     expect(drawerHtml).toContain(`class="exec-open-btn" data-exec-id="${child.execution.id}"`);
     expect(drawerHtml).not.toMatch(/\bonclick\s*=/i);
 
-    // Verify explicit unavailable warning when /events or /children fails
+    // Verify explicit unavailable warning when /events, /children, or /artifacts fails
     const failingSubresourceDom = mountDashboardHtml((input, init) => {
       const urlStr = String(input);
-      if (urlStr.endsWith('/events') || urlStr.endsWith('/children')) {
+      if (urlStr.endsWith('/events') || urlStr.endsWith('/children') || urlStr.endsWith('/artifacts')) {
         return Promise.reject(new Error('503 subresource outage'));
       }
       return proxyFetch(input, init);
@@ -334,5 +334,23 @@ describe('Web dashboard end-to-end (Section 4 & Findings A, C, D, E, I.3)', { ti
     const degradedDrawerHtml = failingSubresourceDom.getEl('drawer-body').innerHTML;
     expect(degradedDrawerHtml).toContain('Subagent execution details unavailable');
     expect(degradedDrawerHtml).toContain('Execution event timeline unavailable');
+    expect(degradedDrawerHtml).toContain('Execution artifacts unavailable');
+
+    // Verify 401 vs 404 vs 500 classification on /api/v1/executions/:id
+    await surface.showExecutionDrawer('non-existent-exec-id');
+    expect(getEl('drawer-body').innerHTML).toContain("Execution 'non-existent-exec-id' not found");
+
+    const authFailDrawerDom = mountDashboardHtml(async () => {
+      const err = new Error('401 Unauthorized') as Error & { status?: number };
+      err.status = 401;
+      throw err;
+    });
+    await authFailDrawerDom.surface.showExecutionDrawer(parent.execution.id);
+    expect(authFailDrawerDom.getEl('drawer-body').innerHTML).toContain('Authentication required to load execution');
+
+    // Verify /ready diagnostics are populated in the Connection Diagnostics panel
+    expect(getEl('diag-readiness').textContent).toBe('ready');
+    expect(getEl('diag-exec-service').textContent).toBe('ready');
   });
 });
+

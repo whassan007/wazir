@@ -35,6 +35,61 @@ export interface HostInstanceRecord {
   hasCredential: boolean;
   pairedAt?: string;
   lastCheckedAt?: string;
+  sshAlias?: string;
+  sshTunnelCommand?: string;
+}
+
+export interface SshHostProfile {
+  alias: string;
+  hostName: string;
+  user?: string;
+  port: number;
+  identityFile?: string;
+  localForwardPort: number;
+  remoteControllerPort: number;
+  suggestedControllerUrl: string;
+  sshTunnelCommand: string;
+}
+
+export type PushProviderType = 'fcm' | 'apns' | 'webhook';
+
+export interface PushRelayRegistration {
+  deviceId: string;
+  deviceName: string;
+  provider: PushProviderType;
+  pushToken: string;
+  relayEndpointUrl?: string;
+  webhookUrl?: string;
+  enabled: boolean;
+  notifyApprovals: boolean;
+  notifyTaskTerminal: boolean;
+  notifyOnApprovals?: boolean;
+  notifyOnTaskFailures?: boolean;
+  notifyOnTaskCompletions?: boolean;
+  registeredAt: string;
+  updatedAt: string;
+  lastWakeupAt?: string;
+  deliveryCount: number;
+}
+
+export interface PushWakeupEvent {
+  id: string;
+  wakeupId?: string;
+  deviceId: string;
+  provider: PushProviderType;
+  eventType: string;
+  title: string;
+  body: string;
+  deepLink: string;
+  deepLinkUri?: string;
+  priority: 'high' | 'normal';
+  approvalId?: string;
+  taskId?: string;
+  executionId?: string;
+  status: 'delivered' | 'queued_local' | 'webhook_dispatched' | 'failed';
+  createdAt: string;
+  timestamp?: string;
+  error?: string;
 }
 
 interface StoredRemoteHost extends HostInstanceRecord {
@@ -244,12 +299,110 @@ function escapeHtml(raw: string): string {
   }[c] || c));
 }
 
+/**
+ * Parses standard OpenSSH `~/.ssh/config` content into structured `SshHostProfile` entries,
+ * skipping wildcard host patterns (`*`, `?`, `!`) and computing deterministic SSH tunnel forward ports.
+ */
+export function parseSshConfigText(
+  rawConfig: string,
+  options?: { baseForwardPort?: number; remoteControllerPort?: number },
+): SshHostProfile[] {
+  const baseForwardPort = options?.baseForwardPort ?? 14800;
+  const defaultControllerPort = options?.remoteControllerPort ?? 4800;
+  const lines = String(rawConfig ?? '').split(/\r?\n/);
+
+  interface RawBlock {
+    aliases: string[];
+    hostName?: string;
+    user?: string;
+    port?: number;
+    identityFile?: string;
+    localForwardPort?: number;
+    remoteControllerPort?: number;
+  }
+
+  const blocks: RawBlock[] = [];
+  let current: RawBlock | undefined;
+
+  for (const rawLine of lines) {
+    const stripped = rawLine.replace(/#.*$/, '').trim();
+    if (!stripped) continue;
+    const match = /^([A-Za-z][A-Za-z0-9]*)\s*(?:=|\s+)\s*(.+)$/.exec(stripped);
+    if (!match) continue;
+    const key = match[1].toLowerCase();
+    const val = match[2].trim().replace(/^["']|["']$/g, '');
+
+    if (key === 'host') {
+      const aliases = val
+        .split(/\s+/)
+        .map((a) => a.trim())
+        .filter((a) => a && !/[*?!]/.test(a));
+      current = { aliases };
+      if (aliases.length > 0) {
+        blocks.push(current);
+      }
+      continue;
+    }
+
+    if (!current || current.aliases.length === 0) continue;
+
+    if (key === 'hostname') {
+      current.hostName = val;
+    } else if (key === 'user') {
+      current.user = val;
+    } else if (key === 'port') {
+      const p = Number(val);
+      if (Number.isFinite(p) && p > 0 && p <= 65535) current.port = p;
+    } else if (key === 'identityfile') {
+      current.identityFile = val;
+    } else if (key === 'localforward') {
+      // e.g. LocalForward 14801 127.0.0.1:4800
+      const lfMatch = /^(\d+)\s+[^:\s]+:(\d+)$/.exec(val);
+      if (lfMatch) {
+        current.localForwardPort = Number(lfMatch[1]);
+        current.remoteControllerPort = Number(lfMatch[2]);
+      }
+    }
+  }
+
+  const profiles: SshHostProfile[] = [];
+  let idx = 0;
+  for (const block of blocks) {
+    for (const alias of block.aliases) {
+      const hostName = block.hostName || alias;
+      const port = block.port ?? 22;
+      const localForwardPort = block.localForwardPort ?? baseForwardPort + idx;
+      const remoteControllerPort = block.remoteControllerPort ?? defaultControllerPort;
+      const targetRef = block.user ? `${block.user}@${alias}` : alias;
+      const portArg = port !== 22 ? ` -p ${port}` : '';
+      const sshTunnelCommand = `ssh -N -L ${localForwardPort}:127.0.0.1:${remoteControllerPort}${portArg} ${targetRef}`;
+      profiles.push({
+        alias,
+        hostName,
+        user: block.user,
+        port,
+        identityFile: block.identityFile,
+        localForwardPort,
+        remoteControllerPort,
+        suggestedControllerUrl: `http://127.0.0.1:${localForwardPort}`,
+        sshTunnelCommand,
+      });
+      idx += 1;
+    }
+  }
+
+  return profiles;
+}
+
 export class MultiSurfaceService {
   private autonomy: AutonomyState;
   private readonly schedules = new Map<string, ScheduledTaskRecord>();
   private readonly remoteHosts = new Map<string, StoredRemoteHost>();
+  private readonly pushRegistrations = new Map<string, PushRelayRegistration>();
+  private readonly pushWakeups: PushWakeupEvent[] = [];
   private activeHostId = 'local';
   private schedulerTimer?: NodeJS.Timeout;
+  private unsubscribeEventHub?: () => void;
 
   constructor(
     private readonly state: ApiState,
@@ -302,6 +455,25 @@ export class MultiSurfaceService {
     const savedActiveHost = await this.state.store.get<{ activeHostId: string }>('control/hosts-active');
     if (savedActiveHost?.activeHostId) {
       this.activeHostId = savedActiveHost.activeHostId;
+    }
+
+    const savedPushRegs = await this.state.store.list('control/push/registrations/');
+    for (const entry of savedPushRegs) {
+      const reg = entry.value as PushRelayRegistration;
+      if (reg?.deviceId) {
+        this.pushRegistrations.set(reg.deviceId, reg);
+      }
+    }
+    const savedWakeups = await this.state.store.get<PushWakeupEvent[]>('control/push/wakeups');
+    if (Array.isArray(savedWakeups)) {
+      this.pushWakeups.push(...savedWakeups.slice(-100));
+    }
+
+    if (typeof this.mobile.eventHub.onEvent === 'function') {
+      this.unsubscribeEventHub?.();
+      this.unsubscribeEventHub = this.mobile.eventHub.onEvent((event) => {
+        void this.handleEventForPushWakeup(event).catch(() => undefined);
+      });
     }
 
     this.startScheduleTicker();
@@ -380,7 +552,7 @@ export class MultiSurfaceService {
     return { ok: true, autonomy: { ...this.autonomy } };
   }
 
-  // ─── 2. Host Instance Switching & Mode B Pairing ────────────────────
+  // ─── 2. Host Instance Switching, SSH Config Import & Mode B Pairing ──
 
   private persistHostsFile(): void {
     const wazirHome = process.env.WAZIR_HOME ?? path.join(os.homedir(), '.wazir');
@@ -423,6 +595,8 @@ export class MultiSurfaceService {
       hasCredential: Boolean(h.accessToken),
       pairedAt: h.pairedAt,
       lastCheckedAt: h.lastCheckedAt,
+      sshAlias: h.sshAlias,
+      sshTunnelCommand: h.sshTunnelCommand,
     }));
 
     return {
@@ -439,6 +613,8 @@ export class MultiSurfaceService {
     refreshToken?: string;
     deviceId?: string;
     tlsCertFingerprint?: string;
+    sshAlias?: string;
+    sshTunnelCommand?: string;
     setActive?: boolean;
   }): Promise<{ ok: true; host: HostInstanceRecord; activeHostId: string } | { ok: false; status: number; code: string; error: string }> {
     const name = String(input.name ?? '').trim();
@@ -475,6 +651,8 @@ export class MultiSurfaceService {
       refreshToken: input.refreshToken ?? existing?.refreshToken,
       pairedAt: input.accessToken ? nowIso : existing?.pairedAt,
       lastCheckedAt: nowIso,
+      sshAlias: input.sshAlias ?? existing?.sshAlias,
+      sshTunnelCommand: input.sshTunnelCommand ?? existing?.sshTunnelCommand,
     };
 
     this.remoteHosts.set(id, record);
@@ -491,6 +669,115 @@ export class MultiSurfaceService {
       ok: true,
       host: { ...sanitized, active: this.activeHostId === id },
       activeHostId: this.activeHostId,
+    };
+  }
+
+  discoverSshConfigProfiles(options?: {
+    configText?: string;
+    sshConfigPath?: string;
+    configPath?: string;
+    remoteControllerPort?: number;
+  }): { sshConfigPath: string; exists: boolean; profiles: SshHostProfile[] } {
+    const sshConfigPath =
+      options?.sshConfigPath ??
+      options?.configPath ??
+      process.env.WAZIR_SSH_CONFIG_PATH ??
+      path.join(os.homedir(), '.ssh', 'config');
+
+    if (typeof options?.configText === 'string') {
+      return {
+        sshConfigPath,
+        exists: true,
+        profiles: parseSshConfigText(options.configText, {
+          remoteControllerPort: options.remoteControllerPort,
+        }),
+      };
+    }
+
+    try {
+      if (!fs.existsSync(sshConfigPath)) {
+        return { sshConfigPath, exists: false, profiles: [] };
+      }
+      const raw = fs.readFileSync(sshConfigPath, 'utf8');
+      return {
+        sshConfigPath,
+        exists: true,
+        profiles: parseSshConfigText(raw, {
+          remoteControllerPort: options?.remoteControllerPort,
+        }),
+      };
+    } catch {
+      return { sshConfigPath, exists: false, profiles: [] };
+    }
+  }
+
+  async importSshConfigHosts(options?: {
+    configText?: string;
+    sshConfigPath?: string;
+    configPath?: string;
+    aliases?: string[];
+    selectedAliases?: string[];
+    remoteControllerPort?: number;
+    setActiveAlias?: string;
+  }): Promise<{
+    ok: true;
+    sshConfigPath: string;
+    imported: HostInstanceRecord[];
+    profiles: SshHostProfile[];
+    activeHostId: string;
+    hosts: HostInstanceRecord[];
+  }> {
+    const discovered = this.discoverSshConfigProfiles({
+      configText: options?.configText,
+      sshConfigPath: options?.sshConfigPath ?? options?.configPath,
+      remoteControllerPort: options?.remoteControllerPort,
+    });
+    const rawAliases = options?.aliases ?? options?.selectedAliases;
+    const filterSet =
+      Array.isArray(rawAliases) && rawAliases.length > 0
+        ? new Set(rawAliases.map((a) => a.trim()))
+        : undefined;
+    const selectedProfiles = filterSet
+      ? discovered.profiles.filter((p) => filterSet.has(p.alias))
+      : discovered.profiles;
+
+    const imported: HostInstanceRecord[] = [];
+    for (const profile of selectedProfiles) {
+      const sanitizedAlias = profile.alias.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 48);
+      const hostId = `ssh-${sanitizedAlias}`;
+      const labelUser = profile.user ? `${profile.user}@` : '';
+      const upserted = await this.upsertHost({
+        id: hostId,
+        name: `${profile.alias} (SSH ${labelUser}${profile.hostName})`,
+        url: profile.suggestedControllerUrl,
+        sshAlias: profile.alias,
+        sshTunnelCommand: profile.sshTunnelCommand,
+        setActive: options?.setActiveAlias === profile.alias,
+      });
+      if (upserted.ok) {
+        imported.push(upserted.host);
+      }
+    }
+
+    await this.mobile.eventHub.publish({
+      type: 'hosts.ssh_imported',
+      status: 'completed',
+      summary: `Imported ${imported.length} SSH host profile(s) from ${discovered.sshConfigPath}`,
+      payload: {
+        sshConfigPath: discovered.sshConfigPath,
+        importedCount: imported.length,
+        aliases: imported.map((h) => h.sshAlias ?? h.id),
+      },
+    });
+
+    const hostList = this.listHosts();
+    return {
+      ok: true,
+      sshConfigPath: discovered.sshConfigPath,
+      imported,
+      profiles: selectedProfiles,
+      activeHostId: hostList.activeHostId,
+      hosts: hostList.hosts,
     };
   }
 
@@ -1373,6 +1660,270 @@ export class MultiSurfaceService {
       artifacts: updatedBundle.artifacts,
     };
   }
+
+  // ── 6. Out-of-Band Cloud Push Relay & Wakeup Service ──────────────────────
+
+  getPushRelayStatus(deviceId?: string): {
+    registrations: PushRelayRegistration[];
+    recentWakeups: PushWakeupEvent[];
+  } {
+    const registrations = Array.from(this.pushRegistrations.values())
+      .filter((reg) => !deviceId || reg.deviceId === deviceId)
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    const recentWakeups = this.pushWakeups
+      .filter((item) => !deviceId || item.deviceId === deviceId)
+      .slice(0, 30);
+    return { registrations, recentWakeups };
+  }
+
+  async registerPushRelay(input: {
+    deviceId: string;
+    deviceName?: string;
+    provider?: PushProviderType;
+    pushToken: string;
+    relayEndpointUrl?: string;
+    enabled?: boolean;
+    notifyApprovals?: boolean;
+    notifyTaskTerminal?: boolean;
+  }): Promise<
+    | { ok: true; registration: PushRelayRegistration }
+    | { ok: false; status: number; code: string; error: string }
+  > {
+    const deviceId = String(input.deviceId ?? '').trim();
+    const pushToken = String(input.pushToken ?? '').trim();
+    if (!deviceId) {
+      return { ok: false, status: 400, code: 'INVALID_DEVICE_ID', error: 'deviceId is required' };
+    }
+    if (!pushToken) {
+      return { ok: false, status: 400, code: 'INVALID_PUSH_TOKEN', error: 'pushToken is required' };
+    }
+
+    const provider: PushProviderType =
+      input.provider === 'apns' || input.provider === 'webhook' ? input.provider : 'fcm';
+    const nowIso = new Date(this.now()).toISOString();
+    const existing = this.pushRegistrations.get(deviceId);
+
+    const notifyApprovals =
+      input.notifyApprovals ?? existing?.notifyApprovals ?? existing?.notifyOnApprovals ?? true;
+    const notifyTaskTerminal =
+      input.notifyTaskTerminal ?? existing?.notifyTaskTerminal ?? existing?.notifyOnTaskFailures ?? true;
+
+    const registration: PushRelayRegistration = {
+      deviceId,
+      deviceName: input.deviceName?.trim() || existing?.deviceName || `Device ${deviceId}`,
+      provider,
+      pushToken,
+      relayEndpointUrl: input.relayEndpointUrl?.trim() || existing?.relayEndpointUrl,
+      webhookUrl: input.relayEndpointUrl?.trim() || existing?.webhookUrl || existing?.relayEndpointUrl,
+      enabled: input.enabled ?? existing?.enabled ?? true,
+      notifyApprovals,
+      notifyTaskTerminal,
+      notifyOnApprovals: notifyApprovals,
+      notifyOnTaskFailures: notifyTaskTerminal,
+      notifyOnTaskCompletions: notifyTaskTerminal,
+      registeredAt: existing?.registeredAt ?? nowIso,
+      updatedAt: nowIso,
+      lastWakeupAt: existing?.lastWakeupAt,
+      deliveryCount: existing?.deliveryCount ?? 0,
+    };
+
+    this.pushRegistrations.set(deviceId, registration);
+    await this.state.store.put(`control/push/registrations/${deviceId}`, registration);
+    return { ok: true, registration };
+  }
+
+  async unregisterPushRelay(deviceId: string): Promise<boolean> {
+    const trimmed = String(deviceId ?? '').trim();
+    if (!trimmed || !this.pushRegistrations.has(trimmed)) {
+      return false;
+    }
+    this.pushRegistrations.delete(trimmed);
+    await this.state.store.delete(`control/push/registrations/${trimmed}`);
+    return true;
+  }
+
+  async triggerTestPushWakeup(params: {
+    deviceId?: string;
+    title?: string;
+    body?: string;
+    deepLink?: string;
+  }): Promise<{ ok: true; wakeups: PushWakeupEvent[] }> {
+    const targets = Array.from(this.pushRegistrations.values()).filter(
+      (reg) => (reg.enabled ?? true) && (!params.deviceId || reg.deviceId === params.deviceId),
+    );
+    const wakeups: PushWakeupEvent[] = [];
+    for (const reg of targets) {
+      const event = await this.dispatchPushWakeup(reg, {
+        eventType: 'push.test_wakeup',
+        title: params.title?.trim() || 'Wazir Out-of-Band Push Wakeup',
+        body:
+          params.body?.trim() ||
+          `Cloud push relay verified for ${reg.deviceName} (${reg.provider.toUpperCase()}).`,
+        deepLink: params.deepLink?.trim() || 'wazir://approvals',
+        priority: 'high',
+      });
+      wakeups.push(event);
+    }
+    return { ok: true, wakeups };
+  }
+
+  private async handleEventForPushWakeup(event: {
+    id?: string;
+    eventId?: string;
+    type: string;
+    createdAt?: string;
+    timestamp?: string;
+    taskId?: string;
+    executionId?: string;
+    approvalId?: string;
+    status?: string;
+    summary?: string;
+    payload?: Record<string, unknown>;
+  }): Promise<void> {
+    const isApprovalReq = event.type === 'approval.requested';
+    const isTaskTerminal =
+      event.type === 'execution.completed' ||
+      event.type === 'execution.failed' ||
+      event.type === 'task.completed' ||
+      event.type === 'task.failed';
+
+    if (!isApprovalReq && !isTaskTerminal) {
+      return;
+    }
+
+    const activeRegistrations = Array.from(this.pushRegistrations.values()).filter((reg) => {
+      if (reg.enabled === false) return false;
+      if (isApprovalReq && reg.notifyApprovals === false && reg.notifyOnApprovals === false) return false;
+      if (isTaskTerminal && reg.notifyTaskTerminal === false && reg.notifyOnTaskFailures === false) return false;
+      return true;
+    });
+
+    if (activeRegistrations.length === 0) {
+      return;
+    }
+
+    const approvalId = event.approvalId ?? (typeof event.payload?.approvalId === 'string' ? event.payload.approvalId : undefined);
+    const taskId = event.taskId ?? event.executionId;
+    const title = isApprovalReq
+      ? 'Action Required: Wazir Approval Gate'
+      : event.type.includes('failed')
+        ? 'Wazir Task Failed'
+        : 'Wazir Task Completed';
+    const body =
+      event.summary ||
+      (isApprovalReq
+        ? `Approval ${approvalId ?? ''} is awaiting operator decision.`
+        : `Task ${taskId ?? ''} reached status ${event.status ?? event.type}.`);
+    const deepLink = isApprovalReq
+      ? `wazir://approvals/${approvalId ?? 'pending'}`
+      : `wazir://tasks/${taskId ?? 'latest'}`;
+
+    for (const reg of activeRegistrations) {
+      await this.dispatchPushWakeup(reg, {
+        eventType: event.type,
+        title,
+        body,
+        deepLink,
+        priority: isApprovalReq || event.type.includes('failed') ? 'high' : 'normal',
+        approvalId,
+        taskId,
+        executionId: event.executionId,
+      });
+    }
+  }
+
+  private async dispatchPushWakeup(
+    reg: PushRelayRegistration,
+    payload: {
+      eventType: string;
+      title: string;
+      body: string;
+      deepLink: string;
+      priority: 'high' | 'normal';
+      approvalId?: string;
+      taskId?: string;
+      executionId?: string;
+    },
+  ): Promise<PushWakeupEvent> {
+    const nowIso = new Date(this.now()).toISOString();
+    let status: PushWakeupEvent['status'] = 'queued_local';
+    let errorMessage: string | undefined;
+
+    if (reg.relayEndpointUrl && /^https?:\/\//i.test(reg.relayEndpointUrl)) {
+      try {
+        const res = await fetch(reg.relayEndpointUrl, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-wazir-push-provider': reg.provider,
+          },
+          body: JSON.stringify({
+            provider: reg.provider,
+            to: reg.pushToken,
+            deviceId: reg.deviceId,
+            priority: payload.priority,
+            notification: {
+              title: payload.title,
+              body: payload.body,
+            },
+            data: {
+              eventType: payload.eventType,
+              deepLink: payload.deepLink,
+              approvalId: payload.approvalId,
+              taskId: payload.taskId,
+              executionId: payload.executionId,
+              sentAt: nowIso,
+            },
+          }),
+        });
+        status = res.ok ? 'delivered' : 'failed';
+        if (!res.ok) {
+          errorMessage = `Relay HTTP ${res.status}`;
+        }
+      } catch (err) {
+        status = 'failed';
+        errorMessage = err instanceof Error ? err.message : String(err);
+      }
+    } else {
+      // Local out-of-band wakeup queue (for FCM/APNs bridge or local webhook test)
+      status = 'delivered';
+    }
+
+    const wakeupId = `push_${randomUUID().slice(0, 12)}`;
+    const wakeup: PushWakeupEvent = {
+      id: wakeupId,
+      wakeupId,
+      deviceId: reg.deviceId,
+      provider: reg.provider,
+      eventType: payload.eventType,
+      title: payload.title,
+      body: payload.body,
+      deepLink: payload.deepLink,
+      deepLinkUri: payload.deepLink,
+      priority: payload.priority,
+      approvalId: payload.approvalId,
+      taskId: payload.taskId,
+      executionId: payload.executionId,
+      status,
+      createdAt: nowIso,
+      timestamp: nowIso,
+      error: errorMessage,
+    };
+
+    reg.lastWakeupAt = nowIso;
+    reg.deliveryCount = (reg.deliveryCount ?? 0) + 1;
+    reg.updatedAt = nowIso;
+    this.pushRegistrations.set(reg.deviceId, reg);
+
+    this.pushWakeups.unshift(wakeup);
+    if (this.pushWakeups.length > 50) {
+      this.pushWakeups.length = 50;
+    }
+
+    await this.state.store.put(`control/push/registrations/${reg.deviceId}`, reg);
+    await this.state.store.put('control/push/wakeups', this.pushWakeups.slice(0, 50));
+    return wakeup;
+  }
 }
 
 export function registerMultiSurfaceRoutes(
@@ -1406,9 +1957,28 @@ export function registerMultiSurfaceRoutes(
   app.get('/api/v1/mobile/autonomy', auth.requireViewerOperatorOrDevice, getAutonomyHandler);
   app.post('/api/v1/mobile/autonomy', auth.requireOperatorOrDevice, auth.requireProtocolPrincipal, setAutonomyHandler);
 
-  // 2. Host Instance Switching & Mode B Remote Controller Pairing
+  // 2. Host Instance Switching, SSH Config Import & Mode B Remote Controller Pairing
   app.get('/api/v1/hosts', auth.requireViewerOperatorOrDevice, (_req, res) => {
     res.json(multiSurface.listHosts());
+  });
+
+  app.get('/api/v1/hosts/ssh-config', auth.requireViewerOperatorOrDevice, async (req, res) => {
+    const configPath = typeof req.query.configPath === 'string' ? req.query.configPath : undefined;
+    const discovered = await multiSurface.discoverSshConfigProfiles({ configPath });
+    res.json(discovered);
+  });
+
+  app.post('/api/v1/hosts/import-ssh', auth.requireOperator, async (req, res) => {
+    const result = await multiSurface.importSshConfigHosts({
+      configText: typeof req.body?.configText === 'string' ? req.body.configText : undefined,
+      configPath: typeof req.body?.configPath === 'string' ? req.body.configPath : undefined,
+      selectedAliases: Array.isArray(req.body?.selectedAliases)
+        ? req.body.selectedAliases.map((a: unknown) => String(a))
+        : undefined,
+      remoteControllerPort:
+        typeof req.body?.remoteControllerPort === 'number' ? req.body.remoteControllerPort : undefined,
+    });
+    res.status(result.imported.length > 0 ? 201 : 200).json(result);
   });
 
   app.post('/api/v1/hosts', auth.requireOperator, async (req, res) => {
@@ -1542,4 +2112,86 @@ export function registerMultiSurfaceRoutes(
   app.post('/api/v1/executions/:id/diff-review', auth.requireOperatorOrDevice, auth.requireProtocolPrincipal, reviewDiffHandler);
   app.get('/api/v1/mobile/tasks/:id/artifacts', auth.requireViewerOperatorOrDevice, getArtifactsHandler);
   app.post('/api/v1/mobile/tasks/:id/diff-review', auth.requireOperatorOrDevice, auth.requireProtocolPrincipal, reviewDiffHandler);
+
+  // 5. Out-of-Band Cloud Push Relay & Wakeup Service (Mobile + Operator)
+  const getPushStatusHandler = (req: Request, res: Response) => {
+    const deviceId = typeof req.query.deviceId === 'string' ? req.query.deviceId : undefined;
+    res.json(multiSurface.getPushRelayStatus(deviceId));
+  };
+
+  const registerPushHandler = async (req: Request, res: Response) => {
+    const principal = (res.locals.principal as ProtocolPrincipal | undefined) ?? {
+      kind: 'operator',
+      id: 'operator',
+      scopes: ['read', 'mutate'],
+    };
+    const deviceId = String(
+      req.body?.deviceId || (principal.kind === 'mobile-device' ? principal.id.replace(/^mobile:/, '') : ''),
+    ).trim();
+    const result = await multiSurface.registerPushRelay({
+      deviceId,
+      deviceName: typeof req.body?.deviceName === 'string' ? req.body.deviceName : undefined,
+      provider: req.body?.provider,
+      pushToken: String(req.body?.pushToken ?? ''),
+      relayEndpointUrl: typeof req.body?.relayEndpointUrl === 'string' ? req.body.relayEndpointUrl : undefined,
+      enabled: typeof req.body?.enabled === 'boolean' ? req.body.enabled : undefined,
+      notifyApprovals: typeof req.body?.notifyApprovals === 'boolean' ? req.body.notifyApprovals : undefined,
+      notifyTaskTerminal: typeof req.body?.notifyTaskTerminal === 'boolean' ? req.body.notifyTaskTerminal : undefined,
+    });
+    if ('error' in result) {
+      res.status(result.status).json({ error: result.error, code: result.code });
+      return;
+    }
+    res.status(201).json(result);
+  };
+
+  const unregisterPushHandler = async (req: Request, res: Response) => {
+    const principal = (res.locals.principal as ProtocolPrincipal | undefined) ?? {
+      kind: 'operator',
+      id: 'operator',
+      scopes: ['read', 'mutate'],
+    };
+    const deviceId = String(
+      req.body?.deviceId ||
+        req.query.deviceId ||
+        (principal.kind === 'mobile-device' ? principal.id.replace(/^mobile:/, '') : ''),
+    ).trim();
+    const removed = await multiSurface.unregisterPushRelay(deviceId);
+    if (!removed) {
+      res.status(404).json({ error: `Push registration for device '${deviceId}' not found`, code: 'PUSH_NOT_FOUND' });
+      return;
+    }
+    res.json({ ok: true, deviceId });
+  };
+
+  const testPushHandler = async (req: Request, res: Response) => {
+    const principal = (res.locals.principal as ProtocolPrincipal | undefined) ?? {
+      kind: 'operator',
+      id: 'operator',
+      scopes: ['read', 'mutate'],
+    };
+    const deviceId =
+      typeof req.body?.deviceId === 'string'
+        ? req.body.deviceId
+        : principal.kind === 'mobile-device'
+          ? principal.id.replace(/^mobile:/, '')
+          : undefined;
+    const result = await multiSurface.triggerTestPushWakeup({
+      deviceId,
+      title: typeof req.body?.title === 'string' ? req.body.title : undefined,
+      body: typeof req.body?.body === 'string' ? req.body.body : undefined,
+      deepLink: typeof req.body?.deepLink === 'string' ? req.body.deepLink : undefined,
+    });
+    res.json(result);
+  };
+
+  app.get('/api/v1/push/status', auth.requireViewerOperatorOrDevice, getPushStatusHandler);
+  app.post('/api/v1/push/register', auth.requireOperatorOrDevice, auth.requireProtocolPrincipal, registerPushHandler);
+  app.post('/api/v1/push/unregister', auth.requireOperatorOrDevice, auth.requireProtocolPrincipal, unregisterPushHandler);
+  app.post('/api/v1/push/test', auth.requireOperatorOrDevice, auth.requireProtocolPrincipal, testPushHandler);
+
+  app.get('/api/v1/mobile/push/status', auth.requireViewerOperatorOrDevice, getPushStatusHandler);
+  app.post('/api/v1/mobile/push/register', auth.requireOperatorOrDevice, auth.requireProtocolPrincipal, registerPushHandler);
+  app.post('/api/v1/mobile/push/unregister', auth.requireOperatorOrDevice, auth.requireProtocolPrincipal, unregisterPushHandler);
+  app.post('/api/v1/mobile/push/test', auth.requireOperatorOrDevice, auth.requireProtocolPrincipal, testPushHandler);
 }

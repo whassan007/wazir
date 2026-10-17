@@ -251,4 +251,100 @@ describe('API consolidation & review findings (B, C, D, E, G, I)', { timeout: 30
     expect(computerIds).toContain('local');
     expect(computerIds).toContain('dgx-spark');
   });
+
+  it('Priority P0/P1: cross-process CLI execution persists through API restart with identical identifiers, events, artifacts, and normalized fields', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'wazir-cross-proc-exec-'));
+    try {
+      const storePath = join(dir, 'shared-store.json');
+      const api1 = await start(new JsonFileStore(storePath));
+
+      // Separate CLI process ExecutionEngine writing to the same JsonFileStore on disk
+      const cliStore = new JsonFileStore(storePath);
+      const cliEngine = new ExecutionEngine({
+        persist: (record) => persistExecutionRecord(cliStore, `execution/${record.execution.id}`, record),
+        load: async () => (await cliStore.list('execution/')).map((e) => e.value as never),
+      });
+      await cliEngine.ready;
+
+      const created = await cliEngine.create({
+        task: {
+          id: 'task-cross-proc-1',
+          type: 'coding',
+          input: 'Verify cross-process execution state',
+          requirements: { capabilities: [] },
+          priority: 'normal',
+          status: 'running',
+          createdAt: new Date(),
+        },
+        agentId: 'coding-agent',
+        modelId: 'qwen2.5-coder:14b',
+        runtimeId: 'ollama',
+        computerId: 'local',
+      });
+      const execId = created.execution.id;
+
+      await cliEngine.setStatus(execId, 'running');
+      await cliEngine.recordCheck(execId, {
+        name: 'vitest-suite',
+        type: 'test',
+        command: 'npx vitest run',
+        passed: true,
+        output: '12 passed',
+        durationMs: 420,
+      });
+      await cliEngine.setResult(execId, 'Cross-process execution verified');
+      await cliEngine.setStatus(execId, 'completed');
+
+      // Retrieve through API #1 (while running concurrently with CLI store updates)
+      const detail1 = await (await fetch(`${api1.baseUrl}/api/v1/executions/${execId}`)).json() as {
+        execution: Record<string, unknown> & { execution: Record<string, unknown> };
+      };
+      expect(detail1.execution.execution.id).toBe(execId);
+      expect(detail1.execution.execution.status).toBe('completed');
+      expect(detail1.execution.agentId).toBe('coding-agent');
+      expect(detail1.execution.modelId).toBe('qwen2.5-coder:14b');
+      expect(detail1.execution.execution.finishedAt).toBeDefined();
+      expect(Array.isArray(detail1.execution.evidence)).toBe(true);
+
+      const events1 = await (await fetch(`${api1.baseUrl}/api/v1/executions/${execId}/events`)).json() as {
+        executionId: string;
+        events: Array<{ id: string; type: string; sequence: number }>;
+      };
+      expect(events1.executionId).toBe(execId);
+      expect(events1.events.some((e) => e.type === 'execution.completed')).toBe(true);
+
+      const artifacts1 = await (await fetch(`${api1.baseUrl}/api/v1/executions/${execId}/artifacts`)).json() as {
+        targetId: string;
+        artifacts: Array<{ kind: string }>;
+      };
+      expect(artifacts1.targetId).toBe(execId);
+      expect(artifacts1.artifacts.length).toBeGreaterThan(0);
+
+      // Mobile task list also surfaces the CLI execution
+      const mobileTasks1 = await (await fetch(`${api1.baseUrl}/api/v1/mobile/tasks`)).json() as {
+        tasks: Array<{ taskId: string; executionId?: string; state: string }>;
+      };
+      expect(mobileTasks1.tasks.some((t) => t.executionId === execId && t.state === 'completed')).toBe(true);
+
+      // Restart the API and verify identical identifiers, events, artifacts, and terminal state
+      await stop(api1.server);
+      const api2 = await start(new JsonFileStore(storePath));
+
+      const detail2 = await (await fetch(`${api2.baseUrl}/api/v1/executions/${execId}`)).json() as {
+        execution: Record<string, unknown> & { execution: Record<string, unknown> };
+      };
+      expect(detail2.execution.execution.id).toBe(execId);
+      expect(detail2.execution.execution.status).toBe('completed');
+      expect(detail2.execution.result).toBe('Cross-process execution verified');
+
+      const events2 = await (await fetch(`${api2.baseUrl}/api/v1/executions/${execId}/events`)).json() as {
+        executionId: string;
+        events: Array<{ id: string; type: string; sequence: number }>;
+      };
+      expect(events2.events.map((e) => e.id)).toEqual(events1.events.map((e) => e.id));
+    } finally {
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
 });
+

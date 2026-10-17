@@ -5,28 +5,30 @@ implement a second orchestration engine: the window simply loads the same
 dashboard served by `@wazir/web`, which talks to `@wazir/api` exactly as it
 does in a browser.
 
-## Status: dev scaffold only
+## Capabilities
 
 What works:
 
 - `npm run desktop:dev` from the repo root (or `npm run dev` here) builds the
-  Rust shell, starts `@wazir/api` + `@wazir/web` (via `start:dashboard`), and
-  opens a native window pointed at the dashboard.
-- Native menu: Reload, Open in Browser, View Logs, Quit/About.
-- App icon generated from `assets/brand/logo.jpeg`.
-
-What is **not** implemented yet (tracked, not forgotten):
-
-- Packaging/installers for Windows, Linux, or macOS (`tauri build` bundling,
-  code signing, notarization, CI workflows).
-- Mode B (remote host connection) — reusing the Android app's mobile pairing
-  protocol (`apps/api/src/mobile.ts`, `POST /api/v1/mobile/pair/request`) is
-  the planned path, not yet wired into this shell.
-- Mode C (bundling a managed runtime inside the installer).
-- OS keychain-backed credential storage (currently the shell relies on the
-  same server-side `WAZIR_API_TOKEN` handling `@wazir/web/server.js` already
-  does; no desktop-specific secret storage exists yet).
-- Auto-update.
+  Rust shell, ensures `@wazir/api` (port 4800) and `@wazir/web` (port 4801) are
+  running with a shared operator credential, and opens a native window once both
+  ports are ready.
+- **OS Keychain & Credential Sync:** Synchronizes the local operator bearer
+  token between `~/.wazir/local-operator.token` (`0600`) and the OS keychain
+  (macOS `security` Keychain / Linux `secret-tool`) so `@wazir/api`,
+  `@wazir/web`, and `wazir-desktop` always share a deterministic credential.
+- **Multi-Host & SSH Config Integration:** Native **Control** menu items for
+  **Pair or Switch Remote Host…** (`CmdOrCtrl+Shift+H`), **Import SSH Hosts
+  (`~/.ssh/config`)**, and **Switch to Local Host**, bridged via
+  `window.__WAZIR_SURFACE__`.
+- **Autonomy & Scheduler Shortcuts:** Native menu actions to switch Autonomy
+  postures (`read-only`, `request-review`, `auto-sandbox`) and jump directly to
+  **Scheduled Tasks (`@wazir/scheduler`)** (`CmdOrCtrl+Shift+S`).
+- **Background Approval Notifications:** Polls pending tool approvals over
+  loopback and dispatches native OS notifications (macOS, Linux, Windows) plus
+  `wazir://approval-pending` events.
+- **App Icons & Bundling:** Multi-platform bundle icons (`icns`, `ico`, `png`)
+  and `targets: "all"` configured in `src-tauri/tauri.conf.json`.
 
 ## Prerequisites
 

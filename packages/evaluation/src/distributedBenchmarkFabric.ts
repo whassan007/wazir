@@ -1260,10 +1260,11 @@ export class DistributedBenchmarkFabric {
       baselineBenchmark: baselineSuite,
       candidateBenchmark: candidateSuite,
       comparison,
-      decision: guardResult.qualified ? 'QUALIFIED' : 'REJECTED',
+      decision: guardResult.qualified ? 'QUALIFIED'
+        : guardResult.regressionsDetected.length > 0 || guardResult.protectedViolations.length > 0 ? 'REJECTED' : 'INCONCLUSIVE',
       reasons: guardResult.qualified
         ? ['Distributed evaluation passed all correctness and regression gates without regression.']
-        : guardResult.regressionsDetected,
+        : [guardResult.summary],
       regressionGuard: guardResult,
       isDistributed: true,
       workerPlacements,

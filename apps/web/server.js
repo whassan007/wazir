@@ -102,8 +102,28 @@ function evaluateTrust(req) {
   const loopbackPeer = isLoopbackAddress(req.socket?.remoteAddress);
   const loopbackHost = isLoopbackHostHeader(req.headers.host);
   const origin = req.headers.origin;
-  const sameOrigin = origin === undefined
-    || (typeof origin === 'string' && origin === `http://${req.headers.host}`);
+  const secFetchSite = req.headers['sec-fetch-site'];
+  const expectedOrigin = req.headers.host ? `http://${req.headers.host}` : undefined;
+  let sameOrigin = origin === undefined
+    || (typeof origin === 'string' && origin === expectedOrigin);
+  if (secFetchSite === 'cross-site') {
+    sameOrigin = false;
+  }
+  if (
+    sameOrigin &&
+    origin === undefined &&
+    req.method !== 'GET' &&
+    req.method !== 'HEAD' &&
+    typeof req.headers.referer === 'string'
+  ) {
+    try {
+      if (new URL(req.headers.referer).origin !== expectedOrigin) {
+        sameOrigin = false;
+      }
+    } catch {
+      sameOrigin = false;
+    }
+  }
   return { trusted: loopbackPeer && loopbackHost && sameOrigin, crossOrigin: !sameOrigin };
 }
 
@@ -200,6 +220,11 @@ async function proxy(req, res) {
       host: url.host,
     };
     delete headers['x-wazir-target-host'];
+    if (!trusted) {
+      headers['x-wazir-untrusted-proxy'] = '1';
+    } else {
+      delete headers['x-wazir-untrusted-proxy'];
+    }
     if (token && !req.headers.authorization) {
       headers.authorization = `Bearer ${token}`;
     }
@@ -277,7 +302,14 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (pathname.startsWith('/api/') || pathname === '/health') {
+  if (
+    pathname.startsWith('/api/') ||
+    pathname === '/health' ||
+    pathname === '/ready' ||
+    pathname === '/executions' ||
+    pathname.startsWith('/ap/') ||
+    pathname.startsWith('/mcp')
+  ) {
     proxy(req, res);
     return;
   }

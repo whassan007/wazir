@@ -54,6 +54,7 @@ import {
   OBJECTIVE_METRIC_MAP,
 } from '@wazir/core';
 import { BenchmarkService } from './benchmarkService.js';
+import { OptimizerStateManager, type OptimizerState } from './optimizerState.js';
 import { EvaluationService } from './evaluationService.js';
 import { OpportunityDetector } from './opportunityDetector.js';
 import { RegressionGuard } from './regressionGuard.js';
@@ -138,6 +139,10 @@ export class MetaOptimizerService {
   private readonly store?: KeyValueStore;
   private readonly canaryDeploymentService: CanaryDeploymentService;
 
+  private readonly durableState: OptimizerStateManager;
+  private pendingWrites: Promise<void> = Promise.resolve();
+  private persistenceError?: Error;
+  private accountingStatus: 'uninitialized' | 'complete' | 'pending' | 'unknown' = 'uninitialized';
   private activeConfig: OptimizableConfig;
   private readonly requireStrictImprovement: boolean;
   private defaultLevel: SelfImprovementLevel;
@@ -152,7 +157,6 @@ export class MetaOptimizerService {
   private candidates = new Map<string, CandidateImplementation>();
   private history: MetaOptimizationRunResult[] = [];
   private events: MetaOptimizerEvent[] = [];
-  private rollbackMetadata = new Map<string, OptimizableConfig>();
 
   constructor(options: MetaOptimizerOptions) {
     this.benchmarkService = options.benchmarkService;
@@ -179,12 +183,13 @@ export class MetaOptimizerService {
         memoryService: options.memoryService,
       });
 
-    this.activeConfig = options.initialConfig ?? structuredClone(DEFAULT_OPTIMIZABLE_CONFIG);
+    this.activeConfig = structuredClone(options.initialConfig ?? DEFAULT_OPTIMIZABLE_CONFIG);
     this.requireStrictImprovement = options.requireStrictImprovement ?? true;
     this.defaultLevel = options.defaultLevel ?? 2; // Level 2: EXPERIMENT (Default)
     this.domainLevels = { ...DEFAULT_DOMAIN_LEVELS, ...(options.domainLevels ?? {}) };
     this.budget = { ...DEFAULT_META_OPTIMIZATION_BUDGET, ...(options.budget ?? {}) };
 
+    this.durableState = new OptimizerStateManager(this.store, this.activeConfig, this.budget);
     this.consumption = {
       experimentsCount: 0,
       candidatesCount: 0,
@@ -195,30 +200,78 @@ export class MetaOptimizerService {
     };
   }
 
+  private applyState(state: OptimizerState): void {
+    this.activeConfig = structuredClone(state.activeConfig);
+    this.budget = structuredClone(state.budget);
+    this.consumption = structuredClone(state.consumption);
+    this.accountingStatus = state.accountingUncertain ? 'unknown' : state.inFlight ? 'pending' : 'complete';
+    this.history = structuredClone(state.history);
+    for (const plan of Object.values(state.plans)) this.experiments.set(plan.experimentId, structuredClone(plan));
+    for (const candidate of Object.values(state.candidates)) this.candidates.set(candidate.candidateId, structuredClone(candidate));
+    for (const baseline of Object.values(state.baselines)) this.baselines.set(baseline.id, structuredClone(baseline));
+  }
+
+  private queuePersistence(action: () => Promise<void>): void {
+    this.pendingWrites = this.pendingWrites.then(async () => {
+      if (!this.persistenceError) await action();
+    }).catch((error) => { this.persistenceError = error instanceof Error ? error : new Error(String(error)); });
+  }
+
+  /** Flush synchronous plan edits before closing or starting execution. */
+  public async flush(): Promise<void> {
+    await this.pendingWrites;
+    if (this.persistenceError) throw this.persistenceError;
+  }
+
+  private async ready(): Promise<void> {
+    await this.flush();
+    this.applyState(await this.durableState.read());
+  }
+
   public async hydrate(): Promise<void> {
+    await this.ready();
     await this.canaryDeploymentService.hydrate();
-    if (!this.store) return;
+  }
+
+  public async getRecoveryState(): Promise<OptimizerState> {
+    await this.flush();
+    const state = await this.durableState.read();
+    this.applyState(state);
+    return state;
+  }
+
+  /** Reconcile an interrupted sample with its recorded result, without executing it again. */
+  public async reconcilePendingSample(reservationId: string, result: import('@wazir/core').BenchmarkRunResult): Promise<void> {
+    await this.ready();
+    this.applyState(await this.durableState.complete(reservationId, result));
+  }
+
+  private async collectSuite(experimentId: string, phase: string, tasks: BenchmarkTask[], runner: BenchmarkRunner,
+    options: NonNullable<Parameters<BenchmarkService['runBenchmarkSuite']>[2]>): Promise<BenchmarkSuiteResult> {
+    let reservationId: string | undefined;
     try {
-      if ('list' in this.store && typeof this.store.list === 'function') {
-        const entries = await this.store.list('meta/history/');
-        for (const entry of entries) {
-          if (entry.value) {
-            const run = entry.value as MetaOptimizationRunResult;
-            if (!this.history.some((h) => h.runId === run.runId)) {
-              this.history.push(run);
-            }
-          }
-        }
-        const planEntries = await this.store.list('meta/plans/');
-        for (const entry of planEntries) {
-          if (entry.value) {
-            const plan = entry.value as ExperimentPlan;
-            this.experiments.set(plan.experimentId, plan);
-          }
-        }
-      }
-    } catch {
-      // Ignore store errors during hydration
+      return await this.benchmarkService.runBenchmarkSuite(tasks, runner, {
+        ...options,
+        beforeRun: async (task, repetition) => {
+          const reservation = await this.durableState.reserve(experimentId, JSON.stringify([phase, task.id, repetition]), task.id, repetition);
+          reservationId = reservation.id;
+          this.accountingStatus = 'pending';
+          if (reservation.remaining.maxWallTimeMs <= 0) throw new Error('META_OPTIMIZATION_BUDGET_EXHAUSTED: Dispatch deadline');
+          return { timeoutMs: Math.min(task.timeoutMs ?? 60_000, reservation.remaining.maxWallTimeMs), resourceBudget: reservation.remaining };
+        },
+        afterRun: async (result) => {
+          const state = await this.durableState.complete(reservationId!, result);
+          this.consumption = structuredClone(state.consumption);
+          this.accountingStatus = state.accountingUncertain ? 'unknown' : 'complete';
+          const experiment = state.experiments[experimentId];
+          if (experiment.status === 'STOPPED') throw new Error(experiment.stopReason);
+        },
+      });
+    } catch (error) {
+      // If a write fails, the durable reservation remains unresolved; do not replay it.
+      this.accountingStatus = 'unknown';
+      await this.durableState.stop(experimentId, String(error));
+      throw error;
     }
   }
 
@@ -249,8 +302,8 @@ export class MetaOptimizerService {
     return { ...this.budget };
   }
 
-  public getConsumption(): MetaOptimizerBudgetConsumption {
-    return { ...this.consumption };
+  public getConsumption(): MetaOptimizerBudgetConsumption & { accountingStatus: 'uninitialized' | 'complete' | 'pending' | 'unknown' } {
+    return { ...this.consumption, accountingStatus: this.accountingStatus };
   }
 
   public getCausalService(): CausalAttributionService {
@@ -488,7 +541,10 @@ export class MetaOptimizerService {
     weights?: Record<string, number>;
     lexicographicOrder?: string[];
   }): ExperimentPlan {
-    const { hypothesis, baselineCheckpointId, sampleSize = 1, tasks = [] } = params;
+    const { hypothesis, baselineCheckpointId, sampleSize = 10, tasks = [] } = params;
+    if (!Number.isSafeInteger(sampleSize) || sampleSize < 1 || sampleSize > 1000) {
+      throw new Error('sampleSize must be an integer between 1 and 1000');
+    }
     const experimentId = `exp-${randomUUID().slice(0, 8)}`;
 
     const plan: ExperimentPlan = {
@@ -525,13 +581,8 @@ export class MetaOptimizerService {
     };
 
     this.experiments.set(experimentId, plan);
-    if (this.store && 'put' in this.store && typeof this.store.put === 'function') {
-      try {
-        void this.store.put(`meta/plans/${experimentId}`, plan);
-      } catch {
-        // Ignore store put failure
-      }
-    }
+    const registeredPlan = structuredClone(plan);
+    this.queuePersistence(() => this.durableState.plan(registeredPlan));
     this.emitEvent('meta.experiment.started', {
       experimentId,
       name: plan.name,
@@ -552,6 +603,7 @@ export class MetaOptimizerService {
     workspaceRoot?: string;
     runner?: BenchmarkRunner;
     tasks?: BenchmarkTask[];
+    models?: string[];
   }): Promise<BaselineRecord> {
     const config = params.config ?? this.getActiveConfig();
     const baselineId = `base-${randomUUID().slice(0, 8)}`;
@@ -560,12 +612,21 @@ export class MetaOptimizerService {
       .update(JSON.stringify(config))
       .digest('hex');
 
+    const derivedModels: string[] = [
+      ...new Set(
+        params.models ??
+          Object.values(config.routingRules ?? {})
+            .flatMap((rule) => [rule?.preferredModel, rule?.fallbackModel])
+            .filter((m): m is string => typeof m === 'string' && m.length > 0),
+      ),
+    ];
+
     const baselineRecord: BaselineRecord = {
       id: baselineId,
       commitSha: params.commitSha,
       workspaceHash,
       config: structuredClone(config),
-      models: ['qwen-2.5-coder', 'gemma-27b'],
+      models: derivedModels,
       runtimeVersions: { node: process.version },
       benchmarkVersion: '1.0.0',
       toolDefinitionsHash: createHash('sha256').update(JSON.stringify(config.toolPolicies ?? {})).digest('hex'),
@@ -575,6 +636,8 @@ export class MetaOptimizerService {
       createdAt: new Date(),
     };
 
+    await this.ready();
+    await this.durableState.baseline(baselineRecord);
     this.baselines.set(baselineId, baselineRecord);
     this.emitEvent('meta.baseline.recorded', {
       baselineId,
@@ -593,7 +656,10 @@ export class MetaOptimizerService {
     plan: ExperimentPlan,
     count = 1,
   ): Promise<CandidateImplementation[]> {
+    await this.ready();
+    await this.durableState.plan(structuredClone(plan));
     this.checkBudget('candidates');
+    if (!Number.isSafeInteger(count) || count < 1 || count > Math.min(this.budget.maxCandidatesPerExperiment, plan.budget.maxCandidatesPerExperiment)) throw new Error('Invalid candidate count or candidate budget exceeded');
 
     const candidates: CandidateImplementation[] = [];
     const hypothesis = plan.hypothesis;
@@ -640,16 +706,13 @@ export class MetaOptimizerService {
       };
 
       candidates.push(candidate);
-      this.candidates.set(candidateId, candidate);
-      this.consumption.candidatesCount++;
-
-      this.emitEvent('meta.candidate.created', {
-        candidateId,
-        experimentId: plan.experimentId,
-        strategy,
-      });
     }
 
+    const state = await this.durableState.addCandidates(plan, candidates);
+    this.applyState(state);
+    for (const candidate of candidates) this.emitEvent('meta.candidate.created', {
+      candidateId: candidate.candidateId, experimentId: plan.experimentId, strategy: candidate.strategy,
+    });
     return candidates;
   }
 
@@ -701,6 +764,7 @@ export class MetaOptimizerService {
       errors.length === 0;
 
     candidate.status = allPassed ? 'VERIFIED' : 'FAILED_VERIFICATION';
+    await this.durableState.candidateStatus(candidate);
 
     const result: CandidateVerificationResult = {
       candidateId: candidate.candidateId,
@@ -744,6 +808,9 @@ export class MetaOptimizerService {
     runnerFactory?: (config: OptimizableConfig, activeMutationIds: string[]) => BenchmarkRunner;
   }): Promise<CausalAttributionReport> {
     const { experimentId, candidate, runner, tasks } = params;
+    await this.ready();
+    const recovery = await this.durableState.read();
+    if (recovery.experiments[experimentId]?.status !== 'RUNNING') throw new Error('OPTIMIZER_ABLATION_REQUIRES_ACTIVE_EXPERIMENT');
     const baseline = params.baselineConfig ?? this.activeConfig;
     const primaryMetric = params.primaryMetric ?? 'peak_context_tokens';
     const direction = params.direction ?? 'decrease';
@@ -765,28 +832,13 @@ export class MetaOptimizerService {
     >();
 
     const extractMetric = (suite: BenchmarkSuiteResult): number => {
-      if (primaryMetric === 'task_success') return suite.passedTasks / Math.max(1, suite.totalTasks);
-      if (primaryMetric === 'input_tokens') {
-        return suite.results.reduce((acc, r) => acc + (r.scoreReport?.metrics?.inputTokens ?? 0), 0);
-      }
-      if (primaryMetric === 'total_tokens') return suite.aggregateMetrics?.totalTokens ?? 0;
-      if (primaryMetric === 'peak_context_tokens') {
-        const peak = Math.max(
-          ...suite.results.map(
-            (r) => (r.scoreReport?.metrics?.inputTokens ?? 0) + (r.scoreReport?.metrics?.outputTokens ?? 0),
-          ),
-          0,
-        );
-        return peak > 0 ? peak : (suite.aggregateMetrics?.totalTokens ?? 0);
-      }
-      if (primaryMetric === 'repair_cycles') return suite.aggregateMetrics?.averageRepairCycles ?? 0;
-      if (primaryMetric === 'wall_time') return suite.aggregateMetrics?.totalWallTimeMs ?? 0;
-      if (primaryMetric === 'monetary_cost') return suite.aggregateMetrics?.totalCostUsd ?? 0;
-      return suite.aggregateMetrics?.totalTokens ?? 0;
+      const value = extractMetricValueSafe(primaryMetric, suite);
+      if (!Number.isFinite(value)) throw new Error(`UNAVAILABLE_METRIC: ablation '${primaryMetric}'`);
+      return value;
     };
 
     // 1. Run baseline measurement
-    const baselineSuite = await this.benchmarkService.runBenchmarkSuite(tasks, runner, {
+    const baselineSuite = await this.collectSuite(experimentId, 'ablation-baseline', tasks, runner, {
       suiteName: `ablation-baseline-${experimentId}`,
       config: baseline,
       activeMutations: [],
@@ -808,7 +860,7 @@ export class MetaOptimizerService {
         ? params.runnerFactory(configItem.config, configItem.mutationIds)
         : runner;
 
-      const suite = await this.benchmarkService.runBenchmarkSuite(tasks, activeRunner, {
+      const suite = await this.collectSuite(experimentId, `ablation-${configItem.configId}`, tasks, activeRunner, {
         suiteName: `ablation-${configItem.configId}`,
         config: configItem.config,
         activeMutations: configItem.mutationIds,
@@ -870,7 +922,18 @@ export class MetaOptimizerService {
     };
     distributedFabric?: DistributedBenchmarkFabric;
   }): Promise<MetaOptimizationRunResult[]> {
-    const { plan, candidates, runner } = params;
+    await this.ready();
+    const { candidates, runner } = params;
+    const plan = structuredClone(params.plan);
+    // Historical callers omitted repetitions; retain one execution without granting qualification.
+    plan.sampleSize ??= 1;
+    if (plan.budget?.maxCandidatesPerExperiment !== undefined &&
+        (!Number.isSafeInteger(plan.budget.maxCandidatesPerExperiment) || plan.budget.maxCandidatesPerExperiment < 1 || candidates.length > plan.budget.maxCandidatesPerExperiment)) {
+      throw new Error('Candidate count exceeds the pre-registered comparison budget');
+    }
+    if (!Number.isSafeInteger(plan.sampleSize) || plan.sampleSize < 1 || plan.sampleSize > 1000) {
+      throw new Error('sampleSize must be an integer between 1 and 1000');
+    }
     const benchmarkTasks = params.tasks ?? this.benchmarkService.listTasks();
 
     if (benchmarkTasks.length === 0) {
@@ -881,74 +944,37 @@ export class MetaOptimizerService {
     const baselineConfig = this.getActiveConfig();
 
     if (params.distributed) {
-      this.checkBudget('evaluations');
-      this.experiments.set(plan.experimentId, plan);
-      const fabric =
-        params.distributedFabric ??
-        this.distributedFabric ??
-        new DistributedBenchmarkFabric({
-          benchmarkService: this.benchmarkService,
-          evaluationService: this.evaluationService,
-          regressionGuard: this.regressionGuard,
-        });
-
-      const distResult = await fabric.executeExperiment({
-        plan,
-        candidates,
-        tasks: benchmarkTasks,
-        workers: params.workers,
-        seed: params.seed ?? plan.experimentId,
-        dispatcher: params.dispatcher,
-        failWorkerSimulation: params.failWorkerSimulation,
-        onEvent: (name, data) => this.emitEvent(name as any, data),
-      });
-
-      results.push(distResult);
-      this.history.push(distResult);
-      if (this.store && 'put' in this.store && typeof this.store.put === 'function') {
-        try {
-          await this.store.put(`meta/history/${distResult.runId}`, distResult);
-        } catch {
-          // Ignore store put failure
-        }
-      }
-
-      await this.recordLearning(plan, candidates[0], distResult);
-
-      this.emitEvent(
-        distResult.decision === 'QUALIFIED'
-          ? 'meta.candidate.qualified'
-          : distResult.decision === 'INCONCLUSIVE'
-            ? 'meta.candidate.evaluated'
-            : 'meta.candidate.rejected',
-        {
-          candidateId: candidates[0]?.candidateId ?? 'cand-dist',
-          decision: distResult.decision,
-          summary: distResult.comparison.summary,
-        },
-      );
-
-      return results;
+      throw new Error('OPTIMIZER_DISTRIBUTED_ACCOUNTING_UNAVAILABLE: Durable per-sample reservations required before distributed optimization');
     }
 
     if (!runner) {
       throw new Error('BenchmarkRunner required for non-distributed candidate evaluation.');
     }
 
+    await this.durableState.plan(plan);
+    const knownCandidates = (await this.durableState.read()).candidates;
+    for (const candidate of candidates) {
+      const existing = knownCandidates[candidate.candidateId];
+      if (existing && JSON.stringify(existing.config) !== JSON.stringify(candidate.config)) throw new Error('OPTIMIZER_CANDIDATE_CONFIG_CHANGED: Create a new candidate');
+    }
+    const newCandidates = candidates.filter((candidate) => !knownCandidates[candidate.candidateId]);
+    if (newCandidates.length) this.applyState(await this.durableState.addCandidates(plan, newCandidates));
+    this.applyState(await this.durableState.begin(plan, baselineConfig));
     // 1. Run baseline benchmark
-    const baselineBenchmark = await this.benchmarkService.runBenchmarkSuite(
-      benchmarkTasks,
+    const baselineBenchmark = await this.collectSuite(
+      plan.experimentId, 'baseline', benchmarkTasks,
       runner,
       {
         suiteName: `baseline-${baselineConfig.id}`,
         config: baselineConfig,
         activeMutations: [],
+        repetitions: plan.sampleSize,
       },
     );
 
     // 2. Evaluate each candidate
     for (const candidate of candidates) {
-      this.checkBudget('evaluations');
+
 
       // First run correctness verification
       const verification = await this.verifyCandidate(candidate);
@@ -986,7 +1012,7 @@ export class MetaOptimizerService {
         };
 
         results.push(runResult);
-        this.history.push(runResult);
+        this.applyState(await this.durableState.record(runResult));
         await this.recordLearning(plan, candidate, runResult);
         continue;
       }
@@ -996,13 +1022,14 @@ export class MetaOptimizerService {
         ? params.runnerFactory(candidate.config, candidate.mutations?.map((m) => m.path) ?? [])
         : runner;
 
-      const candidateBenchmark = await this.benchmarkService.runBenchmarkSuite(
-        benchmarkTasks,
+      const candidateBenchmark = await this.collectSuite(
+        plan.experimentId, `candidate-${candidate.candidateId}`, benchmarkTasks,
         activeCandidateRunner,
         {
           suiteName: `candidate-${candidate.candidateId}`,
           config: candidate.config,
           activeMutations: candidate.mutations?.map((m) => m.path) ?? [],
+          repetitions: plan.sampleSize,
         },
       );
 
@@ -1022,7 +1049,7 @@ export class MetaOptimizerService {
       let decision: MetaOptimizationDecision = 'REJECTED';
       if (guardResult.qualified) {
         decision = 'QUALIFIED';
-      } else if (guardResult.inconclusiveReasons.length > 0 && guardResult.regressionsDetected.length === 0) {
+      } else if (guardResult.inconclusiveReasons.length > 0 && guardResult.regressionsDetected.length === 0 && guardResult.protectedViolations.length === 0) {
         decision = 'INCONCLUSIVE';
       } else {
         decision = 'REJECTED';
@@ -1047,8 +1074,9 @@ export class MetaOptimizerService {
             significanceThreshold: params.significanceThreshold,
             runnerFactory: params.runnerFactory,
           });
-        } catch {
-          // Graceful fallback if runner does not support ablation
+        } catch (error) {
+          await this.durableState.stop(plan.experimentId, String(error));
+          throw error;
         }
       }
 
@@ -1069,14 +1097,7 @@ export class MetaOptimizerService {
       };
 
       results.push(runResult);
-      this.history.push(runResult);
-      if (this.store && 'put' in this.store && typeof this.store.put === 'function') {
-        try {
-          await this.store.put(`meta/history/${runResult.runId}`, runResult);
-        } catch {
-          // Ignore store put failure
-        }
-      }
+      this.applyState(await this.durableState.record(runResult));
 
       // Record learning in MemoryService (single-objective plans record immediately; multi-objective records after frontier computation)
       if (!plan.objectives || plan.objectives.length === 0) {
@@ -1112,6 +1133,7 @@ export class MetaOptimizerService {
         const disqualificationReasons: string[] = [
           ...(runRes.regressionGuard?.regressionsDetected ?? []),
           ...(runRes.regressionGuard?.protectedViolations ?? []),
+          ...(runRes.regressionGuard?.inconclusiveReasons ?? []),
         ];
 
         // Check if verification failed
@@ -1123,6 +1145,11 @@ export class MetaOptimizerService {
         for (const obj of plan.objectives) {
           const candVal = extractMetricValueSafe(obj.metric, runRes.candidateBenchmark);
           const baseVal = extractMetricValueSafe(obj.metric, runRes.baselineBenchmark);
+          if (!Number.isFinite(candVal) || !Number.isFinite(baseVal)) {
+            allConstraintsSatisfied = false;
+            disqualificationReasons.push(`UNAVAILABLE_METRIC: '${obj.metric}' requires complete baseline and candidate measurements`);
+            continue;
+          }
           rawMetrics[obj.metric] = candVal;
           normalizedDeltas[obj.metric] = computeBaselineRelativeDelta(candVal, baseVal);
         }
@@ -1132,6 +1159,11 @@ export class MetaOptimizerService {
           for (const constraint of plan.hardConstraints) {
             const candVal = extractMetricValueSafe(constraint.metric, runRes.candidateBenchmark);
             const baseVal = extractMetricValueSafe(constraint.metric, runRes.baselineBenchmark);
+            if (!Number.isFinite(candVal) || !Number.isFinite(baseVal)) {
+              allConstraintsSatisfied = false;
+              disqualificationReasons.push(`UNAVAILABLE_METRIC: '${constraint.metric}' cannot be evaluated`);
+              continue;
+            }
             rawMetrics[constraint.metric] = candVal;
             const evalRes = evaluateMetricConstraint(constraint, candVal, baseVal);
             if (!evalRes.satisfied) {
@@ -1183,6 +1215,8 @@ export class MetaOptimizerService {
       }
     }
 
+    for (const result of results) await this.durableState.record(result);
+    this.applyState(await this.durableState.finish(plan.experimentId));
     return results;
   }
 
@@ -1207,15 +1241,10 @@ export class MetaOptimizerService {
     this.emitEvent('meta.promotion.started', { candidateId: candidate.candidateId });
 
     try {
-      // Save rollback metadata
-      this.rollbackMetadata.set(candidate.candidateId, structuredClone(this.activeConfig));
-
-      // Promote configuration
-      this.activeConfig = structuredClone(candidate.config);
-
-      if (this.store) {
-        await this.store.put('meta_optimizer/active_config', this.activeConfig);
-      }
+      await this.ready();
+      const proof = [...this.history].reverse().find((run) => JSON.stringify(run.candidateConfig) === JSON.stringify(candidate.config) && run.regressionGuard?.qualified);
+      if (!proof) throw new Error('OPTIMIZER_QUALIFICATION_REQUIRED');
+      this.applyState(await this.durableState.promote(candidate.candidateId, candidate.config, proof));
 
       this.emitEvent('meta.promotion.completed', {
         candidateId: candidate.candidateId,
@@ -1241,18 +1270,8 @@ export class MetaOptimizerService {
   public async rollback(runIdOrCandidateId?: string): Promise<OptimizableConfig> {
     this.emitEvent('meta.rollback', { target: runIdOrCandidateId ?? 'last' });
 
-    if (runIdOrCandidateId && this.rollbackMetadata.has(runIdOrCandidateId)) {
-      this.activeConfig = this.rollbackMetadata.get(runIdOrCandidateId)!;
-    } else if (this.history.length > 0) {
-      const last = this.history[this.history.length - 1];
-      this.activeConfig = last.baselineConfig;
-    } else {
-      this.activeConfig = structuredClone(DEFAULT_OPTIMIZABLE_CONFIG);
-    }
-
-    if (this.store) {
-      await this.store.put('meta_optimizer/active_config', this.activeConfig);
-    }
+    await this.ready();
+    this.applyState(await this.durableState.rollback(runIdOrCandidateId));
 
     return this.getActiveConfig();
   }
@@ -1631,7 +1650,9 @@ export class MetaOptimizerService {
     candidate: MetaOptimizationCandidate,
     runner: BenchmarkRunner,
     tasks?: BenchmarkTask[],
+    options: { repetitions?: number } = {},
   ): Promise<MetaOptimizationRunResult> {
+    await this.ready();
     const benchmarkTasks = tasks ?? this.benchmarkService.listTasks();
     if (benchmarkTasks.length === 0) {
       throw new Error('No benchmark tasks available to evaluate candidate configuration.');
@@ -1640,63 +1661,59 @@ export class MetaOptimizerService {
     const runId = `opt-run-${randomUUID()}`;
     const baselineConfig = this.getActiveConfig();
 
+    // Register the legacy API's fixed objective family before observing results.
+    const plan = this.designExperiment({
+      hypothesis: {
+        id: `legacy-${runId}`, targetComponent: 'configuration', domain: 'context_policy',
+        proposedChange: 'Evaluate legacy candidate with repeated evidence',
+        expectedMetricEffect: { metric: 'task_success', direction: 'increase', expectedDelta: 0 },
+        possibleRegressions: [], requiredBenchmark: [], successThreshold: 1,
+      },
+      sampleSize: options.repetitions ?? 1,
+      tasks: benchmarkTasks.map((task) => task.id),
+      objectives: [
+        { metric: 'task_success', direction: 'MAXIMIZE' },
+        { metric: 'total_tokens', direction: 'MINIMIZE' },
+        { metric: 'wall_time', direction: 'MINIMIZE' },
+      ],
+      protectedMetrics: ['task_success', 'verification_success'],
+    });
+    await this.flush();
+    const known = (await this.durableState.read()).candidates[candidate.candidateId];
+    if (known && JSON.stringify(known.config) !== JSON.stringify(candidate.config)) throw new Error('OPTIMIZER_CANDIDATE_CONFIG_CHANGED: Create a new candidate');
+    if (!known) this.applyState(await this.durableState.addCandidates(plan, [{
+      candidateId: candidate.candidateId, experimentId: plan.experimentId, config: candidate.config,
+      strategy: 'CONFIGURATION', filesChanged: [], mutations: candidate.mutations, status: 'CREATED',
+    }]));
+    this.applyState(await this.durableState.begin(plan, baselineConfig));
+
     // 1. Run baseline benchmark
-    const baselineBenchmark = await this.benchmarkService.runBenchmarkSuite(
-      benchmarkTasks,
+    const baselineBenchmark = await this.collectSuite(
+      plan.experimentId, 'baseline', benchmarkTasks,
       runner,
-      { suiteName: `baseline-${baselineConfig.id}` },
+      { suiteName: `baseline-${baselineConfig.id}`, config: baselineConfig, repetitions: plan.sampleSize },
     );
 
     // 2. Run candidate benchmark
-    const candidateBenchmark = await this.benchmarkService.runBenchmarkSuite(
-      benchmarkTasks,
+    const candidateBenchmark = await this.collectSuite(
+      plan.experimentId, `candidate-${candidate.candidateId}`, benchmarkTasks,
       runner,
-      { suiteName: `candidate-${candidate.config.id}` },
+      { suiteName: `candidate-${candidate.config.id}`, config: candidate.config, activeMutations: candidate.mutations.map((m) => m.path), repetitions: plan.sampleSize },
     );
 
     // 3. Compare suites
     const comparison = this.benchmarkService.compareSuites(baselineBenchmark, candidateBenchmark);
 
-    // 4. Decision logic
-    const reasons: string[] = [];
-    let decision: MetaOptimizationDecision = 'REJECTED';
-
-    if (comparison.regressionDetected) {
-      decision = 'REJECTED';
-      reasons.push(
-        `REGRESSION_DETECTED: Candidate broke ${comparison.regressedTasks.length} previously passing task(s): ${comparison.regressedTasks.join(', ')}`,
-      );
-    } else if (comparison.passRateDelta < 0) {
-      decision = 'REJECTED';
-      reasons.push(
-        `PASS_RATE_REGRESSION: Candidate pass rate decreased by ${(Math.abs(comparison.passRateDelta) * 100).toFixed(1)}%`,
-      );
-    } else if (comparison.passRateDelta > 0) {
-      decision = 'ACCEPTED';
-      reasons.push(
-        `PASS_RATE_IMPROVEMENT: Candidate strictly improved pass rate by ${(comparison.passRateDelta * 100).toFixed(1)}%`,
-      );
-    } else {
-      // Pass rate is identical. Check resource efficiency gains
-      const costReduced = comparison.costDelta < -0.0001;
-      const tokensReduced = comparison.tokenUsageDelta < -10;
-      const latencyReduced = comparison.durationDelta < -50;
-
-      if (costReduced || tokensReduced || latencyReduced) {
-        decision = 'ACCEPTED';
-        reasons.push(
-          `EFFICIENCY_IMPROVEMENT: Maintained ${(comparison.candidatePassRate * 100).toFixed(1)}% pass rate with improved resource efficiency (cost delta: ${comparison.costDelta.toFixed(4)}, tokens delta: ${comparison.tokenUsageDelta}, latency delta: ${comparison.durationDelta.toFixed(0)}ms)`,
-        );
-      } else {
-        decision = 'REJECTED';
-        reasons.push(
-          'NO_EMPIRICAL_ADVANTAGE: Candidate showed neither pass rate improvement nor significant resource reduction.',
-        );
-      }
-    }
+    // Both APIs must use the same qualification gate; a point estimate cannot promote.
+    const guardResult = this.regressionGuard.evaluate({ plan, baselineSuite: baselineBenchmark, candidateSuite: candidateBenchmark, comparison });
+    const decision: MetaOptimizationDecision = guardResult.qualified ? 'ACCEPTED'
+      : guardResult.regressionsDetected.length > 0 || guardResult.protectedViolations.length > 0 ? 'REJECTED' : 'INCONCLUSIVE';
+    const reasons = [guardResult.summary];
 
     const runResult: MetaOptimizationRunResult = {
       runId,
+      experimentId: plan.experimentId,
+      regressionGuard: guardResult,
       baselineConfig,
       candidateConfig: candidate.config,
       mutations: candidate.mutations,
@@ -1708,16 +1725,10 @@ export class MetaOptimizerService {
       evaluatedAt: new Date(),
     };
 
+    this.applyState(await this.durableState.record(runResult));
+    this.applyState(await this.durableState.finish(plan.experimentId));
     if (decision === 'ACCEPTED') {
-      this.activeConfig = candidate.config;
-      if (this.store) {
-        await this.store.put('meta_optimizer/active_config', this.activeConfig);
-      }
-    }
-
-    this.history.push(runResult);
-    if (this.store) {
-      await this.store.put(`meta_optimizer/runs/${runId}`, runResult);
+      this.applyState(await this.durableState.promote(candidate.candidateId, candidate.config, runResult));
     }
 
     return runResult;
@@ -1748,7 +1759,7 @@ export class MetaOptimizerService {
   }
 
   private checkBudget(operation: 'experiments' | 'candidates' | 'evaluations'): void {
-    if (this.consumption.experimentsCount >= this.budget.maxExperiments) {
+    if (operation === 'experiments' && this.consumption.experimentsCount >= this.budget.maxExperiments) {
       throw new Error(`META_OPTIMIZATION_BUDGET_EXHAUSTED: Exceeded max experiments (${this.budget.maxExperiments})`);
     }
     if (this.consumption.candidatesCount >= this.budget.maxCandidatesPerExperiment * this.budget.maxExperiments) {
@@ -1764,15 +1775,17 @@ export class MetaOptimizerService {
   }
 
   public listExperiments(): ExperimentPlan[] {
-    return Array.from(this.experiments.values());
+    return structuredClone(Array.from(this.experiments.values()));
   }
 
   public getExperiment(experimentId: string): ExperimentPlan | undefined {
-    return this.experiments.get(experimentId);
+    return structuredClone(this.experiments.get(experimentId));
   }
 
   public registerExperiment(plan: ExperimentPlan): void {
-    this.experiments.set(plan.experimentId, plan);
+    this.experiments.set(plan.experimentId, structuredClone(plan));
+    const registeredPlan = structuredClone(plan);
+    this.queuePersistence(() => this.durableState.plan(registeredPlan));
     this.emitEvent('meta.experiment.started', { experimentId: plan.experimentId, domain: (plan as any).domain });
   }
 

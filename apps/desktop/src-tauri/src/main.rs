@@ -39,7 +39,32 @@ fn dirs_log_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Library/Logs")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn dirs_log_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
+        if !xdg.trim().is_empty() {
+            return PathBuf::from(xdg);
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.trim().is_empty() {
+            return PathBuf::from(home).join(".local/state");
+        }
+    }
+    std::env::temp_dir()
+}
+
+#[cfg(target_os = "windows")]
+fn dirs_log_dir() -> PathBuf {
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        if !local_app_data.trim().is_empty() {
+            return PathBuf::from(local_app_data).join("Logs");
+        }
+    }
+    std::env::temp_dir()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn dirs_log_dir() -> PathBuf {
     std::env::temp_dir()
 }
@@ -146,7 +171,32 @@ fn read_keychain_token() -> Option<String> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn read_keychain_token() -> Option<String> {
+    let output = Command::new("secret-tool")
+        .args([
+            "lookup",
+            "service",
+            KEYCHAIN_SERVICE,
+            "account",
+            KEYCHAIN_ACCOUNT,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if token.len() >= 16 {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn read_keychain_token() -> Option<String> {
     None
 }
@@ -169,7 +219,30 @@ fn store_keychain_token(token: &str) {
         .status();
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn store_keychain_token(token: &str) {
+    if let Ok(mut child) = Command::new("secret-tool")
+        .args([
+            "store",
+            "--label=Wazir Desktop Operator Token",
+            "service",
+            KEYCHAIN_SERVICE,
+            "account",
+            KEYCHAIN_ACCOUNT,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(token.as_bytes());
+        }
+        let _ = child.wait();
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn store_keychain_token(_token: &str) {}
 
 /// Synchronizes the operator token across `~/.wazir/local-operator.token` (mode 0600)
@@ -273,6 +346,19 @@ fn send_system_notification(title: &str, body: &str) {
             .stderr(Stdio::null())
             .status();
     }
+    #[cfg(target_os = "windows")]
+    {
+        let safe_title = title.replace('\'', "''");
+        let safe_body = body.replace('\'', "''");
+        let ps_script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; $n = New-Object System.Windows.Forms.NotifyIcon; $n.Icon = [System.Drawing.SystemIcons]::Information; $n.Visible = $true; $n.ShowBalloonTip(5000, '{safe_title}', '{safe_body}', [System.Windows.Forms.ToolTipIcon]::Info)"
+        );
+        let _ = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &ps_script])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 /// Lightweight HTTP GET over loopback to check for pending approvals without adding heavy HTTP crates.
@@ -320,6 +406,7 @@ fn build_menu(app: &tauri::AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
 
     let reload = MenuItem::with_id(app, "reload", "Reload Dashboard", true, Some("CmdOrCtrl+R"))?;
     let pair_host = MenuItem::with_id(app, "pair_host", "Pair or Switch Remote Host…", true, Some("CmdOrCtrl+Shift+H"))?;
+    let import_ssh = MenuItem::with_id(app, "import_ssh", "Import SSH Hosts (~/.ssh/config)", true, None::<&str>)?;
     let host_local = MenuItem::with_id(app, "host_local", "Switch to Local Host", true, None::<&str>)?;
     let autonomy_readonly = MenuItem::with_id(app, "autonomy_readonly", "Autonomy: Read-Only (Strict)", true, None::<&str>)?;
     let autonomy_review = MenuItem::with_id(app, "autonomy_review", "Autonomy: Request-Review (Balanced)", true, None::<&str>)?;
@@ -336,6 +423,7 @@ fn build_menu(app: &tauri::AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
         true,
         &[
             &pair_host,
+            &import_ssh,
             &host_local,
             &separator,
             &autonomy_readonly,
@@ -346,6 +434,37 @@ fn build_menu(app: &tauri::AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
     let help_menu = Submenu::with_items(app, "Help", true, &[&open_browser, &view_logs])?;
 
     Menu::with_items(app, &[&app_menu, &view_menu, &control_menu, &help_menu])
+}
+
+/// Parses concrete OpenSSH `Host <alias>` entries (ignoring wildcard patterns).
+fn parse_ssh_config_aliases(raw: &str) -> Vec<String> {
+    let mut aliases = Vec::new();
+    for line in raw.lines() {
+        let stripped = line.split('#').next().unwrap_or("").trim();
+        if stripped.is_empty() {
+            continue;
+        }
+        let mut parts = stripped.split_whitespace();
+        if let Some(keyword) = parts.next() {
+            if keyword.eq_ignore_ascii_case("host") {
+                for alias in parts {
+                    if !alias.contains('*') && !alias.contains('?') && !alias.contains('!') {
+                        aliases.push(alias.to_string());
+                    }
+                }
+            }
+        }
+    }
+    aliases
+}
+
+fn load_local_ssh_config_aliases() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let ssh_config_path = PathBuf::from(home).join(".ssh/config");
+    match std::fs::read_to_string(ssh_config_path) {
+        Ok(raw) => parse_ssh_config_aliases(&raw),
+        Err(_) => Vec::new(),
+    }
 }
 
 fn main() {
@@ -409,6 +528,13 @@ fn main() {
             "pair_host" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.eval("window.__WAZIR_SURFACE__ && window.__WAZIR_SURFACE__.openPairHostDrawer()");
+                }
+            }
+            "import_ssh" => {
+                let aliases = load_local_ssh_config_aliases();
+                let _ = app.emit("wazir://ssh-hosts-discovered", aliases);
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval("if (window.__WAZIR_SURFACE__) { window.__WAZIR_SURFACE__.openPairHostDrawer(); window.__WAZIR_SURFACE__.importSshConfigHosts(); }");
                 }
             }
             "host_local" => {
@@ -486,4 +612,42 @@ mod tests {
         assert!(wait_until_listening(port, Duration::from_millis(500)));
         drop(listener);
     }
+
+    #[test]
+    fn parses_concrete_ssh_host_aliases_ignoring_wildcards() {
+        let sample = "
+            # Fleet SSH config
+            Host gpu-cluster-1 gpu-cluster-2
+              HostName 10.0.10.5
+              User wazir
+            Host *
+              ServerAliveInterval 60
+        ";
+        let aliases = parse_ssh_config_aliases(sample);
+        assert_eq!(aliases, vec!["gpu-cluster-1".to_string(), "gpu-cluster-2".to_string()]);
+    }
+
+    #[test]
+    fn extracts_pending_approval_ids_over_loopback_http() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+                let payload = r#"{"approvals":[{"id":"apr-9001","status":"pending"},{"id":"approval-42","status":"pending"}]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    payload.len(),
+                    payload
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let ids = check_pending_approvals(port, "test-operator-token");
+        let _ = handle.join();
+        assert_eq!(ids, vec!["apr-9001".to_string(), "approval-42".to_string()]);
+    }
 }
+

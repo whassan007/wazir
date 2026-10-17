@@ -516,6 +516,70 @@ class WazirControllerApi(
             decode = { json.decodeFromString(it) },
         )
 
+    suspend fun getPushRelayStatus(
+        profile: ControllerProfile,
+        deviceId: String? = null,
+    ): Result<PushRelayStatusResponse> {
+        val query = if (!deviceId.isNullOrBlank()) "?deviceId=${URLEncoder.encode(deviceId, "UTF-8")}" else ""
+        return executeAuthenticated(
+            profile = profile,
+            method = "GET",
+            path = "/api/v1/mobile/push/status$query",
+            decode = { json.decodeFromString(it) },
+        )
+    }
+
+    suspend fun registerPushRelay(
+        profile: ControllerProfile,
+        request: RegisterPushRelayRequest,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): Result<RegisterPushRelayResponse> =
+        executeAuthenticated(
+            profile = profile,
+            method = "POST",
+            path = "/api/v1/mobile/push/register",
+            bodyJson = json.encodeToString(request),
+            idempotencyKey = idempotencyKey,
+            decode = { json.decodeFromString(it) },
+        )
+
+    suspend fun unregisterPushRelay(
+        profile: ControllerProfile,
+        deviceId: String,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): Result<Boolean> {
+        val body = buildJsonObject { put("deviceId", deviceId) }
+        return executeAuthenticated(
+            profile = profile,
+            method = "POST",
+            path = "/api/v1/mobile/push/unregister",
+            bodyJson = json.encodeToString(body),
+            idempotencyKey = idempotencyKey,
+            decode = { true },
+        )
+    }
+
+    suspend fun testPushWakeup(
+        profile: ControllerProfile,
+        deviceId: String? = null,
+        title: String? = null,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): Result<TestPushWakeupResponse> {
+        val body = buildJsonObject {
+            if (!deviceId.isNullOrBlank()) put("deviceId", deviceId)
+            if (!title.isNullOrBlank()) put("title", title)
+        }
+        return executeAuthenticated(
+            profile = profile,
+            method = "POST",
+            path = "/api/v1/mobile/push/test",
+            bodyJson = json.encodeToString(body),
+            idempotencyKey = idempotencyKey,
+            decode = { json.decodeFromString(it) },
+        )
+    }
+
+
     suspend fun rotateTokenIfNeeded(
         profile: ControllerProfile,
         force: Boolean = false,

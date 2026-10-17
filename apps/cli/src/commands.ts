@@ -2144,6 +2144,7 @@ export async function improveStatusCommand(
   const optimizer = engine.optimizer;
   if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
 
+  await optimizer.getRecoveryState();
   const activeConfig = optimizer.getActiveConfig();
   const budget = optimizer.getBudget();
   const consumption = optimizer.getConsumption();
@@ -2178,6 +2179,7 @@ export async function improveStatusCommand(
     ...domains.map((d) => `  - ${d.padEnd(20)}: Level ${levelNames[optimizer.getLevel(d)]}`),
     '',
     color.bold('Resource Budgets:'),
+    `  - Accounting:      ${consumption.accountingStatus}${consumption.accountingStatus === 'complete' ? '' : ' (recorded usage is incomplete; dispatch blocked)'}`,
     `  - Experiments:     ${consumption.experimentsCount} / ${budget.maxExperiments}`,
     `  - Candidates:      ${consumption.candidatesCount} / ${budget.maxCandidatesPerExperiment * budget.maxExperiments}`,
     `  - Model Calls:     ${consumption.modelCallsCount} / ${budget.maxModelCalls}`,

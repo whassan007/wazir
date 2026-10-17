@@ -1,3 +1,4 @@
+import { controlledGeneration, type GenerationControl } from '@wazir/runtimes-interfaces';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
@@ -415,9 +416,13 @@ export class LMStudioAdapter implements RuntimeAdapter {
     return { minMemoryGB: e.totalMemoryBytes === undefined ? undefined : e.totalMemoryBytes / 1024 ** 3 };
   }
 
-  async *generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
-    const controller = new AbortController();
-    const requestId = request.requestId ?? `lmstudio-${Date.now()}`;
+  generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
+    return controlledGeneration(request, (generation, control) => this.generateControlled(generation, control));
+  }
+
+  private async *generateControlled(request: GenerationRequest, control: GenerationControl): AsyncIterable<GenerationEvent> {
+    const controller = control.controller;
+    const requestId = control.requestId;
     this.controllers.set(requestId, controller);
 
     const messages: Array<Record<string, unknown>> = [];
@@ -456,10 +461,13 @@ export class LMStudioAdapter implements RuntimeAdapter {
     // output the caller may have already consumed, so nothing past this
     // point is retried.
     let response: Response | undefined;
-    const retryPolicy = resolveRetryPolicy({ maxRetries: 3, initialDelayMs: 250, maxDelayMs: 8000, ...request.providerRetryPolicy });
+    const configuredRetryPolicy = resolveRetryPolicy({ maxRetries: 3, initialDelayMs: 250, maxDelayMs: 8000, ...request.providerRetryPolicy });
+    const retryPolicy = { ...configuredRetryPolicy, maxRetries: control.capRetries(configuredRetryPolicy.maxRetries) };
     const maxAttempts = retryPolicy.maxRetries + 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      yield control.startAttempt();
       try {
+        control.assertActive();
         const candidate = await fetch(`${this.baseURL}/chat/completions`, {
           method: 'POST',
           headers: this.headers(true),

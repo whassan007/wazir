@@ -56,6 +56,8 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
       evaluationService,
       memoryService,
       store,
+      // Fixture trajectories intentionally model large contexts across repeated runs.
+      budget: { maxExperiments: 10, maxCandidatesPerExperiment: 4, maxModelCalls: 1000, maxTokens: 20_000_000, maxWallTimeMs: 1_800_000, maxMonetaryCostUSD: 1000 },
     });
   });
 
@@ -85,6 +87,7 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
           checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 100 }],
           errors: [],
           events: [],
+          totalModelCalls: 1,
           usage: { input: 78_000, output: 1000 },
         },
         {
@@ -96,6 +99,7 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
           checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 100 }],
           errors: [],
           events: [],
+          totalModelCalls: 1,
           usage: { input: 82_000, output: 1000 },
         },
         {
@@ -107,6 +111,7 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
           checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 100 }],
           errors: [],
           events: [],
+          totalModelCalls: 1,
           usage: { input: 79_000, output: 1000 },
         },
       ];
@@ -124,7 +129,7 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
       // 4. Invariant 3: Acceptance criteria defined BEFORE candidate results are observed
       const plan: ExperimentPlan = optimizer.designExperiment({
         hypothesis: hyp,
-        sampleSize: 1,
+        sampleSize: 10,
         tasks: ['g29-bench-1', 'g29-bench-2'],
       });
       expect(plan.experimentId).toBeDefined();
@@ -151,7 +156,7 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
         async run(task) {
           invocationCount++;
           // First 2 runs: baseline. Next 2 runs: candidate.
-          const isCandidate = invocationCount > 2;
+          const isCandidate = invocationCount > 20;
           const tokens = isCandidate ? 50_000 : 80_000;
 
           return {
@@ -179,7 +184,8 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
             filesChanged: task.expectedFiles ?? [],
             checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 80 }],
             errors: [],
-            events: [],
+            events: [{ id: 'context-sample', executionId: 'fixture', type: 'context.snapshot.created', timestamp: new Date(), data: { tokens } }],
+            totalModelCalls: 1,
             usage: { input: tokens, output: 200 },
           };
         },
@@ -250,7 +256,7 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
         benchmarkCategories: ['CONTEXT_STRESS'],
         benchmarkTasks: ['g29-bench-1', 'g29-bench-2'],
         sampleSize: 1,
-        budget: { maxExperiments: 5, maxCandidatesPerExperiment: 2, maxModelCalls: 50, maxTokens: 100_000, maxWallTimeMs: 1000 },
+        budget: { maxExperiments: 5, maxCandidatesPerExperiment: 2, maxModelCalls: 200, maxTokens: 10_000_000, maxWallTimeMs: 1000 },
         createdAt: new Date(),
       };
 
@@ -292,7 +298,8 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
             filesChanged: pass ? task.expectedFiles ?? [] : [],
             checks: [{ name: 'test', command: 'npm test', ok: pass, durationMs: 80 }],
             errors: pass ? [] : ['Regression: parsing logic broken due to omitted context'],
-            events: [],
+            events: [{ id: 'context-sample', executionId: 'fixture', type: 'context.snapshot.created', timestamp: new Date(), data: { tokens } }],
+            totalModelCalls: 1,
             usage: { input: tokens, output: 200 },
           };
         },
@@ -362,7 +369,7 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
         benchmarkCategories: ['CONTEXT_STRESS'],
         benchmarkTasks: ['g29-bench-1'],
         sampleSize: 1, // Only 1 sample evaluated, below minSampleCount 5!
-        budget: { maxExperiments: 5, maxCandidatesPerExperiment: 2, maxModelCalls: 50, maxTokens: 100_000, maxWallTimeMs: 1000 },
+        budget: { maxExperiments: 5, maxCandidatesPerExperiment: 2, maxModelCalls: 200, maxTokens: 10_000_000, maxWallTimeMs: 1000 },
         createdAt: new Date(),
       };
 
@@ -401,6 +408,7 @@ describe('G29 / G30 / G31 Acceptance Meta-Benchmarks', () => {
             checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 80 }],
             errors: [],
             events: [],
+            totalModelCalls: 1,
             usage: { input: isCandidate ? 70_000 : 80_000, output: 200 },
           };
         },

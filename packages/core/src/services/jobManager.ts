@@ -16,7 +16,7 @@ import type {
   ExecutionPreferences,
   WorkspaceMode,
 } from '../types/index.js';
-import { assertJobTransition, assertTaskTransition } from './statusTransitions.js';
+import { assertJobTransition, assertNodeTransition, assertTaskTransition } from './statusTransitions.js';
 
 export interface JobManagerOptions {
   store?: KeyValueStore;
@@ -385,8 +385,9 @@ export class JobManager {
     if (!task) {
       throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
     }
-    task.status = 'completed';
+    assertTaskTransition(`${jobId}/${taskId}`, task.status, 'completed');
     this.updateNodeState(job, taskId, 'completed', result);
+    task.status = 'completed';
     await this.flush(job);
   }
 
@@ -402,11 +403,18 @@ export class JobManager {
       throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
     }
     const maxRetries = job.maxRetries ?? 3;
-    if ((retryCount ?? 0) < maxRetries) {
+    const willRetry = (retryCount ?? 0) < maxRetries;
+    const nextStatus: TaskStatus = willRetry ? 'pending' : 'failed';
+    assertTaskTransition(`${jobId}/${taskId}`, task.status, nextStatus);
+    if (willRetry) {
+      const node = job.graph.nodes.find((n) => n.id === taskId || n.taskId === taskId);
+      if (node && node.state !== 'idle') {
+        this.updateNodeState(job, taskId, 'idle', undefined, error);
+      }
       task.status = 'pending';
     } else {
-      task.status = 'failed';
       this.updateNodeState(job, taskId, 'failed', undefined, error);
+      task.status = 'failed';
     }
     await this.flush(job);
   }
@@ -701,6 +709,7 @@ export class JobManager {
   ): void {
     const node = job.graph.nodes.find((n) => n.id === nodeId || n.taskId === nodeId);
     if (node) {
+      assertNodeTransition(`${job.id}/${node.id}`, node.state, state);
       node.state = state;
       if (result !== undefined) node.result = result;
       if (error !== undefined) node.error = error;

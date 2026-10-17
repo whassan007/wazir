@@ -441,6 +441,7 @@ describe('Causal Experiment Discipline & MetaOptimizer Ablation', () => {
       };
       benchmarkService.register(task);
 
+      let executionIndex = 0;
       // Mock runner that returns different metrics based on active configuration
       const runner: BenchmarkRunner = {
         id: 'mock-causal-runner',
@@ -452,7 +453,7 @@ describe('Causal Experiment Discipline & MetaOptimizer Ablation', () => {
 
           return {
             execution: {
-              id: `exec-${t.id}-${Date.now()}`,
+              id: `exec-${t.id}-${++executionIndex}`,
               taskId: t.id,
               runtimeId: 'r',
               modelId: 'm',
@@ -474,7 +475,8 @@ describe('Causal Experiment Discipline & MetaOptimizer Ablation', () => {
             filesChanged: ['packages/core/src/index.ts'],
             checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 50 }],
             errors: [],
-            events: [],
+            events: [{ id: 'context-sample', executionId: 'fixture', type: 'context.snapshot.created', timestamp: new Date(), data: { tokens } }],
+            totalModelCalls: 1,
             usage: { input: tokens, output: 500 },
           };
         },

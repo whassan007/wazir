@@ -1,3 +1,33 @@
+# Wazir Release Notes - v0.2.0
+
+**Release**: `v0.2.0`
+**Theme**: Unified Applications, Multi-LLM Optimization, Evaluation Integrity, and Controlled Self-Improvement
+
+This release delivers the Wazir v0.2 architecture and quality roadmap (`docs/roadmap-v0.2.md`) alongside the October 2026 security and reliability remediation across Desktop, Web, Mobile, Scheduler, Resource Router, Evaluation, and Meta-Optimizer subsystems.
+
+## Highlights
+
+- **Unified Control Plane Across Desktop, Web, and Mobile (Workstream A)**:
+  - Loopback-first web proxy (`apps/web/server.js`) and CLI dashboard (`apps/cli/src/dashboardServer.ts`) with `HttpOnly; SameSite=Strict` session cookies, CSRF and `Origin` enforcement, viewer/operator privilege separation, and short-lived SSE tickets.
+  - Native Tauri desktop shell (`apps/desktop`) with OS keychain integration and background worker survival when the window closes.
+  - Native iOS (`apps/ios/WazirMobile`) and Android (`apps/android`) companions with QR pairing, biometric approval gates, stale approval expiration, immutable `eventId` SSE deduplication (`MobileEventHub`), and idempotent multi-surface task cancellation (`cancelTask`).
+- **Expected Cost per Verified Success & KV-Cache Placement (Workstream B)**:
+  - `ResourceRouter` evaluates `effectiveCostPerSuccessUsd` (incorporating empirical verified success rate and retry probability), enforces `minVerifiedSuccessRate` ($Q_{\min}$) and `maxLatencyMs` ($L_{\max}$), and accounts for cold-start load latency (`estimatedLoadMs`) and model eviction (`evictionRequired`).
+  - `Scheduler` estimates incremental KV-cache VRAM demand and active `ResourceReservation` `vramBytes`, rejecting GPU placement before dispatch when usable VRAM fits model weights but cannot fit the KV cache for the required context window.
+- **Evaluation Integrity & Statistical Qualification (Workstream C)**:
+  - `readBenchmarkMetric` and `extractMetricValueSafe` preserve metric provenance (`measured`, `estimated`, `unavailable`) and never substitute `0` for missing data.
+  - `EvaluationService` and `RegressionGuard` reject protected benchmark fixture edits (`PROTECTED_FIXTURE_MODIFIED`) and benchmark context contamination (`BENCHMARK_CONTAMINATED`), enforce `minSampleCount >= 5` with Bonferroni-corrected exact paired sign tests (`pairedEvidence.ts`), and report per-category pass rates (`categoryBreakdown` / `CATEGORY_REGRESSION`).
+- **Controlled Self-Improvement & Atomic Recovery (Workstream D)**:
+  - `OptimizerStateManager` persists atomic versioned snapshots at `meta_optimizer/state/v1` with durable per-sample reservations and accounting receipts.
+  - `RegressionGuard` detects model-scoped divergence (`scopedModels` / `MODEL_SCOPED_REGRESSION`) to block global promotion when a candidate improves one model while harming another.
+  - `MetaOptimizerService` derives baseline models dynamically from `routingRules` and enforces atomic baseline version checks (`OPTIMIZER_BASELINE_CHANGED`), canary deployment, and automatic rollback.
+
+## Validation
+
+Verified across all 23 workspace packages (`npm run build && npm run typecheck && npm run check-dist`), standalone CLI bundle (`bin/wa.js`), native Tauri desktop build, and 275 automated test suites including `packages/evaluation/tests/roadmapV02.test.ts`, `metricIntegrity.test.ts`, `statisticalQualification.test.ts`, `optimizerRecovery.test.ts`, and `apps/api/tests/mobileApi.test.ts`.
+
+---
+
 # Wazir Release Notes - v0.1.66
 
 **Release**: `v0.1.66`

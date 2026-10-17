@@ -10,103 +10,93 @@ import type {
   MetricConstraint,
 } from '@wazir/core';
 
-/**
- * Safely extracts a metric value from benchmark suite results, handling both
- * standard canonical metrics and arbitrary domain/custom metrics (Requirement 13).
- */
+export type BenchmarkMetricMeasurement =
+  | { kind: 'measured' | 'estimated'; value: number }
+  | { kind: 'unavailable'; reason: string };
+
+const finite = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+/** Read a complete suite measurement. Missing or invalid samples are never zero. */
+export function readBenchmarkMetric(
+  metric: string,
+  suite: BenchmarkSuiteResult,
+  comparison?: ComparativeBenchmarkSuiteResult,
+  isBaseline = false,
+): BenchmarkMetricMeasurement {
+  const unavailable = (): BenchmarkMetricMeasurement => ({
+    kind: 'unavailable', reason: `Metric '${metric}' is missing, invalid, or incomplete`,
+  });
+  if (suite.results.length === 0) return unavailable();
+  const measured = (value: unknown): BenchmarkMetricMeasurement =>
+    finite(value) ? { kind: 'measured', value } : unavailable();
+  const values = (key: string): unknown[] => suite.results.map((r) =>
+    (r.scoreReport?.metrics as unknown as Record<string, unknown> | undefined)?.[key]);
+  const reduce = (items: unknown[], mode: 'sum' | 'mean' | 'max' = 'mean'): BenchmarkMetricMeasurement => {
+    if (!items.every(finite)) return unavailable();
+    const sum = items.reduce((a, b) => a + b, 0);
+    return measured(mode === 'max' ? Math.max(...items) : mode === 'sum' ? sum : sum / items.length);
+  };
+  const nonnegative = (items: unknown[]): unknown[] => items.map((v) => finite(v) && v >= 0 ? v : undefined);
+  const counts = (key: string): unknown[] => nonnegative(values(key)).map((v) => finite(v) && Number.isInteger(v) ? v : undefined);
+  const aggregate = suite.aggregateMetrics as unknown as Record<string, unknown> | undefined;
+  switch (metric) {
+    case 'task_success':
+      if (!suite.results.every((r) => typeof r.scoreReport?.passed === 'boolean')) return unavailable();
+      return measured(suite.results.filter((r) => r.scoreReport.passed && !r.error).length / suite.results.length);
+    case 'verification_success':
+      if (!suite.results.every((r) => typeof r.scoreReport?.metrics?.physicalVerificationSuccess === 'boolean')) return unavailable();
+      return measured(suite.results.filter((r) => r.scoreReport.metrics.physicalVerificationSuccess && !r.error).length / suite.results.length);
+    case 'input_tokens': return reduce(nonnegative(values('inputTokens')));
+    case 'tokens':
+    case 'total_tokens':
+      return reduce(suite.results.map((r) => {
+        const m = r.scoreReport?.metrics;
+        return finite(m?.inputTokens) && m.inputTokens >= 0 && finite(m?.outputTokens) && m.outputTokens >= 0
+          ? m.inputTokens + m.outputTokens : undefined;
+      }), 'sum');
+    case 'peak_context_tokens': return reduce(nonnegative(values('peakContextTokens')), 'max');
+    case 'wall_time':
+    case 'latency':
+    case 'duration':
+      return reduce(nonnegative(suite.results.map((r) => r.scoreReport?.metrics?.totalWallTimeMs ?? r.durationMs)));
+    case 'repair_cycles': return reduce(counts('repairCycles'));
+    case 'model_calls': return reduce(counts('totalModelCalls'));
+    case 'monetary_cost':
+    case 'compute_cost': {
+      const cost = reduce(nonnegative(values('costEstimateUsd')), 'sum');
+      return cost.kind === 'unavailable' ? cost : { kind: 'estimated', value: cost.value };
+    }
+    case 'tool_failures': return reduce(counts('failedToolCalls'), 'sum');
+    case 'tool_failure_rate': {
+      const failures = reduce(counts('failedToolCalls'), 'sum');
+      const calls = reduce(counts('totalToolCalls'), 'sum');
+      if (failures.kind === 'unavailable' || calls.kind === 'unavailable' || calls.value === 0 ||
+          suite.results.some((r) => (r.scoreReport.metrics.failedToolCalls ?? Infinity) > r.scoreReport.metrics.totalToolCalls)) return unavailable();
+      return measured(failures.value / calls.value);
+    }
+    case 'malformed_actions': return reduce(counts('malformedActions'), 'sum');
+    default:
+      // Aggregate custom metrics are explicitly supplied; per-run custom metrics
+      // require coverage of every run and use the arithmetic mean.
+      if (aggregate && Object.prototype.hasOwnProperty.call(aggregate, metric)) return measured(aggregate[metric]);
+      return reduce(suite.results.map((r) => {
+        const m = r.scoreReport?.metrics;
+        return m?.rawMetrics?.[metric] ?? (m as unknown as Record<string, unknown> | undefined)?.[metric];
+      }));
+  }
+}
+
+/** Numeric compatibility API. Unavailable measurements return NaN; use the tagged
+ * reader for persistence and inspect Number.isFinite before making decisions. */
 export function extractMetricValueSafe(
   metric: string,
   suite: BenchmarkSuiteResult,
   comparison?: ComparativeBenchmarkSuiteResult,
-  isBaseline: boolean = false,
+  isBaseline = false,
 ): number {
-  switch (metric) {
-    case 'task_success':
-      if (comparison) {
-        return isBaseline ? comparison.baselinePassRate : comparison.candidatePassRate;
-      }
-      return suite.results.filter((r) => r.scoreReport?.passed && !r.error).length / (suite.results.length || 1);
-
-    case 'verification_success': {
-      const verifiedCount = suite.results.filter((r) => {
-        return r.scoreReport?.metrics?.physicalVerificationSuccess ?? r.scoreReport?.passed;
-      }).length;
-      return verifiedCount / (suite.results.length || 1);
-    }
-
-    case 'input_tokens': {
-      const avgInput =
-        suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.inputTokens ?? 0), 0) /
-        (suite.results.length || 1);
-      if (avgInput > 0) return avgInput;
-      return suite.aggregateMetrics?.totalTokens ?? 0;
-    }
-
-    case 'tokens':
-      return suite.aggregateMetrics?.totalTokens ??
-        (suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.inputTokens ?? 0), 0) / (suite.results.length || 1));
-
-    case 'total_tokens':
-      return suite.aggregateMetrics?.totalTokens ??
-        (suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.inputTokens ?? 0) + (r.scoreReport?.metrics?.outputTokens ?? 0), 0) / (suite.results.length || 1));
-
-    case 'peak_context_tokens':
-      return Math.max(...suite.results.map((r) => r.scoreReport?.metrics?.inputTokens ?? 0), 0);
-
-    case 'wall_time':
-    case 'latency':
-    case 'duration': {
-      const avgWall =
-        suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.totalWallTimeMs ?? r.durationMs ?? 0), 0) /
-        (suite.results.length || 1);
-      if (avgWall > 0) return avgWall;
-      return suite.aggregateMetrics?.totalWallTimeMs ?? 0;
-    }
-
-    case 'repair_cycles': {
-      const avgRepairs =
-        suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.repairCycles ?? 0), 0) /
-        (suite.results.length || 1);
-      if (avgRepairs > 0 || suite.results.length > 0) return avgRepairs;
-      return (suite.aggregateMetrics as any)?.averageRepairCycles ?? 0;
-    }
-
-    case 'model_calls':
-      return suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.totalModelCalls ?? 0), 0) / (suite.results.length || 1);
-
-    case 'monetary_cost':
-    case 'compute_cost':
-      return suite.aggregateMetrics?.totalCostUsd ??
-        (suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.costEstimateUsd ?? 0), 0) / (suite.results.length || 1));
-
-    case 'tool_failures':
-    case 'tool_failure_rate': {
-      const totalTools = suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.totalToolCalls || 0), 0);
-      return totalTools > 0 ? 0.05 : 0;
-    }
-
-    case 'malformed_actions':
-      return 0;
-
-    default: {
-      // UNKNOWN metrics handling (Requirement 13)
-      const agg = suite.aggregateMetrics as Record<string, unknown> | undefined;
-      if (agg && typeof agg[metric] === 'number') {
-        return agg[metric] as number;
-      }
-      for (const res of suite.results) {
-        const raw = res.scoreReport?.metrics?.rawMetrics;
-        if (raw && typeof raw[metric] === 'number') {
-          return raw[metric] as number;
-        }
-        const m = res.scoreReport?.metrics as unknown as Record<string, unknown> | undefined;
-        if (m && typeof m[metric] === 'number') {
-          return m[metric] as number;
-        }
-      }
-      return 0;
-    }
-  }
+  const measurement = readBenchmarkMetric(metric, suite, comparison, isBaseline);
+  return measurement.kind === 'unavailable' ? Number.NaN : measurement.value;
 }
 
 /**
@@ -165,9 +155,10 @@ export function candidateDominates(
   let atLeastOneStrictlyBetter = false;
 
   for (const obj of objectives) {
-    const valA = vecA.rawMetrics[obj.metric] ?? 0;
-    const valB = vecB.rawMetrics[obj.metric] ?? 0;
+    const valA = vecA.rawMetrics[obj.metric];
+    const valB = vecB.rawMetrics[obj.metric];
     const tol = obj.tolerance ?? 1e-9;
+    if (!finite(valA) || !finite(valB)) return false;
 
     if (!isBetterOrEqual(valA, valB, obj.direction, tol)) {
       return false; // A is worse than B in this dimension; cannot dominate
@@ -190,9 +181,10 @@ export function candidateVectorsEquivalent(
   objectives: OptimizationObjective[],
 ): boolean {
   for (const obj of objectives) {
-    const valA = vecA.rawMetrics[obj.metric] ?? 0;
-    const valB = vecB.rawMetrics[obj.metric] ?? 0;
+    const valA = vecA.rawMetrics[obj.metric];
+    const valB = vecB.rawMetrics[obj.metric];
     const tol = obj.tolerance ?? 1e-9;
+    if (!finite(valA) || !finite(valB)) return false;
     if (Math.abs(valA - valB) > tol) {
       return false;
     }
@@ -255,6 +247,13 @@ export function computeParetoFrontier(
   }
 
   // 1. Constraints First: filter to only qualifying candidates
+  for (const candidate of candidates) {
+    const missing = objectives.filter((o) => !finite(candidate.rawMetrics[o.metric]) || !finite(candidate.normalizedDeltas[o.metric]));
+    if (missing.length > 0) {
+      candidate.qualifies = false;
+      candidate.disqualificationReasons.push(`UNAVAILABLE_METRICS: ${missing.map((o) => o.metric).join(', ')}`);
+    }
+  }
   const qualifying = candidates.filter((c) => c.qualifies);
   const disqualified = candidates.filter((c) => !c.qualifies);
 
@@ -283,9 +282,9 @@ export function computeParetoFrontier(
       frontierCandidates: [sole],
       dominatedCandidates: [],
       allEvaluated: candidates,
-      hypervolume: 1.0,
+      hypervolume: computeHypervolume([sole], objectives),
       baselineHypervolume: 0,
-      hypervolumeDifference: 1.0,
+      hypervolumeDifference: computeHypervolume([sole], objectives),
       tradeoffsSummary: `Sole qualifying candidate '${sole.candidateId}' on Pareto frontier`,
       policyUsed: 'PARETO_ONLY',
     };

@@ -43,6 +43,14 @@ export interface RouteCandidate {
    * must be loaded or reloaded costs memory and load time, so it is penalised and explained.
    */
   residency?: 'ready' | 'reload' | 'load';
+  /** Empirically measured verified success rate in [0, 1] for this task type/category. */
+  verifiedSuccessRate?: number;
+  /** Estimated cold-start or context-reload latency in milliseconds when not ready. */
+  estimatedLoadMs?: number;
+  /** True when loading this model on its target computer requires evicting a resident model. */
+  evictionRequired?: boolean;
+  /** False when usable GPU VRAM on target hardware cannot fit model weights + KV cache. */
+  kvCacheFits?: boolean;
 }
 
 export interface RouteAssessment extends RouteCandidate {
@@ -51,6 +59,8 @@ export interface RouteAssessment extends RouteCandidate {
   reasons: string[];
   /** Normalised factors in [0, 1]. */
   factors?: { quality: number; reliability: number; capacity: number; cost: number; latency: number; quotaRisk: number };
+  /** Expected total USD cost per verified successful task (accounts for retry probability). */
+  effectiveCostPerSuccessUsd?: number;
   score?: number;
   local?: boolean;
 }
@@ -99,11 +109,25 @@ export class ResourceRouter {
     const w = this.weights();
     const estOutput = estimateOutputTokens({}, input.workload);
     const maxCapability = Math.max(1, ...input.candidates.map((c) => c.capabilityScore));
+    const minCorrectness = budget.policy.minVerifiedSuccessRate;
+    const maxLatencyMs = budget.policy.maxLatencyMs;
 
     const prelim = input.candidates.map((c): RouteAssessment & { estCost: number; ms?: number; mode?: BudgetMode } => {
       const accountId = this.opts.resolveAccount(c.runtimeId, c.modelId);
       if (!accountId) return { ...c, admissible: false, reasons: ['no account is configured for this runtime/model'], estCost: 0 };
       const account = budget.accounts.get(accountId)!;
+      if (c.kvCacheFits === false) {
+        return {
+          ...c, accountId, admissible: false, local: account.kind === 'local', estCost: 0,
+          reasons: ['insufficient usable GPU VRAM to fit model weights and KV cache for required context'],
+        };
+      }
+      if (minCorrectness !== undefined && c.verifiedSuccessRate !== undefined && c.verifiedSuccessRate < minCorrectness) {
+        return {
+          ...c, accountId, admissible: false, local: account.kind === 'local', estCost: 0,
+          reasons: [`calibrated correctness ${(c.verifiedSuccessRate * 100).toFixed(0)}% is below policy minimum ${(minCorrectness * 100).toFixed(0)}%`],
+        };
+      }
       const preview = budget.preview({
         requestId: `route-${input.task.id}-${c.modelId}`, accountId, modelId: c.modelId, workload: input.workload, taskId: input.task.id,
         estimatedInputTokens: input.estimatedInputTokens, estimatedOutputTokens: estOutput,
@@ -113,11 +137,27 @@ export class ResourceRouter {
         return { ...c, accountId, admissible: false, local: account.kind === 'local', estCost: 0,
           reasons: [`capability ${c.capabilityScore} is below half of the best candidate (${maxCapability}) for ${input.workload} work; not substituted`] };
       }
+      const singleCallCost = costUsd(pricingFor(account, c.modelId), input.estimatedInputTokens, estOutput);
+      const rel = this.reliability(accountId, c.modelId);
+      const successProb = Math.max(0.05, Math.min(1, c.verifiedSuccessRate !== undefined ? c.verifiedSuccessRate * rel : rel));
+      const effectiveCostPerSuccess = singleCallCost / successProb;
+      const tokenMs = this.msPerToken(c.modelId);
+      const loadPenaltyMs = c.residency && c.residency !== 'ready' ? (c.estimatedLoadMs ?? 4_000) : 0;
+      const totalLatencyMs = tokenMs !== undefined ? tokenMs * estOutput + loadPenaltyMs : (loadPenaltyMs > 0 ? loadPenaltyMs : undefined);
+      if (maxLatencyMs !== undefined && totalLatencyMs !== undefined && totalLatencyMs > maxLatencyMs) {
+        return {
+          ...c, accountId, admissible: false, local: account.kind === 'local', estCost: effectiveCostPerSuccess,
+          effectiveCostPerSuccessUsd: Number(effectiveCostPerSuccess.toFixed(6)),
+          reasons: [`estimated latency ${Math.round(totalLatencyMs)}ms exceeds maxLatencyMs ${maxLatencyMs}ms`],
+        };
+      }
       return {
         ...c, accountId, local: account.kind === 'local', admissible: preview.outcome === 'admitted',
         reasons: preview.outcome === 'admitted' ? preview.reasons : [`${preview.outcome}: ${preview.reasons.join('; ')}`],
-        estCost: costUsd(pricingFor(account, c.modelId), input.estimatedInputTokens, estOutput),
-        ms: this.msPerToken(c.modelId), mode: preview.mode,
+        estCost: effectiveCostPerSuccess,
+        effectiveCostPerSuccessUsd: Number(effectiveCostPerSuccess.toFixed(6)),
+        ms: totalLatencyMs !== undefined ? totalLatencyMs / Math.max(1, estOutput) : tokenMs,
+        mode: preview.mode,
       };
     });
 
@@ -131,14 +171,17 @@ export class ResourceRouter {
       const status = budget.status(p.accountId!);
       const account = status!.account;
       const slotCapacity = account.maxConcurrent ? 1 - status!.inFlight / account.maxConcurrent : 1;
+      const residencyFactor = p.residency === 'reload' ? 0.3 : p.residency === 'load' ? (p.evictionRequired ? 0.1 : 0.2) : 1;
       const capacity = account.kind === 'local'
-        ? slotCapacity * (p.residency === 'reload' ? 0.3 : p.residency === 'load' ? 0.2 : 1)
+        ? slotCapacity * residencyFactor
         : status!.limits.some((l) => l.utilization !== undefined)
           ? 1 - Math.max(...status!.limits.map((l) => l.utilization ?? 0))
           : 0.5;
       const factors = {
         quality: p.capabilityScore / maxCapability,
-        reliability: this.reliability(p.accountId!, p.modelId),
+        reliability: p.verifiedSuccessRate !== undefined
+          ? Math.max(0, Math.min(1, p.verifiedSuccessRate * this.reliability(p.accountId!, p.modelId)))
+          : this.reliability(p.accountId!, p.modelId),
         capacity: Math.max(0, Math.min(1, capacity)),
         cost: maxCost > 0 ? estCost / maxCost : 0,
         latency: ms !== undefined && maxMs > 0 ? ms / maxMs : 0.5,
@@ -146,8 +189,10 @@ export class ResourceRouter {
       };
       const score = w.quality * factors.quality + w.reliability * factors.reliability + w.capacity * factors.capacity
         - w.cost * factors.cost - w.latency * factors.latency - w.quotaRisk * factors.quotaRisk;
-      const reasons = p.residency === 'reload' ? [...p.reasons, 'loaded with too little context: needs a reload (memory + load time)']
-        : p.residency === 'load' ? [...p.reasons, 'not loaded: needs a load (memory + load time)'] : p.reasons;
+      const reasons = [...p.reasons];
+      if (p.residency === 'reload') reasons.push('loaded with too little context: needs a reload (memory + load time)');
+      else if (p.residency === 'load') reasons.push(`not loaded: needs cold load${p.estimatedLoadMs ? ` (~${p.estimatedLoadMs}ms)` : ''} (memory + load time)`);
+      if (p.evictionRequired) reasons.push('loading requires evicting a resident model on target hardware');
       return { ...p, reasons, factors, score: Number(score.toFixed(4)) };
     });
   }

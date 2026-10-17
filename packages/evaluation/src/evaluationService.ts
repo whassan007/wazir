@@ -23,7 +23,13 @@ export interface EvaluationServiceOptions extends EvaluationOptions {
   requirePhysicalVerification?: boolean; // default true
   category?: BenchmarkTaskCategory;
   taskId?: string;
+  /** Protected benchmark fixture paths or globs that must never be modified by a candidate */
+  protectedFiles?: string[];
+  /** Explicit flag indicating benchmark context or environment contamination */
+  contaminated?: boolean;
 }
+
+const DEFAULT_PROTECTED_FIXTURE_PATTERN = /(^|\/)(__fixtures__|fixtures)\/|\.fixture\.|benchmark\.expect\./i;
 
 export class EvaluationService {
   constructor(
@@ -32,6 +38,60 @@ export class EvaluationService {
       costPer1kOutputTokens: 0.015,
     },
   ) {}
+
+  private hasCompleteTokenUsage(record: ExecutionRecord): boolean {
+    const usage = record.usage as unknown as Record<string, unknown> | undefined;
+    const input = usage?.input ?? usage?.inputTokens;
+    const output = usage?.output ?? usage?.outputTokens;
+    return typeof input === 'number' && Number.isSafeInteger(input) && input >= 0 &&
+      typeof output === 'number' && Number.isSafeInteger(output) && output >= 0;
+  }
+
+  private extractMalformedActions(record: ExecutionRecord): number | undefined {
+    const events = record.events ?? [];
+    if (events.some((e) => (e.eventType ?? e.type) === 'model.route.changed' &&
+        (e.data as { accepted?: boolean } | undefined)?.accepted)) return undefined;
+    const termination = [...events].reverse().find((e) => (e.eventType ?? e.type) === 'termination.completed');
+    const count = (termination?.data as { protocolMetrics?: { malformedActions?: number } } | undefined)
+      ?.protocolMetrics?.malformedActions;
+    return typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 ? count : undefined;
+  }
+
+  private extractPeakContextTokens(record: ExecutionRecord): number | undefined {
+    const samples = (record.events ?? [])
+      .filter((e) => ['context.snapshot.created', 'context.compiled'].includes(e.eventType ?? e.type))
+      .map((e) => {
+        const data = e.data as { estimatedTokens?: number; tokens?: number } | undefined;
+        // Estimates cannot substitute for measured context demand.
+        return data?.tokens;
+      });
+    if (samples.length === 0 || samples.some((v) => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) return undefined;
+    return Math.max(...samples as number[]);
+  }
+
+  private detectProtectedFixtureEdits(record: ExecutionRecord, options: EvaluationServiceOptions): string[] {
+    const changed = record.filesChanged ?? [];
+    if (changed.length === 0) return [];
+    const expectedSet = new Set(options.expectedFiles ?? []);
+    const protectedSet = new Set(options.protectedFiles ?? []);
+    return changed.filter((file) => {
+      if (protectedSet.has(file)) return true;
+      if ([...protectedSet].some((p) => file.startsWith(p.endsWith('/') ? p : `${p}/`))) return true;
+      if (!expectedSet.has(file) && DEFAULT_PROTECTED_FIXTURE_PATTERN.test(file)) return true;
+      return false;
+    });
+  }
+
+  private detectBenchmarkContamination(record: ExecutionRecord, options: EvaluationServiceOptions): boolean {
+    if (options.contaminated === true) return true;
+    const taskMeta = record.task as unknown as Record<string, unknown> | undefined;
+    if (taskMeta?.contaminated === true) return true;
+    return (record.events ?? []).some((e) => {
+      const type = String(e.eventType ?? e.type ?? '');
+      const data = e.data as Record<string, unknown> | undefined;
+      return type === 'benchmark.contaminated' || data?.contaminated === true;
+    });
+  }
 
   /**
    * Authoritatively evaluates an execution record, computing multi-dimensional
@@ -100,13 +160,21 @@ export class EvaluationService {
       ).toFixed(6),
     );
 
+    const modifiedFixtures = this.detectProtectedFixtureEdits(record, options);
+    const protectedFixtureModified = modifiedFixtures.length > 0;
+    const benchmarkContaminated = this.detectBenchmarkContamination(record, options);
+
     // 11. Compile execution metrics
-    const taskSuccess = evaluationResult.success;
+    const taskSuccess = evaluationResult.success && !protectedFixtureModified && !benchmarkContaminated;
     const metrics: ExecutionMetrics = {
       taskSuccess,
-      physicalVerificationSuccess,
+      physicalVerificationSuccess: physicalVerificationSuccess && !protectedFixtureModified && !benchmarkContaminated,
       totalModelCalls,
       totalToolCalls,
+      failedToolCalls: record.toolCalls?.every((call) => typeof call.ok === 'boolean')
+        ? record.toolCalls.filter((call) => !call.ok).length : undefined,
+      malformedActions: this.extractMalformedActions(record),
+      peakContextTokens: this.extractPeakContextTokens(record),
       repairCycles,
       inputTokens,
       outputTokens,
@@ -117,21 +185,33 @@ export class EvaluationService {
       costEstimateUsd,
       verificationLatencyMs,
       rawMetrics: {
+        tokenUsageAvailable: this.hasCompleteTokenUsage(record),
+        modelCallCountAvailable: Number.isSafeInteger((record as any).totalModelCalls ?? (record as any).modelCalls) &&
+          ((record as any).totalModelCalls ?? (record as any).modelCalls) >= 0,
         workspaceRevision: currentRevision,
         filesChangedCount: record.filesChanged?.length ?? 0,
         checksCount: record.checks?.length ?? 0,
         errorsCount: record.errors?.length ?? 0,
+        protectedFixtureModified,
+        benchmarkContaminated,
+        ...(record.execution?.modelId ? { modelId: record.execution.modelId } : {}),
       },
     };
 
     // 12. Non-negotiable invariant check:
     // MODEL CLAIM != EXECUTION EVIDENCE
     // NO SUCCESSFUL VERIFICATION = NO COMPLETE
-    let passed = taskSuccess && (!requirePhysicalVerification || physicalVerificationSuccess);
+    let passed = taskSuccess && (!requirePhysicalVerification || metrics.physicalVerificationSuccess);
     let rejectionReason: string | undefined;
 
-    if (requirePhysicalVerification && !physicalVerificationSuccess) {
-      if (record.result || record.execution.status === 'completed' || taskSuccess) {
+    if (protectedFixtureModified) {
+      passed = false;
+      rejectionReason = `PROTECTED_FIXTURE_MODIFIED: Candidate modified protected benchmark fixture(s): ${modifiedFixtures.join(', ')}`;
+    } else if (benchmarkContaminated) {
+      passed = false;
+      rejectionReason = 'BENCHMARK_CONTAMINATED: Benchmark context or execution was contaminated; results cannot be used for qualification';
+    } else if (requirePhysicalVerification && !physicalVerificationSuccess) {
+      if (record.result || record.execution.status === 'completed' || evaluationResult.success) {
         passed = false;
         rejectionReason =
           'REJECTED_WITHOUT_VERIFICATION: Task or agent claimed success, but physical verification evidence is missing, stale, or failed for current workspace revision';
@@ -419,7 +499,9 @@ export class EvaluationService {
       },
       agent: {
         repairCycles: { value: m.repairCycles, kind: 'measured', unit: 'cycles' },
-        malformedActions: { value: 0, kind: 'estimated', unit: 'actions' },
+        malformedActions: m.malformedActions === undefined
+          ? { value: 0, kind: 'unavailable', unit: 'actions', note: 'Complete protocol telemetry unavailable' }
+          : { value: m.malformedActions, kind: 'measured', unit: 'actions' },
         noProgressEvents: { value: 0, kind: 'estimated', unit: 'events' },
         subagentCalls: { value: 0, kind: 'measured', unit: 'calls' },
       },
@@ -645,7 +727,9 @@ export class EvaluationService {
     inputTokens: number;
     outputTokens: number;
   } {
-    let totalModelCalls = (record as any).modelCalls ?? (record as any).totalModelCalls ?? 0;
+    const explicitCalls = record.totalModelCalls ?? (record as any).modelCalls;
+    const hasExplicitCalls = Number.isSafeInteger(explicitCalls) && explicitCalls >= 0;
+    let totalModelCalls = hasExplicitCalls ? explicitCalls : 0;
     let modelLatencyMs = 0;
     let inputTokens = record.usage?.input ?? (record.usage as any)?.inputTokens ?? 0;
     let outputTokens = record.usage?.output ?? (record.usage as any)?.outputTokens ?? 0;
@@ -681,11 +765,11 @@ export class EvaluationService {
       }
     }
 
-    if (totalModelCalls === 0) {
+    if (!hasExplicitCalls && totalModelCalls === 0) {
       totalModelCalls = eventModelCalls;
     }
 
-    if (totalModelCalls === 0 && (inputTokens > 0 || outputTokens > 0)) {
+    if (!hasExplicitCalls && totalModelCalls === 0 && (inputTokens > 0 || outputTokens > 0)) {
       totalModelCalls = 1;
     }
 

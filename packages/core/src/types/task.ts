@@ -17,9 +17,14 @@ export type Priority = 'low' | 'normal' | 'high' | 'critical';
 
 export type TaskStatus =
   | 'pending'
+  | 'queued'
   | 'planning'
   | 'scheduled'
+  | 'ready'
   | 'running'
+  | 'waiting_for_approval'
+  | 'verifying'
+  | 'paused'
   | 'completed'
   | 'failed'
   | 'cancelled'

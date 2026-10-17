@@ -880,6 +880,7 @@
         <option value="local">Local Controller</option>
       </select>
       <button id="pair-host-btn" type="button" title="Pair or add remote Wazir host">+ Host</button>
+      <button id="import-ssh-hosts-btn" type="button" title="Import SSH tunnel host profiles from ~/.ssh/config">⇄ SSH Config</button>
     </div>
     <div class="control-group">
       <label for="autonomy-posture-select">Autonomy:</label>
@@ -916,6 +917,9 @@
     <div class="diag-summary">
       <div><span class="diag-label">Connection</span><span id="diag-connection" class="badge muted">—</span></div>
       <div><span class="diag-label">Host</span><span id="diag-host">—</span></div>
+      <div><span class="diag-label">Readiness (/ready)</span><span id="diag-readiness" class="badge muted">—</span></div>
+      <div><span class="diag-label">Execution Service</span><span id="diag-exec-service" class="badge muted">—</span></div>
+      <div><span class="diag-label">Providers</span><span id="diag-providers">—</span></div>
       <div><span class="diag-label">Last fully successful sync</span><span id="diag-last-success">never</span></div>
       <div><span class="diag-label">Consecutive failed checks</span><span id="diag-consecutive">0</span></div>
       <div><span class="diag-label">Next check</span><span id="diag-next-check">—</span></div>
@@ -1276,13 +1280,22 @@ async function fetchJsonWithTimeout(url, timeoutMs = 8000, options = {}) {
   }
 }
 
+let latestReadiness = null;
+
 async function syncMultiSurfaceState() {
   try {
-    const [autonomyRes, hostsRes, approvalsRes] = await Promise.allSettled([
+    const [autonomyRes, hostsRes, approvalsRes, readyRes] = await Promise.allSettled([
       fetchJsonWithTimeout('/api/v1/autonomy', 5000),
       fetchJsonWithTimeout('/api/v1/hosts', 5000),
       fetchJsonWithTimeout('/api/v1/mobile/approvals?status=pending', 5000),
+      fetchJsonWithTimeout('/ready', 5000),
     ]);
+
+    if (readyRes.status === 'fulfilled' && readyRes.value) {
+      latestReadiness = readyRes.value;
+    } else if (readyRes.status === 'rejected') {
+      latestReadiness = { status: 'not_ready', error: readyRes.reason?.message || 'unreachable' };
+    }
 
     if (autonomyRes.status === 'fulfilled' && autonomyRes.value?.autonomy?.mode) {
       const sel = $('autonomy-posture-select');
@@ -1491,6 +1504,29 @@ function renderDiagnosticsPanel() {
 
   const hostSelect = $('host-instance-select');
   $('diag-host').textContent = hostSelect?.selectedOptions?.[0]?.textContent || selectedHostId;
+
+  const readyEl = $('diag-readiness');
+  if (readyEl) {
+    const isReady = latestReadiness?.status === 'ready';
+    readyEl.textContent = latestReadiness ? String(latestReadiness.status) : 'unknown';
+    readyEl.className = isReady ? 'badge ok' : latestReadiness ? 'badge err' : 'badge muted';
+  }
+  const execSvcEl = $('diag-exec-service');
+  if (execSvcEl) {
+    const ctrlOk = latestReadiness?.checks?.controlServices?.ok ?? (latestReadiness?.checks?.executionService === 'ok');
+    execSvcEl.textContent = ctrlOk ? 'ready' : latestReadiness ? 'degraded' : 'unknown';
+    execSvcEl.className = ctrlOk ? 'badge ok' : latestReadiness ? 'badge warn' : 'badge muted';
+  }
+  const provEl = $('diag-providers');
+  if (provEl) {
+    const rtList = sectionState.runtimes?.data?.runtimes;
+    if (Array.isArray(rtList)) {
+      const healthyCount = rtList.filter((r) => r.health === 'healthy' || r.health === 'available').length;
+      provEl.textContent = `${healthyCount}/${rtList.length} healthy`;
+    } else {
+      provEl.textContent = '—';
+    }
+  }
 
   $('diag-last-success').textContent = lastFullSuccess ? lastFullSuccess.toLocaleTimeString() : 'never';
   $('diag-consecutive').textContent = String(consecutiveErrors);
@@ -1728,9 +1764,9 @@ function applyExecutionsFilter() {
         String(e.execution?.id ?? '').toLowerCase().includes(q) ||
         String(e.task?.type ?? '').toLowerCase().includes(q) ||
         String(e.task?.input ?? '').toLowerCase().includes(q) ||
-        String(e.agentId ?? '').toLowerCase().includes(q) ||
-        String(e.modelId ?? '').toLowerCase().includes(q) ||
-        String(e.runtimeId ?? '').toLowerCase().includes(q) ||
+        String(e.agentId ?? e.execution?.agentId ?? '').toLowerCase().includes(q) ||
+        String(e.modelId ?? e.execution?.modelId ?? '').toLowerCase().includes(q) ||
+        String(e.runtimeId ?? e.execution?.runtimeId ?? '').toLowerCase().includes(q) ||
         String(e.result ?? '').toLowerCase().includes(q);
       if (!match) return false;
     }
@@ -1749,14 +1785,15 @@ function applyExecutionsFilter() {
   }
 
   const rows = sliced.map((e) => {
-    const fullDate = e.execution?.createdAt ? new Date(e.execution.createdAt).toLocaleString() : '—';
-    const relDate = timeAgo(e.execution?.createdAt);
+    const rawCreated = e.execution?.createdAt ?? e.execution?.startedAt ?? e.task?.createdAt;
+    const fullDate = rawCreated ? new Date(rawCreated).toLocaleString() : '—';
+    const relDate = timeAgo(rawCreated);
     return [
       `<a href="#" class="view-execution-link" data-exec-id="${esc(e.execution?.id)}">${esc(e.execution?.id ?? '—')}</a>`,
       badge(e.execution?.status, 'completed|ok', 'failed|error'),
       esc(e.task?.type ?? '—'),
-      esc(e.agentId ?? '—'),
-      truncateCell(e.modelId ?? '—', 28),
+      esc(e.agentId ?? e.execution?.agentId ?? '—'),
+      truncateCell(e.modelId ?? e.execution?.modelId ?? '—', 28),
       `<span title="${esc(fullDate)}">${esc(relDate)}</span>`,
     ];
   });
@@ -1913,6 +1950,14 @@ function openPairHostDrawer() {
         <button type="submit">+ Connect & Select Host</button>
       </form>
     </div>
+    <div class="drawer-section">
+      <h4>Import SSH Tunnel Profiles (<code>~/.ssh/config</code>)</h4>
+      <p class="tag" style="margin-bottom:10px;">Automatically parse OpenSSH host aliases and generate local port-forwarding tunnel profiles for remote Wazir controllers.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        <button type="button" id="drawer-import-ssh-btn">⇄ Auto-Import from ~/.ssh/config</button>
+      </div>
+      <div id="ssh-import-results" class="tag"></div>
+    </div>
   `;
   openDrawer('Host Instance Manager', html);
 }
@@ -1943,21 +1988,33 @@ async function showExecutionDrawer(execId) {
     ]);
 
     if (execRes.status !== 'fulfilled' || !execRes.value?.execution) {
-      $('drawer-body').innerHTML = `<div class="empty">Execution '${esc(execId)}' not found</div>`;
+      const errStatus = execRes.status === 'rejected' ? execRes.reason?.status : undefined;
+      const errMsg = execRes.status === 'rejected' ? (execRes.reason?.message || 'Request failed') : 'Missing execution payload';
+      if (errStatus === 404 || (!errStatus && execRes.status === 'fulfilled')) {
+        $('drawer-body').innerHTML = `<div class="empty">Execution '${esc(execId)}' not found</div>`;
+      } else if (errStatus === 401 || errStatus === 403) {
+        $('drawer-body').innerHTML = `<div class="empty err">Authentication required to load execution '${esc(execId)}' (${esc(errMsg)})</div>`;
+      } else {
+        $('drawer-body').innerHTML = `<div class="empty err">Failed to load execution '${esc(execId)}': ${esc(errMsg)}</div>`;
+      }
       return;
     }
     const e = execRes.value.execution;
     const eventsFailed = eventsRes.status !== 'fulfilled' || !Array.isArray(eventsRes.value?.events);
     const childrenFailed = childrenRes.status !== 'fulfilled' || !Array.isArray(childrenRes.value?.children);
+    const artifactsFailed = artifactsRes.status !== 'fulfilled' || !Array.isArray(artifactsRes.value?.artifacts);
     const events = !eventsFailed ? eventsRes.value.events : [];
     const children = !childrenFailed ? childrenRes.value.children : [];
-    const artifacts = (artifactsRes.status === 'fulfilled' && Array.isArray(artifactsRes.value?.artifacts)) ? artifactsRes.value.artifacts : [];
+    const artifacts = !artifactsFailed ? artifactsRes.value.artifacts : [];
 
     const ex = e.execution ?? {};
     const task = e.task ?? {};
-    const createdStr = ex.createdAt ? new Date(ex.createdAt).toLocaleString() : '—';
-    const startedStr = ex.startedAt ? new Date(ex.startedAt).toLocaleString() : '—';
-    const finishedStr = ex.finishedAt ? new Date(ex.finishedAt).toLocaleString() : '—';
+    const rawCreated = ex.createdAt ?? ex.startedAt ?? task.createdAt;
+    const rawStarted = ex.startedAt ?? ex.createdAt;
+    const rawFinished = ex.finishedAt ?? ex.completedAt;
+    const createdStr = rawCreated ? new Date(rawCreated).toLocaleString() : '—';
+    const startedStr = rawStarted ? new Date(rawStarted).toLocaleString() : '—';
+    const finishedStr = rawFinished ? new Date(rawFinished).toLocaleString() : '—';
 
     let html = `
       <dl class="drawer-dl">
@@ -1967,10 +2024,10 @@ async function showExecutionDrawer(execId) {
         <dt>Task Type</dt><dd>${esc(task.type ?? '—')}</dd>
         <dt>Preset</dt><dd><span class="badge ok">${esc(task.requirements?.runtimePreset ?? 'standard')}</span></dd>
         <dt>Task Input</dt><dd>${esc(task.input ?? '—')}</dd>
-        <dt>Agent</dt><dd>${esc(e.agentId ?? '—')}</dd>
-        <dt>Model</dt><dd>${esc(e.modelId ?? '—')}</dd>
-        <dt>Runtime</dt><dd>${esc(e.runtimeId ?? '—')}</dd>
-        <dt>Computer</dt><dd>${esc(e.computerId ?? '—')}</dd>
+        <dt>Agent</dt><dd>${esc(e.agentId ?? ex.agentId ?? '—')}</dd>
+        <dt>Model</dt><dd>${esc(e.modelId ?? ex.modelId ?? '—')}</dd>
+        <dt>Runtime</dt><dd>${esc(e.runtimeId ?? ex.runtimeId ?? '—')}</dd>
+        <dt>Computer</dt><dd>${esc(e.computerId ?? ex.computerId ?? '—')}</dd>
         <dt>Result</dt><dd><div class="detail">${esc(e.result ?? '—')}</div></dd>
         <dt>Usage</dt><dd>${e.usage ? `${esc(e.usage.input)} input + ${esc(e.usage.output)} output tokens` : '—'}</dd>
         <dt>Created</dt><dd>${esc(createdStr)}</dd>
@@ -1979,8 +2036,60 @@ async function showExecutionDrawer(execId) {
       </dl>
     `;
 
+    // Failure Information
+    const failureList = Array.isArray(e.errors)
+      ? e.errors
+      : typeof e.error === 'string' && e.error
+        ? [{ message: e.error }]
+        : [];
+    if (failureList.length > 0) {
+      html += `
+        <div class="drawer-section">
+          <h4>Failure Information (${failureList.length})</h4>
+          <ul class="reason-list">
+            ${failureList.map((errItem) => {
+              const msg = typeof errItem === 'string' ? errItem : (errItem.message || errItem.code || JSON.stringify(errItem));
+              return `<li><div class="detail err">${esc(msg)}</div></li>`;
+            }).join('')}
+          </ul>
+        </div>
+      `;
+    }
+
+    // Verification Evidence
+    const evidenceList = Array.isArray(e.evidence)
+      ? e.evidence
+      : Array.isArray(e.checks)
+        ? e.checks
+        : [];
+    if (evidenceList.length > 0) {
+      html += `
+        <div class="drawer-section">
+          <h4>Verification Evidence (${evidenceList.length})</h4>
+          <ul class="reason-list">
+            ${evidenceList.map((chk) => `
+              <li>
+                <strong>${esc(chk.name || chk.type || 'check')}</strong>:
+                ${badge(chk.status || (chk.passed ? 'passed' : 'failed'), 'passed|pass|ok|completed', 'failed|fail|error')}
+                ${chk.details || chk.output ? `<div class="detail">${esc(chk.details || chk.output)}</div>` : ''}
+              </li>
+            `).join('')}
+          </ul>
+        </div>
+      `;
+    }
+
     // Verifiable Artifacts (Plan, Code Diff Review with Keep/Skip, Test Summary, Sandboxed Preview)
-    html += renderVerifiableArtifacts(ex.id ?? execId, artifacts);
+    if (artifactsFailed) {
+      html += `
+        <div class="drawer-section">
+          <h4>Verifiable Artifacts</h4>
+          <div class="detail err">Execution artifacts unavailable (${esc(artifactsRes.reason?.message ?? 'request failed')}).</div>
+        </div>
+      `;
+    } else {
+      html += renderVerifiableArtifacts(ex.id ?? execId, artifacts);
+    }
 
     // Subsection: Child Subagent Executions
     if (childrenFailed) {
@@ -2174,12 +2283,46 @@ async function selectTargetHost(hostId) {
   await load();
 }
 
+async function importSshConfigHosts() {
+  try {
+    const res = await fetchJsonWithTimeout('/api/v1/hosts/import-ssh', 8000, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const imported = Array.isArray(res?.imported) ? res.imported : [];
+    const resultsEl = $('ssh-import-results');
+    if (resultsEl) {
+      if (imported.length === 0) {
+        resultsEl.innerHTML = '<span>No concrete SSH host aliases found in <code>~/.ssh/config</code>.</span>';
+      } else {
+        resultsEl.innerHTML = imported.map((h) => `
+          <div style="margin-top:6px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;">
+            <div><strong>${esc(h.name)}</strong> → <code>${esc(h.url)}</code></div>
+            ${h.sshTunnelCommand ? `<div style="margin-top:4px;font-family:var(--font-mono);font-size:11px;">Tunnel: <code>${esc(h.sshTunnelCommand)}</code></div>` : ''}
+          </div>
+        `).join('');
+      }
+    }
+    sectionState.hosts = { snapshot: '' };
+    await load();
+    return res;
+  } catch (err) {
+    const resultsEl = $('ssh-import-results');
+    if (resultsEl) {
+      resultsEl.textContent = `SSH import failed: ${err.message}`;
+    }
+    return null;
+  }
+}
+
 // Expose shared multi-surface controller hook for Desktop (Tauri native menu/notifications) & tests
 window.__WAZIR_SURFACE__ = {
   switchTab,
   setAutonomyPosture,
   selectTargetHost,
   openPairHostDrawer,
+  importSshConfigHosts,
   showExecutionDrawer,
   refresh: load,
 };
@@ -2221,6 +2364,19 @@ document.addEventListener('DOMContentLoaded', () => {
       openPairHostDrawer();
     });
   }
+
+  if ($('import-ssh-hosts-btn')) {
+    $('import-ssh-hosts-btn').addEventListener('click', async () => {
+      openPairHostDrawer();
+      await importSshConfigHosts();
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'drawer-import-ssh-btn') {
+      void importSshConfigHosts();
+    }
+  });
 
   // Autonomy Posture Selector
   if ($('autonomy-posture-select')) {

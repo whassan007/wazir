@@ -613,4 +613,72 @@ describe('Wazir Mobile API & CLI Companion Integration', () => {
       expect(resumeRes.body.emergencyStop).toBeNull();
     });
   });
+
+  describe('6. Multi-Surface Idempotent Cancellation & Immutable Event Deduplication', () => {
+    it('deduplicates replayed events by immutable eventId and handles concurrent cancellation idempotently', async () => {
+      // 1. Verify MobileEventHub deduplicates identical eventId
+      const hub = h.state.mobile.eventHub;
+      const ev1 = await hub.publish({
+        eventId: 'mev-dedup-test-1',
+        type: 'task.state',
+        taskId: 'task-dedup',
+        summary: 'Task state update',
+        payload: { state: 'running' },
+      });
+      const ev2 = await hub.publish({
+        eventId: 'mev-dedup-test-1',
+        type: 'task.state',
+        taskId: 'task-dedup',
+        summary: 'Duplicate task state update',
+        payload: { state: 'running' },
+      });
+      expect(ev2.sequence).toBe(ev1.sequence);
+      const recentForTask = hub.listRecent(20, 'task-dedup');
+      expect(recentForTask.filter((e) => e.eventId === 'mev-dedup-test-1')).toHaveLength(1);
+
+      // 2. Verify concurrent cancellation from desktop/operator and mobile is idempotent (200 OK on both)
+      const created = await jsonReq<{ taskId: string; task: { taskId: string; state: string } }>(
+        h.baseUrl,
+        'POST',
+        '/api/v1/mobile/tasks',
+        {
+          token: OPERATOR_TOKEN,
+          body: {
+            title: 'Task for concurrent cancellation',
+            input: 'Run shell check that pauses on approval',
+            operations: [
+              {
+                tool: {
+                  name: 'shell',
+                  input: { command: 'npm --version' },
+                },
+              },
+            ],
+          },
+        },
+      );
+      expect(created.status).toBe(201);
+      const cancelTaskId = created.body.taskId;
+
+      const cancel1 = await jsonReq<{ task: { state: string } }>(
+        h.baseUrl,
+        'POST',
+        `/api/v1/mobile/tasks/${cancelTaskId}/cancel`,
+        { token: OPERATOR_TOKEN },
+      );
+      expect(cancel1.status).toBe(200);
+      expect(cancel1.body.task.state).toBe('cancelled');
+
+      // Second cancellation from another surface succeeds idempotently instead of 409
+      const cancel2 = await jsonReq<{ task: { state: string } }>(
+        h.baseUrl,
+        'POST',
+        `/api/v1/mobile/tasks/${cancelTaskId}/cancel`,
+        { token: OPERATOR_TOKEN },
+      );
+      expect(cancel2.status).toBe(200);
+      expect(cancel2.body.task.state).toBe('cancelled');
+    });
+  });
 });
+

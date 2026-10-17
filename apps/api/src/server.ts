@@ -164,20 +164,33 @@ export class TaskDispatcher {
   async subscribe(id: string, res: Response): Promise<void> {
     this.disconnect(id);
     this.streams.set(id, res);
-    await this.redeliver();
+    await this.redeliver(id);
   }
   disconnect(id: string): void { this.streams.get(id)?.end(); this.streams.delete(id); }
   unsubscribe(id: string, res: Response): void {
     if (this.streams.get(id) === res) this.streams.delete(id);
   }
-  async redeliver(): Promise<void> {
+  async redeliver(computerId?: string): Promise<void> {
     await this.refresh();
     for (const r of this.records.values()) {
+      if (computerId !== undefined && r.computerId !== computerId) continue;
       const stream = this.streams.get(r.computerId);
       if (stream && !r.outcome && (!r.lease || r.lease.expiresAt <= this.now())) {
         stream.write(`event: task\ndata: ${JSON.stringify(r.request)}\n\n`);
       }
     }
+  }
+  async pruneCompleted(retentionMs = this.completedRetentionMs ?? 0): Promise<number> {
+    const cutoff = this.now() - retentionMs;
+    let pruned = 0;
+    for (const entry of await this.store.list('dispatch/')) {
+      const record = entry.value as DurableDispatch | undefined;
+      if (record?.outcome && record.completedAt !== undefined && record.completedAt <= cutoff) {
+        await this.store.delete(entry.key);
+        pruned += 1;
+      }
+    }
+    return pruned;
   }
   async dispatch(computerId: string, request: WorkerExecutionRequest): Promise<{ ok: true } | { ok: false; reason: string }> {
     await this.ready;
@@ -546,6 +559,56 @@ async function recordExecution(state: ApiState, record: Record<string, unknown>)
   }
 }
 
+function recordRevisionScore(rec: Record<string, unknown> | undefined): number {
+  if (!rec) return -1;
+  const rev = typeof rec.storageRevision === 'number' ? rec.storageRevision : 0;
+  const evCount = Array.isArray(rec.events) ? rec.events.length : 0;
+  const status = String((rec.execution as { status?: unknown } | undefined)?.status ?? '');
+  const terminalBonus = ['completed', 'failed', 'cancelled'].includes(status) ? 1000 : 0;
+  return rev * 1_000_000 + terminalBonus + evCount;
+}
+
+function normalizeExecutionRecord(raw: Record<string, unknown>): Record<string, unknown> {
+  const exRaw = (raw.execution as Record<string, unknown> | undefined) ?? {};
+  const agentId = raw.agentId ?? exRaw.agentId;
+  const modelId = raw.modelId ?? exRaw.modelId;
+  const runtimeId = raw.runtimeId ?? exRaw.runtimeId;
+  const computerId = raw.computerId ?? exRaw.computerId;
+  const completedAt = exRaw.completedAt ?? exRaw.finishedAt;
+  const finishedAt = exRaw.finishedAt ?? exRaw.completedAt;
+  const execution: Record<string, unknown> = {
+    ...exRaw,
+    ...(agentId !== undefined ? { agentId } : {}),
+    ...(modelId !== undefined ? { modelId } : {}),
+    ...(runtimeId !== undefined ? { runtimeId } : {}),
+    ...(computerId !== undefined ? { computerId } : {}),
+    ...(completedAt !== undefined ? { completedAt } : {}),
+    ...(finishedAt !== undefined ? { finishedAt } : {}),
+  };
+  const evidence = raw.evidence ?? (Array.isArray(raw.checks) ? raw.checks : undefined);
+  const errors =
+    raw.errors ??
+    (typeof raw.error === 'string' && raw.error ? [{ message: raw.error }] : undefined);
+  const filesChanged =
+    raw.filesChanged ??
+    (Array.isArray(raw.fileMutations)
+      ? (raw.fileMutations as Array<{ path?: unknown }>)
+          .map((m) => (typeof m?.path === 'string' ? m.path : ''))
+          .filter(Boolean)
+      : undefined);
+  return {
+    ...raw,
+    execution,
+    ...(agentId !== undefined ? { agentId } : {}),
+    ...(modelId !== undefined ? { modelId } : {}),
+    ...(runtimeId !== undefined ? { runtimeId } : {}),
+    ...(computerId !== undefined ? { computerId } : {}),
+    ...(evidence !== undefined ? { evidence } : {}),
+    ...(errors !== undefined ? { errors } : {}),
+    ...(filesChanged !== undefined ? { filesChanged } : {}),
+  };
+}
+
 /**
  * Collects execution records from both the API's execution list and the shared
  * ExecutionEngine / store (`execution/<id>`), ordered newest-first. Reading
@@ -559,14 +622,19 @@ async function collectAllExecutions(state: ApiState): Promise<Array<Record<strin
   for (let i = engineRecords.length - 1; i >= 0; i -= 1) {
     const rec = engineRecords[i] as unknown as Record<string, unknown>;
     const id = extractExecutionId(rec);
-    if (id) byId.set(id, rec);
+    if (id) byId.set(id, normalizeExecutionRecord(rec));
   }
   try {
     const storeEntries = await state.store.list('execution/');
     for (const entry of storeEntries) {
       const rec = entry.value as Record<string, unknown> | undefined;
       const id = extractExecutionId(rec);
-      if (id && rec) byId.set(id, rec);
+      if (id && rec) {
+        const existing = byId.get(id);
+        if (!existing || recordRevisionScore(rec) >= recordRevisionScore(existing)) {
+          byId.set(id, normalizeExecutionRecord(rec));
+        }
+      }
     }
   } catch {
     // Ignore transient store list errors and fall back to in-memory state.
@@ -576,7 +644,7 @@ async function collectAllExecutions(state: ApiState): Promise<Array<Record<strin
     if (id) {
       // Re-insert so newer API records move to the end before reverse().
       byId.delete(id);
-      byId.set(id, r);
+      byId.set(id, normalizeExecutionRecord(r));
     }
   }
   return [...byId.values()].reverse();
@@ -585,28 +653,34 @@ async function collectAllExecutions(state: ApiState): Promise<Array<Record<strin
 async function lookupExecution(state: ApiState, id: string): Promise<Record<string, unknown> | undefined> {
   for (let i = state.executions.length - 1; i >= 0; i -= 1) {
     if (extractExecutionId(state.executions[i]) === id) {
-      return state.executions[i];
+      return normalizeExecutionRecord(state.executions[i]);
     }
   }
+  let candidate: Record<string, unknown> | undefined;
   if (state.mobile) {
     const engineExec = await state.mobile.executionEngine.get(id);
     if (engineExec && engineExec.execution?.id === id) {
-      return engineExec as unknown as Record<string, unknown>;
+      candidate = engineExec as unknown as Record<string, unknown>;
     }
   }
   try {
     const fromExecStore = await state.store.get<Record<string, unknown>>(`execution/${id}`);
     if (fromExecStore && extractExecutionId(fromExecStore) === id) {
-      return fromExecStore;
+      if (!candidate || recordRevisionScore(fromExecStore) >= recordRevisionScore(candidate)) {
+        candidate = fromExecStore;
+      }
+    }
+    if (candidate) {
+      return normalizeExecutionRecord(candidate);
     }
     const fromApiStore = await state.store.get<{ record?: Record<string, unknown> }>(`${API_EXECUTION_PREFIX}${id}`);
     if (fromApiStore?.record && extractExecutionId(fromApiStore.record) === id) {
-      return fromApiStore.record;
+      return normalizeExecutionRecord(fromApiStore.record);
     }
   } catch {
-    // Fall through
+    if (candidate) return normalizeExecutionRecord(candidate);
   }
-  return undefined;
+  return candidate ? normalizeExecutionRecord(candidate) : undefined;
 }
 
 function summarizeExecutionRecord(record: Record<string, unknown>): Record<string, unknown> {
@@ -972,14 +1046,6 @@ export function createApp(state: ApiState) {
 
   app.get('/api/v1/executions/:id/events', async (req, res) => {
     const id = String(req.params.id);
-    if (state.mobile) {
-      const engineExec = await state.mobile.executionEngine.get(id);
-      if (engineExec && engineExec.execution?.id === id) {
-        const events = await state.mobile.executionEngine.events(engineExec.execution.id);
-        res.json({ executionId: engineExec.execution.id, events });
-        return;
-      }
-    }
     const record = await lookupExecution(state, id);
     const dispatchStatus = await state.dispatcher.status(id);
     if (!record && !dispatchStatus) {
@@ -1137,7 +1203,7 @@ export function createApp(state: ApiState) {
       state.dispatcher.unsubscribe(computerId, res);
       return;
     }
-    keepAlive = setInterval(() => { res.write(': ping\n\n'); void state.dispatcher.redeliver().catch(() => undefined); }, 5_000);
+    keepAlive = setInterval(() => { res.write(': ping\n\n'); void state.dispatcher.redeliver(computerId).catch(() => undefined); }, 5_000);
   });
 
   // Dispatch an authorized execution request to a specific computer's worker.

@@ -130,6 +130,8 @@ const MATRIX: Record<string, Scope> = {
   'GET /api/v1/mobile/autonomy': 'viewer-or-device',
   'POST /api/v1/mobile/autonomy': 'operator-or-device',
   'GET /api/v1/hosts': 'viewer-or-device',
+  'GET /api/v1/hosts/ssh-config': 'viewer-or-device',
+  'POST /api/v1/hosts/import-ssh': 'operator',
   'POST /api/v1/hosts': 'operator',
   'POST /api/v1/hosts/select': 'operator',
   'POST /api/v1/hosts/pair': 'operator',
@@ -148,6 +150,14 @@ const MATRIX: Record<string, Scope> = {
   'POST /api/v1/executions/:id/diff-review': 'operator-or-device',
   'GET /api/v1/mobile/tasks/:id/artifacts': 'viewer-or-device',
   'POST /api/v1/mobile/tasks/:id/diff-review': 'operator-or-device',
+  'GET /api/v1/push/status': 'viewer-or-device',
+  'POST /api/v1/push/register': 'operator-or-device',
+  'POST /api/v1/push/unregister': 'operator-or-device',
+  'POST /api/v1/push/test': 'operator-or-device',
+  'GET /api/v1/mobile/push/status': 'viewer-or-device',
+  'POST /api/v1/mobile/push/register': 'operator-or-device',
+  'POST /api/v1/mobile/push/unregister': 'operator-or-device',
+  'POST /api/v1/mobile/push/test': 'operator-or-device',
 };
 
 function routes(app: Express): string[] {

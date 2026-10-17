@@ -11,6 +11,10 @@ struct ControllerCachedState {
     var agents: [AgentDescriptorItem] = []
     var computers: [ComputerTelemetryItem] = []
     var resources: ResourceBudgetSnapshot?
+    var autonomy: MobileAutonomyState = MobileAutonomyState()
+    var schedules: [MobileScheduleItem] = []
+    var pushRegistrations: [PushRelayRegistration] = []
+    var recentPushWakeups: [PushWakeupEvent] = []
     var lastSequence: Int64 = 0
     var syncedAtMs: Int64?
 }
@@ -89,6 +93,10 @@ final class ControllerStore: ObservableObject {
             agents: persisted.agents,
             computers: persisted.computers,
             resources: persisted.resources,
+            autonomy: persisted.autonomy ?? MobileAutonomyState(),
+            schedules: persisted.schedules ?? [],
+            pushRegistrations: persisted.pushRegistrations ?? [],
+            recentPushWakeups: persisted.recentPushWakeups ?? [],
             lastSequence: persisted.lastSequence,
             syncedAtMs: persisted.syncedAtMs
         )
@@ -99,6 +107,8 @@ final class ControllerStore: ObservableObject {
             dashboard: state.dashboard, tasks: state.tasks, approvals: state.approvals,
             models: state.models, modelInstances: state.modelInstances, runtimes: state.runtimes,
             agents: state.agents, computers: state.computers, resources: state.resources,
+            autonomy: state.autonomy, schedules: state.schedules,
+            pushRegistrations: state.pushRegistrations, recentPushWakeups: state.recentPushWakeups,
             lastSequence: state.lastSequence, syncedAtMs: state.syncedAtMs
         )
         guard let data = try? encoder.encode(persisted) else { return }
@@ -152,6 +162,10 @@ private struct PersistedSnapshot: Codable {
     var agents: [AgentDescriptorItem]
     var computers: [ComputerTelemetryItem]
     var resources: ResourceBudgetSnapshot?
+    var autonomy: MobileAutonomyState?
+    var schedules: [MobileScheduleItem]?
+    var pushRegistrations: [PushRelayRegistration]?
+    var recentPushWakeups: [PushWakeupEvent]?
     var lastSequence: Int64
     var syncedAtMs: Int64?
 }

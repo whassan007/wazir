@@ -107,9 +107,12 @@ final class WazirRepository {
         async let agentsRes = try? api.getAgents(profile)
         async let computersRes = try? api.getComputers(profile)
         async let resourcesRes = try? api.getResourceBudget(profile)
+        async let autonomyRes = try? api.getAutonomy(profile)
+        async let schedulesRes = try? api.listSchedules(profile)
+        async let pushStatusRes = try? api.getPushRelayStatus(profile)
 
-        let (dashboard, tasks, approvals, models, runtimes, agents, computers, resources) =
-            await (dashboardRes, tasksRes, approvalsRes, modelsRes, runtimesRes, agentsRes, computersRes, resourcesRes)
+        let (dashboard, tasks, approvals, models, runtimes, agents, computers, resources, autonomy, schedules, pushStatus) =
+            await (dashboardRes, tasksRes, approvalsRes, modelsRes, runtimesRes, agentsRes, computersRes, resourcesRes, autonomyRes, schedulesRes, pushStatusRes)
 
         if dashboard == nil && tasks == nil {
             throw RepositoryError.message("Unable to reach Wazir controller")
@@ -130,6 +133,10 @@ final class WazirRepository {
             agents: agents?.agents ?? existing.agents,
             computers: computers?.computers ?? existing.computers,
             resources: resources ?? existing.resources,
+            autonomy: autonomy ?? existing.autonomy,
+            schedules: schedules?.schedules ?? existing.schedules,
+            pushRegistrations: pushStatus?.registrations ?? existing.pushRegistrations,
+            recentPushWakeups: pushStatus?.recentWakeups ?? existing.recentPushWakeups,
             lastSequence: nextSeq,
             syncedAtMs: now
         )
@@ -168,6 +175,70 @@ final class WazirRepository {
 
     func resolveApproval(_ profile: ControllerProfile, approvalId: String, request: ResolveApprovalRequest) async throws -> ResolveApprovalResponse {
         try await api.resolveApproval(profile, approvalId: approvalId, request: request)
+    }
+
+    // MARK: - Multi-Surface & Push Relay
+
+    func updateAutonomy(_ profile: ControllerProfile, posture: String? = nil, networkGuard: String? = nil) async throws -> MobileAutonomyState {
+        try await api.updateAutonomy(profile, request: UpdateAutonomyRequest(posture: posture, networkGuard: networkGuard))
+    }
+
+    func getTaskArtifacts(_ profile: ControllerProfile, taskId: String) async throws -> TaskArtifactsResponse {
+        try await api.getTaskArtifacts(profile, taskId: taskId)
+    }
+
+    func reviewTaskDiffFile(_ profile: ControllerProfile, taskId: String, path: String, decision: String) async throws -> TaskDiffReviewResponse {
+        try await api.reviewTaskDiffFile(profile, taskId: taskId, path: path, decision: decision)
+    }
+
+    func createSchedule(_ profile: ControllerProfile, request: CreateScheduleRequest) async throws -> ScheduleMutationResponse {
+        try await api.createSchedule(profile, request: request)
+    }
+
+    func toggleSchedule(_ profile: ControllerProfile, scheduleId: String, enabled: Bool) async throws -> ScheduleMutationResponse {
+        try await api.toggleSchedule(profile, scheduleId: scheduleId, enabled: enabled)
+    }
+
+    func runScheduleNow(_ profile: ControllerProfile, scheduleId: String) async throws -> ScheduleMutationResponse {
+        try await api.runScheduleNow(profile, scheduleId: scheduleId)
+    }
+
+    func deleteSchedule(_ profile: ControllerProfile, scheduleId: String) async throws -> ScheduleMutationResponse {
+        try await api.deleteSchedule(profile, scheduleId: scheduleId)
+    }
+
+    func registerPushRelay(
+        _ profile: ControllerProfile,
+        provider: String = "apns",
+        pushToken: String? = nil,
+        relayEndpointUrl: String? = nil,
+        enabled: Bool = true,
+        notifyApprovals: Bool = true,
+        notifyTaskTerminal: Bool = true
+    ) async throws -> RegisterPushRelayResponse {
+        let (deviceId, _) = credentialVault.getOrCreateDeviceIdentity()
+        let effectiveToken = pushToken?.nilIfBlank ?? "wazir-apns-token-\(deviceId)"
+        let request = RegisterPushRelayRequest(
+            deviceId: deviceId,
+            deviceName: Self.deviceDisplayName(),
+            provider: provider,
+            pushToken: effectiveToken,
+            relayEndpointUrl: relayEndpointUrl?.nilIfBlank,
+            enabled: enabled,
+            notifyApprovals: notifyApprovals,
+            notifyTaskTerminal: notifyTaskTerminal
+        )
+        return try await api.registerPushRelay(profile, request: request)
+    }
+
+    func unregisterPushRelay(_ profile: ControllerProfile) async throws {
+        let (deviceId, _) = credentialVault.getOrCreateDeviceIdentity()
+        try await api.unregisterPushRelay(profile, deviceId: deviceId)
+    }
+
+    func testPushWakeup(_ profile: ControllerProfile, title: String? = nil) async throws -> TestPushWakeupResponse {
+        let (deviceId, _) = credentialVault.getOrCreateDeviceIdentity()
+        return try await api.testPushWakeup(profile, deviceId: deviceId, title: title)
     }
 
     private static func deviceDisplayName() -> String {

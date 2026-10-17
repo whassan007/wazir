@@ -130,7 +130,17 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 
+export interface GenerationExecutionLimits {
+  /** Maximum HTTP model-request admissions for this generation, including retries. */
+  maxModelCalls?: number;
+  /** Absolute deadline, also usable across a remote worker boundary. */
+  deadlineAt?: number;
+}
+
 export interface GenerationRequest {
+  executionLimits?: GenerationExecutionLimits;
+  /** Local cancellation; serialize executionLimits, not this signal, for remote workers. */
+  signal?: AbortSignal;
   /** Controller-owned provider retry budget, never supplied by model output. */
   providerRetryPolicy?: Partial<import('@wazir/shared').RetryPolicy>;
   modelId: string;
@@ -378,7 +388,10 @@ export interface GenerationEvent {
   retryExhausted?: boolean;
   requestId?: string;
   /** 'reasoning': model thinking, streamed for progress only; never part of the answer. */
-  type: 'token' | 'reasoning' | 'tool_call' | 'completed' | 'error' | 'retry';
+  type: 'token' | 'reasoning' | 'tool_call' | 'completed' | 'error' | 'retry' | 'attempt_started';
+  /** Controller-assigned physical HTTP attempt identity; admission precedes dispatch. */
+  attempt?: number;
+  attemptId?: string;
   /** 'error' from an HTTP response: its status code. */
   status?: number;
   /** 'error': provider-requested wait (Retry-After), in milliseconds. */
@@ -506,3 +519,5 @@ export function httpFailureEvent(provider: string, response: Response, body: str
     error: `${provider} API error: HTTP ${response.status} ${body.slice(0, 300)}`,
   };
 }
+
+export * from './generationControl.js';

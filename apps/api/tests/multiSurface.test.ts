@@ -404,4 +404,157 @@ describe('Phase 1: Multi-Surface Shared Capabilities (Web, Desktop, Mobile)', ()
     expect(delRes.status).toBe(200);
     expect(delRes.body.ok).toBe(true);
   });
+
+  it('imports SSH tunnel host profiles from OpenSSH config text into the host switcher', async () => {
+    const sampleSshConfig = `
+# Production and Staging Wazir Fleet
+Host prod-fleet
+  HostName 10.24.0.15
+  User ubuntu
+  Port 2222
+  IdentityFile ~/.ssh/id_ed25519
+  LocalForward 4120 127.0.0.1:4100
+
+Host staging-gpu
+  HostName gpu.staging.internal
+  User deploy
+
+Host *
+  ServerAliveInterval 60
+`;
+
+    const importRes = await jsonReq<{
+      ok: boolean;
+      imported: Array<{
+        id: string;
+        name: string;
+        url: string;
+        sshAlias?: string;
+        sshTunnelCommand?: string;
+      }>;
+      profiles: Array<{
+        alias: string;
+        hostName: string;
+        user?: string;
+        port: number;
+        localForwardPort: number;
+        suggestedControllerUrl: string;
+        sshTunnelCommand: string;
+      }>;
+      hosts: Array<{ id: string }>;
+    }>(harness.baseUrl, 'POST', '/api/v1/hosts/import-ssh', {
+      token: OPERATOR_TOKEN,
+      body: {
+        configText: sampleSshConfig,
+      },
+    });
+
+    expect(importRes.status).toBe(201);
+    expect(importRes.body.ok).toBe(true);
+    expect(importRes.body.profiles).toHaveLength(2);
+    expect(importRes.body.imported).toHaveLength(2);
+
+    const prodProfile = importRes.body.profiles.find((p) => p.alias === 'prod-fleet')!;
+    expect(prodProfile.hostName).toBe('10.24.0.15');
+    expect(prodProfile.user).toBe('ubuntu');
+    expect(prodProfile.port).toBe(2222);
+    expect(prodProfile.localForwardPort).toBe(4120);
+    expect(prodProfile.suggestedControllerUrl).toBe('http://127.0.0.1:4120');
+    expect(prodProfile.sshTunnelCommand).toContain('ssh -N -L 4120:127.0.0.1:4100');
+
+    const prodHost = importRes.body.imported.find((h) => h.id === 'ssh-prod-fleet')!;
+    expect(prodHost).toBeDefined();
+    expect(prodHost.url).toBe('http://127.0.0.1:4120');
+    expect(prodHost.sshAlias).toBe('prod-fleet');
+  });
+
+  it('registers Cloud Push Relay devices and dispatches out-of-band wakeups on approval gates and task completion', async () => {
+    // 1. Register mobile push relay token
+    const regRes = await jsonReq<{
+      ok: boolean;
+      registration: {
+        deviceId: string;
+        provider: string;
+        pushToken: string;
+        enabled: boolean;
+        deliveryCount: number;
+      };
+    }>(harness.baseUrl, 'POST', '/api/v1/mobile/push/register', {
+      token: OPERATOR_TOKEN,
+      body: {
+        deviceId: 'pixel-9-pro',
+        deviceName: 'Pixel 9 Pro',
+        provider: 'fcm',
+        pushToken: 'fcm-token-xyz-987654',
+        notifyApprovals: true,
+        notifyTaskTerminal: true,
+      },
+    });
+    expect(regRes.status).toBe(201);
+    expect(regRes.body.ok).toBe(true);
+    expect(regRes.body.registration.deviceId).toBe('pixel-9-pro');
+    expect(regRes.body.registration.provider).toBe('fcm');
+
+    // 2. Trigger test wakeup
+    const testWakeRes = await jsonReq<{
+      ok: boolean;
+      wakeups: Array<{ deviceId: string; eventType: string; deepLink: string; status: string }>;
+    }>(harness.baseUrl, 'POST', '/api/v1/mobile/push/test', {
+      token: OPERATOR_TOKEN,
+      body: {
+        deviceId: 'pixel-9-pro',
+        title: 'Test Wakeup Ping',
+      },
+    });
+    expect(testWakeRes.status).toBe(200);
+    expect(testWakeRes.body.wakeups).toHaveLength(1);
+    expect(testWakeRes.body.wakeups[0].eventType).toBe('push.test_wakeup');
+    expect(testWakeRes.body.wakeups[0].status).toBe('delivered');
+
+    // 3. Emit an approval.requested event on the mobile event hub and verify automatic push wakeup
+    await harness.state.mobile.eventHub.publish({
+      type: 'approval.requested',
+      taskId: 'task-push-99',
+      executionId: 'exec-push-99',
+      approvalId: 'apr-push-99',
+      status: 'pending',
+      summary: 'High-risk bash command requires mobile approval',
+    });
+
+    const statusRes = await jsonReq<{
+      registrations: Array<{ deviceId: string; deliveryCount: number }>;
+      recentWakeups: Array<{
+        deviceId: string;
+        eventType: string;
+        deepLink: string;
+        approvalId?: string;
+        priority: string;
+      }>;
+    }>(harness.baseUrl, 'GET', '/api/v1/mobile/push/status?deviceId=pixel-9-pro', {
+      token: VIEWER_TOKEN,
+    });
+    expect(statusRes.status).toBe(200);
+    expect(statusRes.body.registrations).toHaveLength(1);
+    expect(statusRes.body.registrations[0].deliveryCount).toBeGreaterThanOrEqual(2);
+
+    const approvalWakeup = statusRes.body.recentWakeups.find((w) => w.eventType === 'approval.requested')!;
+    expect(approvalWakeup).toBeDefined();
+    expect(approvalWakeup.approvalId).toBe('apr-push-99');
+    expect(approvalWakeup.deepLink).toBe('wazir://approvals/apr-push-99');
+    expect(approvalWakeup.priority).toBe('high');
+
+    // 4. Unregister push relay
+    const unregRes = await jsonReq<{ ok: boolean; deviceId: string }>(
+      harness.baseUrl,
+      'POST',
+      '/api/v1/mobile/push/unregister',
+      {
+        token: OPERATOR_TOKEN,
+        body: { deviceId: 'pixel-9-pro' },
+      },
+    );
+    expect(unregRes.status).toBe(200);
+    expect(unregRes.body.ok).toBe(true);
+  });
 });
+

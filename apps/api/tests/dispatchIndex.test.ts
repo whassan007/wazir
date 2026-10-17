@@ -72,4 +72,87 @@ describe('TaskDispatcher pending index (review finding F)', () => {
     expect(await store.get('dispatch/pending')).toBeDefined();
     expect(second.totalQueued).toBe(1);
   });
+
+  it('targets redelivery per worker, handles disconnect/reconnect, lease expiry, duplicate requests, retried completions, and 1,000+ historical records in O(pending)', async () => {
+    let now = 1_000;
+    const { store, fullScans } = countingStore();
+    const dispatcher = new TaskDispatcher(store, () => now, 5_000, { completedRetentionMs: 60_000 });
+    await dispatcher.ready;
+
+    // Seed 1,000 historical completed records directly in the store
+    for (let i = 0; i < 1_000; i += 1) {
+      const id = `hist-${i}`;
+      await store.put(`dispatch/${id}`, {
+        computerId: i % 2 === 0 ? 'w1' : 'w2',
+        request: request(id),
+        events: [],
+        attempt: 1,
+        outcome,
+        completedAt: 500,
+      });
+    }
+
+    const w1Frames: string[] = [];
+    const w2Frames: string[] = [];
+    const mockRes = (frames: string[]) =>
+      ({
+        write: (chunk: string) => {
+          frames.push(chunk);
+          return true;
+        },
+        end: () => undefined,
+      }) as unknown as Parameters<TaskDispatcher['subscribe']>[1];
+
+    await dispatcher.subscribe('w1', mockRes(w1Frames));
+    await dispatcher.subscribe('w2', mockRes(w2Frames));
+
+    const scansBefore = fullScans();
+    const t0 = performance.now();
+
+    // Concurrent dispatches to w1 and w2
+    const [d1, d2, dup1] = await Promise.all([
+      dispatcher.dispatch('w1', request('task-w1')),
+      dispatcher.dispatch('w2', request('task-w2')),
+      dispatcher.dispatch('w1', request('task-w1')),
+    ]);
+    expect([d1.ok, d2.ok]).toContain(true);
+    expect([d1, dup1]).toContainEqual({ ok: false, reason: 'REQUEST_ALREADY_DISPATCHED' });
+
+    // Targeted redelivery for w1 must only write to w1Frames, never w2Frames
+    w1Frames.length = 0;
+    w2Frames.length = 0;
+    await dispatcher.redeliver('w1');
+    expect(w1Frames).toHaveLength(1);
+    expect(w2Frames).toHaveLength(0);
+
+    // Claim task-w1 -> while lease is active, redeliver('w1') emits nothing
+    const lease1 = await dispatcher.claim('task-w1', 'w1');
+    w1Frames.length = 0;
+    await dispatcher.redeliver('w1');
+    expect(w1Frames).toHaveLength(0);
+
+    // Advance past lease expiry -> redeliver('w1') redelivers task-w1
+    now += 6_000;
+    await dispatcher.redeliver('w1');
+    expect(w1Frames).toHaveLength(1);
+
+    // Re-claim after lease expiry and commit with idempotent retry
+    const lease2 = await dispatcher.claim('task-w1', 'w1');
+    expect(lease2.attempt).toBe(2);
+    expect(await dispatcher.commit('task-w1', outcome, lease2.token)).toBe('committed');
+    expect(await dispatcher.commit('task-w1', outcome, lease2.token)).toBe('duplicate');
+
+    const elapsedMs = performance.now() - t0;
+    expect(fullScans()).toBe(scansBefore);
+    expect(elapsedMs).toBeLessThan(200);
+
+    // Prune the 1,000 expired historical records (completedAt = 500 <= 65,000 - 60,000)
+    now = 65_000;
+    const pruned = await dispatcher.pruneCompleted();
+    expect(pruned).toBe(1_000);
+    // Recently completed task-w1 (completedAt = 7,000 > 5,000) and pending task-w2 remain intact
+    expect(await store.get('dispatch/task-w1')).toBeDefined();
+    expect(await store.get('dispatch/task-w2')).toBeDefined();
+  });
 });
+

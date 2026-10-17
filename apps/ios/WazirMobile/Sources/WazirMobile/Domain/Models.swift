@@ -1354,3 +1354,420 @@ indirect enum JSONValue: Decodable {
         }
     }
 }
+
+// MARK: - Multi-Surface: Autonomy, Verifiable Artifacts, Schedules & Push Relay
+
+struct MobileAutonomyState: Codable, Equatable {
+    var ok: Bool
+    var posture: String
+    var networkGuard: String
+    var updatedAt: String
+    var updatedBy: String
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, posture, networkGuard, updatedAt, updatedBy
+    }
+
+    init(
+        ok: Bool = true,
+        posture: String = "request-review",
+        networkGuard: String = "normal",
+        updatedAt: String = "",
+        updatedBy: String = "operator"
+    ) {
+        self.ok = ok
+        self.posture = posture
+        self.networkGuard = networkGuard
+        self.updatedAt = updatedAt
+        self.updatedBy = updatedBy
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try c.decode(Bool.self, forKey: .ok, default: true)
+        posture = try c.decode(String.self, forKey: .posture, default: "request-review")
+        networkGuard = try c.decode(String.self, forKey: .networkGuard, default: "normal")
+        updatedAt = try c.decode(String.self, forKey: .updatedAt, default: "")
+        updatedBy = try c.decode(String.self, forKey: .updatedBy, default: "operator")
+    }
+}
+
+struct UpdateAutonomyRequest: Codable {
+    var posture: String?
+    var networkGuard: String?
+    var updatedBy: String = "ios-operator"
+}
+
+struct ArtifactPlanStep: Codable, Identifiable {
+    var id: String
+    var title: String
+    var status: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, status
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id, default: UUID().uuidString)
+        title = try c.decode(String.self, forKey: .title, default: "")
+        status = try c.decode(String.self, forKey: .status, default: "pending")
+    }
+}
+
+struct MobileDiffFileItem: Codable, Identifiable {
+    var path: String
+    var changeType: String
+    var additions: Int
+    var deletions: Int
+    var status: String
+    var patch: String
+
+    var id: String { path }
+
+    private enum CodingKeys: String, CodingKey {
+        case path, changeType, additions, deletions, status, patch
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path, default: "")
+        changeType = try c.decode(String.self, forKey: .changeType, default: "modified")
+        additions = try c.decode(Int.self, forKey: .additions, default: 0)
+        deletions = try c.decode(Int.self, forKey: .deletions, default: 0)
+        status = try c.decode(String.self, forKey: .status, default: "pending")
+        patch = try c.decode(String.self, forKey: .patch, default: "")
+    }
+}
+
+struct ArtifactTestCheck: Codable, Identifiable {
+    var name: String
+    var status: String
+    var durationMs: Int64
+    var output: String?
+
+    var id: String { name }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, status, durationMs, output
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name, default: "")
+        status = try c.decode(String.self, forKey: .status, default: "passed")
+        durationMs = try c.decode(Int64.self, forKey: .durationMs, default: 0)
+        output = try c.decodeIfPresent(String.self, forKey: .output)
+    }
+}
+
+struct MobileVerifiableArtifact: Codable, Identifiable {
+    var id: String
+    var executionId: String
+    var kind: String
+    var title: String
+    var status: String
+    var createdAt: String
+    var summary: String
+    var steps: [ArtifactPlanStep]
+    var files: [MobileDiffFileItem]
+    var checks: [ArtifactTestCheck]
+    var previewHtml: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, executionId, kind, title, status, createdAt, summary, steps, files, checks, previewHtml
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id, default: UUID().uuidString)
+        executionId = try c.decode(String.self, forKey: .executionId, default: "")
+        kind = try c.decode(String.self, forKey: .kind, default: "")
+        title = try c.decode(String.self, forKey: .title, default: "")
+        status = try c.decode(String.self, forKey: .status, default: "pending")
+        createdAt = try c.decode(String.self, forKey: .createdAt, default: "")
+        summary = try c.decode(String.self, forKey: .summary, default: "")
+        steps = try c.decode([ArtifactPlanStep].self, forKey: .steps, default: [])
+        files = try c.decode([MobileDiffFileItem].self, forKey: .files, default: [])
+        checks = try c.decode([ArtifactTestCheck].self, forKey: .checks, default: [])
+        previewHtml = try c.decodeIfPresent(String.self, forKey: .previewHtml)
+    }
+}
+
+struct TaskArtifactsResponse: Codable {
+    var ok: Bool
+    var taskId: String
+    var executionId: String
+    var artifacts: [MobileVerifiableArtifact]
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, taskId, executionId, artifacts
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try c.decode(Bool.self, forKey: .ok, default: true)
+        taskId = try c.decode(String.self, forKey: .taskId, default: "")
+        executionId = try c.decode(String.self, forKey: .executionId, default: "")
+        artifacts = try c.decode([MobileVerifiableArtifact].self, forKey: .artifacts, default: [])
+    }
+}
+
+struct DiffReviewRequest: Codable {
+    var path: String
+    var decision: String
+}
+
+struct DiffReviewDecisionItem: Codable, Identifiable {
+    var path: String
+    var decision: String
+    var updatedAt: String
+
+    var id: String { path }
+
+    private enum CodingKeys: String, CodingKey {
+        case path, decision, updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path, default: "")
+        decision = try c.decode(String.self, forKey: .decision, default: "accepted")
+        updatedAt = try c.decode(String.self, forKey: .updatedAt, default: "")
+    }
+}
+
+struct TaskDiffReviewResponse: Codable {
+    var ok: Bool
+    var taskId: String
+    var executionId: String
+    var reviews: [DiffReviewDecisionItem]
+    var artifacts: [MobileVerifiableArtifact]
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, taskId, executionId, reviews, artifacts
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try c.decode(Bool.self, forKey: .ok, default: true)
+        taskId = try c.decode(String.self, forKey: .taskId, default: "")
+        executionId = try c.decode(String.self, forKey: .executionId, default: "")
+        reviews = try c.decode([DiffReviewDecisionItem].self, forKey: .reviews, default: [])
+        artifacts = try c.decode([MobileVerifiableArtifact].self, forKey: .artifacts, default: [])
+    }
+}
+
+struct MobileScheduleItem: Codable, Identifiable {
+    var id: String
+    var name: String
+    var prompt: String
+    var cronExpression: String
+    var agentId: String
+    var modelId: String
+    var autonomyPosture: String
+    var enabled: Bool
+    var lastRunAt: String?
+    var lastExecutionId: String?
+    var nextRunDescription: String
+    var createdAt: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, prompt, cronExpression, agentId, modelId, autonomyPosture, enabled,
+             lastRunAt, lastExecutionId, nextRunDescription, createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id, default: "")
+        name = try c.decode(String.self, forKey: .name, default: "")
+        prompt = try c.decode(String.self, forKey: .prompt, default: "")
+        cronExpression = try c.decode(String.self, forKey: .cronExpression, default: "0 * * * *")
+        agentId = try c.decode(String.self, forKey: .agentId, default: "coding-agent")
+        modelId = try c.decode(String.self, forKey: .modelId, default: "local-default")
+        autonomyPosture = try c.decode(String.self, forKey: .autonomyPosture, default: "request-review")
+        enabled = try c.decode(Bool.self, forKey: .enabled, default: true)
+        lastRunAt = try c.decodeIfPresent(String.self, forKey: .lastRunAt)
+        lastExecutionId = try c.decodeIfPresent(String.self, forKey: .lastExecutionId)
+        nextRunDescription = try c.decode(String.self, forKey: .nextRunDescription, default: "")
+        createdAt = try c.decode(String.self, forKey: .createdAt, default: "")
+    }
+}
+
+struct ScheduleListResponse: Codable {
+    var schedules: [MobileScheduleItem]
+    var count: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case schedules, count
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schedules = try c.decode([MobileScheduleItem].self, forKey: .schedules, default: [])
+        count = try c.decode(Int.self, forKey: .count, default: 0)
+    }
+}
+
+struct CreateScheduleRequest: Codable {
+    var name: String
+    var prompt: String
+    var cronExpression: String
+    var agentId: String = "coding-agent"
+    var modelId: String = "local-default"
+    var autonomyPosture: String = "request-review"
+    var enabled: Bool = true
+}
+
+struct ScheduleMutationResponse: Codable {
+    var ok: Bool
+    var schedule: MobileScheduleItem?
+    var executionId: String?
+    var deleted: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, schedule, executionId, deleted
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try c.decode(Bool.self, forKey: .ok, default: true)
+        schedule = try c.decodeIfPresent(MobileScheduleItem.self, forKey: .schedule)
+        executionId = try c.decodeIfPresent(String.self, forKey: .executionId)
+        deleted = try c.decode(Bool.self, forKey: .deleted, default: false)
+    }
+}
+
+struct PushRelayRegistration: Codable, Identifiable {
+    var deviceId: String
+    var deviceName: String
+    var provider: String
+    var pushToken: String
+    var relayEndpointUrl: String?
+    var enabled: Bool
+    var notifyApprovals: Bool
+    var notifyTaskTerminal: Bool
+    var registeredAt: String
+    var updatedAt: String
+    var lastWakeupAt: String?
+    var deliveryCount: Int
+
+    var id: String { deviceId }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceId, deviceName, provider, pushToken, relayEndpointUrl, enabled,
+             notifyApprovals, notifyTaskTerminal, registeredAt, updatedAt, lastWakeupAt, deliveryCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        deviceId = try c.decode(String.self, forKey: .deviceId, default: "")
+        deviceName = try c.decode(String.self, forKey: .deviceName, default: "")
+        provider = try c.decode(String.self, forKey: .provider, default: "apns")
+        pushToken = try c.decode(String.self, forKey: .pushToken, default: "")
+        relayEndpointUrl = try c.decodeIfPresent(String.self, forKey: .relayEndpointUrl)
+        enabled = try c.decode(Bool.self, forKey: .enabled, default: true)
+        notifyApprovals = try c.decode(Bool.self, forKey: .notifyApprovals, default: true)
+        notifyTaskTerminal = try c.decode(Bool.self, forKey: .notifyTaskTerminal, default: true)
+        registeredAt = try c.decode(String.self, forKey: .registeredAt, default: "")
+        updatedAt = try c.decode(String.self, forKey: .updatedAt, default: "")
+        lastWakeupAt = try c.decodeIfPresent(String.self, forKey: .lastWakeupAt)
+        deliveryCount = try c.decode(Int.self, forKey: .deliveryCount, default: 0)
+    }
+}
+
+struct PushWakeupEvent: Codable, Identifiable {
+    var id: String
+    var deviceId: String
+    var provider: String
+    var eventType: String
+    var title: String
+    var body: String
+    var deepLink: String
+    var priority: String
+    var approvalId: String?
+    var taskId: String?
+    var executionId: String?
+    var status: String
+    var createdAt: String
+    var error: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, deviceId, provider, eventType, title, body, deepLink, priority,
+             approvalId, taskId, executionId, status, createdAt, error
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id, default: UUID().uuidString)
+        deviceId = try c.decode(String.self, forKey: .deviceId, default: "")
+        provider = try c.decode(String.self, forKey: .provider, default: "apns")
+        eventType = try c.decode(String.self, forKey: .eventType, default: "")
+        title = try c.decode(String.self, forKey: .title, default: "")
+        body = try c.decode(String.self, forKey: .body, default: "")
+        deepLink = try c.decode(String.self, forKey: .deepLink, default: "")
+        priority = try c.decode(String.self, forKey: .priority, default: "high")
+        approvalId = try c.decodeIfPresent(String.self, forKey: .approvalId)
+        taskId = try c.decodeIfPresent(String.self, forKey: .taskId)
+        executionId = try c.decodeIfPresent(String.self, forKey: .executionId)
+        status = try c.decode(String.self, forKey: .status, default: "delivered")
+        createdAt = try c.decode(String.self, forKey: .createdAt, default: "")
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+    }
+}
+
+struct PushRelayStatusResponse: Codable {
+    var registrations: [PushRelayRegistration]
+    var recentWakeups: [PushWakeupEvent]
+
+    private enum CodingKeys: String, CodingKey {
+        case registrations, recentWakeups
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        registrations = try c.decode([PushRelayRegistration].self, forKey: .registrations, default: [])
+        recentWakeups = try c.decode([PushWakeupEvent].self, forKey: .recentWakeups, default: [])
+    }
+}
+
+struct RegisterPushRelayRequest: Codable {
+    var deviceId: String
+    var deviceName: String = "Wazir iOS Supervisor"
+    var provider: String = "apns"
+    var pushToken: String
+    var relayEndpointUrl: String? = nil
+    var enabled: Bool = true
+    var notifyApprovals: Bool = true
+    var notifyTaskTerminal: Bool = true
+}
+
+struct RegisterPushRelayResponse: Codable {
+    var ok: Bool
+    var registration: PushRelayRegistration?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, registration
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try c.decode(Bool.self, forKey: .ok, default: true)
+        registration = try c.decodeIfPresent(PushRelayRegistration.self, forKey: .registration)
+    }
+}
+
+struct TestPushWakeupResponse: Codable {
+    var ok: Bool
+    var wakeups: [PushWakeupEvent]
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, wakeups
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try c.decode(Bool.self, forKey: .ok, default: true)
+        wakeups = try c.decode([PushWakeupEvent].self, forKey: .wakeups, default: [])
+    }
+}

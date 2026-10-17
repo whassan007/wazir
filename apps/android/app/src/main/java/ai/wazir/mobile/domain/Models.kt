@@ -757,3 +757,67 @@ data class ScheduleMutationResponse(
     val deleted: Boolean = false,
 )
 
+@Serializable
+data class PushRelayRegistration(
+    val deviceId: String,
+    val deviceName: String = "",
+    val provider: String = "fcm",
+    val pushToken: String = "",
+    val relayEndpointUrl: String? = null,
+    val enabled: Boolean = true,
+    val notifyApprovals: Boolean = true,
+    val notifyTaskTerminal: Boolean = true,
+    val registeredAt: String = "",
+    val updatedAt: String = "",
+    val lastWakeupAt: String? = null,
+    val deliveryCount: Int = 0,
+)
+
+@Serializable
+data class PushWakeupEvent(
+    val id: String,
+    val deviceId: String = "",
+    val provider: String = "fcm",
+    val eventType: String = "",
+    val title: String = "",
+    val body: String = "",
+    val deepLink: String = "",
+    val priority: String = "high",
+    val approvalId: String? = null,
+    val taskId: String? = null,
+    val executionId: String? = null,
+    val status: String = "delivered",
+    val createdAt: String = "",
+    val error: String? = null,
+)
+
+@Serializable
+data class PushRelayStatusResponse(
+    val registrations: List<PushRelayRegistration> = emptyList(),
+    val recentWakeups: List<PushWakeupEvent> = emptyList(),
+)
+
+@Serializable
+data class RegisterPushRelayRequest(
+    val deviceId: String,
+    val deviceName: String = "Wazir Android Supervisor",
+    val provider: String = "fcm",
+    val pushToken: String,
+    val relayEndpointUrl: String? = null,
+    val enabled: Boolean = true,
+    val notifyApprovals: Boolean = true,
+    val notifyTaskTerminal: Boolean = true,
+)
+
+@Serializable
+data class RegisterPushRelayResponse(
+    val ok: Boolean = true,
+    val registration: PushRelayRegistration? = null,
+)
+
+@Serializable
+data class TestPushWakeupResponse(
+    val ok: Boolean = true,
+    val wakeups: List<PushWakeupEvent> = emptyList(),
+)
+

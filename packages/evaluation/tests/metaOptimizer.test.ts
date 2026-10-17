@@ -97,7 +97,7 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
       name: 'Mock Regressing Runner',
       async run(task): Promise<ExecutionRecord> {
         runCount++;
-        const isCandidate = runCount > 2;
+        const isCandidate = runCount > 20;
         const pass = isCandidate ? task.id === 'opt-bench-1' : true;
 
         return {
@@ -126,17 +126,18 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
           checks: [{ name: 'test', command: 'npm test', ok: pass, durationMs: 100 }],
           errors: pass ? [] : ['Regression occurred in test execution'],
           events: [],
+          totalModelCalls: 1,
           usage: { inputTokens: 500, outputTokens: 200 },
         };
       },
     };
 
-    const result = await metaOptimizer.evaluateCandidate(candidate, runner, [task1, task2]);
+    const result = await metaOptimizer.evaluateCandidate(candidate, runner, [task1, task2], { repetitions: 10 });
 
     expect(result.decision).toBe('REJECTED');
     expect(result.comparison.regressionDetected).toBe(true);
     expect(result.comparison.regressedTasks).toContain('opt-bench-2');
-    expect(result.reasons.some((r) => r.includes('REGRESSION_DETECTED'))).toBe(true);
+    expect(result.reasons.some((r) => r.includes('REJECTED'))).toBe(true);
 
     // Active config must remain the baseline
     expect(metaOptimizer.getActiveConfig().id).toBe(DEFAULT_OPTIMIZABLE_CONFIG.id);
@@ -159,7 +160,7 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
       name: 'Mock Improving Runner',
       async run(task): Promise<ExecutionRecord> {
         runCount++;
-        const isCandidate = runCount > 2;
+        const isCandidate = runCount > 20;
         const pass = isCandidate ? true : task.id === 'opt-bench-1';
 
         return {
@@ -188,17 +189,18 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
           checks: [{ name: 'test', command: 'npm test', ok: pass, durationMs: 100 }],
           errors: pass ? [] : ['Test failed in baseline'],
           events: [],
+          totalModelCalls: 1,
           usage: { inputTokens: 500, outputTokens: 200 },
         };
       },
     };
 
-    const result = await metaOptimizer.evaluateCandidate(candidate, runner, [task1, task2]);
+    const result = await metaOptimizer.evaluateCandidate(candidate, runner, [task1, task2], { repetitions: 10 });
 
     expect(result.decision).toBe('ACCEPTED');
     expect(result.comparison.regressionDetected).toBe(false);
     expect(result.comparison.passRateDelta).toBeGreaterThan(0);
-    expect(result.reasons.some((r) => r.includes('PASS_RATE_IMPROVEMENT'))).toBe(true);
+    expect(result.reasons.some((r) => r.includes('QUALIFIED'))).toBe(true);
 
     // Active config promoted!
     expect(metaOptimizer.getActiveConfig().id).toBe(candidate.candidateId);
@@ -221,7 +223,7 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
       name: 'Mock Efficient Runner',
       async run(task): Promise<ExecutionRecord> {
         runCount++;
-        const isCandidate = runCount > 2;
+        const isCandidate = runCount > 20;
         const tokens = isCandidate ? 100 : 1000;
 
         return {
@@ -250,25 +252,26 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
           checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 100 }],
           errors: [],
           events: [],
+          totalModelCalls: 1,
           usage: { inputTokens: tokens, outputTokens: tokens / 2 },
         };
       },
     };
 
-    const result = await metaOptimizer.evaluateCandidate(candidate, runner, [task1, task2]);
+    const result = await metaOptimizer.evaluateCandidate(candidate, runner, [task1, task2], { repetitions: 10 });
 
     expect(result.decision).toBe('ACCEPTED');
     expect(result.comparison.regressionDetected).toBe(false);
     expect(result.comparison.passRateDelta).toBe(0);
     expect(result.comparison.tokenUsageDelta).toBeLessThan(0);
     expect(result.comparison.costDelta).toBeLessThan(0);
-    expect(result.reasons.some((r) => r.includes('EFFICIENCY_IMPROVEMENT'))).toBe(true);
+    expect(result.reasons.some((r) => r.includes('QUALIFIED'))).toBe(true);
 
     // Active config promoted!
     expect(metaOptimizer.getActiveConfig().id).toBe(candidate.candidateId);
   });
 
-  it('rejects candidate when there is no empirical advantage', async () => {
+  it('preserves baseline when there is no statistically supported advantage', async () => {
     const candidate = metaOptimizer.proposeCandidate([
       {
         type: 'PROMPT_TWEAK',
@@ -279,13 +282,14 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
       },
     ]);
 
+    let identicalRuns = 0;
     const runner: BenchmarkRunner = {
       id: 'mock-identical-runner',
       name: 'Mock Identical Runner',
       async run(task): Promise<ExecutionRecord> {
         return {
           execution: {
-            id: `exec-${task.id}`,
+            id: `exec-${task.id}-${++identicalRuns}`,
             taskId: task.id,
             runtimeId: 'test',
             modelId: 'test',
@@ -309,15 +313,17 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
           checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 100 }],
           errors: [],
           events: [],
+          totalModelCalls: 1,
           usage: { inputTokens: 500, outputTokens: 200 },
         };
       },
     };
 
-    const result = await metaOptimizer.evaluateCandidate(candidate, runner, [task1, task2]);
+    const result = await metaOptimizer.evaluateCandidate(candidate, runner, [task1, task2], { repetitions: 10 });
 
-    expect(result.decision).toBe('REJECTED');
-    expect(result.reasons.some((r) => r.includes('NO_EMPIRICAL_ADVANTAGE'))).toBe(true);
+    expect(result.decision).toBe('INCONCLUSIVE');
+    expect(result.reasons.some((r) => r.includes('UNCERTAIN_IMPROVEMENT'))).toBe(true);
+    expect(metaOptimizer.getActiveConfig().id).toBe(DEFAULT_OPTIMIZABLE_CONFIG.id);
   });
 
   it('supports rollback to baseline configuration', async () => {
@@ -339,7 +345,7 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
       name: 'Mock Runner',
       async run(task): Promise<ExecutionRecord> {
         runCount++;
-        const isCandidate = runCount > 2;
+        const isCandidate = runCount > 20;
         return {
           execution: {
             id: `exec-${task.id}-${runCount}`,
@@ -366,12 +372,13 @@ describe('Gate 13: Empirical Meta-Optimizer', () => {
           checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 100 }],
           errors: [],
           events: [],
+          totalModelCalls: 1,
           usage: { inputTokens: isCandidate ? 200 : 800, outputTokens: 100 },
         };
       },
     };
 
-    const runResult = await metaOptimizer.evaluateCandidate(candidate, runner, [task1, task2]);
+    const runResult = await metaOptimizer.evaluateCandidate(candidate, runner, [task1, task2], { repetitions: 10 });
     expect(runResult.decision).toBe('ACCEPTED');
     expect(metaOptimizer.getActiveConfig().id).toBe(candidate.candidateId);
 

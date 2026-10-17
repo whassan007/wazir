@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.2.0 — 2026-10-16
+
+**Release**: `v0.2.0`
+**Theme**: Unified Applications, Multi-LLM Optimization, Evaluation Integrity, and Controlled Self-Improvement
+
+Delivers the Wazir v0.2 roadmap (`docs/roadmap-v0.2.md`) and completes autonomous codebase remediation across all four engineering workstreams:
+
+- **Workstream A — Unified Applications (Desktop, Web, Mobile)**:
+  - Hardened `@wazir/web` reverse proxy (`apps/web/server.js`) and CLI dashboard (`apps/cli/src/dashboardServer.ts`) with loopback-only default binding, `HttpOnly; SameSite=Strict` session cookies, `X-CSRF-Token` and same-origin `Origin` validation, viewer vs. operator role separation, and single-use SSE stream tickets.
+  - Native desktop supervision (`apps/desktop/src-tauri/src/main.rs`) with OS keychain credential storage and detached worker survival on window close.
+  - Native iOS (`apps/ios/WazirMobile`) and Android (`apps/android`) companion apps with QR pairing, biometric approval gating (`BIOMETRIC_REQUIRED`), stale approval rejection (`APPROVAL_EXPIRED`), immutable `eventId` SSE deduplication in `MobileEventHub`, and idempotent concurrent task cancellation across surfaces (`cancelTask`).
+- **Workstream B — Multi-LLM Optimization & Pre-Dispatch KV-Cache Placement**:
+  - Added `minVerifiedSuccessRate` ($Q_{\min}$) and `maxLatencyMs` ($L_{\max}$) policy constraints to `ResourcePolicy` and `ResourceRouter`.
+  - Updated `ResourceRouter.assess` to evaluate total expected cost per verified success (`effectiveCostPerSuccessUsd`), accounting for empirical task success rates, cold-start model load latency (`estimatedLoadMs`), and eviction penalties (`evictionRequired`).
+  - Enhanced `Scheduler.scheduleComputer` and `Scheduler.estimatePlacement` to compute incremental KV-cache VRAM demand and active `ResourceReservation` `vramBytes`, rejecting GPU placement before dispatch when usable VRAM fits model weights (or a resident model at smaller context) but cannot fit the target context KV cache.
+- **Workstream C — Evaluation Integrity & Statistical Qualification**:
+  - Eliminated fabricated zero fallback metrics via tagged `readBenchmarkMetric` (`measured`, `estimated`, `unavailable`) and `extractMetricValueSafe` (`NaN` on missing telemetry).
+  - Enforced repeated paired sign-test qualification (`minSampleCount >= 5`, Bonferroni-adjusted $\alpha$) in `RegressionGuard` and `pairedEvidence.ts`.
+  - Added protected benchmark fixture modification detection (`PROTECTED_FIXTURE_MODIFIED`), benchmark context contamination rejection (`BENCHMARK_CONTAMINATED`), and per-category pass-rate regression breakdown (`categoryBreakdown` / `CATEGORY_REGRESSION`).
+- **Workstream D — Controlled Self-Improvement & Atomic Optimizer State**:
+  - Implemented versioned atomic optimizer persistence at `meta_optimizer/state/v1` (`OptimizerStateManager`) with durable per-sample reservations, idempotent accounting receipts, and fault-resilient hydration.
+  - Added model-scoped divergence detection (`scopedModels` / `MODEL_SCOPED_REGRESSION`) in `RegressionGuard` so candidates that improve one model while regressing another cannot be promoted globally.
+  - Updated `MetaOptimizerService.recordBaseline` to derive baseline models dynamically from active `routingRules` rather than static model lists, and enforced atomic baseline version checks (`OPTIMIZER_BASELINE_CHANGED`), canary evaluation, and rollback.
+
 ## v0.1.69 — 2026-10-15
 
 **Release**: `v0.1.69`

@@ -101,6 +101,82 @@ function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown
   });
 }
 
+function parseSimpleSshConfig(rawConfig: string): Array<{
+  alias: string;
+  hostName: string;
+  user?: string;
+  port: number;
+  localForwardPort: number;
+  remoteControllerPort: number;
+  suggestedControllerUrl: string;
+  sshTunnelCommand: string;
+}> {
+  const lines = String(rawConfig ?? '').split(/\r?\n/);
+  interface RawBlock {
+    aliases: string[];
+    hostName?: string;
+    user?: string;
+    port?: number;
+    localForwardPort?: number;
+    remoteControllerPort?: number;
+  }
+  const blocks: RawBlock[] = [];
+  let current: RawBlock | undefined;
+  for (const rawLine of lines) {
+    const stripped = rawLine.replace(/#.*$/, '').trim();
+    if (!stripped) continue;
+    const match = /^([A-Za-z][A-Za-z0-9]*)\s*(?:=|\s+)\s*(.+)$/.exec(stripped);
+    if (!match) continue;
+    const key = match[1].toLowerCase();
+    const val = match[2].trim().replace(/^["']|["']$/g, '');
+    if (key === 'host') {
+      const aliases = val
+        .split(/\s+/)
+        .map((a) => a.trim())
+        .filter((a) => a && !/[*?!]/.test(a));
+      current = { aliases };
+      if (aliases.length > 0) blocks.push(current);
+      continue;
+    }
+    if (!current || current.aliases.length === 0) continue;
+    if (key === 'hostname') current.hostName = val;
+    else if (key === 'user') current.user = val;
+    else if (key === 'port') current.port = Number(val) || 22;
+    else if (key === 'localforward') {
+      const lfMatch = /^(\d+)\s+[^:\s]+:(\d+)$/.exec(val);
+      if (lfMatch) {
+        current.localForwardPort = Number(lfMatch[1]);
+        current.remoteControllerPort = Number(lfMatch[2]);
+      }
+    }
+  }
+  const profiles = [];
+  let idx = 0;
+  for (const block of blocks) {
+    for (const alias of block.aliases) {
+      const hostName = block.hostName || alias;
+      const port = block.port ?? 22;
+      const localForwardPort = block.localForwardPort ?? 14800 + idx;
+      const remoteControllerPort = block.remoteControllerPort ?? 4800;
+      const targetRef = block.user ? `${block.user}@${alias}` : alias;
+      const portArg = port !== 22 ? ` -p ${port}` : '';
+      profiles.push({
+        alias,
+        hostName,
+        user: block.user,
+        port,
+        localForwardPort,
+        remoteControllerPort,
+        suggestedControllerUrl: `http://127.0.0.1:${localForwardPort}`,
+        sshTunnelCommand: `ssh -N -L ${localForwardPort}:127.0.0.1:${remoteControllerPort}${portArg} ${targetRef}`,
+      });
+      idx += 1;
+    }
+  }
+  return profiles;
+}
+
+
 /**
  * Starts the integrated Wazir Web Dashboard & Control Plane HTTP server.
  */
@@ -131,8 +207,15 @@ export async function startDashboardServer(
   const scheduleList: Array<Record<string, unknown>> = [];
 
   const server = http.createServer(async (req, res) => {
-    // CORS headers for local developer tooling
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    const expectedOrigin = req.headers.host ? `http://${req.headers.host}` : `http://${host}:${port}`;
+    if (origin && origin !== expectedOrigin) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'cross-origin request refused' }));
+      return;
+    }
+    res.setHeader('Access-Control-Allow-Origin', origin ?? expectedOrigin);
+    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Wazir-Target-Host');
 
@@ -146,7 +229,7 @@ export async function startDashboardServer(
     const pathname = parsedUrl.pathname;
 
     // Upstream API proxy if WAZIR_API is configured
-    if (upstreamApi && (pathname.startsWith('/api/') || pathname === '/health')) {
+    if (upstreamApi && (pathname.startsWith('/api/') || pathname === '/health' || pathname === '/ready')) {
       proxyRequest(req, res, upstreamApi);
       return;
     }
@@ -214,10 +297,29 @@ export async function startDashboardServer(
       }
     }
 
-    // 2. Health Endpoint
+    // 2. Health & Readiness Endpoints
     if (pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+      return;
+    }
+
+    if (pathname === '/ready') {
+      const runtimes = engine.runtimes.list();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          status: 'ready',
+          timestamp: new Date().toISOString(),
+          checks: {
+            processLiveness: 'ok',
+            apiReadiness: 'ok',
+            executionService: 'ok',
+            providersAvailable: runtimes.length,
+            remoteHost: 'local',
+          },
+        }),
+      );
       return;
     }
 
@@ -503,9 +605,72 @@ export async function startDashboardServer(
       return;
     }
 
+    if (pathname === '/api/v1/hosts/ssh-config' && req.method === 'GET') {
+      const configPath = parsedUrl.searchParams.get('configPath') || path.join(os.homedir(), '.ssh', 'config');
+      let rawText = '';
+      if (fs.existsSync(configPath)) {
+        try {
+          rawText = fs.readFileSync(configPath, 'utf8');
+        } catch {
+          rawText = '';
+        }
+      }
+      const profiles = parseSimpleSshConfig(rawText);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ configPath, profiles }));
+      return;
+    }
+
+    if (pathname === '/api/v1/hosts/import-ssh' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      let rawText = typeof body.configText === 'string' ? body.configText : '';
+      const configPath = typeof body.configPath === 'string' ? body.configPath : path.join(os.homedir(), '.ssh', 'config');
+      if (!rawText && fs.existsSync(configPath)) {
+        try {
+          rawText = fs.readFileSync(configPath, 'utf8');
+        } catch {
+          rawText = '';
+        }
+      }
+      const profiles = parseSimpleSshConfig(rawText);
+      const imported: Array<Record<string, unknown>> = [];
+      for (const p of profiles) {
+        const id = `ssh-${p.alias.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`;
+        const existingIdx = hostList.findIndex((h) => h.id === id);
+        const hostEntry = {
+          id,
+          name: `SSH: ${p.alias} (${p.user ? `${p.user}@` : ''}${p.hostName})`,
+          url: p.suggestedControllerUrl,
+          local: false,
+          selected: false,
+          status: 'online',
+          addedAt: new Date().toISOString(),
+          sshAlias: p.alias,
+          sshTunnelCommand: p.sshTunnelCommand,
+        };
+        if (existingIdx >= 0) {
+          hostList[existingIdx] = hostEntry;
+        } else {
+          hostList.push(hostEntry);
+        }
+        imported.push(hostEntry);
+      }
+      res.writeHead(imported.length > 0 ? 201 : 200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          ok: true,
+          imported,
+          profiles,
+          hosts: hostList,
+          activeHost: hostList.find((h) => h.selected) ?? hostList[0],
+        }),
+      );
+      return;
+    }
+
     if (pathname === '/api/v1/hosts/select' && req.method === 'POST') {
       const body = await readJsonBody(req);
-      const id = String(body.id ?? 'local');
+      const id = String(body.id ?? body.hostId ?? 'local');
       for (const h of hostList) {
         h.selected = h.id === id;
       }
@@ -543,7 +708,14 @@ export async function startDashboardServer(
       return;
     }
 
-    if (pathname === '/sandbox/preview') {
+    // 14. Cloud Push Relay Status & Registration
+    if (pathname === '/api/v1/push/status' || pathname === '/api/v1/mobile/push/status') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ registrations: [], recentWakeups: [] }));
+      return;
+    }
+
+    if (pathname === '/api/v1/sandbox/preview' || pathname === '/sandbox/preview') {
       const html = parsedUrl.searchParams.get('html') ?? '<div>Sandbox Ready</div>';
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',

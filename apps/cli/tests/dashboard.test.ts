@@ -297,10 +297,16 @@ describe('wa dashboard server', () => {
     expect(previewRes.status).toBe(200);
     expect(previewRes.headers.get('content-security-policy')).toContain("sandbox allow-scripts; default-src 'none'");
 
-    // 11. CORS preflight OPTIONS request
+    // 11. CORS preflight OPTIONS request (same-origin allowed, cross-origin rejected)
     const optionsRes = await fetch(`${baseUrl}/api/v1/overview`, { method: 'OPTIONS' });
     expect(optionsRes.status).toBe(204);
-    expect(optionsRes.headers.get('access-control-allow-origin')).toBe('*');
+    expect(optionsRes.headers.get('access-control-allow-origin')).toBe(baseUrl);
+
+    const crossOriginRes = await fetch(`${baseUrl}/api/v1/overview`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://evil.example' },
+    });
+    expect(crossOriginRes.status).toBe(403);
   });
 
   it('provides getDashboardHtml fallback function with multi-surface UI controls', () => {

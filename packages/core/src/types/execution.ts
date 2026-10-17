@@ -4,12 +4,18 @@ import type { ContextDecision } from './context.js';
 import type { PolicyDecision, PolicyEffect } from './policy.js';
 
 export type ExecutionStatus =
+  | 'pending'
   | 'queued'
+  | 'planning'
   | 'scheduled'
+  | 'ready'
   | 'assigned'
   | 'running'
   | 'waiting'
+  | 'waiting_for_approval'
+  | 'verifying'
   | 'paused'
+  | 'blocked'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -164,6 +170,8 @@ export interface ExecutionRecord {
   result?: string;
   evaluation?: EvaluationResult;
   usage?: TokenUsage;
+  /** Complete request count, including unsuccessful model attempts, when recorded. */
+  totalModelCalls?: number;
   events: ExecutionEvent[];
   workspaceState?: WorkspaceState;
   evidence?: VerificationEvidence[];

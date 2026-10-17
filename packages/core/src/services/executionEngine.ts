@@ -39,6 +39,7 @@ import { planRecovery, reconstructExecutionState } from './executionRecovery.js'
 import type { ReconstructedExecutionState, RecoveryBudgetLimits, RecoveryPlan, ToolOutcomeInspection } from './executionRecovery.js';
 import type { ToolSideEffectClass } from '../types/tool.js';
 import type { FileMutationResult } from '../types/tool.js';
+import { assertExecutionTransition } from './statusTransitions.js';
 
 export interface ExecutionEngineOptions {
   /** Persists a record after every mutation. */
@@ -239,6 +240,7 @@ export class ExecutionEngine {
 
   async setStatus(executionId: string, status: ExecutionStatus, options?: { targetRevision?: number }): Promise<void> {
     const record = this.require(executionId);
+    assertExecutionTransition(executionId, record.execution.status, status);
     if (status === 'completed' && this.toolCheckpoints(executionId).some(call => call.state === 'STARTED' || call.state === 'OUTCOME_UNKNOWN')) {
       this.pushEvent(record, 'completion.rejected', { reason: 'TOOL_OUTCOME_UNKNOWN' });
       await this.flush(record);
@@ -571,6 +573,10 @@ export class ExecutionEngine {
 
   async recordEvent(executionId: string, type: ExecutionEventType, data?: unknown, identity?: ExecutionEventIdentity): Promise<void> {
     const record = this.require(executionId);
+    if (type === 'execution.resumed' && record.execution.status === 'failed') {
+      assertExecutionTransition(executionId, record.execution.status, 'queued');
+      record.execution.status = 'queued';
+    }
     this.pushEvent(record, type, data, identity);
     await this.flush(record);
   }

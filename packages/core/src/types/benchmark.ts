@@ -45,6 +45,10 @@ export interface ExecutionMetrics {
   physicalVerificationSuccess: boolean;
   totalModelCalls: number;
   totalToolCalls: number;
+  /** Absent for historical records without complete telemetry. */
+  failedToolCalls?: number;
+  malformedActions?: number;
+  peakContextTokens?: number;
   repairCycles: number;
   inputTokens: number;
   outputTokens: number;
@@ -102,6 +106,8 @@ export interface ComparativeEvaluation {
 }
 
 export interface BenchmarkExecutionContext {
+  /** Remaining optimizer budget; runners must propagate limits to model/tool execution. */
+  resourceBudget?: { maxTokens: number; maxModelCalls: number; maxWallTimeMs: number; maxMonetaryCostUSD?: number };
   workspaceRoot: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
@@ -116,6 +122,11 @@ export interface BenchmarkRunner {
 }
 
 export interface BenchmarkRunResult {
+  /** Zero-based independent repetition within this suite. Absent on legacy results. */
+  repetition?: number;
+  /** Immutable evaluation/workload identity used when pairing comparisons. */
+  evaluationVersion?: string;
+  taskDefinitionHash?: string;
   taskId: string;
   taskName: string;
   category: BenchmarkTaskCategory;

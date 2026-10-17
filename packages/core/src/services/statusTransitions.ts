@@ -1,8 +1,9 @@
-import type { JobStatus } from '../types/job.js';
+import type { AgentState, JobStatus } from '../types/job.js';
 import type { TaskStatus } from '../types/task.js';
+import type { ExecutionStatus } from '../types/execution.js';
 
 /**
- * Canonical job/task status transition policy.
+ * Canonical job/task/node/execution status transition policy.
  *
  * The rule that matters for correctness when several controllers (local
  * orchestrator, remote workers, mobile/desktop clients) write the same mission
@@ -12,13 +13,18 @@ import type { TaskStatus } from '../types/task.js';
  *
  * Deliberately permissive elsewhere so existing recovery flows keep working:
  *  - same-state writes are always allowed (idempotent re-flushes);
- *  - a failed task may be retried (`pending` / `scheduled`);
+ *  - a failed task/node/execution may be retried via an explicit non-running retry target;
  *  - a terminal job may be re-labelled with another terminal status, because
  *    finalizers reconcile cancel-vs-timeout-vs-failure races after the fact.
  */
 export class InvalidStatusTransitionError extends Error {
   readonly code = 'INVALID_STATUS_TRANSITION';
-  constructor(readonly kind: 'job' | 'task', readonly from: string, readonly to: string, readonly id: string) {
+  constructor(
+    readonly kind: 'job' | 'task' | 'node' | 'execution',
+    readonly from: string,
+    readonly to: string,
+    readonly id: string,
+  ) {
     super(`Invalid ${kind} status transition for '${id}': ${from} -> ${to}`);
     this.name = 'InvalidStatusTransitionError';
   }
@@ -26,7 +32,11 @@ export class InvalidStatusTransitionError extends Error {
 
 const TERMINAL_JOB: ReadonlySet<JobStatus> = new Set(['completed', 'failed', 'cancelled']);
 const TERMINAL_TASK: ReadonlySet<TaskStatus> = new Set(['completed', 'failed', 'cancelled']);
-const TASK_RETRY_TARGETS: ReadonlySet<TaskStatus> = new Set(['pending', 'scheduled']);
+const TASK_RETRY_TARGETS: ReadonlySet<TaskStatus> = new Set(['pending', 'queued', 'scheduled', 'ready']);
+const TERMINAL_NODE: ReadonlySet<AgentState> = new Set(['completed', 'failed', 'cancelled']);
+const NODE_RETRY_TARGETS: ReadonlySet<AgentState> = new Set(['idle', 'assigned']);
+const TERMINAL_EXECUTION: ReadonlySet<ExecutionStatus> = new Set(['completed', 'failed', 'cancelled']);
+const EXECUTION_RETRY_TARGETS: ReadonlySet<ExecutionStatus> = new Set(['pending', 'queued', 'scheduled', 'ready']);
 
 export function isTerminalJobStatus(status: JobStatus): boolean {
   return TERMINAL_JOB.has(status);
@@ -34,6 +44,14 @@ export function isTerminalJobStatus(status: JobStatus): boolean {
 
 export function isTerminalTaskStatus(status: TaskStatus): boolean {
   return TERMINAL_TASK.has(status);
+}
+
+export function isTerminalNodeState(state: AgentState): boolean {
+  return TERMINAL_NODE.has(state);
+}
+
+export function isTerminalExecutionStatus(status: ExecutionStatus): boolean {
+  return TERMINAL_EXECUTION.has(status);
 }
 
 export function canTransitionJob(from: JobStatus, to: JobStatus): boolean {
@@ -49,6 +67,20 @@ export function canTransitionTask(from: TaskStatus, to: TaskStatus): boolean {
   return true;
 }
 
+export function canTransitionNode(from: AgentState, to: AgentState): boolean {
+  if (from === to) return true;
+  if (from === 'failed') return NODE_RETRY_TARGETS.has(to);
+  if (TERMINAL_NODE.has(from)) return false;
+  return true;
+}
+
+export function canTransitionExecution(from: ExecutionStatus, to: ExecutionStatus): boolean {
+  if (from === to) return true;
+  if (from === 'failed') return EXECUTION_RETRY_TARGETS.has(to);
+  if (TERMINAL_EXECUTION.has(from)) return false;
+  return true;
+}
+
 export function assertJobTransition(id: string, from: JobStatus, to: JobStatus): void {
   if (!canTransitionJob(from, to)) throw new InvalidStatusTransitionError('job', from, to, id);
 }
@@ -56,3 +88,12 @@ export function assertJobTransition(id: string, from: JobStatus, to: JobStatus):
 export function assertTaskTransition(id: string, from: TaskStatus, to: TaskStatus): void {
   if (!canTransitionTask(from, to)) throw new InvalidStatusTransitionError('task', from, to, id);
 }
+
+export function assertNodeTransition(id: string, from: AgentState, to: AgentState): void {
+  if (!canTransitionNode(from, to)) throw new InvalidStatusTransitionError('node', from, to, id);
+}
+
+export function assertExecutionTransition(id: string, from: ExecutionStatus, to: ExecutionStatus): void {
+  if (!canTransitionExecution(from, to)) throw new InvalidStatusTransitionError('execution', from, to, id);
+}
+

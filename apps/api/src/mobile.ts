@@ -356,8 +356,16 @@ export class MobileEventHub {
     taskId?: string;
     keepAlive: NodeJS.Timeout;
   }>();
+  private readonly listeners = new Set<(event: MobileStreamEvent) => void>();
 
   constructor(private readonly store: KeyValueStore, private readonly now: () => number = Date.now) {}
+
+  onEvent(listener: (event: MobileStreamEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
 
   async init(): Promise<void> {
     const saved = await this.store.get<{ sequence: number; events: MobileStreamEvent[] }>('mobile/events/ring');
@@ -376,25 +384,40 @@ export class MobileEventHub {
   }
 
   listRecent(limit = 50, taskId?: string): MobileStreamEvent[] {
-    const filtered = taskId
-      ? this.events.filter((e) => e.taskId === taskId || e.executionId === taskId)
-      : this.events;
+    const seen = new Set<string>();
+    const filtered = this.events.filter((e) => {
+      if (taskId && e.taskId !== taskId && e.executionId !== taskId) return false;
+      if (seen.has(e.eventId)) return false;
+      seen.add(e.eventId);
+      return true;
+    });
     return filtered.slice(-limit).reverse();
   }
 
   eventsSince(cursor: number, taskId?: string): MobileStreamEvent[] {
+    const seen = new Set<string>();
     return this.events.filter((e) => {
       if (e.sequence <= cursor) return false;
       if (taskId && e.taskId !== taskId && e.executionId !== taskId) return false;
+      if (seen.has(e.eventId)) return false;
+      seen.add(e.eventId);
       return true;
     });
   }
 
-  async publish(event: Omit<MobileStreamEvent, 'sequence' | 'eventId' | 'timestamp'>): Promise<MobileStreamEvent> {
+  async publish(
+    event: Omit<MobileStreamEvent, 'sequence' | 'eventId' | 'timestamp'> & { eventId?: string },
+  ): Promise<MobileStreamEvent> {
+    if (event.eventId) {
+      const existing = this.events.find((e) => e.eventId === event.eventId);
+      if (existing) {
+        return existing;
+      }
+    }
     this.sequence += 1;
     const full: MobileStreamEvent = {
       sequence: this.sequence,
-      eventId: `mev-${this.sequence}-${randomBytes(4).toString('hex')}`,
+      eventId: event.eventId ?? `mev-${this.sequence}-${randomBytes(4).toString('hex')}`,
       timestamp: new Date(this.now()).toISOString(),
       ...event,
     };
@@ -416,6 +439,13 @@ export class MobileEventHub {
         client.res.write(frame);
       } catch {
         // Broken pipe cleaned up on close
+      }
+    }
+    for (const listener of this.listeners) {
+      try {
+        listener(full);
+      } catch {
+        // Non-fatal listener error
       }
     }
     return full;
@@ -1261,38 +1291,72 @@ export class MobileServices {
       summaries.set(ap.task_id, mapped);
     }
 
-    // Also include any raw execution records in state.executions
-    for (const raw of this.state.executions) {
-      const exec = raw.execution as { id?: string; taskId?: string; status?: string; createdAt?: string | Date } | undefined;
+    // Also include ExecutionEngine and shared store execution/* records (e.g. CLI runs) plus state.executions
+    const rawRecords: Array<Record<string, unknown>> = [...this.state.executions];
+    try {
+      const engineList = await this.executionEngine.list();
+      for (const rec of engineList) {
+        rawRecords.push(rec as unknown as Record<string, unknown>);
+      }
+      const storedEntries = await this.state.store.list('execution/');
+      for (const entry of storedEntries) {
+        if (entry.value && typeof entry.value === 'object') {
+          rawRecords.push(entry.value as Record<string, unknown>);
+        }
+      }
+    } catch {
+      // Ignore transient store errors
+    }
+
+    for (const raw of rawRecords) {
+      const exec = raw.execution as {
+        id?: string;
+        taskId?: string;
+        agentId?: string;
+        modelId?: string;
+        runtimeId?: string;
+        computerId?: string;
+        status?: string;
+        createdAt?: string | Date;
+        startedAt?: string | Date;
+        completedAt?: string | Date;
+        finishedAt?: string | Date;
+        durationMs?: number;
+      } | undefined;
       const id = exec?.taskId ?? exec?.id;
-      if (!id || summaries.has(id)) continue;
-      const createdAt = exec?.createdAt ? new Date(exec.createdAt).toISOString() : new Date().toISOString();
+      const execId = exec?.id;
+      if (!id || summaries.has(id) || (execId && summaries.has(execId))) continue;
+      // Also skip if a managed task already references this executionId
+      if (execId && [...summaries.values()].some((s) => s.executionId === execId)) continue;
+      const rawStart = exec?.startedAt ?? exec?.createdAt ?? (raw.task as { createdAt?: string | Date })?.createdAt;
+      const createdAt = rawStart ? new Date(rawStart).toISOString() : new Date().toISOString();
+      const rawEnd = exec?.completedAt ?? exec?.finishedAt;
+      const completedAt = rawEnd ? new Date(rawEnd).toISOString() : undefined;
       const rawState = String(exec?.status ?? 'completed');
       const state: MobileTaskSummary['state'] =
         rawState === 'running' ? 'running'
         : rawState === 'queued' || rawState === 'pending' ? 'queued'
         : rawState === 'failed' ? 'failed'
         : rawState === 'blocked' ? 'blocked'
+        : rawState === 'cancelled' ? 'cancelled'
         : 'completed';
-      const usage = raw.usage as { input?: number; output?: number } | undefined;
-      void usage;
       summaries.set(id, {
         taskId: id,
         executionId: exec?.id,
         title: String((raw.task as { title?: string; input?: string })?.title ?? (raw.task as { input?: string })?.input ?? id).slice(0, 120),
         input: String((raw.task as { input?: string })?.input ?? id),
-        agentId: String(raw.agentId ?? 'coding-agent'),
-        modelId: String(raw.modelId ?? this.defaultModelId()),
-        runtimeId: String(raw.runtimeId ?? this.defaultRuntimeId()),
-        computerId: String(raw.computerId ?? (process.env.WAZIR_COMPUTER_ID ?? 'local')),
+        agentId: String(raw.agentId ?? exec?.agentId ?? 'coding-agent'),
+        modelId: String(raw.modelId ?? exec?.modelId ?? this.defaultModelId()),
+        runtimeId: String(raw.runtimeId ?? exec?.runtimeId ?? this.defaultRuntimeId()),
+        computerId: String(raw.computerId ?? exec?.computerId ?? (process.env.WAZIR_COMPUTER_ID ?? 'local')),
         priority: 'normal',
         state,
         phase: state === 'completed' ? 'Completion' : state === 'running' ? 'Agent Execution' : 'Queued',
         createdAt,
         startedAt: createdAt,
-        completedAt: state === 'completed' || state === 'failed' ? createdAt : undefined,
-        lastActivityAt: createdAt,
-        elapsedMs: 0,
+        completedAt: completedAt ?? (state === 'completed' || state === 'failed' ? createdAt : undefined),
+        lastActivityAt: completedAt ?? createdAt,
+        elapsedMs: typeof exec?.durationMs === 'number' ? exec.durationMs : 0,
         verificationStatus: 'UNAVAILABLE',
         pendingApprovalIds: this.approvals.pendingForTask(id),
         supportedActions: ['inspect', 'logs'],
@@ -1307,7 +1371,9 @@ export class MobileServices {
   }
 
   async getTaskDetail(taskId: string): Promise<MobileTaskDetail | undefined> {
-    const managed = this.tasks.get(taskId);
+    const managed =
+      this.tasks.get(taskId) ??
+      [...this.tasks.values()].find((t) => t.executionId === taskId);
     if (managed) {
       return {
         ...this.toSummary(managed),
@@ -1402,6 +1468,96 @@ export class MobileServices {
         finalOutput: ap.steps.at(-1)?.output,
         logs,
       };
+    }
+
+    // Check ExecutionEngine / shared store execution/* records
+    try {
+      let execRec = (await this.state.store.get<Record<string, unknown>>(`execution/${taskId}`)) ??
+        ((await this.executionEngine.get(taskId)) as unknown as Record<string, unknown> | undefined);
+      if (!execRec) {
+        const storedEntries = await this.state.store.list('execution/');
+        for (const entry of storedEntries) {
+          const val = entry.value as { execution?: { id?: string; taskId?: string } } | undefined;
+          if (val?.execution?.taskId === taskId || val?.execution?.id === taskId) {
+            execRec = entry.value as Record<string, unknown>;
+            break;
+          }
+        }
+      }
+      if (execRec) {
+        const exec = (execRec.execution as Record<string, unknown> | undefined) ?? {};
+        const taskObj = (execRec.task as Record<string, unknown> | undefined) ?? {};
+        const rawStart = exec.startedAt ?? taskObj.createdAt;
+        const createdAt = rawStart ? new Date(String(rawStart)).toISOString() : new Date().toISOString();
+        const rawEnd = exec.completedAt ?? exec.finishedAt;
+        const completedAt = rawEnd ? new Date(String(rawEnd)).toISOString() : undefined;
+        const rawState = String(exec.status ?? 'completed');
+        const state: MobileTaskSummary['state'] =
+          rawState === 'running' ? 'running'
+          : rawState === 'queued' || rawState === 'pending' ? 'queued'
+          : rawState === 'failed' ? 'failed'
+          : rawState === 'blocked' ? 'blocked'
+          : rawState === 'cancelled' ? 'cancelled'
+          : 'completed';
+        const events = Array.isArray(execRec.events) ? (execRec.events as Array<Record<string, unknown>>) : [];
+        const logs: MobileTaskDetail['logs'] = events.map((ev, idx) => ({
+          sequence: idx + 1,
+          timestamp: ev.timestamp ? new Date(String(ev.timestamp)).toISOString() : createdAt,
+          level: String(ev.type ?? '').includes('fail') || String(ev.type ?? '').includes('err') ? 'error' : 'info',
+          phase: String(ev.type ?? 'Event'),
+          message: typeof ev.data === 'string' ? ev.data : JSON.stringify(ev.data ?? ev.type ?? ''),
+        }));
+        const filesChanged = Array.isArray(execRec.fileMutations)
+          ? (execRec.fileMutations as Array<{ path?: string }>).map((m) => m.path ?? '').filter(Boolean)
+          : Array.isArray(execRec.filesChanged)
+            ? (execRec.filesChanged as string[])
+            : [];
+        return {
+          taskId: String(exec.taskId ?? exec.id ?? taskId),
+          executionId: String(exec.id ?? taskId),
+          title: String(taskObj.title ?? taskObj.input ?? taskId).slice(0, 120),
+          input: String(taskObj.input ?? taskId),
+          agentId: String(execRec.agentId ?? exec.agentId ?? 'coding-agent'),
+          modelId: String(execRec.modelId ?? exec.modelId ?? this.defaultModelId()),
+          runtimeId: String(execRec.runtimeId ?? exec.runtimeId ?? this.defaultRuntimeId()),
+          computerId: String(execRec.computerId ?? exec.computerId ?? 'local'),
+          priority: 'normal',
+          state,
+          phase: state === 'completed' ? 'Completion' : state === 'running' ? 'Agent Execution' : 'Queued',
+          createdAt,
+          startedAt: createdAt,
+          completedAt,
+          lastActivityAt: completedAt ?? createdAt,
+          elapsedMs: typeof exec.durationMs === 'number' ? exec.durationMs : 0,
+          verificationStatus: 'UNAVAILABLE',
+          pendingApprovalIds: this.approvals.pendingForTask(taskId),
+          supportedActions: ['inspect', 'logs'],
+          repository: this.options.projectRoot,
+          timeline: events.map((ev, idx) => ({
+            id: String(ev.id ?? `ev-${idx}`),
+            phase: String(ev.type ?? 'Execution'),
+            title: String(ev.type ?? `Event ${idx + 1}`),
+            status: state === 'failed' ? 'failed' : 'completed',
+            timestamp: ev.timestamp ? new Date(String(ev.timestamp)).toISOString() : createdAt,
+          })),
+          reasoningSummaries: [],
+          toolCalls: [],
+          filesChanged,
+          errors: typeof execRec.error === 'string' && execRec.error ? [execRec.error] : [],
+          resourceConsumption: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            estimatedCostUsd: 0,
+            durationMs: typeof exec.durationMs === 'number' ? exec.durationMs : 0,
+            source: 'estimated',
+          },
+          finalOutput: typeof execRec.result === 'string' ? execRec.result : undefined,
+          logs,
+        };
+      }
+    } catch {
+      // Ignore transient store errors
     }
 
     return undefined;
@@ -2117,7 +2273,10 @@ export class MobileServices {
     if (!task) {
       return { ok: false, status: 404, code: 'TASK_NOT_FOUND', error: `Task '${taskId}' not found` };
     }
-    if (task.state === 'completed' || task.state === 'failed' || task.state === 'cancelled') {
+    if (task.state === 'cancelled') {
+      return { ok: true, task: (await this.getTaskDetail(taskId))! };
+    }
+    if (task.state === 'completed' || task.state === 'failed') {
       return { ok: false, status: 409, code: 'TASK_ALREADY_TERMINAL', error: `Task '${taskId}' is already ${task.state}` };
     }
 
@@ -2132,15 +2291,14 @@ export class MobileServices {
     }
 
     const controller = this.activeAbortControllers.get(taskId);
+    task.state = 'cancelled';
+    task.phase = 'Completion';
+    task.currentOperation = 'Cancelled by operator';
+    task.completedAt = new Date().toISOString();
+    this.appendLog(task, 'warn', 'Completion', `Cancelled by ${resolvedBy}`);
+    await this.saveTask(task);
     if (controller) {
       controller.abort();
-    } else {
-      task.state = 'cancelled';
-      task.phase = 'Completion';
-      task.currentOperation = 'Cancelled by operator';
-      task.completedAt = new Date().toISOString();
-      this.appendLog(task, 'warn', 'Completion', `Cancelled by ${resolvedBy}`);
-      await this.saveTask(task);
     }
 
     // Brief yield to allow abort handler to flush
