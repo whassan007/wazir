@@ -59,11 +59,26 @@ export interface RouteAssessment extends RouteCandidate {
   reasons: string[];
   /** Normalised factors in [0, 1]. */
   factors?: { quality: number; reliability: number; capacity: number; cost: number; latency: number; quotaRisk: number };
-  /** Expected total USD cost per verified successful task (accounts for retry probability). */
+  /** Expected USD cost per successful request, using request reliability and verified task evidence when available. */
   effectiveCostPerSuccessUsd?: number;
+  costEstimate?: { status: 'estimated' | 'unknown'; usd?: number };
+  reliabilityEvidence?: {
+    status: 'measured' | 'insufficient' | 'unknown';
+    successfulRequests: number;
+    failedRequests: number;
+    samples: number;
+    confidence: number;
+    /** Scoring prior or sample-adjusted request reliability; not task correctness. */
+    scoreValue: number;
+  };
+  latencyEstimate?: { status: 'measured' | 'insufficient' | 'unknown'; samples: number; msPerOutputToken?: number; confidence: number };
   score?: number;
   local?: boolean;
 }
+
+const MIN_RELIABILITY_SAMPLES = 3;
+const RELIABILITY_PRIOR = 0.8;
+const RELIABILITY_PRIOR_STRENGTH = 5;
 
 export interface RouterOptions {
   budget: TokenBudgetManager;
@@ -85,34 +100,62 @@ export class ResourceRouter {
     return { ...DEFAULT_WEIGHTS[p.mode], ...(p.weights ?? {}) };
   }
 
-  /** Recent success rate of a model on an account (provider errors vs settled requests). */
-  private reliability(accountId: string, modelId: string): number {
+  /** Recent per-account, model and workload request reliability; this is not task correctness. */
+  private reliability(accountId: string, modelId: string, workload: WorkloadClass) {
     const ledger = this.opts.budget.ledger;
     const since = ledger.now() - 7 * 86_400_000;
-    const ok = ledger.usageRows({ since, accountId }).filter((u) => u.modelId === modelId && u.source !== 'conservative').length;
-    const failed = ledger.events({ kind: 'provider_error', since, limit: 1000 }).filter((e) => e.accountId === accountId && e.data.retry !== true).length
-      + ledger.events({ kind: 'ambiguous', since, limit: 1000 }).filter((e) => e.accountId === accountId).length;
-    const total = ok + failed;
-    return total < 3 ? 0.8 : ok / total;
+    const provider = this.opts.budget.accounts.get(accountId)?.provider;
+    const counts = ledger.routingOutcomeCounts({ since, accountId, provider: provider ?? '', modelId, workload });
+    const samples = counts.successfulRequests + counts.failedRequests;
+    const status = samples >= MIN_RELIABILITY_SAMPLES ? 'measured' as const : samples > 0 ? 'insufficient' as const : 'unknown' as const;
+    const scoreValue = status === 'measured'
+      ? (counts.successfulRequests + RELIABILITY_PRIOR * RELIABILITY_PRIOR_STRENGTH) / (samples + RELIABILITY_PRIOR_STRENGTH)
+      : RELIABILITY_PRIOR;
+    return {
+      status, ...counts, samples,
+      confidence: status === 'measured' ? samples / (samples + RELIABILITY_PRIOR_STRENGTH) : 0,
+      scoreValue,
+    };
   }
 
-  /** Measured milliseconds per output token for a model (undefined when never measured). */
-  private msPerToken(modelId: string): number | undefined {
+  /** Robust latency summary scoped to the same account/model/workload. */
+  private latency(accountId: string, modelId: string, workload: WorkloadClass) {
     const rows = this.opts.budget.ledger.usageRows({ since: this.opts.budget.ledger.now() - 7 * 86_400_000 })
-      .filter((u) => u.modelId === modelId && u.durationMs && u.outputTokens > 20 && u.source === 'provider-reported').slice(-50);
-    if (rows.length === 0) return undefined;
-    return rows.reduce((n, u) => n + u.durationMs! / u.outputTokens, 0) / rows.length;
+      .filter((u) => u.accountId === accountId && u.modelId === modelId && u.workload === workload
+        && u.durationMs && u.outputTokens > 20 && u.source === 'provider-reported').slice(-50);
+    const values = rows.map((u) => u.durationMs! / u.outputTokens).sort((a, b) => a - b);
+    const samples = values.length;
+    const status = samples >= MIN_RELIABILITY_SAMPLES ? 'measured' as const : samples > 0 ? 'insufficient' as const : 'unknown' as const;
+    const middle = Math.floor(samples / 2);
+    const median = samples === 0 ? undefined : samples % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
+    return {
+      status, samples, confidence: status === 'measured' ? samples / (samples + MIN_RELIABILITY_SAMPLES) : 0,
+      ...(median !== undefined ? { msPerOutputToken: median } : {}),
+    };
   }
 
   assess(input: { task: Pick<Task, 'id'>; workload: WorkloadClass; estimatedInputTokens: number; candidates: RouteCandidate[] }): RouteAssessment[] {
     const { budget } = this.opts;
     const w = this.weights();
     const estOutput = estimateOutputTokens({}, input.workload);
-    const maxCapability = Math.max(1, ...input.candidates.map((c) => c.capabilityScore));
     const minCorrectness = budget.policy.minVerifiedSuccessRate;
     const maxLatencyMs = budget.policy.maxLatencyMs;
+    // A candidate that cannot be admitted (no account, insufficient context/VRAM,
+    // unauthorised or out of budget) must not make every usable complex model look weaker.
+    const admissibleCapabilities = input.candidates.filter((c) => {
+      const accountId = this.opts.resolveAccount(c.runtimeId, c.modelId);
+      const account = accountId ? budget.accounts.get(accountId) : undefined;
+      if (!account || c.kvCacheFits === false) return false;
+      if (minCorrectness !== undefined && c.verifiedSuccessRate !== undefined && c.verifiedSuccessRate < minCorrectness) return false;
+      return budget.preview({
+        requestId: `route-${input.task.id}-${c.modelId}`, accountId: account.id, modelId: c.modelId,
+        workload: input.workload, taskId: input.task.id,
+        estimatedInputTokens: input.estimatedInputTokens, estimatedOutputTokens: estOutput,
+      }).outcome === 'admitted';
+    }).map((c) => c.capabilityScore);
+    const maxCapability = Math.max(1, ...admissibleCapabilities);
 
-    const prelim = input.candidates.map((c): RouteAssessment & { estCost: number; ms?: number; mode?: BudgetMode } => {
+    const prelim = input.candidates.map((c): RouteAssessment & { estCost: number | undefined; ms?: number; mode?: BudgetMode } => {
       const accountId = this.opts.resolveAccount(c.runtimeId, c.modelId);
       if (!accountId) return { ...c, admissible: false, reasons: ['no account is configured for this runtime/model'], estCost: 0 };
       const account = budget.accounts.get(accountId)!;
@@ -133,21 +176,27 @@ export class ResourceRouter {
         estimatedInputTokens: input.estimatedInputTokens, estimatedOutputTokens: estOutput,
       });
       const quality = c.capabilityScore / maxCapability;
-      if ((input.workload === 'complex' || input.workload === 'critical-review') && quality < 0.5) {
+      if ((input.workload === 'complex' || input.workload === 'critical-review') && c.capabilityScore < maxCapability) {
         return { ...c, accountId, admissible: false, local: account.kind === 'local', estCost: 0,
-          reasons: [`capability ${c.capabilityScore} is below half of the best candidate (${maxCapability}) for ${input.workload} work; not substituted`] };
+          reasons: [`capability ${c.capabilityScore} is below the best candidate (${maxCapability}) for ${input.workload} work; not substituted because cost cannot compensate for lower capability`] };
       }
-      const singleCallCost = costUsd(pricingFor(account, c.modelId), input.estimatedInputTokens, estOutput);
-      const rel = this.reliability(accountId, c.modelId);
-      const successProb = Math.max(0.05, Math.min(1, c.verifiedSuccessRate !== undefined ? c.verifiedSuccessRate * rel : rel));
-      const effectiveCostPerSuccess = singleCallCost / successProb;
-      const tokenMs = this.msPerToken(c.modelId);
+      const pricing = pricingFor(account, c.modelId);
+      const costKnown = account.kind === 'local' || pricing !== undefined;
+      const singleCallCost = costKnown ? costUsd(pricing, input.estimatedInputTokens, estOutput) : undefined;
+      const rel = this.reliability(accountId, c.modelId, input.workload);
+      const successProb = Math.max(0.05, Math.min(1, c.verifiedSuccessRate !== undefined ? c.verifiedSuccessRate * rel.scoreValue : rel.scoreValue));
+      const effectiveCostPerSuccess = singleCallCost === undefined ? undefined : singleCallCost / successProb;
+      const latency = this.latency(accountId, c.modelId, input.workload);
+      const tokenMs = latency.status === 'measured' ? latency.msPerOutputToken : undefined;
       const loadPenaltyMs = c.residency && c.residency !== 'ready' ? (c.estimatedLoadMs ?? 4_000) : 0;
       const totalLatencyMs = tokenMs !== undefined ? tokenMs * estOutput + loadPenaltyMs : (loadPenaltyMs > 0 ? loadPenaltyMs : undefined);
       if (maxLatencyMs !== undefined && totalLatencyMs !== undefined && totalLatencyMs > maxLatencyMs) {
         return {
           ...c, accountId, admissible: false, local: account.kind === 'local', estCost: effectiveCostPerSuccess,
-          effectiveCostPerSuccessUsd: Number(effectiveCostPerSuccess.toFixed(6)),
+          ...(effectiveCostPerSuccess !== undefined ? { effectiveCostPerSuccessUsd: Number(effectiveCostPerSuccess.toFixed(6)) } : {}),
+          costEstimate: costKnown ? { status: 'estimated', usd: effectiveCostPerSuccess } : { status: 'unknown' },
+          reliabilityEvidence: rel,
+          latencyEstimate: latency,
           reasons: [`estimated latency ${Math.round(totalLatencyMs)}ms exceeds maxLatencyMs ${maxLatencyMs}ms`],
         };
       }
@@ -155,14 +204,17 @@ export class ResourceRouter {
         ...c, accountId, local: account.kind === 'local', admissible: preview.outcome === 'admitted',
         reasons: preview.outcome === 'admitted' ? preview.reasons : [`${preview.outcome}: ${preview.reasons.join('; ')}`],
         estCost: effectiveCostPerSuccess,
-        effectiveCostPerSuccessUsd: Number(effectiveCostPerSuccess.toFixed(6)),
+        ...(effectiveCostPerSuccess !== undefined ? { effectiveCostPerSuccessUsd: Number(effectiveCostPerSuccess.toFixed(6)) } : {}),
+        costEstimate: costKnown ? { status: 'estimated', usd: effectiveCostPerSuccess } : { status: 'unknown' },
+        reliabilityEvidence: rel,
+        latencyEstimate: latency,
         ms: totalLatencyMs !== undefined ? totalLatencyMs / Math.max(1, estOutput) : tokenMs,
         mode: preview.mode,
       };
     });
 
     const admissible = prelim.filter((p) => p.admissible);
-    const maxCost = Math.max(0, ...admissible.map((p) => p.estCost));
+    const maxCost = Math.max(0, ...admissible.map((p) => p.estCost ?? 0));
     const measured = admissible.map((p) => p.ms).filter((m): m is number => m !== undefined);
     const maxMs = measured.length ? Math.max(...measured) : 0;
 
@@ -180,10 +232,10 @@ export class ResourceRouter {
       const factors = {
         quality: p.capabilityScore / maxCapability,
         reliability: p.verifiedSuccessRate !== undefined
-          ? Math.max(0, Math.min(1, p.verifiedSuccessRate * this.reliability(p.accountId!, p.modelId)))
-          : this.reliability(p.accountId!, p.modelId),
+          ? Math.max(0, Math.min(1, p.verifiedSuccessRate * (p.reliabilityEvidence?.scoreValue ?? RELIABILITY_PRIOR)))
+          : (p.reliabilityEvidence?.scoreValue ?? RELIABILITY_PRIOR),
         capacity: Math.max(0, Math.min(1, capacity)),
-        cost: maxCost > 0 ? estCost / maxCost : 0,
+        cost: estCost !== undefined ? (maxCost > 0 ? estCost / maxCost : 0) : (maxCost > 0 ? 1 : 0.5),
         latency: ms !== undefined && maxMs > 0 ? ms / maxMs : 0.5,
         quotaRisk: QUOTA_RISK[mode ?? 'normal'],
       };
@@ -193,6 +245,10 @@ export class ResourceRouter {
       if (p.residency === 'reload') reasons.push('loaded with too little context: needs a reload (memory + load time)');
       else if (p.residency === 'load') reasons.push(`not loaded: needs cold load${p.estimatedLoadMs ? ` (~${p.estimatedLoadMs}ms)` : ''} (memory + load time)`);
       if (p.evictionRequired) reasons.push('loading requires evicting a resident model on target hardware');
+      if (p.reliabilityEvidence?.status === 'unknown') reasons.push('request reliability is unknown; using a neutral prior (not measured task-success evidence)');
+      else if (p.reliabilityEvidence?.status === 'insufficient') reasons.push(`request reliability has only ${p.reliabilityEvidence.samples} attributable sample(s); using a prior (not a measured rate)`);
+      if (p.latencyEstimate?.status === 'insufficient') reasons.push(`latency has only ${p.latencyEstimate.samples} provider-reported sample(s); it is shown but not used to rank`);
+      if (p.costEstimate?.status === 'unknown') reasons.push('expected API/subscription cost is unknown and is not treated as $0');
       return { ...p, reasons, factors, score: Number(score.toFixed(4)) };
     });
   }
@@ -201,7 +257,7 @@ export class ResourceRouter {
   record(taskId: string, workload: WorkloadClass, chosen: RouteAssessment | undefined, all: RouteAssessment[]): void {
     this.opts.budget.ledger.appendEvent('routing', { accountId: chosen?.accountId, taskId }, {
       workload, mode: this.opts.budget.policy.mode, chosen: chosen ? `${chosen.modelId}@${chosen.runtimeId}` : null,
-      candidates: all.map((a) => ({ model: a.modelId, runtime: a.runtimeId, account: a.accountId, admissible: a.admissible, score: a.score, factors: a.factors, reasons: a.reasons })),
+      candidates: all.map((a) => ({ model: a.modelId, runtime: a.runtimeId, account: a.accountId, admissible: a.admissible, score: a.score, factors: a.factors, reliabilityEvidence: a.reliabilityEvidence, costEstimate: a.costEstimate, latencyEstimate: a.latencyEstimate, reasons: a.reasons })),
     });
   }
 }

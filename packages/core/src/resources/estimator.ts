@@ -3,7 +3,7 @@ import type { WorkloadClass } from './types.js';
 /**
  * Token estimation without a vendor tokenizer. Exact tokenizers exist only for some vendors
  * (none for Anthropic or arbitrary local GGUF models), so Wazir uses one conservative
- * character heuristic, corrected per model by the observed actual/estimated ratio (see
+ * character heuristic, corrected per account/model by the observed actual/estimated ratio (see
  * ResourceLedger.calibrate) and always reported as an estimate.
  */
 

@@ -47,7 +47,7 @@ export interface ReservationRow {
 export type LedgerEventKind =
   | 'admitted' | 'deferred' | 'blocked' | 'settled' | 'released' | 'expired' | 'duplicate_settle'
   | 'rate_limited' | 'auth_failed' | 'quota_exhausted' | 'provider_error' | 'ambiguous'
-  | 'emergency_stop' | 'emergency_resume' | 'health_changed' | 'routing';
+  | 'cancelled' | 'interrupted' | 'emergency_stop' | 'emergency_resume' | 'health_changed' | 'routing';
 
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
@@ -282,22 +282,24 @@ export class ResourceLedger {
   }
 
   // ---- estimate calibration ---------------------------------------------------------------
-  /** Learned actual/estimated input-token ratio for a model (1 when unseen). */
-  calibration(modelId: string): { ratio: number; samples: number } {
-    const row = this.db.prepare('SELECT ratio, samples FROM calibration WHERE model_id = ?').get(modelId) as { ratio: number; samples: number } | undefined;
+  /** Learned actual/estimated input-token ratio for a model/account scope (1 when unseen). */
+  calibration(modelId: string, scope?: string): { ratio: number; samples: number } {
+    const key = scope ? JSON.stringify([scope, modelId]) : modelId;
+    const row = this.db.prepare('SELECT ratio, samples FROM calibration WHERE model_id = ?').get(key) as { ratio: number; samples: number } | undefined;
     return row ?? { ratio: 1, samples: 0 };
   }
 
-  calibrate(modelId: string, estimated: number, actual: number): void {
+  calibrate(modelId: string, estimated: number, actual: number, scope?: string): void {
     if (!(estimated > 0) || !(actual > 0)) return;
+    const key = scope ? JSON.stringify([scope, modelId]) : modelId;
     const observed = Math.min(4, Math.max(0.25, actual / estimated));
-    const { ratio, samples } = this.calibration(modelId);
+    const { ratio, samples } = this.calibration(modelId, scope);
     // Exponential moving average; the first samples move fast, later ones settle.
     const alpha = Math.max(0.1, 1 / (samples + 1));
     const next = samples === 0 ? observed : ratio + alpha * (observed - ratio);
     this.db.prepare(`INSERT INTO calibration (model_id, ratio, samples, updated_at) VALUES (?, ?, ?, ?)
       ON CONFLICT(model_id) DO UPDATE SET ratio = excluded.ratio, samples = excluded.samples, updated_at = excluded.updated_at`)
-      .run(modelId, next, samples + 1, this.now());
+      .run(key, next, samples + 1, this.now());
   }
 
   // ---- audit trail ------------------------------------------------------------------------
@@ -338,6 +340,37 @@ export class ResourceLedger {
       source: r.source as UsageRow['source'], at: Number(r.at), durationMs: r.duration_ms === null ? undefined : Number(r.duration_ms),
       local: Number(r.local) === 1,
     }));
+  }
+
+  /**
+   * Request outcomes attributable to one account/provider/model/workload tuple. Historical
+   * account-only events are intentionally excluded: assigning them to every model would
+   * contaminate per-model routing evidence.
+   */
+  routingOutcomeCounts(filter: { since: number; accountId: string; provider: string; modelId: string; workload: WorkloadClass }): {
+    successfulRequests: number; failedRequests: number;
+  } {
+    const { since, accountId, provider, modelId, workload } = filter;
+    const attributed = (alias: string) => `(
+      (json_extract(${alias}.json, '$.modelId') = ? OR json_extract(${alias}.json, '$.model') = ?)
+      AND json_extract(${alias}.json, '$.provider') = ?
+      AND json_extract(${alias}.json, '$.workload') = ?
+    )`;
+    const failureKinds = "'provider_error','ambiguous','rate_limited','auth_failed','quota_exhausted'";
+    const failureArgs = [modelId, modelId, provider, workload];
+    const failed = Number((this.db.prepare(`SELECT COUNT(DISTINCT e.request_id) AS n FROM events e
+      WHERE e.at >= ? AND e.account_id = ? AND e.request_id IS NOT NULL
+      AND e.kind IN (${failureKinds}) AND COALESCE(json_extract(e.json, '$.retry'), 0) != 1
+      AND ${attributed('e')}`).get(since, accountId, ...failureArgs) as { n: number }).n);
+    const success = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM usage u
+      WHERE u.at >= ? AND u.account_id = ? AND u.model_id = ? AND u.workload = ? AND u.source != 'conservative'
+      AND NOT EXISTS (
+        SELECT 1 FROM events e WHERE e.request_id = u.request_id AND e.at >= ?
+        AND e.kind IN (${failureKinds},'cancelled','interrupted')
+        AND (e.kind IN ('cancelled','interrupted') OR COALESCE(json_extract(e.json, '$.retry'), 0) != 1)
+        AND ${attributed('e')}
+      )`).get(since, accountId, modelId, workload, since, ...failureArgs) as { n: number }).n);
+    return { successfulRequests: success, failedRequests: failed };
   }
 
   activeReservations(now = this.now()): ReservationRow[] {

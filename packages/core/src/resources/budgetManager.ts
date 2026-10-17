@@ -185,13 +185,15 @@ export class TokenBudgetManager {
         const stop = this.stopped();
         if (stop) return deny('blocked', `emergency stop is active (${stop.reason}); only local inference is dispatched`, 'exhausted');
       }
+      // Payment authorization is an operator consent boundary, not a quota. It remains
+      // mandatory even when local budget enforcement is disabled for accounting-only mode.
+      if (isPaid(account) && !(this.policy.paidApiFallback || account.allowPaid)) {
+        return deny('blocked', `account '${account.id}' is a paid API and paid fallback is not authorized (policy.paidApiFallback=false)`, 'exhausted');
+      }
       if (!this.policy.enforce) {
         // Accounting only: reserve and record, but never refuse for budget, quota, health or cost.
         reasons.push('limits not enforced (policy.enforce=false)');
         return reserveAndAdmit('normal');
-      }
-      if (isPaid(account) && !(this.policy.paidApiFallback || account.allowPaid)) {
-        return deny('blocked', `account '${account.id}' is a paid API and paid fallback is not authorized (policy.paidApiFallback=false)`, 'exhausted');
       }
       if (account.workloads?.length && !account.workloads.includes(req.workload)) {
         return deny('blocked', `account '${account.id}' does not serve '${req.workload}' work`, 'normal');
@@ -260,7 +262,7 @@ export class TokenBudgetManager {
    * Replaces the reservation with actual usage. Idempotent per request id: a duplicate call
    * (retried callback) changes nothing and returns false.
    */
-  reconcile(requestId: string, usage: UsageMeasurement, extra: { durationMs?: number; agent?: string; rawEstimatedInput?: number } = {}): boolean {
+  reconcile(requestId: string, usage: UsageMeasurement, extra: { durationMs?: number; agent?: string; rawEstimatedInput?: number; outcome?: 'completed' | 'cancelled' | 'interrupted' } = {}): boolean {
     const r = this.ledger.getReservation(requestId);
     if (!r) return false;
     const account = this.accounts.get(r.accountId);
@@ -271,8 +273,15 @@ export class TokenBudgetManager {
       reasoningTokens: usage.reasoningTokens ?? 0, requests: r.estRequests, costUsd: cost, source: usage.source,
       at: this.ledger.now(), durationMs: extra.durationMs, local: r.local,
     });
+    if (settled && extra.outcome && extra.outcome !== 'completed') {
+      this.ledger.appendEvent(extra.outcome, { accountId: r.accountId, requestId, taskId: r.taskId }, {
+        model: r.modelId, modelId: r.modelId, workload: r.workload,
+        provider: account?.provider, source: usage.source,
+      });
+    }
     if (settled && usage.source === 'provider-reported' && extra.rawEstimatedInput) {
-      this.ledger.calibrate(r.modelId, extra.rawEstimatedInput, usage.inputTokens);
+      const calibrationScope = account ? JSON.stringify([account.provider, account.id]) : r.accountId;
+      this.ledger.calibrate(r.modelId, extra.rawEstimatedInput, usage.inputTokens, calibrationScope);
     }
     return settled;
   }
@@ -288,32 +297,36 @@ export class TokenBudgetManager {
     if (!r) return;
     const now = this.ledger.now();
     const ids = { accountId: r.accountId, requestId, taskId: r.taskId };
+    const account = this.accounts.get(r.accountId);
+    const evidence = {
+      model: r.modelId, modelId: r.modelId, workload: r.workload, provider: account?.provider,
+      failureClass: report.failureClass, status: report.status, ambiguous: report.ambiguous,
+    };
     switch (report.failureClass) {
       case 'AUTH_FAILED':
         this.ledger.setHealth(r.accountId, 'auth_blocked', undefined, `HTTP ${report.status ?? '?'}: ${report.message?.slice(0, 160) ?? 'authentication failed'}`);
-        this.ledger.appendEvent('auth_failed', ids, { status: report.status });
+        this.ledger.appendEvent('auth_failed', ids, evidence);
         break;
       case 'QUOTA_EXHAUSTED': {
-        const account = this.accounts.get(r.accountId);
         const resets = account ? this.effectiveLimits(account).filter((l) => l.limit !== null).map((l) => windowBounds(l.window, now).resetHint) : [];
         const until = report.retryAfterMs !== undefined ? now + report.retryAfterMs : resets.length ? Math.min(...resets) : now + 3_600_000;
         this.ledger.setHealth(r.accountId, 'quota_blocked', until, report.message?.slice(0, 160) ?? 'provider reported quota exhausted');
-        this.ledger.appendEvent('quota_exhausted', ids, { until, status: report.status });
+        this.ledger.appendEvent('quota_exhausted', ids, { ...evidence, until });
         break;
       }
       case 'RATE_LIMIT': {
         const until = now + (report.retryAfterMs ?? 30_000);
         this.ledger.setHealth(r.accountId, 'cooldown', until, report.retryAfterMs !== undefined ? `Retry-After ${Math.round(report.retryAfterMs / 1000)}s` : 'HTTP 429 without Retry-After; 30s default');
-        this.ledger.appendEvent('rate_limited', ids, { until, retryAfterMs: report.retryAfterMs });
+        this.ledger.appendEvent('rate_limited', ids, { ...evidence, until, retryAfterMs: report.retryAfterMs });
         break;
       }
       default:
-        this.ledger.appendEvent('provider_error', ids, { failureClass: report.failureClass, status: report.status, ambiguous: report.ambiguous });
+        this.ledger.appendEvent('provider_error', ids, evidence);
     }
     if (report.ambiguous) {
       // The provider may have done the work and billed it: charge the larger of what was
       // observed and what was reserved, labelled conservative.
-      this.ledger.appendEvent('ambiguous', ids, { failureClass: report.failureClass });
+      this.ledger.appendEvent('ambiguous', ids, evidence);
       this.reconcile(requestId, {
         inputTokens: Math.max(report.partial?.inputTokens ?? 0, r.estInputTokens),
         outputTokens: Math.max(report.partial?.outputTokens ?? 0, r.estOutputTokens),

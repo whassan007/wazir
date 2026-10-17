@@ -31,10 +31,12 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
       yield { type: 'error', requestId, failureClass: 'POLICY_DENIED', error: `RESOURCE_ADMISSION_DENIED: no account is configured for runtime '${inner.id}' model '${request.modelId}'` };
       return;
     }
+    const account = budget.accounts.get(accountId);
+    const calibrationScope = account ? JSON.stringify([account.provider, account.id]) : accountId;
     const ctx = request.resourceContext ?? {};
     const workload: WorkloadClass = (WORKLOAD_CLASSES as readonly string[]).includes(ctx.workload ?? '') ? ctx.workload as WorkloadClass : 'routine';
     const rawInput = estimateInputTokens(req);
-    const { ratio } = ledger.calibration(request.modelId);
+    const { ratio } = ledger.calibration(request.modelId, calibrationScope);
     const estInput = padEstimate(rawInput, ratio, budget.policy.estimateMargin);
     const estOutput = estimateOutputTokens(req, workload);
     const admission = () => budget.admit({
@@ -44,7 +46,6 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
 
     let decision: ResourceAdmissionDecision = admission();
     // Local capacity is a queue, not a refusal: wait for a GPU slot (bounded).
-    const account = budget.accounts.get(accountId);
     if (decision.outcome === 'deferred' && account?.kind === 'local' && /concurrency limit/.test(decision.reasons.join(' '))) {
       const deadline = ledger.now() + budget.policy.localQueueTimeoutMs;
       let wait = 100;
@@ -88,7 +89,10 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
           }
         }
         if (event.type === 'retry') {
-          ledger.appendEvent(event.failureClass === 'RATE_LIMIT' ? 'rate_limited' : 'provider_error', { accountId, requestId, taskId: ctx.taskId }, { retry: true, attempt: event.retryAttempt, delayMs: event.retryDelayMs });
+          ledger.appendEvent(event.failureClass === 'RATE_LIMIT' ? 'rate_limited' : 'provider_error', { accountId, requestId, taskId: ctx.taskId }, {
+            retry: true, attempt: event.retryAttempt, delayMs: event.retryDelayMs,
+            model: request.modelId, modelId: request.modelId, workload, provider: budget.accounts.get(accountId)?.provider,
+          });
         }
         if (event.type === 'completed') {
           const u = event.usage;
@@ -99,7 +103,10 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
           if (event.finishReason === 'cancelled' && !reported) {
             usage.inputTokens = Math.max(usage.inputTokens, rawInput);
           }
-          budget.reconcile(requestId, usage, { durationMs: now - started, agent: ctx.agent, rawEstimatedInput: rawInput });
+          budget.reconcile(requestId, usage, {
+            durationMs: now - started, agent: ctx.agent, rawEstimatedInput: rawInput,
+            outcome: event.finishReason === 'cancelled' ? 'cancelled' : 'completed',
+          });
           settled = true;
         }
         if (event.type === 'error') {
@@ -112,12 +119,22 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
         }
         yield event;
       }
+    } catch (error) {
+      budget.fail(requestId, {
+        failureClass: 'TRANSPORT', ambiguous: outputSeen,
+        partial: outputSeen ? estimatedUsage() : undefined,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      settled = true;
+      throw error;
     } finally {
       stopLease();
       if (!settled) {
         // Consumer stopped early or the stream threw: the prompt was sent and some output
         // produced, so charge what can be estimated rather than releasing.
-        budget.reconcile(requestId, { ...estimatedUsage(), source: outputSeen ? 'estimated' : 'conservative' }, { durationMs: ledger.now() - started, agent: ctx.agent });
+        budget.reconcile(requestId, { ...estimatedUsage(), source: outputSeen ? 'estimated' : 'conservative' }, {
+          durationMs: ledger.now() - started, agent: ctx.agent, outcome: 'interrupted',
+        });
       }
     }
   }

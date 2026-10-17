@@ -61,7 +61,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('default policy: limits are not enforced', () => {
   it('admits past quotas, cooldowns and the paid gate, but still accounts every request', () => {
-    const { budget, ledger } = setup([sub('A', 1_000), api], { enforce: false });
+    const { budget, ledger } = setup([sub('A', 1_000), { ...api, allowPaid: true }], { enforce: false });
     expect(DEFAULT_POLICY.enforce).toBe(false);
     for (let i = 0; i < 5; i++) expect(ask(budget, 'A', 1_000, 0).outcome).toBe('admitted');
     ledger.setHealth('api', 'auth_blocked', undefined, 'test');
@@ -69,6 +69,13 @@ describe('default policy: limits are not enforced', () => {
     expect(paid.outcome).toBe('admitted');
     expect(paid.reasons.join(' ')).toMatch(/limits not enforced/);
     expect(ledger.reservedNow('A', 'tokens')).toBe(5_000);
+  });
+
+  it('accounting-only mode still requires explicit authorization for paid APIs', () => {
+    const { budget } = setup([api], { enforce: false });
+    const paid = ask(budget, 'api', 10, 10);
+    expect(paid.outcome).toBe('blocked');
+    expect(paid.reasons.join(' ')).toMatch(/paid fallback is not authorized/);
   });
 
   it('the emergency stop still applies (an operator switch, not a limit)', () => {
@@ -249,7 +256,7 @@ describe('concurrency and durability', () => {
     budget.reconcile(d.requestId, { inputTokens: 1_300, outputTokens: 200, source: 'provider-reported' }, { rawEstimatedInput: 1_000 });
     expect(ledger.reservedNow('A', 'tokens')).toBe(0);
     expect(ledger.usedSince('A', 'tokens', T0)).toBe(1_500);
-    expect(ledger.calibration('m').ratio).toBeCloseTo(1.3);
+    expect(ledger.calibration('m', JSON.stringify(['claude', 'A'])).ratio).toBeCloseTo(1.3);
   });
 
   it('audit trail is append-only', () => {
@@ -390,7 +397,9 @@ describe('routing', () => {
   it('16. an underperforming local model loses to a reliable alternative', async () => {
     const { ResourceRouter } = await load();
     const { budget, ledger } = setup([{ ...local, maxConcurrent: 2 }, hosted], { mode: 'quality-first' });
-    for (let i = 0; i < 6; i++) ledger.appendEvent('provider_error', { accountId: 'dgx' }, { failureClass: 'SERVER' });
+    for (let i = 0; i < 6; i++) ledger.appendEvent('provider_error', { accountId: 'dgx', requestId: `bad-local-${i}` }, {
+      failureClass: 'SERVER', model: 'local-model', modelId: 'local-model', provider: 'lmstudio', workload: 'routine',
+    });
     ledger.settle({ requestId: 'ok', accountId: 'dgx', modelId: 'local-model', inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, reasoningTokens: 0, requests: 1, costUsd: 0, source: 'provider-reported', at: clock, local: true });
     const out = new ResourceRouter({ budget, resolveAccount: resolve }).assess({ task: { id: 't' }, workload: 'routine', estimatedInputTokens: 2_000, candidates });
     const byModel = Object.fromEntries(out.map((a) => [a.modelId, a]));
