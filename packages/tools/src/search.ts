@@ -43,9 +43,33 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${regex}$`);
 }
 
-function matchesInclude(file: string, include?: string): boolean {
-  if (!include) return true;
-  return globToRegExp(include).test(file) || globToRegExp(include).test(path.basename(file));
+function expandIncludePatterns(include?: string | string[]): string[] {
+  if (!include) return [];
+  if (Array.isArray(include)) return include.flatMap((item) => expandIncludePatterns(String(item)));
+  const trimmed = include.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map((x) => String(x).trim()).filter(Boolean);
+      }
+    } catch {
+      // fall through
+    }
+  }
+  const braceMatch = trimmed.match(/^(.*?)\{([^{}]+)\}(.*)$/);
+  if (braceMatch) {
+    const [, prefix, inner, suffix] = braceMatch;
+    return inner.split(',').map((part) => `${prefix}${part.trim()}${suffix}`).filter(Boolean);
+  }
+  return [trimmed];
+}
+
+function matchesInclude(file: string, include?: string | string[]): boolean {
+  const patterns = expandIncludePatterns(include);
+  if (patterns.length === 0) return true;
+  return patterns.some((p) => globToRegExp(p).test(file) || globToRegExp(p).test(path.basename(file)));
 }
 
 export const globTool: Tool = {
@@ -150,7 +174,7 @@ export const searchTool: Tool = {
       }
 
       const results: string[] = [];
-      const fileGlob = (input.regex || input.pattern) && typeof input.glob === 'string' ? input.glob : undefined;
+      const fileGlob = (input.regex || input.pattern) && (typeof input.glob === 'string' || Array.isArray(input.glob)) ? (Array.isArray(input.glob) ? JSON.stringify(input.glob) : input.glob) : undefined;
       let filesScanned = 0;
 
       for await (const file of walkFiles(searchRoot, path.relative(ctx.projectRoot, searchRoot).split(path.sep).join('/'))) {

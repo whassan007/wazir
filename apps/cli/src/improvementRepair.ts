@@ -27,6 +27,14 @@ export interface RepairScope {
   timeoutMs?: number;
   maxTurns?: number;
   allowWeakModel?: boolean;
+  baselineMetrics?: { inputTokens?: number; outputTokens?: number; latencyMs?: number };
+  candidateMetrics?: { inputTokens?: number; outputTokens?: number; latencyMs?: number };
+  configMutation?: {
+    domain: 'routing' | 'context_policy' | 'tool_surfaces' | 'prompts';
+    key: string;
+    value: unknown;
+    autoPromote?: boolean;
+  };
 }
 
 const WEAK_CODING_MODELS = new Set([
@@ -329,6 +337,92 @@ export async function executeRepairScope(params: {
   const candidate = await runChecks();
   const stable = fingerprint === (await digest());
   const passed = agentExitCode === 0 && candidate.every((result) => result.exitCode === 0) && stable;
+
+  if (scope.mode === 'optimize') {
+    if (!passed) {
+      return {
+        decision: 'REJECTED',
+        reason: 'Optimization candidate rejected due to correctness regression',
+        evidence: {
+          worktree,
+          baseSha,
+          fingerprint,
+          changed,
+          agentExitCode,
+          baselineMetrics: scope.baselineMetrics,
+          candidateMetrics: scope.candidateMetrics,
+          baseline: baseline.map(({ output, ...result }) => result),
+          candidate: candidate.map(({ output, ...result }) => result),
+        },
+      };
+    }
+    if (scope.baselineMetrics && scope.candidateMetrics) {
+      const baseTokens = (scope.baselineMetrics.inputTokens ?? 0) + (scope.baselineMetrics.outputTokens ?? 0);
+      const candTokens = (scope.candidateMetrics.inputTokens ?? 0) + (scope.candidateMetrics.outputTokens ?? 0);
+      const baseLatency = scope.baselineMetrics.latencyMs ?? 0;
+      const candLatency = scope.candidateMetrics.latencyMs ?? 0;
+      const tokensImproved = baseTokens > 0 && candTokens < baseTokens;
+      const latencyImproved = baseLatency > 0 && candLatency < baseLatency;
+      if (!tokensImproved && !latencyImproved) {
+        return {
+          decision: 'REJECTED',
+          reason: 'Optimization candidate did not improve measured efficiency metrics',
+          evidence: {
+            worktree,
+            baseSha,
+            fingerprint,
+            changed,
+            agentExitCode,
+            baselineMetrics: scope.baselineMetrics,
+            candidateMetrics: scope.candidateMetrics,
+            baseline: baseline.map(({ output, ...result }) => result),
+            candidate: candidate.map(({ output, ...result }) => result),
+          },
+        };
+      }
+    }
+    if (scope.configMutation?.autoPromote) {
+      const activeCfg = params.engine.optimizer?.getActiveConfig?.() ?? { id: 'cfg-default' };
+      await params.store.put(`meta/rollback/${params.id}`, activeCfg);
+      const promotedCfg = {
+        ...activeCfg,
+        id: `cfg-${params.id}`,
+        [scope.configMutation.key]: scope.configMutation.value,
+      };
+      await params.store.put('meta_optimizer/active_config', promotedCfg);
+      return {
+        decision: 'QUALIFIED',
+        reason: 'Policy-authorized reversible config optimization qualified and promoted',
+        evidence: {
+          worktree,
+          baseSha,
+          fingerprint,
+          changed,
+          agentExitCode,
+          promotedConfigId: promotedCfg.id,
+          baselineMetrics: scope.baselineMetrics,
+          candidateMetrics: scope.candidateMetrics,
+          baseline: baseline.map(({ output, ...result }) => result),
+          candidate: candidate.map(({ output, ...result }) => result),
+        },
+      };
+    }
+    return {
+      decision: 'STAGED',
+      reason: 'Optimization candidate passed independent checks and efficiency comparison; isolated candidate retained for review',
+      evidence: {
+        worktree,
+        baseSha,
+        fingerprint,
+        changed,
+        agentExitCode,
+        baselineMetrics: scope.baselineMetrics,
+        candidateMetrics: scope.candidateMetrics,
+        baseline: baseline.map(({ output, ...result }) => result),
+        candidate: candidate.map(({ output, ...result }) => result),
+      },
+    };
+  }
 
   return {
     decision: passed ? 'STAGED' : 'REJECTED',

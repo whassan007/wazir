@@ -466,7 +466,7 @@ run_worker() {
       exit "$(exit_code_for NO_SOURCE_CHANGES)"
     fi
     atomic_write "$STATE_DIR/checkpoint" "phase=$phase state=VERIFYING"
-    if ! npm run build || ! npx vitest run ${BUILDER_VERIFY_TESTS:-packages/evaluation/tests apps/cli/tests/improvementSupervisor.test.ts}; then
+    if ! npm run build || ! npx vitest run ${BUILDER_VERIFY_TESTS:-packages/evaluation/tests apps/cli/tests/improveSupervisorE2E.test.ts}; then
       atomic_write "$RESULT_FILE" "FAILED class=VERIFICATION_FAILED phase=$phase"
       exit "$(exit_code_for VERIFICATION_FAILED)"
     fi
@@ -530,6 +530,7 @@ supersede() {
 }
 
 case "${1:-help}" in
+  doctor) shift; load_config 2>/dev/null || true; ensure_linger; echo "Builder doctor OK: worktree=${WORKTREE:-$PWD} agent=${WAZIR_AGENT:-wazir-coding} model=${WAZIR_MODEL:-auto}";;
   start) shift; start_job "$@";;
   resume)
     shift

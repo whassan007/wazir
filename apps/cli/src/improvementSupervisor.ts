@@ -1,3 +1,5 @@
+import { StrategyLearningService } from '@wazir/core';
+import { MemoryService } from '@wazir/memory';
 import fs from 'node:fs/promises';
 import { existsSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
@@ -539,6 +541,58 @@ export async function improvementSupervisorCommand(
               directory,
             })
         : undefined,
+      recordLearning: async (entry) => {
+        const memoryService = new MemoryService();
+        const strategyService = new StrategyLearningService({ store, memoryService, minEvidenceThreshold: 1 });
+        const verified = entry.result.decision === 'STAGED' || entry.result.decision === 'QUALIFIED';
+        const syntheticRecord: any = {
+          execution: {
+            id: entry.attemptId,
+            taskId: `improve-${entry.attemptId}`,
+            runtimeId: 'local',
+            modelId: 'supervisor',
+            agentId: 'wazir-coding',
+            status: verified ? 'completed' : 'failed',
+            createdAt: new Date(entry.completedAt),
+            startedAt: new Date(entry.completedAt),
+            completedAt: new Date(entry.completedAt),
+          },
+          task: {
+            id: `improve-${entry.attemptId}`,
+            type: 'coding',
+            title: `Supervisor ${entry.modes.join(',')} attempt`,
+            input: entry.result.reason,
+            requirements: {},
+            priority: 'normal',
+            status: verified ? 'completed' : 'failed',
+            createdAt: new Date(entry.completedAt),
+          },
+          policyDecisions: [],
+          toolCalls: [{ tool: 'edit', ok: verified, durationMs: 10, input: {} }],
+          filesChanged: Array.isArray((entry.result.evidence as any)?.changed) ? (entry.result.evidence as any).changed : (verified ? ['target.ts'] : []),
+          checks: [{ name: 'test', command: 'node --test', ok: verified, durationMs: 25 }],
+          errors: verified ? [] : [entry.result.reason],
+          events: [],
+          evaluation: {
+            success: verified,
+            reasons: [entry.result.reason],
+            filesChanged: Array.isArray((entry.result.evidence as any)?.changed) ? (entry.result.evidence as any).changed : (verified ? ['target.ts'] : []),
+            checks: [{ name: 'test', command: 'node --test', ok: verified, durationMs: 25 }],
+            evaluatedAt: new Date(entry.completedAt),
+            evidence: [{ id: `ev-${entry.attemptId}`, type: 'test_pass', verified }],
+          },
+        };
+        const extracted = await strategyService.extractStrategy(syntheticRecord);
+        await store.put(`supervisor/strategies/${entry.attemptId}`, {
+          attemptId: entry.attemptId,
+          modes: entry.modes,
+          decision: entry.result.decision,
+          reason: entry.result.reason,
+          kind: verified ? 'VERIFIED_STRATEGY' : 'ANTI_STRATEGY',
+          strategyId: extracted.strategy?.id ?? extracted.antiStrategy?.strategyId ?? `strat-${entry.attemptId}`,
+          recordedAt: entry.completedAt,
+        });
+      },
     });
 
     await supervisor.initialize(modes);

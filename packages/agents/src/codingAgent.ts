@@ -849,7 +849,30 @@ export class CodingAgent implements AgentAdapter {
           messages: messages.map((m) => ({ ...m })),
           maxTokens: this.maxTokensPerTurn,
           temperature: this.temperature,
-          tools: currentToolSurface.selectedProtocol === 'native_tool_call' ? currentToolSurface.serializedSchemas : undefined,
+          tools: currentToolSurface.selectedProtocol === 'native_tool_call'
+            ? [
+                ...(currentToolSurface.serializedSchemas ?? []),
+                currentPhase === 'plan'
+                  ? {
+                      name: 'plan',
+                      description: 'Submit a short step-by-step implementation plan to proceed from planning to implementation.',
+                      parameters: {
+                        type: 'object',
+                        properties: { content: { type: 'string', description: 'Short step-by-step plan' } },
+                        required: ['content'],
+                      },
+                    }
+                  : {
+                      name: 'done',
+                      description: 'Declare the coding task complete after modifying the target files and verifying checks.',
+                      parameters: {
+                        type: 'object',
+                        properties: { summary: { type: 'string', description: 'What changed and how it was verified' } },
+                        required: ['summary'],
+                      },
+                    },
+              ]
+            : undefined,
         })) {
           if (event.type === 'token' && event.content) {
             content += event.content;
@@ -987,6 +1010,7 @@ export class CodingAgent implements AgentAdapter {
       repair.message.content = `${prefix}[previous response rejected and discarded] ${note}`;
     };
     const acceptAttempt = (raw: string): void => {
+      correctionCount = 0;
       const repair = pendingRepair;
       if (repair) {
         if (repair.base === null) {

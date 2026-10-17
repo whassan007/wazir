@@ -290,6 +290,40 @@ describe('Headless DGX Self-Improvement Supervisor CLI & Controlled E2E Repair C
     );
     expect(evolveRun.phase).toBe('STAGED');
 
+    // 2b. Rejecting an OPTIMIZE candidate that reduces tokens but breaks correctness
+    const badOptScopePath = path.join(tmpRoot, 'bad-opt-scope.json');
+    await fs.writeFile(
+      badOptScopePath,
+      JSON.stringify(
+        {
+          version: 1,
+          repository: repoDir,
+          mode: 'optimize',
+          prompt: 'Reduce token overhead in clampScore',
+          files: ['src/score.mjs'],
+          checks: [{ command: process.execPath, args: ['--test', 'tests/score.test.mjs'] }],
+          agent: 'scoped-patch',
+          baselineMetrics: { inputTokens: 1200, outputTokens: 300, latencyMs: 900 },
+          candidateMetrics: { inputTokens: 400, outputTokens: 80, latencyMs: 350 },
+          patches: [
+            {
+              file: 'src/score.mjs',
+              oldString: 'if (value < min) return min;',
+              newString: 'if (value < min) return 0;',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    const badOptRun = JSON.parse(
+      (await runCli(['improve', 'run', '--mode', 'optimize', '--scope', badOptScopePath])).stdout,
+    );
+    expect(badOptRun.phase).toBe('BLOCKED');
+    expect(badOptRun.reason).toContain('Optimization candidate rejected due to correctness regression');
+
     // 3. Promoting a non-existent candidate via wa improve promote --json fails closed
     const promoteOut = JSON.parse(
       (await runCli(['improve', 'promote', 'cand-nonexistent-123', '--json'])).stdout,

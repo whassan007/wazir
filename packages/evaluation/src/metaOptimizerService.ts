@@ -171,6 +171,7 @@ export class MetaOptimizerService {
   private readonly requiredSourceGates: OracleType[];
   /** Set when persisted state could not be recovered; promotion then fails closed. */
   private hydrationError?: string;
+  private pendingPersistence: Promise<void> = Promise.resolve();
 
   constructor(options: MetaOptimizerOptions) {
     this.benchmarkService = options.benchmarkService;
@@ -261,6 +262,7 @@ export class MetaOptimizerService {
   private async persist(key: string, value: unknown): Promise<void> {
     if (!this.store) return;
     try {
+      await this.pendingPersistence;
       await this.store.put(key, value);
     } catch (error) {
       // Evidence that cannot be made durable must not silently disappear.
@@ -687,7 +689,7 @@ export class MetaOptimizerService {
 
       candidates.push(candidate);
       this.candidates.set(candidateId, candidate);
-      await this.store?.put(`meta/candidates/${candidateId}`, candidate);
+      await this.persist(`meta/candidates/${candidateId}`, candidate);
       this.consumption.candidatesCount++;
 
       this.emitEvent('meta.candidate.created', {

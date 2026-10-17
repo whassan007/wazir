@@ -70,6 +70,7 @@ export interface SupervisorDependencies {
   diagnose?: (modes: ImprovementMode[]) => Promise<Array<Omit<ImprovementRecommendation, 'id' | 'createdAt' | 'updatedAt' | 'status'>>>;
   busy: () => Promise<boolean>;
   experiment?: (attemptId: string, modes: ImprovementMode[]) => Promise<SupervisorResult>;
+  recordLearning?: (entry: { attemptId: string; modes: ImprovementMode[]; result: SupervisorResult; completedAt: string }) => Promise<void>;
   optimize?: (attemptId: string) => Promise<SupervisorResult>;
   log?: (event: Record<string, unknown>) => Promise<void>;
   now?: () => number;
@@ -174,11 +175,18 @@ export class SelfImprovementSupervisor {
         this.state.activeAttempt = attemptId;
         await this.transition('EXPERIMENTING');
         const result = await this.deps.experiment(attemptId, this.state.modes);
+        const completedAt = new Date(this.now()).toISOString();
         await this.deps.store.put(`supervisor/attempts/${attemptId}`, {
           attemptId,
           modes: this.state.modes,
           ...result,
-          completedAt: new Date(this.now()).toISOString(),
+          completedAt,
+        });
+        await this.deps.recordLearning?.({
+          attemptId,
+          modes: this.state.modes,
+          result,
+          completedAt,
         });
         this.state.activeAttempt = undefined;
         this.state.consecutiveFailures = 0;
