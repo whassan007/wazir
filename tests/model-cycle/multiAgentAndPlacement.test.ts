@@ -317,8 +317,8 @@ describe('Section 9 & 10: Multi-Agent Switching & Cross-Computer Placement (mode
       expect(planX.computerId).toBe('local-mac');
       expect(planY.computerId).toBe('local-mac');
       // Both instances are loaded: false (F1) and scheduled purely on static memory limits (F4)
-      expect(planX.computerDecision.reasons).toContain("model will be loaded via 'rt-ollama'");
-      expect(planY.computerDecision.reasons).toContain("model will be loaded via 'rt-ollama'");
+      expect(planX.computerDecision.reasons.some((r) => r.startsWith("model will be loaded via 'rt-ollama'"))).toBe(true);
+      expect(planY.computerDecision.reasons.some((r) => r.startsWith("model will be loaded via 'rt-ollama'"))).toBe(true);
     });
 
     it('Cross-Computer: routes to remote computer B when model is only registered there', () => {

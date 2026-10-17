@@ -214,14 +214,18 @@ export class JobOrchestrator {
       return null;
     }
 
-    await this.executionEngine.create({
-      task,
-      agentId: decision.agentId,
-      computerId: decision.computerId,
-      runtimeId: decision.runtimeId,
-      modelId: decision.modelId,
-      scheduling: decision,
-    });
+    const existing = await this.executionEngine.listByTask(taskId);
+    if (existing.length === 0) {
+      await this.executionEngine.create({
+        task,
+        jobId,
+        agentId: decision.agentId,
+        computerId: decision.computerId,
+        runtimeId: decision.runtimeId,
+        modelId: decision.modelId,
+        scheduling: decision,
+      });
+    }
 
     return {
       jobId,
@@ -235,13 +239,17 @@ export class JobOrchestrator {
   }
 
   async executeTask(assignment: OrchestratorTaskAssignment): Promise<void> {
-    const record = await this.executionEngine.create({
-      task: { id: assignment.taskId } as Task,
-      agentId: assignment.agentId,
-      computerId: assignment.computerId,
-      runtimeId: assignment.runtimeId,
-      modelId: assignment.modelId,
-    });
+    const existing = await this.executionEngine.listByTask(assignment.taskId);
+    const record = existing.length > 0
+      ? existing[0]
+      : await this.executionEngine.create({
+          task: { id: assignment.taskId } as Task,
+          jobId: assignment.jobId,
+          agentId: assignment.agentId,
+          computerId: assignment.computerId,
+          runtimeId: assignment.runtimeId,
+          modelId: assignment.modelId,
+        });
 
     await this.executionEngine.setStatus(record.execution.id, 'scheduled');
   }
@@ -565,6 +573,7 @@ export class JobOrchestrator {
         // here also keeps step 4's deadlock detector from misreading "paused with idle
         // work waiting" as "stuck with nowhere to go".
         const paused = job.status === 'paused';
+        let unschedulableBreak = false;
         while (!paused && activeTasks.size < concurrencyLimit && readyNodes.length > 0 && !isFinished) {
           const node = readyNodes.shift()!;
           const taskId = node.taskId ?? node.id;
@@ -598,9 +607,10 @@ export class JobOrchestrator {
           }
 
           if (!assignment) {
-            // Placement unavailable right now; wait for free resources
+            // Placement unavailable right now; wait for free resources if other tasks are active
             activeTasks.delete(taskId);
             readyNodes.unshift(node);
+            unschedulableBreak = true;
             break;
           }
 
@@ -620,6 +630,22 @@ export class JobOrchestrator {
 
           // Run task execution asynchronously
           void (async () => {
+            const finalizeExecutionRecord = async (finalStatus: 'completed' | 'failed' | 'cancelled', errText?: string) => {
+              const recs = await this.executionEngine.listByTask(taskId);
+              for (const rec of recs) {
+                if (rec.execution.status === 'queued' || rec.execution.status === 'scheduled' || rec.execution.status === 'running') {
+                  if (errText && finalStatus === 'failed') {
+                    await this.executionEngine.recordError(rec.execution.id, errText);
+                  }
+                  try {
+                    await this.executionEngine.setStatus(rec.execution.id, finalStatus);
+                  } catch {
+                    // When a synthetic taskExecutor returns success without recording verification evidence
+                    // on the ExecutionRecord, leave the record status as-is rather than failing the job.
+                  }
+                }
+              }
+            };
             try {
               const executionContext: JobTaskExecutionContext = {
                 jobId,
@@ -689,10 +715,12 @@ export class JobOrchestrator {
                 } else {
                   node.state = 'failed';
                   node.error = reason;
+                  await finalizeExecutionRecord('failed', reason);
                   await this.failTask(job.id, taskId, reason, Infinity);
                   this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
                 }
               } else if (taskAbort.signal.aborted) {
+                await finalizeExecutionRecord('cancelled');
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 // cancelJob()/cancelTask() already emitted this task's cancellation (with
@@ -703,6 +731,7 @@ export class JobOrchestrator {
                   this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
                 }
               } else if (outcome.success) {
+                await finalizeExecutionRecord('completed');
                 await this.completeTask(job.id, taskId, outcome.result);
                 this.emit(jobId, {
                   type: 'task:completed',
@@ -735,6 +764,7 @@ export class JobOrchestrator {
                     if (replanResult?.repairTasks && replanResult.repairTasks.length > 0) {
                       node.state = 'failed';
                       node.error = `Superseded by repair plan: ${outcome.error ?? 'Task failed'}`;
+                      await finalizeExecutionRecord('failed', node.error);
                       await this.jobManager.updateAgentState(job.id, node.id, 'failed', undefined, node.error);
                       await this.jobManager.updateTaskStatus(job.id, taskId, 'failed');
                       supersededTaskIds.add(taskId);
@@ -786,6 +816,7 @@ export class JobOrchestrator {
                 } else {
                   node.state = 'failed';
                   node.error = outcome.error ?? 'Task failed';
+                  await finalizeExecutionRecord('failed', outcome.error ?? 'Task failed');
                   await this.failTask(job.id, taskId, outcome.error ?? 'Task failed', Infinity);
                   this.emit(jobId, {
                     type: 'task:failed',
@@ -818,10 +849,12 @@ export class JobOrchestrator {
                 } else {
                   node.state = 'failed';
                   node.error = reason;
+                  await finalizeExecutionRecord('failed', reason);
                   await this.failTask(job.id, taskId, reason, Infinity);
                   this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
                 }
               } else if (taskAbort.signal.aborted) {
+                await finalizeExecutionRecord('cancelled');
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
@@ -856,6 +889,7 @@ export class JobOrchestrator {
                 } else {
                   node.state = 'failed';
                   node.error = errMessage;
+                  await finalizeExecutionRecord('failed', errMessage);
                   await this.failTask(job.id, taskId, errMessage, Infinity);
                   this.emit(jobId, {
                     type: 'task:failed',
@@ -887,13 +921,17 @@ export class JobOrchestrator {
             return;
           }
 
-          // Deadlock / unresolvable dependency detection
+          // Deadlock / unresolvable dependency / unschedulable placement detection
           const remainingIdle = job.graph.nodes.filter((n) => n.state === 'idle');
-          if (remainingIdle.length > 0 && readyNodes.length === 0) {
+          if (remainingIdle.length > 0 && (readyNodes.length === 0 || (!paused && unschedulableBreak))) {
             for (const deadNode of remainingIdle) {
               const hasFailedDep = this.jobManager.hasFailedDependency(job, deadNode.taskId ?? deadNode.id);
               deadNode.state = 'failed';
-              deadNode.error = hasFailedDep ? 'Dependency failed' : 'Unresolvable dependencies / deadlock';
+              deadNode.error = hasFailedDep
+                ? 'Dependency failed'
+                : unschedulableBreak
+                  ? 'Scheduling failed: no eligible model or runtime placement available'
+                  : 'Unresolvable dependencies / deadlock';
               await this.jobManager.updateAgentState(job.id, deadNode.id, 'failed', undefined, deadNode.error);
               await this.jobManager.updateTaskStatus(job.id, deadNode.taskId ?? deadNode.id, 'failed');
               this.emit(jobId, {

@@ -1,3 +1,4 @@
+import { controlledGeneration, type GenerationControl } from '@wazir/runtimes-interfaces';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
@@ -19,7 +20,11 @@ import { classifyFailure, classifyHttpFailure, isProviderRetryable, providerRetr
 
 const execFileAsync = promisify(execFile);
 
+/** Set WAZIR_LMS_DISABLE=1 to never spawn the `lms` CLI (it starts the LM Studio/Bionic daemon). */
+const LMS_DISABLED_BIN = '/nonexistent/wazir-lms-disabled';
+
 function resolveLmsBin(): string {
+  if (process.env.WAZIR_LMS_DISABLE === '1') return LMS_DISABLED_BIN;
   if (process.env.WAZIR_LMS_BIN && existsSync(process.env.WAZIR_LMS_BIN)) return process.env.WAZIR_LMS_BIN;
   if (process.env.LMS_BIN && existsSync(process.env.LMS_BIN)) return process.env.LMS_BIN;
   const homeLms = path.join(os.homedir(), '.lmstudio/bin/lms');
@@ -207,6 +212,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     const lmsBin = resolveLmsBin();
     try {
       const child = execFile(lmsBin, ['server', 'start']);
+      child.on('error', () => { /* CLI missing/disabled: the reachability poll below reports failure */ });
       child.unref();
       for (let i = 0; i < 20; i++) {
         try {
@@ -410,9 +416,13 @@ export class LMStudioAdapter implements RuntimeAdapter {
     return { minMemoryGB: e.totalMemoryBytes === undefined ? undefined : e.totalMemoryBytes / 1024 ** 3 };
   }
 
-  async *generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
-    const controller = new AbortController();
-    const requestId = request.requestId ?? `lmstudio-${Date.now()}`;
+  generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
+    return controlledGeneration(request, (generation, control) => this.generateControlled(generation, control));
+  }
+
+  private async *generateControlled(request: GenerationRequest, control: GenerationControl): AsyncIterable<GenerationEvent> {
+    const controller = control.controller;
+    const requestId = control.requestId;
     this.controllers.set(requestId, controller);
 
     const messages: Array<Record<string, unknown>> = [];
@@ -451,10 +461,13 @@ export class LMStudioAdapter implements RuntimeAdapter {
     // output the caller may have already consumed, so nothing past this
     // point is retried.
     let response: Response | undefined;
-    const retryPolicy = resolveRetryPolicy({ maxRetries: 3, initialDelayMs: 250, maxDelayMs: 8000, ...request.providerRetryPolicy });
+    const configuredRetryPolicy = resolveRetryPolicy({ maxRetries: 3, initialDelayMs: 250, maxDelayMs: 8000, ...request.providerRetryPolicy });
+    const retryPolicy = { ...configuredRetryPolicy, maxRetries: control.capRetries(configuredRetryPolicy.maxRetries) };
     const maxAttempts = retryPolicy.maxRetries + 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      yield control.startAttempt();
       try {
+        control.assertActive();
         const candidate = await fetch(`${this.baseURL}/chat/completions`, {
           method: 'POST',
           headers: this.headers(true),
@@ -470,6 +483,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
               type: 'function',
               function: { name: t.name, description: t.description, parameters: t.parameters },
             })),
+            parallel_tool_calls: request.tools?.length ? false : undefined,
             tool_choice: request.toolChoice,
             response_format: request.responseFormat,
           }),

@@ -40,6 +40,17 @@ export {
 export { RendererMetrics, type RendererMetricsSnapshot } from './metrics.js';
 export { FleetTui } from './fleetTui.js';
 export type { FleetTuiOptions, TuiView, AgentCardState } from './fleetTui.js';
+export { ConversationRenderer } from './conversationRenderer.js';
+export type { ConversationFrame } from './conversationRenderer.js';
+export { StatusProjection, classifyTool } from './statusProjection.js';
+export type { ConversationStatus, ProjectedTaskStatus } from './statusProjection.js';
+export { EventSummarizer } from './eventSummarizer.js';
+export type { TranscriptVerbosity, TaskEventSummary } from './eventSummarizer.js';
+export { detectTerminalCapabilities } from './terminalCapabilities.js';
+export type { TerminalCapabilities } from './terminalCapabilities.js';
+export { TranscriptStore } from './transcriptStore.js';
+export type { TranscriptEntry } from './transcriptStore.js';
+export { OutputWriter } from './outputWriter.js';
 export { TuiTestHarness, MockTerminalStream } from './inputHarness.js';
 export {
   StatusLoader,

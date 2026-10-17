@@ -1,7 +1,9 @@
 import type { DiscoveredModel } from './index.js';
 
-export type ProviderId = 'anthropic' | 'openai' | 'google';
+export type ProviderId = 'anthropic' | 'openai' | 'google' | 'nvidia';
 export type AuthMethod = 'api-key' | 'oauth-pkce';
+export type ProviderCredentialSource = 'secret-broker' | 'env' | 'none';
+export type ProviderLifecycleState = 'configured' | 'authenticated' | 'healthy' | 'degraded' | 'unavailable';
 
 export interface ApiKeyCredential {
   kind: 'api-key';
@@ -51,6 +53,10 @@ export interface AuthStatus {
   provider: ProviderId;
   authenticated: boolean;
   method?: AuthMethod;
+  /** Where the credential was resolved from, without revealing the value. */
+  credentialSource?: ProviderCredentialSource;
+  /** Current provider lifecycle state when known. */
+  state?: ProviderLifecycleState;
   /** ISO 8601, when `method` is `oauth-pkce`. */
   expiresAt?: string;
   /** `authenticated` AND not expired. Computed locally — see `ProviderAuthAdapter.status`. */

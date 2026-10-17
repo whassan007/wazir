@@ -46,6 +46,8 @@ describe('G43: Multi-Objective Empirical Meta-Optimization (MULTI_OBJECTIVE_META
       evaluationService,
       memoryService,
       store,
+      // Fixture trajectories intentionally model large contexts across repeated runs.
+      budget: { maxExperiments: 10, maxCandidatesPerExperiment: 4, maxModelCalls: 1000, maxTokens: 20_000_000, maxWallTimeMs: 1_800_000, maxMonetaryCostUSD: 1000 },
     });
   });
 
@@ -76,12 +78,12 @@ describe('G43: Multi-Objective Empirical Meta-Optimization (MULTI_OBJECTIVE_META
       selectionPolicy: 'PARETO_ONLY',
       benchmarkCategories: ['CODE_REPAIR'],
       benchmarkTasks: ['g43-task-1'],
-      sampleSize: 1,
+      sampleSize: 10,
       budget: {
         maxExperiments: 1,
         maxCandidatesPerExperiment: 4,
-        maxModelCalls: 50,
-        maxTokens: 500_000,
+        maxModelCalls: 200,
+        maxTokens: 10_000_000,
         maxWallTimeMs: 60_000,
       },
       createdAt: new Date(),
@@ -103,28 +105,29 @@ describe('G43: Multi-Objective Empirical Meta-Optimization (MULTI_OBJECTIVE_META
       name: 'G43 Multi-Objective Empirical Runner',
       async run(task) {
         callIndex++;
+        const scenario = Math.floor((callIndex - 1) / 10) + 1;
 
         // Baseline vs Candidates data
         let inputTokens = 100_000;
         let durationMs = 300_000;
         let repairCycles = 5;
 
-        if (callIndex === 1) {
+        if (scenario === 1) {
           // Baseline
           inputTokens = 100_000;
           durationMs = 300_000;
           repairCycles = 5;
-        } else if (callIndex === 2) {
+        } else if (scenario === 2) {
           // C1: Balanced (75K tokens, 220s wall time, 3 repairs)
           inputTokens = 75_000;
           durationMs = 220_000;
           repairCycles = 3;
-        } else if (callIndex === 3) {
+        } else if (scenario === 3) {
           // C2: Token Specialist (55K tokens, 280s wall time, 2 repairs)
           inputTokens = 55_000;
           durationMs = 280_000;
           repairCycles = 2;
-        } else if (callIndex === 4) {
+        } else if (scenario === 4) {
           // C3: Speed Specialist (90K tokens, 140s wall time, 4 repairs)
           inputTokens = 90_000;
           durationMs = 140_000;
@@ -163,6 +166,7 @@ describe('G43: Multi-Objective Empirical Meta-Optimization (MULTI_OBJECTIVE_META
           checks: [{ name: 'unit-test', command: 'npm test', ok: true, durationMs: 150 }],
           errors: [],
           events: [],
+          totalModelCalls: 1,
           usage: { input: inputTokens, output: 500 },
           durationMs,
           metadata: {
@@ -241,8 +245,8 @@ describe('G43: Multi-Objective Empirical Meta-Optimization (MULTI_OBJECTIVE_META
       lexicographicOrder: ['wall_time', 'input_tokens'],
       benchmarkCategories: ['CODE_REPAIR'],
       benchmarkTasks: ['g43-task-1'],
-      sampleSize: 1,
-      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 2, maxModelCalls: 20, maxTokens: 100_000, maxWallTimeMs: 10_000 },
+      sampleSize: 10,
+      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 2, maxModelCalls: 200, maxTokens: 10_000_000, maxWallTimeMs: 10_000 },
       createdAt: new Date(),
     };
 
@@ -254,8 +258,8 @@ describe('G43: Multi-Objective Empirical Meta-Optimization (MULTI_OBJECTIVE_META
       name: 'Lexicographic Runner',
       async run(task) {
         callCount++;
-        const isCandidate = callCount > 1;
-        const candIndex = callCount - 2;
+        const isCandidate = callCount > 10;
+        const candIndex = Math.floor((callCount - 1) / 10) - 1;
 
         return {
           execution: {
@@ -274,6 +278,7 @@ describe('G43: Multi-Objective Empirical Meta-Optimization (MULTI_OBJECTIVE_META
           checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 100 }],
           errors: [],
           events: [],
+          totalModelCalls: 1,
           usage: { input: isCandidate ? (candIndex === 0 ? 60_000 : 80_000) : 75_000, output: 200 },
           durationMs: isCandidate ? (candIndex === 0 ? 250_000 : 150_000) : 200_000,
         } as unknown as ExecutionRecord;
@@ -307,8 +312,8 @@ describe('G43: Multi-Objective Empirical Meta-Optimization (MULTI_OBJECTIVE_META
       objectives,
       benchmarkCategories: ['CODE_REPAIR'],
       benchmarkTasks: ['g43-task-1'],
-      sampleSize: 1,
-      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 2, maxModelCalls: 20, maxTokens: 100_000, maxWallTimeMs: 10_000 },
+      sampleSize: 10,
+      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 2, maxModelCalls: 200, maxTokens: 10_000_000, maxWallTimeMs: 10_000 },
       createdAt: new Date(),
     };
 
@@ -320,8 +325,8 @@ describe('G43: Multi-Objective Empirical Meta-Optimization (MULTI_OBJECTIVE_META
       name: 'Constraint Guard Runner',
       async run(task) {
         callCount++;
-        const isCandidate = callCount > 1;
-        const candIndex = callCount - 2;
+        const isCandidate = callCount > 10;
+        const candIndex = Math.floor((callCount - 1) / 10) - 1;
 
         const isFailing = isCandidate && candIndex === 0;
 
@@ -343,7 +348,8 @@ describe('G43: Multi-Objective Empirical Meta-Optimization (MULTI_OBJECTIVE_META
           checks: [{ name: 'test', command: 'npm test', ok: !isFailing, durationMs: 100 }],
           errors: isFailing ? [{ message: 'Assertion failed: expected 200 OK' }] : [],
           events: [],
-          usage: { input: isFailing ? 20_000 : 70_000, output: 200 }, // C0 has amazing 20K tokens!
+          totalModelCalls: 1,
+          usage: { input: isFailing ? 20_000 : isCandidate ? 60_000 : 70_000, output: 200 }, // C0 has amazing 20K tokens!
           durationMs: 100_000,
         } as unknown as ExecutionRecord;
       },

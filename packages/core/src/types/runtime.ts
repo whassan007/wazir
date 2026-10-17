@@ -6,6 +6,7 @@ export type RuntimeType =
   | 'anthropic'
   | 'openai'
   | 'google'
+  | 'nvidia'
   | 'other';
 
 /** Runtimes registered with this kind have no `computerId`/hardware affinity
@@ -14,7 +15,7 @@ export type RuntimeType =
  *  registered before this field existed is local). */
 export type RuntimeKind = 'local' | 'hosted';
 
-export const HOSTED_RUNTIME_TYPES: ReadonlySet<RuntimeType> = new Set(['anthropic', 'openai', 'google']);
+export const HOSTED_RUNTIME_TYPES: ReadonlySet<RuntimeType> = new Set(['anthropic', 'openai', 'google', 'nvidia']);
 
 export interface RuntimeCapabilities {
   chat: boolean;

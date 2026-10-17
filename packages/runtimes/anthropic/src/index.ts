@@ -1,3 +1,4 @@
+import { controlledGeneration, type GenerationControl } from '@wazir/runtimes-interfaces';
 import type {
   AuthLoginResult,
   AuthMethod,
@@ -161,7 +162,11 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     };
   }
 
-  async *generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
+  generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
+    return controlledGeneration(request, (generation, control) => this.generateControlled(generation, control));
+  }
+
+  private async *generateControlled(request: GenerationRequest, control: GenerationControl): AsyncIterable<GenerationEvent> {
     const stored = await this.readStoredCredential();
     if (!stored || stored.credential.kind !== 'api-key') {
       yield { type: 'error', error: 'not authenticated: run `wa auth login anthropic`' };
@@ -169,8 +174,8 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     }
     const apiKey = stored.credential.apiKey;
 
-    const controller = new AbortController();
-    const requestId = request.requestId ?? `anthropic-${Date.now()}`;
+    const controller = control.controller;
+    const requestId = control.requestId;
     this.controllers.set(requestId, controller);
 
     const system = request.systemPrompt;
@@ -186,7 +191,9 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     if (request.prompt) messages.push({ role: 'user', content: request.prompt });
 
     let response: Response;
+    yield control.startAttempt();
     try {
+      control.assertActive();
       response = await fetch(`${API_BASE}/v1/messages`, {
         method: 'POST',
         headers: {

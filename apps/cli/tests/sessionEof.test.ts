@@ -43,8 +43,14 @@ async function tempDir(): Promise<string> {
  * machine, and isolates the config/state dir.
  */
 async function isolatedEnv(dir: string): Promise<NodeJS.ProcessEnv> {
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.ANTHROPIC_API_KEY;
+  delete cleanEnv.OPENAI_API_KEY;
+  delete cleanEnv.GOOGLE_API_KEY;
+  delete cleanEnv.GEMINI_API_KEY;
+  delete cleanEnv.NVIDIA_API_KEY;
   return {
-    ...process.env,
+    ...cleanEnv,
     WAZIR_HOME: dir,
     WAZIR_COMPUTER_ID: `session-eof-${Date.now()}`,
     WAZIR_OLLAMA_URL: 'http://127.0.0.1:1',
@@ -295,6 +301,22 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
       expect(result.exitCode).toBe(0);
     }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000);
 
+    it('uses primary-screen conversation output and restores bracketed paste/cursor modes', async () => {
+      const env = await isolatedEnv(dir);
+      const result = await runPtyChat({
+        steps: [
+          { op: 'wait', text: 'WAZIR', timeout: 15 },
+          { op: 'send', data: '/exit\r' },
+          { op: 'exit', timeout: 15, expectCode: 0 },
+        ],
+      }, env);
+      expect(result.exitCode).toBe(0);
+      expect(result.outputTail).toContain('WAZIR');
+      expect(result.outputTail).toContain('\x1b[?2004l');
+      expect(result.outputTail).toContain('\x1b[?25h');
+      expect(result.outputTail).not.toMatch(/\x1b\[\?(?:1049|1047|1000|1002|1003|1006)[hl]/);
+    }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000);
+
     it('runs the piped /doctor command, then exits 0 — previously hung forever', async () => {
       const env = await isolatedEnv(dir);
       const result = await runPipedChat('/doctor\r', env);
@@ -309,6 +331,18 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
       expect(result.timedOut).toBe(false);
       expect(result.exitCode).toBe(0);
     }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000);
+
+    it('renders shell output, missing-model warning, and prompt failure in non-TTY piped mode', async () => {
+      const env = await isolatedEnv(dir);
+      const result = await runPipedChat('!echo NON_TTY_SHELL_OK\rbuild a rest api\r/exit\r', env);
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Model unavailable');
+      expect(result.stdout).toContain('> !echo NON_TTY_SHELL_OK');
+      expect(result.stdout).toContain('NON_TTY_SHELL_OK');
+      expect(result.stdout).toContain('Command completed · exit 0');
+      expect(result.stdout).toContain('cannot execute task "build a rest api"');
+    }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000);
   });
 
   describe.skipIf(process.platform === 'win32')('real TTY (PTY)', () => {
@@ -317,7 +351,7 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
       const result = await runPtyChat(
         {
           steps: [
-            { op: 'wait', text: 'wa>', timeout: 15 },
+            { op: 'wait', text: 'WAZIR', timeout: 15 },
             { op: 'send', data: '/exit\r' },
             { op: 'exit', timeout: 15, expectCode: 0 },
           ],
@@ -333,7 +367,7 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
       const result = await runPtyChat(
         {
           steps: [
-            { op: 'wait', text: 'wa>', timeout: 15 },
+            { op: 'wait', text: 'WAZIR', timeout: 15 },
             { op: 'send', data: 'q\r' },
             { op: 'exit', timeout: 15, expectCode: 0 },
           ],
@@ -349,7 +383,7 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
       const result = await runPtyChat(
         {
           steps: [
-            { op: 'wait', text: 'wa>', timeout: 15 },
+            { op: 'wait', text: 'WAZIR', timeout: 15 },
             { op: 'send', data: '\x10' }, // Ctrl+P
             { op: 'wait', text: 'QUICK ACTIONS (Ctrl+P)', timeout: 10 },
             { op: 'send', data: '\x1b' }, // Esc dismisses
@@ -380,7 +414,7 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
         const result = await runPtyChat(
           {
             steps: [
-              { op: 'wait', text: 'wa>', timeout: 15 },
+              { op: 'wait', text: 'WAZIR', timeout: 15 },
               { op: 'closemaster' },
               { op: 'exit', timeout: 15, expectCode: 0 },
             ],
@@ -400,7 +434,7 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
       const result = await runPtyChat(
         {
           steps: [
-            { op: 'wait', text: 'wa>', timeout: 15 },
+            { op: 'wait', text: 'WAZIR', timeout: 15 },
             { op: 'resize', cols: 80, rows: 24 },
             { op: 'sleep', ms: 500 },
             { op: 'send', data: '/exit\r' },
@@ -411,6 +445,78 @@ describe('Section 14: `wa chat` session exit — stdin EOF & dead terminal (regr
       );
       expect(result.killed).toBe(false);
       expect(result.exitCode).toBe(0);
+    }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000);
+
+    it('executes !pwd, !ls -la, /sh echo WAZIR_OK, failing shell command, and natural-language prompt without models in a real PTY without terminating early', async () => {
+      const env = await isolatedEnv(dir);
+      const result = await runPtyChat(
+        {
+          steps: [
+            // 5. Zero registered models produces a visible warning on startup
+            { op: 'wait', text: 'Model unavailable: 0 eligible models registered', timeout: 15 },
+            // 1. !pwd displays its output
+            { op: 'send', data: '!pwd\r' },
+            { op: 'wait', text: 'Command completed · exit 0', timeout: 10 },
+            // 2. !ls -la displays the directory listing
+            { op: 'send', data: '!ls -la\r' },
+            { op: 'wait', text: 'package.json', timeout: 10 },
+            // 3. /sh echo WAZIR_OK displays WAZIR_OK
+            { op: 'send', data: '/sh echo WAZIR_OK\r' },
+            { op: 'wait', text: 'WAZIR_OK', timeout: 10 },
+            // 4. Failing shell command displays stderr and nonzero exit status
+            { op: 'send', data: '!sh -c "echo BAD_SHELL_ERR >&2; exit 7"\r' },
+            { op: 'wait', text: 'Command failed · exit 7', timeout: 10 },
+            { op: 'wait', text: 'BAD_SHELL_ERR', timeout: 10 },
+            // 7. Natural-language prompts fail visibly when no model is available (including prompts starting with 'q')
+            { op: 'send', data: 'query the repository architecture\r' },
+            { op: 'wait', text: 'cannot execute task "query the repository architecture"', timeout: 10 },
+            // 9 & 11. Keyboard submission works repeatedly and TUI does not terminate after a command
+            { op: 'send', data: '!echo STILL_ALIVE_AFTER_FAILURE\r' },
+            { op: 'wait', text: 'STILL_ALIVE_AFTER_FAILURE', timeout: 10 },
+            // 10. Normal exit restores the terminal
+            { op: 'send', data: '/exit\r' },
+            { op: 'exit', timeout: 15, expectCode: 0 },
+          ],
+        },
+        env,
+      );
+
+      expect(result.killed).toBe(false);
+      expect(result.exitCode).toBe(0);
+      for (const step of result.steps) {
+        expect(step.ok, `Step ${step.op} (${step.detail}) failed`).toBe(true);
+      }
+      // 8. Conversation rendering does not erase durable output
+      expect(result.outputTail).toContain('> !pwd');
+      expect(result.outputTail).toContain('> !ls -la');
+      expect(result.outputTail).toContain('package.json');
+      expect(result.outputTail).toContain('WAZIR_OK');
+      expect(result.outputTail).toContain('BAD_SHELL_ERR');
+      expect(result.outputTail).toContain('Command failed · exit 7');
+      expect(result.outputTail).toContain('cannot execute task "query the repository architecture"');
+      expect(result.outputTail).toContain('STILL_ALIVE_AFTER_FAILURE');
+      expect(result.outputTail).toContain('ref @1');
+      // 10. Restores bracketed paste and cursor visibility
+      expect(result.outputTail).toContain('\x1b[?2004l');
+      expect(result.outputTail).toContain('\x1b[?25h');
+    }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 15_000);
+
+    it('Ctrl-C exits 0 and restores bracketed paste and cursor visibility in a real PTY', async () => {
+      const env = await isolatedEnv(dir);
+      const result = await runPtyChat(
+        {
+          steps: [
+            { op: 'wait', text: 'WAZIR', timeout: 15 },
+            { op: 'send', data: '\x03' }, // Ctrl+C
+            { op: 'exit', timeout: 15, expectCode: 0 },
+          ],
+        },
+        env,
+      );
+      expect(result.killed).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(result.outputTail).toContain('\x1b[?2004l');
+      expect(result.outputTail).toContain('\x1b[?25h');
     }, STARTUP_TIMEOUT_MS + EXIT_TIMEOUT_MS + 5_000);
   });
 });

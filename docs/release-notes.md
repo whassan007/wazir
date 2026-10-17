@@ -1,3 +1,135 @@
+# Wazir Release Notes - v0.2.5
+
+**Release**: `v0.2.5`
+**Theme**: Conversation Shell Visibility, NVIDIA API Catalog Provider, and Durable Execution API
+
+`v0.2.5` restores durable shell command output and visible operational/missing-model errors in `wa chat` conversation mode, adds first-class support for the NVIDIA API Catalog execution provider (`@wazir/runtimes-nvidia`), and unifies durable execution history and cancellation endpoints in `@wazir/api`.
+
+## Highlights
+
+- **Visible Inline Shell Execution in `wa chat`**: `!command` and `/sh command` submissions are recorded in the durable conversation transcript along with stdout, stderr, exit codes, duration, and block references—without invoking an LLM or losing output on redraw.
+- **Interactive Operational Status & Missing-Model Recovery**: Interactive TTY conversation frames now surface live operational statuses (`Command running`, `Command completed`, `Model unavailable`, `Provider disconnected`, `Scheduler rejected task`, `Waiting for approval`, `Execution failed`, `Tool execution failed`) and durable, actionable recovery guidance when no eligible model is registered.
+- **NVIDIA API Catalog Execution Provider (`@wazir/runtimes-nvidia`)**: First-class hosted/self-hosted NVIDIA NIM & API Catalog adapter with SSE token streaming, tool-call normalization, curated model discovery (`moonshotai/kimi-k2-instruct`, `deepseek-ai/deepseek-v3.1`, `qwen/qwen3-coder-480b-a35b-instruct`, `nvidia/llama-3.3-nemotron-super-49b-v1.5`, `meta/llama-3.3-70b-instruct`), `wa auth login nvidia`, and `wa providers list|inspect|test`.
+- **Unified Durable Execution API (`@wazir/api`)**: Consolidated SQLite-backed execution records across `POST /api/executions`, `GET /api/executions`, `GET /api/executions/:id`, and `POST /api/executions/:id/cancel`.
+
+## Validation
+
+Verified across the TUI conversation projection, PTY session-exit, fleet TUI, NVIDIA runtime adapter, provider system, auth status, hosted provider failure, and durable execution API test suites, plus `npm run build`, `npm run typecheck`, `npm run check-dist`, `npm run package:check`, `npm run release:verify`, and `npm run release:gate`.
+
+---
+
+# Wazir Release Notes - v0.2.4
+
+**Release**: `v0.2.4`
+**Theme**: Conversation-first terminal experience
+
+`wa chat` now opens Wazir's focused, conversation-first coding interface by default. The Mission Control fleet dashboard remains available as `wa fleet` or `wa chat --dashboard`, and `/fleet` and `/chat` switch views during an interactive session.
+
+## Highlights
+
+- **Conversation-first chat** with a persistent prompt, readable task summaries, streamed events, and execution status.
+- **Keyboard controls** for quick actions, task history, model selection, shell mode, clipboard, and dashboard navigation.
+- **Mission Control remains available** with current jobs, agents, providers, approvals, activity, and verification evidence.
+- **Terminal integrity** across narrow and wide layouts, resize, paste, cancellation, and clean exit.
+- **Rendered PTY evidence** in [`docs/verification/mission-control`](verification/mission-control/README.md), including before and after screenshots.
+
+## Validation
+
+Verified with the TUI, terminal integrity, PTY session-exit, conversation projection, and paste-barrier suites; `npm run build`, `npm run typecheck`, `npm run check-dist`, `npm run package:check`, `npm run release:verify`, and `npm run release:gate`.
+
+---
+
+# Wazir Release Notes - v0.2.3
+
+**Release**: `v0.2.3`
+**Theme**: Wazir Mission Control terminal interface
+
+`wa chat` and `wa fleet` now open a cohesive Mission Control experience. It surfaces current jobs, model/provider readiness, approvals, activity and verification evidence, with the official terminal logo and responsive narrow-terminal layout. Existing task cycling, inline shell mode, job detail and approval interactions remain available. The new task and model views use recorded Wazir state and show unknown values honestly.
+
+Before/after PTY screenshots and validation evidence are in [`docs/verification/mission-control`](verification/mission-control/README.md).
+
+## Highlights
+
+- **Mission Control landing view** with the Wazir logo, workspace navigation, real-time job status, agent and provider availability, token usage, approval queue, activity and verification evidence.
+- **Keyboard-first model management**: browse registered models and pin routing from the model view.
+- **Responsive terminal layouts** with compact presentation and readable status at narrow widths.
+- **Evidence-backed status**: removed the home and task panes' fabricated fleet, model, verification and cost values.
+- **Release verification**: captured actual terminal output in wide and narrow PTYs, including before/after screens and keyboard interactions.
+
+## v0.2.2
+
+**Release**: `v0.2.2`
+**Theme**: Mandatory Git Synchronization, Verification, and Commit Authorization Policy & Multi-Surface Companion Completion
+
+This release enforces Wazir's mandatory Git Synchronization, Verification, and Commit Authorization policy in code across all self-improvement workflows and completes remaining Desktop/CLI, iOS, and Android companion features.
+
+## Highlights
+
+- **Mandatory Git Preflight & 8-Boundary Checkpoint Revalidation**: `runGitPreflight` and `revalidateGitCheckpoint` inspect repository state before planning, worktree creation, applying changes, agent mutation, final verification, approval requests, staging/commit, and supervisor restart recovery.
+- **Explicit Commit Authorization Modes (`MANUAL_COMMIT` default, `AUTO_COMMIT`, `NO_COMMIT`)**: `resolveEffectiveCommitPolicy` validates provenance (`user_explicit`, `cli_flag`, `scoped_config`), repository/task/worktree scope, and expiration while `resolvePermissionMatrix` separates code execution, local commit, push, merge, and deployment permissions.
+- **Durable Manual Commit Approval Workflow & CLI**: `wa improve preflight`, `wa improve approvals`, and `wa improve approve <attemptId> --action <COMMIT|REVISE|KEEP_UNCOMMITTED|DISCARD|CANCEL>` manage candidate revisions bound to verified diff hashes, with pre-commit secret scanning (`scanCandidateForSecrets`), intended-file-only staging (`WorktreeManager.commitWorktree`), and Git hooks enabled.
+- **Desktop/CLI, iOS, and Android Feature Completion**: Full `wa canary` CLI command suite, real SSE token streaming in `LMStudioAdapter.streamTask`, and native QR pairing, task submission, approval filtering, batch low-risk approval, and `wazir://pair` deep links across iOS and Android.
+
+## Validation
+
+Verified across `@wazir/core`, `@wazir/evaluation`, and `@wazir/cli` (`gitSynchronizationPolicy.test.ts`, `selfImprovementSupervisor.test.ts`, `improveSupervisorE2E.test.ts`, `worktreeManager.test.ts`, `executeTask.e2e.test.ts`), `swift test`, and `./gradlew testDebugUnitTest assembleDebug`.
+
+---
+
+# Wazir Release Notes - v0.2.1
+
+**Release**: `v0.2.1`
+**Theme**: Evaluation Qualification Fail-Closed Defaults, Benchmark Deadline Isolation, Dynamic Phase Routing, and Static Path Containment
+
+This release hardens Wazir's autonomous self-improvement engine, benchmark runner isolation, and web static file serving in response to the October 16, 2026 repository review (`F1`–`F5`).
+
+## Highlights
+
+- **Fail-Closed Verification & Empty-Suite Guards (`F2`)**: `RegressionGuard.evaluate` no longer defaults `candidateVerificationPassed` to `true` when omitted; every candidate run must carry explicit `physicalVerificationSuccess === true` (`MISSING_VERIFICATION_EVIDENCE`), and empty suites fail closed (`EMPTY_BENCHMARK_SUITE`).
+- **Duplicate Promotion Fencing (`F3`)**: `OptimizerStateManager.promote` prevents promoting an already-promoted `candidateId` or `runId` (`OPTIMIZER_CANDIDATE_ALREADY_PROMOTED`) in addition to atomic `baselineRevision` fencing.
+- **Canonical Static Path Containment (`F4`)**: `apps/web/server.js` enforces canonical `fs.realpath` + `path.relative` containment and regular-file checks, blocking sibling-prefix and symlink path traversal.
+- **Dynamic Phase Model Resolution (`F5`)**: `MetaOptimizerService.resolveModelForPhase` queries `Scheduler` and `ModelRegistry` to select eligible models and emit explainable fallback reasons when configured preferred models (`gemma-27b`, `qwen-2.5-coder`, `gpt-4o`) are missing, unloaded, or ineligible.
+- **Hard Benchmark Deadlines & Fixture Isolation**: `BenchmarkService.runTask` copies `customContext.workspaceRoot` into an isolated temp directory and races `runner.run(...)` against a hard timeout timer (`BENCHMARK_DEADLINE_EXCEEDED`) even when a runner ignores `abortSignal`.
+- **Native Continuous Self-Improvement Supervisor & DGX Spark 4-Phase Qualification**:
+  - Full CLI lifecycle (`wa improve start|run|status|history|stop|rollback|doctor|service`) backed by `SelfImprovementSupervisor`, singleton lock protection, candidate worktree fingerprint tamper rejection (`CANDIDATE_WORKTREE_TAMPERED`), and phase-receipt verification (`scripts/self-improvement-builder.sh`).
+  - Protocol adapter tool aliasing and fail-closed `UNSUPPORTED_TOOL_SURFACE` circuit breaking in `CodingAgent`, qualified with live local LLM execution on DGX Spark (`docs/self-improvement-recovery.md`).
+
+## Validation
+
+Verified with `npm run build && npm run typecheck && npm run check-dist && npm run package:check -- --skip-build && npm run release:verify` and evaluation/CLI self-improvement E2E suites.
+
+---
+
+# Wazir Release Notes - v0.2.0
+
+**Release**: `v0.2.0`
+**Theme**: Unified Applications, Multi-LLM Optimization, Evaluation Integrity, and Controlled Self-Improvement
+
+This release delivers the Wazir v0.2 architecture and quality roadmap (`docs/roadmap-v0.2.md`) alongside the October 2026 security and reliability remediation across Desktop, Web, Mobile, Scheduler, Resource Router, Evaluation, and Meta-Optimizer subsystems.
+
+## Highlights
+
+- **Unified Control Plane Across Desktop, Web, and Mobile (Workstream A)**:
+  - Loopback-first web proxy (`apps/web/server.js`) and CLI dashboard (`apps/cli/src/dashboardServer.ts`) with `HttpOnly; SameSite=Strict` session cookies, CSRF and `Origin` enforcement, viewer/operator privilege separation, and short-lived SSE tickets.
+  - Native Tauri desktop shell (`apps/desktop`) with OS keychain integration and background worker survival when the window closes.
+  - Native iOS (`apps/ios/WazirMobile`) and Android (`apps/android`) companions with QR pairing, biometric approval gates, stale approval expiration, immutable `eventId` SSE deduplication (`MobileEventHub`), and idempotent multi-surface task cancellation (`cancelTask`).
+- **Expected Cost per Verified Success & KV-Cache Placement (Workstream B)**:
+  - `ResourceRouter` evaluates `effectiveCostPerSuccessUsd` (incorporating empirical verified success rate and retry probability), enforces `minVerifiedSuccessRate` ($Q_{\min}$) and `maxLatencyMs` ($L_{\max}$), and accounts for cold-start load latency (`estimatedLoadMs`) and model eviction (`evictionRequired`).
+  - `Scheduler` estimates incremental KV-cache VRAM demand and active `ResourceReservation` `vramBytes`, rejecting GPU placement before dispatch when usable VRAM fits model weights but cannot fit the KV cache for the required context window.
+- **Evaluation Integrity & Statistical Qualification (Workstream C)**:
+  - `readBenchmarkMetric` and `extractMetricValueSafe` preserve metric provenance (`measured`, `estimated`, `unavailable`) and never substitute `0` for missing data.
+  - `EvaluationService` and `RegressionGuard` reject protected benchmark fixture edits (`PROTECTED_FIXTURE_MODIFIED`) and benchmark context contamination (`BENCHMARK_CONTAMINATED`), enforce `minSampleCount >= 5` with Bonferroni-corrected exact paired sign tests (`pairedEvidence.ts`), and report per-category pass rates (`categoryBreakdown` / `CATEGORY_REGRESSION`).
+- **Controlled Self-Improvement & Atomic Recovery (Workstream D)**:
+  - `OptimizerStateManager` persists atomic versioned snapshots at `meta_optimizer/state/v1` with durable per-sample reservations and accounting receipts.
+  - `RegressionGuard` detects model-scoped divergence (`scopedModels` / `MODEL_SCOPED_REGRESSION`) to block global promotion when a candidate improves one model while harming another.
+  - `MetaOptimizerService` derives baseline models dynamically from `routingRules` and enforces atomic baseline version checks (`OPTIMIZER_BASELINE_CHANGED`), canary deployment, and automatic rollback.
+
+## Validation
+
+Verified across all 23 workspace packages (`npm run build && npm run typecheck && npm run check-dist`), standalone CLI bundle (`bin/wa.js`), native Tauri desktop build, and 275 automated test suites including `packages/evaluation/tests/roadmapV02.test.ts`, `metricIntegrity.test.ts`, `statisticalQualification.test.ts`, `optimizerRecovery.test.ts`, and `apps/api/tests/mobileApi.test.ts`.
+
+---
+
 # Wazir Release Notes - v0.1.66
 
 **Release**: `v0.1.66`

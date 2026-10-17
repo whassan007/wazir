@@ -1,0 +1,50 @@
+ ⟪◈⟫ WAZIR  MISSION CONTROL                                                                                                                                     
+ ~/Code/Wazir  [View: FLEET]                                                                                                                                    
+ 1 Home   Tab Timeline / Approvals / Worktrees   5 Models   6 Evidence   ? Help                                                                                 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ JOBS                               │         ╱╲     ╱▲╲     ╱╲            MISSION CONTROL                                                                      
+ > + ..c5iuk8-1 build a c++ prog.   │     ╭──╱──╲───╱ │ ╲───╱──╲──╮        Autonomous Agent Orchestration                                                       
+ EXECUTIONS                         │     │   ○──╲    │    ╱──○   │                                                                                             
+   (none)                           │     │   ○───◎──(◉)──◎───○   │        0 executing / 7 agents registered                                                    
+ AGENTS                             │     ╲   ○──╱   ╱│╲   ╲──○   ╱        82 ready / 82 models discovered                                                      
+   o antigravity                    │      ╰──────╲   ○   ╱──────╯         1 computers / 6 runtimes                                                             
+   o claude-code                    │              ╰──▽──╯                 Approval queue clear                                                                 
+   o codex                          │      █   █ ▄▀█ ▀▀█ █ █▀█                                                                                                  
+   o gemini                         │      ▀▄▀▄▀ █▀█ █▄▄ █ █▀▄             Enter a task below to start.                                                         
+   o opencode                       │    A LOCAL AI FLEET COUNSELOR        !command runs in this workspace.                                                     
+   o wazir-coding                   │            ━━━━━━━━                  Tab views · 5 models · 6 evidence                                                    
+   o wazir-step                     │                                                                                                                           
+ COMPUTERS                          │  EXECUTION MONITOR                                                                                                        
+   + WaelMacPro.local               │  COMPLETED  build a c++ program that can implement a clinic reservation   job-muc5iuk8-1                                  
+ RUNTIMES                           │  ↑↓ select · Enter inspect · [ / ] cycle tasks · Enter full output                                                        
+   + Anthropic                      │                                                                                                                           
+   + Google Gemini                  │  MODELS & PROVIDERS                                                                                                       
+   x lmstudio                       │  READY  01-ai/yi-large  nvidia                                                                                            
+   + NVIDIA API Catalog             │  READY  adept/fuyu-8b  nvidia                                                                                             
+   x ollama                         │  READY  ai21labs/jamba-1.5-large-instruct  nvidia                                                                         
+   + OpenAI                         │  +79 models · 5 opens model intelligence                                                                                  
+ MCP                                │  Anthropic · unavailable                                                                                                  
+   x GitHub auth_required           │  Google Gemini · unavailable                                                                                              
+   x NVIDIA Run:ai auth_required    │  Session tokens 0 in / 0 out · Cost: unreported                                                                           
+                                    │                                                                                                                           
+                                    │  ACTIVITY & TOOL CALLS                                                                                                    
+                                    │  Waiting for execution events. Tab opens the live timeline.                                                               
+                                    │                                                                                                                           
+                                    │  VERIFICATION EVIDENCE                                                                                                    
+                                    │  No verification recorded. 6 opens checks and provenance.                                                                 
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+                                    │                                                                                                                           
+ History: [#82 + ! printf mission] [#81 + ! printf mission] [#80 + ! printf mission] [#79 + ! printf mission] [#78 + ! printf mission]                          
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ [NORMAL] Ready. Type a task or /fanout <t1; t2; ...> to begin.                                               Context 0.0K/128K ~ 0 in / 0 out · Ctrl+T Sidebar 
+wa>                                                                                                                                                             

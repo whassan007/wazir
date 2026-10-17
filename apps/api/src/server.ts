@@ -25,11 +25,14 @@ import {
 import { currentLoad, discoverHardware, discoverRuntimes, type DiscoveredRuntime } from '@wazir/workers';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
+import { createNvidiaAdapter } from '@wazir/runtimes-nvidia';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
 import { generateId, sanitizeUntrustedOutput, MemoryStore, type KeyValueStore } from '@wazir/shared';
 import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
 import { createControlledExecution } from './toolExecution.js';
+import { MobileServices, registerMobileRoutes } from './mobile.js';
+import { wazirVersion } from './version.js';
 
 // Bounds on in-memory state so an unauthenticated peer (or a runaway client)
 // cannot grow the control plane without limit (security review F-19).
@@ -58,27 +61,96 @@ interface DurableDispatch {
   request: WorkerExecutionRequest;
   events: WorkerExecutionEvent[];
   outcome?: ExecutionOutcome;
+  /** Epoch ms at which the outcome was committed; drives completed-record retention. */
+  completedAt?: number;
   attempt: number;
   lease?: { token: string; expiresAt: number };
 }
 
+/**
+ * Secondary index of dispatches that still need a worker. `dispatch/<id>` stays
+ * the authoritative (and audit) record; `dispatch-pending/<id>` exists only
+ * while that record has no outcome, so the redelivery path, which runs every
+ * five seconds per connected worker, no longer re-reads every historical
+ * dispatch ever made.
+ */
+const PENDING_PREFIX = 'dispatch-pending/';
+/** An index entry whose record never appeared (crash mid-dispatch) is dropped after this. */
+const ORPHAN_PENDING_INDEX_MS = 60_000;
+
+export interface TaskDispatcherOptions {
+  /**
+   * Delete completed dispatch records older than this at startup. Undefined or
+   * 0 keeps them forever (the default, preserving the audit trail). Defaults to
+   * `WAZIR_DISPATCH_RETENTION_DAYS` when set.
+   */
+  completedRetentionMs?: number;
+}
+
+function retentionFromEnv(): number | undefined {
+  const days = Number(process.env.WAZIR_DISPATCH_RETENTION_DAYS);
+  return Number.isFinite(days) && days > 0 ? days * 24 * 60 * 60 * 1000 : undefined;
+}
+
 export class TaskDispatcher {
   private readonly streams = new Map<string, Response>();
+  /** Non-terminal dispatches only; terminal records are read from the store on demand. */
   private readonly records = new Map<string, DurableDispatch>();
+  private readonly completedRetentionMs?: number;
   readonly ready: Promise<void>;
 
   constructor(private readonly store: KeyValueStore = new MemoryStore(),
-    private readonly now: () => number = Date.now, readonly leaseMs = 30_000) {
+    private readonly now: () => number = Date.now, readonly leaseMs = 30_000,
+    options: TaskDispatcherOptions = {}) {
     if (!store.update) throw new Error('ATOMIC_STORE_REQUIRED');
     if (!Number.isFinite(leaseMs) || leaseMs < 100) throw new Error('INVALID_LEASE_DURATION');
-    this.ready = this.refresh();
+    this.completedRetentionMs = options.completedRetentionMs ?? retentionFromEnv();
+    this.ready = this.reconcileIndex().then(() => this.refresh());
   }
 
   private key(id: string): string { return `dispatch/${id}`; }
-  private async refresh(): Promise<void> {
+  private pendingKey(id: string): string { return `${PENDING_PREFIX}${id}`; }
+
+  /**
+   * One full scan at startup: index pending records written before the index
+   * existed (or by a process that crashed between the two writes), and apply
+   * completed-record retention. This is the only path that lists `dispatch/`.
+   */
+  private async reconcileIndex(): Promise<void> {
+    const indexed = new Set((await this.store.list(PENDING_PREFIX)).map(e => e.key.slice(PENDING_PREFIX.length)));
+    const cutoff = this.completedRetentionMs ? this.now() - this.completedRetentionMs : undefined;
     for (const entry of await this.store.list('dispatch/')) {
       const record = entry.value as DurableDispatch;
-      this.records.set(record.request.requestId, record);
+      const id = record.request.requestId;
+      if (!record.outcome) {
+        if (!indexed.has(id)) await this.store.put(this.pendingKey(id), { computerId: record.computerId, at: this.now() });
+      } else if (cutoff !== undefined && record.completedAt !== undefined && record.completedAt < cutoff) {
+        await this.store.delete(this.key(id));
+      }
+    }
+  }
+
+  private async refresh(): Promise<void> {
+    const live = new Set<string>();
+    for (const entry of await this.store.list(PENDING_PREFIX)) {
+      const id = entry.key.slice(PENDING_PREFIX.length);
+      const record = await this.store.get<DurableDispatch>(this.key(id));
+      if (!record) {
+        // The index is written before the record, so a missing record is either
+        // a dispatch still in flight in another process or a crash leftover.
+        const at = (entry.value as { at?: number } | undefined)?.at ?? 0;
+        if (this.now() - at > ORPHAN_PENDING_INDEX_MS) await this.store.delete(entry.key);
+        continue;
+      }
+      if (record.outcome) {
+        await this.store.delete(entry.key);
+        continue;
+      }
+      live.add(id);
+      this.records.set(id, record);
+    }
+    for (const id of [...this.records.keys()]) {
+      if (!live.has(id)) this.records.delete(id);
     }
   }
   isConnected(id: string): boolean { return this.streams.has(id); }
@@ -93,20 +165,33 @@ export class TaskDispatcher {
   async subscribe(id: string, res: Response): Promise<void> {
     this.disconnect(id);
     this.streams.set(id, res);
-    await this.redeliver();
+    await this.redeliver(id);
   }
   disconnect(id: string): void { this.streams.get(id)?.end(); this.streams.delete(id); }
   unsubscribe(id: string, res: Response): void {
     if (this.streams.get(id) === res) this.streams.delete(id);
   }
-  async redeliver(): Promise<void> {
+  async redeliver(computerId?: string): Promise<void> {
     await this.refresh();
     for (const r of this.records.values()) {
+      if (computerId !== undefined && r.computerId !== computerId) continue;
       const stream = this.streams.get(r.computerId);
       if (stream && !r.outcome && (!r.lease || r.lease.expiresAt <= this.now())) {
         stream.write(`event: task\ndata: ${JSON.stringify(r.request)}\n\n`);
       }
     }
+  }
+  async pruneCompleted(retentionMs = this.completedRetentionMs ?? 0): Promise<number> {
+    const cutoff = this.now() - retentionMs;
+    let pruned = 0;
+    for (const entry of await this.store.list('dispatch/')) {
+      const record = entry.value as DurableDispatch | undefined;
+      if (record?.outcome && record.completedAt !== undefined && record.completedAt <= cutoff) {
+        await this.store.delete(entry.key);
+        pruned += 1;
+      }
+    }
+    return pruned;
   }
   async dispatch(computerId: string, request: WorkerExecutionRequest): Promise<{ ok: true } | { ok: false; reason: string }> {
     await this.ready;
@@ -115,6 +200,9 @@ export class TaskDispatcher {
       return { ok: false, reason: 'RESOURCE_BUSY' };
     }
     try {
+      // Index first: a crash after this leaves an orphan index entry (cleaned up
+      // by refresh), never a pending record that redelivery cannot see.
+      await this.store.put(this.pendingKey(request.requestId), { computerId, at: this.now() });
       const record = await this.store.update!<DurableDispatch>(this.key(request.requestId), current => {
         if (current) throw new Error('REQUEST_ALREADY_DISPATCHED');
         return { computerId, request, events: [], attempt: 0 };
@@ -170,13 +258,14 @@ export class TaskDispatcher {
    */
   async commit(id: string, outcome: ExecutionOutcome, token: string): Promise<'committed' | 'duplicate'> {
     let committed = false;
-    const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
+    await this.store.update!<DurableDispatch>(this.key(id), current => {
       const r = this.validate(current, token);
       if (r.outcome) return r;
       committed = true;
-      return { ...r, outcome };
+      return { ...r, outcome, completedAt: this.now() };
     });
-    this.records.set(id, record);
+    this.records.delete(id);
+    await this.store.delete(this.pendingKey(id));
     return committed ? 'committed' : 'duplicate';
   }
   async assignments(): Promise<Array<{ id: string; modelId: string; computerId: string; runtimeId?: string }>> {
@@ -213,6 +302,7 @@ export interface ApiState {
   store: KeyValueStore;
   auth: ApiAuth;
   editorProtocol: EditorProtocolService;
+  mobile: MobileServices;
 }
 
 export interface ApiStateOptions {
@@ -225,6 +315,10 @@ export interface ApiStateOptions {
   /** Human approval for policy `ask` decisions on protocol tool calls; absent, `ask` is denied. */
   approveTool?: (request: PolicyActionRequest, decision: PolicyDecision) => Promise<boolean | 'unavailable'>;
   auditPath?: string;
+  /** Explicitly enable durable mobile approval queue even before a mobile device pairs. */
+  enableMobileApprovals?: boolean;
+  /** SQLite path for ResourceLedger (defaults to :memory:). */
+  ledgerPath?: string;
 }
 
 export async function createApiState(options: ApiStateOptions = {}): Promise<ApiState> {
@@ -248,12 +342,17 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   const agents = new AgentRegistry();
   const tools = new ToolRegistry(defaultTools);
 
+  const nvidiaEnabled = Boolean(process.env.NVIDIA_API_KEY || process.env.WAZIR_NVIDIA_BASE_URL);
+  const nvidiaAdapter = createNvidiaAdapter({
+    baseURL: process.env.WAZIR_NVIDIA_BASE_URL ?? 'https://integrate.api.nvidia.com/v1',
+  });
   const adapters = [
     createOllamaAdapter(process.env.WAZIR_OLLAMA_URL ?? 'http://localhost:11434'),
     createLMStudioAdapter(process.env.WAZIR_LMSTUDIO_URL ?? 'http://localhost:1234/v1'),
+    ...(nvidiaEnabled ? [nvidiaAdapter] : []),
   ];
 
-  const discovered = await discoverRuntimes(adapters);
+  const discovered = await discoverRuntimes(adapters as any);
   const hardware = await discoverHardware();
 
   const localId = process.env.WAZIR_COMPUTER_ID ?? 'local';
@@ -272,9 +371,10 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   await auth.issueComputerToken(localId);
 
   for (const discoveredRuntime of discovered) {
+    const isHosted = discoveredRuntime.id === 'nvidia';
     runtimes.register({
       id: discoveredRuntime.id,
-      type: discoveredRuntime.id === 'ollama' ? 'ollama' : discoveredRuntime.id === 'lmstudio' ? 'lmstudio' : 'other',
+      type: discoveredRuntime.id === 'ollama' ? 'ollama' : discoveredRuntime.id === 'lmstudio' ? 'lmstudio' : discoveredRuntime.id === 'nvidia' ? 'nvidia' : 'other',
       name: discoveredRuntime.info.name,
       version: discoveredRuntime.info.version,
       url: discoveredRuntime.info.url,
@@ -299,7 +399,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
            embedding: discoveredModel.embedding ?? false,
            reasoning: discoveredModel.reasoning ?? false,
            runtimeCompatibility: [discoveredRuntime.id as RuntimeType],
-           local: true,
+           local: !isHosted,
            createdAt: new Date(),
            updatedAt: new Date(),
          });
@@ -312,9 +412,9 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
            computerId: localId,
            runtimeId: discoveredRuntime.id,
            runtimeModelId: discoveredModel.id,
-           loaded: false,
+           loaded: isHosted,
            health: discoveredRuntime.health === 'healthy' ? 'healthy' : 'degraded',
-           state: 'INSTALLED',
+           state: isHosted ? 'LOADED' : 'INSTALLED',
          });
       }
     }
@@ -338,7 +438,37 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   lifecycle.startReconciliation();
 
   const projectRoot = options.projectRoot ?? process.env.WAZIR_PROJECT_ROOT ?? process.cwd();
-  const controlled = createControlledExecution({ tools, projectRoot, approve: options.approveTool, auditPath: options.auditPath });
+  let mobileRef: MobileServices | undefined;
+  const approveCallback = async (
+    request: PolicyActionRequest,
+    decision: PolicyDecision,
+  ): Promise<boolean | 'unavailable'> => {
+    if (options.approveTool) {
+      const explicit = await options.approveTool(request, decision);
+      if (explicit === true || explicit === false) {
+        return explicit;
+      }
+    }
+    if (mobileRef) {
+      const posture = mobileRef.multiSurface.getAutonomy().effectivePosture;
+      if (posture === 'read-only') {
+        return false;
+      }
+      if (posture === 'auto-sandbox') {
+        return true;
+      }
+      if (mobileRef.shouldUseMobileApprovalQueue()) {
+        return mobileRef.approvals.requestApproval(request, decision);
+      }
+    }
+    return 'unavailable';
+  };
+  const controlled = createControlledExecution({
+    tools,
+    projectRoot,
+    approve: approveCallback,
+    auditPath: options.auditPath,
+  });
   const editorProtocol = new EditorProtocolService({
     store,
     tools,
@@ -348,7 +478,22 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     projectRoot,
   });
 
-  return {
+  const storedExecEntries = await store.list('execution/');
+  const sortedStoredExecs = storedExecEntries
+    .map((entry) => {
+      const record = entry.value as Record<string, unknown>;
+      return { key: entry.key, seq: 0, record: Array.isArray(record?.events) ? record : { events: [], ...record } };
+    })
+    .sort((a, b) => a.seq - b.seq);
+  if (sortedStoredExecs.length > MAX_EXECUTION_RECORDS) {
+    const excess = sortedStoredExecs.splice(0, sortedStoredExecs.length - MAX_EXECUTION_RECORDS);
+    for (const item of excess) {
+      await store.delete(item.key);
+    }
+  }
+  const initialExecutions = sortedStoredExecs.map((item) => item.record);
+
+  const state: ApiState = {
     computers,
     runtimes,
     models,
@@ -356,19 +501,124 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     agents,
     tools,
     discovered,
-    executions: [],
+    executions: initialExecutions,
     dispatcher,
     store,
     auth,
     editorProtocol,
+    mobile: undefined as unknown as MobileServices,
+  };
+
+  const mobile = new MobileServices(state, {
+    projectRoot,
+    executeTool: controlled.executeTool,
+    verify: controlled.verify,
+    policy: controlled.policy,
+    ledgerPath: options.ledgerPath,
+  });
+  if (options.enableMobileApprovals) {
+    mobile.approvals.enableDurableQueue = true;
+  }
+  await mobile.init();
+  state.mobile = mobile;
+  mobileRef = mobile;
+
+  return state;
+}
+
+const SUMMARY_RESULT_MAX_CHARS = 512;
+const DEFAULT_EXECUTION_PAGE_SIZE = 100;
+const MAX_EXECUTION_PAGE_SIZE = 500;
+
+function extractExecutionId(record: Record<string, unknown> | undefined): string | undefined {
+  const id = (record?.execution as { id?: unknown } | undefined)?.id;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
+async function recordExecution(state: ApiState, record: Record<string, unknown>): Promise<void> {
+  const id = extractExecutionId(record);
+  if (!id) throw new Error('EXECUTION_ID_REQUIRED');
+  if (!state.store.update) throw new Error('EXECUTION_PERSISTENCE_UNAVAILABLE');
+  await state.store.update<Record<string, unknown>>(`execution/${id}`, current => current ?? { events: [], ...record, storageRevision: 1 });
+  state.executions.push(record);
+  if (state.executions.length > MAX_EXECUTION_RECORDS) state.executions.splice(0, state.executions.length - MAX_EXECUTION_RECORDS);
+}
+
+function normalizeExecutionRecord(raw: Record<string, unknown>): Record<string, unknown> {
+  const exRaw = (raw.execution as Record<string, unknown> | undefined) ?? {};
+  const agentId = raw.agentId ?? exRaw.agentId;
+  const modelId = raw.modelId ?? exRaw.modelId;
+  const runtimeId = raw.runtimeId ?? exRaw.runtimeId;
+  const computerId = raw.computerId ?? exRaw.computerId;
+  const completedAt = exRaw.completedAt ?? exRaw.finishedAt;
+  const finishedAt = exRaw.finishedAt ?? exRaw.completedAt;
+  const execution: Record<string, unknown> = {
+    ...exRaw,
+    ...(agentId !== undefined ? { agentId } : {}),
+    ...(modelId !== undefined ? { modelId } : {}),
+    ...(runtimeId !== undefined ? { runtimeId } : {}),
+    ...(computerId !== undefined ? { computerId } : {}),
+    ...(completedAt !== undefined ? { completedAt } : {}),
+    ...(finishedAt !== undefined ? { finishedAt } : {}),
+  };
+  const evidence = raw.evidence ?? (Array.isArray(raw.checks) ? raw.checks : undefined);
+  const errors =
+    raw.errors ??
+    (typeof raw.error === 'string' && raw.error ? [{ message: raw.error }] : undefined);
+  const filesChanged =
+    raw.filesChanged ??
+    (Array.isArray(raw.fileMutations)
+      ? (raw.fileMutations as Array<{ path?: unknown }>)
+          .map((m) => (typeof m?.path === 'string' ? m.path : ''))
+          .filter(Boolean)
+      : undefined);
+  return {
+    ...raw,
+    execution,
+    ...(agentId !== undefined ? { agentId } : {}),
+    ...(modelId !== undefined ? { modelId } : {}),
+    ...(runtimeId !== undefined ? { runtimeId } : {}),
+    ...(computerId !== undefined ? { computerId } : {}),
+    ...(evidence !== undefined ? { evidence } : {}),
+    ...(errors !== undefined ? { errors } : {}),
+    ...(filesChanged !== undefined ? { filesChanged } : {}),
   };
 }
 
-function recordExecution(state: ApiState, record: Record<string, unknown>): void {
-  state.executions.push(record);
-  if (state.executions.length > MAX_EXECUTION_RECORDS) {
-    state.executions.splice(0, state.executions.length - MAX_EXECUTION_RECORDS);
+/**
+ * Reads the shared durable execution repository. The in-process engine is only
+ * a derived index; the store is authoritative across API/CLI restarts.
+ */
+async function collectAllExecutions(state: ApiState): Promise<Array<Record<string, unknown>>> {
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const entry of await state.store.list('execution/')) {
+    const rec = entry.value as Record<string, unknown> | undefined;
+    const id = extractExecutionId(rec);
+    if (id && rec) byId.set(id, normalizeExecutionRecord(rec));
   }
+  return [...byId.values()].sort((a, b) => {
+    const ad = Date.parse(String((a.execution as any)?.createdAt ?? '')) || 0;
+    const bd = Date.parse(String((b.execution as any)?.createdAt ?? '')) || 0;
+    return bd - ad || String((b.execution as any)?.id).localeCompare(String((a.execution as any)?.id));
+  });
+}
+
+async function lookupExecution(state: ApiState, id: string): Promise<Record<string, unknown> | undefined> {
+  const record = await state.store.get<Record<string, unknown>>(`execution/${id}`);
+  return record && extractExecutionId(record) === id ? normalizeExecutionRecord(record) : undefined;
+}
+
+function summarizeExecutionRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const { events: _events, toolCalls, fileMutations: _fm, checks: _checks, context: _ctx, ...rest } = record;
+  const summary: Record<string, unknown> = { ...rest };
+  if (Array.isArray(toolCalls)) {
+    summary.toolCallCount = toolCalls.length;
+  }
+  if (typeof summary.result === 'string' && summary.result.length > SUMMARY_RESULT_MAX_CHARS) {
+    summary.result = `${summary.result.slice(0, SUMMARY_RESULT_MAX_CHARS)}…`;
+    summary.resultTruncated = true;
+  }
+  return summary;
 }
 
 function lifecycleError(res: Response, error: unknown): void {
@@ -414,13 +664,43 @@ export function createApp(state: ApiState) {
     res.json({
       status: 'ok',
       name: 'wazir-api',
-      version: '0.1.0',
+      version: wazirVersion(),
       auth: {
         operatorToken: auth.operatorTokenRequired,
         viewerToken: auth.viewerTokenRequired,
         registrationToken: auth.registrationToken !== undefined,
       },
     });
+  });
+
+  // Liveness (/health) only proves the process answers. Readiness proves the
+  // control plane can actually serve: the store round-trips, the durable
+  // dispatcher finished loading, and the mobile/control services initialized.
+  // Load balancers, the Desktop shell, and startup scripts should gate on this.
+  app.get('/ready', async (_req, res) => {
+    const withTimeout = <T,>(p: Promise<T>, ms: number) => Promise.race([
+      p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+    ]);
+    const checks: Record<string, { ok: boolean; error?: string }> = {};
+    const run = async (name: string, fn: () => Promise<unknown>) => {
+      try { await withTimeout(fn(), 2000); checks[name] = { ok: true }; }
+      catch (error) { checks[name] = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+    };
+    await Promise.all([
+      run('store', async () => {
+        const probe = `readiness/probe`;
+        const value = Date.now();
+        await state.store.put(probe, value);
+        if ((await state.store.get<number>(probe)) !== value) throw new Error('store read-back mismatch');
+      }),
+      run('dispatcher', () => state.dispatcher.ready),
+      run('controlServices', async () => {
+        if (!state.mobile) throw new Error('not initialized');
+        await state.mobile.executionEngine.ready;
+      }),
+    ]);
+    const ready = Object.values(checks).every((c) => c.ok);
+    res.status(ready ? 200 : 503).json({ status: ready ? 'ready' : 'not_ready', version: wazirVersion(), checks });
   });
 
   // Metrics reveal topology and auth-failure counts: viewer scope, like the
@@ -470,26 +750,35 @@ export function createApp(state: ApiState) {
     res.send(lines.join('\n'));
   });
 
-  // Read-only control routes allow viewer or operator tokens.
-  // Mutating endpoints (dispatch, executions) explicitly enforce operator scope.
+  // Mobile companion routes (public pairing endpoints + authenticated mobile endpoints)
+  registerMobileRoutes(app, state, state.mobile);
+
+  // Read-only control routes allow viewer or operator tokens. Mutating endpoints
+  // explicitly enforce operator scope. A paired mobile device is deliberately NOT
+  // granted blanket access to this whole surface (computers, workers, runtimes, models,
+  // agents, tools, executions, task dispatch) — only the specific `/api/v1/mobile/*`
+  // routes it needs, gated individually by `requireOperatorOrDevice`/
+  // `requireViewerOperatorOrDevice` in mobile.ts.
   app.use('/api/v1', auth.requireViewerOrOperator);
   app.use('/executions', auth.requireOperator);
 
-  app.get('/api/v1/overview', (_req, res) => {
+  app.get('/api/v1/overview', async (_req, res) => {
+    const allExecutions = await collectAllExecutions(state);
     res.json({
       name: 'wazir',
-      version: '0.1.0',
+      version: wazirVersion(),
       description:
         'Wazir is a model- and runtime-agnostic meta-harness that schedules AI agents, models, tools, and compute to execute tasks across local and distributed environments.',
       computerId: localId,
       hostname: os.hostname(),
       counts: {
         computers: state.computers.list().length,
+        workers: state.computers.list().length,
         runtimes: state.runtimes.list().length,
         models: state.models.list().length,
         agents: state.agents.list().length,
         tools: state.tools.list().length,
-        executions: state.executions.length,
+        executions: allExecutions.length,
       },
     });
   });
@@ -499,21 +788,23 @@ export function createApp(state: ApiState) {
   });
 
   app.get('/api/v1/workers', (_req, res) => {
-    const local = state.computers.get(localId);
+    // Every registered computer is a worker: the in-process local host plus
+    // each remote that registered over the worker protocol. Listing only the
+    // local host made the distributed fleet invisible to the dashboard.
+    const computers = [...state.computers.list()].sort((a, b) =>
+      a.id === localId ? -1 : b.id === localId ? 1 : a.id.localeCompare(b.id));
     res.json({
-      workers: local
-        ? [
-            {
-              id: `worker-${localId}`,
-              computerId: localId,
-              name: local.name,
-              status: local.status,
-              runtimes: local.runtimes,
-              models: local.models,
-              lastHeartbeat: local.lastHeartbeat,
-            },
-          ]
-        : [],
+      workers: computers.map((c) => ({
+        id: `worker-${c.id}`,
+        computerId: c.id,
+        name: c.name,
+        status: c.status,
+        local: c.id === localId,
+        connected: c.id === localId || state.dispatcher.isConnected(c.id),
+        runtimes: c.runtimes,
+        models: c.models,
+        lastHeartbeat: c.lastHeartbeat,
+      })),
     });
   });
 
@@ -528,6 +819,59 @@ export function createApp(state: ApiState) {
       };
     });
     res.json({ runtimes });
+  });
+
+  app.get('/api/v1/providers', (_req, res) => {
+    const providers = state.runtimes.list().map((r) => {
+      const discovered = state.discovered.find((d) => d.id === r.id);
+      const isHosted = r.type === 'nvidia' || r.type === 'openai' || r.type === 'anthropic' || r.type === 'google';
+      return {
+        id: r.id,
+        displayName: r.name,
+        providerType: isHosted ? 'HOSTED_INFERENCE' : 'LOCAL_INFERENCE',
+        runtimeKind: isHosted ? 'hosted' : 'local',
+        endpoint: r.url,
+        health: discovered?.health ?? r.health ?? 'unavailable',
+        healthMessage: discovered?.healthMessage,
+        modelCount: (discovered?.models ?? []).length,
+        models: (discovered?.models ?? []).map((m) => m.id),
+      };
+    });
+    if (!providers.some((p) => p.id === 'nvidia')) {
+      providers.push({
+        id: 'nvidia',
+        displayName: 'NVIDIA API Catalog',
+        providerType: 'HOSTED_INFERENCE',
+        runtimeKind: 'hosted',
+        endpoint: process.env.WAZIR_NVIDIA_BASE_URL ?? 'https://integrate.api.nvidia.com/v1',
+        health: process.env.NVIDIA_API_KEY ? 'healthy' : 'unavailable',
+        healthMessage: process.env.NVIDIA_API_KEY ? 'NVIDIA_API_KEY configured' : 'Missing NVIDIA_API_KEY',
+        modelCount: 0,
+        models: [],
+      });
+    }
+    res.json({ providers });
+  });
+
+  app.get('/api/v1/providers/:id', (req, res) => {
+    const id = String(req.params.id);
+    const runtime = state.runtimes.list().find((r) => r.id === id);
+    if (!runtime && id !== 'nvidia') {
+      res.status(404).json({ error: `provider '${id}' not found` });
+      return;
+    }
+    const discovered = state.discovered.find((d) => d.id === id);
+    const isHosted = id === 'nvidia' || runtime?.type === 'openai' || runtime?.type === 'anthropic' || runtime?.type === 'google';
+    res.json({
+      id,
+      displayName: runtime?.name ?? (id === 'nvidia' ? 'NVIDIA API Catalog' : id),
+      providerType: isHosted ? 'HOSTED_INFERENCE' : 'LOCAL_INFERENCE',
+      runtimeKind: isHosted ? 'hosted' : 'local',
+      endpoint: runtime?.url ?? (id === 'nvidia' ? (process.env.WAZIR_NVIDIA_BASE_URL ?? 'https://integrate.api.nvidia.com/v1') : undefined),
+      health: discovered?.health ?? runtime?.health ?? 'unavailable',
+      healthMessage: discovered?.healthMessage ?? (id === 'nvidia' && !process.env.NVIDIA_API_KEY ? 'Missing NVIDIA_API_KEY' : undefined),
+      models: discovered?.models ?? [],
+    });
   });
 
   app.get('/api/v1/models', (_req, res) => {
@@ -553,12 +897,34 @@ export function createApp(state: ApiState) {
     catch (error) { lifecycleError(res, error); }
   });
   app.post('/api/v1/models/:id/load', auth.requireOperator, async (req, res) => {
-    try { res.json(await state.lifecycle.load(String(req.params.id), req.body ?? {})); }
-    catch (error) { lifecycleError(res, error); }
+    try {
+      const modelId = String(req.params.id);
+      const loaded = await state.lifecycle.load(modelId, req.body ?? {});
+      void state.mobile.eventHub.publish({
+        type: 'model.loaded',
+        modelId,
+        computerId: req.body?.computerId ?? localId,
+        status: 'LOADED',
+        summary: `Model loaded: ${modelId}`,
+        payload: { modelId, instance: loaded },
+      });
+      res.json(loaded);
+    } catch (error) { lifecycleError(res, error); }
   });
   app.post('/api/v1/models/:id/unload', auth.requireOperator, async (req, res) => {
-    try { await state.lifecycle.unload(String(req.params.id), req.body ?? {}); res.json({ state: 'UNLOADED' }); }
-    catch (error) { lifecycleError(res, error); }
+    try {
+      const modelId = String(req.params.id);
+      await state.lifecycle.unload(modelId, req.body ?? {});
+      void state.mobile.eventHub.publish({
+        type: 'model.unloaded',
+        modelId,
+        computerId: req.body?.computerId ?? localId,
+        status: 'UNLOADED',
+        summary: `Model unloaded: ${modelId}`,
+        payload: { modelId },
+      });
+      res.json({ state: 'UNLOADED' });
+    } catch (error) { lifecycleError(res, error); }
   });
   for (const operation of ['pin', 'unpin'] as const) {
     app.post(`/api/v1/models/:id/${operation}`, auth.requireOperator, async (req, res) => {
@@ -579,19 +945,118 @@ export function createApp(state: ApiState) {
     res.json({ tools: state.tools.descriptors() });
   });
 
-  app.get('/api/v1/executions', (_req, res) => {
-    res.json({ executions: state.executions.slice().reverse() });
+  app.get('/api/v1/executions', async (req, res) => {
+    let all: Array<Record<string, unknown>>;
+    try { all = await collectAllExecutions(state); }
+    catch (error) {
+      res.status(503).json({ code: 'EXECUTION_HISTORY_UNAVAILABLE', error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    const statusFilter = typeof req.query.status === 'string' ? req.query.status.trim().toLowerCase() : '';
+    const computerFilter = typeof req.query.computerId === 'string' ? req.query.computerId.trim() : '';
+    const agentFilter = typeof req.query.agentId === 'string' ? req.query.agentId.trim() : '';
+    const modelFilter = typeof req.query.modelId === 'string' ? req.query.modelId.trim() : '';
+    const runtimeFilter = typeof req.query.runtimeId === 'string' ? req.query.runtimeId.trim() : '';
+    const parentFilter = typeof req.query.parentExecutionId === 'string' ? req.query.parentExecutionId.trim() : '';
+    const textQuery = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+    const summaryMode = req.query.summary === '1' || req.query.summary === 'true' || req.query.fields === 'summary';
+
+    const filtered = all.filter((e) => {
+      const ex = (e.execution as Record<string, unknown> | undefined) ?? {};
+      const task = (e.task as Record<string, unknown> | undefined) ?? {};
+      if (statusFilter && statusFilter !== 'all') {
+        const st = String(ex.status ?? '').toLowerCase();
+        const allowed = statusFilter.split(',').map((s) => s.trim()).filter(Boolean);
+        const matchStatus = allowed.some((target) => {
+          if (target === 'completed') return st === 'completed' || st === 'ok';
+          if (target === 'failed') return st === 'failed' || st === 'error';
+          if (target === 'running') return ['running', 'active', 'queued', 'assigned', 'waiting'].includes(st);
+          return st === target;
+        });
+        if (!matchStatus) return false;
+      }
+      if (computerFilter && String(e.computerId ?? '') !== computerFilter) return false;
+      if (agentFilter && String(e.agentId ?? '') !== agentFilter) return false;
+      if (modelFilter && String(e.modelId ?? '') !== modelFilter) return false;
+      if (runtimeFilter && String(e.runtimeId ?? '') !== runtimeFilter) return false;
+      if (parentFilter && String(ex.parentExecutionId ?? '') !== parentFilter) return false;
+      if (textQuery) {
+        const haystack = [
+          ex.id,
+          task.type,
+          task.input,
+          e.agentId,
+          e.modelId,
+          e.runtimeId,
+          e.result,
+        ]
+          .map((v) => String(v ?? '').toLowerCase())
+          .join(' ');
+        if (!haystack.includes(textQuery)) return false;
+      }
+      return true;
+    });
+
+    const rawLimit = req.query.limit !== undefined ? Number(req.query.limit) : DEFAULT_EXECUTION_PAGE_SIZE;
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(MAX_EXECUTION_PAGE_SIZE, Math.floor(rawLimit)) : DEFAULT_EXECUTION_PAGE_SIZE;
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+    const rawOffset = Number(req.query.offset ?? 0);
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
+    const start = cursor
+      ? Math.max(0, filtered.findIndex((e) => String((e.execution as any)?.id) === cursor) + 1)
+      : offset;
+    const sliced = filtered.slice(start, start + limit);
+    const executions = summaryMode ? sliced.map(summarizeExecutionRecord) : sliced;
+    res.json({
+      executions,
+      total: filtered.length,
+      offset: start,
+      limit,
+      hasMore: start + executions.length < filtered.length,
+      nextCursor: start + executions.length < filtered.length ? String((sliced[sliced.length - 1].execution as any).id) : undefined,
+    });
   });
 
-  app.get('/api/v1/executions/:id', (req, res) => {
+  app.get('/api/v1/executions/:id', async (req, res) => {
     // Exact match only: a substring match let `GET /executions/a` return an
     // arbitrary record (F-18).
-    const execution = state.executions.find((e) => (e.execution as { id?: string })?.id === req.params.id);
+    const id = String(req.params.id);
+    const execution = await lookupExecution(state, id);
     if (!execution) {
-      res.status(404).json({ error: `execution '${req.params.id}' not found` });
+      res.status(404).json({ error: `execution '${id}' not found` });
       return;
     }
     res.json({ execution });
+  });
+
+  app.get('/api/v1/executions/:id/events', async (req, res) => {
+    const id = String(req.params.id);
+    const record = await lookupExecution(state, id);
+    const dispatchStatus = await state.dispatcher.status(id);
+    if (!record && !dispatchStatus) {
+      res.status(404).json({ error: `execution '${id}' not found` });
+      return;
+    }
+    const storedEvents = Array.isArray(record?.events) ? (record.events as unknown[]) : undefined;
+    const events = storedEvents && storedEvents.length > 0
+      ? storedEvents
+      : dispatchStatus?.events ?? storedEvents ?? [];
+    res.json({ executionId: id, events });
+  });
+
+  app.get('/api/v1/executions/:id/children', async (req, res) => {
+    const id = String(req.params.id);
+    const parent = await lookupExecution(state, id);
+    if (!parent) {
+      res.status(404).json({ error: `execution '${id}' not found` });
+      return;
+    }
+    const all = await collectAllExecutions(state);
+    const children = all.filter((r) => {
+      const ex = r.execution as { parentExecutionId?: unknown } | undefined;
+      return ex?.parentExecutionId === id;
+    });
+    res.json({ executionId: id, children });
   });
 
   // Worker protocol (registration + heartbeat).
@@ -640,6 +1105,78 @@ export function createApp(state: ApiState) {
       return;
     }
     const computer = state.computers.register({ ...registration, local: false });
+    const registerRemoteWorkerModels = (compId: string, runtimeIds: string[] = [], modelIds: string[] = [], modelHealth?: Record<string, { loaded?: boolean }>) => {
+      const effectiveRuntimes = runtimeIds.length > 0 ? runtimeIds : ['ollama'];
+      for (const rtId of effectiveRuntimes) {
+        const compositeRtId = state.runtimes.get(rtId)?.computerId && state.runtimes.get(rtId)?.computerId !== compId
+          ? `${rtId}@${compId}`
+          : rtId;
+        if (!state.runtimes.get(compositeRtId)) {
+          state.runtimes.register({
+            id: compositeRtId,
+            type: rtId === 'ollama' ? 'ollama' : rtId === 'lmstudio' ? 'lmstudio' : 'other',
+            name: `${rtId} (${compId})`,
+            version: 'remote',
+            computerId: compId,
+            capabilities: {
+              chat: true,
+              streaming: true,
+              toolCalling: true,
+              structuredOutput: false,
+              vision: false,
+              embeddings: false,
+              reasoning: false,
+              modelLoad: true,
+              modelUnload: true,
+              modelDownload: false,
+              statefulChat: false,
+              mcp: false,
+            },
+          });
+        }
+        state.runtimes.update(compositeRtId, { health: 'healthy' });
+      }
+      const primaryRt = effectiveRuntimes[0]!;
+      const runtimeForInstance = state.runtimes.get(primaryRt)?.computerId === compId ? primaryRt : (state.runtimes.get(`${primaryRt}@${compId}`) ? `${primaryRt}@${compId}` : primaryRt);
+      for (const mId of modelIds) {
+        if (!state.models.get(mId)) {
+          state.models.register({
+            id: mId,
+            name: mId,
+            provider: primaryRt,
+            family: 'other',
+            contextMax: 32_768,
+            capabilities: ['generalChat', 'coding'],
+            toolCalling: true,
+            structuredOutput: false,
+            vision: false,
+            audio: false,
+            embedding: false,
+            reasoning: false,
+            runtimeCompatibility: 'any',
+            local: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+        const isLoaded = modelHealth?.[mId]?.loaded ?? true;
+        state.models.upsertInstance({
+          id: `${mId}::${compId}::${runtimeForInstance}`,
+          modelId: mId,
+          computerId: compId,
+          runtimeId: runtimeForInstance,
+          runtimeModelId: mId,
+          loaded: isLoaded,
+          health: 'healthy',
+          state: isLoaded ? 'READY' : 'INSTALLED',
+        });
+      }
+    };
+    registerRemoteWorkerModels(
+      computer.id,
+      Array.isArray(registration.runtimes) ? registration.runtimes : [],
+      Array.isArray(registration.models) ? registration.models : [],
+    );
     let token: string;
     if (byComputerToken && !preferred) {
       token = presented as string; // re-registration with the current token keeps it
@@ -656,6 +1193,13 @@ export function createApp(state: ApiState) {
       }
       state.dispatcher.disconnect(registration.id);
     }
+    void state.mobile.eventHub.publish({
+      type: 'worker.connected',
+      computerId: computer.id,
+      status: 'online',
+      summary: `Worker connected: ${computer.name} (${computer.id})`,
+      payload: { computerId: computer.id, name: computer.name },
+    });
     res.json({ ok: true, id: computer.id, token });
   });
 
@@ -671,6 +1215,25 @@ export function createApp(state: ApiState) {
       runtimeHealth: req.body?.runtimeHealth,
       modelHealth: req.body?.modelHealth,
     });
+    if (Array.isArray(req.body?.models) || req.body?.modelHealth) {
+      const runtimeIds = Array.isArray(req.body?.runtimes) ? req.body.runtimes : computer.runtimes;
+      const modelIds = Array.isArray(req.body?.models) ? req.body.models : Object.keys(req.body?.modelHealth ?? {});
+      const primaryRt = runtimeIds[0] ?? 'ollama';
+      const runtimeForInstance = state.runtimes.get(primaryRt)?.computerId === computerId ? primaryRt : (state.runtimes.get(`${primaryRt}@${computerId}`) ? `${primaryRt}@${computerId}` : primaryRt);
+      for (const mId of modelIds) {
+        const isLoaded = req.body?.modelHealth?.[mId]?.loaded ?? true;
+        state.models.upsertInstance({
+          id: `${mId}::${computerId}::${runtimeForInstance}`,
+          modelId: mId,
+          computerId,
+          runtimeId: runtimeForInstance,
+          runtimeModelId: mId,
+          loaded: isLoaded,
+          health: 'healthy',
+          state: isLoaded ? 'READY' : 'INSTALLED',
+        });
+      }
+    }
     res.json({ ok: true });
   });
 
@@ -696,6 +1259,13 @@ export function createApp(state: ApiState) {
     req.on('close', () => {
       clearInterval(keepAlive);
       state.dispatcher.unsubscribe(computerId, res);
+      void state.mobile.eventHub.publish({
+        type: 'worker.disconnected',
+        computerId,
+        status: 'offline',
+        summary: `Worker stream disconnected: ${computerId}`,
+        payload: { computerId },
+      });
     });
     try {
       await state.dispatcher.subscribe(computerId, res);
@@ -709,7 +1279,7 @@ export function createApp(state: ApiState) {
       state.dispatcher.unsubscribe(computerId, res);
       return;
     }
-    keepAlive = setInterval(() => { res.write(': ping\n\n'); void state.dispatcher.redeliver().catch(() => undefined); }, 5_000);
+    keepAlive = setInterval(() => { res.write(': ping\n\n'); void state.dispatcher.redeliver(computerId).catch(() => undefined); }, 5_000);
   });
 
   // Dispatch an authorized execution request to a specific computer's worker.
@@ -822,7 +1392,7 @@ export function createApp(state: ApiState) {
       res.json({ ok: true, duplicate: true });
       return;
     }
-    recordExecution(state, {
+    await recordExecution(state, {
       execution: { id: requestId, status: outcome.ok ? 'completed' : 'failed', createdAt: new Date() },
       computerId: String(req.params.id),
       result: outcome.output,
@@ -837,7 +1407,7 @@ export function createApp(state: ApiState) {
     res.json({ ok: true });
   });
 
-  app.post('/executions', (req, res) => {
+  app.post('/executions', async (req, res) => {
     const id = generateId('execution-');
     const record = {
       execution: { id, taskId: String(req.body?.taskId ?? id), status: 'recorded', createdAt: new Date() },
@@ -849,7 +1419,7 @@ export function createApp(state: ApiState) {
       result: typeof req.body?.result === 'string' ? sanitizeUntrustedOutput(req.body.result.slice(0, MAX_OUTPUT_CHARS)) : req.body?.result,
       usage: req.body?.usage,
     };
-    recordExecution(state, record);
+    await recordExecution(state, record);
     res.status(201).json({ id, record });
   });
 

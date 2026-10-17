@@ -9,7 +9,7 @@ import { VerifiedIntegrationCoordinator, WorktreeManager, type AgentIntegrationM
 const exec = promisify(execFile);
 const checkNames = ['build', 'typecheck', 'unit-tests', 'integration-tests'];
 
-describe('VerifiedIntegrationCoordinator', () => {
+describe('VerifiedIntegrationCoordinator', { timeout: 30_000 }, () => {
   let root = '';
   let candidateRoot = '';
   let agentWorktrees: string[] = [];

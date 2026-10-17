@@ -4,12 +4,18 @@ import type { ContextDecision } from './context.js';
 import type { PolicyDecision, PolicyEffect } from './policy.js';
 
 export type ExecutionStatus =
+  | 'pending'
   | 'queued'
+  | 'planning'
   | 'scheduled'
+  | 'ready'
   | 'assigned'
   | 'running'
   | 'waiting'
+  | 'waiting_for_approval'
+  | 'verifying'
   | 'paused'
+  | 'blocked'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -124,7 +130,15 @@ export interface FileMutationHistoryEntry {
 import type { EvidenceType, VerificationEvidence } from './verification.js';
 export type { EvidenceType, VerificationEvidence };
 
+export interface AcceptanceCriterion {
+  id: string;
+  condition: string;
+  mandatory?: boolean;
+  verification: EvidenceType | 'human_review';
+}
+
 export interface AcceptanceContract {
+  criteria?: AcceptanceCriterion[];
   taskType?: string;
   requiredEvidence: EvidenceType[];
 }
@@ -156,10 +170,13 @@ export interface ExecutionRecord {
   result?: string;
   evaluation?: EvaluationResult;
   usage?: TokenUsage;
+  /** Complete request count, including unsuccessful model attempts, when recorded. */
+  totalModelCalls?: number;
   events: ExecutionEvent[];
   workspaceState?: WorkspaceState;
   evidence?: VerificationEvidence[];
   acceptanceContract?: AcceptanceContract;
+  executionContract?: import('../services/executionContract.js').ExecutionContract;
   mutationHistory?: FileMutationHistoryEntry[];
 }
 

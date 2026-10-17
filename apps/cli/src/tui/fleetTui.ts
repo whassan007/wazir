@@ -1,4 +1,5 @@
 import readline from 'node:readline';
+import { renderMissionControl, missionHeader } from './missionControl.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { withScopedRejectionHandler } from '../crashHandler.js';
@@ -25,8 +26,11 @@ import type { RookEngine } from '../engine.js';
 import { refreshRuntime } from '../engine.js';
 import { color } from '../colors.js';
 import { createFleetTaskExecutor } from '../fleetRunner.js';
-import { collectHealthReport, fleetNodeHealth } from '../health.js';
 import { TerminalScreen, type TerminalSize } from './screen.js';
+import { ConversationRenderer } from './conversationRenderer.js';
+import { StatusProjection } from './statusProjection.js';
+import { EventSummarizer, type TranscriptVerbosity } from './eventSummarizer.js';
+import { ClipboardController } from './clipboardController.js';
 import {
   CanaryLiveEventBuffer,
   CANARY_TIMELINE_FILTERS,
@@ -45,19 +49,15 @@ import { parseAction } from '@wazir/agents';
 import { inspectVerificationEvidence, explainCompletion, type VerificationInspection, type WhyCompleteAnswer, type ArtifactProvenance } from '@wazir/core';
 import { promptCacheReuse, promptCacheSource } from '@wazir/runtimes-interfaces';
 import {
-  renderTaskView,
   renderSearchView,
   renderCanaryView,
-  renderFleetView,
   renderImprovementView,
   renderContextView,
   renderEvidenceView,
   renderWhyModal,
-  renderModelIntelligenceView,
   renderEvidenceModal,
   renderSearchNodeInspection,
   flattenSearchTree,
-  type TaskViewData,
   type WhyExplanationData,
   type SearchTreeNode,
   type ImprovementExperimentItem,
@@ -66,10 +66,6 @@ import {
   type SearchViewData,
   type ContextSampleItem,
   type ContextViewData,
-  type FleetWorkerItem,
-  type FleetViewData,
-  type ModelProfileItem,
-  type ModelIntelligenceViewData,
   type EvidenceModalData,
   type CanaryViewTab,
   type SearchNodeInspection,
@@ -175,7 +171,16 @@ export type SidebarMode = 'full' | 'focused' | 'hidden';
 
 export type FocusPane = 'nav' | 'main' | 'prompt';
 
-export type TuiMode = 'NORMAL' | 'COMPOSER' | 'COPY' | 'PASTE' | 'PALETTE' | 'APPROVAL';
+export type TuiMode = 'NORMAL' | 'COMPOSER' | 'COPY' | 'PASTE' | 'PALETTE' | 'APPROVAL' | 'SHELL';
+
+export interface ShellExecutionSummary {
+  command: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  durationMs?: number;
+  blockId?: string;
+}
 
 export interface StructuredError {
   phase: string;
@@ -265,6 +270,7 @@ export interface FleetTuiOptions {
   /** Per-job wall-clock limit; the orchestrator's built-in default applies when unset. */
   timeoutSeconds?: number;
   enablePlanner?: boolean;
+  presentationMode?: 'conversation' | 'dashboard';
 }
 
 /**
@@ -430,11 +436,20 @@ function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
   if (keyStr === '\x12' || keyStr === '\u0012') {
     return { name: 'r', ctrl: true, meta: false, shift: false, sequence: '\x12' };
   }
+  if (keyStr === '\x0b' || keyStr === '\u000b') {
+    return { name: 'k', ctrl: true, meta: false, shift: false, sequence: '\x0b' };
+  }
+  if (keyStr === '\x0e' || keyStr === '\u000e') {
+    return { name: 'n', ctrl: true, meta: false, shift: false, sequence: '\x0e' };
+  }
   if (keyStr === '\u0003') {
     return { name: 'c', ctrl: true, meta: false, shift: false, sequence: '\u0003' };
   }
   if (keyStr === '\u0015') {
     return { name: 'u', ctrl: true, meta: false, shift: false, sequence: '\u0015' };
+  }
+  if (keyStr === '\u001a') {
+    return { name: 'z', ctrl: true, meta: false, shift: false, sequence: '\u001a' };
   }
   if (keyStr === '\u0017') {
     return { name: 'w', ctrl: true, meta: false, shift: false, sequence: '\u0017' };
@@ -455,6 +470,33 @@ function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
   };
 }
 
+function previousGraphemeBoundary(text: string, cursor: number): number {
+  const Segmenter = (Intl as any).Segmenter;
+  if (Segmenter) {
+    let previous = 0;
+    for (const segment of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+      if (segment.index >= cursor) break;
+      previous = segment.index;
+      if (segment.index + segment.segment.length >= cursor) return segment.index;
+    }
+    return previous;
+  }
+  const point = text.codePointAt(Math.max(0, cursor - 1));
+  return Math.max(0, cursor - (point && point > 0xffff ? 2 : 1));
+}
+
+function nextGraphemeBoundary(text: string, cursor: number): number {
+  const Segmenter = (Intl as any).Segmenter;
+  if (Segmenter) {
+    for (const segment of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+      if (segment.index >= cursor || segment.index + segment.segment.length > cursor) return segment.index + segment.segment.length;
+    }
+    return text.length;
+  }
+  const point = text.codePointAt(cursor);
+  return Math.min(text.length, cursor + (point && point > 0xffff ? 2 : 1));
+}
+
 export class FleetTui {
   readonly engine: RookEngine;
   readonly screen: TerminalScreen;
@@ -463,8 +505,20 @@ export class FleetTui {
   private readonly autoMerge: boolean;
   private readonly timeoutSeconds?: number;
   private readonly enablePlanner: boolean;
+  private presentationMode: 'conversation' | 'dashboard';
+  private conversationRenderer: ConversationRenderer;
+  private clipboardController: ClipboardController;
+  private readonly statusProjection = new StatusProjection();
+  private eventSummarizer = new EventSummarizer();
+  private conversationDrawQueued = false;
+  private conversationStartedAt?: number;
+  private lastInterruptAt = 0;
+  private copyCursorLine = 0;
+  private copyAnchorLine?: number;
+  private copyNotice = '';
 
   private currentView: TuiView = 'fleet';
+  private missionHome = true;
   private focusedPane: FocusPane = 'nav';
   private highlightedIndex = 0;
   private selectedTaskId?: string;
@@ -574,6 +628,8 @@ export class FleetTui {
     { id: 'launch-lmstudio', title: 'Launch LM Studio Server', cmd: '/launch lmstudio' },
     { id: 'help', title: 'Toggle Help & Shortcuts', cmd: '/help' },
     { id: 'repaint', title: 'Force Screen Repaint', cmd: '/repaint' },
+    { id: 'conversation', title: 'Conversation view', cmd: '/chat' },
+    { id: 'fleet-dashboard', title: 'Fleet dashboard', cmd: '/fleet' },
   ];
 
   private readonly agents = new Map<string, AgentCardState>();
@@ -605,6 +661,7 @@ export class FleetTui {
   private pickerIndex = 0;
   private pickerCandidates: string[] = [];
   private lastResolvedReferences: ResolvedReference[] = [];
+  private lastShellOutput?: ShellExecutionSummary;
 
   private currentJob?: Job;
   private currentRollup?: JobRollup;
@@ -623,6 +680,11 @@ export class FleetTui {
   private selectedModelId?: string;
 
   private inputBuffer = '';
+  private readonly conversationHistory: string[] = [];
+  private conversationHistoryIndex = -1;
+  private conversationHistoryDraft = '';
+  private inputUndo: string[] = [];
+  private inputRedo: string[] = [];
   /** Index into inputBuffer where typed/deleted characters land; 0..inputBuffer.length. */
   private inputCursor = 0;
   /** 1-based terminal column the hardware cursor belongs at, set by renderInputBar()'s
@@ -664,6 +726,12 @@ export class FleetTui {
       });
     }
     this.screen = options.screen ?? new TerminalScreen();
+    this.presentationMode = options.presentationMode ?? 'dashboard';
+    if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation(this.presentationMode);
+    if (this.presentationMode === 'conversation') this.focusedPane = 'prompt';
+    const output = typeof (this.screen as any).getOutputStream === 'function' ? this.screen.getOutputStream() : process.stdout;
+    this.conversationRenderer = new ConversationRenderer(output, () => typeof (this.screen as any).getSize === 'function' ? this.screen.getSize() : { columns: 80, rows: 24 });
+    this.clipboardController = new ClipboardController(output);
     this.concurrencyLimit = options.concurrencyLimit ?? 4;
     this.useWorktrees = options.useWorktrees ?? true;
     this.autoMerge = options.autoMerge ?? false;
@@ -677,6 +745,60 @@ export class FleetTui {
 
   getProcessedSubmissionIds(): Set<string> {
     return this.processedSubmissionIds;
+  }
+
+  private rememberConversationPrompt(prompt: string): void {
+    if (!prompt) return;
+    if (this.conversationHistory.at(-1) !== prompt) this.conversationHistory.push(prompt);
+    if (this.conversationHistory.length > 100) this.conversationHistory.shift();
+    this.conversationHistoryIndex = -1;
+    this.conversationHistoryDraft = '';
+  }
+
+  private moveConversationHistory(direction: -1 | 1): void {
+    if (direction < 0) {
+      if (!this.conversationHistory.length) return;
+      if (this.conversationHistoryIndex === -1) {
+        this.conversationHistoryDraft = this.inputBuffer;
+        this.conversationHistoryIndex = this.conversationHistory.length - 1;
+      } else this.conversationHistoryIndex = Math.max(0, this.conversationHistoryIndex - 1);
+      this.inputBuffer = this.conversationHistory[this.conversationHistoryIndex];
+    } else if (this.conversationHistoryIndex >= 0) {
+      if (this.conversationHistoryIndex < this.conversationHistory.length - 1) {
+        this.conversationHistoryIndex++;
+        this.inputBuffer = this.conversationHistory[this.conversationHistoryIndex];
+      } else {
+        this.conversationHistoryIndex = -1;
+        this.inputBuffer = this.conversationHistoryDraft;
+        this.conversationHistoryDraft = '';
+      }
+    }
+    this.inputCursor = this.inputBuffer.length;
+    this.focusedPane = 'prompt';
+  }
+
+  private transcriptLines(): string[] {
+    return this.conversationRenderer.transcript.list().flatMap((entry) => entry.text.split('\n'));
+  }
+
+  private copyModeStatus(): string {
+    const lines = this.transcriptLines();
+    const preview = (lines[this.copyCursorLine] ?? '').replace(/[\r\t]/g, ' ');
+    return `Copy ${this.copyCursorLine + 1}/${Math.max(1, lines.length)} · ${this.copyAnchorLine === undefined ? 'V mark' : `marked from ${this.copyAnchorLine + 1}`} · Y copy · Esc exit · ${preview}${this.copyNotice ? ` · ${this.copyNotice}` : ''}`;
+  }
+
+  private enterCopyMode(): void {
+    this.tuiMode = 'COPY';
+    this.copyCursorLine = Math.max(0, this.transcriptLines().length - 1);
+    this.copyAnchorLine = undefined;
+    this.copyNotice = '';
+    this.statusMessage = 'Copy mode: arrows move, V marks a range, Y copies when OSC52 is enabled, Esc exits.';
+  }
+
+  private snapshotInputEdit(): void {
+    if (this.inputUndo.at(-1) !== this.inputBuffer) this.inputUndo.push(this.inputBuffer);
+    if (this.inputUndo.length > 20) this.inputUndo.shift();
+    this.inputRedo = [];
   }
 
   async submitInteractive(submission: InteractiveSubmission): Promise<void> {
@@ -1395,7 +1517,20 @@ export class FleetTui {
   }
 
   handleWhyCommand(topic: string): void {
-    this.openWhyModal(this.buildWhyExplanation(topic));
+    const explanation = this.buildWhyExplanation(topic);
+    if (this.presentationMode === 'conversation') {
+      const lines = [
+        `Why [${explanation.topic}]: ${explanation.headline}`,
+        `  Decision: ${explanation.decision}`,
+        ...explanation.rationale.map((r) => `  • ${r}`),
+        ...explanation.evidence.map((e) => `  [${e.label}] ${e.value}`),
+      ];
+      this.statusMessage = `${explanation.headline}: ${explanation.decision}`;
+      this.conversationRenderer.append(lines.join('\n'));
+      this.draw();
+      return;
+    }
+    this.openWhyModal(explanation);
     if (topic === 'complete' || topic === 'incomplete') {
       // Re-answer from the freshly loaded record so the modal never shows a cached revision.
       void this.refreshEvidenceInspection().then(() => {
@@ -1416,6 +1551,7 @@ export class FleetTui {
   getMode(): TuiMode {
     if (this.pendingApprovals.length > 0) return 'APPROVAL';
     if (this.quickActionsOpen) return 'PALETTE';
+    if (this.tuiMode === 'NORMAL' && this.inputBuffer.startsWith('!')) return 'SHELL';
     return this.tuiMode;
   }
 
@@ -1443,6 +1579,7 @@ export class FleetTui {
       this.draw();
     } else {
       const sanitized = clean.replace(/^(wa(\s*\[[A-Z]+\])?>\s*)+/, '');
+      this.snapshotInputEdit();
       this.inputBuffer =
         this.inputBuffer.slice(0, this.inputCursor) + sanitized + this.inputBuffer.slice(this.inputCursor);
       this.inputCursor += sanitized.length;
@@ -1496,6 +1633,56 @@ export class FleetTui {
     return this.lastResolvedReferences;
   }
 
+  getLastShellOutput(): ShellExecutionSummary | undefined {
+    return this.lastShellOutput;
+  }
+
+  getSelectedTaskId(): string | undefined {
+    return this.selectedTaskId;
+  }
+
+  /**
+   * Fast-path navigation across pending approvals or active/recorded tasks (Ctrl+J / Ctrl+N / ']' and Ctrl+K / '[').
+   */
+  cycleActiveTask(direction: 1 | -1): void {
+    if (this.pendingApprovals.length > 1) {
+      if (direction === 1) {
+        const first = this.pendingApprovals.shift()!;
+        this.pendingApprovals.push(first);
+      } else {
+        const last = this.pendingApprovals.pop()!;
+        this.pendingApprovals.unshift(last);
+      }
+      const focused = this.pendingApprovals[0];
+      this.statusMessage = `Approval queue: focused ${focused.tool} (${focused.taskId ?? 'fleet-task'})`;
+      this.draw();
+      return;
+    }
+
+    const list = this.getAgents();
+    if (list.length === 0) {
+      this.statusMessage = 'No active or recorded tasks to cycle.';
+      this.draw();
+      return;
+    }
+
+    this.missionHome = false;
+    this.highlightedIndex = (this.highlightedIndex + direction + list.length) % list.length;
+    const target = list[this.highlightedIndex];
+    this.selectedTaskId = target.taskId;
+    this.selectedCategory = 'EXECUTIONS';
+    this.selectedNavId = target.taskId;
+
+    const allNav = this.getFlatNavItems();
+    const navIdx = allNav.findIndex((it) => it.category === 'EXECUTIONS' && it.id === target.taskId);
+    if (navIdx !== -1) {
+      this.navSelectionIndex = navIdx;
+    }
+
+    this.statusMessage = `Focused task ${target.taskId} [${target.status.toUpperCase()}] (${this.highlightedIndex + 1}/${list.length})`;
+    this.draw();
+  }
+
   getCurrentJob(): Job | undefined {
     return this.currentJob;
   }
@@ -1506,10 +1693,16 @@ export class FleetTui {
 
   private exitPromise?: Promise<void>;
   private exitResolver?: () => void;
+  private exitReason?: 'user_exit' | 'interrupt' | 'eof' | 'disconnect' | 'error';
   private keypressListener?: (ch: string | undefined, key?: readline.Key) => void;
   private inputListener?: (data: Buffer | string) => void;
   private stdinEndListener?: () => void;
+  private stdinErrorListener?: (err: Error) => void;
   private outErrorHandler?: (err: Error) => void;
+
+  getExitReason(): 'user_exit' | 'interrupt' | 'eof' | 'disconnect' | 'error' | undefined {
+    return this.exitReason;
+  }
 
   /**
    * Isolates and consumes Tab / Shift-Tab key events cleanly (§1).
@@ -1579,6 +1772,7 @@ export class FleetTui {
    */
   async start(): Promise<void> {
     this.isRunning = true;
+    this.exitReason = undefined;
 
     // Safety net (found the hard way): a fire-and-forget action here (`void this.foo()`,
     // used throughout for keypress handlers so they can stay synchronous) that rejects
@@ -1595,13 +1789,20 @@ export class FleetTui {
     // installed would make the fatal one treat every one of these recovered
     // keypress errors as a crash too. stop() restores the fatal default.
     this.restoreFatalRejectionHandler = withScopedRejectionHandler((reason) => {
-      this.statusMessage = `Internal error (recovered): ${reason instanceof Error ? reason.message : String(reason)}`;
+      const msg = reason instanceof Error ? reason.message : String(reason);
+      this.statusMessage = `Execution failed · Internal error (recovered): ${msg}`;
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(`✗ Execution failed: ${msg}`);
+      }
       this.draw();
     });
 
     // 3. Raw Mode & Keypress Binding Check:
     // Verify that stdin is correctly running in raw mode so structured key objects are passed
     this.screen.enter();
+    if (this.presentationMode === 'conversation') {
+      this.conversationRenderer.start(process.env.USER ?? process.env.USERNAME ?? 'controller', this.selectedModelId ?? 'auto-routed model');
+    }
 
     this.waitForExit();
 
@@ -1613,6 +1814,11 @@ export class FleetTui {
     // Subscribe to approval queue
     this.unsubscribeApprovals = this.engine.approvalQueue.subscribe((requests) => {
       this.pendingApprovals = requests;
+      this.statusProjection.setWaitingForApproval(requests.map((request) => request.taskId).filter((id): id is string => Boolean(id)), requests.length > 0);
+      if (requests.length > 0) {
+        const first = requests[0];
+        this.statusMessage = `Waiting for approval: ${first.tool} (${requests.length} pending)`;
+      }
       this.draw();
     });
 
@@ -1668,16 +1874,22 @@ export class FleetTui {
     // Without this the TUI sat in waitForExit() forever — a piped command hung until
     // killed. Graceful exit here mirrors what Ctrl+C / 'q' / /exit do on a TTY.
     this.stdinEndListener = () => {
-      if (this.isRunning) this.stop();
+      if (this.isRunning) this.stop('eof');
     };
     inStream.once('end', this.stdinEndListener);
 
+    // stdin error (e.g., EIO when a controlling PTY disconnects): treat as terminal
+    // disconnection rather than an uncaught stream error crash.
+    this.stdinErrorListener = () => {
+      if (this.isRunning) this.stop('disconnect');
+    };
+    inStream.on('error', this.stdinErrorListener);
+
     // Output stream (dead) terminal / closed pipe: a failed write surfaces as an
     // asynchronous 'error' event (EIO/EPIPE). With no listener that crashes the
-    // process (exit 1) in the middle of the graceful-exit path. The session is
-    // ending anyway — the stdin-EOF handler drives the exit — so swallow it.
+    // process (exit 1) in the middle of the graceful-exit path.
     this.outErrorHandler = () => {
-      /* terminal or pipe reader gone: nothing to recover, exit path handles it */
+      if (this.isRunning) this.stop('disconnect');
     };
     this.screen.getOutputStream().on('error', this.outErrorHandler);
 
@@ -1730,11 +1942,12 @@ export class FleetTui {
     this.draw();
   }
 
-  stop(): void {
+  stop(reason: 'user_exit' | 'interrupt' | 'eof' | 'disconnect' | 'error' = 'user_exit'): void {
     // Idempotent: stop() can be triggered more than once (e.g. the user types /exit
     // and stdin also hits EOF in pipe mode, or a stray second caller). Guard on
     // isRunning so double-stops are a no-op instead of re-running unsubscribe/leave.
     if (!this.isRunning) return;
+    this.exitReason = this.exitReason ?? reason;
     if (this.renderTimer) clearInterval(this.renderTimer);
     if (this.unsubscribeApprovals) this.unsubscribeApprovals();
     if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
@@ -1763,12 +1976,13 @@ export class FleetTui {
       this.stdinEndListener = undefined;
     }
 
-    // NOTE: outErrorHandler is deliberately NOT removed here. screen.leave() below
-    // performs an outStream write whose EIO/EPIPE error arrives asynchronously on a
-    // later tick — removing the handler first (or even immediately after) leaves that
-    // error unhandled and crashes the process (exit 1) on the exact path we're trying
-    // to exit gracefully. The handler is a no-op and harmless for the process lifetime.
+    // NOTE: outErrorHandler and stdinErrorListener are deliberately NOT removed here.
+    // screen.leave() below performs an outStream write whose EIO/EPIPE error arrives
+    // asynchronously on a later tick — removing the handler first leaves that error
+    // unhandled and crashes the process (exit 1) on the exact path we're trying to
+    // exit gracefully.
 
+    if (this.presentationMode === 'conversation') this.conversationRenderer.stop();
     this.screen.leave();
     this.isRunning = false;
     this.exitResolver?.();
@@ -1781,6 +1995,20 @@ export class FleetTui {
     const keyObj = resolveKeyObject(key, rawKeyObj);
     const keyName = keyObj.name ?? '';
     const keyStr = keyObj.sequence ?? key;
+
+    // Leave emulator clipboard chords to the terminal; these are distinct from Ctrl+C.
+    if (keyObj.ctrl && keyObj.shift && ['c', 'C', 'v', 'V'].includes(keyName || keyStr)) return;
+
+    if (keyObj.ctrl && (keyName.toLowerCase() === 'z' || keyStr === '\x1a')) {
+      if (keyObj.shift) {
+        const next = this.inputRedo.pop();
+        if (next !== undefined) { this.inputUndo.push(this.inputBuffer); this.inputBuffer = next; this.inputCursor = next.length; this.draw(); }
+      } else {
+        const previous = this.inputUndo.pop();
+        if (previous !== undefined) { this.inputRedo.push(this.inputBuffer); this.inputBuffer = previous; this.inputCursor = previous.length; this.draw(); }
+      }
+      return;
+    }
 
     // 0. Bracketed paste handling
     if (keyName === 'paste-start' || keyStr === '\x1b[200~' || keyStr.startsWith('\x1b[200~')) {
@@ -1820,17 +2048,41 @@ export class FleetTui {
     // either genuinely multi-line or long enough to match the bracketed-paste
     // size threshold (see handlePastedText's isLarge check).
     if (!keyStr.startsWith('\x1b') && keyStr.length > 1 && (hasInternalLineBreak(keyStr) || keyStr.length >= 200)) {
+      if (!this.screen.isTTY() && hasInternalLineBreak(keyStr) && keyStr.length < 200) {
+        const lines = keyStr.split(/\r\n|\r|\n/);
+        void (async () => {
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine) continue;
+            await this.submitCommand(trimmedLine);
+            if (!this.isRunning) break;
+          }
+        })();
+        return;
+      }
       this.handlePastedText(keyStr);
       return;
     }
 
     // 1. Ctrl+C: exit
     if ((keyObj.ctrl && (keyName === 'c' || keyName === 'C')) || keyStr === '\u0003') {
-      this.stop();
+      const now = Date.now();
+      const active = this.getAgents().some((agent) => agent.status === 'running' || agent.status === 'retry');
+      if (active && now - this.lastInterruptAt > 1500) {
+        this.lastInterruptAt = now;
+        if (this.currentJob) void this.engine.orchestrator.cancelJob(this.currentJob.id).catch(() => undefined);
+        this.statusMessage = 'Interrupt requested. Press Ctrl+C again to exit.';
+        this.draw();
+        return;
+      }
+      this.stop('interrupt');
       process.exit(0);
     }
 
-    // Model Startup Selector key routing
+    // Model Startup Selector key routing (dashboard mode only — never block conversation mode)
+    if (this.startupSelector && this.presentationMode === 'conversation') {
+      this.startupSelector = undefined;
+    }
     if (this.startupSelector) {
       if (keyObj.ctrl && (keyName === 'p' || keyName === 'P' || keyStr === '\x10')) {
         this.startupSelector = undefined;
@@ -1848,7 +2100,7 @@ export class FleetTui {
         return;
       }
       if (this.inputBuffer === '' && (keyStr === 'q' || keyStr === 'Q')) {
-        this.stop();
+        this.stop('user_exit');
         process.exit(0);
       }
       void this.handleStartupSelectorKey(keyStr, keyObj);
@@ -1880,6 +2132,7 @@ export class FleetTui {
       }
       if (keyStr === 'e' || keyStr === 'E') {
         this.tuiMode = 'COMPOSER';
+        this.snapshotInputEdit();
         this.inputBuffer = this.pastedContent;
         this.inputCursor = this.inputBuffer.length;
         this.pastedContent = '';
@@ -1956,11 +2209,9 @@ export class FleetTui {
 
     // Ctrl+Y: Toggle COPY mode
     if ((keyObj.ctrl && (keyName === 'y' || keyName === 'Y')) || keyStr === '\u0019') {
-      this.tuiMode = this.tuiMode === 'COPY' ? 'NORMAL' : 'COPY';
-      this.statusMessage =
-        this.tuiMode === 'COPY'
-          ? 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.'
-          : 'Exited copy mode.';
+      if (this.tuiMode === 'COPY') { this.tuiMode = 'NORMAL'; this.copyAnchorLine = undefined; this.copyNotice = ''; this.statusMessage = 'Exited copy mode.'; }
+      else if (this.presentationMode === 'conversation') this.enterCopyMode();
+      else { this.tuiMode = 'COPY'; this.statusMessage = 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.'; }
       this.draw();
       return;
     }
@@ -1996,6 +2247,28 @@ export class FleetTui {
 
     // COPY mode handling
     if (this.tuiMode === 'COPY') {
+      if (this.presentationMode === 'conversation') {
+        const lines = this.transcriptLines();
+        if (keyName === 'up' || keyStr === '\u001b[A') this.copyCursorLine = Math.max(0, this.copyCursorLine - 1);
+        else if (keyName === 'down' || keyStr === '\u001b[B') this.copyCursorLine = Math.min(Math.max(0, lines.length - 1), this.copyCursorLine + 1);
+        else if (keyName === 'home' || keyStr === '\x1b[H' || keyStr === '\x1bOH') this.copyCursorLine = 0;
+        else if (keyName === 'end' || keyStr === '\x1b[F' || keyStr === '\x1bOF') this.copyCursorLine = Math.max(0, lines.length - 1);
+        else if (keyStr.toLowerCase() === 'v') {
+          this.copyAnchorLine = this.copyAnchorLine === undefined ? this.copyCursorLine : undefined;
+          this.copyNotice = this.copyAnchorLine === undefined ? 'mark cleared' : 'range marked';
+        } else if (keyStr.toLowerCase() === 'y') {
+          if (lines.length) {
+            const start = Math.min(this.copyAnchorLine ?? this.copyCursorLine, this.copyCursorLine);
+            const end = Math.max(this.copyAnchorLine ?? this.copyCursorLine, this.copyCursorLine);
+            const result = this.clipboardController.copy(lines.slice(start, end + 1).join('\n'));
+            this.copyNotice = result.copied ? 'copied to clipboard' : ('reason' in result ? result.reason : 'Copy blocked.');
+          }
+        } else if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
+          this.tuiMode = 'NORMAL'; this.copyAnchorLine = undefined; this.copyNotice = ''; this.statusMessage = 'Exited copy mode.';
+        }
+        this.draw();
+        return;
+      }
       if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
         this.tuiMode = 'NORMAL';
         this.statusMessage = 'Exited copy mode.';
@@ -2180,6 +2453,28 @@ export class FleetTui {
         this.draw();
         return;
       }
+      if (this.inputBuffer.startsWith('!')) {
+        this.inputBuffer = '';
+        this.inputCursor = 0;
+        this.statusMessage = 'Exited shell mode.';
+        this.draw();
+        return;
+      }
+      if (this.presentationMode === 'conversation') {
+        if (this.pendingApprovals.length > 0) return;
+        if (this.inputBuffer) {
+          this.inputBuffer = '';
+          this.inputCursor = 0;
+        } else {
+          const active = this.getAgents().some((agent) => agent.status === 'running' || agent.status === 'retry');
+          if (active && this.currentJob) {
+            void this.engine.orchestrator.cancelJob(this.currentJob.id).catch(() => undefined);
+            this.conversationRenderer.append('Interrupt requested');
+          }
+        }
+        this.draw();
+        return;
+      }
       if (this.eventScrollOffset > 0) {
         this.eventScrollOffset = 0;
         this.draw();
@@ -2206,6 +2501,9 @@ export class FleetTui {
     if (key === '\u0010' || key === '\x10') {
       this.quickActionsOpen = !this.quickActionsOpen;
       this.quickActionIndex = 0;
+      if (this.presentationMode === 'conversation' && this.quickActionsOpen) {
+        this.conversationRenderer.append(`QUICK ACTIONS (Ctrl+P)\n${this.quickActions.map((action, index) => `${index + 1}. ${action.title}`).join('\n')}`);
+      }
       this.draw();
       return;
     }
@@ -2340,30 +2638,50 @@ export class FleetTui {
     }
 
     // 9. Overlaid Approval Modal Actions ([A] Approve, [D] Deny, [V] View details, [I] Inspect,
-    // Ctrl+A Approve All, Ctrl+D Deny All)
-    if (this.pendingApprovals.length > 0) {
+    // Ctrl+A Approve All, Ctrl+D Deny All, Ctrl+J / Ctrl+K / [ / ] cycle approvals)
+    if (this.pendingApprovals.length > 0 && !(this.presentationMode === 'conversation' && (this.inputBuffer.startsWith('/') || keyStr === '/'))) {
       const first = this.pendingApprovals[0];
       if (key === '\u0001') {
         const count = this.engine.approvalQueue.approveAll();
         this.statusMessage = `Approved all ${count} pending policy request${count === 1 ? '' : 's'}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
       if (key === '\u0004') {
         const count = this.engine.approvalQueue.denyAll();
         this.statusMessage = `Denied all ${count} pending policy request${count === 1 ? '' : 's'}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
       if (key === 'a' || key === 'A' || key === 'y' || key === 'Y') {
         this.engine.approvalQueue.approve(first.id);
         this.statusMessage = `Approved policy request for ${first.tool}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
+        return;
+      }
+      if (
+        (keyObj.ctrl && (keyName === 'k' || keyName === 'K')) ||
+        keyStr === '\u000b' ||
+        keyStr === '['
+      ) {
+        this.cycleActiveTask(-1);
+        return;
+      }
+      if (
+        (keyObj.ctrl && (keyName === 'n' || keyName === 'N' || ((keyName === 'j' || keyName === 'J') && keyStr !== '\n' && keyStr !== '\r'))) ||
+        keyStr === '\u000e' ||
+        keyStr === ']'
+      ) {
+        this.cycleActiveTask(1);
         return;
       }
       if (key === 'd' || key === 'D' || key === 'n' || key === 'N') {
         this.engine.approvalQueue.deny(first.id);
         this.statusMessage = `Denied policy request for ${first.tool}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
@@ -2372,12 +2690,16 @@ export class FleetTui {
         this.statusMessage = this.approvalShowDetails
           ? 'Showing expanded approval details'
           : 'Showing standard approval view';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`Approval request (${first.id}): tool=${first.tool} rule=${first.rule} reasons=${first.reasons.join('; ')}`);
+        }
         this.draw();
         return;
       }
       if (key === 'i' || key === 'I') {
         this.pendingApprovals.push(this.pendingApprovals.shift()!);
         this.statusMessage = `Inspected and snoozed policy request for ${first.tool}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
@@ -2423,6 +2745,27 @@ export class FleetTui {
       return;
     }
 
+    // 12. Fast-path subagent/task navigation: Ctrl+K / '[' (prev) and Ctrl+J / Ctrl+N / ']' (next)
+    if (
+      (keyObj.ctrl && (keyName === 'k' || keyName === 'K')) ||
+      keyStr === '\u000b' ||
+      (this.inputBuffer.length === 0 && keyStr === '[')
+    ) {
+      this.cycleActiveTask(-1);
+      return;
+    }
+    if (
+      (keyObj.ctrl &&
+        (keyName === 'n' ||
+          keyName === 'N' ||
+          ((keyName === 'j' || keyName === 'J') && keyStr !== '\n' && keyStr !== '\r'))) ||
+      keyStr === '\u000e' ||
+      (this.inputBuffer.length === 0 && keyStr === ']')
+    ) {
+      this.cycleActiveTask(1);
+      return;
+    }
+
     // 13. Event-Stream Activity Scrolling: PageUp (\x1b[5~) / PageDown (\x1b[6~)
     if (keyName === 'pageup' || keyStr === '\x1b[5~') {
       this.eventScrollOffset += 5;
@@ -2444,6 +2787,8 @@ export class FleetTui {
         return;
       }
       if (keyStr === '1' || keyName === 'f3') {
+        this.missionHome = true;
+        this.navSelectionIndex = 0;
         this.currentView = 'fleet';
         this.focusedPane = 'main';
         this.draw();
@@ -2900,48 +3245,31 @@ export class FleetTui {
     }
 
     if (this.currentView === 'models') {
-      const profiles = this.engine.modelIntelligence?.listProfiles?.() ?? [];
-      const profCount = Math.max(1, profiles.length);
+      const models = this.engine.models.list();
+      if (keyName === 'up' || keyName === 'down' || (this.inputBuffer.length === 0 && ['j', 'k'].includes(keyStr))) {
+        const direction = keyName === 'up' || keyStr === 'k' ? -1 : 1;
+        this.selectedModelProfileIndex = Math.max(0, Math.min(models.length - 1, this.selectedModelProfileIndex + direction));
+        this.draw();
+        return;
+      }
+      if (this.inputBuffer.length === 0 && (keyName === 'return' || keyName === 'enter' || keyStr === '\r')) {
+        const model = models[this.selectedModelProfileIndex];
+        if (model) {
+          this.selectedModelId = model.id;
+          this.statusMessage = `Pinned model: ${model.id}`;
+        }
+        this.draw();
+        return;
+      }
+    }
 
-      if (keyName === 'up' || keyStr === '\u001b[A' || (this.inputBuffer.length === 0 && (keyStr === 'k' || keyStr === 'K'))) {
-        this.selectedModelProfileIndex = Math.max(0, this.selectedModelProfileIndex - 1);
-        this.draw();
-        return;
-      }
-      if (keyName === 'down' || keyStr === '\u001b[B' || (this.inputBuffer.length === 0 && (keyStr === 'j' || keyStr === 'J'))) {
-        this.selectedModelProfileIndex = Math.min(profCount - 1, this.selectedModelProfileIndex + 1);
-        this.draw();
-        return;
-      }
-      if (this.inputBuffer.length === 0 && (keyStr === 'e' || keyStr === 'E' || keyName === 'return' || keyName === 'enter')) {
-        const selProf = profiles[this.selectedModelProfileIndex];
-        const modelId = (selProf as any)?.modelId ?? (selProf as any)?.model ?? 'qwen-2.5-coder-32b';
-        this.evidenceModalData = {
-          title: `Model Capability Profile: ${modelId}`,
-          checks: [
-            { name: 'routing-eligibility', ok: true, exitCode: 0 },
-            { name: 'confidence-threshold-met', ok: true, exitCode: 0 },
-          ],
-          evidence: [
-            { kind: 'empirical_matrix', hash: 'sha256:matrix-prof-001', command: 'evaluate-model' },
-          ],
-          provenanceChain: [
-            `Model: ${modelId}`,
-            'Capability Plan: 88% success rate (n=42, confidence=0.95)',
-            'Capability Implement: 82% success rate (n=120, confidence=0.98)',
-            'Capability Repair: 79% success rate (n=65, confidence=0.92)',
-            'Capability Tool Use: 91% success rate (n=94, confidence=0.96)',
-          ],
-          metrics: {
-            total_samples: (selProf as any)?.sampleCount ?? (selProf as any)?.sampleCounts?.total ?? 321,
-            typescript_score: 0.86,
-            python_score: 0.80,
-          },
-          width: 80,
-          maxRows: 30,
-        };
-        this.evidenceModalOpen = true;
-        this.evidenceScrollOffset = 0;
+    if (this.presentationMode === 'conversation' && (keyName === 'up' || keyName === 'down')) {
+      const beforeCursor = this.inputBuffer.slice(0, this.inputCursor);
+      const afterCursor = this.inputBuffer.slice(this.inputCursor);
+      const atLineStart = beforeCursor.length === 0 || beforeCursor.endsWith('\n');
+      const atLineEnd = afterCursor.length === 0 || afterCursor.startsWith('\n');
+      if ((keyName === 'up' && atLineStart) || (keyName === 'down' && (this.conversationHistoryIndex >= 0 || (this.inputBuffer.length === 0 && atLineEnd)))) {
+        this.moveConversationHistory(keyName === 'up' ? -1 : 1);
         this.draw();
         return;
       }
@@ -2958,6 +3286,7 @@ export class FleetTui {
       const all = this.getFlatNavItems();
       if (all.length > 0) {
         this.navSelectionIndex = Math.max(0, this.navSelectionIndex - 1);
+        this.missionHome = false;
         this.updateNavSelection(all[this.navSelectionIndex]);
         // Enter's command-submit path never resets focus back off 'prompt' — without this,
         // arrowing down to a job after typing+submitting a task leaves focusedPane stuck at
@@ -2978,6 +3307,7 @@ export class FleetTui {
       const all = this.getFlatNavItems();
       if (all.length > 0) {
         this.navSelectionIndex = Math.min(all.length - 1, this.navSelectionIndex + 1);
+        this.missionHome = false;
         this.updateNavSelection(all[this.navSelectionIndex]);
         this.focusedPane = 'nav';
       }
@@ -2991,9 +3321,16 @@ export class FleetTui {
     if (keyName === 'left' || keyStr === '\u001b[D' || keyName === 'right' || keyStr === '\u001b[C') {
       if (this.inputBuffer.length > 0) {
         if (keyName === 'left' || keyStr === '\u001b[D') {
-          this.inputCursor = Math.max(0, this.inputCursor - 1);
+          if (keyObj.ctrl || keyObj.meta) {
+            const prefix = this.inputBuffer.slice(0, this.inputCursor).replace(/\s+$/, '');
+            this.inputCursor = Math.max(0, prefix.search(/\S+$/));
+          } else this.inputCursor = previousGraphemeBoundary(this.inputBuffer, this.inputCursor);
         } else {
-          this.inputCursor = Math.min(this.inputBuffer.length, this.inputCursor + 1);
+          if (keyObj.ctrl || keyObj.meta) {
+            const suffix = this.inputBuffer.slice(this.inputCursor);
+            const move = suffix.match(/^\s*\S+/)?.[0].length ?? suffix.length;
+            this.inputCursor = Math.min(this.inputBuffer.length, this.inputCursor + move);
+          } else this.inputCursor = nextGraphemeBoundary(this.inputBuffer, this.inputCursor);
         }
         this.draw();
         return;
@@ -3025,6 +3362,37 @@ export class FleetTui {
 
     // 16. Enter key: submit command or inspect item (§3)
     if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+      if (this.presentationMode === 'conversation') {
+        if (isCtrlEnter(keyStr, keyObj)) {
+          const command = this.inputBuffer.trim();
+          this.rememberConversationPrompt(command);
+          this.inputBuffer = '';
+          this.inputCursor = 0;
+          this.focusedPane = 'prompt';
+          if (command) void this.submitCommand(command);
+          this.draw();
+          return;
+        }
+        if (keyObj.shift || this.inputBuffer.slice(0, this.inputCursor).endsWith('\\')) {
+          this.snapshotInputEdit();
+          if (this.inputBuffer.slice(0, this.inputCursor).endsWith('\\')) {
+            this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor - 1) + this.inputBuffer.slice(this.inputCursor);
+            this.inputCursor--;
+          }
+          this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + '\n' + this.inputBuffer.slice(this.inputCursor);
+          this.inputCursor++;
+          this.draw();
+          return;
+        }
+        const command = this.inputBuffer.trim();
+        this.rememberConversationPrompt(command);
+        this.inputBuffer = '';
+        this.inputCursor = 0;
+        this.focusedPane = 'prompt';
+        if (command) void this.submitCommand(command);
+        this.draw();
+        return;
+      }
       if (this.inputBuffer.trim().length > 0) {
         const command = this.inputBuffer.trim();
         this.inputBuffer = '';
@@ -3046,6 +3414,7 @@ export class FleetTui {
         void this.submitCommand(submission);
       } else {
         // Enter to inspect currently selected item or block
+        this.missionHome = false;
         const all = this.getFlatNavItems();
         const current = all[this.navSelectionIndex];
         if (current?.category === 'JOBS') {
@@ -3166,9 +3535,12 @@ export class FleetTui {
       /^[\x7f\u0008]+$/.test(keyStr)
     ) {
       if (this.inputCursor > 0) {
-        const count = Math.min(this.inputCursor, /^[\x7f\u0008]+$/.test(keyStr) ? keyStr.length : 1);
-        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor - count) + this.inputBuffer.slice(this.inputCursor);
-        this.inputCursor -= count;
+        this.snapshotInputEdit();
+        let previous = this.inputCursor;
+        const repeats = /^[\x7f\u0008]+$/.test(keyStr) ? keyStr.length : 1;
+        for (let i = 0; i < repeats; i++) previous = previousGraphemeBoundary(this.inputBuffer, previous);
+        this.inputBuffer = this.inputBuffer.slice(0, previous) + this.inputBuffer.slice(this.inputCursor);
+        this.inputCursor = previous;
         this.checkReferencePicker();
         this.draw();
       }
@@ -3176,7 +3548,9 @@ export class FleetTui {
     }
     if (keyName === 'delete' || keyStr === '\x1b[3~') {
       if (this.inputCursor < this.inputBuffer.length) {
-        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(this.inputCursor + 1);
+        this.snapshotInputEdit();
+        const next = nextGraphemeBoundary(this.inputBuffer, this.inputCursor);
+        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(next);
         this.checkReferencePicker();
         this.draw();
       }
@@ -3185,6 +3559,7 @@ export class FleetTui {
 
     // 18. Ctrl+U: Clear entire input line
     if ((keyObj.ctrl && (keyName === 'u' || keyName === 'U')) || keyStr === '\u0015') {
+      this.snapshotInputEdit();
       this.inputBuffer = '';
       this.inputCursor = 0;
       this.isPickerActive = false;
@@ -3236,9 +3611,10 @@ export class FleetTui {
     // 21. Printable characters (§2):
     // Must be a single valid printable character (never an unparsed multi-byte sequence)
     if (
-      keyStr.length === 1 &&
+      Array.from(keyStr).length === 1 &&
       !/[\x00-\x1f\x7f-\x9f]/.test(keyStr)
     ) {
+      this.snapshotInputEdit();
       this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + keyStr + this.inputBuffer.slice(this.inputCursor);
       this.inputCursor += keyStr.length;
       this.focusedPane = 'prompt';
@@ -3315,10 +3691,19 @@ export class FleetTui {
       list.push(`@${b.id}`);
     }
 
-    // Jobs: @job:<id>
+    // Jobs: @job:<id> and Tasks: @task:<id>
     const jobs = this.engine.orchestrator.listJobs?.() ?? (this.currentJob ? [this.currentJob] : []);
     for (const j of jobs) {
       list.push(`@job:${j.id}`);
+      for (const t of j.tasks ?? []) {
+        list.push(`@task:${t.id}`);
+      }
+    }
+
+    // Active/recorded agent tasks & executions: @task:<id> and @exec:<id>
+    for (const a of this.agents.values()) {
+      list.push(`@task:${a.taskId}`);
+      list.push(`@exec:${a.taskId}`);
     }
 
     // Agents: @agent:<id>
@@ -3356,12 +3741,144 @@ export class FleetTui {
     try {
       const block = await getBlock(this.engine, blockId);
       if (block) {
-        this.expandedBlock = block;
+        if (this.presentationMode === 'conversation') {
+          const out = [
+            `Block #${block.id} (${block.status}) — ${block.command}`,
+            block.stdout ? block.stdout.trimEnd() : '',
+            block.stderr ? `[stderr] ${block.stderr.trimEnd()}` : '',
+            `exit: ${block.exitCode ?? 0} · duration: ${block.durationMs ?? 0}ms`,
+          ].filter(Boolean).join('\n');
+          this.statusMessage = `Block #${block.id}: ${block.status}`;
+          this.conversationRenderer.append(out);
+        } else {
+          this.expandedBlock = block;
+          this.statusMessage = `Expanded block #${block.id}`;
+        }
+        this.draw();
+      } else {
+        this.statusMessage = `Block '${blockId}' not found.`;
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
         this.draw();
       }
     } catch {
-      // Ignore
+      this.statusMessage = `Block '${blockId}' not found.`;
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
     }
+  }
+
+  /**
+   * Executes an inline shell command (`!<cmd>` or `/sh <cmd>`) directly in `engine.projectRoot`,
+   * capturing stdout/stderr/exitCode as a persistent Block record that can be referenced via `@<id>`.
+   */
+  private async executeInlineShellCommand(shellCmd: string, submission: InteractiveSubmission): Promise<void> {
+    const rawTrimmed = submission.text.trim();
+    const displayCmd = rawTrimmed.startsWith('!') || rawTrimmed.startsWith('/sh') ? rawTrimmed : `!${shellCmd}`;
+    if (this.presentationMode === 'conversation') {
+      this.conversationRenderer.append(`> ${displayCmd}`);
+    }
+    this.statusMessage = `Command running: [SHELL] Running: ${shellCmd}...`;
+    this.draw();
+
+    const startedAt = Date.now();
+    let shellBin = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/sh';
+    let shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', shellCmd] : ['-c', shellCmd];
+    if (process.platform === 'win32') {
+      const shMatch = shellCmd.match(/^sh\s+-c\s+(["'])([\s\S]*)\1$/);
+      if (shMatch) {
+        shellArgs = [
+          '-e',
+          `const { spawnSync } = require('node:child_process'); const cmd = process.argv[1].replace(/;\\s*exit\\s+/g, ' & exit /b '); const r = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', cmd], { stdio: 'inherit' }); process.exit(r.status ?? 1);`,
+          shMatch[2],
+        ];
+        shellBin = process.execPath;
+      } else if (shellCmd === 'pwd') {
+        shellArgs = ['/d', '/s', '/c', 'cd'];
+      } else if (/^ls(\s+-[a-zA-Z]+)?$/.test(shellCmd)) {
+        shellArgs = ['/d', '/s', '/c', 'dir /a'];
+      }
+    }
+    let tracker: Awaited<ReturnType<typeof createBlock>> | undefined;
+    try {
+      if (this.engine.store) {
+        tracker = await createBlock(this.engine, `! ${shellCmd}`, [shellBin, ...shellArgs], {
+          submissionId: submission.submissionId,
+          source: submission.source,
+          sessionId: submission.sessionId,
+        });
+      }
+    } catch {
+      // Store may not be configured
+    }
+
+    try {
+      const { stdout = '', stderr = '' } = await execFileAsync(shellBin, shellArgs, {
+        cwd: this.engine.projectRoot,
+        timeout: 30_000,
+        maxBuffer: 1024 * 1024,
+      });
+      const durationMs = Math.max(0, Date.now() - startedAt);
+      const blockId = tracker?.block.id;
+      if (tracker) {
+        await tracker.finish('success', { stdout, stderr, exitCode: 0, durationMs }).catch(() => {});
+        await this.refreshRecentBlocks();
+      }
+      this.lastShellOutput = {
+        command: shellCmd,
+        stdout,
+        stderr,
+        exitCode: 0,
+        durationMs,
+        blockId,
+      };
+      const firstLine = (stdout.trim() || stderr.trim()).split(/\r?\n/)[0] ?? '';
+      const refHint = blockId ? ` (ref @${blockId})` : '';
+      this.statusMessage = `Command completed (${durationMs}ms) · [SHELL${blockId ? ` #${blockId}` : ''}] exit 0: ${firstLine || '(no output)'}${refHint}`;
+      if (this.presentationMode === 'conversation') {
+        const outParts: string[] = [];
+        const cleanStdout = stdout.replace(/\r/g, '').trimEnd();
+        const cleanStderr = stderr.replace(/\r/g, '').trimEnd();
+        if (cleanStdout) outParts.push(cleanStdout);
+        if (cleanStderr) outParts.push(`stderr:\n${cleanStderr}`);
+        if (!cleanStdout && !cleanStderr) outParts.push('(no output)');
+        outParts.push(`✓ Command completed · exit 0 · ${durationMs}ms${blockId ? ` · ref @${blockId}` : ''}`);
+        this.conversationRenderer.append(outParts.join('\n'));
+      }
+    } catch (err: any) {
+      const durationMs = Math.max(0, Date.now() - startedAt);
+      const stdout = typeof err?.stdout === 'string' ? err.stdout : '';
+      const stderr = typeof err?.stderr === 'string' ? err.stderr : err instanceof Error ? err.message : String(err);
+      const exitCode = typeof err?.code === 'number' ? err.code : 1;
+      const blockId = tracker?.block.id;
+      if (tracker) {
+        await tracker.finish('failed', { stdout, stderr, exitCode, durationMs, errors: [stderr] }).catch(() => {});
+        await this.refreshRecentBlocks();
+      }
+      this.lastShellOutput = {
+        command: shellCmd,
+        stdout,
+        stderr,
+        exitCode,
+        durationMs,
+        blockId,
+      };
+      const firstErr = (stderr.trim() || stdout.trim()).split(/\r?\n/)[0] ?? 'command failed';
+      const refHint = blockId ? ` (ref @${blockId})` : '';
+      this.statusMessage = `Execution failed (${durationMs}ms) · [SHELL${blockId ? ` #${blockId}` : ''}] exit ${exitCode}: ${firstErr}${refHint}`;
+      if (this.presentationMode === 'conversation') {
+        const outParts: string[] = [`✗ Command failed · exit ${exitCode} · ${durationMs}ms${blockId ? ` · ref @${blockId}` : ''}`];
+        const cleanStdout = stdout.replace(/\r/g, '').trimEnd();
+        const cleanStderr = stderr.replace(/\r/g, '').trimEnd();
+        if (cleanStdout) outParts.push(cleanStdout);
+        if (cleanStderr) outParts.push(`stderr:\n${cleanStderr}`);
+        this.conversationRenderer.append(outParts.join('\n'));
+      }
+    }
+    this.draw();
   }
 
   /**
@@ -3388,6 +3905,133 @@ export class FleetTui {
     const trimmed = submission.text.trim();
     if (!trimmed) return;
 
+    if (trimmed === '/fleet') {
+      if (this.presentationMode !== 'dashboard') {
+        this.presentationMode = 'dashboard';
+        if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation('dashboard');
+      }
+      this.currentView = 'fleet';
+      this.statusMessage = 'Switched to Fleet dashboard view.';
+      this.draw();
+      return;
+    }
+    if (trimmed === '/chat') {
+      if (this.presentationMode !== 'conversation') {
+        this.presentationMode = 'conversation';
+        if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation('conversation');
+        this.conversationRenderer.start(process.env.USER ?? process.env.USERNAME ?? 'controller', this.selectedModelId ?? 'auto-routed model');
+      } else {
+        this.conversationRenderer.append('Conversation mode active.');
+      }
+      this.focusedPane = 'prompt';
+      this.statusMessage = 'Conversation mode active.';
+      this.draw();
+      return;
+    }
+    if (trimmed === '/verbose' || trimmed === '/quiet' || trimmed === '/debug') {
+      const verbosity = trimmed.slice(1) as TranscriptVerbosity;
+      this.eventSummarizer.setVerbosity(verbosity);
+      this.statusMessage = `Verbosity: ${verbosity}`;
+      this.conversationRenderer.append(`Verbosity: ${verbosity}`);
+      this.draw();
+      return;
+    }
+    if (trimmed === '/help' && this.presentationMode === 'conversation') {
+      this.conversationRenderer.append(
+        'Commands: /help · /models · /model <id|auto> · /agents · /runtimes · /tasks · /status · /doctor · /block [id] · /why <topic> · /cancel · /compact · /clear-context · /steer <text> · /approve · /deny · /sh <cmd> · !<cmd> · /fleet · /chat · /exit',
+      );
+      this.draw();
+      return;
+    }
+    if ((trimmed === '/tasks' || trimmed === '/task') && this.presentationMode === 'conversation') {
+      const tasks = this.statusProjection.getTasks();
+      this.conversationRenderer.append(tasks.length ? `Tasks:\n${tasks.map((task) => `${task.status} · ${task.taskId}`).join('\n')}` : 'Tasks: No tasks in this session.');
+      this.draw();
+      return;
+    }
+    if ((trimmed === '/models' || trimmed === '/model-manager' || trimmed === '/model-intelligence') && this.presentationMode === 'conversation') {
+      const models = this.engine.models.list();
+      this.conversationRenderer.append(models.length ? `Models: ${models.map((model) => model.id).join(', ')}\nUse /model <id> to select a model.` : 'Models: No registered models.');
+      this.draw();
+      return;
+    }
+    if (trimmed === '/agents' && this.presentationMode === 'conversation') {
+      const registered = this.engine.agents?.list?.() ?? [];
+      this.conversationRenderer.append(
+        registered.length
+          ? `Agents: ${registered.map((a: any) => a.descriptor?.name ?? a.id ?? String(a)).join(', ')}`
+          : 'Agents: coding (built-in)',
+      );
+      this.draw();
+      return;
+    }
+    if (trimmed === '/runtimes' && this.presentationMode === 'conversation') {
+      const runtimes = this.engine.runtimes?.list?.() ?? [];
+      this.conversationRenderer.append(
+        runtimes.length
+          ? `Runtimes: ${runtimes.map((r: any) => `${r.id} (${r.status ?? 'configured'})`).join(', ')}`
+          : 'Runtimes: none registered.',
+      );
+      this.draw();
+      return;
+    }
+    if (trimmed === '/status') {
+      const modelsCount = this.engine.models?.list().length ?? 0;
+      const runtimesCount = this.engine.runtimes?.list().length ?? 0;
+      const activeTasks = this.getAgents().filter((a) => a.status === 'running' || a.status === 'retry').length;
+      const msg = `Status: ${modelsCount} model(s), ${runtimesCount} runtime(s), ${activeTasks} active task(s), ${this.pendingApprovals.length} pending approval(s).`;
+      this.statusMessage = msg;
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(msg);
+      }
+      this.draw();
+      return;
+    }
+    if (trimmed === '/approve' || trimmed === '/Approve') {
+      if (this.pendingApprovals.length > 0) {
+        const first = this.pendingApprovals[0];
+        this.engine.approvalQueue.approve(first.id);
+        this.statusMessage = `Approved policy request for ${first.tool}`;
+      } else {
+        this.statusMessage = 'No pending approval requests.';
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
+      return;
+    }
+    if (trimmed === '/deny' || trimmed === '/Deny') {
+      if (this.pendingApprovals.length > 0) {
+        const first = this.pendingApprovals[0];
+        this.engine.approvalQueue.deny(first.id);
+        this.statusMessage = `Denied policy request for ${first.tool}`;
+      } else {
+        this.statusMessage = 'No pending approval requests.';
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
+      return;
+    }
+    if (trimmed === '/logs' || trimmed === '/details') {
+      const taskId = this.selectedTaskId ?? this.getAgents().at(-1)?.taskId;
+      const taskLines = taskId ? (this.agentLogs.get(taskId) ?? []).slice(-120).map((entry) => `[${entry.time}] ${entry.text}`) : [];
+      const lines = taskLines.length ? taskLines : this.eventSummarizer.logLines(80);
+      this.conversationRenderer.append(lines.length ? lines.join('\n') : 'No detailed events recorded yet.');
+      this.draw();
+      return;
+    }
+    if (trimmed === '/tail' && this.presentationMode === 'conversation') {
+      const taskId = this.selectedTaskId ?? this.getAgents().at(-1)?.taskId;
+      const raw = taskId ? this.lastRawResponse.get(taskId) : undefined;
+      const lines = taskId ? (this.agentLogs.get(taskId) ?? []).slice(-80).map((entry) => entry.text) : [];
+      this.conversationRenderer.append(raw || lines.join('\n') || 'No task output is available yet.');
+      this.draw();
+      return;
+    }
+
     if (trimmed === '/exit' || trimmed === '/quit' || trimmed === 'q') {
       this.stop();
       return;
@@ -3400,9 +4044,25 @@ export class FleetTui {
     }
 
     if (trimmed === '/copy') {
-      this.tuiMode = 'COPY';
-      this.statusMessage = 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.';
+      if (this.presentationMode === 'conversation') this.enterCopyMode();
+      else { this.tuiMode = 'COPY'; this.statusMessage = 'Entered copy mode. Terminal selection active. Submissions locked. Press Esc to exit.'; }
       this.draw();
+      return;
+    }
+
+    // Inline Shell-Mode (`!<cmd>` or `/sh <cmd>`): execute directly in projectRoot and record as a Block
+    if (trimmed.startsWith('!') || trimmed === '/sh' || trimmed.startsWith('/sh ')) {
+      const shellCmd = (trimmed.startsWith('!') ? trimmed.slice(1) : trimmed.slice(3)).trim();
+      if (!shellCmd) {
+        this.statusMessage =
+          'Shell mode: type !<command> (e.g. !git status) or /sh <command> to execute in project root and capture as @block.';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
+        this.draw();
+        return;
+      }
+      await this.executeInlineShellCommand(shellCmd, submission);
       return;
     }
 
@@ -3452,13 +4112,10 @@ export class FleetTui {
     if (trimmed === '/search') {
       this.currentView = 'search';
       this.focusedPane = 'main';
-      this.draw();
-      return;
-    }
-
-    if (trimmed === '/fleet') {
-      this.currentView = 'fleet';
-      this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        this.statusMessage = 'Search view available in Fleet dashboard (/fleet).';
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -3466,6 +4123,11 @@ export class FleetTui {
     if (trimmed === '/improvement') {
       this.currentView = 'improvement';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        const exps = (this.engine.optimizer as any)?.listExperiments?.() ?? [];
+        this.statusMessage = `Self-improvement: ${exps.length} experiment(s) recorded.`;
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -3481,6 +4143,11 @@ export class FleetTui {
       this.currentView = 'canary';
       this.canaryTab = 'dashboard';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        const canaries = (this.engine.optimizer as any)?.getCanaryDeploymentService?.()?.listDeployments?.() ?? [];
+        this.statusMessage = `Canary deployments: ${canaries.length} recorded.`;
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -3488,6 +4155,11 @@ export class FleetTui {
     if (trimmed === '/context') {
       this.currentView = 'context';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        const m = this.getContextMetrics();
+        this.statusMessage = `Context utilization: ${m.used}/${m.max} tokens (${this.contextSamples.length} sample(s)).`;
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -3496,6 +4168,10 @@ export class FleetTui {
       this.evidenceProvenanceDepth = this.evidenceProvenanceDepth === 0 ? 9 : 0;
       this.currentView = 'evidence';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        this.statusMessage = `Provenance depth set to ${this.evidenceProvenanceDepth}.`;
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -3504,6 +4180,13 @@ export class FleetTui {
       void this.refreshEvidenceInspection();
       this.currentView = 'evidence';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        const cached = this.currentEvidenceInspection();
+        this.statusMessage = cached
+          ? `Evidence (${cached.inspection.executionId}): ${cached.why.complete ? 'VERIFIED' : 'INCOMPLETE'}`
+          : 'No execution evidence selected.';
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -3514,6 +4197,9 @@ export class FleetTui {
       const topic = (whyMatch[1] ?? '').toLowerCase();
       if (!topic) {
         this.statusMessage = 'Usage: why [model|worker|tool|candidate|prune|complete|incomplete|rollback]';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
         this.draw();
         return;
       }
@@ -3530,12 +4216,20 @@ export class FleetTui {
 
     if (trimmed === '/worktrees') {
       this.currentView = 'worktrees';
+      if (this.presentationMode === 'conversation') {
+        this.statusMessage = `Worktree isolation: ${this.useWorktrees ? 'enabled' : 'disabled'}.`;
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
 
-    if (trimmed === '/repaint') {
+    if (trimmed === '/repaint' || trimmed === '/clear') {
       this.screen.repaint();
+      if (this.presentationMode === 'conversation') {
+        this.statusMessage = 'Screen repainted.';
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -3543,12 +4237,28 @@ export class FleetTui {
     if (trimmed === '/clear-context') {
       await clearContext(this.engine).catch(() => {});
       this.statusMessage = 'Cleared all active context blocks';
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
 
     if (trimmed === '/doctor') {
-      this.statusMessage = 'System diagnostics healthy: control plane, workers, and runtimes online';
+      const readiness = this.engine.lifecycle?.getReadiness();
+      const modelsCount = this.engine.models?.list().length ?? 0;
+      const unhealthyRuntimes = (this.engine.discovered ?? []).filter((d) => d.health === 'unavailable');
+      if (readiness && readiness.readyCount === 0 && modelsCount === 0) {
+        this.statusMessage = `System diagnostics warning: 0 models registered (${unhealthyRuntimes.length} runtime(s) unavailable)`;
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`${this.statusMessage}\n${this.formatMissingModelRecovery(readiness)}`);
+        }
+      } else {
+        this.statusMessage = 'System diagnostics healthy: control plane, workers, and runtimes online';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`${this.statusMessage} (${modelsCount} model(s) registered)`);
+        }
+      }
       this.draw();
       return;
     }
@@ -3565,6 +4275,9 @@ export class FleetTui {
         this.statusMessage =
           `Don't know how to launch '${target}' — only 'lmstudio' is supported (LM Studio ships an ` +
           `'lms' CLI for this; Ollama is normally already running as a background service).`;
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
         this.draw();
         return;
       }
@@ -3577,6 +4290,9 @@ export class FleetTui {
         this.statusMessage = /ENOENT/.test(message)
           ? `'lms' CLI not found on PATH — install LM Studio (lmstudio.ai) or add its CLI to PATH`
           : `Failed to start LM Studio server: ${message.split('\n')[0]}`;
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`✗ ${this.statusMessage}`);
+        }
         this.draw();
         return;
       }
@@ -3590,7 +4306,28 @@ export class FleetTui {
       this.statusMessage = result.ok
         ? `LM Studio started — ${result.message}`
         : `LM Studio server started, but still not reachable: ${result.message}`;
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
+      return;
+    }
+
+    if (trimmed === '/unpin') {
+      this.selectedModelId = undefined;
+      this.statusMessage = 'Cleared model pin — new tasks will be auto-routed by the scheduler again.';
+      if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
+      this.draw();
+      return;
+    }
+
+    if (trimmed === '/pin' || trimmed.startsWith('/pin ')) {
+      const pinArg = trimmed.slice(4).trim();
+      await this.submitCommand({
+        ...submission,
+        submissionId: `${submission.submissionId}-pin`,
+        text: pinArg ? `/model ${pinArg}` : '/model',
+      });
       return;
     }
 
@@ -3601,12 +4338,14 @@ export class FleetTui {
         const current = this.selectedModelId ?? 'auto (scheduler picks)';
         const ids = available.map((m) => m.id).join(', ') || '(none registered)';
         this.statusMessage = `Model: ${current}. Available: ${ids}. Use /model <id> to pin, /model auto to clear.`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
       if (arg === 'auto' || arg === 'clear') {
         this.selectedModelId = undefined;
         this.statusMessage = 'Cleared model pin — new tasks will be auto-routed by the scheduler again.';
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
@@ -3614,37 +4353,37 @@ export class FleetTui {
       if (!match) {
         const ids = available.map((m) => m.id).join(', ') || '(none registered)';
         this.statusMessage = `No registered model '${arg}'. Available: ${ids}.`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
       this.selectedModelId = match.id;
       this.statusMessage = `Pinned model to '${match.id}' — new tasks will use it instead of auto-routing.`;
+      if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
       this.draw();
       return;
     }
 
-    if (trimmed.startsWith('/block')) {
+    if (trimmed === '/block' || trimmed.startsWith('/block ')) {
       const parts = trimmed.split(/\s+/);
       const targetId = parts[1] ?? this.recentBlocks[0]?.id;
       if (targetId) {
         await this.expandBlock(targetId);
+      } else {
+        this.statusMessage = 'No command blocks recorded in this session yet.';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
+        this.draw();
       }
       return;
     }
 
-    if (trimmed.startsWith('/cancel')) {
-      // cancelJob()/cancelTask() throw for an invalid state transition (e.g. the job is
-      // already completed/failed) — submitCommand() is always invoked fire-and-forget
-      // (`void this.submitCommand(...)`), so an uncaught throw here is an unhandled
-      // promise rejection, which crashes the whole Node process by default, not just the
-      // TUI. Everything below is wrapped so a bad /cancel is a status message, not a crash.
+    if (trimmed === '/cancel' || trimmed.startsWith('/cancel ')) {
       try {
         const parts = trimmed.split(/\s+/);
         const arg = parts[1];
 
-        // A job id (e.g. one picked from the nav, possibly from a past session — /cancel
-        // previously only ever worked against `this.currentJob`, the job launched in
-        // *this* session, so cancelling an older/reloaded job did nothing at all).
         const argJob = arg ? this.engine.orchestrator.getJob(arg) : undefined;
         if (argJob) {
           await this.engine.orchestrator.cancelJob(argJob.id);
@@ -3653,7 +4392,6 @@ export class FleetTui {
           await this.engine.orchestrator.cancelTask(this.currentJob.id, arg);
           this.statusMessage = `Cancelled task ${arg}`;
         } else {
-          // No argument: cancel whatever's highlighted in the nav if it's a job.
           const all = this.getFlatNavItems();
           const selected = all[this.navSelectionIndex];
           if (selected?.category === 'JOBS') {
@@ -3672,11 +4410,14 @@ export class FleetTui {
       } catch (err) {
         this.statusMessage = `Could not cancel: ${err instanceof Error ? err.message : String(err)}`;
       }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
 
-    if (trimmed.startsWith('/compact')) {
+    if (trimmed === '/compact' || trimmed.startsWith('/compact ')) {
       try {
         const parts = trimmed.split(/\s+/);
         const targetExecId = parts[1] ?? this.selectedTaskId ?? this.currentJob?.tasks[0]?.id;
@@ -3707,12 +4448,23 @@ export class FleetTui {
       } catch (err) {
         this.statusMessage = `Compaction error: ${err instanceof Error ? err.message : String(err)}`;
       }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
 
-    if (trimmed.startsWith('/steer ')) {
-      const instruction = trimmed.slice(7).trim();
+    if (trimmed === '/steer' || trimmed.startsWith('/steer ')) {
+      const instruction = trimmed.slice(6).trim();
+      if (!instruction) {
+        this.statusMessage = 'Usage: /steer <instruction>';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
+        this.draw();
+        return;
+      }
       const targetTaskId = this.selectedTaskId ?? this.getAgents()[this.highlightedIndex]?.taskId;
       if (this.currentJob && targetTaskId) {
         this.engine.orchestrator.steerTask(this.currentJob.id, targetTaskId, instruction);
@@ -3722,6 +4474,43 @@ export class FleetTui {
         this.statusMessage = `Injected fleet-wide steering: "${instruction}"`;
       } else {
         this.statusMessage = `Injected steering: "${instruction}"`;
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
+      return;
+    }
+
+    if (trimmed === '/retry' || trimmed.startsWith('/retry ')) {
+      const retryTask = trimmed.slice(6).trim() || this.currentError?.taskId || this.selectedTaskId;
+      this.currentError = undefined;
+      this.statusMessage = retryTask ? `Retrying task ${retryTask}...` : 'No failed task selected to retry.';
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
+      return;
+    }
+
+    // Reject unknown slash commands instead of dispatching them as AI coding prompts
+    if (trimmed.startsWith('/') && !trimmed.startsWith('/fanout ') && trimmed !== '/fanout') {
+      if (trimmed === '/fanout') {
+        this.statusMessage = 'Usage: /fanout <task 1>; <task 2>[; <task 3>...]';
+      } else {
+        const cmdToken = trimmed.split(/\s+/)[0];
+        this.statusMessage = `Unknown command '${cmdToken}'. Type /help for available commands.`;
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
+      return;
+    }
+    if (trimmed === '/fanout') {
+      this.statusMessage = 'Usage: /fanout <task 1>; <task 2>[; <task 3>...]';
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
       }
       this.draw();
       return;
@@ -3755,18 +4544,48 @@ export class FleetTui {
     }
 
     // Submit a new task or fan-out job
-    await this.launchJobFromPrompt(trimmed);
+    try {
+      await this.launchJobFromPrompt(trimmed);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.statusMessage = `Execution failed: ${errMsg}`;
+      if (this.currentBlockTracker) {
+        await this.currentBlockTracker.finish('failed', { exitCode: 1, stderr: errMsg, errors: [errMsg] }).catch(() => {});
+        this.currentBlockTracker = undefined;
+        await this.refreshRecentBlocks();
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(`✗ Execution failed: ${errMsg}`);
+      }
+      this.draw();
+    }
   }
 
   /**
    * Decomposes or parses a user prompt and launches concurrent execution.
    */
   async launchJobFromPrompt(prompt: string): Promise<void> {
+    if (this.presentationMode === 'conversation') {
+      this.conversationRenderer.append(`> ${prompt}`);
+      this.conversationStartedAt = Date.now();
+    }
     // Installed models are activated on the existing execution after scheduling.
     const readiness = this.engine.lifecycle.getReadiness();
-    if (readiness.installedCount === 0 && readiness.readyCount === 0) {
-      this.statusMessage = 'No models installed. Discover models in LM Studio or Ollama.';
-      this.openModelRecoveryModal();
+    const hasSchedulable = this.hasSchedulableGenerativeModel();
+    if ((readiness.installedCount === 0 && readiness.readyCount === 0) || (this.presentationMode === 'conversation' && !hasSchedulable)) {
+      const recoveryText = this.formatMissingModelRecovery(readiness, prompt);
+      this.statusMessage = 'Model unavailable · No models installed. Discover models in LM Studio or Ollama.';
+      if (this.currentBlockTracker) {
+        await this.currentBlockTracker.finish('failed', { exitCode: 1, stderr: recoveryText, errors: [recoveryText] }).catch(() => {});
+        this.currentBlockTracker = undefined;
+        await this.refreshRecentBlocks();
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(recoveryText);
+        this.draw();
+      } else {
+        this.openModelRecoveryModal();
+      }
       return;
     }
 
@@ -3855,6 +4674,8 @@ export class FleetTui {
       this.currentJob = job;
       this.agents.clear();
       this.agentLogs.clear();
+      this.eventSummarizer = new EventSummarizer(this.eventSummarizer.getVerbosity());
+      this.statusProjection.seed(job.tasks.map((task) => task.id));
       // A new job means a fresh execution context — reset dismissed-error tracking so
       // errors from this job always surface (they're new failures, not repeats of
       // something the user already acknowledged from a previous session).
@@ -3881,6 +4702,7 @@ export class FleetTui {
         this.agentLogs.set(t.id, []);
       }
 
+      this.missionHome = false;
       this.highlightedIndex = 0;
       this.selectedTaskId = job.tasks[0]?.id;
       this.selectedNavId = job.tasks[0]?.id;
@@ -3923,7 +4745,21 @@ export class FleetTui {
           // here rather than a bare "failed!" that hides why.
           const timeoutNode = finalJob.graph.nodes.find((n) => /timeout/i.test(n.error ?? ''));
           const outcome = timeoutNode ? `failed (${timeoutNode.error})` : `${finalJob.status}!`;
-          this.statusMessage = `Job ${job.id} ${outcome} Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
+          const prefix = finalJob.status === 'failed' ? 'Execution failed · ' : '';
+          this.statusMessage = `${prefix}Job ${job.id} ${outcome} Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
+          if (this.presentationMode === 'conversation') {
+            if (finalJob.status === 'completed') {
+              const elapsed = Math.max(0, Math.floor(this.currentRollup.durationMs / 1000));
+              const elapsedText = elapsed >= 60 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${elapsed}s`;
+              const files = [...new Set([...this.agents.values()].flatMap((agent) => agent.filesChanged))];
+              const summaries = this.eventSummarizer.completion(files);
+              this.conversationRenderer.append([`✓ Completed in ${elapsedText}`, ...summaries.map((line) => `  ${line}`)].join('\n'));
+            } else if (finalJob.status === 'cancelled') {
+              this.conversationRenderer.append('■ Cancelled');
+            } else {
+              this.conversationRenderer.append('✗ Task failed · /logs for details');
+            }
+          }
 
           if (this.currentBlockTracker) {
             await this.currentBlockTracker.finish(finalJob.status === 'completed' ? 'success' : 'failed', {
@@ -3935,21 +4771,26 @@ export class FleetTui {
           }
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          this.statusMessage = `Job execution error: ${errMsg}`;
+          const isSched = /schedul|eligible|model|capacity|admission|reject/i.test(errMsg);
+          this.statusMessage = `${isSched ? 'Scheduler rejected task · ' : 'Execution failed · '}Job execution error: ${errMsg}`;
 
-          // Structured error component (§29)
-          this.currentError = {
-            phase: 'scheduling',
-            reason: errMsg,
-            required: `Allocatable compute on workstation with loaded model`,
-            available: `Models: ${this.engine.models.list().length}, Concurrency: ${this.concurrencyLimit}`,
-            suggestedSteps: [
-              '1. Verify model instances are loaded: wa models list',
-              '2. Run system health diagnostics: wa doctor',
-              '3. Check memory & context limits in wazir.json',
-            ],
-            timestamp: new Date(),
-          };
+          if (this.presentationMode === 'conversation') {
+            this.conversationRenderer.append(`✗ ${isSched ? 'Scheduler rejected task' : 'Execution failed'}: ${errMsg}\n  Run /doctor or wa models list to inspect runtime readiness.`);
+          } else {
+            // Structured error component (§29)
+            this.currentError = {
+              phase: 'scheduling',
+              reason: errMsg,
+              required: `Allocatable compute on workstation with loaded model`,
+              available: `Models: ${this.engine.models.list().length}, Concurrency: ${this.concurrencyLimit}`,
+              suggestedSteps: [
+                '1. Verify model instances are loaded: wa models list',
+                '2. Run system health diagnostics: wa doctor',
+                '3. Check memory & context limits in wazir.json',
+              ],
+              timestamp: new Date(),
+            };
+          }
 
           if (this.currentBlockTracker) {
             await this.currentBlockTracker.finish('failed', {
@@ -3965,18 +4806,31 @@ export class FleetTui {
       })();
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      this.statusMessage = `Scheduling failed: ${errMsg}`;
-      this.currentError = {
-        phase: 'scheduling',
-        reason: errMsg,
-        required: 'Valid task definition and available agent',
-        available: 'Scheduler queue rejection',
-        suggestedSteps: [
-          '1. Verify task syntax and prompt format',
-          '2. Check active context budget with wa context list',
-        ],
-        timestamp: new Date(),
-      };
+      this.statusMessage = `Scheduler rejected task · Scheduling failed: ${errMsg}`;
+      if (this.currentBlockTracker) {
+        await this.currentBlockTracker.finish('failed', {
+          exitCode: 1,
+          stderr: errMsg,
+          errors: [errMsg],
+        }).catch(() => {});
+        this.currentBlockTracker = undefined;
+        await this.refreshRecentBlocks();
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(`✗ Scheduler rejected task: ${errMsg}\n  Verify task syntax or run /doctor to inspect system readiness.`);
+      } else {
+        this.currentError = {
+          phase: 'scheduling',
+          reason: errMsg,
+          required: 'Valid task definition and available agent',
+          available: 'Scheduler queue rejection',
+          suggestedSteps: [
+            '1. Verify task syntax and prompt format',
+            '2. Check active context budget with wa context list',
+          ],
+          timestamp: new Date(),
+        };
+      }
       this.draw();
     }
   }
@@ -4073,6 +4927,12 @@ export class FleetTui {
 
   private onJobEvent = (ev: JobOrchestratorEvent): void => {
     const taskId = ev.taskId;
+    const projected = taskId ? this.statusProjection.apply(ev as any) : undefined;
+    if (projected && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(projected.status)) {
+      const eventStatus: Record<string, string> = { 'task:completed': 'COMPLETED', 'task:failed': 'FAILED', 'task:cancelled': 'CANCELLED' };
+      if (eventStatus[ev.type] && eventStatus[ev.type] !== projected.status) return;
+      if (!eventStatus[ev.type] && !(ev.type === 'task:progress' && (ev.event as any)?.kind === 'usage')) return;
+    }
     const now = new Date();
     const timeStr = now.toISOString().slice(11, 19);
 
@@ -4125,6 +4985,12 @@ export class FleetTui {
           const next = prev + (p.content ?? '');
           this.streamingBuffers.set(taskId, next.length > 12_000 ? next.slice(-12_000) : next);
           return;
+        }
+
+        const summary = this.eventSummarizer.progress(p, p.metadata);
+        if (this.presentationMode === 'conversation' && summary.milestone) {
+          const icon = summary.milestone.kind === 'error' ? '✗' : summary.milestone.kind === 'success' ? '✓' : '•';
+          this.conversationRenderer.append(`${icon} ${summary.milestone.text}${summary.milestone.kind === 'error' ? '\n  /logs for details' : ''}`);
         }
 
         // The model turn just finished (its usage is known): fold the streamed text into
@@ -4185,6 +5051,7 @@ export class FleetTui {
             if (p.error) {
               eventKind = 'error';
               eventText = `${p.tool} failed — ${this.humanizeError(p.error)}`;
+              this.statusMessage = `Tool execution failed: ${eventText}`;
             } else {
               eventKind = 'tool';
               eventText = `${p.tool} succeeded`;
@@ -4227,6 +5094,9 @@ export class FleetTui {
           text: `Task completed successfully (${agent.filesChanged.length} files updated)`,
           kind: 'complete',
         });
+        if (this.presentationMode === 'conversation' && typeof ev.result === 'string' && ev.result.trim()) {
+          this.conversationRenderer.append(ev.result.trim());
+        }
       } else if (ev.type === 'task:failed') {
         this.flushStreaming(taskId, logs, timeStr);
         agent.status = 'failed';
@@ -4245,12 +5115,16 @@ export class FleetTui {
         }
         const failureReason = ev.error ? this.humanizeError(ev.error) : 'Task failed';
         agent.lastMessage = failureReason;
+        this.statusMessage = `Execution failed: ${failureReason.split(/\r?\n/, 1)[0]}`;
 
         logs.push({
           time: timeStr,
           text: isInfra ? `Infrastructure preflight failed: ${failureReason}` : `Task failed: ${failureReason}`,
           kind: isInfra ? 'infra' : 'error',
         });
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`✗ Execution failed: ${failureReason.split(/\r?\n/, 1)[0]}\n  /logs for details`);
+        }
 
         // Structured Error Component (§29).
         // Only open the card if the user has not already dismissed it for this
@@ -4560,15 +5434,24 @@ export class FleetTui {
    * Renders the persistent 5-region frame to the terminal screen buffer.
    */
   draw(): void {
+    if (this.presentationMode === 'conversation') {
+      if (this.conversationDrawQueued) return;
+      this.conversationDrawQueued = true;
+      queueMicrotask(() => {
+        this.conversationDrawQueued = false;
+        this.drawConversation();
+      });
+      return;
+    }
     const size = this.screen.getSize();
     const lines: string[] = [];
 
     // Region 1: Header Bar (Line 0) + Divider (Line 1)
-    lines.push(this.renderHeader(size.columns));
-    lines.push(color.gray('-'.repeat(size.columns)));
+    lines.push(...missionHeader(this.engine.projectRoot, this.currentView, size.columns));
+    lines.push(color.cyan('─'.repeat(size.columns)));
 
     // Region 2: Persistent Split Content or Collapsed Pane
-    const contentHeight = Math.max(5, size.rows - 6);
+    const contentHeight = Math.max(1, size.rows - 8);
 
     // Auto-recompute the sidebar mode from execution state UNLESS the user manually
     // chose one (Ctrl+B / Ctrl+Shift+B) — a manual choice must survive incoming
@@ -4591,7 +5474,7 @@ export class FleetTui {
       for (let i = 0; i < contentHeight; i++) {
         const l = leftLines[i] ?? ' '.repeat(leftWidth);
         const m = mainLines[i] ?? ' '.repeat(mainWidth);
-        lines.push(`${l}${color.gray('|')}${m}`);
+        lines.push(`${l}${color.cyan('│')}${m}`);
       }
     } else {
       // Collapsed single pane layout
@@ -4601,40 +5484,67 @@ export class FleetTui {
       }
     }
 
+    this.drawDashboardFrame(size, lines, contentHeight);
+  }
+
+  private drawConversation(): void {
+      const active = this.statusProjection.getTasks().filter((task) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(task.status));
+      const running = active.filter((task) => task.status !== 'WAITING_FOR_APPROVAL');
+      const waiting = active.length - running.length;
+      const activity = running[0]?.activity ?? '';
+      const activeAgent = this.getAgents().find((agent) => agent.status === 'running');
+      this.conversationRenderer.render({
+        identity: process.env.USER ?? process.env.USERNAME ?? 'controller',
+        model: activeAgent ? `${activeAgent.computerId} · ${activeAgent.modelId}` : this.selectedModelId ?? 'auto-routed model',
+        prompt: this.inputBuffer,
+        cursor: this.inputCursor,
+        active: running.length,
+        waitingApproval: waiting || this.pendingApprovals.length,
+        activity,
+        elapsedSeconds: this.conversationStartedAt === undefined ? undefined : Math.floor((Date.now() - this.conversationStartedAt) / 1000),
+        approval: this.pendingApprovals[0]
+          ? `${this.pendingApprovals[0].tool}: ${String(this.pendingApprovals[0].input.command ?? this.pendingApprovals[0].input.path ?? JSON.stringify(this.pendingApprovals[0].input)).slice(0, 140)} · A approve · D deny · V details`
+          : undefined,
+        status: this.statusMessage,
+        copyMode: this.tuiMode === 'COPY' ? this.copyModeStatus() : undefined,
+      });
+  }
+
+  private drawDashboardFrame(size: TerminalSize, lines: string[], contentHeight: number): void {
     // Overlays over content region:
     if (this.startupSelector) {
       const modalLines = this.renderStartupSelectorModal(size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.taskTimeModelRequired) {
       const modalLines = this.renderTaskTimeModelRequiredModal(size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.pendingApprovals.length > 0) {
       const modalLines = this.renderApprovalModal(size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.currentError) {
       // B. Structured Error Card Modal (§29)
       const modalLines = this.renderStructuredErrorCard(this.currentError, size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.quickActionsOpen) {
       // C. Quick Actions Palette Modal (§3)
       const modalLines = this.renderQuickActionsModal(size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.expandedBlock) {
       // D. Expanded Block Modal Card
       const modalLines = this.renderBlockModal(this.expandedBlock, size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.rawResponseModalOpen) {
       // D.5 Raw Model Response Modal ('r' on Tail view)
       const taskId = this.selectedTaskId ?? this.getAgents()[this.highlightedIndex]?.taskId;
       if (taskId) {
         const modalLines = this.renderRawResponseModal(taskId, size.columns);
-        const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+        const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
         this.overlayModal(lines, modalLines, size.columns, startY);
       } else {
         this.rawResponseModalOpen = false;
@@ -4645,27 +5555,27 @@ export class FleetTui {
       const job = this.engine.orchestrator.getJob(this.expandedJobId);
       if (job) {
         const modalLines = this.renderJobOutputModal(job, this.jobRollups.get(job.id), size.columns);
-        const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+        const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
         this.overlayModal(lines, modalLines, size.columns, startY);
       } else {
         this.expandedJobId = undefined;
       }
     } else if (this.whyModalOpen && this.whyModalData) {
       const modalLines = renderWhyModal(this.whyModalData);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.evidenceModalOpen && this.evidenceModalData) {
       const modalLines = renderEvidenceModal(this.evidenceModalData);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.canaryModal) {
       const modalLines = this.renderCanaryControlModal(size.columns);
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     } else if (this.canaryTimeline) {
       const tl = this.canaryTimeline;
       const modalLines = renderCanaryTimelineModal({ ...tl, width: size.columns, maxRows: Math.max(8, contentHeight) });
-      const startY = Math.max(2, 2 + Math.floor((contentHeight - modalLines.length) / 2));
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
     }
 
@@ -4706,41 +5616,6 @@ export class FleetTui {
 
     const frame = clampedLines.slice(0, size.rows).join('\n');
     this.screen.render(frame, this.inputCursorScreenCol);
-  }
-
-  /**
-   * Region 1: Header Reconfiguration
-   * Format: WAZIR - CONTROL - WORKER: 3 COMPUTERS 7 AGENTS 14 MODELS    Agents 2/4 - AVAILABLE
-   */
-  private renderHeader(cols: number): string {
-    const compCount = this.engine.computers.list().length;
-    const agentCount = this.engine.agents.list().length;
-    const readiness = this.engine.lifecycle.getReadiness();
-    const readyColored = readiness.readyCount > 0 ? color.green(`${readiness.readyCount} READY`) : color.yellow(`0 READY`);
-    const modelTagColored = `${readyColored} / ${readiness.installedCount} MODELS`;
-    const modelTagPlain = `${readiness.readyCount} READY / ${readiness.installedCount} MODELS`;
-
-    const activeCount = Array.from(this.agents.values()).filter((a) => a.status === 'running').length;
-    const workerStatus = activeCount >= this.concurrencyLimit ? 'BUSY' : 'AVAILABLE';
-
-    const viewName = this.currentView.toUpperCase();
-    const viewTag = `[View: ${viewName}]`;
-    const viewTagPadded = viewTag.padEnd(20);
-
-    const titlePart = `${color.bold(color.cyan('WAZIR'))} ${color.gray('-')} ${color.bold('CONTROL')} ${color.gray('-')} ${color.bold('WORKER:')} ${compCount} COMPUTERS ${agentCount} AGENTS ${modelTagColored}`;
-    const viewPart = color.bold(color.cyan(viewTagPadded));
-    const agentPart = `Agents ${activeCount}/${this.concurrencyLimit} ${color.gray('-')} ${workerStatus === 'AVAILABLE' ? color.green('AVAILABLE') : color.yellow('BUSY')}`;
-
-    const pendingCount = this.pendingApprovals.length;
-    const alert = pendingCount > 0 ? color.bold(color.yellow(` [! ${pendingCount} APPROVALS]`)) : '';
-
-    const titlePlain = `WAZIR - CONTROL - WORKER: ${compCount} COMPUTERS ${agentCount} AGENTS ${modelTagPlain}`;
-    const viewPlain = viewTagPadded;
-    const agentPlain = `Agents ${activeCount}/${this.concurrencyLimit} - ${workerStatus}${pendingCount > 0 ? ` [! ${pendingCount} APPROVALS]` : ''}`;
-
-    const spaces = Math.max(1, cols - titlePlain.length - viewPlain.length - agentPlain.length - 4);
-    const headerLine = ` ${titlePart} ${viewPart}${' '.repeat(spaces)}${agentPart}${alert}`;
-    return this.padRightTo(headerLine, cols);
   }
 
   /**
@@ -4835,7 +5710,7 @@ export class FleetTui {
     if (this.currentView === 'task') {
       return this.renderTaskPane(width, maxRows);
     }
-    if (!selected && this.currentView === 'fleet') {
+    if (this.currentView === 'fleet' && (this.missionHome || !selected)) {
       return this.renderFleetOverviewPane(width, maxRows);
     }
     if (this.currentView === 'evidence') {
@@ -5202,62 +6077,19 @@ export class FleetTui {
    * Region 4: Status Bar & Real-Time Context Token Budget Indicator (§20)
    */
   private renderStatusBar(cols: number): string {
-    const { used, max, jobIn, jobOut, calls } = this.getContextMetrics();
-    const usedK = (used / 1024).toFixed(1);
-    const maxK = Math.round(max / 1024);
-    const inK = (jobIn / 1024).toFixed(1);
-    const outK = (jobOut / 1024).toFixed(1);
-
-    // Semantic colors (§25): cyan = identity / active context
-    // Only shown once a model is pinned via /model — otherwise this bar stays as it
-    // was, since "auto-routed" is the common case and not worth a permanent label.
-    const modelPlain = this.selectedModelId ? `Model ${this.selectedModelId} ~ ` : '';
-    const modelIndicator = this.selectedModelId ? `${color.magenta(modelPlain.trimEnd())} ` : '';
-
-    const showJobTokens = calls > 0 || jobIn > 0;
-    const jobPlain = showJobTokens ? `Job ${inK}K in / ${outK}K out, Calls: ${calls} ~ ` : '';
-    const jobIndicator = showJobTokens ? color.gray(jobPlain) : '';
-
-    const contextPlain = `Context ${usedK}K/${maxK}K ~`;
-    const contextIndicator = color.cyan(contextPlain);
-
-    // Subtle sidebar-toggle hint (§ Show Toggle State Clearly) — a short tag, not
-    // another persistent large UI element. Alert categories still hidden from the
-    // pane surface here as a small warning glyph so a real problem stays visible
-    // even while the sidebar itself is hidden/focused.
-    const alertCats = this.sidebarMode !== 'full' ? Array.from(this.getAlertCategories()) : [];
-    const alertPlain = alertCats.length > 0 ? `${alertCats.map((c) => `!${c}`).join(' ')} ~ ` : '';
-    const alertIndicator = alertCats.length > 0 ? color.yellow(alertPlain) : '';
-    const sidebarPlain = this.sidebarMode === 'hidden' ? 'Sidebar hidden (Ctrl+T) ~ ' : 'Ctrl+T Sidebar ~ ';
-    const sidebarIndicator = color.gray(sidebarPlain);
-
-    const anyRunning =
-      Array.from(this.agents.values()).some((a) => a.status === 'running') ||
-      this.statusMessage.includes('Planning') ||
-      this.statusMessage.includes('Retrying') ||
-      this.statusMessage.includes('Executing');
-    const spinnerPrefix = anyRunning ? `${color.cyan(getCategorySpinnerFrame('JOBS', this.spinnerTick))} ` : '';
-
     const mode = this.getMode();
-    let modeBadge = color.gray(`[${mode}]`);
-    if (mode === 'PASTE') modeBadge = color.bold(color.yellow(`[${mode}]`));
-    else if (mode === 'COMPOSER') modeBadge = color.bold(color.magenta(`[${mode}]`));
-    else if (mode === 'COPY') modeBadge = color.bold(color.cyan(`[${mode}]`));
-    else if (mode === 'APPROVAL') modeBadge = color.bold(color.red(`[${mode}]`));
-    else if (mode === 'PALETTE') modeBadge = color.bold(color.blue(`[${mode}]`));
-
-    const rightPlain = `${modelPlain}${jobPlain}${alertPlain}${sidebarPlain}${contextPlain} `;
-    const maxStatusLen = Math.max(10, cols - rightPlain.length - 16);
-    let msg = this.statusMessage;
-    if (msg.length > maxStatusLen) {
-      msg = msg.slice(0, maxStatusLen - 3) + '...';
+    const badge = color.bold(mode === 'APPROVAL' || mode === 'SHELL' ? color.yellow(`[${mode}]`) : color.cyan(`[${mode}]`));
+    const alerts = this.sidebarMode === 'full' ? '' : Array.from(this.getAlertCategories()).map(c => `!${c}`).join(' ');
+    if (cols < 110) {
+      return this.padRightTo(` ${badge} ${alerts ? alerts + ' ' : ''}${this.statusMessage}`, cols);
     }
-
-    const statusText = `  ${modeBadge} ${color.gray('Status:')} ${spinnerPrefix}${msg}`;
-    const statusPlain = this.stripAnsi(statusText);
-
-    const spaces = Math.max(2, cols - statusPlain.length - rightPlain.length);
-    return `${statusText}${' '.repeat(spaces)}${modelIndicator}${jobIndicator}${alertIndicator}${sidebarIndicator}${contextIndicator} `;
+    const { used, max, jobIn, jobOut } = this.getContextMetrics();
+    const telemetry = `${alerts ? alerts + ' · ' : ''}Context ${(used / 1024).toFixed(1)}K/${Math.round(max / 1024)}K ~ ${jobIn.toLocaleString()} in / ${jobOut.toLocaleString()} out · Ctrl+T ${this.sidebarMode === 'hidden' ? 'Show sidebar' : 'Sidebar'}`;
+    const available = Math.max(16, cols - telemetry.length - mode.length - 7);
+    const message = this.truncateAnsi(this.statusMessage, available);
+    const left = ` ${badge} ${message}`;
+    const gap = Math.max(2, cols - this.stripAnsi(left).length - telemetry.length - 1);
+    return `${left}${' '.repeat(gap)}${color.gray(telemetry)} `;
   }
 
   private renderInputBar(cols: number): string {
@@ -5280,8 +6112,13 @@ export class FleetTui {
       return `${promptPrefix}${hint}`;
     }
 
-    const promptPrefix = mode === 'COMPOSER' ? color.magenta('wa [COMPOSER]> ') : color.cyan('wa> ');
-    const prefixLen = mode === 'COMPOSER' ? 15 : 4;
+    const promptPrefix =
+      mode === 'COMPOSER'
+        ? color.magenta('wa [COMPOSER]> ')
+        : mode === 'SHELL'
+          ? color.yellow('wa [SHELL]> ')
+          : color.cyan('wa> ');
+    const prefixLen = mode === 'COMPOSER' ? 15 : mode === 'SHELL' ? 12 : 4;
     const available = Math.max(0, cols - prefixLen);
 
     // Strip any leading prompt prefix in the inputBuffer to prevent duplicate prompts (e.g. "wa> wa> ...")
@@ -5445,6 +6282,74 @@ export class FleetTui {
     this.draw();
   }
 
+  private formatMissingModelRecovery(readiness: ModelReadiness, prompt?: string): string {
+    const unavailableRuntimes: string[] = [];
+    const runtimeEntries = Object.entries(readiness.runtimeHealth ?? {});
+    for (const [runtimeId, health] of runtimeEntries) {
+      const h = health as { status?: string; message?: string };
+      if (h.status === 'unavailable' || h.status === 'unhealthy') {
+        unavailableRuntimes.push(`${runtimeId} (${h.status}${h.message ? `: ${h.message}` : ''})`);
+      }
+    }
+    for (const disc of this.engine.discovered ?? []) {
+      if (disc.health === 'unavailable' || disc.health === 'degraded') {
+        const label = `${disc.id} (${disc.health}${disc.healthMessage ? `: ${disc.healthMessage}` : ''})`;
+        if (!unavailableRuntimes.some((r) => r.startsWith(`${disc.id} (`))) {
+          unavailableRuntimes.push(label);
+        }
+      }
+    }
+    for (const rt of this.engine.runtimes?.list() ?? []) {
+      const st = (rt as { status?: string; health?: string }).status ?? (rt as { health?: string }).health;
+      if (st === 'offline' || st === 'unavailable' || st === 'degraded') {
+        if (!unavailableRuntimes.some((r) => r.startsWith(`${rt.id} (`))) {
+          unavailableRuntimes.push(`${rt.id} (${st})`);
+        }
+      } else if ((rt as { runtimeKind?: string }).runtimeKind === 'hosted' && this.engine.policy) {
+        const gate = this.engine.policy.checkHostedEligibility(undefined, rt.type);
+        if (!gate.allowed && !unavailableRuntimes.some((r) => r.startsWith(`${rt.id} (`))) {
+          unavailableRuntimes.push(`${rt.id} (hosted providers disabled by policy)`);
+        }
+      }
+    }
+    if (unavailableRuntimes.length === 0) {
+      unavailableRuntimes.push('ollama (0 models installed)', 'lmstudio (offline or 0 models installed)');
+    }
+
+    const lines: string[] = [
+      prompt
+        ? `✗ Model unavailable: cannot execute task "${prompt.slice(0, 60)}" because no eligible AI model is registered or loaded.`
+        : '⚠ Model unavailable: 0 eligible models registered across configured runtimes.',
+    ];
+    if (unavailableRuntimes.length > 0) {
+      lines.push(`  Unavailable runtimes: ${unavailableRuntimes.join(', ')}`);
+    }
+    lines.push(
+      '  Recovery commands:',
+      '    • Pull a local Ollama model:       ollama pull qwen2.5-coder',
+      '    • Start LM Studio server:          lms server start   (or /launch lmstudio)',
+      '    • Authenticate a hosted provider:  wa auth login <anthropic|openai|google>',
+      '    • Check runtime diagnostics:       wa doctor          (or /doctor)',
+      '  Shell commands (!<cmd> or /sh <cmd>, e.g. !ls -la) remain available without an AI model.',
+    );
+    return lines.join('\n');
+  }
+
+  private hasSchedulableGenerativeModel(): boolean {
+    const eligible = this.engine.lifecycle?.getEligibleModels() ?? this.engine.models?.list().filter((m) => !m.embedding) ?? [];
+    if (eligible.length === 0) return false;
+    return eligible.some((m) => {
+      const instances = this.engine.models?.instancesOf(m.id) ?? [];
+      if (instances.length === 0) return false;
+      if (m.local === false && this.engine.policy) {
+        const providerType = Array.isArray(m.runtimeCompatibility) ? m.runtimeCompatibility[0] : m.provider;
+        const gate = this.engine.policy.checkHostedEligibility(undefined, providerType as any);
+        if (!gate.allowed) return false;
+      }
+      return instances.some((i) => i.health !== 'unavailable' && i.state !== 'UNAVAILABLE');
+    });
+  }
+
   private async handleStartupModelReadiness(): Promise<void> {
     const mode = this.engine.config.models?.startup?.mode ?? 'prompt';
     if (mode === 'none') {
@@ -5454,10 +6359,29 @@ export class FleetTui {
 
     // Default: 'prompt'
     const readiness = this.engine.lifecycle.getReadiness();
-    if (readiness.readyCount > 0) {
+    const hasSchedulable = this.hasSchedulableGenerativeModel();
+    if (readiness.readyCount > 0 && hasSchedulable) {
       if (readiness.unloadedEligibleModels.length > 0) {
         this.statusMessage = `Ready: ${readiness.readyCount} model(s) loaded. Press [M] to manage models.`;
       }
+      return;
+    }
+
+    const runtimeEntries = Object.entries(readiness.runtimeHealth ?? {});
+    const allUnavailable =
+      runtimeEntries.length > 0 &&
+      runtimeEntries.every(([, h]: [string, any]) => h.status === 'unavailable' || h.status === 'unhealthy');
+
+    if (this.presentationMode === 'conversation') {
+      if (readiness.installedCount === 0 || !hasSchedulable) {
+        this.statusMessage = allUnavailable
+          ? 'Provider disconnected · Model unavailable (0 models registered). Shell commands (!cmd) available.'
+          : 'Model unavailable (0 models registered). Shell commands (!cmd) available.';
+        this.conversationRenderer.append(this.formatMissingModelRecovery(readiness));
+      } else {
+        this.statusMessage = `${readiness.installedCount} model(s) installed (0 loaded) — will activate on task submission or use /models.`;
+      }
+      this.draw();
       return;
     }
 
@@ -5466,10 +6390,6 @@ export class FleetTui {
       return;
     }
 
-    const runtimeEntries = Object.entries(readiness.runtimeHealth);
-    const allUnavailable =
-      runtimeEntries.length > 0 &&
-      runtimeEntries.every(([, h]: [string, any]) => h.status === 'unavailable' || h.status === 'unhealthy');
     if (allUnavailable) {
       this.openRuntimeRecoveryModal();
     } else {
@@ -5478,9 +6398,18 @@ export class FleetTui {
   }
 
   private handleModelLifecycleEvent(event: ModelLifecycleEvent): void {
-    if (['MODEL_DRAINING', 'MODEL_ADMISSION_DENIED', 'MODEL_CONTEXT_DOWNSHIFTED', 'WAITING_FOR_MODEL'].includes(event.type)) {
-      this.statusMessage = `${event.type}: ${event.modelId}${event.reason ? ' — ' + event.reason : ''}`;
-      this.draw();
+    if (['MODEL_DRAINING', 'MODEL_ADMISSION_DENIED', 'MODEL_CONTEXT_DOWNSHIFTED', 'WAITING_FOR_MODEL', 'MODEL_LOAD_FAILED'].includes(event.type)) {
+      const allCurrentTasksTerminal = this.agents.size > 0 && [...this.agents.values()].every((agent) => ['completed', 'failed', 'cancelled'].includes(agent.status));
+      const jobTerminal = this.currentJob && ['completed', 'failed', 'cancelled'].includes(this.currentJob.status);
+      if (!allCurrentTasksTerminal && !jobTerminal) {
+        const prefix = event.type === 'MODEL_LOAD_FAILED'
+          ? 'Model unavailable · '
+          : event.type === 'MODEL_ADMISSION_DENIED'
+            ? 'Scheduler rejected task · '
+            : '';
+        this.statusMessage = `${prefix}${event.type}: ${event.modelId}${event.reason ? ' — ' + event.reason : ''}`;
+        this.draw();
+      }
     }
     if (this.startupSelector) {
       if (event.type === 'MODEL_LOADING') {
@@ -6337,57 +7266,36 @@ export class FleetTui {
    */
   private renderTaskPane(cols: number, maxRows: number): string[] {
     const card = this.agents.get(this.selectedTaskId ?? '') ?? this.getAgents()[0];
-    const taskInput = this.currentJob?.tasks.find((t) => t.id === (card?.taskId ?? this.selectedTaskId));
-    const activeTaskId = card?.taskId ?? this.selectedTaskId ?? 'task-001';
-
-    const verification = (this.engine as any).verification?.getLastVerificationResult?.() ?? {
-      overall: card?.status === 'completed' ? 'PASS' : card?.status === 'failed' ? 'FAIL' : 'PENDING',
-      checksPassed: card?.status === 'completed' ? 4 : 0,
-      totalChecks: 4,
-      checks: [
-        { name: 'ast_invariants', ok: card?.status !== 'failed', exitCode: card?.status === 'failed' ? 1 : 0 },
-        { name: 'typescript_compiler', ok: card?.status !== 'failed', exitCode: 0 },
-        { name: 'unit_test_suite', ok: card?.status !== 'failed', exitCode: 0 },
-        { name: 'workspace_cleanliness', ok: true, exitCode: 0 },
-      ],
-    };
-
-    const taskData: TaskViewData = {
-      taskId: activeTaskId,
-      title: card?.title ?? taskInput?.title ?? 'Autonomous Engineering Task',
-      objective: (taskInput as any)?.prompt ?? (taskInput as any)?.task ?? 'Execute autonomous engineering workflow',
-      requirements: [
-        'Complete implementation adhering to deterministic invariants',
-        'Verify with compiler, test suite, and AST integrity check',
-        'Ensure 0 regressions and stay within token budget',
-      ],
-      currentPhase: (card?.phase?.toUpperCase() as any) ?? (card?.status === 'completed' ? 'VERIFY' : 'TASK'),
-      agentId: card?.agentId ?? 'wazir-coder',
-      modelId: card?.modelId ?? this.selectedModelId ?? 'claude-3-5-sonnet',
-      runtimeId: 'local',
-      computerId: card?.computerId ?? 'worker-local',
-      workerId: card?.computerId ?? 'worker-local',
-      workspaceRevision: (card as any)?.worktreeInfo?.revision ?? 1,
-      verificationStatus: verification,
-      budget: {
-        tokensUsed: card?.usage?.total ?? 1240,
-        maxTokens: 32768,
-        repairCycles: 0,
-        maxRepairCycles: 3,
-        costUsd: (card?.usage?.total ?? 1240) * 0.000003,
-      },
-      elapsedTimeMs: card?.durationMs ?? 0,
-      physicalMutationsCount: card?.filesChanged?.length ?? 1,
-      filesChanged: card?.filesChanged ?? ['src/engine.ts'],
-      recentEvents: (this.agentLogs.get(card?.taskId ?? '') ?? []).slice(-5).map((l) => ({
-        time: l.time,
-        kind: l.kind,
-        text: l.text,
-      })),
-      width: cols,
-      maxRows,
-    };
-    return renderTaskView(taskData);
+    if (!card) return [
+      '  TASK EXECUTION PIPELINE',
+      '  TASK → AGENT → MODEL → RUNTIME → WORKER → TOOLS → VERIFY',
+      '  Routing: pending',
+      '  Compute: pending',
+      '  Deterministic Verification: pending',
+      '  Budget Governance: active',
+      '',
+      '  No task selected. Submit a task or select an execution.',
+    ];
+    const model = this.engine.models.get(card.modelId);
+    const inspection = this.currentEvidenceInspection();
+    return [
+      color.bold(color.cyan('  TASK DETAILS')),
+      `  ${card.title}`,
+      `  ${card.taskId} · ${card.status.toUpperCase()} · ${card.phase}`,
+      '',
+      `  Agent ${card.agentId} · Computer ${card.computerId}`,
+      `  Model ${card.modelId} · Provider ${model?.provider ?? 'unknown'}`,
+      `  Elapsed ${(card.durationMs / 1000).toFixed(1)}s · Model calls ${card.modelCallCount ?? 0}`,
+      `  Tokens ${card.usage?.input ?? 0} in / ${card.usage?.output ?? 0} out · Cost: unreported`,
+      `  Files changed: ${(card.filesChanged ?? []).length}`,
+      ...(card.filesChanged ?? []).slice(0, 4).map(f => `    ${f}`),
+      '',
+      color.bold(color.cyan('  VERIFICATION')),
+      ...(inspection ? [inspection.inspection.status, ...inspection.why.chain, ...inspection.why.missing].map(t => `  ${t}`) : ['  No verification evidence loaded. Press 6 to inspect checks.']),
+      '',
+      color.bold(color.cyan('  ACTIVITY & TOOL CALLS')),
+      ...(this.agentLogs.get(card.taskId) ?? []).slice(-5).map(e => `  ${e.time} ${e.kind.toUpperCase()} ${e.text}`),
+    ].slice(0, maxRows).map(l => this.padRightTo(l, cols));
   }
 
   /**
@@ -6678,41 +7586,6 @@ export class FleetTui {
       };
     });
 
-    if (experiments.length === 0) {
-      experiments = [
-        {
-          id: 'exp-042',
-          domain: 'context_compaction',
-          state: 'QUALIFIED',
-          maturityLevel: 2,
-          hypothesis: 'Multi-layer prefix dedup minimizes token overhead by 22%',
-          baselineId: 'base-v1',
-          baselinePassRate: 0.90,
-          candidateCount: 4,
-          benchmarkProgress: { completed: 8, total: 8 },
-          objectives: [
-            { metric: 'tokens', direction: 'MINIMIZE' },
-            { metric: 'latency', direction: 'MINIMIZE' },
-          ],
-          canaryState: {
-            trafficFraction: 0.50,
-            stage: 2,
-            totalStages: 3,
-            status: 'HEALTHY',
-          },
-          causalEvidence: {
-            design: '2x2 factorial ablation',
-            beneficialMutations: ['stable_prefix_hash', 'stream_coalescing'],
-            neutralMutations: ['heuristic_token_estimator'],
-            harmfulMutations: [],
-          },
-          regressionGuardStatus: { passed: true, violationsCount: 0 },
-          decision: 'PROMOTED',
-          decisionReason: 'Non-dominated Pareto candidate, verified by canary evaluation',
-        },
-      ];
-    }
-
     const data: ImprovementViewData = {
       experiments,
       selectedIndex: this.selectedExperimentIndex,
@@ -6869,163 +7742,55 @@ export class FleetTui {
   }
 
   private renderModelIntelligencePane(cols: number, maxRows: number): string[] {
-    const profiles: ModelProfileItem[] = (this.engine.modelIntelligence?.listProfiles?.() ?? []).map((prof: any) => {
-      const caps: Record<string, { score: number; sampleCount: number; confidence: number }> = {};
-      if (prof.categoryMeasurements) {
-        for (const m of prof.categoryMeasurements) {
-          caps[m.category] = {
-            score: m.score,
-            sampleCount: m.sampleCount,
-            confidence: m.confidence,
-          };
-        }
-      }
-      return {
-        id: prof.id ?? prof.model,
-        model: prof.model ?? 'unknown-model',
-        runtime: prof.runtime ?? 'local',
-        capabilities: caps,
-        totalSamples: prof.sampleCounts?.total ?? 100,
-        phaseBreakdown: prof.conditionalMeasurements?.byPhase ? {
-          PLAN: { score: 0.88, sampleCount: 42 },
-          ACT: { score: 0.84, sampleCount: 120 },
-          REPAIR: { score: 0.79, sampleCount: 65 },
-        } : undefined,
-        languageBreakdown: prof.conditionalMeasurements?.byLanguage ? {
-          typescript: { score: 0.86, sampleCount: 150 },
-          python: { score: 0.81, sampleCount: 80 },
-        } : undefined,
-      };
-    });
-
-    const data: ModelIntelligenceViewData = {
-      profiles,
-      selectedIndex: this.selectedModelProfileIndex,
-      width: cols,
-      maxRows,
-    };
-    return renderModelIntelligenceView(data);
+    const models = this.engine.models.list();
+    const instances = this.engine.models.listInstances();
+    const lines = [color.bold(color.cyan('  MODELS & PROVIDERS')), '  ↑↓ / j k browse · Enter pin model · /model auto clears pin', ''];
+    for (const [index, m] of models.entries()) {
+      if (index < this.selectedModelProfileIndex) continue;
+      const resident = instances.filter(i => i.modelId === m.id);
+      const ready = resident.some(i => i.loaded && i.state === 'READY' && i.health === 'healthy');
+      lines.push(`  ${index === this.selectedModelProfileIndex ? ">" : " "} ${ready ? color.green('READY') : color.yellow('NOT READY')}  ${m.name}`);
+      const contextMax = m.contextMax ?? (m as typeof m & { contextWindow?: number }).contextWindow ?? 0;
+      lines.push(`    Provider ${m.provider} · ${m.local ? 'local' : 'hosted'} · Context ${contextMax.toLocaleString()} · Tools ${m.toolCalling ? 'yes' : 'no'}`);
+      for (const i of resident) lines.push(`    ${i.runtimeId} / ${i.computerId} · ${i.state ?? 'unknown'} · ${i.health ?? 'unknown'}`);
+    }
+    if (!models.length) lines.push('  No models discovered. /refresh to discover configured providers.');
+    return lines.slice(0, maxRows).map(l => this.padRightTo(l, cols));
   }
 
   /**
    * Dedicated Fleet Topology & Compute Fabric Pane (Mission Control View 3)
    */
   private renderFleetOverviewPane(cols: number, maxRows: number): string[] {
-    const computers = this.engine.computers?.list() ?? [];
-    const runtimes = this.engine.runtimes?.list() ?? [];
-    const models = this.engine.models?.list() ?? [];
-
-    const workers: FleetWorkerItem[] = [];
-    let healthReport: import('@wazir/core').HealthReport | undefined;
-    try {
-      healthReport = computers.length > 0 ? collectHealthReport(this.engine) : undefined;
-    } catch {
-      healthReport = undefined; // health indicators are advisory; never break the fleet view
-    }
-
-    if (computers.length > 0) {
-      for (const comp of computers) {
-        const compRuntimes = runtimes.filter((r) => r.computerId === comp.id).map((r) => r.type);
-        const gpuModel = (comp.hardware as any)?.gpu || (comp.id === 'MAC-01' ? 'M2 Ultra' : comp.id === 'PC-01' ? 'RTX 4090' : 'H100');
-        const gpuCount = (comp.hardware as any)?.gpuCount || (comp.id === 'DGX-01' ? 8 : 1);
-        const gpuInfo = comp.capabilities.includes('gpuAcceleration')
-          ? { model: gpuModel, count: gpuCount, memoryGB: comp.id === 'DGX-01' ? 640 : comp.id === 'MAC-01' ? 128 : 24 }
-          : undefined;
-
-        const shardsCount = comp.id === 'DGX-01' ? 14 : comp.id === 'MAC-01' ? 5 : comp.id === 'PC-01' ? 2 : 2;
-        const temperatureC = comp.id === 'DGX-01' ? 52 : comp.id === 'MAC-01' ? 41 : 48;
-
-        workers.push({
-          id: comp.name || comp.id,
-          name: comp.name || comp.id,
-          type: comp.type ?? 'workstation',
-          status: 'online',
-          runtimes: compRuntimes.length > 0 ? compRuntimes : ['local'],
-          loadedModels: models.map((m) => m.id),
-          gpu: gpuInfo,
-          ram: {
-            totalGB: comp.hardware?.memoryGB ?? 64,
-            availableGB: Math.round((comp.hardware?.memoryGB ?? 64) * 0.7),
-            load: 1.4,
-          },
-          capacity: comp.hardware?.cpuCores ?? 8,
-          availableCapacity: Math.max(1, (comp.hardware?.cpuCores ?? 8) - 2),
-          temperatureC,
-          reservations: 1,
-          shards: [`shard-${comp.id}-0`],
-          shardsCount,
-          health: healthReport ? fleetNodeHealth(healthReport, comp.id) : undefined,
-        });
-      }
-    }
-
-    if (workers.length < 3) {
-      if (!workers.some((w) => w.id === 'DGX-01')) {
-        workers.push({
-          id: 'DGX-01',
-          name: 'DGX-01',
-          type: 'cluster',
-          status: 'online',
-          runtimes: ['local', 'vllm'],
-          loadedModels: ['qwen-2.5-coder-32b', 'deepseek-coder', 'llama-3.1-70b'],
-          gpu: { model: 'H100', count: 8, memoryGB: 640 },
-          ram: { totalGB: 512, availableGB: 420, load: 6.8 },
-          capacity: 16,
-          availableCapacity: 2,
-          temperatureC: 52,
-          reservations: 4,
-          shards: ['shard-0', 'shard-1', 'shard-2'],
-          shardsCount: 14,
-          healthPct: 99,
-        });
-      }
-      if (!workers.some((w) => w.id === 'MAC-01')) {
-        workers.push({
-          id: 'MAC-01',
-          name: 'MAC-01',
-          type: 'workstation',
-          status: 'online',
-          runtimes: ['local', 'mlx'],
-          loadedModels: ['qwen-2.5-coder-32b', 'claude-3-5-sonnet'],
-          gpu: { model: 'M2 Ultra', count: 1, memoryGB: 128 },
-          ram: { totalGB: 128, availableGB: 96, load: 2.1 },
-          capacity: 8,
-          availableCapacity: 4,
-          temperatureC: 41,
-          reservations: 1,
-          shards: ['shard-3', 'shard-4'],
-          shardsCount: 5,
-          healthPct: 100,
-        });
-      }
-      if (!workers.some((w) => w.id === 'PC-01')) {
-        workers.push({
-          id: 'PC-01',
-          name: 'PC-01',
-          type: 'workstation',
-          status: 'online',
-          runtimes: ['local', 'ollama'],
-          loadedModels: ['deepseek-coder'],
-          gpu: { model: 'RTX 4090', count: 1, memoryGB: 24 },
-          ram: { totalGB: 64, availableGB: 40, load: 0.9 },
-          capacity: 4,
-          availableCapacity: 3,
-          temperatureC: 48,
-          reservations: 0,
-          shards: ['shard-5'],
-          shardsCount: 2,
-          healthPct: 95,
-        });
-      }
-    }
-
-    const data: FleetViewData = {
-      workers,
-      selectedIndex: this.selectedWorkerIndex,
-      width: cols,
-      maxRows,
-    };
-    return renderFleetView(data);
+    const models = this.engine.models.list();
+    const readyIds = new Set(this.engine.models.listInstances().filter(i => i.loaded && i.state === 'READY' && i.health === 'healthy').map(i => i.modelId));
+    const agents = this.getAgents();
+    const jobs = this.engine.orchestrator.listJobs?.() ?? [];
+    const metrics = this.getContextMetrics();
+    const evidence = this.currentEvidenceInspection();
+    return renderMissionControl({
+      workspace: this.engine.projectRoot,
+      agents: this.engine.agents.list().length,
+      running: agents.filter(a => a.status === 'running').length,
+      ready: readyIds.size,
+      installed: models.length,
+      computers: this.engine.computers.list().length,
+      fleetNodes: this.engine.computers.list().map((computer) => ({
+        id: computer.id,
+        gpu: typeof computer.hardware?.gpu === 'string'
+          ? computer.hardware.gpu
+          : computer.hardware?.gpu?.model,
+        health: computer.status ?? 'unknown',
+      })),
+      jobs: jobs.slice(-4).reverse().map(j => ({ id: j.id, title: j.title, status: j.status })),
+      models: models.map(m => ({ name: m.name, provider: m.provider, ready: readyIds.has(m.id) })),
+      runtimes: this.engine.runtimes.list().map(r => ({ name: r.name, health: r.health ?? 'unknown' })),
+      approvals: this.pendingApprovals.length,
+      inputTokens: metrics.jobIn,
+      outputTokens: metrics.jobOut,
+      events: Array.from(this.agentLogs.values()).flat().sort((a, b) => a.time.localeCompare(b.time)).slice(-3),
+      evidence: evidence ? [`${evidence.inspection.status} · 6 inspect verification checks`] : [],
+    }, cols, maxRows);
   }
 
   /**
@@ -7067,6 +7832,9 @@ export class FleetTui {
       color.bold('  WAZIR FLEET TUI SHORTCUTS & COMMANDS'),
       '',
       '  Navigation:',
+      '    1 / 5 / 6       Mission Control / Models & Providers / Evidence',
+      '    [ / ]           Cycle tasks or pending approvals',
+      '    !cmd / /sh cmd  Run an inline workspace shell command',
       '    Tab          Cycle through views (Shift-Tab for reverse traversal)',
       '    Up / Down       Navigate categories and items across entire left index',
       '    Enter           Drill down into highlighted agent stream (Tail view)',

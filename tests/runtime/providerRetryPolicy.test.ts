@@ -25,7 +25,7 @@ describe.each([['LM Studio', () => new LMStudioAdapter()], ['Ollama', () => new 
   it.each([new TypeError('Invalid URL'), new ExecutionFailure('BUILD_FAILED', 'compiler failed'), new ExecutionFailure('POLICY_DENIED', 'denied')])('does not retry %s', async error => {
     const fetch = vi.fn().mockRejectedValue(error);
     vi.stubGlobal('fetch', fetch);
-    const events = await collect(create());
+    const events = (await collect(create())).filter(e => e.type !== 'attempt_started');
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('error');
@@ -37,6 +37,7 @@ describe.each([['LM Studio', () => new LMStudioAdapter()], ['Ollama', () => new 
     vi.stubGlobal('fetch', fetch);
     const adapter = create();
     const iterator = adapter.generate(request)[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toMatchObject({ type: 'attempt_started', attempt: 1 });
     expect((await iterator.next()).value).toMatchObject({ type: 'retry', failureClass: 'RATE_LIMIT' });
     await adapter.cancel(request.requestId);
     expect((await iterator.next()).value).toMatchObject({ type: 'error', error: 'cancelled' });

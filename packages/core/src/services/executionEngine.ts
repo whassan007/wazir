@@ -1,3 +1,4 @@
+import { createExecutionContract } from './executionContract.js';
 import type {
   ExecutionOwner,
   AcceptanceContract,
@@ -38,6 +39,7 @@ import { planRecovery, reconstructExecutionState } from './executionRecovery.js'
 import type { ReconstructedExecutionState, RecoveryBudgetLimits, RecoveryPlan, ToolOutcomeInspection } from './executionRecovery.js';
 import type { ToolSideEffectClass } from '../types/tool.js';
 import type { FileMutationResult } from '../types/tool.js';
+import { assertExecutionTransition } from './statusTransitions.js';
 
 export interface ExecutionEngineOptions {
   /** Persists a record after every mutation. */
@@ -201,7 +203,7 @@ export class ExecutionEngine {
 
     const record: ExecutionRecord = {
       execution,
-      task: params.task,
+      task: structuredClone(params.task),
       scheduling: params.scheduling,
       context: params.context,
       policyDecisions: [],
@@ -211,7 +213,8 @@ export class ExecutionEngine {
       errors: [],
       workspaceState,
       evidence: [],
-      acceptanceContract: params.task.acceptanceContract,
+      executionContract: createExecutionContract(params.task, params.workspaceRoot),
+      acceptanceContract: params.task.acceptanceContract ? structuredClone(params.task.acceptanceContract) : undefined,
       mutationHistory: [],
       events: [],
     };
@@ -237,6 +240,7 @@ export class ExecutionEngine {
 
   async setStatus(executionId: string, status: ExecutionStatus, options?: { targetRevision?: number }): Promise<void> {
     const record = this.require(executionId);
+    assertExecutionTransition(executionId, record.execution.status, status);
     if (status === 'completed' && this.toolCheckpoints(executionId).some(call => call.state === 'STARTED' || call.state === 'OUTCOME_UNKNOWN')) {
       this.pushEvent(record, 'completion.rejected', { reason: 'TOOL_OUTCOME_UNKNOWN' });
       await this.flush(record);
@@ -259,9 +263,9 @@ export class ExecutionEngine {
     }
 
     if (status === 'completed') {
-      const { workspaceRevision: revision, missing, evaluationInvalid, evaluationMissing } = assessCompletionEvidence(record);
-      if (missing.length > 0 || evaluationInvalid || evaluationMissing) {
-        this.pushEvent(record, 'completion.rejected', { reason: 'VERIFICATION_REQUIRED', workspaceRevision: revision, missing, evaluationInvalid, evaluationMissing });
+      const { workspaceRevision: revision, missing, missingCriteria, evaluationInvalid, evaluationMissing } = assessCompletionEvidence(record);
+      if (missing.length > 0 || missingCriteria.length > 0 || evaluationInvalid || evaluationMissing) {
+        this.pushEvent(record, 'completion.rejected', { reason: 'VERIFICATION_REQUIRED', workspaceRevision: revision, missing, missingCriteria, evaluationInvalid, evaluationMissing });
         await this.flush(record);
         throw new ExecutionFailure('ARTIFACT_CONTRACT_FAILED', `Completion requires current verification for workspace revision ${revision}`);
       }
@@ -569,6 +573,10 @@ export class ExecutionEngine {
 
   async recordEvent(executionId: string, type: ExecutionEventType, data?: unknown, identity?: ExecutionEventIdentity): Promise<void> {
     const record = this.require(executionId);
+    if (type === 'execution.resumed' && record.execution.status === 'failed') {
+      assertExecutionTransition(executionId, record.execution.status, 'queued');
+      record.execution.status = 'queued';
+    }
     this.pushEvent(record, type, data, identity);
     await this.flush(record);
   }
@@ -1196,6 +1204,10 @@ export class ExecutionEngine {
     const owner = record.execution.owner;
     if (!owner || owner.host !== this.owner.host || owner.pid === this.owner.pid) return false;
     return this.isProcessAlive(owner.pid);
+  }
+
+  async persistRecord(record: ExecutionRecord): Promise<void> {
+    await this.flush(record);
   }
 
   private async flush(record: ExecutionRecord): Promise<void> {

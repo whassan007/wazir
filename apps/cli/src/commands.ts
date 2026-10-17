@@ -147,14 +147,19 @@ export async function unloadModelCommand(engine: RookEngine, modelId: string, op
 }
 
 export function listRuntimes(engine: RookEngine): string {
-  const rows = engine.discovered.map((r) => [
-    r.id,
-    r.info.name,
-    r.info.version,
-    r.info.url ?? '—',
-    r.health,
-    r.models.length > 0 ? `${r.models.length} models` : '—',
-  ]);
+  const discoveredById = new Map(engine.discovered.map((d) => [d.id, d]));
+  const rows = engine.runtimes.list().map((r) => {
+    const disc = discoveredById.get(r.id);
+    const modelCount = disc ? disc.models.length : engine.models.instancesForRuntime(r.id).length;
+    return [
+      r.id,
+      r.name,
+      r.version,
+      disc?.info.url ?? r.url ?? '—',
+      disc?.health ?? r.health,
+      modelCount > 0 ? `${modelCount} models` : '—',
+    ];
+  });
   return table(['runtime', 'name', 'version', 'url', 'health', 'models'], rows);
 }
 
@@ -547,7 +552,8 @@ export async function inspectExecution(engine: RookEngine, id: string, json: boo
     const all = await engine.executions.list();
     const fuzzy = all.find((r) => r.execution.id.includes(id));
     if (!fuzzy) {
-      return color.red(`execution '${id}' not found`);
+      process.exitCode = 1;
+      return json ? JSON.stringify({ error: `execution '${id}' not found` }, null, 2) : color.red(`execution '${id}' not found`);
     }
     record = fuzzy;
   }
@@ -679,7 +685,10 @@ export async function replayExecution(engine: RookEngine, id: string): Promise<s
   if (!record) {
     const all = await engine.executions.list();
     const fuzzy = all.find((r) => r.execution.id.includes(id));
-    if (!fuzzy) return color.red(`execution '${id}' not found`);
+    if (!fuzzy) {
+      process.exitCode = 1;
+      return color.red(`execution '${id}' not found`);
+    }
     record = fuzzy;
   }
   const events = await engine.executions.events(record.execution.id);
@@ -694,17 +703,20 @@ export async function replayExecution(engine: RookEngine, id: string): Promise<s
 const BENCHMARK_PROMPT =
   'Write a short haiku (17 syllables) about a TypeScript compiler checking types.';
 
-export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?: string): Promise<string> {
+async function runBenchmarkLegacy(engine: RookEngine, modelId?: string, prompt?: string): Promise<string> {
   const models = engine.models.list();
   if (models.length === 0) {
+    process.exitCode = 1;
     return color.yellow('no models registered — cannot benchmark');
   }
 
   const target = modelId ? models.find((m) => m.id === modelId) : models[0];
   if (!target) {
+    process.exitCode = 1;
     return color.red(`model '${modelId}' not found`);
   }
   if (modelId && target.id !== modelId) {
+    process.exitCode = 1;
     return color.red(`model '${modelId}' not found`);
   }
 
@@ -721,8 +733,9 @@ export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?
   let outputTokens = 0;
   let error: string | undefined;
 
-  const adapter = engine.worker.adapterForModel(target.id);
+  const adapter = engine.adapters.get(target.provider) ?? engine.worker.adapterForModel(target.id);
   if (!adapter) {
+    process.exitCode = 1;
     return color.red(`no runtime can serve '${target.id}'`);
   }
 
@@ -753,6 +766,7 @@ export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?
   lines.push(`  output:      ${outputTokens} tokens`);
   lines.push(`  throughput:  ${tokensPerSecond(outputTokens, elapsedMs).toFixed(1)} tok/s`);
   if (error) {
+    process.exitCode = 1;
     lines.push(color.red(`  error: ${error}`));
   }
   lines.push('');
@@ -760,6 +774,28 @@ export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?
   lines.push(color.gray(`  ${output.slice(0, 400)}`));
 
   return lines.join('\n');
+}
+
+/** Programmatic provider/benchmark API used by the CLI and integration tests. */
+export async function runBenchmark(
+  engine: RookEngine,
+  request?: string | { models?: string[]; json?: boolean },
+  prompt?: string,
+): Promise<string | { exitCode: number; output: string }> {
+  if (typeof request === 'object') {
+    const modelIds = request.models ?? [];
+    const runs = [];
+    for (const modelId of modelIds) {
+      const output = await runBenchmarkLegacy(engine, modelId);
+      runs.push({ modelId, passed: !/failed|error|no runtime|not found|cannot benchmark/i.test(output), output });
+    }
+    const allPassed = runs.length > 0 && runs.every((r) => r.passed);
+    const exitCode = allPassed ? 0 : 1;
+    if (!allPassed) process.exitCode = 1;
+    const report = { models: modelIds, runs };
+    return request.json ? { exitCode, output: JSON.stringify(report) } : { exitCode, output: JSON.stringify(report, null, 2) };
+  }
+  return runBenchmarkLegacy(engine, request, prompt);
 }
 
 export async function discover(engine: RookEngine): Promise<string> {
@@ -770,6 +806,15 @@ export async function discover(engine: RookEngine): Promise<string> {
       lines.push(color.gray(`    ${model.id}${model.parameters ? color.gray(` (${model.parameters})`) : ''}${model.toolCalling ? ' tool-calling' : ''}`));
     }
   }
+  for (const [providerId] of engine.hostedAdapters) {
+    const rt = engine.runtimes.get(providerId);
+    if (!rt) continue;
+    const providerModels = engine.models.list().filter((m) => m.provider === providerId);
+    lines.push(`  ${rt.name} (${rt.id}) — ${rt.health} [hosted]`);
+    for (const model of providerModels) {
+      lines.push(color.gray(`    ${model.id}${model.parameters ? color.gray(` (${model.parameters})`) : ''}${model.toolCalling ? ' tool-calling' : ''}`));
+    }
+  }
   return lines.join('\n');
 }
 
@@ -777,6 +822,8 @@ export async function planTaskCommand(engine: RookEngine, description: string, o
   type?: TaskType;
   model?: string;
   agent?: string;
+  allowHosted?: boolean;
+  routingMode?: import('@wazir/core').RoutingMode;
   json?: boolean;
 }): Promise<{ code: number; output: string }> {
   const planned = await planTask(engine, description, options);
@@ -797,6 +844,9 @@ export async function planTaskCommand(engine: RookEngine, description: string, o
   lines.push(`    model:     ${scheduling.modelId} (${scheduling.modelDecision.strategy})`);
   lines.push(`    runtime:   ${scheduling.runtimeId}`);
   lines.push(`    computer:  ${scheduling.computerId ?? `hosted (${scheduling.runtimeId})`}`);
+  if (scheduling.resourceType) {
+    lines.push(`    resource:  ${scheduling.resourceType}`);
+  }
   lines.push(`    context:   ${context.finalRequiredTokens} / ${context.available.tokens} tokens (${context.available.source})`);
   lines.push('');
   lines.push(color.bold('  Reasons'));
@@ -814,6 +864,8 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   force?: boolean;
   maxTurns?: number;
   expectedFiles?: string[];
+  allowHosted?: boolean;
+  routingMode?: import('@wazir/core').RoutingMode;
   json?: boolean;
   preset?: string;
 }): Promise<{ code: number; output: string }> {
@@ -842,6 +894,8 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
     agent: options.agent,
     maxTurns: options.maxTurns,
     expectedFiles: options.expectedFiles,
+    allowHosted: options.allowHosted,
+    routingMode: options.routingMode,
     json: options.json,
     quiet: options.json === true,
     preset: options.preset,
@@ -889,7 +943,10 @@ export async function inspectJob(engine: RookEngine, id: string): Promise<string
   if (!job) {
     const all = engine.orchestrator.listJobs();
     const fuzzy = all.find((j) => j.id.includes(id));
-    if (!fuzzy) return color.red(`job '${id}' not found`);
+    if (!fuzzy) {
+      process.exitCode = 1;
+      return color.red(`job '${id}' not found`);
+    }
     job = fuzzy;
   }
 
@@ -931,7 +988,10 @@ export async function mergeJob(engine: RookEngine, id: string, targetBranch?: st
   if (!job) {
     const all = engine.orchestrator.listJobs();
     const fuzzy = all.find((j) => j.id.includes(id));
-    if (!fuzzy) return color.red(`job '${id}' not found`);
+    if (!fuzzy) {
+      process.exitCode = 1;
+      return color.red(`job '${id}' not found`);
+    }
     job = fuzzy;
   }
 
@@ -942,6 +1002,7 @@ export async function mergeJob(engine: RookEngine, id: string, targetBranch?: st
     if (res.success) {
       lines.push(color.green(`  ✓ Merged ${branch} -> ${res.targetBranch}`));
     } else {
+      process.exitCode = 1;
       lines.push(color.red(`  ✗ Failed to merge ${branch}: ${res.error ?? 'conflicts detected'}`));
       if (res.conflicts && res.conflicts.length > 0) {
         lines.push(color.yellow(`    Conflicting files: ${res.conflicts.join(', ')}`));
@@ -971,14 +1032,14 @@ function formatAge(timestamp: Date): string {
 
 export async function listHistory(
   engine: RookEngine,
-  options?: { status?: string; commandContains?: string; json?: boolean },
+  options?: { status?: string; command?: string; commandContains?: string; json?: boolean },
 ): Promise<string> {
   const blocks = await listBlocks(engine, {
     status: options?.status as BlockStatus,
-    commandContains: options?.commandContains,
+    commandContains: options?.commandContains ?? options?.command,
   });
 
-  if (blocks.length === 0) return color.yellow('no history recorded yet');
+  if (blocks.length === 0) return options?.json ? '[]' : color.yellow('no history recorded yet');
 
   if (options?.json) {
     return JSON.stringify(blocks, null, 2);
@@ -1000,7 +1061,8 @@ export async function listHistory(
 export async function inspectHistory(engine: RookEngine, id: string, json?: boolean): Promise<string> {
   const block = await getBlock(engine, id);
   if (!block) {
-    return color.red(`history entry '${id}' not found`);
+    process.exitCode = 1;
+    return json ? JSON.stringify({ error: `history entry '${id}' not found` }, null, 2) : color.red(`history entry '${id}' not found`);
   }
 
   if (json) {
@@ -1431,6 +1493,7 @@ export async function listArtifacts(engine: RookEngine, options: ArtifactListOpt
 }
 
 function artifactNotFound(id: string, json?: boolean): string {
+  process.exitCode = 1;
   return json ? JSON.stringify({ error: `artifact not found: ${id}` }) : color.red(`artifact not found: ${id}`);
 }
 
@@ -2020,17 +2083,35 @@ export async function modelProtocolTestCommand(modelId: string): Promise<{ code:
 
 export async function inspectRuntime(engine: RookEngine, id: string): Promise<void> {
   const runtime = engine.discovered.find((r) => r.id === id);
-  if (!runtime) {
+  const hostedAdapter = engine.hostedAdapters.get(id as any);
+  const runtimeReg = engine.runtimes.get(id);
+  if (!runtime && !hostedAdapter && !runtimeReg) {
+    process.exitCode = 1;
     console.error(color.red(`Runtime '${id}' not found.`));
     return;
   }
-  
-  console.log(`\n${color.bold(runtime.info.name || id)}`);
+
+  if (!runtime && (hostedAdapter || runtimeReg)) {
+    const info = hostedAdapter ? await hostedAdapter.discover() : { id, name: runtimeReg?.name ?? id, version: runtimeReg?.version ?? 'v1', url: runtimeReg?.url };
+    const status = hostedAdapter ? await hostedAdapter.status() : { authenticated: runtimeReg?.health === 'healthy', eligible: runtimeReg?.health === 'healthy' };
+    const models = engine.models.list().filter((m) => m.provider === id);
+    console.log(`\n${color.bold(info.name || id)}`);
+    console.log('-'.repeat(48));
+    console.log(`Kind:       hosted (HOSTED_INFERENCE)`);
+    console.log(`Endpoint:   ${info.url || 'unknown'}`);
+    console.log(`Auth:       ${status.authenticated ? color.green(`authenticated (${(status as any).credentialSource ?? (status as any).method ?? 'api-key'})`) : color.yellow('unauthenticated')}`);
+    console.log(`Health:     ${runtimeReg?.health === 'healthy' ? color.green('healthy') : color.yellow(runtimeReg?.health ?? 'unavailable')}`);
+    console.log(`Models:     ${models.length} registered`);
+    console.log();
+    return;
+  }
+
+  console.log(`\n${color.bold(runtime!.info.name || id)}`);
   console.log('-'.repeat(48));
   console.log(`Computer:   ${process.env.WAZIR_COMPUTER_ID || 'local'}`);
-  
-  if (runtime.healthDiagnostics) {
-    const diag = runtime.healthDiagnostics;
+
+  if (runtime!.healthDiagnostics) {
+    const diag = runtime!.healthDiagnostics;
     console.log(`CLI:        ${diag.cliAvailable ? color.green('available') : color.red('unavailable')}`);
     console.log(`Server:     ${diag.serverRunning ? color.green('running') : color.red('stopped')}`);
     console.log(`Endpoint:   ${diag.endpoint}`);
@@ -2038,22 +2119,269 @@ export async function inspectRuntime(engine: RookEngine, id: string): Promise<vo
     console.log('');
     console.log(`Models:     ${diag.installedModels} installed | ${diag.loadedModels} loaded | ${diag.readyModels} ready`);
   } else {
-    console.log(`Endpoint:   ${runtime.info.url || 'unknown'}`);
-    console.log(`Health:     ${runtime.health === 'healthy' ? color.green('healthy') : color.red(runtime.health)}`);
+    console.log(`Endpoint:   ${runtime!.info.url || 'unknown'}`);
+    console.log(`Health:     ${runtime!.health === 'healthy' ? color.green('healthy') : color.red(runtime!.health)}`);
   }
-  
-  if (runtime.health !== 'healthy') {
+
+  if (runtime!.health !== 'healthy') {
     console.log(`\n${color.red('Error:')}`);
-    console.log(`  ${runtime.healthReason || 'UNAVAILABLE'} ${runtime.healthMessage}`);
+    console.log(`  ${runtime!.healthReason || 'UNAVAILABLE'} ${runtime!.healthMessage}`);
   }
-  
-  if (runtime.healthDiagnostics?.cliAvailable && !runtime.healthDiagnostics.serverRunning && runtime.adapter.startServer) {
+
+  if (runtime!.healthDiagnostics?.cliAvailable && !runtime!.healthDiagnostics.serverRunning && runtime!.adapter.startServer) {
     console.log(`\n${color.yellow('Suggested action:')}`);
     console.log(`  Start LM Studio API server or correct runtime endpoint.`);
-    console.log(`  Run: wa runtimes start ${id}`); // If we add a start command
+    console.log(`  Run: wa runtimes start ${id}`);
   }
-  
+
   console.log();
+}
+
+export interface ProviderSummaryEntry {
+  id: string;
+  name: string;
+  providerType: 'LOCAL_INFERENCE' | 'HOSTED_INFERENCE';
+  resourceType: 'LOCAL_GPU_INFERENCE' | 'HOSTED_API_INFERENCE';
+  endpoint?: string;
+  state: 'configured' | 'authenticated' | 'healthy' | 'degraded' | 'unavailable';
+  authenticated: boolean;
+  credentialSource?: string;
+  defaultModel?: string;
+  modelsCount: number;
+  models: string[];
+  capabilities?: Record<string, unknown>;
+}
+
+export async function collectProvidersSummary(engine: RookEngine): Promise<ProviderSummaryEntry[]> {
+  const entries: ProviderSummaryEntry[] = [];
+
+  for (const disc of engine.discovered) {
+    const rt = engine.runtimes.get(disc.id);
+    const modelIds = disc.models.map((m) => m.id);
+    entries.push({
+      id: disc.id,
+      name: disc.info.name || disc.id,
+      providerType: 'LOCAL_INFERENCE',
+      resourceType: 'LOCAL_GPU_INFERENCE',
+      endpoint: disc.info.url,
+      state: disc.health === 'healthy' ? 'healthy' : disc.health === 'degraded' ? 'degraded' : 'unavailable',
+      authenticated: disc.health !== 'unavailable',
+      credentialSource: 'local-endpoint',
+      defaultModel: modelIds[0],
+      modelsCount: modelIds.length,
+      models: modelIds,
+      capabilities: (rt?.capabilities ?? {}) as unknown as Record<string, unknown>,
+    });
+  }
+
+  for (const [id, adapter] of engine.hostedAdapters) {
+    const rt = engine.runtimes.get(id);
+    const info = await adapter.discover().catch(() => ({ id, name: rt?.name ?? id, version: 'v1', url: rt?.url }));
+    const auth = await adapter.status();
+    const models = engine.models.list().filter((m) => m.provider === id);
+    const defaultModel =
+      typeof (adapter as any).getDefaultModel === 'function'
+        ? (adapter as any).getDefaultModel()
+        : models[0]?.id;
+    let state: ProviderSummaryEntry['state'] = 'unavailable';
+    if (rt?.health === 'healthy' && auth.authenticated) {
+      state = 'healthy';
+    } else if (rt?.health === 'degraded' && auth.authenticated) {
+      state = 'degraded';
+    } else if (auth.authenticated) {
+      state = 'authenticated';
+    } else if (id === 'nvidia' && engine.config.providers?.nvidia?.enabled) {
+      state = 'configured';
+    }
+    entries.push({
+      id,
+      name: info.name || rt?.name || id,
+      providerType: 'HOSTED_INFERENCE',
+      resourceType: 'HOSTED_API_INFERENCE',
+      endpoint: info.url ?? rt?.url,
+      state,
+      authenticated: auth.authenticated,
+      credentialSource: auth.credentialSource ?? auth.method ?? 'none',
+      defaultModel,
+      modelsCount: models.length,
+      models: models.map((m) => m.id),
+      capabilities: (rt?.capabilities ?? (await adapter.getCapabilities())) as unknown as Record<string, unknown>,
+    });
+  }
+
+  return entries;
+}
+
+export async function listProvidersCommand(
+  engine: RookEngine,
+  options: { json?: boolean } = {},
+): Promise<{ code: number; output: string }> {
+  const providers = await collectProvidersSummary(engine);
+  if (options.json) {
+    return { code: 0, output: JSON.stringify({ providers }, null, 2) };
+  }
+  const rows = providers.map((p) => [
+    p.id,
+    p.name,
+    p.providerType,
+    p.state,
+    p.authenticated ? `yes (${p.credentialSource})` : 'no',
+    String(p.modelsCount),
+    p.defaultModel ?? '—',
+  ]);
+  return {
+    code: 0,
+    output: table(['ID', 'NAME', 'TYPE', 'STATE', 'AUTH', 'MODELS', 'DEFAULT MODEL'], rows),
+  };
+}
+
+export async function inspectProviderCommand(
+  engine: RookEngine,
+  providerId: string,
+  options: { json?: boolean } = {},
+): Promise<{ code: number; output: string }> {
+  const normalized = providerId.toLowerCase();
+  const providers = await collectProvidersSummary(engine);
+  const found = providers.find((p) => p.id.toLowerCase() === normalized);
+  if (!found) {
+    const err = `Provider '${providerId}' not found. Available providers: ${providers.map((p) => p.id).join(', ')}`;
+    return {
+      code: 1,
+      output: options.json ? JSON.stringify({ error: err }, null, 2) : color.red(err),
+    };
+  }
+  const modelRecords = engine.models.list().filter((m) => m.provider === found.id);
+  const account = engine.resources?.accounts?.candidates?.({ runtimeId: found.id })?.[0];
+  const detail = {
+    ...found,
+    routingPolicy: {
+      allowHostedProvidersDefault: engine.config.providers?.allowHostedProviders ?? false,
+      ...(found.id === 'nvidia' ? { nvidiaConfig: engine.config.providers?.nvidia } : {}),
+    },
+    account: account
+      ? {
+          id: account.id,
+          kind: account.kind,
+          maxConcurrent: account.maxConcurrent,
+          allowPaid: account.allowPaid,
+        }
+      : undefined,
+    modelDetails: modelRecords.map((m) => ({
+      id: m.id,
+      name: m.name,
+      family: m.family,
+      contextMax: m.contextMax,
+      capabilities: m.capabilities,
+      toolCalling: m.toolCalling,
+      vision: m.vision,
+      reasoning: m.reasoning,
+      structuredOutput: m.structuredOutput,
+    })),
+  };
+
+  if (options.json) {
+    return { code: 0, output: JSON.stringify(detail, null, 2) };
+  }
+
+  const lines = [
+    color.bold(`PROVIDER: ${found.name} (${found.id})`),
+    '-'.repeat(56),
+    `  Type:              ${found.providerType}`,
+    `  Resource Type:     ${found.resourceType}`,
+    `  State:             ${found.state}`,
+    `  Authenticated:     ${found.authenticated ? color.green(`yes (${found.credentialSource})`) : color.yellow('no')}`,
+    `  Endpoint:          ${found.endpoint ?? '—'}`,
+    `  Default Model:     ${found.defaultModel ?? '—'}`,
+    `  Registered Models: ${found.modelsCount}`,
+  ];
+  if (account) {
+    lines.push(`  Resource Account:  ${account.id} (kind=${account.kind}, maxConcurrent=${account.maxConcurrent ?? 'unlimited'})`);
+  }
+  if (modelRecords.length > 0) {
+    lines.push('');
+    lines.push(color.bold('  Models:'));
+    for (const m of modelRecords) {
+      lines.push(
+        `    - ${m.id} [ctx=${m.contextMax}, vision=${m.vision}, reasoning=${m.reasoning}, tools=${m.toolCalling}]`,
+      );
+    }
+  }
+  return { code: 0, output: lines.join('\n') };
+}
+
+export async function testProviderCommand(
+  engine: RookEngine,
+  providerId: string,
+  options: { json?: boolean; prompt?: string; model?: string } = {},
+): Promise<{ code: number; output: string }> {
+  const normalized = providerId.toLowerCase();
+  const hosted = engine.hostedAdapters.get(normalized as any);
+  const disc = engine.discovered.find((d) => d.id.toLowerCase() === normalized);
+  if (!hosted && !disc) {
+    const err = `Provider '${providerId}' not found.`;
+    return {
+      code: 1,
+      output: options.json ? JSON.stringify({ ok: false, error: err }, null, 2) : color.red(err),
+    };
+  }
+
+  const adapter = hosted ?? disc!.adapter;
+  const startedAt = Date.now();
+  const health = await adapter.healthCheck();
+  const latencyMs = Date.now() - startedAt;
+  const models = await adapter.listModels().catch(() => []);
+  const ok = health.status === 'healthy' || health.status === 'degraded';
+
+  const resultPayload = {
+    ok,
+    provider: normalized,
+    health: health.status,
+    reason: health.reason,
+    message: health.message,
+    latencyMs,
+    discoveredModelsCount: models.length,
+    sampleModels: models.slice(0, 5).map((m) => m.id),
+  };
+
+  if (options.json) {
+    return { code: ok ? 0 : 1, output: JSON.stringify(resultPayload, null, 2) };
+  }
+
+  const lines = [
+    color.bold(`Provider Connectivity Test: ${normalized}`),
+    `  status:    ${ok ? color.green(health.status) : color.red(health.status)}`,
+    `  latency:   ${latencyMs}ms`,
+    `  models:    ${models.length} discovered`,
+    ...(health.message ? [`  message:   ${health.message}`] : []),
+    ...(models.length > 0 ? [`  available: ${models.slice(0, 5).map((m) => m.id).join(', ')}`] : []),
+  ];
+  return { code: ok ? 0 : 1, output: lines.join('\n') };
+}
+
+export async function listProviders(engine: RookEngine, options: { json?: boolean } = {}) {
+  const result = await listProvidersCommand(engine, options);
+  if (options.json) {
+    const parsed = JSON.parse(result.output);
+    const providers = parsed.providers.map((p: any) => ({ ...p, displayName: p.name }));
+    return { exitCode: result.code, output: JSON.stringify(providers) };
+  }
+  return { exitCode: result.code, output: result.output };
+}
+
+export async function inspectProvider(engine: RookEngine, providerId: string, options: { json?: boolean } = {}) {
+  const result = await inspectProviderCommand(engine, providerId, options);
+  if (options.json && result.code === 0) {
+    const detail = JSON.parse(result.output);
+    detail.displayName = detail.name;
+    detail.models = (detail.modelDetails ?? []).map((m: any) => ({ id: m.id, name: m.name }));
+    return { exitCode: result.code, output: JSON.stringify(detail) };
+  }
+  return { exitCode: result.code, output: result.output };
+}
+
+export async function testProvider(engine: RookEngine, providerId: string, options: { json?: boolean } = {}) {
+  const result = await testProviderCommand(engine, providerId, options);
+  return { exitCode: result.code, output: result.output };
 }
 
 export async function checkpointCommand(
@@ -2075,6 +2403,7 @@ export async function checkpointCommand(
       `  Files Snapshot: ${Object.keys(chk.worktreeState.filesSnapshot).length} files`,
     ].join('\n');
   } catch (err) {
+    process.exitCode = 1;
     if (options?.json) {
       return JSON.stringify({ ok: false, error: String(err) }, null, 2);
     }
@@ -2101,6 +2430,7 @@ export async function forkCommand(
       `  Revision: R${res.workspaceRevision}`,
     ].join('\n');
   } catch (err) {
+    process.exitCode = 1;
     if (options?.json) {
       return JSON.stringify({ ok: false, error: String(err) }, null, 2);
     }
@@ -2126,6 +2456,7 @@ export async function rollbackCommand(
       `  Files Restored: ${res.filesRestored.length}`,
     ].join('\n');
   } catch (err) {
+    process.exitCode = 1;
     if (options?.json) {
       return JSON.stringify({ ok: false, error: String(err) }, null, 2);
     }
@@ -2144,11 +2475,34 @@ export async function improveStatusCommand(
   const optimizer = engine.optimizer;
   if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
 
+  await optimizer.getRecoveryState();
   const activeConfig = optimizer.getActiveConfig();
   const budget = optimizer.getBudget();
   const consumption = optimizer.getConsumption();
   const history = optimizer.getHistory();
   const opportunities = optimizer.listOpportunities();
+
+  const { resolveEffectiveCommitPolicy } = await import('@wazir/evaluation');
+  const { supervisorDirectory } = await import('./improvementSupervisor.js');
+  const { JsonFileStore } = await import('@wazir/shared');
+  const supStore = new JsonFileStore(path.join(supervisorDirectory(engine.projectRoot), 'state.json'));
+  const supState = await supStore.get<any>('supervisor/state').catch(() => undefined);
+  const candidateEntries = await supStore.list('supervisor/git-candidates/').catch(() => []);
+  const pendingApprovals = candidateEntries
+    .map((e) => e.value as any)
+    .filter((c) => c?.state === 'AWAITING_COMMIT_APPROVAL');
+  const effectivePolicy = resolveEffectiveCommitPolicy(
+    supState?.effectiveCommitMode
+      ? {
+          mode: supState.effectiveCommitMode,
+          source: 'trusted_config',
+          authorizingIdentity: 'operator',
+          scope: 'session',
+          repositoryRoot: engine.projectRoot,
+        }
+      : undefined,
+    { repositoryRoot: engine.projectRoot },
+  );
 
   const domains = ['routing', 'tool_surfaces', 'context_policy', 'prompts', 'orchestration', 'wazir_source_code'] as const;
   const levelNames = ['0 (OBSERVE)', '1 (RECOMMEND)', '2 (EXPERIMENT)', '3 (QUALIFY)', '4 (GUARDED PROMOTION)'];
@@ -2157,6 +2511,14 @@ export async function improveStatusCommand(
     return JSON.stringify(
       {
         activeConfig,
+        effectiveCommitMode: effectivePolicy.mode,
+        permissions: effectivePolicy.permissions,
+        pendingCommitApprovals: pendingApprovals.map((p) => ({
+          attemptId: p.attemptId,
+          branch: p.baseline?.branch,
+          candidateRevisionHash: p.candidateRevisionHash,
+          files: p.intendedFiles,
+        })),
         domains: Object.fromEntries(domains.map((d) => [d, optimizer.getLevel(d)])),
         budget,
         consumption,
@@ -2173,11 +2535,14 @@ export async function improveStatusCommand(
     '-------------------------------------------------------',
     `Active Config:      ${activeConfig.id} (v${activeConfig.version})`,
     `Default Level:      Level ${levelNames[optimizer.getLevel()]}`,
+    `Commit Policy:      ${effectivePolicy.mode} (exec=${effectivePolicy.permissions.codeExecutionAuthorized} commit=${effectivePolicy.permissions.commitAuthorized} push=${effectivePolicy.permissions.pushAuthorized} merge=${effectivePolicy.permissions.mergeAuthorized} deploy=${effectivePolicy.permissions.deploymentAuthorized})`,
+    `Pending Approvals:  ${pendingApprovals.length}`,
     '',
     color.bold('Domain Maturity Levels:'),
     ...domains.map((d) => `  - ${d.padEnd(20)}: Level ${levelNames[optimizer.getLevel(d)]}`),
     '',
     color.bold('Resource Budgets:'),
+    `  - Accounting:      ${consumption.accountingStatus}${consumption.accountingStatus === 'complete' ? '' : ' (recorded usage is incomplete; dispatch blocked)'}`,
     `  - Experiments:     ${consumption.experimentsCount} / ${budget.maxExperiments}`,
     `  - Candidates:      ${consumption.candidatesCount} / ${budget.maxCandidatesPerExperiment * budget.maxExperiments}`,
     `  - Model Calls:     ${consumption.modelCallsCount} / ${budget.maxModelCalls}`,
@@ -2272,11 +2637,15 @@ export async function improveInspectCommand(
   options?: { json?: boolean },
 ): Promise<string> {
   const optimizer = engine.optimizer;
-  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+  if (!optimizer) {
+    process.exitCode = 1;
+    return color.yellow('MetaOptimizerService is not configured on this engine.');
+  }
 
   const run = optimizer.getHistory().find((h) => h.experimentId === experimentId || h.runId === experimentId);
   if (!run) {
-    return color.red(`Experiment '${experimentId}' not found.`);
+    process.exitCode = 1;
+    return options?.json ? JSON.stringify({ error: `Experiment '${experimentId}' not found.` }, null, 2) : color.red(`Experiment '${experimentId}' not found.`);
   }
 
   if (options?.json) {
@@ -2372,8 +2741,15 @@ export async function improveExplainCommand(
   options?: { json?: boolean },
 ): Promise<string> {
   const optimizer = engine.optimizer;
-  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+  if (!optimizer) {
+    process.exitCode = 1;
+    return color.yellow('MetaOptimizerService is not configured on this engine.');
+  }
 
+  const run = optimizer.getHistory().find((h) => h.experimentId === experimentId || h.runId === experimentId);
+  if (!run) {
+    process.exitCode = 1;
+  }
   const explanation = optimizer.explainExperiment(experimentId);
   if (options?.json) {
     return JSON.stringify({ experimentId, explanation }, null, 2);
@@ -2387,21 +2763,29 @@ export async function improvePromoteCommand(
   options?: { force?: boolean; json?: boolean },
 ): Promise<string> {
   const optimizer = engine.optimizer;
-  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+  if (!optimizer) {
+    process.exitCode = 1;
+    return color.yellow('MetaOptimizerService is not configured on this engine.');
+  }
 
-  const candidate = {
-    candidateId,
-    experimentId: `promo-${candidateId}`,
-    strategy: 'CONFIGURATION' as const,
-    filesChanged: [],
-    config: optimizer.getActiveConfig(),
-    status: 'VERIFIED' as const,
-  };
+  const candidate = optimizer.getCandidate(candidateId);
+  if (!candidate) {
+    if (!options?.json) process.exitCode = 1;
+    const missing = {
+      success: false,
+      reason: `PROMOTION_DENIED: Persisted candidate '${candidateId}' not found.`,
+    };
+    return options?.json ? JSON.stringify(missing, null, 2) : color.red(`✗ ${missing.reason}`);
+  }
 
   const res = await optimizer.promoteCandidate(candidate, {
     force: options?.force,
     operatorApproved: true,
   });
+
+  if (!res.success && !options?.json) {
+    process.exitCode = 1;
+  }
 
   if (options?.json) {
     return JSON.stringify(res, null, 2);
@@ -2416,29 +2800,66 @@ export async function improveRollbackCommand(
   options?: { json?: boolean },
 ): Promise<string> {
   const optimizer = engine.optimizer;
-  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
-
-  const restored = await optimizer.rollback(promotionId);
-
-  if (options?.json) {
-    return JSON.stringify({ ok: true, activeConfig: restored }, null, 2);
+  if (!optimizer) {
+    process.exitCode = 1;
+    return color.yellow('MetaOptimizerService is not configured on this engine.');
   }
 
-  return color.green(`✓ Rolled back active configuration to ${restored.id} (v${restored.version})`);
+  try {
+    const restored = await optimizer.rollback(promotionId);
+    if (options?.json) {
+      return JSON.stringify({ ok: true, activeConfig: restored }, null, 2);
+    }
+    return color.green(`✓ Rolled back active configuration to ${restored.id} (v${restored.version})`);
+  } catch (err) {
+    process.exitCode = 1;
+    if (options?.json) {
+      return JSON.stringify({ ok: false, error: String(err) }, null, 2);
+    }
+    return color.red(`✗ Rollback failed: ${String(err)}`);
+  }
 }
 
 export async function improveRunCommand(
   engine: RookEngine,
-  options?: { level?: string; json?: boolean; distributed?: boolean },
+  options?: { level?: string; json?: boolean; distributed?: boolean; runner?: any; offlinePolicy?: 'allow' | 'block' },
 ): Promise<string> {
   const optimizer = engine.optimizer;
-  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+  if (!optimizer) {
+    process.exitCode = 1;
+    return color.yellow('MetaOptimizerService is not configured on this engine.');
+  }
+
+  const { runGitPreflight } = await import('@wazir/evaluation');
+  const gitPreflight = await runGitPreflight(engine.projectRoot, {
+    fetchRemote: false,
+    offlinePolicy: options?.offlinePolicy ?? 'allow',
+  }).catch(() => undefined);
+
+  if (gitPreflight && !gitPreflight.ok) {
+    process.exitCode = 1;
+    if (options?.json) {
+      return JSON.stringify(
+        {
+          decision: 'BLOCKED_GIT_CONFLICT',
+          reason: gitPreflight.blockedReason,
+          gitPreflight,
+        },
+        null,
+        2,
+      );
+    }
+    return color.red(`✗ Git preflight blocked self-improvement cycle: ${gitPreflight.blockedReason}`);
+  }
 
   // Step 1: Observe executions
   const executions = await engine.executions.list();
   const opportunities = optimizer.observe({ executions });
 
   if (opportunities.length === 0) {
+    if (options?.json) {
+      return JSON.stringify({ decision: 'NO_OPPORTUNITIES', opportunities: [], gitPreflight }, null, 2);
+    }
     return color.green('MetaOptimizer cycle complete: No material improvement opportunities detected.');
   }
 
@@ -2446,6 +2867,9 @@ export async function improveRunCommand(
   const topOpp = opportunities[0];
   const hypotheses = optimizer.formulateHypotheses(topOpp);
   if (hypotheses.length === 0) {
+    if (options?.json) {
+      return JSON.stringify({ decision: 'INCONCLUSIVE', reason: 'NO_TESTABLE_HYPOTHESES', opportunity: topOpp }, null, 2);
+    }
     return color.yellow('Could not formulate testable hypotheses for detected opportunity.');
   }
 
@@ -2462,64 +2886,69 @@ export async function improveRunCommand(
   // Step 5: Verify candidate
   const verification = await optimizer.verifyCandidate(candidate);
 
-  // Step 6: Benchmark candidate against baseline
+  // Step 6: Benchmark candidate against baseline using real task execution (no synthetic results)
   const allTasks = engine.benchmark?.listTasks() ?? [];
   const matchedTasks = allTasks.filter((t) => plan.benchmarkCategories.includes(t.category));
   const tasksToRun = matchedTasks.length > 0 ? matchedTasks.slice(0, 2) : allTasks.slice(0, 2);
 
-  let evalResults: any[] = [];
-  if (tasksToRun.length > 0) {
-    let runIndex = 0;
-    const runner = {
-      id: 'cli-dogfood-runner',
-      name: 'Dogfood Evaluation Runner',
-      async run(task: any) {
-        runIndex++;
-        const isCandidate = runIndex > tasksToRun.length;
-        const tokens = isCandidate ? Math.round(topOpp.baseline * 0.72) : topOpp.baseline;
-        return {
-          execution: {
-            id: `exec-${task.id}-${runIndex}`,
-            taskId: task.id,
-            runtimeId: 'local',
-            modelId: 'qwen-2.5-coder',
-            status: 'completed' as const,
-            createdAt: new Date(),
-            completedAt: new Date(),
-          },
-          task: {
-            id: task.id,
-            type: 'coding' as const,
-            title: task.name,
-            input: task.prompt,
-            requirements: {},
-            priority: 'normal' as const,
-            status: 'completed' as const,
-            createdAt: new Date(),
-          },
-          policyDecisions: [],
-          toolCalls: [],
-          filesChanged: task.expectedFiles ?? [],
-          checks: [{ name: 'test' as const, command: 'check', ok: true, durationMs: 40, output: 'ok' }],
-          errors: [],
-          events: [],
-          usage: { input: tokens, output: 200 },
-        };
+  if (tasksToRun.length === 0) {
+    const payload = {
+      decision: 'INCONCLUSIVE',
+      reason: 'NO_BENCHMARK_TASKS_REGISTERED',
+      opportunity: topOpp,
+      plan,
+      candidateId: candidate.candidateId,
+      verification,
+      results: [],
+    };
+    if (options?.json) {
+      return JSON.stringify(payload, null, 2);
+    }
+    return [
+      color.cyan('SELF-IMPROVEMENT EXPERIMENT OBSERVED'),
+      '-------------------------------------------------------',
+      `Opportunity:   ${topOpp.category} on ${topOpp.component}`,
+      `Hypothesis:    ${hypotheses[0].proposedChange}`,
+      `Experiment ID: ${plan.experimentId}`,
+      `Candidate ID:  ${candidate.candidateId}`,
+      `Verification:  ${verification.allPassed ? color.green('PASSED') : color.red('FAILED')}`,
+      `Decision:      ${color.yellow('INCONCLUSIVE (NO_BENCHMARK_TASKS_REGISTERED)')}`,
+      '-------------------------------------------------------',
+    ].join('\n');
+  }
+
+  const liveRunner =
+    options?.runner ?? {
+      id: 'wazir-live-execution-runner',
+      name: 'Wazir Real Task Execution Benchmark Runner',
+      async run(task: any): Promise<ExecutionRecord> {
+        const outcome = await executeTask(engine, task.prompt, {
+          type: 'coding',
+          expectedFiles: task.expectedFiles,
+          maxTurns: 6,
+          quiet: true,
+          json: true,
+        });
+        if (!outcome.executionId || outcome.executionId === '—') {
+          throw new Error(
+            `Benchmark task '${task.id}' failed to execute: ${outcome.reasons.join('; ') || 'no execution created'}`,
+          );
+        }
+        const record = await engine.executions.get(outcome.executionId);
+        if (!record) {
+          throw new Error(`Execution record '${outcome.executionId}' not found for benchmark task '${task.id}'`);
+        }
+        return record;
       },
     };
 
-    const onlineWorkers = engine.computers.list().filter((c) => c.status === 'online');
-    const isDistributed = Boolean(options?.distributed && onlineWorkers.length >= 2);
-
-    evalResults = await optimizer.evaluateCandidates({
-      plan,
-      candidates,
-      runner,
-      tasks: tasksToRun,
-      distributed: isDistributed,
-      workers: isDistributed ? onlineWorkers : undefined,
-    });
-  }
+  const evalResults = await optimizer.evaluateCandidates({
+    plan,
+    candidates,
+    runner: liveRunner,
+    tasks: tasksToRun,
+    distributed: options?.distributed,
+  });
 
   const firstResult = evalResults[0];
   const decisionStr = firstResult
@@ -2532,6 +2961,7 @@ export async function improveRunCommand(
 
   if (options?.json) {
     return JSON.stringify({
+      decision: firstResult?.decision ?? 'INCONCLUSIVE',
       opportunity: topOpp,
       plan,
       candidates,
@@ -2541,7 +2971,7 @@ export async function improveRunCommand(
   }
 
   return [
-    color.cyan('✓ SELF-IMPROVEMENT EXPERIMENT COMPLETED'),
+    color.cyan('SELF-IMPROVEMENT EXPERIMENT OBSERVED'),
     '-------------------------------------------------------',
     `Opportunity:   ${topOpp.category} on ${topOpp.component}`,
     `Hypothesis:    ${hypotheses[0].proposedChange}`,
@@ -2571,6 +3001,7 @@ export async function canaryListCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
@@ -2617,6 +3048,7 @@ export async function canaryStatusCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
@@ -2657,12 +3089,14 @@ export async function canaryInspectCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
 
   const record = canaryService.getDeployment(canaryId);
   if (!record) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
     return color.red(`Canary deployment '${canaryId}' not found.`);
   }
@@ -2727,12 +3161,14 @@ export async function canaryCompareCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
 
   const record = canaryService.getDeployment(canaryId);
   if (!record) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
     return color.red(`Canary deployment '${canaryId}' not found.`);
   }
@@ -2808,8 +3244,15 @@ export async function canaryShadowCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
+  }
+  const record = canaryService.getDeployment(canaryId);
+  if (!record) {
+    process.exitCode = 1;
+    if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
+    return color.red(`Canary deployment '${canaryId}' not found.`);
   }
 
   let shadowResults: any[] = [];
@@ -2849,12 +3292,14 @@ export async function canaryRollbackCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
 
   const record = canaryService.getDeployment(canaryId);
   if (!record) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
     return color.red(`Canary deployment '${canaryId}' not found.`);
   }

@@ -275,6 +275,7 @@ export interface ExperimentPlan {
   regressionConstraints: Record<string, MetricConstraint>;
   benchmarkCategories: string[];
   benchmarkTasks: string[];
+  /** Independent executions per task and configuration. */
   sampleSize: number;
   budget: MetaOptimizationBudget;
   createdAt: Date;
@@ -349,7 +350,37 @@ export interface CandidateVerificationResult {
 // 6. REGRESSION GUARD & DECISION
 // ======================================================================
 
+export interface PairedMetricEvidence {
+  taskId: string;
+  metric: string;
+  pairCount: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  meanPairedImprovement: number;
+  pValue: number;
+  adjustedAlpha: number;
+  /** One-sided exact lower bound on the non-tied probability of improvement. */
+  improvementProbabilityLowerBound: number;
+  supported: boolean;
+}
+
+export interface CategoryRegressionSummary {
+  taskCount: number;
+  pairCount: number;
+  baselinePassRate: number;
+  candidatePassRate: number;
+  passRateDelta: number;
+  regressed: boolean;
+}
+
 export interface RegressionGuardResult {
+  /** Exact paired sign-test evidence; does not estimate the mean effect. */
+  statisticalEvidence?: PairedMetricEvidence[];
+  /** Per-category pass-rate and regression breakdown across benchmark categories. */
+  categoryBreakdown?: Record<string, CategoryRegressionSummary>;
+  /** Per-model improvement vs regression scoping when multi-model runs are evaluated. */
+  scopedModels?: { improved: string[]; regressed: string[] };
   qualified: boolean;
   primaryObjectiveMet: boolean;
   correctnessGatesPassed: boolean;

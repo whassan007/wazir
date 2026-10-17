@@ -69,6 +69,9 @@ jobs:
       - name: Run agent execution test plan (55 cases)
         run: npm run test:plan:agent
 
+      - name: Run Live Reliability Gate (Tier 1 Deterministic Core)
+        run: npm run test:live:tier1
+
       - name: Run Automated Release Validation Gate
         run: npm run release:gate
 

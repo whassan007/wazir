@@ -80,6 +80,21 @@ describe('default policy: limits are not enforced', () => {
 });
 
 describe('subscription quotas', () => {
+  it('admits separate credentials against one shared provider quota atomically', () => {
+    const shared = { quotaGroup: 'claude-team', limits: [{ unit: 'tokens' as const, window: '5h', limit: 1_000, source: 'configured' as const }] };
+    const { budget } = setup([sub('A', 1_000, shared), sub('B', 1_000, shared)]);
+    expect(ask(budget, 'A', 700, 0, { workload: 'critical-review' }).outcome).toBe('admitted');
+    expect(ask(budget, 'B', 300, 0, { workload: 'critical-review' }).outcome).toBe('admitted');
+    expect(ask(budget, 'A', 1, 0, { workload: 'critical-review' }).outcome).toBe('deferred');
+  });
+
+  it('labels paid accounting as advisory when enforcement is disabled', () => {
+    const { budget } = setup([api], { enforce: false });
+    const decision = ask(budget, 'api', 10, 10);
+    expect(decision.outcome).toBe('admitted');
+    expect(decision.reasons.join(' ')).toContain('paid-account authorization is advisory');
+  });
+
   it('1. two subscriptions with different quotas are enforced independently', () => {
     const { budget } = setup([sub('A', 10_000), sub('B', 3_000)]);
     expect(ask(budget, 'A', 2_000, 1_000).outcome).toBe('admitted');

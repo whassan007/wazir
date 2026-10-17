@@ -68,6 +68,14 @@ describe('CodingAgent.run — context compaction', () => {
     expect(lateGrowth).toBeLessThan(earlyGrowth / 4);
   });
 
+  it('uses the current placement ceiling when the runtime changes model context', async () => {
+    const { runtime } = growingRuntime();
+    runtime.getContextTokens = () => 800;
+    // A stale original large window must not disable compaction after escalation.
+    const turns = await drain(createCodingAgent({ maxTurns: 15 }).run({ ...baseRequest, contextTokens: 32768 }, runtime));
+    expect(turns.some(t => t.content?.includes('context compacted'))).toBe(true);
+  });
+
   it('never compacts when the host does not report a contextTokens ceiling', async () => {
     const agent = createCodingAgent({ maxTurns: 15 });
     const { runtime } = growingRuntime();

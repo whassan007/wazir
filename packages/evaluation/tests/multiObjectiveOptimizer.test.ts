@@ -61,6 +61,8 @@ describe('Multi-Objective Empirical Optimization', () => {
       evaluationService,
       memoryService,
       store,
+      // Fixture trajectories intentionally model large contexts across repeated runs.
+      budget: { maxExperiments: 10, maxCandidatesPerExperiment: 4, maxModelCalls: 1000, maxTokens: 20_000_000, maxWallTimeMs: 1_800_000, maxMonetaryCostUSD: 1000 },
     });
   });
 
@@ -92,8 +94,8 @@ describe('Multi-Objective Empirical Optimization', () => {
       regressionConstraints: {},
       benchmarkCategories: ['CODE_REPAIR'],
       benchmarkTasks: ['mo-task-1'],
-      sampleSize: 2,
-      budget: { maxExperiments: 2, maxCandidatesPerExperiment: 1, maxModelCalls: 10, maxTokens: 100_000, maxWallTimeMs: 5000 },
+      sampleSize: 10,
+      budget: { maxExperiments: 2, maxCandidatesPerExperiment: 1, maxModelCalls: 200, maxTokens: 10_000_000, maxWallTimeMs: 5000 },
       createdAt: new Date(),
     };
 
@@ -105,7 +107,7 @@ describe('Multi-Objective Empirical Optimization', () => {
       name: 'Legacy Single-Objective Runner',
       async run(task) {
         runIndex++;
-        const isCand = runIndex > 1;
+        const isCand = runIndex > 10;
         return {
           execution: {
             id: `exec-${task.id}-${runIndex}`,
@@ -132,6 +134,7 @@ describe('Multi-Objective Empirical Optimization', () => {
           checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 100 }],
           errors: [],
           events: [],
+          totalModelCalls: 1,
           usage: { input: isCand ? 65_000 : 80_000, output: 500 },
         };
       },
@@ -458,7 +461,7 @@ describe('Multi-Objective Empirical Optimization', () => {
       secondaryMetrics: [],
       benchmarkCategories: [],
       sampleSize: 1,
-      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 3, maxModelCalls: 10, maxTokens: 1000, maxWallTimeMs: 1000 },
+      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 3, maxModelCalls: 200, maxTokens: 1000, maxWallTimeMs: 1000 },
       createdAt: new Date(),
       objectives,
       selectionPolicy: 'LEXICOGRAPHIC',
@@ -506,7 +509,7 @@ describe('Multi-Objective Empirical Optimization', () => {
       secondaryMetrics: [],
       benchmarkCategories: [],
       sampleSize: 1,
-      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 2, maxModelCalls: 10, maxTokens: 1000, maxWallTimeMs: 1000 },
+      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 2, maxModelCalls: 200, maxTokens: 1000, maxWallTimeMs: 1000 },
       createdAt: new Date(),
       objectives,
       selectionPolicy: 'WEIGHTED_AFTER_PARETO',
@@ -554,7 +557,7 @@ describe('Multi-Objective Empirical Optimization', () => {
       secondaryMetrics: [],
       benchmarkCategories: [],
       sampleSize: 1,
-      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 2, maxModelCalls: 10, maxTokens: 1000, maxWallTimeMs: 1000 },
+      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 2, maxModelCalls: 200, maxTokens: 1000, maxWallTimeMs: 1000 },
       createdAt: new Date(),
       objectives,
       selectionPolicy: 'PARETO_ONLY',
@@ -626,7 +629,7 @@ describe('Multi-Objective Empirical Optimization', () => {
     expect(val2).toBe(42);
 
     const missingVal = extractMetricValueSafe('completely_unregistered_metric', mockSuite);
-    expect(missingVal).toBe(0);
+    expect(missingVal).toBeNaN();
   });
 
   // ======================================================================
@@ -656,7 +659,7 @@ describe('Multi-Objective Empirical Optimization', () => {
       benchmarkCategories: ['CODE_REPAIR'],
       benchmarkTasks: ['mo-task-1'],
       sampleSize: 1,
-      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 2, maxModelCalls: 10, maxTokens: 100_000, maxWallTimeMs: 5000 },
+      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 2, maxModelCalls: 200, maxTokens: 10_000_000, maxWallTimeMs: 5000 },
       createdAt: new Date(),
       objectives,
       selectionPolicy: 'PARETO_ONLY',
@@ -698,6 +701,7 @@ describe('Multi-Objective Empirical Optimization', () => {
           checks: [{ name: 'test', command: 'npm test', ok: true, durationMs: 100 }],
           errors: [],
           events: [],
+          totalModelCalls: 1,
           usage: { input: isCandidate ? (candIndex === 0 ? 60_000 : 80_000) : 75_000, output: 200 },
         };
       },
@@ -767,7 +771,7 @@ describe('Multi-Objective Empirical Optimization', () => {
       secondaryMetrics: [],
       benchmarkCategories: ['CODE_REPAIR'],
       sampleSize: 1,
-      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 3, maxModelCalls: 10, maxTokens: 1000, maxWallTimeMs: 1000 },
+      budget: { maxExperiments: 1, maxCandidatesPerExperiment: 3, maxModelCalls: 200, maxTokens: 1000, maxWallTimeMs: 1000 },
       createdAt: new Date(),
       objectives,
       selectionPolicy: 'PARETO_ONLY',

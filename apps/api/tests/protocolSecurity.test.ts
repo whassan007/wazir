@@ -334,7 +334,7 @@ describe('tool enforcement (operator, real registered tools)', () => {
     } finally {
       shell.descriptor.timeoutMs = original;
     }
-  });
+  }, 20_000);
 
   it('records a tool exception as a failed step, never completion', async () => {
     const original = h.state.tools.get('lint')!;

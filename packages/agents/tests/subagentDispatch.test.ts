@@ -14,6 +14,7 @@ describe('Subagent Dispatch & Nesting Boundaries', () => {
     const seenTools: string[][] = [];
 
     const runtime: AgentRuntime = {
+      runtimeCapabilities: { nativeToolCalling: true },
       tools: [
         { name: 'read', description: 'read a file', inputSchema: {} },
         { name: 'dispatch_subagent', description: 'dispatch subtask', inputSchema: {} },

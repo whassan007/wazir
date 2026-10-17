@@ -1,0 +1,120 @@
+{
+  "version": "0.2.5",
+  "timestamp": "2026-10-17T22:24:47.242Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "nodeVersion": "v22.23.3",
+  "selectedTier": "all",
+  "tiers": {
+    "tier1": {
+      "passed": true,
+      "durationMs": 8861,
+      "checks": [
+        {
+          "name": "systemic-failure-detectors-vitest",
+          "passed": true,
+          "detail": "14/14 systemic detector assertions passed",
+          "outputPreview": " Detectors > Detector 3: False-Success Prevention — CLI Exit Codes & Verification Guards (DEF-04, DEF-06, DEF-07) > returns non-zero exit code for missing entities across CLI inspection and mutation commands 4428ms\n\n Test Files  1 passed (1)\n      Tests  14 passed (14)\n   Start at  15:24:47\n   Duration  8.10s (transform 313ms, setup 0ms, collect 676ms, tests 7.26s, environment 0ms, prepare 24ms)\n\n"
+        },
+        {
+          "name": "dist-vs-bundle-parity",
+          "passed": true,
+          "version": "0.2.5"
+        }
+      ]
+    },
+    "tier2": {
+      "passed": true,
+      "durationMs": 70831,
+      "checks": [
+        {
+          "name": "real-pty-interactive-conversation",
+          "passed": true,
+          "exitCode": 0,
+          "outputBytes": 2746,
+          "stepsVerified": 18
+        },
+        {
+          "name": "real-cli-e2e-task-execution",
+          "passed": true,
+          "executionId": "exec-mvcysmcd-1",
+          "filesChanged": [
+            "verified-artifact.txt"
+          ],
+          "artifactVerified": true
+        },
+        {
+          "name": "distributed-multiprocess-qualification",
+          "passed": true,
+          "outputPreview": "KILL > records duplicate execution and external effect with idempotency=true 31418ms\n   ✓ mutation before acknowledgment across SIGKILL > records duplicate execution and external effect with idempotency=false 31409ms\n\n Test Files  2 passed (2)\n      Tests  5 passed (5)\n   Start at  15:24:59\n   Duration  67.24s (transform 47ms, setup 0ms, collect 80ms, tests 66.93s, environment 0ms, prepare 36ms)\n\n"
+        }
+      ]
+    },
+    "tier3": {
+      "passed": true,
+      "durationMs": 9008,
+      "liveInfrastructure": {
+        "ollama": {
+          "url": "http://127.0.0.1:11434",
+          "reachable": true,
+          "models": []
+        },
+        "lmstudio": {
+          "url": "http://127.0.0.1:1234/v1",
+          "reachable": true,
+          "models": [
+            "google/gemma-4-12b-qat",
+            "qwen/qwen3.8-27b"
+          ],
+          "liveInference": {
+            "verified": true,
+            "model": "google/gemma-4-12b-qat",
+            "durationMs": 1212,
+            "responsePreview": "READY"
+          }
+        },
+        "hostedCredentialsConfigured": {
+          "nvidia": false,
+          "anthropic": false,
+          "openai": false,
+          "google": false
+        }
+      }
+    }
+  },
+  "stressCampaign": {
+    "freshInteractivePtySessions": {
+      "target": 20,
+      "completed": 20,
+      "passed": 20,
+      "failed": 0,
+      "orphanedProcesses": 0,
+      "avgDurationMs": 1191
+    },
+    "concurrentTaskSubmissions": {
+      "totalTasks": 8,
+      "completed": 8,
+      "duplicateExecutionRecords": 0,
+      "passed": true
+    },
+    "seededRandomCancellation": {
+      "seed": 20261017,
+      "trials": 5,
+      "cancelledCleanly": 5,
+      "hungOrCorrupted": 0,
+      "passed": true
+    },
+    "runtimeInterruptionRecovery": {
+      "interruptedMidStream": true,
+      "transitionedToFailedTruthfully": true,
+      "passed": true
+    },
+    "restartStateRecovery": {
+      "jobsPersisted": 1,
+      "jobsRecoveredOnRestart": 1,
+      "passed": true
+    }
+  },
+  "overallPassed": true,
+  "totalDurationMs": 88701
+}

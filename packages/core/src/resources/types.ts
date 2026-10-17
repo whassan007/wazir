@@ -55,6 +55,9 @@ export interface Pricing {
 
 export interface AccountConfig {
   id: string;
+  /** Optional provider-side quota identity. Accounts sharing this key are admitted against
+   * one durable ledger scope (useful for multiple controller credentials on one subscription). */
+  quotaGroup?: string;
   /** Human label for dashboards. */
   label?: string;
   provider: string;
@@ -128,6 +131,10 @@ export interface ResourcePolicy {
   weights?: Partial<RoutingWeights>;
   /** Workload classes that must stay on local accounts (privacy). */
   localOnlyWorkloads?: WorkloadClass[];
+  /** Minimum empirically calibrated correctness probability Q_min in [0, 1]. */
+  minVerifiedSuccessRate?: number;
+  /** Hard latency ceiling L_max in milliseconds (including cold-start/load time). */
+  maxLatencyMs?: number;
 }
 
 export const DEFAULT_THRESHOLDS: Thresholds = { advisory: 0.70, conserve: 0.85, critical: 0.95 };

@@ -1,3 +1,4 @@
+import { controlledGeneration, type GenerationControl } from '@wazir/runtimes-interfaces';
 import type {
   AuthLoginResult,
   AuthMethod,
@@ -181,7 +182,11 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     };
   }
 
-  async *generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
+  generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
+    return controlledGeneration(request, (generation, control) => this.generateControlled(generation, control));
+  }
+
+  private async *generateControlled(request: GenerationRequest, control: GenerationControl): AsyncIterable<GenerationEvent> {
     const stored = await this.readStoredCredential();
     if (!stored || stored.credential.kind !== 'api-key') {
       yield { type: 'error', error: 'not authenticated: run `wa auth login openai`' };
@@ -189,8 +194,8 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     }
     const apiKey = stored.credential.apiKey;
 
-    const controller = new AbortController();
-    const requestId = request.requestId ?? `openai-${Date.now()}`;
+    const controller = control.controller;
+    const requestId = control.requestId;
     this.controllers.set(requestId, controller);
 
     const messages: Array<{ role: string; content: string }> = [];
@@ -205,7 +210,9 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     if (request.prompt) messages.push({ role: 'user', content: request.prompt });
 
     let response: Response;
+    yield control.startAttempt();
     try {
+      control.assertActive();
       response = await fetch(`${API_BASE}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },

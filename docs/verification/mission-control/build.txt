@@ -1,0 +1,122 @@
+
+> wazir@0.2.2 build
+> npm run build --workspaces --if-present && npm run bundle
+
+
+> @wazir/agents@0.1.28 build
+> tsc --build
+
+
+> @wazir/core@0.2.2 build
+> tsc --build
+
+
+> @wazir/database@0.1.28 build
+> tsc --build
+
+
+> @wazir/evaluation@0.1.28 build
+> tsc --build
+
+
+> @wazir/memory@0.1.28 build
+> tsc --build
+
+
+> @wazir/models@0.1.28 build
+> tsc --build
+
+
+> @wazir/observability@0.1.28 build
+> tsc --build
+
+
+> @wazir/policies@0.1.28 build
+> tsc --build
+
+
+> @wazir/registry@0.1.28 build
+> tsc --build
+
+
+> @wazir/scheduler@0.1.28 build
+> tsc --build
+
+
+> @wazir/secrets@0.1.28 build
+> tsc --build
+
+
+> @wazir/shared@0.1.28 build
+> tsc
+
+
+> @wazir/tools@0.1.28 build
+> tsc --build
+
+
+> @wazir/workers@0.1.28 build
+> tsc --build
+
+
+> @wazir/runtimes-anthropic@0.1.28 build
+> tsc --build
+
+
+> @wazir/runtimes-google@0.1.28 build
+> tsc --build
+
+
+> @wazir/runtimes-interfaces@0.1.28 build
+> tsc --build
+
+
+> @wazir/runtimes-lmstudio@0.1.28 build
+> tsc --build
+
+
+> @wazir/runtimes-nvidia@0.1.28 build
+> tsc --build
+
+
+> @wazir/runtimes-ollama@0.1.28 build
+> tsc --build
+
+
+> @wazir/runtimes-openai@0.1.28 build
+> tsc --build
+
+
+> @wazir/api@0.1.28 build
+> tsc --build
+
+
+> @wazir/cli@0.2.2 build
+> tsc --build
+
+
+> @wazir/desktop@0.1.0 build
+> tauri build --no-bundle
+
+        Info Looking up installed tauri packages to check mismatched versions...
+    Finished `release` profile [optimized] target(s) in 0.29s
+       Built application at: /Users/wael/Code/Wazir/apps/desktop/src-tauri/target/release/wazir-desktop
+
+> @wazir/web@0.1.28 build
+> true
+
+
+> @wazir/worker@0.1.28 build
+> tsc
+
+
+> wazir@0.2.2 bundle
+> node scripts/bundle.mjs
+
+==> Bundling Wazir CLI into standalone executable: bin/wa.js
+
+  bin/wa.js      18.3mb ⚠️
+  bin/wa.js.map  28.7mb
+
+⚡ Done in 380ms
+✓ Standalone CLI bundle created at: /Users/wael/Code/Wazir/bin/wa.js

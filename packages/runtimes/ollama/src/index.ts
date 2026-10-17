@@ -1,3 +1,4 @@
+import { controlledGeneration, type GenerationControl } from '@wazir/runtimes-interfaces';
 import type {
   DiscoveredModel,
   GenerationEvent,
@@ -233,9 +234,13 @@ export class OllamaAdapter implements RuntimeAdapter {
     return { minMemoryGB: Math.ceil(gb * 1.5), minGpuGB: undefined };
   }
 
-  async *generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
-    const controller = new AbortController();
-    const requestId = request.requestId ?? `ollama-${Date.now()}`;
+  generate(request: GenerationRequest): AsyncIterable<GenerationEvent> {
+    return controlledGeneration(request, (generation, control) => this.generateControlled(generation, control));
+  }
+
+  private async *generateControlled(request: GenerationRequest, control: GenerationControl): AsyncIterable<GenerationEvent> {
+    const controller = control.controller;
+    const requestId = control.requestId;
     this.controllers.set(requestId, controller);
 
     const messages = this.buildMessages(request);
@@ -245,10 +250,13 @@ export class OllamaAdapter implements RuntimeAdapter {
     // lazy-model-load window (it can refuse connections or 5xx while
     // swapping a model into memory) that motivated this.
     let response: Response | undefined;
-    const retryPolicy = resolveRetryPolicy({ maxRetries: 3, initialDelayMs: 250, maxDelayMs: 8000, ...request.providerRetryPolicy });
+    const configuredRetryPolicy = resolveRetryPolicy({ maxRetries: 3, initialDelayMs: 250, maxDelayMs: 8000, ...request.providerRetryPolicy });
+    const retryPolicy = { ...configuredRetryPolicy, maxRetries: control.capRetries(configuredRetryPolicy.maxRetries) };
     const maxAttempts = retryPolicy.maxRetries + 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      yield control.startAttempt();
       try {
+        control.assertActive();
         const candidate = await fetch(`${this.baseURL}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

@@ -17,46 +17,52 @@ describe('Hosted provider failure isolation', () => {
   });
 
   it('#16 an unauthenticated hosted provider does not prevent local models from registering or scheduling', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-hostedfail-'));
-    const secretBroker = await createSecretBroker({ secretsDir: dir });
-    const config = { modelContext: {}, modelCapabilities: {}, networkAllowed: false, allowCommands: [], denyCommands: [], allowedMcpServers: [] };
+    const prevNvidiaKey = process.env.NVIDIA_API_KEY;
+    delete process.env.NVIDIA_API_KEY;
+    try {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-hostedfail-'));
+      const secretBroker = await createSecretBroker({ secretsDir: dir });
+      const config = { modelContext: {}, modelCapabilities: {}, networkAllowed: false, allowCommands: [], denyCommands: [], allowedMcpServers: [] };
 
-    const computers = new ComputerRegistry();
-    computers.register({ id: 'local', name: 'local', type: 'workstation', local: true, os: { platform: 'linux', architecture: 'x64', version: '1' }, hardware: { cpu: 'x', cpuCores: 4, memoryGB: 16 } });
-    const runtimes = new RuntimeRegistry();
-    runtimes.register({ id: 'ollama', type: 'ollama', name: 'Ollama', version: '1', computerId: 'local', capabilities: { chat: true, streaming: true, toolCalling: true, structuredOutput: false, vision: false, embeddings: false, reasoning: false, modelLoad: false, modelUnload: false, modelDownload: false, statefulChat: false, mcp: false } });
-    runtimes.update('ollama', { health: 'healthy' });
+      const computers = new ComputerRegistry();
+      computers.register({ id: 'local', name: 'local', type: 'workstation', local: true, os: { platform: 'linux', architecture: 'x64', version: '1' }, hardware: { cpu: 'x', cpuCores: 4, memoryGB: 16 } });
+      const runtimes = new RuntimeRegistry();
+      runtimes.register({ id: 'ollama', type: 'ollama', name: 'Ollama', version: '1', computerId: 'local', capabilities: { chat: true, streaming: true, toolCalling: true, structuredOutput: false, vision: false, embeddings: false, reasoning: false, modelLoad: false, modelUnload: false, modelDownload: false, statefulChat: false, mcp: false } });
+      runtimes.update('ollama', { health: 'healthy' });
 
-    const models = new ModelRegistry();
-    models.register({
-      id: 'local-model', name: 'local-model', provider: 'ollama', family: 'qwen', contextMax: 32768,
-      capabilities: ['generalChat'], toolCalling: true, structuredOutput: false, vision: false, audio: false, embedding: false, reasoning: false,
-      runtimeCompatibility: ['ollama'], local: true, createdAt: new Date(), updatedAt: new Date(),
-    });
-    models.upsertInstance({ id: 'local-model::local::ollama', modelId: 'local-model', computerId: 'local', runtimeId: 'ollama', runtimeModelId: 'local-model', loaded: true, health: 'healthy' });
+      const models = new ModelRegistry();
+      models.register({
+        id: 'local-model', name: 'local-model', provider: 'ollama', family: 'qwen', contextMax: 32768,
+        capabilities: ['generalChat'], toolCalling: true, structuredOutput: false, vision: false, audio: false, embedding: false, reasoning: false,
+        runtimeCompatibility: ['ollama'], local: true, createdAt: new Date(), updatedAt: new Date(),
+      });
+      models.upsertInstance({ id: 'local-model::local::ollama', modelId: 'local-model', computerId: 'local', runtimeId: 'ollama', runtimeModelId: 'local-model', loaded: true, health: 'healthy' });
 
-    const policy = new PolicyEngine({ projectRoot: dir });
-    const scheduler = new Scheduler({ computers, runtimes, models, policy });
+      const policy = new PolicyEngine({ projectRoot: dir });
+      const scheduler = new Scheduler({ computers, runtimes, models, policy });
 
-    // Hosted providers never authenticated (no fetch stub — any accidental
-    // network call would surface as a rejected promise, which
-    // applyHostedProvider must swallow into an 'unavailable' health state).
-    const hostedAdapters = createHostedProviders(config as any, secretBroker);
-    for (const [id, adapter] of hostedAdapters) {
-      await applyHostedProvider(id, adapter, { runtimes, models, config: config as any });
-    }
+      // Hosted providers never authenticated (no fetch stub — any accidental
+      // network call would surface as a rejected promise, which
+      // applyHostedProvider must swallow into an 'unavailable' health state).
+      const hostedAdapters = createHostedProviders(config as any, secretBroker);
+      for (const [id, adapter] of hostedAdapters) {
+        await applyHostedProvider(id, adapter, { runtimes, models, config: config as any });
+      }
 
-    // Local models are completely unaffected.
-    expect(models.get('local-model')).toBeDefined();
-    const decision = scheduler.plan({ task: { id: 't1', type: 'coding', input: 'x', requirements: {}, priority: 'normal', status: 'pending', createdAt: new Date() } as any });
-    expect(decision.modelId).toBe('local-model');
-    expect(decision.computerId).toBe('local');
+      // Local models are completely unaffected.
+      expect(models.get('local-model')).toBeDefined();
+      const decision = scheduler.plan({ task: { id: 't1', type: 'coding', input: 'x', requirements: {}, priority: 'normal', status: 'pending', createdAt: new Date() } as any });
+      expect(decision.modelId).toBe('local-model');
+      expect(decision.computerId).toBe('local');
 
-    // The hosted runtimes are registered but correctly marked unavailable —
-    // not silently dropped, not crashing anything else.
-    for (const id of ['anthropic', 'openai', 'google']) {
-      expect(runtimes.get(id)?.health).toBe('unavailable');
-      expect(runtimes.get(id)?.runtimeKind).toBe('hosted');
+      // The hosted runtimes are registered but correctly marked unavailable —
+      // not silently dropped, not crashing anything else.
+      for (const id of ['anthropic', 'openai', 'google', 'nvidia']) {
+        expect(runtimes.get(id)?.health).toBe('unavailable');
+        expect(runtimes.get(id)?.runtimeKind).toBe('hosted');
+      }
+    } finally {
+      if (prevNvidiaKey !== undefined) process.env.NVIDIA_API_KEY = prevNvidiaKey;
     }
   });
 

@@ -7,13 +7,19 @@ import type { RookEngine } from './engine.js';
 import { applyHostedProvider } from './hostedProviders.js';
 import { promptSecret } from './secretPrompt.js';
 
-const PROVIDER_IDS: ProviderId[] = ['anthropic', 'openai', 'google'];
-const DISPLAY_NAME: Record<ProviderId, string> = { anthropic: 'Anthropic / Claude', openai: 'OpenAI', google: 'Google / Gemini' };
+const PROVIDER_IDS: ProviderId[] = ['anthropic', 'openai', 'google', 'nvidia'];
+const DISPLAY_NAME: Record<ProviderId, string> = {
+  anthropic: 'Anthropic / Claude',
+  openai: 'OpenAI',
+  google: 'Google / Gemini',
+  nvidia: 'NVIDIA API Catalog',
+};
 // In priority order — the first one set wins, matching the interactive-prompt fallback order.
 const API_KEY_ENV_VARS: Record<ProviderId, string[]> = {
   anthropic: ['ANTHROPIC_API_KEY'],
   openai: ['OPENAI_API_KEY'],
   google: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+  nvidia: ['NVIDIA_API_KEY'],
 };
 
 function isProviderId(value: string): value is ProviderId {
@@ -74,7 +80,7 @@ async function resolveProvider(providerArg: string | undefined): Promise<{ ok: b
     PROVIDER_IDS.map((id) => ({ id, label: DISPLAY_NAME[id] })),
   );
   if (choice && isProviderId(choice)) return { ok: true, provider: choice };
-  return { ok: false, output: color.red('no provider selected. Usage: wa auth login <anthropic|openai|google>') };
+  return { ok: false, output: color.red('no provider selected. Usage: wa auth login <anthropic|openai|google|nvidia>') };
 }
 
 export interface AuthLoginOptions {

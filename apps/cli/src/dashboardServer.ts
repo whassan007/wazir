@@ -85,6 +85,98 @@ function proxyRequest(req: http.IncomingMessage, res: http.ServerResponse, targe
   }
 }
 
+function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      try {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        resolve(raw ? (JSON.parse(raw) as Record<string, unknown>) : {});
+      } catch {
+        resolve({});
+      }
+    });
+    req.on('error', () => resolve({}));
+  });
+}
+
+function parseSimpleSshConfig(rawConfig: string): Array<{
+  alias: string;
+  hostName: string;
+  user?: string;
+  port: number;
+  localForwardPort: number;
+  remoteControllerPort: number;
+  suggestedControllerUrl: string;
+  sshTunnelCommand: string;
+}> {
+  const lines = String(rawConfig ?? '').split(/\r?\n/);
+  interface RawBlock {
+    aliases: string[];
+    hostName?: string;
+    user?: string;
+    port?: number;
+    localForwardPort?: number;
+    remoteControllerPort?: number;
+  }
+  const blocks: RawBlock[] = [];
+  let current: RawBlock | undefined;
+  for (const rawLine of lines) {
+    const stripped = rawLine.replace(/#.*$/, '').trim();
+    if (!stripped) continue;
+    const match = /^([A-Za-z][A-Za-z0-9]*)\s*(?:=|\s+)\s*(.+)$/.exec(stripped);
+    if (!match) continue;
+    const key = match[1].toLowerCase();
+    const val = match[2].trim().replace(/^["']|["']$/g, '');
+    if (key === 'host') {
+      const aliases = val
+        .split(/\s+/)
+        .map((a) => a.trim())
+        .filter((a) => a && !/[*?!]/.test(a));
+      current = { aliases };
+      if (aliases.length > 0) blocks.push(current);
+      continue;
+    }
+    if (!current || current.aliases.length === 0) continue;
+    if (key === 'hostname') current.hostName = val;
+    else if (key === 'user') current.user = val;
+    else if (key === 'port') current.port = Number(val) || 22;
+    else if (key === 'localforward') {
+      const lfMatch = /^(\d+)\s+[^:\s]+:(\d+)$/.exec(val);
+      if (lfMatch) {
+        current.localForwardPort = Number(lfMatch[1]);
+        current.remoteControllerPort = Number(lfMatch[2]);
+      }
+    }
+  }
+  const profiles = [];
+  let idx = 0;
+  for (const block of blocks) {
+    for (const alias of block.aliases) {
+      const hostName = block.hostName || alias;
+      const port = block.port ?? 22;
+      const localForwardPort = block.localForwardPort ?? 14800 + idx;
+      const remoteControllerPort = block.remoteControllerPort ?? 4800;
+      const targetRef = block.user ? `${block.user}@${alias}` : alias;
+      const portArg = port !== 22 ? ` -p ${port}` : '';
+      profiles.push({
+        alias,
+        hostName,
+        user: block.user,
+        port,
+        localForwardPort,
+        remoteControllerPort,
+        suggestedControllerUrl: `http://127.0.0.1:${localForwardPort}`,
+        sshTunnelCommand: `ssh -N -L ${localForwardPort}:127.0.0.1:${remoteControllerPort}${portArg} ${targetRef}`,
+      });
+      idx += 1;
+    }
+  }
+  return profiles;
+}
+
+
 /**
  * Starts the integrated Wazir Web Dashboard & Control Plane HTTP server.
  */
@@ -95,12 +187,37 @@ export async function startDashboardServer(
   const port = options.port ?? 4801;
   const host = options.host ?? '127.0.0.1';
   const upstreamApi = process.env.WAZIR_API?.replace(/\/+$/, '');
+  const diffReviews = new Map<string, Record<string, 'keep' | 'skip' | 'pending'>>();
+  const autonomyState: { mode: string; networkGuard: string; updatedAt: string } = {
+    mode: 'request-review',
+    networkGuard: 'normal',
+    updatedAt: new Date().toISOString(),
+  };
+  const hostList: Array<Record<string, unknown>> = [
+    {
+      id: 'local',
+      name: `${os.hostname()} (Local Controller)`,
+      url: `http://${host}:${port}`,
+      local: true,
+      selected: true,
+      status: 'online',
+      addedAt: new Date().toISOString(),
+    },
+  ];
+  const scheduleList: Array<Record<string, unknown>> = [];
 
   const server = http.createServer(async (req, res) => {
-    // CORS headers for local developer tooling
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    const origin = req.headers.origin;
+    const expectedOrigin = req.headers.host ? `http://${req.headers.host}` : `http://${host}:${port}`;
+    if (origin && origin !== expectedOrigin) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'cross-origin request refused' }));
+      return;
+    }
+    res.setHeader('Access-Control-Allow-Origin', origin ?? expectedOrigin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Wazir-Target-Host');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -112,12 +229,12 @@ export async function startDashboardServer(
     const pathname = parsedUrl.pathname;
 
     // Upstream API proxy if WAZIR_API is configured
-    if (upstreamApi && (pathname.startsWith('/api/') || pathname === '/health')) {
+    if (upstreamApi && (pathname.startsWith('/api/') || pathname === '/health' || pathname === '/ready')) {
       proxyRequest(req, res, upstreamApi);
       return;
     }
 
-    // 1. Dashboard UI
+    // 1. Dashboard UI & Brand Assets
     if (pathname === '/' || pathname === '/index.html') {
       const html = getDashboardHtml();
       res.writeHead(200, {
@@ -128,10 +245,81 @@ export async function startDashboardServer(
       return;
     }
 
-    // 2. Health Endpoint
+    const staticAssetMime: Record<string, string> = {
+      '/favicon.svg': 'image/svg+xml',
+      '/logo-emblem.svg': 'image/svg+xml',
+      '/favicon.ico': 'image/x-icon',
+      '/favicon-16x16.png': 'image/png',
+      '/favicon-32x32.png': 'image/png',
+      '/apple-touch-icon.png': 'image/png',
+      '/icon-192.png': 'image/png',
+      '/icon-512.png': 'image/png',
+      '/icon-maskable-512.png': 'image/png',
+      '/logo-emblem.png': 'image/png',
+      '/og-image.png': 'image/png',
+      '/site.webmanifest': 'application/manifest+json; charset=utf-8',
+    };
+    if (pathname in staticAssetMime) {
+      const relFile = pathname.slice(1);
+      const candidates = [
+        path.resolve(process.cwd(), 'apps/web/public', relFile),
+        path.resolve(__dirname, '../../web/public', relFile),
+        path.resolve(__dirname, '../web/public', relFile),
+      ];
+      for (const cand of candidates) {
+        if (fs.existsSync(cand)) {
+          res.writeHead(200, { 'Content-Type': staticAssetMime[pathname] });
+          res.end(fs.readFileSync(cand));
+          return;
+        }
+      }
+      if (pathname === '/site.webmanifest') {
+        res.writeHead(200, { 'Content-Type': staticAssetMime[pathname] });
+        res.end(
+          JSON.stringify({
+            name: 'Wazir — A Local AI Fleet Counselor',
+            short_name: 'Wazir',
+            start_url: '/',
+            display: 'standalone',
+            background_color: '#0f131a',
+            theme_color: '#0f131a',
+            icons: [{ src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml' }],
+          })
+        );
+        return;
+      }
+      if (pathname.endsWith('.svg')) {
+        res.writeHead(200, { 'Content-Type': 'image/svg+xml' });
+        res.end(
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none"><rect width="512" height="512" rx="108" fill="#0f131a"/><path d="M256 36 L204 128 L256 172 L308 128 Z M114 58 L128 158 L194 180 L190 132 Z M398 58 L384 158 L318 180 L322 132 Z" fill="#f8fafc"/><path d="M118 164 L196 196 L256 150 L316 196 L394 164 L394 274 C394 362 332 428 256 476 C180 428 118 362 118 274 Z" fill="#94a3b8"/><path d="M138 184 L198 210 L256 168 L314 210 L374 184 L374 272 C374 348 320 406 256 450 C192 406 138 348 138 272 Z" fill="#162032" stroke="#38bdf8" stroke-width="5"/><circle cx="256" cy="296" r="42" fill="#0f131a" stroke="#f8fafc" stroke-width="12"/><circle cx="256" cy="296" r="18" fill="#67e8f9"/></svg>`
+        );
+        return;
+      }
+    }
+
+    // 2. Health & Readiness Endpoints
     if (pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+      return;
+    }
+
+    if (pathname === '/ready') {
+      const runtimes = engine.runtimes.list();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          status: 'ready',
+          timestamp: new Date().toISOString(),
+          checks: {
+            processLiveness: 'ok',
+            apiReadiness: 'ok',
+            executionService: 'ok',
+            providersAvailable: runtimes.length,
+            remoteHost: 'local',
+          },
+        }),
+      );
       return;
     }
 
@@ -188,19 +376,43 @@ export async function startDashboardServer(
       return;
     }
 
-    // 6. API v1 Runtimes
+    // 6. API v1 Runtimes & Providers
     if (pathname === '/api/v1/runtimes') {
       const runtimes = engine.runtimes.list().map((r) => {
         const disc = engine.discovered.find((d) => d.id === r.id);
+        const hostedModels = engine.models.list().filter((m) => m.provider === r.id);
         return {
           ...r,
-          health: disc?.health ?? 'available',
+          health: disc?.health ?? r.health ?? 'available',
           healthMessage: disc?.healthMessage,
-          models: disc?.models ?? [],
+          models: disc?.models ?? hostedModels,
         };
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ runtimes }));
+      return;
+    }
+
+    if (pathname === '/api/v1/providers') {
+      const { collectProvidersSummary } = await import('./commands.js');
+      const providers = await collectProvidersSummary(engine);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ providers }));
+      return;
+    }
+
+    if (pathname.startsWith('/api/v1/providers/')) {
+      const providerId = decodeURIComponent(pathname.slice('/api/v1/providers/'.length));
+      const { collectProvidersSummary } = await import('./commands.js');
+      const providers = await collectProvidersSummary(engine);
+      const found = providers.find((p) => p.id.toLowerCase() === providerId.toLowerCase());
+      if (!found) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Provider '${providerId}' not found` }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ provider: found }));
       return;
     }
 
@@ -264,6 +476,110 @@ export async function startDashboardServer(
         return;
       }
 
+      if (rest.endsWith('/artifacts')) {
+        const execId = decodeURIComponent(rest.slice(0, -'/artifacts'.length));
+        const execution = await engine.executions.get(execId);
+        if (!execution) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Execution '${execId}' not found` }));
+          return;
+        }
+        const events = await engine.executions.events(execution.execution.id);
+        const decisions = diffReviews.get(execution.execution.id) ?? {};
+        const createdAtIso = new Date(execution.execution.createdAt).toISOString();
+        const fileEntries = events
+          .filter((ev) => ev.type.includes('tool') || ev.type.includes('execution'))
+          .map((ev, idx) => {
+            const p = String((ev.data as { path?: string } | undefined)?.path ?? `step-${idx + 1}.log`);
+            return {
+              path: p,
+              decision: decisions[p] ?? 'pending',
+              reviewDecision: decisions[p] ?? 'pending',
+              additions: 1,
+              deletions: 0,
+              hunks: [{ header: '@@ -1,1 +1,1 @@', oldStart: 1, newStart: 1, lines: [`+ ${ev.type} completed`] }],
+            };
+          });
+        const artifacts = [
+          {
+            id: `art-plan-${execution.execution.id}`,
+            executionId: execution.execution.id,
+            kind: 'plan',
+            title: `Execution Plan: ${execution.task.title ?? execution.task.id}`,
+            createdAt: createdAtIso,
+            status: execution.execution.status === 'completed' ? 'verified' : 'ready',
+            summary: `${events.length} provenance step(s) recorded`,
+            steps: events.slice(0, 8).map((ev, i) => ({
+              index: i + 1,
+              phase: ev.type,
+              description: `${ev.type} at ${new Date(ev.timestamp).toLocaleTimeString()}`,
+              status: 'completed',
+            })),
+          },
+          {
+            id: `art-diff-${execution.execution.id}`,
+            executionId: execution.execution.id,
+            kind: 'code_diff',
+            title: `Workspace Diff Review (${fileEntries.length} item${fileEntries.length === 1 ? '' : 's'})`,
+            createdAt: createdAtIso,
+            status: Object.values(decisions).length > 0 ? 'verified' : 'pending_review',
+            summary: `${fileEntries.length} file entry(ies)`,
+            files: fileEntries,
+          },
+          {
+            id: `art-test-${execution.execution.id}`,
+            executionId: execution.execution.id,
+            kind: 'test_summary',
+            title: `Verification Summary (${execution.execution.status.toUpperCase()})`,
+            createdAt: createdAtIso,
+            status: execution.execution.status === 'completed' ? 'verified' : 'ready',
+            summary: `Status: ${execution.execution.status}`,
+            testReport: {
+              overallStatus: execution.execution.status === 'completed' ? 'PASS' : 'PENDING',
+              totalChecks: 1,
+              passedChecks: execution.execution.status === 'completed' ? 1 : 0,
+              failedChecks: execution.execution.status === 'failed' ? 1 : 0,
+              durationMs: 0,
+              checks: [
+                {
+                  name: 'execution-verification',
+                  status: execution.execution.status === 'completed' ? 'PASS' : 'PENDING',
+                  durationMs: 0,
+                  output: execution.result,
+                  error: execution.errors?.[0],
+                },
+              ],
+            },
+          },
+          {
+            id: `art-preview-${execution.execution.id}`,
+            executionId: execution.execution.id,
+            kind: 'sandbox_preview',
+            title: 'Sandboxed Output Preview',
+            createdAt: createdAtIso,
+            status: 'ready',
+            summary: 'Isolated CSP sandbox preview',
+            previewHtml: `<div style="font-family:monospace;padding:12px;color:#e6edf3;background:#0d1117"><h4>${execution.task.title ?? execution.task.id}</h4><pre>${String(execution.result ?? 'Completed').slice(0, 1000)}</pre></div>`,
+          },
+        ];
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ executionId: execution.execution.id, artifacts }));
+        return;
+      }
+
+      if (rest.endsWith('/diff-review') && req.method === 'POST') {
+        const execId = decodeURIComponent(rest.slice(0, -'/diff-review'.length));
+        const body = await readJsonBody(req);
+        const filePath = String(body.path ?? '');
+        const decision = body.decision === 'keep' || body.decision === 'skip' ? body.decision : 'pending';
+        const map = diffReviews.get(execId) ?? {};
+        map[filePath] = decision;
+        diffReviews.set(execId, map);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, executionId: execId, path: filePath, decision, decisions: map }));
+        return;
+      }
+
       const execId = decodeURIComponent(rest);
       const execution = await engine.executions.get(execId);
       if (execution) {
@@ -273,6 +589,163 @@ export async function startDashboardServer(
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: `Execution '${execId}' not found` }));
       }
+      return;
+    }
+
+    // 11. Autonomy Posture
+    if (pathname === '/api/v1/autonomy' || pathname === '/api/v1/mobile/autonomy') {
+      if (req.method === 'POST') {
+        const body = await readJsonBody(req);
+        if (body.mode === 'read-only' || body.mode === 'request-review' || body.mode === 'auto-sandbox') {
+          autonomyState.mode = body.mode;
+        }
+        if (body.networkGuard === 'normal' || body.networkGuard === 'cellular-strict') {
+          autonomyState.networkGuard = body.networkGuard;
+        }
+        autonomyState.updatedAt = new Date().toISOString();
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ autonomy: autonomyState }));
+      return;
+    }
+
+    // 12. Host Instances
+    if (pathname === '/api/v1/hosts') {
+      if (req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const id = String(body.id ?? `host-${Date.now()}`);
+        hostList.push({
+          id,
+          name: String(body.name ?? id),
+          url: String(body.url ?? `http://${host}:${port}`),
+          local: false,
+          selected: Boolean(body.selected),
+          status: 'online',
+          addedAt: new Date().toISOString(),
+        });
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ hosts: hostList, activeHost: hostList.find((h) => h.selected) ?? hostList[0] }));
+      return;
+    }
+
+    if (pathname === '/api/v1/hosts/ssh-config' && req.method === 'GET') {
+      const configPath = parsedUrl.searchParams.get('configPath') || path.join(os.homedir(), '.ssh', 'config');
+      let rawText = '';
+      if (fs.existsSync(configPath)) {
+        try {
+          rawText = fs.readFileSync(configPath, 'utf8');
+        } catch {
+          rawText = '';
+        }
+      }
+      const profiles = parseSimpleSshConfig(rawText);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ configPath, profiles }));
+      return;
+    }
+
+    if (pathname === '/api/v1/hosts/import-ssh' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      let rawText = typeof body.configText === 'string' ? body.configText : '';
+      const configPath = typeof body.configPath === 'string' ? body.configPath : path.join(os.homedir(), '.ssh', 'config');
+      if (!rawText && fs.existsSync(configPath)) {
+        try {
+          rawText = fs.readFileSync(configPath, 'utf8');
+        } catch {
+          rawText = '';
+        }
+      }
+      const profiles = parseSimpleSshConfig(rawText);
+      const imported: Array<Record<string, unknown>> = [];
+      for (const p of profiles) {
+        const id = `ssh-${p.alias.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`;
+        const existingIdx = hostList.findIndex((h) => h.id === id);
+        const hostEntry = {
+          id,
+          name: `SSH: ${p.alias} (${p.user ? `${p.user}@` : ''}${p.hostName})`,
+          url: p.suggestedControllerUrl,
+          local: false,
+          selected: false,
+          status: 'online',
+          addedAt: new Date().toISOString(),
+          sshAlias: p.alias,
+          sshTunnelCommand: p.sshTunnelCommand,
+        };
+        if (existingIdx >= 0) {
+          hostList[existingIdx] = hostEntry;
+        } else {
+          hostList.push(hostEntry);
+        }
+        imported.push(hostEntry);
+      }
+      res.writeHead(imported.length > 0 ? 201 : 200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          ok: true,
+          imported,
+          profiles,
+          hosts: hostList,
+          activeHost: hostList.find((h) => h.selected) ?? hostList[0],
+        }),
+      );
+      return;
+    }
+
+    if (pathname === '/api/v1/hosts/select' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const id = String(body.id ?? body.hostId ?? 'local');
+      for (const h of hostList) {
+        h.selected = h.id === id;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, hosts: hostList, activeHost: hostList.find((h) => h.selected) ?? hostList[0] }));
+      return;
+    }
+
+    // 13. Scheduled Tasks
+    if (pathname === '/api/v1/schedules' || pathname === '/api/v1/mobile/schedules') {
+      if (req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const item = {
+          id: `sched-${Date.now()}`,
+          name: String(body.name ?? 'Scheduled Task'),
+          prompt: String(body.prompt ?? body.name ?? 'Verify workspace'),
+          cadenceMinutes: Number(body.cadenceMinutes ?? 60),
+          agentId: String(body.agentId ?? 'coding-agent'),
+          modelId: String(body.modelId ?? 'local-default'),
+          computerId: String(body.computerId ?? 'local'),
+          priority: String(body.priority ?? 'normal'),
+          enabled: body.enabled !== false,
+          createdAt: new Date().toISOString(),
+          nextRunAt: new Date(Date.now() + Number(body.cadenceMinutes ?? 60) * 60_000).toISOString(),
+          runCount: 0,
+          schedulerExplanation: 'Scheduled via local engine',
+        };
+        scheduleList.unshift(item);
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ schedule: item }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ schedules: scheduleList }));
+      return;
+    }
+
+    // 14. Cloud Push Relay Status & Registration
+    if (pathname === '/api/v1/push/status' || pathname === '/api/v1/mobile/push/status') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ registrations: [], recentWakeups: [] }));
+      return;
+    }
+
+    if (pathname === '/api/v1/sandbox/preview' || pathname === '/sandbox/preview') {
+      const html = parsedUrl.searchParams.get('html') ?? '<div>Sandbox Ready</div>';
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Security-Policy': "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;",
+      });
+      res.end(`<!doctype html><html><body style="margin:0;background:#0d1117;color:#e6edf3;font-family:sans-serif">${html}</body></html>`);
       return;
     }
 

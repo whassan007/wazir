@@ -10,6 +10,7 @@ import type {
   VerificationSet,
   VerificationStatus,
 } from '../types/verification.js';
+import { oracleSatisfied } from './evidencePolicy.js';
 import { detectOracleWeakening } from './verificationIntegrity.js';
 
 export interface VerificationOracle {
@@ -158,12 +159,14 @@ export class VerificationEngine {
     }
 
     const startedAt = new Date();
+    const workspaceRevision = this.currentRevision;
     const result = await oracle.verify(params);
     const completedAt = new Date();
     const status: VerificationStatus = result.status ?? (result.exitCode === 0 ? 'PASS' : 'FAIL');
 
     return this.recordEvidence({
       oracle: type,
+      workspaceRevision,
       command: params.command,
       exitCode: result.exitCode,
       output: result.output,
@@ -192,8 +195,9 @@ export class VerificationEngine {
     completedAt?: Date;
     metadata?: Record<string, unknown>;
     executionId?: string;
+    workspaceRevision?: number;
   }): VerificationEvidence {
-    const rev = this.currentRevision;
+    const rev = params.workspaceRevision ?? this.currentRevision;
     const status = params.status ?? (params.exitCode === 0 ? 'PASS' : 'FAIL');
     const started = params.startedAt ?? new Date();
     const completed = params.completedAt ?? new Date();
@@ -315,9 +319,7 @@ export class VerificationEngine {
     const missingOracles: OracleType[] = [];
 
     for (const oracle of requiredOracles) {
-      const evidenceAtCurrent = currentEvidence.find(
-        (e) => (e.oracle === oracle || e.type === oracle) && e.status === 'PASS' && e.exitCode === 0,
-      );
+      const evidenceAtCurrent = oracleSatisfied(this.evidenceHistory, currentRev, oracle);
 
       if (evidenceAtCurrent) {
         satisfiedOracles.push(oracle);

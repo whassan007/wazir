@@ -1,3 +1,5 @@
+import { missingAcceptanceCriteria } from './executionContract.js';
+import { oracleSatisfied } from './evidencePolicy.js';
 import type { ExecutionRecord, VerificationEvidence, EvidenceType } from '../types/execution.js';
 import type { ArtifactProvenance } from '../types/artifact.js';
 import type { FileMutationResult } from '../types/tool.js';
@@ -55,6 +57,7 @@ export interface CompletionAssessment {
   required: EvidenceType[];
   /** Required oracles lacking a current, all-passing evidence set (same rule as ExecutionEngine.setStatus). */
   missing: EvidenceType[];
+  missingCriteria: string[];
   evaluationInvalid: boolean;
   evaluationMissing: boolean;
   eligible: boolean;
@@ -93,23 +96,20 @@ const revOf = (e: VerificationEvidence): number => e.workspaceRevision ?? e.revi
  */
 export function assessCompletionEvidence(record: ExecutionRecord): CompletionAssessment {
   const revision = record.workspaceState?.revision ?? 0;
-  const required = record.acceptanceContract?.requiredEvidence ?? [];
-  const missing = required.filter((type) => {
-    const latest = new Map<string, VerificationEvidence>();
-    for (const evidence of record.evidence ?? []) {
-      if (evidence.type === type && evidence.revision === revision) latest.set(evidence.command ?? '', evidence);
-    }
-    return latest.size === 0 || [...latest.values()].some((evidence) => evidence.exitCode !== 0);
-  });
+  const contract = record.executionContract?.acceptance ?? record.acceptanceContract;
+  const required = contract?.requiredEvidence ?? [];
+  const missingCriteria = missingAcceptanceCriteria(contract, record.evidence ?? [], revision);
+  const missing = required.filter(type => !oracleSatisfied(record.evidence ?? [], revision, type));
   const evaluationInvalid = Boolean(record.evaluation && (!record.evaluation.success || record.evaluation.workspaceRevision !== revision));
   const evaluationMissing = record.filesChanged.length > 0 && required.length === 0 && !record.evaluation;
   return {
     workspaceRevision: revision,
     required,
     missing,
+    missingCriteria,
     evaluationInvalid,
     evaluationMissing,
-    eligible: missing.length === 0 && !evaluationInvalid && !evaluationMissing,
+    eligible: missing.length === 0 && missingCriteria.length === 0 && !evaluationInvalid && !evaluationMissing,
   };
 }
 
@@ -262,7 +262,7 @@ export function explainCompletion(inspection: VerificationInspection): WhyComple
       if (!slot.required || slot.status !== 'PASS') continue;
       chain.push(`${slot.oracle} ${slot.evidenceId} — \`${slot.command}\` exit ${slot.exitCode} at R${slot.revision}`);
     }
-    if (c.required.length === 0) chain.push(`No evidence contract; controller evaluation passed at R${rev}`);
+    if (c.required.length === 0) chain.push(`No required oracle evidence; legacy completion eligibility does not establish semantic task success`);
     chain.push('All dispatched tool calls reconciled');
     return { complete: true, chain, missing: [] };
   }
@@ -273,6 +273,7 @@ export function explainCompletion(inspection: VerificationInspection): WhyComple
     else if (slot.status === 'STALE') missing.push(`${oracle}: STALE — evidence is for R${slot.revision}, current revision is R${rev}`);
     else missing.push(`${oracle}: ${slot.status} at R${slot.revision} (exit ${slot.exitCode})`);
   }
+  for (const id of c.missingCriteria) missing.push(`ACCEPTANCE: ${id} requires current evidence or human review`);
   if (c.evaluationInvalid) missing.push(`EVALUATION: controller evaluation failed or is not bound to R${rev}`);
   if (c.evaluationMissing) missing.push(`EVALUATION: files changed but no controller evaluation recorded for R${rev}`);
   if (inspection.unresolvedToolCalls > 0) missing.push(`TOOL_OUTCOME_UNKNOWN: ${inspection.unresolvedToolCalls} dispatched tool call(s) unreconciled`);

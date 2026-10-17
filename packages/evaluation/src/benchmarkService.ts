@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { benchmarkSampleKey } from './pairedEvidence.js';
 import path from 'node:path';
 import os from 'node:os';
 import type {
@@ -12,6 +14,11 @@ import type {
   BenchmarkExecutionContext,
 } from '@wazir/core';
 import { EvaluationService } from './evaluationService.js';
+
+function snapshotTask(task: BenchmarkTask): BenchmarkTask {
+  const { workspaceSetup, ...definition } = task;
+  return { ...structuredClone(definition), workspaceSetup };
+}
 
 export const BENCHMARK_CATEGORIES: BenchmarkTaskCategory[] = [
   'CODE_REPAIR',
@@ -37,6 +44,10 @@ export class BenchmarkService {
    */
   public register(task: BenchmarkTask): void {
     this.tasks.set(task.id, task);
+  }
+
+  public registerTask(task: BenchmarkTask): void {
+    this.register(task);
   }
 
   /**
@@ -78,22 +89,27 @@ export class BenchmarkService {
     runner: BenchmarkRunner,
     customContext?: Partial<BenchmarkExecutionContext>,
   ): Promise<BenchmarkRunResult> {
-    const task = this.getTask(taskId);
+    const registeredTask = this.getTask(taskId);
+    const task = registeredTask ? snapshotTask(registeredTask) : undefined;
     if (!task) {
       throw new Error(`Benchmark task '${taskId}' not found`);
     }
 
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), `wazir-bench-${task.id}-`));
+    if (customContext?.workspaceRoot) {
+      await fs.cp(customContext.workspaceRoot, tempDir, { recursive: true });
+    }
     const timeoutMs = customContext?.timeoutMs ?? task.timeoutMs ?? 60_000;
     const abortController = new AbortController();
-    const timeoutHandle = setTimeout(() => abortController.abort(), timeoutMs);
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
     const context: BenchmarkExecutionContext = {
-      workspaceRoot: customContext?.workspaceRoot ?? tempDir,
+      workspaceRoot: tempDir,
       timeoutMs,
+      resourceBudget: customContext?.resourceBudget ? structuredClone(customContext.resourceBudget) : undefined,
       abortSignal: abortController.signal,
-      config: customContext?.config,
-      activeMutations: customContext?.activeMutations,
+      config: customContext?.config ? structuredClone(customContext.config) : undefined,
+      activeMutations: customContext?.activeMutations ? [...customContext.activeMutations] : undefined,
     };
 
     const startTime = Date.now();
@@ -103,11 +119,20 @@ export class BenchmarkService {
         await task.workspaceSetup(context.workspaceRoot);
       }
 
-      // 2. Execute runner under controlled conditions
-      const record = await runner.run(task, context);
+      // 2. Execute runner under controlled conditions with hard deadline race
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          abortController.abort();
+          reject(new Error('BENCHMARK_DEADLINE_EXCEEDED'));
+        }, timeoutMs);
+      });
+      const record = await Promise.race([
+        runner.run(snapshotTask(task), context),
+        timeoutPromise,
+      ]);
 
       // 3. Clear timeout
-      clearTimeout(timeoutHandle);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       const durationMs = Date.now() - startTime;
 
       // 4. Score execution using EvaluationService (strictly separated from runner execution)
@@ -122,6 +147,11 @@ export class BenchmarkService {
         taskId: task.id,
       });
 
+      const deadlineExceeded = abortController.signal.aborted || durationMs > timeoutMs;
+      if (deadlineExceeded) {
+        scoreReport.passed = false;
+        scoreReport.rejectionReason = 'BENCHMARK_DEADLINE_EXCEEDED';
+      }
       return {
         taskId: task.id,
         taskName: task.name,
@@ -129,9 +159,10 @@ export class BenchmarkService {
         runnerId: runner.id,
         scoreReport,
         durationMs,
+        ...(deadlineExceeded ? { error: 'BENCHMARK_DEADLINE_EXCEEDED' } : {}),
       };
     } catch (err) {
-      clearTimeout(timeoutHandle);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       const durationMs = Date.now() - startTime;
       const errorMsg = err instanceof Error ? err.message : String(err);
 
@@ -170,6 +201,10 @@ export class BenchmarkService {
           projectRoot: context.workspaceRoot,
         },
       );
+      if (errorMsg === 'BENCHMARK_DEADLINE_EXCEEDED') {
+        syntheticReport.passed = false;
+        syntheticReport.rejectionReason = 'BENCHMARK_DEADLINE_EXCEEDED';
+      }
 
       return {
         taskId: task.id,
@@ -181,10 +216,8 @@ export class BenchmarkService {
         error: errorMsg,
       };
     } finally {
-      // Clean up temp directory if we created it
-      if (!customContext?.workspaceRoot) {
-        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-      }
+      // Clean up isolated temp directory
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 
@@ -196,6 +229,9 @@ export class BenchmarkService {
     runner: BenchmarkRunner,
   ): Promise<BenchmarkSuiteResult> {
     const tasks = this.listTasks(category);
+    if (tasks.length === 0) {
+      throw new Error(`EMPTY_BENCHMARK_SUITE: No benchmark tasks registered for category '${category}'`);
+    }
     const results: BenchmarkRunResult[] = [];
 
     for (const task of tasks) {
@@ -294,16 +330,43 @@ export class BenchmarkService {
       suiteName?: string;
       config?: import('@wazir/core').OptimizableConfig;
       activeMutations?: string[];
+      repetitions?: number;
+      beforeRun?: (task: BenchmarkTask, repetition: number) => Promise<Partial<BenchmarkExecutionContext>>;
+      afterRun?: (result: BenchmarkRunResult) => Promise<void>;
     },
   ): Promise<BenchmarkSuiteResult> {
+    if (tasks.length === 0) {
+      throw new Error('EMPTY_BENCHMARK_SUITE: Cannot execute an empty benchmark suite');
+    }
     const results: BenchmarkRunResult[] = [];
 
-    for (const task of tasks) {
-      const res = await this.runTask(task.id, runner, {
-        config: options?.config,
-        activeMutations: options?.activeMutations,
-      });
-      results.push(res);
+    const repetitions = options?.repetitions ?? 1;
+    if (!Number.isSafeInteger(repetitions) || repetitions < 1 || repetitions > 1000) {
+      throw new Error('Benchmark repetitions must be an integer between 1 and 1000');
+    }
+    if (new Set(tasks.map((task) => task.id)).size !== tasks.length) {
+      throw new Error('Benchmark task IDs must be unique; use repetitions for repeated runs');
+    }
+    for (let repetition = 0; repetition < repetitions; repetition++) {
+      for (const task of tasks) {
+        const definition = this.getTask(task.id);
+        if (!definition) throw new Error(`Benchmark task '${task.id}' not found`);
+        const definitionHash = createHash('sha256').update(JSON.stringify({
+          ...definition, workspaceSetup: definition.workspaceSetup?.toString(),
+        })).digest('hex');
+        const limits = await options?.beforeRun?.(task, repetition);
+        const res = await this.runTask(task.id, runner, {
+          config: options?.config,
+          activeMutations: options?.activeMutations,
+          ...limits,
+        });
+        // Hash the registered definition actually used by runTask, not a caller's copy.
+        res.repetition = repetition;
+        res.evaluationVersion = 'wazir-evaluation-v2';
+        res.taskDefinitionHash = definitionHash;
+        results.push(res);
+        await options?.afterRun?.(res);
+      }
     }
 
     const passedTasks = results.filter((r) => r.scoreReport.passed).length;
@@ -332,7 +395,7 @@ export class BenchmarkService {
       totalToolCalls,
       totalTokens,
       totalCostUsd: Number(totalCostUsd.toFixed(6)),
-      averageRepairCycles: tasks.length > 0 ? totalRepairCycles / tasks.length : 0,
+      averageRepairCycles: results.length > 0 ? totalRepairCycles / results.length : 0,
     };
 
     const suiteLabel = options?.suiteName ?? 'Custom Suite';
@@ -373,9 +436,9 @@ export class BenchmarkService {
     const regressedTasks: string[] = [];
     const improvedTasks: string[] = [];
 
-    const baselineMap = new Map(baseline.results.map((r) => [r.taskId, r.scoreReport.passed]));
+    const baselineMap = new Map(baseline.results.map((r) => [benchmarkSampleKey(r), r.scoreReport.passed]));
     for (const candRes of candidate.results) {
-      const basePassed = baselineMap.get(candRes.taskId);
+      const basePassed = baselineMap.get(benchmarkSampleKey(candRes));
       if (basePassed === true && !candRes.scoreReport.passed) {
         regressedTasks.push(candRes.taskId);
       } else if (basePassed === false && candRes.scoreReport.passed) {

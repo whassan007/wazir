@@ -27,16 +27,24 @@ export interface KeyValueStore {
  */
 const LOCK_STALE_AFTER_MS = 30_000;
 
-/** A lock's holder pid, when it's another process that is still alive. */
-async function liveForeignHolder(lockFile: string): Promise<number | undefined> {
+/**
+ * Checks the lock file for its holder PID:
+ * - `'writing'`: lock file was just created (`open('wx')`) and its first line (`<pid>\n`) hasn't been flushed yet
+ * - `'self'`: lock is held by `process.pid` (another async task in this same Node process)
+ * - `number`: lock is held by a live foreign OS process with that PID
+ * - `'dead'`: lock has a complete PID line (`<pid>\n`) and that foreign PID no longer exists (`ESRCH`)
+ */
+async function inspectLockHolder(lockFile: string): Promise<'writing' | 'self' | 'dead' | number> {
   const content = await fs.readFile(lockFile, 'utf8').catch(() => '');
+  if (!content.includes('\n')) return 'writing';
   const pid = Number.parseInt(content.split('\n')[0] ?? '', 10);
-  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return undefined;
+  if (!Number.isInteger(pid) || pid <= 0) return 'writing';
+  if (pid === process.pid) return 'self';
   try {
     process.kill(pid, 0);
     return pid;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM' ? pid : undefined;
+    return (error as NodeJS.ErrnoException).code === 'EPERM' ? pid : 'dead';
   }
 }
 const LOCK_RETRY_DELAY_MS = 25;
@@ -72,12 +80,12 @@ async function withFileLock<T>(lockFile: string, fn: () => Promise<T>): Promise<
       if (code !== 'EEXIST' && !windowsLockContention) throw error;
       const staleSince = await fs.stat(lockFile).then((s) => s.mtimeMs).catch(() => undefined);
       const old = staleSince !== undefined && Date.now() - staleSince > LOCK_STALE_AFTER_MS;
-      blockedBy = old ? await liveForeignHolder(lockFile) : undefined;
-      if (old && blockedBy === undefined) {
-        // Steal the stale lock with an atomic rename rather than unlink: if
-        // two waiters both observe the same stale lock, only one rename can
-        // succeed, so only one of them proceeds to re-acquire — a bare
-        // `unlink` let both clear it and both win `open('wx')` back to back.
+      const holder = await inspectLockHolder(lockFile);
+      blockedBy = typeof holder === 'number' ? holder : undefined;
+      // Reclaim the lock if:
+      // 1) A foreign process wrote its PID and is now dead (`holder === 'dead'`), OR
+      // 2) The lock is older than LOCK_STALE_AFTER_MS and is not held by a live foreign process (`old && blockedBy === undefined`).
+      if (holder === 'dead' || (old && blockedBy === undefined)) {
         const stolen = `${lockFile}.stale.${process.pid}.${Date.now()}`;
         const won = await fs.rename(lockFile, stolen).then(() => true).catch(() => false);
         if (won) {

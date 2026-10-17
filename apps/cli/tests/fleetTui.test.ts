@@ -269,6 +269,27 @@ describe('FleetTui — interactive terminal UI harness', () => {
     }
   });
 
+  it('browses registered models and pins the selected model without synthetic evidence', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-model-nav-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    engine.models.register({ ...engine.models.get('fake-model')!, id: 'second-model', name: 'Second Model' });
+    await engine.orchestrator.createJob({ title: 'Restored job', tasks: [{ task: { id: 'saved-task', input: 'saved task' } }] });
+    const harness = new TuiTestHarness({ engine });
+    await harness.start();
+    expect(harness.getScreenBuffer()).toContain('EXECUTION MONITOR');
+    expect(harness.getScreenBuffer()).toContain('Restored job');
+    harness.sendKey('5');
+    expect(harness.getScreenBuffer()).toContain('MODELS & PROVIDERS');
+    harness.sendKey('\x1b[B');
+    expect(harness.getScreenBuffer()).toContain('Second Model');
+    harness.sendKey('\r');
+    expect(harness.getScreenBuffer()).toContain('Pinned model: second-model');
+    expect(harness.getScreenBuffer()).not.toContain('sha256:matrix-prof');
+    harness.sendKey('1');
+    expect(harness.getScreenBuffer()).toContain('EXECUTION MONITOR');
+    harness.stop();
+  });
+
   it('renders initial dashboard, transitions between views via keyboard shortcuts, and displays help', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
     const engine = await buildFleetTestEngine(projectRoot);
@@ -278,9 +299,11 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // 1. Initial screen render
     const initialBuf = harness.getScreenBuffer();
-    expect(initialBuf).toContain('WAZIR - CONTROL - WORKER');
+    expect(initialBuf).toContain('MISSION CONTROL');
     expect(initialBuf).toContain('[View: FLEET]');
-    expect(initialBuf).toContain('AVAILABLE');
+    expect(initialBuf).toContain('MODELS & PROVIDERS');
+    expect(initialBuf).not.toContain('H100');
+    expect(initialBuf).not.toContain('DGX-01');
     expect(initialBuf).toContain('wa> ');
     expect(harness.tui.getCurrentView()).toBe('fleet');
 
@@ -893,26 +916,26 @@ describe('FleetTui — interactive terminal UI harness', () => {
 
     // 1. Initial 120 cols >= 100: 2-pane split with separator '│'
     const splitBuf = harness.getScreenBuffer();
-    expect(splitBuf).toContain('|');
+    expect(splitBuf).toContain('│');
     expect(splitBuf).toContain('JOBS');
     expect(splitBuf).toContain('EXECUTIONS');
     expect(splitBuf).toContain('AGENTS');
     expect(splitBuf).toContain('COMPUTERS');
     expect(splitBuf).toContain('RUNTIMES');
-    expect(splitBuf).toContain('Routing:');
+    expect(splitBuf).toContain('EXECUTION MONITOR');
 
     // 2. Responsive collapse: resize below 100 columns
     harness.outStream.columns = 80;
     harness.screen.onResize();
 
     const collapsedBuf = harness.getScreenBuffer();
-    expect(collapsedBuf).not.toContain('|');
-    expect(collapsedBuf).toContain('Routing:');
+    expect(collapsedBuf).not.toContain('│');
+    expect(collapsedBuf).toContain('EXECUTION MONITOR');
 
     // 3. Restore columns >= 100
     harness.outStream.columns = 120;
     harness.screen.onResize();
-    expect(harness.getScreenBuffer()).toContain('|');
+    expect(harness.getScreenBuffer()).toContain('│');
 
     harness.stop();
   });
@@ -927,7 +950,7 @@ describe('FleetTui — interactive terminal UI harness', () => {
     // Initially cursor > points to wazir-coding in AGENTS
     let buf = harness.getScreenBuffer();
     expect(buf).toContain('> o wazir-coding');
-    expect(buf).toContain('Routing: Agent [wazir-coding]');
+    expect(buf).toContain('EXECUTION MONITOR');
 
     // Navigate Down to COMPUTERS (test-computer)
     harness.sendKey('\u001b[B');
@@ -2299,4 +2322,194 @@ describe('FleetTui — protocol/validation visibility and raw response viewer', 
       harness.stop();
     });
   });
+
+  describe('Phase 4 — Inline Shell Mode (!), Cross-Task @ References, and Fast-Path Navigation', () => {
+    it('switches to SHELL mode when typing !, executes inline shell commands in projectRoot, records a Block, and exits on Esc', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-shell-'));
+      await fs.writeFile(path.join(projectRoot, 'marker.txt'), 'wazir-shell-ok\n', 'utf8');
+      const engine = await buildFleetTestEngine(projectRoot);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 2 });
+      await harness.start();
+
+      // Typing '!' enters SHELL mode and updates status badge + input prompt
+      harness.sendKeys('!cat marker.txt');
+      expect(harness.tui.getMode()).toBe('SHELL');
+      expect(harness.getScreenBuffer()).toContain('[SHELL]');
+      expect(harness.getScreenBuffer()).toContain('wa [SHELL]> !cat marker.txt');
+
+      // Pressing Esc clears the shell buffer and returns to NORMAL mode
+      harness.sendKey('\x1b');
+      expect(harness.tui.getMode()).toBe('NORMAL');
+      expect(harness.tui.getStatusMessage()).toContain('Exited shell mode');
+
+      // Execute !cat marker.txt and verify output + block creation
+      harness.sendLine('!cat marker.txt');
+      for (let i = 0; i < 60 && !harness.tui.getLastShellOutput(); i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      const shellRes = harness.tui.getLastShellOutput();
+      expect(shellRes).toBeDefined();
+      expect(shellRes?.exitCode).toBe(0);
+      expect(shellRes?.stdout.trim()).toBe('wazir-shell-ok');
+      expect(shellRes?.blockId).toBe('1');
+      expect(harness.tui.getStatusMessage()).toContain('[SHELL #1] exit 0: wazir-shell-ok (ref @1)');
+
+      // Now reference @1 in a follow-up prompt
+      harness.sendLine('inspect @1 output');
+      await new Promise((r) => setTimeout(r, 40));
+      const refs = harness.tui.getLastResolvedReferences();
+      expect(refs.some((r) => r.kind === 'block' && r.id === '1')).toBe(true);
+
+      harness.stop();
+    });
+
+    it('surfaces @task:<id> and @exec:<id> in the @ fuzzy picker and resolves them on submit', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-refs-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      useSuccessfulFakeModel(engine);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
+      await harness.start();
+
+      harness.sendLine('/fanout build backend; write docs');
+      for (let i = 0; i < 60 && harness.tui.getAgents().length < 2; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      const firstTaskId = harness.tui.getAgents()[0].taskId;
+
+      // Trigger @ picker with '@task:'
+      harness.sendKeys('@task:');
+      const pickerBuf = harness.getScreenBuffer();
+      expect(pickerBuf).toContain('References (@)');
+      expect(pickerBuf).toContain(`@task:${firstTaskId.slice(0, 20)}`);
+
+      // Tab-complete the @task:<id> candidate and submit
+      harness.sendKey('\t');
+      expect(harness.getScreenBuffer()).toContain(`@task:${firstTaskId}`);
+      harness.sendKey('\r');
+      await new Promise((r) => setTimeout(r, 40));
+
+      const resolved = harness.tui.getLastResolvedReferences();
+      expect(resolved.some((r) => r.kind === 'task' && r.id === firstTaskId)).toBe(true);
+
+      harness.stop();
+    });
+
+    it('supports fast-path task and approval cycling via Ctrl+N / ] and Ctrl+K / [', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-nav-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      useSuccessfulFakeModel(engine);
+      const harness = new TuiTestHarness({ engine, concurrencyLimit: 3, useWorktrees: false });
+      await harness.start();
+
+      harness.sendLine('/fanout task alpha; task beta; task gamma');
+      for (let i = 0; i < 60 && harness.tui.getAgents().length < 3; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      const agents = harness.tui.getAgents();
+      expect(agents).toHaveLength(3);
+
+      // Cycle forward with ']' (or Ctrl+N \u000e)
+      harness.sendKey(']');
+      expect(harness.tui.getSelectedTaskId()).toBe(agents[1].taskId);
+      expect(harness.tui.getStatusMessage()).toContain(`Focused task ${agents[1].taskId}`);
+
+      harness.sendKey('\u000e'); // Ctrl+N
+      expect(harness.tui.getSelectedTaskId()).toBe(agents[2].taskId);
+
+      // Cycle backward with Ctrl+K (\u000b) and '['
+      harness.sendKey('\u000b'); // Ctrl+K
+      expect(harness.tui.getSelectedTaskId()).toBe(agents[1].taskId);
+
+      harness.sendKey('[');
+      expect(harness.tui.getSelectedTaskId()).toBe(agents[0].taskId);
+
+      harness.stop();
+    });
+
+    it('renders shell output, exit code, duration, stderr, and missing-model recovery visibly in conversation mode without invoking an LLM or opening dashboard modals', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-chat-p0-'));
+      await fs.writeFile(path.join(projectRoot, 'hello-wazir.txt'), 'chat-shell-content\n', 'utf8');
+      const engine = await buildFleetTestEngine(projectRoot);
+      // Replace with empty ModelRegistry to simulate zero registered models / no AI provider configured
+      const emptyModels = new ModelRegistry();
+      engine.models = emptyModels;
+      engine.lifecycle = new ModelLifecycleService({
+        executions: engine.executions,
+        models: emptyModels,
+        runtimes: engine.runtimes,
+        computers: engine.computers,
+        agents: engine.agents,
+        adapters: new Map(),
+        store: new MemoryStore() as any,
+      });
+      engine.discovered = [
+        {
+          id: 'ollama',
+          info: { id: 'ollama', name: 'Ollama', version: '0.0' },
+          capabilities: {} as any,
+          health: 'unavailable',
+          healthMessage: 'connection refused',
+          models: [],
+          adapter: {} as any,
+        },
+      ];
+
+      const harness = new TuiTestHarness({ engine, presentationMode: 'conversation', concurrencyLimit: 2 });
+      await harness.start();
+
+      // 1. Startup with 0 models produces a visible durable warning and never opens dashboard startupSelector
+      expect((harness.tui as any).startupSelector).toBeUndefined();
+      expect(harness.outStream.getOutput()).toContain('Model unavailable');
+      expect(harness.outStream.getOutput()).toContain('ollama (unavailable');
+      expect(harness.outStream.getOutput()).toContain('ollama pull');
+
+      // 2. Execute !pwd and !ls -la without a configured AI provider
+      harness.sendLine('!pwd');
+      for (let i = 0; i < 60 && harness.tui.getLastShellOutput()?.command !== 'pwd'; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(harness.outStream.getOutput()).toContain('> !pwd');
+      expect(harness.outStream.getOutput()).toContain(projectRoot);
+      expect(harness.outStream.getOutput()).toContain('✓ Command completed · exit 0');
+      expect(harness.outStream.getOutput()).toContain('ref @1');
+
+      harness.sendLine('!ls -la');
+      for (let i = 0; i < 60 && harness.tui.getLastShellOutput()?.command !== 'ls -la'; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(harness.outStream.getOutput()).toContain('> !ls -la');
+      expect(harness.outStream.getOutput()).toContain('hello-wazir.txt');
+      expect(harness.outStream.getOutput()).toContain('ref @2');
+
+      // 3. Execute /sh echo WAZIR_OK
+      harness.sendLine('/sh echo WAZIR_OK');
+      for (let i = 0; i < 60 && harness.tui.getLastShellOutput()?.command !== 'echo WAZIR_OK'; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(harness.outStream.getOutput()).toContain('> /sh echo WAZIR_OK');
+      expect(harness.outStream.getOutput()).toContain('WAZIR_OK');
+
+      // 4. Failing shell command displays stderr and nonzero exit status
+      harness.sendLine('!sh -c "echo ERR_DETAIL >&2; exit 9"');
+      for (let i = 0; i < 60 && harness.tui.getLastShellOutput()?.exitCode !== 9; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(harness.outStream.getOutput()).toContain('✗ Command failed · exit 9');
+      expect(harness.outStream.getOutput()).toContain('ERR_DETAIL');
+
+      // 5. Natural-language prompt fails visibly when no model is available and creates 0 jobs
+      harness.sendLine('refactor the authentication module');
+      await new Promise((r) => setTimeout(r, 50));
+      expect(harness.outStream.getOutput()).toContain('cannot execute task "refactor the authentication module"');
+      expect(harness.tui.getCurrentJob()).toBeUndefined();
+      expect((harness.tui as any).startupSelector).toBeUndefined();
+
+      harness.stop();
+      expect(harness.tui.getExitReason()).toBe('user_exit');
+    });
+  });
 });
+

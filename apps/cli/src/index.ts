@@ -7,6 +7,7 @@ declare const __WAZIR_VERSION__: string | undefined;
 import chalk from 'chalk';
 import { registerMCPCommands } from './mcp.js';
 import { registerWebCommands } from './web.js';
+import { registerMobileCommands } from './mobile.js';
 import { closeMCPRegistries } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
 
@@ -16,15 +17,100 @@ import { installGlobalCrashHandlers } from './crashHandler.js';
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
+const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.5';
+
 const program = new Command();
 
 program
   .name('wa')
   .description('Wazir CLI — meta-harness for local and distributed AI execution')
-  .version(typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.1.66');
+  .version(CLI_VERSION)
+  .option('--no-banner', 'Disable the Wazir terminal startup banner')
+  .option('--no-color', 'Disable ANSI colors in terminal output')
+  .option('--ascii', 'Use plain ASCII fallback for terminal branding');
 
 registerMCPCommands(program);
 registerWebCommands(program);
+registerMobileCommands(program);
+
+program
+  .command('banner')
+  .description('Display the official Wazir terminal logo and interactive startup status')
+  .option('--logo-only', 'Render only the Wazir terminal logo without runtime status')
+  .option('--variant <variant>', 'Force logo variant: unicode-wide, unicode-medium, ascii, or compact')
+  .option('--cols <columns>', 'Simulate a specific terminal width in columns', (v) => parseInt(v, 10))
+  .option('-j, --json', 'Output startup status in JSON format (suppresses banner artwork)')
+  .action(async (options) => {
+    const globalOpts = program.opts<{ banner?: boolean; color?: boolean; ascii?: boolean }>();
+    const {
+      detectTerminalCapabilities,
+      renderStartupBanner,
+      renderUnicodeWideLogo,
+      renderUnicodeMediumLogo,
+      renderPlainAsciiLogo,
+      renderCompactLogo,
+    } = await import('./brand.js');
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const runtimes = engine.runtimes.list();
+    const onlineRuntimes = runtimes.filter(
+      (rt) => (rt as { status?: string }).status === 'online' || engine.discovered.some((d) => d.id === rt.id && d.health !== 'unavailable'),
+    );
+    const models = engine.models.list();
+
+    const status = {
+      version: CLI_VERSION,
+      workspace: process.cwd(),
+      runtimeConnected: onlineRuntimes.length > 0,
+      runtimeLabel: onlineRuntimes.length > 0 ? onlineRuntimes.map((r) => r.type).join(', ') : undefined,
+      modelsAvailable: models.length,
+      mode: 'Autonomous',
+    };
+
+    if (options.json) {
+      console.log(JSON.stringify(status, null, 2));
+      return;
+    }
+
+    if (globalOpts.banner === false) {
+      return;
+    }
+
+    const envInput = {
+      isTTY: options.variant || options.cols ? true : Boolean(process.stdout.isTTY),
+      columns: options.cols ?? process.stdout.columns ?? 80,
+      noColorFlag: globalOpts.color === false,
+      noBannerFlag: false,
+      asciiFlag: Boolean(globalOpts.ascii) || options.variant === 'ascii',
+      jsonFlag: Boolean(options.json),
+    };
+    const caps = detectTerminalCapabilities(envInput);
+
+    if (options.logoOnly || options.variant) {
+      const v = options.variant ?? caps.variant;
+      if (v === 'unicode-wide') {
+        console.log(renderUnicodeWideLogo(caps.colorMode));
+      } else if (v === 'unicode-medium') {
+        console.log(renderUnicodeMediumLogo(caps.colorMode));
+      } else if (v === 'ascii') {
+        console.log(renderPlainAsciiLogo(caps.colorMode));
+      } else {
+        console.log(
+          renderCompactLogo({
+            unicode: caps.unicode && v !== 'ascii',
+            colorMode: caps.colorMode,
+            maxWidth: caps.columns,
+          })
+        );
+      }
+      return;
+    }
+
+    const output = renderStartupBanner(status, envInput);
+    if (output) {
+      console.log(output);
+    }
+  });
 
 program
   .command('version')
@@ -60,9 +146,26 @@ computersCmd
 computersCmd
   .command('inspect')
   .argument('<id>', 'Computer ID')
+  .option('--json', 'Output in JSON format')
   .description('Inspect a specific computer')
-  .action((id) => {
-    console.log(chalk.green(`Computer: ${id}`));
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const computer = engine.computers.get(id);
+    if (!computer) {
+      console.error(chalk.red(`Computer '${id}' not found`));
+      process.exitCode = 1;
+      return;
+    }
+    if (options.json) {
+      console.log(JSON.stringify(computer, null, 2));
+      return;
+    }
+    console.log(chalk.bold(`Computer: ${computer.id}`));
+    console.log(`  Name:   ${computer.name}`);
+    console.log(`  Status: ${computer.status}`);
+    console.log(`  Type:   ${computer.type}`);
+    console.log(`  OS/Arch:${computer.os.platform}/${computer.os.architecture}`);
   });
 
 program.addCommand(computersCmd);
@@ -110,6 +213,52 @@ runtimesCmd
   });
 
 program.addCommand(runtimesCmd);
+
+// providers command
+const providersCmd = new Command()
+  .name('providers')
+  .description('Manage local and hosted AI execution providers (Ollama, LM Studio, NVIDIA, Anthropic, OpenAI, Google)');
+
+providersCmd
+  .command('list', { isDefault: true })
+  .description('List all registered execution providers and their status')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const { listProvidersCommand } = await import('./commands.js');
+    const result = await listProvidersCommand(engine, options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+providersCmd
+  .command('inspect <provider>')
+  .description('Inspect a provider, its configuration, capabilities, and registered models')
+  .option('--json', 'Output in JSON format')
+  .action(async (provider, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const { inspectProviderCommand } = await import('./commands.js');
+    const result = await inspectProviderCommand(engine, provider, options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+providersCmd
+  .command('test <provider>')
+  .description('Test connectivity, authentication, and model discovery for a provider')
+  .option('--json', 'Output in JSON format')
+  .action(async (provider, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const { testProviderCommand } = await import('./commands.js');
+    const result = await testProviderCommand(engine, provider, options);
+    console.log(result.output);
+    process.exit(result.code);
+  });
+
+program.addCommand(providersCmd);
 
 // models command
 const modelsCmd = new Command()
@@ -213,8 +362,13 @@ for (const operation of ['inspect', 'estimate', 'pin', 'unpin'] as const) {
       const { createEngine } = await import('./engine.js');
       const { lifecycleOptions, formatModelLoadPlan } = await import('./commands.js');
       const engine = await createEngine({ readOnlyLifecycle: true });
-      if (operation === 'inspect') console.log(JSON.stringify(engine.lifecycle.inspect(modelId), null, 2));
-      else if (operation === 'estimate') {
+      if (operation === 'inspect') {
+        const inspected = engine.lifecycle.inspect(modelId);
+        console.log(JSON.stringify(inspected, null, 2));
+        if ((inspected as { found?: boolean }).found === false || (!Array.isArray(inspected) && !(inspected as { instances?: unknown[] }).instances?.length && !engine.models.get(modelId))) {
+          process.exitCode = 1;
+        }
+      } else if (operation === 'estimate') {
         const plan = await engine.lifecycle.estimate(modelId, lifecycleOptions(options));
         console.log(options.json ? JSON.stringify(plan, null, 2) : formatModelLoadPlan(plan));
       } else {
@@ -299,9 +453,10 @@ program.addCommand(testCmd);
 program
   .command('status')
   .description('Show system status')
-  .action(async () => {
+  .option('-j, --json', 'Output status in JSON format')
+  .action(async (options) => {
     const { statusCommand } = await import('./status.js');
-    const result = await statusCommand();
+    const result = await statusCommand({ json: Boolean(options.json) });
     console.log(result.output);
     process.exit(result.code);
   });
@@ -323,6 +478,8 @@ taskCmd
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
   .option('--preset <name>', 'Runtime preset (e.g. standard, minimal)')
   .option('--expected-files <files>', 'Expected changed files (comma-separated)')
+  .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
   .description('Run a new task')
   .action(async (prompt, options) => {
@@ -342,6 +499,8 @@ taskCmd
         expectedFiles: options.expectedFiles
           ? options.expectedFiles.split(',').map((s) => s.trim())
           : undefined,
+        allowHosted: options.allowHosted,
+        routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
         json: options.json,
       },
     );
@@ -355,6 +514,8 @@ taskCmd
   .option('--model <name>', 'Use specific model')
   .option('--agent <name>', 'Use specific agent')
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
+  .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
   .description('Show scheduling decision without executing')
   .action(async (prompt, options) => {
@@ -365,6 +526,8 @@ taskCmd
       type: options.type as any,
       model: options.model,
       agent: options.agent,
+      allowHosted: options.allowHosted,
+      routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
       json: options.json,
     });
     console.log(result.output);
@@ -373,10 +536,33 @@ taskCmd
 
 taskCmd
   .command('status')
-  .argument('<id>', 'Task ID')
+  .argument('<id>', 'Task or Execution ID')
+  .option('--json', 'Output in JSON format')
   .description('Show task status')
-  .action((id) => {
-    console.log(chalk.green(`Task ${id}: queued`));
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const record = await engine.executions.get(id);
+    if (record) {
+      const exec = record.execution;
+      if (options.json) {
+        console.log(JSON.stringify({ id: exec.id, taskId: exec.taskId, status: exec.status, modelId: exec.modelId, error: record.errors?.[0] }, null, 2));
+      } else {
+        console.log(`Task ${exec.id}: ${exec.status}`);
+      }
+      return;
+    }
+    const job = engine.orchestrator.getJob(id);
+    if (job) {
+      if (options.json) {
+        console.log(JSON.stringify({ id: job.id, status: job.status }, null, 2));
+      } else {
+        console.log(`Task ${job.id}: ${job.status}`);
+      }
+      return;
+    }
+    console.error(chalk.red(`Task '${id}' not found`));
+    process.exitCode = 1;
   });
 
 program.addCommand(taskCmd);
@@ -394,6 +580,8 @@ program
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
   .option('--preset <name>', 'Runtime preset (e.g. standard, minimal)')
   .option('--expected-files <files>', 'Expected changed files (comma-separated)')
+  .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
   .description('Run a new task (alias for wa task run)')
   .action(async (prompt, options) => {
@@ -413,6 +601,8 @@ program
         expectedFiles: options.expectedFiles
           ? options.expectedFiles.split(',').map((s) => s.trim())
           : undefined,
+        allowHosted: options.allowHosted,
+        routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
         json: options.json,
       },
     );
@@ -1031,44 +1221,53 @@ program
     process.exit(result.code);
   });
 
-// chat command — interactive fleet coding agent TUI
+// Shared interactive runner keeps conversation and dashboard on one execution source.
+async function launchInteractiveTui(options: any, presentationMode: 'conversation' | 'dashboard'): Promise<void> {
+  const { createEngine } = await import('./engine.js');
+  const engine = await createEngine();
+  const { FleetTui } = await import('./tui/index.js');
+  const timeout = options.timeout !== undefined ? Number(options.timeout) : undefined;
+  if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+    console.error(`--timeout must be a positive number of seconds, got '${options.timeout}'`);
+    process.exit(2);
+  }
+  const tui = new FleetTui({
+    engine,
+    presentationMode,
+    concurrencyLimit: options.concurrency ? Number(options.concurrency) : 4,
+    useWorktrees: options.worktrees !== false,
+    autoMerge: options.autoMerge === true,
+    timeoutSeconds: timeout,
+    enablePlanner: options.planner === true,
+  });
+  const { shutdownController } = await import('./shutdownController.js');
+  shutdownController().register('chat-tui', () => tui.stop());
+  await tui.start();
+  await tui.waitForExit();
+}
+
+// `wa chat` is the inline conversation; the full-screen fleet UI remains explicit.
 program
   .command('chat')
-  .alias('fleet')
-  .description('Open interactive fleet-scale coding agent TUI session')
+  .description('Open the conversation-first coding assistant')
+  .option('--dashboard', 'Open the full-screen fleet dashboard')
+  .option('--legacy', 'Use the legacy full-screen fleet dashboard')
   .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
   .option('--no-worktrees', 'Disable git worktree isolation')
   .option('--auto-merge', 'Automatically merge completed agent branches into main')
   .option('--timeout <seconds>', 'Stop a job automatically after this many seconds (default: no limit)')
   .option('--planner', 'Enable 3-layer Planner-Supervisor-Executor architecture (pre-execution DAG planning)')
-  .action(async (options) => {
-    const { createEngine } = await import('./engine.js');
-    const engine = await createEngine();
-    const { FleetTui } = await import('./tui/index.js');
-    const timeout = options.timeout !== undefined ? Number(options.timeout) : undefined;
-    if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
-      console.error(`--timeout must be a positive number of seconds, got '${options.timeout}'`);
-      process.exit(2);
-    }
-    const tui = new FleetTui({
-      engine,
-      concurrencyLimit: options.concurrency ? Number(options.concurrency) : 4,
-      useWorktrees: options.worktrees !== false,
-      autoMerge: options.autoMerge === true,
-      timeoutSeconds: timeout,
-      enablePlanner: options.planner === true,
-    });
-    // A closed/dead controlling terminal (the pty itself going away — distinct from
-    // stdin's own 'end' event, which FleetTui already handles) delivers SIGHUP, and
-    // Ctrl-C delivers SIGINT. Routed through the shared ShutdownController rather
-    // than a one-off handler so both get the same bounded-timeout-then-force-exit
-    // behavior as every other long-running command, and a second interrupt during a
-    // hung tui.stop() forces exit instead of leaving the process stuck.
-    const { shutdownController } = await import('./shutdownController.js');
-    shutdownController().register('chat-tui', () => tui.stop());
-    await tui.start();
-    await tui.waitForExit();
-  });
+  .action(async (options) => launchInteractiveTui(options, options.dashboard || options.legacy ? 'dashboard' : 'conversation'));
+
+program
+  .command('fleet')
+  .description('Open the full-screen fleet dashboard (alias: wa chat --dashboard)')
+  .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
+  .option('--no-worktrees', 'Disable git worktree isolation')
+  .option('--auto-merge', 'Automatically merge completed agent branches into main')
+  .option('--timeout <seconds>', 'Stop a job automatically after this many seconds (default: no limit)')
+  .option('--planner', 'Enable 3-layer Planner-Supervisor-Executor architecture')
+  .action(async (options) => launchInteractiveTui(options, 'dashboard'));
 
 // dashboard command — launch web dashboard & control plane
 program
@@ -1377,6 +1576,15 @@ program.addCommand(searchCmd);
 // ======================================================================
 // IMPROVE COMMAND (Empirical self-improvement system)
 // ======================================================================
+const exitImproveOk = (): void => {
+  const code = process.exitCode ?? 0;
+  if (process.stdout.writableNeedDrain) {
+    process.stdout.once('drain', () => process.exit(code));
+    return;
+  }
+  process.stdout.write('', () => process.exit(code));
+};
+
 const improveCmd = new Command()
   .name('improve')
   .description('Empirical self-improvement system (observe, hypothesize, experiment, guard, promote)');
@@ -1385,11 +1593,19 @@ improveCmd
   .command('status')
   .description('Show self-improvement status, maturity levels, and budgets')
   .option('--json', 'Output in JSON format')
+  .option('--live', 'Watch durable supervisor state')
   .action(async (options) => {
+    if (options.live) {
+      const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+      await improvementSupervisorCommand('status', options);
+      exitImproveOk();
+      return;
+    }
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { improveStatusCommand } = await import('./commands.js');
     console.log(await improveStatusCommand(engine, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1401,6 +1617,7 @@ improveCmd
     const engine = await createEngine();
     const { improveOpportunitiesCommand } = await import('./commands.js');
     console.log(await improveOpportunitiesCommand(engine, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1412,6 +1629,7 @@ improveCmd
     const engine = await createEngine();
     const { improveExperimentsCommand } = await import('./commands.js');
     console.log(await improveExperimentsCommand(engine, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1423,6 +1641,7 @@ improveCmd
     const engine = await createEngine();
     const { improveInspectCommand } = await import('./commands.js');
     console.log(await improveInspectCommand(engine, experiment, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1431,11 +1650,24 @@ improveCmd
   .option('--level <level>', 'Target self-improvement maturity level')
   .option('--distributed', 'Distribute benchmark candidate evaluation across the worker fleet')
   .option('--json', 'Output in JSON format')
+  .option('--mode <modes>', 'harden, optimize, or evolve', 'harden')
+  .option('--scope <file>', 'Authorized reproducible repair scope with independent checks')
+  .option('--commit-mode <mode>', 'Commit policy mode: manual (default), auto, or no-commit')
+  .option('--auto-commit', 'Explicitly authorize automatic local commits for verified improvements in this scope')
+  .option('--no-commit', 'Preserve verified changes in the candidate worktree without committing')
+  .option('--offline-policy <policy>', 'Remote fetch offline policy: allow (default) or block', 'allow')
   .action(async (options) => {
+    if (!options.level && !options.distributed) {
+      const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+      await improvementSupervisorCommand('run', { ...options, foreground: true });
+      exitImproveOk();
+      return;
+    }
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { improveRunCommand } = await import('./commands.js');
     console.log(await improveRunCommand(engine, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1447,6 +1679,7 @@ improveCmd
     const engine = await createEngine();
     const { improveCompareCommand } = await import('./commands.js');
     console.log(await improveCompareCommand(engine, experiment, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1459,6 +1692,7 @@ improveCmd
     const engine = await createEngine();
     const { improvePromoteCommand } = await import('./commands.js');
     console.log(await improvePromoteCommand(engine, candidate, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1470,6 +1704,7 @@ improveCmd
     const engine = await createEngine();
     const { improveRollbackCommand } = await import('./commands.js');
     console.log(await improveRollbackCommand(engine, promotion, options));
+    exitImproveOk();
   });
 
 improveCmd
@@ -1481,8 +1716,63 @@ improveCmd
     const engine = await createEngine();
     const { improveExplainCommand } = await import('./commands.js');
     console.log(await improveExplainCommand(engine, experiment, options));
+    exitImproveOk();
   });
 
+for (const command of ['doctor', 'failures', 'recommendations', 'history', 'pause', 'resume', 'stop', 'preflight', 'approvals']) {
+  improveCmd
+    .command(command)
+    .option('--json', 'Output JSON')
+    .option('--scope <file>', 'Authorized repair scope')
+    .option('--offline-policy <policy>', 'Remote fetch offline policy: allow or block', 'allow')
+    .option('--print-systemd-unit', 'Print optional systemd --user unit template without installing')
+    .action(async (options) => {
+      const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+      await improvementSupervisorCommand(command, options);
+      exitImproveOk();
+    });
+}
+
+improveCmd
+  .command('approve <attemptId>')
+  .description('Approve, revise, keep uncommitted, discard, or cancel a candidate awaiting manual commit approval')
+  .option('--action <action>', 'Decision: COMMIT, REVISE, KEEP_UNCOMMITTED, DISCARD, or CANCEL', 'COMMIT')
+  .option('--revision <hash>', 'Bind approval to exact candidate revision hash')
+  .option('--confirm-discard', 'Explicit confirmation required when --action DISCARD is selected')
+  .option('--json', 'Output JSON')
+  .action(async (attemptId, options) => {
+    const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+    await improvementSupervisorCommand('approve', { ...options, attemptId });
+    exitImproveOk();
+  });
+
+improveCmd
+  .command('start')
+  .description('Start the native persistent supervisor under the current user')
+  .option('--continuous', 'Observe and execute bounded cycles continuously')
+  .option('--foreground', 'Run in the foreground (for systemd or debugging)')
+  .option('--mode <modes>', 'Comma-separated harden,optimize,evolve', 'harden')
+  .option('--interval <seconds>', 'Sweep interval, minimum 1 second', '60')
+  .option('--max-cycles <count>', 'Session cycle budget', '1000')
+  .option('--scope <file>', 'Authorized repair scope')
+  .option('--commit-mode <mode>', 'Commit policy mode: manual (default), auto, or no-commit')
+  .option('--auto-commit', 'Explicitly authorize automatic local commits for verified improvements in this session')
+  .option('--no-commit', 'Preserve verified changes in the candidate worktree without committing')
+  .option('--offline-policy <policy>', 'Remote fetch offline policy: allow (default) or block', 'allow')
+  .option('--print-systemd-unit', 'Print optional systemd --user unit template without installing')
+  .action(async (options) => {
+    const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+    await improvementSupervisorCommand('start', options);
+    exitImproveOk();
+  });
+improveCmd
+  .command('logs')
+  .option('--follow', 'Follow structured supervisor logs')
+  .action(async (options) => {
+    const { improvementSupervisorCommand } = await import('./improvementSupervisor.js');
+    await improvementSupervisorCommand('logs', options);
+    exitImproveOk();
+  });
 program.addCommand(improveCmd);
 
 // ======================================================================
@@ -1603,6 +1893,7 @@ serviceCmd
     const sm = new ServiceManager();
     const result = await sm.install(options);
     console.log(result.message);
+    if (!result.success) process.exitCode = 1;
   });
 
 serviceCmd
@@ -1613,6 +1904,7 @@ serviceCmd
     const sm = new ServiceManager();
     const result = await sm.start(name);
     console.log(result.message);
+    if (!result.success) process.exitCode = 1;
   });
 
 serviceCmd
@@ -1623,6 +1915,7 @@ serviceCmd
     const sm = new ServiceManager();
     const result = await sm.stop(name);
     console.log(result.message);
+    if (!result.success) process.exitCode = 1;
   });
 
 serviceCmd
@@ -1633,6 +1926,7 @@ serviceCmd
     const sm = new ServiceManager();
     const result = await sm.restart(name);
     console.log(result.message);
+    if (!result.success) process.exitCode = 1;
   });
 
 serviceCmd
@@ -1664,9 +1958,47 @@ serviceCmd
     const sm = new ServiceManager();
     const result = await sm.uninstall(name);
     console.log(result.message);
+    if (!result.success) process.exitCode = 1;
   });
 
 program.addCommand(serviceCmd);
 
+program.action(async () => {
+  const globalOpts = program.opts<{ banner?: boolean; color?: boolean; ascii?: boolean }>();
+  if (process.stdout.isTTY && globalOpts.banner !== false) {
+    const { renderStartupBanner } = await import('./brand.js');
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
+    const runtimes = engine.runtimes.list();
+    const onlineRuntimes = runtimes.filter(
+      (rt) => (rt as { status?: string }).status === 'online' || engine.discovered.some((d) => d.id === rt.id && d.health !== 'unavailable'),
+    );
+    const models = engine.models.list();
+    const bannerText = renderStartupBanner(
+      {
+        version: CLI_VERSION,
+        workspace: process.cwd(),
+        runtimeConnected: onlineRuntimes.length > 0,
+        runtimeLabel: onlineRuntimes.length > 0 ? onlineRuntimes.map((r) => r.type).join(', ') : undefined,
+        modelsAvailable: models.length,
+        mode: 'Autonomous',
+      },
+      {
+        isTTY: true,
+        columns: process.stdout.columns ?? 80,
+        noColorFlag: globalOpts.color === false,
+        noBannerFlag: false,
+        asciiFlag: Boolean(globalOpts.ascii),
+      }
+    );
+    if (bannerText) {
+      console.log(bannerText);
+      console.log();
+    }
+  }
+  program.outputHelp();
+});
+
 program.parse();
+
 

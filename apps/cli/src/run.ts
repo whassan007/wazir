@@ -1,5 +1,6 @@
 import { executeMCPForAgent } from './mcp.js';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { classifyWorkload, effectiveContextTokens, estimateOutputTokens, estimateTextTokens, padEstimate, SchedulingError, taskAuthorizesVerificationChanges } from '@wazir/core';
 import type {
   AgentAdapter,
@@ -29,6 +30,18 @@ import { recordTermination } from './termination.js';
 import { recordAgentTask } from './agentPreflight.js';
 import { captureDelegationBaseline, verifyDelegatedWork, type DelegationBaseline } from './delegationVerification.js';
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
+
+/** Registration does not imply a policy execution handler exists. Inspect classification
+ * without authorizing or executing dummy arguments; argument-level policy remains enforced
+ * at dispatch. In particular, never advertise registry-only SDK/terminal tools as callable. */
+export function policySupportsModelTool(engine: Pick<RookEngine, 'policy' | 'projectRoot'>, name: string): boolean {
+  // The controller handles delegation before ordinary tool dispatch and applies parent policy.
+  if (name === 'dispatch_subagent') return true;
+  const decision = engine.policy.classify({ tool: name, input: {}, projectRoot: engine.projectRoot });
+  if (decision.rule === 'unknown-tool') return false;
+  if (/^(?:web_|mcp[.:])/.test(name) && decision.decision !== 'allow') return false;
+  return true;
+}
 
 /** Maps a control-plane-reported worker event onto the local `GenerationEvent` shape,
  * so a remotely-dispatched task streams through the same agent loop as a local one. */
@@ -68,17 +81,21 @@ export interface ExecuteTaskOptions {
   expectedFiles?: string[];
   json?: boolean;
   quiet?: boolean;
-  /** Per-invocation opt-in for routing to a hosted provider (Anthropic/OpenAI/Google).
+  /** Per-invocation opt-in for routing to a hosted provider (Anthropic/OpenAI/Google/NVIDIA).
    *  Overrides the engine-wide `providers.allowHostedProviders` default for this task only —
    *  never overrides `localOnly`/sensitive-data policy, which always wins (see
    *  PolicyEngine.checkHostedEligibility()). */
   allowHosted?: boolean;
+  /** Explicit provider/placement routing policy mode (AUTO, NVIDIA, LOCAL_ONLY, HYBRID). */
+  routingMode?: import('@wazir/core').RoutingMode;
   /** Runtime preset name (e.g. 'standard', 'minimal'). */
   preset?: string;
 }
 
 export interface TaskOutcome {
   success: boolean;
+  ok?: boolean;
+  decision?: SchedulerDecision;
   reasons: string[];
   filesChanged: string[];
   executionId: string;
@@ -138,7 +155,7 @@ const MINIMUM_CONTEXT_TOKENS = 8192;
 export async function planTask(
   engine: RookEngine,
   description: string,
-  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'preset'> = {},
+  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'routingMode' | 'preset'> = {},
 ): Promise<PlanResult> {
   const preset = resolvePreset(options.preset);
   const task: Task = {
@@ -151,7 +168,12 @@ export async function planTask(
       projectRoot: engine.projectRoot,
       allowHostedProviders: options.allowHosted,
     },
-    execution: { targetModelId: options.model, targetAgentId: options.agent, runtimePreset: preset.name },
+    execution: {
+      targetModelId: options.model,
+      targetAgentId: options.agent,
+      routingMode: options.routingMode,
+      runtimePreset: preset.name,
+    },
     priority: 'normal',
     status: 'pending',
     createdAt: new Date(),
@@ -162,7 +184,7 @@ export async function planTask(
     return { ok: false, reasons: taskPolicy.reasons };
   }
 
-  const allModelTools = engine.tools.forModel(undefined, engine.agents.get(options.agent ?? 'wazir-coding')?.descriptor.capabilities);
+  const allModelTools = engine.tools.forModel(undefined, engine.agents.get(options.agent ?? 'wazir-coding')?.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
   const allowedTools = preset.tools === 'all'
     ? allModelTools
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
@@ -227,9 +249,20 @@ export async function planTask(
 
 export async function executeTask(
   engine: RookEngine,
-  description: string,
+  description: string | (ExecuteTaskOptions & { input: string }),
   options: ExecuteTaskOptions = {},
 ): Promise<TaskOutcome> {
+  // Programmatic callers may pass the same request object used by the CLI
+  // command layer; normalize it before planning so routing options are not lost.
+  if (typeof description !== 'string') {
+    const request = description;
+    description = request.input;
+    options = { ...request, ...options };
+  }
+  const configuredProjectRoot = (engine.config as RookEngine['config'] & { projectRoot?: string }).projectRoot;
+  if (!engine.projectRoot && configuredProjectRoot) {
+    (engine as RookEngine & { projectRoot: string }).projectRoot = configuredProjectRoot;
+  }
   const isPiped = !process.stdout.isTTY;
   const emitJson = (event: Record<string, unknown>): void => {
     if (options.json) {
@@ -271,7 +304,7 @@ export async function executeTask(
     computerId: scheduling.computerId,
     runtimeId: scheduling.runtimeId,
     modelId: scheduling.modelId,
-    workerId: engine.worker.id,
+    workerId: engine.worker?.id ?? 'local-cli',
     workspaceRoot: engine.projectRoot,
     scheduling,
     context,
@@ -349,7 +382,7 @@ export async function executeTask(
   process.once('SIGINT', onSigint);
 
   const preset = resolvePreset(options.preset);
-  const allModelTools = engine.tools.forModel(undefined, agent.descriptor.capabilities);
+  const allModelTools = engine.tools.forModel(undefined, agent.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
   const availableTools = preset.tools === 'all'
     ? allModelTools
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
@@ -374,6 +407,7 @@ export async function executeTask(
     tools: availableTools,
     runtimeCapabilities: resolvedCapabilities,
     getCapabilities: () => resolvedCapabilities,
+    getContextTokens: () => placement.contextTokens,
 
     escalate: createEscalationHandler(engine, {
       executionId,
@@ -580,6 +614,23 @@ export async function executeTask(
           agentCapabilities: agent.descriptor.capabilities,
           agentId: agent.descriptor.name,
           checkpoint: async () => { await engine.executions.recordToolStart(executionId, name, input, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },
+          authorizeTool: async (subToolName, subInput, subCtx) => {
+            const subDecision = await engine.policy.authorize({
+              tool: subToolName,
+              input: subInput,
+              executionId,
+              projectRoot: subCtx.projectRoot,
+            });
+            await engine.executions.recordPolicy(executionId, subDecision);
+            if (subDecision.decision !== 'allow') {
+              return {
+                allowed: false,
+                error: `POLICY_DENIED: policy ${subDecision.decision} (${subDecision.rule}): ${subDecision.reasons.join('; ')}`,
+                failureClass: 'POLICY_DENIED',
+              };
+            }
+            return { allowed: true };
+          },
           projectRoot: engine.projectRoot,
           executionId,
           networkAllowed: engine.config.networkAllowed && task.policy?.networkAccess !== false,
@@ -629,7 +680,7 @@ export async function executeTask(
       // same call has already landed.
       const checkRevision = engine.executions.getWorkspaceRevision(executionId);
       if (CHECK_TOOLS.has(name)) {
-        const notApplicable = !result.ok && /missing script/i.test(result.error ?? '');
+        const notApplicable = !result.ok && (!existsSync(path.join(engine.projectRoot, 'package.json')) || /missing script|paths\[0\]|package\.json/i.test(result.error ?? ''));
         if (!notApplicable) {
           const script = typeof input.script === 'string' && input.script.trim() ? input.script.trim() : name;
           await engine.executions.recordCheck(executionId, {
@@ -717,6 +768,7 @@ export async function executeTask(
         taskType: task.type,
         projectRoot: engine.projectRoot,
         maxTurns: options.maxTurns,
+        contextTokens: context.available.tokens,
         isCancelled: () => cancelled,
       },
       runtime,
@@ -840,6 +892,9 @@ export async function executeTask(
 
   return {
     success: evaluation.success && !cancelled,
+    ...(options.routingMode === 'NVIDIA' ? { ok: evaluation.success && !cancelled, decision: scheduling } : {}),
+    ok: evaluation.success && !cancelled,
+    decision: scheduling,
     reasons: cancelled ? ['execution cancelled by user', ...evaluation.reasons] : evaluation.reasons,
     filesChanged: evaluation.filesChanged,
     executionId,
@@ -950,7 +1005,7 @@ export async function runSubagent(
   });
 
   // Filter tools to strictly omit dispatch_subagent for child agent
-  const subagentTools = engine.tools.forModel(undefined, engine.agents.get('wazir-coding')?.descriptor.capabilities).filter((t) => t.name !== 'dispatch_subagent');
+  const subagentTools = engine.tools.forModel(undefined, engine.agents.get('wazir-coding')?.descriptor.capabilities).filter((t) => t.name !== 'dispatch_subagent' && policySupportsModelTool(engine, t.name));
 
   const subagentRuntime: AgentRuntime = {
     tools: subagentTools,

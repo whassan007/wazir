@@ -1,0 +1,45 @@
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+
+ RUN  v2.1.9 /Users/wael/Code/Wazir
+
+(node:2987) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ apps/cli/tests/terminalIntegrity.test.ts (15 tests) 1884ms
+   ✓ Terminal & Control-Plane Integrity Acceptance Suite (15 Deterministic Tests) > Test 6: Large real TUI screen paste -> 0 jobs created 398ms
+   ✓ Terminal & Control-Plane Integrity Acceptance Suite (15 Deterministic Tests) > Test 14: Coding regression test (task execution path preserves plan -> route -> model -> done) 363ms
+(node:3362) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ tmp/p0-remediation/apps/cli/tests/terminalIntegrity.test.ts (15 tests) 1568ms
+   ✓ Terminal & Control-Plane Integrity Acceptance Suite (15 Deterministic Tests) > Test 14: Coding regression test (task execution path preserves plan -> route -> model -> done) 347ms
+(node:3700) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ apps/cli/tests/terminalArchitecture.test.ts (45 tests) 193ms
+(node:3702) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ tmp/p0-remediation/apps/cli/tests/terminalArchitecture.test.ts (45 tests) 195ms
+(node:3705) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ apps/cli/tests/pasteBarrier.test.ts (15 tests) 831ms
+(node:3896) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ tmp/p0-remediation/apps/cli/tests/pasteBarrier.test.ts (15 tests) 790ms
+ ✓ apps/cli/tests/branding.test.ts (12 tests) 14ms
+ ✓ tmp/p0-remediation/apps/cli/tests/branding.test.ts (12 tests) 16ms
+(node:4095) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ apps/cli/tests/executionProjection.test.ts (1 test) 5ms
+(node:4098) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ tmp/p0-remediation/apps/cli/tests/executionProjection.test.ts (1 test) 5ms
+(node:4100) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ apps/cli/tests/references.test.ts (2 tests) 4ms
+(node:4102) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ tmp/p0-remediation/apps/cli/tests/references.test.ts (2 tests) 8ms
+
+ Test Files  12 passed (12)
+      Tests  180 passed (180)
+   Start at  00:38:31
+   Duration  10.69s (transform 545ms, setup 0ms, collect 3.57s, tests 5.51s, environment 1ms, prepare 243ms)
+

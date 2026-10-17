@@ -139,7 +139,7 @@ export class Scheduler {
       throw new SchedulingError(`Selected model instance '${modelDecision.modelInstanceId}' is no longer registered`);
     }
 
-    const computerDecision = this.scheduleComputer(task, record);
+    const computerDecision = this.scheduleComputer(task, record, requiredContext);
     const placed = this.deps.models.instancesOf(record.id).find(i => i.runtimeId === computerDecision.runtimeId && i.computerId === computerDecision.computerId)!;
     modelDecision.modelInstanceId = placed.id;
 
@@ -150,6 +150,7 @@ export class Scheduler {
       readiness: placed.state === 'READY' ? 'READY_NOW' : 'LOADABLE',
       runtimeId: computerDecision.runtimeId,
       computerId: computerDecision.computerId,
+      resourceType: computerDecision.resourceType,
       modelDecision,
       computerDecision,
       reasons: [
@@ -184,7 +185,20 @@ export class Scheduler {
       const capable = scored.filter((s) => s.rejected.length === 0);
       const all = router.assess({
         task, workload, estimatedInputTokens: Math.max(requiredContext, 1),
-        candidates: capable.map((s) => ({ modelId: s.record.id, runtimeId: this.preferredRuntime(s.record.id), capabilityScore: Math.max(0, s.score), residency: this.residency(s.record.id, requiredContext) })),
+        candidates: capable.map((s) => {
+          const resState = this.residency(s.record.id, requiredContext);
+          const placementEst = this.estimatePlacement(s.record, requiredContext);
+          return {
+            modelId: s.record.id,
+            runtimeId: this.preferredRuntime(s.record.id),
+            capabilityScore: Math.max(0, s.score),
+            residency: resState,
+            verifiedSuccessRate: this.measuredSuccessRate(s.record, task, requiredCapability),
+            estimatedLoadMs: resState === 'ready' ? 0 : placementEst.estimatedLoadMs,
+            evictionRequired: placementEst.evictionRequired,
+            kvCacheFits: placementEst.kvCacheFits,
+          };
+        }),
       });
       for (const a of all) {
         const s = capable.find((c) => c.record.id === a.modelId)!;
@@ -200,6 +214,28 @@ export class Scheduler {
       router.record(task.id, workload, chosen, all);
     }
 
+    if (task.execution?.routingMode === 'NVIDIA') {
+      const preferred = scored.find((s) => s.record.id === 'nvidia/nemotron-3.5-super-vl-120b-a12b');
+      // Explicit provider routing must remain deterministic when the adaptive
+      // resource router ranks another catalog model higher. Preserve hard
+      // policy/capability rejections and hard resource safety vetoes
+      // (emergency_stop, auth_blocked, disabled, quota_exhausted), clearing only
+      // soft ranking vetoes.
+      const isHardResourceVeto = (reason: string) =>
+        /emergency[_ ]stop|auth[_ ]blocked|failed authentication|is disabled|quota[_ ]exhausted|would be exceeded|rate[_ ]limited|cooldown/i.test(reason);
+      if (preferred && preferred.rejected.every((reason) => reason.startsWith('resource:') && !isHardResourceVeto(reason))) {
+        preferred.rejected = [];
+        preferred.score = Number.MAX_SAFE_INTEGER;
+      }
+    }
+    const hasLocalEligible = scored.some((candidate) => candidate.record.local && candidate.rejected.length === 0);
+    if (hasLocalEligible && (task.execution?.routingMode === undefined || task.execution.routingMode === 'AUTO')) {
+      for (const candidate of scored) {
+        if (!candidate.record.local && candidate.rejected.length === 0 && !task.requirements?.vision && !task.requirements?.reasoning) {
+          candidate.score -= 100;
+        }
+      }
+    }
     const eligible = scored.filter((s) => s.rejected.length === 0);
     const rejected = scored.filter((s) => s.rejected.length > 0);
 
@@ -299,7 +335,10 @@ export class Scheduler {
     }
 
     eligible.sort((a, b) => b.score - a.score || a.record.id.localeCompare(b.record.id));
-    const best = eligible[0];
+    const preferredNvidia = task.execution?.routingMode === 'NVIDIA'
+      ? eligible.find((candidate) => candidate.record.id === 'nvidia/nemotron-3.5-super-vl-120b-a12b')
+      : undefined;
+    const best = preferredNvidia ?? eligible[0];
     const instance = this.selectInstance(best.record);
 
     const explanation: EmpiricalRoutingExplanation = {
@@ -341,6 +380,125 @@ export class Scheduler {
   private preferredRuntime(modelId: string): string {
     const instances = this.deps.models.instancesOf(modelId);
     return (instances.find((i) => i.state === 'READY') ?? instances.find((i) => i.loaded) ?? instances[0])?.runtimeId ?? 'unknown';
+  }
+
+  /** Empirical verified success rate from ModelIntelligenceService or legacy record.performance. */
+  private measuredSuccessRate(
+    record: ModelRecord,
+    task: Task,
+    category: ModelCapabilityCategory,
+  ): number | undefined {
+    if (this.deps.modelIntelligence) {
+      const instances = this.deps.models.instancesOf(record.id);
+      const runtimeId = instances[0]?.runtimeId ?? 'unknown';
+      const segKey: ProfileSegmentationKey = {
+        model: record.id,
+        runtime: runtimeId,
+        quantization: record.quantization,
+        modelVersion: (record as unknown as Record<string, unknown>).version as string | undefined,
+        wazirProtocolVersion: '1.0.0',
+      };
+      const profile = this.deps.modelIntelligence.getProfile(segKey);
+      if (profile && !profile.isStale) {
+        const m = profile.categoryMeasurements.find((c) => c.category === category);
+        if (m && m.sampleCount >= 2 && Number.isFinite(m.score)) {
+          return m.score;
+        }
+      }
+    }
+    const measured = record.performance?.[task.type];
+    if (measured && measured.samples >= MIN_MEASURED_SAMPLES && Number.isFinite(measured.verifiedSuccessRate)) {
+      return measured.verifiedSuccessRate;
+    }
+    return undefined;
+  }
+
+  /**
+   * Estimates incremental KV-cache GPU memory (GB) beyond base context (default 8192 tokens
+   * or the currently loaded context window).
+   */
+  private estimateKvCacheGB(record: ModelRecord, requiredContext: number, baseCoveredContext = 8192): number {
+    if (requiredContext <= baseCoveredContext) return 0;
+    const extraTokens = requiredContext - baseCoveredContext;
+    const baseWeightGB = Math.max(4, record.memory?.minGpuGB ?? record.memory?.minSystemGB ?? 8);
+    // ~25% of base weight footprint per 32k additional context tokens
+    return Number(((extraTokens / 32768) * (baseWeightGB * 0.25)).toFixed(2));
+  }
+
+  /**
+   * Estimates cold-start load time, eviction requirement, and whether KV cache fits on at least one
+   * candidate instance for ResourceRouter assessment.
+   */
+  private estimatePlacement(
+    record: ModelRecord,
+    requiredContext: number,
+  ): { estimatedLoadMs: number; evictionRequired: boolean; kvCacheFits: boolean } {
+    const instances = this.deps.models.instancesOf(record.id);
+    if (instances.length === 0) {
+      return { estimatedLoadMs: 0, evictionRequired: false, kvCacheFits: true };
+    }
+
+    let bestLoadMs = Number.POSITIVE_INFINITY;
+    let anyEviction = false;
+    let anyKvFits = false;
+
+    for (const instance of instances) {
+      const runtime = this.deps.runtimes.get(instance.runtimeId);
+      const isHosted = runtime?.runtimeKind === 'hosted' || !instance.computerId;
+      if (isHosted) {
+        anyKvFits = true;
+        bestLoadMs = Math.min(bestLoadMs, 0);
+        continue;
+      }
+      const computer = this.deps.computers.get(instance.computerId!);
+      if (!computer || computer.status !== 'online') continue;
+
+      const baseWeightGB = record.memory?.minGpuGB ?? 0;
+      const loadMs = instance.loaded
+        ? 0
+        : (instance.loadTimeMs ?? Math.max(1500, Math.round(baseWeightGB * 400)));
+      bestLoadMs = Math.min(bestLoadMs, loadMs);
+
+      const gpuTotalGB = computer.hardware.gpu?.memoryGB;
+      const reservedGpuGB = (computer.reservations ?? []).reduce(
+        (acc, r) => acc + (r.settledAt ? 0 : (r.vramBytes ?? 0) / 1024 ** 3 + ((r as unknown as { gpuMemoryGB?: number }).gpuMemoryGB ?? 0)),
+        0,
+      );
+      const usableGpuGB =
+        computer.load?.gpuMemoryAvailableGB !== undefined
+          ? Math.max(0, computer.load.gpuMemoryAvailableGB - reservedGpuGB)
+          : gpuTotalGB !== undefined && computer.load?.gpuMemoryUsedGB !== undefined
+            ? Math.max(0, gpuTotalGB - computer.load.gpuMemoryUsedGB - reservedGpuGB)
+            : gpuTotalGB !== undefined && reservedGpuGB > 0
+              ? Math.max(0, gpuTotalGB - reservedGpuGB)
+              : undefined;
+
+      const coveredContext = instance.loaded ? (instance.contextTokens ?? 8192) : 8192;
+      const kvCacheGB =
+        computer.hardware.gpu && (baseWeightGB > 0 || usableGpuGB !== undefined)
+          ? this.estimateKvCacheGB(record, requiredContext, coveredContext)
+          : 0;
+      const neededGpuGB = (instance.loaded ? 0 : baseWeightGB) + kvCacheGB;
+
+      if (usableGpuGB !== undefined && neededGpuGB > usableGpuGB) {
+        // Check if total GPU could fit weights + KV cache if other non-reserved models were evicted
+        const unreservedTotal = Math.max(0, (gpuTotalGB ?? usableGpuGB) - reservedGpuGB);
+        if (!instance.loaded && baseWeightGB + kvCacheGB <= unreservedTotal && (computer.load?.gpuMemoryUsedGB ?? 0) > 0) {
+          anyEviction = true;
+          anyKvFits = true;
+        }
+      } else if (gpuTotalGB !== undefined && baseWeightGB > 0 && baseWeightGB + kvCacheGB > gpuTotalGB) {
+        // Total GPU cannot fit weights + KV cache
+      } else {
+        anyKvFits = true;
+      }
+    }
+
+    return {
+      estimatedLoadMs: Number.isFinite(bestLoadMs) ? bestLoadMs : 0,
+      evictionRequired: anyEviction,
+      kvCacheFits: anyKvFits,
+    };
   }
 
   private scoreModel(
@@ -390,14 +548,33 @@ export class Scheduler {
     // see this class's docstring) and only then fail in Phase 2 with a
     // confusing "no computer can host" error, even when a perfectly good
     // local model exists and would have been picked instead.
-    if (Array.isArray(record.runtimeCompatibility) && record.runtimeCompatibility.length > 0 &&
-        record.runtimeCompatibility.every((t) => HOSTED_RUNTIME_TYPES.has(t))) {
+    const isHostedOnly =
+      Array.isArray(record.runtimeCompatibility) &&
+      record.runtimeCompatibility.length > 0 &&
+      record.runtimeCompatibility.every((t) => HOSTED_RUNTIME_TYPES.has(t));
+    if (isHostedOnly) {
       const gate = this.deps.policy.checkHostedEligibility(task.policy, record.runtimeCompatibility[0]);
       if (!gate.allowed) {
         rejected.push(gate.reason);
       } else {
         reasons.push(gate.reason);
       }
+    }
+
+    const routingMode = task.execution?.routingMode ?? (task.execution?.executionMode === 'local' ? 'LOCAL_ONLY' : undefined);
+    if (routingMode === 'LOCAL_ONLY' && (record.local === false || isHostedOnly)) {
+      rejected.push(`routingMode=LOCAL_ONLY: hosted model '${record.id}' is not permitted`);
+    } else if (routingMode === 'NVIDIA') {
+      const isNvidiaModel =
+        record.provider === 'nvidia' ||
+        (Array.isArray(record.runtimeCompatibility) && record.runtimeCompatibility.includes('nvidia'));
+      if (!isNvidiaModel && task.execution?.targetModelId !== record.id) {
+        rejected.push(`routingMode=NVIDIA: model '${record.id}' is not an NVIDIA provider model`);
+      } else if (isNvidiaModel) {
+        reasons.push('routingMode=NVIDIA: preferred NVIDIA provider model');
+      }
+    } else if (routingMode === 'HYBRID') {
+      reasons.push(`routingMode=HYBRID: ${record.local === false ? 'hosted' : 'local'} model eligible`);
     }
 
     const circuit = this.deps.reliability?.status(record.id, task.type);
@@ -414,6 +591,12 @@ export class Scheduler {
     let score = 0;
     score += requiredCapabilities.filter((c) => record.capabilities.includes(c)).length * 2;
     if (record.toolCalling) score += 1;
+    if (routingMode === 'NVIDIA' && (record.provider === 'nvidia' || (Array.isArray(record.runtimeCompatibility) && record.runtimeCompatibility.includes('nvidia')))) {
+      score += 5;
+      // NVIDIA's configured default is the stable multimodal Nemotron catalog entry.
+      // Prefer it over secondary curated catalog models for explicit NVIDIA routing.
+      if (record.id === 'nvidia/nemotron-3.5-super-vl-120b-a12b') score += 100;
+    }
 
     // Empirical Model Intelligence Profile integration
     if (this.deps.modelIntelligence && classification) {
@@ -516,14 +699,14 @@ export class Scheduler {
 
   // ==================== PHASE 2: COMPUTER SCHEDULING ====================
 
-  private scheduleComputer(task: Task, record: ModelRecord): ComputerRoutingDecision {
+  private scheduleComputer(task: Task, record: ModelRecord, requiredContext = 0): ComputerRoutingDecision {
     const instances = this.deps.models.instancesOf(record.id);
     const failures: string[] = [];
     const placements: ScoredPlacement[] = [];
 
     for (const instance of instances) {
-      if (['DRAINING', 'UNLOADING', 'LOADING'].includes(instance.state ?? '')) {
-        failures.push(`${instance.id}: lifecycle operation in progress`); continue;
+      if (['DRAINING', 'UNLOADING', 'LOADING', 'FAILED', 'UNAVAILABLE'].includes(instance.state ?? '')) {
+        failures.push(`${instance.id}: instance state is ${instance.state}`); continue;
       }
       if (task.execution?.targetComputerId && instance.computerId !== task.execution.targetComputerId) continue;
       const runtime = this.deps.runtimes.get(instance.runtimeId);
@@ -663,29 +846,84 @@ export class Scheduler {
         continue;
       }
 
-      if (!instance.loaded && computer.load?.memoryAvailableGB !== undefined && requiredSystemGB > computer.load.memoryAvailableGB) {
-        failures.push(`${computer.id}: available memory ${computer.load.memoryAvailableGB}GB < required ${requiredSystemGB}GB`);
+      const reservedSystemGB = (computer.reservations ?? []).reduce(
+        (acc, r) => acc + (r.settledAt ? 0 : (r.memoryBytes ?? 0) / 1024 ** 3 + ((r as unknown as { memoryGB?: number }).memoryGB ?? 0)),
+        0,
+      );
+      const usableSystemGB =
+        computer.load?.memoryAvailableGB !== undefined
+          ? Math.max(0, computer.load.memoryAvailableGB - reservedSystemGB)
+          : undefined;
+
+      if (!instance.loaded && usableSystemGB !== undefined && requiredSystemGB > usableSystemGB) {
+        failures.push(`${computer.id}: available memory ${usableSystemGB}GB < required ${requiredSystemGB}GB`);
         continue;
       }
 
       const taskMinGpuGB = task.requirements?.minimumGPUMemoryGB ?? 0;
       const requiredGpuGB = Math.max(record.memory?.minGpuGB ?? 0, taskMinGpuGB);
-      if (requiredGpuGB > 0) {
-        const gpuGB = computer.hardware.gpu?.memoryGB ?? 0;
-        if (gpuGB < requiredGpuGB) {
-          failures.push(`${computer.id}: GPU memory ${gpuGB}GB < required ${requiredGpuGB}GB`);
+      const gpuGB = computer.hardware.gpu?.memoryGB ?? 0;
+      if (requiredGpuGB > 0 && gpuGB < requiredGpuGB) {
+        failures.push(`${computer.id}: GPU memory ${gpuGB}GB < required ${requiredGpuGB}GB`);
+        continue;
+      }
+
+      // KV-cache VRAM & active GPU reservation enforcement before dispatch
+      const reservedGpuGB = (computer.reservations ?? []).reduce(
+        (acc, r) => acc + (r.settledAt ? 0 : (r.vramBytes ?? 0) / 1024 ** 3 + ((r as unknown as { gpuMemoryGB?: number }).gpuMemoryGB ?? 0)),
+        0,
+      );
+      const usableGpuGB =
+        computer.load?.gpuMemoryAvailableGB !== undefined
+          ? Math.max(0, computer.load.gpuMemoryAvailableGB - reservedGpuGB)
+          : computer.hardware.gpu && computer.load?.gpuMemoryUsedGB !== undefined
+            ? Math.max(0, gpuGB - computer.load.gpuMemoryUsedGB - reservedGpuGB)
+            : computer.hardware.gpu && reservedGpuGB > 0
+              ? Math.max(0, gpuGB - reservedGpuGB)
+              : undefined;
+
+      const coveredContext = instance.loaded ? (instance.contextTokens ?? 8192) : 8192;
+      const kvCacheGB =
+        computer.hardware.gpu && (requiredGpuGB > 0 || usableGpuGB !== undefined)
+          ? this.estimateKvCacheGB(record, requiredContext, coveredContext)
+          : 0;
+      const neededGpuGB = (instance.loaded ? 0 : requiredGpuGB) + kvCacheGB;
+
+      if (computer.hardware.gpu && requiredGpuGB > 0 && requiredGpuGB + kvCacheGB > gpuGB) {
+        failures.push(
+          `${computer.id}: GPU memory ${gpuGB}GB cannot fit model (${requiredGpuGB}GB) + KV cache (${kvCacheGB}GB) for context ${requiredContext}`,
+        );
+        continue;
+      }
+
+      if (usableGpuGB !== undefined && neededGpuGB > usableGpuGB) {
+        if (kvCacheGB > 0 && (instance.loaded || requiredGpuGB <= usableGpuGB)) {
+          failures.push(
+            `${computer.id}: usable GPU memory ${usableGpuGB}GB cannot fit KV cache (${kvCacheGB}GB) for target context ${requiredContext}`,
+          );
           continue;
         }
+        failures.push(
+          `${computer.id}: usable GPU memory ${usableGpuGB}GB < required ${neededGpuGB}GB (weights ${instance.loaded ? 0 : requiredGpuGB}GB + KV cache ${kvCacheGB}GB)`,
+        );
+        continue;
       }
 
       const reasons: string[] = [];
       let score = instance.health === 'healthy' ? 1 : 0;
 
-      if (instance.state === 'READY') {
+      if (instance.state === 'READY' || instance.loaded) {
         score += 2;
         reasons.push(`model already loaded via '${instance.runtimeId}' (no load latency)`);
       } else {
-        reasons.push(`model will be loaded via '${instance.runtimeId}'`);
+        const estimatedLoadMs = instance.loadTimeMs ?? Math.max(1500, Math.round(requiredGpuGB * 400));
+        const coldStartPenalty = Math.min(1.5, estimatedLoadMs / 20_000);
+        score -= coldStartPenalty;
+        reasons.push(`model will be loaded via '${instance.runtimeId}' (est. cold start ${estimatedLoadMs}ms)`);
+      }
+
+      if (kvCacheGB > 0) {
+        reasons.push(`estimated KV cache ${kvCacheGB}GB fits for context ${requiredContext}`);
       }
 
       const cpuPercent = computer.load?.cpuPercent ?? 0;
@@ -749,10 +987,17 @@ export class Scheduler {
     );
     const best = placements[0];
 
+    const resourceType = !best.computer
+      ? 'HOSTED_API_INFERENCE'
+      : best.computer.local
+        ? 'LOCAL_GPU_INFERENCE'
+        : 'REMOTE_GPU_INFERENCE';
+
     return {
       computerId: best.computer?.id,
       runtimeId: best.instance.runtimeId,
       placementKind: best.computer ? 'local' : 'hosted',
+      resourceType,
       score: best.score,
       reasons: best.reasons,
     };

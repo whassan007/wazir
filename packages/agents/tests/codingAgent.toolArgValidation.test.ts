@@ -179,10 +179,14 @@ describe('CodingAgent.run — tool argument validation', () => {
     let calls = 0;
     const executed: Array<{ name: string; input: unknown }> = [];
     const runtime: AgentRuntime = {
+      runtimeCapabilities: { nativeToolCalling: true },
       tools: [{ name: 'shell', description: 'run command', inputSchema: {} }],
       async *generate() {
         calls += 1;
         if (calls === 1) {
+          yield { type: 'token', content: '{"action":"plan","content":"inspect using shell after planning"}' };
+          yield { type: 'completed' };
+        } else if (calls === 2) {
           yield {
             type: 'tool_call',
             toolName: 'shell',

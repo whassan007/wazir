@@ -244,6 +244,7 @@ export class WorktreeManager {
   async commitWorktree(
     info: WorktreeInfo,
     commitMessage: string,
+    options?: { intendedFiles?: string[]; enableHooks?: boolean },
   ): Promise<WorktreeCommitResult> {
     if (!info.isGit) {
       return { committed: false, files: [] };
@@ -261,10 +262,24 @@ export class WorktreeManager {
         return { committed: false, files: [] };
       }
 
-      const files = lines.map((l) => l.slice(3).trim());
+      const files =
+        options?.intendedFiles && options.intendedFiles.length > 0
+          ? options.intendedFiles
+          : lines.map((l) => l.slice(3).trim());
 
-      await execFileAsync('git', [...GIT_NO_HOOKS, 'add', '-A'], { cwd: info.worktreeDir });
-      await execFileAsync('git', [...GIT_NO_HOOKS, 'commit', '-m', commitMessage], {
+      if (options?.intendedFiles && options.intendedFiles.length > 0) {
+        await execFileAsync('git', [...GIT_NO_HOOKS, 'reset'], { cwd: info.worktreeDir });
+        await execFileAsync('git', [...GIT_NO_HOOKS, 'add', '--', ...options.intendedFiles], {
+          cwd: info.worktreeDir,
+        });
+      } else {
+        await execFileAsync('git', [...GIT_NO_HOOKS, 'add', '-A'], { cwd: info.worktreeDir });
+      }
+
+      const commitArgs = options?.enableHooks
+        ? ['commit', '-m', commitMessage]
+        : [...GIT_NO_HOOKS, 'commit', '-m', commitMessage];
+      await execFileAsync('git', commitArgs, {
         cwd: info.worktreeDir,
       });
 

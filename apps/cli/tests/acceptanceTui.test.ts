@@ -366,7 +366,7 @@ describe('Wazir TUI Acceptance Tests (Sections 42 - 45)', () => {
       expect(harness.tui.getCurrentView()).toBe('fleet');
       const finalBuffer = harness.getScreenBuffer();
       expect(finalBuffer).toContain('[View: FLEET]');
-      expect(finalBuffer).toContain('AVAILABLE');
+      expect(finalBuffer).toContain('MISSION CONTROL');
       expect(harness.screen.getFrame()).toBeDefined();
 
       harness.stop();

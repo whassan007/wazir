@@ -11,6 +11,18 @@ export function setCodeModeToolRegistry(registry: ToolRegistry): void {
 export function createCodeModeTool(registry: ToolRegistry): Tool {
   const service = new CodeModeService({
     toolExecutor: async (name, input, ctx) => {
+      if (ctx.authorizeTool) {
+        const auth = await ctx.authorizeTool(name, input, ctx);
+        if (!auth.allowed) {
+          return {
+            ok: false,
+            output: '',
+            error: auth.error ?? `POLICY_DENIED: tool '${name}' denied by policy`,
+            failureClass: auth.failureClass ?? 'POLICY_DENIED',
+            durationMs: 0,
+          };
+        }
+      }
       return executeTool(registry, name, input, ctx);
     },
   });
@@ -33,7 +45,7 @@ export function createCodeModeTool(registry: ToolRegistry): Tool {
         },
         required: ['script'],
       },
-      permissions: ['filesystem_read'],
+      permissions: ['filesystem_read', 'filesystem_write', 'shell_execute', 'git_execute', 'test_run', 'build_run'],
       riskLevel: 'medium',
       environment: 'local',
       timeoutMs: 60_000,
@@ -74,7 +86,7 @@ export const codeModeTool: Tool = {
       },
       required: ['script'],
     },
-    permissions: ['filesystem_read'],
+    permissions: ['filesystem_read', 'filesystem_write', 'shell_execute', 'git_execute', 'test_run', 'build_run'],
     riskLevel: 'medium',
     environment: 'local',
     timeoutMs: 60_000,

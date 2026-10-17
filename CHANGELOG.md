@@ -1,5 +1,166 @@
 # Changelog
 
+## v0.2.5 — 2026-10-17
+
+**Release**: `v0.2.5`
+**Theme**: Conversation Shell Visibility, NVIDIA API Catalog Provider, and Durable Execution API
+
+- **Conversation Shell Execution & Error Visibility (`@wazir/cli`)**:
+  - Appended inline shell commands (`!cmd`, `/sh cmd`) and their durable stdout/stderr, exit codes, execution duration, and block references directly into the conversation transcript without invoking an LLM.
+  - Added operational status visibility (`Command running`, `Command completed`, `Execution failed`, `Model unavailable`, `Provider disconnected`, `Scheduler rejected task`, `Waiting for approval`) to interactive TTY conversation frames.
+  - Added explicit missing-model recovery explanations and actionable recovery commands directly in the conversation transcript while keeping shell execution usable without an AI provider.
+  - Hardened terminal stdin EOF and error handling to prevent unexpected returns to the parent shell.
+- **NVIDIA API Catalog Execution Provider (`@wazir/runtimes-nvidia`, `@wazir/cli`, `@wazir/core`)**:
+  - Added `@wazir/runtimes-nvidia` runtime adapter supporting NVIDIA API Catalog (`https://integrate.api.nvidia.com/v1`), OpenAI-compatible chat completions, SSE streaming, tool calling, and curated catalog discovery.
+  - Added `wa providers` CLI commands (`list`, `inspect`, `test`), `wa auth login nvidia`, and hosted provider routing and failure diagnostics across Mission Control and `wa doctor`.
+- **Durable Execution History & Endpoints (`@wazir/api`)**:
+  - Unified durable execution history (`GET /api/executions`, `GET /api/executions/:id`, `POST /api/executions`, `POST /api/executions/:id/cancel`) with SQLite persistence across API restarts.
+
+## v0.2.4 — 2026-10-17
+
+**Release**: `v0.2.4`
+**Theme**: Conversation-first terminal experience
+
+- Restored the Codex-style conversation-first interface as the default for `wa chat`.
+- Kept Mission Control available through `wa fleet` and `wa chat --dashboard`, with `/fleet` and `/chat` navigation during a session.
+- Added conversation transcript rendering, event summaries, keyboard quick actions, clipboard support, responsive terminal capabilities, and clean terminal restoration.
+- Added wide and narrow PTY screenshots and terminal regression coverage.
+
+## v0.2.3 — 2026-10-17
+
+**Release**: `v0.2.3`
+**Theme**: Wazir Mission Control terminal interface
+
+- Activated the Mission Control dashboard for `wa chat` and `wa fleet`, with the official Wazir terminal logo, live job and provider state, evidence, approvals, activity, and responsive layouts.
+- Added model browsing and pinning, restored-job landing coverage, and honest unknown cost and verification states.
+- Preserved inline shell execution, task cycling, job inspection, and existing terminal interactions.
+- Added real PTY before/after and narrow/wide screen captures.
+
+
+## v0.2.2 — 2026-10-16
+
+**Release**: `v0.2.2`
+**Theme**: Mandatory Git Synchronization, Verification, and Commit Authorization Policy & Multi-Surface Companion Completion
+
+- **Mandatory Git Synchronization, Verification, and Commit Authorization (`@wazir/evaluation`, `@wazir/core`, `@wazir/cli`)**:
+  - Added `runGitPreflight` and `revalidateGitCheckpoint` enforcing Git repository root, branch, HEAD SHA, dirty working-tree preservation, active worktrees, remote tracking, bounded `git fetch --prune origin`, and `REMOTE_UNAVAILABLE` offline policy (`allow` | `block`) across all 8 execution checkpoints.
+  - Enforced explicit commit authorization modes (`MANUAL_COMMIT` default, `AUTO_COMMIT`, `NO_COMMIT`) with provenance, scope, and expiration validation (`resolveEffectiveCommitPolicy`) and separated permission matrices (`resolvePermissionMatrix`).
+  - Added durable manual approval state machine (`IMPLEMENTING → VERIFYING → READY_FOR_REVIEW → AWAITING_COMMIT_APPROVAL → COMMITTING → COMMITTED`) supporting `COMMIT`, `REVISE`, `KEEP_UNCOMMITTED`, `DISCARD` (confirmation required), and `CANCEL` via `wa improve preflight`, `wa improve approvals`, and `wa improve approve <attemptId>`.
+  - Added pre-commit secret scanning (`scanCandidateForSecrets`), isolated intended-file staging with Git hooks enabled (`WorktreeManager.commitWorktree`), and supervisor restart reconciliation (`reconcileCandidateAfterRestart`).
+- **Desktop/CLI, iOS, and Android Feature Completion (`@wazir/cli`, `@wazir/runtime-lmstudio`, `apps/ios`, `apps/android`)**:
+  - Completed `wa canary` CLI subcommands (`status`, `inspect`, `history`, `compare`, `shadow`, `rollback`, `pause`, `resume`, `advance`, `throttle`) and `LMStudioAdapter.streamTask` real token streaming.
+  - Added iOS & Android QR camera scanner sheets, interactive task submission, approval risk filter chips, batch approve-low-risk, and custom `wazir://pair` deep-link handling.
+
+## v0.2.1 — 2026-10-16
+
+**Release**: `v0.2.1`
+**Theme**: Evaluation Qualification Fail-Closed Defaults, Benchmark Deadline Isolation, Dynamic Phase Routing, and Static Path Containment
+
+Addresses findings `F1`–`F5` and Section 2 improvements from the October 16, 2026 Wazir Repository Review:
+
+- **F1 & F2 — Fail-Closed Qualification & Verification Evidence (`RegressionGuard`)**:
+  - Removed the permissive `candidateVerificationPassed = true` default in `RegressionGuard.evaluate`; omitted verification now requires explicit `physicalVerificationSuccess === true` across all candidate runs (`MISSING_VERIFICATION_EVIDENCE`).
+  - Added fail-closed rejection (`EMPTY_BENCHMARK_SUITE`) when baseline or candidate benchmark suites contain zero results.
+- **F3 — Duplicate Promotion Fencing (`OptimizerStateManager`)**:
+  - Added explicit duplicate-candidate and duplicate-run promotion rejection (`OPTIMIZER_CANDIDATE_ALREADY_PROMOTED`) alongside atomic `baselineRevision` and `configRevision` fencing in `OptimizerStateManager.promote`.
+- **F4 — Canonical Static Path Containment (`@wazir/web`)**:
+  - Replaced `filePath.startsWith(PUBLIC)` in `apps/web/server.js` with canonical `fs.realpathSync(PUBLIC)`, `decodeURIComponent` + null-byte rejection, `path.relative` boundary verification, symlink target resolution (`fs.realpath`), and regular-file validation (`stats.isFile()`).
+- **F5 — Dynamic Phase Model Resolution (`MetaOptimizerService`)**:
+  - Added `MetaOptimizerService.resolveModelForPhase(phase, task)` backed by `Scheduler` and `ModelRegistry` to dynamically resolve `plan`, `implement`, and `repair` models with explainable fallbacks when preferred models (`gemma-27b`, `qwen-2.5-coder`, `gpt-4o`) are missing, unloaded, or ineligible.
+- **Benchmark Deadline & Workspace Isolation (`BenchmarkService`)**:
+  - `BenchmarkService.runTask` now copies `customContext.workspaceRoot` into an isolated temporary directory (`fs.cp`) cleaned up in `finally`, races `runner.run(...)` against a hard timeout timer (`BENCHMARK_DEADLINE_EXCEEDED`) even if the runner ignores `abortSignal`, and rejects empty benchmark suites in `runSuite` and `runBenchmarkSuite`.
+- **Native Continuous Self-Improvement Supervisor & DGX Spark Qualification (`SelfImprovementSupervisor`, `@wazir/cli`)**:
+  - Added durable self-improvement supervision (`wa improve start|run|status|history|stop|rollback|doctor|service`) with singleton lock protection, atomic state and attempt persistence, candidate worktree fingerprint tamper detection (`CANDIDATE_WORKTREE_TAMPERED`), and systemd user-service management (`scripts/self-improvement-builder.sh`).
+  - Repaired native tool-surface circuit breaking (`UNSUPPORTED_TOOL_SURFACE`) and protocol adapter tool-name aliasing (`documentSymbols`, `findReferences`, `code_mode`), qualified end-to-end across all four builder phases on DGX Spark (`docs/self-improvement-recovery.md`).
+- **Git Synchronization & Worktree Safety (`GitSynchronizationPolicy`, `WorktreeManager`)**:
+  - Enforced protected-branch and clean-worktree synchronization policies alongside iOS/Android companion operation workflows.
+
+## v0.2.0 — 2026-10-16
+
+**Release**: `v0.2.0`
+**Theme**: Unified Applications, Multi-LLM Optimization, Evaluation Integrity, and Controlled Self-Improvement
+
+Delivers the Wazir v0.2 roadmap (`docs/roadmap-v0.2.md`) and completes autonomous codebase remediation across all four engineering workstreams:
+
+- **Workstream A — Unified Applications (Desktop, Web, Mobile)**:
+  - Hardened `@wazir/web` reverse proxy (`apps/web/server.js`) and CLI dashboard (`apps/cli/src/dashboardServer.ts`) with loopback-only default binding, `HttpOnly; SameSite=Strict` session cookies, `X-CSRF-Token` and same-origin `Origin` validation, viewer vs. operator role separation, and single-use SSE stream tickets.
+  - Native desktop supervision (`apps/desktop/src-tauri/src/main.rs`) with OS keychain credential storage and detached worker survival on window close.
+  - Native iOS (`apps/ios/WazirMobile`) and Android (`apps/android`) companion apps with QR pairing, biometric approval gating (`BIOMETRIC_REQUIRED`), stale approval rejection (`APPROVAL_EXPIRED`), immutable `eventId` SSE deduplication in `MobileEventHub`, and idempotent concurrent task cancellation across surfaces (`cancelTask`).
+- **Workstream B — Multi-LLM Optimization & Pre-Dispatch KV-Cache Placement**:
+  - Added `minVerifiedSuccessRate` ($Q_{\min}$) and `maxLatencyMs` ($L_{\max}$) policy constraints to `ResourcePolicy` and `ResourceRouter`.
+  - Updated `ResourceRouter.assess` to evaluate total expected cost per verified success (`effectiveCostPerSuccessUsd`), accounting for empirical task success rates, cold-start model load latency (`estimatedLoadMs`), and eviction penalties (`evictionRequired`).
+  - Enhanced `Scheduler.scheduleComputer` and `Scheduler.estimatePlacement` to compute incremental KV-cache VRAM demand and active `ResourceReservation` `vramBytes`, rejecting GPU placement before dispatch when usable VRAM fits model weights (or a resident model at smaller context) but cannot fit the target context KV cache.
+- **Workstream C — Evaluation Integrity & Statistical Qualification**:
+  - Eliminated fabricated zero fallback metrics via tagged `readBenchmarkMetric` (`measured`, `estimated`, `unavailable`) and `extractMetricValueSafe` (`NaN` on missing telemetry).
+  - Enforced repeated paired sign-test qualification (`minSampleCount >= 5`, Bonferroni-adjusted $\alpha$) in `RegressionGuard` and `pairedEvidence.ts`.
+  - Added protected benchmark fixture modification detection (`PROTECTED_FIXTURE_MODIFIED`), benchmark context contamination rejection (`BENCHMARK_CONTAMINATED`), and per-category pass-rate regression breakdown (`categoryBreakdown` / `CATEGORY_REGRESSION`).
+- **Workstream D — Controlled Self-Improvement & Atomic Optimizer State**:
+  - Implemented versioned atomic optimizer persistence at `meta_optimizer/state/v1` (`OptimizerStateManager`) with durable per-sample reservations, idempotent accounting receipts, and fault-resilient hydration.
+  - Added model-scoped divergence detection (`scopedModels` / `MODEL_SCOPED_REGRESSION`) in `RegressionGuard` so candidates that improve one model while regressing another cannot be promoted globally.
+  - Updated `MetaOptimizerService.recordBaseline` to derive baseline models dynamically from active `routingRules` rather than static model lists, and enforced atomic baseline version checks (`OPTIMIZER_BASELINE_CHANGED`), canary evaluation, and rollback.
+
+## v0.1.69 — 2026-10-15
+
+**Release**: `v0.1.69`
+**Theme**: Dashboard state handling — stop showing "0" when the real answer is "unknown"
+
+Rounds out the v0.1.68 OFFLINE/502 fix by repairing the dashboard's own
+state handling, which had the exact bug the original report flagged: a
+failed request rendering as a confirmed zero instead of an unknown value.
+
+- Tab badges (Activity/Infrastructure/Catalog) only updated as a side
+  effect of a successful render, so a total outage froze them at a literal
+  "0". They now show "—" whenever every section feeding them has never
+  loaded, and recompute every refresh cycle regardless of success/failure.
+- The executions pagination counter's "Showing 0 of 0" was both the
+  pre-load placeholder and the genuine-empty-result text, making the two
+  indistinguishable. Placeholder is now "No data yet"; "Showing 0 of 0"
+  from a real successful response is unchanged (it's correct there).
+- The global status pill can now tell "backend reachable but rejecting our
+  token" apart from a real outage: 401/403 responses surface as
+  "authentication required" instead of folding into generic "offline".
+
+Verified in a real Chrome tab: forced a 401 via a deliberate token
+mismatch (pill read "authentication required", all counters "—"), then
+fixed the token and confirmed full recovery with real data.
+
+## v0.1.68 — 2026-10-15
+
+**Release**: `v0.1.68`
+**Theme**: Fix Wazir Desktop OFFLINE / 502 on a cold local launch
+
+Any launch of `@wazir/desktop` outside the `tauri dev` CLI (a built binary, or
+`tauri build --no-bundle` output) showed "Runtime: OFFLINE" with 502s on every
+dashboard call — `beforeDevCommand` only runs under `tauri dev`, so nothing
+had actually started the backend.
+
+- `main.rs` now health-checks ports 4800/4801 on startup and spawns `node
+  dist/main.js` (apps/api) and `node server.js` (apps/web) itself when
+  nothing's listening, logging to `~/Library/Logs/Wazir/{api,web}.log`. The
+  window stays hidden until the web port responds, then navigates to the live
+  dashboard — no more flash of the broken static page. Only child processes
+  this instance spawned are tracked and killed on quit; a pre-existing or
+  remote runtime is left untouched.
+- Fixing the connectivity race surfaced a second, previously-masked failure:
+  `apps/api`'s operator token is mandatory by default (`auth.ts`), and nothing
+  set `WAZIR_API_TOKEN` for the self-spawned backend, so every
+  `/api/v1/*`/`/executions` call 401'd even once the race was fixed. Desktop
+  now generates a random per-launch token and passes it to both spawned
+  processes; `apps/web`'s existing proxy attaches it to proxied requests
+  server-side, so it never reaches the webview.
+- Verified end-to-end on a cold launch with both ports free: dashboard loads
+  real data (`GET /api/v1/executions` → 200), and quitting the app leaves no
+  orphaned node processes or held ports.
+
+## v0.1.67 — 2026-10-15
+
+**Release**: `v0.1.67`
+**Theme**: Wazir Desktop scaffold (dev-only)
+
+- **New `@wazir/desktop` package**: a Tauri 2 native shell that opens a window onto the existing `@wazir/web` dashboard and `@wazir/api` control plane instead of a second, duplicate frontend/runtime. `npm run desktop:dev` builds the Rust shell and boots both servers via the existing `start:dashboard` script.
+- Native menu (Reload, Open in Browser, View Logs, Quit/About) and a generated app icon set (`icon.icns`/`.ico`/PNGs) from the existing brand logo.
+- Scope is intentionally limited to a verified dev build: no installers, code signing, notarization, or CI packaging workflows yet, and no remote-host (Mode B) connection — see `apps/desktop/README.md` for what's deferred and why.
+
 ## v0.1.66 — 2026-10-14
 
 **Release**: `v0.1.66`

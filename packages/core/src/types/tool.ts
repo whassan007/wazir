@@ -90,6 +90,12 @@ export interface ToolExecutionContext {
     input: Record<string, unknown>,
     ctx: ToolExecutionContext,
   ) => Promise<ToolResult>;
+  /** Optional policy authorization callback for tools (like code_mode) that dispatch nested sub-tools. */
+  authorizeTool?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    ctx: ToolExecutionContext,
+  ) => Promise<{ allowed: boolean; error?: string; failureClass?: import('@wazir/shared').FailureClass }>;
 }
 
 export interface Tool {

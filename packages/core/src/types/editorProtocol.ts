@@ -153,7 +153,7 @@ export type ProtocolScope = 'read' | 'mutate' | 'execute';
  * Never read from a request body or tool arguments.
  */
 export interface ProtocolPrincipal {
-  kind: 'operator' | 'viewer' | 'local-dev';
+  kind: 'operator' | 'viewer' | 'local-dev' | 'mobile-device';
   id: string;
   scopes: readonly ProtocolScope[];
 }

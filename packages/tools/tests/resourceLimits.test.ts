@@ -57,7 +57,7 @@ describe('defaultResourceLimits', () => {
 describe('resource limits actually constrain the process (real rlimits, Linux/macOS)', () => {
   it.skipIf(process.platform === 'win32')('kills a CPU-bound busy loop once it exceeds maxCpuSeconds', async () => {
     const result = await runShell(
-      'x=0; while true; do x=$((x+1)); done',
+      `exec "${process.execPath}" -e "while (true) {}"`,
       {
         cwd: os.tmpdir(),
         unsandboxed: true,

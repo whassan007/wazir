@@ -255,8 +255,10 @@ describe('G61 / G62 Acceptance: Capability-Weighted Fleet & Dynamic Rebalance', 
       expect(dgxPlacement.capacityProfile!.gpuCount).toBe(8);
       expect(macPlacement.capacityProfile!.unifiedMemory).toBe(true);
 
-      // Decision qualifies under improved candidate
-      expect(result.decision).toBe('QUALIFIED');
+      // Placement alone cannot establish repeated improvement
+      // Single-sample dispatch proves placement/recovery mechanics, not optimization.
+      expect(result.decision).toBe('INCONCLUSIVE');
+      expect(result.regressionGuard?.inconclusiveReasons.some((reason) => reason.includes('INSUFFICIENT_SAMPLES'))).toBe(true);
     });
   });
 
@@ -356,8 +358,10 @@ describe('G61 / G62 Acceptance: Capability-Weighted Fleet & Dynamic Rebalance', 
       expect(result.comparison.baselineTasks).toBe(fleetTasks.length);
       expect(result.comparison.candidateTasks).toBe(fleetTasks.length);
 
-      // Decision remains deterministic
-      expect(result.decision).toBe('QUALIFIED');
+      // Qualification remains inconclusive without repeated evidence
+      // Single-sample dispatch proves placement/recovery mechanics, not optimization.
+      expect(result.decision).toBe('INCONCLUSIVE');
+      expect(result.regressionGuard?.inconclusiveReasons.some((reason) => reason.includes('INSUFFICIENT_SAMPLES'))).toBe(true);
     });
   });
 });

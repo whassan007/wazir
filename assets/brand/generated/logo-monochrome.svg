@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-label="Wazir Monochrome Emblem">
+  <!-- Three-Peaked W Crown -->
+  <path d="M256 36 L204 128 L256 172 L308 128 Z" fill="currentColor"/>
+  <path d="M114 58 L128 158 L194 180 L190 132 Z" fill="currentColor"/>
+  <path d="M398 58 L384 158 L318 180 L322 132 Z" fill="currentColor"/>
+  <!-- Shield Frame -->
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M118 164 L196 196 L256 150 L316 196 L394 164 L394 274 C394 362 332 428 256 476 C180 428 118 362 118 274 Z M142 188 L198 212 L256 170 L314 212 L370 188 L370 272 C370 346 318 402 256 446 C194 402 142 346 142 272 Z" fill="currentColor"/>
+  <!-- Circuit Rays -->
+  <g stroke="currentColor" stroke-width="10" stroke-linecap="round">
+    <line x1="224" y1="264" x2="182" y2="222"/>
+    <line x1="288" y1="264" x2="330" y2="222"/>
+    <line x1="224" y1="328" x2="188" y2="364"/>
+    <line x1="288" y1="328" x2="324" y2="364"/>
+    <line x1="256" y1="242" x2="256" y2="202"/>
+    <line x1="256" y1="350" x2="256" y2="396"/>
+    <line x1="202" y1="296" x2="162" y2="296"/>
+    <line x1="310" y1="296" x2="350" y2="296"/>
+  </g>
+  <!-- Core Ring & Node -->
+  <circle cx="256" cy="296" r="42" stroke="currentColor" stroke-width="12"/>
+  <circle cx="256" cy="296" r="16" fill="currentColor"/>
+</svg>

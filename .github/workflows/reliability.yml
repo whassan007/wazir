@@ -29,11 +29,36 @@ jobs:
       - run: npm run build
       - name: Process persistence, socket faults, and authorization
         run: npx vitest run tests/reliability tests/integration/policyBypassSweep.test.ts apps/api/tests/durableDispatch.test.ts --reporter=json --outputFile=reliability-results.json
+      - name: Tier 1 Live Reliability Gate (10 Systemic Failure Detectors & Parity)
+        run: npm run test:live:tier1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: deterministic-reliability
-          path: reliability-results.json
+          path: |
+            reliability-results.json
+            docs/reliability/live-test-results.json
+  tier2-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npm run build
+      - name: Tier 2 Live Integration Gate (Real PTY Session, CLI E2E, Multi-Process Cluster)
+        run: npm run test:live:tier2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tier2-live-integration
+          path: docs/reliability/live-test-results.json
   upstream-contract:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -81,6 +106,8 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci && npm run build
+      - name: Tier 3 Live Infrastructure & Phase 7 Stress Campaign
+        run: npm run test:live:tier3
       - name: Independently scored real-model tasks
         env:
           BENCHMARK_MODEL: ${{ inputs.live_model }}
@@ -89,4 +116,7 @@ jobs:
         if: always()
         with:
           name: live-reliability
-          path: live-results/
+          path: |
+            live-results/
+            docs/reliability/live-test-results.json
+

@@ -27,20 +27,25 @@ async function makeEngine(): Promise<RookEngine> {
 }
 
 describe('authStatusCommand', () => {
+  const prevNvidiaKey = process.env.NVIDIA_API_KEY;
   beforeEach(() => {
+    delete process.env.NVIDIA_API_KEY;
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 })));
   });
   afterEach(() => {
+    if (prevNvidiaKey === undefined) delete process.env.NVIDIA_API_KEY;
+    else process.env.NVIDIA_API_KEY = prevNvidiaKey;
     vi.unstubAllGlobals();
   });
 
-  it('shows all three providers as not connected before any login', async () => {
+  it('shows all four providers as not connected before any login', async () => {
     const engine = await makeEngine();
 
     const result = await authStatusCommand(engine, { json: true });
     const rows = JSON.parse(result.output);
 
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
+    expect(rows.map((r: any) => r.id)).toEqual(['anthropic', 'openai', 'google', 'nvidia']);
     expect(rows.every((r: any) => r.status.authenticated === false)).toBe(true);
   });
 

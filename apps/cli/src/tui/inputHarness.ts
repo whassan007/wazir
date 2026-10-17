@@ -46,6 +46,7 @@ export class TuiTestHarness {
     this.screen = new TerminalScreen(
       this.inStream as unknown as NodeJS.ReadableStream,
       this.outStream as unknown as NodeJS.WritableStream,
+      options.presentationMode,
     );
     this.tui = new FleetTui({
       ...options,

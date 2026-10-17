@@ -36,6 +36,29 @@ describe('search and glob honor their directory scope', () => {
     expect(result.output).toContain('pkg/b/two.ts');
   });
 
+  it.each(['pattern', 'regex'])('does not replace the %s content query with its file glob', async key => {
+    const result = await run('search', { [key]: 'needle', glob: 'pkg/a/*.ts' });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain('pkg/a/one.ts:1:');
+    expect(result.output).not.toContain('pkg/b/two.ts');
+    expect(result.metadata?.filesScanned).toBe(1);
+  });
+
+  it('preserves glob-only legacy content matching', async () => {
+    const result = await run('search', { glob: '*needle*' });
+    expect(result.output).toContain('pkg/a/one.ts');
+    expect(result.output).toContain('pkg/b/two.ts');
+  });
+
+  it('distinguishes an empty file filter from content with no matches', async () => {
+    const empty = await run('search', { pattern: 'needle', glob: 'pkg/a/' });
+    expect(empty.metadata?.filesScanned).toBe(0);
+    expect(empty.output).toContain('use path to select a directory');
+    const absent = await run('search', { pattern: 'absent', glob: 'pkg/a/*.ts' });
+    expect(absent.metadata?.filesScanned).toBe(1);
+    expect(absent.output).toBe('(no matches)');
+  });
+
   it('search and glob on a missing directory say so instead of answering', async () => {
     for (const [tool, input] of [['search', { pattern: 'needle', path: 'pkg/missing' }], ['glob', { pattern: '**/*.ts', path: 'pkg/missing' }]] as const) {
       const result = await run(tool, input);

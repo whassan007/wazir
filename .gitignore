@@ -16,6 +16,10 @@ coverage/
 **/src/**/*.d.ts
 **/src/**/*.d.ts.map
 
+# Rust (apps/desktop/src-tauri) — Cargo.lock is committed (binary crate)
+target/
+apps/desktop/src-tauri/gen/schemas/
+
 # IDE / editors
 .vscode/
 .idea/
@@ -71,3 +75,12 @@ buildcpp-test-report.json
 # acceptance test library runner artifacts (scripts/acceptance-test-harness.mjs)
 acceptance-test-report.json
 .acceptance-vitest-report.json
+
+# Android Gradle local machine config (SDK path, etc.) — never portable across machines
+apps/android/local.properties
+apps/android/.gradle/
+apps/android/build/
+apps/android/.idea/
+
+# Wazir's own worktree/scratch state for managing other branches locally
+.wazir/

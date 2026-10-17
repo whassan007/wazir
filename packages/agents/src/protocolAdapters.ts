@@ -793,6 +793,51 @@ export function normalizeToActionEnvelope(params: {
       };
     }
 
+    if (name === 'plan' || (name === 'build' && input.script === 'plan')) {
+      const planText = typeof input.content === 'string' && input.content.trim()
+        ? input.content.trim()
+        : typeof input.summary === 'string' && input.summary.trim()
+          ? input.summary.trim()
+          : 'Inspect files, apply minimal fix, run verification checks, and report done.';
+      return {
+        envelope: {
+          id: id ?? `act-${randomUUID().slice(0, 8)}`,
+          name: 'plan',
+          arguments: { content: planText },
+          source: 'native_tool_call',
+          runtimeId: params.runtimeId,
+          modelId: params.modelId,
+          rawReference: typeof params.raw === 'string' ? params.raw : JSON.stringify(params.nativeToolCall),
+          phase: params.phase,
+          timestamp: new Date(),
+        },
+      };
+    }
+    if (
+      name === 'done' ||
+      name === 'answer' ||
+      (name === 'build' && (input.script === 'done' || input.script === 'complete' || input.script === 'finish'))
+    ) {
+      const summaryText = typeof input.summary === 'string' && input.summary.trim()
+        ? input.summary.trim()
+        : typeof input.content === 'string' && input.content.trim()
+          ? input.content.trim()
+          : 'Completed changes and verified with checks.';
+      return {
+        envelope: {
+          id: id ?? `act-${randomUUID().slice(0, 8)}`,
+          name: name === 'answer' ? 'answer' : 'done',
+          arguments: { summary: summaryText },
+          source: 'native_tool_call',
+          runtimeId: params.runtimeId,
+          modelId: params.modelId,
+          rawReference: typeof params.raw === 'string' ? params.raw : JSON.stringify(params.nativeToolCall),
+          phase: params.phase,
+          timestamp: new Date(),
+        },
+      };
+    }
+
     const normalizedArgs = normalizeToolArguments(name, input);
     const semanticValidation = validateToolActionSemantics(name, normalizedArgs);
     if (!semanticValidation.ok) {

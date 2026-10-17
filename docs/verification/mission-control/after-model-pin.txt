@@ -1,0 +1,42 @@
+ ⟪◈⟫ WAZIR  MISSION CONTROL                                                                                                                 
+ ~/Code/Wazir  [View: MODELS]                                                                                                               
+ 1 Home   Tab Timeline / Approvals / Worktrees   5 Models   6 Evidence   ? Help                                                             
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ JOBS                               │  MODELS & PROVIDERS                                                                                   
+ > + ..c5iuk8-1 build a c++ prog.   │  ↑↓ / j k browse · Enter pin model · /model auto clears pin                                           
+ EXECUTIONS                         │                                                                                                       
+   (none)                           │  > READY  adept/fuyu-8b                                                                               
+ AGENTS                             │    Provider nvidia · hosted · Context 131,072 · Tools yes                                             
+   o antigravity                    │    nvidia / undefined · READY · healthy                                                               
+   o claude-code                    │    READY  ai21labs/jamba-1.5-large-instruct                                                           
+   o codex                          │    Provider nvidia · hosted · Context 131,072 · Tools yes                                             
+   o gemini                         │    nvidia / undefined · READY · healthy                                                               
+   o opencode                       │    READY  aisingapore/sea-lion-7b-instruct                                                            
+   o wazir-coding                   │    Provider nvidia · hosted · Context 131,072 · Tools yes                                             
+   o wazir-step                     │    nvidia / undefined · READY · healthy                                                               
+ COMPUTERS                          │    READY  bigcode/starcoder2-15b                                                                      
+   + WaelMacPro.local               │    Provider nvidia · hosted · Context 131,072 · Tools yes                                             
+ RUNTIMES                           │    nvidia / undefined · READY · healthy                                                               
+   + Anthropic                      │    READY  databricks/dbrx-instruct                                                                    
+   + Google Gemini                  │    Provider nvidia · hosted · Context 131,072 · Tools yes                                             
+   x lmstudio                       │    nvidia / undefined · READY · healthy                                                               
+   + NVIDIA API Catalog             │    READY  deepseek-ai/deepseek-coder-6.7b-instruct                                                    
+   x ollama                         │    Provider nvidia · hosted · Context 131,072 · Tools yes                                             
+   + OpenAI                         │    nvidia / undefined · READY · healthy                                                               
+ MCP                                │    READY  deepseek-ai/deepseek-v4.1-flash                                                             
+   x GitHub auth_required           │    Provider nvidia · hosted · Context 131,072 · Tools yes                                             
+   x NVIDIA Run:ai auth_required    │    nvidia / undefined · READY · healthy                                                               
+                                    │    READY  google/codegemma-1.1-7b                                                                     
+                                    │    Provider nvidia · hosted · Context 131,072 · Tools yes                                             
+                                    │    nvidia / undefined · READY · healthy                                                               
+                                    │    READY  google/codegemma-7b                                                                         
+                                    │    Provider nvidia · hosted · Context 131,072 · Tools yes                                             
+                                    │    nvidia / undefined · READY · healthy                                                               
+                                    │    READY  google/deplot                                                                               
+                                    │    Provider nvidia · hosted · Context 131,072 · Tools yes                                             
+                                    │    nvidia / undefined · READY · healthy                                                               
+                                    │    READY  google/diffusiongemma-26b-a4b-it                                                            
+ History: [#79 + ! printf mission] [#78 + ! printf mission] [#77 + ! printf mission] [#76 + ! printf mission] [#75 + ! printf mission]      
+--------------------------------------------------------------------------------------------------------------------------------------------
+  [NORMAL] Status: Pinned model: adept/fuyu-8b                                   Model adept/fuyu-8b ~ Ctrl+T Sidebar ~ Context 0.0K/128K ~ 
+wa>                                                                                                                                         
