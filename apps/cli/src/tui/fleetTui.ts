@@ -1517,7 +1517,20 @@ export class FleetTui {
   }
 
   handleWhyCommand(topic: string): void {
-    this.openWhyModal(this.buildWhyExplanation(topic));
+    const explanation = this.buildWhyExplanation(topic);
+    if (this.presentationMode === 'conversation') {
+      const lines = [
+        `Why [${explanation.topic}]: ${explanation.headline}`,
+        `  Decision: ${explanation.decision}`,
+        ...explanation.rationale.map((r) => `  • ${r}`),
+        ...explanation.evidence.map((e) => `  [${e.label}] ${e.value}`),
+      ];
+      this.statusMessage = `${explanation.headline}: ${explanation.decision}`;
+      this.conversationRenderer.append(lines.join('\n'));
+      this.draw();
+      return;
+    }
+    this.openWhyModal(explanation);
     if (topic === 'complete' || topic === 'incomplete') {
       // Re-answer from the freshly loaded record so the modal never shows a cached revision.
       void this.refreshEvidenceInspection().then(() => {
@@ -2624,23 +2637,26 @@ export class FleetTui {
 
     // 9. Overlaid Approval Modal Actions ([A] Approve, [D] Deny, [V] View details, [I] Inspect,
     // Ctrl+A Approve All, Ctrl+D Deny All, Ctrl+J / Ctrl+K / [ / ] cycle approvals)
-    if (this.pendingApprovals.length > 0) {
+    if (this.pendingApprovals.length > 0 && !(this.presentationMode === 'conversation' && (this.inputBuffer.startsWith('/') || keyStr === '/'))) {
       const first = this.pendingApprovals[0];
       if (key === '\u0001') {
         const count = this.engine.approvalQueue.approveAll();
         this.statusMessage = `Approved all ${count} pending policy request${count === 1 ? '' : 's'}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
       if (key === '\u0004') {
         const count = this.engine.approvalQueue.denyAll();
         this.statusMessage = `Denied all ${count} pending policy request${count === 1 ? '' : 's'}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
       if (key === 'a' || key === 'A' || key === 'y' || key === 'Y') {
         this.engine.approvalQueue.approve(first.id);
         this.statusMessage = `Approved policy request for ${first.tool}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
@@ -2663,6 +2679,7 @@ export class FleetTui {
       if (key === 'd' || key === 'D' || key === 'n' || key === 'N') {
         this.engine.approvalQueue.deny(first.id);
         this.statusMessage = `Denied policy request for ${first.tool}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
@@ -2671,12 +2688,16 @@ export class FleetTui {
         this.statusMessage = this.approvalShowDetails
           ? 'Showing expanded approval details'
           : 'Showing standard approval view';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`Approval request (${first.id}): tool=${first.tool} rule=${first.rule} reasons=${first.reasons.join('; ')}`);
+        }
         this.draw();
         return;
       }
       if (key === 'i' || key === 'I') {
         this.pendingApprovals.push(this.pendingApprovals.shift()!);
         this.statusMessage = `Inspected and snoozed policy request for ${first.tool}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
@@ -3718,11 +3739,33 @@ export class FleetTui {
     try {
       const block = await getBlock(this.engine, blockId);
       if (block) {
-        this.expandedBlock = block;
+        if (this.presentationMode === 'conversation') {
+          const out = [
+            `Block #${block.id} (${block.status}) — ${block.command}`,
+            block.stdout ? block.stdout.trimEnd() : '',
+            block.stderr ? `[stderr] ${block.stderr.trimEnd()}` : '',
+            `exit: ${block.exitCode ?? 0} · duration: ${block.durationMs ?? 0}ms`,
+          ].filter(Boolean).join('\n');
+          this.statusMessage = `Block #${block.id}: ${block.status}`;
+          this.conversationRenderer.append(out);
+        } else {
+          this.expandedBlock = block;
+          this.statusMessage = `Expanded block #${block.id}`;
+        }
+        this.draw();
+      } else {
+        this.statusMessage = `Block '${blockId}' not found.`;
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
         this.draw();
       }
     } catch {
-      // Ignore
+      this.statusMessage = `Block '${blockId}' not found.`;
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
     }
   }
 
@@ -3847,11 +3890,10 @@ export class FleetTui {
       if (this.presentationMode !== 'dashboard') {
         this.presentationMode = 'dashboard';
         if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation('dashboard');
-        this.currentView = 'fleet';
-        this.draw();
-      } else {
-        this.currentView = 'fleet'; this.draw();
       }
+      this.currentView = 'fleet';
+      this.statusMessage = 'Switched to Fleet dashboard view.';
+      this.draw();
       return;
     }
     if (trimmed === '/chat') {
@@ -3859,30 +3901,99 @@ export class FleetTui {
         this.presentationMode = 'conversation';
         if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation('conversation');
         this.conversationRenderer.start(process.env.USER ?? process.env.USERNAME ?? 'controller', this.selectedModelId ?? 'auto-routed model');
+      } else {
+        this.conversationRenderer.append('Conversation mode active.');
       }
       this.focusedPane = 'prompt';
+      this.statusMessage = 'Conversation mode active.';
       this.draw();
       return;
     }
     if (trimmed === '/verbose' || trimmed === '/quiet' || trimmed === '/debug') {
       const verbosity = trimmed.slice(1) as TranscriptVerbosity;
       this.eventSummarizer.setVerbosity(verbosity);
+      this.statusMessage = `Verbosity: ${verbosity}`;
       this.conversationRenderer.append(`Verbosity: ${verbosity}`);
       this.draw();
       return;
     }
     if (trimmed === '/help' && this.presentationMode === 'conversation') {
-      this.conversationRenderer.append('Commands: /fleet · /chat · /tasks · /models · /logs · /details · /tail · /verbose · /quiet · /debug · /help');
+      this.conversationRenderer.append(
+        'Commands: /help · /models · /model <id|auto> · /agents · /runtimes · /tasks · /status · /doctor · /block [id] · /why <topic> · /cancel · /compact · /clear-context · /steer <text> · /approve · /deny · /sh <cmd> · !<cmd> · /fleet · /chat · /exit',
+      );
+      this.draw();
       return;
     }
     if ((trimmed === '/tasks' || trimmed === '/task') && this.presentationMode === 'conversation') {
       const tasks = this.statusProjection.getTasks();
-      this.conversationRenderer.append(tasks.length ? tasks.map((task) => `${task.status} · ${task.taskId}`).join('\n') : 'No tasks in this session.');
+      this.conversationRenderer.append(tasks.length ? `Tasks:\n${tasks.map((task) => `${task.status} · ${task.taskId}`).join('\n')}` : 'Tasks: No tasks in this session.');
+      this.draw();
       return;
     }
-    if (trimmed === '/models' && this.presentationMode === 'conversation') {
+    if ((trimmed === '/models' || trimmed === '/model-manager' || trimmed === '/model-intelligence') && this.presentationMode === 'conversation') {
       const models = this.engine.models.list();
-      this.conversationRenderer.append(models.length ? `Models: ${models.map((model) => model.id).join(', ')}\nUse /model <id> to select a model.` : 'No registered models.');
+      this.conversationRenderer.append(models.length ? `Models: ${models.map((model) => model.id).join(', ')}\nUse /model <id> to select a model.` : 'Models: No registered models.');
+      this.draw();
+      return;
+    }
+    if (trimmed === '/agents' && this.presentationMode === 'conversation') {
+      const registered = this.engine.agents?.list?.() ?? [];
+      this.conversationRenderer.append(
+        registered.length
+          ? `Agents: ${registered.map((a: any) => a.descriptor?.name ?? a.id ?? String(a)).join(', ')}`
+          : 'Agents: coding (built-in)',
+      );
+      this.draw();
+      return;
+    }
+    if (trimmed === '/runtimes' && this.presentationMode === 'conversation') {
+      const runtimes = this.engine.runtimes?.list?.() ?? [];
+      this.conversationRenderer.append(
+        runtimes.length
+          ? `Runtimes: ${runtimes.map((r: any) => `${r.id} (${r.status ?? 'configured'})`).join(', ')}`
+          : 'Runtimes: none registered.',
+      );
+      this.draw();
+      return;
+    }
+    if (trimmed === '/status') {
+      const modelsCount = this.engine.models?.list().length ?? 0;
+      const runtimesCount = this.engine.runtimes?.list().length ?? 0;
+      const activeTasks = this.getAgents().filter((a) => a.status === 'running' || a.status === 'retry').length;
+      const msg = `Status: ${modelsCount} model(s), ${runtimesCount} runtime(s), ${activeTasks} active task(s), ${this.pendingApprovals.length} pending approval(s).`;
+      this.statusMessage = msg;
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(msg);
+      }
+      this.draw();
+      return;
+    }
+    if (trimmed === '/approve' || trimmed === '/Approve') {
+      if (this.pendingApprovals.length > 0) {
+        const first = this.pendingApprovals[0];
+        this.engine.approvalQueue.approve(first.id);
+        this.statusMessage = `Approved policy request for ${first.tool}`;
+      } else {
+        this.statusMessage = 'No pending approval requests.';
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
+      return;
+    }
+    if (trimmed === '/deny' || trimmed === '/Deny') {
+      if (this.pendingApprovals.length > 0) {
+        const first = this.pendingApprovals[0];
+        this.engine.approvalQueue.deny(first.id);
+        this.statusMessage = `Denied policy request for ${first.tool}`;
+      } else {
+        this.statusMessage = 'No pending approval requests.';
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
       return;
     }
     if (trimmed === '/logs' || trimmed === '/details') {
@@ -3982,6 +4093,10 @@ export class FleetTui {
     if (trimmed === '/search') {
       this.currentView = 'search';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        this.statusMessage = 'Search view available in Fleet dashboard (/fleet).';
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -3989,6 +4104,11 @@ export class FleetTui {
     if (trimmed === '/improvement') {
       this.currentView = 'improvement';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        const exps = (this.engine.optimizer as any)?.listExperiments?.() ?? [];
+        this.statusMessage = `Self-improvement: ${exps.length} experiment(s) recorded.`;
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -4004,6 +4124,11 @@ export class FleetTui {
       this.currentView = 'canary';
       this.canaryTab = 'dashboard';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        const canaries = (this.engine.optimizer as any)?.getCanaryDeploymentService?.()?.listDeployments?.() ?? [];
+        this.statusMessage = `Canary deployments: ${canaries.length} recorded.`;
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -4011,6 +4136,11 @@ export class FleetTui {
     if (trimmed === '/context') {
       this.currentView = 'context';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        const m = this.getContextMetrics();
+        this.statusMessage = `Context utilization: ${m.used}/${m.max} tokens (${this.contextSamples.length} sample(s)).`;
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -4019,6 +4149,10 @@ export class FleetTui {
       this.evidenceProvenanceDepth = this.evidenceProvenanceDepth === 0 ? 9 : 0;
       this.currentView = 'evidence';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        this.statusMessage = `Provenance depth set to ${this.evidenceProvenanceDepth}.`;
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -4027,6 +4161,13 @@ export class FleetTui {
       void this.refreshEvidenceInspection();
       this.currentView = 'evidence';
       this.focusedPane = 'main';
+      if (this.presentationMode === 'conversation') {
+        const cached = this.currentEvidenceInspection();
+        this.statusMessage = cached
+          ? `Evidence (${cached.inspection.executionId}): ${cached.why.complete ? 'VERIFIED' : 'INCOMPLETE'}`
+          : 'No execution evidence selected.';
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -4037,6 +4178,9 @@ export class FleetTui {
       const topic = (whyMatch[1] ?? '').toLowerCase();
       if (!topic) {
         this.statusMessage = 'Usage: why [model|worker|tool|candidate|prune|complete|incomplete|rollback]';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
         this.draw();
         return;
       }
@@ -4053,12 +4197,20 @@ export class FleetTui {
 
     if (trimmed === '/worktrees') {
       this.currentView = 'worktrees';
+      if (this.presentationMode === 'conversation') {
+        this.statusMessage = `Worktree isolation: ${this.useWorktrees ? 'enabled' : 'disabled'}.`;
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
 
-    if (trimmed === '/repaint') {
+    if (trimmed === '/repaint' || trimmed === '/clear') {
       this.screen.repaint();
+      if (this.presentationMode === 'conversation') {
+        this.statusMessage = 'Screen repainted.';
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
@@ -4066,19 +4218,27 @@ export class FleetTui {
     if (trimmed === '/clear-context') {
       await clearContext(this.engine).catch(() => {});
       this.statusMessage = 'Cleared all active context blocks';
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
 
     if (trimmed === '/doctor') {
-      this.statusMessage = 'System diagnostics healthy: control plane, workers, and runtimes online';
-      if (this.presentationMode === 'conversation') {
-        const readiness = this.engine.lifecycle?.getReadiness();
-        const modelsCount = this.engine.models?.list().length ?? 0;
-        const summary = readiness && readiness.readyCount === 0 && modelsCount === 0
-          ? `${this.statusMessage}\n${this.formatMissingModelRecovery(readiness)}`
-          : `${this.statusMessage} (${modelsCount} model(s) registered)`;
-        this.conversationRenderer.append(summary);
+      const readiness = this.engine.lifecycle?.getReadiness();
+      const modelsCount = this.engine.models?.list().length ?? 0;
+      const unhealthyRuntimes = (this.engine.discovered ?? []).filter((d) => d.health === 'unavailable');
+      if (readiness && readiness.readyCount === 0 && modelsCount === 0) {
+        this.statusMessage = `Diagnostics warning: 0 models registered (${unhealthyRuntimes.length} runtime(s) unavailable)`;
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`${this.statusMessage}\n${this.formatMissingModelRecovery(readiness)}`);
+        }
+      } else {
+        this.statusMessage = 'System diagnostics healthy: control plane, workers, and runtimes online';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`${this.statusMessage} (${modelsCount} model(s) registered)`);
+        }
       }
       this.draw();
       return;
@@ -4134,6 +4294,24 @@ export class FleetTui {
       return;
     }
 
+    if (trimmed === '/unpin') {
+      this.selectedModelId = undefined;
+      this.statusMessage = 'Cleared model pin — new tasks will be auto-routed by the scheduler again.';
+      if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
+      this.draw();
+      return;
+    }
+
+    if (trimmed === '/pin' || trimmed.startsWith('/pin ')) {
+      const pinArg = trimmed.slice(4).trim();
+      await this.submitCommand({
+        ...submission,
+        submissionId: `${submission.submissionId}-pin`,
+        text: pinArg ? `/model ${pinArg}` : '/model',
+      });
+      return;
+    }
+
     if (trimmed === '/model' || trimmed.startsWith('/model ')) {
       const arg = trimmed.slice(6).trim();
       const available = this.engine.models.list();
@@ -4167,28 +4345,26 @@ export class FleetTui {
       return;
     }
 
-    if (trimmed.startsWith('/block')) {
+    if (trimmed === '/block' || trimmed.startsWith('/block ')) {
       const parts = trimmed.split(/\s+/);
       const targetId = parts[1] ?? this.recentBlocks[0]?.id;
       if (targetId) {
         await this.expandBlock(targetId);
+      } else {
+        this.statusMessage = 'No command blocks recorded in this session yet.';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
+        this.draw();
       }
       return;
     }
 
-    if (trimmed.startsWith('/cancel')) {
-      // cancelJob()/cancelTask() throw for an invalid state transition (e.g. the job is
-      // already completed/failed) — submitCommand() is always invoked fire-and-forget
-      // (`void this.submitCommand(...)`), so an uncaught throw here is an unhandled
-      // promise rejection, which crashes the whole Node process by default, not just the
-      // TUI. Everything below is wrapped so a bad /cancel is a status message, not a crash.
+    if (trimmed === '/cancel' || trimmed.startsWith('/cancel ')) {
       try {
         const parts = trimmed.split(/\s+/);
         const arg = parts[1];
 
-        // A job id (e.g. one picked from the nav, possibly from a past session — /cancel
-        // previously only ever worked against `this.currentJob`, the job launched in
-        // *this* session, so cancelling an older/reloaded job did nothing at all).
         const argJob = arg ? this.engine.orchestrator.getJob(arg) : undefined;
         if (argJob) {
           await this.engine.orchestrator.cancelJob(argJob.id);
@@ -4197,7 +4373,6 @@ export class FleetTui {
           await this.engine.orchestrator.cancelTask(this.currentJob.id, arg);
           this.statusMessage = `Cancelled task ${arg}`;
         } else {
-          // No argument: cancel whatever's highlighted in the nav if it's a job.
           const all = this.getFlatNavItems();
           const selected = all[this.navSelectionIndex];
           if (selected?.category === 'JOBS') {
@@ -4216,11 +4391,14 @@ export class FleetTui {
       } catch (err) {
         this.statusMessage = `Could not cancel: ${err instanceof Error ? err.message : String(err)}`;
       }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
 
-    if (trimmed.startsWith('/compact')) {
+    if (trimmed === '/compact' || trimmed.startsWith('/compact ')) {
       try {
         const parts = trimmed.split(/\s+/);
         const targetExecId = parts[1] ?? this.selectedTaskId ?? this.currentJob?.tasks[0]?.id;
@@ -4251,12 +4429,23 @@ export class FleetTui {
       } catch (err) {
         this.statusMessage = `Compaction error: ${err instanceof Error ? err.message : String(err)}`;
       }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
       this.draw();
       return;
     }
 
-    if (trimmed.startsWith('/steer ')) {
-      const instruction = trimmed.slice(7).trim();
+    if (trimmed === '/steer' || trimmed.startsWith('/steer ')) {
+      const instruction = trimmed.slice(6).trim();
+      if (!instruction) {
+        this.statusMessage = 'Usage: /steer <instruction>';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(this.statusMessage);
+        }
+        this.draw();
+        return;
+      }
       const targetTaskId = this.selectedTaskId ?? this.getAgents()[this.highlightedIndex]?.taskId;
       if (this.currentJob && targetTaskId) {
         this.engine.orchestrator.steerTask(this.currentJob.id, targetTaskId, instruction);
@@ -4266,6 +4455,43 @@ export class FleetTui {
         this.statusMessage = `Injected fleet-wide steering: "${instruction}"`;
       } else {
         this.statusMessage = `Injected steering: "${instruction}"`;
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
+      return;
+    }
+
+    if (trimmed === '/retry' || trimmed.startsWith('/retry ')) {
+      const retryTask = trimmed.slice(6).trim() || this.currentError?.taskId || this.selectedTaskId;
+      this.currentError = undefined;
+      this.statusMessage = retryTask ? `Retrying task ${retryTask}...` : 'No failed task selected to retry.';
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
+      return;
+    }
+
+    // Reject unknown slash commands instead of dispatching them as AI coding prompts
+    if (trimmed.startsWith('/') && !trimmed.startsWith('/fanout ') && trimmed !== '/fanout') {
+      if (trimmed === '/fanout') {
+        this.statusMessage = 'Usage: /fanout <task 1>; <task 2>[; <task 3>...]';
+      } else {
+        const cmdToken = trimmed.split(/\s+/)[0];
+        this.statusMessage = `Unknown command '${cmdToken}'. Type /help for available commands.`;
+      }
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
+      }
+      this.draw();
+      return;
+    }
+    if (trimmed === '/fanout') {
+      this.statusMessage = 'Usage: /fanout <task 1>; <task 2>[; <task 3>...]';
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(this.statusMessage);
       }
       this.draw();
       return;
@@ -7340,41 +7566,6 @@ export class FleetTui {
         },
       };
     });
-
-    if (experiments.length === 0) {
-      experiments = [
-        {
-          id: 'exp-042',
-          domain: 'context_compaction',
-          state: 'QUALIFIED',
-          maturityLevel: 2,
-          hypothesis: 'Multi-layer prefix dedup minimizes token overhead by 22%',
-          baselineId: 'base-v1',
-          baselinePassRate: 0.90,
-          candidateCount: 4,
-          benchmarkProgress: { completed: 8, total: 8 },
-          objectives: [
-            { metric: 'tokens', direction: 'MINIMIZE' },
-            { metric: 'latency', direction: 'MINIMIZE' },
-          ],
-          canaryState: {
-            trafficFraction: 0.50,
-            stage: 2,
-            totalStages: 3,
-            status: 'HEALTHY',
-          },
-          causalEvidence: {
-            design: '2x2 factorial ablation',
-            beneficialMutations: ['stable_prefix_hash', 'stream_coalescing'],
-            neutralMutations: ['heuristic_token_estimator'],
-            harmfulMutations: [],
-          },
-          regressionGuardStatus: { passed: true, violationsCount: 0 },
-          decision: 'PROMOTED',
-          decisionReason: 'Non-dominated Pareto candidate, verified by canary evaluation',
-        },
-      ];
-    }
 
     const data: ImprovementViewData = {
       experiments,

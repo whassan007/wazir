@@ -157,7 +157,7 @@ WantedBy=${isRoot ? 'multi-user.target' : 'default.target'}
     <array>
         ${execPath.endsWith('.js') ? `<string>${process.execPath}</string>\n        <string>${execPath}</string>` : `<string>${execPath}</string>`}
         <string>${serviceType === 'api' ? 'api' : 'worker'}</string>
-        <string>start</string>
+        <string>start</string>${serviceType === 'api' && options.port ? `\n        <string>--port</string>\n        <string>${options.port}</string>` : ''}${serviceType !== 'api' && options.apiUrl ? `\n        <string>--api-url</string>\n        <string>${options.apiUrl}</string>` : ''}
     </array>
     <key>WorkingDirectory</key>
     <string>${this.baseConfigDir}</string>

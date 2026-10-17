@@ -552,7 +552,8 @@ export async function inspectExecution(engine: RookEngine, id: string, json: boo
     const all = await engine.executions.list();
     const fuzzy = all.find((r) => r.execution.id.includes(id));
     if (!fuzzy) {
-      return color.red(`execution '${id}' not found`);
+      process.exitCode = 1;
+      return json ? JSON.stringify({ error: `execution '${id}' not found` }, null, 2) : color.red(`execution '${id}' not found`);
     }
     record = fuzzy;
   }
@@ -684,7 +685,10 @@ export async function replayExecution(engine: RookEngine, id: string): Promise<s
   if (!record) {
     const all = await engine.executions.list();
     const fuzzy = all.find((r) => r.execution.id.includes(id));
-    if (!fuzzy) return color.red(`execution '${id}' not found`);
+    if (!fuzzy) {
+      process.exitCode = 1;
+      return color.red(`execution '${id}' not found`);
+    }
     record = fuzzy;
   }
   const events = await engine.executions.events(record.execution.id);
@@ -702,14 +706,17 @@ const BENCHMARK_PROMPT =
 async function runBenchmarkLegacy(engine: RookEngine, modelId?: string, prompt?: string): Promise<string> {
   const models = engine.models.list();
   if (models.length === 0) {
+    process.exitCode = 1;
     return color.yellow('no models registered — cannot benchmark');
   }
 
   const target = modelId ? models.find((m) => m.id === modelId) : models[0];
   if (!target) {
+    process.exitCode = 1;
     return color.red(`model '${modelId}' not found`);
   }
   if (modelId && target.id !== modelId) {
+    process.exitCode = 1;
     return color.red(`model '${modelId}' not found`);
   }
 
@@ -728,6 +735,7 @@ async function runBenchmarkLegacy(engine: RookEngine, modelId?: string, prompt?:
 
   const adapter = engine.adapters.get(target.provider) ?? engine.worker.adapterForModel(target.id);
   if (!adapter) {
+    process.exitCode = 1;
     return color.red(`no runtime can serve '${target.id}'`);
   }
 
@@ -758,6 +766,7 @@ async function runBenchmarkLegacy(engine: RookEngine, modelId?: string, prompt?:
   lines.push(`  output:      ${outputTokens} tokens`);
   lines.push(`  throughput:  ${tokensPerSecond(outputTokens, elapsedMs).toFixed(1)} tok/s`);
   if (error) {
+    process.exitCode = 1;
     lines.push(color.red(`  error: ${error}`));
   }
   lines.push('');
@@ -778,10 +787,13 @@ export async function runBenchmark(
     const runs = [];
     for (const modelId of modelIds) {
       const output = await runBenchmarkLegacy(engine, modelId);
-      runs.push({ modelId, passed: !/failed|error|no runtime/i.test(output), output });
+      runs.push({ modelId, passed: !/failed|error|no runtime|not found|cannot benchmark/i.test(output), output });
     }
+    const allPassed = runs.length > 0 && runs.every((r) => r.passed);
+    const exitCode = allPassed ? 0 : 1;
+    if (!allPassed) process.exitCode = 1;
     const report = { models: modelIds, runs };
-    return request.json ? { exitCode: 0, output: JSON.stringify(report) } : { exitCode: 0, output: JSON.stringify(report, null, 2) };
+    return request.json ? { exitCode, output: JSON.stringify(report) } : { exitCode, output: JSON.stringify(report, null, 2) };
   }
   return runBenchmarkLegacy(engine, request, prompt);
 }
@@ -931,7 +943,10 @@ export async function inspectJob(engine: RookEngine, id: string): Promise<string
   if (!job) {
     const all = engine.orchestrator.listJobs();
     const fuzzy = all.find((j) => j.id.includes(id));
-    if (!fuzzy) return color.red(`job '${id}' not found`);
+    if (!fuzzy) {
+      process.exitCode = 1;
+      return color.red(`job '${id}' not found`);
+    }
     job = fuzzy;
   }
 
@@ -973,7 +988,10 @@ export async function mergeJob(engine: RookEngine, id: string, targetBranch?: st
   if (!job) {
     const all = engine.orchestrator.listJobs();
     const fuzzy = all.find((j) => j.id.includes(id));
-    if (!fuzzy) return color.red(`job '${id}' not found`);
+    if (!fuzzy) {
+      process.exitCode = 1;
+      return color.red(`job '${id}' not found`);
+    }
     job = fuzzy;
   }
 
@@ -984,6 +1002,7 @@ export async function mergeJob(engine: RookEngine, id: string, targetBranch?: st
     if (res.success) {
       lines.push(color.green(`  ✓ Merged ${branch} -> ${res.targetBranch}`));
     } else {
+      process.exitCode = 1;
       lines.push(color.red(`  ✗ Failed to merge ${branch}: ${res.error ?? 'conflicts detected'}`));
       if (res.conflicts && res.conflicts.length > 0) {
         lines.push(color.yellow(`    Conflicting files: ${res.conflicts.join(', ')}`));
@@ -1013,14 +1032,14 @@ function formatAge(timestamp: Date): string {
 
 export async function listHistory(
   engine: RookEngine,
-  options?: { status?: string; commandContains?: string; json?: boolean },
+  options?: { status?: string; command?: string; commandContains?: string; json?: boolean },
 ): Promise<string> {
   const blocks = await listBlocks(engine, {
     status: options?.status as BlockStatus,
-    commandContains: options?.commandContains,
+    commandContains: options?.commandContains ?? options?.command,
   });
 
-  if (blocks.length === 0) return color.yellow('no history recorded yet');
+  if (blocks.length === 0) return options?.json ? '[]' : color.yellow('no history recorded yet');
 
   if (options?.json) {
     return JSON.stringify(blocks, null, 2);
@@ -1042,7 +1061,8 @@ export async function listHistory(
 export async function inspectHistory(engine: RookEngine, id: string, json?: boolean): Promise<string> {
   const block = await getBlock(engine, id);
   if (!block) {
-    return color.red(`history entry '${id}' not found`);
+    process.exitCode = 1;
+    return json ? JSON.stringify({ error: `history entry '${id}' not found` }, null, 2) : color.red(`history entry '${id}' not found`);
   }
 
   if (json) {
@@ -1473,6 +1493,7 @@ export async function listArtifacts(engine: RookEngine, options: ArtifactListOpt
 }
 
 function artifactNotFound(id: string, json?: boolean): string {
+  process.exitCode = 1;
   return json ? JSON.stringify({ error: `artifact not found: ${id}` }) : color.red(`artifact not found: ${id}`);
 }
 
@@ -2065,6 +2086,7 @@ export async function inspectRuntime(engine: RookEngine, id: string): Promise<vo
   const hostedAdapter = engine.hostedAdapters.get(id as any);
   const runtimeReg = engine.runtimes.get(id);
   if (!runtime && !hostedAdapter && !runtimeReg) {
+    process.exitCode = 1;
     console.error(color.red(`Runtime '${id}' not found.`));
     return;
   }
@@ -2381,6 +2403,7 @@ export async function checkpointCommand(
       `  Files Snapshot: ${Object.keys(chk.worktreeState.filesSnapshot).length} files`,
     ].join('\n');
   } catch (err) {
+    process.exitCode = 1;
     if (options?.json) {
       return JSON.stringify({ ok: false, error: String(err) }, null, 2);
     }
@@ -2407,6 +2430,7 @@ export async function forkCommand(
       `  Revision: R${res.workspaceRevision}`,
     ].join('\n');
   } catch (err) {
+    process.exitCode = 1;
     if (options?.json) {
       return JSON.stringify({ ok: false, error: String(err) }, null, 2);
     }
@@ -2432,6 +2456,7 @@ export async function rollbackCommand(
       `  Files Restored: ${res.filesRestored.length}`,
     ].join('\n');
   } catch (err) {
+    process.exitCode = 1;
     if (options?.json) {
       return JSON.stringify({ ok: false, error: String(err) }, null, 2);
     }
@@ -2612,11 +2637,15 @@ export async function improveInspectCommand(
   options?: { json?: boolean },
 ): Promise<string> {
   const optimizer = engine.optimizer;
-  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+  if (!optimizer) {
+    process.exitCode = 1;
+    return color.yellow('MetaOptimizerService is not configured on this engine.');
+  }
 
   const run = optimizer.getHistory().find((h) => h.experimentId === experimentId || h.runId === experimentId);
   if (!run) {
-    return color.red(`Experiment '${experimentId}' not found.`);
+    process.exitCode = 1;
+    return options?.json ? JSON.stringify({ error: `Experiment '${experimentId}' not found.` }, null, 2) : color.red(`Experiment '${experimentId}' not found.`);
   }
 
   if (options?.json) {
@@ -2712,8 +2741,15 @@ export async function improveExplainCommand(
   options?: { json?: boolean },
 ): Promise<string> {
   const optimizer = engine.optimizer;
-  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+  if (!optimizer) {
+    process.exitCode = 1;
+    return color.yellow('MetaOptimizerService is not configured on this engine.');
+  }
 
+  const run = optimizer.getHistory().find((h) => h.experimentId === experimentId || h.runId === experimentId);
+  if (!run) {
+    process.exitCode = 1;
+  }
   const explanation = optimizer.explainExperiment(experimentId);
   if (options?.json) {
     return JSON.stringify({ experimentId, explanation }, null, 2);
@@ -2727,10 +2763,14 @@ export async function improvePromoteCommand(
   options?: { force?: boolean; json?: boolean },
 ): Promise<string> {
   const optimizer = engine.optimizer;
-  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+  if (!optimizer) {
+    process.exitCode = 1;
+    return color.yellow('MetaOptimizerService is not configured on this engine.');
+  }
 
   const candidate = optimizer.getCandidate(candidateId);
   if (!candidate) {
+    if (!options?.json) process.exitCode = 1;
     const missing = {
       success: false,
       reason: `PROMOTION_DENIED: Persisted candidate '${candidateId}' not found.`,
@@ -2742,6 +2782,10 @@ export async function improvePromoteCommand(
     force: options?.force,
     operatorApproved: true,
   });
+
+  if (!res.success && !options?.json) {
+    process.exitCode = 1;
+  }
 
   if (options?.json) {
     return JSON.stringify(res, null, 2);
@@ -2756,15 +2800,24 @@ export async function improveRollbackCommand(
   options?: { json?: boolean },
 ): Promise<string> {
   const optimizer = engine.optimizer;
-  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
-
-  const restored = await optimizer.rollback(promotionId);
-
-  if (options?.json) {
-    return JSON.stringify({ ok: true, activeConfig: restored }, null, 2);
+  if (!optimizer) {
+    process.exitCode = 1;
+    return color.yellow('MetaOptimizerService is not configured on this engine.');
   }
 
-  return color.green(`✓ Rolled back active configuration to ${restored.id} (v${restored.version})`);
+  try {
+    const restored = await optimizer.rollback(promotionId);
+    if (options?.json) {
+      return JSON.stringify({ ok: true, activeConfig: restored }, null, 2);
+    }
+    return color.green(`✓ Rolled back active configuration to ${restored.id} (v${restored.version})`);
+  } catch (err) {
+    process.exitCode = 1;
+    if (options?.json) {
+      return JSON.stringify({ ok: false, error: String(err) }, null, 2);
+    }
+    return color.red(`✗ Rollback failed: ${String(err)}`);
+  }
 }
 
 export async function improveRunCommand(
@@ -2772,7 +2825,10 @@ export async function improveRunCommand(
   options?: { level?: string; json?: boolean; distributed?: boolean; runner?: any; offlinePolicy?: 'allow' | 'block' },
 ): Promise<string> {
   const optimizer = engine.optimizer;
-  if (!optimizer) return color.yellow('MetaOptimizerService is not configured on this engine.');
+  if (!optimizer) {
+    process.exitCode = 1;
+    return color.yellow('MetaOptimizerService is not configured on this engine.');
+  }
 
   const { runGitPreflight } = await import('@wazir/evaluation');
   const gitPreflight = await runGitPreflight(engine.projectRoot, {
@@ -2781,6 +2837,7 @@ export async function improveRunCommand(
   }).catch(() => undefined);
 
   if (gitPreflight && !gitPreflight.ok) {
+    process.exitCode = 1;
     if (options?.json) {
       return JSON.stringify(
         {
@@ -2944,6 +3001,7 @@ export async function canaryListCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
@@ -2990,6 +3048,7 @@ export async function canaryStatusCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
@@ -3030,12 +3089,14 @@ export async function canaryInspectCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
 
   const record = canaryService.getDeployment(canaryId);
   if (!record) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
     return color.red(`Canary deployment '${canaryId}' not found.`);
   }
@@ -3100,12 +3161,14 @@ export async function canaryCompareCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
 
   const record = canaryService.getDeployment(canaryId);
   if (!record) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
     return color.red(`Canary deployment '${canaryId}' not found.`);
   }
@@ -3181,8 +3244,15 @@ export async function canaryShadowCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
+  }
+  const record = canaryService.getDeployment(canaryId);
+  if (!record) {
+    process.exitCode = 1;
+    if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
+    return color.red(`Canary deployment '${canaryId}' not found.`);
   }
 
   let shadowResults: any[] = [];
@@ -3222,12 +3292,14 @@ export async function canaryRollbackCommand(
 ): Promise<string> {
   const canaryService = (engine.optimizer as any)?.getCanaryDeploymentService?.();
   if (!canaryService) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: 'CanaryDeploymentService is not configured on this engine.' });
     return color.yellow('CanaryDeploymentService is not configured on this engine.');
   }
 
   const record = canaryService.getDeployment(canaryId);
   if (!record) {
+    process.exitCode = 1;
     if (options?.json) return JSON.stringify({ error: `Canary deployment '${canaryId}' not found.` });
     return color.red(`Canary deployment '${canaryId}' not found.`);
   }

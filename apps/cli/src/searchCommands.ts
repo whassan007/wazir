@@ -115,6 +115,7 @@ export async function searchRunCommand(
 
     return lines.join('\n');
   } catch (err: any) {
+    process.exitCode = 1;
     if (jsonMode) {
       return JSON.stringify({ ok: false, error: String(err) }, null, 2);
     }
@@ -129,6 +130,7 @@ export function searchStatusCommand(
 ): string {
   const result = engine.solutionSearch.getSearch(searchId);
   if (!result) {
+    process.exitCode = 1;
     const err = { ok: false, error: `Search '${searchId}' not found` };
     return options.json ? JSON.stringify(err, null, 2) : color.red(`Search '${searchId}' not found`);
   }
@@ -154,6 +156,7 @@ export function searchCandidatesCommand(
 ): string {
   const result = engine.solutionSearch.getSearch(searchId);
   if (!result) {
+    process.exitCode = 1;
     const err = { ok: false, error: `Search '${searchId}' not found` };
     return options.json ? JSON.stringify(err, null, 2) : color.red(`Search '${searchId}' not found`);
   }
@@ -181,12 +184,14 @@ export function searchInspectCommand(
 ): string {
   const result = engine.solutionSearch.getSearch(searchId);
   if (!result) {
+    process.exitCode = 1;
     const err = { ok: false, error: `Search '${searchId}' not found` };
     return options.json ? JSON.stringify(err, null, 2) : color.red(`Search '${searchId}' not found`);
   }
 
   const candidate = result.candidates.find((c) => c.candidateId === candidateId);
   if (!candidate) {
+    process.exitCode = 1;
     const err = { ok: false, error: `Candidate '${candidateId}' not found in search '${searchId}'` };
     return options.json ? JSON.stringify(err, null, 2) : color.red(`Candidate '${candidateId}' not found`);
   }
@@ -228,18 +233,21 @@ export async function searchPromoteCommand(
 ): Promise<string> {
   const result = engine.solutionSearch.getSearch(searchId);
   if (!result) {
+    process.exitCode = 1;
     const err = { ok: false, error: `Search '${searchId}' not found` };
     return options.json ? JSON.stringify(err, null, 2) : color.red(`Search '${searchId}' not found`);
   }
 
   const candidate = result.candidates.find((c) => c.candidateId === candidateId);
   if (!candidate) {
+    process.exitCode = 1;
     const err = { ok: false, error: `Candidate '${candidateId}' not found in search '${searchId}'` };
     return options.json ? JSON.stringify(err, null, 2) : color.red(`Candidate '${candidateId}' not found`);
   }
 
   const checkpoint = engine.checkpoints.getCheckpoint(result.checkpointId);
   if (!checkpoint) {
+    process.exitCode = 1;
     const err = { ok: false, error: `Checkpoint '${result.checkpointId}' not found` };
     return options.json ? JSON.stringify(err, null, 2) : color.red(`Checkpoint '${result.checkpointId}' not found`);
   }
@@ -252,6 +260,10 @@ export async function searchPromoteCommand(
       checkpoint,
       projectRoot: engine.projectRoot,
     });
+
+    if (!promo.success) {
+      process.exitCode = 1;
+    }
 
     if (options.json) {
       return JSON.stringify(promo, null, 2);
@@ -272,6 +284,7 @@ export async function searchPromoteCommand(
       ].join('\n');
     }
   } catch (err: any) {
+    process.exitCode = 1;
     if (options.json) {
       return JSON.stringify({ ok: false, error: String(err) }, null, 2);
     }
@@ -285,6 +298,9 @@ export function searchCancelCommand(
   options: { json?: boolean } = {},
 ): string {
   const cancelled = engine.solutionSearch.cancelSearch(searchId);
+  if (!cancelled) {
+    process.exitCode = 1;
+  }
   if (options.json) {
     return JSON.stringify({ ok: cancelled, searchId }, null, 2);
   }

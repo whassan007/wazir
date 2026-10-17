@@ -146,9 +146,26 @@ computersCmd
 computersCmd
   .command('inspect')
   .argument('<id>', 'Computer ID')
+  .option('--json', 'Output in JSON format')
   .description('Inspect a specific computer')
-  .action((id) => {
-    console.log(chalk.green(`Computer: ${id}`));
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const computer = engine.computers.get(id);
+    if (!computer) {
+      console.error(chalk.red(`Computer '${id}' not found`));
+      process.exitCode = 1;
+      return;
+    }
+    if (options.json) {
+      console.log(JSON.stringify(computer, null, 2));
+      return;
+    }
+    console.log(chalk.bold(`Computer: ${computer.id}`));
+    console.log(`  Name:   ${computer.name}`);
+    console.log(`  Status: ${computer.status}`);
+    console.log(`  Type:   ${computer.type}`);
+    console.log(`  OS/Arch:${computer.os.platform}/${computer.os.architecture}`);
   });
 
 program.addCommand(computersCmd);
@@ -345,8 +362,13 @@ for (const operation of ['inspect', 'estimate', 'pin', 'unpin'] as const) {
       const { createEngine } = await import('./engine.js');
       const { lifecycleOptions, formatModelLoadPlan } = await import('./commands.js');
       const engine = await createEngine({ readOnlyLifecycle: true });
-      if (operation === 'inspect') console.log(JSON.stringify(engine.lifecycle.inspect(modelId), null, 2));
-      else if (operation === 'estimate') {
+      if (operation === 'inspect') {
+        const inspected = engine.lifecycle.inspect(modelId);
+        console.log(JSON.stringify(inspected, null, 2));
+        if ((inspected as { found?: boolean }).found === false || (!Array.isArray(inspected) && !(inspected as { instances?: unknown[] }).instances?.length && !engine.models.get(modelId))) {
+          process.exitCode = 1;
+        }
+      } else if (operation === 'estimate') {
         const plan = await engine.lifecycle.estimate(modelId, lifecycleOptions(options));
         console.log(options.json ? JSON.stringify(plan, null, 2) : formatModelLoadPlan(plan));
       } else {
@@ -431,9 +453,10 @@ program.addCommand(testCmd);
 program
   .command('status')
   .description('Show system status')
-  .action(async () => {
+  .option('-j, --json', 'Output status in JSON format')
+  .action(async (options) => {
     const { statusCommand } = await import('./status.js');
-    const result = await statusCommand();
+    const result = await statusCommand({ json: Boolean(options.json) });
     console.log(result.output);
     process.exit(result.code);
   });
@@ -513,10 +536,33 @@ taskCmd
 
 taskCmd
   .command('status')
-  .argument('<id>', 'Task ID')
+  .argument('<id>', 'Task or Execution ID')
+  .option('--json', 'Output in JSON format')
   .description('Show task status')
-  .action((id) => {
-    console.log(chalk.green(`Task ${id}: queued`));
+  .action(async (id, options) => {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ readOnlyLifecycle: true });
+    const record = await engine.executions.get(id);
+    if (record) {
+      const exec = record.execution;
+      if (options.json) {
+        console.log(JSON.stringify({ id: exec.id, taskId: exec.taskId, status: exec.status, modelId: exec.modelId, error: record.errors?.[0] }, null, 2));
+      } else {
+        console.log(`Task ${exec.id}: ${exec.status}`);
+      }
+      return;
+    }
+    const job = engine.orchestrator.getJob(id);
+    if (job) {
+      if (options.json) {
+        console.log(JSON.stringify({ id: job.id, status: job.status }, null, 2));
+      } else {
+        console.log(`Task ${job.id}: ${job.status}`);
+      }
+      return;
+    }
+    console.error(chalk.red(`Task '${id}' not found`));
+    process.exitCode = 1;
   });
 
 program.addCommand(taskCmd);
@@ -1531,11 +1577,12 @@ program.addCommand(searchCmd);
 // IMPROVE COMMAND (Empirical self-improvement system)
 // ======================================================================
 const exitImproveOk = (): void => {
+  const code = process.exitCode ?? 0;
   if (process.stdout.writableNeedDrain) {
-    process.stdout.once('drain', () => process.exit(0));
+    process.stdout.once('drain', () => process.exit(code));
     return;
   }
-  process.stdout.write('', () => process.exit(0));
+  process.stdout.write('', () => process.exit(code));
 };
 
 const improveCmd = new Command()
@@ -1846,6 +1893,7 @@ serviceCmd
     const sm = new ServiceManager();
     const result = await sm.install(options);
     console.log(result.message);
+    if (!result.success) process.exitCode = 1;
   });
 
 serviceCmd
@@ -1856,6 +1904,7 @@ serviceCmd
     const sm = new ServiceManager();
     const result = await sm.start(name);
     console.log(result.message);
+    if (!result.success) process.exitCode = 1;
   });
 
 serviceCmd
@@ -1866,6 +1915,7 @@ serviceCmd
     const sm = new ServiceManager();
     const result = await sm.stop(name);
     console.log(result.message);
+    if (!result.success) process.exitCode = 1;
   });
 
 serviceCmd
@@ -1876,6 +1926,7 @@ serviceCmd
     const sm = new ServiceManager();
     const result = await sm.restart(name);
     console.log(result.message);
+    if (!result.success) process.exitCode = 1;
   });
 
 serviceCmd
@@ -1907,6 +1958,7 @@ serviceCmd
     const sm = new ServiceManager();
     const result = await sm.uninstall(name);
     console.log(result.message);
+    if (!result.success) process.exitCode = 1;
   });
 
 program.addCommand(serviceCmd);

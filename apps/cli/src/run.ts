@@ -614,6 +614,23 @@ export async function executeTask(
           agentCapabilities: agent.descriptor.capabilities,
           agentId: agent.descriptor.name,
           checkpoint: async () => { await engine.executions.recordToolStart(executionId, name, input, { callId, sideEffectClass: engine.tools.get(name)?.descriptor.sideEffectClass }); },
+          authorizeTool: async (subToolName, subInput, subCtx) => {
+            const subDecision = await engine.policy.authorize({
+              tool: subToolName,
+              input: subInput,
+              executionId,
+              projectRoot: subCtx.projectRoot,
+            });
+            await engine.executions.recordPolicy(executionId, subDecision);
+            if (subDecision.decision !== 'allow') {
+              return {
+                allowed: false,
+                error: `POLICY_DENIED: policy ${subDecision.decision} (${subDecision.rule}): ${subDecision.reasons.join('; ')}`,
+                failureClass: 'POLICY_DENIED',
+              };
+            }
+            return { allowed: true };
+          },
           projectRoot: engine.projectRoot,
           executionId,
           networkAllowed: engine.config.networkAllowed && task.policy?.networkAccess !== false,

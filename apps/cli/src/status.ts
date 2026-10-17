@@ -1,5 +1,6 @@
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
+import { getBuildInfo } from './version.js';
 
 export interface StatusSummary {
   version: string;
@@ -47,9 +48,14 @@ export function getStatus(engine: RookEngine): StatusSummary {
       discoveredModels.add(model.id);
     }
   }
+
+  const rawExecs = engine.executions?.list?.();
+  const allExecs = Array.isArray(rawExecs) ? rawExecs : [];
+  const activeCount = allExecs.filter((r) => r.execution.status === 'running').length;
+  const queuedCount = allExecs.filter((r) => r.execution.status === 'queued').length;
   
   return {
-    version: '0.1.2',
+    version: getBuildInfo().version,
     configDir: engine.configDir,
     projectRoot: engine.projectRoot,
     computers: {
@@ -75,19 +81,23 @@ export function getStatus(engine: RookEngine): StatusSummary {
       modelsDiscovered: engine.worker.info.models.length,
     },
     executions: {
-      active: 0,
-      queued: 0,
+      active: activeCount,
+      queued: queuedCount,
     },
   };
 }
 
-export function statusCommand(): Promise<{ code: number; output: string }> {
+export function statusCommand(options?: { json?: boolean }): Promise<{ code: number; output: string }> {
   return new Promise(async (resolve) => {
     try {
-      const { createEngine } = require('./engine.js');
-      const engine = await createEngine();
+      const { createEngine } = await import('./engine.js');
+      const engine = await createEngine({ quiet: Boolean(options?.json) });
       
       const status = getStatus(engine);
+      if (options?.json) {
+        resolve({ code: 0, output: JSON.stringify(status, null, 2) });
+        return;
+      }
       
       const lines: string[] = [];
       
@@ -138,8 +148,8 @@ export function statusCommand(): Promise<{ code: number; output: string }> {
       lines.push(color.bold('Agents'));
       const registeredAgents = engine.agents.list().length;
       lines.push(`  registered: ${registeredAgents}`);
-      lines.push(`  active:     0`);
-      lines.push(`  slots:      ${engine.config?.concurrencyLimit ?? 4}`);
+      lines.push(`  active:     ${status.executions.active}`);
+      lines.push(`  slots:      ${(engine.config as { concurrencyLimit?: number } | undefined)?.concurrencyLimit ?? 4}`);
 
       lines.push('');
       lines.push(color.bold('Models'));
