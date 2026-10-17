@@ -1,3 +1,29 @@
+# Wazir Release Notes - v0.2.7
+
+**Release**: `v0.2.7`
+**Theme**: Policy-Governed NVIDIA Native Provider, Modern Mission Control TUI, and Shared Resource Quota Hardening
+
+`v0.2.7` delivers a first-class, policy-governed NVIDIA hosted execution provider (`nvidia/nemotron-3.5-super-vl-120b-a12b`), the modernized Wazir Mission Control terminal interface for `wa fleet` (preserving inline Codex-style chat in `wa chat`), shared resource quota routing hardening, and distributed worker lease fencing.
+
+## Highlights
+
+- **Policy-Governed NVIDIA Hosted Provider (`@wazir/runtimes-nvidia`, `@wazir/core`, `@wazir/cli`)**:
+  - Native support for `nvidia/nemotron-3.5-super-vl-120b-a12b` on `https://integrate.api.nvidia.com/v1` via `NVIDIA_API_KEY` or `wa auth login nvidia`.
+  - Multimodal vision input (`image_url`), structured JSON schema output (`response_format`), SSE streaming, cancellation, and tool-call execution.
+  - Strict local-first policy enforcement (`LOCAL_ONLY`, `LOCAL_FIRST`, `CLOUD_ALLOWED`, `HOSTED_PREFERRED`, `PROVIDER_PINNED`) that never falls back to hosted cloud inference without explicit policy permission, and explainable placement decisions that clearly separate NVIDIA API Catalog cloud execution from local DGX Spark worker execution.
+  - Honest cost accounting (`ACTUAL`, `ESTIMATED`, `UNKNOWN`) in the SQLite resource ledger and `wa resources`.
+- **Modern Mission Control TUI (`@wazir/cli`)**:
+  - 6-state model readiness classification in `wa fleet` (`LOCAL · GPU LOADED`, `LOCAL · UNLOADED`, `HOSTED · READY`, `HOSTED · UNAVAILABLE`, `PROVIDER-ONLY ROUTING`, `AVAILABILITY UNKNOWN`) so hosted NVIDIA models are ready without requiring local GPU residency.
+  - Execution inspector with explicit separation of model completion claims from deterministic verification evidence (`MODEL CLAIM != EXECUTION EVIDENCE`), interactive `/filter <query>`, and responsive narrow/wide terminal layouts while keeping `wa chat` in inline Codex-style conversation mode.
+- **Shared Quota Routing & Lease Fencing (`@wazir/core`, `@wazir/api`)**:
+  - Shared quota group accounting and routing in `BudgetManager` and `ResourceRouter`, plus stale lease fencing and retry deduplication in `@wazir/api`.
+
+## Validation
+
+Verified across the NVIDIA adapter, NVIDIA provider system, Mission Control TUI, fleet TUI, resource ledger/router, and durable dispatch test suites, plus `npm run build`, `npm run check-dist`, `npm run package:check`, and `npm run release:verify`.
+
+---
+
 # Wazir Release Notes - v0.2.5
 
 **Release**: `v0.2.5`

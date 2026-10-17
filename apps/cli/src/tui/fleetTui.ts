@@ -2688,7 +2688,9 @@ export class FleetTui {
           ? 'Showing expanded approval details'
           : 'Showing standard approval view';
         if (this.presentationMode === 'conversation') {
-          this.conversationRenderer.append(`Approval request (${first.id}): tool=${first.tool} rule=${first.decision.rule} reasons=${first.decision.reasons.join('; ')}`);
+          const rule = first.rule ?? (first as any).decision?.rule ?? 'policy';
+          const reasons = first.reasons ?? (first as any).decision?.reasons ?? [];
+          this.conversationRenderer.append(`Approval request (${first.id}): tool=${first.tool} rule=${rule} reasons=${reasons.join('; ')}`);
         }
         this.draw();
         return;

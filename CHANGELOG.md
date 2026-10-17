@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.7 — 2026-10-17
+
+**Release**: `v0.2.7`
+**Theme**: Policy-Governed NVIDIA Native Provider, Modern Mission Control TUI, and Shared Resource Quota Hardening
+
+- **First-Class Policy-Governed NVIDIA Provider (`@wazir/runtimes-nvidia`, `@wazir/core`, `@wazir/cli`)**:
+  - Integrated `nvidia/nemotron-3.5-super-vl-120b-a12b` as the primary curated and default NVIDIA API Catalog model (`https://integrate.api.nvidia.com/v1`) with explicit registration when dynamic `/v1/models` discovery is unavailable.
+  - Added multimodal vision input serialization (`image_url` data URLs and HTTPS URLs), JSON schema `response_format` structured output support, streaming tool-call argument assembly, and AbortSignal cancellation.
+  - Enforced policy-governed hosted inference (`LOCAL_ONLY`, `LOCAL_FIRST`, `CLOUD_ALLOWED`, `HOSTED_PREFERRED`, `PROVIDER_PINNED`) with zero unauthorized cloud fallback when local runtimes are offline.
+  - Added explainable placement metadata (`placementKind: 'hosted-cloud' | 'local-device'`, `providerType`, `endpoint`, `credentialSource`, `policyBasis`, `fallbackUsed`) distinguishing NVIDIA API Catalog cloud execution from local DGX Spark worker execution.
+  - Added explicit cost accounting (`ACTUAL` | `ESTIMATED` | `UNKNOWN`) in the resource ledger and `wa resources` so unpriced hosted models never fabricate `$0.00` bills.
+- **Modern Mission Control Terminal Interface (`@wazir/cli`)**:
+  - Upgraded `wa fleet` and `wa chat --dashboard` Mission Control with 6-state model readiness classification (`LOCAL · GPU LOADED`, `LOCAL · UNLOADED`, `HOSTED · READY`, `HOSTED · UNAVAILABLE`, `PROVIDER-ONLY ROUTING`, `AVAILABILITY UNKNOWN`), live execution inspector separating model claims from verification evidence, `/filter <query>`, and responsive narrow/medium/wide layouts while keeping `wa chat` in inline Codex-style conversation mode.
+- **Resource Quota & Distributed Lease Hardening (`@wazir/core`, `@wazir/api`)**:
+  - Hardened shared quota group routing and budget accounting across accounts and fenced stale distributed worker lease results with retry deduplication.
+
 ## v0.2.5 — 2026-10-17
 
 **Release**: `v0.2.5`
