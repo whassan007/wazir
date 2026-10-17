@@ -27,9 +27,8 @@ describe.each([['LM Studio', () => new LMStudioAdapter()], ['Ollama', () => new 
     vi.stubGlobal('fetch', fetch);
     const events = await collect(create());
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('error');
-    expect(events[0].retryExhausted).toBe(false);
+    expect(events.filter(e => e.type !== 'attempt_started')).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: 'error', retryExhausted: false });
   });
 
   it('allows cancellation between retry intent and the next request', async () => {
@@ -37,9 +36,10 @@ describe.each([['LM Studio', () => new LMStudioAdapter()], ['Ollama', () => new 
     vi.stubGlobal('fetch', fetch);
     const adapter = create();
     const iterator = adapter.generate(request)[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toMatchObject({ type: 'attempt_started', attempt: 1 });
     expect((await iterator.next()).value).toMatchObject({ type: 'retry', failureClass: 'RATE_LIMIT' });
     await adapter.cancel(request.requestId);
-    expect((await iterator.next()).value).toMatchObject({ type: 'error', error: 'cancelled' });
+    expect((await iterator.next()).value).toMatchObject({ type: 'error', failureClass: 'CANCELLED', error: 'GENERATION_CANCELLED' });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

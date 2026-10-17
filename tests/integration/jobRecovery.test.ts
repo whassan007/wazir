@@ -178,7 +178,13 @@ describe('Section 10: Job-Level Restart & Recovery mid-execution', () => {
     expect(recoveredExec?.execution.createdAt).toBeInstanceOf(Date);
     expect(recoveredExec?.execution.startedAt).toBeInstanceOf(Date);
 
-    // 9. Job Completion from recovered state
+    // 9. Retry the orphaned task through the supported failed -> pending -> running
+    // transitions before completing it. Recovery marks interrupted work failed;
+    // completion must never resurrect it directly.
+    await jobManager2.updateTaskStatus(job1.id, 'step-1', 'pending');
+    await jobManager2.updateAgentState(job1.id, 'step-1', 'idle');
+    await jobManager2.updateTaskStatus(job1.id, 'step-1', 'running');
+    await jobManager2.updateAgentState(job1.id, 'step-1', 'running');
     await jobManager2.updateTaskStatus(job1.id, 'step-1', 'completed');
     await jobManager2.updateAgentState(job1.id, 'step-1', 'completed', 'step-1 result');
     await jobManager2.updateTaskStatus(job1.id, 'step-2', 'completed');

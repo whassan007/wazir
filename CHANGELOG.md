@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.8 — 2026-10-17
+
+**Release**: `v0.2.8`
+**Theme**: Persistent, Verified Automatic Updates and Recovery Test Corrections
+
+- Added opt-in five-minute update checks with native per-user scheduling, signed-source checksum verification, safe staging, supported installation adapters, rollback, history, and CLI/TUI controls.
+- Corrected recovery, scheduling, retry, and cancellation tests to match the current status-transition and generation-event contracts.
+
 ## v0.2.7 — 2026-10-17
 
 **Release**: `v0.2.7`

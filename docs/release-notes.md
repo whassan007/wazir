@@ -1,3 +1,18 @@
+# Wazir Release Notes - v0.2.8
+
+**Release**: `v0.2.8`
+**Theme**: Persistent, Verified Automatic Updates
+
+`v0.2.8` adds an opt-in five-minute update service with per-user platform scheduling, verified official release artifacts, safe staging and rollback paths, persistent history, and CLI/TUI management. Update paths that lack a safe installation adapter continue to request the package manager or operator.
+
+## Highlights
+
+- **Automatic Updates**: Manage the native scheduler and update lifecycle with `wa update status|check|now|enable|disable|history|rollback|config`.
+- **Safe Activation**: Verify release checksums before staging, defer activation while local Wazir sessions run, and validate or roll back supported npm and standalone installations.
+- **Recovery and Diagnostics**: Persist update journals, retry backoff, and update history under `WAZIR_HOME`.
+
+---
+
 # Wazir Release Notes - v0.2.7
 
 **Release**: `v0.2.7`

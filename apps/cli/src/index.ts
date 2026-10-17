@@ -17,7 +17,7 @@ import { installGlobalCrashHandlers } from './crashHandler.js';
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.7';
+const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.8';
 
 const program = new Command();
 
