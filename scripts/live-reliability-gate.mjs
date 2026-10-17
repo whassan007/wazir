@@ -258,8 +258,8 @@ async function main() {
     const checks = [];
 
     // 1a. Vitest systemic detectors suite
-    const vitestBin = path.join(ROOT, 'node_modules/.bin/vitest');
-    const { stdout: vOut } = await execFileAsync(vitestBin, ['run', 'tests/live/liveReliability.test.ts'], {
+    const vitestEntry = path.join(ROOT, 'node_modules/vitest/vitest.mjs');
+    const { stdout: vOut } = await execFileAsync(process.execPath, [vitestEntry, 'run', 'tests/live/liveReliability.test.ts'], {
       cwd: ROOT,
       timeout: 90_000,
     });
