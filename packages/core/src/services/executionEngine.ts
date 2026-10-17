@@ -1206,6 +1206,10 @@ export class ExecutionEngine {
     return this.isProcessAlive(owner.pid);
   }
 
+  async persistRecord(record: ExecutionRecord): Promise<void> {
+    await this.flush(record);
+  }
+
   private async flush(record: ExecutionRecord): Promise<void> {
     if (this.persistenceFailure) throw this.persistenceFailure;
     // Every write claims the execution for this process (e.g. a retry resuming it).

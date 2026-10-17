@@ -367,6 +367,25 @@ export class JobManager {
 
   async resume(jobId: string): Promise<void> {
     const job = this.require(jobId);
+    if (this.store && !this.claims.has(jobId)) {
+      const updated = await this.store.update!<Job>(`job/${jobId}`, current => {
+        if (!current) throw new Error('JOB_NOT_FOUND');
+        if (current.status !== 'paused') {
+          throw new Error(`Cannot resume job in status '${current.status}'`);
+        }
+        const next = structuredClone(current);
+        next.status = 'ready';
+        next.revision = (current.revision ?? 0) + 1;
+        for (const task of next.tasks) {
+          if (task.status === 'blocked' && this.dependenciesSatisfied(next, task.id)) {
+            task.status = 'pending';
+          }
+        }
+        return next;
+      });
+      this.jobs.set(jobId, updated);
+      return;
+    }
     if (job.status !== 'paused') {
       throw new Error(`Cannot resume job in status '${job.status}'`);
     }

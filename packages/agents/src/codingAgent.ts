@@ -1752,17 +1752,17 @@ export class CodingAgent implements AgentAdapter {
         const fullPath = path.resolve(request.projectRoot, artifact);
         if (existsSync(fullPath)) continue;
 
-        // The exact relative path doesn't exist, but the agent may have
-        // legitimately placed the file elsewhere in the project (e.g. under
-        // src/). Fall back to matching by basename against files it actually
-        // touched before declaring this a real failure.
-        const basename = path.basename(artifact);
-        const matches = [...filesChangedSet].filter(
-          (changed) => path.basename(changed) === basename,
-        );
-        if (matches.length === 0) {
-          failures.push(`Expected artifact '${artifact}' was not created.`);
+        // Only allow basename fallback when `artifact` was specified as a bare filename
+        // without directory components (e.g., 'main.cpp'). When an explicit relative directory
+        // path like 'src/auth.ts' was requested, the file must exist at that path.
+        if (!artifact.includes('/') && !artifact.includes('\\')) {
+          const basename = path.basename(artifact);
+          const matches = [...filesChangedSet].filter(
+            (changed) => path.basename(changed) === basename && existsSync(path.resolve(request.projectRoot, changed)),
+          );
+          if (matches.length > 0) continue;
         }
+        failures.push(`Expected artifact '${artifact}' was not created.`);
       }
     }
 
@@ -1775,7 +1775,12 @@ export class CodingAgent implements AgentAdapter {
       if (request.isCancelled?.()) return;
       const result = await runtime.executeTool(check, {});
       const output = result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n');
-      if (output && /missing script|no such file|not found/i.test(output) && !result.ok) {
+      const isUnconfiguredCheck =
+        !result.ok &&
+        output &&
+        (/(?:missing script|no package\.json|no test specified|no .* script configured|command not found.*(?:npm|pnpm|yarn|pytest|cargo|go|tsc|eslint))/i.test(output) ||
+          (/ENOENT/i.test(output) && /package\.json/i.test(output)));
+      if (isUnconfiguredCheck) {
         // project does not define this check — not applicable, not a failure
         continue;
       }

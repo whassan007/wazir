@@ -1286,11 +1286,29 @@ export class PolicyEngine {
       const execFlag = execFlags.find((f) => flagMatches(arg, f));
       if (execFlag) {
         if (name === 'find' && args[i + 1]) {
-          // `find -exec <cmd>` is as safe as <cmd> itself; the rest of the -exec
-          // clause is that command's own arguments.
-          decisions.push(this.classifyCommandName(basename(args[i + 1])));
-          const end = args.indexOf(';', i + 1);
-          i = end === -1 ? args.length : end;
+          // `find -exec <cmd> ... (; | +)` is as safe as <cmd> and its own arguments;
+          // find the matching `;` or `+` terminator so subsequent find predicates (like `-delete`)
+          // are not skipped when `+` is used.
+          const subCmd = basename(args[i + 1]);
+          let end = -1;
+          for (let j = i + 2; j < args.length; j++) {
+            if (args[j] === ';' || args[j] === '\\;' || args[j] === '+') {
+              end = j;
+              break;
+            }
+          }
+
+          const subArgs = (end === -1 ? args.slice(i + 2) : args.slice(i + 2, end)).filter((a) => a !== '{}');
+          const cmdDecision = this.classifyCommandName(subCmd);
+          decisions.push(cmdDecision);
+          if (cmdDecision.decision === 'allow') {
+            decisions.push(...this.classifySafeCommandArgs(subCmd, subArgs, projectRoot, executionId));
+          }
+          if (end === -1) {
+            i = args.length;
+          } else {
+            i = end;
+          }
           continue;
         }
         decisions.push({ decision: 'deny', rule: 'shell-dangerous-deny', reasons: [`'${name} ${execFlag}' executes an arbitrary program under a read-only command; denied`] });

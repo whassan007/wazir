@@ -152,7 +152,7 @@ export class StepAgent implements AgentAdapter {
     };
 
     const toolNames = new Set(runtime.tools.map((t) => t.name));
-    const readAction = (raw: string) => normalizeAction(parseAction(raw), toolNames);
+    const readAction = (raw: string) => normalizeAction(parseAction(raw, toolNames), toolNames);
 
     yield { kind: 'phase', phase: 'implement' as AgentPhase };
 

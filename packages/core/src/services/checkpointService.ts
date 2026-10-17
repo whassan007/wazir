@@ -144,6 +144,7 @@ export class CheckpointService {
       filesCount: Object.keys(filesSnapshot).length,
       description: options.description,
     });
+    await this.executionEngine.persistRecord?.(record);
 
     return checkpoint;
   }
@@ -235,6 +236,8 @@ export class CheckpointService {
       branch: worktreeInfo.branch,
       worktreeDir: worktreeInfo.worktreeDir,
     });
+    await this.executionEngine.persistRecord?.(parentRecord);
+    await this.executionEngine.persistRecord?.(forkedRecord);
 
     await injectFault('DURING_FORK', { checkpointId, parentExecutionId: parentRecord.execution.id, forkedExecutionId: forkedRecord.execution.id, worktreeDir: worktreeInfo.worktreeDir });
 
@@ -275,6 +278,7 @@ export class CheckpointService {
         checkpointId,
         reason: `Checkpoint '${checkpointId}' not found`,
       });
+      await this.executionEngine.persistRecord?.(record);
       throw new Error(`Checkpoint '${checkpointId}' not found`);
     }
 
@@ -285,6 +289,7 @@ export class CheckpointService {
         checkpointId,
         reason: `Checkpoint '${checkpointId}' belongs to execution '${checkpoint.executionId}', not '${executionId}'`,
       });
+      await this.executionEngine.persistRecord?.(record);
       throw new Error(
         `Invalid rollback target: checkpoint '${checkpointId}' does not belong to execution '${executionId}'`,
       );
@@ -358,6 +363,7 @@ export class CheckpointService {
       irreversibleSideEffectsCount: irreversibleSideEffects.length,
       irreversibleSideEffects,
     });
+    await this.executionEngine.persistRecord?.(record);
 
     await injectFault('DURING_ROLLBACK', { executionId, checkpointId, restoredRevision: checkpoint.workspaceRevision });
 

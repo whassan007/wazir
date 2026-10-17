@@ -72,12 +72,14 @@ async function withFileLock<T>(lockFile: string, fn: () => Promise<T>): Promise<
       if (code !== 'EEXIST' && !windowsLockContention) throw error;
       const staleSince = await fs.stat(lockFile).then((s) => s.mtimeMs).catch(() => undefined);
       const old = staleSince !== undefined && Date.now() - staleSince > LOCK_STALE_AFTER_MS;
-      blockedBy = old ? await liveForeignHolder(lockFile) : undefined;
-      if (old && blockedBy === undefined) {
-        // Steal the stale lock with an atomic rename rather than unlink: if
-        // two waiters both observe the same stale lock, only one rename can
-        // succeed, so only one of them proceeds to re-acquire — a bare
-        // `unlink` let both clear it and both win `open('wx')` back to back.
+      blockedBy = await liveForeignHolder(lockFile);
+      // If the lock file has been completely written (contains a newline) and the holder PID
+      // is no longer alive (e.g. killed via SIGKILL), or the lock is older than LOCK_STALE_AFTER_MS
+      // with no live holder, reclaim it immediately via atomic rename so restarting controllers
+      // do not hang for 30s on their predecessor's dead lock.
+      const lockContent = blockedBy === undefined ? await fs.readFile(lockFile, 'utf8').catch(() => '') : '';
+      const deadHolderReady = blockedBy === undefined && (old || lockContent.includes('\n'));
+      if (deadHolderReady) {
         const stolen = `${lockFile}.stale.${process.pid}.${Date.now()}`;
         const won = await fs.rename(lockFile, stolen).then(() => true).catch(() => false);
         if (won) {
