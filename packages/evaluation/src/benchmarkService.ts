@@ -312,6 +312,8 @@ export class BenchmarkService {
     let totalWallTimeMs = 0;
     let totalModelCalls = 0;
     let totalToolCalls = 0;
+    let totalToolFailures = 0;
+    let totalMalformedActions = 0;
     let totalTokens = 0;
     let totalCostUsd = 0;
     let totalRepairCycles = 0;
@@ -321,6 +323,8 @@ export class BenchmarkService {
       totalWallTimeMs += m.totalWallTimeMs;
       totalModelCalls += m.totalModelCalls;
       totalToolCalls += m.totalToolCalls;
+      totalToolFailures += m.toolFailures ?? 0;
+      totalMalformedActions += m.malformedActions ?? 0;
       totalTokens += m.inputTokens + m.outputTokens;
       totalCostUsd += m.costEstimateUsd;
       totalRepairCycles += m.repairCycles;
@@ -330,6 +334,8 @@ export class BenchmarkService {
       totalWallTimeMs,
       totalModelCalls,
       totalToolCalls,
+      totalToolFailures,
+      totalMalformedActions,
       totalTokens,
       totalCostUsd: Number(totalCostUsd.toFixed(6)),
       averageRepairCycles: tasks.length > 0 ? totalRepairCycles / tasks.length : 0,
@@ -342,6 +348,7 @@ export class BenchmarkService {
       `Tasks: ${passedTasks}/${results.length} passed (${failedTasks} failed)`,
       `Total Tokens: ${totalTokens} | Total Cost: $${totalCostUsd.toFixed(4)}`,
       `Total Wall Time: ${totalWallTimeMs}ms | Avg Repair Cycles: ${aggregateMetrics.averageRepairCycles.toFixed(2)}`,
+      `Tool Failures: ${totalToolFailures} | Malformed Actions: ${totalMalformedActions}`,
     ].join('\n');
 
     return {

@@ -79,14 +79,28 @@ export function extractMetricValueSafe(
       return suite.aggregateMetrics?.totalCostUsd ??
         (suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.costEstimateUsd ?? 0), 0) / (suite.results.length || 1));
 
-    case 'tool_failures':
-    case 'tool_failure_rate': {
-      const totalTools = suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.totalToolCalls || 0), 0);
-      return totalTools > 0 ? 0.05 : 0;
+    case 'tool_failures': {
+      if (typeof suite.aggregateMetrics?.totalToolFailures === 'number') {
+        return suite.aggregateMetrics.totalToolFailures;
+      }
+      return suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.toolFailures ?? (r.scoreReport?.metrics?.rawMetrics?.toolFailures as number) ?? 0), 0);
     }
 
-    case 'malformed_actions':
-      return 0;
+    case 'tool_failure_rate': {
+      const totalTools = suite.aggregateMetrics?.totalToolCalls ??
+        suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.totalToolCalls || 0), 0);
+      const failures = typeof suite.aggregateMetrics?.totalToolFailures === 'number'
+        ? suite.aggregateMetrics.totalToolFailures
+        : suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.toolFailures ?? (r.scoreReport?.metrics?.rawMetrics?.toolFailures as number) ?? 0), 0);
+      return totalTools > 0 ? failures / totalTools : 0;
+    }
+
+    case 'malformed_actions': {
+      if (typeof suite.aggregateMetrics?.totalMalformedActions === 'number') {
+        return suite.aggregateMetrics.totalMalformedActions;
+      }
+      return suite.results.reduce((sum, r) => sum + (r.scoreReport?.metrics?.malformedActions ?? (r.scoreReport?.metrics?.rawMetrics?.malformedActions as number) ?? 0), 0);
+    }
 
     default: {
       // UNKNOWN metrics handling (Requirement 13)

@@ -71,6 +71,12 @@ export class EvaluationService {
       (sum, call) => sum + (call.durationMs || 0),
       0,
     );
+    const toolFailures = (record.toolCalls ?? []).filter(
+      (tc) => !tc.ok || (tc.exitCode !== undefined && tc.exitCode !== 0) || Boolean(tc.error),
+    ).length;
+
+    // 5b. Extract malformed actions
+    const malformedActions = this.extractMalformedActions(record);
 
     // 6. Extract repair cycles
     const repairCycles = this.extractRepairCycles(record);
@@ -107,6 +113,8 @@ export class EvaluationService {
       physicalVerificationSuccess,
       totalModelCalls,
       totalToolCalls,
+      toolFailures,
+      malformedActions,
       repairCycles,
       inputTokens,
       outputTokens,
@@ -121,6 +129,8 @@ export class EvaluationService {
         filesChangedCount: record.filesChanged?.length ?? 0,
         checksCount: record.checks?.length ?? 0,
         errorsCount: record.errors?.length ?? 0,
+        toolFailures,
+        malformedActions,
       },
     };
 
@@ -184,6 +194,8 @@ export class EvaluationService {
       toolLatencyDeltaMs: c.toolLatencyMs - b.toolLatencyMs,
       totalModelCallsDelta: c.totalModelCalls - b.totalModelCalls,
       totalToolCallsDelta: c.totalToolCalls - b.totalToolCalls,
+      toolFailuresDelta: (c.toolFailures ?? 0) - (b.toolFailures ?? 0),
+      malformedActionsDelta: (c.malformedActions ?? 0) - (b.malformedActions ?? 0),
       repairCyclesDelta: c.repairCycles - b.repairCycles,
       inputTokensDelta: c.inputTokens - b.inputTokens,
       outputTokensDelta: c.outputTokens - b.outputTokens,
@@ -219,6 +231,18 @@ export class EvaluationService {
       regressions.push(`Candidate made ${deltas.totalToolCallsDelta} more tool calls (${c.totalToolCalls} vs ${b.totalToolCalls}).`);
     } else if (deltas.totalToolCallsDelta < -2) {
       improvements.push(`Candidate reduced tool calls by ${Math.abs(deltas.totalToolCallsDelta)} (${c.totalToolCalls} vs ${b.totalToolCalls}).`);
+    }
+
+    if ((deltas.toolFailuresDelta ?? 0) > 0) {
+      regressions.push(`Candidate incurred ${deltas.toolFailuresDelta} more tool failures (${c.toolFailures ?? 0} vs ${b.toolFailures ?? 0}).`);
+    } else if ((deltas.toolFailuresDelta ?? 0) < 0) {
+      improvements.push(`Candidate reduced tool failures by ${Math.abs(deltas.toolFailuresDelta!)} (${c.toolFailures ?? 0} vs ${b.toolFailures ?? 0}).`);
+    }
+
+    if ((deltas.malformedActionsDelta ?? 0) > 0) {
+      regressions.push(`Candidate incurred ${deltas.malformedActionsDelta} more malformed actions (${c.malformedActions ?? 0} vs ${b.malformedActions ?? 0}).`);
+    } else if ((deltas.malformedActionsDelta ?? 0) < 0) {
+      improvements.push(`Candidate reduced malformed actions by ${Math.abs(deltas.malformedActionsDelta!)} (${c.malformedActions ?? 0} vs ${b.malformedActions ?? 0}).`);
     }
 
     // Repair cycles
@@ -365,6 +389,7 @@ export class EvaluationService {
 
     const codeModeCalls = (record.toolCalls ?? []).filter((tc) => tc.tool === 'code_mode' || tc.tool === 'run_code_mode').length;
     const toolFailures = (record.toolCalls ?? []).filter((tc) => !tc.ok).length;
+    const malformedActions = m.malformedActions ?? this.extractMalformedActions(record);
 
     const revisionChanges = events.filter((e) => (e.type || e.eventType) === 'workspace.revision.changed' || (e.type || e.eventType) === 'WORKSPACE_REVISION_CHANGED').length;
     const verificationInvalidations = events.filter((e) => (e.type || e.eventType) === 'verification.invalidated' || (e.type || e.eventType) === 'EVIDENCE_STALE').length;
@@ -419,7 +444,7 @@ export class EvaluationService {
       },
       agent: {
         repairCycles: { value: m.repairCycles, kind: 'measured', unit: 'cycles' },
-        malformedActions: { value: 0, kind: 'estimated', unit: 'actions' },
+        malformedActions: { value: malformedActions, kind: 'measured', unit: 'actions' },
         noProgressEvents: { value: 0, kind: 'estimated', unit: 'events' },
         subagentCalls: { value: 0, kind: 'measured', unit: 'calls' },
       },
@@ -737,6 +762,38 @@ export class EvaluationService {
     }
 
     return compactedTokens;
+  }
+
+  private extractMalformedActions(record: ExecutionRecord): number {
+    let malformedCount = 0;
+    const events = record.events ?? [];
+    for (const event of events) {
+      const type = event.eventType ?? event.type;
+      if (type === 'action.validation_failed') {
+        malformedCount++;
+      } else if (type === 'agent.turn' && String((event as any).data?.content ?? '').startsWith('ACTION_VALIDATION_FAILED')) {
+        malformedCount++;
+      }
+    }
+
+    for (const call of record.toolCalls ?? []) {
+      if (
+        call.error?.includes('validation') ||
+        call.error?.includes('malformed') ||
+        call.error?.includes('SCHEMA') ||
+        (call as any).failureClass === 'MALFORMED_TOOL_USE'
+      ) {
+        malformedCount++;
+      }
+    }
+
+    for (const err of record.errors ?? []) {
+      if (err.includes('protocol') || err.includes('malformed') || err.includes('SCHEMA')) {
+        malformedCount++;
+      }
+    }
+
+    return malformedCount;
   }
 
   private extractWallTime(record: ExecutionRecord, fallbackLatency: number): number {
