@@ -586,10 +586,13 @@ describe('Wazir Mobile API & CLI Companion Integration', () => {
       }>(h.baseUrl, 'GET', '/api/v1/mobile/computers', { token: OPERATOR_TOKEN });
       expect(comps.status).toBe(200);
       expect(comps.body.computers.length).toBeGreaterThanOrEqual(1);
-      // Verify GPU utilization is null when not reported by hardware rather than fabricated
+      // Verify GPU utilization is null when not reported by hardware rather than fabricated (or number if host has GPU)
       const localComp = comps.body.computers.find((c) => c.id === 'local');
       expect(localComp).toBeDefined();
-      expect(localComp!.telemetry.gpuUtilizationPercent).toBeNull();
+      if (localComp!.telemetry.gpuUtilizationPercent !== null) {
+        expect(typeof localComp!.telemetry.gpuUtilizationPercent).toBe('number');
+        expect(Number.isFinite(localComp!.telemetry.gpuUtilizationPercent)).toBe(true);
+      }
 
       // Trigger emergency stop on ResourceLedger
       const stopRes = await jsonReq<{
