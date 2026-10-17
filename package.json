@@ -59,7 +59,7 @@
     "start:api": "npm run start --workspace @wazir/api",
     "start:dashboard": "concurrently \"npm run start:api\" \"npm run start:web\"",
     "desktop:dev": "npm run dev --workspace @wazir/desktop",
-    "desktop:build": "npm run build --workspace @wazir/desktop",
+    "desktop:build": "npm run build:tauri --workspace @wazir/desktop",
     "test": "npm run build && vitest run",
     "check-dist": "node scripts/check-dist-fresh.mjs",
     "test:watch": "vitest",

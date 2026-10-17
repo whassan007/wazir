@@ -111,7 +111,7 @@ describe('Wazir Comprehensive Live Reliability & Systemic Failure Detectors', ()
         { cmd: '/agents', expectedSubstring: 'Agents' },
         { cmd: '/runtimes', expectedSubstring: 'Runtimes' },
         { cmd: '/tasks', expectedSubstring: 'No tasks in this session' },
-        { cmd: '/doctor', expectedSubstring: 'Diagnostics' },
+        { cmd: '/doctor', expectedSubstring: 'System diagnostics' },
         { cmd: '/why model', expectedSubstring: 'Model' },
         { cmd: 'why complete', expectedSubstring: 'No execution evidence loaded' },
         { cmd: '/block', expectedSubstring: 'No command blocks recorded' },

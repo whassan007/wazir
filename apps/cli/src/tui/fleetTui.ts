@@ -3783,10 +3783,12 @@ export class FleetTui {
     this.draw();
 
     const startedAt = Date.now();
+    const shellBin = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/sh';
+    const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', shellCmd] : ['-c', shellCmd];
     let tracker: Awaited<ReturnType<typeof createBlock>> | undefined;
     try {
       if (this.engine.store) {
-        tracker = await createBlock(this.engine, `! ${shellCmd}`, ['/bin/sh', '-c', shellCmd], {
+        tracker = await createBlock(this.engine, `! ${shellCmd}`, [shellBin, ...shellArgs], {
           submissionId: submission.submissionId,
           source: submission.source,
           sessionId: submission.sessionId,
@@ -3797,7 +3799,7 @@ export class FleetTui {
     }
 
     try {
-      const { stdout = '', stderr = '' } = await execFileAsync('/bin/sh', ['-c', shellCmd], {
+      const { stdout = '', stderr = '' } = await execFileAsync(shellBin, shellArgs, {
         cwd: this.engine.projectRoot,
         timeout: 30_000,
         maxBuffer: 1024 * 1024,
@@ -4230,7 +4232,7 @@ export class FleetTui {
       const modelsCount = this.engine.models?.list().length ?? 0;
       const unhealthyRuntimes = (this.engine.discovered ?? []).filter((d) => d.health === 'unavailable');
       if (readiness && readiness.readyCount === 0 && modelsCount === 0) {
-        this.statusMessage = `Diagnostics warning: 0 models registered (${unhealthyRuntimes.length} runtime(s) unavailable)`;
+        this.statusMessage = `System diagnostics warning: 0 models registered (${unhealthyRuntimes.length} runtime(s) unavailable)`;
         if (this.presentationMode === 'conversation') {
           this.conversationRenderer.append(`${this.statusMessage}\n${this.formatMissingModelRecovery(readiness)}`);
         }

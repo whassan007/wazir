@@ -517,6 +517,65 @@ async function main() {
         `LM Studio reachable=${liveProbe.lmstudio.reachable} (${liveProbe.lmstudio.models.length} models)`,
     );
 
+    if (liveProbe.lmstudio.reachable && liveProbe.lmstudio.models.length > 0) {
+      const targetModel = liveProbe.lmstudio.models[0];
+      console.log(`  • [Tier 3 Live Inference] Exercising real inference against LM Studio model '${targetModel}'...`);
+      const infStart = Date.now();
+      const infRes = await fetch(`${liveProbe.lmstudio.url}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: targetModel,
+          messages: [{ role: 'user', content: 'Reply with the single word READY.' }],
+          max_tokens: 96,
+          temperature: 0,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!infRes.ok) {
+        throw new Error(`Tier 3 live LM Studio inference failed with HTTP ${infRes.status}`);
+      }
+      const infData = await infRes.json();
+      const msg = infData?.choices?.[0]?.message ?? {};
+      const replyContent = String(msg.content || msg.reasoning_content || '').trim();
+      if (!replyContent) {
+        throw new Error(`Tier 3 live LM Studio inference returned empty response: ${JSON.stringify(infData)}`);
+      }
+      liveProbe.lmstudio.liveInference = {
+        verified: true,
+        model: targetModel,
+        durationMs: Date.now() - infStart,
+        responsePreview: replyContent.slice(0, 120),
+      };
+    }
+
+    if (liveProbe.ollama.reachable && liveProbe.ollama.models.length > 0) {
+      const targetModel = liveProbe.ollama.models[0];
+      console.log(`  • [Tier 3 Live Inference] Exercising real inference against Ollama model '${targetModel}'...`);
+      const infStart = Date.now();
+      const infRes = await fetch(`${liveProbe.ollama.url}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: targetModel,
+          prompt: 'Reply with the single word READY.',
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!infRes.ok) {
+        throw new Error(`Tier 3 live Ollama inference failed with HTTP ${infRes.status}`);
+      }
+      const infData = await infRes.json();
+      const replyContent = String(infData?.response ?? '').trim();
+      liveProbe.ollama.liveInference = {
+        verified: Boolean(replyContent),
+        model: targetModel,
+        durationMs: Date.now() - infStart,
+        responsePreview: replyContent.slice(0, 120),
+      };
+    }
+
     // 3b. Phase 7 Stress Campaign:
     //   1. 20 fresh interactive PTY sessions
     //   2. Repeated & concurrent command/task submissions

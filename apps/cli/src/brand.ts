@@ -205,7 +205,7 @@ export function detectTerminalCapabilities(
     Boolean(input.jsonFlag) ||
     Boolean(input.quietFlag) ||
     env.WAZIR_NO_BANNER === '1' ||
-    env.CI === 'true';
+    (input.env !== undefined ? input.env.CI === 'true' : (input.isTTY === undefined && env.CI === 'true'));
 
   return {
     isTTY,

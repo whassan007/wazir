@@ -40,12 +40,20 @@ export function supervisorSocket(directory: string): string {
     // Linux abstract sockets are released by the kernel even after SIGKILL.
     return '\0wazir-improve-' + digest;
   }
+  if (process.platform === 'win32') {
+    return `\\\\.\\pipe\\wazir-improve-${digest}`;
+  }
   return path.join(os.tmpdir(), `wazir-improve-${digest}.sock`);
 }
 
 export async function supervisorLease(directory: string): Promise<net.Server> {
   const sockPath = supervisorSocket(directory);
-  if (process.platform !== 'linux' && existsSync(sockPath)) {
+  if (process.platform === 'win32') {
+    const alive = await running(directory);
+    if (alive) {
+      throw new Error('A supervisor already owns this repository');
+    }
+  } else if (process.platform !== 'linux' && existsSync(sockPath)) {
     const alive = await running(directory);
     if (alive) {
       throw new Error('A supervisor already owns this repository');
