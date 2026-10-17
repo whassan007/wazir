@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.71 — 2026-10-16
+
+**Release**: `v0.1.71`
+**Theme**: Self-Improvement Engine v2: durable supervisor, lease fencing, isolated worktree execution, and empirical metric integrity
+
+- **Durable Improvement Supervisor**: Implemented `DurableImprovementSupervisor` enforcing an atomic, versioned lifecycle state machine (`DISCOVERED` -> `QUALIFIED_FOR_EXPERIMENT` -> `PLANNED` -> `IMPLEMENTING` -> `VERIFYING` -> `BENCHMARKING` -> `READY_TO_COMMIT` -> `COMMITTED`).
+- **Monotonic Lease Fencing & Crash Resilience**: Added TTL leases and monotonically increasing fencing tokens to prevent dual-supervisor split-brain concurrency. In-flight volatile states automatically recover to `BLOCKED` on restart for safe inspection.
+- **Isolated Worktree Execution**: Integrated `WorktreeManager` into `MetaOptimizerService` for source-code candidates, generating dedicated isolated worktrees and committing verified changes safely.
+- **Honest Non-Synthetic Metrics**: Eliminated synthetic fallback telemetry for tool failures, malformed actions, and wall-time execution latency across `evaluationService.ts`, `benchmarkService.ts`, and `regressionGuard.ts`.
+- **Complete Opportunity Detectors**: Added dedicated statistical detectors for `HIGH_RUNTIME_LATENCY`, `REPEATED_SEARCH_BEHAVIOR`, and `UNNECESSARY_TOOL_EXPOSURE` in `OpportunityDetector`.
+
 ## v0.1.70 — 2026-10-16
 
 **Release**: `v0.1.70`
