@@ -140,6 +140,17 @@ export class ResourceRouter {
       const singleCallCost = costUsd(pricingFor(account, c.modelId), input.estimatedInputTokens, estOutput);
       const rel = this.reliability(accountId, c.modelId);
       const successProb = Math.max(0.05, Math.min(1, c.verifiedSuccessRate !== undefined ? c.verifiedSuccessRate * rel : rel));
+      // A quality floor is a hard eligibility constraint, not merely a scoring bonus.
+      // This prevents a cheap but empirically unreliable model from winning budget-first
+      // routing. With no explicit calibration, the conservative prior is used and remains
+      // visible in the routing explanation.
+      if (minCorrectness !== undefined && successProb < minCorrectness) {
+        return {
+          ...c, accountId, local: account.kind === 'local', admissible: false, estCost: 0,
+          effectiveCostPerSuccessUsd: Number((singleCallCost / successProb).toFixed(6)),
+          reasons: [`estimated verified success ${(successProb * 100).toFixed(0)}% is below policy minimum ${(minCorrectness * 100).toFixed(0)}% (empirical reliability)`],
+        };
+      }
       const effectiveCostPerSuccess = singleCallCost / successProb;
       const tokenMs = this.msPerToken(c.modelId);
       const loadPenaltyMs = c.residency && c.residency !== 'ready' ? (c.estimatedLoadMs ?? 4_000) : 0;
