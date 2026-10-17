@@ -71,6 +71,7 @@
     "test:buildcpp": "npm run build && RUN_BUILDCPP=1 vitest run apps/cli/tests/buildcpp.e2e.test.ts",
     "test:acceptance": "node scripts/acceptance-test-harness.mjs",
     "test:plan:acceptance": "node scripts/acceptance-test-harness.mjs --all",
+    "test:live": "npm run build && vitest run tests/live/realWorldAcceptance.test.ts",
     "typecheck": "tsc --build --force",
     "dmg": "bash scripts/build-dmg.sh",
     "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\"",
