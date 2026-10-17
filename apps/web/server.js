@@ -314,21 +314,65 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  let filePath = path.join(PUBLIC, pathname === '/' ? 'index.html' : pathname);
-  if (!filePath.startsWith(PUBLIC)) {
-    res.writeHead(403);
-    res.end();
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(pathname);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('bad request');
     return;
   }
-  fs.readFile(filePath, (error, data) => {
-    if (error) {
+  if (decodedPath.includes('\0')) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('forbidden');
+    return;
+  }
+
+  let publicReal;
+  try {
+    publicReal = fs.realpathSync(PUBLIC);
+  } catch {
+    publicReal = path.resolve(PUBLIC);
+  }
+
+  const relativeTarget = (decodedPath === '/' ? 'index.html' : decodedPath).replace(/^[/\\]+/, '');
+  const candidatePath = path.resolve(publicReal, relativeTarget);
+  const relToPublic = path.relative(publicReal, candidatePath);
+  if (relToPublic.startsWith('..') || path.isAbsolute(relToPublic)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('forbidden');
+    return;
+  }
+
+  fs.realpath(candidatePath, (realErr, realFilePath) => {
+    if (realErr) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('not found');
       return;
     }
-    const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME[ext] ?? 'application/octet-stream' });
-    res.end(data);
+    const realRel = path.relative(publicReal, realFilePath);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('forbidden');
+      return;
+    }
+    fs.stat(realFilePath, (statErr, stats) => {
+      if (statErr || !stats.isFile()) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('not found');
+        return;
+      }
+      fs.readFile(realFilePath, (error, data) => {
+        if (error) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('not found');
+          return;
+        }
+        const ext = path.extname(realFilePath).toLowerCase();
+        res.writeHead(200, { 'Content-Type': MIME[ext] ?? 'application/octet-stream' });
+        res.end(data);
+      });
+    });
   });
 });
 

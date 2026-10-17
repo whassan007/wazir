@@ -290,6 +290,9 @@ export class OptimizerStateManager {
       if (!proof?.regressionGuard?.qualified || !['QUALIFIED', 'ACCEPTED'].includes(proof.decision) ||
           JSON.stringify(proof.candidateConfig) !== JSON.stringify(config)) throw new Error('OPTIMIZER_QUALIFICATION_REQUIRED');
       if (s.accountingUncertain || s.inFlight) throw new Error('OPTIMIZER_UNRESOLVED_EXECUTION');
+      if (s.rollbacks.some((r) => r.candidateId === candidateId || r.runId === proof.runId)) {
+        throw new Error('OPTIMIZER_CANDIDATE_ALREADY_PROMOTED');
+      }
       const experiment = s.experiments[proof.experimentId!];
       if (!experiment || experiment.status !== 'COMPLETED' || experiment.baselineRevision !== s.configRevision ||
           JSON.stringify(proof.baselineConfig) !== JSON.stringify(s.activeConfig)) throw new Error('OPTIMIZER_BASELINE_CHANGED: Reevaluate before promotion');

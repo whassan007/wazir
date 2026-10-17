@@ -46,6 +46,10 @@ export class BenchmarkService {
     this.tasks.set(task.id, task);
   }
 
+  public registerTask(task: BenchmarkTask): void {
+    this.register(task);
+  }
+
   /**
    * Registers an array of benchmark tasks.
    */
@@ -92,12 +96,15 @@ export class BenchmarkService {
     }
 
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), `wazir-bench-${task.id}-`));
+    if (customContext?.workspaceRoot) {
+      await fs.cp(customContext.workspaceRoot, tempDir, { recursive: true });
+    }
     const timeoutMs = customContext?.timeoutMs ?? task.timeoutMs ?? 60_000;
     const abortController = new AbortController();
-    const timeoutHandle = setTimeout(() => abortController.abort(), timeoutMs);
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
     const context: BenchmarkExecutionContext = {
-      workspaceRoot: customContext?.workspaceRoot ?? tempDir,
+      workspaceRoot: tempDir,
       timeoutMs,
       resourceBudget: customContext?.resourceBudget ? structuredClone(customContext.resourceBudget) : undefined,
       abortSignal: abortController.signal,
@@ -112,11 +119,20 @@ export class BenchmarkService {
         await task.workspaceSetup(context.workspaceRoot);
       }
 
-      // 2. Execute runner under controlled conditions
-      const record = await runner.run(snapshotTask(task), context);
+      // 2. Execute runner under controlled conditions with hard deadline race
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          abortController.abort();
+          reject(new Error('BENCHMARK_DEADLINE_EXCEEDED'));
+        }, timeoutMs);
+      });
+      const record = await Promise.race([
+        runner.run(snapshotTask(task), context),
+        timeoutPromise,
+      ]);
 
       // 3. Clear timeout
-      clearTimeout(timeoutHandle);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       const durationMs = Date.now() - startTime;
 
       // 4. Score execution using EvaluationService (strictly separated from runner execution)
@@ -146,7 +162,7 @@ export class BenchmarkService {
         ...(deadlineExceeded ? { error: 'BENCHMARK_DEADLINE_EXCEEDED' } : {}),
       };
     } catch (err) {
-      clearTimeout(timeoutHandle);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       const durationMs = Date.now() - startTime;
       const errorMsg = err instanceof Error ? err.message : String(err);
 
@@ -185,6 +201,10 @@ export class BenchmarkService {
           projectRoot: context.workspaceRoot,
         },
       );
+      if (errorMsg === 'BENCHMARK_DEADLINE_EXCEEDED') {
+        syntheticReport.passed = false;
+        syntheticReport.rejectionReason = 'BENCHMARK_DEADLINE_EXCEEDED';
+      }
 
       return {
         taskId: task.id,
@@ -196,10 +216,8 @@ export class BenchmarkService {
         error: errorMsg,
       };
     } finally {
-      // Clean up temp directory if we created it
-      if (!customContext?.workspaceRoot) {
-        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-      }
+      // Clean up isolated temp directory
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 
@@ -211,6 +229,9 @@ export class BenchmarkService {
     runner: BenchmarkRunner,
   ): Promise<BenchmarkSuiteResult> {
     const tasks = this.listTasks(category);
+    if (tasks.length === 0) {
+      throw new Error(`EMPTY_BENCHMARK_SUITE: No benchmark tasks registered for category '${category}'`);
+    }
     const results: BenchmarkRunResult[] = [];
 
     for (const task of tasks) {
@@ -314,6 +335,9 @@ export class BenchmarkService {
       afterRun?: (result: BenchmarkRunResult) => Promise<void>;
     },
   ): Promise<BenchmarkSuiteResult> {
+    if (tasks.length === 0) {
+      throw new Error('EMPTY_BENCHMARK_SUITE: Cannot execute an empty benchmark suite');
+    }
     const results: BenchmarkRunResult[] = [];
 
     const repetitions = options?.repetitions ?? 1;

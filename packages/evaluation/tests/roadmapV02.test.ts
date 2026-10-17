@@ -25,6 +25,7 @@ import {
   EvaluationService,
   RegressionGuard,
   MetaOptimizerService,
+  BenchmarkService,
 } from '../src/index.js';
 
 describe('Wazir v0.2 Roadmap Verification Gates (Workstreams B, C, D)', () => {
@@ -454,5 +455,160 @@ describe('Wazir v0.2 Roadmap Verification Gates (Workstreams B, C, D)', () => {
       const baseline = await optimizer.recordBaseline({});
       expect(baseline.models).toEqual(['deepseek-r1-distill', 'llama-3.3-70b', 'claude-3-7-sonnet']);
     });
+
+    it('F5: resolves phase models dynamically via ModelRegistry and Scheduler with explainable fallbacks when preferred model is missing or unloaded', () => {
+      const registry = new ModelRegistry();
+      registry.register({
+        id: 'gemma-27b',
+        name: 'Gemma 27B (Unloaded)',
+        provider: 'local',
+        family: 'gemma',
+        contextMax: 32768,
+        capabilities: ['reasoning'],
+        toolCalling: true,
+        structuredOutput: true,
+        vision: false,
+        audio: false,
+        embedding: false,
+        reasoning: true,
+        runtimeCompatibility: ['vllm'],
+        local: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      registry.upsertInstance({
+        id: 'inst-gemma-27b',
+        modelId: 'gemma-27b',
+        runtimeId: 'vllm',
+        computerId: 'dgx-1',
+        loaded: false,
+        state: 'UNLOADED',
+        health: 'healthy',
+      });
+
+      registry.register({
+        id: 'deepseek-coder-v2',
+        name: 'DeepSeek Coder V2',
+        provider: 'local',
+        family: 'deepseek',
+        contextMax: 65536,
+        capabilities: ['coding', 'reasoning'],
+        toolCalling: true,
+        structuredOutput: true,
+        vision: false,
+        audio: false,
+        embedding: false,
+        reasoning: true,
+        runtimeCompatibility: ['vllm'],
+        local: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      registry.upsertInstance({
+        id: 'inst-deepseek',
+        modelId: 'deepseek-coder-v2',
+        runtimeId: 'vllm',
+        computerId: 'dgx-1',
+        loaded: true,
+        state: 'READY',
+        health: 'healthy',
+      });
+
+      const optimizer = new MetaOptimizerService({
+        benchmarkService: new BenchmarkService(),
+        modelRegistry: registry,
+      });
+
+      // 'plan' prefers 'gemma-27b' (which is unloaded); should fallback to available 'deepseek-coder-v2'
+      const planResolution = optimizer.resolveModelForPhase('plan');
+      expect(planResolution.modelId).toBe('deepseek-coder-v2');
+      expect(planResolution.fallbackUsed).toBe(true);
+      expect(planResolution.reasons.some((r) => r.includes('unavailable/unloaded'))).toBe(true);
+
+      // 'repair' prefers 'qwen-2.5-coder' (not registered) and fallback 'gpt-4o' (not registered); should select 'deepseek-coder-v2'
+      const repairResolution = optimizer.resolveModelForPhase('repair');
+      expect(repairResolution.modelId).toBe('deepseek-coder-v2');
+      expect(repairResolution.fallbackUsed).toBe(true);
+      expect(repairResolution.reasons.some((r) => r.includes('not registered'))).toBe(true);
+    });
+
+    it('F2: fails closed when candidateVerificationPassed is omitted and candidate runs lack physicalVerificationSuccess or suite is empty', () => {
+      const guard = new RegressionGuard({ minSampleCount: 5 });
+      const plan: ExperimentPlan = {
+        experimentId: 'exp-f2',
+        hypothesisId: 'hyp-f2',
+        primaryMetric: 'input_tokens',
+        protectedMetrics: ['task_success', 'verification_success'],
+        minSampleCount: 5,
+      } as any;
+
+      const emptySuite: BenchmarkSuiteResult = {
+        category: 'CODE_REPAIR',
+        runnerId: 'r1',
+        totalTasks: 0,
+        passedTasks: 0,
+        failedTasks: 0,
+        results: [],
+        aggregateMetrics: { totalWallTimeMs: 0, totalModelCalls: 0, totalToolCalls: 0, totalTokens: 0, totalCostUsd: 0, averageRepairCycles: 0 },
+        summary: 'empty',
+      };
+      const emptyComparison: ComparativeBenchmarkSuiteResult = {
+        suiteName: 'empty',
+        baselineSuite: emptySuite,
+        candidateSuite: emptySuite,
+        taskComparisons: [],
+        aggregateDeltas: {
+          passRateDelta: 0,
+          tokensDelta: 0,
+          tokensSavedPct: 0,
+          wallTimeDeltaMs: 0,
+          wallTimeSavedPct: 0,
+          costDeltaUsd: 0,
+          repairCyclesDelta: 0,
+        },
+        regressedTasks: [],
+        improvedTasks: [],
+        summary: 'empty',
+      };
+
+      const emptyResult = guard.evaluate({
+        plan,
+        baselineSuite: emptySuite,
+        candidateSuite: emptySuite,
+        comparison: emptyComparison,
+      });
+      expect(emptyResult.qualified).toBe(false);
+      expect(emptyResult.inconclusiveReasons?.some((r) => r.includes('EMPTY_BENCHMARK_SUITE'))).toBe(true);
+    });
+
+    it('Section 2: terminates hanging benchmark runners at timeoutMs and rejects empty benchmark suites', async () => {
+      const bench = new BenchmarkService();
+      bench.register({
+        id: 'hang-task',
+        name: 'Hanging Task',
+        category: 'CODE_REPAIR',
+        description: 'Task with a runner that ignores abortSignal',
+        prompt: 'Fix it',
+        timeoutMs: 60,
+      });
+
+      const hangingRunner = {
+        id: 'hanging-runner',
+        name: 'Hanging Runner',
+        run: async () => {
+          // Ignores context.abortSignal completely
+          await new Promise((resolve) => setTimeout(resolve, 5_000));
+          throw new Error('Should have timed out before reaching here');
+        },
+      };
+
+      const res = await bench.runTask('hang-task', hangingRunner, { timeoutMs: 60 });
+      expect(res.scoreReport.passed).toBe(false);
+      expect(res.error).toBe('BENCHMARK_DEADLINE_EXCEEDED');
+      expect(res.scoreReport.rejectionReason).toBe('BENCHMARK_DEADLINE_EXCEEDED');
+
+      await expect(bench.runBenchmarkSuite([], hangingRunner)).rejects.toThrow('EMPTY_BENCHMARK_SUITE');
+    });
   });
 });
+

@@ -56,13 +56,19 @@ export class RegressionGuard {
       baselineSuite,
       candidateSuite,
       comparison,
-      candidateVerificationPassed = true,
+      candidateVerificationPassed,
       verificationErrors = [],
     } = params;
 
     const regressionsDetected: string[] = [];
     const protectedViolations: string[] = [];
     const inconclusiveReasons: string[] = [];
+
+    if (baselineSuite.results.length === 0 || candidateSuite.results.length === 0) {
+      inconclusiveReasons.push(
+        `EMPTY_BENCHMARK_SUITE: Baseline (${baselineSuite.results.length}) and candidate (${candidateSuite.results.length}) suites must both contain executed tasks`,
+      );
+    }
 
     const requiredMetrics = new Set([
       String(plan.primaryMetric),
@@ -83,12 +89,30 @@ export class RegressionGuard {
       }
     }
 
-    // 1. Correctness Gates Check
-    let correctnessGatesPassed = candidateVerificationPassed && verificationErrors.length === 0;
-    if (!candidateVerificationPassed || verificationErrors.length > 0) {
+    // 1. Correctness Gates Check (never assume verification passed when omitted; require explicit evidence)
+    const hasVerifiedCandidateRuns =
+      candidateSuite.results.length > 0 &&
+      candidateSuite.results.some((r) => r.scoreReport?.metrics?.physicalVerificationSuccess === true) &&
+      candidateSuite.results.every((r) => r.scoreReport?.metrics?.physicalVerificationSuccess !== false);
+    const missingCandidateVerification =
+      candidateSuite.results.length === 0 ||
+      candidateSuite.results.some((r) => typeof r.scoreReport?.metrics?.physicalVerificationSuccess !== 'boolean');
+
+    let correctnessGatesPassed =
+      candidateVerificationPassed !== false &&
+      verificationErrors.length === 0 &&
+      hasVerifiedCandidateRuns &&
+      !missingCandidateVerification;
+
+    if (candidateVerificationPassed === false || verificationErrors.length > 0) {
       correctnessGatesPassed = false;
       regressionsDetected.push(
         `VERIFICATION_FAILURE: Candidate failed physical verification or test checks (${verificationErrors.join(', ')})`,
+      );
+    } else if (candidateVerificationPassed === undefined && missingCandidateVerification) {
+      correctnessGatesPassed = false;
+      inconclusiveReasons.push(
+        'MISSING_VERIFICATION_EVIDENCE: Candidate verification status was omitted and run-level physicalVerificationSuccess evidence is incomplete',
       );
     }
 

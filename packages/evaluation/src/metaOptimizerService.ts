@@ -64,6 +64,7 @@ import type { VerificationEngine } from '@wazir/core';
 import type { WorktreeManager } from '@wazir/core';
 import type { CheckpointService } from '@wazir/core';
 import type { PolicyEngine } from '@wazir/core';
+import type { ModelRegistry, Scheduler, Task } from '@wazir/core';
 
 export const DEFAULT_OPTIMIZABLE_CONFIG: OptimizableConfig = {
   id: 'cfg-default',
@@ -113,6 +114,8 @@ export interface MetaOptimizerOptions {
   worktreeManager?: WorktreeManager;
   checkpointService?: CheckpointService;
   policyEngine?: PolicyEngine;
+  modelRegistry?: ModelRegistry;
+  scheduler?: Scheduler;
   store?: KeyValueStore;
   initialConfig?: OptimizableConfig;
   requireStrictImprovement?: boolean;
@@ -136,6 +139,8 @@ export class MetaOptimizerService {
   private readonly worktreeManager?: WorktreeManager;
   private readonly checkpointService?: CheckpointService;
   private readonly policyEngine?: PolicyEngine;
+  private readonly modelRegistry?: ModelRegistry;
+  private readonly scheduler?: Scheduler;
   private readonly store?: KeyValueStore;
   private readonly canaryDeploymentService: CanaryDeploymentService;
 
@@ -175,6 +180,8 @@ export class MetaOptimizerService {
     this.worktreeManager = options.worktreeManager;
     this.checkpointService = options.checkpointService;
     this.policyEngine = options.policyEngine;
+    this.modelRegistry = options.modelRegistry;
+    this.scheduler = options.scheduler;
     this.store = options.store;
     this.canaryDeploymentService =
       options.canaryDeploymentService ??
@@ -198,6 +205,89 @@ export class MetaOptimizerService {
       wallTimeMs: 0,
       costUSD: 0,
     };
+  }
+
+  /**
+   * Resolves the optimal model for a given phase ('plan' | 'implement' | 'repair') dynamically
+   * against the Scheduler and ModelRegistry, producing a safe, explainable fallback when a
+   * configured preferred model is missing, renamed, unloaded, exceeding VRAM, or blocked by quota.
+   */
+  public resolveModelForPhase(
+    phase: 'plan' | 'implement' | 'repair' | string,
+    task?: Task,
+  ): { modelId: string; fallbackUsed: boolean; reasons: string[] } {
+    const rule = this.activeConfig.routingRules?.[phase];
+    const preferred = rule?.preferredModel;
+    const fallback = rule?.fallbackModel;
+    const reasons: string[] = [];
+
+    if (this.scheduler && task) {
+      try {
+        const decision = this.scheduler.plan({
+          task: {
+            ...task,
+            execution: {
+              ...task.execution,
+              targetModelId: preferred ?? task.execution?.targetModelId,
+            },
+          },
+        });
+        const fallbackUsed = Boolean(preferred && decision.modelId !== preferred);
+        if (fallbackUsed) {
+          reasons.push(`Preferred model '${preferred}' unavailable or ineligible; scheduler selected '${decision.modelId}'`);
+        }
+        reasons.push(...decision.reasons);
+        return { modelId: decision.modelId, fallbackUsed, reasons };
+      } catch (err) {
+        reasons.push(`Scheduler could not place preferred model '${preferred ?? 'default'}': ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    if (this.modelRegistry) {
+      const isAvailableInRegistry = (modelId: string): boolean => {
+        const rec = this.modelRegistry!.get(modelId);
+        if (!rec) return false;
+        const instances = this.modelRegistry!.instancesOf(modelId);
+        if (instances.length === 0) return false;
+        return instances.some((i) => i.loaded && i.health === 'healthy' && i.state !== 'UNAVAILABLE' && i.state !== 'FAILED');
+      };
+
+      if (preferred) {
+        const prefModel = this.modelRegistry.get(preferred);
+        if (prefModel && isAvailableInRegistry(preferred)) {
+          reasons.push(`Preferred model '${preferred}' verified loaded and healthy in registry`);
+          return { modelId: preferred, fallbackUsed: false, reasons };
+        }
+        reasons.push(
+          prefModel
+            ? `Preferred model '${preferred}' is registered but currently unavailable/unloaded`
+            : `Preferred model '${preferred}' is not registered in ModelRegistry`,
+        );
+      }
+      if (fallback) {
+        const fbModel = this.modelRegistry.get(fallback);
+        if (fbModel && isAvailableInRegistry(fallback)) {
+          reasons.push(`Selected configured fallback model '${fallback}'`);
+          return { modelId: fallback, fallbackUsed: true, reasons };
+        }
+        reasons.push(`Configured fallback model '${fallback}' is unavailable`);
+      }
+
+      const available = this.modelRegistry.list().filter((m) => isAvailableInRegistry(m.id));
+      if (available.length > 0) {
+        const scoreOf = (m: import('@wazir/core').ModelRecord): number => {
+          const perf = m.performance?.[phase] ?? Object.values(m.performance ?? {})[0];
+          return perf ? perf.verifiedSuccessRate : m.capabilities.length * 0.1 + (m.reasoning ? 0.2 : 0);
+        };
+        const best = [...available].sort((a, b) => scoreOf(b) - scoreOf(a))[0]!;
+        reasons.push(`Dynamic registry fallback selected best available model '${best.id}'`);
+        return { modelId: best.id, fallbackUsed: true, reasons };
+      }
+    }
+
+    const chosen = preferred ?? fallback ?? 'default-model';
+    reasons.push(`Using static routing rule model '${chosen}' (no live registry/scheduler bound)`);
+    return { modelId: chosen, fallbackUsed: false, reasons };
   }
 
   private applyState(state: OptimizerState): void {
@@ -454,6 +544,7 @@ export class MetaOptimizerService {
         break;
       }
       case 'ROUTING_UNDERPERFORMANCE': {
+        const resolvedRepair = this.resolveModelForPhase('repair');
         hypotheses.push({
           id: `hyp-${randomUUID().slice(0, 8)}`,
           opportunityId: opportunity.id,
@@ -473,8 +564,8 @@ export class MetaOptimizerService {
               type: 'ROUTING_ADJUSTMENT',
               path: 'routingRules.repair.preferredModel',
               oldValue: this.activeConfig.routingRules?.repair?.preferredModel,
-              newValue: 'qwen-2.5-coder',
-              rationale: 'Specialize repair phase on high-performance coding model',
+              newValue: resolvedRepair.modelId,
+              rationale: `Specialize repair phase on high-performance coding model (${resolvedRepair.reasons.join('; ')})`,
             },
           ],
         });
