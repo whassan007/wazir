@@ -64,7 +64,7 @@ interface DurableDispatch {
   /** Epoch ms at which the outcome was committed; drives completed-record retention. */
   completedAt?: number;
   attempt: number;
-  lease?: { token: string; expiresAt: number };
+  lease?: { token: string; attemptId: string; expiresAt: number };
 }
 
 /**
@@ -215,13 +215,14 @@ export class TaskDispatcher {
       throw error;
     }
   }
-  async claim(id: string, computerId: string): Promise<{ token: string; expiresAt: number; leaseMs: number; attempt: number }> {
+  async claim(id: string, computerId: string): Promise<{ token: string; attemptId: string; expiresAt: number; leaseMs: number; attempt: number }> {
     const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
       if (!current || current.computerId !== computerId) throw new Error('UNKNOWN_DISPATCH');
       if (current.outcome || (current.lease && current.lease.expiresAt > this.now())) throw new Error('RESOURCE_BUSY');
-      return { ...current, attempt: current.attempt + 1,
+      const attempt = current.attempt + 1;
+      return { ...current, attempt,
         events: [...current.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), { executionId: current.request.executionId, type: 'lease_acquired' as const, at: new Date(this.now()), data: { attempt: current.attempt + 1 } }],
-        lease: { token: randomUUID(), expiresAt: this.now() + this.leaseMs } };
+        lease: { token: randomUUID(), attemptId: `${id}:attempt:${attempt}`, expiresAt: this.now() + this.leaseMs } };
     });
     this.records.set(id, record);
     return { ...record.lease!, attempt: record.attempt, leaseMs: this.leaseMs };
@@ -234,7 +235,7 @@ export class TaskDispatcher {
     const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
       const r = this.validate(current, token);
       if (r.outcome) throw new Error('EXECUTION_TERMINAL');
-      return { ...r, events: [...r.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), { executionId: r.request.executionId, type: 'lease_renewed' as const, at: new Date(this.now()), data: { attempt: r.attempt } }], lease: { token, expiresAt: this.now() + this.leaseMs } };
+      return { ...r, events: [...r.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), { executionId: r.request.executionId, type: 'lease_renewed' as const, at: new Date(this.now()), data: { attempt: r.attempt, attemptId: r.lease?.attemptId } }], lease: { token, attemptId: r.lease!.attemptId, expiresAt: this.now() + this.leaseMs } };
     });
     this.records.set(id, record);
   }
@@ -243,6 +244,15 @@ export class TaskDispatcher {
       const r = this.validate(current, token);
       if (r.outcome) throw new Error('EXECUTION_TERMINAL');
       if (event.executionId !== r.request.executionId) throw new Error('EXECUTION_MISMATCH');
+      const eventData = event.data as { eventId?: unknown; attemptId?: unknown } | undefined;
+      const duplicateKey = eventData && (typeof eventData.eventId === 'string' || typeof eventData.attemptId === 'string')
+        ? JSON.stringify({ type: event.type, executionId: event.executionId, eventId: eventData.eventId, attemptId: eventData.attemptId })
+        : undefined;
+      const duplicate = duplicateKey !== undefined && r.events.some(existing => {
+        const existingData = existing.data as { eventId?: unknown; attemptId?: unknown } | undefined;
+        return JSON.stringify({ type: existing.type, executionId: existing.executionId, eventId: existingData?.eventId, attemptId: existingData?.attemptId }) === duplicateKey;
+      });
+      if (duplicate) return r;
       return { ...r, events: [...r.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), event] };
     });
     this.records.set(id, record); return true;
@@ -259,8 +269,14 @@ export class TaskDispatcher {
   async commit(id: string, outcome: ExecutionOutcome, token: string): Promise<'committed' | 'duplicate'> {
     let committed = false;
     await this.store.update!<DurableDispatch>(this.key(id), current => {
+      // Terminal state is authoritative and idempotent. Check it before lease
+      // validation so a retried result remains a duplicate even after the lease
+      // naturally expires; it can never overwrite the first outcome.
+      if (current?.outcome) {
+        if (current.lease?.token === token) return current;
+        throw new Error('LEASE_LOST');
+      }
       const r = this.validate(current, token);
-      if (r.outcome) return r;
       committed = true;
       return { ...r, outcome, completedAt: this.now() };
     });
