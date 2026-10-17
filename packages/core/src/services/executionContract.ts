@@ -32,10 +32,10 @@ export function createExecutionContract(task: Task, workspaceRoot?: string): Exe
   }
   const data = {
     version: 1 as const, taskId: task.id, originalRequest: task.input, objective: task.title ?? task.input,
-    requirements: structuredClone(task.requirements), constraints: structuredClone(task.policy ?? {}),
+    requirements: task.requirements ? structuredClone(task.requirements) : {}, constraints: structuredClone(task.policy ?? {}),
     targetRepository: workspaceRoot ?? task.policy?.projectRoot ?? null,
-    targetFiles: [...(task.expectedArtifacts ?? task.requirements.expectedArtifacts ?? [])],
-    deliverables: [...(task.expectedArtifacts ?? task.requirements.expectedArtifacts ?? [])], acceptance,
+    targetFiles: [...(task.expectedArtifacts ?? task.requirements?.expectedArtifacts ?? [])],
+    deliverables: [...(task.expectedArtifacts ?? task.requirements?.expectedArtifacts ?? [])], acceptance,
     dependencies: [...(task.contextFrom ?? [])],
     assumptions: acceptance.criteria?.length ? [] : ['Semantic acceptance criteria were not supplied; legacy evidence requirements do not prove the full user intent.'],
     completionConditions: ['All mandatory criteria have current controller evidence', 'All dispatched tool outcomes are reconciled'],
