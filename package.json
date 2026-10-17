@@ -76,7 +76,11 @@
     "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\"",
     "test:distributed": "vitest run --config tests/distributed/vitest.config.ts",
     "test:postgres": "WAZIR_REQUIRE_DATABASE=1 vitest run packages/database/tests/postgresStore.test.ts",
-    "test:distributed:typecheck": "tsc --noEmit --esModuleInterop --module commonjs --moduleResolution node --target es2022 --skipLibCheck tests/distributed/*.test.ts tests/distributed/harness/*.ts"
+    "test:distributed:typecheck": "tsc --noEmit --esModuleInterop --module commonjs --moduleResolution node --target es2022 --skipLibCheck tests/distributed/*.test.ts tests/distributed/harness/*.ts",
+    "test:live": "node scripts/live-reliability-gate.mjs",
+    "test:live:tier1": "node scripts/live-reliability-gate.mjs --tier 1",
+    "test:live:tier2": "node scripts/live-reliability-gate.mjs --tier 2",
+    "test:live:tier3": "node scripts/live-reliability-gate.mjs --tier 3"
   },
   "devDependencies": {
     "@modelcontextprotocol/node": "^2.0.0",

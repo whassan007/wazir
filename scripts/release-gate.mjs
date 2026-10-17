@@ -117,6 +117,13 @@ function testHostPlatform() {
     ['vitest', 'run', 'tests/integration/crossPlatformRecovery.test.ts']
   );
 
+  // 9. Live Reliability Gate (Tier 1 Deterministic Core)
+  const liveReliabilityResult = runStep(
+    'Live Reliability Gate (Tier 1)',
+    nodeBin,
+    ['scripts/live-reliability-gate.mjs', '--tier', '1']
+  );
+
   const categories = [
     installResult,
     buildResult,
@@ -126,6 +133,7 @@ function testHostPlatform() {
     tuiResult,
     fleetResult,
     recoveryResult,
+    liveReliabilityResult,
   ];
 
   let status = 'PASS';
@@ -146,6 +154,7 @@ function testHostPlatform() {
     TUI: tuiResult,
     Fleet: fleetResult,
     Recovery: recoveryResult,
+    LiveReliability: liveReliabilityResult,
     Status: status,
   };
 }
@@ -183,6 +192,7 @@ function generateReport(options = {}) {
           TUI: cached.TUI ?? 'NOT_RUN',
           Fleet: cached.Fleet ?? 'NOT_RUN',
           Recovery: cached.Recovery ?? 'NOT_RUN',
+          LiveReliability: cached.LiveReliability ?? 'NOT_RUN',
           Status: cached.Status ?? 'NOT_RUN',
         });
         continue;
@@ -203,6 +213,7 @@ function generateReport(options = {}) {
         TUI: 'UNSUPPORTED',
         Fleet: 'UNSUPPORTED',
         Recovery: 'UNSUPPORTED',
+        LiveReliability: 'UNSUPPORTED',
         Status: 'UNSUPPORTED',
       });
     } else {
@@ -217,6 +228,7 @@ function generateReport(options = {}) {
         TUI: 'NOT_RUN',
         Fleet: 'NOT_RUN',
         Recovery: 'NOT_RUN',
+        LiveReliability: 'NOT_RUN',
         Status: 'NOT_RUN',
       });
     }
@@ -247,6 +259,7 @@ function formatMarkdownTable(results) {
     'TUI',
     'Fleet',
     'Recovery',
+    'LiveReliability',
     'Status',
   ];
 
