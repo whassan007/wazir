@@ -128,13 +128,15 @@ export class ClusterHarness {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ROOK_OLLAMA_URL: this.simulated.baseUrl,
+      WAZIR_OLLAMA_URL: this.simulated.baseUrl,
       ROOK_LMSTUDIO_URL: 'http://127.0.0.1:1/v1',
+      WAZIR_LMSTUDIO_URL: 'http://127.0.0.1:1/v1',
+      WAZIR_LMS_DISABLE: '1',
       PORT: String(this.port),
       WAZIR_HOST: '127.0.0.1',
       WAZIR_HOME: this.tempDir,
       WAZIR_REGISTRATION_TOKEN: this.registrationToken,
       WAZIR_API_TOKEN: this.apiToken,
-
     };
 
     delete env.WAZIR_ALLOW_UNAUTHENTICATED;
@@ -263,7 +265,10 @@ export class ClusterHarness {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ROOK_OLLAMA_URL: this.simulated.baseUrl,
+      WAZIR_OLLAMA_URL: this.simulated.baseUrl,
       ROOK_LMSTUDIO_URL: 'http://127.0.0.1:54329/v1', // unreachable fallback
+      WAZIR_LMSTUDIO_URL: 'http://127.0.0.1:54329/v1',
+      WAZIR_LMS_DISABLE: '1',
       WAZIR_REGISTRATION_TOKEN: regToken,
       WAZIR_HOME: path.join(this.tempDir, computerId),
     };

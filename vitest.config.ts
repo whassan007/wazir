@@ -11,7 +11,7 @@ export default defineConfig({
     // external state, so serializing files costs little.
     fileParallelism: false,
     // scripts/*.test.mjs are node:test suites, run with `node --test scripts/`.
-    exclude: [...configDefaults.exclude, '**/.wazir/**', '**/.worktrees/**', '**/.claude/**', 'scripts/**/*.test.mjs'],
+    exclude: [...configDefaults.exclude, '**/.wazir/**', '**/.worktrees/**', '**/.claude/**', '**/tmp/**', 'scripts/**/*.test.mjs'],
     // Deterministic tests must not reach the host's OS keychain — including through a
     // spawned real `wa` CLI, which inherits this. A locked keychain (e.g. over SSH) costs
     // every CLI start the full keychain-probe timeout. Tests of backend selection opt back in.

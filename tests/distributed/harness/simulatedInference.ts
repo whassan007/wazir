@@ -83,6 +83,36 @@ export async function startSimulatedInference(
       return;
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/ps') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          models: [
+            {
+              name: modelName,
+              model: modelName,
+              size: 1024 * 1024 * 100,
+              size_vram: 1024 * 1024 * 100,
+              context_length: 32768,
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/generate') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          model: modelName,
+          response: 'OK',
+          done: true,
+        }),
+      );
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/chat') {
       let body = '';
       req.on('data', (chunk) => {
