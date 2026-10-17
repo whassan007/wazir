@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@wazir/runtimes-interfaces": "*",
-    "@wazir/secrets": "*"
+    "@wazir/secrets": "*",
+    "@wazir/shared": "*"
   }
 }

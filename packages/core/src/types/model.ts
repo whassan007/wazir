@@ -212,7 +212,8 @@ export function estimateModelMemory(
 export interface ModelInstallation {
   id: string;
   modelId: string;
-  computerId: string;
+  /** Absent for a hosted-provider installation (Anthropic/OpenAI/Google/NVIDIA). */
+  computerId?: string;
   runtimeId: string;
   runtimeModelId: string;
   installed: boolean;

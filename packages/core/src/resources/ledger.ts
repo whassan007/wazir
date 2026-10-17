@@ -21,6 +21,9 @@ export interface UsageRow {
   reasoningTokens: number;
   requests: number;
   costUsd: number;
+  /** True when costUsd was computed from a known rate (or local $0.00); false when no pricing rate is configured. */
+  costKnown?: boolean;
+  costStatus?: 'ACTUAL' | 'ESTIMATED' | 'UNKNOWN';
   source: UsageMeasurement['source'];
   at: number;
   durationMs?: number;
@@ -213,7 +216,16 @@ export class ResourceLedger {
         row.source, row.at, row.durationMs ?? null, row.local ? 1 : 0);
       this.db.prepare(`UPDATE reservations SET status = 'settled', settled_at = ? WHERE request_id = ? AND status IN ('active','expired')`).run(row.at, row.requestId);
       this.appendEvent('settled', { accountId: row.accountId, requestId: row.requestId, taskId: row.taskId }, {
-        input: row.inputTokens, output: row.outputTokens, cached: row.cachedInputTokens, cost: row.costUsd, source: row.source,
+        model: row.modelId,
+        input: row.inputTokens,
+        output: row.outputTokens,
+        cached: row.cachedInputTokens,
+        reasoning: row.reasoningTokens,
+        cost: row.costKnown === false ? null : row.costUsd,
+        costKnown: row.costKnown ?? (row.local || row.costUsd > 0),
+        costStatus: row.costStatus ?? (row.local ? 'ACTUAL' : row.costKnown === false ? 'UNKNOWN' : 'ACTUAL'),
+        durationMs: row.durationMs,
+        source: row.source,
       });
       return true;
     });
@@ -330,14 +342,30 @@ export class ResourceLedger {
     if (filter.accountId) { where.push('account_id = ?'); args.push(filter.accountId); }
     if (filter.taskId) { where.push('task_id = ?'); args.push(filter.taskId); }
     const rows = this.db.prepare(`SELECT * FROM usage${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY at`).all(...args) as Record<string, unknown>[];
-    return rows.map((r) => ({
-      requestId: String(r.request_id), accountId: String(r.account_id), modelId: String(r.model_id),
-      taskId: (r.task_id as string) ?? undefined, agent: (r.agent as string) ?? undefined, workload: (r.workload as WorkloadClass) ?? undefined,
-      inputTokens: Number(r.input_tokens), outputTokens: Number(r.output_tokens), cachedInputTokens: Number(r.cached_input_tokens),
-      reasoningTokens: Number(r.reasoning_tokens), requests: Number(r.requests), costUsd: Number(r.cost_usd),
-      source: r.source as UsageRow['source'], at: Number(r.at), durationMs: r.duration_ms === null ? undefined : Number(r.duration_ms),
-      local: Number(r.local) === 1,
-    }));
+    return rows.map((r) => {
+      const local = Number(r.local) === 1;
+      const costUsd = Number(r.cost_usd);
+      const settledEv = this.db.prepare(`SELECT json FROM events WHERE kind = 'settled' AND request_id = ? LIMIT 1`).get(String(r.request_id)) as { json: string } | undefined;
+      let costKnown: boolean = local || costUsd > 0;
+      let costStatus: 'ACTUAL' | 'ESTIMATED' | 'UNKNOWN' = local || costUsd > 0 ? 'ACTUAL' : 'UNKNOWN';
+      if (settledEv) {
+        try {
+          const parsed = JSON.parse(settledEv.json) as { costKnown?: boolean; costStatus?: 'ACTUAL' | 'ESTIMATED' | 'UNKNOWN' };
+          if (typeof parsed.costKnown === 'boolean') costKnown = parsed.costKnown;
+          if (parsed.costStatus) costStatus = parsed.costStatus;
+        } catch {
+          // ignore
+        }
+      }
+      return {
+        requestId: String(r.request_id), accountId: String(r.account_id), modelId: String(r.model_id),
+        taskId: (r.task_id as string) ?? undefined, agent: (r.agent as string) ?? undefined, workload: (r.workload as WorkloadClass) ?? undefined,
+        inputTokens: Number(r.input_tokens), outputTokens: Number(r.output_tokens), cachedInputTokens: Number(r.cached_input_tokens),
+        reasoningTokens: Number(r.reasoning_tokens), requests: Number(r.requests), costUsd, costKnown, costStatus,
+        source: r.source as UsageRow['source'], at: Number(r.at), durationMs: r.duration_ms === null ? undefined : Number(r.duration_ms),
+        local,
+      };
+    });
   }
 
   activeReservations(now = this.now()): ReservationRow[] {

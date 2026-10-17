@@ -6,7 +6,12 @@ import {
 } from '@wazir/core';
 import { createAnthropicAdapter } from '@wazir/runtimes-anthropic';
 import { createGoogleAdapter } from '@wazir/runtimes-google';
-import { createNvidiaAdapter, inferNvidiaModelMetadata, NVIDIA_DEFAULT_BASE_URL, NVIDIA_DEFAULT_MODEL_ID } from '@wazir/runtimes-nvidia';
+import {
+  createNvidiaAdapter,
+  inferNvidiaModelMetadata,
+  NVIDIA_DEFAULT_BASE_URL,
+  NVIDIA_DEFAULT_MODEL_ID,
+} from '@wazir/runtimes-nvidia';
 import { createOpenAIAdapter } from '@wazir/runtimes-openai';
 import type { DiscoveredModel, ProviderAuthAdapter, ProviderId, RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import type { SecretBroker } from '@wazir/secrets';
@@ -23,6 +28,22 @@ export const PROVIDER_DISPLAY_NAME: Record<ProviderId, string> = {
 
 export function createHostedProviders(config: WazirConfig, secrets: SecretBroker): Map<ProviderId, HostedAdapter> {
   const nvidiaCfg = config.providers?.nvidia;
+  const routingDefaultModel =
+    config.routing?.provider === 'nvidia' && config.routing?.defaultModel
+      ? config.routing.defaultModel
+      : undefined;
+  const defaultModel =
+    routingDefaultModel ??
+    nvidiaCfg?.defaultModel ??
+    process.env.WAZIR_NVIDIA_DEFAULT_MODEL ??
+    NVIDIA_DEFAULT_MODEL_ID;
+  const configuredModels = Array.from(
+    new Set([
+      ...(nvidiaCfg?.models ?? []),
+      ...(routingDefaultModel ? [routingDefaultModel] : []),
+    ]),
+  );
+
   return new Map<ProviderId, HostedAdapter>([
     ['anthropic', createAnthropicAdapter(secrets)],
     ['openai', createOpenAIAdapter(secrets)],
@@ -39,9 +60,10 @@ export function createHostedProviders(config: WazirConfig, secrets: SecretBroker
         secrets,
         baseURL: nvidiaCfg?.baseUrl ?? process.env.WAZIR_NVIDIA_BASE_URL ?? NVIDIA_DEFAULT_BASE_URL,
         apiKeyEnv: nvidiaCfg?.apiKeyEnv ?? 'NVIDIA_API_KEY',
-        defaultModel: nvidiaCfg?.defaultModel ?? process.env.WAZIR_NVIDIA_DEFAULT_MODEL ?? NVIDIA_DEFAULT_MODEL_ID,
-        configuredModels: nvidiaCfg?.models,
-        defaultMaxOutputTokens: nvidiaCfg?.limits?.maxOutputTokens,
+        defaultModel,
+        configuredModels: configuredModels.length > 0 ? configuredModels : undefined,
+        defaultMaxOutputTokens: !Array.isArray(nvidiaCfg?.limits) ? nvidiaCfg?.limits?.maxOutputTokens : undefined,
+        maxRetries: !Array.isArray(nvidiaCfg?.limits) ? nvidiaCfg?.limits?.maxRetries : undefined,
         discoverModelsRemote: nvidiaCfg?.capabilities?.discoverOnStartup ?? true,
       }),
     ],
@@ -65,8 +87,17 @@ function guessHostedFamily(provider: ProviderId, discovered: DiscoveredModel): M
   return provider === 'openai' ? 'gpt' : 'other';
 }
 
-function registerHostedModel(models: ModelRegistry, provider: ProviderId, discovered: DiscoveredModel, config: WazirConfig): void {
-  const capabilities: ModelCapability[] = ['generalChat', ...(discovered.capabilities ?? []), ...(config.modelCapabilities[discovered.id] ?? [])] as ModelCapability[];
+export function registerHostedModel(
+  models: ModelRegistry,
+  provider: ProviderId,
+  discovered: DiscoveredModel,
+  config: WazirConfig,
+): void {
+  const capabilities: ModelCapability[] = [
+    'generalChat',
+    ...(discovered.capabilities ?? []),
+    ...(config.modelCapabilities[discovered.id] ?? []),
+  ] as ModelCapability[];
   if (discovered.toolCalling) capabilities.push('toolCalling');
   if (discovered.reasoning) capabilities.push('reasoning');
   if (discovered.vision) capabilities.push('vision');
@@ -101,9 +132,27 @@ function registerHostedModel(models: ModelRegistry, provider: ProviderId, discov
   };
   models.register(record);
 
+  const instanceId = `${discovered.id}::hosted::${provider}`;
+  models.upsertInstallation({
+    id: instanceId,
+    modelId: discovered.id,
+    runtimeId: provider,
+    runtimeModelId: discovered.id,
+    installed: true,
+    observedAt: new Date(),
+    profile: {
+      modelId: discovered.id,
+      runtimeId: provider,
+      maximumContext: contextMax,
+      quantization: discovered.quantization,
+      metadata: { hosted: true, provider },
+    },
+  });
+
   models.upsertInstance({
     // No computerId segment — a hosted instance has no Computer affinity.
-    id: `${discovered.id}::hosted::${provider}`,
+    id: instanceId,
+    installationId: instanceId,
     modelId: discovered.id,
     runtimeId: provider,
     runtimeModelId: discovered.id,
@@ -112,6 +161,32 @@ function registerHostedModel(models: ModelRegistry, provider: ProviderId, discov
     health: 'healthy',
     contextTokens: contextMax,
   });
+}
+
+/**
+ * Ensures an explicitly pinned or configured NVIDIA model ID is registered in the
+ * live ModelRegistry when the NVIDIA runtime is healthy & authenticated, even if
+ * the remote `/models` catalog did not list it or startup discovery was offline.
+ */
+export function ensureNvidiaModelRegistered(
+  models: ModelRegistry,
+  runtimes: RuntimeRegistry,
+  config: WazirConfig,
+  modelId: string,
+): boolean {
+  const trimmed = modelId.trim();
+  if (!trimmed) return false;
+  const nvidiaRuntime = runtimes.get('nvidia');
+  if (!nvidiaRuntime || nvidiaRuntime.health !== 'healthy') return false;
+  const existing = models.get(trimmed);
+  const existingReady = models
+    .instancesOf(trimmed)
+    .some((i) => i.runtimeId === 'nvidia' && i.loaded && i.state === 'READY' && i.health === 'healthy');
+  if (existing && existingReady) return true;
+
+  const meta = inferNvidiaModelMetadata(trimmed);
+  registerHostedModel(models, 'nvidia', meta, config);
+  return true;
 }
 
 /**
@@ -170,29 +245,6 @@ export async function applyHostedProvider(
     return;
   }
 
-  // The configured default is a release contract: a provider's remote catalog
-  // must not make the stable default disappear from local routing.
-  if (provider === 'nvidia') {
-    const defaultModel = (adapter as any).getDefaultModel?.() ?? NVIDIA_DEFAULT_MODEL_ID;
-    if (!discovered.some((model) => model.id === defaultModel)) {
-      const meta = inferNvidiaModelMetadata(defaultModel);
-      discovered.unshift({
-        id: meta.id,
-        name: meta.name,
-        family: meta.family,
-        contextWindow: meta.contextWindow,
-        maxOutputTokens: meta.maxOutputTokens,
-        capabilities: meta.capabilities,
-        toolCalling: meta.toolCalling,
-        structuredOutput: meta.structuredOutput,
-        vision: meta.vision,
-        audio: meta.audio,
-        embedding: meta.embedding,
-        reasoning: meta.reasoning,
-      });
-    }
-  }
-
   if (discovered.length === 0) {
     runtimes.update(provider, { health: 'degraded' });
     return;
@@ -200,5 +252,17 @@ export async function applyHostedProvider(
 
   for (const model of discovered) {
     registerHostedModel(models, provider, model, config);
+  }
+
+  if (provider === 'nvidia') {
+    const extraModelIds = new Set<string>();
+    if (config.providers?.nvidia?.defaultModel) extraModelIds.add(config.providers.nvidia.defaultModel);
+    for (const m of config.providers?.nvidia?.models ?? []) extraModelIds.add(m);
+    if (config.routing?.provider === 'nvidia' && config.routing.defaultModel) {
+      extraModelIds.add(config.routing.defaultModel);
+    }
+    for (const extraId of extraModelIds) {
+      ensureNvidiaModelRegistered(models, runtimes, config, extraId);
+    }
   }
 }
