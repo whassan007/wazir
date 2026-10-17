@@ -478,14 +478,11 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     projectRoot,
   });
 
-  const storedExecEntries = await store.list(API_EXECUTION_PREFIX);
+  const storedExecEntries = await store.list('execution/');
   const sortedStoredExecs = storedExecEntries
     .map((entry) => {
-      const val = entry.value as { seq?: number; record?: Record<string, unknown> } | Record<string, unknown>;
-      if (val && typeof val === 'object' && 'record' in val && val.record && typeof val.record === 'object') {
-        return { key: entry.key, seq: typeof val.seq === 'number' ? val.seq : 0, record: val.record as Record<string, unknown> };
-      }
-      return { key: entry.key, seq: 0, record: val as Record<string, unknown> };
+      const record = entry.value as Record<string, unknown>;
+      return { key: entry.key, seq: 0, record: Array.isArray(record?.events) ? record : { events: [], ...record } };
     })
     .sort((a, b) => a.seq - b.seq);
   if (sortedStoredExecs.length > MAX_EXECUTION_RECORDS) {
@@ -495,10 +492,6 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     }
   }
   const initialExecutions = sortedStoredExecs.map((item) => item.record);
-  const maxLoadedSeq = sortedStoredExecs.reduce((max, item) => Math.max(max, item.seq), 0);
-  if (maxLoadedSeq > apiExecutionSeq) {
-    apiExecutionSeq = maxLoadedSeq;
-  }
 
   const state: ApiState = {
     computers,
@@ -533,9 +526,9 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   return state;
 }
 
-const API_EXECUTION_PREFIX = 'api-execution/';
 const SUMMARY_RESULT_MAX_CHARS = 512;
-let apiExecutionSeq = 0;
+const DEFAULT_EXECUTION_PAGE_SIZE = 100;
+const MAX_EXECUTION_PAGE_SIZE = 500;
 
 function extractExecutionId(record: Record<string, unknown> | undefined): string | undefined {
   const id = (record?.execution as { id?: unknown } | undefined)?.id;
@@ -543,36 +536,12 @@ function extractExecutionId(record: Record<string, unknown> | undefined): string
 }
 
 async function recordExecution(state: ApiState, record: Record<string, unknown>): Promise<void> {
-  state.executions.push(record);
-  let evicted: Array<Record<string, unknown>> = [];
-  if (state.executions.length > MAX_EXECUTION_RECORDS) {
-    evicted = state.executions.splice(0, state.executions.length - MAX_EXECUTION_RECORDS);
-  }
   const id = extractExecutionId(record);
-  apiExecutionSeq += 1;
-  const seq = apiExecutionSeq;
-  try {
-    if (id) {
-      await state.store.put(`${API_EXECUTION_PREFIX}${id}`, { seq, record });
-    }
-    for (const old of evicted) {
-      const oldId = extractExecutionId(old);
-      if (oldId && oldId !== id) {
-        await state.store.delete(`${API_EXECUTION_PREFIX}${oldId}`);
-      }
-    }
-  } catch {
-    // Keep in-memory history intact even if the backing store is temporarily read-only.
-  }
-}
-
-function recordRevisionScore(rec: Record<string, unknown> | undefined): number {
-  if (!rec) return -1;
-  const rev = typeof rec.storageRevision === 'number' ? rec.storageRevision : 0;
-  const evCount = Array.isArray(rec.events) ? rec.events.length : 0;
-  const status = String((rec.execution as { status?: unknown } | undefined)?.status ?? '');
-  const terminalBonus = ['completed', 'failed', 'cancelled'].includes(status) ? 1000 : 0;
-  return rev * 1_000_000 + terminalBonus + evCount;
+  if (!id) throw new Error('EXECUTION_ID_REQUIRED');
+  if (!state.store.update) throw new Error('EXECUTION_PERSISTENCE_UNAVAILABLE');
+  await state.store.update<Record<string, unknown>>(`execution/${id}`, current => current ?? { events: [], ...record, storageRevision: 1 });
+  state.executions.push(record);
+  if (state.executions.length > MAX_EXECUTION_RECORDS) state.executions.splice(0, state.executions.length - MAX_EXECUTION_RECORDS);
 }
 
 function normalizeExecutionRecord(raw: Record<string, unknown>): Record<string, unknown> {
@@ -617,77 +586,26 @@ function normalizeExecutionRecord(raw: Record<string, unknown>): Record<string, 
 }
 
 /**
- * Collects execution records from both the API's execution list and the shared
- * ExecutionEngine / store (`execution/<id>`), ordered newest-first. Reading
- * `execution/` from `state.store` ensures CLI executions written by another
- * process sharing the same store appear immediately without an API restart.
+ * Reads the shared durable execution repository. The in-process engine is only
+ * a derived index; the store is authoritative across API/CLI restarts.
  */
 async function collectAllExecutions(state: ApiState): Promise<Array<Record<string, unknown>>> {
   const byId = new Map<string, Record<string, unknown>>();
-  // Oldest-first insertion so reversing at the end puts newest first.
-  const engineRecords = state.mobile ? await state.mobile.executionEngine.list() : [];
-  for (let i = engineRecords.length - 1; i >= 0; i -= 1) {
-    const rec = engineRecords[i] as unknown as Record<string, unknown>;
+  for (const entry of await state.store.list('execution/')) {
+    const rec = entry.value as Record<string, unknown> | undefined;
     const id = extractExecutionId(rec);
-    if (id) byId.set(id, normalizeExecutionRecord(rec));
+    if (id && rec) byId.set(id, normalizeExecutionRecord(rec));
   }
-  try {
-    const storeEntries = await state.store.list('execution/');
-    for (const entry of storeEntries) {
-      const rec = entry.value as Record<string, unknown> | undefined;
-      const id = extractExecutionId(rec);
-      if (id && rec) {
-        const existing = byId.get(id);
-        if (!existing || recordRevisionScore(rec) >= recordRevisionScore(existing)) {
-          byId.set(id, normalizeExecutionRecord(rec));
-        }
-      }
-    }
-  } catch {
-    // Ignore transient store list errors and fall back to in-memory state.
-  }
-  for (const r of state.executions) {
-    const id = extractExecutionId(r);
-    if (id) {
-      // Re-insert so newer API records move to the end before reverse().
-      byId.delete(id);
-      byId.set(id, normalizeExecutionRecord(r));
-    }
-  }
-  return [...byId.values()].reverse();
+  return [...byId.values()].sort((a, b) => {
+    const ad = Date.parse(String((a.execution as any)?.createdAt ?? '')) || 0;
+    const bd = Date.parse(String((b.execution as any)?.createdAt ?? '')) || 0;
+    return bd - ad || String((b.execution as any)?.id).localeCompare(String((a.execution as any)?.id));
+  });
 }
 
 async function lookupExecution(state: ApiState, id: string): Promise<Record<string, unknown> | undefined> {
-  for (let i = state.executions.length - 1; i >= 0; i -= 1) {
-    if (extractExecutionId(state.executions[i]) === id) {
-      return normalizeExecutionRecord(state.executions[i]);
-    }
-  }
-  let candidate: Record<string, unknown> | undefined;
-  if (state.mobile) {
-    const engineExec = await state.mobile.executionEngine.get(id);
-    if (engineExec && engineExec.execution?.id === id) {
-      candidate = engineExec as unknown as Record<string, unknown>;
-    }
-  }
-  try {
-    const fromExecStore = await state.store.get<Record<string, unknown>>(`execution/${id}`);
-    if (fromExecStore && extractExecutionId(fromExecStore) === id) {
-      if (!candidate || recordRevisionScore(fromExecStore) >= recordRevisionScore(candidate)) {
-        candidate = fromExecStore;
-      }
-    }
-    if (candidate) {
-      return normalizeExecutionRecord(candidate);
-    }
-    const fromApiStore = await state.store.get<{ record?: Record<string, unknown> }>(`${API_EXECUTION_PREFIX}${id}`);
-    if (fromApiStore?.record && extractExecutionId(fromApiStore.record) === id) {
-      return normalizeExecutionRecord(fromApiStore.record);
-    }
-  } catch {
-    if (candidate) return normalizeExecutionRecord(candidate);
-  }
-  return candidate ? normalizeExecutionRecord(candidate) : undefined;
+  const record = await state.store.get<Record<string, unknown>>(`execution/${id}`);
+  return record && extractExecutionId(record) === id ? normalizeExecutionRecord(record) : undefined;
 }
 
 function summarizeExecutionRecord(record: Record<string, unknown>): Record<string, unknown> {
@@ -1028,7 +946,12 @@ export function createApp(state: ApiState) {
   });
 
   app.get('/api/v1/executions', async (req, res) => {
-    const all = await collectAllExecutions(state);
+    let all: Array<Record<string, unknown>>;
+    try { all = await collectAllExecutions(state); }
+    catch (error) {
+      res.status(503).json({ code: 'EXECUTION_HISTORY_UNAVAILABLE', error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
     const statusFilter = typeof req.query.status === 'string' ? req.query.status.trim().toLowerCase() : '';
     const computerFilter = typeof req.query.computerId === 'string' ? req.query.computerId.trim() : '';
     const agentFilter = typeof req.query.agentId === 'string' ? req.query.agentId.trim() : '';
@@ -1074,21 +997,23 @@ export function createApp(state: ApiState) {
       return true;
     });
 
+    const rawLimit = req.query.limit !== undefined ? Number(req.query.limit) : DEFAULT_EXECUTION_PAGE_SIZE;
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(MAX_EXECUTION_PAGE_SIZE, Math.floor(rawLimit)) : DEFAULT_EXECUTION_PAGE_SIZE;
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
     const rawOffset = Number(req.query.offset ?? 0);
     const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0;
-    const rawLimit = req.query.limit !== undefined ? Number(req.query.limit) : MAX_EXECUTION_RECORDS;
-    const limit = Number.isFinite(rawLimit) && rawLimit > 0
-      ? Math.min(MAX_EXECUTION_RECORDS, Math.floor(rawLimit))
-      : MAX_EXECUTION_RECORDS;
-
-    const sliced = filtered.slice(offset, offset + limit);
+    const start = cursor
+      ? Math.max(0, filtered.findIndex((e) => String((e.execution as any)?.id) === cursor) + 1)
+      : offset;
+    const sliced = filtered.slice(start, start + limit);
     const executions = summaryMode ? sliced.map(summarizeExecutionRecord) : sliced;
     res.json({
       executions,
       total: filtered.length,
-      offset,
+      offset: start,
       limit,
-      hasMore: offset + executions.length < filtered.length,
+      hasMore: start + executions.length < filtered.length,
+      nextCursor: start + executions.length < filtered.length ? String((sliced[sliced.length - 1].execution as any).id) : undefined,
     });
   });
 
