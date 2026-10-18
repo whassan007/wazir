@@ -90,6 +90,11 @@ export interface ExecuteTaskOptions {
   routingMode?: import('@wazir/core').RoutingMode;
   /** Runtime preset name (e.g. 'standard', 'minimal'). */
   preset?: string;
+  /** Force VERIFY to build/test/lint/typecheck the whole repo instead of scoping to the
+   *  workspace(s) the task touched (`wa run --full-verify`). */
+  fullVerification?: boolean;
+  /** Force direct-answer fast-path execution (single-turn inference without workspace modification). */
+  fastPath?: boolean;
 }
 
 export interface TaskOutcome {
@@ -112,6 +117,56 @@ export type PlanResult = { ok: true; plan: TaskPlan } | { ok: false; reasons: st
 
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
 const WRITE_TOOLS = new Set(['write', 'edit']);
+
+/**
+ * Detects whether a request is a direct-answer / non-mutating query (e.g. arithmetic,
+ * string transformation, pure Q&A, JSON formatting, or self-contained code snippet generation)
+ * that does not require repository editing, multi-turn coding agent planning, or build checks.
+ */
+export function isDirectAnswerRequest(prompt: string, options: ExecuteTaskOptions = {}): boolean {
+  if (options.fastPath === true) return true;
+  if (options.type === 'chat') return true;
+  if (options.expectedFiles && options.expectedFiles.length > 0) return false;
+  if (options.agent && options.agent !== 'wazir-coding') return false;
+
+  const trimmed = prompt.trim();
+  const lower = trimmed.toLowerCase();
+
+  // If prompt explicitly mentions repository editing, files, or git operations, it is mutating
+  if (/\b(edit|modify|fix|update|refactor|add to file|write to|create file|delete file|git commit|in repo|in repository)\b/i.test(lower)) {
+    return false;
+  }
+
+  // Arithmetic, calculation, math expressions
+  if (/^what\s+is\s+[\d\s+\-*/^().]+(\?)?$/i.test(trimmed) || /^\d+\s*[\+\-\*\/]\s*\d+/.test(trimmed) || /^[\d\s+\-*/%^().=]+$/.test(trimmed) || /\b(calculate|compute|arithmetic|sum of|product of)\b/i.test(trimmed)) {
+    return true;
+  }
+
+  // String transformations: reverse, uppercase, lowercase, anagram
+  if (/\b(reverse|transform|convert|capitalize|lowercase|uppercase)\b/i.test(trimmed) && !/\b(file|directory|path|repo)\b/i.test(trimmed)) {
+    return true;
+  }
+
+  // Pure JSON / YAML / formatting requests
+  if (/\b(output|generate|format|produce|write|give me)\b.*\b(json|yaml|xml|csv)\b/i.test(trimmed)) {
+    return true;
+  }
+
+  // Direct questions: what is, who is, why is, explain, define, how does
+  if (/^(what|who|where|when|why|how)\s+(is|are|was|were|does|do|did|can|could|should|would)\b/i.test(trimmed) || /^(explain|describe|define|summarize|list)\b/i.test(trimmed)) {
+    return true;
+  }
+
+  // Standalone code snippets / functions (without repo file targets)
+  if (/\b(write|show|implement|create|give me)\b.*\b(function|algorithm|class|snippet|script|code|fibonacci)\b/i.test(trimmed)) {
+    // If it doesn't mention file names or path extensions (.ts, .js, src/, etc.)
+    if (!/\b(\.ts|\.js|\.py|\.go|\.rs|src\/|test\/|lib\/)\b/i.test(trimmed)) {
+      return true;
+    }
+  }
+
+  return false;
+}
 // A model that compiles via a raw `shell` call (e.g. `g++ -o main main.cpp`)
 // rather than a dedicated `build` tool invocation was previously invisible to
 // evaluateExecution() — CHECK_TOOLS only recognized the four named tools
@@ -156,6 +211,7 @@ export async function planTask(
   options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'routingMode' | 'preset'> = {},
 ): Promise<PlanResult> {
   const preset = resolvePreset(options.preset);
+  const isDirect = isDirectAnswerRequest(description, options);
   const routingCfg = engine.config.routing;
   const effectiveRoutingMode: import('@wazir/core').RoutingMode | undefined =
     options.routingMode ??
@@ -188,9 +244,9 @@ export async function planTask(
 
   const task: Task = {
     id: generateId('task-'),
-    type: options.type ?? 'coding',
+    type: options.type ?? (isDirect ? 'chat' : 'coding'),
     input: description,
-    requirements: { minimumContext: MINIMUM_CONTEXT_TOKENS, runtimePreset: preset.name },
+    requirements: { minimumContext: isDirect ? 4096 : MINIMUM_CONTEXT_TOKENS, runtimePreset: preset.name },
     policy: {
       networkAccess: engine.config.networkAllowed,
       projectRoot: engine.projectRoot,
@@ -221,11 +277,11 @@ export async function planTask(
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
 
   const baseParts: ContextPart[] = [
-    { kind: 'system', label: 'system prompt', content: buildSystemPrompt(engine.projectRoot, allowedTools), priority: 'critical' },
+    { kind: 'system', label: 'system prompt', content: isDirect ? 'You are a helpful, fast, and precise assistant. Answer the user\'s request directly, concisely, and completely without unnecessary planning or tool calls.' : buildSystemPrompt(engine.projectRoot, allowedTools), priority: 'critical' },
     { kind: 'task', label: 'task', content: description, priority: 'critical' },
   ];
 
-  const activeContextParts = await buildContextPartsFromActive(engine);
+  const activeContextParts = isDirect ? [] : await buildContextPartsFromActive(engine);
   const parts = [...baseParts, ...activeContextParts];
   const budget = engine.compiler.budget(parts, OUTPUT_RESERVE_TOKENS);
 
@@ -362,6 +418,114 @@ export async function executeTask(
   log(color.gray(`    context:  ${context.finalRequiredTokens} / ${context.available.tokens} tokens`));
   for (const reason of scheduling.reasons) {
     log(color.gray(`    - ${reason}`));
+  }
+
+  // ---- FAST-PATH DIRECT EXECUTION (§1) -----------------------------------
+  // For non-mutating / direct-answer requests (arithmetic, Q&A, string transforms,
+  // valid JSON generation), bypass coding agent planning, preflight probes, tool compilation,
+  // multi-phase turn loops, and build/test verification. Perform single direct model inference.
+  if (isDirectAnswerRequest(description, options) && !externalAgent) {
+    const startTime = Date.now();
+    loader.start(`Generating answer from ${scheduling.modelId}...`);
+    await engine.executions.setStatus(executionId, 'running');
+
+    let directSummary = '';
+    const directErrors: string[] = [];
+    const directRequestId = generateId('fast-req-');
+
+    try {
+      const adapter = engine.adapters.get(scheduling.runtimeId) ?? engine.worker.adapterForModel(scheduling.modelId);
+      if (!adapter) {
+        throw new Error(`no runtime adapter available for model '${scheduling.modelId}'`);
+      }
+
+      const promptMessages = [
+        {
+          role: 'system' as const,
+          content: 'You are a helpful, precise assistant. Provide a direct, correct, and concise answer to the user\'s request without unnecessary explanation or commentary.',
+        },
+        {
+          role: 'user' as const,
+          content: description,
+        },
+      ];
+
+      for await (const event of adapter.generate({
+        requestId: directRequestId,
+        modelId: scheduling.modelId,
+        messages: promptMessages,
+        contextTokens: context.available.tokens,
+        stream: true,
+        resourceContext: { taskId: task.id, workload: 'routine', agent: agent.descriptor.name },
+      })) {
+        if (event.type === 'token') {
+          const chunk = event.content ?? (event as any).token ?? '';
+          directSummary += chunk;
+          const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+          loader.setText(`Generating answer from ${scheduling.modelId} (${elapsedSec}s)...`);
+        } else if (event.type === 'completed') {
+          if (event.content && !directSummary) {
+            directSummary = event.content;
+          }
+          if (event.usage) {
+            await engine.executions.recordUsage(executionId, {
+              input: event.usage.inputTokens,
+              output: event.usage.outputTokens,
+              total: event.usage.totalTokens,
+              cacheReadTokens: event.usage.cacheReadTokens,
+              cacheWriteTokens: event.usage.cacheWriteTokens,
+              promptCacheMetrics: event.promptCache ?? event.usage.promptCache,
+            });
+          }
+        } else if (event.type === 'error') {
+          directErrors.push(event.error);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      directErrors.push(msg);
+      await engine.executions.recordError(executionId, msg).catch(() => undefined);
+    } finally {
+      loader.stop();
+    }
+
+    const trimmedSummary = directSummary.trim();
+    if (trimmedSummary) {
+      await engine.executions.setResult(executionId, trimmedSummary);
+    }
+
+    const isSuccess = directErrors.length === 0 && trimmedSummary.length > 0;
+    const finalRecord = engine.executions.require(executionId);
+    const evaluation = evaluateExecution(finalRecord, {
+      expectedFiles: options.expectedFiles,
+      expectedEvidence: undefined, // No checks expected or required on fast-path
+    });
+
+    evaluation.success = isSuccess;
+    if (isSuccess && !evaluation.reasons.includes('direct answer completed successfully')) {
+      evaluation.reasons.push('direct answer completed successfully');
+    }
+
+    await engine.executions.setEvaluation(executionId, evaluation);
+    await engine.executions.setStatus(executionId, isSuccess ? 'completed' : 'failed');
+
+    emitJson({
+      type: 'complete',
+      success: isSuccess,
+      executionId,
+      filesChanged: [],
+      result: trimmedSummary,
+      errors: directErrors,
+    });
+
+    return {
+      success: isSuccess,
+      reasons: evaluation.reasons,
+      filesChanged: [],
+      executionId,
+      result: trimmedSummary,
+      errors: directErrors,
+    };
   }
 
   // Preflight Infrastructure Verification. Runs whenever execution happens
@@ -782,6 +946,7 @@ export async function executeTask(
         maxTurns: options.maxTurns,
         contextTokens: context.available.tokens,
         isCancelled: () => cancelled,
+        fullVerification: options.fullVerification,
       },
       runtime,
     )) {
@@ -816,6 +981,11 @@ export async function executeTask(
             emitJson({ type: 'error', error: turn.error, executionId });
             log(color.red(`    ${untrusted(turn.error.split('\n')[0].slice(0, 200))}`));
           }
+          // The model may have reached "done" with a real answer before verification
+          // failed it (e.g. a Q&A prompt correctly answered but flagged for making no
+          // code changes). Surface it instead of letting a failed task hide what the
+          // model actually said.
+          if (turn.content) summary = turn.content;
           break;
         default:
           break;

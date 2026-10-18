@@ -270,6 +270,27 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     expect(outcome.result).toContain('Verification checks passed');
   });
 
+  it('a Q&A prompt answered correctly without writing any file still surfaces the answer, even though VERIFY fails it for making no code changes', async () => {
+    // Regression test for a live-observed usability defect (2026-10-17, test/agy-mac-gemma):
+    // "What is 12 x 8?" was answered by the model, but the task type defaults to `coding`
+    // (mutationRequired), so VERIFY correctly fails it for "no code modifications" — and
+    // the model's actual answer used to be silently discarded, leaving the operator with
+    // zero indication whether the model had even gotten the trivial question right.
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-answer-surfaced-'));
+    const engine = await buildTestEngine(projectRoot, [
+      '{"action":"plan","content":"calculate 12 x 8"}',
+      '{"action":"done","summary":"96"}',
+    ]);
+
+    const outcome = await executeTask(engine, 'What is 12 x 8? Return only the number.', { quiet: true });
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.errors.join(' ')).toContain('no code modifications');
+    // The model's actual answer must still be visible, not thrown away just because
+    // this task — correctly — isn't being reported as a verified success.
+    expect(outcome.result).toBe('96');
+  });
+
   it('a task that compiles source code via a raw `shell` call IS recorded as a real check and can succeed', async () => {
     // Companion regression test: the compiler must actually be *recognized*
     // as a check. This also pins the exact live bug found while verifying

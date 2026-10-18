@@ -64,3 +64,4 @@ export {
   EXECUTION_PHASES,
 } from './modelIntelligence.js';
 export type { BudgetConsumption } from './governance.js';
+export * from './handoff.js';

@@ -1,12 +1,12 @@
 import { formatVerificationInspection } from './tui/observabilityViews.js';
-import { explainExecution, inspectVerificationEvidence, explainCompletion, ModelLifecycleError, summarizeExecution, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
+import { explainExecution, inspectVerificationEvidence, explainCompletion, ModelLifecycleError, summarizeExecution, captureHeadFingerprint, describeUnexpectedHeadDrift, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { ArtifactProvenance, ArtifactType, TaskType } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
-import { executeTask, planTask } from './run.js';
+import { executeTask, planTask, isDirectAnswerRequest } from './run.js';
 import { ensureNvidiaModelRegistered } from './hostedProviders.js';
 import { tokensPerSecond, readAuditEvents, stripTerminalEscapes, type AuditEvent } from '@wazir/shared';
 import { parseAction, normalizeAction, missingRequiredFields, REQUIRED_TOOL_FIELDS } from '@wazir/agents';
@@ -833,6 +833,8 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   routingMode?: import('@wazir/core').RoutingMode;
   json?: boolean;
   preset?: string;
+  fullVerification?: boolean;
+  fastPath?: boolean;
 }): Promise<{ code: number; output: string }> {
   // A fresh, failed preflight means this agent would fail too: say why now rather than after
   // a full launch. Agents never checked (or with an expired result) run normally.
@@ -853,6 +855,13 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
       };
     }
   }
+  // Defense-in-depth (see packages/core/src/services/repoIntegrityGuard.ts): a 2026-10-17
+  // audit observed a single task invocation coincide with an unauthorized merge commit
+  // landing on the user's checked-out branch, with no trace in any of Wazir's own
+  // policy/audit/event logs. The exact trigger wasn't isolated. Regardless of mechanism,
+  // never hand back a result without telling the user their repository moved underneath them.
+  const isDirect = isDirectAnswerRequest(description, { type: options.type, expectedFiles: options.expectedFiles, agent: options.agent, fastPath: options.fastPath });
+  const headBefore = isDirect ? undefined : await captureHeadFingerprint(engine.projectRoot);
   const outcome = await executeTask(engine, description, {
     type: options.type,
     model: options.model,
@@ -864,7 +873,15 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
     json: options.json,
     quiet: options.json === true,
     preset: options.preset,
+    fullVerification: options.fullVerification,
+    fastPath: options.fastPath,
   });
+  const headDrift = headBefore ? await describeUnexpectedHeadDrift(engine.projectRoot, headBefore) : undefined;
+  if (headDrift) {
+    outcome.success = false;
+    outcome.reasons = [headDrift, ...outcome.reasons];
+    outcome.errors = [headDrift, ...outcome.errors];
+  }
 
   if (options.json) {
     return { code: outcome.success ? 0 : 1, output: JSON.stringify(outcome, null, 2) };
@@ -1846,7 +1863,7 @@ export async function askCommand(
 
   // Enforce provider-only and localOnly filtering on candidate models
   let eligibleModels = models.filter((m) => !m.embedding && !m.id.toLowerCase().includes('embed'));
-  if (options.localOnly || effectiveRoutingMode === 'LOCAL_ONLY') {
+  if (options.localOnly || effectiveRoutingMode === 'LOCAL_ONLY' || (!options.allowHosted && !engine.config.providers?.allowHostedProviders && !isProviderOnly)) {
     eligibleModels = eligibleModels.filter((m) => m.local);
   }
   if (isProviderOnly && effectiveRoutingProvider) {
@@ -1888,12 +1905,19 @@ export async function askCommand(
   const defaultModelId =
     routingCfg?.defaultModel ??
     (effectiveRoutingProvider === 'nvidia' ? engine.config.providers?.nvidia?.defaultModel : undefined);
+  // Prioritize resident models when no explicit model is requested
+  const residentModel = !options.model
+    ? eligibleModels.find((m) =>
+        engine.models.instancesOf(m.id).some((i) => i.loaded && (i.state === 'READY' || i.state === 'LOADED') && i.health === 'healthy')
+      )
+    : undefined;
 
   const target = options.model
     ? eligibleModels.find((m) => m.id === options.model || m.id.toLowerCase().includes(options.model!.toLowerCase()))
-    : (defaultModelId ? eligibleModels.find((m) => m.id === defaultModelId) : undefined) ??
-      eligibleModels[0] ??
-      (!isProviderOnly ? models[0] : undefined);
+    : (residentModel ??
+       (defaultModelId ? eligibleModels.find((m) => m.id === defaultModelId) : undefined) ??
+       eligibleModels[0] ??
+       (!isProviderOnly ? models[0] : undefined));
 
   if (!target) {
     return {

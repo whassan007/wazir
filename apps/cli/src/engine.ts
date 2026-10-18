@@ -35,6 +35,7 @@ import {
   estimateModelMemory,
   TaskCapabilityClassifier,
   ModelIntelligenceService,
+  HandoffService,
 } from '@wazir/core';
 import type {
   ComputerRegistration,
@@ -81,6 +82,8 @@ export interface EngineOptions {
   approvalTimeoutMs?: number;
   /** Opt in to honouring `WAZIR_AUTO_APPROVE=1`; never on by default. */
   allowEnvAutoApprove?: boolean;
+  /** Skip active verification probes and background loops for ultra-low-latency CLI commands. */
+  fastStartup?: boolean;
 }
 
 export interface RookEngine {
@@ -127,6 +130,7 @@ export interface RookEngine {
   store: KeyValueStore;
   secretBroker: SecretBroker;
   hostedAdapters: Map<ProviderId, HostedAdapter>;
+  handoffs: HandoffService;
 }
 
 function guessFamily(id: string, provider: string): ModelRecord['family'] {
@@ -438,6 +442,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     defaultWorkspaceRoot: projectRoot,
   });
   await checkpoints.ready;
+  const handoffs = new HandoffService({ store, executions, checkpoints, projectRoot });
+  await handoffs.ready;
 
   const orchestrator = new JobOrchestrator({
     scheduler,
@@ -477,10 +483,10 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const executionHistory = await executions.list();
   reliability.hydrate(executionHistory);
   health.hydrateFromExecutions(executionHistory);
-  await lifecycle.discoverAndReconcile({ verify: !options.readOnlyLifecycle });
+  await lifecycle.discoverAndReconcile({ verify: !options.readOnlyLifecycle && !options.fastStartup });
   // After discovery so every model is registered; register() preserves the profiles.
   for (const [modelId, profiles] of measureModelPerformance(executionHistory)) models.setPerformance(modelId, profiles);
-  if (!options.readOnlyLifecycle) {
+  if (!options.readOnlyLifecycle && !options.fastStartup) {
     await lifecycle.applyStartupPolicy(config.models?.startup);
     lifecycle.startReconciliation();
     const inspectOutcome = localOutcomeInspector(projectRoot, localComputer.id);
@@ -582,6 +588,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     store,
     secretBroker,
     hostedAdapters,
+    handoffs,
     mcp,
   };
 }

@@ -131,6 +131,19 @@ export class LMStudioAdapter implements RuntimeAdapter {
       failureReason: ''
     };
 
+    // Fast-path: query the LM Studio REST API directly (10-20ms) without spawning CLI subprocesses
+    try {
+      const installed = await this.nativeModels();
+      diagnostics.apiReachable = true;
+      diagnostics.serverRunning = true;
+      diagnostics.installedModels = installed.length;
+      diagnostics.loadedModels = installed.reduce((count, model) => count + model.loaded_instances.length, 0);
+      diagnostics.readyModels = diagnostics.loadedModels;
+      return { status: 'healthy', diagnostics };
+    } catch {
+      // Fall through to CLI / compatibility probe when REST API is not directly reachable
+    }
+
     const lmsBin = resolveLmsBin();
     try {
       const { stdout } = await execFileAsync(lmsBin, ['ls'], { timeout: 3000 });
@@ -146,18 +159,6 @@ export class LMStudioAdapter implements RuntimeAdapter {
       }
     } catch {
       diagnostics.cliAvailable = false;
-    }
-
-    try {
-      const installed = await this.nativeModels();
-      diagnostics.apiReachable = true;
-      diagnostics.serverRunning = true;
-      diagnostics.installedModels = installed.length;
-      diagnostics.loadedModels = installed.reduce((count, model) => count + model.loaded_instances.length, 0);
-      diagnostics.readyModels = diagnostics.loadedModels;
-      return { status: 'healthy', diagnostics };
-    } catch {
-      // Older LM Studio versions may expose only the compatibility endpoint.
     }
 
     try {

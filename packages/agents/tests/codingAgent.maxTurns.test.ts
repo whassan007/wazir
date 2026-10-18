@@ -94,9 +94,12 @@ describe('CodingAgent.run — maxTurns', () => {
 
     await drain(agent.run({ ...baseRequest, maxTurns: 5 }, runtime));
 
-    // PLAN (3 turns) + WORK turns each call `read`, then VERIFY calls the
-    // three check tools once verification kicks in.
+    // PLAN (3 turns) + WORK turns each call `read`.
     expect(toolCalls.filter((t) => t === 'read').length).toBe(5);
-    expect(toolCalls).toEqual(expect.arrayContaining(['test', 'lint', 'typecheck']));
+    // This run only ever read a file and exhausted its turn budget without writing
+    // anything — VERIFY's mutation-required failure already explains that outcome, so the
+    // check battery (test/lint/typecheck) is skipped rather than run against an untouched
+    // repo for no reason (see codingAgent.skipChecksOnNoMutation.test.ts).
+    expect(toolCalls).not.toEqual(expect.arrayContaining(['test', 'lint', 'typecheck']));
   });
 });

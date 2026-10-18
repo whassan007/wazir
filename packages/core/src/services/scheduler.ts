@@ -774,8 +774,9 @@ export class Scheduler {
       .instancesOf(record.id)
       .find((i) => i.loaded && i.health === 'healthy');
     if (loadedInstance) {
-      score += 2;
-      reasons.push(`instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' already loaded`);
+      const bonus = loadedInstance.state === 'READY' ? 30 : 15;
+      score += bonus;
+      reasons.push(`instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' already loaded${loadedInstance.state === 'READY' ? ' and ready' : ''} (+${bonus})`);
     } else if (this.deps.models.instancesOf(record.id).length > 0) {
       reasons.push('available instance will be loaded on demand');
     } else {

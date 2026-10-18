@@ -198,10 +198,12 @@ export class ResourceRouter {
         latency: ms !== undefined && maxMs > 0 ? ms / maxMs : 0.5,
         quotaRisk: QUOTA_RISK[mode ?? 'normal'],
       };
+      const residencyBonus = p.residency === 'ready' ? 1.5 : 0;
       const score = w.quality * factors.quality + w.reliability * factors.reliability + w.capacity * factors.capacity
-        - w.cost * factors.cost - w.latency * factors.latency - w.quotaRisk * factors.quotaRisk;
+        - w.cost * factors.cost - w.latency * factors.latency - w.quotaRisk * factors.quotaRisk + residencyBonus;
       const reasons = [...p.reasons];
-      if (p.residency === 'reload') reasons.push('loaded with too little context: needs a reload (memory + load time)');
+      if (p.residency === 'ready') reasons.push('resident model in memory: ready now (zero reload latency)');
+      else if (p.residency === 'reload') reasons.push('loaded with too little context: needs a reload (memory + load time)');
       else if (p.residency === 'load') reasons.push(`not loaded: needs cold load${p.estimatedLoadMs ? ` (~${p.estimatedLoadMs}ms)` : ''} (memory + load time)`);
       if (p.evictionRequired) reasons.push('loading requires evicting a resident model on target hardware');
       return { ...p, reasons, factors, score: Number(score.toFixed(4)) };

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+import { createHandoffCommand } from './handoff.js';
 
 /** Injected by scripts/bundle.mjs from package.json (the canonical version); the literal is for unbundled dev runs. */
 declare const __WAZIR_VERSION__: string | undefined;
@@ -458,10 +459,12 @@ taskCmd
   .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
   .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
+  .option('--full-verify', 'Build/test/lint/typecheck the whole repo instead of scoping to the workspace(s) the task touched')
+  .option('--fast-path', 'Execute via direct-answer fast-path (single-turn inference without workspace modification)')
   .description('Run a new task')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
-    const engine = await createEngine();
+    const engine = await createEngine({ fastStartup: true });
     const { runTaskCommand } = await import('./commands.js');
     const result = await runTaskCommand(
       engine,
@@ -479,6 +482,8 @@ taskCmd
         allowHosted: options.allowHosted,
         routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
         json: options.json,
+        fullVerification: options.fullVerify,
+        fastPath: options.fastPath,
       },
     );
     console.log(result.output);
@@ -537,10 +542,12 @@ program
   .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
   .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
+  .option('--full-verify', 'Build/test/lint/typecheck the whole repo instead of scoping to the workspace(s) the task touched')
+  .option('--fast-path', 'Execute via direct-answer fast-path (single-turn inference without workspace modification)')
   .description('Run a new task (alias for wa task run)')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
-    const engine = await createEngine();
+    const engine = await createEngine({ fastStartup: true });
     const { runTaskCommand } = await import('./commands.js');
     const result = await runTaskCommand(
       engine,
@@ -558,6 +565,8 @@ program
         allowHosted: options.allowHosted,
         routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
         json: options.json,
+        fullVerification: options.fullVerify,
+        fastPath: options.fastPath,
       },
     );
     if (!options.json || result.output) {
@@ -1167,7 +1176,7 @@ program
   .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
-    const engine = await createEngine();
+    const engine = await createEngine({ fastStartup: true });
     const { askCommand } = await import('./commands.js');
     const result = await askCommand(engine, prompt, {
       ...options,
@@ -1378,6 +1387,7 @@ jobsCmd
   });
 
 program.addCommand(jobsCmd);
+program.addCommand(createHandoffCommand());
 
 // artifacts command
 const artifactsCmd = new Command()

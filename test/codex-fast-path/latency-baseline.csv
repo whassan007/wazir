@@ -1,0 +1,5 @@
+task_name,prompt,target_model,execution_mode,cold_latency_s,warm_latency_s,result_correct,verification_status
+arithmetic,"what is 23 + 19?",google/gemma-4-12b-qat,coding_agent_full_loop,220.0,35.4,true,FAILED_NO_CHECKS
+string_reversal,"reverse the word WAZIR",google/gemma-4-12b-qat,coding_agent_full_loop,63.0,42.1,true,FAILED_NO_MUTATION
+json_generation,"generate JSON {\"status\":\"ok\",\"count\":5}",google/gemma-4-12b-qat,coding_agent_full_loop,336.0,58.7,true,FAILED_UNRELATED_CHECK
+code_generation,"write a python fibonacci function",google/gemma-4-12b-qat,coding_agent_full_loop,180.0,48.2,true,FAILED_NO_WORKSPACE_CHECKS

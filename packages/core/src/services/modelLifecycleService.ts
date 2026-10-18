@@ -350,7 +350,9 @@ export class ModelLifecycleService {
     const requested = options.context;
     if ((requested !== undefined && (!Number.isSafeInteger(requested) || requested <= 0)) || !Number.isSafeInteger(minimum)) throw new ModelLifecycleError('CONTEXT_TOO_LARGE', ['invalid context']);
     const mode = options.mode ?? (requested !== undefined ? 'EXPLICIT' : 'AUTO');
-    const desired = requested ?? (mode === 'MAX_SAFE' ? limit : Math.max(minimum, this.deps.resources?.autoContext ?? 32768));
+    const isResidentUsable = i.loaded && (i.state === 'READY' || i.state === 'LOADED') && i.health === 'healthy' &&
+      i.contextTokens !== undefined && i.contextTokens >= minimum;
+    const desired = requested ?? (mode === 'MAX_SAFE' ? limit : isResidentUsable ? i.contextTokens! : Math.max(minimum, this.deps.resources?.autoContext ?? 32768));
     let context = Math.min(desired, limit);
     if (!Number.isSafeInteger(context)) throw new ModelLifecycleError('CONTEXT_TOO_LARGE', ['model context limit unknown']);
     if (requested !== undefined && requested > limit && !options.fit) reasons.push('CONTEXT_TOO_LARGE');
@@ -360,6 +362,19 @@ export class ModelLifecycleService {
     const held = snapshot.activeReservations.reduce((n, r) => n + r.memoryBytes, 0);
     const usable = available === undefined ? undefined : Math.max(0, available - safetyReserve - held);
     const estimateAt = async (candidateContext: number): Promise<LoadEstimate> => {
+      if (i.loaded && i.contextTokens === candidateContext && i.residentMemoryBytes) {
+        return {
+          modelId, runtimeId: i.runtimeId, computerId: i.computerId!, requestedContext: requested, candidateContext,
+          weightMemory: profile?.weightBytes, contextMemory: profile?.contextBytesPerToken ? profile.contextBytesPerToken * candidateContext : undefined,
+          runtimeOverhead: profile?.runtimeOverheadBytes,
+          estimatedTotalMemory: i.residentMemoryBytes,
+          estimatedVram: snapshot.unifiedMemory ? undefined : (profile?.weightBytes ?? i.residentMemoryBytes),
+          reservationMemoryBytes: i.residentMemoryBytes,
+          currentlyAvailableMemory: available, safetyReserve, usableMemory: usable,
+          postLoadAvailableMemory: available !== undefined ? available - held : undefined,
+          estimateSource: 'OBSERVED', confidence: 'high', classification: 'SAFE',
+        };
+      }
       let e: import('@wazir/runtimes-interfaces').ModelLoadEstimate = { source: 'UNKNOWN', confidence: 'unknown' };
       if (adapter?.estimateModelLoad) {
         try { e = await adapter.estimateModelLoad(i.runtimeModelId, candidateContext); } catch { /* unknown is denied below */ }
@@ -388,18 +403,33 @@ export class ModelLifecycleService {
     let estimate = await estimateAt(context);
     let safeContext: number | undefined;
     if (estimate.classification === 'INSUFFICIENT' && context >= minimum) {
-      let low = minimum, high = context, best: LoadEstimate | undefined;
-      // Monotonic context-memory search, with every candidate estimated by the runtime.
-      while (low <= high) {
-        const mid = Math.floor((low + high) / 2);
-        const e = await estimateAt(mid);
-        if (e.classification === 'SAFE' || e.classification === 'WARNING') { best = e; low = mid + 1; }
-        else high = mid - 1;
+      if (context === minimum) {
+        // Already at the minimum allowed context and it is insufficient
+        safeContext = undefined;
+      } else {
+        // Quick short-circuit: probe at minimum context first. If even the absolute minimum
+        // context is INSUFFICIENT, no safe context exists in [minimum, context], so skip
+        // the expensive binary search loop (which spawns repeated runtime estimate subprocesses).
+        const minEstimate = await estimateAt(minimum);
+        if (minEstimate.classification === 'INSUFFICIENT') {
+          safeContext = undefined;
+        } else {
+          let low = minimum, high = context, best: LoadEstimate | undefined =
+            (minEstimate.classification === 'SAFE' || minEstimate.classification === 'WARNING') ? minEstimate : undefined;
+          if (best) low = minimum + 1;
+          // Monotonic context-memory search, with every candidate estimated by the runtime.
+          while (low <= high) {
+            const mid = Math.floor((low + high) / 2);
+            const e = await estimateAt(mid);
+            if (e.classification === 'SAFE' || e.classification === 'WARNING') { best = e; low = mid + 1; }
+            else high = mid - 1;
+          }
+          safeContext = best?.candidateContext;
+          if (best && (mode !== 'EXPLICIT' || options.fit)) { estimate = best; context = best.candidateContext; }
+        }
       }
-      safeContext = best?.candidateContext;
-      if (best && (mode !== 'EXPLICIT' || options.fit)) { estimate = best; context = best.candidateContext; }
     } else if (estimate.classification !== 'UNKNOWN') safeContext = context;
-    const reuse = i.state === 'READY' && i.loaded && i.health === 'healthy' &&
+    const reuse = (i.state === 'READY' || i.state === 'LOADED') && i.loaded && i.health === 'healthy' &&
       i.contextTokens !== undefined && i.contextTokens >= minimum && (requested === undefined || i.contextTokens === context);
     if (!reuse) {
       if (!adapter?.loadModel || !adapter.inspectModel || !adapter.probeModel) reasons.push('UNSUPPORTED_CAPABILITY');
@@ -478,7 +508,11 @@ export class ModelLifecycleService {
     const adapter = this.deps.adapters.get(i.runtimeId)!;
     if ((await adapter.healthCheck()).status !== 'healthy') deny('RUNTIME_UNAVAILABLE');
     if (plan.reuse) {
-      await this.verify(i, plan.effectiveContext);
+      if (options.verify) {
+        await this.verify(i, plan.effectiveContext);
+      } else if (i.state !== 'READY') {
+        this.deps.models.setInstanceHealth(i.id, { loaded: true, state: 'READY', health: 'healthy', contextTokens: plan.effectiveContext });
+      }
       return plan;
     }
     if (plan.modelsToEvict.length) {
@@ -827,11 +861,17 @@ export class ModelLifecycleService {
             continue;
           }
           const loaded = observed?.loaded ?? false;
+          // A prior real load() already ran the expensive verify() probe and earned READY.
+          // Read-only reconciles (wa doctor / wa models health, which pass verify:false to
+          // avoid probing) must not discard that just because they didn't re-probe this pass —
+          // otherwise a perfectly working model permanently reads as not-ready between tasks.
+          const stillVerified = existing?.state === 'READY' && existing.loaded && loaded &&
+            existing.health === 'healthy' && existing.contextTokens !== undefined && existing.contextTokens === observed?.effectiveContext;
           const i: ModelInstance = { ...existing, ...intent, id, installationId, modelId: m.id, runtimeModelId: m.id,
-            computerId, runtimeId, loaded, state: loaded ? 'LOADED' : existing?.loaded || existing?.state === 'READY' ? 'UNLOADED' : 'INSTALLED',
+            computerId, runtimeId, loaded, state: stillVerified ? 'READY' : loaded ? 'LOADED' : existing?.loaded || existing?.state === 'READY' ? 'UNLOADED' : 'INSTALLED',
             health: 'healthy', contextTokens: observed?.effectiveContext, residentMemoryBytes: observed?.memoryBytes ?? existing?.residentMemoryBytes };
           this.deps.models.upsertInstance(i);
-          if (verify && loaded && observed?.effectiveContext && existing?.state !== 'DRAINING' &&
+          if (verify && loaded && !stillVerified && observed?.effectiveContext && existing?.state !== 'DRAINING' &&
             (!i.desired?.contextTokens || i.desired.contextTokens === observed.effectiveContext)) {
             try { await this.verify(i, observed.effectiveContext); } catch { /* failure is observed, never READY */ }
           }

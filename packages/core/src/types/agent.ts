@@ -205,6 +205,10 @@ export interface AgentRunRequest {
   getSteeringInstruction?: () => string | undefined;
   /** Whether the task requires creating or modifying code/files. If false, zero file changes is valid. */
   mutationRequired?: boolean;
+  /** Run build/test/lint/typecheck against the whole repo instead of scoping to the workspace(s)
+   *  the task actually touched. Set explicitly (e.g. `wa run --full-verify`) when a change in one
+   *  package might affect another that scoping can't see (cross-package API changes, shared config). */
+  fullVerification?: boolean;
   expectedArtifacts?: string[];
   expectedEvidence?: string[];
   /** Depth of subagent nesting (0 = root agent, 1 = direct subagent). */
