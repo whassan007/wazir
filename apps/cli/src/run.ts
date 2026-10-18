@@ -768,7 +768,8 @@ export async function executeTask(
       });
       switch (turn.kind) {
         case 'phase':
-          await engine.executions.recordEvent(executionId, 'agent.phase', { phase: turn.phase });
+          // Best effort: a lock-contended write here must not crash a task that otherwise succeeded.
+          await engine.executions.recordEvent(executionId, 'agent.phase', { phase: turn.phase }).catch(() => undefined);
           emitJson({ type: 'phase', phase: turn.phase, executionId });
           log(color.cyan(`  [${turn.phase}]`));
           break;
@@ -783,7 +784,8 @@ export async function executeTask(
         case 'error':
           if (turn.error) {
             errors.push(turn.error);
-            await engine.executions.recordError(executionId, turn.error);
+            // Best effort: when the error *is* a rejected write (e.g. lock contention), recording it would rethrow.
+            await engine.executions.recordError(executionId, turn.error).catch(() => undefined);
             emitJson({ type: 'error', error: turn.error, executionId });
             log(color.red(`    ${untrusted(turn.error.split('\n')[0].slice(0, 200))}`));
           }
@@ -830,7 +832,9 @@ export async function executeTask(
     if (baseline instanceof Error) {
       const message = `UNVERIFIED: cannot observe the workspace before delegation (${baseline.message})`;
       errors.push(message);
-      await engine.executions.recordError(executionId, message);
+      // Best effort: this runs after the main try/catch, so a rejected write here
+      // (e.g. lock contention) must not escape as an unhandled rejection.
+      await engine.executions.recordError(executionId, message).catch(() => undefined);
     } else {
       const verified = await verifyDelegatedWork({
         executions: engine.executions, tools: engine.tools, executionId, projectRoot: engine.projectRoot,
