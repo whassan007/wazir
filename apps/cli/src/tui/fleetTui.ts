@@ -1788,7 +1788,15 @@ export class FleetTui {
     // Verify that stdin is correctly running in raw mode so structured key objects are passed
     this.screen.enter();
     if (this.presentationMode === 'conversation') {
-      this.conversationRenderer.start(process.env.USER ?? process.env.USERNAME ?? 'controller', this.selectedModelId ?? 'auto-routed model');
+      const modelsCount = this.engine.models.list().length;
+      const localComp = this.engine.computers.list().find((c) => c.local) ?? this.engine.computers.list()[0];
+      const computerName = localComp?.name ?? 'Local';
+      this.conversationRenderer.start({
+        identity: process.env.USER ?? process.env.USERNAME ?? 'controller',
+        model: this.selectedModelId,
+        modelsCount,
+        computerName,
+      });
     }
 
     this.waitForExit();
@@ -3858,9 +3866,42 @@ export class FleetTui {
       if (this.presentationMode !== 'conversation') {
         this.presentationMode = 'conversation';
         if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation('conversation');
-        this.conversationRenderer.start(process.env.USER ?? process.env.USERNAME ?? 'controller', this.selectedModelId ?? 'auto-routed model');
+        const modelsCount = this.engine.models.list().length;
+        const localComp = this.engine.computers.list().find((c) => c.local) ?? this.engine.computers.list()[0];
+        this.conversationRenderer.start({
+          identity: process.env.USER ?? process.env.USERNAME ?? 'controller',
+          model: this.selectedModelId,
+          modelsCount,
+          computerName: localComp?.name ?? 'Local',
+        });
       }
       this.focusedPane = 'prompt';
+      this.draw();
+      return;
+    }
+    if (trimmed === '/clear' && this.presentationMode === 'conversation') {
+      const modelsCount = this.engine.models.list().length;
+      const localComp = this.engine.computers.list().find((c) => c.local) ?? this.engine.computers.list()[0];
+      this.conversationRenderer.clear({
+        identity: process.env.USER ?? process.env.USERNAME ?? 'controller',
+        model: this.selectedModelId,
+        modelsCount,
+        computerName: localComp?.name ?? 'Local',
+      });
+      this.draw();
+      return;
+    }
+    if (trimmed === '/status' && this.presentationMode === 'conversation') {
+      const models = this.engine.models.list();
+      const computers = this.engine.computers.list();
+      const activeTasks = this.statusProjection.getTasks().filter((t) => t.status === 'RUNNING' || t.status === 'PLANNING');
+      const lines = [
+        `Computers: ${computers.map((c) => `${c.name} (${c.local ? 'Local' : 'Remote'})`).join(', ') || 'Local'}`,
+        `Models: ${models.length} loaded (${models.map((m) => m.id).join(', ') || 'none'})`,
+        `Selected Model: ${this.selectedModelId ?? 'Auto (scheduler picks)'}`,
+        `Active Tasks: ${activeTasks.length}`,
+      ];
+      this.conversationRenderer.append(lines.join('\n'));
       this.draw();
       return;
     }
@@ -3872,7 +3913,18 @@ export class FleetTui {
       return;
     }
     if (trimmed === '/help' && this.presentationMode === 'conversation') {
-      this.conversationRenderer.append('Commands: /fleet · /chat · /tasks · /models · /logs · /details · /tail · /verbose · /quiet · /debug · /help');
+      this.conversationRenderer.append(
+        'Available commands:\n' +
+        '  /help      — show this help message\n' +
+        '  /models    — list available and loaded models\n' +
+        '  /model     — inspect or select active model (/model <id> | /model auto)\n' +
+        '  /status    — inspect current computer, runtime, and task status\n' +
+        '  /tasks     — list recent task executions\n' +
+        '  /clear     — clear conversation screen and display welcome card\n' +
+        '  /fleet     — switch to fleet dashboard view\n' +
+        '  /exit      — exit Wazir (or press Ctrl+C)'
+      );
+      this.draw();
       return;
     }
     if ((trimmed === '/tasks' || trimmed === '/task') && this.presentationMode === 'conversation') {
@@ -4298,6 +4350,17 @@ export class FleetTui {
       // Store may not be configured
     }
 
+    // If input begins with a slash, it was intended as a command. Do not submit unknown commands as jobs.
+    if (trimmed.startsWith('/') && !trimmed.startsWith('/fanout ') && !trimmed.startsWith('/parallel ') && !trimmed.startsWith('/p ')) {
+      const helpMsg = `Unknown command '${trimmed}'. Type /help for available commands.`;
+      this.statusMessage = helpMsg;
+      if (this.presentationMode === 'conversation') {
+        this.conversationRenderer.append(`✗ ${helpMsg}`);
+      }
+      this.draw();
+      return;
+    }
+
     // Submit a new task or fan-out job
     try {
       await this.launchJobFromPrompt(trimmed);
@@ -4322,6 +4385,7 @@ export class FleetTui {
   async launchJobFromPrompt(prompt: string): Promise<void> {
     if (this.presentationMode === 'conversation') {
       this.conversationRenderer.append(`> ${prompt}`);
+      this.conversationRenderer.append('✓ Request received\n◌ Planning & scheduling job...');
       this.conversationStartedAt = Date.now();
     }
     // Installed models are activated on the existing execution after scheduling.
@@ -4592,6 +4656,9 @@ export class FleetTui {
 
   /** Folds a task's in-progress streamed model text into its log as one MODEL entry. */
   private flushStreaming(taskId: string, logs: AgentLogEntry[], timeStr: string): void {
+    if (this.presentationMode === 'conversation') {
+      this.conversationRenderer.flushStreaming();
+    }
     const raw = this.streamingBuffers.get(taskId);
     this.streamingBuffers.delete(taskId);
     if (!raw || !raw.trim()) return;
@@ -4718,6 +4785,9 @@ export class FleetTui {
           text: `Route assigned: model [${agent.modelId}] on computer [${agent.computerId}]`,
           kind: 'route',
         });
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(`◌ Model: ${agent.modelId ?? 'auto'} · Computer: ${agent.computerId ?? 'local'}\n◌ Generating response...`);
+        }
       } else if (ev.type === 'task:progress') {
         const p = ev.event as {
           kind?: string;
@@ -4739,6 +4809,9 @@ export class FleetTui {
           const prev = this.streamingBuffers.get(taskId) ?? '';
           const next = prev + (p.content ?? '');
           this.streamingBuffers.set(taskId, next.length > 12_000 ? next.slice(-12_000) : next);
+          if (this.presentationMode === 'conversation') {
+            this.conversationRenderer.streamToken(p.content ?? '');
+          }
           return;
         }
 

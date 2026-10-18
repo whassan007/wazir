@@ -16,4 +16,8 @@ export class TranscriptStore {
   list(limit = this.maxEntries): TranscriptEntry[] {
     return this.entries.slice(-Math.max(0, limit)).map((entry) => ({ ...entry }));
   }
+
+  clear(): void {
+    this.entries.length = 0;
+  }
 }
