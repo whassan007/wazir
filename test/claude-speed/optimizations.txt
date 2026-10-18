@@ -1,0 +1,66 @@
+Wazir P0 Execution-Speed Investigation — Claude's findings
+=============================================================
+Scope note: another agent session (test/agy-*) was found running the same
+mission concurrently against this same Wazir instance. Per user instruction
+("merge efforts"), this pass avoided duplicating their live benchmark runs
+and their model selection (gemma-4-26b-a4b-it-qat, chosen for 231ms TTFT,
+smallest resident footprint, 4B active params) is adopted rather than
+re-measured. This pass focused on a distinct, confirmed reliability defect
+found via direct repro, not covered by their in-progress checkpoints.
+
+CONFIRMED DEFECT (P0 — execution reliability / crash)
+-------------------------------------------------------
+Repro: `wa run "What is 19 + 24? ..."` while the shared ~/.wazir/wazir.json
+file lock was held by a concurrent `wa run` process. Result: the lock wait
+timed out after 10s and the CLI exited via an unhandled-rejection crash
+report (crash-2026-10-18T02-10-21-896Z.log), instead of a clean task
+failure.
+
+Root cause: apps/cli/src/run.ts had three `engine.executions.recordError`/
+`recordEvent` write calls that were not defensively caught, while a sibling
+call at line ~799 in the same file already was, with the comment "Best
+effort: when the error *is* a rejected write, recording it would rethrow."
+The inconsistency meant lock contention (or any store write rejection)
+during these specific code paths escaped as a raw rejection:
+  - apps/cli/src/run.ts: `case 'phase':` recordEvent (line ~771) — fires on
+    every agent phase transition, every task.
+  - apps/cli/src/run.ts: `case 'error':` recordError (line ~786) — fires on
+    every tool/agent error.
+  - apps/cli/src/run.ts: delegated-baseline-failure recordError (line ~835)
+    — this one runs AFTER the function's main try/catch/finally has already
+    closed, so nothing in the function could catch a rejection there; this
+    is the most severe of the three, since the existing `storageError` /
+    `persistenceError` guard at line ~822 only catches failures that
+    happened *before* this point, not a fresh failure at this write.
+
+Fix applied: wrapped all three awaited calls with `.catch(() => undefined)`,
+matching the established pattern already used elsewhere in the same file.
+No behavior change on the success path; on a lock-contended/rejected write,
+the task now completes with its real result/errors instead of crashing the
+whole CLI process.
+
+Files changed:
+  - apps/cli/src/run.ts (3 one-line changes)
+
+Verification:
+  - `npx tsc --noEmit -p apps/cli` — clean.
+  - `npx vitest run apps/cli/tests/executeTask.e2e.test.ts` — 6/6 passed.
+  - Manual repro: confirmed the crash occurs on current HEAD before the fix
+    when two `wa run` invocations contend for the file lock; did not
+    re-verify a live contended run after the fix because another agent's
+    process was actively holding the lock during this session (see scope
+    note above) and deliberately contending with it again risked
+    corrupting their in-progress benchmark data.
+
+Follow-up not done in this pass (flagged, not silently skipped):
+  - A dedicated e2e regression test reproducing lock-contention specifically
+    on the delegated-baseline-failure path (line ~835) requires mocking an
+    external-agent delegation lease plus a rejecting store; existing test
+    infra doesn't have that fixture yet. Recommend adding one before this
+    branch gets further load-bearing logic.
+  - The broader "why is a trivial arithmetic task scored against all 11
+    registered models with a full empirical-explanation payload" question
+    (observed ~20-37s wall time per trivial task even on a resident model)
+    is a separate, real P1 latency finding worth its own investigation —
+    not pursued here to avoid duplicating the concurrent agy-* session's
+    Phase 2/3 work, which is already measuring exactly this.
