@@ -66,9 +66,9 @@ describe('LMStudioAdapter against authenticated OpenAI-compatible endpoints', ()
       events.push(e);
       if (e.type === 'token') await adapter.cancel('r1');
     }
-    const done = events.find((e) => e.type === 'completed');
-    expect(done?.finishReason).toBe('cancelled');
-    expect(done?.content).toBe('par');
+    expect(events.some((e) => e.type === 'completed')).toBe(false);
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ failureClass: 'CANCELLED', error: 'GENERATION_CANCELLED' });
+    expect(events.filter((e) => e.type === 'token').map((e) => e.content).join('')).toBe('par');
   });
 
   it('streams reasoning separately and never mixes it into the answer', async () => {

@@ -1,0 +1,56 @@
+Wazir Doctor
+
+✓ package version
+  v0.2.5 (channel: source, commit: 8598c44)
+✓ runtime dependencies
+  Node.js v22.23.3 (arm64)
+✓ git availability
+  git version 2.43.0
+✓ configuration
+  configuration file valid
+✓ persistence
+  in-memory store active
+✓ control plane
+  1/1 computer(s) online
+✓ worker
+  worker-local-52030902a455e236a3247b0255c98b1e on local
+    runtimes: lmstudio, ollama, models: 11
+✓ computer registration
+  local: waelbot
+    0 runtimes, 0 models
+⚠ runtime connectivity
+  1/2 runtime(s) healthy
+      lmstudio: healthy
+      ollama: unavailable
+○ hosted providers
+  no hosted providers authenticated
+    run `wa auth login <provider>` or set NVIDIA_API_KEY to enable Anthropic/OpenAI/Google/NVIDIA routing
+✓ model availability
+  10 model(s) registered (3 ready)
+    3 ready generative models, 7 unloaded eligible
+✗ runtime & model health
+  1 error(s), 1 warning(s); run `wa models health --detail`
+    MODEL_NOT_LOADED: qwen/qwen3-coder-next@lmstudio — model is installed and wanted, but not loaded
+    TELEMETRY_UNAVAILABLE: lmstudio — inference succeeded but prompt-cache telemetry was not observed (non-fatal)
+    RUNTIME_UNREACHABLE: ollama — ollama endpoint is not reachable
+✓ required permissions
+  18 rule(s) configured
+✓ scheduler readiness
+  scheduler ready for planning
+✓ api security & tokens
+  cluster tokens configured
+    WAZIR_CHILD_ENV: not set (tool processes inherit minimal default environment: PATH, HOME, TMPDIR, USER)
+    API operator token: configured
+    Registration token: configured
+⚠ tool sandbox
+  unavailable — tool processes run directly on the host
+    bwrap cannot start: bwrap: setting up uid map: Permission denied — unprivileged user namespaces are disabled (on Ubuntu: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or install the bubblewrap AppArmor profile; inside a container, run with `--security-opt seccomp=unconfined --cap-add SYS_ADMIN` or rely on the container as the boundary with WAZIR_SANDBOX=none). See docs/sandbox.md; set WAZIR_SANDBOX=required to fail closed instead.
+⚠ external agents
+  0/4 ready
+    not checked recently: antigravity, claude-code, codex, opencode (run `wa agents check`)
+
+Summary:
+  ✓ 12 passed
+  ⚠ 3 warnings
+  ✗ 1 failures
+  ○ 1 not installed

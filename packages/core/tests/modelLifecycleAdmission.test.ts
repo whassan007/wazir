@@ -45,6 +45,16 @@ function setup(free = 64, size: (ctx: number) => number = () => 30, store?: Memo
  return { service, models, computers, runtimes, executions, adapter, loaded, add, events };
 }
 describe('model lifecycle admission and observed readiness', () => {
+ it('verifies a discovered LOADED resident without demanding reload', async () => {
+   const f = setup(); f.loaded.set('a', 32768);
+   await f.service.discoverAndReconcile({ verify: false });
+   expect(f.models.getModelState('a')).toBe('LOADED');
+   const p = await f.service.ensureReady('a', { minimumContext: 8192 });
+   expect(p.reuse).toBe(true);
+   expect(f.adapter.loadModel).not.toHaveBeenCalled();
+   expect(f.adapter.probeModel).toHaveBeenCalledTimes(1);
+   expect(f.models.isModelReady('a')).toBe(true);
+ });
  it('admits safe load, then verifies context and readiness', async () => {
    const f = setup(); const p = await f.service.load('a');
    expect(p.admissionDecision.status).toBe('ADMITTED');

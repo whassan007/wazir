@@ -1,0 +1,3 @@
+id     name     scope  os     cpu       ram    gpu          load  status
+-----  -------  -----  -----  --------  -----  -----------  ----  ------
+local  waelbot  local  linux  20 cores  122GB  NVIDIA GB10  —     online

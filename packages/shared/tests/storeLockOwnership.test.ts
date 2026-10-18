@@ -48,6 +48,17 @@ describe('the store lock is never taken from, or released for, another live hold
     expect(await store.get('k')).toBe(1);
   });
 
+  it('immediately clears a fresh (<10s) lock whose foreign holder has already died (e.g. SIGTERM)', async () => {
+    const holder = spawn(process.execPath, ['-e', '']);
+    await new Promise((resolve) => holder.on('exit', resolve));
+    await fs.writeFile(lock, `${holder.pid!}\n${new Date().toISOString()}\n`);
+    const start = Date.now();
+    const store = new JsonFileStore(file);
+    await store.put('k', 42);
+    expect(await store.get('k')).toBe(42);
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
+
   it('release leaves a lock that another holder now owns', async () => {
     const store = new JsonFileStore(file);
     await store.update('k', () => {

@@ -1,0 +1,25 @@
+{
+  "res": {
+    "ok": false,
+    "operationId": "phase3_pty_usability_baseline",
+    "taskId": "PTY_USABILITY",
+    "pid": 3128983,
+    "pgid": 3128983,
+    "exitCode": null,
+    "signal": "SIGTERM",
+    "stdout": "",
+    "stderr": "",
+    "stdoutTruncated": false,
+    "stderrTruncated": false,
+    "durationMs": 25143,
+    "firstTokenMs": null,
+    "readyMs": 3,
+    "timedOut": true,
+    "timeoutType": "IDLE_TIMEOUT",
+    "cancelled": true,
+    "cancelReason": "Idle/no-progress deadline exceeded (25000ms)",
+    "cleanupVerified": true,
+    "residualPids": []
+  },
+  "ptyReport": null
+}

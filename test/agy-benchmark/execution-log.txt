@@ -1,0 +1,31 @@
+# Wazir 10-Task Benchmark Execution Log
+Start Time: 2026-10-18T02:25:00Z
+Orchestrator: Antigravity (AGY)
+Target System: Wazir (wa CLI)
+Directory: /home/wael/Code/Wazir
+
+[02:25:00] PHASE 0 — ENVIRONMENT DISCOVERY
+[02:25:00] Discovered local host: waelbot, 20 CPU cores, 122GB RAM, NVIDIA GB10 GPU.
+[02:25:00] Loaded models in LM Studio:
+  - gemma-4-26b-a4b-it-qat (READY, context 32768, Q4_0)
+  - nvidia/nemotron-3-nano-omni (READY, context 8192, Q4_K_M)
+  - qwen/qwen3.8-27b (READY, context 8192, Q4_K_M)
+[02:25:00] Unloaded models installed: qwen/qwen3-coder-next (80B), nvidia/nemotron-3-super (120B), openai/gpt-oss-120b (120B), qwen2.5-7b-instruct, etc.
+[02:25:00] Hosted providers: None authenticated (local inference only).
+[02:25:00] Ollama runtime: unreachable (offline). LM Studio runtime: healthy (127.0.0.1:1234).
+[02:25:00] Calibration model selection:
+  - Model 1 (Fastest already-loaded lightweight): gemma-4-26b-a4b-it-qat
+  - Model 2 (Fastest already-loaded coding-capable): nvidia/nemotron-3-nano-omni
+  - Model 3 (General-purpose loaded): qwen/qwen3.8-27b
+[02:25:00] RATIONALE: All 3 models are already in memory, preventing GPU thrashing and load overhead.
+
+[19:25:25] PHASE A — SERIAL MODEL CALIBRATION START
+[19:25:25] CALIBRATION TRIAL — MODEL: gemma-4-26b-a4b-it-qat (gemma) | TASK: T01
+[19:25:32] RESULT — TASK T01 | MODEL: gemma-4-26b-a4b-it-qat | VERIFICATION: PASS | TURNAROUND: 7.4895s
+[19:25:32] CALIBRATION TRIAL — MODEL: gemma-4-26b-a4b-it-qat (gemma) | TASK: T05
+[19:25:54] RESULT — TASK T05 | MODEL: gemma-4-26b-a4b-it-qat | VERIFICATION: PASS | TURNAROUND: 21.8582s
+[19:25:54] CALIBRATION TRIAL — MODEL: gemma-4-26b-a4b-it-qat (gemma) | TASK: T09
+[19:26:02] RESULT — TASK T09 | MODEL: gemma-4-26b-a4b-it-qat | VERIFICATION: PASS | TURNAROUND: 8.163s
+[19:26:02] CALIBRATION TRIAL — MODEL: nvidia/nemotron-3-nano-omni (nemotron) | TASK: T01
+[19:26:11] RESULT — TASK T01 | MODEL: nvidia/nemotron-3-nano-omni | VERIFICATION: PASS | TURNAROUND: 8.1609s
+[19:26:11] CALIBRATION TRIAL — MODEL: nvidia/nemotron-3-nano-omni (nemotron) | TASK: T05

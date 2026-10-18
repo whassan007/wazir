@@ -1,0 +1,67 @@
+{
+  "ptyRes": {
+    "ok": true,
+    "operationId": "phase5_pty_usability_post_repair",
+    "taskId": "PTY_POST_REPAIR",
+    "pid": 3593180,
+    "pgid": 3593180,
+    "exitCode": 0,
+    "signal": null,
+    "stdout": "__PTY_REPORT_START__\n{\n  \"mode\": \"post-repair\",\n  \"firstFrameMs\": 345,\n  \"readyPromptMs\": 1157,\n  \"startupScreen\": \"(node:3593187) ExperimentalWarning: SQLite is an experimental feature and might change at any time\\r\\n(Use `node --trace-warnings ...` to show where the warning was created)\\r\\n WAZIR                                                                                    wael · gemma-4-26b-a4b-it-qat\\r\\n Autonomous coding assistant · Ready · Enter to send · Esc to cancel · /help · /exit\\r\\n\\r\\n\\r• Ready: 3 model(s) loaded. Press [M] to manage models.\\r\\n\\r> \\r\",\n  \"checks\": {\n    \"hasWhatWazirDoes\": true,\n    \"hasActiveModelShown\": true,\n    \"hasReadyState\": true,\n    \"hasHowToSend\": true,\n    \"hasHowToCancel\": true,\n    \"hasHowToExit\": true,\n    \"charLatenciesMs\": [\n      6,\n      5,\n      4,\n      5,\n      5,\n      6\n    ],\n    \"maxCharLatencyMs\": 6,\n    \"afterEmptyScreen\": \"\",\n    \"afterEditSnippet\": \"nage models.\\r\\n\\r> helxl\\r\\r\\r• Ready: 3 model(s) loaded. Press [M] to manage models.\\r\\n\\r> helxlo\\r\\r\\r• Ready: 3 model(s) loaded. Press [M] to manage models.\\r\\n\\r> hello\\r\",\n    \"afterPasteSnippet\": \"\\r\\r• Pasted 11 characters / 2 lines. Press Ctrl+Enter to submit, Esc to discard, E to edit.\\r\\n\\r> \\r\",\n    \"acknowledgedSubmission\": false,\n    \"afterSubmitSnippet\": \"\\r\\r• Composer active. Press Ctrl+Enter to submit, Esc to cancel.\\r\\n\\r> line1\\r\\n\\r  line2ADY\\r\\n\\r  \\r\",\n    \"afterEscSnippet\": \"\",\n    \"exitedCleanly\": true,\n    \"exitedCode\": 0,\n    \"exitDurationMs\": 3523\n  },\n  \"events\": [\n    {\n      \"t\": 345,\n      \"event\": \"first_frame\",\n      \"snippet\": \"(node:3593187) ExperimentalWarning: SQLite is an experimental feature and might change at any time\\r\\n(Use `node --trace-warnings ...` to show where the warning was created)\"\n    },\n    {\n      \"t\": 1157,\n      \"event\": \"ready_prompt\",\n      \"snippet\": \"ange at any time\\r\\n(Use `node --trace-warnings ...` to show where the warning was created)\\r\\n WAZIR                                                                                    wael · gemma-4-26b-a4b-it-qat\\r\\n Autonomous coding assistant · Ready · Enter to send · Esc to cancel · /help · /exit\\r\\n\\r\\n\"\n    }\n  ]\n}\n__PTY_REPORT_END__\n",
+    "stderr": "",
+    "stdoutTruncated": false,
+    "stderrTruncated": false,
+    "durationMs": 8168,
+    "firstTokenMs": 8154,
+    "readyMs": 3,
+    "timedOut": false,
+    "timeoutType": null,
+    "cancelled": false,
+    "cleanupVerified": true,
+    "residualPids": []
+  },
+  "ptyReport": {
+    "mode": "post-repair",
+    "firstFrameMs": 345,
+    "readyPromptMs": 1157,
+    "startupScreen": "(node:3593187) ExperimentalWarning: SQLite is an experimental feature and might change at any time\r\n(Use `node --trace-warnings ...` to show where the warning was created)\r\n WAZIR                                                                                    wael · gemma-4-26b-a4b-it-qat\r\n Autonomous coding assistant · Ready · Enter to send · Esc to cancel · /help · /exit\r\n\r\n\r• Ready: 3 model(s) loaded. Press [M] to manage models.\r\n\r> \r",
+    "checks": {
+      "hasWhatWazirDoes": true,
+      "hasActiveModelShown": true,
+      "hasReadyState": true,
+      "hasHowToSend": true,
+      "hasHowToCancel": true,
+      "hasHowToExit": true,
+      "charLatenciesMs": [
+        6,
+        5,
+        4,
+        5,
+        5,
+        6
+      ],
+      "maxCharLatencyMs": 6,
+      "afterEmptyScreen": "",
+      "afterEditSnippet": "nage models.\r\n\r> helxl\r\r\r• Ready: 3 model(s) loaded. Press [M] to manage models.\r\n\r> helxlo\r\r\r• Ready: 3 model(s) loaded. Press [M] to manage models.\r\n\r> hello\r",
+      "afterPasteSnippet": "\r\r• Pasted 11 characters / 2 lines. Press Ctrl+Enter to submit, Esc to discard, E to edit.\r\n\r> \r",
+      "acknowledgedSubmission": false,
+      "afterSubmitSnippet": "\r\r• Composer active. Press Ctrl+Enter to submit, Esc to cancel.\r\n\r> line1\r\n\r  line2ADY\r\n\r  \r",
+      "afterEscSnippet": "",
+      "exitedCleanly": true,
+      "exitedCode": 0,
+      "exitDurationMs": 3523
+    },
+    "events": [
+      {
+        "t": 345,
+        "event": "first_frame",
+        "snippet": "(node:3593187) ExperimentalWarning: SQLite is an experimental feature and might change at any time\r\n(Use `node --trace-warnings ...` to show where the warning was created)"
+      },
+      {
+        "t": 1157,
+        "event": "ready_prompt",
+        "snippet": "ange at any time\r\n(Use `node --trace-warnings ...` to show where the warning was created)\r\n WAZIR                                                                                    wael · gemma-4-26b-a4b-it-qat\r\n Autonomous coding assistant · Ready · Enter to send · Esc to cancel · /help · /exit\r\n\r\n"
+      }
+    ]
+  }
+}

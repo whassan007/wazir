@@ -1,0 +1,13 @@
+{
+  "deadPidLockReclaimed": true,
+  "conc1": {
+    "ok": true,
+    "durationMs": 2975,
+    "timedOut": false
+  },
+  "conc2": {
+    "ok": true,
+    "durationMs": 2623,
+    "timedOut": false
+  }
+}

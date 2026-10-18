@@ -1,0 +1,1 @@
+Error: could not connect to ollama server, run 'ollama serve' to start it
