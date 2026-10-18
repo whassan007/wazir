@@ -147,9 +147,18 @@ export class TaskPlanner {
     capabilities: string[];
   } {
     const lower = input.toLowerCase();
-    const isBuildOrWrite = /\b(build|write|create|implement|add|code|make|generate|scaffold)\b/i.test(input);
-    const isCheckOrInspect = /\b(check|inspect|verify|test|read|examine|review|explain|does\b.*work)\b/i.test(input);
-    const isFix = /\b(fix|patch|repair|resolve|update)\b/i.test(input);
+    const hasFileOrWorkspaceTarget =
+      /\b([A-Za-z0-9_-]+\.(?:cpp|cc|cxx|c|h|hpp|py|js|mjs|cjs|ts|tsx|jsx|go|rs|java|json|md|yaml|yml|toml|sh))\b/i.test(input) ||
+      /\b(?:in|to|into|inside)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(?:file|folder|directory|repo|repository|workspace|project|module|package)\b/i.test(input);
+    const isStandaloneSnippet =
+      !hasFileOrWorkspaceTarget &&
+      /\b(?:write|implement|generate|provide|show)\s+(?:me\s+)?(?:a|an)\s+(?:[\w+#-]+\s+){0,3}(?:function|method|snippet|helper|class|expression|regex|query|algorithm|one-liner)\b/i.test(input);
+    const isInlineResponseOnly =
+      isStandaloneSnippet ||
+      /\b(return\s+(?:only\b|valid\s+json\b|code\s+only\b|corrected\b.*?\bonly\b|its\s+\w+\s+field\b)|respond\s+with\b|nothing\s+else\b)/i.test(input);
+    const isBuildOrWrite = !isInlineResponseOnly && /\b(build|write|create|implement|add|code|make|generate|scaffold)\b/i.test(input);
+    const isCheckOrInspect = isInlineResponseOnly || /\b(check|inspect|verify|test|read|examine|review|explain|list|what\s+is|how\s+many|reverse\b|does\b.*work)\b/i.test(input);
+    const isFix = !isInlineResponseOnly && /\b(fix|patch|repair|resolve|update)\b/i.test(input);
 
     const mutationRequired = isBuildOrWrite || isFix || (!isCheckOrInspect);
     const isFromScratch = /\b(from scratch|new program|new project|empty workspace)\b/i.test(input) || (isBuildOrWrite && !isFix);

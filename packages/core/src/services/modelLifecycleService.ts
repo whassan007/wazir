@@ -77,6 +77,7 @@ const LAST_READY_MODELS_KEY = 'models/last_ready_set';
 export class ModelLifecycleService {
   private inFlightLoads = new Map<string, Promise<ModelLoadPlan>>();
   private operations = new Set<string>();
+  private fastStartupVerifiedIds = new Set<string>();
   private reconciliation?: Promise<DiscoveredModelReconciliation>;
   private policy: PolicyEngine;
   private reservePercent: number;
@@ -359,9 +360,16 @@ export class ModelLifecycleService {
     const safetyReserve = Math.max((available ?? 0) * this.reservePercent / 100, this.minimumReserveBytes);
     const held = snapshot.activeReservations.reduce((n, r) => n + r.memoryBytes, 0);
     const usable = available === undefined ? undefined : Math.max(0, available - safetyReserve - held);
+    const reuse = (i.state === 'READY' || i.state === 'LOADED') && i.loaded && i.health === 'healthy' &&
+      i.contextTokens !== undefined && i.contextTokens >= minimum && (requested === undefined || i.contextTokens === context);
     const estimateAt = async (candidateContext: number): Promise<LoadEstimate> => {
       let e: import('@wazir/runtimes-interfaces').ModelLoadEstimate = { source: 'UNKNOWN', confidence: 'unknown' };
-      if (adapter?.estimateModelLoad) {
+      if (reuse && !options.dryRun) {
+        const residentBytes = i.residentMemoryBytes ?? profile?.weightBytes;
+        if (residentBytes !== undefined && residentBytes > 0) {
+          e = { weightBytes: profile?.weightBytes, totalMemoryBytes: residentBytes, source: 'RUNTIME', confidence: 'high' };
+        }
+      } else if (adapter?.estimateModelLoad) {
         try { e = await adapter.estimateModelLoad(i.runtimeModelId, candidateContext); } catch { /* unknown is denied below */ }
       }
       if (e.totalMemoryBytes === undefined && profile?.weightBytes !== undefined && profile.contextBytesPerToken !== undefined && profile.runtimeOverheadBytes !== undefined) {
@@ -383,11 +391,11 @@ export class ModelLifecycleService {
         currentlyAvailableMemory: available, safetyReserve, usableMemory: usable,
         postLoadAvailableMemory: known && available !== undefined ? available - total! - held : undefined,
         estimateSource: known ? e.source : 'UNKNOWN', confidence: known ? e.confidence : 'unknown',
-        classification: !known || usable === undefined || gpuUnknown ? 'UNKNOWN' : total! > usable || gpuInsufficient ? 'INSUFFICIENT' : total! > usable * 0.9 ? 'WARNING' : 'SAFE' };
+        classification: reuse && !options.dryRun ? 'SAFE' : !known || usable === undefined || gpuUnknown ? 'UNKNOWN' : total! > usable || gpuInsufficient ? 'INSUFFICIENT' : total! > usable * 0.9 ? 'WARNING' : 'SAFE' };
     };
     let estimate = await estimateAt(context);
     let safeContext: number | undefined;
-    if (estimate.classification === 'INSUFFICIENT' && context >= minimum) {
+    if (!reuse && estimate.classification === 'INSUFFICIENT' && context >= minimum) {
       let low = minimum, high = context, best: LoadEstimate | undefined;
       // Monotonic context-memory search, with every candidate estimated by the runtime.
       while (low <= high) {
@@ -399,8 +407,6 @@ export class ModelLifecycleService {
       safeContext = best?.candidateContext;
       if (best && (mode !== 'EXPLICIT' || options.fit)) { estimate = best; context = best.candidateContext; }
     } else if (estimate.classification !== 'UNKNOWN') safeContext = context;
-    const reuse = i.state === 'READY' && i.loaded && i.health === 'healthy' &&
-      i.contextTokens !== undefined && i.contextTokens >= minimum && (requested === undefined || i.contextTokens === context);
     if (!reuse) {
       if (!adapter?.loadModel || !adapter.inspectModel || !adapter.probeModel) reasons.push('UNSUPPORTED_CAPABILITY');
       if (i.loaded) reasons.push('CONTEXT_RELOAD_REQUIRED');
@@ -466,7 +472,9 @@ export class ModelLifecycleService {
     const extra = { runtimeId: i.runtimeId, computerId: i.computerId, initiator: options.initiator, data: { executionId: options.executionId } };
     this.emitEvent('MODEL_LOAD_REQUESTED', modelId, extra);
     this.emitEvent('MODEL_ADMISSION_STARTED', modelId, extra);
-    await this.deps.refreshResources?.(i.computerId!);
+    if (!(i.state === 'READY' && i.loaded && i.health === 'healthy')) {
+      await this.deps.refreshResources?.(i.computerId!);
+    }
     let plan = await this.estimate(modelId, { ...options, computerId: i.computerId, runtimeId: i.runtimeId });
     this.emitEvent('MODEL_LOAD_PLAN_CREATED', modelId, { ...extra, data: { ...plan, executionId: options.executionId } });
     const deny = (reason?: string): never => {
@@ -476,11 +484,15 @@ export class ModelLifecycleService {
     };
     if (plan.admissionDecision.status === 'DENIED') deny();
     const adapter = this.deps.adapters.get(i.runtimeId)!;
-    if ((await adapter.healthCheck()).status !== 'healthy') deny('RUNTIME_UNAVAILABLE');
     if (plan.reuse) {
+      if (i.state === 'READY' && i.loaded && i.health === 'healthy' && i.contextTokens === plan.effectiveContext && this.fastStartupVerifiedIds.has(i.id)) {
+        return plan;
+      }
+      if ((await adapter.healthCheck()).status !== 'healthy') deny('RUNTIME_UNAVAILABLE');
       await this.verify(i, plan.effectiveContext);
       return plan;
     }
+    if ((await adapter.healthCheck()).status !== 'healthy') deny('RUNTIME_UNAVAILABLE');
     if (plan.modelsToEvict.length) {
       this.emitEvent('MODEL_EVICTION_PLANNED', modelId, { ...extra, data: { modelsToEvict: plan.modelsToEvict } });
       for (const victim of plan.modelsToEvict) {
@@ -771,9 +783,9 @@ export class ModelLifecycleService {
   /**
    * Discovers and reconciles all models across all registered runtime adapters.
    */
-  async discoverAndReconcile(options: { verify?: boolean } = {}): Promise<DiscoveredModelReconciliation> {
+  async discoverAndReconcile(options: { verify?: boolean; fastStartup?: boolean } = {}): Promise<DiscoveredModelReconciliation> {
     if (this.reconciliation) return this.reconciliation;
-    this.reconciliation = this.reconcileObserved(options.verify !== false);
+    this.reconciliation = this.reconcileObserved(options.verify !== false, options.fastStartup === true);
     try { return await this.reconciliation; } finally { this.reconciliation = undefined; }
   }
   discover() { return this.discoverAndReconcile(); }
@@ -783,11 +795,12 @@ export class ModelLifecycleService {
     timer.unref();
     return () => clearInterval(timer);
   }
-  private async reconcileObserved(verify = true): Promise<DiscoveredModelReconciliation> {
+  private async reconcileObserved(verify = true, fastStartup = false): Promise<DiscoveredModelReconciliation> {
     let totalDiscovered = 0, newlyRegistered = 0;
     for (const [runtimeId, adapter] of this.deps.adapters) {
       const runtime = this.deps.runtimes.get(runtimeId);
       if (!runtime?.computerId || runtime.runtimeKind === 'hosted') continue;
+      if (fastStartup && runtime.health === 'unavailable') continue;
       const computerId = runtime.computerId;
       try {
         if ((await adapter.healthCheck()).status !== 'healthy') throw new Error('RUNTIME_UNAVAILABLE');
@@ -827,11 +840,16 @@ export class ModelLifecycleService {
             continue;
           }
           const loaded = observed?.loaded ?? false;
+          const readyOnFastStartup = fastStartup && verify && loaded && Boolean(observed?.effectiveContext) && existing?.state !== 'DRAINING' &&
+            (!intent?.desired?.contextTokens || intent.desired.contextTokens === observed?.effectiveContext);
+          if (readyOnFastStartup) this.fastStartupVerifiedIds.add(id);
           const i: ModelInstance = { ...existing, ...intent, id, installationId, modelId: m.id, runtimeModelId: m.id,
-            computerId, runtimeId, loaded, state: loaded ? 'LOADED' : existing?.loaded || existing?.state === 'READY' ? 'UNLOADED' : 'INSTALLED',
-            health: 'healthy', contextTokens: observed?.effectiveContext, residentMemoryBytes: observed?.memoryBytes ?? existing?.residentMemoryBytes };
+            computerId, runtimeId, loaded,
+            state: readyOnFastStartup ? 'READY' : loaded ? 'LOADED' : existing?.loaded || existing?.state === 'READY' ? 'UNLOADED' : 'INSTALLED',
+            health: 'healthy', contextTokens: observed?.effectiveContext,
+            residentMemoryBytes: observed?.memoryBytes ?? existing?.residentMemoryBytes ?? m.weightBytes };
           this.deps.models.upsertInstance(i);
-          if (verify && loaded && observed?.effectiveContext && existing?.state !== 'DRAINING' &&
+          if (!readyOnFastStartup && verify && loaded && observed?.effectiveContext && existing?.state !== 'DRAINING' &&
             (!i.desired?.contextTokens || i.desired.contextTokens === observed.effectiveContext)) {
             try { await this.verify(i, observed.effectiveContext); } catch { /* failure is observed, never READY */ }
           }

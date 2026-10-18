@@ -142,6 +142,54 @@ const MAX_STREAM_RETRIES = 2;
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
 const FILE_TOOLS = new Set(['write', 'edit']);
 const MUTATING_FILE_TOOLS = new Set(['write', 'edit', 'write_to_file', 'replace_file_content']);
+
+const FILE_OR_PATH_REFERENCE_RE =
+  /(?:^|[\s'"`(])(?:\.{0,2}\/[\w./-]+|[\w-]+\/[\w./-]+|[\w-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|cpp|cc|cxx|c|h|hpp|json|md|yaml|yml|toml|sh|bash|zsh|html|css|scss|sql|txt|xml|ini|cfg|conf|lock|env))\b/i;
+
+const WORKSPACE_OR_TOOL_ACTION_RE =
+  /\b(?:files?|filepath|filename|directory|directories|folders?|repo|repository|codebase|workspace|project|worktree|commit|branch|git|npm|pnpm|yarn|npx|vitest|jest|pytest|cargo|rustc|gcc|g\+\+|clang|make|cmake|build|compile|lint|typecheck|refactor|edit|modify|update|overwrite|delete|remove|rename|move|save|create\s+(?:a\s+)?(?:new\s+)?(?:file|folder|directory|project|script|module|package|test)|write\s+(?:to|into)\b|write\s+(?:a\s+|an\s+|the\s+)?(?:[\w+#-]+\s+)?(?:file|program|script|cli|app|application|server|test|suite)\b|read\s+(?:the\s+|from\s+)?(?:file|directory|folder|repo|codebase|config|logs?)|inspect|search\s+(?:the|for|in)|find\s+(?:in|all|files)|glob|grep|run\s+(?:the|a|an|npm|pnpm|yarn|tests?|build|lint|typecheck|command|script|shell|bash)|execute|shell|bash|terminal|command\s+line|fix|debug|repair|patch|install|deploy|migrate|benchmark)\b/i;
+
+const CONVERSATIONAL_INTENT_RE =
+  /\?|\b(?:what|why|how|when|where|who|which|explain|describe|summarize|define|translate|calculate|compute|evaluate|solve|reverse|convert|compare|tell\s+me|give\s+me|return\s+only|in\s+one\s+sentence|is\s+there|can\s+you\s+(?:explain|tell|answer|compute|calculate|reverse))\b/i;
+
+const ARITHMETIC_INTENT_RE =
+  /^\s*[-+*/()\d\s.]+\s*=?\s*$|(?:\b\d+\s*(?:\+|-|\*|\/|plus|minus|times|multiplied\s+by|divided\s+by)\s*\d+\b)/i;
+
+const STANDALONE_SNIPPET_INTENT_RE =
+  /\b(?:write|implement|generate|provide|show)\s+(?:me\s+)?(?:a|an)\s+(?:[\w+#-]+\s+){0,3}(?:function|method|snippet|helper|class|expression|regex|query|algorithm|one-liner)\b/i;
+
+export interface ConversationalFastPathOptions {
+  type?: string;
+  expectedFiles?: string[];
+  mutationRequired?: boolean;
+  resume?: boolean;
+}
+
+/**
+ * Deterministic, zero-LLM-call classifier for simple conversational, arithmetic,
+ * or standalone code-snippet requests that do not touch files, run commands, or
+ * inspect the repository. Any request mentioning files, paths, workspace actions,
+ * builds, tests, or mutations retains the full multi-phase coding agent loop.
+ */
+export function isConversationalFastPathRequest(
+  description: string,
+  options: ConversationalFastPathOptions = {},
+): boolean {
+  const trimmed = description.trim();
+  if (!trimmed || trimmed.length > 600) return false;
+  if (options.mutationRequired === true) return false;
+  if (options.resume === true) return false;
+  if (options.expectedFiles && options.expectedFiles.length > 0) return false;
+  if (options.type === 'debugging' || options.type === 'research') return false;
+  if (FILE_OR_PATH_REFERENCE_RE.test(trimmed)) return false;
+  if (WORKSPACE_OR_TOOL_ACTION_RE.test(trimmed)) return false;
+  if (options.type === 'chat') return true;
+  return (
+    CONVERSATIONAL_INTENT_RE.test(trimmed) ||
+    ARITHMETIC_INTENT_RE.test(trimmed) ||
+    STANDALONE_SNIPPET_INTENT_RE.test(trimmed)
+  );
+}
 /**
  * Matches the start of the one required JSON action, e.g. `{"action":`.
  * Used (not a bare `{` check) so the prose-bailout heuristic below isn't
@@ -852,25 +900,42 @@ export class CodingAgent implements AgentAdapter {
           tools: currentToolSurface.selectedProtocol === 'native_tool_call'
             ? [
                 ...(currentToolSurface.serializedSchemas ?? []),
-                currentPhase === 'plan'
-                  ? {
-                      name: 'plan',
-                      description: 'Submit a short step-by-step implementation plan to proceed from planning to implementation.',
-                      parameters: {
-                        type: 'object',
-                        properties: { content: { type: 'string', description: 'Short step-by-step plan' } },
-                        required: ['content'],
+                ...(currentPhase === 'plan'
+                  ? [
+                      {
+                        name: 'plan',
+                        description: 'Submit a short step-by-step implementation plan to proceed from planning to implementation.',
+                        parameters: {
+                          type: 'object',
+                          properties: { content: { type: 'string', description: 'Short step-by-step plan' } },
+                          required: ['content'],
+                        },
                       },
-                    }
-                  : {
-                      name: 'done',
-                      description: 'Declare the coding task complete after modifying the target files and verifying checks.',
-                      parameters: {
-                        type: 'object',
-                        properties: { summary: { type: 'string', description: 'What changed and how it was verified' } },
-                        required: ['summary'],
+                      ...(request.mutationRequired === false
+                        ? [
+                            {
+                              name: 'done',
+                              description: 'Finish immediately when the task can be answered directly or after read-only inspection.',
+                              parameters: {
+                                type: 'object',
+                                properties: { summary: { type: 'string', description: 'Direct answer or read-only inspection result' } },
+                                required: ['summary'],
+                              },
+                            },
+                          ]
+                        : []),
+                    ]
+                  : [
+                      {
+                        name: 'done',
+                        description: 'Declare the coding task complete after modifying the target files and verifying checks.',
+                        parameters: {
+                          type: 'object',
+                          properties: { summary: { type: 'string', description: 'What changed and how it was verified' } },
+                          required: ['summary'],
+                        },
                       },
-                    },
+                    ]),
               ]
             : undefined,
         })) {
@@ -920,7 +985,7 @@ export class CodingAgent implements AgentAdapter {
       // that as a proposed answer; the normal deterministic verification still runs.
       if (!toolCall && !timedOut && finishReason === 'stop' &&
           currentToolSurface.selectedProtocol === 'native_tool_call' && content.trim() &&
-          !/^\s*(\{|```)/.test(content)) {
+          !readAction(content)) {
         content = JSON.stringify({ action: 'answer', content });
       }
       return { content, toolCall, timedOut, retryNotes, usage };
@@ -1211,20 +1276,125 @@ export class CodingAgent implements AgentAdapter {
       return { ok: true };
     };
 
-    // ==================== PLAN ====================
-    currentToolSurface = compileSurface('plan');
-    yield { kind: 'phase', phase: 'plan' as AgentPhase, toolSurface: currentToolSurface };
-    yield {
-      kind: 'message',
-      content: `runtime.protocol.selected: ${currentToolSurface.selectedProtocol} (${currentToolSurface.protocolSelectionReason})`,
-    };
-    yield {
-      kind: 'message',
-      content: `tool_surface.compiled: phase=${currentToolSurface.phase} tools=${currentToolSurface.totalToolsExposed}/${currentToolSurface.totalToolsAvailable} tokens=${currentToolSurface.totalSchemaTokens} (${Math.round(currentToolSurface.reductionRatio * 100)}% reduction)`,
-    };
+    const useConversationalFastPath = isConversationalFastPathRequest(request.taskDescription, {
+      type: request.taskType,
+      expectedFiles: request.expectedArtifacts,
+      mutationRequired: request.mutationRequired,
+      resume: Boolean(request.resume),
+    });
+
     let planEstablished = false;
     let planExplorationCount = 0;
     let planIterations = 0;
+
+    if (useConversationalFastPath) {
+      if (request.isCancelled?.()) return;
+      const beforeTurn = checkStop('before_turn');
+      if (beforeTurn) {
+        yield stopTurn(beforeTurn, ' during fast path');
+        return;
+      }
+      const fastSystemPrompt = [
+        'You are Wazir, a precise AI assistant. Answer the user request directly and concisely. Do not invoke tools or wrap the response in JSON action envelopes unless explicitly asked for JSON.',
+        this.systemPromptExtra?.trim(),
+      ].filter(Boolean).join('\n\n');
+      let fastContent = '';
+      let fastToolCall: { name: string; input: Record<string, unknown> } | undefined;
+      let fastError: string | undefined;
+      let fastTimedOut = false;
+      let fastUsage: { inputTokens: number; outputTokens: number; totalTokens?: number } | undefined;
+      const fastRetryNotes: string[] = [];
+      const timer = setTimeout(() => {
+        fastTimedOut = true;
+        runtime.cancelCurrentTurn?.();
+      }, this.modelTurnTimeoutMs);
+      try {
+        for await (const event of runtime.generate({
+          modelId: currentModelId,
+          messages: [
+            { role: 'system', content: fastSystemPrompt },
+            { role: 'user', content: request.taskDescription },
+          ],
+          maxTokens: this.maxTokensPerTurn,
+          temperature: this.temperature,
+          tools: undefined,
+        })) {
+          if (event.type === 'token' && event.content) {
+            fastContent += event.content;
+            await injectFault('DURING_MODEL_STREAM', { modelId: currentModelId, token: event.content, length: fastContent.length });
+          }
+          if (event.type === 'tool_call' && event.toolName && !fastToolCall) {
+            let input: Record<string, unknown> = {};
+            if (event.toolInput && typeof event.toolInput === 'object' && !Array.isArray(event.toolInput)) {
+              input = event.toolInput as Record<string, unknown>;
+            } else if (typeof event.toolInput === 'string') {
+              input = tryParseObject(event.toolInput) ?? { command: event.toolInput };
+            }
+            fastToolCall = { name: event.toolName, input };
+          }
+          if (event.type === 'completed' && event.usage) fastUsage = event.usage;
+          if (event.type === 'error' && event.error) fastError = event.error;
+          if (event.type === 'retry') {
+            fastRetryNotes.push(
+              `model request retry ${event.retryAttempt ?? '?'} after ${event.retryDelayMs ?? '?'}ms backoff (${event.error ?? 'transient error'})`,
+            );
+          }
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+      for (const note of fastRetryNotes) yield { kind: 'message', content: note };
+      if (request.isCancelled?.()) return;
+      if (fastError && !fastTimedOut) throw new Error(fastError);
+      if (fastUsage) totalTokensUsed += fastUsage.totalTokens ?? fastUsage.inputTokens + fastUsage.outputTokens;
+      const afterModel = checkStop('after_model_turn');
+      if (afterModel) {
+        yield stopTurn(afterModel);
+        return;
+      }
+      turnsUsed += 1;
+      actionAttempts += 1;
+      validActions += 1;
+
+      const parsedFastAction = !fastToolCall && /^\s*\{/.test(fastContent) ? readAction(fastContent) : null;
+      if (fastToolCall || parsedFastAction?.action === 'plan' || parsedFastAction?.action === 'tool') {
+        if (parsedFastAction?.action === 'plan' && parsedFastAction.content) {
+          acceptAttempt(fastContent);
+          plan = parsedFastAction.content;
+          planEstablished = true;
+          yield { kind: 'phase', phase: 'plan' as AgentPhase, toolSurface: currentToolSurface };
+          yield { kind: 'message', content: `Plan: ${plan}`, raw: fastContent };
+          pushContinue('Plan accepted. Execute it now, one tool call per turn.');
+        }
+      } else {
+        const answer =
+          (parsedFastAction && (parsedFastAction.action === 'done' || parsedFastAction.action === 'answer')
+            ? (parsedFastAction.summary ?? parsedFastAction.content)
+            : undefined) ?? fastContent.trim();
+        yield { kind: 'phase', phase: 'complete' as AgentPhase };
+        yield {
+          kind: 'done',
+          content: answer,
+          terminationReason: 'VERIFICATION_PASSED',
+          protocolMetrics: currentMetrics(),
+        };
+        return;
+      }
+    }
+
+    // ==================== PLAN ====================
+    if (!plan) {
+      currentToolSurface = compileSurface('plan');
+      yield { kind: 'phase', phase: 'plan' as AgentPhase, toolSurface: currentToolSurface };
+      yield {
+        kind: 'message',
+        content: `runtime.protocol.selected: ${currentToolSurface.selectedProtocol} (${currentToolSurface.protocolSelectionReason})`,
+      };
+      yield {
+        kind: 'message',
+        content: `tool_surface.compiled: phase=${currentToolSurface.phase} tools=${currentToolSurface.totalToolsExposed}/${currentToolSurface.totalToolsAvailable} tokens=${currentToolSurface.totalSchemaTokens} (${Math.round(currentToolSurface.reductionRatio * 100)}% reduction)`,
+      };
+    }
     for (; planIterations < 3 && !plan; planIterations++) {
       if (request.isCancelled?.()) return;
       const beforeTurn = checkStop('before_turn');
@@ -1742,7 +1912,8 @@ export class CodingAgent implements AgentAdapter {
     const failures: string[] = [];
 
     const groundedResearch = request.taskType === 'research' && this.descriptor.capabilities.includes('web.fetch');
-    const mutationRequired = request.mutationRequired ?? !groundedResearch;
+    const nonMutatingTask = groundedResearch || request.taskType === 'chat' || useConversationalFastPath;
+    const mutationRequired = request.mutationRequired ?? !nonMutatingTask;
     if (mutationRequired && filesChangedSet.size === 0) {
       failures.push('Agent declared completion but produced no code modifications.');
     }
@@ -1771,7 +1942,7 @@ export class CodingAgent implements AgentAdapter {
       if (!documents.some(d => modelSummary?.includes(d.citation.citationId) || modelSummary?.includes(d.url) || modelSummary?.includes(d.finalUrl)))
         failures.push('WEB_EVIDENCE_REQUIRED: research completion requires a successfully fetched document cited in the answer.');
     }
-    for (const check of groundedResearch && filesChangedSet.size === 0 ? [] : ['build', 'test', 'lint', 'typecheck']) {
+    for (const check of (!mutationRequired || nonMutatingTask) && filesChangedSet.size === 0 ? [] : ['build', 'test', 'lint', 'typecheck']) {
       if (request.isCancelled?.()) return;
       const result = await runtime.executeTool(check, {});
       const output = result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n');

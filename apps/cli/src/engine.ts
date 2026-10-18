@@ -56,7 +56,7 @@ import {
 import { ToolRegistry, defaultTools, createWebTools } from '@wazir/tools';
 import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
 import { createConfiguredWeb } from './web.js';
-import { AcpAgentAdapter, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
+import { AcpAgentAdapter, ChatAgent, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
@@ -77,6 +77,8 @@ export interface EngineOptions {
   projectRoot?: string;
   quiet?: boolean;
   readOnlyLifecycle?: boolean;
+  /** Skip background daemon intervals and redundant live model probes during one-shot CLI commands. */
+  fastStartup?: boolean;
   /** How long an unanswered policy approval waits before it is denied (default 5 minutes). */
   approvalTimeoutMs?: number;
   /** Opt in to honouring `WAZIR_AUTO_APPROVE=1`; never on by default. */
@@ -170,15 +172,7 @@ function acpAgentSpecs(): Array<{ name: string; description: string; requires: s
 }
 
 async function detectOpenCode(): Promise<boolean> {
-  const resolved = resolveExecutable('opencode');
-  if (!resolved) return false;
-  try {
-    const cmd = getSpawnCommand(resolved, ['--version']);
-    await execFileAsync(cmd.command, cmd.args, { timeout: 3_000, shell: cmd.useShell });
-    return true;
-  } catch {
-    return false;
-  }
+  return Boolean(resolveExecutable('opencode'));
 }
 
 export async function createEngine(options: EngineOptions = {}): Promise<RookEngine> {
@@ -279,6 +273,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
 
   // ---- agents -----------------------------------------------------------
   agents.register(createCodingAgent({ webCapabilities: config.web?.enabled ? ['web.search', 'web.fetch'] : [] }), 'native');
+  agents.register(new ChatAgent(), 'native');
   agents.register(createStepAgent(), 'native');
 
   // OpenCode is an optional external execution provider: Wazir still owns
@@ -386,7 +381,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   mcp.on('event', event => {
     if (event.executionId) void executions.recordEvent(event.executionId, 'mcp.event', event).catch(() => undefined);
   });
-  await mcp.initialize().catch(() => { if (!options.quiet) console.error('[wazir] MCP registry unavailable; run wa mcp doctor.'); });
+  if (!options.fastStartup || existsSync(path.join(engineConfigDir, 'mcp.json')) || (config.allowedMcpServers?.length ?? 0) > 0) {
+    await mcp.initialize().catch(() => { if (!options.quiet) console.error('[wazir] MCP registry unavailable; run wa mcp doctor.'); });
+  }
   const web = config.web?.enabled ? createConfiguredWeb(config.web, policy, mcp, engineConfigDir, executions, store) : undefined;
   if (web) for (const tool of createWebTools(web)) tools.register(tool);
 
@@ -418,7 +415,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
 
   // ---- jobs & orchestration -----------------------------------------------
   const jobManager = new JobManager({ store });
-  await jobManager.ready;
+  if (!options.fastStartup) {
+    await jobManager.ready;
+  }
 
   const worktrees = new WorktreeManager();
   const checkpoints = new CheckpointService({
@@ -428,7 +427,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     provenanceManager: provenance,
     defaultWorkspaceRoot: projectRoot,
   });
-  await checkpoints.ready;
+  if (!options.fastStartup) {
+    await checkpoints.ready;
+  }
 
   const orchestrator = new JobOrchestrator({
     scheduler,
@@ -468,10 +469,13 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const executionHistory = await executions.list();
   reliability.hydrate(executionHistory);
   health.hydrateFromExecutions(executionHistory);
-  await lifecycle.discoverAndReconcile({ verify: !options.readOnlyLifecycle });
+  await lifecycle.discoverAndReconcile({
+    verify: !options.readOnlyLifecycle,
+    fastStartup: options.fastStartup ?? true,
+  });
   // After discovery so every model is registered; register() preserves the profiles.
   for (const [modelId, profiles] of measureModelPerformance(executionHistory)) models.setPerformance(modelId, profiles);
-  if (!options.readOnlyLifecycle) {
+  if (!options.readOnlyLifecycle && !options.fastStartup) {
     await lifecycle.applyStartupPolicy(config.models?.startup);
     lifecycle.startReconciliation();
     const inspectOutcome = localOutcomeInspector(projectRoot, localComputer.id);
@@ -531,7 +535,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     policyEngine: policy,
     store,
   });
-  await optimizer.hydrate();
+  if (!options.fastStartup) {
+    await optimizer.hydrate();
+  }
 
   return {
     resources,

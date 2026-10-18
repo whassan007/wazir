@@ -17,7 +17,7 @@ import type {
 } from '@wazir/core';
 import { buildContextPartsFromActive } from './commands.js';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
-import { buildSystemPrompt, resolvePreset } from '@wazir/agents';
+import { buildSystemPrompt, isConversationalFastPathRequest, resolvePreset } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, keepEnds, stripTerminalEscapes } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
@@ -155,7 +155,7 @@ const MINIMUM_CONTEXT_TOKENS = 8192;
 export async function planTask(
   engine: RookEngine,
   description: string,
-  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'routingMode' | 'preset'> = {},
+  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'routingMode' | 'preset' | 'expectedFiles'> = {},
 ): Promise<PlanResult> {
   const preset = resolvePreset(options.preset);
   const task: Task = {
@@ -170,7 +170,7 @@ export async function planTask(
     },
     execution: {
       targetModelId: options.model,
-      targetAgentId: options.agent,
+      targetAgentId: options.agent ?? (options.type === 'chat' && engine.agents.get('wazir-chat') ? 'wazir-chat' : undefined),
       routingMode: options.routingMode,
       runtimePreset: preset.name,
     },
@@ -184,17 +184,32 @@ export async function planTask(
     return { ok: false, reasons: taskPolicy.reasons };
   }
 
-  const allModelTools = engine.tools.forModel(undefined, engine.agents.get(options.agent ?? 'wazir-coding')?.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
+  const targetAgent = engine.agents.get(task.execution?.targetAgentId ?? 'wazir-coding');
+  const fastPath = targetAgent?.descriptor.strategy === 'conversational-inference' || isConversationalFastPathRequest(description, {
+    type: options.type,
+    expectedFiles: options.expectedFiles,
+  });
+
+  const allModelTools = fastPath
+    ? []
+    : engine.tools.forModel(undefined, targetAgent?.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
   const allowedTools = preset.tools === 'all'
     ? allModelTools
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
 
   const baseParts: ContextPart[] = [
-    { kind: 'system', label: 'system prompt', content: buildSystemPrompt(engine.projectRoot, allowedTools), priority: 'critical' },
+    {
+      kind: 'system',
+      label: 'system prompt',
+      content: fastPath
+        ? 'You are Wazir, a precise AI assistant. Answer the user request directly and concisely.'
+        : buildSystemPrompt(engine.projectRoot, allowedTools),
+      priority: 'critical',
+    },
     { kind: 'task', label: 'task', content: description, priority: 'critical' },
   ];
 
-  const activeContextParts = await buildContextPartsFromActive(engine);
+  const activeContextParts = fastPath ? [] : await buildContextPartsFromActive(engine);
   const parts = [...baseParts, ...activeContextParts];
   const budget = engine.compiler.budget(parts, OUTPUT_RESERVE_TOKENS);
 
@@ -341,8 +356,13 @@ export async function executeTask(
   // (no computerId at all, but the *tool* execution environment is still
   // this local workspace regardless of which LLM answers), not only when
   // computerId happens to equal this worker's own id.
+  // Skip worker tool preflight on non-tool conversational fast-path requests.
+  const fastPathExecution = isConversationalFastPathRequest(description, {
+    type: options.type,
+    expectedFiles: options.expectedFiles,
+  });
   const runsInProcess = !scheduling.computerId || scheduling.computerId === engine.worker.computerId;
-  if (runsInProcess) {
+  if (runsInProcess && !fastPathExecution) {
     const preflight = await runWorkerPreflight({
       workspace: engine.projectRoot,
       taskPrompt: description,
@@ -374,15 +394,19 @@ export async function executeTask(
 
   // ---- policy-gated runtime handed to the agent ---------------------------
   let cancelled = false;
+  let cancelGeneration: (() => void) | undefined;
   let turnsUsed = 0;
   const onSigint = (): void => {
     cancelled = true;
+    cancelGeneration?.();
     log(color.yellow('  cancellation requested; finishing current step'));
   };
   process.once('SIGINT', onSigint);
 
   const preset = resolvePreset(options.preset);
-  const allModelTools = engine.tools.forModel(undefined, agent.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
+  const allModelTools = agent.descriptor.strategy === 'conversational-inference'
+    ? []
+    : engine.tools.forModel(undefined, agent.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
   const availableTools = preset.tools === 'all'
     ? allModelTools
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
@@ -403,11 +427,13 @@ export async function executeTask(
     structuredOutput: activeModelReg?.structuredOutput ?? activeRuntimeReg?.capabilities.structuredOutput ?? false,
   };
 
+  let firstTokenEmitted = false;
   const runtime: AgentRuntime = {
     tools: availableTools,
     runtimeCapabilities: resolvedCapabilities,
     getCapabilities: () => resolvedCapabilities,
     getContextTokens: () => placement.contextTokens,
+    cancelCurrentTurn: () => cancelGeneration?.(),
 
     escalate: createEscalationHandler(engine, {
       executionId,
@@ -431,6 +457,10 @@ export async function executeTask(
       const retryContext = { requestId, model: request.modelId, provider: engine.models.get(request.modelId)?.provider };
       loader.start(`Waiting for model response (${request.modelId})...`);
       await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
+      emitJson({ type: 'dispatch', executionId, requestId, modelId: request.modelId, runtimeId: placement.runtimeId });
+      if (agent.descriptor.strategy === 'conversational-inference') {
+        emitJson({ type: 'generation_started', executionId, modelId: request.modelId });
+      }
       if (engine.web) request = { ...request, messages: await recordWebContext(engine.executions, executionId, request.messages, engine.web.limits.maxGroundingTokens) };
       // Inference outcome evidence for health diagnostics; 'unknown' when the stream ended without either.
       let outcome: { outcome: 'completed' | 'error' | 'unknown'; error?: string } = { outcome: 'unknown' };
@@ -452,6 +482,7 @@ export async function executeTask(
             yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
             return;
           }
+          cancelGeneration = () => { void adapter.cancel(requestId).catch(() => undefined); };
           for await (const event of adapter.generate({
             requestId,
             modelId: request.modelId,
@@ -466,6 +497,13 @@ export async function executeTask(
             await engine.executions.recordProviderEvent(executionId, event, retryContext);
             observe(event);
             if (event.type === 'token') {
+              if (!firstTokenEmitted) {
+                firstTokenEmitted = true;
+                emitJson({ type: 'first_token', executionId, requestId, modelId: request.modelId });
+              }
+              if (agent.descriptor.strategy === 'conversational-inference' && event.content) {
+                emitJson({ type: 'token', content: event.content, executionId });
+              }
               loader.setText(`Generating response from ${request.modelId}...`);
             }
             if (event.type === 'completed' && event.usage) {
@@ -501,6 +539,13 @@ export async function executeTask(
               await engine.executions.recordProviderEvent(executionId, generationEvent, retryContext);
               observe(generationEvent);
               if (generationEvent.type === 'token') {
+                if (!firstTokenEmitted) {
+                  firstTokenEmitted = true;
+                  emitJson({ type: 'first_token', executionId, requestId, modelId: request.modelId });
+                }
+                if (agent.descriptor.strategy === 'conversational-inference' && generationEvent.content) {
+                  emitJson({ type: 'token', content: generationEvent.content, executionId });
+                }
                 loader.setText(`Generating response from ${request.modelId}...`);
               }
               if (generationEvent.type === 'completed' && generationEvent.usage) {
@@ -525,6 +570,7 @@ export async function executeTask(
           };
         }
       } finally {
+        cancelGeneration = undefined;
         loader.stop();
         await engine.executions.recordEvent(executionId, 'generation.completed', { modelId: request.modelId, runtimeId: placement.runtimeId, ...outcome });
       }
@@ -743,12 +789,18 @@ export async function executeTask(
   let summary: string | undefined;
   const errors: string[] = [];
 
+  const taskAnalysis = engine.planner?.analyze?.(description);
+  const fastPathRequest = isConversationalFastPathRequest(description, {
+    type: task.type,
+    expectedFiles: options.expectedFiles,
+  });
   try {
     for await (const turn of agent.run(
       {
         modelId: scheduling.modelId,
         taskDescription: description,
         taskType: task.type,
+        mutationRequired: fastPathRequest ? false : taskAnalysis?.mutationRequired,
         projectRoot: engine.projectRoot,
         maxTurns: options.maxTurns,
         contextTokens: context.available.tokens,
@@ -850,6 +902,7 @@ export async function executeTask(
   const finalRecord = engine.executions.require(executionId);
   const evaluation = evaluateExecution(finalRecord, {
     expectedFiles: options.expectedFiles,
+    protectedFiles: options.protectedFiles,
     expectedEvidence: touchesSourceCode(finalRecord.filesChanged) ? ['checks_pass'] : undefined,
   });
   await engine.executions.setEvaluation(executionId, evaluation);
@@ -1164,13 +1217,17 @@ export async function runSubagent(
     childErrors.push(err instanceof Error ? err.message : String(err));
   }
 
-  const childUpdated = await engine.executions.get(childExecId);
-  const childFiles = childUpdated?.filesChanged ?? [];
-  const status = (subagentSuccess && childErrors.length === 0) ? 'completed' : 'failed';
-  await engine.executions.setStatus(childExecId, status);
+  const childUpdated = engine.executions.require(childExecId);
+  const childFiles = childUpdated.filesChanged ?? [];
+  const childEval = evaluateExecution(childUpdated, {
+    expectedFiles: expectedArtifacts,
+  });
+  await engine.executions.setEvaluation(childExecId, childEval);
   if (subagentSummary) {
     await engine.executions.setResult(childExecId, subagentSummary);
   }
+  const status = (subagentSuccess && childErrors.length === 0 && childEval.success) ? 'completed' : 'failed';
+  await engine.executions.setStatus(childExecId, status);
 
   const durationMs = Date.now() - startTime;
   const condensedOutput = [
@@ -1195,5 +1252,13 @@ export async function runSubagent(
     output: condensedOutput,
     error: childErrors.length > 0 ? childErrors.join('; ') : undefined,
     durationMs,
+    fileMutations: childFiles.map((p) => ({
+      path: p,
+      attempted: true,
+      succeeded: true,
+      changed: true,
+      existedBefore: false,
+      existsAfter: true,
+    })),
   };
 }

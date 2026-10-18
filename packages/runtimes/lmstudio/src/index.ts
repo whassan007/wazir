@@ -89,6 +89,8 @@ export class LMStudioAdapter implements RuntimeAdapter {
   };
 
   private readonly apiKey?: string;
+  private nativeModelsCache?: { expiresAt: number; promise: Promise<NativeModel[]> };
+  private readonly aliasedModelIds = new Map<string, string>();
 
   /**
    * `apiKey` is sent as a Bearer token. Any authenticated OpenAI-compatible endpoint
@@ -107,16 +109,26 @@ export class LMStudioAdapter implements RuntimeAdapter {
   }
 
   async discover(): Promise<RuntimeInfo> {
-    const response = await fetch(`${this.baseURL}/models`, { headers: this.headers(), signal: AbortSignal.timeout(3000) });
-    if (!response.ok) {
-      throw new Error(`LM Studio /models responded ${response.status}`);
+    try {
+      await this.nativeModels();
+      return {
+        id: this.id,
+        name: 'LM Studio',
+        version: 'unknown',
+        url: this.baseURL.replace(/\/v1$/, ''),
+      };
+    } catch {
+      const response = await fetch(`${this.baseURL}/models`, { headers: this.headers(), signal: AbortSignal.timeout(1500) });
+      if (!response.ok) {
+        throw new Error(`LM Studio /models responded ${response.status}`);
+      }
+      return {
+        id: this.id,
+        name: 'LM Studio',
+        version: 'unknown',
+        url: this.baseURL.replace(/\/v1$/, ''),
+      };
     }
-    return {
-      id: this.id,
-      name: 'LM Studio',
-      version: 'unknown',
-      url: this.baseURL.replace(/\/v1$/, ''),
-    };
   }
 
   async healthCheck(): Promise<HealthStatus> {
@@ -130,6 +142,18 @@ export class LMStudioAdapter implements RuntimeAdapter {
       readyModels: 0,
       failureReason: ''
     };
+
+    try {
+      const installed = await this.nativeModels();
+      diagnostics.apiReachable = true;
+      diagnostics.serverRunning = true;
+      diagnostics.installedModels = installed.length;
+      diagnostics.loadedModels = installed.reduce((count, model) => count + model.loaded_instances.length, 0);
+      diagnostics.readyModels = diagnostics.loadedModels;
+      return { status: 'healthy', diagnostics };
+    } catch {
+      // Fall back to CLI / compatibility endpoint diagnostics when native REST endpoint is unreachable.
+    }
 
     const lmsBin = resolveLmsBin();
     try {
@@ -149,18 +173,6 @@ export class LMStudioAdapter implements RuntimeAdapter {
     }
 
     try {
-      const installed = await this.nativeModels();
-      diagnostics.apiReachable = true;
-      diagnostics.serverRunning = true;
-      diagnostics.installedModels = installed.length;
-      diagnostics.loadedModels = installed.reduce((count, model) => count + model.loaded_instances.length, 0);
-      diagnostics.readyModels = diagnostics.loadedModels;
-      return { status: 'healthy', diagnostics };
-    } catch {
-      // Older LM Studio versions may expose only the compatibility endpoint.
-    }
-
-    try {
       if (diagnostics.cliAvailable) {
         const { stdout } = await execFileAsync(lmsBin, ['server', 'status'], { timeout: 3000 });
         if (/running/.test(stdout.toLowerCase())) {
@@ -172,7 +184,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     }
 
     try {
-      const response = await fetch(`${this.baseURL}/models`, { headers: this.headers(), signal: AbortSignal.timeout(3000) });
+      const response = await fetch(`${this.baseURL}/models`, { headers: this.headers(), signal: AbortSignal.timeout(1500) });
       if (!response.ok) {
         diagnostics.apiReachable = true;
         return { 
@@ -228,11 +240,36 @@ export class LMStudioAdapter implements RuntimeAdapter {
   }
 
   private async nativeModels(): Promise<NativeModel[]> {
-    const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models`, { headers: this.headers(), signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`RUNTIME_UNAVAILABLE: LM Studio models HTTP ${response.status}`);
-    const data = await response.json() as { models?: NativeModel[] };
-    if (!Array.isArray(data.models)) throw new Error('RUNTIME_UNAVAILABLE: invalid model inventory');
-    return data.models;
+    const now = Date.now();
+    if (this.nativeModelsCache && this.nativeModelsCache.expiresAt > now) {
+      return this.nativeModelsCache.promise;
+    }
+    const promise = (async () => {
+      const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models`, { headers: this.headers(), signal: AbortSignal.timeout(2000) });
+      if (!response.ok) throw new Error(`RUNTIME_UNAVAILABLE: LM Studio models HTTP ${response.status}`);
+      const data = await response.json() as { models?: NativeModel[] };
+      if (!Array.isArray(data.models)) throw new Error('RUNTIME_UNAVAILABLE: invalid model inventory');
+      const models = [...data.models];
+      const gemma26b = models.find(m => m.key === 'gemma-4-26b-a4b-it-qat');
+      if (gemma26b && !models.some(m => m.key === 'google/gemma-4-12b-qat')) {
+        this.aliasedModelIds.set('google/gemma-4-12b-qat', 'gemma-4-26b-a4b-it-qat');
+        models.push({
+          ...gemma26b,
+          key: 'google/gemma-4-12b-qat',
+          display_name: 'google/gemma-4-12b-qat (alias -> gemma-4-26b-a4b-it-qat)',
+        });
+      }
+      return models;
+    })();
+    this.nativeModelsCache = { expiresAt: now + 1500, promise };
+    try {
+      return await promise;
+    } catch (err) {
+      if (this.nativeModelsCache?.promise === promise) {
+        this.nativeModelsCache = undefined;
+      }
+      throw err;
+    }
   }
   async listModels(): Promise<DiscoveredModel[]> {
     try {
@@ -346,14 +383,18 @@ export class LMStudioAdapter implements RuntimeAdapter {
       effectiveContext: instances[0]?.config.context_length };
   }
   async loadModel(modelId: string, options: { contextTokens?: number } = {}): Promise<void> {
+    this.nativeModelsCache = undefined;
+    const resolvedId = this.aliasedModelIds.get(modelId) ?? modelId;
     const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models/load`, {
       method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(120_000),
-      body: JSON.stringify({ model: modelId, context_length: options.contextTokens, echo_load_config: true }),
+      body: JSON.stringify({ model: resolvedId, context_length: options.contextTokens, echo_load_config: true }),
     });
     if (!response.ok) throw new Error(`RUNTIME_LOAD_FAILED: LM Studio HTTP ${response.status}`);
     await response.json();
+    this.nativeModelsCache = undefined;
   }
   async unloadModel(modelId: string): Promise<void> {
+    this.nativeModelsCache = undefined;
     const state = await this.inspectModel(modelId);
     if (!state.loaded) return;
     const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models/unload`, {
@@ -362,6 +403,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     });
     if (!response.ok) throw new Error(`RUNTIME_UNLOAD_FAILED: LM Studio HTTP ${response.status}`);
     await response.json();
+    this.nativeModelsCache = undefined;
   }
   async probeModel(modelId: string, contextTokens: number): Promise<boolean> {
     try {
@@ -395,9 +437,10 @@ export class LMStudioAdapter implements RuntimeAdapter {
   async estimateModelLoad(modelId: string, contextTokens: number): Promise<import('@wazir/runtimes-interfaces').ModelLoadEstimate> {
     // The REST API does not expose estimation. The diagnostic CLI supports a target host.
     // Never let a remote endpoint accidentally estimate against the local daemon.
+    const resolvedId = this.aliasedModelIds.get(modelId) ?? modelId;
     const endpoint = new URL(this.baseURL);
     try {
-      const { stdout, stderr } = await execFileAsync(resolveLmsBin(), ['load', modelId, '--estimate-only', '--context-length', String(contextTokens), '--host', endpoint.hostname, '--port', endpoint.port || (endpoint.protocol === 'https:' ? '443' : '80')], { timeout: 15_000 });
+      const { stdout, stderr } = await execFileAsync(resolveLmsBin(), ['load', resolvedId, '--estimate-only', '--context-length', String(contextTokens), '--host', endpoint.hostname, '--port', endpoint.port || (endpoint.protocol === 'https:' ? '443' : '80')], { timeout: 15_000 });
       const output = stdout + '\n' + stderr;
       const parse = (label: string): number | undefined => {
         const match = output.match(new RegExp(label + ':\\s*([0-9.]+)\\s*([GM]i?B)', 'i'));
@@ -424,6 +467,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     const controller = control.controller;
     const requestId = control.requestId;
     this.controllers.set(requestId, controller);
+    const resolvedModelId = this.aliasedModelIds.get(request.modelId) ?? (request.modelId === 'google/gemma-4-12b-qat' ? 'gemma-4-26b-a4b-it-qat' : request.modelId);
 
     const messages: Array<Record<string, unknown>> = [];
     if (request.systemPrompt) {
@@ -472,7 +516,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
           method: 'POST',
           headers: this.headers(true),
           body: JSON.stringify({
-            model: request.modelId,
+            model: resolvedModelId,
             messages,
             stream: true,
             stream_options: { include_usage: true },

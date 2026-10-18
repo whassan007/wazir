@@ -106,8 +106,10 @@ export class ExecutionEngine {
     this.isProcessAlive = options.isProcessAlive ?? signalZeroAlive;
     this.ready = Promise.resolve().then(() => options.load?.()).then(async (loaded) => {
       if (!loaded) return;
+      const migratedIds = new Set<string>();
       for (const record of loaded) {
         const copy = structuredClone(record);
+        let eventsMutated = false;
         const events = copy.events.map((event, index) => {
           if (event.sequence !== undefined && event.sequence !== index + 1) {
             throw new Error(`Invalid event sequence for execution '${copy.execution.id}'`);
@@ -117,20 +119,31 @@ export class ExecutionEngine {
               (event.eventType !== undefined && event.eventType !== event.type)) {
             throw new Error(`Invalid event identity for execution '${copy.execution.id}'`);
           }
+          const expectedJobId = event.jobId ?? copy.execution.jobId ?? null;
+          if (
+            event.eventId !== event.id ||
+            event.eventType !== event.type ||
+            event.sequence !== index + 1 ||
+            event.jobId !== expectedJobId ||
+            !(event.timestamp instanceof Date)
+          ) {
+            eventsMutated = true;
+          }
           return {
             ...event,
             eventId: event.id,
             eventType: event.type,
             sequence: index + 1,
-            jobId: event.jobId ?? copy.execution.jobId ?? null,
-            timestamp: new Date(event.timestamp),
+            jobId: expectedJobId,
+            timestamp: event.timestamp instanceof Date ? event.timestamp : new Date(event.timestamp),
           } satisfies SequencedExecutionEvent;
         });
         if (new Set(events.map(e => e.eventId)).size !== events.length) {
           throw new Error(`Duplicate event identity for execution '${copy.execution.id}'`);
         }
-        copy.events = structuredClone(events);
-        this.histories.set(copy.execution.id, events);
+        copy.events = events;
+        if (eventsMutated) migratedIds.add(copy.execution.id);
+        this.histories.set(copy.execution.id, structuredClone(events));
         this.records.set(copy.execution.id, copy);
       }
       // Detect orphaned tool.start events without a matching completed event — but never
@@ -138,10 +151,12 @@ export class ExecutionEngine {
       // in flight, and marking it would also fork the record's storage revision.
       for (const record of this.records.values()) {
         if (this.ownedByAnotherLiveProcess(record)) continue;
+        let recovered = false;
         for (const call of this.toolCheckpoints(record.execution.id).filter(call => call.state === 'STARTED')) {
           const data = { tool: call.toolName, input: call.input, startedAt: call.startedAt, callId: call.callId, sideEffectClass: call.sideEffectClass, failureClass: 'TOOL_OUTCOME_UNKNOWN' };
           this.pushEvent(record, 'tool.unknownOutcome', data, { callId: call.callId, stepId: call.stepId });
           this.pushEvent(record, 'tool.call.outcome_unknown', data, { callId: call.callId, stepId: call.stepId });
+          recovered = true;
         }
         // An execution whose process died (SIGKILL, OOM, closed terminal) would otherwise
         // read as active forever. Its outcome is unknown, so it fails with that reason;
@@ -153,10 +168,13 @@ export class ExecutionEngine {
           record.execution.status = 'failed';
           record.execution.completedAt = new Date();
           this.pushEvent(record, 'execution.failed', { status: 'failed', reason: 'OWNER_PROCESS_EXITED', ownerPid: owner.pid, previousStatus: previous });
+          recovered = true;
         }
         // Persist legacy envelope migration and recovered unknown outcomes before ready.
-        const loadedRecord = loaded.find(item => item.execution.id === record.execution.id)!;
-        if (!isDeepStrictEqual(loadedRecord.events, record.events)) await this.flush(record);
+        if (recovered || migratedIds.has(record.execution.id)) {
+          const loadedRecord = loaded.find(item => item.execution.id === record.execution.id)!;
+          if (!isDeepStrictEqual(loadedRecord.events, record.events)) await this.flush(record);
+        }
       }
     }).catch(error => {
       this.persistenceFailure = error instanceof Error ? error : new Error(String(error));

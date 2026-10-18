@@ -1,0 +1,11 @@
+task_id,mode,model_requested,model_resolved,end_to_end_ms,engine_init_ms,runtime_probing_ms,worker_init_ms,history_load_ms,model_inference_ms,wazir_overhead_ms,completion_delay_ms,model_calls,agent_phases,tool_calls,exit_code,correct,response_preview
+P01,cli_cold_start,google/gemma-4-12b-qat,gemma-4-26b-a4b-it-qat,4987.15,,,,,,,,1,1,0,0,true,"31"
+P02,cli_cold_start,google/gemma-4-12b-qat,gemma-4-26b-a4b-it-qat,4355.43,,,,,,,,1,1,0,0,true,"RIZAW"
+P03,cli_cold_start,google/gemma-4-12b-qat,gemma-4-26b-a4b-it-qat,4381.45,,,,,,,,1,1,0,0,true,"56"
+P04,cli_cold_start,google/gemma-4-12b-qat,gemma-4-26b-a4b-it-qat,4808.48,,,,,,,,1,1,0,0,true,"```python def add_integers(a, b): \"\"\"Adds two integers and returns the result.\"\"\" return a + b ```"
+P05,cli_cold_start,google/gemma-4-12b-qat,gemma-4-26b-a4b-it-qat,4921.18,,,,,,,,1,1,0,0,true,"A queue is a linear data structure that follows the First-In, First-Out (FIFO) principle, where elements are added at th"
+P01,engine_cold_first_run,google/gemma-4-12b-qat,google/gemma-4-12b-qat,3301.14,669.31,15,12,180,262.55,3038.59,1.5,1,1,0,0,true,"31"
+P02,engine_warm_reuse,google/gemma-4-12b-qat,google/gemma-4-12b-qat,2543.47,0,0,0,0,279.66,2263.81,1.5,1,1,0,0,true,"RIZAW"
+P03,engine_warm_reuse,google/gemma-4-12b-qat,google/gemma-4-12b-qat,2494.51,0,0,0,0,262.93,2231.58,1.5,1,1,0,0,true,"56"
+P04,engine_warm_reuse,google/gemma-4-12b-qat,google/gemma-4-12b-qat,3123.69,0,0,0,0,654.32,2469.37,1.5,1,1,0,0,true,"```python def add_integers(a, b): \"\"\"Adds two integers and returns the result.\"\"\" return a + b ```"
+P05,engine_warm_reuse,google/gemma-4-12b-qat,google/gemma-4-12b-qat,3021.78,0,0,0,0,649.31,2372.47,1.5,1,1,0,0,true,"A queue is a linear data structure that follows the First-In, First-Out (FIFO) principle, where elements are added at th"
