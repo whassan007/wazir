@@ -17,6 +17,14 @@ export interface ConversationFrame {
   copyMode?: string;
 }
 
+export interface ConversationStartOptions {
+  identity?: string;
+  model?: string;
+  modelsCount?: number;
+  computerName?: string;
+  ready?: boolean;
+}
+
 /** Inline renderer: transcript is append-only; only this small live region is repainted. */
 export class ConversationRenderer {
   private liveRows: string[] = [];
@@ -26,6 +34,8 @@ export class ConversationRenderer {
   private lastFrameKey = '';
   private lastPlainStatus = '';
   private liveCursorCol = 0;
+  private isStreaming = false;
+  private streamingBuffer = '';
   private readonly tty: boolean;
   private readonly writer: OutputWriter;
   readonly transcript = new TranscriptStore();
@@ -35,17 +45,95 @@ export class ConversationRenderer {
     this.tty = options.isTTY ?? detectTerminalCapabilities(output).isTTY;
   }
 
-  start(identity: string, model?: string): void {
+  start(identityOrOptions: string | ConversationStartOptions, modelArg?: string): void {
     if (this.started) return;
     this.started = true;
     const { columns } = this.size();
+
+    let identity = 'controller';
+    let model = modelArg;
+    let modelsCount: number | undefined;
+    let computerName = 'Local';
+
+    if (typeof identityOrOptions === 'object' && identityOrOptions !== null) {
+      identity = identityOrOptions.identity ?? identity;
+      model = identityOrOptions.model ?? model;
+      modelsCount = identityOrOptions.modelsCount;
+      computerName = identityOrOptions.computerName ?? computerName;
+    } else if (typeof identityOrOptions === 'string') {
+      identity = identityOrOptions;
+    }
+
+    // Top identity header
     const right = fit(model ? `${identity} · ${model}` : identity, Math.max(1, columns - 10));
     const gap = Math.max(1, columns - 2 - stringDisplayWidth('WAZIR') - stringDisplayWidth(right));
-    this.writeDurable(` WAZIR${' '.repeat(gap)}${right}\n\n`);
+    let welcome = ` WAZIR${' '.repeat(gap)}${right}\n`;
+
+    // Discoverable welcome screen banner if wide enough and startup
+    if (columns >= 40) {
+      const modelsReadyText = modelsCount !== undefined
+        ? `● ${modelsCount} model${modelsCount === 1 ? '' : 's'} ready`
+        : '● Ready';
+      const computerStatusText = `● ${computerName} connected`;
+      const divider = '─'.repeat(Math.min(columns - 2, 54));
+
+      welcome += ` Multi-Model AI Coding Assistant\n\n`;
+      welcome += ` ${modelsReadyText}    ${computerStatusText}\n\n`;
+      welcome += ` What would you like to do?\n\n`;
+      welcome += `   > Explain this repository\n`;
+      welcome += `   > Find and fix failing tests\n`;
+      welcome += `   > Implement a new feature\n`;
+      welcome += `   > Review my code for bugs\n\n`;
+      welcome += ` Type a request and press Enter.\n\n`;
+      welcome += ` ${divider}\n`;
+      const modelLabel = model ? model : (modelsCount ? `Auto (${modelsCount} available)` : 'Auto');
+      welcome += ` Model: ${fit(modelLabel, 24)}     Computer: ${fit(computerName, 20)}\n`;
+      welcome += ` /help    /models    /status    Ctrl+C cancel\n\n`;
+    } else {
+      welcome += ` Multi-Model AI Coding Assistant\n\n`;
+    }
+
+    this.writeDurable(welcome);
     this.liveRows = [];
   }
 
+  clear(welcomeOptions?: ConversationStartOptions): void {
+    this.clearLive();
+    if (this.tty) {
+      this.writeTransient('\x1b[2J\x1b[H');
+    }
+    this.transcript.clear();
+    this.started = false;
+    this.plainRendered = false;
+    this.lastFrameKey = '';
+    this.lastPlainStatus = '';
+    this.isStreaming = false;
+    this.streamingBuffer = '';
+    this.start(welcomeOptions ?? 'controller');
+  }
+
+  streamToken(token: string): void {
+    if (!token) return;
+    this.clearLive();
+    this.isStreaming = true;
+    this.streamingBuffer += token;
+    this.writeDurable(token);
+  }
+
+  flushStreaming(): void {
+    if (!this.isStreaming) return;
+    if (!this.streamingBuffer.endsWith('\n')) {
+      this.writeDurable('\n\n');
+    } else {
+      this.writeDurable('\n');
+    }
+    this.transcript.append(this.streamingBuffer);
+    this.streamingBuffer = '';
+    this.isStreaming = false;
+  }
+
   append(text: string): void {
+    this.flushStreaming();
     this.clearLive();
     const clean = text.replace(/\r/g, '');
     this.transcript.append(clean);
@@ -91,10 +179,11 @@ export class ConversationRenderer {
       }
       return;
     }
-    const frameKey = `${next.join('\n')}\0${nextCursorRow}`;
+    const frameKey = `${next.join('\n')}\0${nextCursorRow}\0${promptLines.cursorCol}`;
     if (frameKey === this.lastFrameKey) return;
     this.lastFrameKey = frameKey;
-    this.rewriteLive(next, nextCursorRow);
+    const prefixLen = 2; // '> ' or '  '
+    this.rewriteLive(next, nextCursorRow, promptLines.cursorCol + prefixLen);
   }
 
   stop(): void {
@@ -104,7 +193,7 @@ export class ConversationRenderer {
     this.liveRows = [];
   }
 
-  private rewriteLive(next: string[], cursorRow: number): void {
+  private rewriteLive(next: string[], cursorRow: number, targetCol?: number): void {
     const oldRows = this.liveRows.length;
     const { columns } = this.size();
     const oldPhysicalRows = oldRows;
@@ -125,7 +214,8 @@ export class ConversationRenderer {
     if (up) this.writeTransient(`\x1b[${up}A`);
     this.writeTransient('\r');
     const cursorLine = next[Math.max(0, Math.min(last, cursorRow))] ?? '';
-    const col = Math.min(columns - 1, stringDisplayWidth(cursorLine));
+    const lineLen = stringDisplayWidth(cursorLine);
+    const col = Math.min(columns - 1, targetCol !== undefined ? Math.min(targetCol, lineLen) : lineLen);
     if (col) this.writeTransient(`\x1b[${col}C`);
     this.liveRows = next;
     this.liveCursorRow = clampedCursorRow;
@@ -167,14 +257,18 @@ function fit(text: string, width: number): string {
   return out;
 }
 
-function wrapWithCursor(text: string, cursor: number, width: number): { lines: string[]; cursorRow: number } {
+function wrapWithCursor(text: string, cursor: number, width: number): { lines: string[]; cursorRow: number; cursorCol: number } {
   const chars = Array.from(text);
   const cursorChars = Array.from(text.slice(0, cursor)).length;
   const lines: string[] = [''];
   let cells = 0;
   let cursorRow = 0;
+  let cursorCol = 0;
   for (let i = 0; i <= chars.length; i++) {
-    if (i === cursorChars) cursorRow = lines.length - 1;
+    if (i === cursorChars) {
+      cursorRow = lines.length - 1;
+      cursorCol = cells;
+    }
     if (i === chars.length) break;
     const char = chars[i];
     if (char === '\n' || cells + Math.max(1, stringDisplayWidth(char)) > width) {
@@ -184,5 +278,5 @@ function wrapWithCursor(text: string, cursor: number, width: number): { lines: s
     lines[lines.length - 1] += char;
     cells += stringDisplayWidth(char);
   }
-  return { lines, cursorRow };
+  return { lines, cursorRow, cursorCol };
 }

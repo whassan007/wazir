@@ -2510,6 +2510,44 @@ describe('FleetTui — protocol/validation visibility and raw response viewer', 
       harness.stop();
       expect(harness.tui.getExitReason()).toBe('user_exit');
     });
+
+    it('handles /clear, /status, /help, and rejects unknown slash commands in conversation mode', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-chat-cmds-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      useSuccessfulFakeModel(engine);
+      const harness = new TuiTestHarness({ engine, presentationMode: 'conversation' });
+      await harness.start();
+
+      // Welcome card should be visible
+      expect(harness.outStream.getOutput()).toContain('WAZIR');
+      expect(harness.outStream.getOutput()).toContain('Multi-Model AI Coding Assistant');
+      expect(harness.outStream.getOutput()).toContain('What would you like to do?');
+
+      // Test unknown slash command rejection
+      harness.sendLine('/unknowncmd');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(harness.outStream.getOutput()).toContain("✗ Unknown command '/unknowncmd'. Type /help for available commands.");
+
+      // Test /help
+      harness.sendLine('/help');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(harness.outStream.getOutput()).toContain('Available commands:');
+      expect(harness.outStream.getOutput()).toContain('/clear     — clear conversation screen');
+
+      // Test /status
+      harness.sendLine('/status');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(harness.outStream.getOutput()).toContain('Computers:');
+      expect(harness.outStream.getOutput()).toContain('Models:');
+
+      // Test /clear
+      harness.sendLine('/clear');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(harness.outStream.getOutput()).toContain('\x1b[2J\x1b[H');
+      expect(harness.outStream.getOutput()).toContain('Multi-Model AI Coding Assistant');
+
+      harness.stop();
+    });
   });
 });
 

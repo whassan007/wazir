@@ -201,4 +201,73 @@ describe('conversation presentation projections', () => {
 
     expect(raw.slice(0, durablePrefix.length)).toBe(durablePrefix);
   });
+
+  it('renders rich welcome screen matching Section 4 and clears cleanly on /clear', () => {
+    const output = new PassThrough() as PassThrough & { isTTY: boolean };
+    output.isTTY = true;
+    let raw = '';
+    output.on('data', (chunk) => { raw += chunk.toString(); });
+    const renderer = new ConversationRenderer(output, () => ({ columns: 80, rows: 24 }));
+
+    renderer.start({
+      identity: 'waelbot',
+      model: undefined,
+      modelsCount: 3,
+      computerName: 'DGX Spark',
+    });
+
+    expect(raw).toContain('WAZIR');
+    expect(raw).toContain('Multi-Model AI Coding Assistant');
+    expect(raw).toContain('● 3 models ready');
+    expect(raw).toContain('● DGX Spark connected');
+    expect(raw).toContain('What would you like to do?');
+    expect(raw).toContain('> Explain this repository');
+    expect(raw).toContain('> Find and fix failing tests');
+    expect(raw).toContain('Type a request and press Enter.');
+    expect(raw).toContain('/help    /models    /status    Ctrl+C cancel');
+
+    // Test clear
+    renderer.append('User query in progress');
+    expect(renderer.transcript.list().map((e) => e.text)).toContain('User query in progress');
+
+    renderer.clear({
+      identity: 'waelbot',
+      model: 'qwen3-coder',
+      modelsCount: 3,
+      computerName: 'DGX Spark',
+    });
+
+    // Transcript should be wiped and welcome screen re-rendered
+    expect(renderer.transcript.list()).toHaveLength(0);
+    expect(raw).toContain('\x1b[2J\x1b[H');
+    expect(raw).toContain('Model: qwen3-coder');
+  });
+
+  it('streams tokens incrementally without disrupting the live prompt region', () => {
+    const output = new PassThrough() as PassThrough & { isTTY: boolean };
+    output.isTTY = true;
+    let raw = '';
+    output.on('data', (chunk) => { raw += chunk.toString(); });
+    const renderer = new ConversationRenderer(output, () => ({ columns: 80, rows: 24 }));
+
+    renderer.start('controller', 'auto');
+    renderer.render({
+      identity: 'controller',
+      prompt: 'hello world',
+      cursor: 11,
+      active: 1,
+      waitingApproval: 0,
+      activity: 'thinking',
+    });
+
+    // Stream tokens
+    renderer.streamToken('Hello');
+    renderer.streamToken(' there!');
+    expect(raw).toContain('Hello');
+    expect(raw).toContain(' there!');
+
+    // Flush tokens
+    renderer.flushStreaming();
+    expect(renderer.transcript.list().map((e) => e.text)).toContain('Hello there!');
+  });
 });
