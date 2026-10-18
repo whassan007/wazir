@@ -439,6 +439,8 @@ export async function executeTask(
         throw new Error(`no runtime adapter available for model '${scheduling.modelId}'`);
       }
 
+      await engine.executions.recordEvent(executionId, 'generation.started', { modelId: scheduling.modelId });
+
       const promptMessages = [
         {
           role: 'system' as const,
@@ -487,6 +489,12 @@ export async function executeTask(
       await engine.executions.recordError(executionId, msg).catch(() => undefined);
     } finally {
       loader.stop();
+      await engine.executions.recordEvent(executionId, 'generation.completed', {
+        modelId: scheduling.modelId,
+        runtimeId: scheduling.runtimeId,
+        outcome: directErrors.length === 0 ? 'completed' : 'error',
+        error: directErrors[0],
+      }).catch(() => undefined);
     }
 
     const trimmedSummary = directSummary.trim();

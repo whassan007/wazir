@@ -1,5 +1,5 @@
-task_name,prompt,target_model,execution_mode,cold_latency_s,warm_latency_s,result_correct,verification_status,first_visible_progress_ms,pre_inference_ms
-arithmetic,"what is 23 + 19?",google/gemma-4-12b-qat,direct_answer_fast_path,6.34,4.94,true,SUCCESS,380,890
-string_reversal,"reverse the word WAZIR",google/gemma-4-12b-qat,direct_answer_fast_path,6.17,5.21,true,SUCCESS,410,920
-json_generation,"generate JSON {\"status\":\"ok\",\"count\":5}",google/gemma-4-12b-qat,direct_answer_fast_path,5.92,4.88,true,SUCCESS,395,880
-code_generation,"write a python fibonacci function",google/gemma-4-12b-qat,direct_answer_fast_path,24.99,21.40,true,SUCCESS,420,910
+benchmark,scenario,model,execution_id,real_wall_clock_s,user_s,sys_s,engine_total_s,inference_s,orchestration_overhead_ms,tokens_in,tokens_out,tokens_per_sec,speedup_vs_baseline
+arithmetic,Warm resident fast-path,google/gemma-4-12b-qat,exec-mvde30v7-1,6.26,4.31,0.59,3.00,2.30,720,52,40,17.39,35.1x (vs 220s) / 5.3x (vs 33s)
+string_reversal,Warm resident fast-path,google/gemma-4-12b-qat,exec-mvde40pg-1,7.28,4.36,0.65,4.20,3.40,743,52,61,17.94,8.7x (vs 63s)
+json_generation,Warm resident fast-path,google/gemma-4-12b-qat,exec-mvde4dql-1,11.39,4.47,0.62,8.30,7.60,731,58,196,25.79,29.5x (vs 336s)
+code_generation,Warm resident fast-path,google/gemma-4-12b-qat,exec-mvde5j4t-1,18.28,4.59,0.69,15.00,14.30,722,56,427,29.86,N/A

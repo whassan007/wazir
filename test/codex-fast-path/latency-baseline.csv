@@ -1,5 +1,5 @@
-task_name,prompt,target_model,execution_mode,cold_latency_s,warm_latency_s,result_correct,verification_status
-arithmetic,"what is 23 + 19?",google/gemma-4-12b-qat,coding_agent_full_loop,220.0,35.4,true,FAILED_NO_CHECKS
-string_reversal,"reverse the word WAZIR",google/gemma-4-12b-qat,coding_agent_full_loop,63.0,42.1,true,FAILED_NO_MUTATION
-json_generation,"generate JSON {\"status\":\"ok\",\"count\":5}",google/gemma-4-12b-qat,coding_agent_full_loop,336.0,58.7,true,FAILED_UNRELATED_CHECK
-code_generation,"write a python fibonacci function",google/gemma-4-12b-qat,coding_agent_full_loop,180.0,48.2,true,FAILED_NO_WORKSPACE_CHECKS
+benchmark,scenario,model,execution_id,real_wall_clock_s,user_s,sys_s,engine_total_s,inference_s,overhead_unattributed_ms,notes
+arithmetic_cold,Cold baseline,google/gemma-4-12b-qat,historical-audit-cold,220.00,-,-,-,-,-,Initial Mac audit baseline before repairs (hung in 25s context probe loops + full agent tool planning)
+arithmetic_repaired,Post-lifecycle repair,google/gemma-4-12b-qat,historical-audit-repaired,33.00,-,-,-,-,-,Prior coding-agent pipeline with repo scan and agent multi-turn planning
+string_reversal,Cold baseline,google/gemma-4-12b-qat,historical-audit-reverse,63.00,-,-,-,-,-,Coding-agent planning + test verification attempts on trivial string reversal
+json_generation,Cold baseline,google/gemma-4-12b-qat,historical-audit-json,336.00,-,-,-,-,-,Trivial JSON prompt failed across multiple repair phases and verification timeouts

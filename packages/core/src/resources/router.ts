@@ -198,7 +198,9 @@ export class ResourceRouter {
         latency: ms !== undefined && maxMs > 0 ? ms / maxMs : 0.5,
         quotaRisk: QUOTA_RISK[mode ?? 'normal'],
       };
-      const residencyBonus = p.residency === 'ready' ? 1.5 : 0;
+      // Resident models ready in memory avoid cold loads, lifecycle reloads, and out-of-memory admission failures.
+      // Grant a decisive residency bonus so warm ready models are prioritized over cold unverified candidates.
+      const residencyBonus = p.residency === 'ready' ? 10.0 : 0;
       const score = w.quality * factors.quality + w.reliability * factors.reliability + w.capacity * factors.capacity
         - w.cost * factors.cost - w.latency * factors.latency - w.quotaRisk * factors.quotaRisk + residencyBonus;
       const reasons = [...p.reasons];
