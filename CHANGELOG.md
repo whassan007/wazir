@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.10 — 2026-10-17
+
+**Release**: `v0.2.10`
+**Theme**: P0 Execution Reliability, Dead-PID SQLite Lock Recovery, Sub-2s Local Model Turnaround, and Phase Telemetry
+
+- **SQLite Write Lock Liveness & Recovery (`@wazir/shared`)**:
+  - Added `inspectForeignHolder()` (`process.kill(pid, 0)`) in `SqliteStore.acquireProcessWriteLock()` so locks left behind by processes terminated via `SIGTERM`/`SIGKILL` (`ESRCH`) are reclaimed immediately (`<50 ms`) instead of stalling until `LOCK_MAX_WAIT_MS = 10_000` when `LOCK_STALE_AFTER_MS = 30_000`.
+- **Fast Resident Model Probing & Lifecycle Reuse (`@wazir/runtimes-lmstudio`, `@wazir/core`)**:
+  - Updated `LMStudioAdapter.healthCheck()` and `probeModel()` to check the HTTP `/api/v0/models` inventory first (with a 1s cache) before spawning `lms ls` or `lms ps --json` subprocesses, and skipped `lms load --estimate-only` in `ModelLifecycleService.ensureModelReady()` when the target model is already resident.
+- **Direct Single-Turn Execution for Non-Mutating Tasks (`@wazir/core`, `@wazir/agents`, `@wazir/cli`)**:
+  - Updated `TaskPlanner.analyze()` to classify inline-return, query, conversion, and standalone function snippet prompts as `mutationRequired: false`, wired `mutationRequired` into `CodingAgent.run()`, skipped repo-wide `build`/`test`/`lint`/`typecheck` verification when no files were mutated, and preserved inner markdown code blocks in `ModelProtocolAdapter.parse()`.
+- **CLI & TUI Observability (`@wazir/cli`)**:
+  - Added `--model` and `--routing-mode` flags to `wa chat` and `wa fleet`, and emitted `dispatch` and `first_token` NDJSON events in `wa run --json`.
+
 ## v0.2.9 — 2026-10-17
 
 **Release**: `v0.2.9`

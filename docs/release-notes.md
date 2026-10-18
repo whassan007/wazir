@@ -1,3 +1,19 @@
+# Wazir Release Notes - v0.2.10
+
+**Release**: `v0.2.10`
+**Theme**: P0 Execution Reliability, Dead-PID SQLite Lock Recovery, Sub-2s Local Model Turnaround, and Phase Telemetry
+
+`v0.2.10` resolves P0 execution reliability and latency bottlenecks across the CLI, SQLite store, LM Studio adapter, and native coding agent, cutting median local task turnaround from `>20s` timeouts to `2.14s` (`10/10` benchmark pass rate).
+
+## Highlights
+
+- **Immediate Dead-PID SQLite Lock Recovery**: Automatically reclaims `wazir.sqlite.write.lock` when the foreign lock holder PID is no longer alive (`ESRCH`), eliminating 10-second cascading lock timeouts after `SIGTERM`/`SIGKILL` interruptions.
+- **Sub-1.3s Local Model Startup & Reuse**: Uses cached HTTP `/api/v0/models` readiness checks for resident LM Studio models instead of spawning redundant `lms ls`, `lms ps`, and `lms load --estimate-only` CLI subprocesses on every task.
+- **Single-Turn Non-Mutating Task Execution**: Accurately classifies queries, inline JSON/text returns, and standalone code snippets as `mutationRequired: false`, skipping unnecessary multi-turn planning and repo-wide verification checks when zero files are modified.
+- **Enhanced CLI & Chat Observability**: Adds `--model` and `--routing-mode` flags to `wa chat`/`wa fleet` and emits structured `dispatch` and `first_token` NDJSON events in `wa run --json`.
+
+---
+
 # Wazir Release Notes - v0.2.9
 
 **Release**: `v0.2.9`
