@@ -649,8 +649,11 @@ export class CodingAgent implements AgentAdapter {
         content:
           `Task: ${request.taskDescription}\n\n` +
           (resume ? `${resumeBriefing(resume)}\n\n` : '') +
-          'Start with a plan. You may inspect the repository with read/glob/search tools first. ' +
-          'Respond now with either a plan or a tool call.',
+          (request.mutationRequired === false
+            ? (/\b(file|files|repo|repository|project|codebase|directory|folder|check|inspect|verify|read|examine|review|[A-Za-z0-9_-]+\.(?:ts|js|py|cpp|cc|c|h|md|json|yaml|yml))\b/i.test(request.taskDescription)
+                ? 'If you can answer this task directly without inspecting repository files, do NOT emit a plan — respond immediately on this first turn with {"action":"done","summary":"<your exact answer>"} or your direct answer text. Only call read/glob/search if you must inspect repository files.'
+                : 'This is a self-contained task that does NOT require inspecting or modifying repository files. Do NOT call any tools and do NOT emit a plan or JSON action wrapper. Respond immediately on this first turn with ONLY the requested answer or code block, with no conversational preamble.')
+            : 'Start with a plan. You may inspect the repository with read/glob/search tools first. Respond now with either a plan or a tool call.'),
       },
     ];
 
@@ -852,25 +855,42 @@ export class CodingAgent implements AgentAdapter {
           tools: currentToolSurface.selectedProtocol === 'native_tool_call'
             ? [
                 ...(currentToolSurface.serializedSchemas ?? []),
-                currentPhase === 'plan'
-                  ? {
-                      name: 'plan',
-                      description: 'Submit a short step-by-step implementation plan to proceed from planning to implementation.',
-                      parameters: {
-                        type: 'object',
-                        properties: { content: { type: 'string', description: 'Short step-by-step plan' } },
-                        required: ['content'],
+                ...(currentPhase === 'plan'
+                  ? [
+                      {
+                        name: 'plan',
+                        description: 'Submit a short step-by-step implementation plan to proceed from planning to implementation.',
+                        parameters: {
+                          type: 'object',
+                          properties: { content: { type: 'string', description: 'Short step-by-step plan' } },
+                          required: ['content'],
+                        },
                       },
-                    }
-                  : {
-                      name: 'done',
-                      description: 'Declare the coding task complete after modifying the target files and verifying checks.',
-                      parameters: {
-                        type: 'object',
-                        properties: { summary: { type: 'string', description: 'What changed and how it was verified' } },
-                        required: ['summary'],
+                      ...(request.mutationRequired === false
+                        ? [
+                            {
+                              name: 'done',
+                              description: 'Return the final answer or response for this non-mutating task.',
+                              parameters: {
+                                type: 'object',
+                                properties: { summary: { type: 'string', description: 'Exact final answer or output' } },
+                                required: ['summary'],
+                              },
+                            },
+                          ]
+                        : []),
+                    ]
+                  : [
+                      {
+                        name: 'done',
+                        description: 'Declare the coding task complete after modifying the target files and verifying checks.',
+                        parameters: {
+                          type: 'object',
+                          properties: { summary: { type: 'string', description: 'What changed and how it was verified' } },
+                          required: ['summary'],
+                        },
                       },
-                    },
+                    ]),
               ]
             : undefined,
         })) {
@@ -916,12 +936,12 @@ export class CodingAgent implements AgentAdapter {
         pendingNativeCall = undefined;
         return { content, toolCall: undefined, timedOut, retryNotes, usage, parallelCalls: toolCallCount };
       }
-      // Native function-calling providers finish with plain assistant text. Treat
-      // that as a proposed answer; the normal deterministic verification still runs.
+      // Native function-calling providers finish with plain assistant text (or inline JSON / code block).
+      // Treat that as a proposed answer unless it is a legacy Wazir JSON action object.
       if (!toolCall && !timedOut && finishReason === 'stop' &&
           currentToolSurface.selectedProtocol === 'native_tool_call' && content.trim() &&
-          !/^\s*(\{|```)/.test(content)) {
-        content = JSON.stringify({ action: 'answer', content });
+          !readAction(content)) {
+        content = JSON.stringify({ action: 'answer', content: content.trim() });
       }
       return { content, toolCall, timedOut, retryNotes, usage };
     };
@@ -1771,7 +1791,7 @@ export class CodingAgent implements AgentAdapter {
       if (!documents.some(d => modelSummary?.includes(d.citation.citationId) || modelSummary?.includes(d.url) || modelSummary?.includes(d.finalUrl)))
         failures.push('WEB_EVIDENCE_REQUIRED: research completion requires a successfully fetched document cited in the answer.');
     }
-    for (const check of groundedResearch && filesChangedSet.size === 0 ? [] : ['build', 'test', 'lint', 'typecheck']) {
+    for (const check of !mutationRequired && filesChangedSet.size === 0 ? [] : ['build', 'test', 'lint', 'typecheck']) {
       if (request.isCancelled?.()) return;
       const result = await runtime.executeTool(check, {});
       const output = result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n');

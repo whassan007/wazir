@@ -359,9 +359,14 @@ export class ModelLifecycleService {
     const safetyReserve = Math.max((available ?? 0) * this.reservePercent / 100, this.minimumReserveBytes);
     const held = snapshot.activeReservations.reduce((n, r) => n + r.memoryBytes, 0);
     const usable = available === undefined ? undefined : Math.max(0, available - safetyReserve - held);
+    const reuse = i.state === 'READY' && i.loaded && i.health === 'healthy' &&
+      i.contextTokens !== undefined && i.contextTokens >= minimum && (requested === undefined || i.contextTokens === context);
     const estimateAt = async (candidateContext: number): Promise<LoadEstimate> => {
       let e: import('@wazir/runtimes-interfaces').ModelLoadEstimate = { source: 'UNKNOWN', confidence: 'unknown' };
-      if (adapter?.estimateModelLoad) {
+      if (reuse && !options.dryRun) {
+        const mem = i.residentMemoryBytes ?? profile?.weightBytes ?? 1;
+        e = { weightBytes: profile?.weightBytes, totalMemoryBytes: mem, source: 'RUNTIME', confidence: 'high' };
+      } else if (adapter?.estimateModelLoad) {
         try { e = await adapter.estimateModelLoad(i.runtimeModelId, candidateContext); } catch { /* unknown is denied below */ }
       }
       if (e.totalMemoryBytes === undefined && profile?.weightBytes !== undefined && profile.contextBytesPerToken !== undefined && profile.runtimeOverheadBytes !== undefined) {
@@ -387,7 +392,7 @@ export class ModelLifecycleService {
     };
     let estimate = await estimateAt(context);
     let safeContext: number | undefined;
-    if (estimate.classification === 'INSUFFICIENT' && context >= minimum) {
+    if (!reuse && estimate.classification === 'INSUFFICIENT' && context >= minimum) {
       let low = minimum, high = context, best: LoadEstimate | undefined;
       // Monotonic context-memory search, with every candidate estimated by the runtime.
       while (low <= high) {
@@ -399,8 +404,6 @@ export class ModelLifecycleService {
       safeContext = best?.candidateContext;
       if (best && (mode !== 'EXPLICIT' || options.fit)) { estimate = best; context = best.candidateContext; }
     } else if (estimate.classification !== 'UNKNOWN') safeContext = context;
-    const reuse = i.state === 'READY' && i.loaded && i.health === 'healthy' &&
-      i.contextTokens !== undefined && i.contextTokens >= minimum && (requested === undefined || i.contextTokens === context);
     if (!reuse) {
       if (!adapter?.loadModel || !adapter.inspectModel || !adapter.probeModel) reasons.push('UNSUPPORTED_CAPABILITY');
       if (i.loaded) reasons.push('CONTEXT_RELOAD_REQUIRED');

@@ -41,7 +41,8 @@ export class ConversationRenderer {
     const { columns } = this.size();
     const right = fit(model ? `${identity} · ${model}` : identity, Math.max(1, columns - 10));
     const gap = Math.max(1, columns - 2 - stringDisplayWidth('WAZIR') - stringDisplayWidth(right));
-    this.writeDurable(` WAZIR${' '.repeat(gap)}${right}\n\n`);
+    const subtitle = fit(' Autonomous coding assistant · Ready · Enter to send · Esc to cancel · /help · /exit', Math.max(1, columns - 1));
+    this.writeDurable(` WAZIR${' '.repeat(gap)}${right}\n${subtitle}\n\n`);
     this.liveRows = [];
   }
 

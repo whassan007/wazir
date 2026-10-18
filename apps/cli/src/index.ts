@@ -1193,7 +1193,8 @@ async function launchInteractiveTui(options: any, presentationMode: 'conversatio
     autoMerge: options.autoMerge === true,
     timeoutSeconds: timeout,
     enablePlanner: options.planner === true,
-  });
+    ...(options.model ? { modelId: String(options.model) } : {}),
+  } as any);
   const { shutdownController } = await import('./shutdownController.js');
   shutdownController().register('chat-tui', () => tui.stop());
   await tui.start();
@@ -1204,6 +1205,8 @@ async function launchInteractiveTui(options: any, presentationMode: 'conversatio
 program
   .command('chat')
   .description('Open the conversation-first coding assistant')
+  .option('--model <name>', 'Pin a specific model for the session')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--dashboard', 'Open the full-screen fleet dashboard')
   .option('--legacy', 'Use the legacy full-screen fleet dashboard')
   .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
@@ -1216,6 +1219,8 @@ program
 program
   .command('fleet')
   .description('Open the full-screen fleet dashboard (alias: wa chat --dashboard)')
+  .option('--model <name>', 'Pin a specific model for the session')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
   .option('--no-worktrees', 'Disable git worktree isolation')
   .option('--auto-merge', 'Automatically merge completed agent branches into main')

@@ -147,14 +147,6 @@ export class TaskPlanner {
     capabilities: string[];
   } {
     const lower = input.toLowerCase();
-    const isBuildOrWrite = /\b(build|write|create|implement|add|code|make|generate|scaffold)\b/i.test(input);
-    const isCheckOrInspect = /\b(check|inspect|verify|test|read|examine|review|explain|does\b.*work)\b/i.test(input);
-    const isFix = /\b(fix|patch|repair|resolve|update)\b/i.test(input);
-
-    const mutationRequired = isBuildOrWrite || isFix || (!isCheckOrInspect);
-    const isFromScratch = /\b(from scratch|new program|new project|empty workspace)\b/i.test(input) || (isBuildOrWrite && !isFix);
-    const workspaceMode: WorkspaceMode = isFromScratch ? 'clean' : 'repository';
-
     // Only treat this as an expected artifact when the user actually named a
     // file; otherwise the agent is free to place files wherever makes sense
     // (e.g. src/main.cpp), and guessing a bare filename here just produces a
@@ -164,6 +156,22 @@ export class TaskPlanner {
     if (filenameMatch) {
       artifacts.push(filenameMatch[1]);
     }
+
+    const isInlineResponseOnly = /\b(return\s+(?:only\b|(?:valid\s+)?json\b|code\s+only\b|corrected\b.*?\bonly\b|its\s+\w+\s+field\b)|respond\s+with\b|nothing\s+else\b)/i.test(input);
+    const isPureSnippetFunction =
+      /^\s*write\s+a\s+(?:[a-z0-9+#.-]+\s+)?function\b/i.test(input) &&
+      artifacts.length === 0 &&
+      !/\b(file|files|repo|repository|project|module|package|directory|folder|disk|workspace|in\s+src)\b/i.test(input);
+    const isBuildOrWrite = !isInlineResponseOnly && !isPureSnippetFunction && /\b(build|write|create|implement|add|code|make|generate|scaffold)\b/i.test(input);
+    const isCheckOrInspect =
+      isInlineResponseOnly ||
+      isPureSnippetFunction ||
+      /\b(check|inspect|verify|test|read|examine|review|explain|list|what\s+is|how\s+many|reverse\s+[A-Za-z0-9_-]+|convert\b.*?\bto\s+(?:uppercase|lowercase|json|hex|binary)\b|does\b.*work)\b/i.test(input);
+    const isFix = !isInlineResponseOnly && !isPureSnippetFunction && /\b(fix|patch|repair|resolve|update)\b/i.test(input);
+
+    const mutationRequired = isBuildOrWrite || isFix || (!isCheckOrInspect);
+    const isFromScratch = /\b(from scratch|new program|new project|empty workspace)\b/i.test(input) || (isBuildOrWrite && !isFix);
+    const workspaceMode: WorkspaceMode = isFromScratch ? 'clean' : 'repository';
 
     let language: string | undefined;
     if (lower.includes('c++') || lower.includes('.cpp') || lower.includes('g++') || lower.includes('clang++')) language = 'C++';

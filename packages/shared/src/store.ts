@@ -27,16 +27,17 @@ export interface KeyValueStore {
  */
 const LOCK_STALE_AFTER_MS = 30_000;
 
-/** A lock's holder pid, when it's another process that is still alive. */
-async function liveForeignHolder(lockFile: string): Promise<number | undefined> {
+/** Inspects a lock file's holder PID when it belongs to another process. */
+async function inspectForeignHolder(lockFile: string): Promise<{ livePid?: number; deadForeignPid?: number }> {
   const content = await fs.readFile(lockFile, 'utf8').catch(() => '');
+  if (!content.includes('\n')) return {};
   const pid = Number.parseInt(content.split('\n')[0] ?? '', 10);
-  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return undefined;
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return {};
   try {
     process.kill(pid, 0);
-    return pid;
+    return { livePid: pid };
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM' ? pid : undefined;
+    return (error as NodeJS.ErrnoException).code === 'EPERM' ? { livePid: pid } : { deadForeignPid: pid };
   }
 }
 const LOCK_RETRY_DELAY_MS = 25;
@@ -72,8 +73,9 @@ async function withFileLock<T>(lockFile: string, fn: () => Promise<T>): Promise<
       if (code !== 'EEXIST' && !windowsLockContention) throw error;
       const staleSince = await fs.stat(lockFile).then((s) => s.mtimeMs).catch(() => undefined);
       const old = staleSince !== undefined && Date.now() - staleSince > LOCK_STALE_AFTER_MS;
-      blockedBy = old ? await liveForeignHolder(lockFile) : undefined;
-      if (old && blockedBy === undefined) {
+      const holder = await inspectForeignHolder(lockFile);
+      blockedBy = holder.livePid;
+      if (holder.deadForeignPid !== undefined || (old && blockedBy === undefined)) {
         // Steal the stale lock with an atomic rename rather than unlink: if
         // two waiters both observe the same stale lock, only one rename can
         // succeed, so only one of them proceeds to re-acquire — a bare

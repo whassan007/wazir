@@ -430,10 +430,12 @@ export async function executeTask(
       const requestId = generateId('req-');
       const retryContext = { requestId, model: request.modelId, provider: engine.models.get(request.modelId)?.provider };
       loader.start(`Waiting for model response (${request.modelId})...`);
-      await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
+      emitJson({ type: 'dispatch', executionId, requestId, modelId: request.modelId, runtimeId: placement.runtimeId });
+      await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId }).catch(() => undefined);
       if (engine.web) request = { ...request, messages: await recordWebContext(engine.executions, executionId, request.messages, engine.web.limits.maxGroundingTokens) };
       // Inference outcome evidence for health diagnostics; 'unknown' when the stream ended without either.
       let outcome: { outcome: 'completed' | 'error' | 'unknown'; error?: string } = { outcome: 'unknown' };
+      let firstTokenEmitted = false;
       const observe = (event: { type: string; error?: string }) => {
         if (event.type === 'completed') outcome = { outcome: 'completed' };
         else if (event.type === 'error') outcome = { outcome: 'error', error: event.error };
@@ -465,6 +467,10 @@ export async function executeTask(
           })) {
             await engine.executions.recordProviderEvent(executionId, event, retryContext);
             observe(event);
+            if (!firstTokenEmitted && (event.type === 'token' || event.type === 'tool_call' || event.type === 'completed')) {
+              firstTokenEmitted = true;
+              emitJson({ type: 'first_token', executionId, requestId, modelId: request.modelId });
+            }
             if (event.type === 'token') {
               loader.setText(`Generating response from ${request.modelId}...`);
             }
@@ -743,6 +749,11 @@ export async function executeTask(
   let summary: string | undefined;
   const errors: string[] = [];
 
+  const taskAnalysis = engine.planner?.analyze?.(description);
+  const mutationRequired = (options.expectedFiles && options.expectedFiles.length > 0)
+    ? true
+    : taskAnalysis?.mutationRequired;
+
   try {
     for await (const turn of agent.run(
       {
@@ -752,6 +763,7 @@ export async function executeTask(
         projectRoot: engine.projectRoot,
         maxTurns: options.maxTurns,
         contextTokens: context.available.tokens,
+        mutationRequired,
         isCancelled: () => cancelled,
       },
       runtime,
