@@ -133,6 +133,19 @@ export class LMStudioAdapter implements RuntimeAdapter {
 
     const lmsBin = resolveLmsBin();
     try {
+      const installed = await this.nativeModels();
+      diagnostics.cliAvailable = existsSync(lmsBin) || lmsBin !== 'lms';
+      diagnostics.apiReachable = true;
+      diagnostics.serverRunning = true;
+      diagnostics.installedModels = installed.length;
+      diagnostics.loadedModels = installed.reduce((count, model) => count + model.loaded_instances.length, 0);
+      diagnostics.readyModels = diagnostics.loadedModels;
+      return { status: 'healthy', diagnostics };
+    } catch {
+      // Older LM Studio versions may expose only the compatibility endpoint or CLI.
+    }
+
+    try {
       const { stdout } = await execFileAsync(lmsBin, ['ls'], { timeout: 3000 });
       diagnostics.cliAvailable = true;
       const lines = stdout.split('\n');
@@ -146,18 +159,6 @@ export class LMStudioAdapter implements RuntimeAdapter {
       }
     } catch {
       diagnostics.cliAvailable = false;
-    }
-
-    try {
-      const installed = await this.nativeModels();
-      diagnostics.apiReachable = true;
-      diagnostics.serverRunning = true;
-      diagnostics.installedModels = installed.length;
-      diagnostics.loadedModels = installed.reduce((count, model) => count + model.loaded_instances.length, 0);
-      diagnostics.readyModels = diagnostics.loadedModels;
-      return { status: 'healthy', diagnostics };
-    } catch {
-      // Older LM Studio versions may expose only the compatibility endpoint.
     }
 
     try {
@@ -227,11 +228,17 @@ export class LMStudioAdapter implements RuntimeAdapter {
     }
   }
 
+  private nativeModelsCache?: { at: number; models: NativeModel[] };
+
   private async nativeModels(): Promise<NativeModel[]> {
+    if (this.nativeModelsCache && Date.now() - this.nativeModelsCache.at < 1000) {
+      return this.nativeModelsCache.models;
+    }
     const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models`, { headers: this.headers(), signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`RUNTIME_UNAVAILABLE: LM Studio models HTTP ${response.status}`);
     const data = await response.json() as { models?: NativeModel[] };
     if (!Array.isArray(data.models)) throw new Error('RUNTIME_UNAVAILABLE: invalid model inventory');
+    this.nativeModelsCache = { at: Date.now(), models: data.models };
     return data.models;
   }
   async listModels(): Promise<DiscoveredModel[]> {
@@ -346,14 +353,17 @@ export class LMStudioAdapter implements RuntimeAdapter {
       effectiveContext: instances[0]?.config.context_length };
   }
   async loadModel(modelId: string, options: { contextTokens?: number } = {}): Promise<void> {
+    this.nativeModelsCache = undefined;
     const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models/load`, {
       method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(120_000),
       body: JSON.stringify({ model: modelId, context_length: options.contextTokens, echo_load_config: true }),
     });
     if (!response.ok) throw new Error(`RUNTIME_LOAD_FAILED: LM Studio HTTP ${response.status}`);
     await response.json();
+    this.nativeModelsCache = undefined;
   }
   async unloadModel(modelId: string): Promise<void> {
+    this.nativeModelsCache = undefined;
     const state = await this.inspectModel(modelId);
     if (!state.loaded) return;
     const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models/unload`, {
@@ -362,11 +372,15 @@ export class LMStudioAdapter implements RuntimeAdapter {
     });
     if (!response.ok) throw new Error(`RUNTIME_UNLOAD_FAILED: LM Studio HTTP ${response.status}`);
     await response.json();
+    this.nativeModelsCache = undefined;
   }
   async probeModel(modelId: string, contextTokens: number): Promise<boolean> {
     try {
       const state = await this.inspectModel(modelId);
       if (!state.loaded || state.effectiveContext !== contextTokens) return false;
+      if (process.env.WAZIR_DEEP_PROBE !== '1') {
+        return Boolean(state.instanceId);
+      }
       const response = await fetch(`${this.baseURL}/chat/completions`, {
         method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(30_000),
         body: JSON.stringify({ model: state.instanceId, messages: [{ role: 'user', content: 'Reply OK.' }], max_tokens: 1, stream: false }),

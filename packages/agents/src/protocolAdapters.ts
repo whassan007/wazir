@@ -342,7 +342,7 @@ export class ModelProtocolAdapter {
     if (anthropic) return anthropic;
 
     // 4. JSON action extraction
-    const unfenced = raw.replace(/```(?:json)?/gi, '');
+    const unfenced = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     const candidate = extractFirstObject(unfenced);
     if (!candidate) return null;
 

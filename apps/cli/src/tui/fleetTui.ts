@@ -752,6 +752,9 @@ export class FleetTui {
     this.autoMerge = options.autoMerge ?? false;
     this.timeoutSeconds = options.timeoutSeconds;
     this.enablePlanner = options.enablePlanner ?? false;
+    if ((options as { modelId?: string }).modelId) {
+      this.selectedModelId = (options as { modelId?: string }).modelId;
+    }
   }
 
   getSessionId(): string {
