@@ -1,3 +1,19 @@
+# Wazir Release Notes - v0.2.9
+
+**Release**: `v0.2.9`
+**Theme**: Chat UI Discoverability, Input Responsiveness, Live Token Streaming, and Execution Resilience
+
+`v0.2.9` upgrades the `wa chat` conversation experience with a discoverable welcome screen, accurate horizontal cursor tracking, real-time execution feedback and incremental token streaming, discoverable slash commands (`/clear`, `/status`, `/help`), and hardened concurrent task execution logging.
+
+## Highlights
+
+- **Discoverable Welcome Screen**: Displays loaded model counts, connected computer status, example coding prompts, active routing configuration, and command shortcuts upon launching `wa chat`.
+- **Real-Time Execution Feedback & Streaming**: Immediately acknowledges submitted requests (`✓ Request received`, `◌ Planning & scheduling job...`), surfaces model/computer routing (`◌ Model: ... · Computer: ...`), and streams generated tokens live in conversation mode.
+- **Responsive Input & Slash Commands**: Accurate horizontal cursor positioning across single-line and multiline prompts, plus `/clear`, `/status`, expanded `/help`, and unknown slash command validation.
+- **Concurrent Execution Resilience**: Prevents lock-contended store writes from crashing concurrent `wa run` tasks and accurately classifies failed tool operations in conversation summaries.
+
+---
+
 # Wazir Release Notes - v0.2.8
 
 **Release**: `v0.2.8`

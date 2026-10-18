@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.9 — 2026-10-17
+
+**Release**: `v0.2.9`
+**Theme**: Chat UI Discoverability, Input Responsiveness, Live Token Streaming, and Execution Resilience
+
+- **Conversation UI & Welcome Screen (`@wazir/cli`)**:
+  - Redesigned the `wa chat` initial welcome card with multi-model readiness indicators, connected computer status, example prompts, active model/computer footer, and command shortcuts (`/help`, `/models`, `/status`, `Ctrl+C`).
+  - Added `/clear` to clear the terminal screen and transcript history while re-rendering the welcome card, `/status` for instant computer/model/task inspection in conversation mode, expanded `/help` command reference, and an unknown-slash-command guard so mistyped commands are not dispatched as coding jobs.
+- **Input Responsiveness & Live Token Streaming (`@wazir/cli`)**:
+  - Fixed horizontal cursor tracking in `ConversationRenderer` (`wrapWithCursor` and `rewriteLive`) so left/right arrow navigation positions the terminal cursor accurately on single-line and wrapped multiline inputs.
+  - Enabled incremental token streaming (`streamToken` / `flushStreaming`) and immediate execution milestones (`✓ Request received`, `◌ Planning & scheduling job...`, `◌ Model: ... · Computer: ...`, `◌ Generating response...`) in conversation mode.
+- **Execution Store & Event Summarizer Resilience (`@wazir/cli`)**:
+  - Guarded `recordEvent` and `recordError` calls in `executeTask` against lock-contention rejections under concurrent `wa run` invocations, and classified non-zero tool exit codes and `Error:` results accurately as error milestones in `EventSummarizer`.
+
 ## v0.2.8 — 2026-10-17
 
 **Release**: `v0.2.8`
