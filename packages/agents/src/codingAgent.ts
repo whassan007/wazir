@@ -146,8 +146,15 @@ const MUTATING_FILE_TOOLS = new Set(['write', 'edit', 'write_to_file', 'replace_
 const FILE_OR_PATH_REFERENCE_RE =
   /(?:^|[\s'"`(])(?:\.{0,2}\/[\w./-]+|[\w-]+\/[\w./-]+|[\w-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|cpp|cc|cxx|c|h|hpp|json|md|yaml|yml|toml|sh|bash|zsh|html|css|scss|sql|txt|xml|ini|cfg|conf|lock|env))\b/i;
 
+// Unambiguous workspace/tool signals: nouns and commands that only make sense
+// in the context of an actual repository, filesystem, or shell session. Kept
+// separate from AMBIGUOUS_MUTATION_VERB_RE below, whose words (fix/update/
+// remove/execute/project, etc.) are just as common in purely conversational
+// requests ("explain how to fix this function", "write a function that
+// removes duplicates") and previously forced those into the full coding
+// agent on keyword presence alone.
 const WORKSPACE_OR_TOOL_ACTION_RE =
-  /\b(?:files?|filepath|filename|directory|directories|folders?|repo|repository|codebase|workspace|project|worktree|commit|branch|git|npm|pnpm|yarn|npx|vitest|jest|pytest|cargo|rustc|gcc|g\+\+|clang|make|cmake|build|compile|lint|typecheck|refactor|edit|modify|update|overwrite|delete|remove|rename|move|save|create\s+(?:a\s+)?(?:new\s+)?(?:file|folder|directory|project|script|module|package|test)|write\s+(?:to|into)\b|write\s+(?:a\s+|an\s+|the\s+)?(?:[\w+#-]+\s+)?(?:file|program|script|cli|app|application|server|test|suite)\b|read\s+(?:the\s+|from\s+)?(?:file|directory|folder|repo|codebase|config|logs?)|inspect|search\s+(?:the|for|in)|find\s+(?:in|all|files)|glob|grep|run\s+(?:the|a|an|npm|pnpm|yarn|tests?|build|lint|typecheck|command|script|shell|bash)|execute|shell|bash|terminal|command\s+line|fix|debug|repair|patch|install|deploy|migrate|benchmark)\b/i;
+  /\b(?:files?|filepath|filename|directory|directories|folders?|repo|repository|codebase|workspace|worktree|commit|branch|git|npm|pnpm|yarn|npx|vitest|jest|pytest|cargo|rustc|gcc|g\+\+|clang|make|cmake|build|compile|lint|typecheck|refactor|create\s+(?:a\s+)?(?:new\s+)?(?:file|folder|directory|project|script|module|package|test)|write\s+(?:to|into)\b|write\s+(?:a\s+|an\s+|the\s+)?(?:[\w+#-]+\s+)?(?:file|program|script|cli|app|application|server|test|suite)\b|read\s+(?:the\s+|from\s+)?(?:file|directory|folder|repo|codebase|config|logs?)|inspect|search\s+(?:the|for|in)|find\s+(?:in|all|files)|glob|grep|run\s+(?:the|a|an|npm|pnpm|yarn|tests?|build|lint|typecheck|command|script|shell|bash)|shell|bash|terminal|command\s+line|install|deploy|migrate|benchmark)\b/i;
 
 const CONVERSATIONAL_INTENT_RE =
   /\?|\b(?:what|why|how|when|where|who|which|explain|describe|summarize|define|translate|calculate|compute|evaluate|solve|reverse|convert|compare|tell\s+me|give\s+me|return\s+only|in\s+one\s+sentence|is\s+there|can\s+you\s+(?:explain|tell|answer|compute|calculate|reverse))\b/i;
@@ -157,6 +164,17 @@ const ARITHMETIC_INTENT_RE =
 
 const STANDALONE_SNIPPET_INTENT_RE =
   /\b(?:write|implement|generate|provide|show)\s+(?:me\s+)?(?:a|an)\s+(?:[\w+#-]+\s+){0,3}(?:function|method|snippet|helper|class|expression|regex|query|algorithm|one-liner)\b/i;
+
+// Debugging/fixing a pasted or described code snippet ("find and fix the bug
+// in this Python function", "debug this code") reads as workspace mutation
+// if judged on the verb alone (fix/debug/repair/execute/...), but it never
+// touches the filesystem — the "workspace" here is text in the prompt, not
+// the repo. Require the verb to be paired with an explicit "this/the
+// following <code|function|snippet|...>" reference so a real instruction
+// like "fix my deployment pipeline" (ambiguous, no snippet in sight) still
+// falls through to the conservative default of the full coding agent.
+const SNIPPET_DEBUG_INTENT_RE =
+  /\b(?:find\s+(?:and\s+)?fix|fix|debug|repair|resolve|correct)\b[\s\S]{0,30}\b(?:this|the\s+following)\s+(?:[\w+#-]+\s+)?(?:code|function|method|snippet|script)\b/i;
 
 export interface ConversationalFastPathOptions {
   type?: string;
@@ -187,7 +205,8 @@ export function isConversationalFastPathRequest(
   return (
     CONVERSATIONAL_INTENT_RE.test(trimmed) ||
     ARITHMETIC_INTENT_RE.test(trimmed) ||
-    STANDALONE_SNIPPET_INTENT_RE.test(trimmed)
+    STANDALONE_SNIPPET_INTENT_RE.test(trimmed) ||
+    SNIPPET_DEBUG_INTENT_RE.test(trimmed)
   );
 }
 /**
