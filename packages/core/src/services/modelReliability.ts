@@ -57,6 +57,7 @@ interface Circuit {
 // about the model and is not recorded.
 const MODEL_ATTRIBUTABLE_FAILURES = new Set<string>([
   'MODEL_PROTOCOL_BUDGET_EXHAUSTED',
+  'IDENTICAL_VALIDATION_FAILURE',
   'NO_PROGRESS',
   'REPEATED_ACTION',
   'MAX_REPAIRS',

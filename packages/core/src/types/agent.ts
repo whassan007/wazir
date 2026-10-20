@@ -66,6 +66,11 @@ export type TerminationReason =
   | 'MAX_RETRIES'
   | 'NO_PROGRESS'
   | 'REPEATED_ACTION'
+  /** The model emitted the exact same tool-validation failure (same tool, same reason)
+   *  twice in a row — stopped before the generic 3-strike protocol budget so a
+   *  deterministically-wrong call (e.g. a malformed `search` argument) can't consume
+   *  the rest of the turn budget retrying the identical mistake. */
+  | 'IDENTICAL_VALIDATION_FAILURE'
   | 'MODEL_PROTOCOL_BUDGET_EXHAUSTED'
   | 'POLICY_DENIED'
   | 'CANCELLED'

@@ -1607,9 +1607,20 @@ export class CodingAgent implements AgentAdapter {
         const val = validateAction(action.tool, action.input ?? {});
         if (val.ok === false) {
           validationErrors += 1;
-          if (val.attempts >= 3) {
-            if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', `'${action.tool}' repeatedly failed validation (${val.reason})`)) continue;
-            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw: effectiveRaw, protocolMetrics: currentMetrics() };
+          // Identical failure twice in a row means the model is repeating the exact
+          // same mistake (same tool, same reason) rather than correcting course — stop
+          // immediately with an actionable error instead of burning the rest of the
+          // turn budget (or the generic 3-strike protocol check below) on a call that
+          // cannot succeed without a different input.
+          if (val.attempts >= 2) {
+            yield {
+              kind: 'error',
+              error: `'${action.tool}' failed validation twice in a row with the same error (${val.reason}); stopping instead of repeating it.`,
+              errorKind: 'protocol',
+              terminationReason: 'IDENTICAL_VALIDATION_FAILURE',
+              raw: effectiveRaw,
+              protocolMetrics: currentMetrics(),
+            };
             return;
           }
           yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw: effectiveRaw };
@@ -1852,9 +1863,20 @@ export class CodingAgent implements AgentAdapter {
         const val = validateAction(action.tool, action.input ?? {});
         if (val.ok === false) {
           validationErrors += 1;
-          if (val.attempts >= 3) {
-            if (yield* tryEscalate('MODEL_PROTOCOL_BUDGET_EXHAUSTED', `'${action.tool}' repeatedly failed validation (${val.reason})`)) continue;
-            yield { kind: 'error', error: `protocol recovery failed: '${action.tool}' repeatedly failed validation (${val.reason})`, errorKind: 'protocol', terminationReason: 'MODEL_PROTOCOL_BUDGET_EXHAUSTED', raw: effectiveRaw, protocolMetrics: currentMetrics() };
+          // Identical failure twice in a row means the model is repeating the exact
+          // same mistake (same tool, same reason) rather than correcting course — stop
+          // immediately with an actionable error instead of burning the rest of the
+          // turn budget (or the generic 3-strike protocol check below) on a call that
+          // cannot succeed without a different input.
+          if (val.attempts >= 2) {
+            yield {
+              kind: 'error',
+              error: `'${action.tool}' failed validation twice in a row with the same error (${val.reason}); stopping instead of repeating it.`,
+              errorKind: 'protocol',
+              terminationReason: 'IDENTICAL_VALIDATION_FAILURE',
+              raw: effectiveRaw,
+              protocolMetrics: currentMetrics(),
+            };
             return;
           }
           yield { kind: 'message', content: `ACTION_VALIDATION_FAILED: '${action.tool}' ${val.reason}`, tool: action.tool, raw: effectiveRaw };

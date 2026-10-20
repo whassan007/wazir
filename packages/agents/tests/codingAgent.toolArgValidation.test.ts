@@ -153,11 +153,19 @@ describe('CodingAgent.run — tool argument validation', () => {
     expect(validationMsgs[0].content).toContain('placeholder');
   });
 
-  it('fails with errorKind protocol after 3 consecutive identical validation failures', async () => {
+  /**
+   * P0-D: a deterministically-wrong tool call (same tool, same validation reason)
+   * must stop after the SECOND identical failure, not burn turns up to maxTurns —
+   * this is the exact shape of the reported `search` regex-argument loop that
+   * previously ran until MAX_TURNS.
+   */
+  it('fails with errorKind protocol and terminationReason IDENTICAL_VALIDATION_FAILURE after 2 consecutive identical validation failures', async () => {
+    let calls = 0;
     const runtime: AgentRuntime = {
       tools: [{ name: 'glob', description: 'search files', inputSchema: {} }],
       async *generate() {
-        // Continuously emits glob with no pattern or invalid placeholder
+        calls += 1;
+        // Continuously emits glob with the same invalid placeholder pattern.
         const reply = '{"action":"tool","tool":"glob","input":{"pattern":"..."}}';
         yield { type: 'token', content: reply };
         yield { type: 'completed', content: reply };
@@ -172,7 +180,10 @@ describe('CodingAgent.run — tool argument validation', () => {
     const errorTurn = turns.find((t) => t.kind === 'error');
     expect(errorTurn).toBeDefined();
     expect(errorTurn?.errorKind).toBe('protocol');
-    expect(errorTurn?.error).toContain('protocol recovery failed');
+    expect(errorTurn?.terminationReason).toBe('IDENTICAL_VALIDATION_FAILURE');
+    expect(errorTurn?.error).toContain('failed validation twice in a row');
+    // Stopped after the 2nd identical failure, not after exhausting maxTurns (10).
+    expect(calls).toBe(2);
   });
 
   it('executes native tool_call events from runtime without text parsing', async () => {
