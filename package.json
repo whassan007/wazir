@@ -67,16 +67,16 @@
     "test:plan:tui": "node scripts/tui-test-plan.mjs",
     "test:agent": "npm run build && vitest run packages/agents/tests/codingAgent.turnTimeout.test.ts packages/agents/tests/codingAgent.proseBailout.test.ts packages/agents/tests/codingAgent.circuitBreaker.test.ts packages/agents/tests/codingAgent.contextCompaction.test.ts packages/agents/tests/codingAgent.maxTurns.test.ts packages/agents/tests/parseAction.test.ts packages/core/tests/jobOrchestrator.test.ts packages/core/tests/jobLifecycleAndValidation.test.ts packages/core/tests/policyEngineShell.test.ts packages/core/tests/policyEngineHardening.test.ts packages/tools/tests/sandbox.test.ts apps/cli/tests/fleetTui.test.ts",
     "test:plan:agent": "node scripts/agent-execution-test-plan.mjs",
-    "test:matrix": "vitest run tests/runtime/liveModelMatrix.test.ts",
+    "test:matrix": "vitest run test/runtime/liveModelMatrix.test.ts",
     "test:buildcpp": "npm run build && RUN_BUILDCPP=1 vitest run apps/cli/tests/buildcpp.e2e.test.ts",
     "test:acceptance": "node scripts/acceptance-test-harness.mjs",
     "test:plan:acceptance": "node scripts/acceptance-test-harness.mjs --all",
     "typecheck": "tsc --build --force",
     "dmg": "bash scripts/build-dmg.sh",
     "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\"",
-    "test:distributed": "vitest run --config tests/distributed/vitest.config.ts",
+    "test:distributed": "vitest run --config test/distributed/vitest.config.ts",
     "test:postgres": "WAZIR_REQUIRE_DATABASE=1 vitest run packages/database/tests/postgresStore.test.ts",
-    "test:distributed:typecheck": "tsc --noEmit --esModuleInterop --module commonjs --moduleResolution node --target es2022 --skipLibCheck tests/distributed/*.test.ts tests/distributed/harness/*.ts"
+    "test:distributed:typecheck": "tsc --noEmit --esModuleInterop --module commonjs --moduleResolution node --target es2022 --skipLibCheck test/distributed/*.test.ts test/distributed/harness/*.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/node": "^2.0.0",

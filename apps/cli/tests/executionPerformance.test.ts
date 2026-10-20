@@ -246,7 +246,7 @@ describe('P0 Execution Pipeline Performance Repairs', () => {
     expect(lmstudioProbeCalls).toBe(0);
   });
 
-  it('3. Explicit Gemma model selection (google/gemma-4-12b-qat) resolves to resident Gemma 4 QAT in LMStudioAdapter and caches native discovery', async () => {
+  it('3. LMStudioAdapter preserves explicit model identity and caches native discovery', async () => {
     let nativeFetchCount = 0;
     let chatRequestModel = '';
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
@@ -301,9 +301,9 @@ describe('P0 Execution Pipeline Performance Repairs', () => {
       const disc2 = await adapter.listModels();
       // Both healthCheck and repeated listModels() calls share the short-lived nativeModels cache
       expect(nativeFetchCount).toBe(1);
-      expect(disc1.some((m) => m.id === 'google/gemma-4-12b-qat')).toBe(true);
+      expect(disc1.some((m) => m.id === 'google/gemma-4-12b-qat')).toBe(false);
       expect(disc2.some((m) => m.id === 'gemma-4-26b-a4b-it-qat')).toBe(true);
-      const inspected = await adapter.inspectModel('google/gemma-4-12b-qat');
+      const inspected = await adapter.inspectModel('gemma-4-26b-a4b-it-qat');
       expect(inspected.loaded).toBe(true);
       expect(inspected.effectiveContext).toBe(32768);
 
@@ -315,7 +315,7 @@ describe('P0 Execution Pipeline Performance Repairs', () => {
       })) {
         events.push(ev);
       }
-      expect(chatRequestModel).toBe('gemma-4-26b-a4b-it-qat');
+      expect(chatRequestModel).toBe('google/gemma-4-12b-qat');
       expect(events.filter((e) => e.type === 'token').map((e) => e.content).join('')).toBe('31');
 
       // Cache invalidation on unloadModel

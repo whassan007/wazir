@@ -73,12 +73,16 @@ export interface RestoreResult {
 }
 
 const LAST_READY_MODELS_KEY = 'models/last_ready_set';
+const AVAILABILITY_TTL_MS = 5_000;
+const AVAILABILITY_PROBE_TIMEOUT_MS = 3_000;
 
 export class ModelLifecycleService {
   private inFlightLoads = new Map<string, Promise<ModelLoadPlan>>();
   private operations = new Set<string>();
   private fastStartupVerifiedIds = new Set<string>();
   private reconciliation?: Promise<DiscoveredModelReconciliation>;
+  /** Per-runtime inventory probes, shared by concurrent callers and reused for AVAILABILITY_TTL_MS. */
+  private inventoryProbes = new Map<string, { at: number; listed: Promise<Set<string> | undefined> }>();
   private policy: PolicyEngine;
   private reservePercent: number;
   private minimumReserveBytes: number;
@@ -451,8 +455,38 @@ export class ModelLifecycleService {
     plan.admissionDecision.status = plan.admissionDecision.reasons.length ? 'DENIED' : 'ADMITTED';
   }
 
+  /**
+   * Confirms the runtime still serves `modelId` before any load or inference is dispatched.
+   * The registry is refreshed on an interval, so a model removed from the runtime in between
+   * would otherwise still route as READY. An inventory that cannot be read proves nothing and
+   * is not treated as absence (runtime health is judged separately by the load path).
+   */
+  async verifyAvailable(modelId: string, options: ModelLoadOptions = {}): Promise<void> {
+    const i = this.target(modelId, options);
+    const adapter = this.deps.adapters.get(i.runtimeId);
+    if (!adapter || this.deps.runtimes.get(i.runtimeId)?.runtimeKind === 'hosted') return;
+    let probe = this.inventoryProbes.get(i.runtimeId);
+    if (!probe || Date.now() - probe.at > AVAILABILITY_TTL_MS) {
+      const listed = Promise.race([
+        adapter.listModels().then(models => new Set(models.map(m => m.id)), () => undefined),
+        new Promise<undefined>(resolve => setTimeout(resolve, AVAILABILITY_PROBE_TIMEOUT_MS).unref()),
+      ]);
+      probe = { at: Date.now(), listed };
+      this.inventoryProbes.set(i.runtimeId, probe);
+    }
+    const listed = await probe.listed;
+    if (!listed || listed.has(i.runtimeModelId)) return;
+    const reason = `model '${modelId}' is not installed in runtime '${i.runtimeId}'`;
+    this.deps.models.setInstanceHealth(i.id, { loaded: false, state: 'UNAVAILABLE', health: 'unavailable', error: reason });
+    const installation = this.deps.models.getInstallation(i.installationId ?? i.id);
+    if (installation) this.deps.models.upsertInstallation({ ...installation, installed: false, observedAt: new Date() });
+    this.emitEvent('MODEL_LOAD_FAILED', modelId, { runtimeId: i.runtimeId, computerId: i.computerId, reason: 'MODEL_NOT_IN_RUNTIME', data: { executionId: options.executionId } });
+    throw new ModelLifecycleError('MODEL_UNAVAILABLE', [reason, `list installed models with the runtime's CLI or pick another with /model`]);
+  }
+
   async load(modelId: string, options: ModelLoadOptions = {}): Promise<ModelLoadPlan> {
     if (options.dryRun) return this.estimate(modelId, options);
+    await this.verifyAvailable(modelId, options);
     const placement = await this.estimate(modelId, options);
     const i = this.target(modelId, { computerId: placement.computerId, runtimeId: placement.runtimeId });
     const existing = this.inFlightLoads.get(i.id);
@@ -581,9 +615,11 @@ export class ModelLifecycleService {
     const record = executions.require(executionId);
     const e = record.execution;
     if (!e.computerId || this.deps.runtimes.get(e.runtimeId)?.runtimeKind === 'hosted') return minimumContext;
-    await executions.setStatus(executionId, 'waiting');
-    await executions.recordEvent(executionId, 'WAITING_FOR_MODEL', { modelId: e.modelId, taskId: e.taskId });
     try {
+      // An absent model fails before the execution is reported as waiting for it.
+      await this.verifyAvailable(e.modelId, { computerId: e.computerId, runtimeId: e.runtimeId, executionId });
+      await executions.setStatus(executionId, 'waiting');
+      await executions.recordEvent(executionId, 'WAITING_FOR_MODEL', { modelId: e.modelId, taskId: e.taskId });
       const plan = await this.ensureReady(e.modelId, { computerId: e.computerId, runtimeId: e.runtimeId, minimumContext, executionId });
       await executions.setStatus(executionId, 'scheduled');
       return plan.effectiveContext;

@@ -573,6 +573,13 @@ export class Scheduler {
       reasons.push(`routingMode=HYBRID: ${record.local === false ? 'hosted' : 'local'} model eligible`);
     }
 
+    // A model every known instance of which is unavailable (removed from its runtime, or its
+    // runtime is down) cannot serve; routing to it only produces a failed load.
+    const knownInstances = this.deps.models.instancesOf(record.id);
+    if (knownInstances.length > 0 && knownInstances.every((i) => i.state === 'UNAVAILABLE' || i.health === 'unavailable')) {
+      rejected.push(`model unavailable: ${knownInstances.find((i) => i.error)?.error ?? 'no runtime currently serves it'}`);
+    }
+
     const circuit = this.deps.reliability?.status(record.id, task.type);
     if (circuit?.state === 'OPEN' && task.execution?.targetModelId !== record.id) {
       rejected.push(`${task.type} ${circuit.reason}`);

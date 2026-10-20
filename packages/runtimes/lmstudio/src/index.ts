@@ -90,7 +90,6 @@ export class LMStudioAdapter implements RuntimeAdapter {
 
   private readonly apiKey?: string;
   private nativeModelsCache?: { expiresAt: number; promise: Promise<NativeModel[]> };
-  private readonly aliasedModelIds = new Map<string, string>();
 
   /**
    * `apiKey` is sent as a Bearer token. Any authenticated OpenAI-compatible endpoint
@@ -250,15 +249,6 @@ export class LMStudioAdapter implements RuntimeAdapter {
       const data = await response.json() as { models?: NativeModel[] };
       if (!Array.isArray(data.models)) throw new Error('RUNTIME_UNAVAILABLE: invalid model inventory');
       const models = [...data.models];
-      const gemma26b = models.find(m => m.key === 'gemma-4-26b-a4b-it-qat');
-      if (gemma26b && !models.some(m => m.key === 'google/gemma-4-12b-qat')) {
-        this.aliasedModelIds.set('google/gemma-4-12b-qat', 'gemma-4-26b-a4b-it-qat');
-        models.push({
-          ...gemma26b,
-          key: 'google/gemma-4-12b-qat',
-          display_name: 'google/gemma-4-12b-qat (alias -> gemma-4-26b-a4b-it-qat)',
-        });
-      }
       return models;
     })();
     this.nativeModelsCache = { expiresAt: now + 1500, promise };
@@ -384,7 +374,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
   }
   async loadModel(modelId: string, options: { contextTokens?: number } = {}): Promise<void> {
     this.nativeModelsCache = undefined;
-    const resolvedId = this.aliasedModelIds.get(modelId) ?? modelId;
+    const resolvedId = modelId;
     const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models/load`, {
       method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(120_000),
       body: JSON.stringify({ model: resolvedId, context_length: options.contextTokens, echo_load_config: true }),
@@ -437,7 +427,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
   async estimateModelLoad(modelId: string, contextTokens: number): Promise<import('@wazir/runtimes-interfaces').ModelLoadEstimate> {
     // The REST API does not expose estimation. The diagnostic CLI supports a target host.
     // Never let a remote endpoint accidentally estimate against the local daemon.
-    const resolvedId = this.aliasedModelIds.get(modelId) ?? modelId;
+    const resolvedId = modelId;
     const endpoint = new URL(this.baseURL);
     try {
       const { stdout, stderr } = await execFileAsync(resolveLmsBin(), ['load', resolvedId, '--estimate-only', '--context-length', String(contextTokens), '--host', endpoint.hostname, '--port', endpoint.port || (endpoint.protocol === 'https:' ? '443' : '80')], { timeout: 15_000 });
@@ -467,7 +457,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     const controller = control.controller;
     const requestId = control.requestId;
     this.controllers.set(requestId, controller);
-    const resolvedModelId = this.aliasedModelIds.get(request.modelId) ?? (request.modelId === 'google/gemma-4-12b-qat' ? 'gemma-4-26b-a4b-it-qat' : request.modelId);
+    const resolvedModelId = request.modelId;
 
     const messages: Array<Record<string, unknown>> = [];
     if (request.systemPrompt) {

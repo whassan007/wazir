@@ -77,6 +77,8 @@ const MATRIX: Record<string, Scope> = {
   'POST /computers/:id/heartbeat': 'computer',
   'GET /computers/:id/tasks/stream': 'computer',
   'POST /api/v1/tasks/dispatch': 'operator',
+  'POST /api/v1/tasks/:requestId/cancel': 'operator',
+  'POST /api/v1/tasks/:requestId/reassign': 'operator',
   'GET /api/v1/tasks/:requestId/status': 'viewer',
   'POST /computers/:id/executions/:requestId/claim': 'computer',
   'POST /computers/:id/executions/:requestId/renew': 'computer',
@@ -177,7 +179,7 @@ const json = (body: unknown, token?: string, method = 'POST'): RequestInit => ({
 });
 
 function request(requestId: string): WorkerExecutionRequest {
-  return { executionId: `exec-${requestId}`, requestId, modelId: 'm', messages: [{ role: 'user', content: 'hi' }] };
+  return { replayPolicy: 'read-only', executionId: `exec-${requestId}`, requestId, modelId: 'm', messages: [{ role: 'user', content: 'hi' }] };
 }
 
 /** A store whose writes can be made to fail, to simulate a disk/database outage. */

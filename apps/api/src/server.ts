@@ -64,6 +64,7 @@ interface DurableDispatch {
   /** Epoch ms at which the outcome was committed; drives completed-record retention. */
   completedAt?: number;
   attempt: number;
+  recovery?: 'orphaned';
   lease?: { token: string; expiresAt: number };
 }
 
@@ -172,6 +173,7 @@ export class TaskDispatcher {
     if (this.streams.get(id) === res) this.streams.delete(id);
   }
   async redeliver(computerId?: string): Promise<void> {
+    await this.reconcile();
     await this.refresh();
     for (const r of this.records.values()) {
       if (computerId !== undefined && r.computerId !== computerId) continue;
@@ -219,12 +221,83 @@ export class TaskDispatcher {
     const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
       if (!current || current.computerId !== computerId) throw new Error('UNKNOWN_DISPATCH');
       if (current.outcome || (current.lease && current.lease.expiresAt > this.now())) throw new Error('RESOURCE_BUSY');
-      return { ...current, attempt: current.attempt + 1,
+      if (current.attempt > 0 && current.request.replayPolicy !== 'read-only') return this.terminal(current, 'UNKNOWN_OUTCOME');
+      return { ...current, recovery: undefined, attempt: current.attempt + 1,
         events: [...current.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), { executionId: current.request.executionId, type: 'lease_acquired' as const, at: new Date(this.now()), data: { attempt: current.attempt + 1 } }],
         lease: { token: randomUUID(), expiresAt: this.now() + this.leaseMs } };
     });
+    if (record.outcome) {
+      this.records.delete(id);
+      await this.store.delete(this.pendingKey(id));
+      this.notifyCancellation(record);
+      throw new Error('RESOURCE_BUSY');
+    }
     this.records.set(id, record);
     return { ...record.lease!, attempt: record.attempt, leaseMs: this.leaseMs };
+  }
+  /** Reconcile expired opaque attempts before any redelivery or claim. */
+  async reconcile(offline: ReadonlySet<string> = new Set()): Promise<void> {
+    await this.ready;
+    for (const entry of await this.store.list(PENDING_PREFIX)) {
+      const id = entry.key.slice(PENDING_PREFIX.length);
+      const candidate = await this.store.get<DurableDispatch>(this.key(id));
+      if (!candidate || (candidate.lease && candidate.lease.expiresAt > this.now())) continue;
+      if (!candidate.outcome && !(candidate.attempt > 0 && candidate.request.replayPolicy !== 'read-only') &&
+          (!offline.has(candidate.computerId) || candidate.recovery === 'orphaned')) continue;
+      const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
+        if (!current) throw new Error('UNKNOWN_DISPATCH');
+        if (current.outcome || (current.lease && current.lease.expiresAt > this.now())) return current;
+        if (current.attempt > 0 && current.request.replayPolicy !== 'read-only') {
+          return this.terminal(current, 'UNKNOWN_OUTCOME');
+        }
+        return offline.has(current.computerId) ? { ...current, recovery: 'orphaned' } : current;
+      }).catch(error => {
+        if (error instanceof Error && error.message === 'UNKNOWN_DISPATCH') return undefined;
+        throw error;
+      });
+      if (record?.outcome) {
+        this.records.delete(id);
+        await this.store.delete(this.pendingKey(id));
+        this.notifyCancellation(record);
+      }
+    }
+  }
+  private terminal(record: DurableDispatch, error: string): DurableDispatch {
+    return { ...record, lease: undefined, completedAt: this.now(),
+      outcome: { ok: false, output: '', inputTokens: 0, outputTokens: 0, durationMs: 0, error },
+      events: [...record.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), {
+        executionId: record.request.executionId, type: error === 'CANCELLED' ? 'cancelled' : 'failed',
+        at: new Date(this.now()), data: { error, attempt: record.attempt },
+      }] };
+  }
+  private notifyCancellation(record: DurableDispatch): void {
+    this.streams.get(record.computerId)?.write(`event: cancel\ndata: ${JSON.stringify({ requestId: record.request.requestId })}\n\n`);
+  }
+  async cancel(id: string): Promise<void> {
+    const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
+      if (!current) throw new Error('UNKNOWN_DISPATCH');
+      return current.outcome ? current : this.terminal(current, 'CANCELLED');
+    });
+    this.records.delete(id);
+    await this.store.delete(this.pendingKey(id));
+    if (record.outcome?.error === 'CANCELLED') this.notifyCancellation(record);
+  }
+  /** Only the operator route can change computer ownership. Never steal a live lease. */
+  async reassign(id: string, computerId: string): Promise<void> {
+    await this.reconcile();
+    const record = await this.store.update!<DurableDispatch>(this.key(id), current => {
+      if (!current) throw new Error('UNKNOWN_DISPATCH');
+      if (current.outcome) throw new Error('EXECUTION_TERMINAL');
+      if (current.lease && current.lease.expiresAt > this.now()) throw new Error('RESOURCE_BUSY');
+      if (current.attempt > 0 && current.request.replayPolicy !== 'read-only') throw new Error('UNKNOWN_OUTCOME');
+      return { ...current, computerId, lease: undefined, recovery: undefined,
+        events: [...current.events.slice(-(MAX_EVENTS_PER_CHANNEL - 1)), {
+          executionId: current.request.executionId, type: 'retry', at: new Date(this.now()),
+          data: { reason: 'operator_reassignment', from: current.computerId, to: computerId },
+        }] };
+    });
+    this.records.set(id, record);
+    await this.redeliver(computerId);
   }
   private validate(current: DurableDispatch | undefined, token: string): DurableDispatch {
     if (!current || !token || current.lease?.token !== token || current.lease.expiresAt <= this.now()) throw new Error('LEASE_LOST');
@@ -259,8 +332,10 @@ export class TaskDispatcher {
   async commit(id: string, outcome: ExecutionOutcome, token: string): Promise<'committed' | 'duplicate'> {
     let committed = false;
     await this.store.update!<DurableDispatch>(this.key(id), current => {
+      // A durably accepted result remains acknowledged after its lease deadline.
+      // Cancel/recovery clear the token; previous attempts still cannot commit.
+      if (current?.outcome && token && current.lease?.token === token) return current;
       const r = this.validate(current, token);
-      if (r.outcome) return r;
       committed = true;
       return { ...r, outcome, completedAt: this.now() };
     });
@@ -273,9 +348,9 @@ export class TaskDispatcher {
     return [...this.records.values()].filter(r => !r.outcome).map(r => ({ id: r.request.executionId,
       computerId: r.computerId, modelId: r.request.modelId, runtimeId: r.request.runtimeId }));
   }
-  async status(id: string): Promise<{ events: WorkerExecutionEvent[]; outcome?: ExecutionOutcome } | undefined> {
+  async status(id: string): Promise<{ events: WorkerExecutionEvent[]; outcome?: ExecutionOutcome; recovery?: 'orphaned'; computerId: string } | undefined> {
     const r = await this.store.get<DurableDispatch>(this.key(id));
-    return r ? { events: r.events, outcome: r.outcome } : undefined;
+    return r ? { events: r.events, outcome: r.outcome, recovery: r.recovery, computerId: r.computerId } : undefined;
   }
   async awaitOutcome(id: string, timeoutMs: number): Promise<ExecutionOutcome> {
     const deadline = Date.now() + timeoutMs;
@@ -303,6 +378,27 @@ export interface ApiState {
   auth: ApiAuth;
   editorProtocol: EditorProtocolService;
   mobile: MobileServices;
+}
+
+/** Starts the production recovery sweep; caller must stop it on shutdown. */
+export function startDispatchRecovery(state: ApiState): () => void {
+  let running = false;
+  const sweep = async () => {
+    if (running) return;
+    running = true;
+    try {
+      for (const computer of state.computers.list()) {
+        if (computer.local) state.computers.heartbeat(computer.id, { load: currentLoad() });
+      }
+      const { offline } = state.computers.checkHeartbeats();
+      await state.dispatcher.reconcile(new Set(offline));
+    } catch (error) { console.error('Dispatch recovery failed:', error instanceof Error ? error.message : String(error)); }
+    finally { running = false; }
+  };
+  void sweep();
+  const timer = setInterval(() => { void sweep(); }, 1000);
+  timer.unref();
+  return () => clearInterval(timer);
 }
 
 export interface ApiStateOptions {
@@ -1204,6 +1300,9 @@ export function createApp(state: ApiState) {
       return;
     }
 
+    if (request.replayPolicy !== undefined && !['never', 'read-only'].includes(request.replayPolicy)) {
+      res.status(400).json({ error: 'INVALID_REPLAY_POLICY' }); return;
+    }
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/.test(request.requestId)) {
       res.status(400).json({ error: 'request.requestId must be 1-256 characters of [A-Za-z0-9._-]' });
       return;
@@ -1230,6 +1329,23 @@ export function createApp(state: ApiState) {
     } catch (error) {
       res.status(504).json({ error: error instanceof Error ? error.message : String(error), requestId: request.requestId });
     }
+  });
+
+  app.post('/api/v1/tasks/:requestId/cancel', auth.requireOperator, async (req, res) => {
+    try {
+      await state.dispatcher.cancel(String(req.params.requestId));
+      res.json(await state.dispatcher.status(String(req.params.requestId)));
+    } catch (error) { res.status((error as Error).message === 'UNKNOWN_DISPATCH' ? 404 : 500).json({ error: (error as Error).message }); }
+  });
+  app.post('/api/v1/tasks/:requestId/reassign', auth.requireOperator, async (req, res) => {
+    const computerId = req.body?.computerId;
+    if (typeof computerId !== 'string' || state.computers.get(computerId)?.status !== 'online') {
+      res.status(409).json({ error: 'TARGET_NOT_ONLINE' }); return;
+    }
+    try {
+      await state.dispatcher.reassign(String(req.params.requestId), computerId);
+      res.json(await state.dispatcher.status(String(req.params.requestId)));
+    } catch (error) { res.status(409).json({ error: (error as Error).message }); }
   });
 
   app.get('/api/v1/tasks/:requestId/status', async (req, res) => {

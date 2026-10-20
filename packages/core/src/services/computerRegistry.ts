@@ -171,7 +171,8 @@ export class ComputerRegistry {
       const last = comp.lastHeartbeat ? comp.lastHeartbeat.getTime() : comp.createdAt.getTime();
       const elapsed = now - last;
 
-      if (elapsed >= offlineMs) {
+      // Restored/disconnected computers stay offline until registration or a real heartbeat.
+      if (comp.status === 'offline' || elapsed >= offlineMs) {
         comp.status = 'offline';
         comp.health = 'unavailable';
         comp.updatedAt = new Date(now);

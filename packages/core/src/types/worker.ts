@@ -16,6 +16,8 @@ export interface WorkerInfo {
  * Workers execute exactly what they are told — they never schedule.
  */
 export interface WorkerExecutionRequest {
+  /** Operator attestation: replay is safe only for requests with no external side effects. Default: never. */
+  replayPolicy?: 'never' | 'read-only';
   providerRetryPolicy?: Partial<import('@wazir/shared').RetryPolicy>;
   /** Opaque claim fencing token assigned by the control plane. */
   leaseToken?: string;

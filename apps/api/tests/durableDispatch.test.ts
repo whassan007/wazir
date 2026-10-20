@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TaskDispatcher } from '../src/server.js';
 
-const request = { requestId: 'request-1', executionId: 'exec-1', modelId: 'test', messages: [] };
+const request = { requestId: 'request-1', executionId: 'exec-1', modelId: 'test', messages: [], replayPolicy: 'read-only' as const };
 const outcome = { ok: true, output: 'done', inputTokens: 1, outputTokens: 2, durationMs: 3 };
 
 describe('durable dispatch and worker fencing', () => {
