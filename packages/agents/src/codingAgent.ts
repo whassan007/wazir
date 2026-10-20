@@ -176,6 +176,41 @@ const STANDALONE_SNIPPET_INTENT_RE =
 const SNIPPET_DEBUG_INTENT_RE =
   /\b(?:find\s+(?:and\s+)?fix|fix|debug|repair|resolve|correct)\b[\s\S]{0,30}\b(?:this|the\s+following)\s+(?:[\w+#-]+\s+)?(?:code|function|method|snippet|script)\b/i;
 
+// Explicit, exact-match allowlist of read-only, side-effect-free commands that can be
+// executed directly without any LLM call. Deliberately narrow: this is not a generic
+// shell-intent inference (that would defeat the sandbox/authorization layer below it) —
+// only a literal, anchored match against one of a handful of known-safe invocations is
+// accepted, and anything containing shell metacharacters is rejected even if it would
+// otherwise match, so there is no injection surface via quoting or chaining.
+const DETERMINISTIC_SHELL_COMMAND_RE = /^(?:ls|dir)(?:\s+-{1,2}[A-Za-z]+)*(?:\s+[\w./~-]+)*$|^pwd$/i;
+const DETERMINISTIC_GIT_COMMAND_RE = /^git\s+(?:status|diff|log)(?:\s+-{1,2}[\w-]+)*(?:\s+[\w./~-]+)*$/i;
+const SHELL_METACHARACTER_RE = /[;&|`$><\n\\]/;
+
+export interface DeterministicCommand {
+  tool: 'shell' | 'git';
+  input: Record<string, unknown>;
+}
+
+/**
+ * Deterministic, zero-LLM-call classifier for a small allowlist of explicit, read-only
+ * commands (`ls`, `pwd`, `git status`, `git diff`, `git log`, with simple flags/paths).
+ * Returns the tool call to run directly, or null to fall through to the full agent loop.
+ * Never infers shell execution from natural-language prompts that merely mention these
+ * words — the match is anchored against the whole trimmed input.
+ */
+export function isDeterministicCommandRequest(description: string): DeterministicCommand | null {
+  const trimmed = description.trim();
+  if (!trimmed || trimmed.length > 200) return null;
+  if (SHELL_METACHARACTER_RE.test(trimmed)) return null;
+  if (DETERMINISTIC_GIT_COMMAND_RE.test(trimmed)) {
+    return { tool: 'git', input: { args: trimmed.split(/\s+/).slice(1) } };
+  }
+  if (DETERMINISTIC_SHELL_COMMAND_RE.test(trimmed)) {
+    return { tool: 'shell', input: { command: trimmed } };
+  }
+  return null;
+}
+
 export interface ConversationalFastPathOptions {
   type?: string;
   expectedFiles?: string[];
@@ -1294,6 +1329,36 @@ export class CodingAgent implements AgentAdapter {
       lastValidationKey = '';
       return { ok: true };
     };
+
+    const deterministicCommand =
+      !request.resume && !request.mutationRequired && (!request.expectedArtifacts || request.expectedArtifacts.length === 0)
+        ? isDeterministicCommandRequest(request.taskDescription)
+        : null;
+
+    if (deterministicCommand) {
+      if (request.isCancelled?.()) return;
+      const beforeTurn = checkStop('before_turn');
+      if (beforeTurn) {
+        yield stopTurn(beforeTurn, ' during fast path');
+        return;
+      }
+      const result = await runtime.executeTool(deterministicCommand.tool, deterministicCommand.input);
+      yield {
+        kind: 'done',
+        content: result.ok ? (result.output || '(no output)') : (result.error ?? `${deterministicCommand.tool} failed`),
+        terminationReason: 'COMPLETED',
+        toolResult: result,
+        runStats: {
+          turns: 0,
+          toolCalls: 1,
+          tokensUsed: 0,
+          longestNoProgressStreak: 0,
+          duplicateActionsBlocked: 0,
+          modelEscalations: 0,
+        },
+      };
+      return;
+    }
 
     const useConversationalFastPath = isConversationalFastPathRequest(request.taskDescription, {
       type: request.taskType,
