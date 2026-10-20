@@ -44,6 +44,8 @@ describe('isConversationalFastPathRequest', () => {
       ['npm keyword', 'Run npm install and report any errors.'],
       ['build keyword', 'Build the project and fix any compile errors.'],
       ['shell/terminal keyword', 'Execute this command in the terminal: ls -la'],
+      ['explicit tool directive with network commands', 'Check if github.com is reachable. Use tools like `nslookup`, `curl -I`, or `openssl s_client`, and report the HTTP status code where applicable.'],
+      ['use available tools directive', 'Test your ability to connect to GitHub over HTTPS. Use your available authorized tools. Report the actual results.'],
       ['ambiguous infra fix, no snippet', 'Fix the issue with my deployment pipeline.'],
       ['ambiguous mutation, no code noun', 'Remove the old backups.'],
       ['explicit workspace mutation', 'Delete the test directory and recreate it.'],
