@@ -469,7 +469,7 @@ export class ModelLifecycleService {
     if (!probe || Date.now() - probe.at > AVAILABILITY_TTL_MS) {
       const listed = Promise.race([
         adapter.listModels().then(models => new Set(models.map(m => m.id)), () => undefined),
-        new Promise<undefined>(resolve => setTimeout(resolve, AVAILABILITY_PROBE_TIMEOUT_MS).unref()),
+        new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), AVAILABILITY_PROBE_TIMEOUT_MS).unref()),
       ]);
       probe = { at: Date.now(), listed };
       this.inventoryProbes.set(i.runtimeId, probe);

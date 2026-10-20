@@ -32,7 +32,16 @@ export interface ComputerRoutingDecision {
   reasons: string[];
 }
 
+/** One model abandoned before dispatch, and why. */
+export interface ModelFallback {
+  from: string;
+  to: string;
+  reason: string;
+}
+
 export interface SchedulerDecision {
+  /** Models skipped before dispatch (e.g. no longer served by their runtime), in order. */
+  fallbacks?: ModelFallback[];
   readiness?: 'READY_NOW' | 'LOADABLE' | 'NOT_LOADABLE';
   agentId?: string;
   modelId: string;

@@ -30,6 +30,7 @@ import { recordTermination } from './termination.js';
 import { recordAgentTask } from './agentPreflight.js';
 import { captureDelegationBaseline, verifyDelegatedWork, type DelegationBaseline } from './delegationVerification.js';
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
+import { planAvailableRoute } from './routeAvailability.js';
 
 /** Registration does not imply a policy execution handler exists. Inspect classification
  * without authorizing or executing dummy arguments; argument-level policy remains enforced
@@ -232,7 +233,7 @@ export async function planTask(
 
   let scheduling: SchedulerDecision;
   try {
-    scheduling = engine.scheduler.plan({ task, requiredContextTokens: budget.requiredTokens });
+    scheduling = await planAvailableRoute(engine, { task, requiredContextTokens: budget.requiredTokens });
   } catch (error) {
     const reasons = [error instanceof Error ? error.message : String(error)];
     if (error instanceof SchedulingError) {
@@ -325,6 +326,12 @@ export async function executeTask(
     context,
   });
   const executionId = record.execution.id;
+  for (const fallback of scheduling.fallbacks ?? []) {
+    await engine.executions.recordEvent(executionId, 'model.route.changed', {
+      previousModel: fallback.from, newModel: fallback.to, accepted: true,
+      failureClass: 'MODEL_UNAVAILABLE', reason: fallback.reason, routeDecision: 'pre-dispatch fallback', taskClass: task.type,
+    });
+  }
   // External agents (Claude Code, Codex, Antigravity, ...) bring their own models, so loading
   // and admitting a local one would only cost memory and could refuse a task that never
   // needed it (seen live: INSUFFICIENT_MEMORY blocking a Codex run).
