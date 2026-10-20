@@ -1,3 +1,23 @@
+# Wazir Release Notes - v0.2.11
+
+**Release**: `v0.2.11`
+**Theme**: Deterministic fast path, earlier failure stops, and availability-checked model dispatch
+
+`v0.2.11` answers read-only repository questions without a model round-trip, stops a run as soon as the model repeats the same invalid tool call, and refuses to dispatch to a model its runtime no longer lists.
+
+## Highlights
+
+- **Deterministic fast path**: `ls`, `pwd`, `git status`, `git diff`, and `git log` are answered directly. Explicit requests to use network tools are routed to the full coding agent.
+- **Early stop on repeated validation failure**: the second identical tool-validation failure ends the run with an actionable `IDENTICAL_VALIDATION_FAILURE` error.
+- **Availability-checked dispatch**: a model must be confirmed installed in its runtime before load or inference, and the routed model and runtime are shown in Mission Control.
+- **Mobile and dispatch**: mobile app scaffold, dispatch cancellation and recovery.
+
+## Validation
+
+Pushed-head CI for this release is `dd5b0b7`: build, typecheck, distributed typecheck, PostgreSQL suite, distributed process suite, and the full regression suite all pass. Locally, `npm run release:verify` passes and `npm run release:gate` passes on linux-arm64 (the other platforms are covered by the release matrix in CI). The fleet and recovery gate checks failed intermittently on two earlier local gate runs without reproducing on the next run.
+
+---
+
 # Wazir Release Notes - v0.2.5
 
 **Release**: `v0.2.5`

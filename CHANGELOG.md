@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.11 — 2026-10-19
+
+**Release**: `v0.2.11`
+**Theme**: Deterministic fast path, earlier failure stops, and availability-checked model dispatch
+
+- **Agent execution (`@wazir/agents`, `@wazir/core`)**:
+  - Deterministic fast path for read-only commands (`ls`, `pwd`, `git status`, `git diff`, `git log`) that answers without a model round-trip. The classifier no longer blocks on ambiguous verbs alone, and explicit tool directives that name network commands (`curl`, `nslookup`, `openssl`) route to the full coding agent.
+  - A second identical tool-validation failure now stops the run immediately with `IDENTICAL_VALIDATION_FAILURE`, instead of repeating the same call until the turn budget is spent.
+  - Failed tool operations are classified correctly, and lock-contended execution writes no longer crash the task.
+- **Model dispatch (`@wazir/cli`, `@wazir/core`)**: a model must be confirmed installed in its runtime before a load or inference is dispatched. The routed model and runtime are shown in Mission Control.
+- **Mobile and dispatch (`@wazir/api`, `apps/mobile`)**: mobile app scaffold, dispatch cancellation and recovery, and migration of the test directory layout.
+- **Execution latency (`@wazir/cli`)**: cold-start, store, and conversational fast-path latency reduced for `wa run`.
+- **Release gates (`@wazir/cli`, `test/`)**: 6-category execution integrity suites, TUI usability coverage, and LIVE-CODE-01..08 release-gate suites.
+
 ## v0.2.5 — 2026-10-17
 
 **Release**: `v0.2.5`
