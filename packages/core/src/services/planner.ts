@@ -232,6 +232,7 @@ export class TaskPlanner {
             expectedArtifacts: step.expectedArtifacts ?? plan.expectedArtifacts,
             ...(baseTaskProps.requirements ?? {}),
           },
+          policy: baseTaskProps.policy,
           execution: baseTaskProps.execution,
         },
         dependencies: step.dependencies,

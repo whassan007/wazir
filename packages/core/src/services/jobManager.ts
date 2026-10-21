@@ -259,6 +259,7 @@ export class JobManager {
       maxRepairCycles: t.task.maxRepairCycles,
       maxRetries: t.task.maxRetries,
       execution: {
+        ...t.task.execution,
         targetComputerId: t.task.execution?.targetComputerId,
         targetRuntimeId: t.task.execution?.targetRuntimeId,
         targetModelId: t.task.execution?.targetModelId,
@@ -527,6 +528,7 @@ export class JobManager {
         maxRepairCycles: input.task.maxRepairCycles,
         maxRetries: input.task.maxRetries,
         execution: {
+          ...input.task.execution,
           targetComputerId: input.task.execution?.targetComputerId,
           targetRuntimeId: input.task.execution?.targetRuntimeId,
           targetModelId: input.task.execution?.targetModelId,

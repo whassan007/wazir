@@ -89,13 +89,13 @@ export interface OAuthLoginOptions {
 
 /**
  * Authentication surface for a hosted provider. A concrete adapter
- * (`AnthropicAdapter`, `OpenAIAdapter`, `GoogleAdapter`) implements this
+ * (`AnthropicAdapter`, `OpenAIAdapter`, `GoogleAdapter`, `NvidiaAdapter`) implements this
  * *alongside* `RuntimeAdapter` — one object per provider, not two glued
  * together — so its own notion of "am I authenticated" never has to be
  * kept in sync with a separate object's.
  *
  * `loginWithApiKey`/`loginWithOAuth`/`refresh` are optional: a provider
- * that only supports API keys (Anthropic, OpenAI) simply omits the OAuth
+ * that only supports API keys (Anthropic, OpenAI, NVIDIA) simply omits the OAuth
  * methods, and `supportedMethods` is what UI code reads to decide which
  * options to offer — never a hardcoded assumption.
  */

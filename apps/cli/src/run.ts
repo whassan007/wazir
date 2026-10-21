@@ -31,6 +31,7 @@ import { recordAgentTask } from './agentPreflight.js';
 import { captureDelegationBaseline, verifyDelegatedWork, type DelegationBaseline } from './delegationVerification.js';
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
 import { planAvailableRoute } from './routeAvailability.js';
+import { ensureNvidiaModelRegistered } from './hostedProviders.js';
 
 /** Registration does not imply a policy execution handler exists. Inspect classification
  * without authorizing or executing dummy arguments; argument-level policy remains enforced
@@ -159,6 +160,36 @@ export async function planTask(
   options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'routingMode' | 'preset' | 'expectedFiles'> = {},
 ): Promise<PlanResult> {
   const preset = resolvePreset(options.preset);
+  const routingCfg = engine.config.routing;
+  const effectiveRoutingMode: import('@wazir/core').RoutingMode | undefined =
+    options.routingMode ??
+    (routingCfg?.mode === 'provider_only'
+      ? routingCfg.provider === 'nvidia'
+        ? 'NVIDIA'
+        : 'PROVIDER_ONLY'
+      : routingCfg?.mode
+      ? (routingCfg.mode.toUpperCase() as import('@wazir/core').RoutingMode)
+      : undefined);
+  const effectiveRoutingProvider =
+    options.routingMode === 'NVIDIA'
+      ? 'nvidia'
+      : routingCfg?.provider;
+  const isProviderOnly =
+    effectiveRoutingMode === 'NVIDIA' ||
+    effectiveRoutingMode === 'PROVIDER_ONLY' ||
+    routingCfg?.mode === 'provider_only';
+
+  // Ensure any explicitly requested or default NVIDIA model is registered when NVIDIA is healthy
+  if (options.model && (options.model.startsWith('nvidia/') || (isProviderOnly && effectiveRoutingProvider === 'nvidia' && !engine.models.get(options.model)))) {
+    // Only auto-register if it looks like an NVIDIA/catalog model ID and isn't already registered under another provider
+    if (!engine.models.get(options.model) && (options.model.startsWith('nvidia/') || options.model.includes('/'))) {
+      ensureNvidiaModelRegistered(engine.models, engine.runtimes, engine.config, options.model);
+    }
+  }
+  if (routingCfg?.provider === 'nvidia' && routingCfg.defaultModel) {
+    ensureNvidiaModelRegistered(engine.models, engine.runtimes, engine.config, routingCfg.defaultModel);
+  }
+
   const task: Task = {
     id: generateId('task-'),
     type: options.type ?? 'coding',
@@ -172,7 +203,10 @@ export async function planTask(
     execution: {
       targetModelId: options.model,
       targetAgentId: options.agent ?? (options.type === 'chat' && engine.agents.get('wazir-chat') ? 'wazir-chat' : undefined),
-      routingMode: options.routingMode,
+      routingMode: effectiveRoutingMode,
+      routingProvider: effectiveRoutingProvider,
+      defaultModelId: routingCfg?.defaultModel,
+      allowFallback: routingCfg?.allowFallback,
       runtimePreset: preset.name,
     },
     priority: 'normal',
@@ -214,10 +248,18 @@ export async function planTask(
   const parts = [...baseParts, ...activeContextParts];
   const budget = engine.compiler.budget(parts, OUTPUT_RESERVE_TOKENS);
 
-  // A delegated (external) agent selects and runs its own model on its vendor's account, so
-  // no local model is placed or loaded for it: planning one could only refuse the task.
+  // External delegated agents select and run their own models on their vendor's account.
+  // When provider-only routing is active, external agents MUST NOT bypass the provider restriction.
   const pinnedAgent = options.agent ? engine.agents.get(options.agent) : undefined;
   if (pinnedAgent?.descriptor.strategy === 'external') {
+    if (isProviderOnly) {
+      return {
+        ok: false,
+        reasons: [
+          `provider-only routing (${effectiveRoutingProvider ?? 'nvidia'}) forbids external delegated agent '${pinnedAgent.descriptor.name}' because external agents bypass Wazir model routing`,
+        ],
+      };
+    }
     const name = pinnedAgent.descriptor.name;
     const reasons = [`delegated to external agent '${name}'; it selects its own model`];
     const computerId = engine.worker.computerId;
@@ -607,6 +649,7 @@ export async function executeTask(
           emitJson,
           remainingTurns: options.maxTurns ? Math.max(1, options.maxTurns - turnsUsed) : undefined,
           parentPolicy: task.policy,
+          parentExecution: task.execution,
         });
       }
 
@@ -963,6 +1006,7 @@ export interface SubagentRunContext {
   emitJson: (event: Record<string, unknown>) => void;
   remainingTurns?: number;
   parentPolicy?: import('@wazir/core').PolicyRequirements;
+  parentExecution?: import('@wazir/core').ExecutionPreferences;
   signal?: AbortSignal;
 }
 
@@ -994,6 +1038,24 @@ export async function runSubagent(
     };
   }
 
+  const routingCfg = engine.config.routing;
+  const parentRoutingMode = context.parentExecution?.routingMode;
+  const isProviderOnly =
+    routingCfg?.mode === 'provider_only' ||
+    parentRoutingMode === 'NVIDIA' ||
+    parentRoutingMode === 'PROVIDER_ONLY';
+  const requiredProvider =
+    parentRoutingMode === 'NVIDIA'
+      ? 'nvidia'
+      : context.parentExecution?.routingProvider ?? routingCfg?.provider;
+  const inheritedRoutingMode =
+    context.parentExecution?.routingMode ??
+    (routingCfg?.mode === 'provider_only'
+      ? routingCfg.provider === 'nvidia'
+        ? 'NVIDIA'
+        : 'PROVIDER_ONLY'
+      : undefined);
+
   const inp = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
   const description = String(inp.description ?? '').trim();
   if (!description) {
@@ -1016,12 +1078,10 @@ export async function runSubagent(
   const wantsFleetPlacement = Boolean((requiredCapabilities && requiredCapabilities.length > 0) || placementRequirements);
 
   // A subtask that declares real requirements is placed by the same Scheduler that places
-  // top-level tasks — capability match, then hardware-aware placement across the fleet —
-  // instead of blindly inheriting the parent's model/computer. Absent any requirement,
-  // placement is unchanged: same model, same local worker as the parent, as before.
-  // (ported from local branch test/real-world-acceptance@ec863ef, adapted: this baseline's
-  // runSubagent predates provider-only-routing/NVIDIA fields, so that guardrail is not
-  // ported here — see docs/reconciliation/FEATURE-MATRIX.md.)
+  // top-level tasks — capability match, provider authorization, quota constraints, and
+  // hardware-aware placement across the fleet — instead of blindly inheriting the parent's
+  // model/computer. Absent any requirement, placement is unchanged: same model, same local
+  // worker as the parent, as before.
   let placementDecision: SchedulerDecision | undefined;
   if (wantsFleetPlacement) {
     const placementTask: Task = {
@@ -1033,6 +1093,21 @@ export async function runSubagent(
         minimumContext: MINIMUM_CONTEXT_TOKENS,
         expectedArtifacts,
         ...placementRequirements,
+      },
+      policy: {
+        ...(context.parentPolicy ?? {}),
+        allowSubagentDispatch: false,
+        projectRoot: context.projectRoot,
+      },
+      execution: {
+        ...(context.parentExecution ?? {}),
+        targetModelId: undefined,
+        targetRuntimeId: undefined,
+        targetComputerId: undefined,
+        routingMode: inheritedRoutingMode,
+        routingProvider: requiredProvider,
+        defaultModelId: context.parentExecution?.defaultModelId ?? routingCfg?.defaultModel,
+        allowFallback: context.parentExecution?.allowFallback ?? routingCfg?.allowFallback,
       },
       priority: 'normal',
       status: 'pending',
@@ -1055,7 +1130,46 @@ export async function runSubagent(
 
   const effectiveModelId = placementDecision?.modelId ?? context.modelId;
   const effectiveRuntimeId = placementDecision?.runtimeId ?? context.runtimeId;
-  const effectiveComputerId = placementDecision ? placementDecision.computerId : (context.computerId ?? engine.worker.computerId);
+  const isHostedRuntime = engine.runtimes.get(effectiveRuntimeId)?.runtimeKind === 'hosted';
+  const effectiveComputerId = placementDecision
+    ? placementDecision.computerId
+    : isHostedRuntime
+      ? undefined
+      : (context.computerId ?? engine.worker.computerId);
+
+  // Guardrail 3: Provider-only routing & hosted-provider authorization enforcement for nested executions
+  if (isProviderOnly && requiredProvider) {
+    const childModel = engine.models.get(effectiveModelId);
+    const childProvider = childModel?.provider ?? effectiveRuntimeId;
+    if (childProvider !== requiredProvider) {
+      return {
+        ok: false,
+        output: '',
+        error: `Subagent dispatch forbidden by provider-only routing policy: child execution attempted to use '${effectiveModelId}' (${childProvider}) instead of required provider '${requiredProvider}'`,
+        durationMs: Date.now() - startTime,
+      };
+    }
+  }
+
+  if (isHostedRuntime) {
+    const childModel = engine.models.get(effectiveModelId);
+    const childProvider = childModel?.provider ?? effectiveRuntimeId;
+    const implicitProviderOnlyAllow = isProviderOnly && requiredProvider === childProvider;
+    const hostedGate = engine.policy.checkHostedEligibility(
+      implicitProviderOnlyAllow && context.parentPolicy?.allowHostedProviders === undefined
+        ? { ...context.parentPolicy, allowHostedProviders: true }
+        : context.parentPolicy,
+      childProvider,
+    );
+    if (!hostedGate.allowed) {
+      return {
+        ok: false,
+        output: '',
+        error: `Subagent dispatch forbidden by hosted provider policy: ${hostedGate.reason}`,
+        durationMs: Date.now() - startTime,
+      };
+    }
+  }
 
   // Create child execution record linked by parentExecutionId
   const subtask: Task = {
@@ -1074,8 +1188,13 @@ export async function runSubagent(
       projectRoot: context.projectRoot,
     },
     execution: {
+      ...(context.parentExecution ?? {}),
       targetModelId: effectiveModelId,
       targetRuntimeId: effectiveRuntimeId,
+      routingMode: inheritedRoutingMode,
+      routingProvider: requiredProvider,
+      defaultModelId: context.parentExecution?.defaultModelId ?? routingCfg?.defaultModel,
+      allowFallback: context.parentExecution?.allowFallback ?? routingCfg?.allowFallback,
     },
     priority: 'normal',
     status: 'pending',
@@ -1117,9 +1236,13 @@ export async function runSubagent(
       if (engine.web) req = { ...req, messages: await recordWebContext(engine.executions, childExecId, req.messages, engine.web.limits.maxGroundingTokens) };
       if (context.signal?.aborted) return;
       const isLocalPlacement = !effectiveComputerId || effectiveComputerId === engine.worker.computerId;
-      // Activation prepares a model to run on *this* worker — meaningless, and liable to
-      // fail admission, for a placement the Scheduler sent to a different fleet machine.
-      const contextTokens = isLocalPlacement ? await engine.lifecycle.activateExecution(childExecId, MINIMUM_CONTEXT_TOKENS) : MINIMUM_CONTEXT_TOKENS;
+      // Activation prepares a model to run on *this* worker — meaningless for a hosted API
+      // placement (no computerId) or a placement the Scheduler sent to a different fleet machine.
+      const contextTokens = effectiveComputerId && effectiveComputerId === engine.worker.computerId
+        ? await engine.lifecycle.activateExecution(childExecId, MINIMUM_CONTEXT_TOKENS)
+        : effectiveComputerId
+          ? MINIMUM_CONTEXT_TOKENS
+          : undefined;
       const retryContext = { requestId, model: req.modelId, provider: engine.models.get(req.modelId)?.provider };
 
       if (isLocalPlacement) {

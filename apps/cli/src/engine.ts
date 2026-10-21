@@ -66,7 +66,7 @@ import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import { createSecretBroker, type SecretBroker } from '@wazir/secrets';
 import { Worker, currentLoad, type DiscoveredRuntime } from '@wazir/workers';
 import { startLocalHeartbeat } from './localHeartbeat.js';
-import { configDir, loadConfig, type WazirConfig } from './config.js';
+import { configDir, loadConfig, buildNvidiaHostedLimits, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
 import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
@@ -363,6 +363,11 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     defaultTimeoutMs: options.approvalTimeoutMs ?? 5 * 60_000,
     allowEnvAutoApprove: options.allowEnvAutoApprove ?? false,
   });
+  const hostedAuthorizedDefault = Boolean(
+    config.providers?.allowHostedProviders ||
+    config.providers?.nvidia?.privacy?.allowHostedInference ||
+    (config.routing?.mode === 'provider_only' && config.routing?.provider),
+  );
   const policy = new PolicyEngine({
     projectRoot,
     modelLifecycle: config.modelLifecyclePolicy,
@@ -372,7 +377,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     denyCommands: config.denyCommands,
     allowedMcpServers: config.allowedMcpServers,
     allowWorkspaceArtifactExecution: true,
-    allowHostedProvidersDefault: config.providers?.allowHostedProviders ?? false,
+    allowHostedProvidersDefault: hostedAuthorizedDefault,
     approvalQueue,
     approveCallback: async (request, decision) => {
       const { createApprover } = await import('./approve.js');
@@ -403,16 +408,19 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const classifier = new TaskCapabilityClassifier();
   const modelIntelligence = new ModelIntelligenceService({ classifier, store });
   const reliability = new ModelReliabilityTracker();
+  const nvidiaLimits = buildNvidiaHostedLimits(config.providers?.nvidia);
   // Accounts for anything not configured: local runtimes, hosted APIs (paid only if hosted
   // providers were already authorised), and delegated agents (subscriptions, limits unknown).
   resources.accounts.addImplicit({
     localRuntimes: adapterList.map((a) => a.id),
     hostedRuntimes: [...hostedAdapters.keys()],
     agents: agents.list().filter((a) => a.source === 'external').map((a) => a.descriptor.name),
-    hostedAuthorized: config.providers?.allowHostedProviders ?? false,
+    hostedAuthorized: hostedAuthorizedDefault,
     hostedConcurrency: {
-      nvidia: config.providers?.nvidia?.limits?.maxConcurrentRequests ?? 2,
+      nvidia: (!Array.isArray(config.providers?.nvidia?.limits) ? config.providers?.nvidia?.limits?.maxConcurrentRequests : undefined) ?? 2,
     },
+    hostedLimits: nvidiaLimits ? { nvidia: nvidiaLimits } : undefined,
+    hostedPricing: config.providers?.nvidia?.pricing ? { nvidia: config.providers.nvidia.pricing } : undefined,
   });
   const scheduler = new Scheduler({
     computers,
@@ -423,6 +431,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     reliability,
     modelIntelligence,
     resources: { router: resources.router },
+    routing: config.routing,
   });
 
   // ---- jobs & orchestration -----------------------------------------------

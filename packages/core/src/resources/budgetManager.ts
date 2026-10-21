@@ -275,11 +275,18 @@ export class TokenBudgetManager {
     const r = this.ledger.getReservation(requestId);
     if (!r) return false;
     const account = this.accounts.get(r.accountId);
-    const cost = account ? costUsd(pricingFor(account, r.modelId), usage.inputTokens, usage.outputTokens, usage.cachedInputTokens ?? 0) : 0;
+    const pricing = account ? pricingFor(account, r.modelId) : undefined;
+    const costKnown = r.local || pricing !== undefined;
+    const costStatus: 'ACTUAL' | 'ESTIMATED' | 'UNKNOWN' = r.local
+      ? 'ACTUAL'
+      : pricing !== undefined
+        ? (usage.source === 'provider-reported' ? 'ACTUAL' : 'ESTIMATED')
+        : 'UNKNOWN';
+    const cost = account ? costUsd(pricing, usage.inputTokens, usage.outputTokens, usage.cachedInputTokens ?? 0) : 0;
     const settled = this.ledger.settle({
       requestId, accountId: r.accountId, modelId: r.modelId, taskId: r.taskId, agent: extra.agent, workload: r.workload,
       inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cachedInputTokens: usage.cachedInputTokens ?? 0,
-      reasoningTokens: usage.reasoningTokens ?? 0, requests: r.estRequests, costUsd: cost, source: usage.source,
+      reasoningTokens: usage.reasoningTokens ?? 0, requests: r.estRequests, costUsd: cost, costKnown, costStatus, source: usage.source,
       at: this.ledger.now(), durationMs: extra.durationMs, local: r.local,
     });
     if (settled && usage.source === 'provider-reported' && extra.rawEstimatedInput) {

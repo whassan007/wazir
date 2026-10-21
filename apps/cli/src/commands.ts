@@ -7,6 +7,7 @@ import type { ArtifactProvenance, ArtifactType, TaskType } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
 import { executeTask, planTask } from './run.js';
+import { ensureNvidiaModelRegistered } from './hostedProviders.js';
 import { tokensPerSecond, readAuditEvents, stripTerminalEscapes, type AuditEvent } from '@wazir/shared';
 import { parseAction, normalizeAction, missingRequiredFields, REQUIRED_TOOL_FIELDS } from '@wazir/agents';
 
@@ -1809,37 +1810,134 @@ function allPassed(results: { passed: boolean }[]): boolean {
 export async function askCommand(
   engine: RookEngine,
   prompt: string,
-  options: { model?: string; computer?: string; allowHosted?: boolean } = {},
+  options: {
+    model?: string;
+    computer?: string;
+    localOnly?: boolean;
+    allowHosted?: boolean;
+    routingMode?: import('@wazir/core').RoutingMode;
+  } = {},
 ): Promise<{ code: number; output: string }> {
+  const routingCfg = engine.config.routing;
+  const effectiveRoutingMode: import('@wazir/core').RoutingMode | undefined =
+    options.routingMode ??
+    (options.localOnly
+      ? 'LOCAL_ONLY'
+      : routingCfg?.mode === 'provider_only'
+      ? routingCfg.provider === 'nvidia'
+        ? 'NVIDIA'
+        : 'PROVIDER_ONLY'
+      : routingCfg?.mode
+      ? (routingCfg.mode.toUpperCase() as import('@wazir/core').RoutingMode)
+      : undefined);
+  const effectiveRoutingProvider =
+    options.routingMode === 'NVIDIA'
+      ? 'nvidia'
+      : routingCfg?.provider;
+  const isProviderOnly =
+    effectiveRoutingMode === 'NVIDIA' ||
+    effectiveRoutingMode === 'PROVIDER_ONLY' ||
+    routingCfg?.mode === 'provider_only';
+
+  if (options.localOnly && isProviderOnly && effectiveRoutingProvider && engine.runtimes.get(effectiveRoutingProvider)?.runtimeKind === 'hosted') {
+    return {
+      code: 1,
+      output: color.red(`refused: localOnly conflicts with provider-only routing mode for hosted provider '${effectiveRoutingProvider}'`),
+    };
+  }
+
+  // Ensure custom or default NVIDIA model is registered when NVIDIA runtime is healthy
+  if (options.model && !engine.models.get(options.model) && (options.model.startsWith('nvidia/') || (isProviderOnly && effectiveRoutingProvider === 'nvidia' && options.model.includes('/')))) {
+    ensureNvidiaModelRegistered(engine.models, engine.runtimes, engine.config, options.model);
+  }
+  if (routingCfg?.provider === 'nvidia' && routingCfg.defaultModel) {
+    ensureNvidiaModelRegistered(engine.models, engine.runtimes, engine.config, routingCfg.defaultModel);
+  }
+
   const models = engine.models.list();
   if (models.length === 0) {
+    if (isProviderOnly) {
+      return {
+        code: 1,
+        output: color.red(`refused: provider-only routing (${effectiveRoutingProvider ?? 'nvidia'}) is enabled, but no eligible models are registered or authenticated`),
+      };
+    }
     return {
       code: 1,
       output: color.yellow('no models registered — start LM Studio or Ollama to enable completions'),
     };
   }
 
+  // Enforce provider-only and localOnly filtering on candidate models
+  let eligibleModels = models.filter((m) => !m.embedding && !m.id.toLowerCase().includes('embed'));
+  if (options.localOnly || effectiveRoutingMode === 'LOCAL_ONLY') {
+    eligibleModels = eligibleModels.filter((m) => m.local);
+  }
+  if (isProviderOnly && effectiveRoutingProvider) {
+    if (options.model) {
+      const requestedModel = models.find((m) => m.id === options.model || m.id.toLowerCase().includes(options.model!.toLowerCase()));
+      if (requestedModel && requestedModel.provider !== effectiveRoutingProvider) {
+        return {
+          code: 1,
+          output: color.red(
+            `refused: pinned model '${requestedModel.id}' belongs to provider '${requestedModel.provider}', which violates provider-only routing for '${effectiveRoutingProvider}'`,
+          ),
+        };
+      }
+      if (!requestedModel && !options.model.toLowerCase().includes(effectiveRoutingProvider.toLowerCase())) {
+        return {
+          code: 1,
+          output: color.red(
+            `refused: requested model '${options.model}' is not an eligible '${effectiveRoutingProvider}' model under provider-only routing`,
+          ),
+        };
+      }
+    }
+    eligibleModels = eligibleModels.filter((m) => {
+      if (m.provider !== effectiveRoutingProvider) return false;
+      const rt = engine.runtimes.get(m.provider);
+      if (!rt || rt.health !== 'healthy') return false;
+      return engine.models.instancesOf(m.id).some((i) => i.loaded && i.state === 'READY' && i.health === 'healthy');
+    });
+    if (eligibleModels.length === 0) {
+      return {
+        code: 1,
+        output: color.red(
+          `refused: provider-only routing (${effectiveRoutingProvider}) is enabled, but no healthy/authenticated '${effectiveRoutingProvider}' model is available`,
+        ),
+      };
+    }
+  }
+
+  const defaultModelId =
+    routingCfg?.defaultModel ??
+    (effectiveRoutingProvider === 'nvidia' ? engine.config.providers?.nvidia?.defaultModel : undefined);
+
   const target = options.model
-    ? models.find((m) => m.id === options.model || m.id.toLowerCase().includes(options.model!.toLowerCase()))
-    : models.find((m) => !m.id.toLowerCase().includes('embed')) || models[0];
+    ? eligibleModels.find((m) => m.id === options.model || m.id.toLowerCase().includes(options.model!.toLowerCase()))
+    : (defaultModelId ? eligibleModels.find((m) => m.id === defaultModelId) : undefined) ??
+      eligibleModels[0] ??
+      (!isProviderOnly ? models[0] : undefined);
 
   if (!target) {
     return {
       code: 1,
-      output: color.red(`model '${options.model}' not found. Available models:\n${models.map((m) => `  - ${m.id}`).join('\n')}`),
+      output: color.red(
+        `model '${options.model ?? defaultModelId ?? '(auto)'}' not found or not eligible under active routing policy. Eligible models:\n${eligibleModels.map((m) => `  - ${m.id}`).join('\n') || '  (none)'}`,
+      ),
     };
   }
 
-  // askCommand bypasses the Scheduler entirely (it resolves a model directly
-  // from a --model flag or the first non-embedding model, not via
-  // Scheduler.plan()), so it is the one place a hosted model could reach
-  // generate() without ever passing through PolicyEngine.checkHostedEligibility().
-  // Gate explicitly here — never rely on engine.worker.adapterForModel()'s
-  // structural inability to find a hosted adapter as the only safeguard.
   const targetRuntime = engine.runtimes.get(target.provider);
   if (targetRuntime?.runtimeKind === 'hosted') {
+    const implicitProviderOnlyAllow = isProviderOnly && effectiveRoutingProvider === target.provider;
     const gate = engine.policy.checkHostedEligibility(
-      { allowHostedProviders: options.allowHosted ?? engine.config.providers?.allowHostedProviders },
+      {
+        localOnly: options.localOnly,
+        allowHostedProviders:
+          options.allowHosted ??
+          (implicitProviderOnlyAllow ? true : engine.config.providers?.allowHostedProviders),
+      },
       target.provider,
     );
     if (!gate.allowed) {
@@ -1855,8 +1953,29 @@ export async function askCommand(
     };
   }
 
+  // Record durable routing decision in ResourceLedger so wa resources reflects askCommand placement
+  const accountId = engine.resources.resolveAccount(target.provider, target.id);
+  const askTaskId = `ask-${Date.now()}`;
+  engine.resources.ledger.appendEvent(
+    'routing',
+    { accountId, taskId: askTaskId },
+    {
+      modelId: target.id,
+      runtimeId: target.provider,
+      provider: target.provider,
+      mode: isProviderOnly ? 'provider_only' : (routingCfg?.mode ?? 'auto'),
+      command: 'ask',
+    },
+  );
+
   if (engine.mcp && engine.tools.descriptors().some(t => t.provenance?.source === 'mcp')) {
-    const outcome = await executeTask(engine, prompt, { type: 'coding', model: target.id, agent: 'wazir-step', allowHosted: options.allowHosted });
+    const outcome = await executeTask(engine, prompt, {
+      type: 'coding',
+      model: target.id,
+      agent: 'wazir-step',
+      allowHosted: options.allowHosted,
+      routingMode: effectiveRoutingMode,
+    });
     return { code: outcome.success ? 0 : 1, output: outcome.result ?? outcome.reasons.join('\n') };
   }
 
@@ -1870,6 +1989,7 @@ export async function askCommand(
       maxTokens: 1024,
       temperature: 0.7,
       stream: true,
+      resourceContext: { taskId: askTaskId, workload: 'interactive', agent: 'wa-ask' },
     })) {
       if (event.type === 'token' && event.content) {
         process.stdout.write(event.content);
@@ -2234,6 +2354,7 @@ export async function inspectProviderCommand(
     ...found,
     routingPolicy: {
       allowHostedProvidersDefault: engine.config.providers?.allowHostedProviders ?? false,
+      routing: engine.config.routing,
       ...(found.id === 'nvidia' ? { nvidiaConfig: engine.config.providers?.nvidia } : {}),
     },
     account: account

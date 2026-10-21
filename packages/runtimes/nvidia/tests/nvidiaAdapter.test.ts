@@ -103,7 +103,7 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
     ]);
   });
 
-  it('3. handles invalid API key (HTTP 401/403) during login and healthCheck without storing or leaking key', async () => {
+  it('3. handles invalid API key (HTTP 401/403) during login, healthCheck, and generate without storing, retrying, or leaking key', async () => {
     fetchMock.mockResolvedValue(new Response('{"error":"Invalid token"}', { status: 401 }));
     const broker = await makeBroker();
     const adapter = new NvidiaAdapter({ secrets: broker, env: {}, fetch: fetchMock as unknown as typeof fetch });
@@ -119,11 +119,30 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
       secrets: broker,
       env: { NVIDIA_API_KEY: TEST_NVAPI_KEY },
       fetch: fetchMock as unknown as typeof fetch,
+      maxRetries: 3,
     });
     const health = await envAdapter.healthCheck();
     expect(health.status).toBe('unavailable');
     expect(health.reason).toBe('AUTH_REQUIRED');
     expect(health.message).not.toContain(TEST_NVAPI_KEY);
+
+    fetchMock.mockClear();
+    const genEvents: any[] = [];
+    for await (const ev of envAdapter.generate({
+      modelId: NVIDIA_DEFAULT_MODEL_ID,
+      messages: [{ role: 'user', content: 'Test 401' }],
+    })) {
+      genEvents.push(ev);
+    }
+    // 401 AUTH_FAILED must not retry
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(genEvents.filter((e) => e.type === 'error')).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        failureClass: 'AUTH_FAILED',
+        status: 401,
+      }),
+    ]);
   });
 
   it('4. discovers models from /models and falls back to configured/curated models when remote enumeration fails', async () => {
@@ -159,7 +178,7 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
     expect(fallbackModels.map((m) => m.id)).toContain('custom/org-model-v1');
   });
 
-  it('5. advertises accurate capability metadata for nvidia/nemotron-3.5-super-vl-120b-a12b', () => {
+  it('5. advertises accurate capability metadata for nvidia/nemotron-3.5-super-vl-120b-a12b and custom overrides', () => {
     const meta = inferNvidiaModelMetadata(NVIDIA_DEFAULT_MODEL_ID);
     expect(meta.id).toBe('nvidia/nemotron-3.5-super-vl-120b-a12b');
     expect(meta.contextWindow).toBe(131072);
@@ -274,7 +293,6 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
 
     expect(reasoningChunks.join('')).toBe('Step 1: think. Step 2: verify.');
     expect(contentChunks.join('')).toBe('Final answer.');
-    // Final answer content never mixes reasoning tokens into content
     expect(completedEvent.content).toBe('Final answer.');
     expect(completedEvent.usage).toMatchObject({
       inputTokens: 25,
@@ -353,7 +371,7 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
     });
   });
 
-  it('10. formats multimodal image inputs for vision models and rejects image inputs on non-vision models', async () => {
+  it('10. enforces capability metadata: formats multimodal inputs for vision models and rejects unsupported capabilities', async () => {
     let capturedBody: any;
     fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => {
       capturedBody = JSON.parse(init.body as string);
@@ -368,6 +386,9 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
     const adapter = new NvidiaAdapter({
       env: { NVIDIA_API_KEY: TEST_NVAPI_KEY },
       fetch: fetchMock as unknown as typeof fetch,
+      modelCapabilityOverrides: {
+        'custom/no-tools-model': { toolCalling: false, vision: false },
+      },
     });
 
     const events: any[] = [];
@@ -396,7 +417,7 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
       },
     ]);
 
-    // Non-vision model must reject multimodal image input cleanly without calling fetch
+    // Case A: Non-vision model rejects multimodal image input cleanly without calling fetch
     fetchMock.mockClear();
     const nonVisionEvents: any[] = [];
     for await (const ev of adapter.generate({
@@ -418,6 +439,44 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
         type: 'error',
         failureClass: 'NON_RECOVERABLE',
         error: expect.stringContaining('does not advertise vision capability'),
+      }),
+    ]);
+
+    // Case B: Embedding-only model rejects chat completions cleanly without calling fetch
+    fetchMock.mockClear();
+    const embedEvents: any[] = [];
+    for await (const ev of adapter.generate({
+      modelId: 'nvidia/nv-embedqa-e5-v5',
+      messages: [{ role: 'user', content: 'Chat with embedding model' }],
+    })) {
+      embedEvents.push(ev);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(embedEvents).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        failureClass: 'NON_RECOVERABLE',
+        error: expect.stringContaining('embedding model and does not support chat completions'),
+      }),
+    ]);
+
+    // Case C: Model without toolCalling rejects required toolChoice cleanly without calling fetch
+    fetchMock.mockClear();
+    const noToolEvents: any[] = [];
+    for await (const ev of adapter.generate({
+      modelId: 'custom/no-tools-model',
+      messages: [{ role: 'user', content: 'Must call tool' }],
+      tools: [{ name: 'read', description: 'Read file', parameters: { type: 'object' } }],
+      toolChoice: 'required',
+    })) {
+      noToolEvents.push(ev);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(noToolEvents).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        failureClass: 'NON_RECOVERABLE',
+        error: expect.stringContaining('does not support native tool calling'),
       }),
     ]);
   });
@@ -463,8 +522,49 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
     expect(events.find((e) => e.type === 'completed')?.content).toBe('Succeeded after stripping extra_body');
   });
 
-  it('12. classifies HTTP 429 rate-limit and HTTP 503 transient server errors with Retry-After headers', async () => {
-    fetchMock.mockResolvedValueOnce(
+  it('12. classifies HTTP 429 rate-limit, honors Retry-After headers, and performs bounded retries before succeeding or failing', async () => {
+    // Part A: Retry on 429 then succeed on attempt 2, emitting a `retry` event
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'Rate limit exceeded' }), {
+          status: 429,
+          headers: {
+            'retry-after': '0',
+            'x-ratelimit-remaining-requests': '0',
+            'x-ratelimit-remaining-tokens': '100',
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          makeSseStream([
+            { choices: [{ delta: { content: 'Recovered after 429 backoff' }, finish_reason: 'stop' }] },
+            { usage: { prompt_tokens: 15, completion_tokens: 8, total_tokens: 23 } },
+          ]),
+          { status: 200 },
+        ),
+      );
+
+    const retryingAdapter = new NvidiaAdapter({
+      env: { NVIDIA_API_KEY: TEST_NVAPI_KEY },
+      fetch: fetchMock as unknown as typeof fetch,
+      maxRetries: 2,
+    });
+
+    const retryEvents: any[] = [];
+    for await (const ev of retryingAdapter.generate({
+      modelId: NVIDIA_DEFAULT_MODEL_ID,
+      messages: [{ role: 'user', content: 'Rate limited then recovered' }],
+    })) {
+      retryEvents.push(ev);
+    }
+
+    expect(retryEvents.some((e) => e.type === 'retry' && e.failureClass === 'RATE_LIMIT' && e.attempt === 1)).toBe(true);
+    expect(retryEvents.find((e) => e.type === 'completed')?.content).toBe('Recovered after 429 backoff');
+
+    // Part B: Exhaust retries on persistent 429 and emit final RATE_LIMIT error with rateLimit & retryAfterMs
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ error: 'Rate limit exceeded' }), {
         status: 429,
         headers: {
@@ -475,13 +575,14 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
       }),
     );
 
-    const adapter = new NvidiaAdapter({
+    const noRetryAdapter = new NvidiaAdapter({
       env: { NVIDIA_API_KEY: TEST_NVAPI_KEY },
       fetch: fetchMock as unknown as typeof fetch,
+      maxRetries: 0,
     });
 
     const events: any[] = [];
-    for await (const ev of adapter.generate({
+    for await (const ev of noRetryAdapter.generate({
       modelId: NVIDIA_DEFAULT_MODEL_ID,
       messages: [{ role: 'user', content: 'Rate limited call' }],
     })) {
@@ -496,7 +597,42 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
     expect(errEvent.rateLimit?.remainingRequests).toBe(0);
   });
 
-  it('13. supports request timeout and explicit cancellation via AbortSignal / cancel()', async () => {
+  it('13. classifies context window overflow (HTTP 400 context_length_exceeded) as MODEL_CONTEXT_OVERFLOW without retrying', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "This model's maximum context length is 131072 tokens. However, your messages resulted in 145000 tokens.",
+            code: 'context_length_exceeded',
+          },
+        }),
+        { status: 400 },
+      ),
+    );
+
+    const adapter = new NvidiaAdapter({
+      env: { NVIDIA_API_KEY: TEST_NVAPI_KEY },
+      fetch: fetchMock as unknown as typeof fetch,
+      maxRetries: 2,
+    });
+
+    const events: any[] = [];
+    for await (const ev of adapter.generate({
+      modelId: NVIDIA_DEFAULT_MODEL_ID,
+      messages: [{ role: 'user', content: 'Huge prompt' }],
+    })) {
+      events.push(ev);
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const errEvent = events.find((e) => e.type === 'error');
+    expect(errEvent).toBeDefined();
+    expect(errEvent.failureClass).toBe('MODEL_CONTEXT_OVERFLOW');
+    expect(errEvent.status).toBe(400);
+  });
+
+  it('14. supports request timeout and explicit cancellation via AbortSignal and adapter.cancel(requestId)', async () => {
+    // Part A: AbortSignal cancellation
     fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => {
       return new Promise((_resolve, reject) => {
         init.signal?.addEventListener('abort', () => {
@@ -508,14 +644,15 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
     const adapter = new NvidiaAdapter({
       env: { NVIDIA_API_KEY: TEST_NVAPI_KEY },
       fetch: fetchMock as unknown as typeof fetch,
+      maxRetries: 0,
     });
 
     const abortController = new AbortController();
-    setTimeout(() => abortController.abort(), 20);
+    setTimeout(() => abortController.abort(), 15);
 
     const events: any[] = [];
     for await (const ev of adapter.generate({
-      requestId: 'req-cancel-test',
+      requestId: 'req-cancel-signal',
       modelId: NVIDIA_DEFAULT_MODEL_ID,
       signal: abortController.signal,
       messages: [{ role: 'user', content: 'Long running request' }],
@@ -526,9 +663,58 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
     const errorEvent = events.find((e) => e.type === 'error');
     expect(errorEvent).toBeDefined();
     expect(errorEvent.failureClass).toBe('CANCELLED');
+
+    // Part B: adapter.cancel(requestId)
+    fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted', 'AbortError'));
+        });
+      });
+    });
+
+    setTimeout(() => {
+      void adapter.cancel('req-cancel-method');
+    }, 15);
+
+    const cancelMethodEvents: any[] = [];
+    for await (const ev of adapter.generate({
+      requestId: 'req-cancel-method',
+      modelId: NVIDIA_DEFAULT_MODEL_ID,
+      messages: [{ role: 'user', content: 'Cancel via adapter.cancel()' }],
+    })) {
+      cancelMethodEvents.push(ev);
+    }
+    expect(cancelMethodEvents.find((e) => e.type === 'error')?.failureClass).toBe('CANCELLED');
+
+    // Part C: Per-attempt timeout (TIMEOUT classification)
+    fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Timed out', 'AbortError'));
+        });
+      });
+    });
+
+    const timeoutAdapter = new NvidiaAdapter({
+      env: { NVIDIA_API_KEY: TEST_NVAPI_KEY },
+      fetch: fetchMock as unknown as typeof fetch,
+      timeoutMs: 20,
+      maxRetries: 0,
+    });
+
+    const timeoutEvents: any[] = [];
+    for await (const ev of timeoutAdapter.generate({
+      requestId: 'req-timeout-test',
+      modelId: NVIDIA_DEFAULT_MODEL_ID,
+      messages: [{ role: 'user', content: 'Stalled server' }],
+    })) {
+      timeoutEvents.push(ev);
+    }
+    expect(timeoutEvents.find((e) => e.type === 'error')?.failureClass).toBe('TIMEOUT');
   });
 
-  it('14. redacts NVIDIA_API_KEY and Bearer tokens from error events and logs', async () => {
+  it('15. redacts NVIDIA_API_KEY and Bearer tokens from error events and logs', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
         `Upstream gateway rejected Authorization: Bearer ${TEST_NVAPI_KEY} for key ${TEST_NVAPI_KEY}`,
@@ -539,6 +725,7 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
     const adapter = new NvidiaAdapter({
       env: { NVIDIA_API_KEY: TEST_NVAPI_KEY },
       fetch: fetchMock as unknown as typeof fetch,
+      maxRetries: 0,
     });
 
     const events: any[] = [];
@@ -555,4 +742,97 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
       'Key=nvapi-[REDACTED] Bearer [REDACTED]',
     );
   });
+
+  it('16. handles HTTP 5xx server error retry/recovery, missing or incomplete usage metadata, and structured responseFormat serialization', async () => {
+    const sentBodies: Array<Record<string, unknown>> = [];
+    let attemptCount = 0;
+
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      sentBodies.push(JSON.parse(String(init.body)));
+      attemptCount += 1;
+      if (attemptCount === 1) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: 'Upstream 503 Gateway Unavailable' }), {
+            status: 503,
+            headers: { 'retry-after': '0' },
+          }),
+        );
+      }
+      // Second attempt succeeds with incomplete usage metadata (no completion_tokens, then a stream with no usage chunk at all)
+      return Promise.resolve(
+        new Response(
+          makeSseStream([
+            { choices: [{ delta: { content: '{"status":"ok"}' }, finish_reason: 'stop' }] },
+            { usage: { prompt_tokens: 42 } },
+          ]),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      );
+    });
+
+    const adapter = new NvidiaAdapter({
+      env: { NVIDIA_API_KEY: TEST_NVAPI_KEY },
+      fetch: fetchMock as unknown as typeof fetch,
+      maxRetries: 2,
+    });
+
+    const events: any[] = [];
+    for await (const ev of adapter.generate({
+      modelId: NVIDIA_DEFAULT_MODEL_ID,
+      responseFormat: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'status_response',
+          strict: true,
+          schema: { type: 'object', properties: { status: { type: 'string' } }, required: ['status'] },
+        },
+      },
+      messages: [{ role: 'user', content: 'Return JSON status' }],
+    })) {
+      events.push(ev);
+    }
+
+    // Verify 503 retry occurred and recovered
+    expect(events.some((e) => e.type === 'retry' && e.status === 503)).toBe(true);
+    // Verify structured response_format was serialized
+    expect(sentBodies[0].response_format).toEqual({
+      type: 'json_schema',
+      json_schema: {
+        name: 'status_response',
+        strict: true,
+        schema: { type: 'object', properties: { status: { type: 'string' } }, required: ['status'] },
+      },
+    });
+    // Verify incomplete usage (only prompt_tokens: 42) normalizes safely without NaN
+    const completed = events.find((e) => e.type === 'completed');
+    expect(completed).toBeDefined();
+    expect(completed.content).toBe('{"status":"ok"}');
+    expect(completed.usage).toEqual(
+      expect.objectContaining({
+        inputTokens: 42,
+        outputTokens: 0,
+        totalTokens: 42,
+      }),
+    );
+
+    // Also verify stream with completely missing usage metadata defaults cleanly to { inputTokens: 0, outputTokens: 0 }
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(
+        new Response(
+          makeSseStream([{ choices: [{ delta: { content: 'No usage chunk' }, finish_reason: 'stop' }] }]),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        ),
+      ),
+    );
+    const noUsageEvents: any[] = [];
+    for await (const ev of adapter.generate({
+      modelId: NVIDIA_DEFAULT_MODEL_ID,
+      messages: [{ role: 'user', content: 'No usage stream' }],
+    })) {
+      noUsageEvents.push(ev);
+    }
+    const noUsageCompleted = noUsageEvents.find((e) => e.type === 'completed');
+    expect(noUsageCompleted?.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+  });
 });
+

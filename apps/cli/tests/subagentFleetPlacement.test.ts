@@ -3,15 +3,20 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  AccountRegistry,
   AgentRegistry,
   ComputerRegistry,
   ContextCompiler,
+  DEFAULT_POLICY,
   ExecutionEngine,
   ModelLifecycleService,
   ModelRegistry,
   PolicyEngine,
+  ResourceLedger,
+  ResourceRouter,
   RuntimeRegistry,
   Scheduler,
+  TokenBudgetManager,
 } from '@wazir/core';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
@@ -94,7 +99,7 @@ async function buildFleetEngine(projectRoot: string): Promise<RookEngine> {
   agents.register(createCodingAgent(), 'native');
 
   const policy = new PolicyEngine({ projectRoot, networkAllowed: false });
-  const scheduler = new Scheduler({ computers, runtimes, models, agents });
+  const scheduler = new Scheduler({ computers, runtimes, models, agents, policy });
 
   const fakeAdapter: RuntimeAdapter = {
     id: 'fake',
@@ -235,5 +240,149 @@ describe('dispatch_subagent — fleet-aware placement', () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain('Subagent fleet placement failed');
+  });
+
+  it('enforces provider-only routing guardrails on both inherited and fleet-placed subagents', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-fleet-sub-'));
+    const engine = await buildFleetEngine(projectRoot);
+    const parent = await engine.executions.create({
+      task: { id: 'task-parent', type: 'coding', input: 'parent', priority: 'normal', status: 'running', createdAt: new Date() } as any,
+      agentId: 'wazir-coding', computerId: 'local', runtimeId: 'fake', modelId: 'fake-model',
+    });
+
+    const ctx = await makeContext(engine, parent.execution.id);
+    ctx.parentExecution = { routingMode: 'NVIDIA', routingProvider: 'nvidia' };
+
+    // 1. Inherited non-NVIDIA model is blocked by Guardrail 3
+    const inherited = await runSubagent(engine, { description: 'inherited non-nvidia' }, ctx);
+    expect(inherited.ok).toBe(false);
+    expect(inherited.error).toMatch(/provider-only routing policy|instead of required provider 'nvidia'/i);
+
+    // 2. Fleet placement requesting vision cannot select non-NVIDIA vision-model when parentExecution enforces NVIDIA
+    const fleetPlaced = await runSubagent(
+      engine,
+      { description: 'analyze screenshot under provider-only', requirements: { vision: true } },
+      ctx,
+    );
+    expect(fleetPlaced.ok).toBe(false);
+    expect(fleetPlaced.error).toMatch(/Subagent fleet placement failed.*provider_only \(nvidia\)/i);
+  });
+
+  it('enforces hosted provider authorization and quota constraints during subagent fleet placement', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-fleet-sub-'));
+    const engine = await buildFleetEngine(projectRoot);
+
+    // Register a hosted NVIDIA vision model and remove vision from the remote local model
+    const remoteVision = engine.models.get('vision-model')!;
+    engine.models.register({ ...remoteVision, vision: false });
+
+    engine.runtimes.register({
+      id: 'nvidia',
+      type: 'nvidia',
+      name: 'NVIDIA Hosted',
+      version: 'v1',
+      runtimeKind: 'hosted',
+      capabilities: {
+        chat: true, streaming: true, toolCalling: true, structuredOutput: true,
+        vision: true, embeddings: false, reasoning: true, modelLoad: false,
+        modelUnload: false, modelDownload: false, statefulChat: false, mcp: false,
+      },
+    });
+    engine.runtimes.update('nvidia', { health: 'healthy' });
+    engine.models.register({
+      id: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
+      name: 'Nemotron VL',
+      provider: 'nvidia',
+      family: 'nemotron',
+      contextMax: 131072,
+      capabilities: ['generalChat', 'coding', 'vision'],
+      toolCalling: true,
+      structuredOutput: true,
+      vision: true,
+      audio: false,
+      embedding: false,
+      reasoning: true,
+      runtimeCompatibility: ['nvidia'],
+      local: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    engine.models.upsertInstance({
+      id: 'nvidia/nemotron-3.5-super-vl-120b-a12b::hosted::nvidia',
+      modelId: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
+      runtimeId: 'nvidia',
+      runtimeModelId: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
+      loaded: true,
+      state: 'READY',
+      health: 'healthy',
+      contextTokens: 131072,
+    });
+
+    const parent = await engine.executions.create({
+      task: { id: 'task-parent', type: 'coding', input: 'parent', priority: 'normal', status: 'running', createdAt: new Date() } as any,
+      agentId: 'wazir-coding', computerId: 'local', runtimeId: 'fake', modelId: 'fake-model',
+    });
+
+    // Part A: Hosted provider unauthorized (allowHostedProviders: false) -> rejects hosted vision placement
+    const ctxUnauth = await makeContext(engine, parent.execution.id);
+    ctxUnauth.parentPolicy = { allowHostedProviders: false };
+    const unauthResult = await runSubagent(
+      engine,
+      { description: 'analyze screenshot without hosted auth', requirements: { vision: true } },
+      ctxUnauth,
+    );
+    expect(unauthResult.ok).toBe(false);
+    expect(unauthResult.error).toMatch(/Subagent fleet placement failed.*allowHostedProviders/i);
+
+    // Part B: Hosted provider authorized, but quota is exhausted -> rejects placement due to quota constraint
+    const ledger = new ResourceLedger(':memory:');
+    const accounts = new AccountRegistry([
+      {
+        id: 'api:nvidia',
+        label: 'NVIDIA API',
+        provider: 'nvidia',
+        kind: 'api',
+        integration: 'api_key',
+        runtimeIds: ['nvidia'],
+        allowPaid: true,
+        limits: [{ window: 'day', unit: 'requests', limit: 1, source: 'configured', thresholds: { advisory: 1.01, conserve: 1.01, critical: 1.01 } }],
+      },
+    ]);
+    const budget = new TokenBudgetManager(ledger, accounts, { ...DEFAULT_POLICY, enforce: true, paidApiFallback: true });
+    // Consume the 1 allowed request in the daily quota
+    const adm = budget.admit({
+      requestId: 'req-exhaust-1',
+      accountId: 'api:nvidia',
+      modelId: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
+      workload: 'coding',
+      requests: 1,
+      estimatedInputTokens: 100,
+      estimatedOutputTokens: 100,
+    });
+    expect(adm.outcome).toBe('admitted');
+    budget.reconcile('req-exhaust-1', { inputTokens: 100, outputTokens: 100, source: 'provider-reported' });
+
+    const router = new ResourceRouter({
+      budget,
+      resolveAccount: (runtimeId) => (runtimeId === 'nvidia' ? 'api:nvidia' : undefined),
+    });
+    (engine as any).scheduler = new Scheduler({
+      computers: engine.computers,
+      runtimes: engine.runtimes,
+      models: engine.models,
+      agents: engine.agents,
+      policy: engine.policy,
+      resources: { router },
+    });
+
+    const ctxQuota = await makeContext(engine, parent.execution.id);
+    ctxQuota.parentPolicy = { allowHostedProviders: true };
+    const quotaResult = await runSubagent(
+      engine,
+      { description: 'analyze screenshot when quota exhausted', requirements: { vision: true } },
+      ctxQuota,
+    );
+    expect(quotaResult.ok).toBe(false);
+    expect(quotaResult.error).toMatch(/Subagent fleet placement failed.*resource:.*requests limit 1\/day.*would be exceeded/i);
   });
 });

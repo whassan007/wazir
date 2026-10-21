@@ -5,6 +5,13 @@ export type ModelSelectionStrategy =
   | 'loaded_preferred'
   | 'empirical_profile';
 
+export interface RoutingPolicyConfig {
+  mode: 'provider_only' | 'auto' | 'local_only' | 'hybrid';
+  provider?: string;
+  defaultModel?: string;
+  allowFallback?: boolean;
+}
+
 export interface ModelRoutingDecision {
   modelId: string;
   modelInstanceId: string;

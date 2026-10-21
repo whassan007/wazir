@@ -2,10 +2,11 @@ import { effectiveContextTokens } from '../types/model.js';
 import type { Computer } from '../types/computer.js';
 import type { ModelInstance, ModelRecord } from '../types/model.js';
 import { HOSTED_RUNTIME_TYPES } from '../types/runtime.js';
-import type { Task } from '../types/task.js';
+import type { RoutingMode, Task } from '../types/task.js';
 import type {
   ComputerRoutingDecision,
   ModelRoutingDecision,
+  RoutingPolicyConfig,
   SchedulerDecision,
 } from '../types/scheduler.js';
 import { SchedulingError } from '../types/scheduler.js';
@@ -54,6 +55,10 @@ export interface SchedulerDeps {
   /** Gates hosted-provider placement — see `scheduleComputer()`'s hosted branch. */
   policy: PolicyEngine;
   /**
+   * Optional engine-wide routing policy (e.g. `routing.mode = 'provider_only'`, `provider = 'nvidia'`).
+   */
+  routing?: RoutingPolicyConfig;
+  /**
    * Per-(model, task class) circuit breaker. An OPEN circuit removes the model from
    * capability routing for that task class; an explicit pin is still honored (no
    * silent substitution) but the open circuit is stated in the decision reasons.
@@ -100,6 +105,13 @@ interface ScoredPlacement {
   reasons: string[];
 }
 
+interface ResolvedRoutingConstraint {
+  mode: RoutingMode;
+  provider?: string;
+  defaultModel?: string;
+  allowFallback: boolean;
+}
+
 /**
  * Deterministic two-phase scheduler.
  *
@@ -108,6 +120,7 @@ interface ScoredPlacement {
  *
  * Rules enforced here:
  * - explicit model/computer pins are hard requirements (no silent fallback)
+ * - provider_only routing fails closed when no eligible model from that provider exists
  * - every decision carries human-readable reasons
  * - ties are broken lexicographically so the same input always yields the same output
  */
@@ -118,19 +131,85 @@ export class Scheduler {
     this.classifier = deps.classifier ?? new TaskCapabilityClassifier();
   }
 
+  public getRoutingPolicy(): RoutingPolicyConfig | undefined {
+    return this.deps.routing;
+  }
+
+  private resolveRoutingConstraint(task: Task): ResolvedRoutingConstraint {
+    const cfg = this.deps.routing;
+    let mode: RoutingMode = 'AUTO';
+    let provider: string | undefined;
+
+    if (cfg?.mode === 'provider_only') {
+      mode = 'PROVIDER_ONLY';
+      provider = cfg.provider?.toLowerCase();
+    } else if (cfg?.mode === 'local_only') {
+      mode = 'LOCAL_ONLY';
+    } else if (cfg?.mode === 'hybrid') {
+      mode = 'HYBRID';
+    }
+
+    const taskMode = task.execution?.routingMode ?? (task.execution?.executionMode === 'local' ? 'LOCAL_ONLY' : undefined);
+    if (taskMode) {
+      if (taskMode === 'NVIDIA') {
+        mode = 'PROVIDER_ONLY';
+        provider = 'nvidia';
+      } else if (taskMode === 'PROVIDER_ONLY') {
+        mode = 'PROVIDER_ONLY';
+        provider = (task.execution?.routingProvider ?? cfg?.provider ?? 'nvidia').toLowerCase();
+      } else {
+        // Note: if engine config enforces provider_only, task cannot weaken it to AUTO/HYBRID
+        if (cfg?.mode === 'provider_only' && taskMode !== 'LOCAL_ONLY') {
+          mode = 'PROVIDER_ONLY';
+          provider = cfg.provider?.toLowerCase() ?? 'nvidia';
+        } else {
+          mode = taskMode;
+        }
+      }
+    }
+
+    const defaultModel =
+      task.execution?.defaultModelId ??
+      cfg?.defaultModel ??
+      (mode === 'PROVIDER_ONLY' && provider === 'nvidia' ? 'nvidia/nemotron-3.5-super-vl-120b-a12b' : undefined);
+    const allowFallback =
+      task.execution?.allowFallback ??
+      cfg?.allowFallback ??
+      (mode === 'PROVIDER_ONLY' ? false : true);
+
+    return { mode, provider, defaultModel, allowFallback };
+  }
+
+  private isModelOfProvider(record: ModelRecord, provider: string): boolean {
+    const p = provider.toLowerCase();
+    if (record.provider?.toLowerCase() === p) return true;
+    if (Array.isArray(record.runtimeCompatibility) && record.runtimeCompatibility.some((r) => r.toLowerCase() === p)) {
+      return true;
+    }
+    return false;
+  }
+
   plan(input: ScheduleInput): SchedulerDecision {
     const { task } = input;
     const requiredContext = input.requiredContextTokens ?? task.requirements.minimumContext ?? 0;
+    const routing = this.resolveRoutingConstraint(task);
 
     let agentId: string | undefined;
     let agentReasons: string[] = [];
     if (this.deps.agents) {
       const resolution = this.deps.agents.resolveForTask(task);
+      const agentInfo = this.deps.agents.list().find((a) => a.descriptor.name === resolution.agent.descriptor.name);
+      if (routing.mode === 'PROVIDER_ONLY' && agentInfo?.source === 'external') {
+        throw new SchedulingError(
+          `External delegated agent '${resolution.agent.descriptor.name}' is not permitted under provider_only routing (${routing.provider ?? 'nvidia'}). External agents manage their own model selection and cannot bypass provider restrictions.`,
+          [`agent '${resolution.agent.descriptor.name}' is external and bypasses provider_only (${routing.provider ?? 'nvidia'}) routing`],
+        );
+      }
       agentId = resolution.agent.descriptor.name;
       agentReasons = resolution.reasons;
     }
 
-    const modelDecision = this.routeModel(task, requiredContext, input.excludeModelIds ?? []);
+    const modelDecision = this.routeModel(task, requiredContext, input.excludeModelIds ?? [], routing);
     const record = this.deps.models.getRequired(modelDecision.modelId);
     const instance = this.deps.models
       .instancesOf(record.id)
@@ -139,9 +218,16 @@ export class Scheduler {
       throw new SchedulingError(`Selected model instance '${modelDecision.modelInstanceId}' is no longer registered`);
     }
 
-    const computerDecision = this.scheduleComputer(task, record, requiredContext);
-    const placed = this.deps.models.instancesOf(record.id).find(i => i.runtimeId === computerDecision.runtimeId && i.computerId === computerDecision.computerId)!;
+    const computerDecision = this.scheduleComputer(task, record, requiredContext, routing);
+    const placed =
+      this.deps.models
+        .instancesOf(record.id)
+        .find((i) => i.runtimeId === computerDecision.runtimeId && i.computerId === computerDecision.computerId) ??
+      instance;
     modelDecision.modelInstanceId = placed.id;
+    const resourceType =
+      computerDecision.resourceType ??
+      (computerDecision.placementKind === 'hosted' ? 'HOSTED_API_INFERENCE' : 'LOCAL_GPU_INFERENCE');
 
     return {
       agentId,
@@ -150,9 +236,12 @@ export class Scheduler {
       readiness: placed.state === 'READY' ? 'READY_NOW' : 'LOADABLE',
       runtimeId: computerDecision.runtimeId,
       computerId: computerDecision.computerId,
-      resourceType: computerDecision.resourceType,
+      resourceType,
       modelDecision,
-      computerDecision,
+      computerDecision: {
+        ...computerDecision,
+        resourceType,
+      },
       reasons: [
         ...agentReasons,
         `model: ${modelDecision.reasons.join(' | ')}`,
@@ -164,7 +253,12 @@ export class Scheduler {
 
   // ==================== PHASE 1: MODEL ROUTING ====================
 
-  private routeModel(task: Task, requiredContext: number, excludeModelIds: readonly string[] = []): ModelRoutingDecision {
+  private routeModel(
+    task: Task,
+    requiredContext: number,
+    excludeModelIds: readonly string[] = [],
+    routing: ResolvedRoutingConstraint = this.resolveRoutingConstraint(task),
+  ): ModelRoutingDecision {
     const records = this.deps.models.list();
     if (records.length === 0) {
       throw new SchedulingError('No models are registered', ['model registry is empty']);
@@ -174,7 +268,7 @@ export class Scheduler {
     const requiredCapability = classification.primaryCategory;
 
     const scored: ScoredModel[] = records.map((record) => {
-      const result = this.scoreModel(task, record, requiredContext, classification);
+      const result = this.scoreModel(task, record, requiredContext, classification, routing);
       if (excludeModelIds.includes(record.id)) result.rejected.push('excluded: already tried by this execution');
       return result;
     });
@@ -207,36 +301,23 @@ export class Scheduler {
           continue;
         }
         const f = a.factors!;
+        const isDefaultPreferred = routing.defaultModel && s.record.id === routing.defaultModel;
         s.reasons.push(`resource (${workload}, account ${a.accountId}): score ${a.score} = quality ${f.quality.toFixed(2)}, reliability ${f.reliability.toFixed(2)}, capacity ${f.capacity.toFixed(2)}, cost ${f.cost.toFixed(2)}, latency ${f.latency.toFixed(2)}, quota risk ${f.quotaRisk.toFixed(2)}`);
-        s.score = Math.round(a.score! * 1000) / 10;
+        s.score = Math.round(a.score! * 1000) / 10 + (isDefaultPreferred ? 100 : 0);
       }
       const chosen = all.filter((a) => a.admissible).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
       router.record(task.id, workload, chosen, all);
     }
 
-    if (task.execution?.routingMode === 'NVIDIA') {
-      const preferred = scored.find((s) => s.record.id === 'nvidia/nemotron-3.5-super-vl-120b-a12b');
-      // Explicit provider routing must remain deterministic when the adaptive
-      // resource router ranks another catalog model higher. Preserve hard
-      // policy/capability rejections, but clear only resource-ranking vetoes.
-      if (preferred && preferred.rejected.every((reason) => reason.startsWith('resource:'))) {
-        preferred.rejected = [];
-        preferred.score = Number.MAX_SAFE_INTEGER;
-      }
-    }
-    const hasLocalEligible = scored.some((candidate) => candidate.record.local && candidate.rejected.length === 0);
-    if (hasLocalEligible && (task.execution?.routingMode === undefined || task.execution.routingMode === 'AUTO')) {
-      for (const candidate of scored) {
-        if (!candidate.record.local && candidate.rejected.length === 0 && !task.requirements?.vision && !task.requirements?.reasoning) {
-          candidate.score -= 100;
-        }
-      }
-    }
     const eligible = scored.filter((s) => s.rejected.length === 0);
     const rejected = scored.filter((s) => s.rejected.length > 0);
 
     const evaluatedCandidates: EvaluatedCandidate[] = [];
-    const policyConstraintsApplied: string[] = ['hosted-provider-gate', 'execution-policy-bounds'];
+    const policyConstraintsApplied: string[] = [
+      'hosted-provider-gate',
+      'execution-policy-bounds',
+      ...(routing.mode === 'PROVIDER_ONLY' ? [`provider-only:${routing.provider ?? 'nvidia'}`] : []),
+    ];
     const resourceConstraintsApplied: string[] = ['context-headroom-requirement', 'concurrency-limits', 'gpu-memory'];
 
     for (const s of scored) {
@@ -258,8 +339,8 @@ export class Scheduler {
           : undefined;
 
       const isEligible = s.rejected.length === 0;
-      const policyRejection = s.rejected.find((r) => r.includes('hosted') || r.includes('policy'));
-      const resourceRejection = s.rejected.find((r) => r.includes('context') || r.includes('instance') || r.includes('memory'));
+      const policyRejection = s.rejected.find((r) => r.includes('hosted') || r.includes('policy') || r.includes('provider_only') || r.includes('routingMode'));
+      const resourceRejection = s.rejected.find((r) => r.includes('context') || r.includes('instance') || r.includes('memory') || r.includes('resource:'));
 
       evaluatedCandidates.push({
         modelId: record.id,
@@ -323,18 +404,27 @@ export class Scheduler {
       };
     }
 
-    if (eligible.length === 0) {
+    // When allowFallback is false and defaultModel was already tried (excluded during escalation), fail closed!
+    if (!routing.allowFallback && routing.defaultModel && excludeModelIds.includes(routing.defaultModel)) {
       throw new SchedulingError(
-        'No model satisfies the task requirements. No silent fallback will be performed.',
+        `Fallback is disabled (allowFallback=false) after default model '${routing.defaultModel}' failed. No silent fallback will be performed.`,
+        [`allowFallback=false prevents switching away from '${routing.defaultModel}'`],
+      );
+    }
+
+    if (eligible.length === 0) {
+      const modeDesc =
+        routing.mode === 'PROVIDER_ONLY'
+          ? ` under provider_only (${routing.provider ?? 'nvidia'}) routing`
+          : '';
+      throw new SchedulingError(
+        `No model satisfies the task requirements${modeDesc}. No silent fallback will be performed.`,
         rejected.flatMap((s) => [`${s.record.id}: ${s.rejected.join('; ')}`]),
       );
     }
 
     eligible.sort((a, b) => b.score - a.score || a.record.id.localeCompare(b.record.id));
-    const preferredNvidia = task.execution?.routingMode === 'NVIDIA'
-      ? eligible.find((candidate) => candidate.record.id === 'nvidia/nemotron-3.5-super-vl-120b-a12b')
-      : undefined;
-    const best = preferredNvidia ?? eligible[0];
+    const best = eligible[0];
     const instance = this.selectInstance(best.record);
 
     const explanation: EmpiricalRoutingExplanation = {
@@ -497,11 +587,28 @@ export class Scheduler {
     };
   }
 
+  private effectivePolicyForHosted(task: Task, providerId: string, routing: ResolvedRoutingConstraint) {
+    const basePolicy = task.policy;
+    // If localOnly or sensitive/restricted is set, never override — PolicyEngine will rightly deny.
+    if (basePolicy?.localOnly || basePolicy?.dataClassification === 'sensitive' || basePolicy?.dataClassification === 'restricted') {
+      return basePolicy;
+    }
+    // If provider_only mode is explicitly configured for this provider, or the user explicitly pinned this hosted model/runtime:
+    const explicitlyRequestedHosted =
+      (routing.mode === 'PROVIDER_ONLY' && (!routing.provider || routing.provider === providerId.toLowerCase())) ||
+      task.execution?.targetRuntimeId === providerId;
+    if (explicitlyRequestedHosted && basePolicy?.allowHostedProviders === undefined) {
+      return { ...basePolicy, allowHostedProviders: true };
+    }
+    return basePolicy;
+  }
+
   private scoreModel(
     task: Task,
     record: ModelRecord,
     requiredContext: number,
     classification?: TaskCapabilityClassification,
+    routing: ResolvedRoutingConstraint = this.resolveRoutingConstraint(task),
   ): ScoredModel {
     const reasons: string[] = [];
     const rejected: string[] = [];
@@ -537,19 +644,28 @@ export class Scheduler {
       }
     }
 
+    if (task.policy?.allowedModels && !task.policy.allowedModels.includes(record.id)) {
+      rejected.push(`policy: model '${record.id}' is not in allowedModels`);
+    }
+
     // A model only servable by a hosted provider must clear the hosted
     // eligibility gate here in Phase 1, not just in Phase 2's computer
-    // placement. Otherwise an ineligible hosted-only model can still be
-    // *selected* as the best-scoring candidate (no fallback is performed —
-    // see this class's docstring) and only then fail in Phase 2 with a
-    // confusing "no computer can host" error, even when a perfectly good
-    // local model exists and would have been picked instead.
+    // placement.
     const isHostedOnly =
       Array.isArray(record.runtimeCompatibility) &&
       record.runtimeCompatibility.length > 0 &&
       record.runtimeCompatibility.every((t) => HOSTED_RUNTIME_TYPES.has(t));
     if (isHostedOnly) {
-      const gate = this.deps.policy.checkHostedEligibility(task.policy, record.runtimeCompatibility[0]);
+      const providerId = record.runtimeCompatibility[0];
+      const effectivePolicy =
+        task.execution?.targetModelId === record.id &&
+        !task.policy?.localOnly &&
+        task.policy?.dataClassification !== 'sensitive' &&
+        task.policy?.dataClassification !== 'restricted' &&
+        task.policy?.allowHostedProviders === undefined
+          ? { ...task.policy, allowHostedProviders: true }
+          : this.effectivePolicyForHosted(task, providerId, routing);
+      const gate = this.deps.policy.checkHostedEligibility(effectivePolicy, providerId);
       if (!gate.allowed) {
         rejected.push(gate.reason);
       } else {
@@ -557,19 +673,18 @@ export class Scheduler {
       }
     }
 
-    const routingMode = task.execution?.routingMode ?? (task.execution?.executionMode === 'local' ? 'LOCAL_ONLY' : undefined);
-    if (routingMode === 'LOCAL_ONLY' && (record.local === false || isHostedOnly)) {
+    if (routing.mode === 'LOCAL_ONLY' && (record.local === false || isHostedOnly)) {
       rejected.push(`routingMode=LOCAL_ONLY: hosted model '${record.id}' is not permitted`);
-    } else if (routingMode === 'NVIDIA') {
-      const isNvidiaModel =
-        record.provider === 'nvidia' ||
-        (Array.isArray(record.runtimeCompatibility) && record.runtimeCompatibility.includes('nvidia'));
-      if (!isNvidiaModel && task.execution?.targetModelId !== record.id) {
-        rejected.push(`routingMode=NVIDIA: model '${record.id}' is not an NVIDIA provider model`);
-      } else if (isNvidiaModel) {
-        reasons.push('routingMode=NVIDIA: preferred NVIDIA provider model');
+    } else if (routing.mode === 'PROVIDER_ONLY') {
+      const targetProvider = routing.provider ?? 'nvidia';
+      const matchesProvider = this.isModelOfProvider(record, targetProvider);
+      // Strictly reject any model not belonging to targetProvider — even if explicitly pinned!
+      if (!matchesProvider) {
+        rejected.push(`routing.mode=provider_only (${targetProvider}): model '${record.id}' (provider '${record.provider}') is not permitted`);
+      } else {
+        reasons.push(`routing.mode=provider_only (${targetProvider}): eligible ${targetProvider} model`);
       }
-    } else if (routingMode === 'HYBRID') {
+    } else if (routing.mode === 'HYBRID') {
       reasons.push(`routingMode=HYBRID: ${record.local === false ? 'hosted' : 'local'} model eligible`);
     }
 
@@ -594,11 +709,12 @@ export class Scheduler {
     let score = 0;
     score += requiredCapabilities.filter((c) => record.capabilities.includes(c)).length * 2;
     if (record.toolCalling) score += 1;
-    if (routingMode === 'NVIDIA' && (record.provider === 'nvidia' || (Array.isArray(record.runtimeCompatibility) && record.runtimeCompatibility.includes('nvidia')))) {
+    if (routing.mode === 'PROVIDER_ONLY' && this.isModelOfProvider(record, routing.provider ?? 'nvidia')) {
       score += 5;
-      // NVIDIA's configured default is the stable multimodal Nemotron catalog entry.
-      // Prefer it over secondary curated catalog models for explicit NVIDIA routing.
-      if (record.id === 'nvidia/nemotron-3.5-super-vl-120b-a12b') score += 100;
+    }
+    if (routing.defaultModel && record.id === routing.defaultModel) {
+      score += 50;
+      reasons.push(`configured defaultModel '${routing.defaultModel}' preferred`);
     }
 
     // Empirical Model Intelligence Profile integration
@@ -706,7 +822,12 @@ export class Scheduler {
 
   // ==================== PHASE 2: COMPUTER SCHEDULING ====================
 
-  private scheduleComputer(task: Task, record: ModelRecord, requiredContext = 0): ComputerRoutingDecision {
+  private scheduleComputer(
+    task: Task,
+    record: ModelRecord,
+    requiredContext = 0,
+    routing: ResolvedRoutingConstraint = this.resolveRoutingConstraint(task),
+  ): ComputerRoutingDecision {
     const instances = this.deps.models.instancesOf(record.id);
     const failures: string[] = [];
     const placements: ScoredPlacement[] = [];
@@ -716,12 +837,35 @@ export class Scheduler {
         failures.push(`${instance.id}: lifecycle operation in progress`); continue;
       }
       if (task.execution?.targetComputerId && instance.computerId !== task.execution.targetComputerId) continue;
+      if (task.execution?.targetRuntimeId && instance.runtimeId !== task.execution.targetRuntimeId) {
+        failures.push(`${instance.runtimeId}: does not match targetRuntimeId '${task.execution.targetRuntimeId}'`);
+        continue;
+      }
       const runtime = this.deps.runtimes.get(instance.runtimeId);
       const isHosted = runtime?.runtimeKind === 'hosted' || !instance.computerId;
 
+      if (routing.mode === 'PROVIDER_ONLY') {
+        const targetProvider = routing.provider ?? 'nvidia';
+        if (instance.runtimeId.toLowerCase() !== targetProvider && runtime?.type?.toLowerCase() !== targetProvider) {
+          failures.push(`${instance.runtimeId}: runtime is not '${targetProvider}' (required by provider_only routing)`);
+          continue;
+        }
+      }
+
       if (isHosted) {
-        const policy = task.policy;
-        const gate = this.deps.policy.checkHostedEligibility(policy, instance.runtimeId);
+        if (routing.mode === 'LOCAL_ONLY') {
+          failures.push(`${instance.runtimeId}: hosted runtime is not permitted when routingMode is LOCAL_ONLY`);
+          continue;
+        }
+        const effectivePolicy =
+          task.execution?.targetModelId === record.id &&
+          !task.policy?.localOnly &&
+          task.policy?.dataClassification !== 'sensitive' &&
+          task.policy?.dataClassification !== 'restricted' &&
+          task.policy?.allowHostedProviders === undefined
+            ? { ...task.policy, allowHostedProviders: true }
+            : this.effectivePolicyForHosted(task, instance.runtimeId, routing);
+        const gate = this.deps.policy.checkHostedEligibility(effectivePolicy, instance.runtimeId);
         if (!gate.allowed) {
           failures.push(gate.reason);
           continue;
@@ -744,11 +888,11 @@ export class Scheduler {
         }
         // allowedComputers/allowedRuntimes still apply — a hosted provider
         // simply has no computer identity to check against allowedComputers.
-        if (policy?.allowedComputers) {
+        if (effectivePolicy?.allowedComputers) {
           failures.push(`${instance.runtimeId}: hosted provider has no computer identity, cannot satisfy allowedComputers`);
           continue;
         }
-        if (policy?.allowedRuntimes && !policy.allowedRuntimes.includes(instance.runtimeId)) {
+        if (effectivePolicy?.allowedRuntimes && !effectivePolicy.allowedRuntimes.includes(instance.runtimeId)) {
           failures.push(`${instance.runtimeId}: not in allowedRuntimes`);
           continue;
         }

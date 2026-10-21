@@ -739,7 +739,18 @@ export class JobOrchestrator {
                       await this.jobManager.updateTaskStatus(job.id, taskId, 'failed');
                       supersededTaskIds.add(taskId);
 
-                      const added = await this.jobManager.addTasksToJob(job.id, replanResult.repairTasks, {
+                      const inheritedRepairTasks = replanResult.repairTasks.map((rt) => ({
+                        ...rt,
+                        task: {
+                          ...rt.task,
+                          policy: rt.task.policy ?? task.policy,
+                          execution: {
+                            ...task.execution,
+                            ...rt.task.execution,
+                          },
+                        },
+                      }));
+                      const added = await this.jobManager.addTasksToJob(job.id, inheritedRepairTasks, {
                         replacesTaskId: taskId,
                       });
 

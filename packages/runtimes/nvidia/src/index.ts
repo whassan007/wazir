@@ -24,6 +24,15 @@ import {
   readRateLimitHeaders,
   redactProviderSecrets,
 } from '@wazir/runtimes-interfaces';
+import {
+  classifyFailure,
+  classifyHttpFailure,
+  parseRetryAfterMs,
+  providerRetryDecision,
+  resolveRetryPolicy,
+  waitForRetry,
+  type RetryPolicy,
+} from '@wazir/shared';
 import type { SecretBroker } from '@wazir/secrets';
 
 export const NVIDIA_PROVIDER_ID = 'nvidia' as const;
@@ -125,7 +134,11 @@ export const CURATED_NVIDIA_MODELS: Record<string, NvidiaModelMetadata> = {
   },
 };
 
-export function inferNvidiaModelMetadata(modelId: string, remoteRecord?: Record<string, unknown>): NvidiaModelMetadata {
+export function inferNvidiaModelMetadata(
+  modelId: string,
+  remoteRecord?: Record<string, unknown>,
+  capabilityOverrides?: Partial<NvidiaModelMetadata>,
+): NvidiaModelMetadata {
   const curated = CURATED_NVIDIA_MODELS[modelId];
   if (curated) {
     const remoteCtx = typeof remoteRecord?.context_window === 'number'
@@ -136,12 +149,14 @@ export function inferNvidiaModelMetadata(modelId: string, remoteRecord?: Record<
     return {
       ...curated,
       ...(remoteCtx && remoteCtx > 0 ? { contextWindow: remoteCtx } : {}),
+      ...(capabilityOverrides ?? {}),
     };
   }
 
   const lower = modelId.toLowerCase();
   const isVision = lower.includes('-vl') || lower.includes('vision') || lower.includes('vlm') || lower.includes('neva') || lower.includes('vila') || lower.includes('cosmos');
   const isEmbedding = lower.includes('embed') || lower.includes('nv-embed') || lower.includes('bge-');
+  const isNonToolModel = isEmbedding || lower.includes('reward') || lower.includes('guard') || lower.includes('rerank') || lower.includes('parse');
   const isReasoning = lower.includes('nemotron') || lower.includes('deepseek-r1') || lower.includes('qwq') || lower.includes('reasoning') || lower.includes('thinking');
   const isNemotron = lower.includes('nemotron');
   const family = isNemotron
@@ -173,15 +188,15 @@ export function inferNvidiaModelMetadata(modelId: string, remoteRecord?: Record<
         ...(isVision ? ['vision'] : []),
       ];
 
-  return {
+  const base: NvidiaModelMetadata = {
     id: modelId,
     name: typeof remoteRecord?.name === 'string' ? remoteRecord.name : modelId,
     family,
     contextWindow: remoteCtx && remoteCtx > 0 ? remoteCtx : 131072,
     maxOutputTokens: 16384,
     capabilities,
-    toolCalling: !isEmbedding,
-    parallelToolCalls: !isEmbedding && (isNemotron || lower.includes('llama-3') || lower.includes('qwen')),
+    toolCalling: !isNonToolModel,
+    parallelToolCalls: !isNonToolModel && (isNemotron || lower.includes('llama-3') || lower.includes('qwen')),
     structuredOutput: !isEmbedding,
     vision: isVision,
     audio: false,
@@ -190,6 +205,7 @@ export function inferNvidiaModelMetadata(modelId: string, remoteRecord?: Record<
     supportsThinkingKwargs: isNemotron,
     supportsSeed: !isEmbedding,
   };
+  return capabilityOverrides ? { ...base, ...capabilityOverrides } : base;
 }
 
 function toDiscoveredModel(meta: NvidiaModelMetadata): DiscoveredModel {
@@ -223,10 +239,19 @@ export interface NvidiaAdapterOptions {
   defaultModel?: string;
   /** Explicitly configured models to include alongside discovered models or when enumeration is unavailable. */
   configuredModels?: string[];
+  /** Optional per-model capability overrides. */
+  modelCapabilities?: Record<string, Partial<NvidiaModelMetadata>>;
+  modelCapabilityOverrides?: Record<string, Partial<NvidiaModelMetadata>>;
   /** Default max output tokens when not specified on GenerationRequest (default: 16384). */
   defaultMaxOutputTokens?: number;
   /** Whether to query /models during listModels()/discoverModels() (default: true). */
   discoverModelsRemote?: boolean;
+  /** Default per-attempt request timeout in milliseconds when not overridden (default: 120_000). */
+  timeoutMs?: number;
+  /** Default max retries shorthand (merged into retryPolicy.maxRetries). */
+  maxRetries?: number;
+  /** Default bounded retry policy for transient connect/429/5xx errors (default maxRetries: 0 unless configured or supplied on request). */
+  retryPolicy?: Partial<RetryPolicy>;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -249,8 +274,11 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
   private readonly env: NodeJS.ProcessEnv;
   private readonly defaultModel: string;
   private readonly configuredModels: string[];
+  private readonly modelCapabilities: Record<string, Partial<NvidiaModelMetadata>>;
   private readonly defaultMaxOutputTokens: number;
   private readonly discoverModelsRemote: boolean;
+  private readonly timeoutMs?: number;
+  private readonly defaultRetryPolicy: Partial<RetryPolicy>;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly inflight = new Map<string, AbortController>();
   /** Remembers per-model unsupported request fields if the endpoint rejected them once. */
@@ -270,8 +298,17 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     this.configuredModels = Array.from(
       new Set([this.defaultModel, ...(options.configuredModels ?? [])].filter((m) => m.trim().length > 0)),
     );
+    this.modelCapabilities = {
+      ...(options.modelCapabilities ?? {}),
+      ...(options.modelCapabilityOverrides ?? {}),
+    };
     this.defaultMaxOutputTokens = options.defaultMaxOutputTokens ?? 16384;
     this.discoverModelsRemote = options.discoverModelsRemote ?? true;
+    this.timeoutMs = options.timeoutMs;
+    this.defaultRetryPolicy = {
+      maxRetries: options.maxRetries ?? options.retryPolicy?.maxRetries ?? 2,
+      ...(options.retryPolicy ?? {}),
+    };
     this.fetchImpl = options.fetch ?? globalThis.fetch;
   }
 
@@ -285,6 +322,10 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
 
   getConfiguredModels(): string[] {
     return [...this.configuredModels];
+  }
+
+  getModelMetadata(modelId: string, remoteRecord?: Record<string, unknown>): NvidiaModelMetadata {
+    return inferNvidiaModelMetadata(modelId, remoteRecord, this.modelCapabilities[modelId]);
   }
 
   private async readStored(): Promise<StoredCredential | null> {
@@ -423,12 +464,12 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     }
   }
 
-  private getConfiguredFallbackModels(): DiscoveredModel[] {
+  public getConfiguredFallbackModels(): DiscoveredModel[] {
     const ids = new Set<string>([this.defaultModel, ...this.configuredModels]);
     for (const curatedId of Object.keys(CURATED_NVIDIA_MODELS)) {
       ids.add(curatedId);
     }
-    return Array.from(ids).map((id) => toDiscoveredModel(inferNvidiaModelMetadata(id)));
+    return Array.from(ids).map((id) => toDiscoveredModel(this.getModelMetadata(id)));
   }
 
   async discoverModels(): Promise<DiscoveredModel[]> {
@@ -452,18 +493,15 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       const remoteEntries = Array.isArray(data.data) ? data.data : [];
       const byId = new Map<string, DiscoveredModel>();
 
-      // Ensure only configured/default models are always present first. The
-      // remote catalog is authoritative when reachable; registering every
-      // curated fallback here makes explicit default routing nondeterministic.
-      for (const fallback of this.getConfiguredFallbackModels().filter((model) =>
-        model.id === this.defaultModel || this.configuredModels.includes(model.id))) {
+      // Ensure configured & default models are always present first
+      for (const fallback of this.getConfiguredFallbackModels()) {
         byId.set(fallback.id, fallback);
       }
 
       for (const entry of remoteEntries) {
         const id = typeof entry?.id === 'string' ? entry.id.trim() : '';
         if (!id) continue;
-        const meta = inferNvidiaModelMetadata(id, entry);
+        const meta = this.getModelMetadata(id, entry);
         byId.set(id, toDiscoveredModel(meta));
       }
 
@@ -602,12 +640,6 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     meta: NvidiaModelMetadata,
     omittedFields: ReadonlySet<string>,
   ): Record<string, unknown> {
-    const advanced = request as GenerationRequest & {
-      seed?: number;
-      parallelToolCalls?: boolean;
-      enableThinking?: boolean;
-      extraBody?: Record<string, unknown>;
-    };
     const stream = request.stream ?? true;
     const maxTokens = request.maxTokens ?? Math.min(this.defaultMaxOutputTokens, meta.maxOutputTokens);
     const body: Record<string, unknown> = {
@@ -623,8 +655,8 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       body.stream_options = { include_usage: true };
     }
 
-    if (advanced.seed !== undefined && meta.supportsSeed && !omittedFields.has('seed')) {
-      body.seed = advanced.seed;
+    if (request.seed !== undefined && meta.supportsSeed && !omittedFields.has('seed')) {
+      body.seed = request.seed;
     }
 
     if (request.tools && request.tools.length > 0 && meta.toolCalling) {
@@ -639,7 +671,7 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       if (request.toolChoice !== undefined) {
         body.tool_choice = request.toolChoice;
       }
-      const allowParallel = advanced.parallelToolCalls ?? meta.parallelToolCalls;
+      const allowParallel = request.parallelToolCalls ?? meta.parallelToolCalls;
       if (allowParallel && meta.parallelToolCalls && !omittedFields.has('parallel_tool_calls')) {
         body.parallel_tool_calls = true;
       }
@@ -652,12 +684,12 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     }
 
     // Reasoning / thinking template kwargs for models that support it (e.g. Nemotron 3.5 Super VL)
-    const shouldSendThinking = (advanced.enableThinking ?? meta.supportsThinkingKwargs) && meta.supportsThinkingKwargs;
+    const shouldSendThinking = (request.enableThinking ?? meta.supportsThinkingKwargs) && meta.supportsThinkingKwargs;
     if (!omittedFields.has('extra_body')) {
-      if (shouldSendThinking || (advanced.extraBody && Object.keys(advanced.extraBody).length > 0)) {
+      if (shouldSendThinking || (request.extraBody && Object.keys(request.extraBody).length > 0)) {
         const mergedExtra: Record<string, unknown> = {
-          ...(shouldSendThinking ? { chat_template_kwargs: { enable_thinking: advanced.enableThinking ?? true } } : {}),
-          ...(advanced.extraBody ?? {}),
+          ...(shouldSendThinking ? { chat_template_kwargs: { enable_thinking: request.enableThinking ?? true } } : {}),
+          ...(request.extraBody ?? {}),
         };
         body.extra_body = mergedExtra;
       }
@@ -681,11 +713,22 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       return;
     }
 
-    const meta = inferNvidiaModelMetadata(request.modelId);
+    const meta = this.getModelMetadata(request.modelId);
     const messages = formatMessages(request);
 
+    // Reject embedding models on chat completions endpoint
+    if (meta.embedding) {
+      yield {
+        type: 'error',
+        requestId: control.requestId,
+        failureClass: 'NON_RECOVERABLE',
+        error: `Model '${request.modelId}' is an embedding model and does not support chat completions`,
+      };
+      return;
+    }
+
     // Check if request contains multimodal image inputs on a model that does not support vision
-    const hasImages = request.messages.some((m) => Array.isArray((m as ChatMessage & { images?: unknown[] }).images) && (m as ChatMessage & { images?: unknown[] }).images!.length > 0);
+    const hasImages = request.messages.some((m) => Array.isArray(m.images) && m.images.length > 0);
     if (hasImages && !meta.vision) {
       yield {
         type: 'error',
@@ -696,38 +739,55 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       return;
     }
 
+    // Check if request explicitly requires tool calling on a model that does not support tool calling
+    const requiresTools =
+      Array.isArray(request.tools) &&
+      request.tools.length > 0 &&
+      (request.toolChoice === 'required' ||
+        (typeof request.toolChoice === 'object' && request.toolChoice !== null) ||
+        !meta.toolCalling);
+    if (requiresTools && !meta.toolCalling) {
+      yield {
+        type: 'error',
+        requestId: control.requestId,
+        failureClass: 'NON_RECOVERABLE',
+        error: `Model '${request.modelId}' does not support native tool calling`,
+      };
+      return;
+    }
+
     const controller = control.controller;
     const requestId = control.requestId;
     this.inflight.set(requestId, controller);
 
     const stream = request.stream ?? true;
     const omittedFields = new Set<string>(this.unsupportedModelFields.get(request.modelId) ?? []);
+    const configuredRetryPolicy = resolveRetryPolicy({
+      maxRetries: 0,
+      initialDelayMs: 250,
+      maxDelayMs: 8000,
+      ...this.defaultRetryPolicy,
+      ...request.providerRetryPolicy,
+    });
+    const retryPolicy = {
+      ...configuredRetryPolicy,
+      maxRetries: control.capRetries(configuredRetryPolicy.maxRetries),
+    };
+    const maxAttempts = retryPolicy.maxRetries + 1;
 
     try {
-      yield control.startAttempt();
-      control.assertActive();
+      let res: Response | undefined;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        yield control.startAttempt();
+        control.assertActive();
 
-      let body = this.buildRequestBody(request, messages, meta, omittedFields);
-      let res = await this.fetchImpl(`${this.baseURL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${cred.apiKey}`,
-          Accept: stream ? 'text/event-stream' : 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+        const attemptSignal = this.timeoutMs
+          ? AbortSignal.any([controller.signal, AbortSignal.timeout(this.timeoutMs)])
+          : controller.signal;
 
-      // Graceful parameter fallback if an OpenAI-compatible model endpoint rejects optional parameters
-      if (res.status === 400) {
-        const errBody = await res.text().catch(() => '');
-        const unsupportedField = detectUnsupportedParameter(errBody, body);
-        if (unsupportedField && !omittedFields.has(unsupportedField)) {
-          omittedFields.add(unsupportedField);
-          this.unsupportedModelFields.set(request.modelId, new Set(omittedFields));
-          body = this.buildRequestBody(request, messages, meta, omittedFields);
-          res = await this.fetchImpl(`${this.baseURL}/chat/completions`, {
+        let body = this.buildRequestBody(request, messages, meta, omittedFields);
+        try {
+          let candidate = await this.fetchImpl(`${this.baseURL}/chat/completions`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -735,19 +795,110 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
               Accept: stream ? 'text/event-stream' : 'application/json',
             },
             body: JSON.stringify(body),
-            signal: controller.signal,
+            signal: attemptSignal,
           });
-        } else {
-          yield httpFailureEvent('NVIDIA', res, redactProviderSecrets(errBody, [cred.apiKey]), requestId);
+
+          // Graceful parameter fallback if an OpenAI-compatible model endpoint rejects optional parameters
+          if (candidate.status === 400) {
+            const errBody = await candidate.text().catch(() => '');
+            const unsupportedField = detectUnsupportedParameter(errBody, body);
+            if (unsupportedField && !omittedFields.has(unsupportedField)) {
+              omittedFields.add(unsupportedField);
+              this.unsupportedModelFields.set(request.modelId, new Set(omittedFields));
+              body = this.buildRequestBody(request, messages, meta, omittedFields);
+              candidate = await this.fetchImpl(`${this.baseURL}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${cred.apiKey}`,
+                  Accept: stream ? 'text/event-stream' : 'application/json',
+                },
+                body: JSON.stringify(body),
+                signal: attemptSignal,
+              });
+            } else {
+              yield httpFailureEvent('NVIDIA', candidate, redactProviderSecrets(errBody, [cred.apiKey]), requestId);
+              return;
+            }
+          }
+
+          if (!candidate.ok) {
+            const errBody = await candidate.text().catch(() => '');
+            const safeErrBody = redactProviderSecrets(errBody, [cred.apiKey]);
+            const failureClass = classifyHttpFailure(candidate.status, safeErrBody);
+            const decision = providerRetryDecision(failureClass, attempt, retryPolicy);
+            if (decision.retry) {
+              const retryAfterMs = parseRetryAfterMs(candidate.headers.get('retry-after'));
+              const delayMs = retryAfterMs !== undefined
+                ? Math.min(retryPolicy.maxDelayMs, Math.max(decision.delayMs, retryAfterMs))
+                : decision.delayMs;
+              yield {
+                type: 'retry',
+                requestId,
+                status: candidate.status,
+                failureClass,
+                retryAfterMs,
+                rateLimit: readRateLimitHeaders(candidate.headers),
+                retryAttempt: decision.attempt,
+                retryDelayMs: delayMs,
+                error: `NVIDIA API error: HTTP ${candidate.status} ${safeErrBody.slice(0, 200)}`,
+              };
+              await waitForRetry(delayMs, controller.signal);
+              continue;
+            }
+            const failEv = httpFailureEvent('NVIDIA', candidate, safeErrBody, requestId);
+            yield {
+              ...failEv,
+              ...(attempt > 1 ? { retryExhausted: decision.reason === 'retry_budget_exhausted' } : {}),
+            };
+            return;
+          }
+
+          res = candidate;
+          break;
+        } catch (err) {
+          if (controller.signal.aborted) {
+            yield {
+              type: 'error',
+              requestId,
+              failureClass: 'CANCELLED',
+              error: 'cancelled',
+            };
+            return;
+          }
+          const isTimeout =
+            (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) ||
+            (attemptSignal.aborted && !controller.signal.aborted);
+          const failureClass = isTimeout ? 'TIMEOUT' : classifyFailure(err);
+          const safeErr = redactProviderSecrets(
+            err instanceof Error ? err.message : String(err),
+            [cred.apiKey],
+          );
+          const decision = providerRetryDecision(failureClass, attempt, retryPolicy);
+          if (decision.retry) {
+            yield {
+              type: 'retry',
+              requestId,
+              failureClass,
+              retryAttempt: decision.attempt,
+              retryDelayMs: decision.delayMs,
+              error: safeErr,
+            };
+            await waitForRetry(decision.delayMs, controller.signal);
+            continue;
+          }
+          yield {
+            type: 'error',
+            requestId,
+            failureClass,
+            ...(attempt > 1 ? { retryExhausted: decision.reason === 'retry_budget_exhausted' } : {}),
+            error: safeErr,
+          };
           return;
         }
       }
 
-      if (!res.ok) {
-        const errBody = await res.text().catch(() => '');
-        yield httpFailureEvent('NVIDIA', res, redactProviderSecrets(errBody, [cred.apiKey]), requestId);
-        return;
-      }
+      if (!res) return;
 
       const rateLimit = readRateLimitHeaders(res.headers);
 
