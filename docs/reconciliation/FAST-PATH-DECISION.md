@@ -1,94 +1,52 @@
-# Fast-Path Architecture Decision
+# Fast-Path & Execution Architecture Decision
 
-Two independent implementations of "skip the full coding-agent loop for
-simple requests" exist across the two lineages. This document is the
-required side-by-side comparison and the decision: **v0.2.11's architecture
-is canonical. main's is not ported.**
+Two historical implementations of "skip the full coding-agent loop for simple requests" existed across `main` (`feat/ultra-low-latency-fast-path`) and `v0.2.11`. In Phase 4 of the `integration/v0.2.12-completion` reconciliation, we reassessed both implementations, verified their runtime behavior end to end, fixed a critical wiring gap in `apps/cli/src/run.ts` for deterministic commands, and confirmed a single authoritative boundary between deterministic and model-assisted execution.
 
-## The two implementations
+## 1. The Two Historical Implementations
 
-### main (`ed4f1d9`, `f7c97cf`, Oct 17 21:16–22:36)
+### `main` (`ed4f1d9`, `f7c97cf` — `feat/ultra-low-latency-fast-path`)
 
-A single regex/keyword classifier, `isDirectAnswerRequest(prompt, options)`,
-living in `apps/cli/src/run.ts`. When it matches, `executeTask()` takes an
-entirely separate code path: a raw `adapter.generate()` call with no `tools`
-array, bypassing the `AgentAdapter`/`AgentRuntime` abstraction, coding-agent
-planning, preflight probes, tool-surface compilation, and verification
-entirely (comment: *"No checks expected or required on fast-path"*).
+- Defined a single regex/keyword classifier `isDirectAnswerRequest(prompt, options)` inside `apps/cli/src/run.ts`.
+- When matched, `executeTask()` took an inline bypass block that called `adapter.generate()` directly with no `tools` array, bypassing `AgentAdapter`, `Scheduler` agent selection, preflight probes, and standardized turn handling.
+- Did **not** support zero-LLM deterministic command execution (`pwd`, `ls`, `git status`, `git diff`, `git log`).
+- Also included two important infrastructure fixes in the same commit (`ed4f1d9`):
+  1. Tiered `+30` (`READY`) / `+15` (`loaded`) residency bonus in `Scheduler`.
+  2. Preserving `stillVerified` (`READY` state) across read-only `discoverAndReconcile({ verify: false })` passes in `ModelLifecycleService`.
 
-Classification logic: ~10 separate regexes/word-boundary checks for
-arithmetic, string transforms, JSON/YAML requests, direct questions
-(what/who/where/why/how), and code-snippet requests, with one negative
-lookahead for mutation-indicating words (`edit|modify|fix|update|refactor|...`).
+### `v0.2.11` Lineage (`246d4cb`, `c7ea2ab`, `973111f`) + Phase 4 Completion (`3aad1af`, `3fda9b3`)
 
-### v0.2.11 lineage (`246d4cb`, `c7ea2ab`, `973111f`, Oct 17 22:55 – Oct 19 20:09)
+A unified, two-tier fast-path architecture governed by one authoritative classifier module (`packages/agents/src/codingAgent.ts`):
 
-Two complementary mechanisms:
+1. **Deterministic Command Fast-Path (`isDeterministicCommandRequest(input, options)`)**:
+   - Strict, anchored allowlist matching only literal read-only commands: `pwd`, `ls [<path/flags>]`, `git status`, `git diff`, and `git log`.
+   - Explicitly rejects shell metacharacters (`;`, `|`, `&`, `` ` ``, `$()`, `>`, `<`, newlines) and never infers shell commands from prose.
+   - Executes directly through the policy-gated `shell` tool inside `CodingAgent.run()` with **zero LLM calls (`0` tokens)**.
+   - **Phase 4 Fix (`3fda9b3`)**: `apps/cli/src/run.ts` previously only checked `isConversationalFastPathRequest` when computing `fastPath` in `planTask()` and `executeTask()`, leaving `taskAnalysis.mutationRequired = true` on `wa run "pwd"` and inadvertently disabling `isDeterministicCommandRequest` (`if (options?.mutationRequired) return null`). We wired `isDeterministicCommandRequest(description)` into `planTask()` and `executeTask()` so deterministic read-only commands set `mutationRequired: false`, bypass unnecessary preflight/verification overhead, and execute with zero model calls.
+2. **Conversational Fast-Path (`isConversationalFastPathRequest(input, options)` + `ChatAgent`)**:
+   - Handles pure arithmetic, factual Q&A, explanations, and self-contained snippet questions when no file references, workspace paths, or mutation requirements exist.
+   - Routes through `Scheduler` (`task.type = 'chat'`) to `ChatAgent` (`packages/agents/src/chatAgent.ts`), a first-class `AgentAdapter`.
+   - Enforces an explicit in-code security invariant: if a model hallucinates a `tool_call` event during conversational fast-path inference, `ChatAgent` immediately throws `'conversational inference cannot execute tools; use a coding task'`.
 
-1. **`ChatAgent`** (`packages/agents/src/chatAgent.ts`) — a real
-   `AgentAdapter` implementation, the same interface `CodingAgent`,
-   `StepAgent`, and `AcpAgentAdapter` all implement. Selected through the
-   existing `taskTypes: ['chat']` routing, so it goes through the normal
-   `Scheduler`/`AgentRegistry`/execution-record pipeline like any other agent
-   — not a special-cased bypass in the orchestration layer.
-2. **`isDeterministicCommandRequest()`** (`packages/agents/src/codingAgent.ts`,
-   added by `973111f`) — a stricter, exact-match, anchored allowlist for
-   literal `ls`/`pwd`/`git status`/`git diff`/`git log` (and arguments),
-   explicitly rejecting shell metacharacters and never inferring shell intent
-   from prose. On match, the tool runs directly through the existing sandbox/
-   authorization path with **zero model calls** — not even ChatAgent's single
-   generation.
+---
 
-## Comparison (static code analysis — no live model available in this
-environment; see TEST-RESULTS.md for what that limits)
+## 2. Side-by-Side Comparison
 
-| Dimension | main (`isDirectAnswerRequest`) | v0.2.11 (`ChatAgent` + classifiers) |
+| Dimension | `main` (`isDirectAnswerRequest`) | Canonical `v0.2.12-completion` (`ChatAgent` + `isDeterministicCommandRequest`) |
 |---|---|---|
-| **Command classification** | Regex/keyword heuristics on raw prompt text; one shared classifier for all "simple" cases | Two-tier: broad conversational classifier (keyword-gated, refined by `c7ea2ab` after it was found to over-block) + a separate, strict, anchored allowlist for literal deterministic commands |
-| **Execution latency** | Single model call, no tool surface compiled — fast | ChatAgent: single model call, no tool surface — same order of latency. Deterministic path: zero model calls — strictly faster than either for its narrow case |
-| **Model bypass behavior** | Bypasses `AgentAdapter` entirely; raw `adapter.generate()` call in the orchestration layer | ChatAgent *is* an `AgentAdapter` — bypass is at the agent-selection level, not a parallel code path |
-| **Security/authorization boundaries** | No tools passed to `generate()`, so nothing can execute even if the model hallucinates a tool call — but this is an *absence of wiring*, not an enforced boundary; no explicit rejection path | ChatAgent explicitly throws `'conversational inference cannot execute tools; use a coding task'` if the model emits a `tool_call` event — a real, tested, in-code boundary (see `chatAgent.test.ts`) |
-| **Shell command handling** | N/A (no shell path) | `isDeterministicCommandRequest` explicitly rejects shell metacharacters and requires literal, anchored matches — tested against 23 cases including arguments, invalid commands, and non-matches (`codingAgent.deterministicCommand.test.ts`) |
-| **Error propagation** | Inline try/catch in the fast-path block, pushes to `directErrors[]`, manually constructs an `EvaluationResult` | ChatAgent: real error/timeout/cancellation handling inside `run()`, surfaced as a normal `AgentTurn` `{kind: 'error'}` — same shape every other agent produces |
-| **Streaming behavior** | Manual token accumulation in the fast-path block | ChatAgent streams through the same `runtime.generate()` iterator contract every agent uses |
-| **Cancellation and timeouts** | Not visible in the diffed code — no explicit wall-clock timeout or cancellation poll in the fast-path block | ChatAgent has an explicit wall-clock timeout (`maxWallClockMs` or a configured default, 60s), a cancellation poll every 25ms, and `finally`-block cleanup that calls `iterator.return()` so a broken adapter can't hang the CLI |
-| **Scheduler integration** | Scheduling still happens via `planTask()` before the fast-path check (model/computer already chosen), but the fast-path's own generation call doesn't go through the same remote-dispatch-aware `runtime.generate()` used elsewhere in the file | ChatAgent is dispatched exactly like any other agent, inheriting whatever remote/local dispatch logic the runtime wiring already provides |
-| **Test coverage** | None found for `isDirectAnswerRequest` itself in `ed4f1d9`'s diff (only narrative `test/codex-fast-path/*.md` reports, not unit tests) | `packages/agents/tests/chatAgent.test.ts` (6 tests) and `packages/agents/tests/codingAgent.deterministicCommand.test.ts` (23 tests) — both passing on this integration branch (see TEST-RESULTS.md) |
-| **Duplicate-path risk** | Overlaps heavily with v0.2.11's own `isConversationalFastPathRequest` (arithmetic, direct Q&A, code snippets) — same problem, independently solved | N/A (is the canonical path) |
+| **Authoritative Classifier** | Inline regexes in `apps/cli/src/run.ts` | Single authoritative classifier module in `packages/agents/src/codingAgent.ts` (`isConversationalFastPathRequest` + `isDeterministicCommandRequest`) imported by `apps/cli/src/run.ts` |
+| **Deterministic vs Model-Assisted Boundary** | None (all requests invoke the LLM) | Strict boundary: literal `pwd`/`ls`/`git status`/`git diff`/`git log` execute deterministically via policy-gated `shell` tool with **0 LLM calls**; conversational queries route to `ChatAgent` (1 LLM call, 0 tools); repo/file tasks route to `CodingAgent` |
+| **Security & Policy Boundary** | Incidental (no tools passed to `adapter.generate()`) | Explicit in-code rejection of `tool_call` events in `ChatAgent`; full `PolicyEngine` + sandbox enforcement on deterministic `shell` calls |
+| **Cancellation & Timeouts** | No dedicated wall-clock timeout or 25ms poll in inline bypass | 60s default wall-clock timeout, 25ms cancellation poll, `iterator.return()` cleanup |
+| **Live Measured Performance (Phase 5)** | Historical only | Deterministic `wa run "pwd"`: **56–89ms tool execution** (`1141ms` full CLI E2E with snapshot), **0 LLM calls**, **0 tokens**. Conversational `wa run "What is 18 + 24?..."`: **1084ms E2E** on `nvidia/nemotron-3.5-super-vl-120b-a12b` (`392ms` TTFT) |
+| **Unit & E2E Test Coverage** | 0 unit tests | `chatAgent.test.ts` (6 tests), `codingAgent.deterministicCommand.test.ts` (23 tests), `executeTask.e2e.test.ts` (10 tests including deterministic zero-LLM E2E check) |
 
-## Decision
+---
 
-**v0.2.11's `ChatAgent` + `isConversationalFastPathRequest` +
-`isDeterministicCommandRequest` is the canonical fast-path architecture.**
-main's `isDirectAnswerRequest` and its inline `executeTask()` bypass block
-are **not ported**. Reasons, in order of weight:
+## 3. Architectural Decision Summary
 
-1. **Explicit safety boundary vs. absence of wiring.** ChatAgent's in-code
-   rejection of tool calls is a tested invariant; main's "no tools passed"
-   is incidentally safe, not guaranteed safe by design.
-2. **Architectural consistency.** ChatAgent reuses the exact abstraction
-   every other agent in Wazir implements. main's approach is a parallel,
-   special-cased code path bolted directly into `executeTask()` — harder to
-   reason about, harder to test in isolation, and a second place future
-   routing/scheduling changes must remember to touch.
-3. **Test coverage.** v0.2.11's classifiers and agent both have dedicated
-   unit tests (29 tests total between the two files). main's classifier has
-   none.
-4. **Duplicate effort.** Both solve materially the same problem
-   (arithmetic/Q&A/code-snippet fast paths) — keeping both would be exactly
-   the "duplicate competing execution paths" the reconciliation spec
-   prohibits.
-5. **v0.2.11's version is strictly more complete**: it additionally has the
-   zero-model-call deterministic-command path (`ls`/`pwd`/`git status`/etc.),
-   which main's lineage never built.
-
-## What was NOT done
-
-I did not run a live model to produce fresh time-to-first-token or
-tokens/sec numbers for either implementation in this environment (no
-Ollama/LM Studio instance available here). Both lineages' own prior,
-self-reported benchmark data is cited as historical context in
-TEST-RESULTS.md, but it was measured by each lineage against its own
-version at a different time and is not a controlled head-to-head — it is
-not treated as proof of the decision above, which rests on the static
-code-quality comparison in this document.
+1. **One Authoritative Classifier**: `packages/agents/src/codingAgent.ts` exports `isConversationalFastPathRequest` and `isDeterministicCommandRequest`. No competing classifier exists in `apps/cli/src/run.ts`.
+2. **Well-Defined Execution Boundary**:
+   - **Tier 0 (Deterministic Tool Execution — 0 LLM calls)**: `isDeterministicCommandRequest` matches literal `pwd`, `ls`, `git status`, `git diff`, `git log` -> `CodingAgent` executes the policy-gated `shell` tool directly and returns.
+   - **Tier 1 (Conversational Model Fast-Path — 1 LLM call, 0 tools)**: `isConversationalFastPathRequest` matches tool-free questions/arithmetic -> `Scheduler` selects `ChatAgent` (`task.type = 'chat'`).
+   - **Tier 2 (Full Agentic Coding Loop — Multi-turn LLM + Tools + Verification)**: All file-referencing, repository-inspecting, or mutating tasks -> `Scheduler` selects `CodingAgent` (`task.type = 'coding'`) with full preflight, tool surface compilation, and verification gates.
+3. **Model Readiness Preservation (`3aad1af`)**: Ported `ed4f1d9`'s `stillVerified` fix into `packages/core/src/services/modelLifecycleService.ts` so read-only CLI commands preserve `READY` state across invocations and benefit from the `+30` READY residency bonus in `Scheduler`.

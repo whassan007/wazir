@@ -1,8 +1,14 @@
 # Branch Analysis
 
-Verified with git, not assumed, on 2026-10-20 against `origin` as fetched that day.
+Verified with git on 2026-10-20 against local refs and `origin`.
 
-## Ancestry facts
+## Phase 1 Checkpoint Preservation
+
+- **Initial reconciliation checkpoint branch:** `integration/v0.2.11-reconciliation`
+- **Verified checkpoint commit SHA:** `12a6ac84319ccf67ab1c37a6c5b3186a4990c2e6` (`docs(reconciliation): add branch analysis, feature matrix, fast-path decision, test results, and release readiness`)
+- **Working completion branch:** `integration/v0.2.12-completion` (cut directly from `12a6ac84319ccf67ab1c37a6c5b3186a4990c2e6`, leaving `integration/v0.2.11-reconciliation` untouched).
+
+## Ancestry & Branch Topology Facts
 
 ```
 git cat-file -t v0.2.11            -> tag
@@ -11,11 +17,7 @@ git log -1 --format='%H %s' v0.2.11^{commit}
   -> 56ad6ee903c2972d635a84d200fde1fbf64e4205 chore(release): prepare v0.2.11
 ```
 
-`v0.2.11` is a **tag**, not a branch. It points at commit `56ad6ee`, whose
-`package.json` reports version `0.2.11`. It was cut from `release/v0.2.10`'s
-lineage, itself the tip of a chain of release branches going back through
-v0.2.9, v0.2.7, v0.2.3, ... to v0.1.61 — each with its own
-`chore(release): prepare vX.Y.Z` commit.
+`v0.2.11` is a **tag** pointing at commit `56ad6ee` (`package.json` version `0.2.11`), descending from the `release/v0.2.10` release train.
 
 ```
 git merge-base main v0.2.11   -> 8598c44e0c9bf8aa173059ca1b4a51539b45b50e
@@ -24,101 +26,57 @@ git log --oneline main..v0.2.11 | wc -l   -> 16
 git log --oneline v0.2.11..main | wc -l   -> 10
 ```
 
-`main` and `v0.2.11` **diverged** from common ancestor `8598c44`. Neither is
-an ancestor of the other. `main`'s own `package.json` still reports `0.2.7`
-— it was never advanced through the v0.2.8–v0.2.11 release train.
+`main` and `v0.2.11` diverged from common ancestor `8598c44e0c9bf8aa173059ca1b4a51539b45b50e`.
 
 ```
 git merge-base test/real-world-acceptance main
-  -> 7133f160a6bd1b92ff956657431de34c4c7bffa6   (= main's own commit 7133f16)
+  -> 7133f160a6bd1b92ff956657431de34c4c7bffa6   (= main's commit 7133f16)
 git log --oneline main..test/real-world-acceptance
   -> ec863ef feat(agents): fleet-aware subagent placement, ...
   -> a9e67b5 fix(execution): scope verification, preserve model readiness, ...
 ```
 
-`test/real-world-acceptance` branched from a point on `main`'s own history
-(commit `7133f16`), then added two commits of its own. It is a sub-lineage
-of `main`, not an independent third lineage in the strict graph sense — but
-its one feature commit (`ec863ef`) was written against the state `main` was
-in *then*, which already included `main`'s NVIDIA/routing work, so when
-applied against `v0.2.11` (which has independently-evolved, differently-shaped
-routing/NVIDIA code) it does not apply cleanly. See FEATURE-MATRIX.md.
+## Deep Inspection of Specialized Feature Branches (Phases 2–4)
 
-## Commits unique to `main` (10, main..v0.2.11 has none of these)
+In Phase 2–4, we inspected the specialized branches flagged during the initial checkpoint:
 
-| Commit | Subject | Subsystem |
+| Branch Ref | Tip Commit | Relationship to `main` & `v0.2.11` | Findings |
+|---|---|---|---|
+| `origin/feat/nvidia-native-provider` | `12f82735ec617758101c9fd7de328ef141ef106e` | Exact ancestor of `main` (merged via `0668ca1`) | Delivers policy-governed NVIDIA provider (`HOSTED_API_INFERENCE` vs `LOCAL_GPU_INFERENCE`, `routing.mode = 'provider_only'`, `NVIDIA_CURATED_MODELS`, parameter-strip retry on HTTP 400, secret redaction, `wa providers` CLI, 15 adapter + 10 system tests). |
+| `origin/feat/nvidia-execution-provider` | `5d79045a496f45520c64053a6c1146b775b3e33d` | Older branch off `v0.2.2` (`49fd90d`), merged into `v0.2.11` via `73355ff` | Earlier iteration of `@wazir/runtimes-nvidia`; already present on `v0.2.11`. Contained programmatic `NvidiaAdapter` constructor options (`apiKey`, `env`, `fetchImpl`, `retryBaseDelayMs`) and `resolveHostedProviderApiKey`/`inspectHostedProviderStatus` helpers that were retained during our Phase 2 unification. |
+| `origin/feat/mission-control-tui` | `1c95e400ef28b03152a560f0d1ab6abfc262b0b8` | Exact commit on `main` (`1c95e40`) | Delivers the 3-pane adaptive Mission Control cockpit (`narrow`/`standard`/`wide`), `buildMissionControlSnapshot`, modal overlays (`CommandPalette`, `Help`, `BlockInspector`, `RawPayload`), and approval queue diff previews. Reconciled in Phase 3 with `v0.2.11`'s `conversationRenderer.ts` and `eventSummarizer.ts`. |
+| `origin/feat/ultra-low-latency-fast-path` | `ed4f1d96ff6a2df2943106205cc20996dc8a735d` | Exact commit on `main` (`ed4f1d9`) | Inline `isDirectAnswerRequest` bypass in `run.ts` (superseded by `v0.2.11`'s `ChatAgent` + `isConversationalFastPathRequest` + `isDeterministicCommandRequest`), plus the `stillVerified` (`READY` state) preservation fix in `modelLifecycleService.ts` (ported in Phase 4). |
+
+## Commits Unique to `main` (10 commits)
+
+| Commit | Subject | Status on `integration/v0.2.12-completion` |
 |---|---|---|
-| f7c97cf | feat(fast-path): ultra-low-latency direct-answer execution and resident model prioritization | run.ts, resources/router.ts |
-| ed4f1d9 | feat(fast-path): implement ultra-low-latency direct-answer execution path | run.ts, LMStudio healthCheck, scheduler scoring, handoff.ts |
-| 7133f16 | test(e2e): establish production-realistic Wazir acceptance testing | tests/live/* |
-| be64805 | chore(release): prepare v0.2.7 | version bump |
-| 0668ca1 | Merge commit '12f8273' into release/v0.2.7 | merge |
-| 48f48e6 | fix(api): fence stale lease results and deduplicate retries | apps/api/src/server.ts |
-| 1c95e40 | feat(tui): deliver modern Wazir mission control interface | apps/cli/src/tui/missionControl.ts (+294) |
-| 12f8273 | feat(nvidia): integrate first-class policy-governed NVIDIA hosted provider | hostedProviders.ts, commands.ts, run.ts |
-| 2a61e59 | feat(resources): harden shared quota routing and accounting | resources/{budgetManager,ledger,router,types}.ts |
-| 607ba43 | feat(nvidia): add interactive Nemotron streaming utility | nemo.py |
+| `f7c97cf` | `feat(fast-path): ultra-low-latency direct-answer execution and resident model prioritization` | Replaced by canonical `ChatAgent` + `isDeterministicCommandRequest` + READY scheduler scoring |
+| `ed4f1d9` | `feat(fast-path): implement ultra-low-latency direct-answer execution path` | Scheduler READY scoring + `modelLifecycleService` `stillVerified` READY state preservation + `handoff.ts` wiring merged; inline fast-path replaced |
+| `7133f16` | `test(e2e): establish production-realistic Wazir acceptance testing` | Merged (`353c1c9` + `ca78171`) |
+| `be64805` | `chore(release): prepare v0.2.7` | Superseded by `v0.2.11` |
+| `0668ca1` | `Merge commit '12f8273' into release/v0.2.7` | Merged via canonical NVIDIA reconciliation (`e14f675`) |
+| `48f48e6` | `fix(api): fence stale lease results and deduplicate retries` | Superseded by `v0.2.11`'s `TaskDispatcher.reconcile()` |
+| `1c95e40` | `feat(tui): deliver modern Wazir mission control interface` | Merged and reconciled with `v0.2.11` conversation renderer (`93288b3`) |
+| `12f8273` | `feat(nvidia): integrate first-class policy-governed NVIDIA hosted provider` | Merged and unified with `v0.2.11` programmatic APIs (`e14f675`) |
+| `2a61e59` | `feat(resources): harden shared quota routing and accounting` | Merged (`353c1c9`) |
+| `607ba43` | `feat(nvidia): add interactive Nemotron streaming utility` | Merged (`353c1c9`) |
 
-## Commits unique to `v0.2.11`'s lineage (16, v0.2.11..main has none of these)
+## Commits Unique to `v0.2.11` Lineage (16 commits)
 
-| Commit | Subject |
-|---|---|
-| 56ad6ee | chore(release): prepare v0.2.11 |
-| dd5b0b7 | test(cli): pin environment in banner session guard test |
-| b9d9a9d | test(config): exclude codex-dgx-execution from vitest |
-| c512fcf | chore(release): regenerate package manager manifests for v0.2.5 |
-| 0bc91e6 | test: align stale assertions with current behavior |
-| 070bd94 | fix(agents,tests): keep fake runtimes' models visible to availability check |
-| e0a87a6 | fix(cli,core): verify model availability before dispatch and show the model actually routed (P0-B) |
-| 9c4fb4a | fix(agents): stop on 2nd identical tool-validation failure (P0-D) |
-| 6211048 | feat(mobile,dispatch): add mobile app scaffold, dispatch cancellation/recovery, test dir migration |
-| 973111f | fix(agents): add deterministic fast path for ls/pwd/git status/diff/log |
-| c7ea2ab | fix(agents): stop fast-path classifier blocking on ambiguous verbs alone |
-| 14813e3 | feat(evaluation,tui,tests): complete 6-category execution integrity, TUI usability, LIVE-CODE-01..08 release-gate suites |
-| 246d4cb | perf(execution): repair P0 wa run cold-start, store, and conversational fast-path latency |
-| f6a6ce7 | fix(cli): don't let lock-contended execution writes crash the task |
-| 6a6fb8b | fix(execution): correctly classify failed tool operations |
+All 16 commits in `v0.2.11` (`56ad6ee`) are preserved as the base of `integration/v0.2.11-reconciliation` and `integration/v0.2.12-completion`.
 
-## `test/real-world-acceptance`'s own 2 commits (beyond its `main` base)
+## Commits Added on `integration/v0.2.11-reconciliation` (Phase 1 Checkpoint)
 
-| Commit | Subject |
-|---|---|
-| a9e67b5 | fix(execution): scope verification, preserve model readiness, surface answers on failure |
-| ec863ef | feat(agents): fleet-aware subagent placement, fleet-shared memory, durable handoffs, workspace mutation attribution |
+1. `353c1c9` — `feat(reconciliation): port main's resource quotaGroup, READY-aware scheduler scoring, nemo.py, and e2e acceptance suite`
+2. `14198ea` — `feat(agents,memory,handoff): port fleet-aware subagent placement, fleet memory, and durable handoffs from test/real-world-acceptance`
+3. `8c37ba1` — `test(evidence): port live-session concurrency and Gemma execution reports from test/real-world-acceptance`
+4. `ca78171` — `fix(tests): read package.json version in realWorldAcceptance Journey 1 instead of hardcoded 0.2.7`
+5. `12a6ac8` — `docs(reconciliation): add branch analysis, feature matrix, fast-path decision, test results, and release readiness`
 
-## Other origin branches (not reconciled here — out of this task's scope)
+## Commits Added on `integration/v0.2.12-completion` (Phases 2–6)
 
-`origin` carries ~35 branches beyond the three in scope: `feat/agent-delegation`,
-`feat/autonomous-auto-updater`, `feat/cross-platform-*` (4 branches),
-`feat/distribution-*` (3), `feat/interactive-acp-execution`,
-`feat/mission-control-tui`, `feat/native-continuous-self-improvement`,
-`feat/nvidia-*` (2), `feat/resource-orchestration`,
-`feat/ultra-low-latency-fast-path`, `feat/wazir-mobile-android`,
-`fix/codex-dgx-p0-reliability`, `fix/codex-style-chat`,
-`fix/comprehensive-live-reliability`, `fix/distributed-lease-fencing`,
-`fix/durable-execution-api`, `fix/remediation-hardening-consolidation`,
-`fix/tui-chat-responsiveness`, `hardening/*` (3),
-`improve/gemini-execution-integrity`, `improve/nvidia-runtime-hardening`,
-`improve/resource-routing-accuracy`, `reliability/autonomous-recovery`,
-`repair/stability-audit`, plus release branches v0.1.61 through v0.2.10.
-
-Of direct relevance to the subsystems in this reconciliation:
-`feat/mission-control-tui`, `feat/nvidia-native-provider`,
-`feat/nvidia-execution-provider`, and `feat/ultra-low-latency-fast-path` look,
-by name, like they may carry *further* independent work on exactly the two
-subsystems (mission-control TUI, NVIDIA provider) this reconciliation
-deferred, and `improve/resource-routing-accuracy` / `fix/distributed-lease-fencing`
-likewise for resource routing and lease fencing. None of these were opened,
-diffed, or merged — flagging them is as far as this task's scope goes. Before
-doing the NVIDIA/TUI follow-up work recommended in FEATURE-MATRIX.md, check
-these branches first; there may already be more advanced versions than either
-`main` or `v0.2.11` carries.
-
-## Integration branch
-
-Created with:
-```
-git checkout -b integration/v0.2.11-reconciliation 56ad6ee903c2972d635a84d200fde1fbf64e4205
-```
-4 commits added on top of the v0.2.11 tag (`353c1c9`, `14198ea`, `8c37ba1`, `ca78171`).
-45 files changed, +2515/-51 vs the v0.2.11 tag. Full diff: `git diff 56ad6ee..HEAD`.
+1. `e14f675` — `feat(nvidia,agents): reconcile policy-governed NVIDIA provider and fleet subagent routing guardrails`
+2. `93288b3` — `feat(tui): reconcile Mission Control TUI with conversation renderer and approval queue`
+3. `3aad1af` — `fix(core,test): preserve verified READY state across read-only reconciles and exclude tmp from vitest`
+4. `3fda9b3` — `fix(cli,tools): wire deterministic command fast-path in run.ts and ignore worktrees/tmp in snapshot`
