@@ -617,6 +617,13 @@ export class PolicyEngine {
         reasons: ['agent requested context compaction via controller'],
       };
     }
+    if (lower === 'remember_fact' || lower === 'recall_facts') {
+      return {
+        decision: 'allow',
+        rule: 'fleet-memory-policy',
+        reasons: [`'${tool}' only reads/writes the durable fleet-memory store, scoped to this project's root`],
+      };
+    }
     if (lower === 'web_search' || lower === 'web_fetch') {
       const web = this.options.web ?? {};
       const permitted = this.options.networkAllowed === true &&

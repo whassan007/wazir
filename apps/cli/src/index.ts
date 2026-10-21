@@ -10,6 +10,7 @@ import { registerWebCommands } from './web.js';
 import { registerMobileCommands } from './mobile.js';
 import { closeMCPRegistries } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
+import { createHandoffCommand } from './handoff.js';
 
 // Installed before anything else runs: previously `uncaughtException` had no
 // handler anywhere (Node's default silently crashes with no terminal
@@ -1915,6 +1916,7 @@ serviceCmd
   });
 
 program.addCommand(serviceCmd);
+program.addCommand(createHandoffCommand());
 
 program.action(async () => {
   const globalOpts = program.opts<{ banner?: boolean; color?: boolean; ascii?: boolean }>();

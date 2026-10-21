@@ -35,6 +35,9 @@ import {
   estimateModelMemory,
   TaskCapabilityClassifier,
   ModelIntelligenceService,
+  FleetMemoryService,
+  createFleetMemoryService,
+  HandoffService,
 } from '@wazir/core';
 import type {
   ComputerRegistration,
@@ -53,7 +56,7 @@ import {
   getSpawnCommand,
   type KeyValueStore,
 } from '@wazir/shared';
-import { ToolRegistry, defaultTools, createWebTools } from '@wazir/tools';
+import { ToolRegistry, defaultTools, createWebTools, createFleetMemoryTools } from '@wazir/tools';
 import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
 import { createConfiguredWeb } from './web.js';
 import { AcpAgentAdapter, ChatAgent, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
@@ -127,6 +130,8 @@ export interface RookEngine {
   discovered: DiscoveredRuntime[];
   worker: Worker;
   store: KeyValueStore;
+  fleetMemory: FleetMemoryService;
+  handoffs: HandoffService;
   secretBroker: SecretBroker;
   hostedAdapters: Map<ProviderId, HostedAdapter>;
 }
@@ -204,6 +209,13 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     },
   }) as any;
   executions.store = store; // Attach store for Block persistence
+
+  // Fleet-shared durable memory: facts recorded by `remember_fact` are keyed by project
+  // root and backed by the same KeyValueStore as everything else — any agent working in
+  // the same project, on this machine or (with a shared PostgresStore) any other machine
+  // in the fleet, can `recall_facts` them. See FleetMemoryService.
+  const fleetMemory = createFleetMemoryService(store);
+  for (const tool of createFleetMemoryTools(fleetMemory)) tools.register(tool);
 
   // ---- local computer + runtimes + models ------------------------------
   // Every model request passes resource admission and accounting: adapters are governed
@@ -431,6 +443,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     await checkpoints.ready;
   }
 
+  const handoffs = new HandoffService({ store, executions, checkpoints, projectRoot });
+  await handoffs.ready;
+
   const orchestrator = new JobOrchestrator({
     scheduler,
     executionEngine: executions,
@@ -577,6 +592,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     discovered,
     worker,
     store,
+    fleetMemory,
+    handoffs,
     secretBroker,
     hostedAdapters,
     mcp,

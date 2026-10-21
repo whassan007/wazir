@@ -1007,15 +1007,66 @@ export async function runSubagent(
   const expectedArtifacts = Array.isArray(inp.expectedArtifacts)
     ? inp.expectedArtifacts.map(String)
     : undefined;
+  const requiredCapabilities = Array.isArray(inp.requiredCapabilities)
+    ? inp.requiredCapabilities.map(String)
+    : undefined;
+  const placementRequirements = (typeof inp.requirements === 'object' && inp.requirements !== null)
+    ? inp.requirements as Partial<import('@wazir/core').TaskRequirements>
+    : undefined;
+  const wantsFleetPlacement = Boolean((requiredCapabilities && requiredCapabilities.length > 0) || placementRequirements);
+
+  // A subtask that declares real requirements is placed by the same Scheduler that places
+  // top-level tasks — capability match, then hardware-aware placement across the fleet —
+  // instead of blindly inheriting the parent's model/computer. Absent any requirement,
+  // placement is unchanged: same model, same local worker as the parent, as before.
+  // (ported from local branch test/real-world-acceptance@ec863ef, adapted: this baseline's
+  // runSubagent predates provider-only-routing/NVIDIA fields, so that guardrail is not
+  // ported here — see docs/reconciliation/FEATURE-MATRIX.md.)
+  let placementDecision: SchedulerDecision | undefined;
+  if (wantsFleetPlacement) {
+    const placementTask: Task = {
+      id: generateId('task-sub-'),
+      type: 'coding',
+      input: description,
+      capabilities: requiredCapabilities,
+      requirements: {
+        minimumContext: MINIMUM_CONTEXT_TOKENS,
+        expectedArtifacts,
+        ...placementRequirements,
+      },
+      priority: 'normal',
+      status: 'pending',
+      createdAt: new Date(),
+    };
+    try {
+      placementDecision = engine.scheduler.plan({ task: placementTask, requiredContextTokens: MINIMUM_CONTEXT_TOKENS });
+    } catch (error) {
+      const reasons = error instanceof SchedulingError
+        ? [error.message, ...error.modelReasons, ...error.computerReasons]
+        : [error instanceof Error ? error.message : String(error)];
+      return {
+        ok: false,
+        output: '',
+        error: `Subagent fleet placement failed: ${reasons.join('; ')}`,
+        durationMs: Date.now() - startTime,
+      };
+    }
+  }
+
+  const effectiveModelId = placementDecision?.modelId ?? context.modelId;
+  const effectiveRuntimeId = placementDecision?.runtimeId ?? context.runtimeId;
+  const effectiveComputerId = placementDecision ? placementDecision.computerId : (context.computerId ?? engine.worker.computerId);
 
   // Create child execution record linked by parentExecutionId
   const subtask: Task = {
     id: generateId('task-sub-'),
     type: 'coding',
     input: description,
+    capabilities: requiredCapabilities,
     requirements: {
       minimumContext: MINIMUM_CONTEXT_TOKENS,
       expectedArtifacts,
+      ...placementRequirements,
     },
     policy: {
       ...(context.parentPolicy ?? {}),
@@ -1023,8 +1074,8 @@ export async function runSubagent(
       projectRoot: context.projectRoot,
     },
     execution: {
-      targetModelId: context.modelId,
-      targetRuntimeId: context.runtimeId,
+      targetModelId: effectiveModelId,
+      targetRuntimeId: effectiveRuntimeId,
     },
     priority: 'normal',
     status: 'pending',
@@ -1035,14 +1086,18 @@ export async function runSubagent(
     task: subtask,
     parentExecutionId: context.parentExecutionId,
     agentId: 'wazir-coding',
-    computerId: context.computerId ?? engine.worker.computerId,
-    runtimeId: context.runtimeId,
-    modelId: context.modelId,
+    computerId: effectiveComputerId,
+    runtimeId: effectiveRuntimeId,
+    modelId: effectiveModelId,
     workerId: engine.worker.id,
     workspaceRoot: context.projectRoot,
+    scheduling: placementDecision,
   });
   const childExecId = childRecord.execution.id;
 
+  if (placementDecision) {
+    context.log(color.cyan(`    [subagent] fleet placement: ${effectiveModelId} via ${effectiveRuntimeId} on ${effectiveComputerId ?? 'hosted'} (${placementDecision.reasons.join('; ')})`));
+  }
   context.log(color.cyan(`    [subagent] spawned nested execution ${childExecId} (depth ${context.subagentDepth + 1})`));
   context.emitJson({
     type: 'subagent.start',
@@ -1061,34 +1116,75 @@ export async function runSubagent(
       const requestId = generateId('req-');
       if (engine.web) req = { ...req, messages: await recordWebContext(engine.executions, childExecId, req.messages, engine.web.limits.maxGroundingTokens) };
       if (context.signal?.aborted) return;
-      const adapter = engine.adapters.get(context.runtimeId) ?? engine.worker.adapterForModel(req.modelId);
-      if (!adapter) {
-        yield { type: 'error', error: `no runtime can serve model '${req.modelId}'` };
-        return;
-      }
-      const effective = context.computerId ? await engine.lifecycle.activateExecution(childExecId, MINIMUM_CONTEXT_TOKENS) : undefined;
-      for await (const event of adapter.generate({
-        requestId,
-        contextTokens: effective,
-        modelId: req.modelId,
-        messages: req.messages,
-        maxTokens: req.maxTokens,
-        temperature: req.temperature,
-        stream: true,
-        tools: req.tools,
-        resourceContext: { taskId: childExecId, workload: 'routine' },
-      })) {
-        await engine.executions.recordProviderEvent(childExecId, event, {
-          requestId, model: req.modelId, provider: engine.models.get(req.modelId)?.provider,
-        });
-        if (event.type === 'completed' && event.usage) {
-          await engine.executions.recordUsage(childExecId, {
-            input: event.usage.inputTokens,
-            output: event.usage.outputTokens,
-            total: event.usage.totalTokens,
-          });
+      const isLocalPlacement = !effectiveComputerId || effectiveComputerId === engine.worker.computerId;
+      // Activation prepares a model to run on *this* worker — meaningless, and liable to
+      // fail admission, for a placement the Scheduler sent to a different fleet machine.
+      const contextTokens = isLocalPlacement ? await engine.lifecycle.activateExecution(childExecId, MINIMUM_CONTEXT_TOKENS) : MINIMUM_CONTEXT_TOKENS;
+      const retryContext = { requestId, model: req.modelId, provider: engine.models.get(req.modelId)?.provider };
+
+      if (isLocalPlacement) {
+        const adapter = engine.adapters.get(effectiveRuntimeId) ?? engine.worker.adapterForModel(req.modelId);
+        if (!adapter) {
+          yield { type: 'error', error: `no runtime can serve model '${req.modelId}'` };
+          return;
         }
-        yield event;
+        for await (const event of adapter.generate({
+          requestId,
+          contextTokens,
+          modelId: req.modelId,
+          messages: req.messages,
+          maxTokens: req.maxTokens,
+          temperature: req.temperature,
+          stream: true,
+          tools: req.tools,
+          resourceContext: { taskId: childExecId, workload: 'routine' },
+        })) {
+          await engine.executions.recordProviderEvent(childExecId, event, retryContext);
+          if (event.type === 'completed' && event.usage) {
+            await engine.executions.recordUsage(childExecId, {
+              input: event.usage.inputTokens,
+              output: event.usage.outputTokens,
+              total: event.usage.totalTokens,
+            });
+          }
+          yield event;
+        }
+      } else if (engine.config.apiUrl) {
+        // The Scheduler placed this subagent on a different fleet machine: hand it to that
+        // computer's worker through the control plane's task-pull loop — the same remote-
+        // dispatch path top-level tasks use (see executeTask's runtime.generate above).
+        const workerRequest: WorkerExecutionRequest = {
+          runtimeId: effectiveRuntimeId,
+          executionId: childExecId,
+          requestId,
+          modelId: req.modelId,
+          messages: req.messages,
+          maxTokens: req.maxTokens,
+          temperature: req.temperature,
+          contextTokens,
+        };
+        try {
+          for await (const event of dispatchRemote(engine.config.apiUrl, effectiveComputerId, workerRequest, { token: engine.config.apiToken })) {
+            const generationEvent = toGenerationEvent(event);
+            if (!generationEvent) continue;
+            await engine.executions.recordProviderEvent(childExecId, generationEvent, retryContext);
+            if (generationEvent.type === 'completed' && generationEvent.usage) {
+              await engine.executions.recordUsage(childExecId, {
+                input: generationEvent.usage.inputTokens,
+                output: generationEvent.usage.outputTokens,
+                total: generationEvent.usage.totalTokens,
+              });
+            }
+            yield generationEvent;
+          }
+        } catch (error) {
+          yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
+        }
+      } else {
+        yield {
+          type: 'error',
+          error: `subagent scheduled on remote computer '${effectiveComputerId}' but no control-plane API URL is configured (set WAZIR_API_URL)`,
+        };
       }
     },
 
@@ -1202,7 +1298,7 @@ export async function runSubagent(
   try {
     for await (const turn of agent.run(
       {
-        modelId: context.modelId,
+        modelId: effectiveModelId,
         taskDescription: description,
         taskType: 'coding',
         projectRoot: context.projectRoot,
@@ -1212,7 +1308,7 @@ export async function runSubagent(
       },
       subagentRuntime,
     )) {
-      if (turn.terminationReason) await recordTermination(engine, childExecId, turn.terminationReason, context.modelId, 'coding', turn.protocolMetrics, turn.runStats);
+      if (turn.terminationReason) await recordTermination(engine, childExecId, turn.terminationReason, effectiveModelId, 'coding', turn.protocolMetrics, turn.runStats);
       if (turn.kind === 'done') {
         subagentSummary = turn.content ?? '';
       } else if (turn.kind === 'error') {
