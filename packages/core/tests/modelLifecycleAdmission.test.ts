@@ -214,4 +214,26 @@ describe('reconcile isolates per-model failures', () => {
    expect(f.models.instancesOf('a')[0]).toMatchObject({ loaded: true, health: 'healthy' });
    expect(f.models.instancesOf('b')[0]).toMatchObject({ state: 'UNAVAILABLE', health: 'unavailable' });
  });
+ it('preserves a verified READY state across a read-only (verify:false) reconcile', async () => {
+   const f = setup();
+   await f.service.load('a');
+   expect(f.models.isModelReady('a')).toBe(true);
+   const probeCallsBefore = (f.adapter.probeModel as any).mock.calls.length;
+   await f.service.discoverAndReconcile({ verify: false });
+   expect(f.models.isModelReady('a')).toBe(true);
+   expect(f.models.instancesOf('a')[0].state).toBe('READY');
+   expect((f.adapter.probeModel as any).mock.calls.length).toBe(probeCallsBefore);
+ });
+ it('reusing an already-READY model is ADMITTED even when a hypothetical fresh load would be INSUFFICIENT, but a genuine fresh load under the same scarcity is DENIED', async () => {
+   const f = setup(40, () => 20);
+   f.add('b');
+   await f.service.load('a');
+   expect(f.models.isModelReady('a')).toBe(true);
+   f.computers.heartbeat('node', { load: { cpuPercent: 0, memoryUsedGB: 124, memoryAvailableGB: 4 } });
+   const reusePlan = await f.service.load('a');
+   expect(reusePlan.reuse).toBe(true);
+   expect(reusePlan.admissionDecision.status).toBe('ADMITTED');
+   expect(f.adapter.loadModel).toHaveBeenCalledTimes(1);
+   await expect(f.service.load('b')).rejects.toMatchObject({ code: 'MODEL_ADMISSION_DENIED' });
+ });
 });

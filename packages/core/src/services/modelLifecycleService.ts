@@ -876,16 +876,18 @@ export class ModelLifecycleService {
             continue;
           }
           const loaded = observed?.loaded ?? false;
+          const stillVerified = existing?.state === 'READY' && existing.loaded && loaded &&
+            existing.health === 'healthy' && existing.contextTokens !== undefined && existing.contextTokens === observed?.effectiveContext;
           const readyOnFastStartup = fastStartup && verify && loaded && Boolean(observed?.effectiveContext) && existing?.state !== 'DRAINING' &&
             (!intent?.desired?.contextTokens || intent.desired.contextTokens === observed?.effectiveContext);
           if (readyOnFastStartup) this.fastStartupVerifiedIds.add(id);
           const i: ModelInstance = { ...existing, ...intent, id, installationId, modelId: m.id, runtimeModelId: m.id,
             computerId, runtimeId, loaded,
-            state: readyOnFastStartup ? 'READY' : loaded ? 'LOADED' : existing?.loaded || existing?.state === 'READY' ? 'UNLOADED' : 'INSTALLED',
+            state: (stillVerified || readyOnFastStartup) ? 'READY' : loaded ? 'LOADED' : existing?.loaded || existing?.state === 'READY' ? 'UNLOADED' : 'INSTALLED',
             health: 'healthy', contextTokens: observed?.effectiveContext,
             residentMemoryBytes: observed?.memoryBytes ?? existing?.residentMemoryBytes ?? m.weightBytes };
           this.deps.models.upsertInstance(i);
-          if (!readyOnFastStartup && verify && loaded && observed?.effectiveContext && existing?.state !== 'DRAINING' &&
+          if (!stillVerified && !readyOnFastStartup && verify && loaded && observed?.effectiveContext && existing?.state !== 'DRAINING' &&
             (!i.desired?.contextTokens || i.desired.contextTokens === observed.effectiveContext)) {
             try { await this.verify(i, observed.effectiveContext); } catch { /* failure is observed, never READY */ }
           }
