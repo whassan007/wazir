@@ -450,5 +450,22 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     expect(outcome).toBeDefined();
     expect(typeof outcome.success).toBe('boolean');
   });
+
+  it('executes deterministic read-only commands (pwd, ls) via policy-gated tools with zero LLM calls', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-det-'));
+    const engine = await buildTestEngine(projectRoot);
+
+    const adapter = engine.adapters.get('fake')!;
+    let generateCalls = 0;
+    adapter.generate = async function* () {
+      generateCalls += 1;
+      throw new Error('deterministic command must not invoke LLM generate');
+    };
+
+    const outcome = await executeTask(engine, 'pwd', { quiet: true });
+    expect(outcome.success).toBe(true);
+    expect(generateCalls).toBe(0);
+    expect(outcome.result?.trim()).toContain(path.basename(projectRoot));
+  });
 });
 

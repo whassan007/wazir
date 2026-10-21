@@ -17,7 +17,7 @@ import type {
 } from '@wazir/core';
 import { buildContextPartsFromActive } from './commands.js';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
-import { buildSystemPrompt, isConversationalFastPathRequest, resolvePreset } from '@wazir/agents';
+import { buildSystemPrompt, isConversationalFastPathRequest, isDeterministicCommandRequest, resolvePreset } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, keepEnds, stripTerminalEscapes } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
@@ -220,10 +220,16 @@ export async function planTask(
   }
 
   const targetAgent = engine.agents.get(task.execution?.targetAgentId ?? 'wazir-coding');
-  const fastPath = targetAgent?.descriptor.strategy === 'conversational-inference' || isConversationalFastPathRequest(description, {
-    type: options.type,
-    expectedFiles: options.expectedFiles,
-  });
+  const deterministicCmd = (!options.expectedFiles || options.expectedFiles.length === 0)
+    ? isDeterministicCommandRequest(description)
+    : null;
+  const fastPath =
+    targetAgent?.descriptor.strategy === 'conversational-inference' ||
+    Boolean(deterministicCmd) ||
+    isConversationalFastPathRequest(description, {
+      type: options.type,
+      expectedFiles: options.expectedFiles,
+    });
 
   const allModelTools = fastPath
     ? []
@@ -406,10 +412,15 @@ export async function executeTask(
   // this local workspace regardless of which LLM answers), not only when
   // computerId happens to equal this worker's own id.
   // Skip worker tool preflight on non-tool conversational fast-path requests.
-  const fastPathExecution = isConversationalFastPathRequest(description, {
-    type: options.type,
-    expectedFiles: options.expectedFiles,
-  });
+  const deterministicExecution = (!options.expectedFiles || options.expectedFiles.length === 0)
+    ? isDeterministicCommandRequest(description)
+    : null;
+  const fastPathExecution =
+    Boolean(deterministicExecution) ||
+    isConversationalFastPathRequest(description, {
+      type: options.type,
+      expectedFiles: options.expectedFiles,
+    });
   const runsInProcess = !scheduling.computerId || scheduling.computerId === engine.worker.computerId;
   if (runsInProcess && !fastPathExecution) {
     const preflight = await runWorkerPreflight({
@@ -840,10 +851,12 @@ export async function executeTask(
   const errors: string[] = [];
 
   const taskAnalysis = engine.planner?.analyze?.(description);
-  const fastPathRequest = isConversationalFastPathRequest(description, {
-    type: task.type,
-    expectedFiles: options.expectedFiles,
-  });
+  const fastPathRequest =
+    Boolean(deterministicExecution) ||
+    isConversationalFastPathRequest(description, {
+      type: task.type,
+      expectedFiles: options.expectedFiles,
+    });
   try {
     for await (const turn of agent.run(
       {

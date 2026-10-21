@@ -12,6 +12,7 @@ export function isInside(root: string, target: string): boolean {
 export const IGNORED_DIRECTORIES = new Set([
   'node_modules', '.git', 'dist', 'build', '.next', '.turbo', 'target',
   '__pycache__', '.venv', 'venv', '.cache', 'coverage', '.rook', '.wazir',
+  '.claude', '.worktrees', 'tmp', 'temp',
 ]);
 
 /** Canonical path of `target`, or of its deepest existing ancestor joined with the missing tail. */
