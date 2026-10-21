@@ -1039,7 +1039,7 @@ export function renderFleetView(data: FleetViewData): string[] {
 
   // Summary counts
   const onlineCount = workers.filter((w) => w.status === 'online' || w.status === 'busy' || w.status === 'idle').length;
-  lines.push(padRight(`  Nodes: ${color.bold(String(onlineCount))}/${workers.length} Online  │  ${color.gray('Live Capacity, Shards & Model Placements')}`, width));
+  lines.push(padRight(`  Nodes: ${color.bold(String(onlineCount))}/${workers.length} Online  ·  ${color.gray('Live Capacity, Shards & Model Placements')}`, width));
   lines.push(padRight(color.gray('  ' + '-'.repeat(Math.max(10, width - 4))), width));
 
   // Topology Cards Rendering
@@ -1426,6 +1426,7 @@ export function formatVerificationInspection(inspection: VerificationInspection,
   kv('Revision', fmtRev(i.currentRevision));
   kv('Workspace', shortHash(String(i.workspaceDigest)));
   kv('Status', i.status);
+  kv('Eligible', i.completion.eligible ? color.green('YES') : color.red('NO'));
 
   for (const slot of i.slots) {
     out.push('');
@@ -1446,8 +1447,6 @@ export function formatVerificationInspection(inspection: VerificationInspection,
     for (const r of slot.reasons.filter((r) => slot.status !== 'PASS' && r).slice(0, 3)) kv('', color.gray(r));
   }
 
-  out.push('');
-  out.push(`Eligible      ${i.completion.eligible ? color.green('YES') : color.red('NO')}`);
   out.push('');
   out.push(color.bold('PHYSICAL MUTATIONS'));
   if (i.mutations.length === 0) out.push(color.gray('  No physical mutations recorded.'));
@@ -1634,12 +1633,15 @@ export function renderEvidenceModal(data: EvidenceModalData): string[] {
   lines.push(`├${border}┤`);
 
   if (nodeInspection) {
-    const inspLines = renderSearchNodeInspection(nodeInspection, { width: modalWidth - 4 });
+    const inspLines = renderSearchNodeInspection(nodeInspection, { width: modalWidth - 4, maxRows: 80 });
     const scrollOffset = data.scrollOffset ?? 0;
-    const maxVisible = Math.max(5, maxRows - 4);
-    const visible = inspLines.slice(scrollOffset, scrollOffset + maxVisible);
-    if (provenanceChain?.length) {
-      lines.push(`│ ${color.bold('PROVENANCE'.padEnd(modalWidth - 4))} │`);
+    const maxVisible = Math.max(5, maxRows - 5);
+    let visible = inspLines.slice(scrollOffset, scrollOffset + maxVisible);
+    if (!visible.some((l) => l.includes('PROVENANCE'))) {
+      const provIdx = inspLines.findIndex((l) => l.includes('PROVENANCE'));
+      if (provIdx !== -1 && visible.length >= 4) {
+        visible = [...visible.slice(0, visible.length - 3), ...inspLines.slice(provIdx, provIdx + 3)];
+      }
     }
     for (const l of visible) {
       lines.push(`│ ${padRight(l, modalWidth - 4)} │`);
