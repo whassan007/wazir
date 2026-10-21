@@ -147,20 +147,27 @@ export class ResourceLedger {
   }
 
   // ---- sums used by admission (call inside transaction) -----------------------------------
-  usedSince(accountId: string, unit: LimitUnit, since: number, until?: number): number {
-    const sql = `SELECT COALESCE(SUM(${unitColumn(unit, '')}), 0) AS v FROM usage WHERE account_id = ? AND at >= ?${until !== undefined ? ' AND at < ?' : ''}`;
-    const args: (string | number)[] = until !== undefined ? [accountId, since, until] : [accountId, since];
+  // Each accepts a single id or a quotaGroup's member ids (ported from main@2a61e59) so
+  // several controller credentials sharing one provider-side quota are admitted against
+  // one durable scope instead of independently over-admitting past the real shared limit.
+  usedSince(accountId: string | readonly string[], unit: LimitUnit, since: number, until?: number): number {
+    const ids = Array.isArray(accountId) ? accountId : [accountId];
+    const marks = ids.map(() => '?').join(',');
+    const sql = `SELECT COALESCE(SUM(${unitColumn(unit, '')}), 0) AS v FROM usage WHERE account_id IN (${marks}) AND at >= ?${until !== undefined ? ' AND at < ?' : ''}`;
+    const args: (string | number)[] = [...ids, since, ...(until !== undefined ? [until] : [])];
     return Number((this.db.prepare(sql).get(...args) as { v: number }).v);
   }
 
   /** Units held by live (active, unexpired) reservations. */
-  reservedNow(accountId: string, unit: LimitUnit, now = this.now()): number {
-    const sql = `SELECT COALESCE(SUM(${unitColumn(unit, 'est_')}), 0) AS v FROM reservations WHERE account_id = ? AND status = 'active' AND lease_expires_at > ?`;
-    return Number((this.db.prepare(sql).get(accountId, now) as { v: number }).v);
+  reservedNow(accountId: string | readonly string[], unit: LimitUnit, now = this.now()): number {
+    const ids = Array.isArray(accountId) ? accountId : [accountId];
+    const sql = `SELECT COALESCE(SUM(${unitColumn(unit, 'est_')}), 0) AS v FROM reservations WHERE account_id IN (${ids.map(() => '?').join(',')}) AND status = 'active' AND lease_expires_at > ?`;
+    return Number((this.db.prepare(sql).get(...ids, now) as { v: number }).v);
   }
 
-  inFlight(accountId: string, now = this.now()): number {
-    return Number((this.db.prepare(`SELECT COUNT(*) AS n FROM reservations WHERE account_id = ? AND status = 'active' AND lease_expires_at > ?`).get(accountId, now) as { n: number }).n);
+  inFlight(accountId: string | readonly string[], now = this.now()): number {
+    const ids = Array.isArray(accountId) ? accountId : [accountId];
+    return Number((this.db.prepare(`SELECT COUNT(*) AS n FROM reservations WHERE account_id IN (${ids.map(() => '?').join(',')}) AND status = 'active' AND lease_expires_at > ?`).get(...ids, now) as { n: number }).n);
   }
 
   spendSince(since: number): number {

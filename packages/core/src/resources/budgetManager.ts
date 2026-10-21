@@ -102,11 +102,21 @@ export class TokenBudgetManager {
     return limits;
   }
 
+  /** All credentials that share one provider-side quota identity. Admission is therefore
+   * safe across independent Wazir processes when they point at the same SQLite ledger.
+   * Ported from main@2a61e59. */
+  private scope(account: AccountConfig): string[] {
+    return account.quotaGroup
+      ? this.accounts.list().filter((a) => a.enabled !== false && a.quotaGroup === account.quotaGroup).map((a) => a.id)
+      : [account.id];
+  }
+
   /** Limit status including a prospective addition (`adding`), evaluated at `now`. */
   private limitStatus(account: AccountConfig, limit: LimitSpec, adding: number, now: number): LimitStatus {
+    const scope = this.scope(account);
     const bounds = windowBounds(limit.window, now);
-    const used = this.ledger.usedSince(account.id, limit.unit, bounds.start, bounds.end);
-    const reserved = this.ledger.reservedNow(account.id, limit.unit, now);
+    const used = this.ledger.usedSince(scope, limit.unit, bounds.start, bounds.end);
+    const reserved = this.ledger.reservedNow(scope, limit.unit, now);
     // A provider-reported reset (from rate-limit headers) refines the window end.
     if (limit.limit === null) {
       const mode: BudgetMode = account.unknownLimitPolicy === 'allow' ? 'unknown' : account.unknownLimitPolicy === 'deny' ? 'exhausted' : 'conserve';
@@ -126,7 +136,7 @@ export class TokenBudgetManager {
     const limits = this.effectiveLimits(account).map((l) => this.limitStatus(account, l, 0, now));
     // Exhausted only when already over (adding nothing): `> 1` is "past the limit".
     const mode = limits.reduce<BudgetMode>((m, l) => worse(m, l.mode), 'normal');
-    return { account, health: health.health, healthUntil: health.until, healthReason: health.reason, mode, limits, inFlight: this.ledger.inFlight(accountId, now) };
+    return { account, health: health.health, healthUntil: health.until, healthReason: health.reason, mode, limits, inFlight: this.ledger.inFlight(this.scope(account), now) };
   }
 
   // ---- admission --------------------------------------------------------------------------
@@ -188,6 +198,7 @@ export class TokenBudgetManager {
       if (!this.policy.enforce) {
         // Accounting only: reserve and record, but never refuse for budget, quota, health or cost.
         reasons.push('limits not enforced (policy.enforce=false)');
+        if (isPaid(account)) reasons.push('paid-account authorization is advisory while policy.enforce=false; provider billing is not prevented');
         return reserveAndAdmit('normal');
       }
       if (isPaid(account) && !(this.policy.paidApiFallback || account.allowPaid)) {
@@ -209,7 +220,7 @@ export class TokenBudgetManager {
       if (health.health === 'quota_blocked') return deny('deferred', `account '${account.id}' quota exhausted (${health.reason})`, 'exhausted', health.until);
       if (health.health === 'cooldown') return deny('deferred', `account '${account.id}' is rate limited (${health.reason})`, 'normal', health.until);
 
-      if (account.maxConcurrent && this.ledger.inFlight(account.id, now) >= account.maxConcurrent) {
+      if (account.maxConcurrent && this.ledger.inFlight(this.scope(account), now) >= account.maxConcurrent) {
         return deny('deferred', `account '${account.id}' has ${account.maxConcurrent} request(s) in flight (concurrency limit)`, 'normal', now + 250);
       }
 

@@ -1,0 +1,175 @@
+{
+  "timestamp": "2026-10-17T21:13:40.023Z",
+  "summary": {
+    "total": 10,
+    "realLivePass": 0,
+    "deterministicIntegrationPass": 10,
+    "failed": 0,
+    "blocked": 0,
+    "notRun": 0
+  },
+  "journeys": [
+    {
+      "name": "First installation and launch",
+      "category": "lifecycle",
+      "verdict": "DETERMINISTIC_INTEGRATION_PASS",
+      "durationMs": 844,
+      "evidence": {
+        "initExitCode": 0,
+        "wazirHomeFiles": [
+          "audit.jsonl",
+          "mcp.json",
+          "resources.db",
+          "resources.db-shm",
+          "resources.db-wal",
+          "wazir.json"
+        ],
+        "versionOutput": "0.2.7"
+      },
+      "transcript": [
+        "Wazir initialization\n\n  configuration file exists, using existing configuration\n  computer already registered: local (WaelMacPro)\n  no runtimes discovered\n  no models discovered\n\ninitialization complete\n",
+        "0.2.7\n"
+      ]
+    },
+    {
+      "name": "Running wa doctor",
+      "category": "diagnostics",
+      "verdict": "DETERMINISTIC_INTEGRATION_PASS",
+      "durationMs": 492,
+      "evidence": {
+        "checksCount": 17,
+        "summary": {
+          "pass": 10,
+          "warn": 3,
+          "fail": 1,
+          "notInstalled": 2,
+          "unavailable": 1
+        }
+      },
+      "transcript": [
+        "{\n  \"checks\": [\n    {\n      \"name\": \"package version\",\n      \"status\": \"PASS\",\n      \"message\": \"v0.2.7 (channel: source, commit: be64805)\"\n    },\n    {\n      \"name\": \"runtime dependencies\",\n      \"status\": \"PASS\",\n      \"message\": \"Node.js v22.23.3 (arm64)\"\n    },\n    {\n      \"name\": \"git availability\",\n      \"status\": \"PASS\",\n      \"message\": \"git version 2.53.0\"\n    },\n    {\n      \"name\": \"configuration\",\n      \"status\": \"WARN\",\n      \"message\": \"no runtimes configured\"\n    },\n    {\n      \"name\": \"persistence\",\n      \"status\": \"PASS\",\n      \"message\": \"in-memory store active\"\n    },\n    {\n      \"name\": \"control plane\",\n      \"status\": \"PASS\",\n      \"message\": \"1/1 computer(s) online\"\n    },\n    {\n      \"name\": \"worker\",\n      \"status\": \"PASS\",\n      \"message\": \"worker-local-90297711e168a5b0502cea844ab36306 on local\",\n      \"details\": \"runtimes: lmstudio, ollama, models: 0\"\n    },\n    {\n      \"name\": \"computer registration\",\n      \"status\": \"PASS\",\n      \"message\": \"local: WaelMacPro\",\n      \"details\": \"0 runtimes, 0 models\"\n    },\n    {\n      \"name\": \"runtime connectivity\",\n      \"status\": \"UNAVAILABLE\",\n      \"message\": \"all runtimes unavailable\"\n    },\n    {\n      \"name\": \"hosted providers\",\n      \"status\": \"NOT INSTALLED\",\n      \"message\": \"no hosted providers authenticated\",\n      \"details\": \"run `wa auth login <provider>` or set NVIDIA_API_KEY to enable Anthropic/OpenAI/Google/NVIDIA routing\"\n    },\n    {\n      \"name\": \"model availability\",\n      \"status\": \"NOT INSTALLED\",\n      \"message\": \"no models registered\"\n    },\n    {\n      \"name\": \"runtime & model health\",\n      \"status\": \"FAIL\",\n      \"message\": \"2 error(s), 0 warning(s); run `wa models health --detail`\",\n      \"details\": \"RUNTIME_UNREACHABLE: lmstudio — lmstudio endpoint is not reachable\\nRUNTIME_UNREACHABLE: ollama — ollama endpoint is not reachable\"\n    },\n    {\n      \"name\": \"required permissions\",\n      \"status\": \"PASS\",\n      \"message\": \"18 rule(s) configured\"\n    },\n    {\n      \"name\": \"scheduler readiness\",\n      \"status\": \"PASS\",\n      \"message\": \"scheduler ready for planning\"\n    },\n    {\n      \"name\": \"api security & tokens\",\n      \"status\": \"WARN\",\n      \"message\": \"no cluster tokens configured\",\n      \"details\": \"WAZIR_CHILD_ENV: not set (tool processes inherit minimal default environment: PATH, HOME, TMPDIR, USER)\\nNeither WAZIR_API_TOKEN nor WAZIR_REGISTRATION_TOKEN is set.\\nAPI endpoints and worker registrations will reject unauthenticated calls.\\nSet WAZIR_API_TOKEN (operator), WAZIR_API_VIEWER_TOKEN (viewer), and WAZIR_REGISTRATION_TOKEN in your environment.\"\n    },\n    {\n      \"name\": \"tool sandbox\",\n      \"status\": \"PASS\",\n      \"message\": \"tool processes run under sandbox-exec\",\n      \"details\": \"Project directory writable, home directory masked (toolchains only), private /tmp, network per policy.\"\n    },\n    {\n      \"name\": \"external agents\",\n      \"status\": \"WARN\",\n      \"message\": \"0/5 ready\",\n      \"details\": \"not checked recently: antigravity, claude-code, codex, gemini, opencode (run `wa agents check`)\"\n    }\n  ],\n  \"summary\": {\n    \"pass\": 10,\n    \"warn\": 3,\n    \"fail\": 1,\n    \"notInstalled\": 2,\n    \"unavailable\": 1\n  },\n  \"health\": {\n    \"generatedAt\": \"2026-10-17T21:13:35.857Z\",\n    \"runtimes\": [\n      {\n        \"runtimeId\": \"anthropic\",\n        \"runtimeType\": \"anthropic\",\n        \"state\": \"UNAVAILABLE\",\n        \"endpointReachable\": null,\n        \"inferenceReady\": false,\n        \"loadedModels\": [],\n        \"queueDepth\": null,\n        \"resourcePressure\": {\n          \"level\": \"UNKNOWN\",\n          \"reservedMemoryBytes\": 0\n        },\n        \"inference\": \"UNKNOWN\",\n        \"telemetryStatus\": \"UNKNOWN\",\n        \"lastCheckedAt\": \"2026-10-17T21:13:35.727Z\"\n      },\n      {\n        \"runtimeId\": \"google\",\n        \"runtimeType\": \"google\",\n        \"state\": \"UNAVAILABLE\",\n        \"endpointReachable\": null,\n        \"inferenceReady\": false,\n        \"loadedModels\": [],\n        \"queueDepth\": null,\n        \"resourcePressure\": {\n          \"level\": \"UNKNOWN\",\n          \"reservedMemoryBytes\": 0\n        },\n        \"inference\": \"UNKNOWN\",\n        \"telemetryStatus\": \"UNKNOWN\",\n        \"lastCheckedAt\": \"2026-10-17T21:13:35.727Z\"\n      },\n      {\n        \"runtimeId\": \"lmstudio\",\n        \"runtimeType\": \"lmstudio\",\n        \"computerId\": \"local\",\n        \"state\": \"UNREACHABLE\",\n        \"endpointReachable\": false,\n        \"inferenceReady\": false,\n        \"loadedModels\": [],\n        \"queueDepth\": null,\n        \"resourcePressure\": {\n          \"reservedMemoryBytes\": 0,\n          \"totalMemoryBytes\": 25769803776,\n          \"availableMemoryBytes\": 260653056,\n          \"observedAt\": \"2026-10-17T21:13:35.857Z\",\n          \"usedMemoryBytes\": 25509150720,\n          \"level\": \"CRITICAL\"\n        },\n        \"inference\": \"UNKNOWN\",\n        \"telemetryStatus\": \"UNKNOWN\",\n        \"lastCheckedAt\": \"2026-10-17T21:13:35.777Z\"\n      },\n      {\n        \"runtimeId\": \"nvidia\",\n        \"runtimeType\": \"nvidia\",\n        \"state\": \"UNAVAILABLE\",\n        \"endpointReachable\": null,\n        \"inferenceReady\": false,\n        \"loadedModels\": [],\n        \"queueDepth\": null,\n        \"resourcePressure\": {\n          \"level\": \"UNKNOWN\",\n          \"reservedMemoryBytes\": 0\n        },\n        \"inference\": \"UNKNOWN\",\n        \"telemetryStatus\": \"UNKNOWN\",\n        \"lastCheckedAt\": \"2026-10-17T21:13:35.727Z\"\n      },\n      {\n        \"runtimeId\": \"ollama\",\n        \"runtimeType\": \"ollama\",\n        \"computerId\": \"local\",\n        \"state\": \"UNREACHABLE\",\n        \"endpointReachable\": false,\n        \"inferenceReady\": false,\n        \"loadedModels\": [],\n        \"queueDepth\": null,\n        \"resourcePressure\": {\n          \"reservedMemoryBytes\": 0,\n          \"totalMemoryBytes\": 25769803776,\n          \"availableMemoryBytes\": 260653056,\n          \"observedAt\": \"2026-10-17T21:13:35.857Z\",\n          \"usedMemoryBytes\": 25509150720,\n          \"level\": \"CRITICAL\"\n        },\n        \"inference\": \"UNKNOWN\",\n        \"telemetryStatus\": \"UNKNOWN\",\n        \"lastCheckedAt\": \"2026-10-17T21:13:35.778Z\"\n      },\n      {\n        \"runtimeId\": \"openai\",\n        \"runtimeType\": \"openai\",\n        \"state\": \"UNAVAILABLE\",\n        \"endpointReachable\": null,\n        \"inferenceReady\": false,\n        \"loadedModels\": [],\n        \"queueDepth\": null,\n        \"resourcePressure\": {\n          \"level\": \"UNKNOWN\",\n          \"reservedMemoryBytes\": 0\n        },\n        \"inference\": \"UNKNOWN\",\n        \"telemetryStatus\": \"UNKNOWN\",\n        \"lastCheckedAt\": \"2026-10-17T21:13:35.727Z\"\n      }\n    ],\n    \"models\": [],\n    \"workers\": [\n      {\n        \"workerId\": \"worker-local-90297711e168a5b0502cea844ab36306\",\n        \"computerId\": \"local\",\n        \"status\": \"online\",\n        \"running\": true,\n        \"lastHeartbeat\": \"2026-10-17T21:13:35.727Z\"\n      }\n    ],\n    \"diagnostics\": [\n      {\n        \"code\": \"RUNTIME_UNREACHABLE\",\n        \"domain\": \"RUNTIME\",\n        \"severity\": \"error\",\n        \"subject\": {\n          \"kind\": \"runtime\",\n          \"id\": \"lmstudio\"\n        },\n        \"reason\": \"lmstudio endpoint is not reachable\",\n        \"evidence\": [\n          {\n            \"label\": \"runtime health\",\n            \"value\": \"unavailable\",\n            \"source\": \"RuntimeRegistry\"\n          },\n          {\n            \"label\": \"endpoint\",\n            \"value\": null,\n            \"source\": \"RuntimeRegistry\"\n          },\n          {\n            \"label\": \"last checked\",\n            \"value\": \"2026-10-17T21:13:35.777Z\",\n            \"source\": \"RuntimeRegistry\"\n          },\n          {\n            \"label\": \"affected model instances\",\n            \"value\": 0,\n            \"source\": \"ModelRegistry\"\n          }\n        ]\n      },\n      {\n        \"code\": \"RUNTIME_UNREACHABLE\",\n        \"domain\": \"RUNTIME\",\n        \"severity\": \"error\",\n        \"subject\": {\n          \"kind\": \"runtime\",\n          \"id\": \"ollama\"\n        },\n        \"reason\": \"ollama endpoint is not reachable\",\n        \"evidence\": [\n          {\n            \"label\": \"runtime health\",\n            \"value\": \"unavailable\",\n            \"source\": \"RuntimeRegistry\"\n          },\n          {\n            \"label\": \"endpoint\",\n            \"value\": null,\n            \"source\": \"RuntimeRegistry\"\n          },\n          {\n            \"label\": \"last checked\",\n            \"value\": \"2026-10-17T21:13:35.778Z\",\n            \"source\": \"RuntimeRegistry\"\n          },\n          {\n            \"label\": \"affected model instances\",\n            \"value\": 0,\n            \"source\": \"ModelRegistry\"\n          }\n        ]\n      }\n    ],\n    \"summary\": {\n      \"RUNTIME_UNREACHABLE\": 2,\n      \"MODEL_NOT_LOADED\": 0,\n      \"MODEL_NOT_READY\": 0,\n      \"MODEL_LOAD_FAILED\": 0,\n      \"INSUFFICIENT_MEMORY\": 0,\n      \"QUEUE_PRESSURE\": 0,\n      \"INFERENCE_FAILED\": 0,\n      \"TELEMETRY_UNAVAILABLE\": 0,\n      \"WORKER_UNAVAILABLE\": 0,\n      \"UNKNOWN\": 0\n    }\n  }\n}\n"
+      ]
+    },
+    {
+      "name": "Model discovery and selection",
+      "category": "models",
+      "verdict": "DETERMINISTIC_INTEGRATION_PASS",
+      "durationMs": 832,
+      "evidence": {
+        "modelsListExitCode": 0,
+        "discoverExitCode": 0
+      },
+      "transcript": [
+        "WAZIR MODELS\n\nFleet Capacity\nCOMPUTER    MEMORY                   RUNTIME   INSTALLED  LOADED  READY\n----------  -----------------------  --------  ---------  ------  -----\nWaelMacPro  24.0 GiB / 0.2 GiB free  lmstudio  0          0       0    \nWaelMacPro  24.0 GiB / 0.2 GiB free  ollama    0          0       0    \n\nModels\nMODEL  COMPUTER  RUNTIME  STATE  CTX  PIN\n-----  --------  -------  -----  ---  ---\n\nSummary: Installed 0  Loaded 0  Ready 0  Loading 0  Failed 0\n",
+        "Runtime discovery\n\n  lmstudio (lmstudio) — unavailable: fetch failed\n  ollama (ollama) — unavailable: fetch failed\n  Anthropic (anthropic) — unavailable [hosted]\n  OpenAI (openai) — unavailable [hosted]\n  Google Gemini (google) — unavailable [hosted]\n  NVIDIA API Catalog (nvidia) — unavailable [hosted]\n"
+      ]
+    },
+    {
+      "name": "Interactive TUI chat PTY workflow",
+      "category": "terminal",
+      "verdict": "DETERMINISTIC_INTEGRATION_PASS",
+      "durationMs": 700,
+      "evidence": {
+        "outputBytes": 1361,
+        "stepsCompleted": [
+          "wait",
+          "send",
+          "wait",
+          "send",
+          "exit"
+        ]
+      },
+      "transcript": [
+        "\u001b[?2004h\u001b[?25h\u001b[0 q WAZIR                                                                                                                                                                         wael · auto-routed model\r\n\r\n⚠ Model unavailable: 0 eligible models registered across configured runtimes.\r\n  Unavailable runtimes: anthropic (unavailable), google (unavailable), lmstudio (unavailable), nvidia (unavailable), ollama (unavailable), openai (unavailable)\r\n  Recovery commands:\r\n    • Pull a local Ollama model:       ollama pull qwen2.5-coder\r\n    • Start LM Studio server:          lms server start   (or /launch lmstudio)\r\n    • Authenticate a hosted provider:  wa auth login <anthropic|openai|google>\r\n    • Check runtime diagnostics:       wa doctor          (or /doctor)\r\n  Shell commands (!<cmd> or /sh <cmd>, e.g. !ls -la) remain available without an AI model.\r\n\r\n\r\u001b[2K• Provider disconnected · Model unavailable (0 models registered). Shell commands (!cmd) available.\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r> !echo USER_KEYBOARD_PROMPT_OK\r\n\r\n\r\u001b[2K• Command running: [SHELL] Running: echo USER_KEYBOARD_PROMPT_OK...\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r\r\r\n\u001b[?2004l\u001b[?25hUSER_KEYBOARD_PROMPT_OK\r\n✓ Command completed · exit 0 · 13ms · ref @1\r\n\r\n\r\u001b[2K• Command completed (13ms) · [SHELL #1] exit 0: USER_KEYBOARD_PROMPT_OK (ref @1)\r\n\r\u001b[2K> \r\u001b[2C"
+      ]
+    },
+    {
+      "name": "Creating and modifying source files",
+      "category": "tools",
+      "verdict": "DETERMINISTIC_INTEGRATION_PASS",
+      "durationMs": 709,
+      "evidence": {
+        "createdFilePath": "/var/folders/rs/k81fz_p53n9_xx2v5yrn1r2r0000gq/T/e2e-file-mutation-FhjAVu/workspace/src/calculator.ts",
+        "verifiedContent": "export const add = (a: number, b: number) => a + b;"
+      },
+      "transcript": [
+        "\u001b[?2004h\u001b[?25h\u001b[0 q WAZIR                                                                                                                                                                         wael · auto-routed model\r\n\r\n⚠ Model unavailable: 0 eligible models registered across configured runtimes.\r\n  Unavailable runtimes: anthropic (unavailable), google (unavailable), lmstudio (unavailable), nvidia (unavailable), ollama (unavailable), openai (unavailable)\r\n  Recovery commands:\r\n    • Pull a local Ollama model:       ollama pull qwen2.5-coder\r\n    • Start LM Studio server:          lms server start   (or /launch lmstudio)\r\n    • Authenticate a hosted provider:  wa auth login <anthropic|openai|google>\r\n    • Check runtime diagnostics:       wa doctor          (or /doctor)\r\n  Shell commands (!<cmd> or /sh <cmd>, e.g. !ls -la) remain available without an AI model.\r\n\r\n\r\u001b[2K• Provider disconnected · Model unavailable (0 models registered). Shell commands (!cmd) available.\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r> !mkdir -p src && echo \"export const add = (a: number, b: number) => a + b;\" > src/calculator.ts\r\n\r\n\r\u001b[2K• Command running: [SHELL] Running: mkdir -p src && echo \"export const add = (a: number, b: number) => a + b;\" > src/calculator.ts...\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r(no output)\r\n✓ Command completed · exit 0 · 15ms · ref @1\r\n\r\n\r\u001b[2K• Command completed (15ms) · [SHELL #1] exit 0: (no output) (ref @1)\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r> !cat src/calculator.ts\r\n\r\n\r\u001b[2K• Command running: [SHELL] Running: cat src/calculator.ts...\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r\r\r\n\u001b[?2004l\u001b[?25hexport const add = (a: number, b: number) => a + b;\r\n✓ Command completed · exit 0 · 13ms · ref @2\r\n\r\n\r\u001b[2K• Command completed (13ms) · [SHELL #2] exit 0: export const add = (a: number, b: number) => a + b; (ref @2)\r\n\r\u001b[2K> \r\u001b[2C"
+      ]
+    },
+    {
+      "name": "Running build and handling failed commands",
+      "category": "execution",
+      "verdict": "DETERMINISTIC_INTEGRATION_PASS",
+      "durationMs": 721,
+      "evidence": {
+        "outputTail": "\u001b[?2004h\u001b[?25h\u001b[0 q WAZIR                                                                                                                                                                         wael · auto-routed model\r\n\r\n⚠ Model unavailable: 0 eligible models registered across configured runtimes.\r\n  Unavailable runtimes: anthropic (unavailable), google (unavailable), lmstudio (unavailable), nvidia (unavailable), ollama (unavailable), openai (unavailable)\r\n  Recovery commands:\r\n    • Pull a local Ollama model:       ollama pull qwen2.5-coder\r\n    • Start LM Studio server:          lms server start   (or /launch lmstudio)\r\n    • Authenticate a hosted provider:  wa auth login <anthropic|openai|google>\r\n    • Check runtime diagnostics:       wa doctor          (or /doctor)\r\n  Shell commands (!<cmd> or /sh <cmd>, e.g. !ls -la) remain available without an AI model.\r\n\r\n\r\u001b[2K• Provider disconnected · Model unavailable (0 models registered). Shell commands (!cmd) available.\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r> !sh -c \"echo BUILDING_SUCCESSFUL; exit 0\"\r\n\r\n\r\u001b[2K• Command running: [SHELL] Running: sh -c \"echo BUILDING_SUCCESSFUL; exit 0\"...\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\rBUILDING_SUCCESSFUL\r\n✓ Command completed · exit 0 · 16ms · ref @1\r\n\r\n\r\u001b[2K• Command completed (16ms) · [SHELL #1] exit 0: BUILDING_SUCCESSFUL (ref @1)\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r> !sh -c \"echo TEST_FAILED_ASSERTION >&2; exit 42\"\r\n\r\n\r\u001b[2K• Command running: [SHELL] Running: sh -c \"echo TEST_FAILED_ASSERTION >&2; exit 42\"...\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r✗ Command failed · exit 42 · 15ms · ref @2\r\nstderr:\r\nTEST_FAILED_ASSERTION\r\n\r\n\r\u001b[2K• Execution failed (15ms) · [SHELL #2] exit 42: TEST_FAILED_ASSERTION (ref @2)\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r\r\r\n\u001b[?2004l\u001b[?25h"
+      },
+      "transcript": [
+        "\u001b[?2004h\u001b[?25h\u001b[0 q WAZIR                                                                                                                                                                         wael · auto-routed model\r\n\r\n⚠ Model unavailable: 0 eligible models registered across configured runtimes.\r\n  Unavailable runtimes: anthropic (unavailable), google (unavailable), lmstudio (unavailable), nvidia (unavailable), ollama (unavailable), openai (unavailable)\r\n  Recovery commands:\r\n    • Pull a local Ollama model:       ollama pull qwen2.5-coder\r\n    • Start LM Studio server:          lms server start   (or /launch lmstudio)\r\n    • Authenticate a hosted provider:  wa auth login <anthropic|openai|google>\r\n    • Check runtime diagnostics:       wa doctor          (or /doctor)\r\n  Shell commands (!<cmd> or /sh <cmd>, e.g. !ls -la) remain available without an AI model.\r\n\r\n\r\u001b[2K• Provider disconnected · Model unavailable (0 models registered). Shell commands (!cmd) available.\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r> !sh -c \"echo BUILDING_SUCCESSFUL; exit 0\"\r\n\r\n\r\u001b[2K• Command running: [SHELL] Running: sh -c \"echo BUILDING_SUCCESSFUL; exit 0\"...\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\rBUILDING_SUCCESSFUL\r\n✓ Command completed · exit 0 · 16ms · ref @1\r\n\r\n\r\u001b[2K• Command completed (16ms) · [SHELL #1] exit 0: BUILDING_SUCCESSFUL (ref @1)\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r> !sh -c \"echo TEST_FAILED_ASSERTION >&2; exit 42\"\r\n\r\n\r\u001b[2K• Command running: [SHELL] Running: sh -c \"echo TEST_FAILED_ASSERTION >&2; exit 42\"...\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r✗ Command failed · exit 42 · 15ms · ref @2\r\nstderr:\r\nTEST_FAILED_ASSERTION\r\n\r\n\r\u001b[2K• Execution failed (15ms) · [SHELL #2] exit 42: TEST_FAILED_ASSERTION (ref @2)\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r\r\r\n\u001b[?2004l\u001b[?25h"
+      ]
+    },
+    {
+      "name": "Handling unavailable models",
+      "category": "fault-tolerance",
+      "verdict": "DETERMINISTIC_INTEGRATION_PASS",
+      "durationMs": 430,
+      "evidence": {
+        "exitCode": 1,
+        "reportedSuccess": false,
+        "reasons": [
+          "No models are registered",
+          "model registry is empty"
+        ]
+      },
+      "transcript": [
+        "{\n  \"success\": false,\n  \"reasons\": [\n    \"No models are registered\",\n    \"model registry is empty\"\n  ],\n  \"filesChanged\": [],\n  \"executionId\": \"—\",\n  \"errors\": []\n}\n"
+      ]
+    },
+    {
+      "name": "Multi-agent delegation and remote worker coordination",
+      "category": "orchestration",
+      "verdict": "DETERMINISTIC_INTEGRATION_PASS",
+      "durationMs": 9,
+      "evidence": {
+        "jobId": "job-5dec1f96-8f21-41cc-9a27-e597c40bec02",
+        "taskCount": 2,
+        "allCompleted": true
+      },
+      "transcript": [
+        "Job job-5dec1f96-8f21-41cc-9a27-e597c40bec02 completed with 2 delegated tasks"
+      ]
+    },
+    {
+      "name": "Restarting Wazir without losing durable work",
+      "category": "durability",
+      "verdict": "DETERMINISTIC_INTEGRATION_PASS",
+      "durationMs": 19,
+      "evidence": {
+        "originalJobId": "job-880fe6a5-c2f9-4538-9449-c6616b900582",
+        "recoveredJobId": "job-880fe6a5-c2f9-4538-9449-c6616b900582",
+        "recoveredTask1Status": "completed"
+      },
+      "transcript": [
+        "Recovered job job-880fe6a5-c2f9-4538-9449-c6616b900582 after simulated process restart"
+      ]
+    },
+    {
+      "name": "Cancellation and retry",
+      "category": "lifecycle",
+      "verdict": "DETERMINISTIC_INTEGRATION_PASS",
+      "durationMs": 722,
+      "evidence": {
+        "ptyExitCode": 0,
+        "cancelledStatus": "cancelled",
+        "cancelledTaskAborted": true,
+        "retryAttempts": 3,
+        "retryFinalStatus": "completed"
+      },
+      "transcript": [
+        "\u001b[?2004h\u001b[?25h\u001b[0 q WAZIR                                                                                                                                                                         wael · auto-routed model\r\n\r\n⚠ Model unavailable: 0 eligible models registered across configured runtimes.\r\n  Unavailable runtimes: anthropic (unavailable), google (unavailable), lmstudio (unavailable), nvidia (unavailable), ollama (unavailable), openai (unavailable)\r\n  Recovery commands:\r\n    • Pull a local Ollama model:       ollama pull qwen2.5-coder\r\n    • Start LM Studio server:          lms server start   (or /launch lmstudio)\r\n    • Authenticate a hosted provider:  wa auth login <anthropic|openai|google>\r\n    • Check runtime diagnostics:       wa doctor          (or /doctor)\r\n  Shell commands (!<cmd> or /sh <cmd>, e.g. !ls -la) remain available without an AI model.\r\n\r\n\r\u001b[2K• Provider disconnected · Model unavailable (0 models registered). Shell commands (!cmd) available.\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\r\u001b[2K• No job selected to cancel\r\n\r\u001b[2K> \r\u001b[2C\u001b[1A\r\u001b[2K\r\n\u001b[2K\r\r\r\n\u001b[?2004l\u001b[?25h",
+        "Cancelled job job-59309e7b-f7da-4e4d-8c79-88cc2fd6ee73 with status cancelled",
+        "Retried job job-509b4f4f-4109-4fdc-b2c2-6d5272fae3aa completed after 3 attempts"
+      ]
+    }
+  ]
+}

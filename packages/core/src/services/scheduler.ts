@@ -665,8 +665,12 @@ export class Scheduler {
       .instancesOf(record.id)
       .find((i) => i.loaded && i.health === 'healthy');
     if (loadedInstance) {
-      score += 2;
-      reasons.push(`instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' already loaded`);
+      // A READY instance answers immediately; one merely 'loaded' (still warming,
+      // reconciling, etc.) still needs to be waited on — weight the two differently
+      // instead of treating any loaded instance as equally fast (ported from main@ed4f1d9).
+      const bonus = loadedInstance.state === 'READY' ? 30 : 15;
+      score += bonus;
+      reasons.push(`instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' already loaded${loadedInstance.state === 'READY' ? ' and ready' : ''} (+${bonus})`);
     } else if (this.deps.models.instancesOf(record.id).length > 0) {
       reasons.push('available instance will be loaded on demand');
     } else {

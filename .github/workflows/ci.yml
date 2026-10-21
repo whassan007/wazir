@@ -60,6 +60,9 @@ jobs:
       - name: Run unit and integration test suite
         run: npm test
 
+      - name: Run production-realistic end-to-end acceptance suite
+        run: npm run test:live
+
       - name: Run Wazir acceptance test library (10 Release Gates G0..G9)
         run: npm run test:plan:acceptance
 
@@ -129,6 +132,7 @@ jobs:
             acceptance-test-report.json
             test-plan-report.json
             agent-execution-test-plan-report.json
+            reports/e2e-acceptance-scorecard.json
           if-no-files-found: ignore
 
   # The published npm package, installed and run the way users get it, on every OS, natively

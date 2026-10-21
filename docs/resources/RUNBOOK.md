@@ -47,6 +47,17 @@ unknown limit is **blocked** (not deferred: waiting does not make the limit know
 **Rollback:** set `"enforce": false` (accounting continues, nothing is refused) or
 `wa resources stop` to halt all cloud and subscription dispatch immediately.
 
+Accounts with the same `quotaGroup` are separate authentication identities but share one admission
+scope. When controllers and workers use the same file-backed `resources.db`, SQLite WAL plus
+`BEGIN IMMEDIATE` makes check-and-reserve atomic across processes. Separate ledgers cannot provide
+distributed correctness; point all participants at the same durable control-plane ledger before
+sharing a provider quota. Authentication and cooldown health remain per account.
+
+When `policy.enforce` is `false`, Wazir still records estimates and reservations, but it does not
+prevent paid dispatch or quota oversubscription. Resource output labels this as advisory. Use
+`wa resources validate --profile production` and set `enforce: true` before authorizing paid or
+quota-constrained production execution.
+
 ## Commands
 
 | Command | Use |
@@ -61,6 +72,7 @@ unknown limit is **blocked** (not deferred: waiting does not make the limit know
 | `wa resources reset <account>` | clear an auth/quota/cooldown block after fixing the cause |
 | `wa resources explain <task-id>` | routing decisions, admissions and usage for a task |
 | `wa resources events [--kind k]` | tail the append-only audit trail |
+| `node scripts/resource-routing-benchmark.mjs` | reproducible synthetic multi-account/concurrency/recovery benchmark; reports measured values only |
 
 ## Configuration
 
@@ -85,7 +97,7 @@ unknown limit is **blocked** (not deferred: waiting does not make the limit know
       "contextLimits": { "qwen/qwen3.8-27b": 32768 } },
 
     { "id": "claude-work", "label": "Subscription A", "provider": "anthropic", "kind": "subscription",
-      "integration": "vendor-cli", "agents": ["claude-code@work"],
+      "integration": "vendor-cli", "agents": ["claude-code@work"], "quotaGroup": "anthropic-work-plan",
       "env": { "CLAUDE_CONFIG_DIR": "/home/me/.claude-work" },
       "reserveFor": ["complex", "critical-review"], "priority": 5,
       "limits": [

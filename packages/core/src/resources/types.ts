@@ -55,6 +55,10 @@ export interface Pricing {
 
 export interface AccountConfig {
   id: string;
+  /** Optional provider-side quota identity. Accounts sharing this key are admitted against
+   * one durable ledger scope (useful for multiple controller credentials on one subscription).
+   * Ported from main@2a61e59. */
+  quotaGroup?: string;
   /** Human label for dashboards. */
   label?: string;
   provider: string;
