@@ -1,0 +1,5 @@
+benchmark,scenario,model,execution_id,real_wall_clock_s,user_s,sys_s,engine_total_s,inference_s,overhead_unattributed_ms,notes
+arithmetic_cold,Cold baseline,google/gemma-4-12b-qat,historical-audit-cold,220.00,-,-,-,-,-,Initial Mac audit baseline before repairs (hung in 25s context probe loops + full agent tool planning)
+arithmetic_repaired,Post-lifecycle repair,google/gemma-4-12b-qat,historical-audit-repaired,33.00,-,-,-,-,-,Prior coding-agent pipeline with repo scan and agent multi-turn planning
+string_reversal,Cold baseline,google/gemma-4-12b-qat,historical-audit-reverse,63.00,-,-,-,-,-,Coding-agent planning + test verification attempts on trivial string reversal
+json_generation,Cold baseline,google/gemma-4-12b-qat,historical-audit-json,336.00,-,-,-,-,-,Trivial JSON prompt failed across multiple repair phases and verification timeouts

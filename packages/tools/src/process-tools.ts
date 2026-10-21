@@ -124,6 +124,11 @@ export const gitTool: Tool = {
 interface CheckToolInput {
   script?: string;
   timeoutMs?: number;
+  /** Scope the check to these workspace package names (e.g. "@wazir/agents") instead of
+   *  running the root script across the whole monorepo. A workspace missing this script is
+   *  skipped (`--if-present`), not treated as a failure. Omit to run the full, unscoped
+   *  root script — the safe default when scoping can't be determined. */
+  workspaces?: string[];
 }
 
 async function readProjectScripts(projectRoot: string): Promise<Record<string, string>> {
@@ -151,6 +156,11 @@ function makeCheckTool(name: string, description: string, defaultScript: string,
             description: `npm script name from package.json to run instead of '${defaultScript}'. Must already be defined in the project; arbitrary commands are rejected.`,
           },
           timeoutMs: { type: 'number', description: 'Timeout in milliseconds (default 300000)' },
+          workspaces: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Workspace package names to scope this check to, instead of the whole repo.',
+          },
         },
       },
       permissions: [permission],
@@ -172,9 +182,17 @@ function makeCheckTool(name: string, description: string, defaultScript: string,
           durationMs: Date.now() - started,
         };
       }
-      const command = `npm run ${script}`;
+      const workspaces = Array.isArray(input.workspaces)
+        ? input.workspaces.filter((w): w is string => typeof w === 'string' && w.length > 0)
+        : [];
+      // --if-present: a workspace that doesn't define this script is skipped, not a failure —
+      // scoping to "the packages this task touched" must not fail a check that package never had.
+      const args = workspaces.length
+        ? ['run', script, ...workspaces.flatMap((w) => ['--workspace', w]), '--if-present']
+        : ['run', script];
+      const command = `npm ${args.join(' ')}`;
       try {
-        const result = await runFile('npm', ['run', script], {
+        const result = await runFile('npm', args, {
           cwd: ctx.projectRoot,
           projectRoot: ctx.projectRoot,
           timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : 300_000,
@@ -185,6 +203,7 @@ function makeCheckTool(name: string, description: string, defaultScript: string,
         return toToolResult(command, result, {
           cwd: ctx.projectRoot,
           projectRoot: ctx.projectRoot,
+          workspaces,
         });
       } catch (error) {
         return { ok: false, output: '', error: errorMessage(error), durationMs: Date.now() - started };

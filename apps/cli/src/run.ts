@@ -92,6 +92,9 @@ export interface ExecuteTaskOptions {
   routingMode?: import('@wazir/core').RoutingMode;
   /** Runtime preset name (e.g. 'standard', 'minimal'). */
   preset?: string;
+  /** Force VERIFY to build/test/lint/typecheck the whole repo instead of scoping to the
+   *  workspace(s) the task touched (`wa run --full-verify`). */
+  fullVerification?: boolean;
 }
 
 export interface TaskOutcome {
@@ -868,6 +871,7 @@ export async function executeTask(
         maxTurns: options.maxTurns,
         contextTokens: context.available.tokens,
         isCancelled: () => cancelled,
+        fullVerification: options.fullVerification,
       },
       runtime,
     )) {
@@ -904,6 +908,11 @@ export async function executeTask(
             emitJson({ type: 'error', error: turn.error, executionId });
             log(color.red(`    ${untrusted(turn.error.split('\n')[0].slice(0, 200))}`));
           }
+          // The model may have reached "done" with a real answer before verification
+          // failed it (e.g. a Q&A prompt correctly answered but flagged for making no
+          // code changes). Surface it instead of letting a failed task hide what the
+          // model actually said.
+          if (turn.content) summary = turn.content;
           break;
         default:
           break;

@@ -1,0 +1,5 @@
+benchmark,scenario,model,execution_id,real_wall_clock_s,user_s,sys_s,engine_total_s,inference_s,orchestration_overhead_ms,tokens_in,tokens_out,tokens_per_sec,speedup_vs_baseline
+arithmetic,Warm resident fast-path,google/gemma-4-12b-qat,exec-mvde30v7-1,6.26,4.31,0.59,3.00,2.30,720,52,40,17.39,35.1x (vs 220s) / 5.3x (vs 33s)
+string_reversal,Warm resident fast-path,google/gemma-4-12b-qat,exec-mvde40pg-1,7.28,4.36,0.65,4.20,3.40,743,52,61,17.94,8.7x (vs 63s)
+json_generation,Warm resident fast-path,google/gemma-4-12b-qat,exec-mvde4dql-1,11.39,4.47,0.62,8.30,7.60,731,58,196,25.79,29.5x (vs 336s)
+code_generation,Warm resident fast-path,google/gemma-4-12b-qat,exec-mvde5j4t-1,18.28,4.59,0.69,15.00,14.30,722,56,427,29.86,N/A

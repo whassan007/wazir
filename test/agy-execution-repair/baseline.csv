@@ -1,0 +1,7 @@
+id,type,prompt,wall_time_s,success,result_correct,failure_reason,source
+G01,coding(default),"23 + 19",220,false,unknown (answer hidden pre-fix),"no code mods + full monorepo build failure",test/agy-mac-gemma session
+G02,coding(default),"12 x 8",33,false,true,"no code modifications (by design)",test/agy-mac-gemma session
+G03,coding(default),"reverse WAZIR",63,false,true,"no code modifications (by design)",test/agy-mac-gemma session
+G04,coding(default),"uppercase hello mac",252,false,true,"full monorepo build fail (Tauri/network, unrelated)",test/agy-mac-gemma session
+G05,coding(default),"JSON status/count",336,false,true,"full monorepo build fail (Tauri/network, unrelated)",test/agy-mac-gemma session
+G06,coding(default),"python square function",37 then 90,false,true,"1st: real memory admission denial; 2nd: full monorepo build fail (Tauri/network)",test/agy-mac-gemma session

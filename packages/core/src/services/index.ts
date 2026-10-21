@@ -77,6 +77,8 @@ export type {
   WorktreeManagerOptions,
   WorktreeMergeResult,
 } from './worktreeManager.js';
+export { captureHeadFingerprint, describeUnexpectedHeadDrift } from './repoIntegrityGuard.js';
+export type { RepoHeadFingerprint } from './repoIntegrityGuard.js';
 export { VerifiedIntegrationCoordinator } from './verifiedIntegrationCoordinator.js';
 export type {
   AgentIntegrationManifest,

@@ -1,5 +1,5 @@
 import { formatVerificationInspection } from './tui/observabilityViews.js';
-import { explainExecution, inspectVerificationEvidence, explainCompletion, ModelLifecycleError, summarizeExecution, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
+import { explainExecution, inspectVerificationEvidence, explainCompletion, ModelLifecycleError, summarizeExecution, captureHeadFingerprint, describeUnexpectedHeadDrift, type ModelLoadOptions, type ModelLoadPlan } from '@wazir/core';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -857,6 +857,7 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   routingMode?: import('@wazir/core').RoutingMode;
   json?: boolean;
   preset?: string;
+  fullVerification?: boolean;
 }): Promise<{ code: number; output: string }> {
   // A fresh, failed preflight means this agent would fail too: say why now rather than after
   // a full launch. Agents never checked (or with an expired result) run normally.
@@ -877,6 +878,12 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
       };
     }
   }
+  // Defense-in-depth (see packages/core/src/services/repoIntegrityGuard.ts): a 2026-10-17
+  // audit observed a single task invocation coincide with an unauthorized merge commit
+  // landing on the user's checked-out branch, with no trace in any of Wazir's own
+  // policy/audit/event logs. The exact trigger wasn't isolated. Regardless of mechanism,
+  // never hand back a result without telling the user their repository moved underneath them.
+  const headBefore = await captureHeadFingerprint(engine.projectRoot);
   const outcome = await executeTask(engine, description, {
     type: options.type,
     model: options.model,
@@ -888,7 +895,14 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
     json: options.json,
     quiet: options.json === true,
     preset: options.preset,
+    fullVerification: options.fullVerification,
   });
+  const headDrift = await describeUnexpectedHeadDrift(engine.projectRoot, headBefore);
+  if (headDrift) {
+    outcome.success = false;
+    outcome.reasons = [headDrift, ...outcome.reasons];
+    outcome.errors = [headDrift, ...outcome.errors];
+  }
 
   if (options.json) {
     return { code: outcome.success ? 0 : 1, output: JSON.stringify(outcome, null, 2) };

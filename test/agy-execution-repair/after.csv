@@ -1,0 +1,4 @@
+id,type,prompt,wall_time_s,success,result_correct,notes
+T1,chat,"23 + 19",15.8,true,true,"Routed to wazir-step agent (single implement phase, no PLAN, no VERIFY check battery). First success:true Q&A task in either audit session."
+T2,coding(default),"python square function (model chose a new top-level python_scripts/ dir)",245.5,false,true,"Correctly fell back to FULL scope (file outside every known workspace) - safety fallback working as designed, not a scoping failure. Still fails on the pre-existing, unrelated Tauri/crates.io network issue (P0-5, not addressed by P0-A's scoping - only mitigated when a task's files land inside a known workspace)."
+T3,coding(default),"create packages/agents/src/mathHelpers.ts with a square function",73.4,true,true,"Scoped to @wazir/agents only (verification.scope message confirms it). build/test/typecheck ACTUALLY PASSED (no Tauri/network involvement). First successful file-mutating task, verified, in either audit session."

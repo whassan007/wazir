@@ -459,6 +459,7 @@ taskCmd
   .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
   .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
+  .option('--full-verify', 'Build/test/lint/typecheck the whole repo instead of scoping to the workspace(s) the task touched')
   .description('Run a new task')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
@@ -480,6 +481,7 @@ taskCmd
         allowHosted: options.allowHosted,
         routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
         json: options.json,
+        fullVerification: options.fullVerify,
       },
     );
     console.log(result.output);
@@ -538,6 +540,7 @@ program
   .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
   .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
+  .option('--full-verify', 'Build/test/lint/typecheck the whole repo instead of scoping to the workspace(s) the task touched')
   .description('Run a new task (alias for wa task run)')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
@@ -559,6 +562,7 @@ program
         allowHosted: options.allowHosted,
         routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
         json: options.json,
+        fullVerification: options.fullVerify,
       },
     );
     if (!options.json || result.output) {

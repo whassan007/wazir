@@ -2,6 +2,7 @@ import { detectProgress, observationFingerprint } from "./diagnostics.js";
 import { DEFAULT_STOP_CONDITIONS, firstStop, type StopCheckpoint, type StopCondition, type StopDecision } from "./stopConditions.js";
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { resolveVerificationScope } from './verificationScope.js';
 import { injectFault } from '@wazir/shared';
 import type {
   AgentAdapter,
@@ -744,8 +745,18 @@ export class CodingAgent implements AgentAdapter {
     };
     let currentToolSurface = compileSurface('plan');
 
+    // P0-B (test/agy-execution-repair): a task whose contract is a textual answer only
+    // ('chat', or mutationRequired explicitly false) should not pay for a separate PLAN
+    // round-trip before it's allowed to answer — the turn loop already accepts a `done`
+    // action during PLAN (see the `action.action === 'done'` branch below), it's the prompt
+    // that was pushing the model to always produce a plan first regardless of task shape.
+    const fastAnswerHint = request.taskType === 'chat' || request.mutationRequired === false
+      ? '\n- This task only requires a textual answer, not a code change. If you can answer right now, respond immediately with {"action":"done","summary":"..."} — do not produce a plan first.'
+      : '';
+    const systemPromptExtra = `${this.systemPromptExtra ?? ''}${fastAnswerHint}` || undefined;
+
     const messages: ChatMessage[] = [
-      { role: 'system', content: buildSystemPrompt(request.projectRoot, effectiveTools, this.systemPromptExtra) },
+      { role: 'system', content: buildSystemPrompt(request.projectRoot, effectiveTools, systemPromptExtra) },
       {
         role: 'user',
         content:
@@ -929,7 +940,7 @@ export class CodingAgent implements AgentAdapter {
       // The text contract and native schemas must describe the same current surface.
       messages[0].content = buildSystemPrompt(request.projectRoot, currentToolSurface.tools.map(t => ({
         name: t.descriptor.name, description: t.descriptor.description, inputSchema: t.descriptor.inputSchema,
-      })), this.systemPromptExtra, currentToolSurface.selectedProtocol === 'native_tool_call');
+      })), systemPromptExtra, currentToolSurface.selectedProtocol === 'native_tool_call');
       let content = '';
       let toolCall: { name: string; input: Record<string, unknown> } | undefined;
       let error: string | undefined;
@@ -2048,9 +2059,35 @@ export class CodingAgent implements AgentAdapter {
       if (!documents.some(d => modelSummary?.includes(d.citation.citationId) || modelSummary?.includes(d.url) || modelSummary?.includes(d.finalUrl)))
         failures.push('WEB_EVIDENCE_REQUIRED: research completion requires a successfully fetched document cited in the answer.');
     }
-    for (const check of (!mutationRequired || nonMutatingTask) && filesChangedSet.size === 0 ? [] : ['build', 'test', 'lint', 'typecheck']) {
+    // If nothing was actually changed, the checks above already know why: either the
+    // mutation-required failure just above fired (task expected code and got none — running
+    // build/test/lint/typecheck against an untouched repo adds nothing but minutes of noise),
+    // or this is a non-mutating / read-only task (`!mutationRequired || nonMutatingTask`) with
+    // nothing to build.
+    const skipChecks = filesChangedSet.size === 0;
+    // Scope checks to the workspace package(s) the task actually touched instead of the whole
+    // monorepo (live audit evidence, test/agy-mac-gemma/issues-ranked.md P0-5: a one-line Python
+    // or JS change was triggering the Tauri desktop app's build, which needs network access this
+    // environment doesn't have — every genuinely correct answer in that audit "failed" for this
+    // reason alone). Fall back to the full, unscoped run whenever scoping can't be justified:
+    // an explicit --full-verify request, or a changed file outside every known workspace.
+    const scope = skipChecks || request.fullVerification
+      ? undefined
+      : resolveVerificationScope(request.projectRoot, filesChangedSet);
+    const useFullScope = !scope || scope.fullScopeRequired || scope.workspaces.length === 0;
+    if (!skipChecks) {
+      yield {
+        kind: 'message',
+        content: request.fullVerification
+          ? 'verification.scope: full (explicitly requested via --full-verify)'
+          : useFullScope
+            ? `verification.scope: full (${scope?.fullScopeRequired ? 'a changed file is outside every known workspace package' : 'no workspace package could be resolved for the changed files'})`
+            : `verification.scope: ${scope!.workspaces.join(', ')} (changed files: ${[...filesChangedSet].join(', ')})`,
+      };
+    }
+    for (const check of skipChecks ? [] : ['build', 'test', 'lint', 'typecheck']) {
       if (request.isCancelled?.()) return;
-      const result = await runtime.executeTool(check, {});
+      const result = await runtime.executeTool(check, useFullScope ? {} : { workspaces: scope!.workspaces });
       const output = result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n');
       if (output && /missing script|no such file|not found/i.test(output) && !result.ok) {
         // project does not define this check — not applicable, not a failure
@@ -2065,6 +2102,9 @@ export class CodingAgent implements AgentAdapter {
       yield {
         kind: 'error', error: `MAX_TURNS: reached ${maxTurns} turns without completing the task` +
           (failures.length ? `\nverification failed:\n${failures.join('\n---\n')}` : ''),
+        // The model may still have said something useful before the budget ran out —
+        // an operator shouldn't have to dig through logs to see whether it was close.
+        content: modelSummary,
         errorKind: 'other', terminationReason: 'MAX_TURNS', protocolMetrics: currentMetrics(),
       };
       return;
@@ -2083,6 +2123,15 @@ export class CodingAgent implements AgentAdapter {
     yield {
       kind: 'error',
       error: `verification failed:\n${failures.join('\n---\n')}`,
+      // A task can reach "done" with a correct, user-facing answer (e.g. a Q&A prompt
+      // answered without writing code) and still fail VERIFY's mutation-required check.
+      // Live audit evidence (2026-10-17, test/agy-mac-gemma): a model answered "96"
+      // correctly, VERIFY failed it for "no code modifications" (expected — the task
+      // type defaulted to coding), and the "96" was then discarded entirely, leaving no
+      // way to tell whether the model had even gotten the trivial question right. Never
+      // throw away what the model actually said just because the task is being reported
+      // as a failure.
+      content: modelSummary,
       errorKind: 'verification',
       terminationReason: turnBudgetExhausted ? 'MAX_TURNS' : 'VERIFICATION_FAILED',
       protocolMetrics: currentMetrics(),
