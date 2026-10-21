@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   createIsolatedWorkspace,
   runWa,
   runWaPty,
 } from './harness/e2eHarness.js';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 import { AcceptanceScorecard } from './harness/scorecard.js';
 import {
   ComputerRegistry,
@@ -45,10 +48,12 @@ describe('Codex Task 1: Production-Realistic End-to-End User Journeys', () => {
       expect(homeFiles).toContain('wazir.json');
       expect(homeFiles).toContain('resources.db');
 
-      // 2. Launch `wa --version` and verify matching version
+      // 2. Launch `wa --version` and verify it matches package.json's version rather than a
+      // hardcoded release string, which goes stale on every release (was a literal '0.2.7').
       const verRes = await runWa(['--version'], { cwd: workspaceDir, env });
       expect(verRes.exitCode).toBe(0);
-      expect(verRes.combined.trim()).toBe('0.2.7');
+      const pkgVersion = JSON.parse(await fs.readFile(path.join(repoRoot, 'package.json'), 'utf8')).version;
+      expect(verRes.combined.trim()).toBe(pkgVersion);
 
       scorecard.record({
         name: 'First installation and launch',
