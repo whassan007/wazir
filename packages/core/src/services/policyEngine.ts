@@ -12,12 +12,22 @@ import type {
 import type { PolicyRequirements, Task } from '../types/task.js';
 import { appendAuditEvent } from '@wazir/shared';
 
+declare module '../types/policy.js' {
+  interface PolicyActionRequest {
+    effectiveIsolation?: 'bwrap' | 'sandbox-exec' | 'seatbelt' | 'container' | 'none' | string;
+    requiredIsolation?: 'os' | 'container' | 'bwrap' | 'sandbox-exec' | 'seatbelt' | 'none' | string;
+  }
+  interface PolicyEngineOptions {
+    requiredIsolation?: 'os' | 'container' | 'bwrap' | 'sandbox-exec' | 'seatbelt' | 'none' | string;
+  }
+}
+
 // `env`/`printenv` are deliberately absent: they dump the operator's whole
 // environment (API keys, database URLs) into an execution record that is
 // persisted and can be shipped to a control plane (security review F-13).
 const SAFE_SHELL_COMMANDS = new Set([
   'ls', 'pwd', 'cat', 'head', 'tail', 'wc', 'file', 'stat', 'du', 'df',
-  'which', 'whoami', 'uname', 'date', 'echo', 'printf',
+  'which', 'whoami', 'uname', 'date', 'echo', 'printf', 'true', 'false', 'exit',
   'ps', 'tree', 'rg', 'grep', 'find', 'sort', 'uniq', 'cut', 'column',
   // Compilers: unlike interpreters/package managers (ASK_SHELL_COMMANDS), a plain
   // compile invocation doesn't execute arbitrary model-supplied code — it only turns
@@ -488,6 +498,58 @@ export class PolicyEngine {
   registerMCPTool(name: string, risk: string, effect: import('../types/policy.js').PolicyEffect): void { this.mcpRules.set(name, { risk, effect }); }
   unregisterMCPTool(name: string): void { this.mcpRules.delete(name); }
 
+  /**
+   * Verifies that the effective sandbox isolation satisfies any configured
+   * policy requirement (`requiredIsolation`). Fails closed when required
+   * isolation is unavailable or degrades to `'none'`.
+   */
+  checkIsolationCompliance(request: PolicyActionRequest): { allowed: boolean; reason?: string } {
+    const required = (request.requiredIsolation ?? this.options.requiredIsolation ?? '').trim().toLowerCase();
+    if (!required || required === 'none') {
+      return { allowed: true };
+    }
+
+    const envSandbox = (process.env.WAZIR_SANDBOX ?? '').trim().toLowerCase();
+    const rawEffective = request.effectiveIsolation ?? (envSandbox === 'none' ? 'none' : undefined);
+    const effective = (rawEffective ?? '').trim().toLowerCase();
+
+    if (!effective || effective === 'none') {
+      return {
+        allowed: false,
+        reason: `policy requires '${required}' sandbox isolation, but effective isolation is '${effective || 'none'}' (refusing silent fallback to host execution)`,
+      };
+    }
+
+    if (required === 'os' || required === 'required') {
+      if (['bwrap', 'sandbox-exec', 'seatbelt', 'container'].includes(effective)) {
+        return { allowed: true };
+      }
+      return {
+        allowed: false,
+        reason: `policy requires OS sandbox isolation, but effective isolation is '${effective}'`,
+      };
+    }
+
+    if (required === 'seatbelt' || required === 'sandbox-exec') {
+      if (effective === 'seatbelt' || effective === 'sandbox-exec') {
+        return { allowed: true };
+      }
+      return {
+        allowed: false,
+        reason: `policy requires '${required}' isolation, but effective isolation is '${effective}'`,
+      };
+    }
+
+    if (effective !== required) {
+      return {
+        allowed: false,
+        reason: `policy requires '${required}' isolation, but effective isolation is '${effective}'`,
+      };
+    }
+
+    return { allowed: true };
+  }
+
   async authorize(request: PolicyActionRequest): Promise<PolicyDecision> {
     const decision = this.classify(request);
     return this.resolveAsk(request, decision);
@@ -607,6 +669,15 @@ export class PolicyEngine {
   }
 
   private doClassify(request: PolicyActionRequest): PolicyDecision {
+    const isolationCheck = this.checkIsolationCompliance(request);
+    if (!isolationCheck.allowed) {
+      return {
+        decision: 'deny',
+        rule: 'isolation-unavailable',
+        reasons: [isolationCheck.reason ?? 'required sandbox isolation is unavailable'],
+      };
+    }
+
     const tool = request.tool;
     const projectRoot = request.projectRoot ?? this.options.projectRoot;
     const lower = tool.toLowerCase();
@@ -864,7 +935,7 @@ export class PolicyEngine {
     const projectRoot = request.projectRoot ?? this.options.projectRoot;
     const decisions: PolicyDecision[] = [];
     for (const segment of segments) {
-      decisions.push(...this.classifyShellSegment(segment, projectRoot, request.executionId));
+      decisions.push(...this.classifyShellSegment(segment, projectRoot, request.executionId, request.effectiveIsolation));
     }
 
     const merged = mostRestrictive(decisions);
@@ -874,7 +945,7 @@ export class PolicyEngine {
     return merged;
   }
 
-  private classifyShellSegment(segment: ShellSegment, projectRoot: string, executionId?: string): PolicyDecision[] {
+  private classifyShellSegment(segment: ShellSegment, projectRoot: string, executionId?: string, effectiveIsolation?: string): PolicyDecision[] {
     const decisions: PolicyDecision[] = [];
     const text = segment.words.join(' ');
 
@@ -891,7 +962,7 @@ export class PolicyEngine {
     for (const word of segment.words) {
       const match = word.match(/\$\((.+)\)/);
       if (match) {
-        decisions.push(this.classifyShell({ tool: 'shell', input: { command: match[1] }, projectRoot, executionId }));
+        decisions.push(this.classifyShell({ tool: 'shell', input: { command: match[1] }, projectRoot, executionId, effectiveIsolation }));
       }
     }
 
@@ -905,6 +976,26 @@ export class PolicyEngine {
     }
 
     const { name, args } = resolveCommand(segment.words);
+
+    if (
+      (name === 'sh' || name === 'bash' || name === 'dash') &&
+      args.length === 2 &&
+      args[0] === '-c' &&
+      typeof args[1] === 'string' &&
+      !args[1].includes('$(') &&
+      !args[1].includes('`')
+    ) {
+      decisions.push(
+        this.classifyShell({
+          tool: 'shell',
+          input: { command: args[1] },
+          projectRoot,
+          executionId,
+          effectiveIsolation,
+        }),
+      );
+      return decisions;
+    }
 
     // Running a binary this exact task already compiled via an already-approved compile
     // step isn't really "an arbitrary unknown command" — the source that produced it was
@@ -932,6 +1023,17 @@ export class PolicyEngine {
             decision: 'ask',
             rule: 'shell-workspace-artifact-ask',
             reasons: [`execution of workspace artifact in protected path '${rawFirstWord}': ${protectedReason}`],
+          });
+          return decisions;
+        }
+        const sandboxDisabled =
+          (effectiveIsolation ?? '').trim().toLowerCase() === 'none' ||
+          (process.env.WAZIR_SANDBOX ?? '').trim().toLowerCase() === 'none';
+        if (sandboxDisabled) {
+          decisions.push({
+            decision: 'ask',
+            rule: 'shell-workspace-artifact-ask',
+            reasons: [`execution of workspace artifact '${rawFirstWord}' requires approval when sandbox isolation is disabled (effectiveIsolation=none)`],
           });
           return decisions;
         }

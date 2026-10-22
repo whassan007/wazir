@@ -47,6 +47,7 @@ import {
 import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } from '../blocks.js';
 import { resolveReference, type ResolvedReference } from '../references.js';
 import { tokensPerSecond } from '@wazir/shared';
+import { runShell, sandboxStatus } from '@wazir/tools';
 import { loadUpdateConfig, readUpdateHistory } from '../updater/storage.js';
 import { parseAction } from '@wazir/agents';
 import { inspectVerificationEvidence, explainCompletion, type VerificationInspection, type WhyCompleteAnswer, type ArtifactProvenance } from '@wazir/core';
@@ -3787,11 +3788,42 @@ export class FleetTui {
     }
 
     try {
-      const { stdout = '', stderr = '' } = await execFileAsync('/bin/sh', ['-c', shellCmd], {
+      const effectiveIsolation = sandboxStatus().mode;
+      if (this.engine.policy) {
+        const decision = await this.engine.policy.authorize({
+          tool: 'shell',
+          input: { command: shellCmd },
+          projectRoot: this.engine.projectRoot,
+          effectiveIsolation,
+        });
+        if (decision.decision !== 'allow') {
+          const policyErr: Error & { code?: number; stdout?: string; stderr?: string } = new Error(
+            `policy ${decision.decision} (${decision.rule}): ${decision.reasons.join('; ')}`,
+          );
+          policyErr.code = 126;
+          policyErr.stdout = '';
+          policyErr.stderr = policyErr.message;
+          throw policyErr;
+        }
+      }
+      const res = await runShell(shellCmd, {
         cwd: this.engine.projectRoot,
-        timeout: 30_000,
+        projectRoot: this.engine.projectRoot,
+        timeoutMs: 30_000,
         maxBuffer: 1024 * 1024,
+        networkAllowed: this.engine.config?.networkAllowed ?? false,
+        env: { PWD: this.engine.projectRoot },
       });
+      if (res.code !== 0) {
+        const execErr: Error & { code?: number; stdout?: string; stderr?: string } = new Error(
+          res.stderr || `Command failed with exit code ${res.code}`,
+        );
+        execErr.code = res.code;
+        execErr.stdout = res.stdout;
+        execErr.stderr = res.stderr;
+        throw execErr;
+      }
+      const { stdout = '', stderr = '' } = res;
       const durationMs = Math.max(0, Date.now() - startedAt);
       const blockId = tracker?.block.id;
       if (tracker) {
