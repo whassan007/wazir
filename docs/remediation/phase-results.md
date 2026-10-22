@@ -70,3 +70,19 @@
   - `./node_modules/.bin/vitest run packages/core/tests/phase3RecoveryAndTransitions.test.ts packages/core/tests/phase3LeasesAndFencing.test.ts packages/core/tests/phase3ReservationsAndQuota.test.ts packages/core/tests/statusTransitions.test.ts packages/core/tests/jobOrchestrator.test.ts packages/core/tests/executionRecovery.test.ts packages/core/tests/recoveryManager.test.ts packages/core/tests/executionEngine.test.ts packages/core/tests/resources.test.ts packages/core/tests/modelLifecycleAdmission.test.ts apps/api/tests/durableDispatch.test.ts`: **PASS** (11 test files, 137/137 tests passed)
 - **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
   - Audited `dbc76a45e2e42b512a2c59cf1c4b085830e64ec6` across all 4 Phase 3 issues (`ISS-012`–`ISS-015`) and all new/existing regression test suites: **PASS**.
+
+---
+
+## Phase 4 — Security, Mobile, and Automatic Updates (P1)
+- **Status**: **PASS**
+- **Integrated Commit SHA**: `8362ee493b90e33b4111c2907cd531946787ecd7`
+- **Worker Commits Integrated**:
+  - `4cdb07c` (Security & Platform Engineer 4A: `ISS-016` — Dynamic `CONTROLLER_VERSION`, real semver & protocol negotiation in `/api/v1/mobile/handshake` & `evaluateMobileCompatibility`, expired credential rejection in `rotateMobileDeviceCredential`, and `detectDefaultAdvertiseHttpsUrl` scheme fidelity)
+  - `56d30f2` (Security & Platform Engineer 4B: `ISS-017` — Durable `execution/*`, `job/*`, and `dispatch/*` active-work inspection, deferral, and `drainAndApply` polling in `UpdateService` and `UpdateScheduler`)
+  - `d871a96` & `8362ee4` (Security & Platform Engineer 4C + Orchestrator Integration: `ISS-018` — `effectiveIsolation` propagation across CLI/Fleet/API/TUI `policy.authorize()`, fail-closed `checkIsolationCompliance`, sandboxed `allowWorkspaceArtifactExecution`, `FleetTui.executeInlineShellCommand` policy/sandbox routing, `codeModeTool` `MUTATING`/`exclusive` classification, and `CodeModeService` VM realm prototype/constructor lockdown)
+- **Verification Executed**:
+  - `npm run typecheck`: **PASS** (exit 0)
+  - `npm run build:cli`: **PASS** (exit 0, `bin/wa.js` 18.7 MB)
+  - `./node_modules/.bin/vitest run packages/core/tests/phase4SandboxAndCodeMode.test.ts packages/core/tests/policyEngine.test.ts packages/core/tests/codeMode.test.ts packages/tools/tests/sandbox.test.ts apps/cli/tests/executeTask.e2e.test.ts apps/cli/tests/updater.test.ts apps/api/tests/phase4MobileCompatibility.test.ts apps/api/tests/mobileApi.test.ts apps/api/tests/multiSurface.test.ts`: **PASS** (9 test files, 130/130 tests passed)
+- **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
+  - Audited `8362ee493b90e33b4111c2907cd531946787ecd7` across all 3 Phase 4 issues (`ISS-016`–`ISS-018`) and all new/existing regression test suites: **PASS**.
