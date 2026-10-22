@@ -19,18 +19,24 @@ function resolveControllerConfig(opts: { url?: string; token?: string }): Mobile
   return { controllerUrl, operatorToken };
 }
 
-function detectDefaultAdvertiseHttpsUrl(controllerUrl: string, explicitAdvertiseUrl?: string): string {
-  if (explicitAdvertiseUrl) return explicitAdvertiseUrl.replace(/\/+$/, '');
+export function detectDefaultAdvertiseHttpsUrl(controllerUrl: string, explicitAdvertiseUrl?: string): string {
+  const configuredAdvertiseUrl = explicitAdvertiseUrl ?? process.env.WAZIR_ADVERTISE_URL;
+  if (configuredAdvertiseUrl && configuredAdvertiseUrl.trim()) {
+    return configuredAdvertiseUrl.trim().replace(/\/+$/, '');
+  }
   try {
     const parsed = new URL(controllerUrl);
     if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost') {
-      return controllerUrl;
+      return controllerUrl.replace(/\/+$/, '');
     }
     const interfaces = os.networkInterfaces();
     for (const list of Object.values(interfaces)) {
       for (const iface of list ?? []) {
         if (!iface.internal && iface.family === 'IPv4') {
-          const scheme = parsed.protocol === 'https:' ? 'https' : 'https';
+          const isTls =
+            parsed.protocol === 'https:' ||
+            Boolean(process.env.WAZIR_TLS_CERT && process.env.WAZIR_TLS_KEY);
+          const scheme = isTls ? 'https' : 'http';
           const portPart = parsed.port ? `:${parsed.port}` : '';
           return `${scheme}://${iface.address}${portPart}`;
         }
@@ -39,7 +45,7 @@ function detectDefaultAdvertiseHttpsUrl(controllerUrl: string, explicitAdvertise
   } catch {
     // fallback
   }
-  return controllerUrl;
+  return controllerUrl.replace(/\/+$/, '');
 }
 
 async function apiRequest<T>(
