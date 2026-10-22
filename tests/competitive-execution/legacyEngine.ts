@@ -179,4 +179,3 @@ export async function buildTestEngine(projectRoot: string, scriptedReplies?: str
     worker: fakeWorker,
   };
 }
-
