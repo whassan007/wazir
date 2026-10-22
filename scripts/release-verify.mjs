@@ -73,6 +73,7 @@ const checks = [
   { name: 'wa models list', args: ['models', 'list'] },
   { name: 'wa resources', args: ['resources'] },
   { name: 'wa doctor --json', args: ['doctor', '--json'] },
+  { name: 'wa update status --json', args: ['update', 'status', '--json'] },
 ];
 
 let failed = 0;

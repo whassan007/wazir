@@ -65,8 +65,11 @@ else
     find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} + 2>/dev/null || true
   fi
 
-  echo "==> Building all workspaces (log: $BUILD_LOG)"
-  if ! npm run build 2>&1 | tee "$BUILD_LOG"; then
+  echo "==> Building CLI workspaces (log: $BUILD_LOG)"
+  # Deliberately not `npm run build`: that also builds @wazir/desktop via `tauri
+  # build`, which requires Cargo and network access to crates.io. A CLI install
+  # has no use for the desktop app and must not fail or stall because of it.
+  if ! npm run build:cli 2>&1 | tee "$BUILD_LOG"; then
     # tsc --build reports the same diagnostic once per dependent workspace with a
     # different relative path; normalise to basename+position and dedupe.
     ERRORS="$(grep -E 'error TS[0-9]+' "$BUILD_LOG" | sed -E 's#^([^(]*/)?([^/(]+)\(#\2(#' | sort -u || true)"
@@ -136,9 +139,24 @@ exec "\$NODE_BIN" "\$CLI" "\$@"
 SHIM
 chmod +x "$BIN_DIR/wa"
 
-# Remove a stale npm-link `wa` from any nvm-managed node so it can't shadow the shim.
+# Refuse to leave a stale source launcher installed and record provenance.
+SOURCE_VERSION="$(node -p "require('./package.json').version")"
+SOURCE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+INSTALLED_VERSION="$(WAZIR_HOME="${WAZIR_HOME:-$HOME/.wazir}" "$BIN_DIR/wa" --version 2>/dev/null || true)"
+if [[ "$INSTALLED_VERSION" != "$SOURCE_VERSION" ]]; then
+  echo "error: installed version '$INSTALLED_VERSION' does not match source '$SOURCE_VERSION'" >&2
+  echo "       executable: $BIN_DIR/wa; source commit: $SOURCE_COMMIT" >&2
+  echo "       remediation: put $BIN_DIR first on PATH, then re-run the installer" >&2
+  exit 1
+fi
+printf '%s\n' "version=$SOURCE_VERSION" "commit=$SOURCE_COMMIT" "source=$REPO_ROOT" > "$BIN_DIR/wa.build-info"
+
+# Diagnose a stale npm-link `wa`; never delete another package manager's install.
 for stale in "$HOME"/.nvm/versions/node/*/bin/wa; do
-  [[ -L "$stale" ]] && rm -f "$stale" && echo "    removed stale npm link $stale"
+  if [[ -L "$stale" ]]; then
+    echo "warning: npm-linked Wazir launcher may shadow $BIN_DIR/wa: $stale" >&2
+    echo "         remediation: put $BIN_DIR first on PATH or remove the link explicitly" >&2
+  fi
 done
 
 # Make sure the shim directory is on PATH for future shells.
