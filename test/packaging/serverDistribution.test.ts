@@ -78,7 +78,7 @@ describe('Server Distribution & Containerization', () => {
       const control = readFileSync(controlPath, 'utf8');
       expect(control).toContain('Package: wazir');
       expect(control).toContain(`Version: ${currentVersion}`);
-      expect(control).toContain('Depends: nodejs (>= 22.5.0)');
+      expect(control).toContain('Depends: nodejs (>= 22.13.0)');
 
       // Postinst creates user and reloads systemd
       const postinst = readFileSync(postinstPath, 'utf8');
@@ -106,8 +106,8 @@ describe('Server Distribution & Containerization', () => {
 
       expect(spec).toContain('Name:           wazir');
       expect(spec).toContain(`Version:        ${currentVersion}`);
-      expect(spec).toContain('License:        AGPL-3.0-or-later');
-      expect(spec).toContain('Requires:       nodejs >= 22.5.0');
+      expect(spec).toContain('License:        AGPL-3.0-only');
+      expect(spec).toContain('Requires:       nodejs >= 22.13.0');
       expect(spec).toContain('%pre');
       expect(spec).toContain('useradd -r -g wazir');
       expect(spec).toContain('%systemd_post wazir-api.service wazir-worker.service');

@@ -111,10 +111,12 @@ describe('Release Package Parity & Lineage Guardrails', () => {
     const requiredFeaturePaths = [
       'packages/runtimes/nvidia/src/index.ts',
       'apps/cli/src/tui/fleetTui.ts',
-      'apps/cli/src/subagentFleet.ts',
+      'packages/core/src/subagents/ledger.ts',
+      'apps/cli/src/fleetRunner.ts',
+      'apps/cli/src/updater/service.ts',
       'apps/api/src/mobile.ts',
       'packages/agents/src/verificationScope.ts',
-      'packages/tools/src/repoIntegrityGuard.ts',
+      'packages/core/src/services/repoIntegrityGuard.ts',
     ];
 
     for (const relPath of requiredFeaturePaths) {
