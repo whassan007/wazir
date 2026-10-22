@@ -186,8 +186,9 @@ export class ExecutionEngine {
         if (!copy.task) {
           copy.task = {
             id: copy.execution.taskId ?? copy.execution.id,
-            type: 'generic',
+            type: 'coding',
             input: '',
+            requirements: {},
             priority: 'normal',
             status: copy.execution.status === 'completed' ? 'completed' : copy.execution.status === 'failed' ? 'failed' : copy.execution.status === 'cancelled' ? 'cancelled' : 'running',
             createdAt: copy.execution.createdAt,

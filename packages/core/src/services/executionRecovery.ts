@@ -1,4 +1,4 @@
-import type { ExecutionRecord, ToolCallCheckpoint, ToolSideEffectClass } from '../types/execution.js';
+import type { ExecutionRecord, ToolCallCheckpoint } from '../types/execution.js';
 import type { ExecutionEngine } from './executionEngine.js';
 import { hashToolArguments } from './toolValidation.js';
 
@@ -231,7 +231,7 @@ export function extractToolCheckpoints(record: Pick<ExecutionRecord, 'execution'
 export function findUnknownOutcomeToolCall(
   recordOrCheckpoints: Pick<ExecutionRecord, 'execution' | 'events'> | ToolCallCheckpoint[],
   options?: { mutatingOnly?: boolean },
-): { tool: string; input: unknown; startedAt: Date; callId: string; sideEffectClass: ToolSideEffectClass } | undefined {
+): { tool: string; input: unknown; startedAt: Date; callId: string; sideEffectClass: ToolCallCheckpoint['sideEffectClass'] } | undefined {
   const checkpoints = Array.isArray(recordOrCheckpoints)
     ? recordOrCheckpoints
     : extractToolCheckpoints(recordOrCheckpoints);

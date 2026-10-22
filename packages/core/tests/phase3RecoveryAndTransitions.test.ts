@@ -105,7 +105,7 @@ describe('Phase 3: Durable Recovery and Distributed Correctness (ISS-012, ISS-01
       let nowMs = 1_000_000;
       const executions = new ExecutionEngine({
         persist: async (record) => {
-          await store.set(`execution/${record.execution.id}`, structuredClone(record));
+          await store.put(`execution/${record.execution.id}`, structuredClone(record));
         },
       });
       await executions.ready;
@@ -170,7 +170,7 @@ describe('Phase 3: Durable Recovery and Distributed Correctness (ISS-012, ISS-01
       let nowMs = 2_000_000;
       const executions = new ExecutionEngine({
         persist: async (record) => {
-          await store.set(`execution/${record.execution.id}`, structuredClone(record));
+          await store.put(`execution/${record.execution.id}`, structuredClone(record));
         },
       });
       await executions.ready;
