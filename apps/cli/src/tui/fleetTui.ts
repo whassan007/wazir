@@ -47,6 +47,7 @@ import {
 import { createBlock, listBlocks, getBlock, getActiveContext, clearContext } from '../blocks.js';
 import { resolveReference, type ResolvedReference } from '../references.js';
 import { tokensPerSecond } from '@wazir/shared';
+import { loadUpdateConfig, readUpdateHistory } from '../updater/storage.js';
 import { parseAction } from '@wazir/agents';
 import { inspectVerificationEvidence, explainCompletion, type VerificationInspection, type WhyCompleteAnswer, type ArtifactProvenance } from '@wazir/core';
 import { promptCacheReuse, promptCacheSource } from '@wazir/runtimes-interfaces';
@@ -703,6 +704,8 @@ export class FleetTui {
    *  most recent call and consumed by draw() right after. */
   private inputCursorScreenCol = 1;
   private statusMessage = 'Ready. Type a task or /fanout <t1; t2; ...> to begin.';
+  private updateIndicator = '';
+  private updateIndicatorTimer?: NodeJS.Timeout;
   private renderTimer?: NodeJS.Timeout;
   private spinnerTick = 0;
 
@@ -1775,6 +1778,9 @@ export class FleetTui {
   async start(): Promise<void> {
     this.isRunning = true;
     this.exitReason = undefined;
+    this.refreshUpdateIndicator(false);
+    this.updateIndicatorTimer = setInterval(() => this.refreshUpdateIndicator(true), 60_000);
+    this.updateIndicatorTimer.unref?.();
 
     // Safety net (found the hard way): a fire-and-forget action here (`void this.foo()`,
     // used throughout for keypress handlers so they can stay synchronous) that rejects
@@ -1952,6 +1958,7 @@ export class FleetTui {
     if (!this.isRunning) return;
     this.exitReason = this.exitReason ?? reason;
     if (this.renderTimer) clearInterval(this.renderTimer);
+    if (this.updateIndicatorTimer) clearInterval(this.updateIndicatorTimer);
     if (this.unsubscribeApprovals) this.unsubscribeApprovals();
     if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
     if (this.unsubscribeResize) this.unsubscribeResize();
@@ -3898,7 +3905,28 @@ export class FleetTui {
       return;
     }
     if (trimmed === '/help' && this.presentationMode === 'conversation') {
-      this.conversationRenderer.append('Commands: /fleet · /chat · /tasks · /models · /logs · /details · /tail · /verbose · /quiet · /debug · /help');
+      this.conversationRenderer.append('Commands: /fleet · /chat · /tasks · /models · /update · /logs · /details · /tail · /verbose · /quiet · /debug · /help');
+      return;
+    }
+    if (trimmed === '/update') {
+      try {
+        const { getUpdateStatus } = await import('../updater/service.js');
+        const status = await getUpdateStatus();
+        const lines = [
+          `Wazir updates · ${status.enabled ? 'automatic checks enabled' : 'automatic checks disabled'} · ${Math.round(status.intervalSeconds / 60)} minute interval`,
+          `Installed ${status.installedVersion} via ${status.installMethod} · channel ${status.channel}`,
+          `Available ${status.availableVersion ?? 'not checked'} · state ${status.phase ?? 'ready'}`,
+          status.jobsPreventActivation ? 'Activation waits while a Wazir session is active.' : 'No local Wazir session is blocking activation.',
+          status.error ? `Details: ${status.error}` : 'Manage with: wa update status | check | now | enable | disable | history',
+        ];
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(lines.join('\n'));
+        else this.statusMessage = lines.join(' · ');
+      } catch (error) {
+        const message = `Update status unavailable: ${error instanceof Error ? error.message : String(error)}`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(message);
+        else this.statusMessage = message;
+      }
+      this.draw();
       return;
     }
     if ((trimmed === '/tasks' || trimmed === '/task') && this.presentationMode === 'conversation') {
@@ -5910,18 +5938,41 @@ export class FleetTui {
   /**
    * Region 4: Status Bar & Real-Time Context Token Budget Indicator (§20)
    */
+  private refreshUpdateIndicator(redraw: boolean): void {
+    let next = '';
+    try {
+      const enabled = loadUpdateConfig().enabled;
+      const phase = readUpdateHistory(1)[0]?.phase;
+      if (phase === 'UP_TO_DATE') next = color.gray('[Updates: up to date]');
+      else if (phase === 'UPDATE_AVAILABLE') next = color.yellow('[Update available]');
+      else if (phase === 'DOWNLOADING' || phase === 'VERIFYING' || phase === 'INSTALLING' || phase === 'VALIDATING') next = color.cyan('[Updating…]');
+      else if (phase === 'STAGED') next = color.blue('[Update staged]');
+      else if (phase === 'WAITING_FOR_SAFE_ACTIVATION') next = color.yellow('[Activation deferred]');
+      else if (phase === 'COMPLETED') next = color.green('[Updated]');
+      else if (phase === 'FAILED') next = color.red('[Update failed]');
+      else if (phase === 'ROLLED_BACK') next = color.yellow('[Rolled back]');
+      else if (phase === 'ACTION_REQUIRED') next = color.yellow('[Update action required]');
+      else next = enabled ? color.green('[Auto-update on]') : color.gray('[Auto-update off]');
+    } catch { next = ''; }
+    if (next !== this.updateIndicator) {
+      this.updateIndicator = next;
+      if (redraw && this.isRunning) this.draw();
+    }
+  }
+
   private renderStatusBar(cols: number): string {
     const mode = this.getMode();
     const badge = color.bold(mode === 'APPROVAL' || mode === 'SHELL' ? color.yellow(`[${mode}]`) : color.cyan(`[${mode}]`));
+    const updateBadge = this.updateIndicator ? `${this.updateIndicator} ` : '';
     const alerts = this.sidebarMode === 'full' ? '' : Array.from(this.getAlertCategories()).map(c => `!${c}`).join(' ');
     if (cols < 110) {
-      return this.padRightTo(` ${badge} ${alerts ? alerts + ' ' : ''}${this.statusMessage}`, cols);
+      return this.padRightTo(` ${badge} ${updateBadge}${alerts ? alerts + ' ' : ''}${this.statusMessage}`, cols);
     }
     const { used, max, jobIn, jobOut } = this.getContextMetrics();
     const telemetry = `${alerts ? alerts + ' · ' : ''}Context ${(used / 1024).toFixed(1)}K/${Math.round(max / 1024)}K ~ ${jobIn.toLocaleString()} in / ${jobOut.toLocaleString()} out · Ctrl+T ${this.sidebarMode === 'hidden' ? 'Show sidebar' : 'Sidebar'}`;
     const available = Math.max(16, cols - telemetry.length - mode.length - 7);
     const message = this.truncateAnsi(this.statusMessage, available);
-    const left = ` ${badge} ${message}`;
+    const left = ` ${badge} ${updateBadge}${message}`;
     const gap = Math.max(2, cols - this.stripAnsi(left).length - telemetry.length - 1);
     return `${left}${' '.repeat(gap)}${color.gray(telemetry)} `;
   }

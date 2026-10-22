@@ -67,6 +67,23 @@ export class ServiceManager {
     return this.backend;
   }
 
+  private registerManagedDeployment(type: ServiceType, serviceName: string, backend: string, unitPath?: string): void {
+    const dir = path.join(this.baseConfigDir, 'deployments');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const manifest = { component: type, serviceName, backend, unitPath, installMethod: 'wazir-service-manager', registeredAt: new Date().toISOString() };
+    writeFileSync(path.join(dir, `${type}.json`), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  }
+
+  private unregisterManagedDeployment(serviceName: string): void {
+    for (const type of ['api', 'worker'] as const) {
+      const file = path.join(this.baseConfigDir, 'deployments', `${type}.json`);
+      try {
+        const registered = JSON.parse(readFileSync(file, 'utf8')) as { serviceName?: string };
+        if (registered.serviceName === serviceName) rmSync(file, { force: true });
+      } catch {}
+    }
+  }
+
   // --- 1. INSTALL ---
   async install(options: ServiceOptions = {}): Promise<{ success: boolean; message: string; unitPath?: string }> {
     const serviceType = options.type || 'worker';
@@ -127,6 +144,7 @@ WantedBy=${isRoot ? 'multi-user.target' : 'default.target'}
         // Systemctl might not be active (e.g. in minimal chroot/docker); file is written
       }
 
+      this.registerManagedDeployment(serviceType, serviceName, 'systemd', unitPath);
       return {
         success: true,
         message: `systemd unit installed successfully at ${unitPath}`,
@@ -186,6 +204,7 @@ WantedBy=${isRoot ? 'multi-user.target' : 'default.target'}
 `;
 
       writeFileSync(plistPath, plistContent, 'utf8');
+      this.registerManagedDeployment(serviceType, serviceName, 'launchd', plistPath);
 
       try {
         execSync(`launchctl load "${plistPath}"`, { stdio: 'ignore' });
@@ -211,6 +230,7 @@ WantedBy=${isRoot ? 'multi-user.target' : 'default.target'}
         execSync(userCmd, { stdio: 'ignore' });
       }
 
+      this.registerManagedDeployment(serviceType, serviceName, 'windows', taskName);
       return {
         success: true,
         message: `Windows Scheduled Task '${taskName}' created successfully.`,
@@ -366,6 +386,7 @@ WantedBy=${isRoot ? 'multi-user.target' : 'default.target'}
     } catch {
       // Ignore failure to stop non-running service
     }
+    this.unregisterManagedDeployment(serviceName);
 
     if (this.backend === 'systemd') {
       const isRoot = isRootUser();
