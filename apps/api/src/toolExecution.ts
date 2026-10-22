@@ -9,7 +9,7 @@ import {
   type StepVerificationCheck,
   type StepVerifier,
 } from '@wazir/core';
-import { executeTool, type ToolRegistry } from '@wazir/tools';
+import { executeTool, sandboxStatus, type ToolRegistry } from '@wazir/tools';
 import { appendAuditEvent } from '@wazir/shared';
 
 /**
@@ -79,7 +79,13 @@ export function createControlledExecution(options: ControlledExecutionOptions): 
     if (invalid) return deny(`TOOL_VALIDATION_FAILED: ${invalid}`, 'TOOL_VALIDATION_FAILED');
     if (request.signal?.aborted) return deny('cancelled before tool dispatch', 'CANCELLED');
 
-    const decision = await policy.authorize({ tool: request.name, input: request.input, executionId: request.executionId, projectRoot: options.projectRoot });
+    const decision = await policy.authorize({
+      tool: request.name,
+      input: request.input,
+      executionId: request.executionId,
+      projectRoot: options.projectRoot,
+      effectiveIsolation: sandboxStatus().mode,
+    });
     if (decision.decision !== 'allow') {
       return deny(`policy ${decision.decision} (${decision.rule}): ${decision.reasons.join('; ')}`, 'POLICY_DENIED', decision);
     }

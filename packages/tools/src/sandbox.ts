@@ -221,6 +221,11 @@ export function sandboxRequired(status: SandboxStatus = sandboxStatus()): boolea
   return status.mode === 'none' && status.required === true;
 }
 
+/** Returns the effective OS sandbox isolation mode for the current process/workspace. */
+export function detectEffectiveIsolation(_projectRoot?: string, refresh = false): SandboxMode {
+  return sandboxStatus(refresh).mode;
+}
+
 /** For a git worktree, the main repository's `.git` directory that holds its metadata. */
 function worktreeGitDir(project: string): string | undefined {
   const dotGit = path.join(project, '.git');

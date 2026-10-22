@@ -20,7 +20,7 @@ import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import { buildSystemPrompt, isConversationalFastPathRequest, isDeterministicCommandRequest, resolvePreset } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, keepEnds, stripTerminalEscapes } from '@wazir/shared';
-import { executeTool as runRegisteredTool } from '@wazir/tools';
+import { executeTool as runRegisteredTool, sandboxStatus } from '@wazir/tools';
 import { recordWebContext } from './web.js';
 import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
 import { color } from './colors.js';
@@ -804,7 +804,13 @@ export async function executeTask(
         return executeMCPForAgent(engine, name, input, { projectRoot: engine.projectRoot, executionId, signal: taskAbortController.signal });
       }
  
-      const decision = await engine.policy.authorize({ tool: name, input, executionId, projectRoot: engine.projectRoot });
+      const decision = await engine.policy.authorize({
+        tool: name,
+        input,
+        executionId,
+        projectRoot: engine.projectRoot,
+        effectiveIsolation: sandboxStatus().mode,
+      });
       await engine.executions.recordPolicy(executionId, decision);
 
       if (decision.decision !== 'allow') {
@@ -1525,6 +1531,7 @@ export async function runSubagent(
         input: toolInput,
         executionId: childExecId,
         projectRoot: context.projectRoot,
+        effectiveIsolation: sandboxStatus().mode,
       });
       await engine.executions.recordPolicy(childExecId, decision);
 

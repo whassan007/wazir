@@ -279,39 +279,194 @@ export class CodeModeService {
       }) as Record<string, Record<string, (input: Record<string, unknown>) => Promise<ToolResult>>>,
     };
 
-    // Sandbox execution context: isolated, with NO access to process, fs, require, or globals
+    // Sandbox execution context: isolated VM realm with NO access to process, fs, require, or host constructors
     const logs: string[] = [];
-    const sandboxContext = vm.createContext({
-      wazir: sdk,
-      console: {
-        log: (...args: unknown[]) => logs.push(args.map(String).join(' ')),
-        info: (...args: unknown[]) => logs.push(args.map(String).join(' ')),
-        warn: (...args: unknown[]) => logs.push(args.map(String).join(' ')),
-        error: (...args: unknown[]) => logs.push(args.map(String).join(' ')),
-      },
-      Promise,
-      Math,
-      JSON,
-      Array,
-      Object,
-      String,
-      Number,
-      Boolean,
-      Date,
-      RegExp,
-      Map,
-      Set,
-      parseInt,
-      parseFloat,
-      isNaN,
-      isFinite,
-      setTimeout,
-      clearTimeout,
+    const activeTimers = new Map<number, ReturnType<typeof setTimeout>>();
+    let nextTimerId = 1;
+    const clearAllSandboxTimers = () => {
+      for (const handle of activeTimers.values()) {
+        clearTimeout(handle);
+      }
+      activeTimers.clear();
+    };
+
+    const sandboxContext = vm.createContext(Object.create(null), {
+      codeGeneration: { strings: false, wasm: false },
     });
 
+    const bootstrapSandbox = vm.runInContext(
+      `(function(hostSdk, hostMcpCall, hostLog, hostSetTimeout, hostClearTimeout) {
+        const SafeError = Error;
+        const jsonParse = JSON.parse;
+        const jsonStringify = JSON.stringify;
+
+        const toSafeValue = (val) => {
+          if (val === undefined || val === null || typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+            return val;
+          }
+          try {
+            return jsonParse(jsonStringify(val));
+          } catch {
+            return undefined;
+          }
+        };
+
+        const wrapAsync = (fn) => {
+          const wrapped = async function(...args) {
+            try {
+              const safeArgs = toSafeValue(args) ?? [];
+              const res = await fn(...safeArgs);
+              return toSafeValue(res);
+            } catch (err) {
+              const msg = err && typeof err.message === 'string' ? err.message : String(err);
+              throw new SafeError(msg);
+            }
+          };
+          Object.setPrototypeOf(wrapped, null);
+          return Object.freeze(wrapped);
+        };
+
+        const mcpProxy = new Proxy(Object.create(null), {
+          get(_target, serverId) {
+            if (typeof serverId !== 'string') return undefined;
+            return new Proxy(Object.create(null), {
+              get(_subTarget, toolName) {
+                if (typeof toolName !== 'string') return undefined;
+                return wrapAsync((input = {}) => hostMcpCall(serverId, toolName, input));
+              },
+            });
+          },
+        });
+
+        const wazir = Object.assign(Object.create(null), {
+          read: wrapAsync((filePath) => hostSdk.read(filePath)),
+          write: wrapAsync((filePath, content) => hostSdk.write(filePath, content)),
+          edit: wrapAsync((filePath, oldString, newString, replaceAll) => hostSdk.edit(filePath, oldString, newString, replaceAll)),
+          search: wrapAsync((opts) => hostSdk.search(opts)),
+          glob: wrapAsync((pattern) => hostSdk.glob(pattern)),
+          goToDefinition: wrapAsync((file, line, character) => hostSdk.goToDefinition(file, line, character)),
+          references: wrapAsync((file, line, character) => hostSdk.references(file, line, character)),
+          callers: wrapAsync((symbol) => hostSdk.callers(symbol)),
+          callees: wrapAsync((symbol) => hostSdk.callees(symbol)),
+          symbols: wrapAsync((file) => hostSdk.symbols(file)),
+          workspaceSymbols: wrapAsync((query) => hostSdk.workspaceSymbols(query)),
+          relatedTests: wrapAsync((file) => hostSdk.relatedTests(file)),
+          git: wrapAsync((command) => hostSdk.git(command)),
+          test: wrapAsync((command) => hostSdk.test(command)),
+          build: wrapAsync((command) => hostSdk.build(command)),
+          call: wrapAsync((toolName, input) => hostSdk.call(toolName, input)),
+          mcp: mcpProxy,
+        });
+        wazir.fs = Object.freeze(Object.assign(Object.create(null), {
+          read: wazir.read,
+          write: wazir.write,
+          edit: wazir.edit,
+          glob: wazir.glob,
+          search: wazir.search,
+        }));
+        Object.freeze(wazir);
+
+        const safeLog = (...args) => {
+          try {
+            hostLog(args.map((a) => String(a)).join(' '));
+          } catch {
+            // ignore logging failures
+          }
+        };
+        Object.setPrototypeOf(safeLog, null);
+        Object.freeze(safeLog);
+
+        const safeConsole = Object.freeze(Object.assign(Object.create(null), {
+          log: safeLog,
+          info: safeLog,
+          warn: safeLog,
+          error: safeLog,
+        }));
+
+        const safeSetTimeout = function(cb, ms) {
+          if (typeof cb !== 'function') {
+            throw new SafeError('Callback must be a function');
+          }
+          const delay = typeof ms === 'number' && Number.isFinite(ms) ? Math.max(0, ms) : 0;
+          return hostSetTimeout(() => {
+            try { cb(); } catch {}
+          }, delay);
+        };
+        Object.setPrototypeOf(safeSetTimeout, null);
+        Object.freeze(safeSetTimeout);
+
+        const safeClearTimeout = function(id) {
+          if (typeof id === 'number') {
+            hostClearTimeout(id);
+          }
+        };
+        Object.setPrototypeOf(safeClearTimeout, null);
+        Object.freeze(safeClearTimeout);
+
+        globalThis.wazir = wazir;
+        globalThis.sdk = wazir;
+        globalThis.console = safeConsole;
+        globalThis.setTimeout = safeSetTimeout;
+        globalThis.clearTimeout = safeClearTimeout;
+
+        const AsyncFunction = (async function(){}).constructor;
+        const GeneratorFunction = (function*(){}).constructor;
+        const AsyncGeneratorFunction = (async function*(){}).constructor;
+        for (const ctor of [Function, AsyncFunction, GeneratorFunction, AsyncGeneratorFunction]) {
+          if (ctor && ctor.prototype) {
+            Object.defineProperty(ctor.prototype, 'constructor', {
+              value: undefined,
+              writable: false,
+              configurable: false,
+            });
+          }
+        }
+        Object.defineProperty(globalThis, 'Function', {
+          value: undefined,
+          writable: false,
+          configurable: false,
+        });
+        Object.defineProperty(globalThis, 'eval', {
+          value: undefined,
+          writable: false,
+          configurable: false,
+        });
+        Object.setPrototypeOf(globalThis, null);
+      })`,
+      sandboxContext,
+    ) as (
+      hostSdk: WazirCodeModeSdk,
+      hostMcpCall: (serverId: string, toolName: string, input: Record<string, unknown>) => Promise<ToolResult>,
+      hostLog: (msg: string) => void,
+      hostSetTimeout: (cb: () => void, delay: number) => number,
+      hostClearTimeout: (id: number) => void,
+    ) => void;
+
+    bootstrapSandbox(
+      sdk,
+      (serverId, toolName, input) => dispatchSdkOperation(`mcp.${serverId}.${toolName}`, input),
+      (msg) => logs.push(msg),
+      (cb, delay) => {
+        const id = nextTimerId++;
+        const handle = setTimeout(() => {
+          activeTimers.delete(id);
+          cb();
+        }, delay);
+        activeTimers.set(id, handle);
+        return id;
+      },
+      (id) => {
+        const handle = activeTimers.get(id);
+        if (handle !== undefined) {
+          clearTimeout(handle);
+          activeTimers.delete(id);
+        }
+      },
+    );
+
     try {
-      // Wrap user code in async function execution
-      const wrappedScript = `(async () => {\n${script}\n})()`;
+      // Wrap user code in strict async function execution
+      const wrappedScript = `(async () => { "use strict";\n${script}\n})()`;
       const compiled = new vm.Script(wrappedScript, {
         filename: 'code-mode-script.js',
       });
@@ -335,11 +490,15 @@ export class CodeModeService {
         }
       });
 
-      const returnValue = await Promise.race([promise, abortPromise]);
+      const rawReturnValue = await Promise.race([promise, abortPromise]);
       clearTimeout(timeoutTimer);
+      clearAllSandboxTimers();
 
       const elapsed = Date.now() - startedAt;
-      const rawOutput = returnValue !== undefined ? JSON.stringify(returnValue, null, 2) : logs.join('\n');
+      const rawOutput = rawReturnValue !== undefined ? JSON.stringify(rawReturnValue, null, 2) : logs.join('\n');
+      const returnValue = rawReturnValue !== undefined && rawOutput !== undefined
+        ? JSON.parse(rawOutput)
+        : rawReturnValue;
       const boundedOutput = rawOutput.slice(0, limits.maxOutputChars);
 
       emitStream({
@@ -362,6 +521,7 @@ export class CodeModeService {
       };
     } catch (err: any) {
       clearTimeout(timeoutTimer);
+      clearAllSandboxTimers();
       const elapsed = Date.now() - startedAt;
       const isTimeout = controller.signal.aborted || err?.message?.includes('CODE_MODE_TIMEOUT');
       const isBudget = err?.message?.includes('CODE_MODE_BUDGET_EXCEEDED');

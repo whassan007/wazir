@@ -27,7 +27,7 @@ import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import { buildSystemPrompt } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, keepEnds } from '@wazir/shared';
-import { executeTool as runRegisteredTool } from '@wazir/tools';
+import { executeTool as runRegisteredTool, sandboxStatus } from '@wazir/tools';
 import { recordWebContext } from './web.js';
 import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
 import type { RookEngine } from './engine.js';
@@ -411,6 +411,7 @@ export function createFleetTaskExecutor(
           input,
           executionId,
           projectRoot: taskRoot,
+          effectiveIsolation: sandboxStatus().mode,
         });
         await engine.executions.recordPolicy(executionId, decision);
 
