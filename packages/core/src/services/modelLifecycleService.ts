@@ -901,7 +901,7 @@ export class ModelLifecycleService {
           const intent = await this.deps.store?.get('models/intent/' + id) as { desired?: ModelInstance['desired']; pinned?: boolean } | undefined;
           let observed: Awaited<ReturnType<NonNullable<typeof adapter.inspectModel>>> | undefined;
           if (fastStartup && m.loaded === false) {
-            observed = { loaded: false, effectiveContext: m.effectiveContext, memoryBytes: m.weightBytes };
+            observed = { modelId: m.id, loaded: false, effectiveContext: m.effectiveContext, memoryBytes: m.weightBytes };
           } else {
             try {
               observed = await adapter.inspectModel?.(m.id);
