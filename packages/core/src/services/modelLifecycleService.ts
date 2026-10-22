@@ -580,22 +580,37 @@ export class ModelLifecycleService {
       await this.persistReadyModelSet();
       return plan;
     } catch (error) {
-      this.deps.models.setInstanceState(i.id, 'FAILED', { health: 'degraded', error: error instanceof Error ? error.message : String(error) });
-      this.emitEvent('MODEL_LOAD_FAILED', modelId, { ...extra, reason: error instanceof ModelLifecycleError ? error.code : 'RUNTIME_LOAD_FAILED' });
-      // A timeout may have allocated memory. Keep the reservation until runtime inspection proves absence.
+      if (attempted && error instanceof ModelLifecycleError && error.code === 'MODEL_READINESS_FAILED') {
+        await adapter.unloadModel?.(i.runtimeModelId).catch(() => undefined);
+      }
       const observed = attempted ? await adapter.inspectModel?.(i.runtimeModelId).catch(() => undefined) : undefined;
-      if (!attempted || observed?.loaded === false) await this.finishReservation(i, reservation!.id, true);
-      else if (observed?.loaded) await this.finishReservation(i, reservation!.id, false);
+      const confirmedLoaded = observed?.loaded === true;
+      this.deps.models.setInstanceHealth(i.id, {
+        loaded: confirmedLoaded,
+        state: 'FAILED',
+        health: 'degraded',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.emitEvent('MODEL_LOAD_FAILED', modelId, { ...extra, reason: error instanceof ModelLifecycleError ? error.code : 'RUNTIME_LOAD_FAILED' });
+      // Release the reservation unless runtime inspection positively confirms the model remains resident.
+      await this.finishReservation(i, reservation!.id, !confirmedLoaded);
       throw error instanceof ModelLifecycleError ? error : new ModelLifecycleError('RUNTIME_LOAD_FAILED');
     }
   }
 
   private async finishReservation(i: ModelInstance, reservationId: string, release: boolean): Promise<void> {
+    if (release) {
+      this.deps.computers.releaseReservation(i.computerId!, reservationId);
+    } else {
+      this.deps.computers.settleReservation(i.computerId!, reservationId);
+    }
     const mutate = (current: ResourceReservation[] = []) => current.flatMap(r => r.id !== reservationId ? [r] : release ? [] : [{ ...r, settledAt: new Date() }]);
-    const c = this.deps.computers.get(i.computerId!)!;
-    c.reservations = this.deps.store?.update
-      ? await this.deps.store.update<ResourceReservation[]>('computer/' + i.computerId + '/reservations', mutate)
-      : mutate(c.reservations);
+    const c = this.deps.computers.get(i.computerId!);
+    if (c) {
+      c.reservations = this.deps.store?.update
+        ? await this.deps.store.update<ResourceReservation[]>('computer/' + i.computerId + '/reservations', mutate)
+        : mutate(c.reservations);
+    }
     if (release) this.emitEvent('RESOURCE_RESERVATION_RELEASED', i.modelId, { computerId: i.computerId, runtimeId: i.runtimeId, data: { reservationId } });
   }
 

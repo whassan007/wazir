@@ -76,7 +76,9 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
       for await (const event of inner.generate(req)) {
         const now = ledger.now();
         if (event.type === 'token' || event.type === 'reasoning' || event.type === 'tool_call') {
-          outputSeen = true;
+          if (event.type === 'tool_call' || event.content === undefined || event.content.length > 0) {
+            outputSeen = true;
+          }
           if (event.content) outputText += event.content;
         }
         if (event.rateLimit) {
@@ -103,7 +105,7 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
           settled = true;
         }
         if (event.type === 'error') {
-          const ambiguous = outputSeen || (event.failureClass === 'TIMEOUT' && event.status === undefined);
+          const ambiguous = outputSeen;
           budget.fail(requestId, {
             failureClass: event.failureClass, status: event.status, retryAfterMs: event.retryAfterMs, ambiguous,
             partial: outputSeen ? estimatedUsage() : undefined, message: event.error,
@@ -112,12 +114,34 @@ export function governAdapter(inner: RuntimeAdapter, opts: GovernorOptions): Run
         }
         yield event;
       }
+    } catch (err) {
+      if (!settled) {
+        const meta = (err && typeof err === 'object' ? err : {}) as {
+          failureClass?: import('@wazir/shared').FailureClass;
+          status?: number;
+          retryAfterMs?: number;
+        };
+        const message = err instanceof Error ? err.message : String(err);
+        budget.fail(requestId, {
+          failureClass: meta.failureClass,
+          status: meta.status,
+          retryAfterMs: meta.retryAfterMs,
+          ambiguous: outputSeen,
+          partial: outputSeen ? estimatedUsage() : undefined,
+          message,
+        });
+        settled = true;
+      }
+      throw err;
     } finally {
       stopLease();
       if (!settled) {
-        // Consumer stopped early or the stream threw: the prompt was sent and some output
-        // produced, so charge what can be estimated rather than releasing.
-        budget.reconcile(requestId, { ...estimatedUsage(), source: outputSeen ? 'estimated' : 'conservative' }, { durationMs: ledger.now() - started, agent: ctx.agent });
+        if (outputSeen) {
+          // Consumer stopped early after output was produced: charge what was observed/estimated.
+          budget.reconcile(requestId, { ...estimatedUsage(), source: 'estimated' }, { durationMs: ledger.now() - started, agent: ctx.agent });
+        } else {
+          budget.fail(requestId, { ambiguous: false, message: 'stream closed before emitting output' });
+        }
       }
     }
   }
