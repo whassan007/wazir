@@ -48,6 +48,9 @@ function safeRealpath(p: string): string | undefined {
 export type SandboxMode = 'bwrap' | 'sandbox-exec' | 'none';
 
 export interface SandboxOptions {
+  /** Competitive verification: no shared temp/cache/Git writes or host workspace reads. */
+  competitiveIsolation?: boolean;
+  immutablePaths?: string[];
   /** Directory the command may write to (bound read-write). */
   projectRoot: string;
   /** Working directory inside the sandbox; must be inside projectRoot or a temp dir. */
@@ -255,6 +258,16 @@ function isInside(root: string, target: string): boolean {
 
 /** bubblewrap argument list for `options`. Pure: safe to unit test. */
 export function bwrapArgs(options: SandboxOptions, home: string = os.homedir(), platformTmp: string = os.tmpdir()): string[] {
+  if (options.competitiveIsolation) {
+    const project = path.resolve(options.projectRoot);
+    return ['--die-with-parent', '--new-session', '--unshare-all', '--tmpfs', '/',
+      ...['/usr', '/bin', '/sbin', '/lib', '/lib64', '/opt'].filter(existsSync).flatMap(d => ['--ro-bind', d, d]),
+      '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
+      '--ro-bind', project, project,
+      ...(options.readWritePaths ?? []).flatMap(p => ['--bind', p, p]),
+      ...(options.immutablePaths ?? []).flatMap(p => ['--ro-bind', p, p]),
+      '--chdir', project, '--disable-userns', '--'];
+  }
   const project = path.resolve(options.projectRoot);
   const args: string[] = [
     // Read-only view of the whole host filesystem as the base layer...
@@ -329,6 +342,24 @@ export function seatbeltProfile(options: SandboxOptions, home: string = os.homed
   const realProject = safeRealpath(project);
   const realTmp = safeRealpath(tmp);
   const realHome = safeRealpath(resolvedHome);
+
+  if (options.competitiveIsolation) {
+    // Keep the established process/runtime allowances, but replace all filesystem and
+    // network access with an allowlist. No common Git directory or global /tmp writes.
+    const roots = [...new Set([project, realProject].filter((p): p is string => !!p))];
+    const systems = ['/usr', '/bin', '/sbin', '/System', '/Library', '/opt', '/dev', safeRealpath('/System/Cryptexes/OS')].filter((p): p is string => !!p);
+    return ['(version 1)', '(allow default)', '(deny file-read* file-write*)',
+      ...systems.map(d => `(allow file-read* (subpath ${q(d)}))`),
+      '(allow file-read-metadata)',
+      // dyld ignition enumerates the filesystem root before loading the shared cache.
+      '(allow file-read* (literal "/"))',
+      ...roots.map(d => `(allow file-read* (subpath ${q(d)}))`),
+      ...(options.readWritePaths ?? []).map(d => `(allow file-read* file-write* (subpath ${q(d)}))`),
+      ...(options.immutablePaths ?? []).map(p => `(deny file-write* (subpath ${q(p)}))`),
+      ...roots.map(d => `(deny file-read* file-write* (literal ${q(path.join(d, '.git'))}))`),
+      '(allow file-read* file-write* (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))',
+      '(deny network*)'].join('\n');
+  }
 
   const toolchainDirs = existingDirs(resolvedHome, HOME_TOOLCHAIN_DIRS);
   const cacheDirs = existingDirs(resolvedHome, HOME_CACHE_DIRS);

@@ -460,10 +460,24 @@ taskCmd
   .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
   .option('--full-verify', 'Build/test/lint/typecheck the whole repo instead of scoping to the workspace(s) the task touched')
+  .option('--race <n>', 'Run N independent eligible model configurations (1-8)')
+  .option('--race-policy <path>', 'Trusted verification/ownership JSON policy')
+  .option('--routing <mode>', 'Adaptive routing: auto, cheapest, highest-quality')
+  .option('--max-cost <usd>', 'Conservative metered-provider dollar ceiling')
+  .option('--timeout <seconds>', 'Race-wide timeout')
+  .option('--progressive', 'Run sequentially and stop after the first verified candidate')
   .description('Run a new task')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine({ fastStartup: true, quiet: Boolean(options.json) });
+    if (options.race !== undefined || options.routing !== undefined) {
+      try {
+        const { runCompetitiveTask } = await import('./competitive.js');
+        const race = await runCompetitiveTask(engine, prompt, options);
+        console.log(JSON.stringify(race, null, options.json ? 0 : 2));
+        process.exit(race.state === 'AWAITING_MERGE' ? 0 : 1);
+      } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); }
+    }
     const { runTaskCommand } = await import('./commands.js');
     const result = await runTaskCommand(
       engine,
@@ -521,6 +535,50 @@ taskCmd
   .action((id) => {
     console.log(chalk.green(`Task ${id}: queued`));
   });
+
+const raceCmd = taskCmd.command('race').description('Inspect and manage durable competitive executions');
+raceCmd.command('list').action(async () => {
+  const { createStore } = await import('./engine.js');
+  const { RACE_PREFIX } = await import('@wazir/core');
+  const store = await createStore();
+  console.log(JSON.stringify((await store.list(RACE_PREFIX)).map(e => e.value), null, 2));
+  process.exit(0);
+});
+for (const verb of ['status', 'inspect', 'compare', 'cancel', 'cleanup', 'recover', 'promote', 'export']) {
+  raceCmd.command(`${verb} <raceId>`).option('--format <format>', 'Export json or csv', 'json').action(async (raceId, options) => {
+    const { createEngine } = await import('./engine.js');
+    const { competitiveService } = await import('./competitive.js');
+    const service = competitiveService(await createEngine({ fastStartup: true, quiet: true }));
+    try {
+      if (verb === 'cleanup') { await service.cleanup(raceId); console.log('Worktrees cleaned; branches and audit records retained.'); }
+      else if (verb === 'export') {
+        if (!['json', 'csv'].includes(options.format)) throw new Error('format must be json or csv');
+        console.log(await service.export(raceId, options.format));
+      } else {
+        const result = verb === 'promote' ? await service.promote(raceId) : verb === 'cancel' ? await service.cancel(raceId) : verb === 'recover' ? await service.recover(raceId) : await service.get(raceId);
+        console.log(JSON.stringify(result, null, 2));
+      }
+      process.exit(0);
+    } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); }
+  });
+}
+taskCmd.command('replay <raceId>').requiredOption('--model <model>', 'Alternative registered model').action(async (raceId, options) => {
+  const { createEngine } = await import('./engine.js');
+  const { competitiveService } = await import('./competitive.js');
+  const { planTask } = await import('./run.js');
+  const engine = await createEngine({ fastStartup: true, quiet: true });
+  const service = competitiveService(engine);
+  try {
+    const original = await service.get(raceId);
+    const plan = await planTask(engine, original.task, { model: options.model, type: 'coding', allowHosted: original.configurations[0].allowHosted });
+    if (!plan.ok) throw new Error(('reasons' in plan ? plan.reasons : []).join('; '));
+    // Unknown prices fail closed if the original snapshot had a dollar ceiling.
+    const candidate = { ...original.configurations[0], id: `replay:${options.model}`, model: plan.plan.scheduling.modelId, provider: plan.plan.scheduling.runtimeId, agent: plan.plan.agent.descriptor.name, version: engine.models.get(plan.plan.scheduling.modelId)?.version, agentVersion: plan.plan.agent.descriptor.version, providerVersion: engine.runtimes.get(plan.plan.scheduling.runtimeId)?.version, pricing: 'unknown' as const, maxCostUsd: undefined };
+    const replay = await service.replay(raceId, [candidate]);
+    console.log(JSON.stringify({ original: original.id, originalWinner: original.winnerId, replay }, null, 2));
+    process.exit(replay.state === 'AWAITING_MERGE' ? 0 : 1);
+  } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); }
+});
 
 program.addCommand(taskCmd);
 
@@ -1440,6 +1498,12 @@ program
   .action(async (ref, options) => {
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
+    if (String(ref).startsWith('race-')) {
+      const { competitiveService } = await import('./competitive.js');
+      const race = await competitiveService(engine).get(ref);
+      console.log(JSON.stringify({ id: race.id, state: race.state, winner: race.winnerId, explanation: race.explanation, routing: race.routingRationale, attempts: race.attempts }, null, 2));
+      process.exit(0);
+    }
     const { explainCommand } = await import('./commands.js');
     const result = await explainCommand(engine, ref, options.json);
     console.log(result.output);

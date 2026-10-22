@@ -181,6 +181,7 @@ export interface ExecutionRecord {
 }
 
 export type ExecutionEventType =
+  | 'race.recovery-required' | 'race.verification.completed'
   | 'execution.started'
   | 'execution.resumed'
   | 'execution.paused'

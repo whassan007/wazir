@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "writablePaths": ["src"],
+  "protectedPaths": ["acceptance", "security", "tests", "scripts", "package.json", "package-lock.json"],
+  "checks": [
+    {"name": "build", "oracle": "BUILD", "file": "npm", "args": ["run", "build"]},
+    {"name": "unit", "oracle": "TEST", "file": "npm", "args": ["run", "test:unit"]},
+    {"name": "integration", "oracle": "TEST", "file": "npm", "args": ["run", "test:integration"]},
+    {"name": "lint", "oracle": "LINT", "file": "npm", "args": ["run", "lint"]},
+    {"name": "format", "oracle": "LINT", "file": "npm", "args": ["run", "format:check"]},
+    {"name": "types", "oracle": "TYPECHECK", "file": "npm", "args": ["run", "typecheck"]},
+    {"name": "security", "oracle": "STATIC_ANALYSIS", "file": "npm", "args": ["run", "security:offline"]},
+    {"name": "acceptance", "oracle": "ACCEPTANCE", "file": "npm", "args": ["run", "test:acceptance"]}
+  ],
+  "maxConcurrency": 2,
+  "timeoutMs": 300000,
+  "maxTurns": 12,
+  "maxTokens": 8192
+}

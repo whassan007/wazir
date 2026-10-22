@@ -1,3 +1,5 @@
+import { classifyComplexity } from './complexity.js';
+import { RACE_PREFIX, eligibleAttempt, type RaceRecord, type RaceConfiguration, type RoutingPreference } from './competitiveExecution.js';
 import type { KeyValueStore } from '@wazir/shared';
 import type { ExecutionRecord } from '../types/execution.js';
 import type { BenchmarkRunResult, BenchmarkTask } from '../types/benchmark.js';
@@ -36,6 +38,39 @@ export class ModelIntelligenceService {
     this.store = options.store;
     this.classifier = options.classifier ?? new TaskCapabilityClassifier();
     this.defaultProtocolVersion = options.defaultProtocolVersion ?? '1.0.0';
+  }
+
+  /** Verified race outcomes remain in the existing KV store. Replays are excluded.
+   * Candidates must already have passed scheduler capability and availability gates. */
+  public async rankCompetitiveConfigurations(task: Task, candidates: RaceConfiguration[], policyHash: string, mode: RoutingPreference = 'auto'): Promise<{ configurations: RaceConfiguration[]; reasons: string[] }> {
+    const signature = this.classifier.classify(task);
+    const rows = (await this.store?.list(RACE_PREFIX) ?? []).map(e => e.value as RaceRecord)
+      .filter(r => r.schemaVersion === 1 && !r.replayOf && r.policyHash === policyHash);
+    const matching = rows.filter(r => {
+      const prior = this.classifier.classify({ ...task, title: undefined, input: r.task });
+      return prior.primaryCategory === signature.primaryCategory && prior.language === signature.language && classifyComplexity(r.task) === classifyComplexity(task.input);
+    });
+    const scores = candidates.map((configuration, index) => {
+      const observations = matching.flatMap(r => r.attempts.filter(a =>
+        a.configuration.model === configuration.model && a.configuration.agent === configuration.agent && a.configuration.provider === configuration.provider
+        && a.configuration.version === configuration.version && a.configuration.agentVersion === configuration.agentVersion && a.configuration.providerVersion === configuration.providerVersion
+        && ['VERIFIED', 'FAILED'].includes(a.state) && (!!a.checks?.length || !!a.violations?.length)
+      ).map(a => ({ success: eligibleAttempt(a, r.policy), duration: a.durationMs })));
+      const n = observations.length;
+      const probability = (1 + observations.filter(o => o.success).length) / (n + 2);
+      const uncertainty = Math.sqrt(probability * (1 - probability) / (n + 3));
+      return { configuration, index, n, probability, lower: Math.max(0, probability - 2 * uncertainty) };
+    });
+    if (scores.every(s => s.n === 0)) return { configurations: candidates, reasons: ['cold start: existing scheduler order; no assumed model inferiority'] };
+    scores.sort((a, b) => {
+      // Deterministic forced exploration until three independent observations/configuration.
+      if (mode === 'auto' && (a.n < 3 || b.n < 3)) return a.n - b.n || a.index - b.index;
+      if (mode === 'cheapest' && a.n >= 3 && b.n >= 3 && a.lower >= 0.5 && b.lower >= 0.5
+        && a.configuration.maxCostUsd !== undefined && b.configuration.maxCostUsd !== undefined)
+        return a.configuration.maxCostUsd - b.configuration.maxCostUsd || b.lower - a.lower || a.index - b.index;
+      return b.lower - a.lower || a.index - b.index;
+    });
+    return { configurations: scores.map(s => s.configuration), reasons: scores.map(s => `${s.configuration.id}: observations=${s.n}, posteriorSuccess=${s.probability.toFixed(3)}, conservativeScore=${s.lower.toFixed(3)}; ${s.n < 3 ? 'exploration required' : 'verified evidence'}; mode=${mode}`) };
   }
 
   /**

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-22T01:12:10.035Z",
+  "platform": "darwin",
+  "node": "v22.23.3",
+  "summary": [
+    {
+      "mode": "legacy-single",
+      "n": 5,
+      "successes": 3,
+      "medianMs": 115.012,
+      "p95Ms": 143.109
+    },
+    {
+      "mode": "race-2",
+      "n": 5,
+      "successes": 5,
+      "medianMs": 274.162,
+      "p95Ms": 280.511
+    },
+    {
+      "mode": "race-3",
+      "n": 5,
+      "successes": 5,
+      "medianMs": 314.793,
+      "p95Ms": 370.755
+    },
+    {
+      "mode": "adaptive",
+      "n": 5,
+      "successes": 3,
+      "medianMs": 226.933,
+      "p95Ms": 244.408
+    },
+    {
+      "mode": "progressive",
+      "n": 5,
+      "successes": 5,
+      "medianMs": 281.226,
+      "p95Ms": 478.069
+    }
+  ],
+  "limitations": "Five synthetic cases per mode, two agent harnesses; quality and overhead are not comparable as model benchmarks. Missing cost/tokens/recovery/regret remain missing. Adaptive mode is cold-start. No paid APIs."
+}

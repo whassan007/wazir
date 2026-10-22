@@ -125,6 +125,11 @@ interface ResolvedRoutingConstraint {
  * - ties are broken lexicographically so the same input always yields the same output
  */
 export class Scheduler {
+  /** Rank only configurations whose models/placements were accepted by schedule(). */
+  async rankCompetitiveConfigurations(task: Task, configurations: import('./competitiveExecution.js').RaceConfiguration[], policyHash: string, mode: import('./competitiveExecution.js').RoutingPreference = 'auto') {
+    return this.deps.modelIntelligence?.rankCompetitiveConfigurations(task, configurations, policyHash, mode)
+      ?? { configurations, reasons: ['model intelligence unavailable; existing scheduler order'] };
+  }
   private readonly classifier: TaskCapabilityClassifier;
 
   constructor(private readonly deps: SchedulerDeps) {

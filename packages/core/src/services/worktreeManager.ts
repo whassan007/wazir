@@ -104,6 +104,7 @@ export class WorktreeManager {
     projectRoot: string,
     jobId: string,
     taskId?: string,
+    baselineCommit?: string,
   ): Promise<WorktreeInfo> {
     assertSafeId('jobId', jobId);
     if (taskId !== undefined) assertSafeId('taskId', taskId);
@@ -124,7 +125,7 @@ export class WorktreeManager {
     const branch = taskId ? `wazir/${jobId}/${taskId}` : `wazir/${jobId}`;
     const baseBranch = isGit ? await this.getCurrentBranch(projectRoot) : 'none';
     const baseSha = isGit
-      ? (await execFileAsync('git', [...GIT_NO_HOOKS, 'rev-parse', 'HEAD^{commit}'], { cwd: projectRoot })).stdout.trim()
+      ? (await execFileAsync('git', [...GIT_NO_HOOKS, 'rev-parse', '--verify', `${baselineCommit ?? 'HEAD'}^{commit}`], { cwd: projectRoot })).stdout.trim()
       : undefined;
 
     if (!isGit) {
@@ -175,6 +176,7 @@ export class WorktreeManager {
         { cwd: projectRoot },
       );
     } catch (error) {
+      if (baselineCommit) throw error; // Races must never attach a pre-existing branch.
       // If branch already exists (e.g. on resume/retry), attach to existing branch
       try {
         await execFileAsync(

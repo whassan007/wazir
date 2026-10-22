@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-22T01:12:28.781263+00:00",
+  "baselineCommit": "f3b115a",
+  "platform": "Darwin",
+  "architecture": "arm64",
+  "commands": [
+    {
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "result": "passed"
+    },
+    {
+      "command": "npm run build",
+      "exitCode": 0,
+      "result": "passed; subsequent source changes separately typechecked and bundled"
+    },
+    {
+      "command": "node scripts/bundle.mjs",
+      "exitCode": 0,
+      "result": "final bundle passed"
+    },
+    {
+      "command": "npx vitest run packages/core/tests packages/agents/tests packages/tools/tests apps/cli/tests tests/competitive-execution --exclude '**/improvementSupervisor*.test.ts'",
+      "exitCode": 0,
+      "passed": 1835,
+      "skipped": 13,
+      "filesPassed": 236,
+      "filesSkipped": 1,
+      "durationSeconds": 192.34,
+      "environment": "host; nested sandbox initially blocked local sockets/process probes"
+    },
+    {
+      "command": "npx vitest run tests/competitive-execution/native.test.ts tests/competitive-execution/sandbox.test.ts tests/competitive-execution/competitive.test.ts packages/tools/tests/sandbox.test.ts",
+      "exitCode": 0,
+      "passed": 38,
+      "skipped": 10,
+      "durationSeconds": 13.6,
+      "environment": "host; after read-only-root hardening"
+    },
+    {
+      "command": "WAZIR_WRITE_COMPETITIVE_BENCHMARK=1 npx vitest run tests/competitive-execution/benchmark.test.ts",
+      "exitCode": 0,
+      "passed": 1,
+      "configurations": 25,
+      "result": "actual deterministic benchmark CSV/summary regenerated"
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "passed"
+    },
+    {
+      "command": "node bin/wa.js task run --help; node bin/wa.js task race --help; node bin/wa.js task replay --help",
+      "exitCode": 0,
+      "result": "options and command registration verified"
+    }
+  ],
+  "paidProvidersExercised": false,
+  "realLinuxSandboxExercised": false,
+  "knownIncomplete": "See docs/reports/competitive-execution-final.md. Full proposal acceptance is not claimed."
+}
