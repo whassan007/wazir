@@ -1,8 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { PolicyEngine, CodeModeService, type CodeModeToolExecutor } from '../src/index.js';
-import { codeModeTool, createCodeModeTool } from '../../tools/src/codeModeTool.js';
-import { ToolRegistry } from '../../tools/src/registry.js';
-import { detectEffectiveIsolation, resetSandboxProbe, sandboxStatus } from '../../tools/src/sandbox.js';
+import {
+  ToolRegistry,
+  codeModeTool,
+  createCodeModeTool,
+  detectEffectiveIsolation,
+  resetSandboxProbe,
+  sandboxStatus,
+} from '@wazir/tools';
 import { createControlledExecution } from '../../../apps/api/src/toolExecution.js';
 import { FleetTui } from '../../../apps/cli/src/tui/fleetTui.js';
 

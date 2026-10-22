@@ -164,8 +164,8 @@ function probeSandboxExec(): { ok: boolean; reason?: string } {
 
 /** Resolves (once) which sandbox backend this process can actually use. */
 export function sandboxStatus(refresh = false): SandboxStatus {
-  if (probed && !refresh) return probed;
   const requested = requestedMode();
+  if (probed && !refresh && probed.requested === requested) return probed;
 
   if (requested === 'none') {
     probed = { mode: 'none', requested, reason: 'disabled by WAZIR_SANDBOX=none' };

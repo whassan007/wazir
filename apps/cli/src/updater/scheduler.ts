@@ -174,7 +174,8 @@ export class UpdateScheduler {
     if (useDrain && this.service.drainAndApply) {
       result = await this.service.drainAndApply(mergedOptions);
     } else if (!this.options.releases && hasPendingStagedUpdate() && shouldApply && this.service.applyStagedUpdate) {
-      result = await this.service.applyStagedUpdate(mergedOptions);
+      const { install: _installBool, apply: _applyBool, ...applyOpts } = mergedOptions;
+      result = await this.service.applyStagedUpdate(applyOpts);
     } else {
       result = await this.service.checkForUpdates(mergedOptions);
     }

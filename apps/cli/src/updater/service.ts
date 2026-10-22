@@ -1188,7 +1188,8 @@ export async function applyStagedUpdate(
   const initialVersion = staged?.installedVersion ?? options.installedVersion ?? deps.installedVersion ?? getBuildInfo().version;
 
   if (!staged && mergedDeps.releases) {
-    return checkForUpdates({ apply: true, force: options.force, ...options }, mergedDeps);
+    const { apply: _applyFn, install: _installFn, ...restOptions } = options;
+    return checkForUpdates({ ...restOptions, apply: true, force: options.force }, mergedDeps);
   }
 
   const unlock = acquireUpdateLock();
