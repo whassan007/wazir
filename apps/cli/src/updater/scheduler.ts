@@ -1,9 +1,11 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { configDir } from '../config.js';
-import { updateDir } from './storage.js';
+import { journalPath, loadUpdateConfig, readUpdateHistory, updateDir } from './storage.js';
+import { UpdateService, type ApplyStagedUpdateOptions, type CheckForUpdatesOptions, type UpdateServiceOptions } from './service.js';
+import type { DrainAndApplyOptions, UpdateRecord } from './types.js';
 
 function schedulerId(id = ''): string { return id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24); }
 function serviceName(id = ''): string { const suffix = schedulerId(id); return `wazir-update${suffix ? `-${suffix}` : ''}`; }
@@ -99,4 +101,113 @@ export function schedulerInstalled(id = ''): boolean {
     return result.status === 0;
   }
   return false;
+}
+
+export interface UpdateSchedulerOptions extends UpdateServiceOptions {
+  service?: UpdateService | {
+    checkForUpdates: (options?: CheckForUpdatesOptions) => Promise<UpdateRecord>;
+    applyStagedUpdate?: (options?: ApplyStagedUpdateOptions) => Promise<UpdateRecord>;
+    drainAndApply?: (options?: DrainAndApplyOptions) => Promise<UpdateRecord>;
+  };
+  intervalSeconds?: number;
+  intervalMs?: number;
+  applyOnTick?: boolean;
+  drainBeforeApply?: boolean;
+  drainTimeoutMs?: number;
+  drainPollIntervalMs?: number;
+  onTick?: (record: UpdateRecord) => void | Promise<void>;
+}
+
+export interface UpdateSchedulerTickOptions extends DrainAndApplyOptions {
+  apply?: boolean;
+  drain?: boolean;
+}
+
+function hasPendingStagedUpdate(): boolean {
+  if (existsSync(journalPath())) {
+    try {
+      const journal = JSON.parse(readFileSync(journalPath(), 'utf8')) as UpdateRecord;
+      if ((journal.phase === 'STAGED' || journal.phase === 'WAITING_FOR_SAFE_ACTIVATION') && Boolean(journal.availableVersion)) {
+        return true;
+      }
+    } catch {}
+  }
+  return readUpdateHistory(20).some(
+    (entry) => (entry.phase === 'STAGED' || entry.phase === 'WAITING_FOR_SAFE_ACTIVATION') && Boolean(entry.availableVersion),
+  );
+}
+
+export class UpdateScheduler {
+  private readonly options: UpdateSchedulerOptions;
+  private readonly service: NonNullable<UpdateSchedulerOptions['service']>;
+  private timer?: ReturnType<typeof setInterval>;
+  private lastResult?: UpdateRecord;
+
+  constructor(options: UpdateSchedulerOptions = {}) {
+    this.options = { ...options };
+    this.service = options.service ?? new UpdateService(options);
+  }
+
+  async tick(tickOptions: UpdateSchedulerTickOptions = {}): Promise<UpdateRecord> {
+    const useDrain = tickOptions.drain ?? this.options.drainBeforeApply ?? false;
+    const shouldApply = tickOptions.apply ?? this.options.applyOnTick ?? loadUpdateConfig().automaticInstall;
+    const mergedOptions: CheckForUpdatesOptions = {
+      store: tickOptions.store ?? this.options.store,
+      configDir: tickOptions.configDir ?? this.options.configDir,
+      storePath: tickOptions.storePath ?? this.options.storePath,
+      executions: tickOptions.executions ?? this.options.executions,
+      jobs: tickOptions.jobs ?? this.options.jobs,
+      dispatches: tickOptions.dispatches ?? this.options.dispatches,
+      checkProcesses: tickOptions.checkProcesses ?? this.options.checkProcesses,
+      processProbe: tickOptions.processProbe ?? this.options.processProbe,
+      isProcessAlive: tickOptions.isProcessAlive ?? this.options.isProcessAlive,
+      now: tickOptions.now ?? this.options.now,
+      scheduled: true,
+      apply: shouldApply,
+      force: tickOptions.force,
+      drain: useDrain,
+      timeoutMs: tickOptions.timeoutMs ?? this.options.drainTimeoutMs,
+      pollIntervalMs: tickOptions.pollIntervalMs ?? this.options.drainPollIntervalMs,
+    };
+
+    let result: UpdateRecord;
+    if (useDrain && this.service.drainAndApply) {
+      result = await this.service.drainAndApply(mergedOptions);
+    } else if (!this.options.releases && hasPendingStagedUpdate() && shouldApply && this.service.applyStagedUpdate) {
+      result = await this.service.applyStagedUpdate(mergedOptions);
+    } else {
+      result = await this.service.checkForUpdates(mergedOptions);
+    }
+
+    this.lastResult = result;
+    if (this.options.onTick) {
+      await this.options.onTick(result);
+    }
+    return result;
+  }
+
+  start(): this {
+    if (this.timer) return this;
+    const intervalMs = this.options.intervalMs ?? (this.options.intervalSeconds ?? loadUpdateConfig().intervalSeconds ?? 300) * 1000;
+    this.timer = setInterval(() => {
+      void this.tick().catch(() => undefined);
+    }, Math.max(50, intervalMs));
+    this.timer.unref?.();
+    return this;
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
+
+  isRunning(): boolean {
+    return this.timer !== undefined;
+  }
+
+  getLastResult(): UpdateRecord | undefined {
+    return this.lastResult;
+  }
 }
