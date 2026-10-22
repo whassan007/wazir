@@ -626,18 +626,225 @@ const SUMMARY_RESULT_MAX_CHARS = 512;
 const DEFAULT_EXECUTION_PAGE_SIZE = 100;
 const MAX_EXECUTION_PAGE_SIZE = 500;
 
+const TERMINAL_EXECUTION_STATUSES = new Set(['completed', 'failed', 'cancelled', 'recorded']);
+
 function extractExecutionId(record: Record<string, unknown> | undefined): string | undefined {
   const id = (record?.execution as { id?: unknown } | undefined)?.id;
   return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
-async function recordExecution(state: ApiState, record: Record<string, unknown>): Promise<void> {
+function normalizeUsageField(usage: unknown): Record<string, unknown> | undefined {
+  if (!usage || typeof usage !== 'object') return undefined;
+  const u = usage as Record<string, unknown>;
+  const input = typeof u.input === 'number' && Number.isFinite(u.input) ? u.input : 0;
+  const output = typeof u.output === 'number' && Number.isFinite(u.output) ? u.output : 0;
+  const total = typeof u.total === 'number' && Number.isFinite(u.total) ? u.total : input + output;
+  return { ...u, input, output, total };
+}
+
+function buildCompleteExecutionRecord(id: string, record: Record<string, unknown>): Record<string, unknown> {
+  const now = new Date();
+  const exRaw = (record.execution as Record<string, unknown> | undefined) ?? {};
+  const taskRaw = (record.task as Record<string, unknown> | undefined) ?? {};
+  const status = typeof exRaw.status === 'string' && exRaw.status ? exRaw.status : 'completed';
+  const createdAt = exRaw.createdAt instanceof Date
+    ? exRaw.createdAt
+    : typeof exRaw.createdAt === 'string' && exRaw.createdAt
+      ? new Date(exRaw.createdAt)
+      : now;
+  const completedAt = exRaw.completedAt instanceof Date
+    ? exRaw.completedAt
+    : typeof exRaw.completedAt === 'string' && exRaw.completedAt
+      ? new Date(exRaw.completedAt)
+      : TERMINAL_EXECUTION_STATUSES.has(status)
+        ? now
+        : undefined;
+  const taskId = typeof exRaw.taskId === 'string' && exRaw.taskId
+    ? exRaw.taskId
+    : typeof taskRaw.id === 'string' && taskRaw.id
+      ? taskRaw.id
+      : id;
+  const computerId = String(exRaw.computerId ?? record.computerId ?? 'local');
+  const runtimeId = String(exRaw.runtimeId ?? record.runtimeId ?? 'local');
+  const modelId = String(exRaw.modelId ?? record.modelId ?? 'default');
+  const agentId = exRaw.agentId ?? record.agentId;
+  const workerId = exRaw.workerId ?? record.workerId;
+  const leaseEpoch = typeof record.leaseEpoch === 'number'
+    ? record.leaseEpoch
+    : typeof exRaw.leaseEpoch === 'number'
+      ? exRaw.leaseEpoch
+      : undefined;
+
+  const execution: Record<string, unknown> = {
+    ...exRaw,
+    id,
+    taskId,
+    computerId,
+    runtimeId,
+    modelId,
+    ...(agentId !== undefined ? { agentId } : {}),
+    ...(workerId !== undefined ? { workerId } : {}),
+    ...(leaseEpoch !== undefined ? { leaseEpoch } : {}),
+    status,
+    createdAt,
+    ...(completedAt !== undefined ? { completedAt } : {}),
+  };
+
+  const taskStatus =
+    status === 'completed' || status === 'recorded' ? 'completed'
+    : status === 'failed' ? 'failed'
+    : status === 'cancelled' ? 'cancelled'
+    : 'running';
+
+  const task: Record<string, unknown> = {
+    id: taskId,
+    type: typeof taskRaw.type === 'string' && taskRaw.type ? taskRaw.type : 'generic',
+    input: typeof taskRaw.input === 'string' ? taskRaw.input : '',
+    priority: typeof taskRaw.priority === 'string' && taskRaw.priority ? taskRaw.priority : 'normal',
+    status: typeof taskRaw.status === 'string' && taskRaw.status ? taskRaw.status : taskStatus,
+    createdAt: taskRaw.createdAt instanceof Date ? taskRaw.createdAt : createdAt,
+    updatedAt: taskRaw.updatedAt instanceof Date ? taskRaw.updatedAt : now,
+    ...taskRaw,
+  };
+
+  const errors: string[] = Array.isArray(record.errors)
+    ? (record.errors as unknown[]).map((e) => (typeof e === 'string' ? e : String((e as { message?: unknown })?.message ?? e))).filter(Boolean)
+    : typeof record.error === 'string' && record.error
+      ? [record.error]
+      : [];
+
+  const usage = normalizeUsageField(record.usage);
+
+  return {
+    ...record,
+    execution,
+    task,
+    computerId,
+    runtimeId,
+    modelId,
+    ...(agentId !== undefined ? { agentId } : {}),
+    ...(workerId !== undefined ? { workerId } : {}),
+    ...(leaseEpoch !== undefined ? { leaseEpoch } : {}),
+    ...(usage !== undefined ? { usage } : {}),
+    policyDecisions: Array.isArray(record.policyDecisions) ? record.policyDecisions : [],
+    toolCalls: Array.isArray(record.toolCalls) ? record.toolCalls : [],
+    filesChanged: Array.isArray(record.filesChanged) ? record.filesChanged : [],
+    checks: Array.isArray(record.checks) ? record.checks : [],
+    errors,
+    workspaceState: record.workspaceState && typeof record.workspaceState === 'object'
+      ? record.workspaceState
+      : { workspaceId: id, revision: 0, updatedAt: now },
+    evidence: Array.isArray(record.evidence) ? record.evidence : [],
+    events: Array.isArray(record.events) ? record.events : [],
+    storageRevision: typeof record.storageRevision === 'number' && record.storageRevision > 0 ? record.storageRevision : 1,
+  };
+}
+
+export async function recordExecution(state: ApiState, record: Record<string, unknown>): Promise<Record<string, unknown>> {
   const id = extractExecutionId(record);
   if (!id) throw new Error('EXECUTION_ID_REQUIRED');
   if (!state.store.update) throw new Error('EXECUTION_PERSISTENCE_UNAVAILABLE');
-  await state.store.update<Record<string, unknown>>(`execution/${id}`, current => current ?? { events: [], ...record, storageRevision: 1 });
-  state.executions.push(record);
-  if (state.executions.length > MAX_EXECUTION_RECORDS) state.executions.splice(0, state.executions.length - MAX_EXECUTION_RECORDS);
+  const completeRecord = buildCompleteExecutionRecord(id, record);
+  const stored = await state.store.update<Record<string, unknown>>(`execution/${id}`, (current) => {
+    if (!current) {
+      return completeRecord;
+    }
+    const currentEx = (current.execution as Record<string, unknown> | undefined) ?? {};
+    const incomingEx = (completeRecord.execution as Record<string, unknown> | undefined) ?? {};
+    const currentEpoch = typeof current.leaseEpoch === 'number'
+      ? current.leaseEpoch
+      : typeof currentEx.leaseEpoch === 'number'
+        ? currentEx.leaseEpoch
+        : undefined;
+    const incomingEpoch = typeof completeRecord.leaseEpoch === 'number'
+      ? completeRecord.leaseEpoch
+      : typeof incomingEx.leaseEpoch === 'number'
+        ? incomingEx.leaseEpoch
+        : undefined;
+
+    // Fence out stale worker reports with a lower lease epoch.
+    if (currentEpoch !== undefined && incomingEpoch !== undefined && incomingEpoch < currentEpoch) {
+      return current;
+    }
+
+    const currentStatus = String(currentEx.status ?? '');
+    // Terminal executions are immutable against subsequent status regressions or duplicate overwrites.
+    if (TERMINAL_EXECUTION_STATUSES.has(currentStatus)) {
+      return current;
+    }
+
+    const incomingStatus = String(incomingEx.status ?? currentStatus);
+    const now = new Date();
+    const completedAt = incomingEx.completedAt ?? currentEx.completedAt ?? (TERMINAL_EXECUTION_STATUSES.has(incomingStatus) ? now : undefined);
+    const effectiveEpoch = incomingEpoch ?? currentEpoch;
+
+    const existingErrors = Array.isArray(current.errors)
+      ? (current.errors as unknown[]).map((e) => (typeof e === 'string' ? e : String((e as { message?: unknown })?.message ?? e))).filter(Boolean)
+      : [];
+    const incomingErrors = Array.isArray(completeRecord.errors) ? (completeRecord.errors as string[]) : [];
+    const mergedErrors = [...existingErrors];
+    for (const err of incomingErrors) {
+      if (!mergedErrors.includes(err)) mergedErrors.push(err);
+    }
+
+    const mergedExecution: Record<string, unknown> = {
+      ...currentEx,
+      ...incomingEx,
+      id,
+      taskId: currentEx.taskId ?? incomingEx.taskId ?? id,
+      createdAt: currentEx.createdAt ?? incomingEx.createdAt ?? now,
+      status: incomingStatus,
+      ...(completedAt !== undefined ? { completedAt } : {}),
+      ...(effectiveEpoch !== undefined ? { leaseEpoch: effectiveEpoch } : {}),
+    };
+
+    const currentTask = (current.task as Record<string, unknown> | undefined) ?? (completeRecord.task as Record<string, unknown>);
+    const mergedTask: Record<string, unknown> = {
+      ...currentTask,
+      status:
+        incomingStatus === 'completed' || incomingStatus === 'recorded' ? 'completed'
+        : incomingStatus === 'failed' ? 'failed'
+        : incomingStatus === 'cancelled' ? 'cancelled'
+        : (currentTask.status ?? 'running'),
+      updatedAt: now,
+    };
+
+    const nextRevision = (typeof current.storageRevision === 'number' ? current.storageRevision : 0) + 1;
+
+    return {
+      ...current,
+      ...record,
+      execution: mergedExecution,
+      task: mergedTask,
+      computerId: record.computerId ?? current.computerId ?? mergedExecution.computerId,
+      runtimeId: record.runtimeId ?? current.runtimeId ?? mergedExecution.runtimeId,
+      modelId: record.modelId ?? current.modelId ?? mergedExecution.modelId,
+      ...(effectiveEpoch !== undefined ? { leaseEpoch: effectiveEpoch } : {}),
+      ...(record.result !== undefined ? { result: record.result } : current.result !== undefined ? { result: current.result } : {}),
+      ...(record.error !== undefined ? { error: record.error } : current.error !== undefined ? { error: current.error } : {}),
+      ...(completeRecord.usage !== undefined ? { usage: completeRecord.usage } : current.usage !== undefined ? { usage: current.usage } : {}),
+      policyDecisions: Array.isArray(current.policyDecisions) ? current.policyDecisions : (completeRecord.policyDecisions as unknown[]),
+      toolCalls: Array.isArray(current.toolCalls) ? current.toolCalls : (completeRecord.toolCalls as unknown[]),
+      filesChanged: Array.isArray(current.filesChanged) ? current.filesChanged : (completeRecord.filesChanged as unknown[]),
+      checks: Array.isArray(current.checks) ? current.checks : (completeRecord.checks as unknown[]),
+      errors: mergedErrors,
+      workspaceState: current.workspaceState ?? completeRecord.workspaceState,
+      evidence: Array.isArray(current.evidence) ? current.evidence : (completeRecord.evidence as unknown[]),
+      events: Array.isArray(current.events) ? current.events : (completeRecord.events as unknown[]),
+      storageRevision: nextRevision,
+    };
+  });
+
+  const existingIdx = state.executions.findIndex((e) => extractExecutionId(e) === id);
+  if (existingIdx >= 0) {
+    state.executions[existingIdx] = stored;
+  } else {
+    state.executions.push(stored);
+    if (state.executions.length > MAX_EXECUTION_RECORDS) {
+      state.executions.splice(0, state.executions.length - MAX_EXECUTION_RECORDS);
+    }
+  }
+  return stored;
 }
 
 function normalizeExecutionRecord(raw: Record<string, unknown>): Record<string, unknown> {
@@ -701,7 +908,17 @@ async function collectAllExecutions(state: ApiState): Promise<Array<Record<strin
 
 async function lookupExecution(state: ApiState, id: string): Promise<Record<string, unknown> | undefined> {
   const record = await state.store.get<Record<string, unknown>>(`execution/${id}`);
-  return record && extractExecutionId(record) === id ? normalizeExecutionRecord(record) : undefined;
+  if (record && extractExecutionId(record) === id) {
+    return normalizeExecutionRecord(record);
+  }
+  const dispatch = await state.store.get<DurableDispatch>(`dispatch/${id}`);
+  if (dispatch?.request?.executionId && dispatch.request.executionId !== id) {
+    const byExecId = await state.store.get<Record<string, unknown>>(`execution/${dispatch.request.executionId}`);
+    if (byExecId && extractExecutionId(byExecId) === dispatch.request.executionId) {
+      return normalizeExecutionRecord(byExecId);
+    }
+  }
+  return undefined;
 }
 
 function summarizeExecutionRecord(record: Record<string, unknown>): Record<string, unknown> {
@@ -1409,6 +1626,7 @@ export function createApp(state: ApiState) {
       return;
     }
     const requestId = String(req.params.requestId);
+    const dispatchRecord = await state.store.get<DurableDispatch>(`dispatch/${requestId}`);
     let committed: 'committed' | 'duplicate';
     try { committed = await state.dispatcher.commit(requestId, outcome, String(req.body?.leaseToken ?? '')); }
     catch (error) { res.status(409).json({ error: (error as Error).message }); return; }
@@ -1417,12 +1635,33 @@ export function createApp(state: ApiState) {
       res.json({ ok: true, duplicate: true });
       return;
     }
+    const executionId = dispatchRecord?.request?.executionId ||
+      (typeof req.body?.executionId === 'string' && req.body.executionId ? req.body.executionId : requestId);
+    const now = new Date();
     await recordExecution(state, {
-      execution: { id: requestId, status: outcome.ok ? 'completed' : 'failed', createdAt: new Date() },
+      execution: {
+        id: executionId,
+        taskId: executionId,
+        computerId: String(req.params.id),
+        modelId: dispatchRecord?.request?.modelId ?? 'default',
+        runtimeId: dispatchRecord?.request?.runtimeId ?? 'local',
+        status: outcome.ok ? 'completed' : 'failed',
+        createdAt: now,
+        completedAt: now,
+        ...(dispatchRecord?.attempt !== undefined ? { leaseEpoch: dispatchRecord.attempt } : {}),
+      },
+      requestId,
+      ...(dispatchRecord?.attempt !== undefined ? { leaseEpoch: dispatchRecord.attempt } : {}),
       computerId: String(req.params.id),
+      ...(dispatchRecord?.request?.modelId ? { modelId: dispatchRecord.request.modelId } : {}),
+      ...(dispatchRecord?.request?.runtimeId ? { runtimeId: dispatchRecord.request.runtimeId } : {}),
       result: outcome.output,
       error: outcome.error,
-      usage: { input: outcome.inputTokens, output: outcome.outputTokens },
+      usage: {
+        input: outcome.inputTokens,
+        output: outcome.outputTokens,
+        total: outcome.inputTokens + outcome.outputTokens,
+      },
     });
     if (outcome.ok) {
       metrics.tasksCompleted++;
