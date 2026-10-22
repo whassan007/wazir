@@ -18,7 +18,7 @@ import { createHandoffCommand } from './handoff.js';
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.11';
+const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.12';
 
 const program = new Command();
 

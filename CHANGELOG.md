@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.2.12 — 2026-10-21
+
+**Release**: `v0.2.12`
+**Theme**: Canonical NVIDIA provider, Mission Control TUI, 3-tier execution optimization, and fleet routing guardrails
+
+- **NVIDIA Hosted Provider (`@wazir/runtimes-nvidia`, `@wazir/cli`, `@wazir/core`)**:
+  - Canonical OpenAI-compatible NVIDIA API Catalog provider (`https://integrate.api.nvidia.com/v1`) with 84-model discovery, streaming `delta.reasoning_content` separation, tool calling, HTTP 400 unsupported-parameter retry stripping, HTTP 429 `Retry-After` backoff, secret redaction (`nvapi-*` and `Bearer`), and explicit `HOSTED_API_INFERENCE` vs `LOCAL_GPU_INFERENCE` placement explainability.
+- **Mission Control TUI (`@wazir/cli`)**:
+  - Consolidated interactive Mission Control interface (`missionControl.ts`, `conversationProjection.ts`, `conversationRenderer.ts`) with responsive `narrow`/`standard`/`wide` terminal layouts, bracketed paste barrier, live telemetry, and diff-preview approval queue while preserving all CLI commands and non-interactive execution.
+- **3-Tier Execution Architecture & Performance (`@wazir/core`, `@wazir/agents`, `@wazir/tools`, `@wazir/cli`)**:
+  - Unified Tier 0 (`classifyDeterministicCommand`), Tier 1 (`isConversationalTask` -> `ChatAgent`), and Tier 2 (`CodingAgent`) execution pipeline.
+  - Optimized `ResourceRouter.assess()` with batch ledger caching (**68.8× faster** `planTask`), skipped redundant workspace snapshots on read-only deterministic commands (**2.75× faster** on disk, **32.9× faster** in-memory), hoisted `fs.realpath(root)` in `snapshotWorkspace()`, and added workspace-scoped verification (`--full-verify`) and git-HEAD integrity guard (`repoIntegrityGuard.ts`).
+- **Fleet Subagent Routing Guardrails (`@wazir/agents`, `@wazir/core`)**:
+  - Enforced parent `provider_only` confinement, `PolicyEngine.checkHostedEligibility()`, `ResourceRouter.assess()` quota admission, and model capability verification on every delegated subagent task (`Guardrail 3`).
+- **Dependency Security**:
+  - Upgraded `@modelcontextprotocol/client` (`1.29.0`) and `shell-quote` (`1.8.4`) to resolve all production `npm audit` advisories (`0 vulnerabilities`).
+
 ## v0.2.11 — 2026-10-19
 
 **Release**: `v0.2.11`

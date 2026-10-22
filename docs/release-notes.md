@@ -1,3 +1,23 @@
+# Wazir Release Notes - v0.2.12
+
+**Release**: `v0.2.12`
+**Theme**: Canonical NVIDIA provider, Mission Control TUI, 3-tier execution optimization, and fleet routing guardrails
+
+`v0.2.12` completes the multi-branch reconciliation of Wazir's execution plane, integrating the canonical NVIDIA hosted inference provider, the Mission Control TUI, fleet subagent routing guardrails, workspace-scoped verification, and major latency optimizations across deterministic and model-assisted paths.
+
+## Highlights
+
+- **Canonical NVIDIA Provider (`@wazir/runtimes-nvidia`)**: Full OpenAI-compatible NVIDIA API Catalog support (84 models), streaming reasoning separation, tool calling, bounded 429 retries, credential redaction, and `HOSTED_API_INFERENCE` vs `LOCAL_GPU_INFERENCE` explainability.
+- **Mission Control TUI**: Responsive `narrow`/`standard`/`wide` terminal layouts, bracketed paste protection, approval queue diff previews, and live telemetry while preserving all CLI subcommands.
+- **3-Tier Execution Optimization**: Batch ledger caching in `ResourceRouter.assess()` (`119 ms` -> `1.73 ms` `planTask`), fast-path workspace verification bypass for read-only deterministic commands (`970 ms` -> `352 ms` disk / `21 ms` in-memory), and workspace-scoped post-run checks (`verificationScope.ts`) with git-HEAD integrity protection (`repoIntegrityGuard.ts`).
+- **Fleet Subagent Confinement**: Subagents inherit parent `provider_only` routing constraints and are gated by policy, quota, and capability checks (`Guardrail 3`).
+
+## Validation
+
+Verified across 354 test files (2,611 passing tests, 52 platform/external-service skips, 0 failures), 0 TypeScript errors across all 26 workspaces, and 0 production dependency vulnerabilities (`npm audit --omit=dev`).
+
+---
+
 # Wazir Release Notes - v0.2.11
 
 **Release**: `v0.2.11`
