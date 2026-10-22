@@ -13,6 +13,15 @@ export class ChatAgent implements AgentAdapter {
   constructor(private readonly options: { timeoutMs?: number } = {}) {}
 
   async *run(request: AgentRunRequest, runtime: AgentRuntime): AsyncIterable<AgentTurn> {
+    if (request.mutationRequired === true || (request.expectedArtifacts && request.expectedArtifacts.length > 0)) {
+      yield {
+        kind: 'error',
+        error: 'ChatAgent cannot satisfy file mutation or expected-artifact requirements',
+        errorKind: 'verification',
+        terminationReason: 'VERIFICATION_FAILED',
+      };
+      return;
+    }
     let content = '', completed = false;
     const iterator = runtime.generate({ modelId: request.modelId,
       messages: [{ role: 'system', content: CHAT_SYSTEM_PROMPT }, { role: 'user', content: request.taskDescription }],
@@ -32,12 +41,15 @@ export class ChatAgent implements AgentAdapter {
         const next = await Promise.race([iterator.next(), stop]);
         if (next.done) break;
         const event = next.value;
-        if (event.type === 'error') throw new Error(event.error ?? 'runtime generation failed');
+        if (event.type === 'error') {
+          if (event.error?.toLowerCase().includes('cancel') || request.isCancelled?.()) stopped = 'CANCELLED';
+          throw new Error(event.error ?? 'runtime generation failed');
+        }
         if (event.type === 'tool_call') throw new Error('conversational inference cannot execute tools; use a coding task');
         if (event.type === 'token') content += event.content ?? '';
         if (event.type === 'completed') { completed = true; if (!content) content = event.content ?? ''; }
       }
-      if (!completed) throw new Error('model stream ended without completion');
+      if (!completed) throw new Error('INCOMPLETE_PROVIDER_STREAM: model stream ended without completion');
       if (!content.trim()) throw new Error('model returned an empty response');
       yield { kind: 'done', content, terminationReason: 'COMPLETED' };
     } catch (error) {
