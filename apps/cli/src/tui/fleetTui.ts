@@ -749,6 +749,9 @@ export class FleetTui {
     this.autoMerge = options.autoMerge ?? false;
     this.timeoutSeconds = options.timeoutSeconds;
     this.enablePlanner = options.enablePlanner ?? false;
+    if ((options as { modelId?: string }).modelId) {
+      this.selectedModelId = (options as { modelId?: string }).modelId;
+    }
   }
 
   getSessionId(): string {
@@ -1800,6 +1803,7 @@ export class FleetTui {
     // Verify that stdin is correctly running in raw mode so structured key objects are passed
     this.screen.enter();
     if (this.presentationMode === 'conversation') {
+      // Before a task is scheduled no model is executing; a ready model is not the router's choice.
       this.conversationRenderer.start(process.env.USER ?? process.env.USERNAME ?? 'controller', this.selectedModelId ?? 'auto-routed model');
     }
 
@@ -2688,8 +2692,8 @@ export class FleetTui {
           ? 'Showing expanded approval details'
           : 'Showing standard approval view';
         if (this.presentationMode === 'conversation') {
-          const rule = first.rule ?? (first as any).decision?.rule ?? 'policy';
-          const reasons = first.reasons ?? (first as any).decision?.reasons ?? [];
+          const rule = first.rule ?? (first as { decision?: { rule?: string } }).decision?.rule ?? 'unknown';
+          const reasons = first.reasons ?? (first as { decision?: { reasons?: string[] } }).decision?.reasons ?? [];
           this.conversationRenderer.append(`Approval request (${first.id}): tool=${first.tool} rule=${rule} reasons=${reasons.join('; ')}`);
         }
         this.draw();
@@ -4183,6 +4187,7 @@ export class FleetTui {
       }
       if (arg === 'auto' || arg === 'clear') {
         this.selectedModelId = undefined;
+        this.conversationRenderer.setModel('auto-routed model');
         this.statusMessage = 'Cleared model pin — new tasks will be auto-routed by the scheduler again.';
         if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
@@ -4197,6 +4202,7 @@ export class FleetTui {
         return;
       }
       this.selectedModelId = match.id;
+      this.conversationRenderer.setModel(match.id);
       this.statusMessage = `Pinned model to '${match.id}' — new tasks will use it instead of auto-routing.`;
       if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
       this.draw();
@@ -5314,7 +5320,10 @@ export class FleetTui {
       const running = active.filter((task) => task.status !== 'WAITING_FOR_APPROVAL');
       const waiting = active.length - running.length;
       const activity = running[0]?.activity ?? '';
-      const activeAgent = this.getAgents().find((agent) => agent.status === 'running');
+      const agents = this.getAgents();
+      // A task waiting for its model is already bound to it; show that model, not the pin or "auto".
+      const activeAgent = agents.find((agent) => agent.status === 'running')
+        ?? agents.find((agent) => !['completed', 'failed', 'cancelled'].includes(agent.status));
       this.conversationRenderer.render({
         identity: process.env.USER ?? process.env.USERNAME ?? 'controller',
         model: activeAgent ? `${activeAgent.computerId} · ${activeAgent.modelId}` : this.selectedModelId ?? 'auto-routed model',
@@ -6232,7 +6241,8 @@ export class FleetTui {
           : event.type === 'MODEL_ADMISSION_DENIED'
             ? 'Scheduler rejected task · '
             : '';
-        this.statusMessage = `${prefix}${event.type}: ${event.modelId}${event.reason ? ' — ' + event.reason : ''}`;
+        const pinNote = this.selectedModelId && this.selectedModelId !== event.modelId ? ` (pinned: ${this.selectedModelId})` : '';
+        this.statusMessage = `${prefix}${event.type}: ${event.modelId}${pinNote}${event.reason ? ' — ' + event.reason : ''}`;
         this.draw();
       }
     }

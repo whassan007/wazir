@@ -121,27 +121,10 @@ export interface WorkspaceState {
   updatedAt: Date;
 }
 
-export interface WorkspaceMutationAttributionSummary {
-  executionId: string;
-  worktree?: import('./tool.js').WorktreeIdentity;
-  ownedFiles: string[];
-  otherWazirFiles: string[];
-  externalFiles: string[];
-  unknownOriginFiles: string[];
-  attributions: Array<import('./tool.js').FileMutationResult & { provenance: import('./tool.js').FileMutationProvenance }>;
-  conflicts: import('./tool.js').FileMutationConflict[];
-  gitDiagnostics?: string[];
-}
-
 export interface FileMutationHistoryEntry {
   path: string;
   revision: number;
   at: Date;
-  origin?: import('./tool.js').FileMutationOrigin;
-  confidence?: import('./tool.js').AttributionConfidence;
-  ownerExecutionId?: string;
-  callId?: string;
-  toolName?: string;
 }
 
 import type { EvidenceType, VerificationEvidence } from './verification.js';
@@ -164,10 +147,6 @@ export interface EvaluationResult {
   success: boolean;
   reasons: string[];
   filesChanged: string[];
-  externalFilesChanged?: string[];
-  otherWazirFilesChanged?: string[];
-  unknownOriginFilesChanged?: string[];
-  mutationConflicts?: import('./tool.js').FileMutationConflict[];
   checks: CheckRunRecord[];
   evaluatedAt: Date;
   workspaceRevision?: number;
@@ -186,11 +165,6 @@ export interface ExecutionRecord {
   policyDecisions: PolicyDecision[];
   toolCalls: ToolCallRecord[];
   filesChanged: string[];
-  externalFilesChanged?: string[];
-  otherWazirFilesChanged?: string[];
-  unknownOriginFilesChanged?: string[];
-  mutationConflicts?: import('./tool.js').FileMutationConflict[];
-  mutationAttribution?: WorkspaceMutationAttributionSummary;
   checks: CheckRunRecord[];
   errors: string[];
   result?: string;
@@ -224,7 +198,6 @@ export type ExecutionEventType =
   | 'tool.call.requested' | 'tool.call.validated' | 'tool.call.started'
   | 'tool.call.completed' | 'tool.call.failed' | 'tool.call.outcome_unknown'
   | 'workspace.mutated' | 'workspace.revision.changed'
-  | 'workspace.external_mutation' | 'workspace.conflict_detected' | 'workspace.attribution_uncertain' | 'git.safety_diagnostic'
   | 'verification.completed' | 'verification.invalidated'
   | 'codemode.started' | 'codemode.completed'
   | 'codemode.operation.started' | 'codemode.operation.output'

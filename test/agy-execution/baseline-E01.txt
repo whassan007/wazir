@@ -1,0 +1,11 @@
+{
+  "success": false,
+  "reasons": [
+    "timed out waiting for lock '/home/wael/.wazir/wazir.json.lock' (held for over 10000ms)"
+  ],
+  "filesChanged": [],
+  "executionId": "exec-mvd6u7b3-1",
+  "errors": [
+    "timed out waiting for lock '/home/wael/.wazir/wazir.json.lock' (held for over 10000ms)"
+  ]
+}

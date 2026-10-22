@@ -1,0 +1,565 @@
+[
+  {
+    "id": "gemma-4-26b-a4b-it-qat",
+    "name": "Gemma 4 26B A4B Instruct QAT",
+    "provider": "lmstudio",
+    "family": "gemma",
+    "architecture": "gemma4",
+    "parameters": "26B-A4B",
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "toolCalling"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_0",
+    "memory": {
+      "minSystemGB": 21
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "performance": {
+      "coding": {
+        "taskClass": "coding",
+        "samples": 17,
+        "verifiedSuccessRate": 0,
+        "firstPassBuildRate": 0,
+        "firstPassTestRate": 0,
+        "protocolFailureRate": 0,
+        "noProgressRate": 0.118,
+        "schemaReliability": 0.958,
+        "medianToolCalls": 9,
+        "medianDurationMs": 97757,
+        "measuredAt": "2026-10-18T02:03:25.774Z"
+      }
+    },
+    "instances": [
+      {
+        "id": "gemma-4-26b-a4b-it-qat::local::lmstudio",
+        "modelId": "gemma-4-26b-a4b-it-qat",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "gemma-4-26b-a4b-it-qat",
+        "loaded": true,
+        "state": "READY",
+        "health": "healthy",
+        "contextTokens": 32768,
+        "lastCheckedAt": "2026-10-18T02:03:24.536Z",
+        "desired": {
+          "state": "READY",
+          "contextTokens": 32768
+        },
+        "installationId": "gemma-4-26b-a4b-it-qat::local::lmstudio",
+        "lastUsedAt": "2026-10-18T02:03:24.536Z"
+      }
+    ]
+  },
+  {
+    "id": "nvidia/nemotron-3-nano-omni",
+    "name": "Nemotron 3 Nano Omni",
+    "provider": "lmstudio",
+    "family": "nemotron",
+    "architecture": "nemotron_h_moe",
+    "parameters": "30B-A3B",
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "toolCalling",
+      "vision"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": true,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 8
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "performance": {
+      "coding": {
+        "taskClass": "coding",
+        "samples": 18,
+        "verifiedSuccessRate": 0.5,
+        "firstPassBuildRate": 0.5,
+        "firstPassTestRate": 0.636,
+        "protocolFailureRate": 0.222,
+        "noProgressRate": 0.111,
+        "schemaReliability": 0.919,
+        "medianToolCalls": 12,
+        "medianDurationMs": 49273,
+        "measuredAt": "2026-10-18T02:03:25.774Z"
+      }
+    },
+    "instances": [
+      {
+        "id": "nvidia/nemotron-3-nano-omni::local::lmstudio",
+        "modelId": "nvidia/nemotron-3-nano-omni",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "nvidia/nemotron-3-nano-omni",
+        "loaded": true,
+        "state": "READY",
+        "health": "healthy",
+        "contextTokens": 8192,
+        "lastCheckedAt": "2026-10-18T02:03:25.419Z",
+        "installationId": "nvidia/nemotron-3-nano-omni::local::lmstudio",
+        "lastUsedAt": "2026-10-18T02:03:25.419Z"
+      }
+    ]
+  },
+  {
+    "id": "nvidia/nemotron-3-super",
+    "name": "Nemotron 3 Super",
+    "provider": "lmstudio",
+    "family": "nemotron",
+    "architecture": "nemotron_h_moe",
+    "parameters": "120B",
+    "contextMax": 1048576,
+    "capabilities": [
+      "generalChat"
+    ],
+    "toolCalling": false,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 92
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "nvidia/nemotron-3-super::local::lmstudio",
+        "modelId": "nvidia/nemotron-3-super",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "nvidia/nemotron-3-super",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:25.091Z",
+        "installationId": "nvidia/nemotron-3-super::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "openai/gpt-oss-120b",
+    "name": "GPT-OSS 120B",
+    "provider": "lmstudio",
+    "family": "gpt",
+    "architecture": "gpt-oss",
+    "parameters": "120B",
+    "contextMax": 131072,
+    "capabilities": [
+      "generalChat",
+      "toolCalling"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "MXFP4",
+    "memory": {
+      "minSystemGB": 92
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "openai/gpt-oss-120b::local::lmstudio",
+        "modelId": "openai/gpt-oss-120b",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "openai/gpt-oss-120b",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:23.709Z",
+        "installationId": "openai/gpt-oss-120b::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "qwen/qwen3-coder-next",
+    "name": "Qwen3 Coder Next",
+    "provider": "lmstudio",
+    "family": "qwen",
+    "architecture": "qwen3next",
+    "parameters": "80B",
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "toolCalling"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 62
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "performance": {
+      "coding": {
+        "taskClass": "coding",
+        "samples": 8,
+        "verifiedSuccessRate": 0,
+        "firstPassBuildRate": 1,
+        "firstPassTestRate": 0,
+        "protocolFailureRate": 0.25,
+        "noProgressRate": 0.375,
+        "schemaReliability": 0.911,
+        "medianToolCalls": 15,
+        "medianDurationMs": 53138.5,
+        "measuredAt": "2026-10-18T02:03:25.774Z"
+      }
+    },
+    "instances": [
+      {
+        "id": "qwen/qwen3-coder-next::local::lmstudio",
+        "modelId": "qwen/qwen3-coder-next",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "qwen/qwen3-coder-next",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:24.806Z",
+        "desired": {
+          "state": "READY",
+          "contextTokens": 32768
+        },
+        "installationId": "qwen/qwen3-coder-next::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "qwen/qwen3.8-27b",
+    "name": "Qwen3.8 27B",
+    "provider": "lmstudio",
+    "family": "qwen",
+    "architecture": "qwen35",
+    "parameters": "27B",
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "toolCalling",
+      "vision"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": true,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 22
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "performance": {
+      "coding": {
+        "taskClass": "coding",
+        "samples": 20,
+        "verifiedSuccessRate": 0.3,
+        "firstPassBuildRate": 0.5,
+        "firstPassTestRate": 0.636,
+        "protocolFailureRate": 0.1,
+        "noProgressRate": 0,
+        "schemaReliability": 0.847,
+        "medianToolCalls": 8,
+        "medianDurationMs": 59158.5,
+        "measuredAt": "2026-10-18T02:03:25.774Z"
+      }
+    },
+    "instances": [
+      {
+        "id": "qwen/qwen3.8-27b::local::lmstudio",
+        "modelId": "qwen/qwen3.8-27b",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "qwen/qwen3.8-27b",
+        "loaded": true,
+        "state": "READY",
+        "health": "healthy",
+        "contextTokens": 8192,
+        "lastCheckedAt": "2026-10-18T02:03:24.189Z",
+        "installationId": "qwen/qwen3.8-27b::local::lmstudio",
+        "lastUsedAt": "2026-10-18T02:03:24.189Z"
+      }
+    ]
+  },
+  {
+    "id": "qwen2.5-7b-instruct",
+    "name": "Qwen2.5 7B Instruct",
+    "provider": "lmstudio",
+    "family": "qwen",
+    "architecture": "qwen2",
+    "parameters": "7B",
+    "contextMax": 32768,
+    "capabilities": [
+      "generalChat",
+      "toolCalling"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 7
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "performance": {
+      "coding": {
+        "taskClass": "coding",
+        "samples": 3,
+        "verifiedSuccessRate": 0,
+        "firstPassBuildRate": 1,
+        "firstPassTestRate": 0.5,
+        "protocolFailureRate": 0,
+        "noProgressRate": 0.333,
+        "schemaReliability": 0.9,
+        "medianToolCalls": 7.5,
+        "medianDurationMs": 175626.5,
+        "measuredAt": "2026-10-18T02:03:25.774Z"
+      }
+    },
+    "instances": [
+      {
+        "id": "qwen2.5-7b-instruct::local::lmstudio",
+        "modelId": "qwen2.5-7b-instruct",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "qwen2.5-7b-instruct",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:23.152Z",
+        "desired": {
+          "state": "UNLOADED"
+        },
+        "installationId": "qwen2.5-7b-instruct::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "text_encoder",
+    "name": "Text Encoder",
+    "provider": "lmstudio",
+    "family": "other",
+    "architecture": "qwen3_vl",
+    "parameters": null,
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "vision"
+    ],
+    "toolCalling": false,
+    "structuredOutput": false,
+    "vision": true,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "bf16",
+    "memory": {
+      "minSystemGB": 8
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "text_encoder::local::lmstudio",
+        "modelId": "text_encoder",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "text_encoder",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:22.872Z",
+        "installationId": "text_encoder::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "text-embedding-nomic-embed-text-v1.5",
+    "name": "Nomic Embed Text v1.5",
+    "provider": "lmstudio",
+    "family": "other",
+    "parameters": null,
+    "contextMax": 2048,
+    "capabilities": [
+      "generalChat",
+      "embedding"
+    ],
+    "toolCalling": false,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": true,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 8
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "text-embedding-nomic-embed-text-v1.5::local::lmstudio",
+        "modelId": "text-embedding-nomic-embed-text-v1.5",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "text-embedding-nomic-embed-text-v1.5",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:25.772Z",
+        "installationId": "text-embedding-nomic-embed-text-v1.5::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "transformer",
+    "name": "Transformer",
+    "provider": "lmstudio",
+    "family": "other",
+    "architecture": null,
+    "parameters": null,
+    "contextMax": 4096,
+    "capabilities": [
+      "generalChat"
+    ],
+    "toolCalling": false,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "memory": {
+      "minSystemGB": 8
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "transformer::local::lmstudio",
+        "modelId": "transformer",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "transformer",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:22.585Z",
+        "installationId": "transformer::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "unsloth/qwen3-coder-next",
+    "name": "Qwen3 Coder Next",
+    "provider": "lmstudio",
+    "family": "qwen",
+    "architecture": "qwen3next",
+    "parameters": "80B",
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "toolCalling"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 62
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "unsloth/qwen3-coder-next::local::lmstudio",
+        "modelId": "unsloth/qwen3-coder-next",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "unsloth/qwen3-coder-next",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:23.430Z",
+        "installationId": "unsloth/qwen3-coder-next::local::lmstudio"
+      }
+    ]
+  }
+]

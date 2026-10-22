@@ -279,9 +279,10 @@ describe('Wazir Terminal Logo & Startup Banner Adaptation', () => {
   });
 
   it('prevents repeated banner printing during terminal resize events', () => {
+    // Pin the environment: CI=true on a host would suppress the banner entirely.
     const guard = new BannerSessionGuard();
-    expect(guard.shouldPrint({ isTTY: true, columns: 80 })).toBe(true);
+    expect(guard.shouldPrint({ isTTY: true, columns: 80, env: {} })).toBe(true);
     expect(guard.onResize()).toBe(false);
-    expect(guard.shouldPrint({ isTTY: true, columns: 100 })).toBe(false);
+    expect(guard.shouldPrint({ isTTY: true, columns: 100, env: {} })).toBe(false);
   });
 });

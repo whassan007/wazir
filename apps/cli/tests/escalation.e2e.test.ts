@@ -29,7 +29,7 @@ function adapter(id: string, replies: string[], calls: { generate: number; loads
     id, type: 'other',
     async discover() { return { id, name: id, version: '1' }; },
     async healthCheck() { return { status: 'healthy' }; },
-    async listModels() { return []; },
+    async listModels() { return [{ id: id === 'rt-a' ? 'a-weak' : 'b-strong', name: id }]; },
     async getCapabilities() { return CAPS; },
     async probeModel() { return true; },
     // What admission control needs to estimate a load (see modelLifecycleAdmission tests).

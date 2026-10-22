@@ -718,9 +718,14 @@ describe('FleetTui — interactive terminal UI harness', () => {
     }
     harness.sendKey('\r');
 
+    // The failed call is recorded in the activity log. The execution-failure overlay covers that
+    // pane on screen, so assert on the log entry itself and keep the screen checks for raw ids.
+    const taskId = harness.tui.getAgents()[0]?.taskId;
+    const logs = (harness.tui as any).agentLogs.get(taskId) as Array<{ kind: string; text: string }>;
+    const shellFailure = logs.find((l) => l.kind === 'error' && l.text.startsWith('shell failed'));
+    expect(shellFailure).toBeDefined();
+    expect(shellFailure!.text).toContain('Blocked: empty shell command');
     const screen = harness.getScreenBuffer();
-    expect(screen).toContain('shell failed');
-    expect(screen).toContain('Blocked: empty shell command');
     expect(screen).not.toContain('shell-unknown-ask');
     expect(screen).not.toContain('Tool call executed');
 

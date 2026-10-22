@@ -48,6 +48,7 @@ export * from './canary.js';
 export * from './strategyLearning.js';
 export * from './semanticCorpus.js';
 export * from './distributedSearch.js';
+export * from './handoff.js';
 export {
   type ModelCapabilityCategory,
   MODEL_CAPABILITY_CATEGORIES,
@@ -64,4 +65,3 @@ export {
   EXECUTION_PHASES,
 } from './modelIntelligence.js';
 export type { BudgetConsumption } from './governance.js';
-export * from './handoff.js';

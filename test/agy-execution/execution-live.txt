@@ -1,0 +1,1975 @@
+[2026-10-18T02:02:38.653+00:00] AGY | DISCOVERY | Action: initialize audit; expected: durable logs before tests; observed: untracked apps/mobile/ preserved, sandbox process initialization failed with RTM_NEWADDR Operation not permitted; decision: request escalated execution for required audit commands; duration: unavailable; next: runtime discovery.
+[2026-10-18T02:03:10.489+00:00] AGY | DISCOVERY | Command: ['wa', '--version']; expected: runtime inventory; decision: read-only discovery; next: inspect result
+[2026-10-18T02:03:10.858+00:00] AGY | RESULT | command=['wa', '--version']; exit=0; duration=0.369s; observation=0.2.5
+; next: assess resident candidates
+[2026-10-18T02:03:10.862+00:00] AGY | DISCOVERY | Command: ['wa', 'doctor']; expected: runtime inventory; decision: read-only discovery; next: inspect result
+[2026-10-18T02:03:15.866+00:00] AGY | HEARTBEAT | operation=['wa', 'doctor']; elapsed=5.004s; process active; progress unknown
+[2026-10-18T02:03:19.354+00:00] AGY | RESULT | command=['wa', 'doctor']; exit=1; duration=8.492s; observation=Wazir Doctor
+
+✓ package version
+  v0.2.5 (channel: source, commit: 8598c44)
+✓ runtime dependencies
+  Node.js v22.23.3 (arm64)
+✓ git availability
+  git version 2.43.0
+✓ configuration
+  configuration file valid
+✓ persistence
+  in-memory store active
+✓ control plane
+  1/1 computer(s) online
+✓ worker
+  worker-local-52030902a455e236a3247b0255c98b1e on local
+    runtimes: lmstudio, ollama, models: 11
+✓ computer registration
+  local: waelbot
+    0 runtimes, 0 models
+⚠ runtime connectivity
+  1/2 runtime(s) healthy
+      lmstudio: healthy
+      ollama: unavailable
+○ hosted providers
+  no hosted providers authenticated
+    run `wa auth login <provider>` or set NVIDIA_API_KEY to enable Anthropic/OpenAI/Google/NVIDIA routing
+✓ model availability
+  10 model(s) registered (3 ready)
+    3 ready generative models, 7 unloaded eligible
+✗ runtime & model health
+  1 error(s), 1 warning(s); run `wa models health --detail`
+    MODEL_NOT_LOADED: qwen/qwen3-coder-next@lmstudio — model is installed and wanted, but not loaded
+    TELEMETRY_UNAVAILABLE: lmstudio — inference succeeded but prompt-cache telemetry was not observed (non-fatal)
+    RUNTIME_UNREACHABLE: ollama — ollama endpoint is not reachable
+✓ required permissions
+  18 rule(s) configured
+✓ scheduler readiness
+  scheduler ready for planning
+✓ api security & tokens
+  cluster tokens configured
+    WAZIR_CHILD_ENV: not set (tool processes inherit minimal default environment: PATH, HOME, TMPDIR, USER)
+    API operator token: configured
+    Registration token: configured
+⚠ tool sandbox
+  unavailable — tool processes run directly on the host
+    bwrap cannot start: bwrap: setting up uid map: Permission denied — unprivileged user namespaces are disabled (on Ubuntu: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or install the bubblewrap AppArmor profile; inside a container, run with `--security-opt seccomp=unconfined --cap-add SYS_ADMIN` or rely on the container as the boundary with WAZIR_SANDBOX=none). See docs/sandbox.md; set WAZIR_SANDBOX=required to fail closed instead.
+⚠ external agents
+  0/4 ready
+    not checked recently: antigravity, claude-code, codex, opencode (run `wa agents check`)
+
+Summary:
+  ✓ 12 passed
+  ⚠ 3 warnings
+  ✗ 1 failures
+  ○ 1 not installed
+; next: assess resident candidates
+[2026-10-18T02:03:19.360+00:00] AGY | DISCOVERY | Command: ['wa', 'models', 'list', '--json']; expected: runtime inventory; decision: read-only discovery; next: inspect result
+[2026-10-18T02:03:24.364+00:00] AGY | HEARTBEAT | operation=['wa', 'models', 'list', '--json']; elapsed=5.005s; process active; progress unknown
+[2026-10-18T02:03:26.751+00:00] AGY | RESULT | command=['wa', 'models', 'list', '--json']; exit=0; duration=7.392s; observation=[
+  {
+    "id": "gemma-4-26b-a4b-it-qat",
+    "name": "Gemma 4 26B A4B Instruct QAT",
+    "provider": "lmstudio",
+    "family": "gemma",
+    "architecture": "gemma4",
+    "parameters": "26B-A4B",
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "toolCalling"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_0",
+    "memory": {
+      "minSystemGB": 21
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "performance": {
+      "coding": {
+        "taskClass": "coding",
+        "samples": 17,
+        "verifiedSuccessRate": 0,
+        "firstPassBuildRate": 0,
+        "firstPassTestRate": 0,
+        "protocolFailureRate": 0,
+        "noProgressRate": 0.118,
+        "schemaReliability": 0.958,
+        "medianToolCalls": 9,
+        "medianDurationMs": 97757,
+        "measuredAt": "2026-10-18T02:03:25.774Z"
+      }
+    },
+    "instances": [
+      {
+        "id": "gemma-4-26b-a4b-it-qat::local::lmstudio",
+        "modelId": "gemma-4-26b-a4b-it-qat",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "gemma-4-26b-a4b-it-qat",
+        "loaded": true,
+        "state": "READY",
+        "health": "healthy",
+        "contextTokens": 32768,
+        "lastCheckedAt": "2026-10-18T02:03:24.536Z",
+        "desired": {
+          "state": "READY",
+          "contextTokens": 32768
+        },
+        "installationId": "gemma-4-26b-a4b-it-qat::local::lmstudio",
+        "lastUsedAt": "2026-10-18T02:03:24.536Z"
+      }
+    ]
+  },
+  {
+    "id": "nvidia/nemotron-3-nano-omni",
+    "name": "Nemotron 3 Nano Omni",
+    "provider": "lmstudio",
+    "family": "nemotron",
+    "architecture": "nemotron_h_moe",
+    "parameters": "30B-A3B",
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "toolCalling",
+      "vision"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": true,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 8
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "performance": {
+      "coding": {
+        "taskClass": "coding",
+        "samples": 18,
+        "verifiedSuccessRate": 0.5,
+        "firstPassBuildRate": 0.5,
+        "firstPassTestRate": 0.636,
+        "protocolFailureRate": 0.222,
+        "noProgressRate": 0.111,
+        "schemaReliability": 0.919,
+        "medianToolCalls": 12,
+        "medianDurationMs": 49273,
+        "measuredAt": "2026-10-18T02:03:25.774Z"
+      }
+    },
+    "instances": [
+      {
+        "id": "nvidia/nemotron-3-nano-omni::local::lmstudio",
+        "modelId": "nvidia/nemotron-3-nano-omni",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "nvidia/nemotron-3-nano-omni",
+        "loaded": true,
+        "state": "READY",
+        "health": "healthy",
+        "contextTokens": 8192,
+        "lastCheckedAt": "2026-10-18T02:03:25.419Z",
+        "installationId": "nvidia/nemotron-3-nano-omni::local::lmstudio",
+        "lastUsedAt": "2026-10-18T02:03:25.419Z"
+      }
+    ]
+  },
+  {
+    "id": "nvidia/nemotron-3-super",
+    "name": "Nemotron 3 Super",
+    "provider": "lmstudio",
+    "family": "nemotron",
+    "architecture": "nemotron_h_moe",
+    "parameters": "120B",
+    "contextMax": 1048576,
+    "capabilities": [
+      "generalChat"
+    ],
+    "toolCalling": false,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 92
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "nvidia/nemotron-3-super::local::lmstudio",
+        "modelId": "nvidia/nemotron-3-super",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "nvidia/nemotron-3-super",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:25.091Z",
+        "installationId": "nvidia/nemotron-3-super::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "openai/gpt-oss-120b",
+    "name": "GPT-OSS 120B",
+    "provider": "lmstudio",
+    "family": "gpt",
+    "architecture": "gpt-oss",
+    "parameters": "120B",
+    "contextMax": 131072,
+    "capabilities": [
+      "generalChat",
+      "toolCalling"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "MXFP4",
+    "memory": {
+      "minSystemGB": 92
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "openai/gpt-oss-120b::local::lmstudio",
+        "modelId": "openai/gpt-oss-120b",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "openai/gpt-oss-120b",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:23.709Z",
+        "installationId": "openai/gpt-oss-120b::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "qwen/qwen3-coder-next",
+    "name": "Qwen3 Coder Next",
+    "provider": "lmstudio",
+    "family": "qwen",
+    "architecture": "qwen3next",
+    "parameters": "80B",
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "toolCalling"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 62
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "performance": {
+      "coding": {
+        "taskClass": "coding",
+        "samples": 8,
+        "verifiedSuccessRate": 0,
+        "firstPassBuildRate": 1,
+        "firstPassTestRate": 0,
+        "protocolFailureRate": 0.25,
+        "noProgressRate": 0.375,
+        "schemaReliability": 0.911,
+        "medianToolCalls": 15,
+        "medianDurationMs": 53138.5,
+        "measuredAt": "2026-10-18T02:03:25.774Z"
+      }
+    },
+    "instances": [
+      {
+        "id": "qwen/qwen3-coder-next::local::lmstudio",
+        "modelId": "qwen/qwen3-coder-next",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "qwen/qwen3-coder-next",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:24.806Z",
+        "desired": {
+          "state": "READY",
+          "contextTokens": 32768
+        },
+        "installationId": "qwen/qwen3-coder-next::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "qwen/qwen3.8-27b",
+    "name": "Qwen3.8 27B",
+    "provider": "lmstudio",
+    "family": "qwen",
+    "architecture": "qwen35",
+    "parameters": "27B",
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "toolCalling",
+      "vision"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": true,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 22
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "performance": {
+      "coding": {
+        "taskClass": "coding",
+        "samples": 20,
+        "verifiedSuccessRate": 0.3,
+        "firstPassBuildRate": 0.5,
+        "firstPassTestRate": 0.636,
+        "protocolFailureRate": 0.1,
+        "noProgressRate": 0,
+        "schemaReliability": 0.847,
+        "medianToolCalls": 8,
+        "medianDurationMs": 59158.5,
+        "measuredAt": "2026-10-18T02:03:25.774Z"
+      }
+    },
+    "instances": [
+      {
+        "id": "qwen/qwen3.8-27b::local::lmstudio",
+        "modelId": "qwen/qwen3.8-27b",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "qwen/qwen3.8-27b",
+        "loaded": true,
+        "state": "READY",
+        "health": "healthy",
+        "contextTokens": 8192,
+        "lastCheckedAt": "2026-10-18T02:03:24.189Z",
+        "installationId": "qwen/qwen3.8-27b::local::lmstudio",
+        "lastUsedAt": "2026-10-18T02:03:24.189Z"
+      }
+    ]
+  },
+  {
+    "id": "qwen2.5-7b-instruct",
+    "name": "Qwen2.5 7B Instruct",
+    "provider": "lmstudio",
+    "family": "qwen",
+    "architecture": "qwen2",
+    "parameters": "7B",
+    "contextMax": 32768,
+    "capabilities": [
+      "generalChat",
+      "toolCalling"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 7
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "performance": {
+      "coding": {
+        "taskClass": "coding",
+        "samples": 3,
+        "verifiedSuccessRate": 0,
+        "firstPassBuildRate": 1,
+        "firstPassTestRate": 0.5,
+        "protocolFailureRate": 0,
+        "noProgressRate": 0.333,
+        "schemaReliability": 0.9,
+        "medianToolCalls": 7.5,
+        "medianDurationMs": 175626.5,
+        "measuredAt": "2026-10-18T02:03:25.774Z"
+      }
+    },
+    "instances": [
+      {
+        "id": "qwen2.5-7b-instruct::local::lmstudio",
+        "modelId": "qwen2.5-7b-instruct",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "qwen2.5-7b-instruct",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:23.152Z",
+        "desired": {
+          "state": "UNLOADED"
+        },
+        "installationId": "qwen2.5-7b-instruct::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "text_encoder",
+    "name": "Text Encoder",
+    "provider": "lmstudio",
+    "family": "other",
+    "architecture": "qwen3_vl",
+    "parameters": null,
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "vision"
+    ],
+    "toolCalling": false,
+    "structuredOutput": false,
+    "vision": true,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "bf16",
+    "memory": {
+      "minSystemGB": 8
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "text_encoder::local::lmstudio",
+        "modelId": "text_encoder",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "text_encoder",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:22.872Z",
+        "installationId": "text_encoder::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "text-embedding-nomic-embed-text-v1.5",
+    "name": "Nomic Embed Text v1.5",
+    "provider": "lmstudio",
+    "family": "other",
+    "parameters": null,
+    "contextMax": 2048,
+    "capabilities": [
+      "generalChat",
+      "embedding"
+    ],
+    "toolCalling": false,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": true,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 8
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "text-embedding-nomic-embed-text-v1.5::local::lmstudio",
+        "modelId": "text-embedding-nomic-embed-text-v1.5",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "text-embedding-nomic-embed-text-v1.5",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:25.772Z",
+        "installationId": "text-embedding-nomic-embed-text-v1.5::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "transformer",
+    "name": "Transformer",
+    "provider": "lmstudio",
+    "family": "other",
+    "architecture": null,
+    "parameters": null,
+    "contextMax": 4096,
+    "capabilities": [
+      "generalChat"
+    ],
+    "toolCalling": false,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "memory": {
+      "minSystemGB": 8
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "transformer::local::lmstudio",
+        "modelId": "transformer",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "transformer",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:22.585Z",
+        "installationId": "transformer::local::lmstudio"
+      }
+    ]
+  },
+  {
+    "id": "unsloth/qwen3-coder-next",
+    "name": "Qwen3 Coder Next",
+    "provider": "lmstudio",
+    "family": "qwen",
+    "architecture": "qwen3next",
+    "parameters": "80B",
+    "contextMax": 262144,
+    "capabilities": [
+      "generalChat",
+      "toolCalling"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": false,
+    "audio": false,
+    "embedding": false,
+    "reasoning": false,
+    "quantization": "Q4_K_M",
+    "memory": {
+      "minSystemGB": 62
+    },
+    "runtimeCompatibility": [
+      "lmstudio"
+    ],
+    "local": true,
+    "createdAt": "2026-10-18T02:03:20.453Z",
+    "updatedAt": "2026-10-18T02:03:20.453Z",
+    "instances": [
+      {
+        "id": "unsloth/qwen3-coder-next::local::lmstudio",
+        "modelId": "unsloth/qwen3-coder-next",
+        "computerId": "local",
+        "runtimeId": "lmstudio",
+        "runtimeModelId": "unsloth/qwen3-coder-next",
+        "loaded": false,
+        "state": "INSTALLED",
+        "health": "healthy",
+        "lastCheckedAt": "2026-10-18T02:03:23.430Z",
+        "installationId": "unsloth/qwen3-coder-next::local::lmstudio"
+      }
+    ]
+  }
+]
+; next: assess resident candidates
+[2026-10-18T02:03:26.764+00:00] AGY | DISCOVERY | Command: ['wa', 'models', 'health', '--detail']; expected: runtime inventory; decision: read-only discovery; next: inspect result
+[2026-10-18T02:03:31.769+00:00] AGY | HEARTBEAT | operation=['wa', 'models', 'health', '--detail']; elapsed=5.005s; process active; progress unknown
+[2026-10-18T02:03:34.056+00:00] AGY | RESULT | command=['wa', 'models', 'health', '--detail']; exit=1; duration=7.292s; observation=Runtime & Model Health
+
+anthropic (anthropic)
+  Runtime     UNAVAILABLE
+  Inference   UNKNOWN
+  Telemetry   UNKNOWN
+  Memory      UNKNOWN
+  Queue       unknown
+
+google (google)
+  Runtime     UNAVAILABLE
+  Inference   UNKNOWN
+  Telemetry   UNKNOWN
+  Memory      UNKNOWN
+  Queue       unknown
+
+lmstudio (lmstudio on local)
+  Runtime     READY
+  Inference   HEALTHY  last ok 40s ago
+  Telemetry   UNKNOWN
+  Memory      90 / 122 GiB OK
+  Queue       unknown
+  Model       gemma-4-26b-a4b-it-qat  LOADED loaded=true ready=false ctx=32768
+  Model       nvidia/nemotron-3-nano-omni  LOADED loaded=true ready=false ctx=8192
+  Model       nvidia/nemotron-3-super  INSTALLED loaded=false ready=false ctx=1048576
+  Model       openai/gpt-oss-120b  INSTALLED loaded=false ready=false ctx=131072
+  Model       qwen/qwen3-coder-next  INSTALLED loaded=false ready=false ctx=262144
+  Model       qwen/qwen3.8-27b  LOADED loaded=true ready=false ctx=8192
+  Model       qwen2.5-7b-instruct  INSTALLED loaded=false ready=false ctx=32768
+  Model       text_encoder  INSTALLED loaded=false ready=false ctx=262144
+  Model       text-embedding-nomic-embed-text-v1.5  INSTALLED loaded=false ready=false ctx=2048
+  Model       transformer  INSTALLED loaded=false ready=false ctx=4096
+  Model       unsloth/qwen3-coder-next  INSTALLED loaded=false ready=false ctx=262144
+
+nvidia (nvidia)
+  Runtime     UNAVAILABLE
+  Inference   UNKNOWN
+  Telemetry   UNKNOWN
+  Memory      UNKNOWN
+  Queue       unknown
+
+ollama (ollama on local)
+  Runtime     UNREACHABLE
+  Inference   UNKNOWN
+  Telemetry   UNKNOWN
+  Memory      90 / 122 GiB OK
+  Queue       unknown
+
+openai (openai)
+  Runtime     UNAVAILABLE
+  Inference   UNKNOWN
+  Telemetry   UNKNOWN
+  Memory      UNKNOWN
+  Queue       unknown
+
+Worker worker-local-7c28299bcffe855a5544e4fee0d0b698 on local  online
+
+Diagnostics (6)
+MODEL_NOT_READY  model gemma-4-26b-a4b-it-qat@lmstudio · MODEL
+  Reason: model is loaded but has not been verified ready
+    model state = LOADED  (ModelRegistry)
+    loaded = true  (ModelRegistry)
+    instance health = healthy  (ModelRegistry)
+    readiness probe = unknown  (readiness probe)
+    last successful inference = 2h ago  (inference observations)
+
+MODEL_NOT_READY  model nvidia/nemotron-3-nano-omni@lmstudio · MODEL
+  Reason: model is loaded but has not been verified ready
+    model state = LOADED  (ModelRegistry)
+    loaded = true  (ModelRegistry)
+    instance health = healthy  (ModelRegistry)
+    readiness probe = unknown  (readiness probe)
+    last successful inference = 40s ago  (inference observations)
+
+MODEL_NOT_LOADED  model qwen/qwen3-coder-next@lmstudio · MODEL
+  Reason: model is installed and wanted, but not loaded
+    model state = INSTALLED  (ModelRegistry)
+    loaded = false  (ModelRegistry)
+    instance health = healthy  (ModelRegistry)
+    desired state = READY  (ModelRegistry)
+    pinned = false  (ModelRegistry)
+
+MODEL_NOT_READY  model qwen/qwen3.8-27b@lmstudio · MODEL
+  Reason: model is loaded but has not been verified ready
+    model state = LOADED  (ModelRegistry)
+    loaded = true  (ModelRegistry)
+    instance health = healthy  (ModelRegistry)
+    readiness probe = unknown  (readiness probe)
+    last successful inference = 3h ago  (inference observations)
+
+TELEMETRY_UNAVAILABLE  runtime lmstudio · TELEMETRY
+  Reason: inference succeeded but prompt-cache telemetry was not observed (non-fatal)
+    inference = HEALTHY  (inference observations)
+    cache telemetry = UNKNOWN  (prompt-cache telemetry)
+    runtime claims cache telemetry = unknown  (RuntimeCapabilities)
+
+RUNTIME_UNREACHABLE  runtime ollama · RUNTIME
+  Reason: ollama endpoint is not reachable
+    runtime health = unavailable  (RuntimeRegistry)
+    endpoint = unknown  (RuntimeRegistry)
+    last checked = 2026-10-18T02:03:33.073Z  (RuntimeRegistry)
+    affected model instances = 0  (ModelRegistry)
+
+; next: assess resident candidates
+[2026-10-18T02:03:34.069+00:00] AGY | DISCOVERY | Command: ['wa', 'computers', 'list']; expected: runtime inventory; decision: read-only discovery; next: inspect result
+[2026-10-18T02:03:39.073+00:00] AGY | HEARTBEAT | operation=['wa', 'computers', 'list']; elapsed=5.004s; process active; progress unknown
+[2026-10-18T02:03:41.355+00:00] AGY | RESULT | command=['wa', 'computers', 'list']; exit=0; duration=7.286s; observation=id     name     scope  os     cpu       ram    gpu          load  status
+-----  -------  -----  -----  --------  -----  -----------  ----  ------
+local  waelbot  local  linux  20 cores  122GB  NVIDIA GB10  —     online
+; next: assess resident candidates
+[2026-10-18T02:03:41.368+00:00] AGY | DISCOVERY | Command: ['lms', 'ps']; expected: runtime inventory; decision: read-only discovery; next: inspect result
+[2026-10-18T02:03:41.987+00:00] AGY | RESULT | command=['lms', 'ps']; exit=0; duration=0.620s; observation=
+IDENTIFIER                     MODEL                          STATUS    SIZE        CONTEXT    PARALLEL    DEVICE    TTL
+gemma-4-26b-a4b-it-qat         gemma-4-26b-a4b-it-qat         IDLE      14.44 GB    32768      4           Local        
+nvidia/nemotron-3-nano-omni    nvidia/nemotron-3-nano-omni    IDLE      26.10 GB    8192       4           Local        
+qwen/qwen3.8-27b               qwen/qwen3.8-27b               IDLE      17.74 GB    8192       4           Local        
+
+; next: assess resident candidates
+[2026-10-18T02:03:41.992+00:00] AGY | DISCOVERY | Command: ['ollama', 'ps']; expected: runtime inventory; decision: read-only discovery; next: inspect result
+[2026-10-18T02:03:42.110+00:00] AGY | RESULT | command=['ollama', 'ps']; exit=1; duration=0.118s; observation=Error: could not connect to ollama server, run 'ollama serve' to start it
+; next: assess resident candidates
+[2026-10-18T02:03:42.114+00:00] AGY | DISCOVERY | Command: ['nvidia-smi']; expected: runtime inventory; decision: read-only discovery; next: inspect result
+[2026-10-18T02:03:42.181+00:00] AGY | RESULT | command=['nvidia-smi']; exit=0; duration=0.067s; observation=Sat Oct 17 19:03:42 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.178.04             Driver Version: 580.178.04     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GB10                    On  |   0000000F:01:00.0 Off |                  N/A |
+| N/A   42C    P0             11W /  N/A  | Not Supported          |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A           56956      C   ...lmstudio/.internal/utils/node      19310MiB |
+|    0   N/A  N/A           57188      C   ...lmstudio/.internal/utils/node      25232MiB |
+|    0   N/A  N/A         1115196      C   ...lmstudio/.internal/utils/node      15648MiB |
++-----------------------------------------------------------------------------------------+
+; next: assess resident candidates
+[2026-10-18T02:04:09.209+00:00] AGY | BASELINE | command=['wa', 'run', 'Calculate 12 + 19. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: verified 31; decision: smallest resident with explicit local-only pin; next: inspect stream
+[2026-10-18T02:04:14.223+00:00] AGY | BASELINE | heartbeat elapsed=5.001s process active; progress=0 output bytes
+[2026-10-18T02:04:19.228+00:00] AGY | BASELINE | heartbeat elapsed=10.006s process active; progress=0 output bytes
+[2026-10-18T02:04:24.232+00:00] AGY | BASELINE | heartbeat elapsed=15.010s process active; progress=282 output bytes
+[2026-10-18T02:04:28.981+00:00] AGY | BASELINE | exit=0; duration=19.759s; actual={"type":"start","executionId":"exec-mvd6mn3u-1","taskId":"task-6ea593ee0fbdd3ce0b48971188fdd736","modelId":"gemma-4-26b-a4b-it-qat","agent":"wazir-step"}
+{"type":"phase","phase":"implement","executionId":"exec-mvd6mn3u-1"}
+[-] Waiting for model response (gemma-4-26b-a4b-it-qat)...
+{"type":"phase","phase":"complete","executionId":"exec-mvd6mn3u-1"}
+{"type":"done","content":"31","executionId":"exec-mvd6mn3u-1"}
+{"type":"complete","success":true,"executionId":"exec-mvd6mn3u-1","filesChanged":[],"result":"31","errors":[]}
+{
+  "success": true,
+  "ok": true,
+  "decision": {
+    "agentId": "wazir-step",
+    "modelId": "gemma-4-26b-a4b-it-qat",
+    "modelInstanceId": "gemma-4-26b-a4b-it-qat::local::lmstudio",
+    "readiness": "READY_NOW",
+    "runtimeId": "lmstudio",
+    "computerId": "local",
+    "resourceType": "LOCAL_GPU_INFERENCE",
+    "modelDecision": {
+      "modelId": "gemma-4-26b-a4b-it-qat",
+      "modelInstanceId": "gemma-4-26b-a4b-it-qat::local::lmstudio",
+      "strategy": "explicit",
+      "score": 235.3,
+      "empiricalExplanation": {
+        "requiredCapability": "implementation",
+        "phase": "ACT",
+        "language": "other",
+        "candidateModels": [
+          "gemma-4-26b-a4b-it-qat",
+          "nvidia/nemotron-3-nano-omni",
+          "nvidia/nemotron-3-super",
+          "openai/gpt-oss-120b",
+          "qwen/qwen3-coder-next",
+          "qwen/qwen3.8-27b",
+          "qwen2.5-7b-instruct",
+          "text_encoder",
+          "text-embedding-nomic-embed-text-v1.5",
+          "transformer",
+          "unsloth/qwen3-coder-next"
+        ],
+        "evaluatedCandidates": [
+          {
+            "modelId": "gemma-4-26b-a4b-it-qat",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 235.3,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": true,
+            "eligible": true,
+            "reasons": [
+              "context 262144 >= required 5667",
+              "empirical evidence [implementation]: unmeasured (neutral baseline)",
+              "context headroom: at least 2x the requirement",
+              "instance on 'local' already loaded",
+              "resource (routine, account local:lmstudio): score 2.3527 = quality 1.00, reliability 0.95, capacity 1.00, cost 0.00, latency 0.34, quota risk 0.00"
+            ]
+          },
+          {
+            "modelId": "nvidia/nemotron-3-nano-omni",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 239,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": true,
+            "eligible": true,
+            "reasons": [
+              "context 262144 >= required 5667",
+              "empirical evidence [implementation]: unmeasured (neutral baseline)",
+              "context headroom: at least 2x the requirement",
+              "instance on 'local' already loaded",
+              "resource (routine, account local:lmstudio): score 2.3897 = quality 1.00, reliability 0.96, capacity 1.00, cost 0.00, latency 0.24, quota risk 0.00"
+            ]
+          },
+          {
+            "modelId": "nvidia/nemotron-3-super",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 34.8,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": true,
+            "eligible": true,
+            "reasons": [
+              "context 1048576 >= required 5667",
+              "empirical evidence [implementation]: unmeasured (neutral baseline)",
+              "context headroom: at least 2x the requirement",
+              "available instance will be loaded on demand",
+              "resource (routine, account local:lmstudio): score 0.3477 = quality 0.25, reliability 0.00, capacity 0.20, cost 0.00, latency 0.01, quota risk 0.00"
+            ]
+          },
+          {
+            "modelId": "openai/gpt-oss-120b",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 59.8,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": true,
+            "eligible": true,
+            "reasons": [
+              "context 131072 >= required 5667",
+              "empirical evidence [implementation]: unmeasured (neutral baseline)",
+              "context headroom: at least 2x the requirement",
+              "available instance will be loaded on demand",
+              "resource (routine, account local:lmstudio): score 0.5977 = quality 0.50, reliability 0.00, capacity 0.20, cost 0.00, latency 0.01, quota risk 0.00"
+            ]
+          },
+          {
+            "modelId": "qwen/qwen3-coder-next",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 120.6,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": true,
+            "eligible": true,
+            "reasons": [
+              "context 262144 >= required 5667",
+              "empirical evidence [implementation]: unmeasured (neutral baseline)",
+              "context headroom: at least 2x the requirement",
+              "available instance will be loaded on demand",
+              "resource (routine, account local:lmstudio): score 1.2063 = quality 0.50, reliability 0.91, capacity 0.20, cost 0.00, latency 1.00, quota risk 0.00"
+            ]
+          },
+          {
+            "modelId": "qwen/qwen3.8-27b",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 220,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": true,
+            "eligible": true,
+            "reasons": [
+              "context 262144 >= required 5667",
+              "empirical evidence [implementation]: unmeasured (neutral baseline)",
+              "context headroom: at least 2x the requirement",
+              "instance on 'local' already loaded",
+              "resource (routine, account local:lmstudio): score 2.2003 = quality 1.00, reliability 0.94, capacity 1.00, cost 0.00, latency 0.80, quota risk 0.00"
+            ]
+          },
+          {
+            "modelId": "qwen2.5-7b-instruct",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 128.7,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": true,
+            "eligible": true,
+            "reasons": [
+              "context 32768 >= required 5667",
+              "empirical evidence [implementation]: unmeasured (neutral baseline)",
+              "context headroom: at least 2x the requirement",
+              "available instance will be loaded on demand",
+              "resource (routine, account local:lmstudio): score 1.2867 = quality 0.50, reliability 0.81, capacity 0.20, cost 0.00, latency 0.42, quota risk 0.00"
+            ]
+          },
+          {
+            "modelId": "text_encoder",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 34.8,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": true,
+            "eligible": true,
+            "reasons": [
+              "context 262144 >= required 5667",
+              "empirical evidence [implementation]: unmeasured (neutral baseline)",
+              "context headroom: at least 2x the requirement",
+              "available instance will be loaded on demand",
+              "resource (routine, account local:lmstudio): score 0.3477 = quality 0.25, reliability 0.00, capacity 0.20, cost 0.00, latency 0.01, quota risk 0.00"
+            ]
+          },
+          {
+            "modelId": "text-embedding-nomic-embed-text-v1.5",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 0,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": false,
+            "resourceRejection": "context 2048 < required 5667",
+            "eligible": false,
+            "reasons": [
+              "context 2048 < required 5667"
+            ]
+          },
+          {
+            "modelId": "transformer",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 0,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": false,
+            "resourceRejection": "context 4096 < required 5667",
+            "eligible": false,
+            "reasons": [
+              "context 4096 < required 5667"
+            ]
+          },
+          {
+            "modelId": "unsloth/qwen3-coder-next",
+            "runtimeId": "lmstudio",
+            "profileFound": false,
+            "isStale": false,
+            "effectiveScore": 59.8,
+            "sampleCount": 0,
+            "policyAllowed": true,
+            "resourceAllowed": true,
+            "eligible": true,
+            "reasons": [
+              "context 262144 >= required 5667",
+              "empirical evidence [implementation]: unmeasured (neutral baseline)",
+              "context headroom: at least 2x the requirement",
+              "available instance will be loaded on demand",
+              "resource (routine, account local:lmstudio): score 0.5977 = quality 0.50, reliability 0.00, capacity 0.20, cost 0.00, latency 0.01, quota risk 0.00"
+            ]
+          }
+        ],
+        "selectedModelId": "gemma-4-26b-a4b-it-qat",
+        "selectionReason": "Explicitly requested model 'gemma-4-26b-a4b-it-qat' satisfied all hard constraints",
+        "policyConstraintsApplied": [
+          "hosted-provider-gate",
+          "execution-policy-bounds"
+        ],
+        "resourceConstraintsApplied": [
+          "context-headroom-requirement",
+          "concurrency-limits",
+          "gpu-memory"
+        ]
+      },
+      "reasons": [
+        "explicitly requested model 'gemma-4-26b-a4b-it-qat'",
+        "required capability: implementation",
+        "context 262144 >= required 5667",
+        "empirical evidence [implementation]: unmeasured (neutral baseline)",
+        "context headroom: at least 2x the requirement",
+        "instance on 'local' already loaded",
+        "resource (routine, account local:lmstudio): score 2.3527 = quality 1.00, reliability 0.95, capacity 1.00, cost 0.00, latency 0.34, quota risk 0.00"
+      ]
+    },
+    "computerDecision": {
+      "computerId": "local",
+      "runtimeId": "lmstudio",
+      "placementKind": "local",
+      "resourceType": "LOCAL_GPU_INFERENCE",
+      "score": 6.5,
+      "reasons": [
+        "model already loaded via 'lmstudio' (no load latency)",
+        "current CPU load 0%",
+        "local computer (lowest latency)",
+        "runtime 'lmstudio' is healthy",
+        "unified memory architecture available for model working set"
+      ]
+    },
+    "reasons": [
+      "agent 'wazir-step' supports task type 'chat'",
+      "model: explicitly requested model 'gemma-4-26b-a4b-it-qat' | required capability: implementation | context 262144 >= required 5667 | empirical evidence [implementation]: unmeasured (neutral baseline) | context headroom: at least 2x the requirement | instance on 'local' already loaded | resource (routine, account local:lmstudio): score 2.3527 = quality 1.00, reliability 0.95, capacity 1.00, cost 0.00, latency 0.34, quota risk 0.00",
+      "computer: model already loaded via 'lmstudio' (no load latency) | current CPU load 0% | local computer (lowest latency) | runtime 'lmstudio' is healthy | unified memory architecture available for model working set"
+    ],
+    "decidedAt": "2026-10-18T02:04:16.890Z"
+  },
+  "reasons": [
+    "no files changed",
+    "no checks were executed"
+  ],
+  "filesChanged": [],
+  "executionId": "exec-mvd6mn3u-1",
+  "result": "31",
+  "errors": []
+}
+; next: investigate or continue sequence
+[2026-10-18T02:10:02.016+00:00] AGY | BENCHMARK | baseline/E01 command=['wa', 'run', 'Calculate 12 + 19. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:10:07.036+00:00] AGY | BENCHMARK | baseline/E01 heartbeat elapsed=5.020s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:10:12.048+00:00] AGY | BENCHMARK | baseline/E01 heartbeat elapsed=10.032s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:10:17.059+00:00] AGY | BENCHMARK | baseline/E01 heartbeat elapsed=15.042s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:10:22.080+00:00] AGY | BENCHMARK | baseline/E01 heartbeat elapsed=20.063s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:10:23.011+00:00] AGY | BENCHMARK | baseline/E01 duration=20978.462ms verified=False; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:10:23.015+00:00] AGY | BENCHMARK | baseline/E02 command=['wa', 'run', 'Calculate 8 × 7. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:10:28.027+00:00] AGY | BENCHMARK | baseline/E02 heartbeat elapsed=5.011s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:10:33.048+00:00] AGY | BENCHMARK | baseline/E02 heartbeat elapsed=10.033s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:10:34.061+00:00] AGY | BENCHMARK | baseline/E02 duration=11032.925ms verified=False; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:10:34.065+00:00] AGY | BENCHMARK | baseline/E03 command=['wa', 'run', 'Reverse the string WAZIR.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:10:39.076+00:00] AGY | BENCHMARK | baseline/E03 heartbeat elapsed=5.011s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:10:44.097+00:00] AGY | BENCHMARK | baseline/E03 heartbeat elapsed=10.032s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:10:49.118+00:00] AGY | BENCHMARK | baseline/E03 heartbeat elapsed=15.054s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:10:53.973+00:00] AGY | BENCHMARK | baseline/E03 observed start: {'type': 'start', 'executionId': 'exec-mvd6v1xj-1', 'taskId': 'task-8fd7a7c4ce0689b85b06e17bae722fd1', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:10:53.973+00:00'}
+[2026-10-18T02:10:54.177+00:00] AGY | BENCHMARK | baseline/E03 heartbeat elapsed=20.112s; process=active; observed_events=1; no inference progress inferred
+[2026-10-18T02:10:59.222+00:00] AGY | BENCHMARK | baseline/E03 heartbeat elapsed=25.158s; process=active; observed_events=3; no inference progress inferred
+[2026-10-18T02:10:59.342+00:00] AGY | BENCHMARK | baseline/E03 observed done: {'type': 'done', 'content': "The string 'WAZIR' reversed is 'RIZAW'.", 'executionId': 'exec-mvd6v1xj-1', 'observed_at': '2026-10-18T02:10:59.342+00:00'}
+[2026-10-18T02:11:02.125+00:00] AGY | BENCHMARK | baseline/E03 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd6v1xj-1', 'filesChanged': [], 'result': "The string 'WAZIR' reversed is 'RIZAW'.", 'errors': [], 'observed_at': '2026-10-18T02:11:02.125+00:00'}
+[2026-10-18T02:11:02.236+00:00] AGY | BENCHMARK | baseline/E03 duration=28167.147ms verified=False; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:11:02.239+00:00] AGY | BENCHMARK | baseline/E04 command=['wa', 'run', 'Convert hello world to uppercase.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:11:07.251+00:00] AGY | BENCHMARK | baseline/E04 heartbeat elapsed=5.011s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:11:12.262+00:00] AGY | BENCHMARK | baseline/E04 heartbeat elapsed=10.023s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:11:15.442+00:00] AGY | BENCHMARK | baseline/E04 observed start: {'type': 'start', 'executionId': 'exec-mvd6vhuf-1', 'taskId': 'task-cbbc6affde4bee71410d17191e79415b', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:11:15.442+00:00'}
+[2026-10-18T02:11:17.415+00:00] AGY | BENCHMARK | baseline/E04 heartbeat elapsed=15.175s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:11:22.476+00:00] AGY | BENCHMARK | baseline/E04 heartbeat elapsed=20.237s; process=active; observed_events=3; no inference progress inferred
+[2026-10-18T02:11:27.481+00:00] AGY | BENCHMARK | baseline/E04 observed error: {'type': 'error', 'error': 'step executor reached turn limit (3 turns) without completing step', 'executionId': 'exec-mvd6vhuf-1', 'observed_at': '2026-10-18T02:11:27.481+00:00'}
+[2026-10-18T02:11:27.685+00:00] AGY | BENCHMARK | baseline/E04 heartbeat elapsed=25.446s; process=active; observed_events=5; no inference progress inferred
+[2026-10-18T02:11:28.385+00:00] AGY | BENCHMARK | baseline/E04 observed complete: {'type': 'complete', 'success': False, 'executionId': 'exec-mvd6vhuf-1', 'filesChanged': [], 'errors': ['step executor reached turn limit (3 turns) without completing step'], 'observed_at': '2026-10-18T02:11:28.385+00:00'}
+[2026-10-18T02:11:28.483+00:00] AGY | BENCHMARK | baseline/E04 duration=26240.05ms verified=False; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:11:28.487+00:00] AGY | BENCHMARK | baseline/E05 command=['wa', 'run', 'Return the first five positive even integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:11:33.496+00:00] AGY | BENCHMARK | baseline/E05 heartbeat elapsed=5.009s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:11:38.518+00:00] AGY | BENCHMARK | baseline/E05 heartbeat elapsed=10.031s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:11:40.903+00:00] AGY | BENCHMARK | baseline/E05 observed start: {'type': 'start', 'executionId': 'exec-mvd6w269-1', 'taskId': 'task-415406a88fa020772f879fd5e1a4ea7c', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:11:40.903+00:00'}
+[2026-10-18T02:11:43.678+00:00] AGY | BENCHMARK | baseline/E05 heartbeat elapsed=15.192s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:11:45.855+00:00] AGY | BENCHMARK | baseline/E05 observed done: {'type': 'done', 'content': 'The first five positive even integers are 2, 4, 6, 8, and 10.', 'executionId': 'exec-mvd6w269-1', 'observed_at': '2026-10-18T02:11:45.855+00:00'}
+[2026-10-18T02:11:48.513+00:00] AGY | BENCHMARK | baseline/E05 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd6w269-1', 'filesChanged': [], 'result': 'The first five positive even integers are 2, 4, 6, 8, and 10.', 'errors': [], 'observed_at': '2026-10-18T02:11:48.513+00:00'}
+[2026-10-18T02:11:48.602+00:00] AGY | BENCHMARK | baseline/E05 duration=20111.642ms verified=True; evidence=integer sequence; next: next task or batch analysis
+[2026-10-18T02:11:48.606+00:00] AGY | BENCHMARK | baseline/E06 command=['wa', 'run', 'Write a Python function that adds two numbers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:11:53.616+00:00] AGY | BENCHMARK | baseline/E06 heartbeat elapsed=5.010s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:11:58.636+00:00] AGY | BENCHMARK | baseline/E06 heartbeat elapsed=10.030s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:12:03.658+00:00] AGY | BENCHMARK | baseline/E06 heartbeat elapsed=15.052s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:12:05.657+00:00] AGY | BENCHMARK | baseline/E06 observed start: {'type': 'start', 'executionId': 'exec-mvd6whjw-1', 'taskId': 'task-6b9e676879b19301cd27bfedf2933704', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:12:05.657+00:00'}
+[2026-10-18T02:12:08.662+00:00] AGY | BENCHMARK | baseline/E06 heartbeat elapsed=20.056s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:12:13.743+00:00] AGY | BENCHMARK | baseline/E06 heartbeat elapsed=25.137s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:12:18.894+00:00] AGY | BENCHMARK | baseline/E06 heartbeat elapsed=30.288s; process=active; observed_events=3; no inference progress inferred
+[2026-10-18T02:12:23.328+00:00] AGY | BENCHMARK | baseline/E06 observed done: {'type': 'done', 'content': 'Successfully wrote the math_utils.py file containing the add_numbers function.', 'executionId': 'exec-mvd6whjw-1', 'observed_at': '2026-10-18T02:12:23.328+00:00'}
+[2026-10-18T02:12:23.934+00:00] AGY | BENCHMARK | baseline/E06 heartbeat elapsed=35.328s; process=active; observed_events=5; no inference progress inferred
+[2026-10-18T02:12:26.897+00:00] AGY | BENCHMARK | baseline/E06 observed complete: {'type': 'complete', 'success': False, 'executionId': 'exec-mvd6whjw-1', 'filesChanged': ['math_utils.py'], 'result': 'Successfully wrote the math_utils.py file containing the add_numbers function.', 'errors': [], 'observed_at': '2026-10-18T02:12:26.897+00:00'}
+[2026-10-18T02:12:26.985+00:00] AGY | BENCHMARK | baseline/E06 duration=38375.007ms verified=False; evidence=no Python function; next: next task or batch analysis
+[2026-10-18T02:12:26.988+00:00] AGY | BENCHMARK | baseline/E07 command=['wa', 'run', 'Write a JavaScript function that squares a number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:12:31.999+00:00] AGY | BENCHMARK | baseline/E07 heartbeat elapsed=5.010s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:12:37.011+00:00] AGY | BENCHMARK | baseline/E07 heartbeat elapsed=10.023s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:12:42.022+00:00] AGY | BENCHMARK | baseline/E07 heartbeat elapsed=15.034s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:12:45.645+00:00] AGY | BENCHMARK | baseline/E07 observed start: {'type': 'start', 'executionId': 'exec-mvd6xbd5-1', 'taskId': 'task-e86d2830518b681dc6d54879598c1a8f', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:12:45.645+00:00'}
+[2026-10-18T02:12:47.050+00:00] AGY | BENCHMARK | baseline/E07 heartbeat elapsed=20.062s; process=active; observed_events=1; no inference progress inferred
+[2026-10-18T02:12:52.138+00:00] AGY | BENCHMARK | baseline/E07 heartbeat elapsed=25.149s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:12:57.315+00:00] AGY | BENCHMARK | baseline/E07 heartbeat elapsed=30.327s; process=active; observed_events=3; no inference progress inferred
+[2026-10-18T02:13:01.171+00:00] AGY | BENCHMARK | baseline/E07 observed done: {'type': 'done', 'content': 'Successfully wrote the square function to square.js', 'executionId': 'exec-mvd6xbd5-1', 'observed_at': '2026-10-18T02:13:01.170+00:00'}
+[2026-10-18T02:13:02.376+00:00] AGY | BENCHMARK | baseline/E07 heartbeat elapsed=35.388s; process=active; observed_events=5; no inference progress inferred
+[2026-10-18T02:13:04.641+00:00] AGY | BENCHMARK | baseline/E07 observed complete: {'type': 'complete', 'success': False, 'executionId': 'exec-mvd6xbd5-1', 'filesChanged': ['square.js'], 'result': 'Successfully wrote the square function to square.js', 'errors': [], 'observed_at': '2026-10-18T02:13:04.641+00:00'}
+[2026-10-18T02:13:04.727+00:00] AGY | BENCHMARK | baseline/E07 duration=37734.536ms verified=False; evidence=/tmp/agy-verify-2714779-278705049366912/case.js:1
+Successfully wrote the square function to square.js
+             ^^^^^
+
+SyntaxError: Unexpected identifier 'wrote'
+    at wrapSafe (node:internal/modules/cjs/loader:1713:18)
+    at Module._compile (node:internal/modules/cjs/loader:1755:20)
+    at Object..js (node:internal/modules/cjs/loader:1913:10)
+    at Module.load (node:internal/modules/cjs/loader:1505:32)
+    at Function._load (node:internal/modules/cjs/loader:1309:12)
+    at wrapModuleLoad ; next: next task or batch analysis
+[2026-10-18T02:13:04.730+00:00] AGY | BENCHMARK | baseline/E08 command=['wa', 'run', 'Write a C++17 function that returns the larger of two integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:13:09.740+00:00] AGY | BENCHMARK | baseline/E08 heartbeat elapsed=5.010s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:13:14.755+00:00] AGY | BENCHMARK | baseline/E08 heartbeat elapsed=10.025s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:13:19.779+00:00] AGY | BENCHMARK | baseline/E08 heartbeat elapsed=15.049s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:13:22.516+00:00] AGY | BENCHMARK | baseline/E08 duration=17772.38ms verified=False; evidence=no C++ function; next: next task or batch analysis
+[2026-10-18T02:13:22.522+00:00] AGY | BENCHMARK | baseline/E09 command=['wa', 'run', 'Return JSON containing status: ok and count: 3.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:13:27.540+00:00] AGY | BENCHMARK | baseline/E09 heartbeat elapsed=5.018s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:13:32.551+00:00] AGY | BENCHMARK | baseline/E09 heartbeat elapsed=10.029s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:13:35.179+00:00] AGY | BENCHMARK | baseline/E09 observed start: {'type': 'start', 'executionId': 'exec-mvd6yi58-1', 'taskId': 'task-735a8d99e902f8983b54875acdd6e548', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:13:35.179+00:00'}
+[2026-10-18T02:13:37.610+00:00] AGY | BENCHMARK | baseline/E09 heartbeat elapsed=15.088s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:13:42.663+00:00] AGY | BENCHMARK | baseline/E09 heartbeat elapsed=20.141s; process=active; observed_events=3; no inference progress inferred
+[2026-10-18T02:13:46.187+00:00] AGY | BENCHMARK | baseline/E09 observed done: {'type': 'done', 'content': 'Successfully created result.json containing the required JSON object: {"status": "ok", "count": 3}.', 'executionId': 'exec-mvd6yi58-1', 'observed_at': '2026-10-18T02:13:46.187+00:00'}
+[2026-10-18T02:13:47.793+00:00] AGY | BENCHMARK | baseline/E09 heartbeat elapsed=25.271s; process=active; observed_events=5; no inference progress inferred
+[2026-10-18T02:13:49.131+00:00] AGY | BENCHMARK | baseline/E09 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd6yi58-1', 'filesChanged': ['result.json'], 'result': 'Successfully created result.json containing the required JSON object: {"status": "ok", "count": 3}.', 'errors': [], 'observed_at': '2026-10-18T02:13:49.130+00:00'}
+[2026-10-18T02:13:49.278+00:00] AGY | BENCHMARK | baseline/E09 duration=26743.127ms verified=False; evidence=invalid JSON; next: next task or batch analysis
+[2026-10-18T02:13:49.281+00:00] AGY | BENCHMARK | baseline/E10 command=['wa', 'run', 'Explain what a CPU does in one sentence.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:13:54.292+00:00] AGY | BENCHMARK | baseline/E10 heartbeat elapsed=5.012s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:13:59.305+00:00] AGY | BENCHMARK | baseline/E10 heartbeat elapsed=10.024s; process=active; observed_events=0; no inference progress inferred
+[2026-10-18T02:14:01.843+00:00] AGY | BENCHMARK | baseline/E10 observed start: {'type': 'start', 'executionId': 'exec-mvd6z2ue-1', 'taskId': 'task-f722e66a29344ed7e2975dde36975b93', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:14:01.843+00:00'}
+[2026-10-18T02:14:04.507+00:00] AGY | BENCHMARK | baseline/E10 heartbeat elapsed=15.226s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:14:07.076+00:00] AGY | BENCHMARK | baseline/E10 observed done: {'type': 'done', 'content': 'A Central Processing Unit (CPU) acts as the primary component of a computer that fetches, decodes, and executes instructions to perform calculations and manage data flow between other hardware components.', 'executionId': 'exec-mvd6z2ue-1', 'observed_at': '2026-10-18T02:14:07.076+00:00'}
+[2026-10-18T02:14:09.683+00:00] AGY | BENCHMARK | baseline/E10 heartbeat elapsed=20.402s; process=active; observed_events=4; no inference progress inferred
+[2026-10-18T02:14:09.901+00:00] AGY | BENCHMARK | baseline/E10 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd6z2ue-1', 'filesChanged': [], 'result': 'A Central Processing Unit (CPU) acts as the primary component of a computer that fetches, decodes, and executes instructions to perform calculations and manage data flow between other hardware components.', 'errors': [], 'observed_at': '2026-10-18T02:14:09.901+00:00'}
+[2026-10-18T02:14:10.005+00:00] AGY | BENCHMARK | baseline/E10 duration=20720.794ms verified=True; evidence=CPU semantic keyword and length; review required; next: next task or batch analysis
+[2026-10-18T02:14:10.009+00:00] AGY | BENCHMARK | batch=baseline; concurrency=1; makespan_ms=247993.410; verified=2/10
+[2026-10-18T02:23:17.692+00:00] AGY | BENCHMARK | source-before/E01 command=['node', '/tmp/agy-baseline.js', 'run', 'Calculate 12 + 19. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:23:21.955+00:00] AGY | BENCHMARK | source-before/E01 observed start: {'type': 'start', 'executionId': 'exec-mvd7b58g-1', 'taskId': 'task-11bb84612b0619f38169b0c7bd1f8400', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:23:21.955+00:00'}
+[2026-10-18T02:23:22.521+00:00] AGY | BENCHMARK | source-before/E01 observed done: {'type': 'done', 'content': '31', 'executionId': 'exec-mvd7b58g-1', 'observed_at': '2026-10-18T02:23:22.521+00:00'}
+[2026-10-18T02:23:22.594+00:00] AGY | BENCHMARK | source-before/E01 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7b58g-1', 'filesChanged': [], 'result': '31', 'errors': [], 'observed_at': '2026-10-18T02:23:22.594+00:00'}
+[2026-10-18T02:23:22.614+00:00] AGY | BENCHMARK | source-before/E01 duration=4918.35ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:23:22.617+00:00] AGY | BENCHMARK | source-before/E02 command=['node', '/tmp/agy-baseline.js', 'run', 'Calculate 8 × 7. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:23:26.799+00:00] AGY | BENCHMARK | source-before/E02 observed start: {'type': 'start', 'executionId': 'exec-mvd7b8zz-1', 'taskId': 'task-12e90cdda448a76daa438feddde34a57', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:23:26.799+00:00'}
+[2026-10-18T02:23:27.339+00:00] AGY | BENCHMARK | source-before/E02 observed done: {'type': 'done', 'content': '56', 'executionId': 'exec-mvd7b8zz-1', 'observed_at': '2026-10-18T02:23:27.339+00:00'}
+[2026-10-18T02:23:27.417+00:00] AGY | BENCHMARK | source-before/E02 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7b8zz-1', 'filesChanged': [], 'result': '56', 'errors': [], 'observed_at': '2026-10-18T02:23:27.417+00:00'}
+[2026-10-18T02:23:27.437+00:00] AGY | BENCHMARK | source-before/E02 duration=4817.353ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:23:27.441+00:00] AGY | BENCHMARK | source-before/E03 command=['node', '/tmp/agy-baseline.js', 'run', 'Reverse the string WAZIR.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:23:32.072+00:00] AGY | BENCHMARK | source-before/E03 observed start: {'type': 'start', 'executionId': 'exec-mvd7bctd-1', 'taskId': 'task-eb1a2b5c0440cb5093e61f553667bc74', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:23:32.072+00:00'}
+[2026-10-18T02:23:32.506+00:00] AGY | BENCHMARK | source-before/E03 heartbeat elapsed=5.065s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:23:32.767+00:00] AGY | BENCHMARK | source-before/E03 observed done: {'type': 'done', 'content': "The string 'WAZIR' reversed is 'RIZAW'.", 'executionId': 'exec-mvd7bctd-1', 'observed_at': '2026-10-18T02:23:32.767+00:00'}
+[2026-10-18T02:23:32.836+00:00] AGY | BENCHMARK | source-before/E03 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7bctd-1', 'filesChanged': [], 'result': "The string 'WAZIR' reversed is 'RIZAW'.", 'errors': [], 'observed_at': '2026-10-18T02:23:32.836+00:00'}
+[2026-10-18T02:23:32.855+00:00] AGY | BENCHMARK | source-before/E03 duration=5410.865ms verified=False; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:23:32.858+00:00] AGY | BENCHMARK | source-before/E04 command=['node', '/tmp/agy-baseline.js', 'run', 'Convert hello world to uppercase.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:23:37.236+00:00] AGY | BENCHMARK | source-before/E04 observed start: {'type': 'start', 'executionId': 'exec-mvd7bgzo-1', 'taskId': 'task-0841c3d8f35ec1dc3c28e745206c6a71', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:23:37.236+00:00'}
+[2026-10-18T02:23:37.883+00:00] AGY | BENCHMARK | source-before/E04 heartbeat elapsed=5.025s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:23:39.125+00:00] AGY | BENCHMARK | source-before/E04 observed error: {'type': 'error', 'error': 'step executor reached turn limit (3 turns) without completing step', 'executionId': 'exec-mvd7bgzo-1', 'observed_at': '2026-10-18T02:23:39.125+00:00'}
+[2026-10-18T02:23:39.164+00:00] AGY | BENCHMARK | source-before/E04 observed complete: {'type': 'complete', 'success': False, 'executionId': 'exec-mvd7bgzo-1', 'filesChanged': [], 'errors': ['step executor reached turn limit (3 turns) without completing step'], 'observed_at': '2026-10-18T02:23:39.164+00:00'}
+[2026-10-18T02:23:39.186+00:00] AGY | BENCHMARK | source-before/E04 duration=6325.394ms verified=False; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:23:39.190+00:00] AGY | BENCHMARK | source-before/E05 command=['node', '/tmp/agy-baseline.js', 'run', 'Return the first five positive even integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:23:43.670+00:00] AGY | BENCHMARK | source-before/E05 observed start: {'type': 'start', 'executionId': 'exec-mvd7blv8-1', 'taskId': 'task-413ffedb8d3cc0b7657d867d654ca085', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:23:43.670+00:00'}
+[2026-10-18T02:23:44.322+00:00] AGY | BENCHMARK | source-before/E05 heartbeat elapsed=5.132s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:23:44.645+00:00] AGY | BENCHMARK | source-before/E05 observed done: {'type': 'done', 'content': 'The first five positive even integers are 2, 4, 6, 8, and 10.', 'executionId': 'exec-mvd7blv8-1', 'observed_at': '2026-10-18T02:23:44.645+00:00'}
+[2026-10-18T02:23:44.745+00:00] AGY | BENCHMARK | source-before/E05 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7blv8-1', 'filesChanged': [], 'result': 'The first five positive even integers are 2, 4, 6, 8, and 10.', 'errors': [], 'observed_at': '2026-10-18T02:23:44.745+00:00'}
+[2026-10-18T02:23:44.764+00:00] AGY | BENCHMARK | source-before/E05 duration=5571.425ms verified=True; evidence=integer sequence; next: next task or batch analysis
+[2026-10-18T02:23:44.767+00:00] AGY | BENCHMARK | source-before/E06 command=['node', '/tmp/agy-baseline.js', 'run', 'Write a Python function that adds two numbers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:23:49.197+00:00] AGY | BENCHMARK | source-before/E06 observed start: {'type': 'start', 'executionId': 'exec-mvd7bq7m-1', 'taskId': 'task-b12f0146b563d9ead38a602077855d53', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:23:49.197+00:00'}
+[2026-10-18T02:23:49.848+00:00] AGY | BENCHMARK | source-before/E06 heartbeat elapsed=5.081s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:23:51.723+00:00] AGY | BENCHMARK | source-before/E06 observed done: {'type': 'done', 'content': 'Successfully wrote the Python function `add_numbers` to `math_utils.py`.', 'executionId': 'exec-mvd7bq7m-1', 'observed_at': '2026-10-18T02:23:51.723+00:00'}
+[2026-10-18T02:23:51.822+00:00] AGY | BENCHMARK | source-before/E06 observed complete: {'type': 'complete', 'success': False, 'executionId': 'exec-mvd7bq7m-1', 'filesChanged': ['math_utils.py'], 'result': 'Successfully wrote the Python function `add_numbers` to `math_utils.py`.', 'errors': [], 'observed_at': '2026-10-18T02:23:51.822+00:00'}
+[2026-10-18T02:23:51.843+00:00] AGY | BENCHMARK | source-before/E06 duration=7072.735ms verified=False; evidence=no Python function; next: next task or batch analysis
+[2026-10-18T02:23:51.847+00:00] AGY | BENCHMARK | source-before/E07 command=['node', '/tmp/agy-baseline.js', 'run', 'Write a JavaScript function that squares a number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:23:56.282+00:00] AGY | BENCHMARK | source-before/E07 observed start: {'type': 'start', 'executionId': 'exec-mvd7bvmi-1', 'taskId': 'task-30dde9eef601ae219991b07eeb76b9f5', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:23:56.282+00:00'}
+[2026-10-18T02:23:56.945+00:00] AGY | BENCHMARK | source-before/E07 heartbeat elapsed=5.098s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:23:58.501+00:00] AGY | BENCHMARK | source-before/E07 observed done: {'type': 'done', 'content': 'Successfully wrote the square function to square.js', 'executionId': 'exec-mvd7bvmi-1', 'observed_at': '2026-10-18T02:23:58.501+00:00'}
+[2026-10-18T02:23:58.613+00:00] AGY | BENCHMARK | source-before/E07 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7bvmi-1', 'filesChanged': [], 'result': 'Successfully wrote the square function to square.js', 'errors': [], 'observed_at': '2026-10-18T02:23:58.613+00:00'}
+[2026-10-18T02:23:58.661+00:00] AGY | BENCHMARK | source-before/E07 duration=6810.433ms verified=False; evidence=/tmp/agy-verify-2785052-260739149721984/case.js:1
+Successfully wrote the square function to square.js
+             ^^^^^
+
+SyntaxError: Unexpected identifier 'wrote'
+    at wrapSafe (node:internal/modules/cjs/loader:1713:18)
+    at Module._compile (node:internal/modules/cjs/loader:1755:20)
+    at Object..js (node:internal/modules/cjs/loader:1913:10)
+    at Module.load (node:internal/modules/cjs/loader:1505:32)
+    at Function._load (node:internal/modules/cjs/loader:1309:12)
+    at wrapModuleLoad ; next: next task or batch analysis
+[2026-10-18T02:23:58.664+00:00] AGY | BENCHMARK | source-before/E08 command=['node', '/tmp/agy-baseline.js', 'run', 'Write a C++17 function that returns the larger of two integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:24:03.016+00:00] AGY | BENCHMARK | source-before/E08 observed start: {'type': 'start', 'executionId': 'exec-mvd7c0wv-1', 'taskId': 'task-3ca0173813e594160f865fd19535b206', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:24:03.016+00:00'}
+[2026-10-18T02:24:03.681+00:00] AGY | BENCHMARK | source-before/E08 heartbeat elapsed=5.017s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:24:05.884+00:00] AGY | BENCHMARK | source-before/E08 observed done: {'type': 'done', 'content': 'Successfully wrote the C++17 function `get_larger` to `get_larger.cpp`.', 'executionId': 'exec-mvd7c0wv-1', 'observed_at': '2026-10-18T02:24:05.884+00:00'}
+[2026-10-18T02:24:06.034+00:00] AGY | BENCHMARK | source-before/E08 observed complete: {'type': 'complete', 'success': False, 'executionId': 'exec-mvd7c0wv-1', 'filesChanged': ['get_larger.cpp'], 'result': 'Successfully wrote the C++17 function `get_larger` to `get_larger.cpp`.', 'errors': [], 'observed_at': '2026-10-18T02:24:06.034+00:00'}
+[2026-10-18T02:24:06.053+00:00] AGY | BENCHMARK | source-before/E08 duration=7385.427ms verified=False; evidence=no C++ function; next: next task or batch analysis
+[2026-10-18T02:24:06.056+00:00] AGY | BENCHMARK | source-before/E09 command=['node', '/tmp/agy-baseline.js', 'run', 'Return JSON containing status: ok and count: 3.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:24:10.559+00:00] AGY | BENCHMARK | source-before/E09 observed start: {'type': 'start', 'executionId': 'exec-mvd7c6p4-1', 'taskId': 'task-56f2fbf33e46c789f4e0b7c45735294c', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:24:10.559+00:00'}
+[2026-10-18T02:24:11.207+00:00] AGY | BENCHMARK | source-before/E09 heartbeat elapsed=5.150s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:24:12.331+00:00] AGY | BENCHMARK | source-before/E09 observed done: {'type': 'done', 'content': 'Successfully created result.json containing the required JSON object: {"status": "ok", "count": 3}.', 'executionId': 'exec-mvd7c6p4-1', 'observed_at': '2026-10-18T02:24:12.331+00:00'}
+[2026-10-18T02:24:12.457+00:00] AGY | BENCHMARK | source-before/E09 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7c6p4-1', 'filesChanged': ['result.json'], 'result': 'Successfully created result.json containing the required JSON object: {"status": "ok", "count": 3}.', 'errors': [], 'observed_at': '2026-10-18T02:24:12.457+00:00'}
+[2026-10-18T02:24:12.476+00:00] AGY | BENCHMARK | source-before/E09 duration=6416.19ms verified=False; evidence=invalid JSON; next: next task or batch analysis
+[2026-10-18T02:24:12.479+00:00] AGY | BENCHMARK | source-before/E10 command=['node', '/tmp/agy-baseline.js', 'run', 'Explain what a CPU does in one sentence.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:24:16.949+00:00] AGY | BENCHMARK | source-before/E10 observed start: {'type': 'start', 'executionId': 'exec-mvd7cbl0-1', 'taskId': 'task-1214376195ee7d6e9453849be6be4c62', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-step', 'observed_at': '2026-10-18T02:24:16.949+00:00'}
+[2026-10-18T02:24:17.622+00:00] AGY | BENCHMARK | source-before/E10 heartbeat elapsed=5.143s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:24:18.075+00:00] AGY | BENCHMARK | source-before/E10 observed done: {'type': 'done', 'content': 'A Central Processing Unit (CPU) acts as the primary component of a computer that fetches, decodes, and executes instructions to perform arithmetic, logical, and input/output operations.', 'executionId': 'exec-mvd7cbl0-1', 'observed_at': '2026-10-18T02:24:18.075+00:00'}
+[2026-10-18T02:24:18.219+00:00] AGY | BENCHMARK | source-before/E10 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7cbl0-1', 'filesChanged': [], 'result': 'A Central Processing Unit (CPU) acts as the primary component of a computer that fetches, decodes, and executes instructions to perform arithmetic, logical, and input/output operations.', 'errors': [], 'observed_at': '2026-10-18T02:24:18.219+00:00'}
+[2026-10-18T02:24:18.241+00:00] AGY | BENCHMARK | source-before/E10 duration=5758.998ms verified=True; evidence=CPU semantic keyword and length; review required; next: next task or batch analysis
+[2026-10-18T02:24:18.245+00:00] AGY | BENCHMARK | batch=source-before; concurrency=1; makespan_ms=60553.818; verified=4/10
+[2026-10-18T02:25:01.050+00:00] AGY | BENCHMARK | repaired/E01 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 12 + 19. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:25:04.682+00:00] AGY | BENCHMARK | repaired/E01 duration=3629.208ms verified=False; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:25:04.686+00:00] AGY | BENCHMARK | repaired/E02 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 8 × 7. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:25:08.282+00:00] AGY | BENCHMARK | repaired/E02 duration=3593.466ms verified=False; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:25:08.286+00:00] AGY | BENCHMARK | repaired/E03 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Reverse the string WAZIR.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:25:11.966+00:00] AGY | BENCHMARK | repaired/E03 duration=3676.779ms verified=False; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:25:11.969+00:00] AGY | BENCHMARK | repaired/E04 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Convert hello world to uppercase.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:25:15.722+00:00] AGY | BENCHMARK | repaired/E04 duration=3749.74ms verified=False; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:25:15.726+00:00] AGY | BENCHMARK | repaired/E05 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return the first five positive even integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:25:19.358+00:00] AGY | BENCHMARK | repaired/E05 duration=3629.246ms verified=False; evidence=integer sequence; next: next task or batch analysis
+[2026-10-18T02:25:19.362+00:00] AGY | BENCHMARK | repaired/E06 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a Python function that adds two numbers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:25:23.139+00:00] AGY | BENCHMARK | repaired/E06 duration=3773.797ms verified=False; evidence=no Python function; next: next task or batch analysis
+[2026-10-18T02:25:23.143+00:00] AGY | BENCHMARK | repaired/E07 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a JavaScript function that squares a number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:25:26.809+00:00] AGY | BENCHMARK | repaired/E07 duration=3662.779ms verified=False; evidence=no JS function; next: next task or batch analysis
+[2026-10-18T02:25:26.813+00:00] AGY | BENCHMARK | repaired/E08 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a C++17 function that returns the larger of two integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:25:30.519+00:00] AGY | BENCHMARK | repaired/E08 duration=3703.152ms verified=False; evidence=no C++ function; next: next task or batch analysis
+[2026-10-18T02:25:30.522+00:00] AGY | BENCHMARK | repaired/E09 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return JSON containing status: ok and count: 3.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:25:34.269+00:00] AGY | BENCHMARK | repaired/E09 duration=3743.169ms verified=False; evidence=invalid JSON; next: next task or batch analysis
+[2026-10-18T02:25:34.272+00:00] AGY | BENCHMARK | repaired/E10 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Explain what a CPU does in one sentence.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:25:37.929+00:00] AGY | BENCHMARK | repaired/E10 duration=3653.752ms verified=False; evidence=CPU semantic keyword and length; review required; next: next task or batch analysis
+[2026-10-18T02:25:37.933+00:00] AGY | BENCHMARK | batch=repaired; concurrency=1; makespan_ms=36883.083; verified=0/10
+[2026-10-18T02:27:03.540+00:00] AGY | BENCHMARK | repaired-final/E01 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 12 + 19. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:27:07.845+00:00] AGY | BENCHMARK | repaired-final/E01 observed start: {'type': 'start', 'executionId': 'exec-mvd7fzfe-1', 'taskId': 'task-21c59239459e1f6a73debc66ddc043d7', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:27:07.845+00:00'}
+[2026-10-18T02:27:08.185+00:00] AGY | BENCHMARK | repaired-final/E01 observed done: {'type': 'done', 'content': '31', 'executionId': 'exec-mvd7fzfe-1', 'observed_at': '2026-10-18T02:27:08.185+00:00'}
+[2026-10-18T02:27:08.362+00:00] AGY | BENCHMARK | repaired-final/E01 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7fzfe-1', 'filesChanged': [], 'result': '31', 'errors': [], 'observed_at': '2026-10-18T02:27:08.362+00:00'}
+[2026-10-18T02:27:08.389+00:00] AGY | BENCHMARK | repaired-final/E01 duration=4845.338ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:27:08.392+00:00] AGY | BENCHMARK | repaired-final/E02 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 8 × 7. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:27:12.561+00:00] AGY | BENCHMARK | repaired-final/E02 observed start: {'type': 'start', 'executionId': 'exec-mvd7g32z-1', 'taskId': 'task-dff23961439fae785f9a50fb522508cf', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:27:12.561+00:00'}
+[2026-10-18T02:27:12.883+00:00] AGY | BENCHMARK | repaired-final/E02 observed done: {'type': 'done', 'content': '56', 'executionId': 'exec-mvd7g32z-1', 'observed_at': '2026-10-18T02:27:12.883+00:00'}
+[2026-10-18T02:27:13.077+00:00] AGY | BENCHMARK | repaired-final/E02 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7g32z-1', 'filesChanged': [], 'result': '56', 'errors': [], 'observed_at': '2026-10-18T02:27:13.077+00:00'}
+[2026-10-18T02:27:13.098+00:00] AGY | BENCHMARK | repaired-final/E02 duration=4702.632ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:27:13.102+00:00] AGY | BENCHMARK | repaired-final/E03 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Reverse the string WAZIR.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:27:17.467+00:00] AGY | BENCHMARK | repaired-final/E03 observed start: {'type': 'start', 'executionId': 'exec-mvd7g6tw-1', 'taskId': 'task-b6f9778dc0ccba0c041807d1ff72b53a', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:27:17.467+00:00'}
+[2026-10-18T02:27:17.831+00:00] AGY | BENCHMARK | repaired-final/E03 observed done: {'type': 'done', 'content': 'RIZAW', 'executionId': 'exec-mvd7g6tw-1', 'observed_at': '2026-10-18T02:27:17.831+00:00'}
+[2026-10-18T02:27:18.032+00:00] AGY | BENCHMARK | repaired-final/E03 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7g6tw-1', 'filesChanged': [], 'result': 'RIZAW', 'errors': [], 'observed_at': '2026-10-18T02:27:18.032+00:00'}
+[2026-10-18T02:27:18.055+00:00] AGY | BENCHMARK | repaired-final/E03 duration=4949.975ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:27:18.058+00:00] AGY | BENCHMARK | repaired-final/E04 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Convert hello world to uppercase.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:27:22.163+00:00] AGY | BENCHMARK | repaired-final/E04 observed start: {'type': 'start', 'executionId': 'exec-mvd7gai6-1', 'taskId': 'task-fb505fe4619ac91726f4131f9aa1bcad', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:27:22.163+00:00'}
+[2026-10-18T02:27:22.519+00:00] AGY | BENCHMARK | repaired-final/E04 observed done: {'type': 'done', 'content': 'HELLO WORLD', 'executionId': 'exec-mvd7gai6-1', 'observed_at': '2026-10-18T02:27:22.519+00:00'}
+[2026-10-18T02:27:22.728+00:00] AGY | BENCHMARK | repaired-final/E04 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7gai6-1', 'filesChanged': [], 'result': 'HELLO WORLD', 'errors': [], 'observed_at': '2026-10-18T02:27:22.728+00:00'}
+[2026-10-18T02:27:22.750+00:00] AGY | BENCHMARK | repaired-final/E04 duration=4688.07ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:27:22.753+00:00] AGY | BENCHMARK | repaired-final/E05 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return the first five positive even integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:27:26.957+00:00] AGY | BENCHMARK | repaired-final/E05 observed start: {'type': 'start', 'executionId': 'exec-mvd7ge7m-1', 'taskId': 'task-57922c5ad1467bf9fb74d57a28464f0a', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:27:26.956+00:00'}
+[2026-10-18T02:27:27.426+00:00] AGY | BENCHMARK | repaired-final/E05 observed done: {'type': 'done', 'content': '2, 4, 6, 8, 10', 'executionId': 'exec-mvd7ge7m-1', 'observed_at': '2026-10-18T02:27:27.426+00:00'}
+[2026-10-18T02:27:27.592+00:00] AGY | BENCHMARK | repaired-final/E05 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7ge7m-1', 'filesChanged': [], 'result': '2, 4, 6, 8, 10', 'errors': [], 'observed_at': '2026-10-18T02:27:27.592+00:00'}
+[2026-10-18T02:27:27.619+00:00] AGY | BENCHMARK | repaired-final/E05 duration=4860.363ms verified=True; evidence=integer sequence; next: next task or batch analysis
+[2026-10-18T02:27:27.623+00:00] AGY | BENCHMARK | repaired-final/E06 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a Python function that adds two numbers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:27:31.938+00:00] AGY | BENCHMARK | repaired-final/E06 observed start: {'type': 'start', 'executionId': 'exec-mvd7gi01-1', 'taskId': 'task-dc620d661e4b06f6afba2fd2503e2fc8', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:27:31.938+00:00'}
+[2026-10-18T02:27:32.490+00:00] AGY | BENCHMARK | repaired-final/E06 observed done: {'type': 'done', 'content': '```python\ndef add_numbers(a, b):\n    return a + b\n```', 'executionId': 'exec-mvd7gi01-1', 'observed_at': '2026-10-18T02:27:32.490+00:00'}
+[2026-10-18T02:27:32.641+00:00] AGY | BENCHMARK | repaired-final/E06 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7gi01-1', 'filesChanged': [], 'result': '```python\ndef add_numbers(a, b):\n    return a + b\n```', 'errors': [], 'observed_at': '2026-10-18T02:27:32.641+00:00'}
+[2026-10-18T02:27:32.644+00:00] AGY | BENCHMARK | repaired-final/E06 heartbeat elapsed=5.022s; process=active; observed_events=25; no inference progress inferred
+[2026-10-18T02:27:32.667+00:00] AGY | BENCHMARK | repaired-final/E06 duration=5040.94ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:27:32.671+00:00] AGY | BENCHMARK | repaired-final/E07 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a JavaScript function that squares a number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:27:37.069+00:00] AGY | BENCHMARK | repaired-final/E07 observed start: {'type': 'start', 'executionId': 'exec-mvd7glw6-1', 'taskId': 'task-9f73df8242e0e9d475c6d4a410b21960', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:27:37.069+00:00'}
+[2026-10-18T02:27:37.686+00:00] AGY | BENCHMARK | repaired-final/E07 observed done: {'type': 'done', 'content': '```javascript\nfunction square(number) {\n  return number * number;\n}\n```', 'executionId': 'exec-mvd7glw6-1', 'observed_at': '2026-10-18T02:27:37.686+00:00'}
+[2026-10-18T02:27:37.689+00:00] AGY | BENCHMARK | repaired-final/E07 heartbeat elapsed=5.018s; process=active; observed_events=24; no inference progress inferred
+[2026-10-18T02:27:37.906+00:00] AGY | BENCHMARK | repaired-final/E07 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7glw6-1', 'filesChanged': [], 'result': '```javascript\nfunction square(number) {\n  return number * number;\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:27:37.906+00:00'}
+[2026-10-18T02:27:37.947+00:00] AGY | BENCHMARK | repaired-final/E07 duration=5272.62ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:27:37.951+00:00] AGY | BENCHMARK | repaired-final/E08 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a C++17 function that returns the larger of two integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:27:42.093+00:00] AGY | BENCHMARK | repaired-final/E08 observed start: {'type': 'start', 'executionId': 'exec-mvd7gpw3-1', 'taskId': 'task-16c92443efd13039287cb1be82b251df', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:27:42.093+00:00'}
+[2026-10-18T02:27:42.942+00:00] AGY | BENCHMARK | repaired-final/E08 observed done: {'type': 'done', 'content': '```cpp\n#include <algorithm>\n\nint get_larger(int a, int b) {\n    return std::max(a, b);\n}\n```', 'executionId': 'exec-mvd7gpw3-1', 'observed_at': '2026-10-18T02:27:42.942+00:00'}
+[2026-10-18T02:27:43.146+00:00] AGY | BENCHMARK | repaired-final/E08 heartbeat elapsed=5.195s; process=active; observed_events=40; no inference progress inferred
+[2026-10-18T02:27:43.171+00:00] AGY | BENCHMARK | repaired-final/E08 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7gpw3-1', 'filesChanged': [], 'result': '```cpp\n#include <algorithm>\n\nint get_larger(int a, int b) {\n    return std::max(a, b);\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:27:43.171+00:00'}
+[2026-10-18T02:27:43.256+00:00] AGY | BENCHMARK | repaired-final/E08 duration=5300.226ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:27:43.259+00:00] AGY | BENCHMARK | repaired-final/E09 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return JSON containing status: ok and count: 3.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:27:47.608+00:00] AGY | BENCHMARK | repaired-final/E09 observed start: {'type': 'start', 'executionId': 'exec-mvd7gu32-1', 'taskId': 'task-928fb31ad37a50e990ba249b08dfde9a', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:27:47.608+00:00'}
+[2026-10-18T02:27:48.274+00:00] AGY | BENCHMARK | repaired-final/E09 observed done: {'type': 'done', 'content': '```json\n{\n  "status": "ok",\n  "count": 3\n}\n```', 'executionId': 'exec-mvd7gu32-1', 'observed_at': '2026-10-18T02:27:48.274+00:00'}
+[2026-10-18T02:27:48.277+00:00] AGY | BENCHMARK | repaired-final/E09 heartbeat elapsed=5.018s; process=active; observed_events=27; no inference progress inferred
+[2026-10-18T02:27:48.497+00:00] AGY | BENCHMARK | repaired-final/E09 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7gu32-1', 'filesChanged': [], 'result': '```json\n{\n  "status": "ok",\n  "count": 3\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:27:48.497+00:00'}
+[2026-10-18T02:27:48.521+00:00] AGY | BENCHMARK | repaired-final/E09 duration=5258.442ms verified=True; evidence=parsed JSON; next: next task or batch analysis
+[2026-10-18T02:27:48.524+00:00] AGY | BENCHMARK | repaired-final/E10 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Explain what a CPU does in one sentence.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:27:52.929+00:00] AGY | BENCHMARK | repaired-final/E10 observed start: {'type': 'start', 'executionId': 'exec-mvd7gy63-1', 'taskId': 'task-64a54c197ead84183ccd6ded090cf48e', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:27:52.929+00:00'}
+[2026-10-18T02:27:53.526+00:00] AGY | BENCHMARK | repaired-final/E10 heartbeat elapsed=5.002s; process=active; observed_events=31; no inference progress inferred
+[2026-10-18T02:27:53.756+00:00] AGY | BENCHMARK | repaired-final/E10 observed done: {'type': 'done', 'content': 'The Central Processing Unit (CPU) acts as the primary engine of a computer by fetching, decoding, and executing instructions to process data and manage the flow of information between other hardware components.', 'executionId': 'exec-mvd7gy63-1', 'observed_at': '2026-10-18T02:27:53.756+00:00'}
+[2026-10-18T02:27:53.982+00:00] AGY | BENCHMARK | repaired-final/E10 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7gy63-1', 'filesChanged': [], 'result': 'The Central Processing Unit (CPU) acts as the primary engine of a computer by fetching, decoding, and executing instructions to process data and manage the flow of information between other hardware components.', 'errors': [], 'observed_at': '2026-10-18T02:27:53.982+00:00'}
+[2026-10-18T02:27:54.000+00:00] AGY | BENCHMARK | repaired-final/E10 duration=5473.31ms verified=True; evidence=CPU semantic keyword and length; review required; next: next task or batch analysis
+[2026-10-18T02:27:54.005+00:00] AGY | BENCHMARK | batch=repaired-final; concurrency=1; makespan_ms=50466.128; verified=10/10
+[2026-10-18T02:33:21.264+00:00] AGY | BENCHMARK | parallel-2/E01 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 12 + 19. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:21.278+00:00] AGY | BENCHMARK | parallel-2/E02 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 8 × 7. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:25.626+00:00] AGY | BENCHMARK | parallel-2/E02 observed start: {'type': 'start', 'executionId': 'exec-mvd7o2vu-1', 'taskId': 'task-b1d6dbdc81e6cacde7f480e8774b10af', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:25.626+00:00'}
+[2026-10-18T02:33:25.783+00:00] AGY | BENCHMARK | parallel-2/E01 observed start: {'type': 'start', 'executionId': 'exec-mvd7o2x1-1', 'taskId': 'task-359dc43cf63b90a766b0f4a1af42fa15', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:25.783+00:00'}
+[2026-10-18T02:33:26.019+00:00] AGY | BENCHMARK | parallel-2/E02 observed done: {'type': 'done', 'content': '56', 'executionId': 'exec-mvd7o2vu-1', 'observed_at': '2026-10-18T02:33:26.019+00:00'}
+[2026-10-18T02:33:26.195+00:00] AGY | BENCHMARK | parallel-2/E02 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7o2vu-1', 'filesChanged': [], 'result': '56', 'errors': [], 'observed_at': '2026-10-18T02:33:26.195+00:00'}
+[2026-10-18T02:33:26.223+00:00] AGY | BENCHMARK | parallel-2/E02 duration=4953.328ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:33:26.353+00:00] AGY | BENCHMARK | parallel-2/E01 observed done: {'type': 'done', 'content': '31', 'executionId': 'exec-mvd7o2x1-1', 'observed_at': '2026-10-18T02:33:26.353+00:00'}
+[2026-10-18T02:33:26.356+00:00] AGY | BENCHMARK | parallel-2/E01 heartbeat elapsed=5.092s; process=active; observed_events=6; no inference progress inferred
+[2026-10-18T02:33:26.514+00:00] AGY | BENCHMARK | parallel-2/E01 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7o2x1-1', 'filesChanged': [], 'result': '31', 'errors': [], 'observed_at': '2026-10-18T02:33:26.514+00:00'}
+[2026-10-18T02:33:26.533+00:00] AGY | BENCHMARK | parallel-2/E01 duration=5265.378ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:33:26.536+00:00] AGY | BENCHMARK | parallel-2/E03 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Reverse the string WAZIR.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:26.540+00:00] AGY | BENCHMARK | parallel-2/E04 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Convert hello world to uppercase.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:30.871+00:00] AGY | BENCHMARK | parallel-2/E03 observed start: {'type': 'start', 'executionId': 'exec-mvd7o6zn-1', 'taskId': 'task-71b39f0049dc28dd7cf7a650f52e4894', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:30.871+00:00'}
+[2026-10-18T02:33:31.109+00:00] AGY | BENCHMARK | parallel-2/E04 observed start: {'type': 'start', 'executionId': 'exec-mvd7o70l-1', 'taskId': 'task-c1612c79f4e32f9918e1b21d63e328ce', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:31.109+00:00'}
+[2026-10-18T02:33:31.341+00:00] AGY | BENCHMARK | parallel-2/E03 observed done: {'type': 'done', 'content': 'RIZAW', 'executionId': 'exec-mvd7o6zn-1', 'observed_at': '2026-10-18T02:33:31.341+00:00'}
+[2026-10-18T02:33:31.469+00:00] AGY | BENCHMARK | parallel-2/E04 observed done: {'type': 'done', 'content': 'HELLO WORLD', 'executionId': 'exec-mvd7o70l-1', 'observed_at': '2026-10-18T02:33:31.469+00:00'}
+[2026-10-18T02:33:31.545+00:00] AGY | BENCHMARK | parallel-2/E03 heartbeat elapsed=5.010s; process=active; observed_events=7; no inference progress inferred
+[2026-10-18T02:33:31.623+00:00] AGY | BENCHMARK | parallel-2/E04 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7o70l-1', 'filesChanged': [], 'result': 'HELLO WORLD', 'errors': [], 'observed_at': '2026-10-18T02:33:31.623+00:00'}
+[2026-10-18T02:33:31.627+00:00] AGY | BENCHMARK | parallel-2/E04 heartbeat elapsed=5.091s; process=active; observed_events=7; no inference progress inferred
+[2026-10-18T02:33:31.641+00:00] AGY | BENCHMARK | parallel-2/E04 duration=5101.535ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:33:31.644+00:00] AGY | BENCHMARK | parallel-2/E05 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return the first five positive even integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:31.800+00:00] AGY | BENCHMARK | parallel-2/E03 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7o6zn-1', 'filesChanged': [], 'result': 'RIZAW', 'errors': [], 'observed_at': '2026-10-18T02:33:31.800+00:00'}
+[2026-10-18T02:33:31.816+00:00] AGY | BENCHMARK | parallel-2/E03 duration=5277.053ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:33:35.775+00:00] AGY | BENCHMARK | parallel-2/E05 observed start: {'type': 'start', 'executionId': 'exec-mvd7oatg-1', 'taskId': 'task-9f6c22e6a8aeac12b2f0ec814880020f', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:35.775+00:00'}
+[2026-10-18T02:33:36.291+00:00] AGY | BENCHMARK | parallel-2/E05 observed done: {'type': 'done', 'content': '2, 4, 6, 8, 10', 'executionId': 'exec-mvd7oatg-1', 'observed_at': '2026-10-18T02:33:36.291+00:00'}
+[2026-10-18T02:33:36.456+00:00] AGY | BENCHMARK | parallel-2/E05 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7oatg-1', 'filesChanged': [], 'result': '2, 4, 6, 8, 10', 'errors': [], 'observed_at': '2026-10-18T02:33:36.456+00:00'}
+[2026-10-18T02:33:36.472+00:00] AGY | BENCHMARK | parallel-2/E05 duration=4825.138ms verified=True; evidence=integer sequence; next: next task or batch analysis
+[2026-10-18T02:33:36.477+00:00] AGY | BENCHMARK | parallel-2/E06 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a Python function that adds two numbers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:36.480+00:00] AGY | BENCHMARK | parallel-2/E07 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a JavaScript function that squares a number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:40.988+00:00] AGY | BENCHMARK | parallel-2/E06 observed start: {'type': 'start', 'executionId': 'exec-mvd7oept-1', 'taskId': 'task-18ba2dc1a722de0817dc2c57c34f2582', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:40.988+00:00'}
+[2026-10-18T02:33:41.122+00:00] AGY | BENCHMARK | parallel-2/E07 observed start: {'type': 'start', 'executionId': 'exec-mvd7oepw-1', 'taskId': 'task-5ecfec3f4535f9fcc83987e7ad3b77eb', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:41.122+00:00'}
+[2026-10-18T02:33:41.480+00:00] AGY | BENCHMARK | parallel-2/E07 heartbeat elapsed=5.003s; process=active; observed_events=7; no inference progress inferred
+[2026-10-18T02:33:41.494+00:00] AGY | BENCHMARK | parallel-2/E06 heartbeat elapsed=5.011s; process=active; observed_events=10; no inference progress inferred
+[2026-10-18T02:33:41.772+00:00] AGY | BENCHMARK | parallel-2/E06 observed done: {'type': 'done', 'content': '```python\ndef add_numbers(a, b):\n    return a + b\n```', 'executionId': 'exec-mvd7oept-1', 'observed_at': '2026-10-18T02:33:41.772+00:00'}
+[2026-10-18T02:33:41.947+00:00] AGY | BENCHMARK | parallel-2/E06 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7oept-1', 'filesChanged': [], 'result': '```python\ndef add_numbers(a, b):\n    return a + b\n```', 'errors': [], 'observed_at': '2026-10-18T02:33:41.947+00:00'}
+[2026-10-18T02:33:41.979+00:00] AGY | BENCHMARK | parallel-2/E06 duration=5497.824ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:33:41.982+00:00] AGY | BENCHMARK | parallel-2/E08 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a C++17 function that returns the larger of two integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:42.119+00:00] AGY | BENCHMARK | parallel-2/E07 observed done: {'type': 'done', 'content': '```javascript\nfunction square(number) {\n  return number * number;\n}\n```', 'executionId': 'exec-mvd7oepw-1', 'observed_at': '2026-10-18T02:33:42.119+00:00'}
+[2026-10-18T02:33:42.288+00:00] AGY | BENCHMARK | parallel-2/E07 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7oepw-1', 'filesChanged': [], 'result': '```javascript\nfunction square(number) {\n  return number * number;\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:33:42.288+00:00'}
+[2026-10-18T02:33:42.330+00:00] AGY | BENCHMARK | parallel-2/E07 duration=5848.835ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:33:42.333+00:00] AGY | BENCHMARK | parallel-2/E09 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return JSON containing status: ok and count: 3.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:46.604+00:00] AGY | BENCHMARK | parallel-2/E08 observed start: {'type': 'start', 'executionId': 'exec-mvd7oj03-1', 'taskId': 'task-a18514a7d1737a6154e7d3f62e024ed8', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:46.604+00:00'}
+[2026-10-18T02:33:46.734+00:00] AGY | BENCHMARK | parallel-2/E09 observed start: {'type': 'start', 'executionId': 'exec-mvd7oj64-1', 'taskId': 'task-c5d8931fb2b789bac1eba78e23354e3a', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:46.734+00:00'}
+[2026-10-18T02:33:46.984+00:00] AGY | BENCHMARK | parallel-2/E08 heartbeat elapsed=5.002s; process=active; observed_events=7; no inference progress inferred
+[2026-10-18T02:33:47.344+00:00] AGY | BENCHMARK | parallel-2/E09 heartbeat elapsed=5.010s; process=active; observed_events=17; no inference progress inferred
+[2026-10-18T02:33:47.568+00:00] AGY | BENCHMARK | parallel-2/E09 observed done: {'type': 'done', 'content': '```json\n{\n  "status": "ok",\n  "count": 3\n}\n```', 'executionId': 'exec-mvd7oj64-1', 'observed_at': '2026-10-18T02:33:47.568+00:00'}
+[2026-10-18T02:33:47.760+00:00] AGY | BENCHMARK | parallel-2/E09 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7oj64-1', 'filesChanged': [], 'result': '```json\n{\n  "status": "ok",\n  "count": 3\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:33:47.760+00:00'}
+[2026-10-18T02:33:47.779+00:00] AGY | BENCHMARK | parallel-2/E09 duration=5441.418ms verified=True; evidence=parsed JSON; next: next task or batch analysis
+[2026-10-18T02:33:47.782+00:00] AGY | BENCHMARK | parallel-2/E10 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Explain what a CPU does in one sentence.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:47.911+00:00] AGY | BENCHMARK | parallel-2/E08 observed done: {'type': 'done', 'content': '```cpp\n#include <algorithm>\n\nint get_larger(int a, int b) {\n    return std::max(a, b);\n}\n```', 'executionId': 'exec-mvd7oj03-1', 'observed_at': '2026-10-18T02:33:47.911+00:00'}
+[2026-10-18T02:33:48.090+00:00] AGY | BENCHMARK | parallel-2/E08 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7oj03-1', 'filesChanged': [], 'result': '```cpp\n#include <algorithm>\n\nint get_larger(int a, int b) {\n    return std::max(a, b);\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:33:48.090+00:00'}
+[2026-10-18T02:33:48.180+00:00] AGY | BENCHMARK | parallel-2/E08 duration=6194.545ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:33:52.239+00:00] AGY | BENCHMARK | parallel-2/E10 observed start: {'type': 'start', 'executionId': 'exec-mvd7oneb-1', 'taskId': 'task-314f9070510d4d38e897d75edb44234b', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:52.239+00:00'}
+[2026-10-18T02:33:52.808+00:00] AGY | BENCHMARK | parallel-2/E10 heartbeat elapsed=5.027s; process=active; observed_events=28; no inference progress inferred
+[2026-10-18T02:33:53.048+00:00] AGY | BENCHMARK | parallel-2/E10 observed done: {'type': 'done', 'content': 'The Central Processing Unit (CPU) acts as the primary engine of a computer by fetching, decoding, and executing instructions to process data and manage the flow of information between other hardware components.', 'executionId': 'exec-mvd7oneb-1', 'observed_at': '2026-10-18T02:33:53.048+00:00'}
+[2026-10-18T02:33:53.233+00:00] AGY | BENCHMARK | parallel-2/E10 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7oneb-1', 'filesChanged': [], 'result': 'The Central Processing Unit (CPU) acts as the primary engine of a computer by fetching, decoding, and executing instructions to process data and manage the flow of information between other hardware components.', 'errors': [], 'observed_at': '2026-10-18T02:33:53.233+00:00'}
+[2026-10-18T02:33:53.255+00:00] AGY | BENCHMARK | parallel-2/E10 duration=5468.858ms verified=True; evidence=CPU semantic keyword and length; review required; next: next task or batch analysis
+[2026-10-18T02:33:53.258+00:00] AGY | BENCHMARK | batch=parallel-2; concurrency=2; makespan_ms=31994.941; verified=10/10; grouped E01-E02, E03-E05, E06-E10
+[2026-10-18T02:33:53.262+00:00] AGY | BENCHMARK | parallel-3/E01 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 12 + 19. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:53.266+00:00] AGY | BENCHMARK | parallel-3/E02 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 8 × 7. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:58.108+00:00] AGY | BENCHMARK | parallel-3/E02 observed start: {'type': 'start', 'executionId': 'exec-mvd7orrv-1', 'taskId': 'task-043118a6a8039b54ff203f72ffc86a0b', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:58.108+00:00'}
+[2026-10-18T02:33:58.216+00:00] AGY | BENCHMARK | parallel-3/E01 observed start: {'type': 'start', 'executionId': 'exec-mvd7orqi-1', 'taskId': 'task-5d7bb24638991428da7c114960bf8155', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:33:58.216+00:00'}
+[2026-10-18T02:33:58.262+00:00] AGY | BENCHMARK | parallel-3/E01 heartbeat elapsed=5.000s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:33:58.308+00:00] AGY | BENCHMARK | parallel-3/E02 heartbeat elapsed=5.046s; process=active; observed_events=5; no inference progress inferred
+[2026-10-18T02:33:58.492+00:00] AGY | BENCHMARK | parallel-3/E02 observed done: {'type': 'done', 'content': '56', 'executionId': 'exec-mvd7orrv-1', 'observed_at': '2026-10-18T02:33:58.492+00:00'}
+[2026-10-18T02:33:58.688+00:00] AGY | BENCHMARK | parallel-3/E02 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7orrv-1', 'filesChanged': [], 'result': '56', 'errors': [], 'observed_at': '2026-10-18T02:33:58.687+00:00'}
+[2026-10-18T02:33:58.710+00:00] AGY | BENCHMARK | parallel-3/E02 duration=5445.251ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:33:58.821+00:00] AGY | BENCHMARK | parallel-3/E01 observed done: {'type': 'done', 'content': '31', 'executionId': 'exec-mvd7orqi-1', 'observed_at': '2026-10-18T02:33:58.821+00:00'}
+[2026-10-18T02:33:59.016+00:00] AGY | BENCHMARK | parallel-3/E01 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7orqi-1', 'filesChanged': [], 'result': '31', 'errors': [], 'observed_at': '2026-10-18T02:33:59.016+00:00'}
+[2026-10-18T02:33:59.038+00:00] AGY | BENCHMARK | parallel-3/E01 duration=5773.416ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:33:59.042+00:00] AGY | BENCHMARK | parallel-3/E03 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Reverse the string WAZIR.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:59.046+00:00] AGY | BENCHMARK | parallel-3/E04 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Convert hello world to uppercase.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:33:59.051+00:00] AGY | BENCHMARK | parallel-3/E05 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return the first five positive even integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:34:03.679+00:00] AGY | BENCHMARK | parallel-3/E04 observed start: {'type': 'start', 'executionId': 'exec-mvd7ow5b-1', 'taskId': 'task-5cd29d2c7c47fa7435b6f89e2d43e10f', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:34:03.679+00:00'}
+[2026-10-18T02:34:03.828+00:00] AGY | BENCHMARK | parallel-3/E05 observed start: {'type': 'start', 'executionId': 'exec-mvd7ow6d-1', 'taskId': 'task-7f94048d1d24bf2968483c52fc385575', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:34:03.828+00:00'}
+[2026-10-18T02:34:04.113+00:00] AGY | BENCHMARK | parallel-3/E04 heartbeat elapsed=5.071s; process=active; observed_events=5; no inference progress inferred
+[2026-10-18T02:34:04.119+00:00] AGY | BENCHMARK | parallel-3/E05 heartbeat elapsed=5.075s; process=active; observed_events=3; no inference progress inferred
+[2026-10-18T02:34:04.130+00:00] AGY | BENCHMARK | parallel-3/E04 observed done: {'type': 'done', 'content': 'HELLO WORLD', 'executionId': 'exec-mvd7ow5b-1', 'observed_at': '2026-10-18T02:34:04.130+00:00'}
+[2026-10-18T02:34:04.173+00:00] AGY | BENCHMARK | parallel-3/E03 heartbeat elapsed=5.130s; process=active; observed_events=1; no inference progress inferred
+[2026-10-18T02:34:04.243+00:00] AGY | BENCHMARK | parallel-3/E03 observed start: {'type': 'start', 'executionId': 'exec-mvd7ow7a-1', 'taskId': 'task-4a3dd8e3f15a22295f146bcc58d79992', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:34:04.243+00:00'}
+[2026-10-18T02:34:04.525+00:00] AGY | BENCHMARK | parallel-3/E04 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7ow5b-1', 'filesChanged': [], 'result': 'HELLO WORLD', 'errors': [], 'observed_at': '2026-10-18T02:34:04.525+00:00'}
+[2026-10-18T02:34:04.546+00:00] AGY | BENCHMARK | parallel-3/E04 duration=5499.912ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:34:04.716+00:00] AGY | BENCHMARK | parallel-3/E03 observed done: {'type': 'done', 'content': 'RIZAW', 'executionId': 'exec-mvd7ow7a-1', 'observed_at': '2026-10-18T02:34:04.716+00:00'}
+[2026-10-18T02:34:04.924+00:00] AGY | BENCHMARK | parallel-3/E03 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7ow7a-1', 'filesChanged': [], 'result': 'RIZAW', 'errors': [], 'observed_at': '2026-10-18T02:34:04.924+00:00'}
+[2026-10-18T02:34:04.944+00:00] AGY | BENCHMARK | parallel-3/E03 duration=5898.158ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:34:05.069+00:00] AGY | BENCHMARK | parallel-3/E05 observed done: {'type': 'done', 'content': '2, 4, 6, 8, 10', 'executionId': 'exec-mvd7ow6d-1', 'observed_at': '2026-10-18T02:34:05.069+00:00'}
+[2026-10-18T02:34:05.280+00:00] AGY | BENCHMARK | parallel-3/E05 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7ow6d-1', 'filesChanged': [], 'result': '2, 4, 6, 8, 10', 'errors': [], 'observed_at': '2026-10-18T02:34:05.280+00:00'}
+[2026-10-18T02:34:05.300+00:00] AGY | BENCHMARK | parallel-3/E05 duration=6253.99ms verified=True; evidence=integer sequence; next: next task or batch analysis
+[2026-10-18T02:34:05.304+00:00] AGY | BENCHMARK | parallel-3/E06 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a Python function that adds two numbers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:34:05.307+00:00] AGY | BENCHMARK | parallel-3/E07 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a JavaScript function that squares a number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:34:05.310+00:00] AGY | BENCHMARK | parallel-3/E08 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a C++17 function that returns the larger of two integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:34:09.897+00:00] AGY | BENCHMARK | parallel-3/E07 observed start: {'type': 'start', 'executionId': 'exec-mvd7p0yx-1', 'taskId': 'task-4a3fb7ad5f43f1f24b719b2d47fa06b8', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:34:09.897+00:00'}
+[2026-10-18T02:34:10.270+00:00] AGY | BENCHMARK | parallel-3/E08 observed start: {'type': 'start', 'executionId': 'exec-mvd7p0yw-1', 'taskId': 'task-653268c8928aeee5dd3fbbdcdcac3584', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:34:10.270+00:00'}
+[2026-10-18T02:34:10.307+00:00] AGY | BENCHMARK | parallel-3/E07 heartbeat elapsed=5.003s; process=active; observed_events=15; no inference progress inferred
+[2026-10-18T02:34:10.330+00:00] AGY | BENCHMARK | parallel-3/E08 heartbeat elapsed=5.026s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:34:10.435+00:00] AGY | BENCHMARK | parallel-3/E06 heartbeat elapsed=5.131s; process=active; observed_events=1; no inference progress inferred
+[2026-10-18T02:34:10.459+00:00] AGY | BENCHMARK | parallel-3/E06 observed start: {'type': 'start', 'executionId': 'exec-mvd7p10c-1', 'taskId': 'task-e8b6c4c3e66b564f021ad45a66ddbc54', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:34:10.459+00:00'}
+[2026-10-18T02:34:10.825+00:00] AGY | BENCHMARK | parallel-3/E07 observed done: {'type': 'done', 'content': '```javascript\nfunction square(number) {\n  return number * number;\n}\n```', 'executionId': 'exec-mvd7p0yx-1', 'observed_at': '2026-10-18T02:34:10.825+00:00'}
+[2026-10-18T02:34:11.140+00:00] AGY | BENCHMARK | parallel-3/E07 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7p0yx-1', 'filesChanged': [], 'result': '```javascript\nfunction square(number) {\n  return number * number;\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:34:11.140+00:00'}
+[2026-10-18T02:34:11.179+00:00] AGY | BENCHMARK | parallel-3/E07 duration=5871.378ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:34:11.182+00:00] AGY | BENCHMARK | parallel-3/E09 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return JSON containing status: ok and count: 3.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:34:11.324+00:00] AGY | BENCHMARK | parallel-3/E08 observed done: {'type': 'done', 'content': '```cpp\n#include <algorithm>\n\nint get_larger(int a, int b) {\n    return std::max(a, b);\n}\n```', 'executionId': 'exec-mvd7p0yw-1', 'observed_at': '2026-10-18T02:34:11.324+00:00'}
+[2026-10-18T02:34:11.529+00:00] AGY | BENCHMARK | parallel-3/E08 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7p0yw-1', 'filesChanged': [], 'result': '```cpp\n#include <algorithm>\n\nint get_larger(int a, int b) {\n    return std::max(a, b);\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:34:11.529+00:00'}
+[2026-10-18T02:34:11.616+00:00] AGY | BENCHMARK | parallel-3/E08 duration=6307.406ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:34:11.618+00:00] AGY | BENCHMARK | parallel-3/E10 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Explain what a CPU does in one sentence.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:34:11.697+00:00] AGY | BENCHMARK | parallel-3/E06 observed done: {'type': 'done', 'content': '```python\ndef add_numbers(a, b):\n    return a + b\n```', 'executionId': 'exec-mvd7p10c-1', 'observed_at': '2026-10-18T02:34:11.697+00:00'}
+[2026-10-18T02:34:11.892+00:00] AGY | BENCHMARK | parallel-3/E06 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7p10c-1', 'filesChanged': [], 'result': '```python\ndef add_numbers(a, b):\n    return a + b\n```', 'errors': [], 'observed_at': '2026-10-18T02:34:11.892+00:00'}
+[2026-10-18T02:34:11.930+00:00] AGY | BENCHMARK | parallel-3/E06 duration=6622.939ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:34:15.718+00:00] AGY | BENCHMARK | parallel-3/E09 observed start: {'type': 'start', 'executionId': 'exec-mvd7p5gu-1', 'taskId': 'task-fcf8f5742f86051a81ac6d45887f61a0', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:34:15.718+00:00'}
+[2026-10-18T02:34:16.201+00:00] AGY | BENCHMARK | parallel-3/E09 heartbeat elapsed=5.019s; process=active; observed_events=17; no inference progress inferred
+[2026-10-18T02:34:16.368+00:00] AGY | BENCHMARK | parallel-3/E09 observed done: {'type': 'done', 'content': '```json\n{\n  "status": "ok",\n  "count": 3\n}\n```', 'executionId': 'exec-mvd7p5gu-1', 'observed_at': '2026-10-18T02:34:16.368+00:00'}
+[2026-10-18T02:34:16.609+00:00] AGY | BENCHMARK | parallel-3/E10 observed start: {'type': 'start', 'executionId': 'exec-mvd7p5vm-1', 'taskId': 'task-0abe92c53c31224b9ff349936c1d7fad', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:34:16.609+00:00'}
+[2026-10-18T02:34:16.665+00:00] AGY | BENCHMARK | parallel-3/E10 heartbeat elapsed=5.047s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:34:16.787+00:00] AGY | BENCHMARK | parallel-3/E09 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7p5gu-1', 'filesChanged': [], 'result': '```json\n{\n  "status": "ok",\n  "count": 3\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:34:16.786+00:00'}
+[2026-10-18T02:34:16.813+00:00] AGY | BENCHMARK | parallel-3/E09 duration=5627.929ms verified=True; evidence=parsed JSON; next: next task or batch analysis
+[2026-10-18T02:34:17.486+00:00] AGY | BENCHMARK | parallel-3/E10 observed done: {'type': 'done', 'content': 'The Central Processing Unit (CPU) acts as the primary engine of a computer by fetching, decoding, and executing instructions to process data and manage the flow of information between other hardware components.', 'executionId': 'exec-mvd7p5vm-1', 'observed_at': '2026-10-18T02:34:17.486+00:00'}
+[2026-10-18T02:34:17.708+00:00] AGY | BENCHMARK | parallel-3/E10 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7p5vm-1', 'filesChanged': [], 'result': 'The Central Processing Unit (CPU) acts as the primary engine of a computer by fetching, decoding, and executing instructions to process data and manage the flow of information between other hardware components.', 'errors': [], 'observed_at': '2026-10-18T02:34:17.708+00:00'}
+[2026-10-18T02:34:17.730+00:00] AGY | BENCHMARK | parallel-3/E10 duration=6109.15ms verified=True; evidence=CPU semantic keyword and length; review required; next: next task or batch analysis
+[2026-10-18T02:34:17.734+00:00] AGY | BENCHMARK | batch=parallel-3; concurrency=3; makespan_ms=24472.119; verified=10/10; grouped E01-E02, E03-E05, E06-E10
+[2026-10-18T02:36:25.838+00:00] AGY | VERIFICATION | command=['npx', 'tsc', '--build']; expected: pass; next: inspect results
+[2026-10-18T02:36:26.717+00:00] AGY | VERIFICATION | exit=0; duration=0.879s; output=; decision=continue
+[2026-10-18T02:36:26.720+00:00] AGY | VERIFICATION | command=['npx', 'vitest', 'run', 'packages/agents/tests/chatAgent.test.ts', 'apps/cli/tests/executeTask.e2e.test.ts', 'packages/core/tests/modelLifecycleAdmission.test.ts', 'packages/evaluation/tests', 'packages/runtimes/lmstudio/tests', 'packages/core/tests/executionRecovery.test.ts']; expected: pass; next: inspect results
+[2026-10-18T02:36:31.725+00:00] AGY | VERIFICATION | heartbeat elapsed=5.005s process active; command=['npx', 'vitest', 'run', 'packages/agents/tests/chatAgent.test.ts', 'apps/cli/tests/executeTask.e2e.test.ts', 'packages/core/tests/modelLifecycleAdmission.test.ts', 'packages/evaluation/tests', 'packages/runtimes/lmstudio/tests', 'packages/core/tests/executionRecovery.test.ts']; progress unknown
+[2026-10-18T02:36:36.738+00:00] AGY | VERIFICATION | heartbeat elapsed=10.018s process active; command=['npx', 'vitest', 'run', 'packages/agents/tests/chatAgent.test.ts', 'apps/cli/tests/executeTask.e2e.test.ts', 'packages/core/tests/modelLifecycleAdmission.test.ts', 'packages/evaluation/tests', 'packages/runtimes/lmstudio/tests', 'packages/core/tests/executionRecovery.test.ts']; progress unknown
+[2026-10-18T02:36:41.743+00:00] AGY | VERIFICATION | heartbeat elapsed=15.023s process active; command=['npx', 'vitest', 'run', 'packages/agents/tests/chatAgent.test.ts', 'apps/cli/tests/executeTask.e2e.test.ts', 'packages/core/tests/modelLifecycleAdmission.test.ts', 'packages/evaluation/tests', 'packages/runtimes/lmstudio/tests', 'packages/core/tests/executionRecovery.test.ts']; progress unknown
+[2026-10-18T02:36:46.542+00:00] AGY | VERIFICATION | exit=1; duration=19.821s; output=at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/optimizerRecovery.test.ts (26 tests) 268ms
+(node:2881884) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/roadmapV02.test.ts (9 tests) 77ms
+(node:2881909) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Executing shell...
+stderr | apps/cli/tests/executeTask.e2e.test.ts > executeTask — real end-to-end Task -> Result flow > a task that compiles source code via a raw `shell` call IS recorded as a real check and can succeed
+[wazir] tool sandbox unavailable — running tool processes directly on the host (bwrap cannot start: bwrap: setting up uid map: Permission denied — unprivileged user namespaces are disabled (on Ubuntu: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or install the bubblewrap AppArmor profile; inside a container, run with `--security-opt seccomp=unconfined --cap-add SYS_ADMIN` or rely on the container as the boundary with WAZIR_SANDBOX=none))
+
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+ ❯ apps/cli/tests/executeTask.e2e.test.ts (13 tests | 1 failed) 1117ms
+   × executeTask — real end-to-end Task -> Result flow > F05 records a real nonzero shell exit as failure 72ms
+     → expected false to be true // Object.is equality
+(node:2882193) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/causalAttribution.test.ts (8 tests) 38ms
+(node:2882297) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/selfImprovementGates.test.ts (3 tests) 134ms
+(node:2882417) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/canaryDeployment.test.ts (9 tests) 9ms
+(node:2882521) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/capabilityWeightedScheduler.test.ts (13 tests) 10ms
+(node:2882565) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/multiObjectiveGate.test.ts (3 tests) 489ms
+ ✓ packages/core/tests/modelLifecycleAdmission.test.ts (22 tests) 120ms
+(node:2882621) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+ ✓ packages/evaluation/tests/selfImprovementSupervisor.test.ts (5 tests) 511ms
+   ✓ Self-Improvement Verification, Promotion Integrity & Supervisor Unit Suite > rejects fabricated candidate promotion and persists verified candidates across restart 447ms
+(node:2882669) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/metaOptimizer.test.ts (6 tests) 515ms
+(node:2882693) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/continuousVerification.test.ts (22 tests) 4ms
+(node:2882713) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/statisticalQualification.test.ts (19 tests) 21ms
+ ✓ packages/core/tests/executionRecovery.test.ts (8 tests) 15ms
+(node:2882769) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/expectedEvidence.test.ts (13 tests) 6ms
+(node:2882793) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/metricIntegrity.test.ts (12 tests) 5ms
+(node:2882818) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+stdout | packages/evaluation/tests/benchmarkExperiment.test.ts > Benchmark Experiment: Single Trajectory vs Best-of-3 Solution Search > measures task success, verification success, calls, repair cycles, tokens, cost, and wall time tradeoffs
+=== Comparative Evaluation: Baseline (exec-single-1) vs Candidate (exec-bestof3-winning-candidate) ===
+| Metric                 | Baseline | Candidate | Delta      |
+|------------------------|----------|-----------|------------|
+| Task Success           | FAIL     | PASS      | +1         |
+| Physical Verification  | FAIL     | PASS      | +1         |
+| Total Model Calls      | 1        | 1         | +0         |
+| Total Tool Calls       | 2        | 3         | +1         |
+| Repair Cycles          | 1        | 0         | -1         |
+| Input Tokens           | 1200     | 3600      | +2400      |
+| Output Tokens          | 250      | 750       | +500       |
+| Compacted Tokens       | 0        | 0         | +0         |
+| Wall Time (ms)         | 1800     | 3600      | +1800      |
+| Est. Cost (USD)        | $0.0073  | $0.0221   | +$0.0147   |
+
+Improvements (3):
+  ✓ Candidate passed run while baseline failed.
+  ✓ Candidate succeeded at physical verification while baseline failed.
+  ✓ Candidate required 1 fewer repair cycles.
+Regressions (1):
+  ✗ Candidate increased cost by $0.0147.
+
+ ✓ packages/evaluation/tests/benchmarkExperiment.test.ts (1 test) 8ms
+(node:2882912) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/evaluationComparison.test.ts (3 tests) 3ms
+ ❯ packages/runtimes/lmstudio/tests/openaiCompat.test.ts (6 tests | 1 failed) 10ms
+   × LMStudioAdapter against authenticated OpenAI-compatible endpoints > marks an aborted stream as cancelled rather than a normal completion 4ms
+     → expected undefined to be 'cancelled' // Object.is equality
+ ✓ packages/runtimes/lmstudio/tests/retry.test.ts (3 tests) 2594ms
+   ✓ LMStudioAdapter.generate() retry behavior (real HTTP server) > retries a 503 and succeeds once the server recovers, yielding a retry event in between 789ms
+   ✓ LMStudioAdapter.generate() retry behavior (real HTTP server) > gives up after 4 attempts and yields a single error event, not a retry event for the last failure 1801ms
+ ✓ packages/runtimes/lmstudio/tests/streamDisconnect.test.ts (2 tests) 1758ms
+   ✓ LMStudioAdapter.generate() — runtime disconnects mid-stream > does not hang waiting for a runtime that accepts the connection but never sends anything before closing 1742ms
+ ✓ packages/agents/tests/chatAgent.test.ts (6 tests) 51ms
+(node:2883283) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/live-coding/08-revisionFencing.test.ts (3 tests) 2ms
+(node:2883303) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/shellOutcomes.test.ts (4 tests) 2ms
+(node:2883329) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/currentAttemptErrors.test.ts (3 tests) 2ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  apps/cli/tests/executeTask.e2e.test.ts > executeTask — real end-to-end Task -> Result flow > F05 records a real nonzero shell exit as failure
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ apps/cli/tests/executeTask.e2e.test.ts:276:110
+    274|     expect(outcome.success).toBe(false);
+    275|     expect(record.execution.status).toBe('failed');
+    276|     expect(record.toolCalls.some(call => call.tool === 'shell' && call…
+       |                                                                                                              ^
+    277|   });
+    278| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  packages/runtimes/lmstudio/tests/openaiCompat.test.ts > LMStudioAdapter against authenticated OpenAI-compatible endpoints > marks an aborted stream as cancelled rather than a normal completion
+AssertionError: expected undefined to be 'cancelled' // Object.is equality
+
+- Expected: 
+"cancelled"
+
++ Received: 
+undefined
+
+ ❯ packages/runtimes/lmstudio/tests/openaiCompat.test.ts:70:32
+     68|     }
+     69|     const done = events.find((e) => e.type === 'completed');
+     70|     expect(done?.finishReason).toBe('cancelled');
+       |                                ^
+     71|     expect(done?.content).toBe('par');
+     72|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  2 failed | 27 passed (29)
+      Tests  2 failed | 263 passed (265)
+   Start at  19:36:27
+   Duration  19.45s (transform 753ms, setup 0ms, collect 7.51s, tests 9.11s, environment 2ms, prepare 642ms)
+
+; decision=investigate
+[2026-10-18T02:38:21.539+00:00] AGY | VERIFICATION | command=['npx', 'tsc', '--build']; expected: pass; next: inspect results
+[2026-10-18T02:38:21.808+00:00] AGY | VERIFICATION | exit=0; duration=0.269s; output=; decision=continue
+[2026-10-18T02:38:21.822+00:00] AGY | VERIFICATION | command=['npx', 'vitest', 'run', 'packages/agents/tests/chatAgent.test.ts', 'apps/cli/tests/executeTask.e2e.test.ts', 'packages/core/tests/modelLifecycleAdmission.test.ts', 'packages/evaluation/tests', 'packages/runtimes/lmstudio/tests', 'packages/core/tests/executionRecovery.test.ts']; expected: pass; next: inspect results
+[2026-10-18T02:38:26.826+00:00] AGY | VERIFICATION | heartbeat elapsed=5.004s process active; command=['npx', 'vitest', 'run', 'packages/agents/tests/chatAgent.test.ts', 'apps/cli/tests/executeTask.e2e.test.ts', 'packages/core/tests/modelLifecycleAdmission.test.ts', 'packages/evaluation/tests', 'packages/runtimes/lmstudio/tests', 'packages/core/tests/executionRecovery.test.ts']; progress unknown
+[2026-10-18T02:38:31.839+00:00] AGY | VERIFICATION | heartbeat elapsed=10.017s process active; command=['npx', 'vitest', 'run', 'packages/agents/tests/chatAgent.test.ts', 'apps/cli/tests/executeTask.e2e.test.ts', 'packages/core/tests/modelLifecycleAdmission.test.ts', 'packages/evaluation/tests', 'packages/runtimes/lmstudio/tests', 'packages/core/tests/executionRecovery.test.ts']; progress unknown
+[2026-10-18T02:38:36.845+00:00] AGY | VERIFICATION | heartbeat elapsed=15.024s process active; command=['npx', 'vitest', 'run', 'packages/agents/tests/chatAgent.test.ts', 'apps/cli/tests/executeTask.e2e.test.ts', 'packages/core/tests/modelLifecycleAdmission.test.ts', 'packages/evaluation/tests', 'packages/runtimes/lmstudio/tests', 'packages/core/tests/executionRecovery.test.ts']; progress unknown
+[2026-10-18T02:38:41.860+00:00] AGY | VERIFICATION | heartbeat elapsed=20.038s process active; command=['npx', 'vitest', 'run', 'packages/agents/tests/chatAgent.test.ts', 'apps/cli/tests/executeTask.e2e.test.ts', 'packages/core/tests/modelLifecycleAdmission.test.ts', 'packages/evaluation/tests', 'packages/runtimes/lmstudio/tests', 'packages/core/tests/executionRecovery.test.ts']; progress unknown
+[2026-10-18T02:38:41.882+00:00] AGY | VERIFICATION | exit=0; duration=20.060s; output= <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+ ✓ packages/evaluation/tests/gitSynchronizationPolicy.test.ts (9 tests) 1192ms
+(node:2894081) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/benchmarkAndEvaluation.test.ts (9 tests) 8ms
+(node:2894105) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/verificationIntegrity.test.ts (10 tests) 37ms
+(node:2894129) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/optimizerRecovery.test.ts (26 tests) 252ms
+(node:2894165) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/roadmapV02.test.ts (9 tests) 78ms
+(node:2894189) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing shell...
+stderr | apps/cli/tests/executeTask.e2e.test.ts > executeTask — real end-to-end Task -> Result flow > F05 records a real nonzero shell exit as failure
+[wazir] tool sandbox unavailable — running tool processes directly on the host (bwrap cannot start: bwrap: setting up uid map: Permission denied — unprivileged user namespaces are disabled (on Ubuntu: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or install the bubblewrap AppArmor profile; inside a container, run with `--security-opt seccomp=unconfined --cap-add SYS_ADMIN` or rely on the container as the boundary with WAZIR_SANDBOX=none))
+
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Executing shell...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+ ✓ apps/cli/tests/executeTask.e2e.test.ts (13 tests) 1153ms
+(node:2894438) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/causalAttribution.test.ts (8 tests) 72ms
+(node:2894585) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/selfImprovementGates.test.ts (3 tests) 139ms
+(node:2894705) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/canaryDeployment.test.ts (9 tests) 9ms
+(node:2894733) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/capabilityWeightedScheduler.test.ts (13 tests) 10ms
+(node:2894837) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/multiObjectiveGate.test.ts (3 tests) 471ms
+ ✓ packages/core/tests/modelLifecycleAdmission.test.ts (22 tests) 141ms
+(node:2894990) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+ ✓ packages/evaluation/tests/selfImprovementSupervisor.test.ts (5 tests) 498ms
+   ✓ Self-Improvement Verification, Promotion Integrity & Supervisor Unit Suite > rejects fabricated candidate promotion and persists verified candidates across restart 423ms
+(node:2895036) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/metaOptimizer.test.ts (6 tests) 587ms
+(node:2895078) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/continuousVerification.test.ts (22 tests) 4ms
+(node:2895110) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/statisticalQualification.test.ts (19 tests) 19ms
+ ✓ packages/core/tests/executionRecovery.test.ts (8 tests) 14ms
+(node:2895154) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/expectedEvidence.test.ts (13 tests) 5ms
+(node:2895178) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/metricIntegrity.test.ts (12 tests) 5ms
+(node:2895210) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+stdout | packages/evaluation/tests/benchmarkExperiment.test.ts > Benchmark Experiment: Single Trajectory vs Best-of-3 Solution Search > measures task success, verification success, calls, repair cycles, tokens, cost, and wall time tradeoffs
+=== Comparative Evaluation: Baseline (exec-single-1) vs Candidate (exec-bestof3-winning-candidate) ===
+| Metric                 | Baseline | Candidate | Delta      |
+|------------------------|----------|-----------|------------|
+| Task Success           | FAIL     | PASS      | +1         |
+| Physical Verification  | FAIL     | PASS      | +1         |
+| Total Model Calls      | 1        | 1         | +0         |
+| Total Tool Calls       | 2        | 3         | +1         |
+| Repair Cycles          | 1        | 0         | -1         |
+| Input Tokens           | 1200     | 3600      | +2400      |
+| Output Tokens          | 250      | 750       | +500       |
+| Compacted Tokens       | 0        | 0         | +0         |
+| Wall Time (ms)         | 1800     | 3600      | +1800      |
+| Est. Cost (USD)        | $0.0073  | $0.0221   | +$0.0147   |
+
+Improvements (3):
+  ✓ Candidate passed run while baseline failed.
+  ✓ Candidate succeeded at physical verification while baseline failed.
+  ✓ Candidate required 1 fewer repair cycles.
+Regressions (1):
+  ✗ Candidate increased cost by $0.0147.
+
+ ✓ packages/evaluation/tests/benchmarkExperiment.test.ts (1 test) 6ms
+(node:2895234) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/evaluationComparison.test.ts (3 tests) 3ms
+ ✓ packages/runtimes/lmstudio/tests/openaiCompat.test.ts (6 tests) 7ms
+ ✓ packages/runtimes/lmstudio/tests/retry.test.ts (3 tests) 2597ms
+   ✓ LMStudioAdapter.generate() retry behavior (real HTTP server) > retries a 503 and succeeds once the server recovers, yielding a retry event in between 814ms
+   ✓ LMStudioAdapter.generate() retry behavior (real HTTP server) > gives up after 4 attempts and yields a single error event, not a retry event for the last failure 1779ms
+ ✓ packages/runtimes/lmstudio/tests/streamDisconnect.test.ts (2 tests) 1797ms
+   ✓ LMStudioAdapter.generate() — runtime disconnects mid-stream > does not hang waiting for a runtime that accepts the connection but never sends anything before closing 1779ms
+ ✓ packages/agents/tests/chatAgent.test.ts (6 tests) 49ms
+(node:2896199) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/live-coding/08-revisionFencing.test.ts (3 tests) 2ms
+(node:2896299) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/shellOutcomes.test.ts (4 tests) 2ms
+(node:2896415) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/currentAttemptErrors.test.ts (3 tests) 2ms
+
+ Test Files  29 passed (29)
+      Tests  265 passed (265)
+   Start at  19:38:22
+   Duration  19.76s (transform 753ms, setup 0ms, collect 7.48s, tests 9.26s, environment 2ms, prepare 664ms)
+
+; decision=continue
+[2026-10-18T02:38:41.885+00:00] AGY | VERIFICATION | command=['node', 'scripts/bundle.mjs']; expected: pass; next: inspect results
+[2026-10-18T02:38:42.503+00:00] AGY | VERIFICATION | exit=0; duration=0.619s; output===> Bundling Wazir CLI into standalone executable: bin/wa.js
+
+  bin/wa.js      18.4mb ⚠️
+  bin/wa.js.map  28.8mb
+
+⚡ Done in 572ms
+✓ Standalone CLI bundle created at: /tmp/wazir-agy-execution/bin/wa.js
+; decision=continue
+[2026-10-18T02:38:42.506+00:00] AGY | VERIFICATION | command=['git', 'diff', '--check']; expected: pass; next: inspect results
+[2026-10-18T02:38:42.518+00:00] AGY | VERIFICATION | exit=0; duration=0.012s; output=; decision=continue
+[2026-10-18T02:40:18.432+00:00] AGY | BENCHMARK | final-serial/E01 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 12 + 19. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:40:22.960+00:00] AGY | BENCHMARK | final-serial/E01 observed start: {'type': 'start', 'executionId': 'exec-mvd7x0wh-1', 'taskId': 'task-174ac1669f15434236a1f004a67c1d97', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:40:22.960+00:00'}
+[2026-10-18T02:40:23.342+00:00] AGY | BENCHMARK | final-serial/E01 observed done: {'type': 'done', 'content': '31', 'executionId': 'exec-mvd7x0wh-1', 'observed_at': '2026-10-18T02:40:23.342+00:00'}
+[2026-10-18T02:40:23.546+00:00] AGY | BENCHMARK | final-serial/E01 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7x0wh-1', 'filesChanged': [], 'result': '31', 'errors': [], 'observed_at': '2026-10-18T02:40:23.546+00:00'}
+[2026-10-18T02:40:23.549+00:00] AGY | BENCHMARK | final-serial/E01 heartbeat elapsed=5.117s; process=active; observed_events=7; no inference progress inferred
+[2026-10-18T02:40:23.577+00:00] AGY | BENCHMARK | final-serial/E01 duration=5140.307ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:40:23.580+00:00] AGY | BENCHMARK | final-serial/E02 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 8 × 7. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:40:28.058+00:00] AGY | BENCHMARK | final-serial/E02 observed start: {'type': 'start', 'executionId': 'exec-mvd7x4tq-1', 'taskId': 'task-2e9ac9dc63eef027cfb0fe3d429f4d6f', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:40:28.058+00:00'}
+[2026-10-18T02:40:28.497+00:00] AGY | BENCHMARK | final-serial/E02 observed done: {'type': 'done', 'content': '56', 'executionId': 'exec-mvd7x4tq-1', 'observed_at': '2026-10-18T02:40:28.497+00:00'}
+[2026-10-18T02:40:28.701+00:00] AGY | BENCHMARK | final-serial/E02 heartbeat elapsed=5.121s; process=active; observed_events=6; no inference progress inferred
+[2026-10-18T02:40:28.747+00:00] AGY | BENCHMARK | final-serial/E02 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7x4tq-1', 'filesChanged': [], 'result': '56', 'errors': [], 'observed_at': '2026-10-18T02:40:28.747+00:00'}
+[2026-10-18T02:40:28.777+00:00] AGY | BENCHMARK | final-serial/E02 duration=5193.069ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:40:28.781+00:00] AGY | BENCHMARK | final-serial/E03 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Reverse the string WAZIR.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:40:33.207+00:00] AGY | BENCHMARK | final-serial/E03 observed start: {'type': 'start', 'executionId': 'exec-mvd7x8rw-1', 'taskId': 'task-72a252ddaea4abe2606828e376938411', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:40:33.206+00:00'}
+[2026-10-18T02:40:33.657+00:00] AGY | BENCHMARK | final-serial/E03 observed done: {'type': 'done', 'content': 'RIZAW', 'executionId': 'exec-mvd7x8rw-1', 'observed_at': '2026-10-18T02:40:33.657+00:00'}
+[2026-10-18T02:40:33.862+00:00] AGY | BENCHMARK | final-serial/E03 heartbeat elapsed=5.081s; process=active; observed_events=7; no inference progress inferred
+[2026-10-18T02:40:33.876+00:00] AGY | BENCHMARK | final-serial/E03 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7x8rw-1', 'filesChanged': [], 'result': 'RIZAW', 'errors': [], 'observed_at': '2026-10-18T02:40:33.875+00:00'}
+[2026-10-18T02:40:33.897+00:00] AGY | BENCHMARK | final-serial/E03 duration=5112.509ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:40:33.899+00:00] AGY | BENCHMARK | final-serial/E04 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Convert hello world to uppercase.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:40:38.548+00:00] AGY | BENCHMARK | final-serial/E04 observed start: {'type': 'start', 'executionId': 'exec-mvd7xcvl-1', 'taskId': 'task-c623c87c565554be69723d62191a01b6', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:40:38.548+00:00'}
+[2026-10-18T02:40:38.912+00:00] AGY | BENCHMARK | final-serial/E04 observed done: {'type': 'done', 'content': 'HELLO WORLD', 'executionId': 'exec-mvd7xcvl-1', 'observed_at': '2026-10-18T02:40:38.912+00:00'}
+[2026-10-18T02:40:38.916+00:00] AGY | BENCHMARK | final-serial/E04 heartbeat elapsed=5.017s; process=active; observed_events=6; no inference progress inferred
+[2026-10-18T02:40:39.127+00:00] AGY | BENCHMARK | final-serial/E04 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7xcvl-1', 'filesChanged': [], 'result': 'HELLO WORLD', 'errors': [], 'observed_at': '2026-10-18T02:40:39.127+00:00'}
+[2026-10-18T02:40:39.150+00:00] AGY | BENCHMARK | final-serial/E04 duration=5247.837ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:40:39.154+00:00] AGY | BENCHMARK | final-serial/E05 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return the first five positive even integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:40:43.611+00:00] AGY | BENCHMARK | final-serial/E05 observed start: {'type': 'start', 'executionId': 'exec-mvd7xgsk-1', 'taskId': 'task-c44acf17749d9415bc19c3846bba3e72', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:40:43.611+00:00'}
+[2026-10-18T02:40:44.237+00:00] AGY | BENCHMARK | final-serial/E05 heartbeat elapsed=5.084s; process=active; observed_events=17; no inference progress inferred
+[2026-10-18T02:40:44.242+00:00] AGY | BENCHMARK | final-serial/E05 observed done: {'type': 'done', 'content': '2, 4, 6, 8, 10', 'executionId': 'exec-mvd7xgsk-1', 'observed_at': '2026-10-18T02:40:44.242+00:00'}
+[2026-10-18T02:40:44.476+00:00] AGY | BENCHMARK | final-serial/E05 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7xgsk-1', 'filesChanged': [], 'result': '2, 4, 6, 8, 10', 'errors': [], 'observed_at': '2026-10-18T02:40:44.476+00:00'}
+[2026-10-18T02:40:44.498+00:00] AGY | BENCHMARK | final-serial/E05 duration=5340.364ms verified=True; evidence=integer sequence; next: next task or batch analysis
+[2026-10-18T02:40:44.502+00:00] AGY | BENCHMARK | final-serial/E06 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a Python function that adds two numbers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:40:49.043+00:00] AGY | BENCHMARK | final-serial/E06 observed start: {'type': 'start', 'executionId': 'exec-mvd7xl04-1', 'taskId': 'task-808b672946b93c80c770f68633066481', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:40:49.043+00:00'}
+[2026-10-18T02:40:49.505+00:00] AGY | BENCHMARK | final-serial/E06 heartbeat elapsed=5.003s; process=active; observed_events=14; no inference progress inferred
+[2026-10-18T02:40:49.775+00:00] AGY | BENCHMARK | final-serial/E06 observed done: {'type': 'done', 'content': '```python\ndef add_numbers(a, b):\n    return a + b\n```', 'executionId': 'exec-mvd7xl04-1', 'observed_at': '2026-10-18T02:40:49.775+00:00'}
+[2026-10-18T02:40:49.998+00:00] AGY | BENCHMARK | final-serial/E06 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7xl04-1', 'filesChanged': [], 'result': '```python\ndef add_numbers(a, b):\n    return a + b\n```', 'errors': [], 'observed_at': '2026-10-18T02:40:49.998+00:00'}
+[2026-10-18T02:40:50.033+00:00] AGY | BENCHMARK | final-serial/E06 duration=5527.295ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:40:50.036+00:00] AGY | BENCHMARK | final-serial/E07 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a JavaScript function that squares a number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:40:54.852+00:00] AGY | BENCHMARK | final-serial/E07 observed start: {'type': 'start', 'executionId': 'exec-mvd7xpec-1', 'taskId': 'task-1e343ecd87b1cb7150f68e0bb2bb610e', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:40:54.852+00:00'}
+[2026-10-18T02:40:55.109+00:00] AGY | BENCHMARK | final-serial/E07 heartbeat elapsed=5.073s; process=active; observed_events=4; no inference progress inferred
+[2026-10-18T02:40:55.516+00:00] AGY | BENCHMARK | final-serial/E07 observed done: {'type': 'done', 'content': '```javascript\nfunction square(number) {\n  return number * number;\n}\n```', 'executionId': 'exec-mvd7xpec-1', 'observed_at': '2026-10-18T02:40:55.516+00:00'}
+[2026-10-18T02:40:55.772+00:00] AGY | BENCHMARK | final-serial/E07 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7xpec-1', 'filesChanged': [], 'result': '```javascript\nfunction square(number) {\n  return number * number;\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:40:55.772+00:00'}
+[2026-10-18T02:40:55.818+00:00] AGY | BENCHMARK | final-serial/E07 duration=5778.157ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:40:55.822+00:00] AGY | BENCHMARK | final-serial/E08 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a C++17 function that returns the larger of two integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:00.274+00:00] AGY | BENCHMARK | final-serial/E08 observed start: {'type': 'start', 'executionId': 'exec-mvd7xtn2-1', 'taskId': 'task-59c36e9085c0f44833375386a057659e', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:00.274+00:00'}
+[2026-10-18T02:41:00.830+00:00] AGY | BENCHMARK | final-serial/E08 heartbeat elapsed=5.008s; process=active; observed_events=26; no inference progress inferred
+[2026-10-18T02:41:01.165+00:00] AGY | BENCHMARK | final-serial/E08 observed done: {'type': 'done', 'content': '```cpp\n#include <algorithm>\n\nint get_larger(int a, int b) {\n    return std::max(a, b);\n}\n```', 'executionId': 'exec-mvd7xtn2-1', 'observed_at': '2026-10-18T02:41:01.165+00:00'}
+[2026-10-18T02:41:01.417+00:00] AGY | BENCHMARK | final-serial/E08 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7xtn2-1', 'filesChanged': [], 'result': '```cpp\n#include <algorithm>\n\nint get_larger(int a, int b) {\n    return std::max(a, b);\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:41:01.417+00:00'}
+[2026-10-18T02:41:01.506+00:00] AGY | BENCHMARK | final-serial/E08 duration=5680.454ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:41:01.509+00:00] AGY | BENCHMARK | final-serial/E09 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return JSON containing status: ok and count: 3.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:06.096+00:00] AGY | BENCHMARK | final-serial/E09 observed start: {'type': 'start', 'executionId': 'exec-mvd7xy3l-1', 'taskId': 'task-4908e1bce53d375b4263c85d07a22348', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:06.096+00:00'}
+[2026-10-18T02:41:06.569+00:00] AGY | BENCHMARK | final-serial/E09 heartbeat elapsed=5.059s; process=active; observed_events=11; no inference progress inferred
+[2026-10-18T02:41:06.881+00:00] AGY | BENCHMARK | final-serial/E09 observed done: {'type': 'done', 'content': '```json\n{\n  "status": "ok",\n  "count": 3\n}\n```', 'executionId': 'exec-mvd7xy3l-1', 'observed_at': '2026-10-18T02:41:06.881+00:00'}
+[2026-10-18T02:41:07.153+00:00] AGY | BENCHMARK | final-serial/E09 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7xy3l-1', 'filesChanged': [], 'result': '```json\n{\n  "status": "ok",\n  "count": 3\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:41:07.152+00:00'}
+[2026-10-18T02:41:07.179+00:00] AGY | BENCHMARK | final-serial/E09 duration=5665.892ms verified=True; evidence=parsed JSON; next: next task or batch analysis
+[2026-10-18T02:41:07.182+00:00] AGY | BENCHMARK | final-serial/E10 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Explain what a CPU does in one sentence.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:11.839+00:00] AGY | BENCHMARK | final-serial/E10 observed start: {'type': 'start', 'executionId': 'exec-mvd7y2i6-1', 'taskId': 'task-bff215106a949dbd119c912faf3a103a', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:11.839+00:00'}
+[2026-10-18T02:41:12.195+00:00] AGY | BENCHMARK | final-serial/E10 heartbeat elapsed=5.013s; process=active; observed_events=10; no inference progress inferred
+[2026-10-18T02:41:12.753+00:00] AGY | BENCHMARK | final-serial/E10 observed done: {'type': 'done', 'content': 'The Central Processing Unit (CPU) acts as the primary engine of a computer by fetching, decoding, and executing instructions to process data and manage the flow of information between other hardware components.', 'executionId': 'exec-mvd7y2i6-1', 'observed_at': '2026-10-18T02:41:12.753+00:00'}
+[2026-10-18T02:41:13.006+00:00] AGY | BENCHMARK | final-serial/E10 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7y2i6-1', 'filesChanged': [], 'result': 'The Central Processing Unit (CPU) acts as the primary engine of a computer by fetching, decoding, and executing instructions to process data and manage the flow of information between other hardware components.', 'errors': [], 'observed_at': '2026-10-18T02:41:13.006+00:00'}
+[2026-10-18T02:41:13.029+00:00] AGY | BENCHMARK | final-serial/E10 duration=5844.47ms verified=True; evidence=CPU semantic keyword and length; review required; next: next task or batch analysis
+[2026-10-18T02:41:13.033+00:00] AGY | BENCHMARK | batch=final-serial; concurrency=1; makespan_ms=54601.686; verified=10/10
+[2026-10-18T02:41:13.037+00:00] AGY | BENCHMARK | final-parallel3/E01 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 12 + 19. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:13.041+00:00] AGY | BENCHMARK | final-parallel3/E02 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Calculate 8 × 7. Return only the number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:17.677+00:00] AGY | BENCHMARK | final-parallel3/E02 observed start: {'type': 'start', 'executionId': 'exec-mvd7y6zt-1', 'taskId': 'task-3db32ceb53c87e08f799c57b0c31057c', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:17.677+00:00'}
+[2026-10-18T02:41:17.886+00:00] AGY | BENCHMARK | final-parallel3/E01 observed start: {'type': 'start', 'executionId': 'exec-mvd7y6zq-1', 'taskId': 'task-1a297eb1c9597b31e7032deffc4a9545', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:17.886+00:00'}
+[2026-10-18T02:41:18.134+00:00] AGY | BENCHMARK | final-parallel3/E01 heartbeat elapsed=5.097s; process=active; observed_events=5; no inference progress inferred
+[2026-10-18T02:41:18.138+00:00] AGY | BENCHMARK | final-parallel3/E02 heartbeat elapsed=5.101s; process=active; observed_events=5; no inference progress inferred
+[2026-10-18T02:41:18.225+00:00] AGY | BENCHMARK | final-parallel3/E02 observed done: {'type': 'done', 'content': '56', 'executionId': 'exec-mvd7y6zt-1', 'observed_at': '2026-10-18T02:41:18.225+00:00'}
+[2026-10-18T02:41:18.620+00:00] AGY | BENCHMARK | final-parallel3/E01 observed done: {'type': 'done', 'content': '31', 'executionId': 'exec-mvd7y6zq-1', 'observed_at': '2026-10-18T02:41:18.620+00:00'}
+[2026-10-18T02:41:18.881+00:00] AGY | BENCHMARK | final-parallel3/E01 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7y6zq-1', 'filesChanged': [], 'result': '31', 'errors': [], 'observed_at': '2026-10-18T02:41:18.881+00:00'}
+[2026-10-18T02:41:18.908+00:00] AGY | BENCHMARK | final-parallel3/E01 duration=5867.467ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:41:18.923+00:00] AGY | BENCHMARK | final-parallel3/E02 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7y6zt-1', 'filesChanged': [], 'result': '56', 'errors': [], 'observed_at': '2026-10-18T02:41:18.923+00:00'}
+[2026-10-18T02:41:18.955+00:00] AGY | BENCHMARK | final-parallel3/E02 duration=5914.651ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:41:18.959+00:00] AGY | BENCHMARK | final-parallel3/E03 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Reverse the string WAZIR.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:18.962+00:00] AGY | BENCHMARK | final-parallel3/E04 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Convert hello world to uppercase.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:18.966+00:00] AGY | BENCHMARK | final-parallel3/E05 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return the first five positive even integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:23.719+00:00] AGY | BENCHMARK | final-parallel3/E03 observed start: {'type': 'start', 'executionId': 'exec-mvd7ybnh-1', 'taskId': 'task-f0a48b51a25f70be3793f417a2f5d979', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:23.719+00:00'}
+[2026-10-18T02:41:23.912+00:00] AGY | BENCHMARK | final-parallel3/E05 observed start: {'type': 'start', 'executionId': 'exec-mvd7ybox-1', 'taskId': 'task-fdfb83733cf23f3293b262457cade981', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:23.912+00:00'}
+[2026-10-18T02:41:23.974+00:00] AGY | BENCHMARK | final-parallel3/E03 heartbeat elapsed=5.015s; process=active; observed_events=6; no inference progress inferred
+[2026-10-18T02:41:23.987+00:00] AGY | BENCHMARK | final-parallel3/E05 heartbeat elapsed=5.028s; process=active; observed_events=2; no inference progress inferred
+[2026-10-18T02:41:24.095+00:00] AGY | BENCHMARK | final-parallel3/E04 heartbeat elapsed=5.135s; process=active; observed_events=1; no inference progress inferred
+[2026-10-18T02:41:24.347+00:00] AGY | BENCHMARK | final-parallel3/E03 observed done: {'type': 'done', 'content': 'RIZAW', 'executionId': 'exec-mvd7ybnh-1', 'observed_at': '2026-10-18T02:41:24.347+00:00'}
+[2026-10-18T02:41:24.436+00:00] AGY | BENCHMARK | final-parallel3/E04 observed start: {'type': 'start', 'executionId': 'exec-mvd7yboz-1', 'taskId': 'task-9833ce4f309af802cbd0e47f352b19f6', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:24.436+00:00'}
+[2026-10-18T02:41:24.754+00:00] AGY | BENCHMARK | final-parallel3/E05 observed done: {'type': 'done', 'content': '2, 4, 6, 8, 10', 'executionId': 'exec-mvd7ybox-1', 'observed_at': '2026-10-18T02:41:24.754+00:00'}
+[2026-10-18T02:41:25.006+00:00] AGY | BENCHMARK | final-parallel3/E05 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7ybox-1', 'filesChanged': [], 'result': '2, 4, 6, 8, 10', 'errors': [], 'observed_at': '2026-10-18T02:41:25.006+00:00'}
+[2026-10-18T02:41:25.035+00:00] AGY | BENCHMARK | final-parallel3/E05 duration=6071.833ms verified=True; evidence=integer sequence; next: next task or batch analysis
+[2026-10-18T02:41:25.221+00:00] AGY | BENCHMARK | final-parallel3/E03 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7ybnh-1', 'filesChanged': [], 'result': 'RIZAW', 'errors': [], 'observed_at': '2026-10-18T02:41:25.221+00:00'}
+[2026-10-18T02:41:25.248+00:00] AGY | BENCHMARK | final-parallel3/E03 duration=6284.733ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:41:25.460+00:00] AGY | BENCHMARK | final-parallel3/E04 observed done: {'type': 'done', 'content': 'HELLO WORLD', 'executionId': 'exec-mvd7yboz-1', 'observed_at': '2026-10-18T02:41:25.460+00:00'}
+[2026-10-18T02:41:25.739+00:00] AGY | BENCHMARK | final-parallel3/E04 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7yboz-1', 'filesChanged': [], 'result': 'HELLO WORLD', 'errors': [], 'observed_at': '2026-10-18T02:41:25.739+00:00'}
+[2026-10-18T02:41:25.768+00:00] AGY | BENCHMARK | final-parallel3/E04 duration=6804.457ms verified=True; evidence=exact string; next: next task or batch analysis
+[2026-10-18T02:41:25.772+00:00] AGY | BENCHMARK | final-parallel3/E06 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a Python function that adds two numbers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:25.775+00:00] AGY | BENCHMARK | final-parallel3/E07 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a JavaScript function that squares a number.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:25.779+00:00] AGY | BENCHMARK | final-parallel3/E08 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Write a C++17 function that returns the larger of two integers.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:30.603+00:00] AGY | BENCHMARK | final-parallel3/E07 observed start: {'type': 'start', 'executionId': 'exec-mvd7ygyr-1', 'taskId': 'task-89ca5a1dffff670bdb97c824d2cc010d', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:30.603+00:00'}
+[2026-10-18T02:41:30.892+00:00] AGY | BENCHMARK | final-parallel3/E07 heartbeat elapsed=5.120s; process=active; observed_events=4; no inference progress inferred
+[2026-10-18T02:41:30.903+00:00] AGY | BENCHMARK | final-parallel3/E08 heartbeat elapsed=5.131s; process=active; observed_events=1; no inference progress inferred
+[2026-10-18T02:41:30.906+00:00] AGY | BENCHMARK | final-parallel3/E06 heartbeat elapsed=5.132s; process=active; observed_events=1; no inference progress inferred
+[2026-10-18T02:41:31.124+00:00] AGY | BENCHMARK | final-parallel3/E06 observed start: {'type': 'start', 'executionId': 'exec-mvd7yh0v-1', 'taskId': 'task-acd51b679fe7b9bf630d852fb26d9c59', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:31.124+00:00'}
+[2026-10-18T02:41:31.301+00:00] AGY | BENCHMARK | final-parallel3/E08 observed start: {'type': 'start', 'executionId': 'exec-mvd7ygzq-1', 'taskId': 'task-29604d0b40979deb10540460cb2fed37', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:31.301+00:00'}
+[2026-10-18T02:41:31.804+00:00] AGY | BENCHMARK | final-parallel3/E07 observed done: {'type': 'done', 'content': '```javascript\nfunction square(number) {\n  return number * number;\n}\n```', 'executionId': 'exec-mvd7ygyr-1', 'observed_at': '2026-10-18T02:41:31.804+00:00'}
+[2026-10-18T02:41:32.224+00:00] AGY | BENCHMARK | final-parallel3/E07 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7ygyr-1', 'filesChanged': [], 'result': '```javascript\nfunction square(number) {\n  return number * number;\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:41:32.224+00:00'}
+[2026-10-18T02:41:32.267+00:00] AGY | BENCHMARK | final-parallel3/E07 duration=6490.35ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:41:32.270+00:00] AGY | BENCHMARK | final-parallel3/E09 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Return JSON containing status: ok and count: 3.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:32.450+00:00] AGY | BENCHMARK | final-parallel3/E06 observed done: {'type': 'done', 'content': '```python\ndef add_numbers(a, b):\n    return a + b\n```', 'executionId': 'exec-mvd7yh0v-1', 'observed_at': '2026-10-18T02:41:32.450+00:00'}
+[2026-10-18T02:41:32.722+00:00] AGY | BENCHMARK | final-parallel3/E06 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7yh0v-1', 'filesChanged': [], 'result': '```python\ndef add_numbers(a, b):\n    return a + b\n```', 'errors': [], 'observed_at': '2026-10-18T02:41:32.722+00:00'}
+[2026-10-18T02:41:32.755+00:00] AGY | BENCHMARK | final-parallel3/E06 duration=6979.957ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:41:32.759+00:00] AGY | BENCHMARK | final-parallel3/E10 command=['node', '/tmp/wazir-agy-execution/bin/wa.js', 'run', 'Explain what a CPU does in one sentence.', '--model', 'gemma-4-26b-a4b-it-qat', '--type', 'chat', '--routing-mode', 'LOCAL_ONLY', '--max-turns', '3', '--json']; expected: task-specific verification; next: observe scheduled inference
+[2026-10-18T02:41:32.952+00:00] AGY | BENCHMARK | final-parallel3/E08 observed done: {'type': 'done', 'content': '```cpp\n#include <algorithm>\n\nint get_larger(int a, int b) {\n    return std::max(a, b);\n}\n```', 'executionId': 'exec-mvd7ygzq-1', 'observed_at': '2026-10-18T02:41:32.952+00:00'}
+[2026-10-18T02:41:33.218+00:00] AGY | BENCHMARK | final-parallel3/E08 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7ygzq-1', 'filesChanged': [], 'result': '```cpp\n#include <algorithm>\n\nint get_larger(int a, int b) {\n    return std::max(a, b);\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:41:33.218+00:00'}
+[2026-10-18T02:41:33.322+00:00] AGY | BENCHMARK | final-parallel3/E08 duration=7545.767ms verified=True; evidence=compiled/executed assertions; next: next task or batch analysis
+[2026-10-18T02:41:36.947+00:00] AGY | BENCHMARK | final-parallel3/E09 observed start: {'type': 'start', 'executionId': 'exec-mvd7ylxi-1', 'taskId': 'task-3fe1b27248efdaa534ebeca4fae0ca03', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:36.947+00:00'}
+[2026-10-18T02:41:37.290+00:00] AGY | BENCHMARK | final-parallel3/E09 heartbeat elapsed=5.020s; process=active; observed_events=5; no inference progress inferred
+[2026-10-18T02:41:37.731+00:00] AGY | BENCHMARK | final-parallel3/E09 observed done: {'type': 'done', 'content': '```json\n{\n  "status": "ok",\n  "count": 3\n}\n```', 'executionId': 'exec-mvd7ylxi-1', 'observed_at': '2026-10-18T02:41:37.731+00:00'}
+[2026-10-18T02:41:37.890+00:00] AGY | BENCHMARK | final-parallel3/E10 heartbeat elapsed=5.131s; process=active; observed_events=1; no inference progress inferred
+[2026-10-18T02:41:38.014+00:00] AGY | BENCHMARK | final-parallel3/E09 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7ylxi-1', 'filesChanged': [], 'result': '```json\n{\n  "status": "ok",\n  "count": 3\n}\n```', 'errors': [], 'observed_at': '2026-10-18T02:41:38.014+00:00'}
+[2026-10-18T02:41:38.046+00:00] AGY | BENCHMARK | final-parallel3/E09 duration=5772.522ms verified=True; evidence=parsed JSON; next: next task or batch analysis
+[2026-10-18T02:41:38.074+00:00] AGY | BENCHMARK | final-parallel3/E10 observed start: {'type': 'start', 'executionId': 'exec-mvd7ym9q-1', 'taskId': 'task-4d3422722106447e487f422f06e6fc4a', 'modelId': 'gemma-4-26b-a4b-it-qat', 'agent': 'wazir-chat', 'observed_at': '2026-10-18T02:41:38.074+00:00'}
+[2026-10-18T02:41:38.971+00:00] AGY | BENCHMARK | final-parallel3/E10 observed done: {'type': 'done', 'content': 'The Central Processing Unit (CPU) acts as the primary engine of a computer by fetching, decoding, and executing instructions to process data and manage the flow of information between other hardware components.', 'executionId': 'exec-mvd7ym9q-1', 'observed_at': '2026-10-18T02:41:38.971+00:00'}
+[2026-10-18T02:41:39.269+00:00] AGY | BENCHMARK | final-parallel3/E10 observed complete: {'type': 'complete', 'success': True, 'executionId': 'exec-mvd7ym9q-1', 'filesChanged': [], 'result': 'The Central Processing Unit (CPU) acts as the primary engine of a computer by fetching, decoding, and executing instructions to process data and manage the flow of information between other hardware components.', 'errors': [], 'observed_at': '2026-10-18T02:41:39.269+00:00'}
+[2026-10-18T02:41:39.300+00:00] AGY | BENCHMARK | final-parallel3/E10 duration=6537.084ms verified=True; evidence=CPU semantic keyword and length; review required; next: next task or batch analysis
+[2026-10-18T02:41:39.304+00:00] AGY | BENCHMARK | batch=final-parallel3; concurrency=3; makespan_ms=26266.929; verified=10/10

@@ -1,0 +1,285 @@
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+ RUN  v2.1.9 /tmp/wazir-agy-execution
+
+(node:2893699) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/multiObjectiveOptimizer.test.ts (15 tests) 98ms
+(node:2893757) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+Switched to a new branch 'conflict-branch'
+Switched to branch 'master'
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+To /tmp/wazir-git-policy-LO3rxT/remote.git
+ * [new branch]      master -> master
+Cloning into '/tmp/wazir-git-policy-LO3rxT/collaborator'...
+done.
+To /tmp/wazir-git-policy-LO3rxT/remote.git
+   af832da..c7005c0  master -> master
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+HEAD is now at af832da Initial commit
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+ ✓ packages/evaluation/tests/gitSynchronizationPolicy.test.ts (9 tests) 1192ms
+(node:2894081) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/benchmarkAndEvaluation.test.ts (9 tests) 8ms
+(node:2894105) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/verificationIntegrity.test.ts (10 tests) 37ms
+(node:2894129) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/optimizerRecovery.test.ts (26 tests) 252ms
+(node:2894165) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/roadmapV02.test.ts (9 tests) 78ms
+(node:2894189) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing shell...
+stderr | apps/cli/tests/executeTask.e2e.test.ts > executeTask — real end-to-end Task -> Result flow > F05 records a real nonzero shell exit as failure
+[wazir] tool sandbox unavailable — running tool processes directly on the host (bwrap cannot start: bwrap: setting up uid map: Permission denied — unprivileged user namespaces are disabled (on Ubuntu: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or install the bubblewrap AppArmor profile; inside a container, run with `--security-opt seccomp=unconfined --cap-add SYS_ADMIN` or rely on the container as the boundary with WAZIR_SANDBOX=none))
+
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Executing shell...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[-] Waiting for model response (fake-model)...
+[-] Waiting for model response (fake-model)...
+[-] Executing write...
+[-] Waiting for model response (fake-model)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+ ✓ apps/cli/tests/executeTask.e2e.test.ts (13 tests) 1153ms
+(node:2894438) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/causalAttribution.test.ts (8 tests) 72ms
+(node:2894585) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/selfImprovementGates.test.ts (3 tests) 139ms
+(node:2894705) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/canaryDeployment.test.ts (9 tests) 9ms
+(node:2894733) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/capabilityWeightedScheduler.test.ts (13 tests) 10ms
+(node:2894837) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/multiObjectiveGate.test.ts (3 tests) 471ms
+ ✓ packages/core/tests/modelLifecycleAdmission.test.ts (22 tests) 141ms
+(node:2894990) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: is subject to change. To configure the initial branch name to use in all
+hint: of your new repositories, which will suppress this warning, call:
+hint: 
+hint: 	git config --global init.defaultBranch <name>
+hint: 
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint: 
+hint: 	git branch -m <name>
+ ✓ packages/evaluation/tests/selfImprovementSupervisor.test.ts (5 tests) 498ms
+   ✓ Self-Improvement Verification, Promotion Integrity & Supervisor Unit Suite > rejects fabricated candidate promotion and persists verified candidates across restart 423ms
+(node:2895036) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/metaOptimizer.test.ts (6 tests) 587ms
+(node:2895078) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/continuousVerification.test.ts (22 tests) 4ms
+(node:2895110) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/statisticalQualification.test.ts (19 tests) 19ms
+ ✓ packages/core/tests/executionRecovery.test.ts (8 tests) 14ms
+(node:2895154) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/expectedEvidence.test.ts (13 tests) 5ms
+(node:2895178) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/metricIntegrity.test.ts (12 tests) 5ms
+(node:2895210) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+stdout | packages/evaluation/tests/benchmarkExperiment.test.ts > Benchmark Experiment: Single Trajectory vs Best-of-3 Solution Search > measures task success, verification success, calls, repair cycles, tokens, cost, and wall time tradeoffs
+=== Comparative Evaluation: Baseline (exec-single-1) vs Candidate (exec-bestof3-winning-candidate) ===
+| Metric                 | Baseline | Candidate | Delta      |
+|------------------------|----------|-----------|------------|
+| Task Success           | FAIL     | PASS      | +1         |
+| Physical Verification  | FAIL     | PASS      | +1         |
+| Total Model Calls      | 1        | 1         | +0         |
+| Total Tool Calls       | 2        | 3         | +1         |
+| Repair Cycles          | 1        | 0         | -1         |
+| Input Tokens           | 1200     | 3600      | +2400      |
+| Output Tokens          | 250      | 750       | +500       |
+| Compacted Tokens       | 0        | 0         | +0         |
+| Wall Time (ms)         | 1800     | 3600      | +1800      |
+| Est. Cost (USD)        | $0.0073  | $0.0221   | +$0.0147   |
+
+Improvements (3):
+  ✓ Candidate passed run while baseline failed.
+  ✓ Candidate succeeded at physical verification while baseline failed.
+  ✓ Candidate required 1 fewer repair cycles.
+Regressions (1):
+  ✗ Candidate increased cost by $0.0147.
+
+ ✓ packages/evaluation/tests/benchmarkExperiment.test.ts (1 test) 6ms
+(node:2895234) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/evaluationComparison.test.ts (3 tests) 3ms
+ ✓ packages/runtimes/lmstudio/tests/openaiCompat.test.ts (6 tests) 7ms
+ ✓ packages/runtimes/lmstudio/tests/retry.test.ts (3 tests) 2597ms
+   ✓ LMStudioAdapter.generate() retry behavior (real HTTP server) > retries a 503 and succeeds once the server recovers, yielding a retry event in between 814ms
+   ✓ LMStudioAdapter.generate() retry behavior (real HTTP server) > gives up after 4 attempts and yields a single error event, not a retry event for the last failure 1779ms
+ ✓ packages/runtimes/lmstudio/tests/streamDisconnect.test.ts (2 tests) 1797ms
+   ✓ LMStudioAdapter.generate() — runtime disconnects mid-stream > does not hang waiting for a runtime that accepts the connection but never sends anything before closing 1779ms
+ ✓ packages/agents/tests/chatAgent.test.ts (6 tests) 49ms
+(node:2896199) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/live-coding/08-revisionFencing.test.ts (3 tests) 2ms
+(node:2896299) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/shellOutcomes.test.ts (4 tests) 2ms
+(node:2896415) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/evaluation/tests/currentAttemptErrors.test.ts (3 tests) 2ms
+
+ Test Files  29 passed (29)
+      Tests  265 passed (265)
+   Start at  19:38:22
+   Duration  19.76s (transform 753ms, setup 0ms, collect 7.48s, tests 9.26s, environment 2ms, prepare 664ms)
+

@@ -57,41 +57,41 @@ const NO_CAPABILITIES: RuntimeCapabilities = {
  * Discovery never invents runtimes: unreachable adapters are reported as unavailable.
  */
 export async function discoverRuntimes(adapters: RuntimeAdapter[]): Promise<DiscoveredRuntime[]> {
-  const results: DiscoveredRuntime[] = [];
+  const results = await Promise.all(
+    adapters.map(async (adapter): Promise<DiscoveredRuntime> => {
+      let info: RuntimeInfo = { id: adapter.id, name: adapter.id, version: 'unknown' };
+      let capabilities: RuntimeCapabilities = NO_CAPABILITIES;
+      let health: HealthStatus['status'] = 'unavailable';
+      let healthReason: HealthStatus['reason'] | undefined;
+      let healthMessage: string | undefined;
+      let healthDiagnostics: HealthStatus['diagnostics'] | undefined;
+      let models: DiscoveredModel[] = [];
 
-  for (const adapter of adapters) {
-    let info: RuntimeInfo = { id: adapter.id, name: adapter.id, version: 'unknown' };
-    let capabilities: RuntimeCapabilities = NO_CAPABILITIES;
-    let health: HealthStatus['status'] = 'unavailable';
-    let healthReason: HealthStatus['reason'] | undefined;
-    let healthMessage: string | undefined;
-    let healthDiagnostics: HealthStatus['diagnostics'] | undefined;
-    let models: DiscoveredModel[] = [];
-
-    try {
-      capabilities = await adapter.getCapabilities();
-    } catch {
-      // static capabilities should not fail; keep defaults
-    }
-
-    try {
-      info = await adapter.discover();
-      const check = await adapter.healthCheck();
-      health = check.status;
-      healthMessage = check.message;
-      healthReason = check.reason;
-      healthDiagnostics = check.diagnostics;
-      if (health === 'healthy' || health === 'degraded' || health === 'unavailable') {
-        // Always try to fetch models if there's diagnostics or a chance
-        models = await adapter.listModels().catch(() => []);
+      try {
+        capabilities = await adapter.getCapabilities();
+      } catch {
+        // static capabilities should not fail; keep defaults
       }
-    } catch (error) {
-      health = 'unavailable';
-      healthMessage = error instanceof Error ? error.message : 'unreachable';
-    }
 
-    results.push({ id: adapter.id, info, capabilities, health, healthReason, healthMessage, healthDiagnostics, models, adapter });
-  }
+      try {
+        info = await adapter.discover();
+        const check = await adapter.healthCheck();
+        health = check.status;
+        healthMessage = check.message;
+        healthReason = check.reason;
+        healthDiagnostics = check.diagnostics;
+        if (health === 'healthy' || health === 'degraded' || health === 'unavailable') {
+          // Always try to fetch models if there's diagnostics or a chance
+          models = await adapter.listModels().catch(() => []);
+        }
+      } catch (error) {
+        health = 'unavailable';
+        healthMessage = error instanceof Error ? error.message : 'unreachable';
+      }
+
+      return { id: adapter.id, info, capabilities, health, healthReason, healthMessage, healthDiagnostics, models, adapter };
+    }),
+  );
 
   return results.sort((a, b) => a.id.localeCompare(b.id));
 }

@@ -311,8 +311,8 @@ export class PolicyEngine {
   readonly rules: PolicyRule[];
   private readonly compiledOutputsByExecution = new Map<string, Set<string>>();
 
-  constructor(options: PolicyEngineOptions) {
-    this.options = options;
+  constructor(options: PolicyEngineOptions = { projectRoot: process.cwd() }) {
+    this.options = options ?? { projectRoot: process.cwd() };
     this.rules = this.buildRules();
   }
 
@@ -447,7 +447,7 @@ export class PolicyEngine {
     if (policy?.dataClassification === 'sensitive' || policy?.dataClassification === 'restricted') {
       return { allowed: false, reason: `dataClassification '${policy.dataClassification}' forbids hosted provider '${provider}'` };
     }
-    const allowed = policy?.allowHostedProviders ?? this.options.allowHostedProvidersDefault ?? false;
+    const allowed = policy?.allowHostedProviders ?? this.options?.allowHostedProvidersDefault ?? false;
     return allowed
       ? { allowed: true, reason: `hosted provider '${provider}' explicitly allowed by policy` }
       : {
@@ -615,6 +615,13 @@ export class PolicyEngine {
         decision: 'allow',
         rule: 'compaction-policy',
         reasons: ['agent requested context compaction via controller'],
+      };
+    }
+    if (lower === 'remember_fact' || lower === 'recall_facts') {
+      return {
+        decision: 'allow',
+        rule: 'fleet-memory-policy',
+        reasons: [`'${tool}' only reads/writes the durable fleet-memory store, scoped to this project's root`],
       };
     }
     if (lower === 'web_search' || lower === 'web_fetch') {

@@ -150,6 +150,9 @@ export class ResourceLedger {
   }
 
   // ---- sums used by admission (call inside transaction) -----------------------------------
+  // Each accepts a single id or a quotaGroup's member ids (ported from main@2a61e59) so
+  // several controller credentials sharing one provider-side quota are admitted against
+  // one durable scope instead of independently over-admitting past the real shared limit.
   usedSince(accountId: string | readonly string[], unit: LimitUnit, since: number, until?: number): number {
     const ids = Array.isArray(accountId) ? accountId : [accountId];
     const marks = ids.map(() => '?').join(',');

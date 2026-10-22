@@ -688,6 +688,13 @@ export class Scheduler {
       reasons.push(`routingMode=HYBRID: ${record.local === false ? 'hosted' : 'local'} model eligible`);
     }
 
+    // A model every known instance of which is unavailable (removed from its runtime, or its
+    // runtime is down) cannot serve; routing to it only produces a failed load.
+    const knownInstances = this.deps.models.instancesOf(record.id);
+    if (knownInstances.length > 0 && knownInstances.every((i) => i.state === 'UNAVAILABLE' || i.health === 'unavailable')) {
+      rejected.push(`model unavailable: ${knownInstances.find((i) => i.error)?.error ?? 'no runtime currently serves it'}`);
+    }
+
     const circuit = this.deps.reliability?.status(record.id, task.type);
     if (circuit?.state === 'OPEN' && task.execution?.targetModelId !== record.id) {
       rejected.push(`${task.type} ${circuit.reason}`);
@@ -774,6 +781,9 @@ export class Scheduler {
       .instancesOf(record.id)
       .find((i) => i.loaded && i.health === 'healthy');
     if (loadedInstance) {
+      // A READY instance answers immediately; one merely 'loaded' (still warming,
+      // reconciling, etc.) still needs to be waited on — weight the two differently
+      // instead of treating any loaded instance as equally fast (ported from main@ed4f1d9).
       const bonus = loadedInstance.state === 'READY' ? 30 : 15;
       score += bonus;
       reasons.push(`instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' already loaded${loadedInstance.state === 'READY' ? ' and ready' : ''} (+${bonus})`);
@@ -1128,11 +1138,17 @@ export class Scheduler {
     );
     const best = placements[0];
 
+    const resourceType = !best.computer
+      ? 'HOSTED_API_INFERENCE'
+      : best.computer.local
+        ? 'LOCAL_GPU_INFERENCE'
+        : 'REMOTE_GPU_INFERENCE';
+
     return {
       computerId: best.computer?.id,
       runtimeId: best.instance.runtimeId,
       placementKind: best.computer ? 'local' : 'hosted',
-      resourceType: best.computer ? 'LOCAL_GPU_INFERENCE' : 'HOSTED_API_INFERENCE',
+      resourceType,
       score: best.score,
       reasons: best.reasons,
     };

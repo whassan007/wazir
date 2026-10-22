@@ -1,40 +1,32 @@
 # HANDOFF — Wazir P0 Execution Reliability & Verification Repair
 
-**Status:** IN PROGRESS
-**Session budget:** 40 minutes (started 2026-10-17T20:30 local)
-**Checkpoint:** 0001
+**Status:** COMPLETE for this session — read FINAL-REPORT.md first.
+**Checkpoint:** 0004 (final)
 
-## Objective
-P0-A: scope VERIFY's build/test/lint/typecheck to the packages actually affected by changed files
-(never build the Tauri desktop app for an unrelated Python/JS change; no network requirement for
-unrelated verification; preserve full-build behavior when explicitly requested; never report success
-when required verification actually fails; report skipped checks + justification).
-P0-B: task classification — a pure Q&A/chat prompt should not run the full PLAN/IMPLEMENT/VERIFY coding
-loop.
-P0-C: preserve the 4 existing uncommitted fixes (READY-state retention, HEAD-integrity guard,
-no-mutation check-skip, answer-visibility-on-failure) — confirmed present via `git status --short`,
-matches exactly what the prior audit session (test/agy-mac-gemma/) left in place. Not touching those
-files' existing logic except where P0-A/B require extending them.
-P0-D: re-run the 10-task benchmark, separating response-only from file-mutating tasks, with timing.
+## One-line status
+P0-A (scoped verification) implemented and live-verified: a file-mutating task inside a known
+workspace now actually passes build/test/typecheck and reports `success: true` for the first time in
+either audit session. P0-B (task classification) partially addressed: discovered `--type chat` already
+routes to a fast, pre-existing lightweight agent; added a defensive prompt hint for when the heavier
+agent handles a non-mutating task anyway. P0-C confirmed: all 4 prior-session fixes intact, 296/297
+tests green. P0-D: 3 targeted live benchmarks (not the full 10 — see FINAL-REPORT.md for why).
 
-## Evidence located
-- test/agy-mac-gemma/FINAL-REPORT.md, issues-ranked.md, fixes-applied.md, execution-results.csv,
-  HANDOFF.md — all present (written by the immediately-prior session on this same machine/repo).
-- Confirms: P0-5 (unscoped build/test battery) is the dominant unfixed issue; P1-4 (memory-admission
-  denial) is real/transient; G02-G06 all gave correct model answers.
+## Important live observation
+Mid-session, files this session never touched (`packages/core/src/types/tool.ts`,
+`packages/core/src/types/execution.ts`) changed on disk from another concurrent agent session, actively,
+in real time. Confirmed via diff (pure additions, no collision with this session's edits). See
+FINAL-REPORT.md's dedicated section. Told the user directly.
 
-## Plan
-1. Investigate workspace layout (packages/apps boundaries, each package's own build/test scripts).
-2. Implement P0-A: a file-to-package resolver + scoped check runner in the VERIFY phase
-   (packages/agents/src/codingAgent.ts + wherever the `build`/`test`/`lint`/`typecheck` tools are
-   implemented), with an explicit-full-build override and skip-with-reason reporting.
-3. Implement P0-B: lightweight task-type auto-classification so a pure question doesn't enter
-   PLAN/IMPLEMENT/VERIFY.
-4. Rebuild (`npx tsc --build ...` + `npm run bundle` — required for live testing, see prior session's
-   fixes-applied.md fix 4 note) and run the real benchmark sweep.
-5. Write baseline.csv (pre-repair, from test/agy-mac-gemma data) / after.csv (post-repair, this session)
-   and FINAL-REPORT.md.
+## If resuming
+1. Re-run `lms ps` / `wa doctor` to reconfirm model/environment state.
+2. Check whether `packages/core/src/types/tool.ts`/`execution.ts` have changed further — another
+   session may still be active.
+3. Top follow-up per FINAL-REPORT.md: classify `wa run`'s default task type (currently always
+   `coding` when `--type` is omitted) instead of leaving P0-B only partially addressed.
+4. Remember: `tsc --build` alone does not update the live `bin/wa.js` — run `npm run bundle` after any
+   source change before testing it live (same gotcha the prior session hit twice).
 
-## Next action
-Read codingAgent.ts's current VERIFY implementation and the tool registry's build/test/lint/typecheck
-tool implementations to design the scoping mechanism.
+## Cleanup note
+This session's live benchmark runs created stray files that were cleaned up after recording results:
+`python_scripts/square.py` (and the `python_scripts/` dir), `packages/agents/src/mathHelpers.ts`.
+Neither was left behind.

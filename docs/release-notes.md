@@ -1,26 +1,20 @@
-# Wazir Release Notes - v0.2.7
+# Wazir Release Notes - v0.2.11
 
-**Release**: `v0.2.7`
-**Theme**: Policy-Governed NVIDIA Native Provider, Modern Mission Control TUI, and Shared Resource Quota Hardening
+**Release**: `v0.2.11`
+**Theme**: Deterministic fast path, earlier failure stops, and availability-checked model dispatch
 
-`v0.2.7` delivers a first-class, policy-governed NVIDIA hosted execution provider (`nvidia/nemotron-3.5-super-vl-120b-a12b`), the modernized Wazir Mission Control terminal interface for `wa fleet` (preserving inline Codex-style chat in `wa chat`), shared resource quota routing hardening, and distributed worker lease fencing.
+`v0.2.11` answers read-only repository questions without a model round-trip, stops a run as soon as the model repeats the same invalid tool call, and refuses to dispatch to a model its runtime no longer lists.
 
 ## Highlights
 
-- **Policy-Governed NVIDIA Hosted Provider (`@wazir/runtimes-nvidia`, `@wazir/core`, `@wazir/cli`)**:
-  - Native support for `nvidia/nemotron-3.5-super-vl-120b-a12b` on `https://integrate.api.nvidia.com/v1` via `NVIDIA_API_KEY` or `wa auth login nvidia`.
-  - Multimodal vision input (`image_url`), structured JSON schema output (`response_format`), SSE streaming, cancellation, and tool-call execution.
-  - Strict local-first policy enforcement (`LOCAL_ONLY`, `LOCAL_FIRST`, `CLOUD_ALLOWED`, `HOSTED_PREFERRED`, `PROVIDER_PINNED`) that never falls back to hosted cloud inference without explicit policy permission, and explainable placement decisions that clearly separate NVIDIA API Catalog cloud execution from local DGX Spark worker execution.
-  - Honest cost accounting (`ACTUAL`, `ESTIMATED`, `UNKNOWN`) in the SQLite resource ledger and `wa resources`.
-- **Modern Mission Control TUI (`@wazir/cli`)**:
-  - 6-state model readiness classification in `wa fleet` (`LOCAL · GPU LOADED`, `LOCAL · UNLOADED`, `HOSTED · READY`, `HOSTED · UNAVAILABLE`, `PROVIDER-ONLY ROUTING`, `AVAILABILITY UNKNOWN`) so hosted NVIDIA models are ready without requiring local GPU residency.
-  - Execution inspector with explicit separation of model completion claims from deterministic verification evidence (`MODEL CLAIM != EXECUTION EVIDENCE`), interactive `/filter <query>`, and responsive narrow/wide terminal layouts while keeping `wa chat` in inline Codex-style conversation mode.
-- **Shared Quota Routing & Lease Fencing (`@wazir/core`, `@wazir/api`)**:
-  - Shared quota group accounting and routing in `BudgetManager` and `ResourceRouter`, plus stale lease fencing and retry deduplication in `@wazir/api`.
+- **Deterministic fast path**: `ls`, `pwd`, `git status`, `git diff`, and `git log` are answered directly. Explicit requests to use network tools are routed to the full coding agent.
+- **Early stop on repeated validation failure**: the second identical tool-validation failure ends the run with an actionable `IDENTICAL_VALIDATION_FAILURE` error.
+- **Availability-checked dispatch**: a model must be confirmed installed in its runtime before load or inference, and the routed model and runtime are shown in Mission Control.
+- **Mobile and dispatch**: mobile app scaffold, dispatch cancellation and recovery.
 
 ## Validation
 
-Verified across the NVIDIA adapter, NVIDIA provider system, Mission Control TUI, fleet TUI, resource ledger/router, and durable dispatch test suites, plus `npm run build`, `npm run check-dist`, `npm run package:check`, and `npm run release:verify`.
+Pushed-head CI for this release is `dd5b0b7`: build, typecheck, distributed typecheck, PostgreSQL suite, distributed process suite, and the full regression suite all pass. Locally, `npm run release:verify` passes and `npm run release:gate` passes on linux-arm64 (the other platforms are covered by the release matrix in CI). The fleet and recovery gate checks failed intermittently on two earlier local gate runs without reproducing on the next run.
 
 ---
 

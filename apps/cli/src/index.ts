@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { createHandoffCommand } from './handoff.js';
 
 /** Injected by scripts/bundle.mjs from package.json (the canonical version); the literal is for unbundled dev runs. */
 declare const __WAZIR_VERSION__: string | undefined;
@@ -11,6 +10,7 @@ import { registerWebCommands } from './web.js';
 import { registerMobileCommands } from './mobile.js';
 import { closeMCPRegistries } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
+import { createHandoffCommand } from './handoff.js';
 
 // Installed before anything else runs: previously `uncaughtException` had no
 // handler anywhere (Node's default silently crashes with no terminal
@@ -18,7 +18,7 @@ import { installGlobalCrashHandlers } from './crashHandler.js';
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.7';
+const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.11';
 
 const program = new Command();
 
@@ -460,11 +460,10 @@ taskCmd
   .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
   .option('--full-verify', 'Build/test/lint/typecheck the whole repo instead of scoping to the workspace(s) the task touched')
-  .option('--fast-path', 'Execute via direct-answer fast-path (single-turn inference without workspace modification)')
   .description('Run a new task')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
-    const engine = await createEngine({ fastStartup: true });
+    const engine = await createEngine({ fastStartup: true, quiet: Boolean(options.json) });
     const { runTaskCommand } = await import('./commands.js');
     const result = await runTaskCommand(
       engine,
@@ -483,7 +482,6 @@ taskCmd
         routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
         json: options.json,
         fullVerification: options.fullVerify,
-        fastPath: options.fastPath,
       },
     );
     console.log(result.output);
@@ -502,7 +500,7 @@ taskCmd
   .description('Show scheduling decision without executing')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
-    const engine = await createEngine();
+    const engine = await createEngine({ fastStartup: true, quiet: Boolean(options.json) });
     const { planTaskCommand } = await import('./commands.js');
     const result = await planTaskCommand(engine, prompt, {
       type: options.type as any,
@@ -543,11 +541,10 @@ program
   .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--json', 'Output in JSON format')
   .option('--full-verify', 'Build/test/lint/typecheck the whole repo instead of scoping to the workspace(s) the task touched')
-  .option('--fast-path', 'Execute via direct-answer fast-path (single-turn inference without workspace modification)')
   .description('Run a new task (alias for wa task run)')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
-    const engine = await createEngine({ fastStartup: true });
+    const engine = await createEngine({ fastStartup: true, quiet: Boolean(options.json) });
     const { runTaskCommand } = await import('./commands.js');
     const result = await runTaskCommand(
       engine,
@@ -566,7 +563,6 @@ program
         routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
         json: options.json,
         fullVerification: options.fullVerify,
-        fastPath: options.fastPath,
       },
     );
     if (!options.json || result.output) {
@@ -1206,7 +1202,8 @@ async function launchInteractiveTui(options: any, presentationMode: 'conversatio
     autoMerge: options.autoMerge === true,
     timeoutSeconds: timeout,
     enablePlanner: options.planner === true,
-  });
+    ...(options.model ? { modelId: String(options.model) } : {}),
+  } as any);
   const { shutdownController } = await import('./shutdownController.js');
   shutdownController().register('chat-tui', () => tui.stop());
   await tui.start();
@@ -1217,6 +1214,8 @@ async function launchInteractiveTui(options: any, presentationMode: 'conversatio
 program
   .command('chat')
   .description('Open the conversation-first coding assistant')
+  .option('--model <name>', 'Pin a specific model for the session')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--dashboard', 'Open the full-screen fleet dashboard')
   .option('--legacy', 'Use the legacy full-screen fleet dashboard')
   .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
@@ -1229,6 +1228,8 @@ program
 program
   .command('fleet')
   .description('Open the full-screen fleet dashboard (alias: wa chat --dashboard)')
+  .option('--model <name>', 'Pin a specific model for the session')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
   .option('--no-worktrees', 'Disable git worktree isolation')
   .option('--auto-merge', 'Automatically merge completed agent branches into main')
@@ -1387,7 +1388,6 @@ jobsCmd
   });
 
 program.addCommand(jobsCmd);
-program.addCommand(createHandoffCommand());
 
 // artifacts command
 const artifactsCmd = new Command()
@@ -1924,6 +1924,7 @@ serviceCmd
   });
 
 program.addCommand(serviceCmd);
+program.addCommand(createHandoffCommand());
 
 program.action(async () => {
   const globalOpts = program.opts<{ banner?: boolean; color?: boolean; ascii?: boolean }>();

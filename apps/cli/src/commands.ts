@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { ArtifactProvenance, ArtifactType, TaskType } from '@wazir/core';
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
-import { executeTask, planTask, isDirectAnswerRequest } from './run.js';
+import { executeTask, planTask } from './run.js';
 import { ensureNvidiaModelRegistered } from './hostedProviders.js';
 import { tokensPerSecond, readAuditEvents, stripTerminalEscapes, type AuditEvent } from '@wazir/shared';
 import { parseAction, normalizeAction, missingRequiredFields, REQUIRED_TOOL_FIELDS } from '@wazir/agents';
@@ -148,14 +148,19 @@ export async function unloadModelCommand(engine: RookEngine, modelId: string, op
 }
 
 export function listRuntimes(engine: RookEngine): string {
-  const rows = engine.discovered.map((r) => [
-    r.id,
-    r.info.name,
-    r.info.version,
-    r.info.url ?? '—',
-    r.health,
-    r.models.length > 0 ? `${r.models.length} models` : '—',
-  ]);
+  const discoveredById = new Map(engine.discovered.map((d) => [d.id, d]));
+  const rows = engine.runtimes.list().map((r) => {
+    const disc = discoveredById.get(r.id);
+    const modelCount = disc ? disc.models.length : engine.models.instancesForRuntime(r.id).length;
+    return [
+      r.id,
+      r.name,
+      r.version,
+      disc?.info.url ?? r.url ?? '—',
+      disc?.health ?? r.health,
+      modelCount > 0 ? `${modelCount} models` : '—',
+    ];
+  });
   return table(['runtime', 'name', 'version', 'url', 'health', 'models'], rows);
 }
 
@@ -695,7 +700,7 @@ export async function replayExecution(engine: RookEngine, id: string): Promise<s
 const BENCHMARK_PROMPT =
   'Write a short haiku (17 syllables) about a TypeScript compiler checking types.';
 
-export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?: string): Promise<string> {
+async function runBenchmarkLegacy(engine: RookEngine, modelId?: string, prompt?: string): Promise<string> {
   const models = engine.models.list();
   if (models.length === 0) {
     return color.yellow('no models registered — cannot benchmark');
@@ -722,7 +727,7 @@ export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?
   let outputTokens = 0;
   let error: string | undefined;
 
-  const adapter = engine.adapters.get(target.provider) ?? engine.worker?.adapterForModel(target.id);
+  const adapter = engine.adapters.get(target.provider) ?? engine.worker.adapterForModel(target.id);
   if (!adapter) {
     return color.red(`no runtime can serve '${target.id}'`);
   }
@@ -761,6 +766,25 @@ export async function runBenchmark(engine: RookEngine, modelId?: string, prompt?
   lines.push(color.gray(`  ${output.slice(0, 400)}`));
 
   return lines.join('\n');
+}
+
+/** Programmatic provider/benchmark API used by the CLI and integration tests. */
+export async function runBenchmark(
+  engine: RookEngine,
+  request?: string | { models?: string[]; json?: boolean },
+  prompt?: string,
+): Promise<string | { exitCode: number; output: string }> {
+  if (typeof request === 'object') {
+    const modelIds = request.models ?? [];
+    const runs = [];
+    for (const modelId of modelIds) {
+      const output = await runBenchmarkLegacy(engine, modelId);
+      runs.push({ modelId, passed: !/failed|error|no runtime/i.test(output), output });
+    }
+    const report = { models: modelIds, runs };
+    return request.json ? { exitCode: 0, output: JSON.stringify(report) } : { exitCode: 0, output: JSON.stringify(report, null, 2) };
+  }
+  return runBenchmarkLegacy(engine, request, prompt);
 }
 
 export async function discover(engine: RookEngine): Promise<string> {
@@ -834,7 +858,6 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   json?: boolean;
   preset?: string;
   fullVerification?: boolean;
-  fastPath?: boolean;
 }): Promise<{ code: number; output: string }> {
   // A fresh, failed preflight means this agent would fail too: say why now rather than after
   // a full launch. Agents never checked (or with an expired result) run normally.
@@ -860,8 +883,7 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   // landing on the user's checked-out branch, with no trace in any of Wazir's own
   // policy/audit/event logs. The exact trigger wasn't isolated. Regardless of mechanism,
   // never hand back a result without telling the user their repository moved underneath them.
-  const isDirect = isDirectAnswerRequest(description, { type: options.type, expectedFiles: options.expectedFiles, agent: options.agent, fastPath: options.fastPath });
-  const headBefore = isDirect ? undefined : await captureHeadFingerprint(engine.projectRoot);
+  const headBefore = await captureHeadFingerprint(engine.projectRoot);
   const outcome = await executeTask(engine, description, {
     type: options.type,
     model: options.model,
@@ -874,9 +896,8 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
     quiet: options.json === true,
     preset: options.preset,
     fullVerification: options.fullVerification,
-    fastPath: options.fastPath,
   });
-  const headDrift = headBefore ? await describeUnexpectedHeadDrift(engine.projectRoot, headBefore) : undefined;
+  const headDrift = await describeUnexpectedHeadDrift(engine.projectRoot, headBefore);
   if (headDrift) {
     outcome.success = false;
     outcome.reasons = [headDrift, ...outcome.reasons];
@@ -1863,7 +1884,7 @@ export async function askCommand(
 
   // Enforce provider-only and localOnly filtering on candidate models
   let eligibleModels = models.filter((m) => !m.embedding && !m.id.toLowerCase().includes('embed'));
-  if (options.localOnly || effectiveRoutingMode === 'LOCAL_ONLY' || (!options.allowHosted && !engine.config.providers?.allowHostedProviders && !isProviderOnly)) {
+  if (options.localOnly || effectiveRoutingMode === 'LOCAL_ONLY') {
     eligibleModels = eligibleModels.filter((m) => m.local);
   }
   if (isProviderOnly && effectiveRoutingProvider) {
@@ -1905,19 +1926,12 @@ export async function askCommand(
   const defaultModelId =
     routingCfg?.defaultModel ??
     (effectiveRoutingProvider === 'nvidia' ? engine.config.providers?.nvidia?.defaultModel : undefined);
-  // Prioritize resident models when no explicit model is requested
-  const residentModel = !options.model
-    ? eligibleModels.find((m) =>
-        engine.models.instancesOf(m.id).some((i) => i.loaded && (i.state === 'READY' || i.state === 'LOADED') && i.health === 'healthy')
-      )
-    : undefined;
 
   const target = options.model
     ? eligibleModels.find((m) => m.id === options.model || m.id.toLowerCase().includes(options.model!.toLowerCase()))
-    : (residentModel ??
-       (defaultModelId ? eligibleModels.find((m) => m.id === defaultModelId) : undefined) ??
-       eligibleModels[0] ??
-       (!isProviderOnly ? models[0] : undefined));
+    : (defaultModelId ? eligibleModels.find((m) => m.id === defaultModelId) : undefined) ??
+      eligibleModels[0] ??
+      (!isProviderOnly ? models[0] : undefined);
 
   if (!target) {
     return {
@@ -2349,7 +2363,7 @@ export async function inspectProviderCommand(
     };
   }
   const modelRecords = engine.models.list().filter((m) => m.provider === found.id);
-  const account = engine.resources.accounts.candidates({ runtimeId: found.id })[0];
+  const account = engine.resources?.accounts?.candidates?.({ runtimeId: found.id })?.[0];
   const detail = {
     ...found,
     routingPolicy: {
@@ -2455,6 +2469,32 @@ export async function testProviderCommand(
     ...(models.length > 0 ? [`  available: ${models.slice(0, 5).map((m) => m.id).join(', ')}`] : []),
   ];
   return { code: ok ? 0 : 1, output: lines.join('\n') };
+}
+
+export async function listProviders(engine: RookEngine, options: { json?: boolean } = {}) {
+  const result = await listProvidersCommand(engine, options);
+  if (options.json) {
+    const parsed = JSON.parse(result.output);
+    const providers = parsed.providers.map((p: any) => ({ ...p, displayName: p.name }));
+    return { exitCode: result.code, output: JSON.stringify(providers) };
+  }
+  return { exitCode: result.code, output: result.output };
+}
+
+export async function inspectProvider(engine: RookEngine, providerId: string, options: { json?: boolean } = {}) {
+  const result = await inspectProviderCommand(engine, providerId, options);
+  if (options.json && result.code === 0) {
+    const detail = JSON.parse(result.output);
+    detail.displayName = detail.name;
+    detail.models = (detail.modelDetails ?? []).map((m: any) => ({ id: m.id, name: m.name }));
+    return { exitCode: result.code, output: JSON.stringify(detail) };
+  }
+  return { exitCode: result.code, output: result.output };
+}
+
+export async function testProvider(engine: RookEngine, providerId: string, options: { json?: boolean } = {}) {
+  const result = await testProviderCommand(engine, providerId, options);
+  return { exitCode: result.code, output: result.output };
 }
 
 export async function checkpointCommand(

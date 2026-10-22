@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { MemoryStore, type KeyValueStore } from '@wazir/shared';
 import { TaskDispatcher } from '../src/server.js';
 
-const request = (id: string) => ({ requestId: id, executionId: `exec-${id}`, modelId: 'test', messages: [] });
+const request = (id: string) => ({ requestId: id, executionId: `exec-${id}`, modelId: 'test', messages: [], replayPolicy: 'read-only' as const });
 const outcome = { ok: true, output: 'done', inputTokens: 1, outputTokens: 1, durationMs: 1 };
 
 /** Counts full `dispatch/` scans so the test can assert redelivery no longer does them. */

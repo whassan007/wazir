@@ -1,0 +1,6 @@
+
+IDENTIFIER                     MODEL                          STATUS    SIZE        CONTEXT    PARALLEL    DEVICE    TTL
+gemma-4-26b-a4b-it-qat         gemma-4-26b-a4b-it-qat         IDLE      14.44 GB    32768      4           Local        
+nvidia/nemotron-3-nano-omni    nvidia/nemotron-3-nano-omni    IDLE      26.10 GB    8192       4           Local        
+qwen/qwen3.8-27b               qwen/qwen3.8-27b               IDLE      17.74 GB    8192       4           Local        
+

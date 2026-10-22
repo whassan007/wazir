@@ -26,7 +26,11 @@ export const PROVIDER_DISPLAY_NAME: Record<ProviderId, string> = {
   nvidia: 'NVIDIA API Catalog',
 };
 
-export function createHostedProviders(config: WazirConfig, secrets: SecretBroker): Map<ProviderId, HostedAdapter> {
+export function createHostedProviders(
+  config: WazirConfig,
+  secrets: SecretBroker,
+  options?: { fastStartup?: boolean },
+): Map<ProviderId, HostedAdapter> {
   const nvidiaCfg = config.providers?.nvidia;
   const routingDefaultModel =
     config.routing?.provider === 'nvidia' && config.routing?.defaultModel
@@ -64,7 +68,7 @@ export function createHostedProviders(config: WazirConfig, secrets: SecretBroker
         configuredModels: configuredModels.length > 0 ? configuredModels : undefined,
         defaultMaxOutputTokens: !Array.isArray(nvidiaCfg?.limits) ? nvidiaCfg?.limits?.maxOutputTokens : undefined,
         maxRetries: !Array.isArray(nvidiaCfg?.limits) ? nvidiaCfg?.limits?.maxRetries : undefined,
-        discoverModelsRemote: nvidiaCfg?.capabilities?.discoverOnStartup ?? true,
+        discoverModelsRemote: nvidiaCfg?.capabilities?.discoverOnStartup ?? !options?.fastStartup,
       }),
     ],
   ]);

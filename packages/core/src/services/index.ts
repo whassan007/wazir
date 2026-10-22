@@ -119,6 +119,7 @@ export * from './webGroundingService.js';
 export * from './webProviders.js';
 export * from './webContent.js';
 export * from './webSecurity.js';
+export * from './fleetMemoryService.js';
 export { SymbolGraph } from './symbolGraph.js';
 export { CodeIntelligenceService } from './codeIntelligenceService.js';
 export type { LspProvider, CodeIntelligenceOptions } from './codeIntelligenceService.js';
@@ -138,6 +139,8 @@ export { CodeModeService } from './codeModeService.js';
 export type { CodeModeToolExecutor, CodeModeServiceOptions } from './codeModeService.js';
 export { CheckpointService } from './checkpointService.js';
 export type { CheckpointServiceOptions } from './checkpointService.js';
+export { HandoffService } from './handoffService.js';
+export type { HandoffCreateOptions, HandoffServiceOptions } from './handoffService.js';
 export { ArtifactIntelligenceService } from './artifactIntelligenceService.js';
 export type { ArtifactIntelligenceOptions } from './artifactIntelligenceService.js';
 export { BrowserVerificationService } from './browserVerificationService.js';
@@ -205,5 +208,3 @@ export type { DistributedSearchCoordinatorOptions } from '../types/distributedSe
 
 export * from './evidencePolicy.js';
 export * from './executionContract.js';
-export { HandoffService } from './handoffService.js';
-export type { HandoffCreateOptions, HandoffServiceOptions } from './handoffService.js';

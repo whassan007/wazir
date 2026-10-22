@@ -1,0 +1,22 @@
+{
+  "runId": "codex-dgx-1792291375124",
+  "startEpochMs": 1792296614869,
+  "checkpointCounter": 85,
+  "selectedModel": "gemma-4-26b-a4b-it-qat",
+  "wazirVersion": "0.2.5",
+  "gitBranch": "improve/gemini-execution-integrity",
+  "gitCommit": "f6a6ce708347f64250527788f69a7bd7b40d2d4e",
+  "stopCondition": null,
+  "consecutiveTimeouts": 0,
+  "defectsFound": [
+    "Defect #1 (P0): JsonFileStore stale lock deadlock (10s wait < 30s stale threshold) + 12.5s-18.5s redundant startup probes (lms ls + probeModel on all 3 loaded models + lms load --estimate-only on already-loaded model)",
+    "Defect #2 (P0): CodingAgent forces 2-turn loop + repo-wide npm build/test/lint/typecheck during VERIFY even when 0 files were modified",
+    "Defect #3 (P1): ConversationRenderer hides Ready/controls and shows auto-routed model instead of pinned model; wa run --json omits dispatch & first_token telemetry"
+  ],
+  "repairsAttempted": [
+    "Repair #1 (Defect #1): store.ts dead foreign PID lock reclamation + LMStudioAdapter HTTP-first healthCheck & 1s model inventory cache + modelLifecycleService reuse fast-path (1 attempt, VERIFIED)",
+    "Repair #2 (Defect #2): planner.ts inline/inspection mutationRequired classification + codingAgent.ts 1-turn non-mutating answer & VERIFY check skip + run.ts mutationRequired wiring (1 attempt, VERIFIED)",
+    "Repair #3 (Defect #3): wa chat --model flag & active model header + ConversationRenderer startup guidance banner + run.ts dispatch/first_token NDJSON telemetry (1 attempt, VERIFIED)"
+  ],
+  "runStartedEpochMs": 1792297194156
+}

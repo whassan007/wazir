@@ -103,7 +103,8 @@ export class TokenBudgetManager {
   }
 
   /** All credentials that share one provider-side quota identity. Admission is therefore
-   * safe across independent Wazir processes when they point at the same SQLite ledger. */
+   * safe across independent Wazir processes when they point at the same SQLite ledger.
+   * Ported from main@2a61e59. */
   private scope(account: AccountConfig): string[] {
     return account.quotaGroup
       ? this.accounts.list().filter((a) => a.enabled !== false && a.quotaGroup === account.quotaGroup).map((a) => a.id)

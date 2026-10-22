@@ -246,12 +246,12 @@ describe('LIVE-CODE-01: Autonomous Bug Repair', () => {
 
     const engine = await buildTestEngine(projectRoot, scriptedReplies);
 
-    const outcome = await executeTask(engine, 'Fix add.js so node add.test.js passes. Run the test and verify the repair.', { 
+    const outcome = await executeTask(engine, 'Fix add.js so node add.test.js passes. Run the test and verify the repair.', {
       quiet: true,
-      // Pass add.test.js as protected files array (need to make sure run.ts accepts protectedFiles option or we add it)
+      protectedFiles: ['add.test.js'],
     });
-    // Oh wait, run.ts options does not accept protectedFiles.
-    // I need to update run.ts to take expectedEvidence, expectedFiles, AND protectedFiles? Or the policy engine.
-    // The policy engine has PROTECTED_FILES. We can just add 'add.test.js' to the policy engine PROTECTED_FILES locally for this test.
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.reasons.join(' ') + ' ' + outcome.errors.join(' ')).toMatch(/add\.test\.js|PROTECTED|verification/i);
   });
 });

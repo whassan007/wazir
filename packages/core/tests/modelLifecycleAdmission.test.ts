@@ -45,6 +45,16 @@ function setup(free = 64, size: (ctx: number) => number = () => 30, store?: Memo
  return { service, models, computers, runtimes, executions, adapter, loaded, add, events };
 }
 describe('model lifecycle admission and observed readiness', () => {
+ it('verifies a discovered LOADED resident without demanding reload', async () => {
+   const f = setup(); f.loaded.set('a', 32768);
+   await f.service.discoverAndReconcile({ verify: false });
+   expect(f.models.getModelState('a')).toBe('LOADED');
+   const p = await f.service.ensureReady('a', { minimumContext: 8192 });
+   expect(p.reuse).toBe(true);
+   expect(f.adapter.loadModel).not.toHaveBeenCalled();
+   expect(f.adapter.probeModel).toHaveBeenCalledTimes(1);
+   expect(f.models.isModelReady('a')).toBe(true);
+ });
  it('admits safe load, then verifies context and readiness', async () => {
    const f = setup(); const p = await f.service.load('a');
    expect(p.admissionDecision.status).toBe('ADMITTED');
@@ -205,9 +215,6 @@ describe('reconcile isolates per-model failures', () => {
    expect(f.models.instancesOf('b')[0]).toMatchObject({ state: 'UNAVAILABLE', health: 'unavailable' });
  });
  it('preserves a verified READY state across a read-only (verify:false) reconcile', async () => {
-   // A real task's load() verifies the model and leaves it READY. A later read-only status
-   // check (`wa doctor` / `wa models health`, which passes verify:false to avoid probing)
-   // must not report a perfectly working model as not-ready just because it skipped re-probing.
    const f = setup();
    await f.service.load('a');
    expect(f.models.isModelReady('a')).toBe(true);
@@ -215,26 +222,18 @@ describe('reconcile isolates per-model failures', () => {
    await f.service.discoverAndReconcile({ verify: false });
    expect(f.models.isModelReady('a')).toBe(true);
    expect(f.models.instancesOf('a')[0].state).toBe('READY');
-   // Nothing changed, so the read-only pass should not have re-probed either.
    expect((f.adapter.probeModel as any).mock.calls.length).toBe(probeCallsBefore);
  });
  it('reusing an already-READY model is ADMITTED even when a hypothetical fresh load would be INSUFFICIENT, but a genuine fresh load under the same scarcity is DENIED', async () => {
-   // This checks a live-audit observation that looked like a bug at first glance: a
-   // MODEL_LOAD_PLAN_CREATED event showed classification "INSUFFICIENT" (what a *fresh* load
-   // would cost right now) next to admissionDecision "ADMITTED" with empty reasons. That's
-   // only safe if it's a reuse of an instance that's already resident (no new allocation
-   // actually happens) — this test pins that exact boundary down.
-   const f = setup(40, () => 20); // 40 GiB free, model needs 20 GiB: safe fresh load.
+   const f = setup(40, () => 20);
+   f.add('b');
    await f.service.load('a');
    expect(f.models.isModelReady('a')).toBe(true);
-   // Memory crunch after load: now far below what a fresh 20 GiB load would need.
    f.computers.heartbeat('node', { load: { cpuPercent: 0, memoryUsedGB: 124, memoryAvailableGB: 4 } });
    const reusePlan = await f.service.load('a');
    expect(reusePlan.reuse).toBe(true);
    expect(reusePlan.admissionDecision.status).toBe('ADMITTED');
-   expect(f.adapter.loadModel).toHaveBeenCalledTimes(1); // no second load call; truly reused.
-   // A genuine fresh load of a *different* model under the identical scarcity must still be denied.
-   f.add('b');
+   expect(f.adapter.loadModel).toHaveBeenCalledTimes(1);
    await expect(f.service.load('b')).rejects.toMatchObject({ code: 'MODEL_ADMISSION_DENIED' });
  });
 });

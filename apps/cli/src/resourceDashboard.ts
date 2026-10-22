@@ -12,7 +12,7 @@ export interface ResourceSnapshot {
   configPath: string;
   ledgerPath: string;
   accounts: Array<Omit<AccountStatus, 'account'> & {
-    id: string; label?: string; provider: string; kind: string; integration: string; quotaGroup?: string;
+    id: string; label?: string; provider: string; kind: string; integration: string;
     usage24h: { inputTokens: number; outputTokens: number; cachedInputTokens: number; requests: number; costUsd: number; costKnown: boolean; costStatus: 'ACTUAL' | 'ESTIMATED' | 'UNKNOWN'; bySource: Record<string, number> };
     rateLimit?: { at: string; value: unknown };
   }>;
@@ -74,7 +74,7 @@ export async function resourceSnapshot(engine: DashEngine): Promise<ResourceSnap
           ? 'ACTUAL'
           : 'ESTIMATED';
     return {
-      ...rest, id: a.id, label: a.label, provider: a.provider, kind: a.kind, integration: a.integration, quotaGroup: a.quotaGroup,
+      ...rest, id: a.id, label: a.label, provider: a.provider, kind: a.kind, integration: a.integration,
       usage24h: {
         inputTokens: sum(mine, (r) => r.inputTokens), outputTokens: sum(mine, (r) => r.outputTokens),
         cachedInputTokens: sum(mine, (r) => r.cachedInputTokens), requests: sum(mine, (r) => r.requests),
@@ -142,7 +142,7 @@ export function renderResourceSnapshot(s: ResourceSnapshot): string {
 
   L.push('', color.bold('Accounts'));
   for (const a of s.accounts) {
-    L.push(`  ${color.bold(a.id)} ${color.gray(`${a.kind} · ${a.provider} · ${a.integration}${a.quotaGroup ? ` · shared quota ${a.quotaGroup}` : ''}`)}  budget ${modeColor(a.mode)}  health ${healthColor(a.health)}${a.healthUntil ? ` until ${when(a.healthUntil)}` : ''}${a.healthReason && a.health !== 'ok' ? color.gray(` (${a.healthReason})`) : ''}  in flight ${a.inFlight}`);
+    L.push(`  ${color.bold(a.id)} ${color.gray(`${a.kind} · ${a.provider} · ${a.integration}`)}  budget ${modeColor(a.mode)}  health ${healthColor(a.health)}${a.healthUntil ? ` until ${when(a.healthUntil)}` : ''}${a.healthReason && a.health !== 'ok' ? color.gray(` (${a.healthReason})`) : ''}  in flight ${a.inFlight}`);
     for (const l of a.limits) {
       const pct = l.utilization === undefined ? 'unknown' : `${Math.round(l.utilization * 100)}%`;
       L.push(`    ${l.unit}/${l.window}: used ${k(l.used)} + reserved ${k(l.reserved)} of ${l.limit === null ? 'UNKNOWN limit' : k(l.limit)} (${l.source}) → ${pct} ${modeColor(l.mode)}, resets ${when(l.windowEnd)}`);

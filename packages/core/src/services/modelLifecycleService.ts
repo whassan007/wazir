@@ -73,11 +73,16 @@ export interface RestoreResult {
 }
 
 const LAST_READY_MODELS_KEY = 'models/last_ready_set';
+const AVAILABILITY_TTL_MS = 5_000;
+const AVAILABILITY_PROBE_TIMEOUT_MS = 3_000;
 
 export class ModelLifecycleService {
   private inFlightLoads = new Map<string, Promise<ModelLoadPlan>>();
   private operations = new Set<string>();
+  private fastStartupVerifiedIds = new Set<string>();
   private reconciliation?: Promise<DiscoveredModelReconciliation>;
+  /** Per-runtime inventory probes, shared by concurrent callers and reused for AVAILABILITY_TTL_MS. */
+  private inventoryProbes = new Map<string, { at: number; listed: Promise<Set<string> | undefined> }>();
   private policy: PolicyEngine;
   private reservePercent: number;
   private minimumReserveBytes: number;
@@ -350,9 +355,7 @@ export class ModelLifecycleService {
     const requested = options.context;
     if ((requested !== undefined && (!Number.isSafeInteger(requested) || requested <= 0)) || !Number.isSafeInteger(minimum)) throw new ModelLifecycleError('CONTEXT_TOO_LARGE', ['invalid context']);
     const mode = options.mode ?? (requested !== undefined ? 'EXPLICIT' : 'AUTO');
-    const isResidentUsable = i.loaded && (i.state === 'READY' || i.state === 'LOADED') && i.health === 'healthy' &&
-      i.contextTokens !== undefined && i.contextTokens >= minimum;
-    const desired = requested ?? (mode === 'MAX_SAFE' ? limit : isResidentUsable ? i.contextTokens! : Math.max(minimum, this.deps.resources?.autoContext ?? 32768));
+    const desired = requested ?? (mode === 'MAX_SAFE' ? limit : Math.max(minimum, this.deps.resources?.autoContext ?? 32768));
     let context = Math.min(desired, limit);
     if (!Number.isSafeInteger(context)) throw new ModelLifecycleError('CONTEXT_TOO_LARGE', ['model context limit unknown']);
     if (requested !== undefined && requested > limit && !options.fit) reasons.push('CONTEXT_TOO_LARGE');
@@ -361,22 +364,16 @@ export class ModelLifecycleService {
     const safetyReserve = Math.max((available ?? 0) * this.reservePercent / 100, this.minimumReserveBytes);
     const held = snapshot.activeReservations.reduce((n, r) => n + r.memoryBytes, 0);
     const usable = available === undefined ? undefined : Math.max(0, available - safetyReserve - held);
+    const reuse = (i.state === 'READY' || i.state === 'LOADED') && i.loaded && i.health === 'healthy' &&
+      i.contextTokens !== undefined && i.contextTokens >= minimum && (requested === undefined || i.contextTokens === context);
     const estimateAt = async (candidateContext: number): Promise<LoadEstimate> => {
-      if (i.loaded && i.contextTokens === candidateContext && i.residentMemoryBytes) {
-        return {
-          modelId, runtimeId: i.runtimeId, computerId: i.computerId!, requestedContext: requested, candidateContext,
-          weightMemory: profile?.weightBytes, contextMemory: profile?.contextBytesPerToken ? profile.contextBytesPerToken * candidateContext : undefined,
-          runtimeOverhead: profile?.runtimeOverheadBytes,
-          estimatedTotalMemory: i.residentMemoryBytes,
-          estimatedVram: snapshot.unifiedMemory ? undefined : (profile?.weightBytes ?? i.residentMemoryBytes),
-          reservationMemoryBytes: i.residentMemoryBytes,
-          currentlyAvailableMemory: available, safetyReserve, usableMemory: usable,
-          postLoadAvailableMemory: available !== undefined ? available - held : undefined,
-          estimateSource: 'OBSERVED', confidence: 'high', classification: 'SAFE',
-        };
-      }
       let e: import('@wazir/runtimes-interfaces').ModelLoadEstimate = { source: 'UNKNOWN', confidence: 'unknown' };
-      if (adapter?.estimateModelLoad) {
+      if (reuse && !options.dryRun) {
+        const residentBytes = i.residentMemoryBytes ?? profile?.weightBytes;
+        if (residentBytes !== undefined && residentBytes > 0) {
+          e = { weightBytes: profile?.weightBytes, totalMemoryBytes: residentBytes, source: 'RUNTIME', confidence: 'high' };
+        }
+      } else if (adapter?.estimateModelLoad) {
         try { e = await adapter.estimateModelLoad(i.runtimeModelId, candidateContext); } catch { /* unknown is denied below */ }
       }
       if (e.totalMemoryBytes === undefined && profile?.weightBytes !== undefined && profile.contextBytesPerToken !== undefined && profile.runtimeOverheadBytes !== undefined) {
@@ -398,39 +395,22 @@ export class ModelLifecycleService {
         currentlyAvailableMemory: available, safetyReserve, usableMemory: usable,
         postLoadAvailableMemory: known && available !== undefined ? available - total! - held : undefined,
         estimateSource: known ? e.source : 'UNKNOWN', confidence: known ? e.confidence : 'unknown',
-        classification: !known || usable === undefined || gpuUnknown ? 'UNKNOWN' : total! > usable || gpuInsufficient ? 'INSUFFICIENT' : total! > usable * 0.9 ? 'WARNING' : 'SAFE' };
+        classification: reuse && !options.dryRun ? 'SAFE' : !known || usable === undefined || gpuUnknown ? 'UNKNOWN' : total! > usable || gpuInsufficient ? 'INSUFFICIENT' : total! > usable * 0.9 ? 'WARNING' : 'SAFE' };
     };
     let estimate = await estimateAt(context);
     let safeContext: number | undefined;
-    if (estimate.classification === 'INSUFFICIENT' && context >= minimum) {
-      if (context === minimum) {
-        // Already at the minimum allowed context and it is insufficient
-        safeContext = undefined;
-      } else {
-        // Quick short-circuit: probe at minimum context first. If even the absolute minimum
-        // context is INSUFFICIENT, no safe context exists in [minimum, context], so skip
-        // the expensive binary search loop (which spawns repeated runtime estimate subprocesses).
-        const minEstimate = await estimateAt(minimum);
-        if (minEstimate.classification === 'INSUFFICIENT') {
-          safeContext = undefined;
-        } else {
-          let low = minimum, high = context, best: LoadEstimate | undefined =
-            (minEstimate.classification === 'SAFE' || minEstimate.classification === 'WARNING') ? minEstimate : undefined;
-          if (best) low = minimum + 1;
-          // Monotonic context-memory search, with every candidate estimated by the runtime.
-          while (low <= high) {
-            const mid = Math.floor((low + high) / 2);
-            const e = await estimateAt(mid);
-            if (e.classification === 'SAFE' || e.classification === 'WARNING') { best = e; low = mid + 1; }
-            else high = mid - 1;
-          }
-          safeContext = best?.candidateContext;
-          if (best && (mode !== 'EXPLICIT' || options.fit)) { estimate = best; context = best.candidateContext; }
-        }
+    if (!reuse && estimate.classification === 'INSUFFICIENT' && context >= minimum) {
+      let low = minimum, high = context, best: LoadEstimate | undefined;
+      // Monotonic context-memory search, with every candidate estimated by the runtime.
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        const e = await estimateAt(mid);
+        if (e.classification === 'SAFE' || e.classification === 'WARNING') { best = e; low = mid + 1; }
+        else high = mid - 1;
       }
+      safeContext = best?.candidateContext;
+      if (best && (mode !== 'EXPLICIT' || options.fit)) { estimate = best; context = best.candidateContext; }
     } else if (estimate.classification !== 'UNKNOWN') safeContext = context;
-    const reuse = (i.state === 'READY' || i.state === 'LOADED') && i.loaded && i.health === 'healthy' &&
-      i.contextTokens !== undefined && i.contextTokens >= minimum && (requested === undefined || i.contextTokens === context);
     if (!reuse) {
       if (!adapter?.loadModel || !adapter.inspectModel || !adapter.probeModel) reasons.push('UNSUPPORTED_CAPABILITY');
       if (i.loaded) reasons.push('CONTEXT_RELOAD_REQUIRED');
@@ -475,8 +455,38 @@ export class ModelLifecycleService {
     plan.admissionDecision.status = plan.admissionDecision.reasons.length ? 'DENIED' : 'ADMITTED';
   }
 
+  /**
+   * Confirms the runtime still serves `modelId` before any load or inference is dispatched.
+   * The registry is refreshed on an interval, so a model removed from the runtime in between
+   * would otherwise still route as READY. An inventory that cannot be read proves nothing and
+   * is not treated as absence (runtime health is judged separately by the load path).
+   */
+  async verifyAvailable(modelId: string, options: ModelLoadOptions = {}): Promise<void> {
+    const i = this.target(modelId, options);
+    const adapter = this.deps.adapters.get(i.runtimeId);
+    if (!adapter || this.deps.runtimes.get(i.runtimeId)?.runtimeKind === 'hosted') return;
+    let probe = this.inventoryProbes.get(i.runtimeId);
+    if (!probe || Date.now() - probe.at > AVAILABILITY_TTL_MS) {
+      const listed = Promise.race([
+        adapter.listModels().then(models => new Set(models.map(m => m.id)), () => undefined),
+        new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), AVAILABILITY_PROBE_TIMEOUT_MS).unref()),
+      ]);
+      probe = { at: Date.now(), listed };
+      this.inventoryProbes.set(i.runtimeId, probe);
+    }
+    const listed = await probe.listed;
+    if (!listed || listed.has(i.runtimeModelId)) return;
+    const reason = `model '${modelId}' is not installed in runtime '${i.runtimeId}'`;
+    this.deps.models.setInstanceHealth(i.id, { loaded: false, state: 'UNAVAILABLE', health: 'unavailable', error: reason });
+    const installation = this.deps.models.getInstallation(i.installationId ?? i.id);
+    if (installation) this.deps.models.upsertInstallation({ ...installation, installed: false, observedAt: new Date() });
+    this.emitEvent('MODEL_LOAD_FAILED', modelId, { runtimeId: i.runtimeId, computerId: i.computerId, reason: 'MODEL_NOT_IN_RUNTIME', data: { executionId: options.executionId } });
+    throw new ModelLifecycleError('MODEL_UNAVAILABLE', [reason, `list installed models with the runtime's CLI or pick another with /model`]);
+  }
+
   async load(modelId: string, options: ModelLoadOptions = {}): Promise<ModelLoadPlan> {
     if (options.dryRun) return this.estimate(modelId, options);
+    await this.verifyAvailable(modelId, options);
     const placement = await this.estimate(modelId, options);
     const i = this.target(modelId, { computerId: placement.computerId, runtimeId: placement.runtimeId });
     const existing = this.inFlightLoads.get(i.id);
@@ -496,7 +506,9 @@ export class ModelLifecycleService {
     const extra = { runtimeId: i.runtimeId, computerId: i.computerId, initiator: options.initiator, data: { executionId: options.executionId } };
     this.emitEvent('MODEL_LOAD_REQUESTED', modelId, extra);
     this.emitEvent('MODEL_ADMISSION_STARTED', modelId, extra);
-    await this.deps.refreshResources?.(i.computerId!);
+    if (!(i.state === 'READY' && i.loaded && i.health === 'healthy')) {
+      await this.deps.refreshResources?.(i.computerId!);
+    }
     let plan = await this.estimate(modelId, { ...options, computerId: i.computerId, runtimeId: i.runtimeId });
     this.emitEvent('MODEL_LOAD_PLAN_CREATED', modelId, { ...extra, data: { ...plan, executionId: options.executionId } });
     const deny = (reason?: string): never => {
@@ -506,15 +518,15 @@ export class ModelLifecycleService {
     };
     if (plan.admissionDecision.status === 'DENIED') deny();
     const adapter = this.deps.adapters.get(i.runtimeId)!;
-    if ((await adapter.healthCheck()).status !== 'healthy') deny('RUNTIME_UNAVAILABLE');
     if (plan.reuse) {
-      if (options.verify) {
-        await this.verify(i, plan.effectiveContext);
-      } else if (i.state !== 'READY') {
-        this.deps.models.setInstanceHealth(i.id, { loaded: true, state: 'READY', health: 'healthy', contextTokens: plan.effectiveContext });
+      if (i.state === 'READY' && i.loaded && i.health === 'healthy' && i.contextTokens === plan.effectiveContext && this.fastStartupVerifiedIds.has(i.id)) {
+        return plan;
       }
+      if ((await adapter.healthCheck()).status !== 'healthy') deny('RUNTIME_UNAVAILABLE');
+      await this.verify(i, plan.effectiveContext);
       return plan;
     }
+    if ((await adapter.healthCheck()).status !== 'healthy') deny('RUNTIME_UNAVAILABLE');
     if (plan.modelsToEvict.length) {
       this.emitEvent('MODEL_EVICTION_PLANNED', modelId, { ...extra, data: { modelsToEvict: plan.modelsToEvict } });
       for (const victim of plan.modelsToEvict) {
@@ -603,9 +615,11 @@ export class ModelLifecycleService {
     const record = executions.require(executionId);
     const e = record.execution;
     if (!e.computerId || this.deps.runtimes.get(e.runtimeId)?.runtimeKind === 'hosted') return minimumContext;
-    await executions.setStatus(executionId, 'waiting');
-    await executions.recordEvent(executionId, 'WAITING_FOR_MODEL', { modelId: e.modelId, taskId: e.taskId });
     try {
+      // An absent model fails before the execution is reported as waiting for it.
+      await this.verifyAvailable(e.modelId, { computerId: e.computerId, runtimeId: e.runtimeId, executionId });
+      await executions.setStatus(executionId, 'waiting');
+      await executions.recordEvent(executionId, 'WAITING_FOR_MODEL', { modelId: e.modelId, taskId: e.taskId });
       const plan = await this.ensureReady(e.modelId, { computerId: e.computerId, runtimeId: e.runtimeId, minimumContext, executionId });
       await executions.setStatus(executionId, 'scheduled');
       return plan.effectiveContext;
@@ -805,9 +819,9 @@ export class ModelLifecycleService {
   /**
    * Discovers and reconciles all models across all registered runtime adapters.
    */
-  async discoverAndReconcile(options: { verify?: boolean } = {}): Promise<DiscoveredModelReconciliation> {
+  async discoverAndReconcile(options: { verify?: boolean; fastStartup?: boolean } = {}): Promise<DiscoveredModelReconciliation> {
     if (this.reconciliation) return this.reconciliation;
-    this.reconciliation = this.reconcileObserved(options.verify !== false);
+    this.reconciliation = this.reconcileObserved(options.verify !== false, options.fastStartup === true);
     try { return await this.reconciliation; } finally { this.reconciliation = undefined; }
   }
   discover() { return this.discoverAndReconcile(); }
@@ -817,11 +831,12 @@ export class ModelLifecycleService {
     timer.unref();
     return () => clearInterval(timer);
   }
-  private async reconcileObserved(verify = true): Promise<DiscoveredModelReconciliation> {
+  private async reconcileObserved(verify = true, fastStartup = false): Promise<DiscoveredModelReconciliation> {
     let totalDiscovered = 0, newlyRegistered = 0;
     for (const [runtimeId, adapter] of this.deps.adapters) {
       const runtime = this.deps.runtimes.get(runtimeId);
       if (!runtime?.computerId || runtime.runtimeKind === 'hosted') continue;
+      if (fastStartup && runtime.health === 'unavailable') continue;
       const computerId = runtime.computerId;
       try {
         if ((await adapter.healthCheck()).status !== 'healthy') throw new Error('RUNTIME_UNAVAILABLE');
@@ -861,17 +876,18 @@ export class ModelLifecycleService {
             continue;
           }
           const loaded = observed?.loaded ?? false;
-          // A prior real load() already ran the expensive verify() probe and earned READY.
-          // Read-only reconciles (wa doctor / wa models health, which pass verify:false to
-          // avoid probing) must not discard that just because they didn't re-probe this pass —
-          // otherwise a perfectly working model permanently reads as not-ready between tasks.
           const stillVerified = existing?.state === 'READY' && existing.loaded && loaded &&
             existing.health === 'healthy' && existing.contextTokens !== undefined && existing.contextTokens === observed?.effectiveContext;
+          const readyOnFastStartup = fastStartup && verify && loaded && Boolean(observed?.effectiveContext) && existing?.state !== 'DRAINING' &&
+            (!intent?.desired?.contextTokens || intent.desired.contextTokens === observed?.effectiveContext);
+          if (readyOnFastStartup) this.fastStartupVerifiedIds.add(id);
           const i: ModelInstance = { ...existing, ...intent, id, installationId, modelId: m.id, runtimeModelId: m.id,
-            computerId, runtimeId, loaded, state: stillVerified ? 'READY' : loaded ? 'LOADED' : existing?.loaded || existing?.state === 'READY' ? 'UNLOADED' : 'INSTALLED',
-            health: 'healthy', contextTokens: observed?.effectiveContext, residentMemoryBytes: observed?.memoryBytes ?? existing?.residentMemoryBytes };
+            computerId, runtimeId, loaded,
+            state: (stillVerified || readyOnFastStartup) ? 'READY' : loaded ? 'LOADED' : existing?.loaded || existing?.state === 'READY' ? 'UNLOADED' : 'INSTALLED',
+            health: 'healthy', contextTokens: observed?.effectiveContext,
+            residentMemoryBytes: observed?.memoryBytes ?? existing?.residentMemoryBytes ?? m.weightBytes };
           this.deps.models.upsertInstance(i);
-          if (verify && loaded && !stillVerified && observed?.effectiveContext && existing?.state !== 'DRAINING' &&
+          if (!stillVerified && !readyOnFastStartup && verify && loaded && observed?.effectiveContext && existing?.state !== 'DRAINING' &&
             (!i.desired?.contextTokens || i.desired.contextTokens === observed.effectiveContext)) {
             try { await this.verify(i, observed.effectiveContext); } catch { /* failure is observed, never READY */ }
           }

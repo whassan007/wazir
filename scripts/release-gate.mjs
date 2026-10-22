@@ -107,14 +107,14 @@ function testHostPlatform() {
   const fleetResult = runStep(
     'Heterogeneous Fleet Scheduling & Dispatch',
     npxBin,
-    ['vitest', 'run', 'packages/core/tests/schedulerHeterogeneousFleet.test.ts', 'tests/integration/crossPlatformFleet.test.ts']
+    ['vitest', 'run', 'packages/core/tests/schedulerHeterogeneousFleet.test.ts', 'test/integration/crossPlatformFleet.test.ts']
   );
 
   // 8. Recovery
   const recoveryResult = runStep(
     'Durable Recovery & Lease Fencing',
     npxBin,
-    ['vitest', 'run', 'tests/integration/crossPlatformRecovery.test.ts']
+    ['vitest', 'run', 'test/integration/crossPlatformRecovery.test.ts']
   );
 
   const categories = [

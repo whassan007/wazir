@@ -34,11 +34,11 @@ function captureSystemPrompt(): { runtime: AgentRuntime; prompts: string[] } {
 }
 
 describe('CodingAgent.run — fast-answer prompt hint for textual-only tasks', () => {
-  it('tells the model it may answer immediately for a chat-typed task', async () => {
+  it('tells the model it may answer immediately for a chat-typed task that inspects the repo', async () => {
     const { runtime, prompts } = captureSystemPrompt();
     const agent = createCodingAgent();
     await drain(agent.run({
-      modelId: 'fake-model', taskDescription: 'What is 23 + 19?', taskType: 'chat',
+      modelId: 'fake-model', taskDescription: 'Inspect src/index.ts and tell me what it exports', taskType: 'chat',
       projectRoot: '/tmp/fake-project', maxTurns: 3,
     }, runtime));
 
@@ -49,7 +49,7 @@ describe('CodingAgent.run — fast-answer prompt hint for textual-only tasks', (
     const { runtime, prompts } = captureSystemPrompt();
     const agent = createCodingAgent();
     await drain(agent.run({
-      modelId: 'fake-model', taskDescription: 'Explain a stack in one sentence', taskType: 'code_analysis',
+      modelId: 'fake-model', taskDescription: 'Read src/index.ts and explain its architecture in one sentence', taskType: 'code_analysis',
       projectRoot: '/tmp/fake-project', maxTurns: 3, mutationRequired: false,
     }, runtime));
 
@@ -60,7 +60,7 @@ describe('CodingAgent.run — fast-answer prompt hint for textual-only tasks', (
     const { runtime, prompts } = captureSystemPrompt();
     const agent = createCodingAgent();
     await drain(agent.run({
-      modelId: 'fake-model', taskDescription: 'Write a function', taskType: 'coding',
+      modelId: 'fake-model', taskDescription: 'Edit src/index.ts to export a helper function', taskType: 'coding',
       projectRoot: '/tmp/fake-project', maxTurns: 3,
     }, runtime));
 

@@ -18,6 +18,7 @@ import {
   WorktreeManager,
   createTaskPlanner,
 } from '@wazir/core';
+import { ModelLifecycleError, SchedulingError } from '@wazir/core';
 import type { ModelRecord, ModelLifecycleEvent } from '@wazir/core';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
@@ -34,6 +35,7 @@ import {
   loadModelCommand,
   unloadModelCommand,
 } from '../src/commands.js';
+import { planAvailableRoute } from '../src/routeAvailability.js';
 
 interface TestEngineOptions {
   modelsLoaded?: boolean;
@@ -626,5 +628,89 @@ describe('Model Readiness & Startup Loading Workflow', () => {
     // 6. wa models discover
     const discoverOutput = await discoverModelsCommand(engine);
     expect(discoverOutput).toContain('Model Discovery & Reconciliation');
+  });
+});
+
+
+describe('Model routing: availability, fallback, and pins', () => {
+  let projectRoot: string;
+  const GEMMA = 'google/gemma-4-12b-qat';
+  const QWEN = 'qwen/qwen3.8-27b';
+  const task = (execution?: Record<string, unknown>) => ({
+    id: 't1', type: 'coding', input: 'x', requirements: {}, priority: 'normal', status: 'pending', createdAt: new Date(), execution,
+  }) as any;
+
+  afterEach(async () => {
+    if (projectRoot) await fs.rm(projectRoot, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  async function setup(served: string[]) {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-routing-test-'));
+    const built = await buildTestEngine(projectRoot, { modelsLoaded: true, modelsConfig: 'two_models' });
+    let listCalls = 0;
+    built.fakeAdapter.listModels = async () => { listCalls++; return served.map((id) => ({ id, name: id })); };
+    return { ...built, listCalls: () => listCalls };
+  }
+
+  it('selected model available -> the requested model executes with no fallback', async () => {
+    const { engine } = await setup([GEMMA, QWEN]);
+    const decision = await planAvailableRoute(engine, { task: task({ targetModelId: GEMMA }) });
+    expect(decision.modelId).toBe(GEMMA);
+    expect(decision.fallbacks).toBeUndefined();
+  });
+
+  it('model removed from the runtime -> MODEL_UNAVAILABLE with an actionable reason and instance marked unavailable', async () => {
+    const { engine } = await setup([QWEN]);
+    const err = await engine.lifecycle.verifyAvailable(GEMMA).catch((e) => e);
+    expect(err).toBeInstanceOf(ModelLifecycleError);
+    expect(err.code).toBe('MODEL_UNAVAILABLE');
+    expect(err.message).toContain(`'${GEMMA}' is not installed in runtime 'mock-runtime'`);
+    expect(engine.models.getModelState(GEMMA)).toBe('UNAVAILABLE');
+  });
+
+  it('repeated checks share one inventory probe instead of re-probing', async () => {
+    const { engine, listCalls } = await setup([QWEN]);
+    await Promise.all([1, 2, 3, 4, 5].map(() => engine.lifecycle.verifyAvailable(GEMMA).catch(() => undefined)));
+    expect(listCalls()).toBe(1);
+  });
+
+  it('unpinned task whose chosen model vanished -> falls back and records why', async () => {
+    const { engine, fakeAdapter } = await setup([GEMMA, QWEN]);
+    const first = engine.scheduler.plan({ task: task() }).modelId;
+    const other = first === GEMMA ? QWEN : GEMMA;
+    fakeAdapter.listModels = async () => [{ id: other, name: other }];
+    const decision = await planAvailableRoute(engine, { task: task() });
+    expect(decision.modelId).toBe(other);
+    expect(decision.fallbacks).toHaveLength(1);
+    expect(decision.fallbacks![0]).toMatchObject({ from: first, to: other });
+    expect(decision.fallbacks![0].reason).toContain('not installed');
+    expect(decision.reasons.join('\n')).toContain(`fallback: ${first} -> ${other}`);
+  });
+
+  it('pinned model unavailable -> fails immediately, never substituted', async () => {
+    const { engine } = await setup([QWEN]);
+    const err = await planAvailableRoute(engine, { task: task({ targetModelId: GEMMA }) }).catch((e) => e);
+    expect(err).toBeInstanceOf(SchedulingError);
+    expect(err.message).toContain('No silent fallback');
+  });
+
+  it('no models available -> structured failure after bounded attempts', async () => {
+    const { engine, listCalls } = await setup([]);
+    const err = await planAvailableRoute(engine, { task: task() }).catch((e) => e);
+    expect(err).toBeInstanceOf(SchedulingError);
+    expect(listCalls()).toBe(1);
+  });
+
+  it('runtime alias differs from the canonical id -> resolves through runtimeModelId', async () => {
+    const { engine } = await setup(['lm-studio-key-for-gemma']);
+    const inst = engine.models.instancesOf(GEMMA)[0];
+    engine.models.upsertInstance({ ...inst, runtimeModelId: 'lm-studio-key-for-gemma' });
+    await expect(engine.lifecycle.verifyAvailable(GEMMA)).resolves.toBeUndefined();
+  });
+
+  it('an unreadable inventory is not treated as proof of absence', async () => {
+    const { engine, fakeAdapter } = await setup([QWEN]);
+    fakeAdapter.listModels = async () => { throw new Error('connection reset'); };
+    await expect(engine.lifecycle.verifyAvailable(GEMMA)).resolves.toBeUndefined();
   });
 });

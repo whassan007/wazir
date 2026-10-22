@@ -74,17 +74,25 @@ function discoverCpu(): string {
   return defaultModel && defaultModel !== 'unknown' ? defaultModel : 'Unknown CPU';
 }
 
+let cachedGpuInfo: { resolved: boolean; value?: GPUInfo } = { resolved: false };
+let cachedGpuLoad: { expiresAt: number; value: { gpuMemoryAvailableGB?: number; gpuMemoryUsedGB?: number; gpuUtilizationPercent?: number } } | undefined;
+
 async function discoverGpu(): Promise<GPUInfo | undefined> {
+  if (cachedGpuInfo.resolved) {
+    return cachedGpuInfo.value;
+  }
   try {
     if (process.platform === 'darwin' && process.arch === 'arm64') {
       // Apple Silicon: unified memory is shared with the GPU
       const totalGB = Math.max(1, Math.round(os.totalmem() / (1024 ** 3)));
-      return {
+      const info: GPUInfo = {
         vendor: 'apple',
         model: 'Apple GPU (unified memory)',
         memoryGB: totalGB,
         unifiedMemory: true,
       };
+      cachedGpuInfo = { resolved: true, value: info };
+      return info;
     }
     if (process.platform === 'linux' || process.platform === 'win32') {
       const info = execSync('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader', {
@@ -104,18 +112,21 @@ async function discoverGpu(): Promise<GPUInfo | undefined> {
           : Number.isFinite(dedicatedMiB)
             ? Math.max(0, Math.round(dedicatedMiB / 1024))
             : 0;
-        return {
+        const gpuInfo: GPUInfo = {
           vendor: 'nvidia',
           model: model ?? 'NVIDIA GPU',
           memoryGB: memGB,
           unifiedMemory,
           cuda: true,
         };
+        cachedGpuInfo = { resolved: true, value: gpuInfo };
+        return gpuInfo;
       }
     }
   } catch {
     // no GPU tooling available
   }
+  cachedGpuInfo = { resolved: true, value: undefined };
   return undefined;
 }
 
@@ -139,12 +150,18 @@ export function currentLoad(): {
   const freeGB = Math.round(os.freemem() / (1024 ** 3) * 10) / 10;
   let gpu: { gpuMemoryAvailableGB?: number; gpuMemoryUsedGB?: number; gpuUtilizationPercent?: number } = {};
   if (process.platform === 'linux' || process.platform === 'win32') {
-    try {
-      const values = execSync('nvidia-smi --query-gpu=memory.free,memory.used,utilization.gpu --format=csv,noheader,nounits', { timeout: 3000 }).toString().trim().split('\n')[0].split(',').map(Number);
-      if (Number.isFinite(values[0])) gpu.gpuMemoryAvailableGB = values[0] / 1024;
-      if (Number.isFinite(values[1])) gpu.gpuMemoryUsedGB = values[1] / 1024;
-      if (Number.isFinite(values[2])) gpu.gpuUtilizationPercent = values[2];
-    } catch { /* Unknown GPU availability must not become zero or total capacity. */ }
+    const now = Date.now();
+    if (cachedGpuLoad && cachedGpuLoad.expiresAt > now) {
+      gpu = cachedGpuLoad.value;
+    } else {
+      try {
+        const values = execSync('nvidia-smi --query-gpu=memory.free,memory.used,utilization.gpu --format=csv,noheader,nounits', { timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split('\n')[0].split(',').map(Number);
+        if (Number.isFinite(values[0])) gpu.gpuMemoryAvailableGB = values[0] / 1024;
+        if (Number.isFinite(values[1])) gpu.gpuMemoryUsedGB = values[1] / 1024;
+        if (Number.isFinite(values[2])) gpu.gpuUtilizationPercent = values[2];
+      } catch { /* Unknown GPU availability must not become zero or total capacity. */ }
+      cachedGpuLoad = { expiresAt: now + 3000, value: gpu };
+    }
   }
   return {
     ...gpu,

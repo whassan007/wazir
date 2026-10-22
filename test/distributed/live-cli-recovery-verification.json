@@ -1,0 +1,20 @@
+[
+  {
+    "prompt": "What is 18 + 24? Return only the number.",
+    "exitCode": 0,
+    "durationMs": 1326,
+    "model": "gemma-4-26b-a4b-it-qat",
+    "result": "42",
+    "correct": true,
+    "workspaceFiles": []
+  },
+  {
+    "prompt": "Write a Python function that adds two integers.",
+    "exitCode": 0,
+    "durationMs": 2219,
+    "model": "gemma-4-26b-a4b-it-qat",
+    "result": "```python\ndef add_integers(a, b):\n    \"\"\"Adds two integers and returns the result.\"\"\"\n    return a + b\n```",
+    "correct": true,
+    "workspaceFiles": []
+  }
+]

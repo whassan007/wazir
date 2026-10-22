@@ -1,0 +1,103 @@
+Runtime & Model Health
+
+anthropic (anthropic)
+  Runtime     UNAVAILABLE
+  Inference   UNKNOWN
+  Telemetry   UNKNOWN
+  Memory      UNKNOWN
+  Queue       unknown
+
+google (google)
+  Runtime     UNAVAILABLE
+  Inference   UNKNOWN
+  Telemetry   UNKNOWN
+  Memory      UNKNOWN
+  Queue       unknown
+
+lmstudio (lmstudio on local)
+  Runtime     READY
+  Inference   HEALTHY  last ok 40s ago
+  Telemetry   UNKNOWN
+  Memory      90 / 122 GiB OK
+  Queue       unknown
+  Model       gemma-4-26b-a4b-it-qat  LOADED loaded=true ready=false ctx=32768
+  Model       nvidia/nemotron-3-nano-omni  LOADED loaded=true ready=false ctx=8192
+  Model       nvidia/nemotron-3-super  INSTALLED loaded=false ready=false ctx=1048576
+  Model       openai/gpt-oss-120b  INSTALLED loaded=false ready=false ctx=131072
+  Model       qwen/qwen3-coder-next  INSTALLED loaded=false ready=false ctx=262144
+  Model       qwen/qwen3.8-27b  LOADED loaded=true ready=false ctx=8192
+  Model       qwen2.5-7b-instruct  INSTALLED loaded=false ready=false ctx=32768
+  Model       text_encoder  INSTALLED loaded=false ready=false ctx=262144
+  Model       text-embedding-nomic-embed-text-v1.5  INSTALLED loaded=false ready=false ctx=2048
+  Model       transformer  INSTALLED loaded=false ready=false ctx=4096
+  Model       unsloth/qwen3-coder-next  INSTALLED loaded=false ready=false ctx=262144
+
+nvidia (nvidia)
+  Runtime     UNAVAILABLE
+  Inference   UNKNOWN
+  Telemetry   UNKNOWN
+  Memory      UNKNOWN
+  Queue       unknown
+
+ollama (ollama on local)
+  Runtime     UNREACHABLE
+  Inference   UNKNOWN
+  Telemetry   UNKNOWN
+  Memory      90 / 122 GiB OK
+  Queue       unknown
+
+openai (openai)
+  Runtime     UNAVAILABLE
+  Inference   UNKNOWN
+  Telemetry   UNKNOWN
+  Memory      UNKNOWN
+  Queue       unknown
+
+Worker worker-local-7c28299bcffe855a5544e4fee0d0b698 on local  online
+
+Diagnostics (6)
+MODEL_NOT_READY  model gemma-4-26b-a4b-it-qat@lmstudio · MODEL
+  Reason: model is loaded but has not been verified ready
+    model state = LOADED  (ModelRegistry)
+    loaded = true  (ModelRegistry)
+    instance health = healthy  (ModelRegistry)
+    readiness probe = unknown  (readiness probe)
+    last successful inference = 2h ago  (inference observations)
+
+MODEL_NOT_READY  model nvidia/nemotron-3-nano-omni@lmstudio · MODEL
+  Reason: model is loaded but has not been verified ready
+    model state = LOADED  (ModelRegistry)
+    loaded = true  (ModelRegistry)
+    instance health = healthy  (ModelRegistry)
+    readiness probe = unknown  (readiness probe)
+    last successful inference = 40s ago  (inference observations)
+
+MODEL_NOT_LOADED  model qwen/qwen3-coder-next@lmstudio · MODEL
+  Reason: model is installed and wanted, but not loaded
+    model state = INSTALLED  (ModelRegistry)
+    loaded = false  (ModelRegistry)
+    instance health = healthy  (ModelRegistry)
+    desired state = READY  (ModelRegistry)
+    pinned = false  (ModelRegistry)
+
+MODEL_NOT_READY  model qwen/qwen3.8-27b@lmstudio · MODEL
+  Reason: model is loaded but has not been verified ready
+    model state = LOADED  (ModelRegistry)
+    loaded = true  (ModelRegistry)
+    instance health = healthy  (ModelRegistry)
+    readiness probe = unknown  (readiness probe)
+    last successful inference = 3h ago  (inference observations)
+
+TELEMETRY_UNAVAILABLE  runtime lmstudio · TELEMETRY
+  Reason: inference succeeded but prompt-cache telemetry was not observed (non-fatal)
+    inference = HEALTHY  (inference observations)
+    cache telemetry = UNKNOWN  (prompt-cache telemetry)
+    runtime claims cache telemetry = unknown  (RuntimeCapabilities)
+
+RUNTIME_UNREACHABLE  runtime ollama · RUNTIME
+  Reason: ollama endpoint is not reachable
+    runtime health = unavailable  (RuntimeRegistry)
+    endpoint = unknown  (RuntimeRegistry)
+    last checked = 2026-10-18T02:03:33.073Z  (RuntimeRegistry)
+    affected model instances = 0  (ModelRegistry)
+

@@ -1,0 +1,3 @@
+
+wa: fatal unhandledRejection: Error: timed out waiting for lock '/home/wael/.wazir/wazir.json.lock' (held for over 10000ms)
+Full details: /home/wael/.wazir/logs/crash-2026-10-18T02-10-33-988Z.log

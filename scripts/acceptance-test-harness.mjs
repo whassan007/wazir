@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import readline from 'node:readline';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const catalogPath = join(root, 'tests/acceptance/acceptanceData.json');
+const catalogPath = join(root, 'test/acceptance/acceptanceData.json');
 
 if (!existsSync(catalogPath)) {
   console.error('Acceptance test catalog missing at tests/acceptance/acceptanceData.json');
@@ -316,7 +316,7 @@ async function main() {
   }
 
   // Also include the acceptance catalog unit test
-  testFilesToRun.add('tests/acceptance/acceptanceLibrary.test.ts');
+  testFilesToRun.add('test/acceptance/acceptanceLibrary.test.ts');
 
   const filesArray = [...testFilesToRun];
   console.log(`[phase 1] executing ${filesArray.length} associated verification suites via vitest`);

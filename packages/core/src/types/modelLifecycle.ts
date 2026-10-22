@@ -11,7 +11,6 @@ export interface ModelLoadOptions {
   initiator?: string;
   executionId?: string;
   timeoutMs?: number;
-  verify?: boolean;
 }
 export interface ResourceReservation {
   id: string;
@@ -50,7 +49,7 @@ export interface LoadEstimate {
   safetyReserve: number;
   usableMemory?: number;
   postLoadAvailableMemory?: number;
-  estimateSource: 'RUNTIME' | 'HEURISTIC' | 'OBSERVED' | 'UNKNOWN';
+  estimateSource: 'RUNTIME' | 'HEURISTIC' | 'UNKNOWN';
   confidence: 'high' | 'medium' | 'low' | 'unknown';
   classification: 'SAFE' | 'WARNING' | 'INSUFFICIENT' | 'UNKNOWN';
 }

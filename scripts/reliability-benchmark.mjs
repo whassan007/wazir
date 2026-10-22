@@ -8,7 +8,7 @@ import { runProcess } from './live-session-harness/runner.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const {values} = parseArgs({options:{model:{type:'string',multiple:true},output:{type:'string'},case:{type:'string',multiple:true},'timeout-ms':{type:'string',default:'120000'}}});
 if (!values.model?.length || !values.output) throw new Error('Require --model and --output');
-const dataset = JSON.parse(await fs.readFile(path.join(root,'tests/reliability/benchmarks/v1.json'),'utf8'));
+const dataset = JSON.parse(await fs.readFile(path.join(root,'test/reliability/benchmarks/v1.json'),'utf8'));
 const out = path.resolve(values.output); await fs.mkdir(out,{recursive:true});
 const sha = (await runProcess('git',['rev-parse','HEAD'],{cwd:root})).output.trim();
 const report = {schema_version:1,dataset_version:dataset.version,source_sha:sha,node:process.version,platform:process.platform,arch:process.arch,started_at:new Date().toISOString(),results:[]};

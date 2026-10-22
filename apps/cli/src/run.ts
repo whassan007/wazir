@@ -1,5 +1,6 @@
 import { executeMCPForAgent } from './mcp.js';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { classifyWorkload, effectiveContextTokens, estimateOutputTokens, estimateTextTokens, padEstimate, SchedulingError, taskAuthorizesVerificationChanges } from '@wazir/core';
 import type {
   AgentAdapter,
@@ -16,7 +17,7 @@ import type {
 } from '@wazir/core';
 import { buildContextPartsFromActive } from './commands.js';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
-import { buildSystemPrompt, resolvePreset } from '@wazir/agents';
+import { buildSystemPrompt, isConversationalFastPathRequest, isDeterministicCommandRequest, resolvePreset } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, keepEnds, stripTerminalEscapes } from '@wazir/shared';
 import { executeTool as runRegisteredTool } from '@wazir/tools';
@@ -29,6 +30,7 @@ import { recordTermination } from './termination.js';
 import { recordAgentTask } from './agentPreflight.js';
 import { captureDelegationBaseline, verifyDelegatedWork, type DelegationBaseline } from './delegationVerification.js';
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
+import { planAvailableRoute } from './routeAvailability.js';
 import { ensureNvidiaModelRegistered } from './hostedProviders.js';
 
 /** Registration does not imply a policy execution handler exists. Inspect classification
@@ -86,19 +88,19 @@ export interface ExecuteTaskOptions {
    *  never overrides `localOnly`/sensitive-data policy, which always wins (see
    *  PolicyEngine.checkHostedEligibility()). */
   allowHosted?: boolean;
-  /** Explicit provider/placement routing policy mode (AUTO, NVIDIA, PROVIDER_ONLY, LOCAL_ONLY, HYBRID). */
+  /** Explicit provider/placement routing policy mode (AUTO, NVIDIA, LOCAL_ONLY, HYBRID). */
   routingMode?: import('@wazir/core').RoutingMode;
   /** Runtime preset name (e.g. 'standard', 'minimal'). */
   preset?: string;
   /** Force VERIFY to build/test/lint/typecheck the whole repo instead of scoping to the
    *  workspace(s) the task touched (`wa run --full-verify`). */
   fullVerification?: boolean;
-  /** Force direct-answer fast-path execution (single-turn inference without workspace modification). */
-  fastPath?: boolean;
 }
 
 export interface TaskOutcome {
   success: boolean;
+  ok?: boolean;
+  decision?: SchedulerDecision;
   reasons: string[];
   filesChanged: string[];
   executionId: string;
@@ -117,56 +119,6 @@ export type PlanResult = { ok: true; plan: TaskPlan } | { ok: false; reasons: st
 
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
 const WRITE_TOOLS = new Set(['write', 'edit']);
-
-/**
- * Detects whether a request is a direct-answer / non-mutating query (e.g. arithmetic,
- * string transformation, pure Q&A, JSON formatting, or self-contained code snippet generation)
- * that does not require repository editing, multi-turn coding agent planning, or build checks.
- */
-export function isDirectAnswerRequest(prompt: string, options: ExecuteTaskOptions = {}): boolean {
-  if (options.fastPath === true) return true;
-  if (options.type === 'chat') return true;
-  if (options.expectedFiles && options.expectedFiles.length > 0) return false;
-  if (options.agent && options.agent !== 'wazir-coding') return false;
-
-  const trimmed = prompt.trim();
-  const lower = trimmed.toLowerCase();
-
-  // If prompt explicitly mentions repository editing, files, or git operations, it is mutating
-  if (/\b(edit|modify|fix|update|refactor|add to file|write to|create file|delete file|git commit|in repo|in repository)\b/i.test(lower)) {
-    return false;
-  }
-
-  // Arithmetic, calculation, math expressions
-  if (/^what\s+is\s+[\d\s+\-*/^().]+(\?)?$/i.test(trimmed) || /^\d+\s*[\+\-\*\/]\s*\d+/.test(trimmed) || /^[\d\s+\-*/%^().=]+$/.test(trimmed) || /\b(calculate|compute|arithmetic|sum of|product of)\b/i.test(trimmed)) {
-    return true;
-  }
-
-  // String transformations: reverse, uppercase, lowercase, anagram
-  if (/\b(reverse|transform|convert|capitalize|lowercase|uppercase)\b/i.test(trimmed) && !/\b(file|directory|path|repo)\b/i.test(trimmed)) {
-    return true;
-  }
-
-  // Pure JSON / YAML / formatting requests
-  if (/\b(output|generate|format|produce|write|give me)\b.*\b(json|yaml|xml|csv)\b/i.test(trimmed)) {
-    return true;
-  }
-
-  // Direct questions: what is, who is, why is, explain, define, how does
-  if (/^(what|who|where|when|why|how)\s+(is|are|was|were|does|do|did|can|could|should|would)\b/i.test(trimmed) || /^(explain|describe|define|summarize|list)\b/i.test(trimmed)) {
-    return true;
-  }
-
-  // Standalone code snippets / functions (without repo file targets)
-  if (/\b(write|show|implement|create|give me)\b.*\b(function|algorithm|class|snippet|script|code|fibonacci)\b/i.test(trimmed)) {
-    // If it doesn't mention file names or path extensions (.ts, .js, src/, etc.)
-    if (!/\b(\.ts|\.js|\.py|\.go|\.rs|src\/|test\/|lib\/)\b/i.test(trimmed)) {
-      return true;
-    }
-  }
-
-  return false;
-}
 // A model that compiles via a raw `shell` call (e.g. `g++ -o main main.cpp`)
 // rather than a dedicated `build` tool invocation was previously invisible to
 // evaluateExecution() — CHECK_TOOLS only recognized the four named tools
@@ -208,10 +160,9 @@ const MINIMUM_CONTEXT_TOKENS = 8192;
 export async function planTask(
   engine: RookEngine,
   description: string,
-  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'routingMode' | 'preset'> = {},
+  options: Pick<ExecuteTaskOptions, 'type' | 'model' | 'agent' | 'allowHosted' | 'routingMode' | 'preset' | 'expectedFiles'> = {},
 ): Promise<PlanResult> {
   const preset = resolvePreset(options.preset);
-  const isDirect = isDirectAnswerRequest(description, options);
   const routingCfg = engine.config.routing;
   const effectiveRoutingMode: import('@wazir/core').RoutingMode | undefined =
     options.routingMode ??
@@ -244,9 +195,9 @@ export async function planTask(
 
   const task: Task = {
     id: generateId('task-'),
-    type: options.type ?? (isDirect ? 'chat' : 'coding'),
+    type: options.type ?? 'coding',
     input: description,
-    requirements: { minimumContext: isDirect ? 4096 : MINIMUM_CONTEXT_TOKENS, runtimePreset: preset.name },
+    requirements: { minimumContext: MINIMUM_CONTEXT_TOKENS, runtimePreset: preset.name },
     policy: {
       networkAccess: engine.config.networkAllowed,
       projectRoot: engine.projectRoot,
@@ -254,7 +205,7 @@ export async function planTask(
     },
     execution: {
       targetModelId: options.model,
-      targetAgentId: options.agent,
+      targetAgentId: options.agent ?? (options.type === 'chat' && engine.agents.get('wazir-chat') ? 'wazir-chat' : undefined),
       routingMode: effectiveRoutingMode,
       routingProvider: effectiveRoutingProvider,
       defaultModelId: routingCfg?.defaultModel,
@@ -271,17 +222,38 @@ export async function planTask(
     return { ok: false, reasons: taskPolicy.reasons };
   }
 
-  const allModelTools = engine.tools.forModel(undefined, engine.agents.get(options.agent ?? 'wazir-coding')?.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
+  const targetAgent = engine.agents.get(task.execution?.targetAgentId ?? 'wazir-coding');
+  const deterministicCmd = (!options.expectedFiles || options.expectedFiles.length === 0)
+    ? isDeterministicCommandRequest(description)
+    : null;
+  const fastPath =
+    targetAgent?.descriptor.strategy === 'conversational-inference' ||
+    Boolean(deterministicCmd) ||
+    isConversationalFastPathRequest(description, {
+      type: options.type,
+      expectedFiles: options.expectedFiles,
+    });
+
+  const allModelTools = fastPath
+    ? []
+    : engine.tools.forModel(undefined, targetAgent?.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
   const allowedTools = preset.tools === 'all'
     ? allModelTools
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
 
   const baseParts: ContextPart[] = [
-    { kind: 'system', label: 'system prompt', content: isDirect ? 'You are a helpful, fast, and precise assistant. Answer the user\'s request directly, concisely, and completely without unnecessary planning or tool calls.' : buildSystemPrompt(engine.projectRoot, allowedTools), priority: 'critical' },
+    {
+      kind: 'system',
+      label: 'system prompt',
+      content: fastPath
+        ? 'You are Wazir, a precise AI assistant. Answer the user request directly and concisely.'
+        : buildSystemPrompt(engine.projectRoot, allowedTools),
+      priority: 'critical',
+    },
     { kind: 'task', label: 'task', content: description, priority: 'critical' },
   ];
 
-  const activeContextParts = isDirect ? [] : await buildContextPartsFromActive(engine);
+  const activeContextParts = fastPath ? [] : await buildContextPartsFromActive(engine);
   const parts = [...baseParts, ...activeContextParts];
   const budget = engine.compiler.budget(parts, OUTPUT_RESERVE_TOKENS);
 
@@ -312,7 +284,7 @@ export async function planTask(
 
   let scheduling: SchedulerDecision;
   try {
-    scheduling = engine.scheduler.plan({ task, requiredContextTokens: budget.requiredTokens });
+    scheduling = await planAvailableRoute(engine, { task, requiredContextTokens: budget.requiredTokens });
   } catch (error) {
     const reasons = [error instanceof Error ? error.message : String(error)];
     if (error instanceof SchedulingError) {
@@ -344,9 +316,20 @@ export async function planTask(
 
 export async function executeTask(
   engine: RookEngine,
-  description: string,
+  description: string | (ExecuteTaskOptions & { input: string }),
   options: ExecuteTaskOptions = {},
 ): Promise<TaskOutcome> {
+  // Programmatic callers may pass the same request object used by the CLI
+  // command layer; normalize it before planning so routing options are not lost.
+  if (typeof description !== 'string') {
+    const request = description;
+    description = request.input;
+    options = { ...request, ...options };
+  }
+  const configuredProjectRoot = (engine.config as RookEngine['config'] & { projectRoot?: string }).projectRoot;
+  if (!engine.projectRoot && configuredProjectRoot) {
+    (engine as RookEngine & { projectRoot: string }).projectRoot = configuredProjectRoot;
+  }
   const isPiped = !process.stdout.isTTY;
   const emitJson = (event: Record<string, unknown>): void => {
     if (options.json) {
@@ -388,12 +371,18 @@ export async function executeTask(
     computerId: scheduling.computerId,
     runtimeId: scheduling.runtimeId,
     modelId: scheduling.modelId,
-    workerId: engine.worker.id,
+    workerId: engine.worker?.id ?? 'local-cli',
     workspaceRoot: engine.projectRoot,
     scheduling,
     context,
   });
   const executionId = record.execution.id;
+  for (const fallback of scheduling.fallbacks ?? []) {
+    await engine.executions.recordEvent(executionId, 'model.route.changed', {
+      previousModel: fallback.from, newModel: fallback.to, accepted: true,
+      failureClass: 'MODEL_UNAVAILABLE', reason: fallback.reason, routeDecision: 'pre-dispatch fallback', taskClass: task.type,
+    });
+  }
   // External agents (Claude Code, Codex, Antigravity, ...) bring their own models, so loading
   // and admitting a local one would only cost memory and could refuse a task that never
   // needed it (seen live: INSUFFICIENT_MEMORY blocking a Codex run).
@@ -420,129 +409,23 @@ export async function executeTask(
     log(color.gray(`    - ${reason}`));
   }
 
-  // ---- FAST-PATH DIRECT EXECUTION (§1) -----------------------------------
-  // For non-mutating / direct-answer requests (arithmetic, Q&A, string transforms,
-  // valid JSON generation), bypass coding agent planning, preflight probes, tool compilation,
-  // multi-phase turn loops, and build/test verification. Perform single direct model inference.
-  if (isDirectAnswerRequest(description, options) && !externalAgent) {
-    const startTime = Date.now();
-    loader.start(`Generating answer from ${scheduling.modelId}...`);
-    await engine.executions.setStatus(executionId, 'running');
-
-    let directSummary = '';
-    const directErrors: string[] = [];
-    const directRequestId = generateId('fast-req-');
-
-    try {
-      const adapter = engine.adapters.get(scheduling.runtimeId) ?? engine.worker.adapterForModel(scheduling.modelId);
-      if (!adapter) {
-        throw new Error(`no runtime adapter available for model '${scheduling.modelId}'`);
-      }
-
-      await engine.executions.recordEvent(executionId, 'generation.started', { modelId: scheduling.modelId });
-
-      const promptMessages = [
-        {
-          role: 'system' as const,
-          content: 'You are a helpful, precise assistant. Provide a direct, correct, and concise answer to the user\'s request without unnecessary explanation or commentary.',
-        },
-        {
-          role: 'user' as const,
-          content: description,
-        },
-      ];
-
-      for await (const event of adapter.generate({
-        requestId: directRequestId,
-        modelId: scheduling.modelId,
-        messages: promptMessages,
-        contextTokens: context.available.tokens,
-        stream: true,
-        resourceContext: { taskId: task.id, workload: 'routine', agent: agent.descriptor.name },
-      })) {
-        if (event.type === 'token') {
-          const chunk = event.content ?? (event as any).token ?? '';
-          directSummary += chunk;
-          const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-          loader.setText(`Generating answer from ${scheduling.modelId} (${elapsedSec}s)...`);
-        } else if (event.type === 'completed') {
-          if (event.content && !directSummary) {
-            directSummary = event.content;
-          }
-          if (event.usage) {
-            await engine.executions.recordUsage(executionId, {
-              input: event.usage.inputTokens,
-              output: event.usage.outputTokens,
-              total: event.usage.totalTokens,
-              cacheReadTokens: event.usage.cacheReadTokens,
-              cacheWriteTokens: event.usage.cacheWriteTokens,
-              promptCacheMetrics: event.promptCache ?? event.usage.promptCache,
-            });
-          }
-        } else if (event.type === 'error') {
-          directErrors.push(event.error);
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      directErrors.push(msg);
-      await engine.executions.recordError(executionId, msg).catch(() => undefined);
-    } finally {
-      loader.stop();
-      await engine.executions.recordEvent(executionId, 'generation.completed', {
-        modelId: scheduling.modelId,
-        runtimeId: scheduling.runtimeId,
-        outcome: directErrors.length === 0 ? 'completed' : 'error',
-        error: directErrors[0],
-      }).catch(() => undefined);
-    }
-
-    const trimmedSummary = directSummary.trim();
-    if (trimmedSummary) {
-      await engine.executions.setResult(executionId, trimmedSummary);
-    }
-
-    const isSuccess = directErrors.length === 0 && trimmedSummary.length > 0;
-    const finalRecord = engine.executions.require(executionId);
-    const evaluation = evaluateExecution(finalRecord, {
-      expectedFiles: options.expectedFiles,
-      expectedEvidence: undefined, // No checks expected or required on fast-path
-    });
-
-    evaluation.success = isSuccess;
-    if (isSuccess && !evaluation.reasons.includes('direct answer completed successfully')) {
-      evaluation.reasons.push('direct answer completed successfully');
-    }
-
-    await engine.executions.setEvaluation(executionId, evaluation);
-    await engine.executions.setStatus(executionId, isSuccess ? 'completed' : 'failed');
-
-    emitJson({
-      type: 'complete',
-      success: isSuccess,
-      executionId,
-      filesChanged: [],
-      result: trimmedSummary,
-      errors: directErrors,
-    });
-
-    return {
-      success: isSuccess,
-      reasons: evaluation.reasons,
-      filesChanged: [],
-      executionId,
-      result: trimmedSummary,
-      errors: directErrors,
-    };
-  }
-
   // Preflight Infrastructure Verification. Runs whenever execution happens
   // in-process on this machine — which includes a hosted-provider placement
   // (no computerId at all, but the *tool* execution environment is still
   // this local workspace regardless of which LLM answers), not only when
   // computerId happens to equal this worker's own id.
+  // Skip worker tool preflight on non-tool conversational fast-path requests.
+  const deterministicExecution = (!options.expectedFiles || options.expectedFiles.length === 0)
+    ? isDeterministicCommandRequest(description)
+    : null;
+  const fastPathExecution =
+    Boolean(deterministicExecution) ||
+    isConversationalFastPathRequest(description, {
+      type: options.type,
+      expectedFiles: options.expectedFiles,
+    });
   const runsInProcess = !scheduling.computerId || scheduling.computerId === engine.worker.computerId;
-  if (runsInProcess) {
+  if (runsInProcess && !fastPathExecution) {
     const preflight = await runWorkerPreflight({
       workspace: engine.projectRoot,
       taskPrompt: description,
@@ -574,15 +457,19 @@ export async function executeTask(
 
   // ---- policy-gated runtime handed to the agent ---------------------------
   let cancelled = false;
+  let cancelGeneration: (() => void) | undefined;
   let turnsUsed = 0;
   const onSigint = (): void => {
     cancelled = true;
+    cancelGeneration?.();
     log(color.yellow('  cancellation requested; finishing current step'));
   };
   process.once('SIGINT', onSigint);
 
   const preset = resolvePreset(options.preset);
-  const allModelTools = engine.tools.forModel(undefined, agent.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
+  const allModelTools = agent.descriptor.strategy === 'conversational-inference'
+    ? []
+    : engine.tools.forModel(undefined, agent.descriptor.capabilities).filter(t => policySupportsModelTool(engine, t.name));
   const availableTools = preset.tools === 'all'
     ? allModelTools
     : allModelTools.filter((t) => (preset.tools as string[]).includes(t.name));
@@ -603,11 +490,13 @@ export async function executeTask(
     structuredOutput: activeModelReg?.structuredOutput ?? activeRuntimeReg?.capabilities.structuredOutput ?? false,
   };
 
+  let firstTokenEmitted = false;
   const runtime: AgentRuntime = {
     tools: availableTools,
     runtimeCapabilities: resolvedCapabilities,
     getCapabilities: () => resolvedCapabilities,
     getContextTokens: () => placement.contextTokens,
+    cancelCurrentTurn: () => cancelGeneration?.(),
 
     escalate: createEscalationHandler(engine, {
       executionId,
@@ -631,6 +520,10 @@ export async function executeTask(
       const retryContext = { requestId, model: request.modelId, provider: engine.models.get(request.modelId)?.provider };
       loader.start(`Waiting for model response (${request.modelId})...`);
       await engine.executions.recordEvent(executionId, 'generation.started', { modelId: request.modelId });
+      emitJson({ type: 'dispatch', executionId, requestId, modelId: request.modelId, runtimeId: placement.runtimeId });
+      if (agent.descriptor.strategy === 'conversational-inference') {
+        emitJson({ type: 'generation_started', executionId, modelId: request.modelId });
+      }
       if (engine.web) request = { ...request, messages: await recordWebContext(engine.executions, executionId, request.messages, engine.web.limits.maxGroundingTokens) };
       // Inference outcome evidence for health diagnostics; 'unknown' when the stream ended without either.
       let outcome: { outcome: 'completed' | 'error' | 'unknown'; error?: string } = { outcome: 'unknown' };
@@ -652,6 +545,7 @@ export async function executeTask(
             yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
             return;
           }
+          cancelGeneration = () => { void adapter.cancel(requestId).catch(() => undefined); };
           for await (const event of adapter.generate({
             requestId,
             modelId: request.modelId,
@@ -666,6 +560,13 @@ export async function executeTask(
             await engine.executions.recordProviderEvent(executionId, event, retryContext);
             observe(event);
             if (event.type === 'token') {
+              if (!firstTokenEmitted) {
+                firstTokenEmitted = true;
+                emitJson({ type: 'first_token', executionId, requestId, modelId: request.modelId });
+              }
+              if (agent.descriptor.strategy === 'conversational-inference' && event.content) {
+                emitJson({ type: 'token', content: event.content, executionId });
+              }
               loader.setText(`Generating response from ${request.modelId}...`);
             }
             if (event.type === 'completed' && event.usage) {
@@ -701,6 +602,13 @@ export async function executeTask(
               await engine.executions.recordProviderEvent(executionId, generationEvent, retryContext);
               observe(generationEvent);
               if (generationEvent.type === 'token') {
+                if (!firstTokenEmitted) {
+                  firstTokenEmitted = true;
+                  emitJson({ type: 'first_token', executionId, requestId, modelId: request.modelId });
+                }
+                if (agent.descriptor.strategy === 'conversational-inference' && generationEvent.content) {
+                  emitJson({ type: 'token', content: generationEvent.content, executionId });
+                }
                 loader.setText(`Generating response from ${request.modelId}...`);
               }
               if (generationEvent.type === 'completed' && generationEvent.usage) {
@@ -725,6 +633,7 @@ export async function executeTask(
           };
         }
       } finally {
+        cancelGeneration = undefined;
         loader.stop();
         await engine.executions.recordEvent(executionId, 'generation.completed', { modelId: request.modelId, runtimeId: placement.runtimeId, ...outcome });
       }
@@ -808,7 +717,7 @@ export async function executeTask(
       let result: ToolResult;
       try {
         result = await runRegisteredTool(engine.tools, name, input, {
-          verifyWorkspace: true,
+          verifyWorkspace: !Boolean(deterministicExecution),
           allowVerificationChanges: taskAuthorizesVerificationChanges(description),
           callId,
           allowedTools: availableTools.map(tool => tool.name),
@@ -864,7 +773,7 @@ export async function executeTask(
       // same call has already landed.
       const checkRevision = engine.executions.getWorkspaceRevision(executionId);
       if (CHECK_TOOLS.has(name)) {
-        const notApplicable = !result.ok && /missing script/i.test(result.error ?? '');
+        const notApplicable = !result.ok && (!existsSync(path.join(engine.projectRoot, 'package.json')) || /missing script|paths\[0\]|package\.json/i.test(result.error ?? ''));
         if (!notApplicable) {
           const script = typeof input.script === 'string' && input.script.trim() ? input.script.trim() : name;
           await engine.executions.recordCheck(executionId, {
@@ -944,12 +853,20 @@ export async function executeTask(
   let summary: string | undefined;
   const errors: string[] = [];
 
+  const taskAnalysis = engine.planner?.analyze?.(description);
+  const fastPathRequest =
+    Boolean(deterministicExecution) ||
+    isConversationalFastPathRequest(description, {
+      type: task.type,
+      expectedFiles: options.expectedFiles,
+    });
   try {
     for await (const turn of agent.run(
       {
         modelId: scheduling.modelId,
         taskDescription: description,
         taskType: task.type,
+        mutationRequired: fastPathRequest ? false : taskAnalysis?.mutationRequired,
         projectRoot: engine.projectRoot,
         maxTurns: options.maxTurns,
         contextTokens: context.available.tokens,
@@ -970,7 +887,8 @@ export async function executeTask(
       });
       switch (turn.kind) {
         case 'phase':
-          await engine.executions.recordEvent(executionId, 'agent.phase', { phase: turn.phase });
+          // Best effort: a lock-contended write here must not crash a task that otherwise succeeded.
+          await engine.executions.recordEvent(executionId, 'agent.phase', { phase: turn.phase }).catch(() => undefined);
           emitJson({ type: 'phase', phase: turn.phase, executionId });
           log(color.cyan(`  [${turn.phase}]`));
           break;
@@ -985,7 +903,8 @@ export async function executeTask(
         case 'error':
           if (turn.error) {
             errors.push(turn.error);
-            await engine.executions.recordError(executionId, turn.error);
+            // Best effort: when the error *is* a rejected write (e.g. lock contention), recording it would rethrow.
+            await engine.executions.recordError(executionId, turn.error).catch(() => undefined);
             emitJson({ type: 'error', error: turn.error, executionId });
             log(color.red(`    ${untrusted(turn.error.split('\n')[0].slice(0, 200))}`));
           }
@@ -1037,7 +956,9 @@ export async function executeTask(
     if (baseline instanceof Error) {
       const message = `UNVERIFIED: cannot observe the workspace before delegation (${baseline.message})`;
       errors.push(message);
-      await engine.executions.recordError(executionId, message);
+      // Best effort: this runs after the main try/catch, so a rejected write here
+      // (e.g. lock contention) must not escape as an unhandled rejection.
+      await engine.executions.recordError(executionId, message).catch(() => undefined);
     } else {
       const verified = await verifyDelegatedWork({
         executions: engine.executions, tools: engine.tools, executionId, projectRoot: engine.projectRoot,
@@ -1053,6 +974,7 @@ export async function executeTask(
   const finalRecord = engine.executions.require(executionId);
   const evaluation = evaluateExecution(finalRecord, {
     expectedFiles: options.expectedFiles,
+    protectedFiles: options.protectedFiles,
     expectedEvidence: touchesSourceCode(finalRecord.filesChanged) ? ['checks_pass'] : undefined,
   });
   await engine.executions.setEvaluation(executionId, evaluation);
@@ -1082,6 +1004,9 @@ export async function executeTask(
 
   return {
     success: evaluation.success && !cancelled,
+    ...(options.routingMode === 'NVIDIA' ? { ok: evaluation.success && !cancelled, decision: scheduling } : {}),
+    ok: evaluation.success && !cancelled,
+    decision: scheduling,
     reasons: cancelled ? ['execution cancelled by user', ...evaluation.reasons] : evaluation.reasons,
     filesChanged: evaluation.filesChanged,
     executionId,
@@ -1135,7 +1060,6 @@ export async function runSubagent(
     };
   }
 
-  // Guardrail 3: Provider-only routing enforcement for nested executions
   const routingCfg = engine.config.routing;
   const parentRoutingMode = context.parentExecution?.routingMode;
   const isProviderOnly =
@@ -1146,18 +1070,13 @@ export async function runSubagent(
     parentRoutingMode === 'NVIDIA'
       ? 'nvidia'
       : context.parentExecution?.routingProvider ?? routingCfg?.provider;
-  if (isProviderOnly && requiredProvider) {
-    const childModel = engine.models.get(context.modelId);
-    const childProvider = childModel?.provider ?? context.runtimeId;
-    if (childProvider !== requiredProvider) {
-      return {
-        ok: false,
-        output: '',
-        error: `Subagent dispatch forbidden by provider-only routing policy: child execution attempted to use '${context.modelId}' (${childProvider}) instead of required provider '${requiredProvider}'`,
-        durationMs: Date.now() - startTime,
-      };
-    }
-  }
+  const inheritedRoutingMode =
+    context.parentExecution?.routingMode ??
+    (routingCfg?.mode === 'provider_only'
+      ? routingCfg.provider === 'nvidia'
+        ? 'NVIDIA'
+        : 'PROVIDER_ONLY'
+      : undefined);
 
   const inp = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
   const description = String(inp.description ?? '').trim();
@@ -1172,18 +1091,118 @@ export async function runSubagent(
   const expectedArtifacts = Array.isArray(inp.expectedArtifacts)
     ? inp.expectedArtifacts.map(String)
     : undefined;
+  const requiredCapabilities = Array.isArray(inp.requiredCapabilities)
+    ? inp.requiredCapabilities.map(String)
+    : undefined;
+  const placementRequirements = (typeof inp.requirements === 'object' && inp.requirements !== null)
+    ? inp.requirements as Partial<import('@wazir/core').TaskRequirements>
+    : undefined;
+  const wantsFleetPlacement = Boolean((requiredCapabilities && requiredCapabilities.length > 0) || placementRequirements);
 
-  const isHostedRuntime = engine.runtimes.get(context.runtimeId)?.runtimeKind === 'hosted';
-  const childComputerId = isHostedRuntime ? undefined : (context.computerId ?? engine.worker.computerId);
+  // A subtask that declares real requirements is placed by the same Scheduler that places
+  // top-level tasks — capability match, provider authorization, quota constraints, and
+  // hardware-aware placement across the fleet — instead of blindly inheriting the parent's
+  // model/computer. Absent any requirement, placement is unchanged: same model, same local
+  // worker as the parent, as before.
+  let placementDecision: SchedulerDecision | undefined;
+  if (wantsFleetPlacement) {
+    const placementTask: Task = {
+      id: generateId('task-sub-'),
+      type: 'coding',
+      input: description,
+      capabilities: requiredCapabilities,
+      requirements: {
+        minimumContext: MINIMUM_CONTEXT_TOKENS,
+        expectedArtifacts,
+        ...placementRequirements,
+      },
+      policy: {
+        ...(context.parentPolicy ?? {}),
+        allowSubagentDispatch: false,
+        projectRoot: context.projectRoot,
+      },
+      execution: {
+        ...(context.parentExecution ?? {}),
+        targetModelId: undefined,
+        targetRuntimeId: undefined,
+        targetComputerId: undefined,
+        routingMode: inheritedRoutingMode,
+        routingProvider: requiredProvider,
+        defaultModelId: context.parentExecution?.defaultModelId ?? routingCfg?.defaultModel,
+        allowFallback: context.parentExecution?.allowFallback ?? routingCfg?.allowFallback,
+      },
+      priority: 'normal',
+      status: 'pending',
+      createdAt: new Date(),
+    };
+    try {
+      placementDecision = engine.scheduler.plan({ task: placementTask, requiredContextTokens: MINIMUM_CONTEXT_TOKENS });
+    } catch (error) {
+      const reasons = error instanceof SchedulingError
+        ? [error.message, ...error.modelReasons, ...error.computerReasons]
+        : [error instanceof Error ? error.message : String(error)];
+      return {
+        ok: false,
+        output: '',
+        error: `Subagent fleet placement failed: ${reasons.join('; ')}`,
+        durationMs: Date.now() - startTime,
+      };
+    }
+  }
+
+  const effectiveModelId = placementDecision?.modelId ?? context.modelId;
+  const effectiveRuntimeId = placementDecision?.runtimeId ?? context.runtimeId;
+  const isHostedRuntime = engine.runtimes.get(effectiveRuntimeId)?.runtimeKind === 'hosted';
+  const effectiveComputerId = placementDecision
+    ? placementDecision.computerId
+    : isHostedRuntime
+      ? undefined
+      : (context.computerId ?? engine.worker.computerId);
+
+  // Guardrail 3: Provider-only routing & hosted-provider authorization enforcement for nested executions
+  if (isProviderOnly && requiredProvider) {
+    const childModel = engine.models.get(effectiveModelId);
+    const childProvider = childModel?.provider ?? effectiveRuntimeId;
+    if (childProvider !== requiredProvider) {
+      return {
+        ok: false,
+        output: '',
+        error: `Subagent dispatch forbidden by provider-only routing policy: child execution attempted to use '${effectiveModelId}' (${childProvider}) instead of required provider '${requiredProvider}'`,
+        durationMs: Date.now() - startTime,
+      };
+    }
+  }
+
+  if (isHostedRuntime) {
+    const childModel = engine.models.get(effectiveModelId);
+    const childProvider = childModel?.provider ?? effectiveRuntimeId;
+    const implicitProviderOnlyAllow = isProviderOnly && requiredProvider === childProvider;
+    const hostedGate = engine.policy.checkHostedEligibility(
+      implicitProviderOnlyAllow && context.parentPolicy?.allowHostedProviders === undefined
+        ? { ...context.parentPolicy, allowHostedProviders: true }
+        : context.parentPolicy,
+      childProvider,
+    );
+    if (!hostedGate.allowed) {
+      return {
+        ok: false,
+        output: '',
+        error: `Subagent dispatch forbidden by hosted provider policy: ${hostedGate.reason}`,
+        durationMs: Date.now() - startTime,
+      };
+    }
+  }
 
   // Create child execution record linked by parentExecutionId
   const subtask: Task = {
     id: generateId('task-sub-'),
     type: 'coding',
     input: description,
+    capabilities: requiredCapabilities,
     requirements: {
       minimumContext: MINIMUM_CONTEXT_TOKENS,
       expectedArtifacts,
+      ...placementRequirements,
     },
     policy: {
       ...(context.parentPolicy ?? {}),
@@ -1192,15 +1211,9 @@ export async function runSubagent(
     },
     execution: {
       ...(context.parentExecution ?? {}),
-      targetModelId: context.modelId,
-      targetRuntimeId: context.runtimeId,
-      routingMode:
-        context.parentExecution?.routingMode ??
-        (routingCfg?.mode === 'provider_only'
-          ? routingCfg.provider === 'nvidia'
-            ? 'NVIDIA'
-            : 'PROVIDER_ONLY'
-          : undefined),
+      targetModelId: effectiveModelId,
+      targetRuntimeId: effectiveRuntimeId,
+      routingMode: inheritedRoutingMode,
       routingProvider: requiredProvider,
       defaultModelId: context.parentExecution?.defaultModelId ?? routingCfg?.defaultModel,
       allowFallback: context.parentExecution?.allowFallback ?? routingCfg?.allowFallback,
@@ -1214,14 +1227,18 @@ export async function runSubagent(
     task: subtask,
     parentExecutionId: context.parentExecutionId,
     agentId: 'wazir-coding',
-    computerId: childComputerId,
-    runtimeId: context.runtimeId,
-    modelId: context.modelId,
+    computerId: effectiveComputerId,
+    runtimeId: effectiveRuntimeId,
+    modelId: effectiveModelId,
     workerId: engine.worker.id,
     workspaceRoot: context.projectRoot,
+    scheduling: placementDecision,
   });
   const childExecId = childRecord.execution.id;
 
+  if (placementDecision) {
+    context.log(color.cyan(`    [subagent] fleet placement: ${effectiveModelId} via ${effectiveRuntimeId} on ${effectiveComputerId ?? 'hosted'} (${placementDecision.reasons.join('; ')})`));
+  }
   context.log(color.cyan(`    [subagent] spawned nested execution ${childExecId} (depth ${context.subagentDepth + 1})`));
   context.emitJson({
     type: 'subagent.start',
@@ -1240,34 +1257,79 @@ export async function runSubagent(
       const requestId = generateId('req-');
       if (engine.web) req = { ...req, messages: await recordWebContext(engine.executions, childExecId, req.messages, engine.web.limits.maxGroundingTokens) };
       if (context.signal?.aborted) return;
-      const adapter = engine.adapters.get(context.runtimeId) ?? engine.worker.adapterForModel(req.modelId);
-      if (!adapter) {
-        yield { type: 'error', error: `no runtime can serve model '${req.modelId}'` };
-        return;
-      }
-      const effective = childComputerId ? await engine.lifecycle.activateExecution(childExecId, MINIMUM_CONTEXT_TOKENS) : undefined;
-      for await (const event of adapter.generate({
-        requestId,
-        contextTokens: effective,
-        modelId: req.modelId,
-        messages: req.messages,
-        maxTokens: req.maxTokens,
-        temperature: req.temperature,
-        stream: true,
-        tools: req.tools,
-        resourceContext: { taskId: childExecId, workload: 'routine' },
-      })) {
-        await engine.executions.recordProviderEvent(childExecId, event, {
-          requestId, model: req.modelId, provider: engine.models.get(req.modelId)?.provider,
-        });
-        if (event.type === 'completed' && event.usage) {
-          await engine.executions.recordUsage(childExecId, {
-            input: event.usage.inputTokens,
-            output: event.usage.outputTokens,
-            total: event.usage.totalTokens,
-          });
+      const isLocalPlacement = !effectiveComputerId || effectiveComputerId === engine.worker.computerId;
+      // Activation prepares a model to run on *this* worker — meaningless for a hosted API
+      // placement (no computerId) or a placement the Scheduler sent to a different fleet machine.
+      const contextTokens = effectiveComputerId && effectiveComputerId === engine.worker.computerId
+        ? await engine.lifecycle.activateExecution(childExecId, MINIMUM_CONTEXT_TOKENS)
+        : effectiveComputerId
+          ? MINIMUM_CONTEXT_TOKENS
+          : undefined;
+      const retryContext = { requestId, model: req.modelId, provider: engine.models.get(req.modelId)?.provider };
+
+      if (isLocalPlacement) {
+        const adapter = engine.adapters.get(effectiveRuntimeId) ?? engine.worker.adapterForModel(req.modelId);
+        if (!adapter) {
+          yield { type: 'error', error: `no runtime can serve model '${req.modelId}'` };
+          return;
         }
-        yield event;
+        for await (const event of adapter.generate({
+          requestId,
+          contextTokens,
+          modelId: req.modelId,
+          messages: req.messages,
+          maxTokens: req.maxTokens,
+          temperature: req.temperature,
+          stream: true,
+          tools: req.tools,
+          resourceContext: { taskId: childExecId, workload: 'routine' },
+        })) {
+          await engine.executions.recordProviderEvent(childExecId, event, retryContext);
+          if (event.type === 'completed' && event.usage) {
+            await engine.executions.recordUsage(childExecId, {
+              input: event.usage.inputTokens,
+              output: event.usage.outputTokens,
+              total: event.usage.totalTokens,
+            });
+          }
+          yield event;
+        }
+      } else if (engine.config.apiUrl) {
+        // The Scheduler placed this subagent on a different fleet machine: hand it to that
+        // computer's worker through the control plane's task-pull loop — the same remote-
+        // dispatch path top-level tasks use (see executeTask's runtime.generate above).
+        const workerRequest: WorkerExecutionRequest = {
+          runtimeId: effectiveRuntimeId,
+          executionId: childExecId,
+          requestId,
+          modelId: req.modelId,
+          messages: req.messages,
+          maxTokens: req.maxTokens,
+          temperature: req.temperature,
+          contextTokens,
+        };
+        try {
+          for await (const event of dispatchRemote(engine.config.apiUrl, effectiveComputerId, workerRequest, { token: engine.config.apiToken })) {
+            const generationEvent = toGenerationEvent(event);
+            if (!generationEvent) continue;
+            await engine.executions.recordProviderEvent(childExecId, generationEvent, retryContext);
+            if (generationEvent.type === 'completed' && generationEvent.usage) {
+              await engine.executions.recordUsage(childExecId, {
+                input: generationEvent.usage.inputTokens,
+                output: generationEvent.usage.outputTokens,
+                total: generationEvent.usage.totalTokens,
+              });
+            }
+            yield generationEvent;
+          }
+        } catch (error) {
+          yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
+        }
+      } else {
+        yield {
+          type: 'error',
+          error: `subagent scheduled on remote computer '${effectiveComputerId}' but no control-plane API URL is configured (set WAZIR_API_URL)`,
+        };
       }
     },
 
@@ -1381,7 +1443,7 @@ export async function runSubagent(
   try {
     for await (const turn of agent.run(
       {
-        modelId: context.modelId,
+        modelId: effectiveModelId,
         taskDescription: description,
         taskType: 'coding',
         projectRoot: context.projectRoot,
@@ -1391,7 +1453,7 @@ export async function runSubagent(
       },
       subagentRuntime,
     )) {
-      if (turn.terminationReason) await recordTermination(engine, childExecId, turn.terminationReason, context.modelId, 'coding', turn.protocolMetrics, turn.runStats);
+      if (turn.terminationReason) await recordTermination(engine, childExecId, turn.terminationReason, effectiveModelId, 'coding', turn.protocolMetrics, turn.runStats);
       if (turn.kind === 'done') {
         subagentSummary = turn.content ?? '';
       } else if (turn.kind === 'error') {
@@ -1403,13 +1465,17 @@ export async function runSubagent(
     childErrors.push(err instanceof Error ? err.message : String(err));
   }
 
-  const childUpdated = await engine.executions.get(childExecId);
-  const childFiles = childUpdated?.filesChanged ?? [];
-  const status = (subagentSuccess && childErrors.length === 0) ? 'completed' : 'failed';
-  await engine.executions.setStatus(childExecId, status);
+  const childUpdated = engine.executions.require(childExecId);
+  const childFiles = childUpdated.filesChanged ?? [];
+  const childEval = evaluateExecution(childUpdated, {
+    expectedFiles: expectedArtifacts,
+  });
+  await engine.executions.setEvaluation(childExecId, childEval);
   if (subagentSummary) {
     await engine.executions.setResult(childExecId, subagentSummary);
   }
+  const status = (subagentSuccess && childErrors.length === 0 && childEval.success) ? 'completed' : 'failed';
+  await engine.executions.setStatus(childExecId, status);
 
   const durationMs = Date.now() - startTime;
   const condensedOutput = [
@@ -1434,5 +1500,13 @@ export async function runSubagent(
     output: condensedOutput,
     error: childErrors.length > 0 ? childErrors.join('; ') : undefined,
     durationMs,
+    fileMutations: childFiles.map((p) => ({
+      path: p,
+      attempted: true,
+      succeeded: true,
+      changed: true,
+      existedBefore: false,
+      existsAfter: true,
+    })),
   };
 }

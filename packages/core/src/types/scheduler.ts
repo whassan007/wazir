@@ -5,8 +5,6 @@ export type ModelSelectionStrategy =
   | 'loaded_preferred'
   | 'empirical_profile';
 
-export type InferenceResourceType = 'LOCAL_GPU_INFERENCE' | 'HOSTED_API_INFERENCE';
-
 export interface RoutingPolicyConfig {
   mode: 'provider_only' | 'auto' | 'local_only' | 'hybrid';
   provider?: string;
@@ -23,6 +21,11 @@ export interface ModelRoutingDecision {
   empiricalExplanation?: import('./modelIntelligence.js').EmpiricalRoutingExplanation;
 }
 
+export type InferenceResourceType =
+  | 'LOCAL_GPU_INFERENCE'
+  | 'REMOTE_GPU_INFERENCE'
+  | 'HOSTED_API_INFERENCE';
+
 export interface ComputerRoutingDecision {
   /** Absent when `placementKind` is 'hosted' — a hosted provider has no Computer. */
   computerId?: string;
@@ -30,13 +33,22 @@ export interface ComputerRoutingDecision {
   /** 'local' when placed on a Computer; 'hosted' when routed to an
    *  authenticated hosted provider (Anthropic/OpenAI/Google/NVIDIA). */
   placementKind: 'local' | 'hosted';
-  /** Resource classification distinguishing local hardware from remote API inference. */
+  /** Distinguishes local GPU, remote GPU (e.g. DGX Spark), and hosted API inference. */
   resourceType?: InferenceResourceType;
   score: number;
   reasons: string[];
 }
 
+/** One model abandoned before dispatch, and why. */
+export interface ModelFallback {
+  from: string;
+  to: string;
+  reason: string;
+}
+
 export interface SchedulerDecision {
+  /** Models skipped before dispatch (e.g. no longer served by their runtime), in order. */
+  fallbacks?: ModelFallback[];
   readiness?: 'READY_NOW' | 'LOADABLE' | 'NOT_LOADABLE';
   agentId?: string;
   modelId: string;
@@ -44,7 +56,7 @@ export interface SchedulerDecision {
   runtimeId: string;
   /** Absent for a hosted placement — see ComputerRoutingDecision.computerId. */
   computerId?: string;
-  /** Resource classification distinguishing local hardware from remote API inference. */
+  /** Distinguishes local GPU, remote GPU, and hosted API inference so hosted providers are never attributed to local/remote GPU hardware. */
   resourceType?: InferenceResourceType;
   modelDecision: ModelRoutingDecision;
   computerDecision: ComputerRoutingDecision;

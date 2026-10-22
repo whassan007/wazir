@@ -364,7 +364,11 @@ export class Worker {
     if (!dataLine) return;
     try {
       const request = JSON.parse(dataLine.slice(5).trim()) as WorkerExecutionRequest;
-      void this.handleDispatchedTask(request);
+      if (frame.split('\n').some(line => line.trim() === 'event: cancel')) {
+        this.activeClaims.get(request.requestId)?.();
+        return;
+      }
+      void this.handleDispatchedTask(request).catch(() => undefined);
     } catch {
       // malformed frame; ignore rather than killing the stream
     }
@@ -377,7 +381,11 @@ export class Worker {
     const claimed = await fetch(`${endpoint}/claim`, { method: 'POST', headers: this.authHeaders() }).catch(() => undefined);
     if (!claimed || !claimed.ok) return; // A duplicate delivery, closed server, or another worker already owns this attempt.
     const lease = await claimed.json() as { token: string; leaseMs: number };
-    request = { ...request, leaseToken: lease.token };
+    request = { ...request, leaseToken: lease.token,
+      // A failed HTTP response may follow a committed external effect.
+      providerRetryPolicy: request.replayPolicy === 'read-only' ? request.providerRetryPolicy
+        : { ...request.providerRetryPolicy, maxRetries: 0 },
+    };
     let lost = false;
     this.activeClaims.set(request.requestId, () => { lost = true; void this.cancel(request.requestId); });
     let renewing = false;
@@ -393,8 +401,9 @@ export class Worker {
         .finally(() => { renewing = false; });
     }, Math.max(50, Math.floor(lease.leaseMs / 3)));
     renewal.unref?.();
-    await this.reportEvent(request, 'started');
     try {
+      await this.reportEvent(request, 'started');
+      if (lost) return;
       // Await report durability before allowing the adapter to advance. In
       // particular, retry intent must reach the lease-fenced control plane
       // before the next provider request is dispatched.
@@ -432,14 +441,16 @@ export class Worker {
 
   private async reportEvent(request: WorkerExecutionRequest, type: WorkerEventType, data?: unknown): Promise<void> {
     if (!this.serverUrl) return;
-    await fetch(
+    const response = await fetch(
       `${this.serverUrl}/computers/${encodeURIComponent(this.computerId)}/executions/${encodeURIComponent(request.requestId)}/events`,
       {
         method: 'POST',
         headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+        signal: AbortSignal.timeout(5000),
         body: JSON.stringify({ executionId: request.executionId, leaseToken: request.leaseToken, type, data }),
       },
-    ).catch(() => undefined);
+    );
+    if (!response.ok) throw new Error(`Event report rejected: HTTP ${response.status}`);
   }
 
   private async reportResult(

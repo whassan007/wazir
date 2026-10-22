@@ -12,6 +12,7 @@ export * from './terminalTools.js';
 export * from './outcomeInspection.js';
 export { snapshotWorkspace, workspaceFingerprint, workspaceMutations, type WorkspaceSnapshot } from './workspaceSnapshot.js';
 export { createWebTools } from './web.js';
+export { createFleetMemoryTools } from './memoryTools.js';
 export * from './compactionTools.js';
 export * from './codeIntelligenceTools.js';
 export * from './codeModeTool.js';

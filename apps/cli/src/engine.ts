@@ -35,6 +35,8 @@ import {
   estimateModelMemory,
   TaskCapabilityClassifier,
   ModelIntelligenceService,
+  FleetMemoryService,
+  createFleetMemoryService,
   HandoffService,
 } from '@wazir/core';
 import type {
@@ -54,10 +56,10 @@ import {
   getSpawnCommand,
   type KeyValueStore,
 } from '@wazir/shared';
-import { ToolRegistry, defaultTools, createWebTools } from '@wazir/tools';
+import { ToolRegistry, defaultTools, createWebTools, createFleetMemoryTools } from '@wazir/tools';
 import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
 import { createConfiguredWeb } from './web.js';
-import { AcpAgentAdapter, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
+import { AcpAgentAdapter, ChatAgent, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
@@ -78,12 +80,12 @@ export interface EngineOptions {
   projectRoot?: string;
   quiet?: boolean;
   readOnlyLifecycle?: boolean;
+  /** Skip background daemon intervals and redundant live model probes during one-shot CLI commands. */
+  fastStartup?: boolean;
   /** How long an unanswered policy approval waits before it is denied (default 5 minutes). */
   approvalTimeoutMs?: number;
   /** Opt in to honouring `WAZIR_AUTO_APPROVE=1`; never on by default. */
   allowEnvAutoApprove?: boolean;
-  /** Skip active verification probes and background loops for ultra-low-latency CLI commands. */
-  fastStartup?: boolean;
 }
 
 export interface RookEngine {
@@ -128,9 +130,10 @@ export interface RookEngine {
   discovered: DiscoveredRuntime[];
   worker: Worker;
   store: KeyValueStore;
+  fleetMemory: FleetMemoryService;
+  handoffs: HandoffService;
   secretBroker: SecretBroker;
   hostedAdapters: Map<ProviderId, HostedAdapter>;
-  handoffs: HandoffService;
 }
 
 function guessFamily(id: string, provider: string): ModelRecord['family'] {
@@ -174,15 +177,7 @@ function acpAgentSpecs(): Array<{ name: string; description: string; requires: s
 }
 
 async function detectOpenCode(): Promise<boolean> {
-  const resolved = resolveExecutable('opencode');
-  if (!resolved) return false;
-  try {
-    const cmd = getSpawnCommand(resolved, ['--version']);
-    await execFileAsync(cmd.command, cmd.args, { timeout: 3_000, shell: cmd.useShell });
-    return true;
-  } catch {
-    return false;
-  }
+  return Boolean(resolveExecutable('opencode'));
 }
 
 export async function createEngine(options: EngineOptions = {}): Promise<RookEngine> {
@@ -214,6 +209,13 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     },
   }) as any;
   executions.store = store; // Attach store for Block persistence
+
+  // Fleet-shared durable memory: facts recorded by `remember_fact` are keyed by project
+  // root and backed by the same KeyValueStore as everything else — any agent working in
+  // the same project, on this machine or (with a shared PostgresStore) any other machine
+  // in the fleet, can `recall_facts` them. See FleetMemoryService.
+  const fleetMemory = createFleetMemoryService(store);
+  for (const tool of createFleetMemoryTools(fleetMemory)) tools.register(tool);
 
   // ---- local computer + runtimes + models ------------------------------
   // Every model request passes resource admission and accounting: adapters are governed
@@ -261,7 +263,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // that searches `worker.adapterForModel()` can ever reach a hosted adapter,
   // since the worker's own discovery list is strictly local/hardware-bound.
   const secretBroker = await createSecretBroker({ secretsDir: engineConfigDir });
-  const hostedAdapters = createHostedProviders(config, secretBroker);
+  const hostedAdapters = createHostedProviders(config, secretBroker, { fastStartup: options.fastStartup });
   for (const [id, rawAdapter] of hostedAdapters) {
     const adapter = govern(rawAdapter);
     adapterById.set(id, adapter);
@@ -283,6 +285,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
 
   // ---- agents -----------------------------------------------------------
   agents.register(createCodingAgent({ webCapabilities: config.web?.enabled ? ['web.search', 'web.fetch'] : [] }), 'native');
+  agents.register(new ChatAgent(), 'native');
   agents.register(createStepAgent(), 'native');
 
   // OpenCode is an optional external execution provider: Wazir still owns
@@ -395,7 +398,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   mcp.on('event', event => {
     if (event.executionId) void executions.recordEvent(event.executionId, 'mcp.event', event).catch(() => undefined);
   });
-  await mcp.initialize().catch(() => { if (!options.quiet) console.error('[wazir] MCP registry unavailable; run wa mcp doctor.'); });
+  if (!options.fastStartup || existsSync(path.join(engineConfigDir, 'mcp.json')) || (config.allowedMcpServers?.length ?? 0) > 0) {
+    await mcp.initialize().catch(() => { if (!options.quiet) console.error('[wazir] MCP registry unavailable; run wa mcp doctor.'); });
+  }
   const web = config.web?.enabled ? createConfiguredWeb(config.web, policy, mcp, engineConfigDir, executions, store) : undefined;
   if (web) for (const tool of createWebTools(web)) tools.register(tool);
 
@@ -431,7 +436,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
 
   // ---- jobs & orchestration -----------------------------------------------
   const jobManager = new JobManager({ store });
-  await jobManager.ready;
+  if (!options.fastStartup) {
+    await jobManager.ready;
+  }
 
   const worktrees = new WorktreeManager();
   const checkpoints = new CheckpointService({
@@ -441,7 +448,10 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     provenanceManager: provenance,
     defaultWorkspaceRoot: projectRoot,
   });
-  await checkpoints.ready;
+  if (!options.fastStartup) {
+    await checkpoints.ready;
+  }
+
   const handoffs = new HandoffService({ store, executions, checkpoints, projectRoot });
   await handoffs.ready;
 
@@ -483,7 +493,10 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const executionHistory = await executions.list();
   reliability.hydrate(executionHistory);
   health.hydrateFromExecutions(executionHistory);
-  await lifecycle.discoverAndReconcile({ verify: !options.readOnlyLifecycle && !options.fastStartup });
+  await lifecycle.discoverAndReconcile({
+    verify: !options.readOnlyLifecycle,
+    fastStartup: options.fastStartup ?? true,
+  });
   // After discovery so every model is registered; register() preserves the profiles.
   for (const [modelId, profiles] of measureModelPerformance(executionHistory)) models.setPerformance(modelId, profiles);
   if (!options.readOnlyLifecycle && !options.fastStartup) {
@@ -546,7 +559,9 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     policyEngine: policy,
     store,
   });
-  await optimizer.hydrate();
+  if (!options.fastStartup) {
+    await optimizer.hydrate();
+  }
 
   return {
     resources,
@@ -586,9 +601,10 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     discovered,
     worker,
     store,
+    fleetMemory,
+    handoffs,
     secretBroker,
     hostedAdapters,
-    handoffs,
     mcp,
   };
 }

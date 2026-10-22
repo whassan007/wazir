@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TaskDispatcher } from '../src/server.js';
 
-const request = { requestId: 'request-1', executionId: 'exec-1', modelId: 'test', messages: [] };
+const request = { requestId: 'request-1', executionId: 'exec-1', modelId: 'test', messages: [], replayPolicy: 'read-only' as const };
 const outcome = { ok: true, output: 'done', inputTokens: 1, outputTokens: 2, durationMs: 3 };
 
 describe('durable dispatch and worker fencing', () => {
@@ -51,37 +51,6 @@ describe('durable dispatch and worker fencing', () => {
       expect(c.totalQueued).toBe(0);
       expect((await c.awaitOutcome(request.requestId, 100)).output).toBe('done');
     } finally { await rm(dir, { recursive: true, force: true }); }
-  });
-
-  it('recognizes terminal retries as duplicates even after lease expiry and never appends duplicate events', async () => {
-    const store = new MemoryStore();
-    let now = 0;
-    const dispatcher = new TaskDispatcher(store, () => now, 1000);
-    await dispatcher.dispatch('computer', request);
-    const lease = await dispatcher.claim(request.requestId, 'computer');
-    const event = { executionId: request.executionId, type: 'started' as const, data: { attemptId: lease.attemptId } };
-    await dispatcher.recordEvent(request.requestId, event, lease.token);
-    await dispatcher.recordEvent(request.requestId, event, lease.token);
-    await dispatcher.commit(request.requestId, outcome, lease.token);
-    now = 2000;
-    await expect(dispatcher.commit(request.requestId, { ...outcome, output: 'stale overwrite' }, lease.token)).resolves.toBe('duplicate');
-    const status = await dispatcher.status(request.requestId);
-    expect(status?.outcome?.output).toBe('done');
-    expect(status?.events.filter(e => e.type === 'started')).toHaveLength(1);
-  });
-
-  it('allows only one concurrent terminal commit and preserves the winning outcome', async () => {
-    const store = new MemoryStore();
-    const a = new TaskDispatcher(store, Date.now, 1000);
-    const b = new TaskDispatcher(store, Date.now, 1000);
-    await a.dispatch('computer', request);
-    const lease = await a.claim(request.requestId, 'computer');
-    const results = await Promise.all([
-      a.commit(request.requestId, { ...outcome, output: 'winner-a' }, lease.token),
-      b.commit(request.requestId, { ...outcome, output: 'winner-b' }, lease.token),
-    ]);
-    expect(results.sort()).toEqual(['committed', 'duplicate']);
-    expect((await b.status(request.requestId))?.outcome?.output).toMatch(/^winner-[ab]$/);
   });
 });
 

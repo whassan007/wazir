@@ -1,7 +1,6 @@
 # Wazir project .gitignore
 
 # Node.js / npm
-node_modules
 node_modules/
 dist/
 build/

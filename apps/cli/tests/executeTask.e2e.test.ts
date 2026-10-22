@@ -14,7 +14,7 @@ import {
   Scheduler,
 } from '@wazir/core';
 import { ToolRegistry, defaultTools } from '@wazir/tools';
-import { createCodingAgent } from '@wazir/agents';
+import { ChatAgent, createCodingAgent } from '@wazir/agents';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import type { Worker } from '@wazir/workers';
 import { executeTask } from '../src/run.js';
@@ -102,6 +102,7 @@ async function buildTestEngine(projectRoot: string, scriptedReplies?: string[], 
   });
 
   agents.register(createCodingAgent(), 'native');
+  agents.register(new ChatAgent(), 'native');
 
   const policy = new PolicyEngine({ projectRoot, networkAllowed: false });
   const scheduler = new Scheduler({ computers, runtimes, models, agents });
@@ -270,19 +271,18 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
     expect(outcome.result).toContain('Verification checks passed');
   });
 
-  it('a Q&A prompt answered correctly without writing any file still surfaces the answer, even though VERIFY fails it for making no code changes', async () => {
+  it('a coding task answered without writing any file still surfaces the answer, even though VERIFY fails it for making no code changes', async () => {
     // Regression test for a live-observed usability defect (2026-10-17, test/agy-mac-gemma):
-    // "What is 12 x 8?" was answered by the model, but the task type defaults to `coding`
-    // (mutationRequired), so VERIFY correctly fails it for "no code modifications" — and
-    // the model's actual answer used to be silently discarded, leaving the operator with
-    // zero indication whether the model had even gotten the trivial question right.
+    // When a coding task (mutationRequired) is answered by the model without modifying any file,
+    // VERIFY correctly fails it for "no code modifications" — and the model's actual answer
+    // used to be silently discarded, leaving the operator with zero indication of what the model said.
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-answer-surfaced-'));
     const engine = await buildTestEngine(projectRoot, [
-      '{"action":"plan","content":"calculate 12 x 8"}',
+      '{"action":"plan","content":"inspect src/app.ts and compute 12 x 8"}',
       '{"action":"done","summary":"96"}',
     ]);
 
-    const outcome = await executeTask(engine, 'What is 12 x 8? Return only the number.', { quiet: true });
+    const outcome = await executeTask(engine, 'Edit src/app.ts and return 96.', { quiet: true });
 
     expect(outcome.success).toBe(false);
     expect(outcome.errors.join(' ')).toContain('no code modifications');
@@ -388,4 +388,104 @@ describe('executeTask — real end-to-end Task -> Result flow', () => {
       process.stdout.write = origWrite;
     }
   });
+
+  it('schedules tool-free chat and emits actual token events', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-chat-'));
+    const engine = await buildTestEngine(projectRoot);
+
+    const adapter = engine.adapters.get('fake')!;
+    adapter.generate = async function* (request: any) {
+      expect(request.tools ?? []).toHaveLength(0);
+      yield { type: 'token' as const, content: '4' };
+      yield { type: 'completed' as const, content: '4', usage: { inputTokens: 5, outputTokens: 1 } };
+    };
+
+    const emittedLines: string[] = [];
+    const origWrite = process.stdout.write;
+    process.stdout.write = function (str: any) {
+      if (typeof str === 'string') {
+        emittedLines.push(str);
+      }
+      return true;
+    } as any;
+
+    try {
+      const outcome = await executeTask(engine, 'Reply with 4', {
+        type: 'chat',
+        json: true,
+        quiet: true,
+      });
+
+      expect(outcome.success).toBe(true);
+      expect(outcome.result).toBe('4');
+
+      const parsed = emittedLines
+        .flatMap((l) => l.split('\n'))
+        .filter((l) => l.trim().startsWith('{'))
+        .map((l) => JSON.parse(l));
+
+      const types = parsed.map((p) => p.type);
+      expect(types).toContain('start');
+      expect(types).toContain('generation_started');
+      expect(types).toContain('token');
+      expect(types).toContain('done');
+      expect(types).toContain('complete');
+      expect(types).not.toContain('phase');
+      expect(parsed.find((p) => p.type === 'start')?.agent).toBe('wazir-chat');
+      expect(parsed.find((p) => p.type === 'token')?.content).toBe('4');
+    } finally {
+      process.stdout.write = origWrite;
+    }
+  });
+
+  it('F03: rejects nonexistent pinned model before execution without fallback', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-f03-'));
+    const engine = await buildTestEngine(projectRoot);
+
+    const outcome = await executeTask(engine, 'Say hi', {
+      model: 'nonexistent-model-xyz-999',
+      quiet: true,
+    });
+
+    expect(outcome.success).toBe(false);
+    expect(outcome.executionId).toBe('—');
+    expect(outcome.reasons.join(' ')).toContain('nonexistent-model-xyz-999');
+  });
+
+  it('degrades gracefully without crashing when store writes reject during turn handling', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-lock-'));
+    const engine = await buildTestEngine(projectRoot);
+
+    vi.spyOn(engine.executions, 'recordEvent').mockRejectedValue(
+      new Error('StoreLockError: timed out waiting for store lock'),
+    );
+    vi.spyOn(engine.executions, 'recordError').mockRejectedValue(
+      new Error('StoreLockError: timed out waiting for store lock'),
+    );
+
+    const outcome = await executeTask(engine, 'create hello.txt containing "hi"', {
+      quiet: true,
+    });
+
+    expect(outcome).toBeDefined();
+    expect(typeof outcome.success).toBe('boolean');
+  });
+
+  it('executes deterministic read-only commands (pwd, ls) via policy-gated tools with zero LLM calls', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-e2e-det-'));
+    const engine = await buildTestEngine(projectRoot);
+
+    const adapter = engine.adapters.get('fake')!;
+    let generateCalls = 0;
+    adapter.generate = async function* () {
+      generateCalls += 1;
+      throw new Error('deterministic command must not invoke LLM generate');
+    };
+
+    const outcome = await executeTask(engine, 'pwd', { quiet: true });
+    expect(outcome.success).toBe(true);
+    expect(generateCalls).toBe(0);
+    expect(outcome.result?.trim()).toContain(path.basename(projectRoot));
+  });
 });
+

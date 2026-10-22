@@ -1,0 +1,7 @@
+==> Bundling Wazir CLI into standalone executable: bin/wa.js
+
+  bin/wa.js      18.4mb ⚠️
+  bin/wa.js.map  28.8mb
+
+⚡ Done in 572ms
+✓ Standalone CLI bundle created at: /tmp/wazir-agy-execution/bin/wa.js

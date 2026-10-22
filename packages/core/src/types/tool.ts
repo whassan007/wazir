@@ -37,45 +37,6 @@ export interface ToolDescriptor {
   environment: ToolEnvironment;
 }
 
-export type FileMutationOrigin = 'wazir' | 'other_wazir' | 'external' | 'unknown';
-export type AttributionConfidence = 'certain' | 'probable' | 'uncertain';
-export type ExternalMutationHint = 'external_shell' | 'external_agent' | 'editor_autosave' | 'external_process';
-
-export interface WorktreeIdentity {
-  worktreeRoot: string;
-  gitDir?: string;
-  branch?: string;
-  headSha?: string;
-  isDetached?: boolean;
-  isLinkedWorktree?: boolean;
-}
-
-export interface FileMutationConflict {
-  path: string;
-  kind: 'concurrent_wazir' | 'concurrent_external' | 'external_overwrite' | 'uncertain_attribution';
-  activeExecutionId: string;
-  otherExecutionId?: string;
-  otherOrigin: FileMutationOrigin;
-  baselineHash?: string;
-  activeAfterHash?: string;
-  observedAfterHash?: string;
-  description: string;
-}
-
-export interface FileMutationProvenance {
-  origin: FileMutationOrigin;
-  confidence: AttributionConfidence;
-  executionId?: string;
-  ownerExecutionId?: string;
-  taskId?: string;
-  callId?: string;
-  toolName?: string;
-  worktree?: WorktreeIdentity;
-  externalHint?: ExternalMutationHint;
-  conflict?: FileMutationConflict;
-  reason: string;
-}
-
 export interface FileMutationResult {
   path: string;
   attempted: boolean;
@@ -85,7 +46,6 @@ export interface FileMutationResult {
   beforeHash?: string;
   afterHash?: string;
   changed: boolean;
-  provenance?: FileMutationProvenance;
 }
 
 export interface ToolResult {
@@ -98,9 +58,6 @@ export interface ToolResult {
   durationMs: number;
   metadata?: Record<string, unknown>;
   fileMutations?: FileMutationResult[];
-  externalMutations?: FileMutationResult[];
-  unattributedMutations?: FileMutationResult[];
-  mutationConflicts?: FileMutationConflict[];
 }
 
 export interface ToolExecutionContext {

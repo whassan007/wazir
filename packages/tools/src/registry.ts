@@ -18,7 +18,12 @@ export const dispatchSubagentTool: Tool = {
     description:
       'Delegate a self-contained subtask to a fresh agent with no memory of this conversation. ' +
       'Use for isolated exploration or a well-scoped subproblem whose full transcript you do not ' +
-      'need. Returns only a condensed summary, not the raw transcript.',
+      'need. Returns only a condensed summary, not the raw transcript. By default the subtask runs ' +
+      'on the same model/machine as this conversation. Set requiredCapabilities and/or requirements ' +
+      'when the subtask genuinely needs something this conversation\'s placement does not have ' +
+      '(e.g. vision, a larger context window, more GPU memory) — Wazir then places it through the ' +
+      'fleet Scheduler, which may run it on a different model or a different machine, recorded as a ' +
+      'normal scheduling decision inspectable via `wa explain`.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -30,6 +35,30 @@ export const dispatchSubagentTool: Tool = {
           type: 'array',
           items: { type: 'string' },
           description: 'Optional expected artifacts or files created by the subtask',
+        },
+        requiredCapabilities: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Agent capabilities the subtask needs. Setting this routes dispatch through the fleet ' +
+            'Scheduler instead of reusing the parent\'s model/machine.',
+        },
+        requirements: {
+          type: 'object',
+          additionalProperties: false,
+          description:
+            'Model/hardware requirements for fleet-aware placement (e.g. { "vision": true } or ' +
+            '{ "minimumGPUMemoryGB": 24 }). Setting any field routes dispatch through the fleet ' +
+            'Scheduler instead of reusing the parent\'s model/machine.',
+          properties: {
+            reasoning: { type: 'string', enum: ['low', 'medium', 'high'] },
+            vision: { type: 'boolean' },
+            toolCalling: { type: 'boolean' },
+            minimumContext: { type: 'integer', minimum: 1 },
+            minimumMemoryGB: { type: 'number', minimum: 0 },
+            minimumGPUMemoryGB: { type: 'number', minimum: 0 },
+            localOnly: { type: 'boolean' },
+          },
         },
       },
       required: ['description'],

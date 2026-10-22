@@ -44,6 +44,9 @@ text (vendor CLIs report no token counts), so a configured subscription limit is
 local budget, not the vendor's quota. With `unknownLimitPolicy: "deny"` an account with an
 unknown limit is **blocked** (not deferred: waiting does not make the limit known).
 
+**Rollback:** set `"enforce": false` (accounting continues, nothing is refused) or
+`wa resources stop` to halt all cloud and subscription dispatch immediately.
+
 Accounts with the same `quotaGroup` are separate authentication identities but share one admission
 scope. When controllers and workers use the same file-backed `resources.db`, SQLite WAL plus
 `BEGIN IMMEDIATE` makes check-and-reserve atomic across processes. Separate ledgers cannot provide
@@ -54,9 +57,6 @@ When `policy.enforce` is `false`, Wazir still records estimates and reservations
 prevent paid dispatch or quota oversubscription. Resource output labels this as advisory. Use
 `wa resources validate --profile production` and set `enforce: true` before authorizing paid or
 quota-constrained production execution.
-
-**Rollback:** set `"enforce": false` (accounting continues, nothing is refused) or
-`wa resources stop` to halt all cloud and subscription dispatch immediately.
 
 ## Commands
 

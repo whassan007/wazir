@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { JsonFileStore, MemoryStore } from '@wazir/shared';
-import { createApiState, createApp } from './server.js';
+import { createApiState, createApp, startDispatchRecovery } from './server.js';
 import { isLoopbackHost } from './auth.js';
 import { listenOrFail } from './listenOrFail.js';
 
@@ -77,12 +77,14 @@ async function main(): Promise<void> {
     : http.createServer(app);
 
   await listenOrFail(server, port, host, 'wazir-api');
+  const stopRecovery = startDispatchRecovery(state);
   const scheme = isTls ? 'https' : 'http';
   console.log(`wazir-api listening${isTls ? ' securely' : ''} on ${scheme}://${host}:${port}`);
   console.log(`  health: ${scheme}://${host}:${port}/health`);
   console.log(`  api:    ${scheme}://${host}:${port}/api/v1/overview`);
 
   const shutdown = () => {
+    stopRecovery();
     server.close(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);

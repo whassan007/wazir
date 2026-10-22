@@ -39,7 +39,7 @@ function build(projectRoot: string, script: (requestIndex: number, messages: Cha
     id: 'fake', type: 'other',
     async discover() { return { id: 'fake', name: 'fake', version: '1' }; },
     async healthCheck() { return { status: 'healthy' }; },
-    async listModels() { return []; },
+    async listModels() { return [{ id: 'fake-model', name: 'fake-model' }]; },
     async getCapabilities() { return CAPS; },
     async inspectModel(modelId: string) { return { modelId, loaded: true, effectiveContext: 32768 }; },
     async probeModel() { return true; },

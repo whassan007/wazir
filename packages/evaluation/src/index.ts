@@ -140,7 +140,7 @@ export function currentAttemptErrors(record: Pick<ExecutionRecord, 'errors'> & P
 
 export function evaluateExecution(
   record: Pick<ExecutionRecord, 'filesChanged' | 'checks' | 'errors'> &
-    Partial<Pick<ExecutionRecord, 'events' | 'workspaceState' | 'evidence' | 'acceptanceContract' | 'task' | 'result' | 'executionContract'>>,
+    Partial<Pick<ExecutionRecord, 'events' | 'workspaceState' | 'evidence' | 'acceptanceContract' | 'task' | 'result' | 'executionContract' | 'toolCalls'>>,
   options: EvaluationOptions = {},
 ): EvaluationResult {
   const errors = currentAttemptErrors(record);
@@ -190,6 +190,24 @@ export function evaluateExecution(
   }
 
   let success = true;
+
+  // Ordinary shell failures are not necessarily build/test checks. A model's
+  // done message cannot erase them. A successful retry of the same command can;
+  // revision-aware checks retain their existing recovery rules below.
+  const resumed = [...(record.events ?? [])].reverse().find(e => (e.eventType ?? e.type) === 'execution.resumed');
+  const resumedAt = resumed ? new Date(resumed.timestamp).getTime() : -Infinity;
+  const shellOutcomes = new Map<string, boolean>();
+  for (const call of record.toolCalls ?? []) {
+    if (call.tool !== 'shell' || new Date(call.at).getTime() < resumedAt) continue;
+    const input = call.input as { command?: unknown; cwd?: unknown } | undefined;
+    if (typeof input?.command !== 'string') continue;
+    if (checks.some(check => check.command === input.command)) continue;
+    shellOutcomes.set(JSON.stringify([input.command, input.cwd ?? '']), call.ok);
+  }
+  if ([...shellOutcomes.values()].some(ok => !ok)) {
+    success = false;
+    reasons.push('unresolved shell command failure or policy denial');
+  }
 
   // 1. Acceptance contract evaluation
   const contract = record.executionContract?.acceptance

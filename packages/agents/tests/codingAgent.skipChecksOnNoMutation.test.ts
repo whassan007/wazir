@@ -19,13 +19,13 @@ async function drain(turns: AsyncIterable<AgentTurn>): Promise<AgentTurn[]> {
 
 const baseRequest: Omit<AgentRunRequest, 'maxTurns'> = {
   modelId: 'fake-model',
-  taskDescription: 'What is 23 + 19? Return only the number.',
+  taskDescription: 'Update src/index.ts to fix the calculation bug.',
   taskType: 'coding',
   projectRoot: '/tmp/fake-project',
 };
 
 describe('CodingAgent.run — verify phase skips build/test/lint/typecheck when nothing changed', () => {
-  it('a coding task that answers without writing any file does not run the check battery', async () => {
+  it('a coding task that answers without writing any file does not run the check battery and surfaces the answer', async () => {
     const executed: string[] = [];
     const runtime: AgentRuntime = {
       tools: [{ name: 'shell', description: 'run a shell command', inputSchema: {} }],
@@ -47,6 +47,7 @@ describe('CodingAgent.run — verify phase skips build/test/lint/typecheck when 
     // was never a legitimate completion for a mutation-required coding task.
     expect(last?.kind).toBe('error');
     expect(last?.error).toContain('no code modifications');
+    expect(last?.content).toBe('42');
     // But it must not have wasted time running build/test/lint/typecheck to get there.
     expect(executed).not.toContain('build');
     expect(executed).not.toContain('test');
@@ -54,15 +55,19 @@ describe('CodingAgent.run — verify phase skips build/test/lint/typecheck when 
     expect(executed).not.toContain('typecheck');
   });
 
-  it('a verify-only task (mutationRequired: false) with no changes still runs the check battery', async () => {
-    // The opposite case: when a task explicitly does not expect a mutation (e.g. "just run
-    // the test suite and tell me if it's green"), checks must still run even though nothing
-    // was written — skipping them here would defeat the point of the task.
+  it('a coding task that modifies a file still runs the check battery during VERIFY', async () => {
     const executed: string[] = [];
+    let turn = 0;
     const runtime: AgentRuntime = {
-      tools: [{ name: 'shell', description: 'run a shell command', inputSchema: {} }],
+      tools: [{ name: 'write', description: 'write a file', inputSchema: {} }],
       async *generate() {
-        const reply = '{"action":"done","summary":"done"}';
+        turn += 1;
+        const reply =
+          turn === 1
+            ? '{"action":"plan","content":"update src/index.ts"}'
+            : turn === 2
+              ? '{"action":"tool","tool":"write","input":{"path":"src/index.ts","content":"export const x = 42;"}}'
+              : '{"action":"done","summary":"updated"}';
         yield { type: 'token', content: reply };
         yield { type: 'completed', content: reply };
       },
@@ -72,7 +77,7 @@ describe('CodingAgent.run — verify phase skips build/test/lint/typecheck when 
       },
     };
     const agent = createCodingAgent();
-    const turns = await drain(agent.run({ ...baseRequest, mutationRequired: false, maxTurns: 5 }, runtime));
+    const turns = await drain(agent.run({ ...baseRequest, maxTurns: 5 }, runtime));
     const last = turns.at(-1);
 
     expect(last?.kind).toBe('done');
