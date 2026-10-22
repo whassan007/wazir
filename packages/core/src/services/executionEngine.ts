@@ -102,6 +102,8 @@ export interface ExecutionEngineOptions {
   owner?: ExecutionOwner;
   /** Liveness check for a same-host owner pid; defaults to signal 0. */
   isProcessAlive?: (pid: number) => boolean;
+  /** Skip deep cloning of terminal historical records and startup recovery rewrites on one-shot CLI commands. */
+  fastStartup?: boolean;
 }
 
 function signalZeroAlive(pid: number): boolean {
@@ -159,7 +161,8 @@ export class ExecutionEngine {
       if (!loaded) return;
       const migratedIds = new Set<string>();
       for (const record of loaded) {
-        const copy = structuredClone(record);
+        const fastTerminal = Boolean(options.fastStartup && record.execution && isTerminalExecutionStatus(record.execution.status));
+        const copy = fastTerminal ? record : structuredClone(record);
         if (!(copy.execution.createdAt instanceof Date)) {
           copy.execution.createdAt = copy.execution.createdAt ? new Date(copy.execution.createdAt) : new Date();
         }
@@ -196,6 +199,8 @@ export class ExecutionEngine {
           };
         }
         let eventsMutated = false;
+        let hasLeaseEvent = false;
+        const seenEventIds = new Set<string>();
         const events = copy.events.map((event, index) => {
           if (event.sequence !== undefined && event.sequence !== index + 1) {
             throw new Error(`Invalid event sequence for execution '${copy.execution.id}'`);
@@ -205,16 +210,24 @@ export class ExecutionEngine {
               (event.eventType !== undefined && event.eventType !== event.type)) {
             throw new Error(`Invalid event identity for execution '${copy.execution.id}'`);
           }
+          if (seenEventIds.has(event.id)) {
+            throw new Error(`Duplicate event identity for execution '${copy.execution.id}'`);
+          }
+          seenEventIds.add(event.id);
+          if (event.type === 'lease.acquired' || event.type === 'lease.renewed' || event.type === 'lease.released') {
+            hasLeaseEvent = true;
+          }
           const expectedJobId = event.jobId ?? copy.execution.jobId ?? null;
           if (
-            event.eventId !== event.id ||
-            event.eventType !== event.type ||
-            event.sequence !== index + 1 ||
-            event.jobId !== expectedJobId ||
-            !(event.timestamp instanceof Date)
+            event.eventId === event.id &&
+            event.eventType === event.type &&
+            event.sequence === index + 1 &&
+            event.jobId === expectedJobId &&
+            event.timestamp instanceof Date
           ) {
-            eventsMutated = true;
+            return event as SequencedExecutionEvent;
           }
+          eventsMutated = true;
           return {
             ...event,
             eventId: event.id,
@@ -224,18 +237,18 @@ export class ExecutionEngine {
             timestamp: event.timestamp instanceof Date ? event.timestamp : new Date(event.timestamp),
           } satisfies SequencedExecutionEvent;
         });
-        if (new Set(events.map(e => e.eventId)).size !== events.length) {
-          throw new Error(`Duplicate event identity for execution '${copy.execution.id}'`);
-        }
         copy.events = events;
         if (eventsMutated) migratedIds.add(copy.execution.id);
-        this.histories.set(copy.execution.id, structuredClone(events));
+        this.histories.set(copy.execution.id, fastTerminal ? events.slice() : structuredClone(events));
         this.records.set(copy.execution.id, copy);
         if (copy.execution.status === 'paused') {
           this.pausedExecutions.add(copy.execution.id);
         }
-        this.reconstructLeaseFromEvents(copy.execution.id, events);
+        if (hasLeaseEvent) {
+          this.reconstructLeaseFromEvents(copy.execution.id, events);
+        }
       }
+      if (options.fastStartup) return;
       // Detect orphaned tool.start events without a matching completed event — but never
       // in an execution another live process is still running: its "unfinished" call is
       // in flight, and marking it would also fork the record's storage revision.

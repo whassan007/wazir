@@ -29,6 +29,7 @@ export interface JobManagerOptions {
   persist?: (job: Job) => void | Promise<void>;
   load?: () => Job[] | Promise<Job[]>;
   remove?: (jobId: string) => void | Promise<void>;
+  lazy?: boolean;
 }
 
 let jobCounter = 0;
@@ -49,8 +50,14 @@ export class JobManager {
   private readonly now: () => number;
 
   private readonly persist?: (job: Job) => void | Promise<void>;
+  private readonly loadOption?: () => Job[] | Promise<Job[]>;
   private readonly remove?: (jobId: string) => void | Promise<void>;
-  readonly ready: Promise<void>;
+  private _ready?: Promise<void>;
+
+  get ready(): Promise<void> {
+    this._ready ??= this.loadInitialJobs();
+    return this._ready;
+  }
 
   constructor(options: JobManagerOptions = {}) {
     this.store = options.store;
@@ -60,8 +67,15 @@ export class JobManager {
     if (!Number.isFinite(this.leaseMs) || this.leaseMs < 100) throw new Error('INVALID_LEASE_DURATION');
     this.now = options.now ?? Date.now;
     this.persist = options.persist;
+    this.loadOption = options.load;
     this.remove = options.remove;
-    this.ready = Promise.resolve(this.store ? this.store.list('job/').then(entries => entries.map(e => e.value as Job)) : options.load?.() ?? []).then(async (loaded) => {
+    if (!options.lazy) {
+      void this.ready;
+    }
+  }
+
+  private loadInitialJobs(): Promise<void> {
+    return Promise.resolve(this.store ? this.store.list('job/').then(entries => entries.map(e => e.value as Job)) : this.loadOption?.() ?? []).then(async (loaded) => {
       for (const job of loaded) {
         if (this.jobs.has(job.id)) continue;
         this.jobs.set(job.id, job);

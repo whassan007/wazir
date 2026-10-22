@@ -25,36 +25,54 @@ export async function discoverHardware(): Promise<HardwareReport> {
   return { hardware, os: osInfo };
 }
 
+let cachedCpuModel: string | undefined;
+
 function discoverCpu(): string {
+  if (cachedCpuModel !== undefined) {
+    return cachedCpuModel;
+  }
+  const nodeModel = os.cpus()[0]?.model?.trim();
+  if (nodeModel && nodeModel !== 'Unknown CPU' && nodeModel !== 'unknown' && !/^generic|^arm$|^aarch64$/i.test(nodeModel)) {
+    cachedCpuModel = nodeModel;
+    return cachedCpuModel;
+  }
   try {
     if (process.platform === 'win32') {
-      const model = os.cpus()[0]?.model?.trim();
-      if (model && model !== 'Unknown CPU') return model;
       try {
         const out = execSync('powershell -NoProfile -Command "(Get-CimInstance Win32_Processor).Name"', {
           timeout: 5000,
           stdio: ['ignore', 'pipe', 'ignore'],
         }).toString().trim();
-        if (out) return out.split('\n')[0].trim();
+        if (out) {
+          cachedCpuModel = out.split('\n')[0].trim();
+          return cachedCpuModel;
+        }
       } catch {
         // powershell or CIM unavailable
       }
       try {
         const out = execSync('wmic cpu get name /value', { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
         const match = out.match(/Name=(.+)/);
-        if (match) return match[1].trim();
+        if (match) {
+          cachedCpuModel = match[1].trim();
+          return cachedCpuModel;
+        }
       } catch {
         // wmic deprecated or not installed
       }
     }
     if (process.platform === 'darwin') {
-      return execSync('sysctl -n machdep.cpu.brand_string', { timeout: 5000 }).toString().trim();
+      cachedCpuModel = execSync('sysctl -n machdep.cpu.brand_string', { timeout: 5000 }).toString().trim();
+      return cachedCpuModel;
     }
     if (process.platform === 'linux') {
       try {
         const info = readFileSync('/proc/cpuinfo', 'utf8');
         const match = info.match(/model name\s*:\s*(.+)/);
-        if (match) return match[1].trim();
+        if (match) {
+          cachedCpuModel = match[1].trim();
+          return cachedCpuModel;
+        }
       } catch {
         // /proc/cpuinfo read failed
       }
@@ -62,7 +80,10 @@ function discoverCpu(): string {
       try {
         const lscpu = execSync('lscpu', { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
         const matchLscpu = lscpu.match(/Model name:\s*(.+)/);
-        if (matchLscpu) return matchLscpu[1].trim();
+        if (matchLscpu) {
+          cachedCpuModel = matchLscpu[1].trim();
+          return cachedCpuModel;
+        }
       } catch {
         // lscpu unavailable
       }
@@ -71,7 +92,8 @@ function discoverCpu(): string {
     // fall through
   }
   const defaultModel = os.cpus()[0]?.model?.trim();
-  return defaultModel && defaultModel !== 'unknown' ? defaultModel : 'Unknown CPU';
+  cachedCpuModel = defaultModel && defaultModel !== 'unknown' ? defaultModel : 'Unknown CPU';
+  return cachedCpuModel;
 }
 
 let cachedGpuInfo: { resolved: boolean; value?: GPUInfo } = { resolved: false };

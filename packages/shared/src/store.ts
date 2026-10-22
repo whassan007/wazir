@@ -214,6 +214,37 @@ function reviveDates(_key: string, value: unknown): unknown {
   return typeof value === 'string' && isIsoDateString(value) ? new Date(value) : value;
 }
 
+export function reviveDatesInPlace<T>(value: T): T {
+  if (typeof value === 'string') {
+    return (isIsoDateString(value) ? new Date(value) : value) as unknown as T;
+  }
+  if (!value || typeof value !== 'object' || value instanceof Date) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const item = value[i];
+      if (typeof item === 'string') {
+        if (isIsoDateString(item)) value[i] = new Date(item);
+      } else if (item && typeof item === 'object' && !(item instanceof Date)) {
+        reviveDatesInPlace(item);
+      }
+    }
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  for (const k of Object.keys(record)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    const v = record[k];
+    if (typeof v === 'string') {
+      if (isIsoDateString(v)) record[k] = new Date(v);
+    } else if (v && typeof v === 'object' && !(v instanceof Date)) {
+      reviveDatesInPlace(v);
+    }
+  }
+  return value;
+}
+
 /**
  * Same date revival as `reviveDates` above, but as a post-hoc recursive walk
  * instead of a `JSON.parse` reviver hook — for backends like `PostgresStore`
@@ -259,6 +290,7 @@ export class JsonFileStore implements KeyValueStore {
   private readonly file: string;
   private readonly lockFile: string;
   private data = new Map<string, unknown>();
+  private revivedKeys = new Set<string>();
   private rawJsonByKey = new Map<string, string>();
   private lastStat?: FileStatSnapshot;
   private loaded = false;
@@ -267,6 +299,19 @@ export class JsonFileStore implements KeyValueStore {
   constructor(file: string) {
     this.file = file;
     this.lockFile = `${file}.lock`;
+  }
+
+  private ensureKeyRevived(data: Map<string, unknown>, key: string): unknown {
+    if (!data.has(key)) return undefined;
+    if (data === this.data && this.revivedKeys.has(key)) {
+      return data.get(key);
+    }
+    const revived = reviveDatesInPlace(data.get(key));
+    data.set(key, revived);
+    if (data === this.data) {
+      this.revivedKeys.add(key);
+    }
+    return revived;
   }
 
   private async currentStat(): Promise<FileStatSnapshot | undefined> {
@@ -303,6 +348,7 @@ export class JsonFileStore implements KeyValueStore {
     const st = await this.currentStat();
     if (!st) {
       this.data = new Map();
+      this.revivedKeys.clear();
       this.rawJsonByKey.clear();
       this.lastStat = undefined;
       this.loaded = true;
@@ -322,16 +368,18 @@ export class JsonFileStore implements KeyValueStore {
     try {
       const st = knownStat ?? (await this.currentStat());
       if (!st) {
+        this.revivedKeys.clear();
         this.rawJsonByKey.clear();
         this.lastStat = undefined;
         return new Map();
       }
       const raw = await fs.readFile(this.file, 'utf8');
-      const parsed = JSON.parse(raw, reviveDates) as Record<string, unknown>;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new Error(`Invalid store document '${this.file}': expected an object`);
       }
       this.observedFile = true;
+      this.revivedKeys.clear();
       this.rawJsonByKey.clear();
       this.lastStat = st;
       return new Map(Object.entries(parsed));
@@ -339,6 +387,7 @@ export class JsonFileStore implements KeyValueStore {
       // Only an absent first-run store is empty. Corruption, access failures,
       // or loss of a previously observed store must never erase execution facts.
       if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !this.observedFile) {
+        this.revivedKeys.clear();
         this.rawJsonByKey.clear();
         this.lastStat = undefined;
         return new Map();
@@ -442,30 +491,48 @@ export class JsonFileStore implements KeyValueStore {
 
   async update<T>(key: string, mutate: (current: T | undefined) => T): Promise<T> {
     let value!: T;
-    await this.withLock((data) => { value = mutate(data.get(key) as T | undefined); data.set(key, value); }, key);
+    await this.withLock((data) => {
+      const current = this.revivedKeys.has(key) ? data.get(key) : reviveDatesInPlace(data.get(key));
+      value = mutate(current as T | undefined);
+      data.set(key, value);
+      this.revivedKeys.add(key);
+    }, key);
     return value;
   }
   async put(key: string, value: unknown): Promise<void> {
-    await this.withLock((data) => data.set(key, value), key);
+    await this.withLock((data) => {
+      data.set(key, value);
+      this.revivedKeys.add(key);
+    }, key);
   }
 
   async get<T>(key: string): Promise<T | undefined> {
     await this.reloadFromDisk();
-    return this.data.get(key) as T | undefined;
+    return this.ensureKeyRevived(this.data, key) as T | undefined;
   }
 
   async list(prefix: string): Promise<StoreEntry[]> {
     await this.reloadFromDisk();
-    return Array.from(this.data.entries())
-      .filter(([key]) => key.startsWith(prefix))
-      .map(([key, value]) => ({ key, value }));
+    const entries: StoreEntry[] = [];
+    for (const key of this.data.keys()) {
+      if (key.startsWith(prefix)) {
+        entries.push({ key, value: this.ensureKeyRevived(this.data, key) });
+      }
+    }
+    return entries;
   }
 
   async delete(key: string): Promise<void> {
-    await this.withLock((data) => data.delete(key), key);
+    await this.withLock((data) => {
+      data.delete(key);
+      this.revivedKeys.delete(key);
+    }, key);
   }
 
   async clear(): Promise<void> {
-    await this.withLock((data) => data.clear(), '*');
+    await this.withLock((data) => {
+      data.clear();
+      this.revivedKeys.clear();
+    }, '*');
   }
 }
