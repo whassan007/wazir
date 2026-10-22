@@ -54,3 +54,19 @@
   - `./node_modules/.bin/vitest run packages/agents/tests/`: **PASS** (52 test files, 304/304 tests passed)
 - **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
   - Audited `65eccd779bda29a093c628e448c9847d6db481c6` across all 6 Phase 2 issues (`ISS-006`–`ISS-011`) and 4 regression test suites: **PASS**.
+
+---
+
+## Phase 3 — Durable Recovery and Distributed Correctness (P1)
+- **Status**: **PASS**
+- **Integrated Commit SHA**: `dbc76a45e2e42b512a2c59cf1c4b085830e64ec6`
+- **Worker Commits Integrated**:
+  - `6f3e490` (Distributed Systems Engineer 3A: `ISS-012`, `ISS-013` — `canTransitionJob` terminal immutability, `JobManager` startup store reconciliation, `JobManager.acquire()` unknown-outcome mutating tool protection via `findUnknownOutcomeToolCall`, and `reconcileLocalOutcomes` standalone execution recovery)
+  - `3fea2ca` (Distributed Systems Engineer 3B: `ISS-012`, `ISS-014` — `ExecutionEngine.orphan`/`pause`/`resume` transition guards, worker lease lifecycle & `StaleWorkerLeaseError` pre-mutation fencing, and `apps/api/src/server.ts` canonical `executionId` in-place `recordExecution` with `leaseEpoch` fencing and terminal immutability)
+  - `10631c8` (Distributed Systems Engineer 3C: `ISS-015` — `governedAdapter` pre-output error quota accounting via `budget.fail(requestId, { ambiguous: false })` and `ModelLifecycleService` `ResourceReservation` release when both `loadModel()` and `inspectModel()` fail)
+- **Verification Executed**:
+  - `npm run typecheck`: **PASS** (exit 0)
+  - `npm run build:cli`: **PASS** (exit 0, `bin/wa.js` 18.6 MB)
+  - `./node_modules/.bin/vitest run packages/core/tests/phase3RecoveryAndTransitions.test.ts packages/core/tests/phase3LeasesAndFencing.test.ts packages/core/tests/phase3ReservationsAndQuota.test.ts packages/core/tests/statusTransitions.test.ts packages/core/tests/jobOrchestrator.test.ts packages/core/tests/executionRecovery.test.ts packages/core/tests/recoveryManager.test.ts packages/core/tests/executionEngine.test.ts packages/core/tests/resources.test.ts packages/core/tests/modelLifecycleAdmission.test.ts apps/api/tests/durableDispatch.test.ts`: **PASS** (11 test files, 137/137 tests passed)
+- **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
+  - Audited `dbc76a45e2e42b512a2c59cf1c4b085830e64ec6` across all 4 Phase 3 issues (`ISS-012`–`ISS-015`) and all new/existing regression test suites: **PASS**.
