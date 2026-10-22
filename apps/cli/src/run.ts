@@ -207,7 +207,9 @@ export async function planTask(
     : null;
   const mutationRequired = Boolean(deterministicCmd)
     ? false
-    : (hasExpectedFiles || Boolean(taskAnalysis?.mutationRequired));
+    : hasExpectedFiles
+    ? true
+    : taskAnalysis?.mutationRequired;
   const isChatFastPath =
     options.type === 'chat' &&
     !mutationRequired &&
@@ -217,9 +219,12 @@ export async function planTask(
       mutationRequired,
     });
 
+  const effectiveTaskType: TaskType =
+    options.type === 'chat' && mutationRequired ? 'coding' : (options.type ?? 'coding');
+
   const task: Task = {
     id: generateId('task-'),
-    type: options.type ?? 'coding',
+    type: effectiveTaskType,
     input: description,
     requirements: {
       minimumContext: MINIMUM_CONTEXT_TOKENS,
@@ -238,7 +243,13 @@ export async function planTask(
     },
     execution: {
       targetModelId: options.model,
-      targetAgentId: options.agent ?? (isChatFastPath && engine.agents.get('wazir-chat') ? 'wazir-chat' : undefined),
+      targetAgentId:
+        options.agent ??
+        (isChatFastPath && engine.agents.get('wazir-chat')
+          ? 'wazir-chat'
+          : mutationRequired && engine.agents.get('wazir-coding')
+          ? 'wazir-coding'
+          : undefined),
       routingMode: effectiveRoutingMode,
       routingProvider: effectiveRoutingProvider,
       defaultModelId: routingCfg?.defaultModel,
@@ -488,7 +499,9 @@ export async function executeTask(
     : null;
   const effectiveMutationRequired = Boolean(deterministicExecution)
     ? false
-    : (hasExpectedFiles || Boolean(taskAnalysis?.mutationRequired));
+    : hasExpectedFiles
+    ? true
+    : taskAnalysis?.mutationRequired;
   const fastPathExecution =
     !effectiveMutationRequired &&
     (Boolean(deterministicExecution) ||

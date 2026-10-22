@@ -1036,12 +1036,13 @@ export function taskStatusCommand(
   if (execStore.records instanceof Map && (!execStore.store || execStore.records.size > 0)) {
     const direct = execStore.records.get(id) ?? findInList(Array.from(execStore.records.values()));
     const result = formatTaskStatusRecord(direct, id, options);
+    const plain = { code: result.code, output: result.output };
     return Object.assign(result, {
       then<TResult1 = { code: number; output: string }, TResult2 = never>(
         onfulfilled?: ((value: { code: number; output: string }) => TResult1 | PromiseLike<TResult1>) | null,
         onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
       ): Promise<TResult1 | TResult2> {
-        return Promise.resolve(result).then(onfulfilled, onrejected);
+        return Promise.resolve(plain).then(onfulfilled, onrejected);
       },
     });
   }

@@ -1,9 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import os, { tmpdir } from 'node:os';
 import path from 'node:path';
+import {
+  AgentRegistry,
+  ComputerRegistry,
+  ContextCompiler,
+  ExecutionEngine,
+  ModelLifecycleService,
+  ModelRegistry,
+  PolicyEngine,
+  RuntimeRegistry,
+  Scheduler,
+  TaskPlanner,
+} from '@wazir/core';
+import { ChatAgent, createCodingAgent } from '@wazir/agents';
+import { ToolRegistry, defaultTools } from '@wazir/tools';
 import type { GenerationEvent, GenerationRequest, RuntimeAdapter } from '@wazir/runtimes-interfaces';
-import { createEngine, type RookEngine } from '../src/engine.js';
+import type { Worker } from '@wazir/workers';
+import type { RookEngine } from '../src/engine.js';
 import { planTask, executeTask, runSubagent } from '../src/run.js';
 import { runTaskCommand, taskStatusCommand } from '../src/commands.js';
 
@@ -13,14 +28,39 @@ function fakeAdapter(
 ): RuntimeAdapter {
   return {
     id: 'ollama',
-    info: { id: 'ollama', name: 'Fake Ollama', version: 'test', endpoint: 'mock://local', local: true },
-    capabilities: { streaming: true, toolCalling: true, embeddings: false, vision: false, structuredOutput: true },
-    healthCheck: async () => 'healthy',
-    discoverModels: async () => [],
-    loadModel: async () => {},
-    unloadModel: async () => {},
+    type: 'ollama',
+    async inspectModel(modelId) {
+      return { modelId, loaded: true, effectiveContext: 32768 };
+    },
+    async probeModel() {
+      return true;
+    },
+    async discover() {
+      return { id: 'ollama', name: 'Fake Ollama', version: 'test' };
+    },
+    async healthCheck() {
+      return { status: 'healthy' };
+    },
+    async listModels() {
+      return [{ id: 'qwen-coder:14b', name: 'Qwen Coder 14B' }];
+    },
+    async getCapabilities() {
+      return {
+        chat: true,
+        streaming: true,
+        toolCalling: true,
+        structuredOutput: true,
+        vision: false,
+        embeddings: false,
+        reasoning: true,
+        modelLoad: false,
+        modelUnload: false,
+        modelDownload: false,
+        statefulChat: false,
+        mcp: false,
+      };
+    },
     generate: script,
-    embed: async () => [],
     cancel: async (requestId: string) => {
       onCancel?.(requestId);
     },
@@ -32,50 +72,116 @@ async function createTestEngine(
   script: (req: GenerationRequest) => AsyncIterable<GenerationEvent>,
   onCancel?: (requestId: string) => void,
 ): Promise<RookEngine> {
-  const engine = await createEngine({ projectRoot, skipDiscovery: true });
-  engine.runtimes.register({
+  const computers = new ComputerRegistry();
+  const runtimes = new RuntimeRegistry();
+  const models = new ModelRegistry();
+  const agents = new AgentRegistry();
+  const tools = new ToolRegistry(defaultTools);
+  const compiler = new ContextCompiler();
+  const executions = new ExecutionEngine();
+
+  computers.register({
+    id: 'local',
+    name: 'Local',
+    type: 'workstation',
+    local: true,
+    os: { platform: os.platform(), architecture: os.arch(), version: os.release() },
+    hardware: { cpu: 'test-cpu', cpuCores: 8, memoryGB: 32 },
+    capabilities: ['localExecution'],
+  });
+
+  runtimes.register({
     id: 'ollama',
+    type: 'ollama',
     name: 'Fake Ollama',
     version: 'test',
-    local: true,
-    health: 'healthy',
-    capabilities: { streaming: true, toolCalling: true, embeddings: false, vision: false, structuredOutput: true },
+    computerId: 'local',
+    capabilities: {
+      chat: true,
+      streaming: true,
+      toolCalling: true,
+      structuredOutput: true,
+      vision: false,
+      embeddings: false,
+      reasoning: true,
+      modelLoad: false,
+      modelUnload: false,
+      modelDownload: false,
+      statefulChat: false,
+      mcp: false,
+    },
   });
-  engine.models.register({
+  runtimes.update('ollama', { health: 'healthy' });
+
+  models.register({
     id: 'qwen-coder:14b',
     name: 'Qwen Coder 14B',
     provider: 'ollama',
     family: 'qwen',
-    capabilities: ['coding', 'reasoning', 'planning', 'fast'],
-    contextWindow: 32768,
+    contextMax: 32_768,
+    capabilities: ['generalChat', 'coding', 'reasoning', 'planning', 'fast'],
     toolCalling: true,
     structuredOutput: true,
+    vision: false,
+    audio: false,
+    embedding: false,
+    reasoning: true,
+    runtimeCompatibility: 'any',
     local: true,
-    costPer1kInput: 0,
-    costPer1kOutput: 0,
+    createdAt: new Date(),
+    updatedAt: new Date(),
   });
-  engine.scheduler.registerComputer({
-    id: 'local',
-    name: 'Local',
-    hostname: 'localhost',
-    os: process.platform,
-    arch: process.arch,
-    cpuCores: 8,
-    ramTotalGb: 32,
-    ramAvailableGb: 24,
-    Local: true,
-    status: 'online',
-    activeTasks: 0,
-    maxConcurrentTasks: 4,
-    runtimes: ['ollama'],
-    loadedModels: ['qwen-coder:14b'],
-    availableModels: ['qwen-coder:14b'],
-    capabilities: ['local'],
+  models.upsertInstance({
+    id: 'qwen-coder:14b::local::ollama',
+    modelId: 'qwen-coder:14b',
+    computerId: 'local',
+    runtimeId: 'ollama',
+    runtimeModelId: 'qwen-coder:14b',
+    loaded: true,
+    state: 'READY',
+    health: 'healthy',
+    contextTokens: 32_768,
   });
+
+  agents.register(createCodingAgent(), 'native');
+  agents.register(new ChatAgent(), 'native');
+
+  const policy = new PolicyEngine({ projectRoot, networkAllowed: false });
+  const scheduler = new Scheduler({ computers, runtimes, models, agents });
   const adapter = fakeAdapter(script, onCancel);
-  engine.worker.registerAdapter(adapter);
-  engine.adapters.set('ollama', adapter);
-  return engine;
+  const adapters = new Map([['ollama', adapter]]);
+  const fakeWorker = {
+    id: 'worker-local',
+    computerId: 'local',
+    adapterForModel: (modelId: string) => (modelId === 'qwen-coder:14b' ? adapter : undefined),
+  } as unknown as Worker;
+
+  return {
+    config: {
+      modelContext: {},
+      modelCapabilities: {},
+      networkAllowed: false,
+      allowCommands: [],
+      denyCommands: [],
+      allowedMcpServers: [],
+    },
+    projectRoot,
+    configDir: path.join(projectRoot, '.wazir'),
+    lifecycle: new ModelLifecycleService({ models, runtimes, computers, executions, adapters }),
+    computers,
+    runtimes,
+    models,
+    agents,
+    tools,
+    policy,
+    scheduler,
+    compiler,
+    executions: executions as RookEngine['executions'],
+    planner: new TaskPlanner(),
+    adapters,
+    discovered: [],
+    worker: fakeWorker,
+  } as unknown as RookEngine;
 }
 
 describe('Phase 2 CLI Execution Correctness Regressions (ISS-006, ISS-008, ISS-009, ISS-010, ISS-011)', () => {
