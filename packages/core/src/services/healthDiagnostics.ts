@@ -369,10 +369,23 @@ export class HealthEvidenceLog {
   private loadFailures = new Map<string, InferenceOutcome>();
   private admissionDenials = new Map<string, { at: string; reasons: string[] }>();
   private probeFailures = new Map<string, { at: string; error?: string }>();
+  private pendingHydration?: () => void;
 
   constructor(private readonly maxPerKey = 20) {}
 
+  deferHydration(fn: () => void): void {
+    this.pendingHydration = fn;
+  }
+
+  private flushPendingHydration(): void {
+    if (!this.pendingHydration) return;
+    const fn = this.pendingHydration;
+    this.pendingHydration = undefined;
+    fn();
+  }
+
   onLifecycleEvent(event: ModelLifecycleEvent): void {
+    this.flushPendingHydration();
     const runtimeId = event.runtimeId ?? (event.data?.runtimeId as string | undefined);
     if (!runtimeId) return;
     const key = inferenceKey(runtimeId, event.modelId);
@@ -386,6 +399,7 @@ export class HealthEvidenceLog {
   }
 
   recordInference(runtimeId: string, modelId: string, outcome: { at?: Date; error?: string } = {}): void {
+    this.flushPendingHydration();
     const key = inferenceKey(runtimeId, modelId);
     const list = this.inference.get(key) ?? [];
     list.push({ at: (outcome.at ?? new Date()).toISOString(), ...(outcome.error ? { error: outcome.error } : {}) });
@@ -394,10 +408,12 @@ export class HealthEvidenceLog {
   }
 
   recordTelemetry(runtimeId: string, status: TelemetryHealthState): void {
+    this.flushPendingHydration();
     this.telemetry.set(runtimeId, status);
   }
 
   recordProbeFailure(instanceId: string, error?: string, at = new Date()): void {
+    this.flushPendingHydration();
     this.probeFailures.set(instanceId, { at: at.toISOString(), error });
   }
 
@@ -407,8 +423,16 @@ export class HealthEvidenceLog {
    * without one are skipped rather than assumed successful.
    */
   hydrateFromExecutions(records: Array<Pick<ExecutionRecord, 'execution' | 'events'>>): void {
-    const events = records.flatMap((r) => (r.events ?? []).map((e) => ({ e, x: r.execution })))
-      .sort((a, b) => new Date(a.e.timestamp).getTime() - new Date(b.e.timestamp).getTime());
+    this.pendingHydration = undefined;
+    const events: Array<{ e: ExecutionRecord['events'][number]; x: ExecutionRecord['execution']; t: number }> = [];
+    for (const r of records) {
+      for (const e of r.events ?? []) {
+        if (e.type !== 'generation.completed' && e.type !== 'prompt_cache.telemetry') continue;
+        const t = e.timestamp instanceof Date ? e.timestamp.getTime() : new Date(e.timestamp).getTime();
+        events.push({ e, x: r.execution, t });
+      }
+    }
+    events.sort((a, b) => a.t - b.t);
     for (const { e, x } of events) {
       const data = (e.data ?? {}) as Record<string, unknown>;
       const runtimeId = typeof data.runtimeId === 'string' ? data.runtimeId : x.runtimeId;
@@ -416,7 +440,7 @@ export class HealthEvidenceLog {
       if (!runtimeId) continue;
       if (e.type === 'generation.completed' && modelId && (data.outcome === 'completed' || data.outcome === 'error')) {
         this.recordInference(runtimeId, modelId, {
-          at: new Date(e.timestamp),
+          at: e.timestamp instanceof Date ? e.timestamp : new Date(e.timestamp),
           error: data.outcome === 'error' ? String(data.error ?? 'inference error') : undefined,
         });
       } else if (e.type === 'prompt_cache.telemetry') {
@@ -427,6 +451,7 @@ export class HealthEvidenceLog {
   }
 
   snapshot(): HealthObservations {
+    this.flushPendingHydration();
     return {
       inference: Object.fromEntries([...this.inference].map(([k, v]) => [k, [...v]])),
       telemetry: Object.fromEntries(this.telemetry),

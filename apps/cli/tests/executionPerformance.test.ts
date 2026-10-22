@@ -8,15 +8,19 @@ import { LMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import { JsonFileStore } from '@wazir/shared';
 import {
   AccountRegistry,
+  CheckpointService,
   ComputerRegistry,
   DEFAULT_POLICY,
   ExecutionEngine,
+  HandoffService,
+  JobManager,
   ModelLifecycleService,
   ModelRegistry,
   ResourceLedger,
   ResourceRouter,
   RuntimeRegistry,
   TokenBudgetManager,
+  WorktreeManager,
 } from '@wazir/core';
 import type { AgentRuntime, AgentTurn } from '@wazir/core';
 import type { GenerationEvent, RuntimeAdapter } from '@wazir/runtimes-interfaces';
@@ -552,5 +556,200 @@ describe('P0 Execution Pipeline Performance Repairs', () => {
     expect(statusSpy).toHaveBeenCalledTimes(1);
     expect(previewSpy).toHaveBeenCalledTimes(1);
     expect(elapsedMs).toBeLessThan(25);
+  });
+
+  it('10. ISS-019: discoverAndReconcile with preDiscovered + fastStartup eliminates duplicate healthCheck, listModels, and unloaded inspectModel probes', async () => {
+    const computers = new ComputerRegistry();
+    const runtimes = new RuntimeRegistry();
+    const models = new ModelRegistry();
+    const executions = new ExecutionEngine({ fastStartup: true });
+
+    computers.register({
+      id: 'comp-local',
+      name: 'local',
+      type: 'workstation',
+      local: true,
+      os: { platform: os.platform(), architecture: os.arch(), version: os.release() },
+      hardware: { cpu: 'ARM', cpuCores: 20, memoryGB: 128 },
+      capabilities: ['localExecution'],
+    });
+
+    runtimes.register({
+      id: 'lmstudio',
+      name: 'lmstudio',
+      type: 'lmstudio',
+      endpoint: 'http://localhost:1234/v1',
+      computerId: 'comp-local',
+      status: 'running',
+      health: 'healthy',
+      capabilities: {
+        streaming: true,
+        toolCalling: true,
+        structuredOutput: true,
+        vision: false,
+        embeddings: false,
+        contextWindowManagement: true,
+        parallelRequests: true,
+        localExecution: true,
+      },
+      models: ['loaded-model', 'unloaded-model-1', 'unloaded-model-2'],
+    });
+
+    let healthCheckCalls = 0;
+    let listModelsCalls = 0;
+    const inspectedModelIds: string[] = [];
+
+    const preDiscoveredModels = [
+      {
+        id: 'loaded-model',
+        name: 'loaded-model',
+        loaded: true,
+        contextWindow: 32768,
+        effectiveContext: 32768,
+        weightBytes: 8 * 1024 ** 3,
+        toolCalling: true,
+        structuredOutput: true,
+      },
+      {
+        id: 'unloaded-model-1',
+        name: 'unloaded-model-1',
+        loaded: false,
+        contextWindow: 32768,
+        weightBytes: 4 * 1024 ** 3,
+      },
+      {
+        id: 'unloaded-model-2',
+        name: 'unloaded-model-2',
+        loaded: false,
+        contextWindow: 32768,
+        weightBytes: 4 * 1024 ** 3,
+      },
+    ];
+
+    const lmstudioAdapter: RuntimeAdapter = {
+      id: 'lmstudio',
+      type: 'lmstudio',
+      getCapabilities: async () => runtimes.get('lmstudio')!.capabilities as any,
+      discover: async () => ({ id: 'lmstudio', name: 'LM Studio', version: '1.0' }),
+      healthCheck: async () => {
+        healthCheckCalls += 1;
+        return { status: 'healthy', latencyMs: 1 };
+      },
+      listModels: async () => {
+        listModelsCalls += 1;
+        return preDiscoveredModels;
+      },
+      inspectModel: async (modelId: string) => {
+        inspectedModelIds.push(modelId);
+        return {
+          loaded: modelId === 'loaded-model',
+          effectiveContext: modelId === 'loaded-model' ? 32768 : undefined,
+          memoryBytes: 8 * 1024 ** 3,
+        };
+      },
+      probeModel: async () => true,
+      loadModel: async () => {},
+      unloadModel: async () => {},
+      estimateModelLoad: async () => ({ estimatedTotalMemory: 8 * 1024 ** 3, contextLength: 32768 }),
+      generate: async function* () {},
+    };
+
+    const lifecycle = new ModelLifecycleService({
+      computers,
+      runtimes,
+      models,
+      executions,
+      adapters: new Map([['lmstudio', lmstudioAdapter]]),
+    });
+
+    await lifecycle.discoverAndReconcile({
+      fastStartup: true,
+      preDiscovered: new Map([['lmstudio', { health: 'healthy', models: preDiscoveredModels }]]),
+    });
+
+    expect(healthCheckCalls).toBe(0);
+    expect(listModelsCalls).toBe(0);
+    // Only the loaded model is inspected during fastStartup; unloaded models skip inspectModel()
+    expect(inspectedModelIds).toEqual(['loaded-model']);
+
+    const rec = await executions.create({
+      task: {
+        id: 'task-fast-2',
+        type: 'coding',
+        input: 'What is 12 + 19?',
+        requirements: { minimumContext: 8192 },
+        policy: { networkAccess: false },
+        priority: 'normal',
+        status: 'pending',
+        createdAt: new Date(),
+      },
+      agentId: 'wazir-coding',
+      computerId: 'comp-local',
+      runtimeId: 'lmstudio',
+      modelId: 'loaded-model',
+      workerId: 'worker-1',
+    });
+
+    const effectiveContext = await lifecycle.activateExecution(rec.execution.id, 8192);
+    expect(effectiveContext).toBe(32768);
+    // verifyAvailable() reuses the inventory cache seeded by discoverAndReconcile
+    expect(listModelsCalls).toBe(0);
+    expect(healthCheckCalls).toBe(0);
+  });
+
+  it('11. ISS-019: JsonFileStore lazy per-key date revival revives only accessed keys and lazy services skip startup store scans', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-lazy-store-'));
+    const storeFile = path.join(tmpDir, 'wazir.json');
+    try {
+      const isoDate = '2026-04-12T10:15:30.000Z';
+      await fs.writeFile(
+        storeFile,
+        JSON.stringify({
+          'execution/exec-1': { id: 'exec-1', createdAt: isoDate },
+          'block/b-1': { id: 'b-1', createdAt: isoDate },
+          'job/job-1': { id: 'job-1', status: 'completed', tasks: [], graph: { nodes: [], edges: [] }, createdAt: isoDate },
+        }),
+        'utf8',
+      );
+
+      const store = new JsonFileStore(storeFile);
+      const listSpy = vi.spyOn(store, 'list');
+
+      // Lazy services should not call store.list() during construction
+      const executions = new ExecutionEngine({ fastStartup: true });
+      const worktrees = new WorktreeManager();
+      const jobManager = new JobManager({ store, lazy: true });
+      const checkpoints = new CheckpointService({
+        store,
+        executionEngine: executions,
+        worktreeManager: worktrees,
+        lazy: true,
+      });
+      const handoffs = new HandoffService({ store, executions, checkpoints, lazy: true });
+
+      expect(listSpy).not.toHaveBeenCalled();
+
+      // Listing 'execution/' revives dates on execution/* keys without reviving unrelated 'block/*' keys
+      const execEntries = await store.list('execution/');
+      expect(execEntries).toHaveLength(1);
+      const execVal = execEntries[0]?.value as { id: string; createdAt: unknown };
+      expect(execVal.createdAt).toBeInstanceOf(Date);
+      expect((execVal.createdAt as Date).toISOString()).toBe(isoDate);
+
+      const internalData = (store as unknown as { data: Map<string, { createdAt: unknown }> }).data;
+      expect(typeof internalData.get('block/b-1')?.createdAt).toBe('string');
+
+      // Accessing 'block/b-1' via get() revives its Date on demand
+      const blockVal = await store.get<{ id: string; createdAt: unknown }>('block/b-1');
+      expect(blockVal?.createdAt).toBeInstanceOf(Date);
+
+      // Awaiting .ready on lazy services triggers their deferred store loads
+      await jobManager.ready;
+      await checkpoints.ready;
+      await handoffs.ready;
+      expect(jobManager.get('job-1')?.createdAt).toBeInstanceOf(Date);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
