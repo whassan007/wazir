@@ -157,6 +157,9 @@ const FILE_OR_PATH_REFERENCE_RE =
 const WORKSPACE_OR_TOOL_ACTION_RE =
   /\b(?:files?|filepath|filename|directory|directories|folders?|repo|repository|codebase|workspace|worktree|commit|branch|git|npm|pnpm|yarn|npx|vitest|jest|pytest|cargo|rustc|gcc|g\+\+|clang|make|cmake|build|compile|lint|typecheck|refactor|create\s+(?:a\s+)?(?:new\s+)?(?:file|folder|directory|project|script|module|package|test)|write\s+(?:to|into)\b|write\s+(?:a\s+|an\s+|the\s+)?(?:[\w+#-]+\s+)?(?:file|program|script|cli|app|application|server|test|suite)\b|read\s+(?:the\s+|from\s+)?(?:file|directory|folder|repo|codebase|config|logs?)|inspect|search\s+(?:the|for|in)|find\s+(?:in|all|files)|glob|grep|run\s+(?:the|a|an|npm|pnpm|yarn|tests?|build|lint|typecheck|command|script|shell|bash)|shell|bash|terminal|command\s+line|install|deploy|migrate|benchmark|use\s+(?:your\s+|the\s+|any\s+|available\s+|authorized\s+)*tools?|tools?\s+like|curl|wget|nslookup|dig|openssl|ping|traceroute|ssh)\b/i;
 
+const WORKSPACE_MUTATION_INTENT_RE =
+  /(?<!\bhow\s+to\s+)(?<!\bhow\s+(?:do|can|should)\s+(?:i|we)\s+)\b(?:fix|repair|resolve|patch|debug|implement|update|modify|edit|refactor|rewrite|add|create|remove|delete|rename|wire|integrate|restore|enforce)\s+(?:the\s+|a\s+|an\s+|our\s+|this\s+|my\s+|all\s+)?(?:[\w+#-]+\s+){0,2}(?:bugs?|issues?|defects?|errors?|regressions?|crash(?:es)?|handlers?|functions?|methods?|class(?:es)?|components?|endpoints?|routes?|services?|adapters?|controllers?|modules?|configs?|configurations?|settings?|scripts?|workflows?|tests?|validations?|checks?|code|implementations?|features?|logic|cli|tui|api|auth(?:entication)?|login|databases?|schemas?|migrations?|middlewares?|parsers?|routers?)\b/i;
+
 const CONVERSATIONAL_INTENT_RE =
   /\?|\b(?:what|why|how|when|where|who|which|explain|describe|summarize|define|translate|calculate|compute|evaluate|solve|reverse|convert|compare|tell\s+me|give\s+me|return\s+only|in\s+one\s+sentence|is\s+there|can\s+you\s+(?:explain|tell|answer|compute|calculate|reverse))\b/i;
 
@@ -237,6 +240,7 @@ export function isConversationalFastPathRequest(
   if (options.type === 'debugging' || options.type === 'research') return false;
   if (FILE_OR_PATH_REFERENCE_RE.test(trimmed)) return false;
   if (WORKSPACE_OR_TOOL_ACTION_RE.test(trimmed)) return false;
+  if (WORKSPACE_MUTATION_INTENT_RE.test(trimmed) && !SNIPPET_DEBUG_INTENT_RE.test(trimmed) && !STANDALONE_SNIPPET_INTENT_RE.test(trimmed)) return false;
   if (options.type === 'chat') return true;
   return (
     CONVERSATIONAL_INTENT_RE.test(trimmed) ||
@@ -950,6 +954,7 @@ export class CodingAgent implements AgentAdapter {
       pendingNativeCall = undefined;
       let finishReason: string | undefined;
       let toolCallCount = 0;
+      let sawCompleted = false;
       const timer = setTimeout(() => {
         timedOut = true;
         runtime.cancelCurrentTurn?.();
@@ -1027,7 +1032,13 @@ export class CodingAgent implements AgentAdapter {
             toolCall = { name: event.toolName, input };
             if (event.toolCallId) pendingNativeCall = { id: event.toolCallId, name: event.toolName, input };
           }
-          if (event.type === 'completed') finishReason = event.finishReason;
+          if (event.type === 'completed') {
+            sawCompleted = true;
+            finishReason = event.finishReason;
+            if (content.length === 0 && typeof event.content === 'string') {
+              content = event.content;
+            }
+          }
           if (event.type === 'completed' && event.usage) usage = event.usage;
           if (event.type === 'error' && event.error) error = event.error;
           if (event.type === 'retry') {
@@ -1042,6 +1053,9 @@ export class CodingAgent implements AgentAdapter {
       // A cancel-induced 'completed' with partial content is not an error —
       // only surface `error` when the turn didn't just hit its own timeout.
       if (error && !timedOut) throw new Error(error);
+      if (!sawCompleted && !toolCall && !timedOut && !request.isCancelled?.()) {
+        throw new Error('INCOMPLETE_PROVIDER_STREAM: stream ended without terminal completion event');
+      }
       if (toolCallCount > 1) {
         pendingNativeCall = undefined;
         return { content, toolCall: undefined, timedOut, retryNotes, usage, parallelCalls: toolCallCount };
@@ -1397,6 +1411,7 @@ export class CodingAgent implements AgentAdapter {
       let fastToolCall: { name: string; input: Record<string, unknown> } | undefined;
       let fastError: string | undefined;
       let fastTimedOut = false;
+      let fastCompleted = false;
       let fastUsage: { inputTokens: number; outputTokens: number; totalTokens?: number } | undefined;
       const fastRetryNotes: string[] = [];
       const timer = setTimeout(() => {
@@ -1427,7 +1442,13 @@ export class CodingAgent implements AgentAdapter {
             }
             fastToolCall = { name: event.toolName, input };
           }
-          if (event.type === 'completed' && event.usage) fastUsage = event.usage;
+          if (event.type === 'completed') {
+            fastCompleted = true;
+            if (fastContent.length === 0 && typeof event.content === 'string') {
+              fastContent = event.content;
+            }
+            if (event.usage) fastUsage = event.usage;
+          }
           if (event.type === 'error' && event.error) fastError = event.error;
           if (event.type === 'retry') {
             fastRetryNotes.push(
@@ -1441,6 +1462,9 @@ export class CodingAgent implements AgentAdapter {
       for (const note of fastRetryNotes) yield { kind: 'message', content: note };
       if (request.isCancelled?.()) return;
       if (fastError && !fastTimedOut) throw new Error(fastError);
+      if (!fastTimedOut && !fastError && !fastCompleted) {
+        throw new Error('INCOMPLETE_PROVIDER_STREAM: stream ended without terminal completion event');
+      }
       if (fastUsage) totalTokensUsed += fastUsage.totalTokens ?? fastUsage.inputTokens + fastUsage.outputTokens;
       const afterModel = checkStop('after_model_turn');
       if (afterModel) {
@@ -1449,31 +1473,36 @@ export class CodingAgent implements AgentAdapter {
       }
       turnsUsed += 1;
       actionAttempts += 1;
-      validActions += 1;
 
-      const parsedFastAction = !fastToolCall && /^\s*\{/.test(fastContent) ? readAction(fastContent) : null;
-      if (fastToolCall || parsedFastAction?.action === 'plan' || parsedFastAction?.action === 'tool') {
-        if (parsedFastAction?.action === 'plan' && parsedFastAction.content) {
-          acceptAttempt(fastContent);
-          plan = parsedFastAction.content;
-          planEstablished = true;
-          yield { kind: 'phase', phase: 'plan' as AgentPhase, toolSurface: currentToolSurface };
-          yield { kind: 'message', content: `Plan: ${plan}`, raw: fastContent };
-          pushContinue('Plan accepted. Execute it now, one tool call per turn.');
+      if (!fastTimedOut && !fastError && fastCompleted) {
+        validActions += 1;
+        const parsedFastAction = !fastToolCall && /^\s*\{/.test(fastContent) ? readAction(fastContent) : null;
+        if (fastToolCall || parsedFastAction?.action === 'plan' || parsedFastAction?.action === 'tool') {
+          if (parsedFastAction?.action === 'plan' && parsedFastAction.content) {
+            acceptAttempt(fastContent);
+            plan = parsedFastAction.content;
+            planEstablished = true;
+            yield { kind: 'phase', phase: 'plan' as AgentPhase, toolSurface: currentToolSurface };
+            yield { kind: 'message', content: `Plan: ${plan}`, raw: fastContent };
+            pushContinue('Plan accepted. Execute it now, one tool call per turn.');
+          }
+        } else if (fastContent.trim().length > 0) {
+          const answer =
+            (parsedFastAction && (parsedFastAction.action === 'done' || parsedFastAction.action === 'answer')
+              ? (parsedFastAction.summary ?? parsedFastAction.content)
+              : undefined) ?? fastContent.trim();
+          yield { kind: 'phase', phase: 'complete' as AgentPhase };
+          yield {
+            kind: 'done',
+            content: answer,
+            terminationReason: 'VERIFICATION_PASSED',
+            protocolMetrics: currentMetrics(),
+          };
+          return;
         }
       } else {
-        const answer =
-          (parsedFastAction && (parsedFastAction.action === 'done' || parsedFastAction.action === 'answer')
-            ? (parsedFastAction.summary ?? parsedFastAction.content)
-            : undefined) ?? fastContent.trim();
-        yield { kind: 'phase', phase: 'complete' as AgentPhase };
-        yield {
-          kind: 'done',
-          content: answer,
-          terminationReason: 'VERIFICATION_PASSED',
-          protocolMetrics: currentMetrics(),
-        };
-        return;
+        correctionCount += 1;
+        malformedActions += 1;
       }
     }
 

@@ -126,6 +126,7 @@ export class StepAgent implements AgentAdapter {
       let content = '';
       let error: string | undefined;
       let timedOut = false;
+      let completed = false;
       const timer = setTimeout(() => {
         timedOut = true;
         runtime.cancelCurrentTurn?.();
@@ -141,6 +142,12 @@ export class StepAgent implements AgentAdapter {
           if (event.type === 'token' && event.content) {
             content += event.content;
           }
+          if (event.type === 'completed') {
+            completed = true;
+            if (content.length === 0 && typeof event.content === 'string') {
+              content = event.content;
+            }
+          }
           if (event.type === 'error' && event.error) error = event.error;
         }
       } finally {
@@ -148,6 +155,9 @@ export class StepAgent implements AgentAdapter {
       }
 
       if (error && !timedOut) throw new Error(error);
+      if (!completed && !timedOut && !request.isCancelled?.()) {
+        throw new Error('INCOMPLETE_PROVIDER_STREAM: stream ended without terminal completion event');
+      }
       return { content, timedOut };
     };
 
@@ -165,11 +175,19 @@ export class StepAgent implements AgentAdapter {
         messages.push({ role: 'user', content: `User instruction: ${steering} Respond with exactly one JSON object.` });
       }
 
-      const { content: raw, timedOut } = await modelTurn();
+      let raw: string;
+      let timedOut: boolean;
+      try {
+        ({ content: raw, timedOut } = await modelTurn());
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        yield { kind: 'error', error: message, errorKind: 'infrastructure' };
+        return;
+      }
       if (request.isCancelled?.()) break;
       turnsUsed += 1;
 
-      const action = readAction(raw);
+      const action = timedOut ? null : readAction(raw);
       if (!action) {
         correctionCount += 1;
         if (correctionCount >= 3) {
