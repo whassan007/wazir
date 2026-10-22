@@ -89,13 +89,13 @@ export function formatBuildInfo(info: BuildInfo): string {
 
 export function checkRuntimeDependencies(): DoctorCheck {
   const [major, minor] = process.versions.node.split('.').map(Number);
-  const ok = (major > 22) || (major === 22 && minor >= 5);
+  const ok = (major > 22) || (major === 22 && minor >= 13);
   if (!ok) {
     return {
       name: 'runtime dependencies',
       status: 'FAIL',
-      message: `Node.js ${process.version} is unsupported (requires >= 22.5.0)`,
-      details: 'Please upgrade Node.js to >= 22.5.0',
+      message: `Node.js ${process.version} is unsupported (requires >= 22.13.0)`,
+      details: 'Please upgrade Node.js to >= 22.13.0',
     };
   }
   return {

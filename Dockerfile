@@ -33,7 +33,7 @@ LABEL org.opencontainers.image.title="Wazir" \
       org.opencontainers.image.url="https://github.com/whassan007/wazir" \
       org.opencontainers.image.source="https://github.com/whassan007/wazir" \
       org.opencontainers.image.vendor="Wazir Contributors" \
-      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 
 # Install production utilities (Git is required for worktree & agent coordination; curl/ca-certificates for HTTPS)
 RUN apt-get update && apt-get install -y --no-install-recommends \

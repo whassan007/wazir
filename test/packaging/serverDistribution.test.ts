@@ -32,7 +32,7 @@ describe('Server Distribution & Containerization', () => {
 
       // OCI annotations
       expect(content).toContain('org.opencontainers.image.title="Wazir"');
-      expect(content).toContain('org.opencontainers.image.licenses="AGPL-3.0-or-later"');
+      expect(content).toContain('org.opencontainers.image.licenses="AGPL-3.0-only"');
 
       // Healthcheck
       expect(content).toContain('HEALTHCHECK');
