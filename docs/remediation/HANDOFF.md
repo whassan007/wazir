@@ -1,15 +1,17 @@
 # Wazir Autonomous Multi-Agent Remediation — Handoff State
 
 - **Current Branch**: `remediation/v0.2.13`
-- **Base Commit SHA**: `2846834280099ed22c29b2f8d058f80343c07320` (`v0.2.12` / `main`)
+- **Latest Verified Commit SHA**: `1526970b601cbe3d81b197a353eb3f9ef18029b1`
 - **Completed Phases**:
-  - **Phase 0 (Baseline & Architectural Reconnaissance)**: **PASS**
-- **Current Phase**: **Phase 1 — Release Reconciliation and CI Integrity (P0)**
-- **Open Issues Assigned to Phase 1**:
-  - `ISS-001` (P0): Restore autonomous updater (`apps/cli/src/updater/*`, `wa update`, `docs/auto-updates.md`, `scripts/build-cli.mjs`) from `v0.2.8`–`v0.2.10` (`1d1ce13`, `9f70a61`).
-  - `ISS-002` (P0): Repair Linux desktop/Tauri build prerequisites (`libwebkit2gtk-4.1-dev`, etc.) in `.github/workflows/ci.yml` and `.github/workflows/reliability.yml`, and fix `reliability.yml` trigger path `'tests/reliability/**'`.
-  - `ISS-003` (P0): Pin `.github/workflows/release.yml` jobs to exact verified commit SHA (`${{ needs.verify.outputs.commit_sha }}` / `${{ github.sha }}`), enforce full mandatory test gates, integrate `scripts/release-integrity.mjs` and `scripts/api-health-smoke.mjs` (`87d4a34`), and publish verified non-prerelease tags as Latest (`draft: false`).
-  - `ISS-004` (P0): Align Debian (`packaging/deb/debian/control`) and RPM (`packaging/rpm/wazir.spec`) Node.js dependency to `>= 22.13.0`, synchronize Homebrew/Scoop/RPM/DEB versions to `0.2.12`, fix `scripts/build-deb.mjs` and `scripts/build-rpm.mjs` systemd `ExecStart` commands, and prevent `scripts/build-binary.mjs` from mutating user dotfiles unless explicitly requested.
-  - `ISS-005` (P0): Align SPDX licensing metadata (`AGPL-3.0-only` across root, all 24 workspace `package.json` files, RPM/Homebrew/Scoop manifests, and `scripts/update-package-managers.mjs`), synchronize workspace `package.json` versions and `engines.node` (`>=22.13.0`), and add release feature-parity regression tests (`tests/release/packageParity.test.ts`).
+  - **Phase 0 (Baseline & Architectural Reconnaissance)**: **PASS** (`30b56d151e61e8811fadb2960c25e771d55306b6`)
+  - **Phase 1 (Release Reconciliation and CI Integrity — P0)**: **PASS** (`1526970b601cbe3d81b197a353eb3f9ef18029b1` — `ISS-001` through `ISS-005` CLOSED and independently verified by `0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`)
+- **Current Phase**: **Phase 2 — Execution Correctness (P0)**
+- **Open Issues Assigned to Phase 2**:
+  - `ISS-006` (P0): Fast-path classification & expected-file/mutation guardrails (`apps/cli/src/run.ts`, `packages/agents/src/codingAgent.ts`, `packages/agents/src/chatAgent.ts`).
+  - `ISS-007` (P0): Require valid terminal provider completion & distinguish successful output from partial streaming output (`packages/runtimes/{nvidia,openai,anthropic,google}/src/index.ts`, `packages/agents/src/{codingAgent,chatAgent,stepAgent}.ts`).
+  - `ISS-008` (P0): Preserve independent verification decisions (`apps/cli/src/run.ts`, `packages/evaluation/src/index.ts`).
+  - `ISS-009` (P0): Persist terminal `'failed'` execution records on activation, planning, and preflight failures (`apps/cli/src/run.ts`, `apps/cli/src/commands.ts`).
+  - `ISS-010` (P0): Replace placeholder `wa task status <id>` with authoritative persisted status (`apps/cli/src/index.ts`, `apps/cli/src/commands.ts`).
+  - `ISS-011` (P0): Immediate user-visible token streaming & cancellation propagation (`apps/cli/src/run.ts`, `apps/cli/src/commands.ts`, `packages/runtimes/nvidia/src/index.ts`).
 - **Next Reproducible Action**:
-  - Commit Phase 0 baseline documentation on `remediation/v0.2.13` and launch parallel Phase 1 worker agents on disjoint file sets.
+  - Launch parallel Phase 2 `execution-engineer` agents in isolated worktrees with strictly disjoint file ownership.
