@@ -86,3 +86,26 @@
   - `./node_modules/.bin/vitest run packages/core/tests/phase4SandboxAndCodeMode.test.ts packages/core/tests/policyEngine.test.ts packages/core/tests/codeMode.test.ts packages/tools/tests/sandbox.test.ts apps/cli/tests/executeTask.e2e.test.ts apps/cli/tests/updater.test.ts apps/api/tests/phase4MobileCompatibility.test.ts apps/api/tests/mobileApi.test.ts apps/api/tests/multiSurface.test.ts`: **PASS** (9 test files, 130/130 tests passed)
 - **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
   - Audited `8362ee493b90e33b4111c2907cd531946787ecd7` across all 3 Phase 4 issues (`ISS-016`–`ISS-018`) and all new/existing regression test suites: **PASS**.
+
+---
+
+## Phase 5 — Startup and Performance Optimization (P2)
+- **Status**: **PASS**
+- **Integrated Commit SHA**: `ef82dc37d808ebc97197af3bb98f2d075bd76a67`
+- **Worker Commits Integrated**:
+  - `efa5b9d` & `ef82dc3` (Performance Engineer: `ISS-019` — Fast native `JSON.parse` + lazy per-key `reviveDatesInPlace` in `JsonFileStore`; memoized `discoverCpu()` preferring `os.cpus()[0].model`; lazy `.ready` getters (`lazy: true`) on `JobManager`, `CheckpointService`, and `HandoffService`; `ExecutionEngine` `fastStartup` terminal-record fast path; pre-filtered & deferred `HealthEvidenceLog` hydration; `preDiscovered` runtime reuse, seeded `inventoryProbes`, and unloaded-model `inspectModel` skip in `ModelLifecycleService.discoverAndReconcile`; memoized `PATH` lookups in `apps/cli/src/engine.ts`)
+- **Before vs. After Benchmark Evidence (`createEngine({ fastStartup: true })`)**:
+  - **9.65 MB Disk Store (`wazir.json` with 264 executions / 1,048 keys)**:
+    - Before Phase 5: Cold = `256.56 ms`, Warm = `430.52 ms` (plus background `JobManager.reconcileStaleStatus` race throwing `JOB_REVISION_CONFLICT` across consecutive calls)
+    - After Phase 5: Cold = `186.61 ms` (`-27.3%`), Warm = `[92.79, 84.86, 83.86, 103.12] ms` (`p50 = 88.83 ms`, `min = 83.86 ms`, `-79.4%` vs warm baseline, `0` revision conflicts)
+  - **In-Memory Store (`WAZIR_IN_MEMORY=1`)**:
+    - Before Phase 5: `[206.86, 63.95, 59.97, 56.26, 55.11] ms` (Cold = `206.86 ms`, Warm p50 = `58.12 ms`)
+    - After Phase 5: `[166.13, 58.90, 54.00, 49.72, 49.93] ms` (Cold = `166.13 ms` (`-19.7%`), Warm p50 = `51.97 ms`, min = `49.72 ms`)
+  - **Store Parse + `execution/` Load (`264` records in `9.65 MB` `wazir.json`)**:
+    - Before Phase 5: `96.87 ms`
+    - After Phase 5: `43.32 ms` (`-55.3%`, `2.24x` speedup)
+- **Verification Executed**:
+  - `npm run build:cli`: **PASS** (exit 0, `bin/wa.js` 18.7 MB)
+  - `./node_modules/.bin/vitest run apps/cli/tests/executionPerformance.test.ts packages/shared/tests/store.test.ts packages/core/tests/phase3RecoveryAndTransitions.test.ts packages/core/tests/phase3LeasesAndFencing.test.ts packages/core/tests/phase3ReservationsAndQuota.test.ts apps/cli/tests/phase2ExecutionCorrectness.test.ts`: **PASS** (6 test files, 47/47 tests passed)
+- **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
+  - Audited `ef82dc37d808ebc97197af3bb98f2d075bd76a67` across all Phase 5 optimizations and regression tests (`ISS-019`): **PASS**.
