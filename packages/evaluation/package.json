@@ -1,6 +1,7 @@
 {
   "name": "@wazir/evaluation",
-  "version": "0.1.28",
+  "version": "0.2.12",
+  "license": "AGPL-3.0-only",
   "description": "Post-execution evaluation for the Wazir meta-harness",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -14,5 +15,8 @@
   },
   "devDependencies": {
     "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

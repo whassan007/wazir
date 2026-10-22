@@ -90,12 +90,12 @@ writeFileSync(path.join(stagingDir, 'usr/lib/wazir/package.json'), JSON.stringif
 
 // 4. Systemd services
 const systemdWorker = readFileSync(path.resolve(rootDir, 'scripts/systemd/wazir-worker.service'), 'utf8')
-  .replace('/usr/bin/node /opt/wazir/apps/worker/dist/index.js', '/usr/bin/wa worker start')
+  .replace('/usr/bin/node /opt/wazir/apps/worker/dist/index.js', '/usr/bin/wa improve start --foreground --continuous')
   .replace('WorkingDirectory=/opt/wazir', 'WorkingDirectory=/var/lib/wazir')
   .replace('ReadWritePaths=/opt/wazir', 'ReadWritePaths=/var/lib/wazir');
 
 const systemdApi = readFileSync(path.resolve(rootDir, 'scripts/systemd/wazir-api.service'), 'utf8')
-  .replace('/usr/bin/node /opt/wazir/apps/api/dist/main.js', '/usr/bin/wa api start')
+  .replace('/usr/bin/node /opt/wazir/apps/api/dist/main.js', '/usr/bin/wa dashboard --no-open --host 0.0.0.0 --port 4800')
   .replace('WorkingDirectory=/opt/wazir', 'WorkingDirectory=/var/lib/wazir')
   .replace('ReadWritePaths=/opt/wazir', 'ReadWritePaths=/var/lib/wazir');
 
