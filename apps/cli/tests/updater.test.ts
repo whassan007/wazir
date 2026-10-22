@@ -6,7 +6,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { compareSemver, chooseRelease, downloadAndVerifyAsset, fetchReleases, platformArtifactNames } from '../src/updater/releases.js';
 import { DEFAULT_UPDATE_CONFIG, journalPath, loadUpdateConfig, readUpdateHistory, saveUpdateConfig } from '../src/updater/storage.js';
-import { checkForUpdates, configureUpdates, extractStandaloneBinary, getUpdateConfig, rollbackUpdate, validateNpmReleasePackage } from '../src/updater/service.js';
+import {
+  applyStagedUpdate,
+  checkForUpdates,
+  configureUpdates,
+  defaultActiveTaskDetector,
+  drainAndApply,
+  extractStandaloneBinary,
+  getUpdateConfig,
+  getUpdateStatus,
+  inspectActiveWork,
+  rollbackUpdate,
+  UpdateService,
+  validateNpmReleasePackage,
+} from '../src/updater/service.js';
+import { UpdateScheduler } from '../src/updater/scheduler.js';
+import { JsonFileStore, MemoryStore } from '@wazir/shared';
 import type { GitHubRelease, UpdateConfig } from '../src/updater/types.js';
 
 const dirs: string[] = [];
@@ -336,5 +351,378 @@ describe('updater release and safety invariants', () => {
     const result = await rollbackUpdate();
     expect(result.phase).toBe('ACTION_REQUIRED');
     expect(result.message).toMatch(/no verified standalone rollback binary/i);
+  });
+
+  describe('ISS-017: durable active-execution, distributed-job, and worker-lease detection', () => {
+    it('defers applying an update when a durable execution/* record is active with live owner PID or active lease', async () => {
+      const home = isolate();
+      enabledConfig();
+      const store = new MemoryStore();
+      await store.put('execution/exec-live-owner', {
+        execution: {
+          id: 'exec-live-owner',
+          taskId: 'task-1',
+          runtimeId: 'ollama',
+          modelId: 'qwen3',
+          status: 'running',
+          owner: { pid: process.pid, host: os.hostname() },
+          createdAt: new Date(),
+        },
+        events: [],
+      });
+
+      expect(await defaultActiveTaskDetector({ store, checkProcesses: false })).toBe(true);
+
+      const installSpy = vi.fn();
+      const service = new UpdateService({
+        store,
+        checkProcesses: false,
+        releases: async () => [release('v0.2.8')],
+        download: downloaded,
+        installedVersion: '0.2.7',
+        installMethod: 'npm',
+        install: installSpy,
+      });
+
+      const deferredOwner = await service.checkForUpdates({ apply: true });
+      expect(deferredOwner.phase).toBe('WAITING_FOR_SAFE_ACTIVATION');
+      expect(deferredOwner.status).toBe('deferred_busy');
+      expect(deferredOwner.deferred).toBe(true);
+      expect(deferredOwner.deferredReason).toContain('exec-live-owner');
+      expect(deferredOwner.activeWork?.executions).toContain('exec-live-owner');
+      expect(installSpy).not.toHaveBeenCalled();
+
+      // Replace with an execution whose owner PID is dead, but that holds an unexpired worker lease
+      await store.delete('execution/exec-live-owner');
+      await store.put('execution/exec-leased', {
+        execution: {
+          id: 'exec-leased',
+          taskId: 'task-2',
+          runtimeId: 'ollama',
+          modelId: 'qwen3',
+          status: 'assigned',
+          createdAt: new Date(),
+        },
+        events: [
+          {
+            id: 'evt-1',
+            executionId: 'exec-leased',
+            type: 'lease.acquired',
+            timestamp: new Date(),
+            data: {
+              workerId: 'worker-remote-1',
+              epoch: 1,
+              expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            },
+          },
+        ],
+      });
+
+      const deferredLease = await service.applyStagedUpdate();
+      expect(deferredLease.phase).toBe('WAITING_FOR_SAFE_ACTIVATION');
+      expect(deferredLease.status).toBe('deferred_busy');
+      expect(deferredLease.deferredReason).toContain('exec-leased');
+      expect(installSpy).not.toHaveBeenCalled();
+
+      // Verify store.json in configDir is also detected automatically without explicit store argument
+      writeFileSync(
+        path.join(home, 'store.json'),
+        JSON.stringify({
+          'execution/exec-disk': {
+            execution: {
+              id: 'exec-disk',
+              status: 'verifying',
+              owner: { pid: process.pid, host: os.hostname() },
+            },
+          },
+        }),
+      );
+      expect(defaultActiveTaskDetector({ configDir: home, checkProcesses: false })).toBe(true);
+      const status = await getUpdateStatus({ configDir: home, checkProcesses: false });
+      expect(status.jobsPreventActivation).toBe(true);
+      expect(status.activeWork?.executions).toContain('exec-disk');
+    });
+
+    it('ignores stale execution/* records whose owner process died and whose lease expired', async () => {
+      isolate();
+      enabledConfig();
+      const store = new MemoryStore();
+      await store.put('execution/exec-stale', {
+        execution: {
+          id: 'exec-stale',
+          status: 'running',
+          owner: { pid: 999_999_999, host: os.hostname() },
+        },
+        lease: {
+          expiresAt: Date.now() - 10_000,
+          released: false,
+        },
+      });
+
+      const work = await inspectActiveWork({
+        store,
+        checkProcesses: false,
+        isProcessAlive: () => false,
+      });
+      expect(work.busy).toBe(false);
+      expect(work.executions).toEqual([]);
+    });
+
+    it('defers applying an update when a durable job/* record is running or has an unexpired controller ownership lease', async () => {
+      const home = isolate();
+      enabledConfig();
+      const fileStore = new JsonFileStore(path.join(home, 'store.json'));
+      await fileStore.put('job/job-leased', {
+        id: 'job-leased',
+        title: 'Distributed fleet job',
+        status: 'ready',
+        ownership: {
+          ownerId: 'controller-1',
+          epoch: 2,
+          expiresAt: Date.now() + 45_000,
+        },
+        tasks: [{ id: 'task-1', status: 'pending' }],
+        graph: { nodes: [], edges: [] },
+      });
+
+      const installSpy = vi.fn();
+      const service = new UpdateService({
+        configDir: home,
+        checkProcesses: false,
+        releases: async () => [release('v0.2.8')],
+        download: downloaded,
+        installedVersion: '0.2.7',
+        installMethod: 'npm',
+        install: installSpy,
+      });
+
+      const deferredLease = await service.checkForUpdates({ apply: true });
+      expect(deferredLease.phase).toBe('WAITING_FOR_SAFE_ACTIVATION');
+      expect(deferredLease.status).toBe('deferred_busy');
+      expect(deferredLease.deferred).toBe(true);
+      expect(deferredLease.deferredReason).toContain('job-leased');
+      expect(deferredLease.activeWork?.jobs).toContain('job-leased');
+      expect(installSpy).not.toHaveBeenCalled();
+
+      // Also defer when job status is 'running' even without an explicit ownership lease
+      await fileStore.put('job/job-leased', {
+        id: 'job-leased',
+        title: 'Distributed fleet job',
+        status: 'running',
+        tasks: [{ id: 'task-1', status: 'running' }],
+        graph: { nodes: [], edges: [] },
+      });
+
+      const scheduler = new UpdateScheduler({
+        service,
+        configDir: home,
+        checkProcesses: false,
+        applyOnTick: true,
+      });
+      const tickDeferred = await scheduler.tick();
+      expect(tickDeferred.phase).toBe('WAITING_FOR_SAFE_ACTIVATION');
+      expect(tickDeferred.status).toBe('deferred_busy');
+      expect(tickDeferred.deferredReason).toContain('job-leased');
+      expect(installSpy).not.toHaveBeenCalled();
+    });
+
+    it('defers applying an update when a durable worker dispatch/* lease is active', async () => {
+      isolate();
+      enabledConfig();
+      const store = new MemoryStore();
+      await store.put('dispatch/disp-claimed', {
+        id: 'disp-claimed',
+        computerId: 'worker-node-1',
+        state: 'claimed',
+        lease: {
+          token: 'lease-tok-1',
+          expiresAt: Date.now() + 30_000,
+        },
+      });
+
+      const installSpy = vi.fn();
+      const service = new UpdateService({
+        store,
+        checkProcesses: false,
+        releases: async () => [release('v0.2.8')],
+        download: downloaded,
+        installedVersion: '0.2.7',
+        installMethod: 'npm',
+        install: installSpy,
+      });
+
+      const deferredClaimed = await service.checkForUpdates({ apply: true });
+      expect(deferredClaimed.phase).toBe('WAITING_FOR_SAFE_ACTIVATION');
+      expect(deferredClaimed.status).toBe('deferred_busy');
+      expect(deferredClaimed.deferredReason).toContain('disp-claimed');
+      expect(deferredClaimed.activeWork?.dispatches).toContain('disp-claimed');
+      expect(installSpy).not.toHaveBeenCalled();
+
+      // Transition dispatch to 'running' with active lease -> still deferred
+      await store.put('dispatch/disp-claimed', {
+        id: 'disp-claimed',
+        computerId: 'worker-node-1',
+        state: 'running',
+        lease: {
+          token: 'lease-tok-1',
+          expiresAt: Date.now() + 30_000,
+        },
+      });
+
+      const deferredRunning = await service.applyStagedUpdate();
+      expect(deferredRunning.phase).toBe('WAITING_FOR_SAFE_ACTIVATION');
+      expect(deferredRunning.status).toBe('deferred_busy');
+      expect(deferredRunning.deferredReason).toContain('disp-claimed');
+      expect(installSpy).not.toHaveBeenCalled();
+    });
+
+    it('applies the staged update cleanly once active executions, jobs, and dispatches transition to completed', async () => {
+      isolate();
+      enabledConfig();
+      const store = new MemoryStore();
+      await store.put('execution/exec-1', {
+        execution: {
+          id: 'exec-1',
+          status: 'running',
+          owner: { pid: process.pid, host: os.hostname() },
+        },
+      });
+      await store.put('job/job-1', {
+        id: 'job-1',
+        status: 'running',
+        ownership: { ownerId: 'ctrl-1', epoch: 1, expiresAt: Date.now() + 30_000 },
+        tasks: [{ id: 'task-1', status: 'running' }],
+        graph: { nodes: [], edges: [] },
+      });
+      await store.put('dispatch/disp-1', {
+        id: 'disp-1',
+        state: 'running',
+        lease: { token: 'tok-1', expiresAt: Date.now() + 30_000 },
+      });
+
+      const installSpy = vi.fn();
+      const service = new UpdateService({
+        store,
+        checkProcesses: false,
+        releases: async () => [release('v0.2.8')],
+        download: downloaded,
+        installedVersion: '0.2.7',
+        installMethod: 'npm',
+        install: installSpy,
+      });
+
+      const deferred = await service.checkForUpdates({ apply: true });
+      expect(deferred.phase).toBe('WAITING_FOR_SAFE_ACTIVATION');
+      expect(deferred.status).toBe('deferred_busy');
+      expect(installSpy).not.toHaveBeenCalled();
+
+      // Transition all active work to completed
+      await store.put('execution/exec-1', {
+        execution: {
+          id: 'exec-1',
+          status: 'completed',
+          owner: { pid: process.pid, host: os.hostname() },
+        },
+      });
+      await store.put('job/job-1', {
+        id: 'job-1',
+        status: 'completed',
+        ownership: { ownerId: 'ctrl-1', epoch: 1, expiresAt: 0 },
+        tasks: [{ id: 'task-1', status: 'completed' }],
+        graph: { nodes: [], edges: [] },
+      });
+      await store.put('dispatch/disp-1', {
+        id: 'disp-1',
+        state: 'completed',
+        outcome: { ok: true, output: 'done', inputTokens: 10, outputTokens: 10, durationMs: 5 },
+      });
+
+      const applied = await service.applyStagedUpdate();
+      expect(applied.phase).toBe('COMPLETED');
+      expect(applied.status).toBe('completed');
+      expect(applied.applied).toBe(true);
+      expect(applied.installedVersion).toBe('0.2.8');
+      expect(installSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('waits for active work to finish during drainAndApply and then applies cleanly', async () => {
+      isolate();
+      enabledConfig();
+      const store = new MemoryStore();
+      await store.put('job/job-draining', {
+        id: 'job-draining',
+        status: 'running',
+        ownership: { ownerId: 'ctrl-1', epoch: 1, expiresAt: Date.now() + 30_000 },
+        tasks: [{ id: 't1', status: 'running' }],
+        graph: { nodes: [], edges: [] },
+      });
+
+      const installSpy = vi.fn();
+      const service = new UpdateService({
+        store,
+        checkProcesses: false,
+        releases: async () => [release('v0.2.8')],
+        download: downloaded,
+        installedVersion: '0.2.7',
+        installMethod: 'npm',
+        install: installSpy,
+      });
+
+      // Stage first (defers because job-draining is running)
+      const initial = await service.checkForUpdates({ apply: true });
+      expect(initial.phase).toBe('WAITING_FOR_SAFE_ACTIVATION');
+      expect(installSpy).not.toHaveBeenCalled();
+
+      // Transition job to completed after 30ms
+      setTimeout(() => {
+        void store.put('job/job-draining', {
+          id: 'job-draining',
+          status: 'completed',
+          ownership: { ownerId: 'ctrl-1', epoch: 1, expiresAt: 0 },
+          tasks: [{ id: 't1', status: 'completed' }],
+          graph: { nodes: [], edges: [] },
+        });
+      }, 30);
+
+      const drained = await service.drainAndApply({ timeoutMs: 1_000, pollIntervalMs: 10 });
+      expect(drained.phase).toBe('COMPLETED');
+      expect(drained.status).toBe('completed');
+      expect(drained.applied).toBe(true);
+      expect(drained.installedVersion).toBe('0.2.8');
+      expect(installSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('safely defers without modifying the installation when drainAndApply times out while a job remains running', async () => {
+      isolate();
+      enabledConfig();
+      const store = new MemoryStore();
+      await store.put('job/job-stuck', {
+        id: 'job-stuck',
+        status: 'running',
+        ownership: { ownerId: 'ctrl-1', epoch: 1, expiresAt: Date.now() + 60_000 },
+        tasks: [{ id: 't1', status: 'running' }],
+        graph: { nodes: [], edges: [] },
+      });
+
+      const installSpy = vi.fn();
+      const result = await drainAndApply(
+        { store, checkProcesses: false, timeoutMs: 60, pollIntervalMs: 15 },
+        {
+          releases: async () => [release('v0.2.8')],
+          download: downloaded,
+          installedVersion: '0.2.7',
+          installMethod: 'npm',
+          install: installSpy,
+        },
+      );
+
+      expect(result.phase).toBe('WAITING_FOR_SAFE_ACTIVATION');
+      expect(result.status).toBe('deferred_busy');
+      expect(result.deferred).toBe(true);
+      expect(result.timedOut).toBe(true);
+      expect(result.deferredReason).toContain('job-stuck');
+      expect(result.installedVersion).toBe('0.2.7');
+      expect(installSpy).not.toHaveBeenCalled();
+    });
   });
 });
