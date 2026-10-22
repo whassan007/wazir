@@ -759,6 +759,13 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     const controller = control.controller;
     const requestId = control.requestId;
     this.inflight.set(requestId, controller);
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort(request.signal.reason);
+      } else {
+        request.signal.addEventListener('abort', () => controller.abort(request.signal?.reason), { once: true });
+      }
+    }
 
     const stream = request.stream ?? true;
     const omittedFields = new Set<string>(this.unsupportedModelFields.get(request.modelId) ?? []);
@@ -967,15 +974,19 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       const toolSlots = new Map<number, { id?: string; name: string; args: string }>();
       let usage: Usage | undefined;
       let finishReason: string | undefined;
+      let sawDoneMarker = false;
       let fullContent = '';
 
-      for await (const data of readSseDataLines(res.body)) {
-        if (data === '[DONE]') break;
+      for await (const payload of readSseDataLines(res.body)) {
+        if (payload === '[DONE]') {
+          sawDoneMarker = true;
+          break;
+        }
         let chunk: Record<string, unknown>;
         try {
-          chunk = JSON.parse(data) as Record<string, unknown>;
+          chunk = JSON.parse(payload) as Record<string, unknown>;
         } catch {
-          continue;
+          throw new Error('MALFORMED_PROVIDER_STREAM: invalid JSON in SSE data line');
         }
 
         if (chunk.usage && typeof chunk.usage === 'object') {
@@ -1024,6 +1035,10 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
             }
           }
         }
+      }
+
+      if (!sawDoneMarker && !finishReason) {
+        throw new Error('INCOMPLETE_PROVIDER_STREAM: stream closed before terminal completion marker');
       }
 
       for (const [index, slot] of [...toolSlots.entries()].sort((a, b) => a[0] - b[0])) {
@@ -1201,13 +1216,26 @@ async function* readSseDataLines(body: ReadableStream<Uint8Array>): AsyncIterabl
         const line = buf.slice(0, nl).replace(/\r$/, '');
         buf = buf.slice(nl + 1);
         if (line.startsWith('data:')) {
-          yield line.slice(5).trim();
+          const payload = line.slice(5).trim();
+          if (payload) yield payload;
         }
       }
     }
-    const tail = buf.replace(/\r$/, '');
-    if (tail.startsWith('data:')) {
-      yield tail.slice(5).trim();
+    buf += decoder.decode();
+    if (buf.trim().length > 0) {
+      for (const rawLine of buf.split(/\r?\n/)) {
+        const line = rawLine.replace(/\r$/, '').trim();
+        if (!line) continue;
+        if (line.startsWith('data:')) {
+          const payload = line.slice(5).trim();
+          if (!payload) {
+            throw new Error('MALFORMED_PROVIDER_STREAM: truncated trailing SSE line');
+          }
+          yield payload;
+        } else if (!line.startsWith(':')) {
+          throw new Error('MALFORMED_PROVIDER_STREAM: truncated trailing SSE line');
+        }
+      }
     }
   } finally {
     reader.releaseLock();

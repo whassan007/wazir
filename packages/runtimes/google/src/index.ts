@@ -231,6 +231,13 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     const controller = control.controller;
     const requestId = control.requestId;
     this.controllers.set(requestId, controller);
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort(request.signal.reason);
+      } else {
+        request.signal.addEventListener('abort', () => controller.abort(request.signal?.reason), { once: true });
+      }
+    }
 
     const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
     for (const message of request.messages) {
@@ -269,7 +276,10 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       });
     } catch (error) {
       this.controllers.delete(requestId);
-      yield { type: 'error', error: controller.signal.aborted ? 'cancelled' : error instanceof Error ? error.message : String(error) };
+      if (controller.signal.aborted) {
+        throw new Error('Request cancelled');
+      }
+      yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       return;
     }
 
@@ -285,6 +295,7 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     let reasoningTokens = 0;
     let cacheReadTokens = 0;
     let outputTokens = 0;
+    let finishReason: string | undefined;
     const toolCalls: Array<{ name: string; args: unknown }> = [];
     let pending = '';
 
@@ -294,7 +305,13 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       const decoder = new TextDecoder();
       const reader = response.body.getReader();
       for (;;) {
+        if (controller.signal.aborted) {
+          throw new Error('Request cancelled');
+        }
         const { done, value } = await reader.read();
+        if (controller.signal.aborted) {
+          throw new Error('Request cancelled');
+        }
         if (done) break;
         pending += decoder.decode(value, { stream: true });
         let index = pending.indexOf('\n');
@@ -310,10 +327,14 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
           try {
             chunk = JSON.parse(data);
           } catch {
-            continue;
+            throw new Error('MALFORMED_PROVIDER_STREAM: invalid JSON chunk');
           }
 
           const candidate = chunk.candidates?.[0];
+          const candFinish = candidate?.finishReason;
+          if (typeof candFinish === 'string' && candFinish.length > 0) {
+            finishReason = candFinish;
+          }
           for (const part of candidate?.content?.parts ?? []) {
             if (typeof part.text === 'string' && part.text) {
               full += part.text;
@@ -332,14 +353,27 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
         }
       }
 
+      pending += decoder.decode();
+      if (pending.trim().length > 0) {
+        for (const rawLine of pending.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line || line.startsWith(':')) continue;
+          throw new Error('MALFORMED_PROVIDER_STREAM: trailing incomplete line');
+        }
+      }
+
+      if (!finishReason) {
+        throw new Error('INCOMPLETE_PROVIDER_STREAM: missing finishReason');
+      }
+
       for (const [index, call] of toolCalls.entries()) {
         yield { type: 'tool_call', toolCallId: `tool-${index}`, toolName: call.name, toolInput: call.args };
       }
 
-      yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, reasoningTokens } };
+      yield { type: 'completed', finishReason, content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, reasoningTokens } };
     } catch (error) {
       if (controller.signal.aborted) {
-        yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, reasoningTokens } };
+        throw new Error('Request cancelled');
       } else {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }

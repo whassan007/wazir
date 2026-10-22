@@ -51,6 +51,7 @@ interface AnthropicModelListing {
 interface SSEBuffer {
   push(chunk: string): void;
   drain(): string[];
+  assertNoTrailingLine(): void;
 }
 
 function createSSEBuffer(): SSEBuffer {
@@ -72,6 +73,16 @@ function createSSEBuffer(): SSEBuffer {
         index = pending.indexOf('\n');
       }
       return payloads;
+    },
+    assertNoTrailingLine() {
+      if (pending.trim().length > 0) {
+        for (const rawLine of pending.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line || line.startsWith(':')) continue;
+          throw new Error('MALFORMED_PROVIDER_STREAM: trailing incomplete line');
+        }
+      }
+      pending = '';
     },
   };
 }
@@ -177,6 +188,13 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     const controller = control.controller;
     const requestId = control.requestId;
     this.controllers.set(requestId, controller);
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort(request.signal.reason);
+      } else {
+        request.signal.addEventListener('abort', () => controller.abort(request.signal?.reason), { once: true });
+      }
+    }
 
     const system = request.systemPrompt;
     const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
@@ -215,7 +233,10 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       });
     } catch (error) {
       this.controllers.delete(requestId);
-      yield { type: 'error', error: controller.signal.aborted ? 'cancelled' : error instanceof Error ? error.message : String(error) };
+      if (controller.signal.aborted) {
+        throw new Error('Request cancelled');
+      }
+      yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       return;
     }
 
@@ -231,6 +252,8 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     let cacheReadTokens = 0;
     let cacheWriteTokens = 0;
     let outputTokens = 0;
+    let sawMessageStop = false;
+    let stopReason: string | undefined;
     const pendingToolCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
     const buffer = createSSEBuffer();
 
@@ -240,7 +263,13 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       const decoder = new TextDecoder();
       const reader = response.body.getReader();
       for (;;) {
+        if (controller.signal.aborted) {
+          throw new Error('Request cancelled');
+        }
         const { done, value } = await reader.read();
+        if (controller.signal.aborted) {
+          throw new Error('Request cancelled');
+        }
         if (done) break;
         buffer.push(decoder.decode(value, { stream: true }));
         for (const payload of buffer.drain()) {
@@ -248,10 +277,10 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
           try {
             event = JSON.parse(payload);
           } catch {
-            continue;
+            throw new Error('MALFORMED_PROVIDER_STREAM: invalid JSON chunk');
           }
 
-          switch (event.type) {
+          switch (event?.type) {
             case 'message_start':
               inputTokens = event.message?.usage?.input_tokens ?? 0;
               cacheReadTokens = event.message?.usage?.cache_read_input_tokens ?? 0;
@@ -274,11 +303,26 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
               break;
             case 'message_delta':
               outputTokens = event.usage?.output_tokens ?? outputTokens;
+              if (typeof event.delta?.stop_reason === 'string' && event.delta.stop_reason.length > 0) {
+                stopReason = event.delta.stop_reason;
+              }
               break;
+            case 'message_stop':
+              sawMessageStop = true;
+              break;
+            case 'error':
+              throw new Error(event.error?.message ?? 'Anthropic stream error');
             default:
               break;
           }
         }
+      }
+
+      buffer.push(decoder.decode());
+      buffer.assertNoTrailingLine();
+
+      if (!sawMessageStop && !stopReason) {
+        throw new Error('INCOMPLETE_PROVIDER_STREAM: missing message_stop or stop_reason');
       }
 
       for (const [index, entry] of [...pendingToolCalls.entries()].sort((a, b) => a[0] - b[0])) {
@@ -291,10 +335,10 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
         yield { type: 'tool_call', toolCallId: entry.id ?? `tool-${index}`, toolName: entry.name ?? 'unknown', toolInput: parsed };
       }
 
-      yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens }, rateLimit: readRateLimitHeaders(response.headers) };
+      yield { type: 'completed', finishReason: stopReason ?? 'stop', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens }, rateLimit: readRateLimitHeaders(response.headers) };
     } catch (error) {
       if (controller.signal.aborted) {
-        yield { type: 'completed', content: full, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens }, rateLimit: readRateLimitHeaders(response.headers) };
+        throw new Error('Request cancelled');
       } else {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }
