@@ -11,6 +11,7 @@ const hash = (value: string | Buffer) => createHash('sha256').update(value).dige
 export async function snapshotWorkspace(root: string, targets?: string[]): Promise<WorkspaceSnapshot> {
   const snapshot: WorkspaceSnapshot = new Map();
   let bytes = 0;
+  const realRoot = await fs.realpath(root);
   const capture = async (relative: string, followTarget = false): Promise<void> => {
     const absolute = path.resolve(root, relative);
     if (snapshot.size >= 50_000) throw Object.assign(new Error('RESOURCE_EXHAUSTED: workspace snapshot file budget'), { code: 'RESOURCE_EXHAUSTED' });
@@ -24,7 +25,7 @@ export async function snapshotWorkspace(root: string, targets?: string[]): Promi
       return;
     }
     if (!stat.isFile() && !stat.isSymbolicLink()) return;
-    const actual = await readProjectBytes(root, relative, 256 * 1024 * 1024 - bytes);
+    const actual = await readProjectBytes(root, relative, 256 * 1024 * 1024 - bytes, realRoot);
     bytes += actual.size;
     snapshot.set(relative, hash(actual.content));
   };
@@ -39,7 +40,7 @@ export async function snapshotWorkspace(root: string, targets?: string[]): Promi
   };
   if (targets) {
     for (const target of targets) {
-      const { resolved } = await resolveInsideProject(root, target);
+      const { resolved } = await resolveInsideProject(root, target, realRoot);
       await capture(path.relative(root, resolved).replace(/\\/g, '/'), true);
     }
   } else await walk('');

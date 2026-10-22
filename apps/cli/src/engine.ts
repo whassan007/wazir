@@ -263,7 +263,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // that searches `worker.adapterForModel()` can ever reach a hosted adapter,
   // since the worker's own discovery list is strictly local/hardware-bound.
   const secretBroker = await createSecretBroker({ secretsDir: engineConfigDir });
-  const hostedAdapters = createHostedProviders(config, secretBroker);
+  const hostedAdapters = createHostedProviders(config, secretBroker, { fastStartup: options.fastStartup });
   for (const [id, rawAdapter] of hostedAdapters) {
     const adapter = govern(rawAdapter);
     adapterById.set(id, adapter);

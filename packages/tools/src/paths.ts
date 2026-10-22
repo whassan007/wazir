@@ -56,12 +56,12 @@ export async function assertInsideProject(root: string, target: string): Promise
  * Like `assertInsideProject`, but also returns the canonical path so I/O can
  * be done on a name that contained no symlinks at check time.
  */
-export async function resolveInsideProject(root: string, target: string): Promise<{ resolved: string; real: string }> {
+export async function resolveInsideProject(root: string, target: string, knownRealRoot?: string): Promise<{ resolved: string; real: string }> {
   const resolved = path.resolve(root, target);
   if (!isInside(root, resolved)) {
     throw new PathEscapeError(target, root);
   }
-  const realRoot = await fs.realpath(root);
+  const realRoot = knownRealRoot ?? await fs.realpath(root);
   const real = await canonicalize(resolved);
   if (!isInside(realRoot, real)) {
     throw new PathEscapeError(target, root);
@@ -80,12 +80,13 @@ export async function readProjectFile(root: string, target: string): Promise<{ r
   return { ...result, content: result.content.toString('utf8') };
 }
 
-export async function readProjectBytes(root: string, target: string, maxBytes = Infinity): Promise<{ resolved: string; content: Buffer; size: number }> {
-  const { resolved, real } = await resolveInsideProject(root, target);
+export async function readProjectBytes(root: string, target: string, maxBytes = Infinity, knownRealRoot?: string): Promise<{ resolved: string; content: Buffer; size: number }> {
+  const realRoot = knownRealRoot ?? await fs.realpath(root);
+  const { resolved, real } = await resolveInsideProject(root, target, realRoot);
   const handle = await fs.open(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
     const stat = await handle.stat();
-    await assertSameInode(root, target, real, stat);
+    await assertSameInode(root, target, real, stat, realRoot);
     if (stat.size > maxBytes) throw Object.assign(new Error('RESOURCE_EXHAUSTED: file exceeds snapshot byte budget'), { code: 'RESOURCE_EXHAUSTED' });
     const content = await handle.readFile();
     return { resolved, content, size: stat.size };
@@ -138,9 +139,9 @@ export async function writeProjectFile(root: string, target: string, content: st
   }
 }
 
-async function assertSameInode(root: string, target: string, real: string, opened: { ino: bigint | number; dev: bigint | number }): Promise<void> {
+async function assertSameInode(root: string, target: string, real: string, opened: { ino: bigint | number; dev: bigint | number }, knownRealRoot?: string): Promise<void> {
   const now = await fs.stat(real);
-  const realRoot = await fs.realpath(root);
+  const realRoot = knownRealRoot ?? await fs.realpath(root);
   const recheck = await canonicalize(real);
   if (!isInside(realRoot, recheck) || now.ino !== opened.ino || now.dev !== opened.dev) {
     throw new PathEscapeError(target, root);

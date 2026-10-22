@@ -717,7 +717,7 @@ export async function executeTask(
       let result: ToolResult;
       try {
         result = await runRegisteredTool(engine.tools, name, input, {
-          verifyWorkspace: true,
+          verifyWorkspace: !Boolean(deterministicExecution),
           allowVerificationChanges: taskAuthorizesVerificationChanges(description),
           callId,
           allowedTools: availableTools.map(tool => tool.name),

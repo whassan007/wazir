@@ -1172,7 +1172,7 @@ program
   .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
   .action(async (prompt, options) => {
     const { createEngine } = await import('./engine.js');
-    const engine = await createEngine();
+    const engine = await createEngine({ fastStartup: true });
     const { askCommand } = await import('./commands.js');
     const result = await askCommand(engine, prompt, {
       ...options,

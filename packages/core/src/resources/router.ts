@@ -112,6 +112,57 @@ export class ResourceRouter {
     const minCorrectness = budget.policy.minVerifiedSuccessRate;
     const maxLatencyMs = budget.policy.maxLatencyMs;
 
+    const ledger = budget.ledger;
+    const since = ledger.now() - 7 * 86_400_000;
+    const recentUsageRows = ledger.usageRows({ since });
+    const recentProviderErrors = ledger.events({ kind: 'provider_error', since, limit: 1000 });
+    const recentAmbiguousEvents = ledger.events({ kind: 'ambiguous', since, limit: 1000 });
+
+    const failedByAccount = new Map<string, number>();
+    const getAccountFailedCount = (accountId: string): number => {
+      let count = failedByAccount.get(accountId);
+      if (count === undefined) {
+        count = recentProviderErrors.filter((e) => e.accountId === accountId && e.data.retry !== true).length
+          + recentAmbiguousEvents.filter((e) => e.accountId === accountId).length;
+        failedByAccount.set(accountId, count);
+      }
+      return count;
+    };
+
+    const reliabilityCache = new Map<string, number>();
+    const getReliability = (accountId: string, modelId: string): number => {
+      const key = `${accountId}::${modelId}`;
+      let rel = reliabilityCache.get(key);
+      if (rel === undefined) {
+        const ok = recentUsageRows.filter((u) => u.accountId === accountId && u.modelId === modelId && u.source !== 'conservative').length;
+        const failed = getAccountFailedCount(accountId);
+        const total = ok + failed;
+        rel = total < 3 ? 0.8 : ok / total;
+        reliabilityCache.set(key, rel);
+      }
+      return rel;
+    };
+
+    const msPerTokenCache = new Map<string, number | undefined>();
+    const getMsPerToken = (modelId: string): number | undefined => {
+      if (msPerTokenCache.has(modelId)) return msPerTokenCache.get(modelId);
+      const rows = recentUsageRows
+        .filter((u) => u.modelId === modelId && u.durationMs && u.outputTokens > 20 && u.source === 'provider-reported')
+        .slice(-50);
+      const val = rows.length === 0 ? undefined : rows.reduce((n, u) => n + u.durationMs! / u.outputTokens, 0) / rows.length;
+      msPerTokenCache.set(modelId, val);
+      return val;
+    };
+
+    const previewCache = new Map<string, ReturnType<typeof budget.preview>>();
+    const statusCache = new Map<string, ReturnType<typeof budget.status>>();
+    const getStatus = (accountId: string) => {
+      if (!statusCache.has(accountId)) {
+        statusCache.set(accountId, budget.status(accountId));
+      }
+      return statusCache.get(accountId);
+    };
+
     const prelim = input.candidates.map((c): RouteAssessment & { estCost: number; ms?: number; mode?: BudgetMode } => {
       const accountId = this.opts.resolveAccount(c.runtimeId, c.modelId);
       if (!accountId) return { ...c, admissible: false, reasons: ['no account is configured for this runtime/model'], estCost: 0 };
@@ -128,20 +179,29 @@ export class ResourceRouter {
           reasons: [`calibrated correctness ${(c.verifiedSuccessRate * 100).toFixed(0)}% is below policy minimum ${(minCorrectness * 100).toFixed(0)}%`],
         };
       }
-      const preview = budget.preview({
-        requestId: `route-${input.task.id}-${c.modelId}`, accountId, modelId: c.modelId, workload: input.workload, taskId: input.task.id,
-        estimatedInputTokens: input.estimatedInputTokens, estimatedOutputTokens: estOutput,
-      });
+      const pricing = pricingFor(account, c.modelId);
+      const hasModelCtxLimit = account.contextLimits?.[c.modelId] !== undefined;
+      const previewKey = hasModelCtxLimit
+        ? `model:${accountId}:${c.modelId}`
+        : `acct:${accountId}:${pricing ? `${pricing.inputPerMTok}:${pricing.outputPerMTok}:${pricing.cachedInputPerMTok ?? 0}` : 'free'}`;
+      let preview = previewCache.get(previewKey);
+      if (!preview) {
+        preview = budget.preview({
+          requestId: `route-${input.task.id}-${c.modelId}`, accountId, modelId: c.modelId, workload: input.workload, taskId: input.task.id,
+          estimatedInputTokens: input.estimatedInputTokens, estimatedOutputTokens: estOutput,
+        });
+        previewCache.set(previewKey, preview);
+      }
       const quality = c.capabilityScore / maxCapability;
       if ((input.workload === 'complex' || input.workload === 'critical-review') && quality < 0.5) {
         return { ...c, accountId, admissible: false, local: account.kind === 'local', estCost: 0,
           reasons: [`capability ${c.capabilityScore} is below half of the best candidate (${maxCapability}) for ${input.workload} work; not substituted`] };
       }
-      const singleCallCost = costUsd(pricingFor(account, c.modelId), input.estimatedInputTokens, estOutput);
-      const rel = this.reliability(accountId, c.modelId);
+      const singleCallCost = costUsd(pricing, input.estimatedInputTokens, estOutput);
+      const rel = getReliability(accountId, c.modelId);
       const successProb = Math.max(0.05, Math.min(1, c.verifiedSuccessRate !== undefined ? c.verifiedSuccessRate * rel : rel));
       const effectiveCostPerSuccess = singleCallCost / successProb;
-      const tokenMs = this.msPerToken(c.modelId);
+      const tokenMs = getMsPerToken(c.modelId);
       const loadPenaltyMs = c.residency && c.residency !== 'ready' ? (c.estimatedLoadMs ?? 4_000) : 0;
       const totalLatencyMs = tokenMs !== undefined ? tokenMs * estOutput + loadPenaltyMs : (loadPenaltyMs > 0 ? loadPenaltyMs : undefined);
       if (maxLatencyMs !== undefined && totalLatencyMs !== undefined && totalLatencyMs > maxLatencyMs) {
@@ -168,7 +228,7 @@ export class ResourceRouter {
 
     return prelim.map(({ estCost, ms, mode, ...p }) => {
       if (!p.admissible) return p;
-      const status = budget.status(p.accountId!);
+      const status = getStatus(p.accountId!);
       const account = status!.account;
       const slotCapacity = account.maxConcurrent ? 1 - status!.inFlight / account.maxConcurrent : 1;
       const residencyFactor = p.residency === 'reload' ? 0.3 : p.residency === 'load' ? (p.evictionRequired ? 0.1 : 0.2) : 1;
@@ -177,11 +237,12 @@ export class ResourceRouter {
         : status!.limits.some((l) => l.utilization !== undefined)
           ? 1 - Math.max(...status!.limits.map((l) => l.utilization ?? 0))
           : 0.5;
+      const rel = getReliability(p.accountId!, p.modelId);
       const factors = {
         quality: p.capabilityScore / maxCapability,
         reliability: p.verifiedSuccessRate !== undefined
-          ? Math.max(0, Math.min(1, p.verifiedSuccessRate * this.reliability(p.accountId!, p.modelId)))
-          : this.reliability(p.accountId!, p.modelId),
+          ? Math.max(0, Math.min(1, p.verifiedSuccessRate * rel))
+          : rel,
         capacity: Math.max(0, Math.min(1, capacity)),
         cost: maxCost > 0 ? estCost / maxCost : 0,
         latency: ms !== undefined && maxMs > 0 ? ms / maxMs : 0.5,

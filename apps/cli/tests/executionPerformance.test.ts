@@ -7,11 +7,16 @@ import { discoverRuntimes } from '@wazir/workers';
 import { LMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import { JsonFileStore } from '@wazir/shared';
 import {
+  AccountRegistry,
   ComputerRegistry,
+  DEFAULT_POLICY,
   ExecutionEngine,
   ModelLifecycleService,
   ModelRegistry,
+  ResourceLedger,
+  ResourceRouter,
   RuntimeRegistry,
+  TokenBudgetManager,
 } from '@wazir/core';
 import type { AgentRuntime, AgentTurn } from '@wazir/core';
 import type { GenerationEvent, RuntimeAdapter } from '@wazir/runtimes-interfaces';
@@ -503,5 +508,49 @@ describe('P0 Execution Pipeline Performance Repairs', () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('9. ResourceRouter.assess memoizes per-account ledger and budget queries across 80+ model candidates', () => {
+    const ledger = new ResourceLedger(':memory:');
+    const accounts = new AccountRegistry();
+    accounts.addImplicit({
+      localRuntimes: ['lmstudio'],
+      hostedRuntimes: ['nvidia'],
+      agents: [],
+      hostedAuthorized: true,
+    });
+    const budget = new TokenBudgetManager(ledger, accounts, { ...DEFAULT_POLICY, mode: 'balanced' });
+    const usageRowsSpy = vi.spyOn(ledger, 'usageRows');
+    const eventsSpy = vi.spyOn(ledger, 'events');
+    const statusSpy = vi.spyOn(budget, 'status');
+    const previewSpy = vi.spyOn(budget, 'preview');
+
+    const router = new ResourceRouter({
+      budget,
+      resolveAccount: (runtimeId) => (runtimeId === 'nvidia' ? 'api:nvidia' : 'local:lmstudio'),
+    });
+
+    const candidates = Array.from({ length: 84 }, (_, idx) => ({
+      modelId: `nvidia/model-${idx}`,
+      runtimeId: 'nvidia',
+      capabilityScore: 80 + (idx % 10),
+    }));
+
+    const t0 = performance.now();
+    const assessed = router.assess({
+      task: { id: 'perf-route-task' },
+      workload: 'routine',
+      estimatedInputTokens: 256,
+      candidates,
+    });
+    const elapsedMs = performance.now() - t0;
+
+    expect(assessed).toHaveLength(84);
+    expect(assessed.every((a) => a.admissible)).toBe(true);
+    expect(usageRowsSpy).toHaveBeenCalledTimes(1);
+    expect(eventsSpy).toHaveBeenCalledTimes(2);
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(previewSpy).toHaveBeenCalledTimes(1);
+    expect(elapsedMs).toBeLessThan(25);
   });
 });
