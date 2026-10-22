@@ -90,7 +90,7 @@ function generateHomebrewFormula(ver, h) {
   desc "Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator"
   homepage "https://github.com/whassan007/wazir"
   version "${ver}"
-  license "AGPL-3.0-or-later"
+  license "AGPL-3.0-only"
 
   on_macos do
     if Hardware::CPU.arm?
@@ -143,7 +143,7 @@ function generateScoopManifest(ver, h) {
     version: ver,
     description: "Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator",
     homepage: "https://github.com/whassan007/wazir",
-    license: "AGPL-3.0-or-later",
+    license: "AGPL-3.0-only",
     architecture: {
       "64bit": {
         url: `https://github.com/whassan007/wazir/releases/download/v${ver}/wazir-v${ver}-windows-x64.zip`,
@@ -228,7 +228,7 @@ PublisherSupportUrl: https://github.com/whassan007/wazir/issues
 Author: Wazir Contributors
 PackageName: Wazir
 PackageUrl: https://github.com/whassan007/wazir
-License: AGPL-3.0-or-later
+License: AGPL-3.0-only
 LicenseUrl: https://raw.githubusercontent.com/whassan007/wazir/main/LICENSE
 Copyright: Copyright (c) 2026 Wazir Contributors
 ShortDescription: Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator

@@ -1,11 +1,17 @@
 {
   "name": "@wazir/desktop",
-  "version": "0.1.0",
+  "version": "0.2.12",
+  "license": "AGPL-3.0-only",
   "private": true,
   "description": "Wazir Desktop — native shell around the Wazir API and web dashboard",
+  "wazir": {
+    "excludeFromCliBuild": true,
+    "excludeFromCliBuildReason": "tauri build requires Cargo and network access to crates.io; the CLI never depends on it."
+  },
   "scripts": {
     "dev": "tauri dev",
-    "build": "tauri build --no-bundle"
+    "build": "tauri build --no-bundle",
+    "build:desktop": "tauri build --no-bundle"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.1"
@@ -13,5 +19,8 @@
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/plugin-opener": "^2.5.1"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

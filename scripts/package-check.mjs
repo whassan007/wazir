@@ -88,12 +88,60 @@ const problems = [
   ...unexpected.map((f) => `unexpected file ${f}`), ...missing.map((f) => `missing ${f}`),
   ...(manifest.version !== version ? [`version ${manifest.version} != ${version}`] : []),
   ...(manifest.private ? ['package is private'] : []),
-  ...(!['AGPL-3.0-only', 'AGPL-3.0'].includes(manifest.license) || !/GNU AFFERO GENERAL PUBLIC LICENSE/.test(readFileSync(path.join(extract, 'package/LICENSE'), 'utf8')) ? [`license ${manifest.license} does not match LICENSE (AGPL-3.0)`] : []),
+  ...(manifest.license !== 'AGPL-3.0-only' || !/GNU AFFERO GENERAL PUBLIC LICENSE/.test(readFileSync(path.join(extract, 'package/LICENSE'), 'utf8')) ? [`license ${manifest.license} does not match LICENSE (AGPL-3.0-only)`] : []),
+  ...(manifest.engines?.node !== '>=22.13.0' ? [`engines.node ${manifest.engines?.node} != >=22.13.0`] : []),
   ...(lifecycle.length ? [`install lifecycle scripts present: ${lifecycle.join(', ')}`] : []),
   ...(manifest.dependencies && Object.keys(manifest.dependencies).length ? [`unexpected hard dependencies: ${Object.keys(manifest.dependencies).join(', ')}`] : []),
   ...(report.tarball.bytes > 15e6 ? [`tarball ${report.tarball.bytes} bytes exceeds 15 MB budget`] : []),
 ];
 record('contents', problems.length ? 'FAIL' : 'PASS', { files, optionalDependencies: manifest.optionalDependencies, note: problems.join('; ') || `${files.length} files, no lifecycle scripts` });
+
+// ---- 3b. packaging parity & systemd commands -----------------------------------------------
+const parityProblems = [];
+const debControl = readFileSync(path.join(repo, 'packaging/deb/debian/control'), 'utf8');
+if (!debControl.includes(`Version: ${version}`)) parityProblems.push(`deb control Version != ${version}`);
+if (!debControl.includes('Depends: nodejs (>= 22.13.0) | nodejs-legacy (>= 22.13.0)')) parityProblems.push('deb control missing nodejs (>= 22.13.0)');
+
+const rpmSpec = readFileSync(path.join(repo, 'packaging/rpm/wazir.spec'), 'utf8');
+if (!new RegExp(`^Version:\\s+${version.replace(/\./g, '\\.')}$`, 'm').test(rpmSpec)) parityProblems.push(`rpm spec Version != ${version}`);
+if (!rpmSpec.includes('License:        AGPL-3.0-only')) parityProblems.push('rpm spec License != AGPL-3.0-only');
+if (!rpmSpec.includes('Requires:       nodejs >= 22.13.0')) parityProblems.push('rpm spec Requires != nodejs >= 22.13.0');
+
+for (const hbRel of ['Formula/wazir.rb', 'packaging/homebrew/Formula/wazir.rb']) {
+  const hb = readFileSync(path.join(repo, hbRel), 'utf8');
+  if (!hb.includes(`version "${version}"`)) parityProblems.push(`${hbRel} version != ${version}`);
+  if (!hb.includes('license "AGPL-3.0-only"')) parityProblems.push(`${hbRel} license != AGPL-3.0-only`);
+}
+
+for (const scoopRel of ['bucket/wazir.json', 'packaging/scoop/wazir.json']) {
+  const scoop = JSON.parse(readFileSync(path.join(repo, scoopRel), 'utf8'));
+  if (scoop.version !== version) parityProblems.push(`${scoopRel} version ${scoop.version} != ${version}`);
+  if (scoop.license !== 'AGPL-3.0-only') parityProblems.push(`${scoopRel} license ${scoop.license} != AGPL-3.0-only`);
+}
+
+const pmVer = readFileSync(path.join(repo, 'packaging/package-manager-version.txt'), 'utf8').trim();
+if (pmVer !== version) parityProblems.push(`package-manager-version.txt ${pmVer} != ${version}`);
+
+const cargoToml = readFileSync(path.join(repo, 'apps/desktop/src-tauri/Cargo.toml'), 'utf8');
+if (!cargoToml.includes(`version = "${version}"`)) parityProblems.push(`Cargo.toml version != ${version}`);
+
+const tauriConf = JSON.parse(readFileSync(path.join(repo, 'apps/desktop/src-tauri/tauri.conf.json'), 'utf8'));
+if (tauriConf.version !== version) parityProblems.push(`tauri.conf.json version ${tauriConf.version} != ${version}`);
+
+for (const buildScriptRel of ['scripts/build-deb.mjs', 'scripts/build-rpm.mjs']) {
+  const bs = readFileSync(path.join(repo, buildScriptRel), 'utf8');
+  if (bs.includes('/usr/bin/wa worker start') || bs.includes('/usr/bin/wa api start')) {
+    parityProblems.push(`${buildScriptRel} contains broken systemd ExecStart (wa worker/api start)`);
+  }
+  if (!bs.includes('/usr/bin/wa improve start --foreground --continuous') || !bs.includes('/usr/bin/wa dashboard --no-open')) {
+    parityProblems.push(`${buildScriptRel} missing valid systemd ExecStart CLI commands`);
+  }
+}
+
+record('packaging-parity', parityProblems.length ? 'FAIL' : 'PASS', {
+  problems: parityProblems,
+  note: parityProblems.join('; ') || `DEB, RPM, Homebrew, Scoop, Tauri, and systemd units aligned at v${version} (Node >=22.13.0, AGPL-3.0-only)`,
+});
 
 // ---- 4. secrets and private paths ----------------------------------------------------------
 const SECRET_PATTERNS = [
