@@ -1635,13 +1635,18 @@ export function createApp(state: ApiState) {
       res.json({ ok: true, duplicate: true });
       return;
     }
-    const executionId = dispatchRecord?.request?.executionId ||
-      (typeof req.body?.executionId === 'string' && req.body.executionId ? req.body.executionId : requestId);
+    const candidateExecId = dispatchRecord?.request?.executionId ||
+      (typeof req.body?.executionId === 'string' && req.body.executionId ? req.body.executionId : undefined);
+    const hasExistingExec = candidateExecId && candidateExecId !== requestId
+      ? (await state.store.get(`execution/${candidateExecId}`)) !== undefined
+      : false;
+    const executionId = hasExistingExec && candidateExecId ? candidateExecId : requestId;
+    const taskId = candidateExecId ?? requestId;
     const now = new Date();
     await recordExecution(state, {
       execution: {
         id: executionId,
-        taskId: executionId,
+        taskId,
         computerId: String(req.params.id),
         modelId: dispatchRecord?.request?.modelId ?? 'default',
         runtimeId: dispatchRecord?.request?.runtimeId ?? 'local',

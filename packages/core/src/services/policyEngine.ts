@@ -990,7 +990,6 @@ export class PolicyEngine {
           tool: 'shell',
           input: { command: args[1] },
           projectRoot,
-          executionId,
           effectiveIsolation,
         }),
       );

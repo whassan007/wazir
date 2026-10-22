@@ -419,9 +419,11 @@ describe('Worker 6: Normalized Prompt-Cache Telemetry', () => {
 
       const adapter = new LMStudioAdapter('http://127.0.0.1:1234/v1');
       const loaded = await adapter.getLoadedModels().catch(() => []);
-      const models = await adapter.listModels();
-      const modelId = loaded[0] ?? models[0]?.id;
-      if (!modelId) return;
+      const modelId = loaded[0];
+      if (!modelId) {
+        console.log('Live LM Studio daemon online, but no model is currently loaded in memory; skipping live generation.');
+        return;
+      }
 
       const events = [];
       for await (const ev of adapter.generate({

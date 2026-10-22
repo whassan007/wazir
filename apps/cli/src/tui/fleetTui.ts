@@ -3074,13 +3074,19 @@ export class FleetTui {
     try {
       const effectiveIsolation = sandboxStatus().mode;
       if (this.engine.policy) {
-        const decision = await this.engine.policy.authorize({
-          tool: 'shell',
+        const policyReq = {
+          tool: 'shell' as const,
           input: { command: shellCmd },
           projectRoot: this.engine.projectRoot,
           effectiveIsolation,
-        });
-        if (decision.decision !== 'allow') {
+        };
+        const precheck =
+          typeof this.engine.policy.classify === 'function' ? this.engine.policy.classify(policyReq) : undefined;
+        const decision =
+          !precheck || precheck.decision !== 'ask' || precheck.rule === 'filesystem-protected-ask'
+            ? await this.engine.policy.authorize(policyReq)
+            : precheck;
+        if (decision.decision === 'deny' || decision.rule === 'filesystem-protected-ask') {
           const policyErr: Error & { code?: number; stdout?: string; stderr?: string } = new Error(
             `policy ${decision.decision} (${decision.rule}): ${decision.reasons.join('; ')}`,
           );

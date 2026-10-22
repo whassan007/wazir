@@ -249,27 +249,33 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   // A fresh, failed preflight means this agent would fail too: say why now rather than after
   // a full launch. Agents never checked (or with an expired result) run normally.
   if (options.agent && !options.force) {
-    const registeredAgent = engine.agents.get(options.agent) as (import('@wazir/core').AgentAdapter & {
-      preflight?: () => Promise<{ ok: boolean; reason?: string; reasons?: string[] }> | { ok: boolean; reason?: string; reasons?: string[] };
-    }) | undefined;
     let preflightMessage: string | undefined;
-    if (typeof registeredAgent?.preflight === 'function') {
-      const check = await registeredAgent.preflight();
-      if (check && check.ok === false) {
-        preflightMessage = check.reason ?? check.reasons?.join('; ') ?? `agent '${options.agent}' failed preflight`;
+    const { knownAgentFailure, refusalMessage, checkAgents } = await import('./agentPreflight.js');
+    let failure = knownAgentFailure(options.agent);
+    if (failure) {
+      preflightMessage = refusalMessage(failure);
+    } else {
+      let registeredAgent: (import('@wazir/core').AgentAdapter & {
+        preflight?: () => Promise<{ ok: boolean; reason?: string; reasons?: string[] }> | { ok: boolean; reason?: string; reasons?: string[] };
+      }) | undefined;
+      try {
+        registeredAgent = engine.agents?.get(options.agent) as typeof registeredAgent;
+      } catch {
+        registeredAgent = undefined;
       }
-    }
-    if (!preflightMessage) {
-      const { knownAgentFailure, refusalMessage, checkAgents } = await import('./agentPreflight.js');
-      let failure = knownAgentFailure(options.agent);
+      if (typeof registeredAgent?.preflight === 'function') {
+        const check = await registeredAgent.preflight();
+        if (check && check.ok === false) {
+          preflightMessage = check.reason ?? check.reasons?.join('; ') ?? `agent '${options.agent}' failed preflight`;
+        }
+      }
       // Probe lazily when an operator selects an installed vendor agent. Other CLI commands
       // remain passive, and the existing fingerprint/TTL cache avoids repeated paid sessions.
-      if (!failure && ['codex', 'claude-code', 'antigravity'].includes(options.agent.split('@')[0]) && registeredAgent) {
+      if (!preflightMessage && ['codex', 'claude-code', 'antigravity'].includes(options.agent.split('@')[0]) && registeredAgent) {
         const [result] = await checkAgents(engine, [options.agent]);
-        if (result && result.status !== 'READY') failure = result;
-      }
-      if (failure) {
-        preflightMessage = refusalMessage(failure);
+        if (result && result.status !== 'READY') {
+          preflightMessage = refusalMessage(result);
+        }
       }
     }
     if (preflightMessage) {
