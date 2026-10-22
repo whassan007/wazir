@@ -589,10 +589,16 @@ taskCmd
 
 taskCmd
   .command('status')
-  .argument('<id>', 'Task ID')
-  .description('Show task status')
-  .action((id) => {
-    console.log(chalk.green(`Task ${id}: queued`));
+  .argument('<id>', 'Task or Execution ID')
+  .option('-j, --json', 'Output as JSON')
+  .description('Show authoritative task/execution status from persisted execution store')
+  .action(async (id: string, opts: { json?: boolean }) => {
+    const { createEngine } = await import('./engine.js');
+    const { taskStatusCommand } = await import('./commands.js');
+    const engine = await createEngine({ fastStartup: true, readOnlyLifecycle: true, quiet: Boolean(opts.json) });
+    const res = await taskStatusCommand(engine, id, { json: Boolean(opts.json) });
+    console.log(res.output);
+    process.exitCode = res.code;
   });
 
 program.addCommand(taskCmd);
