@@ -14,12 +14,16 @@ import type {
   Priority,
   JobNode,
   ExecutionPreferences,
+  ExecutionRecord,
   WorkspaceMode,
 } from '../types/index.js';
+import type { ExecutionEngine } from './executionEngine.js';
+import { findUnknownOutcomeToolCall } from './executionRecovery.js';
 import { assertJobTransition, assertNodeTransition, assertTaskTransition } from './statusTransitions.js';
 
 export interface JobManagerOptions {
   store?: KeyValueStore;
+  executions?: Pick<ExecutionEngine, 'listByTask' | 'findUnknownOutcomeToolCall' | 'toolCheckpoints' | 'orphan'>;
   leaseMs?: number;
   now?: () => number;
   persist?: (job: Job) => void | Promise<void>;
@@ -40,6 +44,7 @@ export class JobManager {
   private readonly creations = new Map<string, Promise<void>>();
   private readonly claims = new Map<string, number>();
   private readonly store?: KeyValueStore;
+  private readonly executions?: Pick<ExecutionEngine, 'listByTask' | 'findUnknownOutcomeToolCall' | 'toolCheckpoints' | 'orphan'>;
   readonly leaseMs: number;
   private readonly now: () => number;
 
@@ -49,6 +54,7 @@ export class JobManager {
 
   constructor(options: JobManagerOptions = {}) {
     this.store = options.store;
+    this.executions = options.executions;
     if (this.store && !this.store.update) throw new Error('ATOMIC_STORE_REQUIRED');
     this.leaseMs = options.leaseMs ?? 30_000;
     if (!Number.isFinite(this.leaseMs) || this.leaseMs < 100) throw new Error('INVALID_LEASE_DURATION');
@@ -59,32 +65,113 @@ export class JobManager {
       for (const job of loaded) {
         if (this.jobs.has(job.id)) continue;
         this.jobs.set(job.id, job);
-        if (!this.store) await this.reconcileStaleStatus(job);
+        if (!job.ownership || job.ownership.expiresAt <= this.now()) {
+          await this.reconcileStaleStatus(job);
+        }
       }
     });
+  }
+
+  private async findUnknownMutationsByTask(jobId: string): Promise<Map<string, { executionId?: string; tool: string; callId: string }>> {
+    const unknownByTask = new Map<string, { executionId?: string; tool: string; callId: string }>();
+    if (this.executions) {
+      const knownJob = this.jobs.get(jobId) ?? (this.store ? await this.store.get<Job>(`job/${jobId}`) : undefined);
+      for (const task of knownJob?.tasks ?? []) {
+        const records = await this.executions.listByTask(task.id);
+        for (const record of records) {
+          if (record.execution.jobId && record.execution.jobId !== jobId) continue;
+          const fromEngine = this.executions.findUnknownOutcomeToolCall?.(record.execution.id);
+          if (fromEngine && fromEngine.sideEffectClass !== 'READ_ONLY') {
+            unknownByTask.set(task.id, { executionId: record.execution.id, tool: fromEngine.tool, callId: fromEngine.callId });
+            break;
+          }
+          const fromRecord = findUnknownOutcomeToolCall(record, { mutatingOnly: true });
+          if (fromRecord) {
+            unknownByTask.set(task.id, { executionId: record.execution.id, tool: fromRecord.tool, callId: fromRecord.callId });
+            break;
+          }
+        }
+      }
+    }
+    if (this.store) {
+      const entries = await this.store.list('execution/');
+      for (const entry of entries) {
+        const record = entry.value as ExecutionRecord | undefined;
+        const taskId = record?.execution?.taskId;
+        if (!record || !taskId || unknownByTask.has(taskId)) continue;
+        if (record.execution.jobId && record.execution.jobId !== jobId) continue;
+        const unknown = findUnknownOutcomeToolCall(record, { mutatingOnly: true });
+        if (unknown) {
+          unknownByTask.set(taskId, { executionId: record.execution.id, tool: unknown.tool, callId: unknown.callId });
+        }
+      }
+    }
+    return unknownByTask;
   }
 
   async acquire(jobId: string): Promise<void> {
     await this.ready;
     if (!this.store) return;
+    const unknownByTask = await this.findUnknownMutationsByTask(jobId);
     const job = await this.store.update!<Job>(`job/${jobId}`, current => {
       if (!current) throw new Error('JOB_NOT_FOUND');
-      if (['completed', 'failed', 'cancelled'].includes(current.status)) throw new Error('JOB_TERMINAL');
+      const hasExpiredLeaseOrphan =
+        current.status === 'failed' &&
+        Boolean(current.ownership && current.ownership.expiresAt > 0 && current.ownership.expiresAt <= this.now()) &&
+        current.graph.nodes.some((n) => n.state === 'failed' && n.error?.startsWith('Orphaned:'));
+      if (['completed', 'failed', 'cancelled'].includes(current.status) && !hasExpiredLeaseOrphan) {
+        throw new Error('JOB_TERMINAL');
+      }
       if (current.ownership && current.ownership.expiresAt > this.now()) throw new Error('JOB_LEASE_BUSY');
       const next = structuredClone(current);
       next.ownership = { ownerId: this.ownerId, epoch: (current.ownership?.epoch ?? 0) + 1, expiresAt: this.now() + this.leaseMs };
       for (const node of next.graph.nodes) {
-        if (node.state === 'running' || node.state === 'assigned') {
-          node.attempts = [...(node.attempts ?? []), { state: 'failed', error: 'OWNER_LEASE_EXPIRED', executedAt: node.executedAt, completedAt: new Date(this.now()) }];
-          node.retryCount = (node.retryCount ?? 0) + 1;
-          node.state = node.retryCount <= (next.maxRetries ?? 3) ? 'idle' : 'failed';
-          node.error = node.state === 'failed' ? 'RETRY_LIMIT_EXCEEDED' : undefined;
-          const task = next.tasks.find(t => t.id === (node.taskId ?? node.id));
-          if (task) task.status = node.state === 'idle' ? 'pending' : 'failed';
+        const isExpiredRunningNode =
+          node.state === 'running' ||
+          node.state === 'assigned' ||
+          (hasExpiredLeaseOrphan && node.state === 'failed' && Boolean(node.error?.startsWith('Orphaned:')));
+        if (isExpiredRunningNode) {
+          const taskId = node.taskId ?? node.id;
+          const unknown = unknownByTask.get(taskId);
+          if (unknown) {
+            const reason = `UNKNOWN_MUTATION_OUTCOME: tool '${unknown.tool}' (call '${unknown.callId}') has no confirmed outcome; refusing automatic replay`;
+            node.attempts = [...(node.attempts ?? []), { state: 'failed', error: reason, executedAt: node.executedAt, completedAt: new Date(this.now()) }];
+            node.retryCount = (node.retryCount ?? 0) + 1;
+            node.state = 'failed';
+            node.error = reason;
+            node.completedAt = node.completedAt ?? new Date(this.now());
+            const task = next.tasks.find(t => t.id === taskId);
+            if (task) task.status = 'failed';
+          } else {
+            node.attempts = [...(node.attempts ?? []), { state: 'failed', error: 'OWNER_LEASE_EXPIRED', executedAt: node.executedAt, completedAt: new Date(this.now()) }];
+            node.retryCount = (node.retryCount ?? 0) + 1;
+            node.state = node.retryCount <= (next.maxRetries ?? 3) ? 'idle' : 'failed';
+            node.error = node.state === 'failed' ? 'RETRY_LIMIT_EXCEEDED' : undefined;
+            if (node.state === 'idle') node.completedAt = undefined;
+            const task = next.tasks.find(t => t.id === taskId);
+            if (task) task.status = node.state === 'idle' ? 'pending' : 'failed';
+          }
         }
+      }
+      if (next.tasks.length > 0 && next.tasks.every(t => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled')) {
+        if (next.tasks.some(t => t.status === 'failed')) {
+          next.status = 'failed';
+          next.completedAt = next.completedAt ?? new Date(this.now());
+        }
+      } else if (hasExpiredLeaseOrphan && next.tasks.some(t => t.status === 'pending')) {
+        next.status = 'running';
+        next.completedAt = undefined;
       }
       return next;
     });
+    for (const [, unknown] of unknownByTask) {
+      if (unknown.executionId && this.executions?.orphan) {
+        await this.executions.orphan(
+          unknown.executionId,
+          `UNKNOWN_MUTATION_OUTCOME: tool '${unknown.tool}' (call '${unknown.callId}') has no confirmed outcome`,
+        );
+      }
+    }
     this.claims.set(jobId, job.ownership!.epoch);
     this.jobs.set(jobId, job);
   }
