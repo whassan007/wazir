@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import { renderMissionControl, missionHeader, classifyModelReadiness } from './missionControl.js';
+import { missionHeader, classifyModelReadiness } from './missionControl.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { withScopedRejectionHandler } from '../crashHandler.js';
@@ -18,7 +18,6 @@ import {
   type ModelLifecycleEvent,
   type InteractiveSubmission,
   type SubmissionSource,
-  type PromptBreakdown,
   ModelLifecycleService,
   assembleSearchNodeInspection,
 } from '@wazir/core';
@@ -26,9 +25,8 @@ import type { RookEngine } from '../engine.js';
 import { refreshRuntime } from '../engine.js';
 import { color } from '../colors.js';
 import { createFleetTaskExecutor } from '../fleetRunner.js';
-import { collectHealthReport, fleetNodeHealth } from '../health.js';
 import { getBuildInfo } from '../version.js';
-import { TerminalScreen, type TerminalSize } from './screen.js';
+import { TerminalScreen } from './screen.js';
 import { ConversationRenderer } from './conversationRenderer.js';
 import { StatusProjection } from './statusProjection.js';
 import { EventSummarizer, type TranscriptVerbosity } from './eventSummarizer.js';
@@ -36,11 +34,9 @@ import { ClipboardController } from './clipboardController.js';
 import {
   CanaryLiveEventBuffer,
   CANARY_TIMELINE_FILTERS,
-  buildCanaryRollbackWhy,
   filterTimeline,
   loadCanaryTimeline,
   renderCanaryTimelineModal,
-  rollbackEntryFromRecord,
   type CanaryTimelineEntry,
   type CanaryTimelineFilter,
 } from './canaryTimeline.js';
@@ -51,463 +47,71 @@ import { runShell, sandboxStatus } from '@wazir/tools';
 import { loadUpdateConfig, readUpdateHistory } from '../updater/storage.js';
 import { parseAction } from '@wazir/agents';
 import { inspectVerificationEvidence, explainCompletion, type VerificationInspection, type WhyCompleteAnswer, type ArtifactProvenance } from '@wazir/core';
-import { promptCacheReuse, promptCacheSource } from '@wazir/runtimes-interfaces';
 import {
-  renderTaskView,
-  renderSearchView,
-  renderCanaryView,
-  renderFleetView,
-  renderImprovementView,
-  renderContextView,
-  renderEvidenceView,
   renderWhyModal,
-  renderModelIntelligenceView,
   renderEvidenceModal,
   renderSearchNodeInspection,
   flattenSearchTree,
-  type TaskViewData,
   type WhyExplanationData,
   type SearchTreeNode,
-  type ImprovementExperimentItem,
-  type ImprovementViewData,
-  type SearchCandidateItem,
-  type SearchViewData,
   type ContextSampleItem,
-  type ContextViewData,
-  type FleetWorkerItem,
-  type FleetViewData,
-  type ModelProfileItem,
-  type ModelIntelligenceViewData,
   type EvidenceModalData,
   type CanaryViewTab,
   type SearchNodeInspection,
 } from './observabilityViews.js';
+import {
+  getCategorySpinnerFrame,
+  shortJobId,
+  diffLines,
+  isScreenFragment,
+  isCtrlEnter,
+  hasInternalLineBreak,
+  resolveKeyObject,
+  previousGraphemeBoundary,
+  nextGraphemeBoundary,
+  stripAnsiStr,
+  wrapAnsiText,
+  truncateAnsiStr,
+  padRightAnsi,
+  type DiffLine,
+  type TuiView,
+  type NavCategory,
+  type SidebarMode,
+  type FocusPane,
+  type TuiMode,
+  type ShellExecutionSummary,
+  type StructuredError,
+  type StartupSelectorState,
+  type TaskTimeModelRequiredState,
+  type NavItem,
+  type AgentCardState,
+  type AgentLogEntry,
+  type FleetTuiOptions,
+  type CanaryModalState,
+} from './fleetTuiTypes.js';
+import { buildFleetWhyExplanation } from './fleetTuiWhy.js';
+import * as fleetPanes from './fleetTuiPanes.js';
+
+export {
+  isScreenFragment,
+  type DiffLine,
+  type TuiView,
+  type NavCategory,
+  type SidebarMode,
+  type FocusPane,
+  type TuiMode,
+  type ShellExecutionSummary,
+  type StructuredError,
+  type StartupSelectorState,
+  type TaskTimeModelRequiredState,
+  type NavItem,
+  type AgentCardState,
+  type AgentLogEntry,
+  type FleetTuiOptions,
+  type CanaryModalState,
+};
 
 const execFileAsync = promisify(execFile);
-
-// Per-category spinner frames for the persistent full-screen renderer. Earlier rounds on
-// this terminal assumed Braille glyphs were unsafe (they'd caused ghosting twice), but an
-// objective cursor-position measurement (glyph-width-test.mjs, using the ANSI Device
-// Status Report) proved every candidate set below renders at exactly 1 column here — so
-// the ghosting was never a per-glyph width problem, and Braille is back in as the default
-// per later request. These were picked from that verified-safe set: square corners for
-// job/task activity, dots/growth for runtime activity (slowed to 1 frame/sec — the shared
-// 250ms redraw tick made it look frantic at 4 frames/sec), Braille for everything else.
-const JOB_SPINNER_FRAMES = ['◴', '◷', '◶', '◵'] as const;
-const RUNTIME_SPINNER_FRAMES = ['·', '•', '●', '•'] as const;
-const RUNTIME_SPINNER_TICKS_PER_FRAME = 4; // 4 * 250ms redraw tick = 1 frame/sec
-const DEFAULT_SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
-
-function getCategorySpinnerFrame(category: NavCategory | undefined, tick: number): string {
-  if (category === 'JOBS' || category === 'EXECUTIONS') {
-    return JOB_SPINNER_FRAMES[Math.abs(Math.floor(tick)) % JOB_SPINNER_FRAMES.length];
-  }
-  if (category === 'RUNTIMES') {
-    const slowTick = Math.floor(Math.abs(Math.floor(tick)) / RUNTIME_SPINNER_TICKS_PER_FRAME);
-    return RUNTIME_SPINNER_FRAMES[slowTick % RUNTIME_SPINNER_FRAMES.length];
-  }
-  return DEFAULT_SPINNER_FRAMES[Math.abs(Math.floor(tick)) % DEFAULT_SPINNER_FRAMES.length];
-}
-
-// Job ids are `job-<base36 timestamp>-<counter>` — every one starts with the same
-// redundant "job-" prefix (already implied by the JOBS category header) and the
-// timestamp chunk isn't human-meaningful anyway, so the nav list shows just the
-// last few characters instead of the full id, leaving more room for the title.
-function shortJobId(id: string): string {
-  const stripped = id.replace(/^job-/, '');
-  return stripped.length > 8 ? `..${stripped.slice(-8)}` : stripped;
-}
-
-interface DiffLine {
-  type: 'ctx' | 'add' | 'del';
-  text: string;
-}
-
-/**
- * Minimal LCS-based line diff for the approval modal's edit preview. Not a
- * full diff algorithm (no move detection, etc.) — just enough to show which
- * lines of a proposed string replacement actually changed instead of a flat
- * "everything removed, everything added" block, for the common case of a
- * small, mostly-unchanged snippet. `oldString`/`newString` come straight
- * from the model's `edit` tool call, so both are already known synchronously
- * with no file read needed.
- */
-function diffLines(oldText: string, newText: string): DiffLine[] {
-  const a = oldText.split('\n');
-  const b = newText.split('\n');
-  const n = a.length;
-  const m = b.length;
-  // The O(n*m) LCS table would be too large/slow for a pathologically big
-  // replacement — fall back to a flat before/after view rather than risk it.
-  if (n * m > 200_000) {
-    return [...a.map((text): DiffLine => ({ type: 'del', text })), ...b.map((text): DiffLine => ({ type: 'add', text }))];
-  }
-  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
-    }
-  }
-  const result: DiffLine[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      result.push({ type: 'ctx', text: a[i] });
-      i++;
-      j++;
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-      result.push({ type: 'del', text: a[i] });
-      i++;
-    } else {
-      result.push({ type: 'add', text: b[j] });
-      j++;
-    }
-  }
-  while (i < n) {
-    result.push({ type: 'del', text: a[i] });
-    i++;
-  }
-  while (j < m) {
-    result.push({ type: 'add', text: b[j] });
-    j++;
-  }
-  return result;
-}
-
-export type TuiView = 'task' | 'search' | 'fleet' | 'improvement' | 'context' | 'evidence' | 'tail' | 'approval' | 'worktrees' | 'help' | 'models' | 'canary';
-
-export type NavCategory = 'MCP' | 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
-
-export type SidebarMode = 'full' | 'focused' | 'hidden';
-
-export type FocusPane = 'nav' | 'main' | 'prompt';
-
-export type TuiMode = 'NORMAL' | 'COMPOSER' | 'COPY' | 'PASTE' | 'PALETTE' | 'APPROVAL' | 'SHELL';
-
-export interface ShellExecutionSummary {
-  command: string;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  durationMs?: number;
-  blockId?: string;
-}
-
-export interface StructuredError {
-  phase: string;
-  reason: string;
-  required?: string;
-  available?: string;
-  suggestedSteps: string[];
-  taskId?: string;
-  timestamp: Date;
-}
-
-export interface StartupSelectorState {
-  mode: 'select' | 'loading' | 'failure' | 'recovery_no_models' | 'recovery_runtime';
-  allInstalledModels: ModelRecord[];
-  eligibleModels: ModelRecord[];
-  recommendedModelIds: Set<string>;
-  selectedModelIds: Set<string>;
-  selectedIndex: number;
-  resourceAssessments: Map<string, ResourceAssessment>;
-  loadStatuses: Map<string, 'PENDING' | 'LOADING' | 'READY' | 'FAILED'>;
-  loadErrors: Map<string, string>;
-  inspectedModelId?: string;
-  statusBanner?: string;
-}
-
-export interface TaskTimeModelRequiredState {
-  pendingPrompt: string;
-  requiredCapabilities: string[];
-  eligibleModels: ModelRecord[];
-  selectedIndex: number;
-  loading: boolean;
-  statusText?: string;
-}
-
-export interface NavItem {
-  category: NavCategory;
-  id: string;
-  label: string;
-  status: 'running' | 'completed' | 'idle' | 'failed' | 'auth_required';
-  routing?: {
-    agentId?: string;
-    modelId?: string;
-    runtimeId?: string;
-    computerId?: string;
-  };
-}
-
-export interface AgentCardState {
-  taskId: string;
-  title: string;
-  agentId: string;
-  computerId: string;
-  modelId: string;
-  phase: string;
-  stage?: string;
-  attempt?: number;
-  maxAttempts?: number;
-  lastMessage: string;
-  status: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'retry';
-  errorKind?: 'model' | 'tool' | 'environment' | 'policy' | 'infrastructure' | string;
-  startedAt?: Date;
-  completedAt?: Date;
-  durationMs: number;
-  filesChanged: string[];
-  usage?: { input: number; output: number; total: number };
-  /** Prompt size of the most recent model turn — the real context-window occupancy. */
-  lastTurnInputTokens?: number;
-  modelCallCount?: number;
-  promptBreakdown?: PromptBreakdown;
-}
-
-export interface AgentLogEntry {
-  text: string;
-  time: string;
-  kind: 'plan' | 'route' | 'tool' | 'test' | 'complete' | 'error' | 'info' | 'model' | 'validate' | 'recover' | 'policy' | 'infra';
-  /** Raw model response text this entry came from, when available (view with 'r'
-   *  on the Tail view). */
-  raw?: string;
-}
-
-export interface FleetTuiOptions {
-  engine: RookEngine;
-  screen?: TerminalScreen;
-  concurrencyLimit?: number;
-  useWorktrees?: boolean;
-  autoMerge?: boolean;
-  /** Per-job wall-clock limit; the orchestrator's built-in default applies when unset. */
-  timeoutSeconds?: number;
-  enablePlanner?: boolean;
-  presentationMode?: 'conversation' | 'dashboard';
-}
-
-/**
- * Detects if a text string looks like terminal output, box borders, or dashboard fragments.
- * Used to reject accidental mouse selections, copies, or terminal echoes from launching bogus jobs.
- */
-export function isScreenFragment(text: string): boolean {
-  // Strip ANSI escape sequences
-  const clean = text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trim();
-  if (!clean) return true;
-
-  // 1. Box-drawing characters, borders, separators, punctuation-only strings
-  if (/^[|\-—+=\s·•─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬><#*~`\.\\/]+$/.test(clean)) {
-    return true;
-  }
-
-  // 2. Exact or normalized UI section / table headers
-  const exactHeaders = new Set([
-    'JOBS',
-    'EXECUTIONS',
-    'AGENTS',
-    'COMPUTERS',
-    'RUNTIMES',
-    'MCP',
-    'MODELS',
-    'WORKERS',
-    'POLICY APPROVAL QUEUE',
-    'QUICK ACTIONS',
-    'KEYBOARD SHORTCUTS & NAVIGATION',
-    'HISTORY',
-    'STATUS',
-    'ROUTING',
-  ]);
-  if (exactHeaders.has(clean.toUpperCase())) {
-    return true;
-  }
-
-  // 3. UI prefix markers and line patterns
-  const prefixPatterns = [
-    /^wa>\s*/,
-    /^Status:\s*/i,
-    /^History:\s*/i,
-    /^Tail:\s*/i,
-    /^WAZIR\s*-\s*CONTROL/i,
-    /^Routing:\s*/i,
-    /^Route assigned/i,
-    /^Context\s+\d+(\.\d+)?K\/\d+K/i,
-    /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◴◷◶◵·•●✓✕✗]\s+/,
-    /^\[#\d+\s+[\+\*x\-]?[^\]]*\]/,
-    /^>+\s*[◷◴◵◶·•●]\s+task-job/i,
-    /^task-job-[a-z0-9]+/i,
-    /^\.\.[a-z0-9]{5,}-\d+/i, // e.g. ..dkllp-15
-    /^\[View:\s+[A-Z]+\]/i,
-    /^Press\s+Ctrl\+[A-Z]\s+to/i,
-    /^\[A\]\s+Approve\s+\[D\]\s+Deny/i,
-  ];
-  for (const pattern of prefixPatterns) {
-    if (pattern.test(clean)) {
-      return true;
-    }
-  }
-
-  // 4. Border-wrapped lines like "| ... |" or "+---...---+"
-  if (/^([|│║]).*\1$/.test(clean) && clean.length > 2) {
-    const inner = clean.slice(1, -1).trim();
-    if (
-      /^[|\-—+=\s·•─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬]+$/.test(inner) ||
-      prefixPatterns.some((p) => p.test(inner)) ||
-      exactHeaders.has(inner.toUpperCase())
-    ) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Checks whether a key event represents Ctrl+Enter across common terminal emulators.
- */
-function isCtrlEnter(keyStr: string, keyObj: readline.Key): boolean {
-  if (keyObj.ctrl && (keyObj.name === 'return' || keyObj.name === 'enter' || keyStr === '\r' || keyStr === '\n')) {
-    return true;
-  }
-  if (keyStr === '\x1b\r' || keyStr === '\x1b\n') return true;
-  if (keyStr === '\x1b[13;5~' || keyStr === '\x1b[27;5;13~') return true;
-  return false;
-}
-
-/**
- * True only for a chunk with a genuine internal line break — multiple real
- * lines, not just a single command chunk terminated by one trailing \r/\n.
- *
- * Node's readline keypress decoder doesn't always deliver input one
- * character at a time: under some conditions (observed live, following a
- * burst of bracketed-paste keypresses) it can hand back a short, unbracketed
- * multi-character chunk like "/exit\r" as a single event. Treating any
- * trailing \r/\n as "this must be a paste" swallows that legitimate command
- * into PASTE review mode instead of executing it. Stripping exactly one
- * trailing terminator before checking distinguishes "one line, submitted in
- * one chunk" from "actually multiple lines" (a real paste).
- */
-function hasInternalLineBreak(text: string): boolean {
-  const withoutTrailingTerminator = text.replace(/(\r\n|\r|\n)$/, '');
-  return withoutTrailingTerminator.includes('\n') || withoutTrailingTerminator.includes('\r');
-}
-
-/**
- * Resolves structured key objects from raw strings or readline key events.
- */
-function resolveKeyObject(keyStr: string, keyObj?: readline.Key): readline.Key {
-  if (keyObj && keyObj.name) return keyObj;
-  if (typeof keyStr !== 'string') {
-    return { name: undefined as any, ctrl: false, meta: false, shift: false, sequence: '' };
-  }
-
-  if (keyStr === '\x1b[200~' || (keyObj as any)?.name === 'paste-start') {
-    return { name: 'paste-start' as any, ctrl: false, meta: false, shift: false, sequence: '\x1b[200~' };
-  }
-  if (keyStr === '\x1b[201~' || (keyObj as any)?.name === 'paste-end') {
-    return { name: 'paste-end' as any, ctrl: false, meta: false, shift: false, sequence: '\x1b[201~' };
-  }
-
-  if (keyStr === '\t') {
-    return { name: 'tab', ctrl: false, meta: false, shift: false, sequence: '\t' };
-  }
-  if (keyStr === '\x1b[Z') {
-    return { name: 'tab', ctrl: false, meta: false, shift: true, sequence: '\x1b[Z' };
-  }
-  if (keyStr === '\x7f' || keyStr === '\b' || keyStr === '\u0008') {
-    return { name: 'backspace', ctrl: false, meta: false, shift: false, sequence: keyStr };
-  }
-  if (keyStr === '\x1b[3~') {
-    return { name: 'delete', ctrl: false, meta: false, shift: false, sequence: keyStr };
-  }
-  if (keyStr === '\x1b' || keyStr === '\u001b') {
-    return { name: 'escape', ctrl: false, meta: false, shift: false, sequence: '\x1b' };
-  }
-  if (keyStr === '\x1b\r' || keyStr === '\x1b\n') {
-    return { name: 'return', ctrl: true, meta: false, shift: false, sequence: keyStr };
-  }
-  if (keyStr === '\r' || keyStr === '\n') {
-    return { name: 'return', ctrl: false, meta: false, shift: false, sequence: keyStr };
-  }
-  if (keyStr === '\u001b[A') {
-    return { name: 'up', ctrl: false, meta: false, shift: false, sequence: keyStr };
-  }
-  if (keyStr === '\u001b[B') {
-    return { name: 'down', ctrl: false, meta: false, shift: false, sequence: keyStr };
-  }
-  if (keyStr === '\u001b[C') {
-    return { name: 'right', ctrl: false, meta: false, shift: false, sequence: keyStr };
-  }
-  if (keyStr === '\u001b[D') {
-    return { name: 'left', ctrl: false, meta: false, shift: false, sequence: keyStr };
-  }
-  if (keyStr === '\x10' || keyStr === '\u0010') {
-    return { name: 'p', ctrl: true, meta: false, shift: false, sequence: '\x10' };
-  }
-  if (keyStr === '\x0c' || keyStr === '\u000c') {
-    return { name: 'l', ctrl: true, meta: false, shift: false, sequence: '\x0c' };
-  }
-  if (keyStr === '\x12' || keyStr === '\u0012') {
-    return { name: 'r', ctrl: true, meta: false, shift: false, sequence: '\x12' };
-  }
-  if (keyStr === '\x0b' || keyStr === '\u000b') {
-    return { name: 'k', ctrl: true, meta: false, shift: false, sequence: '\x0b' };
-  }
-  if (keyStr === '\x0e' || keyStr === '\u000e') {
-    return { name: 'n', ctrl: true, meta: false, shift: false, sequence: '\x0e' };
-  }
-  if (keyStr === '\u0003') {
-    return { name: 'c', ctrl: true, meta: false, shift: false, sequence: '\u0003' };
-  }
-  if (keyStr === '\u0015') {
-    return { name: 'u', ctrl: true, meta: false, shift: false, sequence: '\u0015' };
-  }
-  if (keyStr === '\u001a') {
-    return { name: 'z', ctrl: true, meta: false, shift: false, sequence: '\u001a' };
-  }
-  if (keyStr === '\u0017') {
-    return { name: 'w', ctrl: true, meta: false, shift: false, sequence: '\u0017' };
-  }
-  if (keyStr === '\x1b[5~') {
-    return { name: 'pageup', ctrl: false, meta: false, shift: false, sequence: keyStr };
-  }
-  if (keyStr === '\x1b[6~') {
-    return { name: 'pagedown', ctrl: false, meta: false, shift: false, sequence: keyStr };
-  }
-
-  return {
-    name: keyStr.length === 1 ? keyStr : (undefined as any),
-    ctrl: false,
-    meta: false,
-    shift: false,
-    sequence: keyStr,
-  };
-}
-
-function previousGraphemeBoundary(text: string, cursor: number): number {
-  const Segmenter = (Intl as any).Segmenter;
-  if (Segmenter) {
-    let previous = 0;
-    for (const segment of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
-      if (segment.index >= cursor) break;
-      previous = segment.index;
-      if (segment.index + segment.segment.length >= cursor) return segment.index;
-    }
-    return previous;
-  }
-  const point = text.codePointAt(Math.max(0, cursor - 1));
-  return Math.max(0, cursor - (point && point > 0xffff ? 2 : 1));
-}
-
-function nextGraphemeBoundary(text: string, cursor: number): number {
-  const Segmenter = (Intl as any).Segmenter;
-  if (Segmenter) {
-    for (const segment of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
-      if (segment.index >= cursor || segment.index + segment.segment.length > cursor) return segment.index + segment.segment.length;
-    }
-    return text.length;
-  }
-  const point = text.codePointAt(cursor);
-  return Math.min(text.length, cursor + (point && point > 0xffff ? 2 : 1));
-}
 
 export class FleetTui {
   readonly engine: RookEngine;
@@ -1053,74 +657,7 @@ export class FleetTui {
     if ((activeSearch as any)?.treeNodes && Array.isArray((activeSearch as any).treeNodes)) {
       return (activeSearch as any).treeNodes;
     }
-    if (activeSearch) return [];
-    return [
-      {
-        id: 'C0',
-        name: 'C0 (Root Checkpoint)',
-        state: 'completed',
-        tokens: 0,
-        children: [
-          {
-            id: 'A',
-            name: 'A (Refactor Strategy)',
-            state: 'completed',
-            tokens: 840,
-            children: [
-              {
-                id: 'A1',
-                name: 'A1',
-                state: 'completed',
-                glyph: color.green('✓'),
-                tokens: 1250,
-                testsPassed: true,
-                isFrontier: true,
-              },
-              {
-                id: 'A2',
-                name: 'A2',
-                state: 'pruned',
-                glyph: color.red('×'),
-                prunedReason: 'build failed',
-                tokens: 920,
-                testsPassed: false,
-                isDominated: true,
-              },
-            ],
-          },
-          {
-            id: 'B',
-            name: 'B (Incremental Strategy)',
-            state: 'active',
-            tokens: 610,
-            children: [
-              {
-                id: 'B1',
-                name: 'B1',
-                state: 'verifying',
-                glyph: color.yellow('◶'),
-                tokens: 780,
-              },
-              {
-                id: 'B2',
-                name: 'B2',
-                state: 'pending',
-                tokens: 340,
-              },
-            ],
-          },
-          {
-            id: 'C',
-            name: 'C (Parallel Strategy)',
-            state: 'pruned',
-            glyph: color.red('×'),
-            prunedReason: 'timeout',
-            tokens: 450,
-            isDominated: true,
-          },
-        ],
-      },
-    ];
+    return [];
   }
 
   getFlattenedSearchTreeNodes(): SearchTreeNode[] {
@@ -1277,262 +814,7 @@ export class FleetTui {
   }
 
   buildWhyExplanation(topic: string): WhyExplanationData {
-    const t = topic.toLowerCase().trim();
-    const card = this.agents.get(this.selectedTaskId ?? '') ?? this.getAgents()[0];
-    const width = 84;
-    const maxRows = 24;
-
-    switch (t) {
-      // Each branch reports only state observed in engine records. Absent evidence is
-      // UNKNOWN and carries no immutableHash: a fabricated digest would read as proof.
-      case 'model': {
-        const modelId = card?.modelId ?? this.selectedModelId;
-        return {
-          topic: 'model',
-          headline: 'Model assignment for selected task',
-          decision: modelId ? `Assigned model [${modelId}]` : 'UNKNOWN — no model assignment recorded',
-          rationale: [
-            modelId
-              ? 'Assignment read from the task card; routing scores are not persisted for this view.'
-              : 'No task card with a model assignment is selected.',
-          ],
-          evidence: [
-            { label: 'Selected Model', value: modelId ?? 'UNKNOWN' },
-            { label: 'Routing Confidence', value: 'UNKNOWN' },
-          ],
-          controllerAudit: { source: 'Task card (FleetTui)', verifiedAt: new Date() },
-          width,
-          maxRows,
-        };
-      }
-
-      case 'worker': {
-        const comp = this.engine.computers.list()[0];
-        return {
-          topic: 'worker',
-          headline: 'Worker placement',
-          decision: comp ? `Registered worker [${comp.id}]` : 'UNKNOWN — no worker registered',
-          rationale: [
-            comp
-              ? 'Values read from ComputerRegistry; per-task placement decisions are not recorded here.'
-              : 'ComputerRegistry has no registered computers.',
-          ],
-          evidence: [
-            { label: 'Node Identifier', value: comp?.id ?? 'UNKNOWN' },
-            { label: 'Memory', value: comp?.hardware?.memoryGB !== undefined ? `${comp.hardware.memoryGB}GB` : 'UNKNOWN' },
-            { label: 'Active Reservations', value: comp?.reservations?.length ?? 'UNKNOWN' },
-            { label: 'Health Status', value: comp?.status ? String(comp.status).toUpperCase() : 'UNKNOWN' },
-            { label: 'Placement Decision', value: 'UNKNOWN' },
-          ],
-          controllerAudit: { source: 'ComputerRegistry', verifiedAt: new Date() },
-          width,
-          maxRows,
-        };
-      }
-
-      case 'tool': {
-        return {
-          topic: 'tool',
-          headline: 'Policy Engine authorization',
-          decision: 'UNKNOWN — no policy decision record is attached to this view',
-          rationale: [
-            'Tool authorization is decided per call by PolicyEngine / ApprovalQueue.',
-            'Open /evidence for the recorded tool receipts of a task.',
-          ],
-          evidence: [{ label: 'Policy Decision', value: 'UNKNOWN' }],
-          controllerAudit: { source: 'PolicyEngine / ApprovalQueue', verifiedAt: new Date() },
-          width,
-          maxRows,
-        };
-      }
-
-      case 'context': {
-        const samples = (this as any).contextSamples ?? [];
-        const lastSample = samples[samples.length - 1];
-        const cache = lastSample?.cache;
-        const readStatus = cache?.cacheReadTokens?.status ?? 'UNKNOWN';
-        const inputStatus = cache?.inputTokens?.status ?? 'UNKNOWN';
-        const isUnsupported = readStatus === 'UNSUPPORTED' || cache?.cacheWriteTokens?.status === 'UNSUPPORTED';
-        const providerName = cache?.provider ?? 'Provider';
-
-        let decision = 'Cache savings: UNKNOWN';
-        if (isUnsupported) {
-          decision = 'Cache savings: UNKNOWN';
-        } else if (readStatus === 'OBSERVED' && inputStatus === 'OBSERVED') {
-          decision = 'Cache savings: OBSERVED';
-        } else if (readStatus === 'ESTIMATED' || inputStatus === 'ESTIMATED') {
-          decision = 'Cache savings: ESTIMATED';
-        }
-
-        const rationale: string[] = [];
-        if (isUnsupported) {
-          rationale.push(`${providerName} does not support prompt cache telemetry on wire responses.`);
-          rationale.push('Prompt cache token savings cannot be observed directly from provider metadata.');
-        } else if (readStatus === 'OBSERVED') {
-          rationale.push(`Provider ${providerName} returned verified prompt cache usage on completion wire.`);
-          rationale.push('Cache read tokens directly observed from prompt_tokens_details or proxy headers.');
-        } else if (readStatus === 'ESTIMATED') {
-          rationale.push('Prompt cache token savings estimated from stable prefix overlap heuristics.');
-        } else {
-          rationale.push('No prompt cache telemetry recorded for current context sample window.');
-        }
-
-        return {
-          topic: 'context',
-          headline: 'Context memory & prompt cache telemetry',
-          decision,
-          rationale,
-          evidence: [
-            { label: 'Provider', value: cache?.provider ?? 'UNKNOWN' },
-            { label: 'Cache Read', value: cache?.cacheReadTokens?.status === 'OBSERVED' ? String(cache.cacheReadTokens.value) : (cache?.cacheReadTokens?.status ?? 'UNKNOWN') },
-            { label: 'Cache Write', value: cache?.cacheWriteTokens?.status === 'OBSERVED' ? String(cache.cacheWriteTokens.value) : (cache?.cacheWriteTokens?.status ?? 'UNKNOWN') },
-            { label: 'Effective Reuse', value: cache ? promptCacheReuse(cache) : 'UNKNOWN' },
-            { label: 'Source', value: cache ? promptCacheSource(cache) : 'UNKNOWN' },
-          ],
-          controllerAudit: {
-            source: 'ContextRevisionService / TelemetryService',
-            verifiedAt: new Date(),
-          },
-          width,
-          maxRows,
-        };
-      }
-
-      case 'candidate': {
-        const searches = this.engine.solutionSearch?.listSearches() ?? [];
-        const activeSearch = searches[searches.length - 1];
-        const cand = activeSearch?.selectedCandidate;
-        const check = (name: string) => {
-          const c = cand?.checks?.find((r: { name: string }) => r.name === name);
-          return c ? (c.ok ? 'PASS' : 'FAIL') : 'UNKNOWN';
-        };
-        const onFrontier = cand && activeSearch?.paretoFrontier?.candidates
-          ? activeSearch.paretoFrontier.candidates.some((c: { candidateId: string }) => c.candidateId === cand.candidateId)
-          : 'UNKNOWN';
-        return {
-          topic: 'candidate',
-          headline: 'Candidate selection',
-          decision: cand ? `Selected candidate [${cand.candidateId}]` : 'UNKNOWN — no candidate selected',
-          rationale: [activeSearch?.selectionReason || 'No selection reason recorded.'],
-          evidence: [
-            { label: 'Candidate ID', value: cand?.candidateId ?? 'UNKNOWN' },
-            { label: 'Pareto Frontier', value: onFrontier },
-            { label: 'Build Check', value: check('build') },
-            { label: 'Test Check', value: check('test') },
-          ],
-          controllerAudit: { source: 'SolutionSearchService', verifiedAt: new Date() },
-          width,
-          maxRows,
-        };
-      }
-
-      case 'prune': {
-        const searches = this.engine.solutionSearch?.listSearches() ?? [];
-        const pruned = (searches[searches.length - 1]?.candidates ?? []).filter(
-          (c: { isPruned?: boolean; prunedReason?: string }) => c.isPruned || c.prunedReason,
-        );
-        return {
-          topic: 'prune',
-          headline: 'Search branch pruning',
-          decision: pruned.length ? `Pruned ${pruned.length} candidate(s)` : 'UNKNOWN — no pruned candidates recorded',
-          rationale: pruned.length
-            ? pruned.slice(0, 5).map((c: { candidateId: string; prunedReason?: string }) => `${c.candidateId}: ${c.prunedReason ?? 'reason not recorded'}`)
-            : ['The active search has no pruned candidates on record.'],
-          evidence: [{ label: 'Pruned Count', value: pruned.length ? pruned.length : 'UNKNOWN' }],
-          controllerAudit: { source: 'SolutionSearchService', verifiedAt: new Date() },
-          width,
-          maxRows,
-        };
-      }
-
-      case 'complete':
-      case 'incomplete': {
-        // Derived only from the durable ExecutionRecord (see inspectVerificationEvidence).
-        const cached = this.currentEvidenceInspection();
-        if (!cached) {
-          return {
-            topic: 'complete',
-            headline: 'No execution evidence loaded',
-            decision: 'UNKNOWN — completion cannot be asserted without an execution record',
-            rationale: ['Open /evidence for a task with an execution record.', 'MODEL CLAIM != EXECUTION EVIDENCE: model narration is not consulted.'],
-            evidence: [],
-            controllerAudit: { source: 'ExecutionEngine record / VerificationEvidenceInspector', verifiedAt: new Date() },
-            width,
-            maxRows,
-          };
-        }
-        const { inspection, why } = cached;
-        return {
-          topic: why.complete ? 'complete' : 'incomplete',
-          headline: why.complete ? `Why complete? Evidence chain for R${inspection.currentRevision}` : `Why incomplete? Missing evidence for R${inspection.currentRevision}`,
-          decision: why.complete ? 'Completion eligible: YES' : 'Completion eligible: NO',
-          rationale: why.complete ? why.chain : why.missing,
-          evidence: inspection.slots.map((sl) => ({ label: sl.oracle, value: sl.status === 'MISSING' ? 'MISSING' : `${sl.status} @R${sl.revision} exit ${sl.exitCode}` })),
-          controllerAudit: {
-            source: `ExecutionEngine record ${inspection.executionId}`,
-            verifiedAt: new Date(),
-            immutableHash: String(inspection.workspaceDigest),
-          },
-          width,
-          maxRows,
-        };
-      }
-
-      case 'rollback': {
-        // Prefer exact stored canary evidence: the timeline's selected rollback, else the
-        // timeline canary's record, else the most recently rolled-back canary record.
-        const selected = this.getSelectedCanaryTimelineEntry();
-        if (this.canaryTimeline && selected && (selected.label === 'ROLLBACK' || selected.guardEvidence)) {
-          return buildCanaryRollbackWhy(selected, this.canaryTimeline.canaryId, width, maxRows);
-        }
-        const canaryRecords: any[] = (this.engine.optimizer as any)?.getCanaryDeploymentService?.()?.listDeployments?.() ?? [];
-        const rolledBack = canaryRecords
-          .filter((r) => r?.rollbackReason)
-          .sort((a, b) => (a.canaryId === this.canaryTimeline?.canaryId ? -1 : b.canaryId === this.canaryTimeline?.canaryId ? 1 : 0)
-            || new Date(b.completedAt ?? b.updatedAt ?? 0).getTime() - new Date(a.completedAt ?? a.updatedAt ?? 0).getTime());
-        const storedEntry = rolledBack[0] ? rollbackEntryFromRecord(rolledBack[0]) : undefined;
-        if (storedEntry) {
-          return buildCanaryRollbackWhy(storedEntry, rolledBack[0].canaryId, width, maxRows);
-        }
-        return {
-          topic: 'rollback',
-          headline: 'Canary rollback',
-          decision: 'UNKNOWN — no rolled-back canary on record',
-          rationale: ['CanaryDeploymentService has no deployment with a rollback reason.'],
-          evidence: [{ label: 'Rollback Status', value: 'UNKNOWN' }],
-          controllerAudit: { source: 'CanaryDeploymentService / RegressionGuard', verifiedAt: new Date() },
-          width,
-          maxRows,
-        };
-      }
-
-      default: {
-        return {
-          topic: t || 'unknown',
-          headline: `Topic '${t}' explanation`,
-          decision: 'Topic not recognized',
-          rationale: [
-            'Valid explainability topics: why [model|worker|tool|candidate|prune|complete|rollback]',
-            'All answers must be grounded in structured controller evidence, never LLM prose',
-          ],
-          evidence: [
-            { label: 'Supported Topic 1', value: 'model (empirical capability routing)' },
-            { label: 'Supported Topic 2', value: 'worker (topology & resource admission)' },
-            { label: 'Supported Topic 3', value: 'tool (policy authorization & sandbox)' },
-            { label: 'Supported Topic 4', value: 'candidate (Pareto frontier selection)' },
-            { label: 'Supported Topic 5', value: 'prune (MCTS early termination)' },
-            { label: 'Supported Topic 6', value: 'complete (physical verification proof)' },
-            { label: 'Supported Topic 7', value: 'rollback (RegressionGuard trigger)' },
-          ],
-          controllerAudit: {
-            source: 'MissionControl / ExplainabilityService',
-            verifiedAt: new Date(),
-          },
-          width,
-          maxRows,
-        };
-      }
-    }
+    return buildFleetWhyExplanation(this, topic);
   }
 
   handleWhyCommand(topic: string): void {
@@ -6051,87 +5333,12 @@ export class FleetTui {
   // ==========================================
   // Modals & Overlays
   // ==========================================
-  /**
-   * Overlaid Policy Approval Modal Card
-   */
   private renderApprovalModal(cols: number): string[] {
-    const first = this.pendingApprovals[0];
-    const modalWidth = Math.min(cols - 4, 76);
-    const count = this.pendingApprovals.length;
-    const title = `POLICY APPROVAL QUEUE [1/${count}]`;
-
-    const body: string[] = [
-      `Task: ${color.cyan(first.taskId ?? 'fleet-task')}   Tool: ${color.yellow(first.tool)}`,
-      `Rule: ${color.cyan(first.rule)}`,
-    ];
-    for (const reason of first.reasons.slice(0, 2)) {
-      body.push(`Why:  ${color.gray(reason)}`);
-    }
-
-    if (first.tool === 'edit' || first.tool === 'write') {
-      body.push('');
-      body.push(...this.renderDiffPreview(first, modalWidth - 4));
-    } else {
-      const inputStr = JSON.stringify(first.input);
-      if (this.approvalShowDetails) {
-        body.push(`Args: ${color.gray(inputStr)}`);
-        if (first.executionId) body.push(`Exec: ${color.gray(first.executionId)}`);
-      } else {
-        body.push(`Args: ${color.gray(inputStr.slice(0, modalWidth - 14))}`);
-      }
-    }
-
-    const actions =
-      count > 1
-        ? `${color.bold('[A]')} Approve  ${color.bold('[D]')} Deny  ${color.bold('[V]')} Details  ${color.bold('[I]')} Skip  ${color.bold('[^A]')} All  ${color.bold('[^D]')} None`
-        : `${color.bold('[A]')} Approve  ${color.bold('[D]')} Deny  ${color.bold('[V]')} Details  ${color.bold('[I]')} Inspect`;
-    return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
+    return fleetPanes.renderApprovalModal(this, cols);
   }
 
-  /**
-   * Renders what a pending `edit`/`write` approval will actually do to the
-   * file, instead of the raw `{"path":...,"content":"..."}` JSON blob that
-   * used to be the only thing shown here — approving an edit meant approving
-   * a wall of escaped text you couldn't realistically read.
-   *
-   * `edit` gets a real line diff: `oldString`/`newString` are already both
-   * known from the tool call itself, no file read needed. `write` cannot be
-   * diffed safely from here — this TUI has no reliable way to resolve which
-   * on-disk file a task's `path` refers to (worktrees put different tasks in
-   * different directories), and reading the wrong file would be actively
-   * misleading for an approve/deny decision — so it's shown as a clearly
-   * labeled content preview instead of a diff.
-   */
   private renderDiffPreview(req: PendingApprovalRequest, innerWidth: number): string[] {
-    const path = typeof req.input.path === 'string' ? req.input.path : '(unknown path)';
-    const maxLines = this.approvalShowDetails ? 40 : 8;
-    const lines: string[] = [`File: ${color.cyan(path)}`];
-
-    if (req.tool === 'edit') {
-      const oldStr = typeof req.input.oldString === 'string' ? req.input.oldString : '';
-      const newStr = typeof req.input.newString === 'string' ? req.input.newString : '';
-      const diff = diffLines(oldStr, newStr);
-      const shown = diff.slice(0, maxLines);
-      for (const d of shown) {
-        const text = this.truncateAnsi(d.text, Math.max(1, innerWidth - 2));
-        if (d.type === 'add') lines.push(color.green(`+ ${text}`));
-        else if (d.type === 'del') lines.push(color.red(`- ${text}`));
-        else lines.push(color.gray(`  ${text}`));
-      }
-      if (diff.length > shown.length) {
-        lines.push(color.gray(`  ... ${diff.length - shown.length} more line(s) — press [V] for details`));
-      }
-    } else {
-      const content = typeof req.input.content === 'string' ? req.input.content : '';
-      const contentLines = content.split('\n');
-      const shown = contentLines.slice(0, maxLines);
-      lines.push(color.gray(`New content (${contentLines.length} line(s)):`));
-      for (const l of shown) lines.push(color.green(`+ ${this.truncateAnsi(l, Math.max(1, innerWidth - 2))}`));
-      if (contentLines.length > shown.length) {
-        lines.push(color.gray(`  ... ${contentLines.length - shown.length} more line(s) — press [V] for details`));
-      }
-    }
-    return lines;
+    return fleetPanes.renderDiffPreview(this, req, innerWidth);
   }
 
   openModelStartupSelector(): void {
@@ -6200,56 +5407,7 @@ export class FleetTui {
   }
 
   private formatMissingModelRecovery(readiness: ModelReadiness, prompt?: string): string {
-    const unavailableRuntimes: string[] = [];
-    const runtimeEntries = Object.entries(readiness.runtimeHealth ?? {});
-    for (const [runtimeId, health] of runtimeEntries) {
-      const h = health as { status?: string; message?: string };
-      if (h.status === 'unavailable' || h.status === 'unhealthy') {
-        unavailableRuntimes.push(`${runtimeId} (${h.status}${h.message ? `: ${h.message}` : ''})`);
-      }
-    }
-    for (const disc of this.engine.discovered ?? []) {
-      if (disc.health === 'unavailable' || disc.health === 'degraded') {
-        const label = `${disc.id} (${disc.health}${disc.healthMessage ? `: ${disc.healthMessage}` : ''})`;
-        if (!unavailableRuntimes.some((r) => r.startsWith(`${disc.id} (`))) {
-          unavailableRuntimes.push(label);
-        }
-      }
-    }
-    for (const rt of this.engine.runtimes?.list() ?? []) {
-      const st = (rt as { status?: string; health?: string }).status ?? (rt as { health?: string }).health;
-      if (st === 'offline' || st === 'unavailable' || st === 'degraded') {
-        if (!unavailableRuntimes.some((r) => r.startsWith(`${rt.id} (`))) {
-          unavailableRuntimes.push(`${rt.id} (${st})`);
-        }
-      } else if ((rt as { runtimeKind?: string }).runtimeKind === 'hosted' && this.engine.policy) {
-        const gate = this.engine.policy.checkHostedEligibility(undefined, rt.type);
-        if (!gate.allowed && !unavailableRuntimes.some((r) => r.startsWith(`${rt.id} (`))) {
-          unavailableRuntimes.push(`${rt.id} (hosted providers disabled by policy)`);
-        }
-      }
-    }
-    if (unavailableRuntimes.length === 0) {
-      unavailableRuntimes.push('ollama (0 models installed)', 'lmstudio (offline or 0 models installed)');
-    }
-
-    const lines: string[] = [
-      prompt
-        ? `✗ Model unavailable: cannot execute task "${prompt.slice(0, 60)}" because no eligible AI model is registered or loaded.`
-        : '⚠ Model unavailable: 0 eligible models registered across configured runtimes.',
-    ];
-    if (unavailableRuntimes.length > 0) {
-      lines.push(`  Unavailable runtimes: ${unavailableRuntimes.join(', ')}`);
-    }
-    lines.push(
-      '  Recovery commands:',
-      '    • Pull a local Ollama model:       ollama pull qwen2.5-coder',
-      '    • Start LM Studio server:          lms server start   (or /launch lmstudio)',
-      '    • Authenticate a hosted provider:  wa auth login <anthropic|openai|google>',
-      '    • Check runtime diagnostics:       wa doctor          (or /doctor)',
-      '  Shell commands (!<cmd> or /sh <cmd>, e.g. !ls -la) remain available without an AI model.',
-    );
-    return lines.join('\n');
+    return fleetPanes.formatMissingModelRecovery(this, readiness, prompt);
   }
 
   private hasSchedulableGenerativeModel(): boolean {
@@ -6632,363 +5790,31 @@ export class FleetTui {
   }
 
   private renderStartupSelectorModal(cols: number): string[] {
-    if (!this.startupSelector) return [];
-    const selector = this.startupSelector;
-    const modalWidth = Math.min(cols - 4, 88);
-
-    if (selector.inspectedModelId) {
-      const m = selector.allInstalledModels.find((it) => it.id === selector.inspectedModelId);
-      if (!m) {
-        selector.inspectedModelId = undefined;
-        return this.renderStartupSelectorModal(cols);
-      }
-      const title = ` MODEL INSPECTION: ${m.id} `;
-      const assessment = selector.resourceAssessments.get(m.id);
-      const isReady = this.engine.lifecycle.isModelReady(m.id);
-      const body: string[] = [
-        `${color.bold('ID:')}            ${m.id}`,
-        `${color.bold('Name:')}          ${m.name}`,
-        `${color.bold('Provider:')}      ${m.provider}`,
-        `${color.bold('Family:')}        ${m.family}`,
-        `${color.bold('Architecture:')}  ${m.architecture ?? '—'}`,
-        `${color.bold('Parameters:')}    ${m.parameters ?? '—'}`,
-        `${color.bold('Quantization:')}  ${m.quantization ?? '—'}`,
-        `${color.bold('Context Max:')}   ${m.contextMax.toLocaleString()} tokens`,
-        `${color.bold('Capabilities:')}  ${m.capabilities.join(', ')}`,
-        `${color.bold('Tool Calling:')}  ${m.toolCalling ? color.green('yes') : color.gray('no')}`,
-        `${color.bold('Reasoning:')}     ${m.reasoning ? color.green('yes') : color.gray('no')}`,
-        `${color.bold('Vision:')}        ${m.vision ? color.green('yes') : color.gray('no')}`,
-        `${color.bold('State:')}         ${isReady ? color.green('READY') : color.yellow(this.engine.lifecycle.getModelState(m.id))}`,
-        '',
-        color.bold('Resource Assessment:'),
-        `  Estimated Memory: ${assessment?.estimatedMemoryGB.toFixed(1) ?? '—'} GB [${assessment?.classification ?? 'UNKNOWN'}]`,
-        `  Status:           ${assessment?.message ?? '—'}`,
-      ];
-      const actions = `${color.bold('[Esc]')} Back to Model Selection`;
-      return this.buildModalBox(title, body, actions, modalWidth, 'cyan');
-    }
-
-    if (selector.mode === 'select') {
-      const title = ' WAZIR - MODEL READINESS & STARTUP ';
-      const readiness = this.engine.lifecycle.getReadiness();
-      const healthyRuntimes = this.engine.runtimes.list().map((r) => r.name || r.id);
-      const localComp = this.engine.computers.list().find((c) => c.local)?.name || 'local';
-
-      const body: string[] = [
-        `Runtime: ${color.bold(healthyRuntimes.join(', ') || 'none')}    Computer: ${color.bold(localComp)}`,
-        `Status: ${color.green(`${readiness.readyCount} READY`)} / ${color.bold(`${readiness.installedCount} INSTALLED`)}`,
-      ];
-      if (selector.statusBanner) {
-        body.push(color.yellow(`* ${selector.statusBanner}`));
-      }
-      body.push(color.gray('-'.repeat(modalWidth - 8)));
-      body.push(color.bold(`Installed Models (${readiness.readyCount} loaded / ${readiness.installedCount} installed):`));
-      body.push('');
-
-      const models = selector.allInstalledModels;
-      for (let i = 0; i < models.length; i++) {
-        const m = models[i];
-        const isSel = selector.selectedModelIds.has(m.id);
-        const isEligible = selector.eligibleModels.some((e) => e.id === m.id);
-        const isRec = selector.recommendedModelIds.has(m.id);
-        const isHighlighted = i === selector.selectedIndex;
-        const assessment = selector.resourceAssessments.get(m.id);
-        const isReady = this.engine.lifecycle.isModelReady(m.id);
-
-        const checkMark = isReady
-          ? color.green('[✓]')
-          : isSel
-            ? color.cyan('[x]')
-            : '[ ]';
-        const cursor = isHighlighted ? color.blue('> ') : '  ';
-        const namePart = isHighlighted ? color.blue(color.bold(m.id)) : color.bold(m.id);
-
-        let badge = '';
-        if (isReady) {
-          badge = ` ${color.green('(ALREADY LOADED)')}`;
-        } else if (isRec) {
-          badge = ` ${color.cyan('[RECOMMENDED]')}`;
-        } else if (!isEligible) {
-          badge = ` ${color.gray('(non-generative)')}`;
-        }
-
-        body.push(`${cursor}${checkMark} ${i + 1}. ${namePart}${badge}`);
-
-        const arch = m.architecture ? `Architecture: ${m.architecture}  ` : '';
-        const params = m.parameters ? `Params: ${m.parameters}  ` : '';
-        const ctx = `Context: ${Math.round(m.contextMax / 1024)}K`;
-        body.push(`       ${color.gray(`${arch}${params}${ctx}`)}`);
-
-        if (assessment) {
-          let classTag = color.gray(`[${assessment.classification}]`);
-          if (assessment.classification === 'SAFE') classTag = color.green('[SAFE]');
-          else if (assessment.classification === 'WARNING') classTag = color.yellow('[WARNING]');
-          else if (assessment.classification === 'INSUFFICIENT') classTag = color.red('[INSUFFICIENT]');
-          body.push(`       ${color.gray(`Memory: ~${assessment.estimatedMemoryGB.toFixed(1)} GB`)} ${classTag}`);
-        }
-
-        if (isRec) {
-          const recPurpose = m.toolCalling ? 'coding / tool execution' : 'planning / reasoning';
-          body.push(`       ${color.cyan(`RECOMMENDED for ${recPurpose}`)}`);
-        }
-        body.push('');
-      }
-
-      const actions = `${color.bold('[Enter]')} Load Selected   ${color.bold('[A]')} Recommended   ${color.bold('[L]')} All   ${color.bold('[R]')} Refresh   ${color.bold('[I]')} Inspect   ${color.bold('[S]')} Skip`;
-      return this.buildModalBox(title, body, actions, modalWidth, 'cyan');
-    }
-
-    if (selector.mode === 'loading') {
-      const title = ' WAZIR - LOADING MODELS ';
-      const body: string[] = [
-        color.bold('Loading selected models into runtime memory:'),
-        '',
-      ];
-      for (const id of selector.selectedModelIds) {
-        const st = selector.loadStatuses.get(id) ?? 'LOADING';
-        if (st === 'READY') {
-          body.push(`  ${color.green('✓')} ${color.bold(id)} .......... ${color.green('READY')}`);
-        } else if (st === 'FAILED') {
-          const err = selector.loadErrors.get(id) ?? 'load failed';
-          body.push(`  ${color.red('✕')} ${color.bold(id)} .......... ${color.red('FAILED')} (${err})`);
-        } else {
-          const frame = getCategorySpinnerFrame('JOBS', this.spinnerTick);
-          body.push(`  ${color.cyan(frame)} ${color.bold(id)} ... ${color.yellow('LOADING')}`);
-        }
-      }
-      body.push('');
-      body.push(color.gray('Please wait while weights are placed into memory...'));
-      const actions = color.gray('Loading in progress...');
-      return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
-    }
-
-    if (selector.mode === 'failure') {
-      const title = ' WAZIR - MODEL LOAD FAILURE ';
-      const body: string[] = [
-        color.bold(color.red('One or more models failed to load:')),
-        '',
-      ];
-      for (const [id, st] of selector.loadStatuses.entries()) {
-        if (st === 'READY') {
-          body.push(`  ${color.green('✓')} ${id} ... READY`);
-        } else if (st === 'FAILED') {
-          const err = selector.loadErrors.get(id) ?? 'failed';
-          body.push(`  ${color.red('✕')} ${id} ... ${color.red('FAILED')} (${err})`);
-        }
-      }
-      body.push('');
-      body.push(color.gray('Choose how to proceed:'));
-      const actions = `${color.bold('[R]')} Retry failed   ${color.bold('[C]')} Continue with available   ${color.bold('[B]')} Back to selection`;
-      return this.buildModalBox(title, body, actions, modalWidth, 'red');
-    }
-
-    if (selector.mode === 'recovery_no_models') {
-      const title = ' WAZIR - MODEL SETUP & RECOVERY ';
-      const body: string[] = [
-        color.bold(color.yellow('0 models discovered across all runtimes.')),
-        '',
-        'No models are currently installed in Ollama or LM Studio.',
-        '',
-        color.bold('Next steps:'),
-        '  1. In LM Studio: Download a model (e.g. google/gemma-4-12b-qat or qwen/qwen3.8-27b).',
-        '  2. In Ollama: Run \'ollama pull qwen2.5-coder\' in terminal.',
-        '  3. Ensure the runtime server is running.',
-      ];
-      const actions = `${color.bold('[R]')} Refresh Discovery   ${color.bold('[S]')} Skip to Fleet   ${color.bold('[D]')} Run wa doctor`;
-      return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
-    }
-
-    if (selector.mode === 'recovery_runtime') {
-      const title = ' WAZIR - RUNTIME RECOVERY ';
-      const body: string[] = [
-        color.bold(color.red('All local model runtimes are currently unavailable.')),
-        '',
-        '  - LM Studio: http://localhost:1234 (OFFLINE / UNREACHABLE)',
-        '  - Ollama:    http://localhost:11434 (OFFLINE / UNREACHABLE)',
-        '',
-        color.bold('Recovery options:'),
-        '  - Press [L] to start LM Studio server automatically via CLI',
-        '  - Ensure LM Studio or Ollama is started in your environment',
-      ];
-      const actions = `${color.bold('[L]')} Launch LM Studio   ${color.bold('[R]')} Refresh Detection   ${color.bold('[S]')} Skip to Fleet`;
-      return this.buildModalBox(title, body, actions, modalWidth, 'red');
-    }
-
-    return [];
+    return fleetPanes.renderStartupSelectorModal(this, cols);
   }
 
   private renderTaskTimeModelRequiredModal(cols: number): string[] {
-    if (!this.taskTimeModelRequired) return [];
-    const modal = this.taskTimeModelRequired;
-    const modalWidth = Math.min(cols - 4, 82);
-    const title = ' TASK-TIME MODEL REQUIRED ';
-
-    const body: string[] = [
-      color.bold(color.yellow('No ready models are available to execute this task.')),
-      `${color.bold('Task:')} "${modal.pendingPrompt.slice(0, 50)}"`,
-      `${color.bold('Required capability:')} ${modal.requiredCapabilities.join(', ')}`,
-      '',
-      color.bold('Eligible installed models:'),
-    ];
-
-    const recommended = this.engine.lifecycle.getRecommendedModels();
-    const recIds = new Set(recommended.map((r) => r.model.id));
-
-    for (let i = 0; i < modal.eligibleModels.length; i++) {
-      const m = modal.eligibleModels[i];
-      const isSel = i === modal.selectedIndex;
-      const cursor = isSel ? color.blue('> ') : '  ';
-      const namePart = isSel ? color.blue(color.bold(m.id)) : color.bold(m.id);
-      const isRec = recIds.has(m.id);
-      const recBadge = isRec ? color.cyan(' [RECOMMENDED]') : '';
-      body.push(`${cursor}${i + 1}. ${namePart} (${m.provider})${recBadge}`);
-    }
-
-    if (modal.statusText) {
-      body.push('');
-      body.push(color.yellow(`Status: ${modal.statusText}`));
-    }
-
-    const actions = `${color.bold('[L]')} Load Model   ${color.bold('[A]')} Load Recommended   ${color.bold('[M]')} Manage Models   ${color.bold('[Esc]')} Cancel`;
-    return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
+    return fleetPanes.renderTaskTimeModelRequiredModal(this, cols);
   }
 
-  /**
-   * Overlaid Structured Error Card Modal (§29)
-   * Explicitly renders fields for phase, reason, required, available, and suggested resolution steps.
-   */
   private renderStructuredErrorCard(err: StructuredError, cols: number): string[] {
-    const modalWidth = Math.min(cols - 4, 76);
-    const title = ' EXECUTION FAILURE ';
-
-    const body: string[] = [
-      `${color.bold('Phase:')}      ${color.red(err.phase)}`,
-      `${color.bold('Reason:')}     ${color.red(err.reason)}`,
-    ];
-    if (err.required) {
-      body.push(`${color.bold('Required:')}   ${color.gray(err.required)}`);
-    }
-    if (err.available) {
-      body.push(`${color.bold('Available:')}  ${color.gray(err.available)}`);
-    }
-    if (err.suggestedSteps && err.suggestedSteps.length > 0) {
-      body.push('');
-      body.push(color.bold('Suggested Resolution Steps:'));
-      for (const step of err.suggestedSteps) {
-        body.push(`  ${color.cyan(step)}`);
-      }
-    }
-
-    const actions = `${color.bold('[Esc]')} Dismiss   ${color.bold('[R]')} Retry Task   ${color.bold('[D]')} Run wa doctor`;
-    return this.buildModalBox(title, body, actions, modalWidth, 'red');
+    return fleetPanes.renderStructuredErrorCard(err, cols);
   }
 
-  /**
-   * Overlaid Quick Actions Palette Modal (Ctrl+P) (§3)
-   */
   private renderQuickActionsModal(cols: number): string[] {
-    const modalWidth = Math.min(cols - 4, 72);
-    const title = ' QUICK ACTIONS (Ctrl+P) ';
-
-    const body: string[] = [];
-    for (let i = 0; i < this.quickActions.length; i++) {
-      const a = this.quickActions[i];
-      const isSel = i === this.quickActionIndex;
-      const cursor = isSel ? color.blue('> ') : '  ';
-      const label = `${cursor}${i + 1}. ${a.title} ${color.gray(`(${a.cmd})`)}`;
-      body.push(isSel ? color.blue(color.bold(label)) : label);
-    }
-
-    const actions = `${color.bold('[Enter]')} Select   ${color.bold('[Esc]')} Dismiss   ${color.bold('[1-9]')} Direct Execute`;
-    return this.buildModalBox(title, body, actions, modalWidth, 'cyan');
+    return fleetPanes.renderQuickActionsModal(this, cols);
   }
 
-  /**
-   * Overlaid Block Details Modal Card
-   */
   private renderBlockModal(block: Block, cols: number): string[] {
-    const modalWidth = Math.min(cols - 4, 76);
-    const title = `BLOCK DETAILS #${block.id} [${block.status.toUpperCase()}]`;
-
-    const body: string[] = [
-      `Command:  ${color.bold(block.command)}`,
-      `Duration: ${block.durationMs ?? 0}ms   Exit: ${block.exitCode ?? 0}`,
-    ];
-
-    if (block.stdout) {
-      body.push(`Stdout:   ${color.gray(block.stdout.slice(0, 100))}`);
-    }
-    if (block.stderr) {
-      body.push(`Stderr:   ${color.red(block.stderr.slice(0, 100))}`);
-    }
-    if (block.filesChanged && block.filesChanged.length > 0) {
-      body.push(`Files:    ${color.cyan(block.filesChanged.join(', '))}`);
-    }
-
-    const actions = `${color.bold('[Esc]')} Close`;
-    return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
+    return fleetPanes.renderBlockModal(block, cols);
   }
 
-  /**
-   * The exact raw text the model produced for its most recent turn on the tailed task,
-   * before any parsing — 'r' on the Tail view. Previously the only way to see this was
-   * reconstructing it by hand from `wa executions inspect --json`'s recorded events; this
-   * is exactly the trace that diagnosed today's argument-wrapping and brace-parsing bugs.
-   */
   private renderRawResponseModal(taskId: string, cols: number): string[] {
-    const modalWidth = Math.min(cols - 4, 100);
-    const innerWidth = modalWidth - 4;
-    const raw = this.lastRawResponse.get(taskId) ?? '(none recorded)';
-    const title = `RAW MODEL RESPONSE — ${taskId}`;
-    const body = this.wrapText(raw, innerWidth, 30);
-    const actions = `${color.bold('[Esc]')} Close`;
-    return this.buildModalBox(title, body, actions, modalWidth, 'cyan');
+    return fleetPanes.renderRawResponseModal(this, taskId, cols);
   }
 
-  /**
-   * Full, untruncated job output modal (Enter on a JOBS nav item). The compact JOBS
-   * detail view only shows a 6-line wrapped preview per task so the fleet dashboard
-   * doesn't get crowded out by one long result — this shows everything.
-   */
   private renderJobOutputModal(job: Job, rollup: JobRollup | undefined, cols: number): string[] {
-    const modalWidth = Math.min(cols - 4, 100);
-    const innerWidth = modalWidth - 4;
-    const title = `JOB OUTPUT: ${job.title.slice(0, 50)} [${job.status.toUpperCase()}]`;
-
-    const body: string[] = [];
-    for (const t of job.tasks) {
-      body.push(`${color.bold(`[${t.status}]`)} ${t.id}${t.title ? ` - ${t.title}` : ''}`);
-      const node = job.graph.nodes.find((n) => n.taskId === t.id || n.id === t.id);
-      const raw = node?.error ?? (node?.result !== undefined
-        ? typeof node.result === 'string' ? node.result : JSON.stringify(node.result)
-        : undefined);
-      if (raw) {
-        const flat = raw.replace(/\s+/g, ' ').trim();
-        const wrapped = this.wrapText(flat, innerWidth, 20);
-        const paint = node?.error ? color.red : color.gray;
-        for (const line of wrapped) body.push(paint(line));
-      } else {
-        body.push(color.gray('(no output captured for this task)'));
-      }
-      body.push('');
-    }
-
-    if (rollup) {
-      const tps = rollup.tokensPerSecond > 0 ? rollup.tokensPerSecond.toFixed(1) : '0.0';
-      body.push(
-        color.gray(
-          `Tokens: In ${rollup.tokens.input} / Out ${rollup.tokens.output} (${rollup.tokens.total} total) | Duration: ${(rollup.durationMs / 1000).toFixed(1)}s | Speed: ${tps} tok/s`,
-        ),
-      );
-      if (rollup.filesChanged.length > 0) {
-        body.push(color.gray(`Files changed: ${rollup.filesChanged.join(', ')}`));
-      }
-    } else {
-      void this.refreshJobRollup(job.id);
-    }
-
-    const actions = `${color.bold('[Esc]')} Close`;
-    return this.buildModalBox(title, body, actions, modalWidth, job.status === 'failed' ? 'red' : 'cyan');
+    return fleetPanes.renderJobOutputModal(this, job, rollup, cols);
   }
 
   private buildModalBox(
@@ -6998,594 +5824,43 @@ export class FleetTui {
     width: number,
     colorScheme: 'yellow' | 'red' | 'cyan' | 'blue' = 'yellow',
   ): string[] {
-    const innerWidth = width - 4;
-    const result: string[] = [];
-
-    const borderPaint =
-      colorScheme === 'red'
-        ? color.red
-        : colorScheme === 'cyan'
-          ? color.cyan
-          : colorScheme === 'blue'
-            ? color.blue
-            : color.yellow;
-
-    // Top border
-    const titleStr = ` ${title} `;
-    const topDashes = Math.max(0, innerWidth - titleStr.length);
-    result.push(color.bold(borderPaint(`+--${titleStr}${'-'.repeat(topDashes)}+`)));
-
-    // Body lines (clamped to innerWidth so a long value can never push the right border
-    // past the box, which would otherwise re-introduce the same wrap/misalignment class
-    // of bug fixed elsewhere in draw())
-    for (const rawLine of bodyLines) {
-      const clamped = this.stripAnsi(rawLine).length > innerWidth ? this.truncateAnsi(rawLine, innerWidth) : rawLine;
-      const plain = this.stripAnsi(clamped);
-      const pad = Math.max(0, innerWidth - plain.length);
-      result.push(`${color.bold(borderPaint('|'))}  ${clamped}${' '.repeat(pad)}${color.bold(borderPaint('|'))}`);
-    }
-
-    // Separator
-    result.push(color.bold(borderPaint(`+--${'-'.repeat(innerWidth)}--+`)));
-
-    // Actions line
-    const clampedActions =
-      this.stripAnsi(actionsLine).length > innerWidth ? this.truncateAnsi(actionsLine, innerWidth) : actionsLine;
-    const actionPlain = this.stripAnsi(clampedActions);
-    const actPad = Math.max(0, innerWidth - actionPlain.length);
-    result.push(`${color.bold(borderPaint('|'))}  ${clampedActions}${' '.repeat(actPad)}${color.bold(borderPaint('|'))}`);
-
-    // Bottom border
-    result.push(color.bold(borderPaint(`+--${'-'.repeat(innerWidth)}--+`)));
-
-    return result;
+    return fleetPanes.buildModalBox(title, bodyLines, actionsLine, width, colorScheme);
   }
 
   private renderCanaryControlModal(cols: number): string[] {
-    if (!this.canaryModal) return [];
-    const modalWidth = Math.min(cols - 4, 76);
-    const innerWidth = modalWidth - 4;
-    const cm = this.canaryModal;
-
-    if (cm.type === 'rollback') {
-      const title = 'CONFIRM CANARY ROLLBACK';
-      const body: string[] = [
-        `Target Canary:   ${color.bold(color.red(cm.canaryId))}`,
-        `Candidate ID:    ${color.bold(cm.candidateId)}`,
-        `Current Traffic: ${color.yellow(`${(cm.currentAllocation * 100).toFixed(0)}%`)}`,
-        '',
-        color.bold(color.red('WARNING: Rolling back will terminate canary evaluation immediately.')),
-        '100% traffic will be restored to the verified baseline checkpoint.',
-        '',
-        'Are you sure you want to proceed with this rollback?',
-      ];
-      const actions = `${color.bold(color.red('[Enter / y] Confirm Rollback'))}    ${color.bold('[Esc / n] Cancel')}`;
-      return this.buildModalBox(title, body, actions, modalWidth, 'red');
-    }
-
-    if (cm.type === 'advance') {
-      const nextStage = cm.nextStage ?? 'NEXT_TIER';
-      const title = 'CONFIRM CANARY STAGE ADVANCEMENT';
-      const body: string[] = [
-        `Target Canary:   ${color.bold(color.cyan(cm.canaryId))}`,
-        `Candidate ID:    ${color.bold(cm.candidateId)}`,
-        `Current Stage:   ${color.yellow(`${(cm.currentAllocation * 100).toFixed(0)}% traffic`)}`,
-        `Target Stage:    ${color.green(nextStage)}`,
-        '',
-        'Advancing stage will allocate increased production traffic to this candidate.',
-        'Continuous RegressionGuard will remain active across all protected metrics.',
-        '',
-        'Are you sure you want to advance this canary deployment?',
-      ];
-      const actions = `${color.bold(color.green('[Enter / y] Confirm Advance'))}    ${color.bold('[Esc / n] Cancel')}`;
-      return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
-    }
-
-    if (cm.type === 'throttle') {
-      const title = 'THROTTLE CANARY TRAFFIC';
-      const body: string[] = [
-        `Target Canary:   ${color.bold(color.cyan(cm.canaryId))}`,
-        `Candidate ID:    ${color.bold(cm.candidateId)}`,
-        `Current Traffic: ${color.yellow(`${(cm.currentAllocation * 100).toFixed(0)}%`)}`,
-        '',
-        'Select target traffic percentage (bounded by current allocation):',
-        '',
-      ];
-
-      for (let i = 0; i < cm.availableTiers.length; i++) {
-        const tier = cm.availableTiers[i];
-        const pct = Math.round(tier * 100);
-        const isSelected = i === cm.selectedTierIndex;
-        const bullet = isSelected ? color.bold(color.cyan(`▸ [${i + 1}]`)) : color.gray(`  [${i + 1}]`);
-        const label = `${pct}% traffic allocation`;
-        body.push(isSelected ? `${bullet} ${color.bold(color.cyan(label))}` : `${bullet} ${label}`);
-      }
-
-      const selectedPct = Math.round((cm.availableTiers[cm.selectedTierIndex] ?? cm.currentAllocation) * 100);
-      body.push('');
-      body.push(`Target Allocation: ${color.bold(color.green(`${selectedPct}%`))}`);
-
-      const actions = `${color.bold('[↑/↓ or 1-9]')} Select    ${color.bold(color.green('[Enter]'))} Apply Throttle    ${color.bold('[Esc/n]')} Cancel`;
-      return this.buildModalBox(title, body, actions, modalWidth, 'yellow');
-    }
-
-    return [];
+    return fleetPanes.renderCanaryControlModal(this, cols);
   }
 
   private buildPickerPopup(candidates: string[], selectedIdx: number, width: number): string[] {
-    const innerWidth = width - 4;
-    const result: string[] = [];
-    const title = ' References (@) ';
-    const topDashes = Math.max(0, innerWidth - title.length);
-    result.push(color.cyan(`+--${title}${'-'.repeat(topDashes)}+`));
-
-    const visibleCandidates = candidates.slice(0, 6);
-    for (let i = 0; i < visibleCandidates.length; i++) {
-      const c = visibleCandidates[i];
-      const isSel = i === selectedIdx;
-      const prefix = isSel ? color.blue('> ') : '  ';
-      const maxTextLen = innerWidth - 4;
-      const truncated = c.length > maxTextLen ? c.slice(0, maxTextLen - 1) + '.' : c;
-      const plain = `${prefix}${truncated}`;
-      const plainLen = this.stripAnsi(plain).length;
-      const pad = Math.max(0, innerWidth - plainLen);
-      result.push(`${color.cyan('|')}  ${prefix}${isSel ? color.blue(color.bold(truncated)) : truncated}${' '.repeat(pad - 2)}${color.cyan('|')}`);
-    }
-
-    result.push(color.cyan(`+--${'-'.repeat(innerWidth)}--+`));
-    return result;
+    return fleetPanes.buildPickerPopup(candidates, selectedIdx, width);
   }
 
   private overlayModal(lines: string[], modalLines: string[], cols: number, startY: number): void {
-    const modalWidth = Math.max(...modalLines.map((l) => this.stripAnsi(l).length));
-    const leftPad = Math.max(0, Math.floor((cols - modalWidth) / 2));
-
-    for (let i = 0; i < modalLines.length; i++) {
-      const y = startY + i;
-      if (y < 0 || y >= lines.length) continue;
-      const m = modalLines[i];
-      const mLen = this.stripAnsi(m).length;
-      const rightPad = Math.max(0, cols - leftPad - mLen);
-      lines[y] = ' '.repeat(leftPad) + m + ' '.repeat(rightPad);
-    }
+    fleetPanes.overlayModal(lines, modalLines, cols, startY);
   }
 
   private renderWorktreesPane(cols: number, maxRows: number): string[] {
-    const lines: string[] = [];
-    lines.push(color.bold(color.cyan('  GIT WORKTREE ISOLATION & MERGE-BACK')));
-    lines.push(color.gray('  Each agent runs in an isolated git branch without colliding writes:'));
-    lines.push('');
-
-    const list = this.getAgents();
-    if (list.length === 0) {
-      lines.push(color.gray('  No active worktrees.'));
-    } else {
-      for (const a of list) {
-        const branch = this.currentJob ? `wazir/${this.currentJob.id}/${a.taskId}` : `wazir/${a.taskId}`;
-        lines.push(`  ${color.cyan(a.taskId.padEnd(12))} Branch: ${color.bold(branch)}  Status: ${a.status}`);
-        if (a.filesChanged.length > 0) {
-          lines.push(`    Files: ${color.gray(a.filesChanged.join(', '))}`);
-        }
-      }
-    }
-
-    lines.push('');
-    lines.push(color.gray('  Merge-back story: Changes are verified on isolated branches before merge into target.'));
-    while (lines.length < maxRows) lines.push('');
-    return lines;
+    return fleetPanes.renderWorktreesPane(this, cols, maxRows);
   }
 
-  /**
-   * Dedicated Solution Search Projection Pane (§22)
-   * Displays solution search trajectories, candidate states, qualification, and selection.
-   */
-  /**
-   * Dedicated Task Execution Pipeline & Inspector Pane (Mission Control View 1)
-   */
   private renderTaskPane(cols: number, maxRows: number): string[] {
-    const card = this.agents.get(this.selectedTaskId ?? '') ?? this.getAgents()[0];
-    const taskInput = this.currentJob?.tasks.find((t) => t.id === (card?.taskId ?? this.selectedTaskId));
-    const activeTaskId = card?.taskId ?? this.selectedTaskId ?? 'task-001';
-    const inspection = this.currentEvidenceInspection();
-    const filesChanged = card?.filesChanged ?? [];
-
-    const verification = inspection
-      ? {
-          overall: inspection.inspection.completion.eligible ? 'PASS' : inspection.inspection.status === 'failed' ? 'FAIL' : 'PENDING',
-          checksPassed: inspection.inspection.slots.filter((s) => s.status === 'PASS').length,
-          totalChecks: inspection.inspection.slots.length,
-          checks: inspection.inspection.slots.map((s) => ({
-            name: s.oracle.toLowerCase(),
-            ok: s.status === 'PASS',
-            exitCode: typeof s.exitCode === 'number' ? s.exitCode : undefined,
-            message: s.status !== 'PASS' ? s.status : undefined,
-          })),
-        }
-      : (this.engine as any).verification?.getLastVerificationResult?.() ?? {
-          overall: 'PENDING',
-          checksPassed: 0,
-          totalChecks: 4,
-          checks: [
-            { name: 'ast_invariants', ok: false, exitCode: undefined, message: 'pending execution evidence' },
-            { name: 'typescript_compiler', ok: false, exitCode: undefined, message: 'pending execution evidence' },
-            { name: 'unit_test_suite', ok: false, exitCode: undefined, message: 'pending execution evidence' },
-            { name: 'workspace_cleanliness', ok: true, exitCode: 0 },
-          ],
-        };
-
-    const taskData: TaskViewData = {
-      taskId: activeTaskId,
-      title: card?.title ?? taskInput?.title ?? 'Autonomous Engineering Task',
-      objective: (taskInput as any)?.prompt ?? (taskInput as any)?.task ?? card?.title ?? 'Execute autonomous engineering workflow',
-      requirements: [
-        'Complete implementation adhering to deterministic invariants',
-        'Verify with compiler, test suite, and AST integrity check (MODEL CLAIM != EXECUTION EVIDENCE)',
-        'Ensure 0 regressions and stay within token budget',
-      ],
-      currentPhase: (card?.phase?.toUpperCase() as any) ?? (card?.status === 'completed' ? 'VERIFY' : 'TASK'),
-      agentId: card?.agentId ?? 'wazir-coder',
-      modelId: card?.modelId ?? this.selectedModelId ?? 'auto-routed',
-      runtimeId: 'local',
-      computerId: card?.computerId ?? 'worker-local',
-      workerId: card?.computerId ?? 'worker-local',
-      workspaceRevision: inspection?.inspection.currentRevision ?? (card as any)?.worktreeInfo?.revision ?? 1,
-      verificationStatus: verification,
-      budget: {
-        tokensUsed: card?.usage?.total ?? ((card?.usage?.input ?? 0) + (card?.usage?.output ?? 0)),
-        maxTokens: 32768,
-        repairCycles: Math.max(0, (card?.attempt ?? 1) - 1),
-        maxRepairCycles: card?.maxAttempts ?? 3,
-        costUsd: undefined,
-      },
-      elapsedTimeMs: card?.durationMs ?? 0,
-      physicalMutationsCount: filesChanged.length,
-      filesChanged,
-      recentEvents: (this.agentLogs.get(card?.taskId ?? '') ?? []).slice(-5).map((l) => ({
-        time: l.time,
-        kind: l.kind,
-        text: l.text,
-      })),
-      width: cols,
-      maxRows,
-    };
-    return renderTaskView(taskData);
+    return fleetPanes.renderTaskPane(this, cols, maxRows);
   }
 
-  /**
-   * Dedicated Solution Search Projection Pane (Mission Control View 2)
-   * Displays solution search trajectories, hierarchical MCTS tree, candidate states, and Pareto membership.
-   */
   private renderSearchPane(cols: number, maxRows: number): string[] {
-    const searches = this.engine.solutionSearch?.listSearches() ?? [];
-    const activeSearch = searches[searches.length - 1];
-
-    const treeNodes: SearchTreeNode[] | undefined = (activeSearch as any)?.hierarchicalTree?.nodes
-      ? (activeSearch as any).hierarchicalTree.nodes
-      : (activeSearch as any)?.treeNodes
-        ? (activeSearch as any).treeNodes
-        : activeSearch
-          ? undefined
-          : [
-      {
-        id: 'C0',
-        name: 'C0 (Root Checkpoint)',
-        state: 'completed',
-        tokens: 0,
-        children: [
-          {
-            id: 'A',
-            name: 'A (Refactor Strategy)',
-            state: 'completed',
-            tokens: 840,
-            children: [
-              {
-                id: 'A1',
-                name: 'A1',
-                state: 'completed',
-                glyph: color.green('✓'),
-                tokens: 1250,
-                testsPassed: true,
-                isFrontier: true,
-              },
-              {
-                id: 'A2',
-                name: 'A2',
-                state: 'pruned',
-                glyph: color.red('×'),
-                prunedReason: 'build failed',
-                tokens: 920,
-                testsPassed: false,
-                isDominated: true,
-              },
-            ],
-          },
-          {
-            id: 'B',
-            name: 'B (Incremental Strategy)',
-            state: 'active',
-            tokens: 610,
-            children: [
-              {
-                id: 'B1',
-                name: 'B1',
-                state: 'verifying',
-                glyph: color.yellow('◶'),
-                tokens: 780,
-              },
-              {
-                id: 'B2',
-                name: 'B2',
-                state: 'pending',
-                tokens: 340,
-              },
-            ],
-          },
-          {
-            id: 'C',
-            name: 'C (Parallel Strategy)',
-            state: 'pruned',
-            glyph: color.red('×'),
-            prunedReason: 'timeout',
-            tokens: 450,
-            isDominated: true,
-          },
-        ],
-      },
-    ];
-
-    let candidates: SearchCandidateItem[] = (activeSearch?.candidates ?? []).map((c: any, i: number) => {
-      const candId = c.candidateId;
-      const modelId = c.descriptor?.modelId ?? c.modelId ?? 'default';
-      const workerId = c.descriptor?.workerId ?? c.workerId ?? 'worker-local';
-      const state = c.status ?? 'completed';
-      const revision = c.workspaceRevision ?? c.descriptor?.iteration ?? i + 1;
-      const buildPassed = c.evaluation?.buildPassed ?? true;
-      const testsPassed = c.evaluation?.testsPassed ?? true;
-      const testSummary = c.evaluation?.testSummary ?? (testsPassed ? 'passed' : 'failed');
-      const tokens = c.metrics?.totalTokens ?? c.tokensUsed ?? 1420;
-      const wallTimeMs = c.metrics?.wallTimeMs ?? c.durationMs ?? 3200;
-      const isPruned = c.status === 'pruned';
-      const pruneState = isPruned
-        ? (c.evaluation?.disqualificationReasons?.[0] ? 'PRUNED' : 'PRUNED')
-        : 'ACTIVE';
-      const isFrontier = c.evaluation?.isParetoFrontier ?? (!isPruned && c.evaluation?.qualifies !== false);
-      const isDominated = c.evaluation?.isDominated ?? isPruned;
-
-      return {
-        candidateId: candId,
-        modelId,
-        workerId,
-        state,
-        revision,
-        buildPassed,
-        testsPassed,
-        testSummary,
-        tokens,
-        wallTimeMs,
-        pruneState,
-        isFrontier,
-        isDominated,
-        qualifies: c.evaluation?.qualifies ?? (!isPruned),
-        disqualificationReasons: c.evaluation?.disqualificationReasons ?? [],
-      };
-    });
-
-    if (candidates.length === 0) {
-      candidates = [
-        {
-          candidateId: 'A1',
-          modelId: 'claude-3-5-sonnet',
-          workerId: 'DGX-01',
-          state: 'completed',
-          revision: 1,
-          buildPassed: true,
-          testsPassed: true,
-          testSummary: '42 passed',
-          tokens: 1250,
-          wallTimeMs: 2100,
-          pruneState: 'ACTIVE',
-          isFrontier: true,
-        },
-        {
-          candidateId: 'A2',
-          modelId: 'qwen-2.5-coder-32b',
-          workerId: 'MAC-01',
-          state: 'failed',
-          revision: 1,
-          buildPassed: false,
-          testsPassed: false,
-          testSummary: 'build error',
-          tokens: 920,
-          wallTimeMs: 1800,
-          pruneState: 'PRUNED (build)',
-          isDominated: true,
-        },
-        {
-          candidateId: 'B1',
-          modelId: 'claude-3-5-sonnet',
-          workerId: 'PC-01',
-          state: 'running',
-          revision: 2,
-          tokens: 780,
-          wallTimeMs: 1400,
-          pruneState: 'ACTIVE',
-        },
-      ];
-    }
-
-    const selectedNodeId = this.getSelectedSearchNodeId();
-    const selectedNodeInspection = selectedNodeId ? this.inspectSearchNode(selectedNodeId) : undefined;
-
-    const data: SearchViewData = {
-      searchId: activeSearch?.searchId ?? 'search-mcts-01',
-      objective: (activeSearch as any)?.objective ?? 'Synthesize optimal solution via hierarchical MCTS',
-      status: activeSearch?.status ?? 'running',
-      strategy: activeSearch?.strategy ?? 'hierarchical_mcts',
-      candidates,
-      treeNodes,
-      viewMode: this.searchViewMode,
-      selectedIndex: this.selectedSearchCandidateIndex,
-      selectedCandidateId: activeSearch?.selectedCandidate?.candidateId ?? candidates[0]?.candidateId,
-      selectionReason: activeSearch?.selectionReason ?? 'Pareto frontier member with minimal tokens',
-      selectedNodeId,
-      selectedNodeInspection,
-      width: cols,
-      maxRows,
-    };
-    return renderSearchView(data);
+    return fleetPanes.renderSearchPane(this, cols, maxRows);
   }
 
-  /**
-   * Dedicated Self-Improvement & Canary Verification Pane (Mission Control View 4)
-   */
   private renderImprovementPane(cols: number, maxRows: number): string[] {
-    let experiments: ImprovementExperimentItem[] = (this.engine.optimizer?.listExperiments?.() ?? []).map((exp: any) => {
-      const expId = exp.experimentId ?? exp.id ?? 'exp-012';
-      const domain = exp.hypothesis?.domain ?? exp.domain ?? 'context';
-      const state = exp.status ?? exp.state ?? 'BENCHMARKING';
-      const hypothesis = exp.hypothesis?.statement ?? exp.hypothesis?.description ?? 'Prefix caching minimizes redundant token usage';
-      const baselinePassRate = exp.baselinePassRate ?? exp.baselineEvaluation?.score ?? 0.85;
-      const candidateCount = exp.candidateCount ?? exp.candidateResults?.length ?? 3;
-      const benchmarkProgress = exp.benchmarkProgress ?? { completed: 8, total: 10 };
-      const objectives = exp.objectives ?? (exp.requiredImprovement ? [{ metric: exp.requiredImprovement.metric ?? 'tokens', direction: exp.requiredImprovement.direction ?? 'MINIMIZE' }] : [
-        { metric: 'tokens', direction: 'MINIMIZE' },
-        { metric: 'wall time', direction: 'MINIMIZE' },
-      ]);
-      const protectedMetrics = exp.protectedMetrics ?? ['task success', 'verification'];
-      const paretoFrontier = exp.paretoFrontier ?? {
-        frontierCandidates: [{ candidateId: 'C1' }, { candidateId: 'C2' }],
-        dominatedCandidates: [{ candidateId: 'C3' }],
-        allEvaluated: [
-          { candidateId: 'C1', isNonDominated: true },
-          { candidateId: 'C2', isNonDominated: true },
-          { candidateId: 'C3', isNonDominated: false },
-        ],
-      };
-      const regressionGuardStatus = exp.regressionGuardStatus ?? { passed: true, violationsCount: 0, summary: 'Guard OK (0 regressions)' };
-      const decision = exp.decision ?? (state === 'QUALIFIED' ? 'QUALIFIED' : state === 'PROMOTED' ? 'PROMOTED' : undefined);
-      const decisionReason = exp.decisionReason ?? (decision ? 'Pareto optimal frontier candidate with positive token delta and intact guards' : undefined);
-
-      // Query live CanaryDeploymentService if configured
-      const canarySvc = (this.engine.optimizer as any)?.getCanaryDeploymentService?.();
-      const deployments = canarySvc?.listDeployments?.() ?? [];
-      const liveCanary = deployments.find((d: any) =>
-        (d.domain === domain || d.candidateId === expId || d.canaryId === expId) &&
-        ['ACTIVE', 'EVALUATING', 'HEALTHY', 'STAGED_EXPANSION', 'PAUSED', 'READY_FOR_PROMOTION', 'ROLLED_BACK', 'CANARY_FAILED'].includes(d.status),
-      ) ?? deployments.find((d: any) => d.domain === domain || d.candidateId === expId);
-
-      let canaryState = exp.canaryState;
-      if (liveCanary) {
-        const stages = ['CANARY_1', 'CANARY_5', 'CANARY_10', 'CANARY_25', 'CANARY_50'];
-        const stageIdx = stages.indexOf(liveCanary.stage ?? 'CANARY_10');
-        const nextStage = stageIdx >= 0 && stageIdx < stages.length - 1 ? stages[stageIdx + 1] : (liveCanary.status === 'READY_FOR_PROMOTION' ? 'READY_TO_PROMOTE' : undefined);
-        const cm = liveCanary.canaryMetrics;
-        const bm = liveCanary.baselineMetrics;
-        const totalSamples = cm?.totalExecutions ?? 0;
-        const correctnessStatus = cm && bm && totalSamples > 0
-          ? (cm.taskSuccessRate >= bm.taskSuccessRate ? 'DOMINANT_PASS' : 'REGRESSED')
-          : (liveCanary.status === 'ROLLED_BACK' ? 'REGRESSED' : 'EVALUATING');
-        const regressionGuardState = liveCanary.status === 'ROLLED_BACK'
-          ? 'FAILED (1 violations)'
-          : 'INTACT (0 violations)';
-
-        canaryState = {
-          canaryId: liveCanary.canaryId,
-          candidateId: liveCanary.candidateId,
-          trafficFraction: liveCanary.currentAllocation,
-          currentAllocation: liveCanary.currentAllocation,
-          stageName: liveCanary.stage,
-          status: liveCanary.status,
-          sampleCount: totalSamples,
-          minimumSamples: liveCanary.minimumSamples,
-          correctnessStatus,
-          regressionGuardState,
-          nextStage,
-          rollbackReason: liveCanary.rollbackReason?.description,
-          stagedExpansionTiers: liveCanary.stagedExpansionTiers,
-        };
-      } else if (!canaryState) {
-        canaryState = {
-          canaryId: 'canary-01',
-          trafficFraction: 0.25,
-          stage: 2,
-          totalStages: 3,
-          status: 'HEALTHY',
-        };
-      }
-
-      return {
-        id: expId,
-        domain,
-        state,
-        maturityLevel: exp.maturityLevel ?? 2,
-        hypothesis,
-        baselineId: exp.baselineCheckpointId ?? 'base-chk-001',
-        baselinePassRate,
-        candidateCount,
-        benchmarkProgress,
-        objectives,
-        protectedMetrics,
-        paretoFrontier,
-        regressionGuardStatus,
-        decision,
-        decisionReason,
-        canaryState,
-        causalEvidence: exp.causalEvidence ?? {
-          design: 'factorial ablation',
-          beneficialMutations: ['cache_prefix_hash', 'lru_compaction'],
-          neutralMutations: ['speculative_prefetch'],
-          harmfulMutations: [],
-        },
-      };
-    });
-
-    const data: ImprovementViewData = {
-      experiments,
-      selectedIndex: this.selectedExperimentIndex,
-      width: cols,
-      maxRows,
-    };
-    return renderImprovementView(data);
+    return fleetPanes.renderImprovementPane(this, cols, maxRows);
   }
 
-  /**
-   * Dedicated Context Utilization & Sawtooth Graph Pane (Mission Control View 5)
-   */
   private renderContextPane(cols: number, maxRows: number): string[] {
-    let samples = this.contextSamples;
-    if (samples.length === 0) {
-      samples = [
-        { generation: 1, currentTokens: 4200, effectiveMax: 32768, targetTokens: 16000, deduplicated: 200, compressed: 0, offloaded: 0, stablePrefix: 1200, volatilePortion: 3000 },
-        { generation: 2, currentTokens: 8900, effectiveMax: 32768, targetTokens: 16000, deduplicated: 450, compressed: 300, offloaded: 0, stablePrefix: 2100, volatilePortion: 6800 },
-        { generation: 3, currentTokens: 14500, effectiveMax: 32768, targetTokens: 16000, deduplicated: 800, compressed: 750, offloaded: 0, stablePrefix: 3400, volatilePortion: 11100 },
-        { generation: 4, currentTokens: 6200, effectiveMax: 32768, targetTokens: 16000, deduplicated: 2400, compressed: 4800, offloaded: 1800, stablePrefix: 3400, volatilePortion: 2800 },
-        { generation: 5, currentTokens: 10400, effectiveMax: 32768, targetTokens: 16000, deduplicated: 2800, compressed: 5100, offloaded: 1800, stablePrefix: 4200, volatilePortion: 6200 },
-        { generation: 6, currentTokens: 15800, effectiveMax: 32768, targetTokens: 16000, deduplicated: 3100, compressed: 5600, offloaded: 2200, stablePrefix: 4800, volatilePortion: 11000 },
-        { generation: 7, currentTokens: 7100, effectiveMax: 32768, targetTokens: 16000, deduplicated: 4500, compressed: 8200, offloaded: 3400, stablePrefix: 4800, volatilePortion: 2300 },
-      ];
-    }
-    const data: ContextViewData = {
-      samples,
-      selectedIndex: this.selectedContextSampleIndex,
-      width: cols,
-      maxRows,
-    };
-    return renderContextView(data);
+    return fleetPanes.renderContextPane(this, cols, maxRows);
   }
 
-  /**
-   * Dedicated Controller Truth & Deterministic Evidence Pane (Mission Control View 6)
-   */
   private renderEvidencePane(cols: number, maxRows: number): string[] {
-    const cached = this.currentEvidenceInspection();
-    if (!cached) void this.refreshEvidenceInspection();
-    return renderEvidenceView({
-      inspection: cached?.inspection,
-      why: cached?.why,
-      provenanceDepth: this.evidenceProvenanceDepth,
-      width: cols,
-      maxRows,
-    });
+    return fleetPanes.renderEvidencePane(this, cols, maxRows);
   }
 
   /**
@@ -7669,389 +5944,38 @@ export class FleetTui {
   }
 
   private renderCanaryPane(cols: number, maxRows: number): string[] {
-    const records = this.listCanaryRecords();
-    const active = records.find((r) => r.canaryId === this.selectedCanaryId)
-      ?? [...records].reverse().find((r) => !r.completedAt)
-      ?? records[records.length - 1];
-    return renderCanaryView({
-      activeCanary: active ? { ...active, stage: active.stage ?? 'UNKNOWN' } : undefined,
-      deployments: records.map((r) => ({
-        canaryId: r.canaryId,
-        candidateId: r.candidateId,
-        domain: r.domain,
-        stage: r.stage ?? 'UNKNOWN',
-        status: r.status,
-        currentAllocation: r.currentAllocation,
-        startTime: r.startTime,
-        completedAt: r.completedAt,
-        rollbackReason: r.rollbackReason,
-        totalExecutions: r.canaryMetrics?.totalExecutions ?? 0,
-      })),
-      activeTab: this.canaryTab,
-      selectedHistoryIndex: this.canaryHistoryIndex,
-      width: cols,
-      maxRows,
-    });
+    return fleetPanes.renderCanaryPane(this, cols, maxRows);
   }
 
   private renderModelIntelligencePane(cols: number, maxRows: number): string[] {
-    const allModels = this.engine.models?.list?.() ?? [];
-    const instances = this.engine.models?.listInstances?.() ?? [];
-    const query = this.viewFilterQuery.trim().toLowerCase();
-    const models = query
-      ? allModels.filter(
-          (m) =>
-            m.id.toLowerCase().includes(query) ||
-            (m.name || (m as any).displayName || '').toLowerCase().includes(query) ||
-            (m.provider || '').toLowerCase().includes(query),
-        )
-      : allModels;
-
-    const pinLabel = this.selectedModelId
-      ? color.magenta(`Pinned: ${this.selectedModelId}`)
-      : color.cyan('Routing: auto (scheduler)');
-    const filterLabel = query ? color.yellow(`  Filter: "${this.viewFilterQuery}" (/filter clear)`) : '';
-
-    const lines: string[] = [
-      `${color.bold(color.cyan('  MODELS & PROVIDERS'))}  ·  ${pinLabel}${filterLabel}`,
-      color.gray('  ↑↓ / j k browse · Enter pin model · /model <id> · /model auto clears pin · /filter <q>'),
-      color.gray('  ' + '─'.repeat(Math.max(10, cols - 4))),
-    ];
-
-    for (const [index, m] of models.entries()) {
-      if (index < this.selectedModelProfileIndex) continue;
-      const classified = classifyModelReadiness(m as any, instances, this.engine);
-      const isSelected = index === this.selectedModelProfileIndex;
-      const isPinned = this.selectedModelId === classified.id;
-      const cursor = isSelected ? color.cyan('>') : ' ';
-      const pinTag = isPinned ? color.magenta(' [PINNED]') : '';
-      const statusLead = classified.ready ? color.green('READY') : color.yellow('NOT READY');
-
-      lines.push(
-        `  ${cursor} ${statusLead}  [${classified.badge}]  ${color.bold(classified.name)}${pinTag}`,
-      );
-      lines.push(
-        `    ID: ${color.cyan(classified.id)} · Provider: ${classified.provider} · ${classified.local ? 'local' : 'hosted'} · Context: ${classified.contextMax.toLocaleString()} · Tools: ${classified.toolCalling ? 'yes' : 'no'}`,
-      );
-      lines.push(`    ${color.gray(classified.statusDetail)}`);
-      for (const i of classified.instances) {
-        lines.push(
-          `    Instance: ${i.runtimeId}${i.computerId ? ` / ${i.computerId}` : ' (cloud)'} · ${i.state ?? 'unknown'} · ${i.health ?? 'unknown'}`,
-        );
-      }
-    }
-    if (!models.length) {
-      lines.push(
-        query
-          ? `  No models match filter "${this.viewFilterQuery}". Run /filter to clear.`
-          : '  No models discovered. /refresh to discover configured providers.',
-      );
-    }
-
-    const rawProfiles = this.engine.modelIntelligence?.listProfiles?.() ?? [];
-    if (rawProfiles.length > 0 && lines.length < maxRows - 5) {
-      lines.push('');
-      const profiles: ModelProfileItem[] = rawProfiles.map((p: any) => ({
-        id: p.modelId ?? p.id ?? 'model',
-        model: p.modelId ?? p.model ?? 'model',
-        runtime: p.runtimeId ?? p.runtime ?? 'local',
-        capabilities: p.capabilities ?? {},
-        totalSamples: p.sampleCount ?? p.totalSamples ?? 0,
-        phaseBreakdown: p.phaseBreakdown,
-      }));
-      const intelLines = renderModelIntelligenceView({
-        profiles,
-        selectedIndex: Math.min(this.selectedModelProfileIndex, Math.max(0, profiles.length - 1)),
-        width: cols,
-        maxRows: Math.max(6, maxRows - lines.length),
-      });
-      lines.push(...intelLines);
-    }
-
-    while (lines.length < maxRows) lines.push('');
-    return lines.slice(0, maxRows).map((l) => this.padRightTo(l, cols));
+    return fleetPanes.renderModelIntelligencePane(this, cols, maxRows);
   }
 
-  /**
-   * Dedicated Fleet Topology & Mission Control Overview Pane (Mission Control View 3)
-   */
   private renderFleetOverviewPane(cols: number, maxRows: number): string[] {
-    const models = this.engine.models?.list?.() ?? [];
-    const instances = this.engine.models?.listInstances?.() ?? [];
-    const classifiedModels = models.map((m) => classifyModelReadiness(m as any, instances, this.engine));
-    const lifecycleReadiness = this.engine.lifecycle?.getReadiness?.();
-    const readyCount = lifecycleReadiness
-      ? lifecycleReadiness.readyCount
-      : classifiedModels.filter((m) => m.ready).length;
-    const installedCount = lifecycleReadiness ? lifecycleReadiness.installedCount : models.length;
-    const agents = this.getAgents();
-    const jobs = this.engine.orchestrator?.listJobs?.() ?? [];
-    const metrics = this.getContextMetrics();
-    const evidence = this.currentEvidenceInspection();
-    const computers = this.engine.computers?.list?.() ?? [];
-    const runtimes = this.engine.runtimes?.list?.() ?? [];
-
-    const missionLines = renderMissionControl(
-      {
-        workspace: this.engine.projectRoot,
-        routingPolicy: this.selectedModelId ? `pinned (${this.selectedModelId})` : 'auto (scheduler)',
-        agents: this.engine.agents?.list?.()?.length ?? 0,
-        running: agents.filter((a) => a.status === 'running').length,
-        ready: readyCount,
-        installed: installedCount,
-        computers: computers.length,
-        fleetNodes: computers.map((computer) => ({
-          id: computer.id,
-          gpu:
-            typeof computer.hardware?.gpu === 'string'
-              ? computer.hardware.gpu
-              : (computer.hardware?.gpu as any)?.model,
-          health: computer.status ?? 'unknown',
-        })),
-        jobs: jobs
-          .slice(-4)
-          .reverse()
-          .map((j) => ({ id: j.id, title: j.title, status: j.status })),
-        models: classifiedModels.map((m) => ({
-          id: m.id,
-          name: m.name,
-          provider: m.provider,
-          ready: m.ready,
-          category: m.category,
-          badge: m.badge,
-          local: m.local,
-        })),
-        runtimes: runtimes.map((r) => ({ name: r.name || r.id, health: r.health ?? 'unknown' })),
-        approvals: this.pendingApprovals.length,
-        inputTokens: metrics.jobIn,
-        outputTokens: metrics.jobOut,
-        events: Array.from(this.agentLogs.values())
-          .flat()
-          .sort((a, b) => a.time.localeCompare(b.time))
-          .slice(-3),
-        evidence: evidence ? [`${evidence.inspection.status} · 6 inspect verification checks`] : [],
-      },
-      cols,
-      computers.length > 0 && maxRows >= 28 ? Math.min(18, Math.floor(maxRows * 0.48)) : maxRows,
-    );
-
-    if (computers.length === 0) {
-      while (missionLines.length < maxRows) missionLines.push('');
-      return missionLines.slice(0, maxRows).map((l) => this.padRightTo(l, cols));
-    }
-
-    const workers: FleetWorkerItem[] = [];
-    let healthReport: import('@wazir/core').HealthReport | undefined;
-    try {
-      healthReport = collectHealthReport(this.engine);
-    } catch {
-      healthReport = undefined;
-    }
-
-    for (const comp of computers) {
-      const compRuntimes = runtimes.filter((r) => r.computerId === comp.id).map((r) => r.type);
-      const gpuModel =
-        (comp.hardware as any)?.gpu ||
-        (comp.id === 'MAC-01' ? 'M2 Ultra' : comp.id === 'PC-01' ? 'RTX 4090' : 'H100');
-      const gpuCount = (comp.hardware as any)?.gpuCount || (comp.id === 'DGX-01' ? 8 : 1);
-      const gpuInfo = comp.capabilities?.includes('gpuAcceleration')
-        ? {
-            model: gpuModel,
-            count: gpuCount,
-            memoryGB: comp.id === 'DGX-01' ? 640 : comp.id === 'MAC-01' ? 128 : 24,
-          }
-        : undefined;
-
-      const shardsCount = comp.id === 'DGX-01' ? 14 : comp.id === 'MAC-01' ? 5 : comp.id === 'PC-01' ? 2 : 2;
-      const temperatureC = comp.id === 'DGX-01' ? 52 : comp.id === 'MAC-01' ? 41 : 48;
-
-      workers.push({
-        id: comp.name || comp.id,
-        name: comp.name || comp.id,
-        type: comp.type ?? 'workstation',
-        status: 'online',
-        runtimes: compRuntimes.length > 0 ? compRuntimes : ['local'],
-        loadedModels: models.map((m) => m.id),
-        gpu: gpuInfo,
-        ram: {
-          totalGB: comp.hardware?.memoryGB ?? 64,
-          availableGB: Math.round((comp.hardware?.memoryGB ?? 64) * 0.7),
-          load: 1.4,
-        },
-        capacity: comp.hardware?.cpuCores ?? 8,
-        availableCapacity: Math.max(1, (comp.hardware?.cpuCores ?? 8) - 2),
-        temperatureC,
-        reservations: 1,
-        shards: [`shard-${comp.id}-0`],
-        shardsCount,
-        health: healthReport ? fleetNodeHealth(healthReport, comp.id) : undefined,
-      });
-    }
-
-    const remainingRows = Math.max(8, maxRows - missionLines.length);
-    const fleetLines = renderFleetView({
-      workers,
-      selectedIndex: this.selectedWorkerIndex,
-      width: cols,
-      maxRows: remainingRows,
-    });
-
-    const combined = [...missionLines, ...fleetLines];
-    while (combined.length < maxRows) combined.push('');
-    return combined.slice(0, maxRows).map((l) => this.padRightTo(l, cols));
+    return fleetPanes.renderFleetOverviewPane(this, cols, maxRows);
   }
 
-  /**
-   * Independent View Layout Template: APPROVAL (§2)
-   * Dedicated layout so approval view never collides with table columns from other views.
-   */
   private renderApprovalPane(cols: number, maxRows: number): string[] {
-    const lines: string[] = [];
-    lines.push(color.bold(color.yellow('  POLICY APPROVAL QUEUE')));
-    lines.push(color.gray('  Review and act on pending tool approval requests:'));
-    lines.push('');
-
-    if (this.pendingApprovals.length === 0) {
-      lines.push(color.green('  + No pending approval requests.'));
-      lines.push('');
-      lines.push(color.gray('  All tool invocations are passing current policy rules.'));
-    } else {
-      for (let i = 0; i < this.pendingApprovals.length && lines.length < maxRows - 2; i++) {
-        const req = this.pendingApprovals[i];
-        const idx = `[${i + 1}/${this.pendingApprovals.length}]`;
-        lines.push(`  ${color.yellow(idx)} Tool: ${color.bold(req.tool)} | Rule: ${color.cyan(req.rule)}`);
-        if (req.taskId) {
-          lines.push(`    Task: ${color.gray(req.taskId)}`);
-        }
-        for (const reason of req.reasons.slice(0, 2)) {
-          lines.push(`    ${color.gray(reason)}`);
-        }
-        lines.push('');
-      }
-    }
-
-    lines.push(color.gray('  Actions: [A] Approve  [D] Deny  [Y] Yes  [N] No  [V] Details'));
-    while (lines.length < maxRows) lines.push('');
-    return lines;
+    return fleetPanes.renderApprovalPane(this, cols, maxRows);
   }
 
   private renderHelpPane(cols: number, maxRows: number): string[] {
-    const lines: string[] = [
-      color.bold('  WAZIR FLEET TUI SHORTCUTS & COMMANDS'),
-      '',
-      '  Navigation:',
-      '    1 / 5 / 6       Mission Control / Models & Providers / Evidence',
-      '    [ / ]           Cycle tasks or pending approvals',
-      '    !cmd / /sh cmd  Run an inline workspace shell command',
-      '    Tab          Cycle through views (Shift-Tab for reverse traversal)',
-      '    Up / Down       Navigate categories and items across entire left index',
-      '    Enter           Drill down into highlighted agent stream (Tail view)',
-      '    c               Cancel the selected running job (JOBS list)',
-      '    Delete / x      Delete the selected job (JOBS list; not while it is running)',
-      '    Esc             Dismiss modal dialogs / return to fleet dashboard',
-      '    ?               Toggle this help screen (when prompt empty)',
-      '    Ctrl+R          Force state refresh across blocks and agents',
-      '    Ctrl+L          Force immediate screen repaint',
-      '    Ctrl+P          Open Quick Actions palette',
-      '',
-      '  Event-Stream Activity Pane:',
-      '    PageUp / PgDn   Scroll chronological activity logs',
-      '    Up / Down       Scroll activity lines when main pane focused',
-      '',
-      '  Telemetry & Approvals:',
-      '    Context ~       Real-time token budget display in status bar',
-      '    [A] / [D]       Approve / Deny pending policy ask (overlaid modal card)',
-      '    [V] / [I]       View full details / Inspect & snooze policy ask',
-      '    [R]             Retry failed task when error card is open',
-      '    [R] (Tail view) View the selected task\'s raw model response',
-      '',
-      '  Commands & Quick Actions:',
-      '    /fanout <t1;t2> Decompose and run concurrent subtasks',
-      '    /steer <msg>    Inject mid-run follow-up instruction to agent',
-      '    /compact [id]   Compact model context for active or specified task',
-      '    /cancel <id>    Cancel one agent or all agents',
-      '    /doctor         Execute system diagnostics',
-      '    /launch lmstudio  Start LM Studio\'s server when its runtime shows unavailable',
-      '    /model [id]     Show or set the model new tasks are pinned to',
-      '    /clear-context  Clear active context blocks',
-      '    /exit or q      Exit TUI and restore terminal',
-    ];
-    while (lines.length < maxRows) lines.push('');
-    return lines;
+    return fleetPanes.renderHelpPane(cols, maxRows);
   }
 
   private stripAnsi(str: string): string {
-    return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    return stripAnsiStr(str);
   }
 
-  /**
-   * Greedily wraps plain text (no ANSI — callers colorize each returned line themselves)
-   * to maxWidth, splitting on whitespace, up to maxLines. Used for task output previews
-   * that were previously cut to a single truncated line — a several-sentence result was
-   * unreadable as "...The projec" with no way to see the rest.
-   */
   private wrapText(text: string, maxWidth: number, maxLines: number): string[] {
-    const words = text.split(/\s+/).filter(Boolean);
-    const lines: string[] = [];
-    let current = '';
-    let wordIndex = 0;
-    while (wordIndex < words.length && lines.length < maxLines) {
-      const word = words[wordIndex];
-      const candidate = current ? `${current} ${word}` : word;
-      if (candidate.length > maxWidth && current) {
-        lines.push(current);
-        current = '';
-      } else {
-        current = candidate;
-        wordIndex++;
-      }
-    }
-    if (wordIndex >= words.length) {
-      if (current) lines.push(current);
-    } else if (lines.length > 0) {
-      // Ran out of lines with words still left over — mark the truncation.
-      const last = lines[lines.length - 1];
-      lines[lines.length - 1] = last.length >= maxWidth ? `${last.slice(0, maxWidth - 1)}.` : `${last}.`;
-    }
-    return lines;
+    return wrapAnsiText(text, maxWidth, maxLines);
   }
 
   private truncateAnsi(str: string, maxLen: number): string {
-    const plain = this.stripAnsi(str);
-    if (plain.length <= maxLen) return str;
-
-    let visibleCount = 0;
-    let result = '';
-    let inEscape = false;
-
-    for (let i = 0; i < str.length; i++) {
-      const char = str[i];
-      if (char === '\x1b') {
-        inEscape = true;
-        result += char;
-      } else if (inEscape) {
-        result += char;
-        if (/[a-zA-Z~]/.test(char)) {
-          inEscape = false;
-        }
-      } else {
-        if (visibleCount < maxLen - 1) {
-          result += char;
-          visibleCount++;
-        } else {
-          result += '.\x1b[0m';
-          break;
-        }
-      }
-    }
-    return result.endsWith('\x1b[0m') ? result : result + '\x1b[0m';
+    return truncateAnsiStr(str, maxLen);
   }
 
   private padRightTo(str: string, targetWidth: number): string {
-    const visible = this.stripAnsi(str).length;
-    if (visible > targetWidth) {
-      return this.truncateAnsi(str, targetWidth);
-    }
-    return str + ' '.repeat(Math.max(0, targetWidth - visible));
+    return padRightAnsi(str, targetWidth);
   }
 }

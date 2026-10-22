@@ -929,6 +929,9 @@ export function renderSearchView(data: SearchViewData): string[] {
     const maxTreeLines = Math.min(treeLines.length, Math.max(5, maxRows - lines.length - 8));
     lines.push(...treeLines.slice(0, maxTreeLines));
     lines.push(padRight('', width));
+  } else if (!candidates || candidates.length === 0) {
+    lines.push(padRight(color.gray('  No active MCTS search tree or candidates recorded.'), width));
+    lines.push(padRight('', width));
   }
 
   // Flat Candidate Table
@@ -1292,6 +1295,7 @@ export function renderContextView(data: ContextViewData): string[] {
   if (!samples || samples.length === 0) {
     lines.push(padRight('  No context telemetry samples recorded.', width));
     lines.push(padRight(color.gray('  Feed generations or execute tasks to observe context compaction.'), width));
+    lines.push(padRight(`  Thresholds: ${color.red('─ [MAX]')} Effective Window │ ${color.yellow('┄ [TARGET]')} Compaction Target`, width));
     while (lines.length < maxRows) lines.push(padRight('', width));
     return lines;
   }
