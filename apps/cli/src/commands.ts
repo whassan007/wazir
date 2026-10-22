@@ -862,19 +862,65 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
   // A fresh, failed preflight means this agent would fail too: say why now rather than after
   // a full launch. Agents never checked (or with an expired result) run normally.
   if (options.agent && !options.force) {
-    const { knownAgentFailure, refusalMessage, checkAgents } = await import('./agentPreflight.js');
-    let failure = knownAgentFailure(options.agent);
-    // Probe lazily when an operator selects an installed vendor agent. Other CLI commands
-    // remain passive, and the existing fingerprint/TTL cache avoids repeated paid sessions.
-    if (!failure && ['codex', 'claude-code', 'antigravity'].includes(options.agent.split('@')[0]) && engine.agents.get(options.agent)) {
-      const [result] = await checkAgents(engine, [options.agent]);
-      if (result && result.status !== 'READY') failure = result;
+    const registeredAgent = engine.agents.get(options.agent) as (import('@wazir/core').AgentAdapter & {
+      preflight?: () => Promise<{ ok: boolean; reason?: string; reasons?: string[] }> | { ok: boolean; reason?: string; reasons?: string[] };
+    }) | undefined;
+    let preflightMessage: string | undefined;
+    if (typeof registeredAgent?.preflight === 'function') {
+      const check = await registeredAgent.preflight();
+      if (check && check.ok === false) {
+        preflightMessage = check.reason ?? check.reasons?.join('; ') ?? `agent '${options.agent}' failed preflight`;
+      }
     }
-    if (failure) {
-      const message = refusalMessage(failure);
+    if (!preflightMessage) {
+      const { knownAgentFailure, refusalMessage, checkAgents } = await import('./agentPreflight.js');
+      let failure = knownAgentFailure(options.agent);
+      // Probe lazily when an operator selects an installed vendor agent. Other CLI commands
+      // remain passive, and the existing fingerprint/TTL cache avoids repeated paid sessions.
+      if (!failure && ['codex', 'claude-code', 'antigravity'].includes(options.agent.split('@')[0]) && registeredAgent) {
+        const [result] = await checkAgents(engine, [options.agent]);
+        if (result && result.status !== 'READY') failure = result;
+      }
+      if (failure) {
+        preflightMessage = refusalMessage(failure);
+      }
+    }
+    if (preflightMessage) {
+      let executionId = '—';
+      try {
+        await engine.executions.ready;
+        const failedTask = {
+          id: `task-preflight-${Date.now()}`,
+          type: options.type ?? ('coding' as TaskType),
+          input: description,
+          requirements: {
+            minimumContext: 8192,
+            ...(options.expectedFiles?.length ? { expectedArtifacts: options.expectedFiles } : {}),
+          },
+          priority: 'normal' as const,
+          status: 'failed' as const,
+          createdAt: new Date(),
+        };
+        const failedRec = await engine.executions.create({
+          task: failedTask,
+          agentId: options.agent,
+          computerId: engine.worker?.computerId ?? 'local',
+          runtimeId: 'external',
+          modelId: options.model ?? `external:${options.agent}`,
+          workerId: engine.worker?.id ?? 'local-cli',
+          workspaceRoot: engine.projectRoot,
+        });
+        await engine.executions.recordError(failedRec.execution.id, preflightMessage);
+        await engine.executions.setStatus(failedRec.execution.id, 'failed');
+        executionId = failedRec.execution.id;
+      } catch {
+        // Best effort if store rejects
+      }
       return {
         code: 1,
-        output: options.json ? JSON.stringify({ success: false, reasons: [message], filesChanged: [], errors: [message] }, null, 2) : message,
+        output: options.json
+          ? JSON.stringify({ success: false, executionId, reasons: [preflightMessage], filesChanged: [], errors: [preflightMessage] }, null, 2)
+          : preflightMessage,
       };
     }
   }
@@ -915,7 +961,7 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
     lines.push(color.gray(`    ${reason}`));
   }
   if (outcome.result) {
-    lines.push(`  result: ${outcome.result.slice(0, 500)}`);
+    lines.push(`  result: ${outcome.result}`);
   }
   if (outcome.filesChanged.length > 0) {
     lines.push(`  files changed: ${outcome.filesChanged.join(', ')}`);
@@ -925,6 +971,100 @@ export async function runTaskCommand(engine: RookEngine, description: string, op
     lines.push(color.gray(`  inspect: wa executions inspect ${outcome.executionId}`));
   }
   return { code: outcome.success ? 0 : 1, output: lines.join('\n') };
+}
+
+function formatTaskStatusRecord(
+  record: ExecutionRecord | undefined,
+  id: string,
+  options?: { json?: boolean },
+): { code: number; output: string } {
+  if (!record) {
+    const msg = `Task or execution '${id}' not found`;
+    return {
+      code: 1,
+      output: options?.json ? JSON.stringify({ error: msg, id }) : color.red(msg),
+    };
+  }
+  const payload = {
+    id: record.task.id,
+    executionId: record.execution.id,
+    status: record.execution.status,
+    type: record.task.type,
+    agentId: record.execution.agentId,
+    modelId: record.execution.modelId,
+    runtimeId: record.execution.runtimeId,
+    computerId: record.execution.computerId ?? null,
+    createdAt: record.execution.createdAt,
+    completedAt: record.execution.completedAt ?? null,
+    filesChanged: record.filesChanged,
+    errors: record.errors,
+    result: record.result ?? null,
+  };
+  if (options?.json) {
+    return { code: 0, output: JSON.stringify(payload, null, 2) };
+  }
+  const lines = [
+    color.bold(`Task ${payload.id} (execution ${payload.executionId})`),
+    `  status:    ${payload.status}`,
+    `  type:      ${payload.type}`,
+    `  agent:     ${payload.agentId}`,
+    `  model:     ${payload.modelId} via ${payload.runtimeId}`,
+    `  computer:  ${payload.computerId ?? 'hosted'}`,
+    `  files:     ${payload.filesChanged.length}`,
+  ];
+  if (payload.errors.length > 0) {
+    lines.push(`  errors:    ${payload.errors.join('; ')}`);
+  }
+  return { code: 0, output: lines.join('\n') };
+}
+
+export function taskStatusCommand(
+  engine: RookEngine,
+  id: string,
+  options?: { json?: boolean },
+): { code: number; output: string } & PromiseLike<{ code: number; output: string }> {
+  const execStore = engine.executions as unknown as {
+    records?: Map<string, ExecutionRecord>;
+    store?: unknown;
+    get: (executionId: string) => Promise<ExecutionRecord | undefined> | ExecutionRecord | undefined;
+    list: () => Promise<ExecutionRecord[]> | ExecutionRecord[];
+  };
+
+  const findInList = (all: ExecutionRecord[]): ExecutionRecord | undefined =>
+    all.find((r) => r.execution.id === id || r.task.id === id || r.execution.id.includes(id) || r.task.id.includes(id));
+
+  if (execStore.records instanceof Map && (!execStore.store || execStore.records.size > 0)) {
+    const direct = execStore.records.get(id) ?? findInList(Array.from(execStore.records.values()));
+    const result = formatTaskStatusRecord(direct, id, options);
+    return Object.assign(result, {
+      then<TResult1 = { code: number; output: string }, TResult2 = never>(
+        onfulfilled?: ((value: { code: number; output: string }) => TResult1 | PromiseLike<TResult1>) | null,
+        onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+      ): Promise<TResult1 | TResult2> {
+        return Promise.resolve(result).then(onfulfilled, onrejected);
+      },
+    });
+  }
+
+  const asyncPromise = (async () => {
+    let record = await execStore.get(id);
+    if (!record) {
+      const all = await execStore.list();
+      record = findInList(all);
+    }
+    return formatTaskStatusRecord(record, id, options);
+  })();
+
+  const fallbackSync = formatTaskStatusRecord(
+    execStore.records instanceof Map
+      ? execStore.records.get(id) ?? findInList(Array.from(execStore.records.values()))
+      : undefined,
+    id,
+    options,
+  );
+  return Object.assign(fallbackSync, {
+    then: asyncPromise.then.bind(asyncPromise),
+  });
 }
 
 export function listJobs(engine: RookEngine): string {
