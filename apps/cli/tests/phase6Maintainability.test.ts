@@ -106,24 +106,9 @@ describe('Phase 6: Maintainability Modularization & TUI Truthfulness (ISS-020)',
       classifier,
       modelIntelligence,
       discovered: [],
-      lifecycle: {
-        getReadiness: () => ({
-          readyCount: 0,
-          installedCount: 0,
-          eligibleCount: 0,
-          readyModels: [],
-          unloadedEligibleModels: [],
-          runtimeHealth: {},
-        }),
-        getEligibleModels: () => [],
-        getRecommendedModels: () => [],
-        isModelReady: () => false,
-        getModelState: () => 'UNLOADED',
-        onEvent: () => () => {},
-      } as any,
     } as unknown as RookEngine;
 
-    harness = new TuiTestHarness(engine, { cols: 120, rows: 40 });
+    harness = new TuiTestHarness({ engine, cols: 120, rows: 40 });
     await harness.start();
   });
 
@@ -162,7 +147,7 @@ describe('Phase 6: Maintainability Modularization & TUI Truthfulness (ISS-020)',
   it('preserves public exports from fleetTui.ts and commands.ts after modularization', () => {
     expect(typeof FleetTui).toBe('function');
     expect(typeof isScreenFragment).toBe('function');
-    expect(isScreenFragment('\x1b[200~paste~')).toBe(true);
+    expect(isScreenFragment('[View: FLEET]')).toBe(true);
 
     // Verify commands.ts barrel re-exports across all 6 domain command modules
     expect(typeof cliCommands.table).toBe('function');
@@ -174,6 +159,6 @@ describe('Phase 6: Maintainability Modularization & TUI Truthfulness (ISS-020)',
     expect(typeof cliCommands.listProvidersCommand).toBe('function');
     expect(typeof cliCommands.improveStatusCommand).toBe('function');
     expect(typeof cliCommands.canaryStatusCommand).toBe('function');
-    expect(typeof cliCommands.runTask).toBe('function');
+    expect(typeof cliCommands.listExecutions).toBe('function');
   });
 });

@@ -18,6 +18,7 @@ import {
   type ModelLifecycleEvent,
   type InteractiveSubmission,
   type SubmissionSource,
+  type PromptBreakdown,
   ModelLifecycleService,
   assembleSearchNodeInspection,
 } from '@wazir/core';
@@ -26,7 +27,7 @@ import { refreshRuntime } from '../engine.js';
 import { color } from '../colors.js';
 import { createFleetTaskExecutor } from '../fleetRunner.js';
 import { getBuildInfo } from '../version.js';
-import { TerminalScreen } from './screen.js';
+import { TerminalScreen, type TerminalSize } from './screen.js';
 import { ConversationRenderer } from './conversationRenderer.js';
 import { StatusProjection } from './statusProjection.js';
 import { EventSummarizer, type TranscriptVerbosity } from './eventSummarizer.js';
@@ -34,6 +35,7 @@ import { ClipboardController } from './clipboardController.js';
 import {
   CanaryLiveEventBuffer,
   CANARY_TIMELINE_FILTERS,
+  buildCanaryRollbackWhy,
   filterTimeline,
   loadCanaryTimeline,
   renderCanaryTimelineModal,
