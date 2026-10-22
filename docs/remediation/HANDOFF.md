@@ -1,17 +1,16 @@
 # Wazir Autonomous Multi-Agent Remediation — Handoff State
 
 - **Current Branch**: `remediation/v0.2.13`
-- **Latest Verified Commit SHA**: `1526970b601cbe3d81b197a353eb3f9ef18029b1`
+- **Latest Verified Commit SHA**: `65eccd779bda29a093c628e448c9847d6db481c6`
 - **Completed Phases**:
   - **Phase 0 (Baseline & Architectural Reconnaissance)**: **PASS** (`30b56d151e61e8811fadb2960c25e771d55306b6`)
   - **Phase 1 (Release Reconciliation and CI Integrity — P0)**: **PASS** (`1526970b601cbe3d81b197a353eb3f9ef18029b1` — `ISS-001` through `ISS-005` CLOSED and independently verified by `0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`)
-- **Current Phase**: **Phase 2 — Execution Correctness (P0)**
-- **Open Issues Assigned to Phase 2**:
-  - `ISS-006` (P0): Fast-path classification & expected-file/mutation guardrails (`apps/cli/src/run.ts`, `packages/agents/src/codingAgent.ts`, `packages/agents/src/chatAgent.ts`).
-  - `ISS-007` (P0): Require valid terminal provider completion & distinguish successful output from partial streaming output (`packages/runtimes/{nvidia,openai,anthropic,google}/src/index.ts`, `packages/agents/src/{codingAgent,chatAgent,stepAgent}.ts`).
-  - `ISS-008` (P0): Preserve independent verification decisions (`apps/cli/src/run.ts`, `packages/evaluation/src/index.ts`).
-  - `ISS-009` (P0): Persist terminal `'failed'` execution records on activation, planning, and preflight failures (`apps/cli/src/run.ts`, `apps/cli/src/commands.ts`).
-  - `ISS-010` (P0): Replace placeholder `wa task status <id>` with authoritative persisted status (`apps/cli/src/index.ts`, `apps/cli/src/commands.ts`).
-  - `ISS-011` (P0): Immediate user-visible token streaming & cancellation propagation (`apps/cli/src/run.ts`, `apps/cli/src/commands.ts`, `packages/runtimes/nvidia/src/index.ts`).
+  - **Phase 2 (Execution Correctness — P0)**: **PASS** (`65eccd779bda29a093c628e448c9847d6db481c6` — `ISS-006` through `ISS-011` CLOSED and independently verified by `0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`)
+- **Current Phase**: **Phase 3 — Durable Recovery and Distributed Correctness (P1)**
+- **Open Issues Assigned to Phase 3**:
+  - `ISS-012` (P1): Execution & job state transition enforcement (`packages/core/src/services/statusTransitions.ts`, `packages/core/src/services/executionEngine.ts`, `apps/cli/src/run.ts`).
+  - `ISS-013` (P1): Startup job & execution recovery reconciliation and unknown-outcome mutating tool protection (`packages/core/src/services/jobManager.ts`, `packages/core/src/services/executionRecovery.ts`).
+  - `ISS-014` (P1): Lease acquisition, renewal, stale worker fencing, and idempotent distributed result finalization (`packages/core/src/services/executionEngine.ts`, `apps/api/src/server.ts`).
+  - `ISS-015` (P1): Pre-output quota failure accounting and resource reservation cleanup (`packages/core/src/resources/governedAdapter.ts`, `packages/core/src/services/modelLifecycleService.ts`).
 - **Next Reproducible Action**:
-  - Launch parallel Phase 2 `execution-engineer` agents in isolated worktrees with strictly disjoint file ownership.
+  - Launch parallel Phase 3 `distributed-systems-engineer` agents in isolated worktrees with strictly disjoint file ownership.
