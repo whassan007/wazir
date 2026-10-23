@@ -15,9 +15,14 @@ export const DEFAULT_UNKNOWN_CONTEXT_MAX = 8_192;
 export const DEFAULT_CONSERVATIVE_WEIGHTS_GB = 4.5;
 export const DEFAULT_CONSERVATIVE_KV_BYTES_PER_TOKEN = 131_072; // ~128 KB per token (approx 8B model)
 
+function roundGB(val: number): number {
+  return Number((Math.round(val * 1000) / 1000).toFixed(3));
+}
+
 export interface ContextAllocationPlan {
   modelId: string;
   eligible: boolean;
+  fits: boolean;
   allocatedContextTokens: number;
   inputBudgetTokens: number;
   outputReserveTokens: number;
@@ -29,17 +34,24 @@ export interface ContextAllocationPlan {
   incrementalRequiredMemoryGB: number;
   downshiftedFromMax: boolean;
   reason: string;
+  shortReason?: string;
 }
 
-export interface ContextPlanParams {
+export interface ContextEstimationInput {
   model: ModelRecord;
   estimatedInputTokens?: number;
   requiredMinimumContext?: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
   availableMemoryGB?: number;
+  usableMemoryGB?: number;
   alreadyLoaded?: boolean;
+  isAlreadyLoaded?: boolean;
   loadedContextTokens?: number;
+  currentLoadedContextTokens?: number;
+  loadedWeightsMemoryGB?: number;
 }
+
+export type ContextPlanParams = ContextEstimationInput;
 
 /**
  * Parses parameter count in billions from parameters string, modelId, or name.
@@ -263,6 +275,9 @@ export class ContextMemoryEstimator {
   public planContextAllocation(params: ContextPlanParams): ContextAllocationPlan {
     const { model } = params;
     const isHosted = model.local === false;
+    const isAlreadyLoaded = params.isAlreadyLoaded ?? params.alreadyLoaded ?? false;
+    const loadedContextTokens = params.currentLoadedContextTokens ?? params.loadedContextTokens;
+    const availableMem = params.usableMemoryGB ?? params.availableMemoryGB;
 
     // 1. Output reserve tokens based on reasoningEffort
     const reasoningEffort = params.reasoningEffort ?? 'medium';
@@ -304,6 +319,7 @@ export class ContextMemoryEstimator {
       return {
         modelId: model.id,
         eligible: false,
+        fits: false,
         allocatedContextTokens: 0,
         inputBudgetTokens: 0,
         outputReserveTokens,
@@ -312,9 +328,10 @@ export class ContextMemoryEstimator {
         runtimeOverheadGB,
         kvCacheMemoryGB: baseKv,
         totalRequiredMemoryGB: totalMem,
-        incrementalRequiredMemoryGB: params.alreadyLoaded ? baseKv : totalMem,
+        incrementalRequiredMemoryGB: isAlreadyLoaded ? baseKv : totalMem,
         downshiftedFromMax: false,
         reason: `Minimum required context (${minimumRequiredContext}) exceeds model context limit (${effectiveContextMax})`,
+        shortReason: 'Context limit exceeded',
       };
     }
 
@@ -340,6 +357,7 @@ export class ContextMemoryEstimator {
       return {
         modelId: model.id,
         eligible: false,
+        fits: false,
         allocatedContextTokens: 0,
         inputBudgetTokens: 0,
         outputReserveTokens,
@@ -348,9 +366,10 @@ export class ContextMemoryEstimator {
         runtimeOverheadGB,
         kvCacheMemoryGB: kv,
         totalRequiredMemoryGB: totalMem,
-        incrementalRequiredMemoryGB: params.alreadyLoaded ? kv : totalMem,
+        incrementalRequiredMemoryGB: isAlreadyLoaded ? kv : totalMem,
         downshiftedFromMax: false,
         reason: `No supported context tier satisfies required minimum context ${minimumRequiredContext}`,
+        shortReason: 'No matching tier',
       };
     }
 
@@ -363,34 +382,37 @@ export class ContextMemoryEstimator {
       let incrementalRequiredMemoryGB: number;
       if (isHosted) {
         incrementalRequiredMemoryGB = 0;
-      } else if (params.alreadyLoaded) {
-        if (params.loadedContextTokens !== undefined && params.loadedContextTokens > 0) {
-          const loadedKv = this.estimateKvCacheGB(model, params.loadedContextTokens);
-          incrementalRequiredMemoryGB = Math.max(0, Math.round((kvCacheMemoryGB - loadedKv) * 100) / 100);
-        } else {
-          incrementalRequiredMemoryGB = kvCacheMemoryGB;
+      } else if (isAlreadyLoaded) {
+        const residentWeights = params.loadedWeightsMemoryGB ?? weightsMemoryGB;
+        const incrementalWeights = Math.max(0, Math.round((weightsMemoryGB - residentWeights) * 100) / 100);
+        let incrementalKv = kvCacheMemoryGB;
+        if (loadedContextTokens !== undefined && loadedContextTokens > 0) {
+          const loadedKv = this.estimateKvCacheGB(model, loadedContextTokens);
+          incrementalKv = Math.max(0, Math.round((kvCacheMemoryGB - loadedKv) * 100) / 100);
         }
+        incrementalRequiredMemoryGB = Math.round((incrementalWeights + incrementalKv) * 100) / 100;
       } else {
         incrementalRequiredMemoryGB = totalRequiredMemoryGB;
       }
 
-      const memoryNeededToFit = params.alreadyLoaded
+      const memoryNeededToFit = isAlreadyLoaded
         ? incrementalRequiredMemoryGB
         : totalRequiredMemoryGB;
       const fitsInMemory =
-        params.availableMemoryGB === undefined || memoryNeededToFit <= params.availableMemoryGB;
+        availableMem === undefined || memoryNeededToFit <= availableMem;
 
       if (fitsInMemory) {
         const allocatedContextTokens = tier;
         const inputBudgetTokens = Math.max(0, allocatedContextTokens - outputReserveTokens);
         const downshiftedFromMax = allocatedContextTokens < advertisedContextMax;
         const reason = downshiftedFromMax
-          ? `Allocated smallest sufficient context ${allocatedContextTokens} tokens (downshifted from max ${advertisedContextMax} to conserve memory: ${totalRequiredMemoryGB}GB required${params.availableMemoryGB !== undefined ? ` vs ${params.availableMemoryGB}GB available` : ''})`
+          ? `Allocated smallest sufficient context ${allocatedContextTokens} tokens (downshifted from max ${advertisedContextMax} to conserve memory: ${totalRequiredMemoryGB}GB required${availableMem !== undefined ? ` vs ${availableMem}GB available` : ''})`
           : `Allocated context ${allocatedContextTokens} tokens satisfying required minimum ${minimumRequiredContext} (${totalRequiredMemoryGB}GB required)`;
 
         return {
           modelId: model.id,
           eligible: true,
+          fits: true,
           allocatedContextTokens,
           inputBudgetTokens,
           outputReserveTokens,
@@ -402,6 +424,7 @@ export class ContextMemoryEstimator {
           incrementalRequiredMemoryGB,
           downshiftedFromMax,
           reason,
+          shortReason: isAlreadyLoaded ? 'Loaded' : 'Fits',
         };
       }
     }
@@ -414,23 +437,34 @@ export class ContextMemoryEstimator {
     let incrementalRequiredMemoryGB: number;
     if (isHosted) {
       incrementalRequiredMemoryGB = 0;
-    } else if (params.alreadyLoaded) {
-      if (params.loadedContextTokens !== undefined && params.loadedContextTokens > 0) {
-        const loadedKv = this.estimateKvCacheGB(model, params.loadedContextTokens);
-        incrementalRequiredMemoryGB = Math.max(0, Math.round((kvCacheMemoryGB - loadedKv) * 100) / 100);
-      } else {
-        incrementalRequiredMemoryGB = kvCacheMemoryGB;
+    } else if (isAlreadyLoaded) {
+      const residentWeights = params.loadedWeightsMemoryGB ?? weightsMemoryGB;
+      const incrementalWeights = Math.max(0, Math.round((weightsMemoryGB - residentWeights) * 100) / 100);
+      let incrementalKv = kvCacheMemoryGB;
+      if (loadedContextTokens !== undefined && loadedContextTokens > 0) {
+        const loadedKv = this.estimateKvCacheGB(model, loadedContextTokens);
+        incrementalKv = Math.max(0, Math.round((kvCacheMemoryGB - loadedKv) * 100) / 100);
       }
+      incrementalRequiredMemoryGB = Math.round((incrementalWeights + incrementalKv) * 100) / 100;
     } else {
       incrementalRequiredMemoryGB = totalRequiredMemoryGB;
     }
-    const memoryNeeded = params.alreadyLoaded
+    const memoryNeeded = isAlreadyLoaded
       ? incrementalRequiredMemoryGB
       : totalRequiredMemoryGB;
+
+    const avail = availableMem !== undefined ? roundGB(availableMem) : 0;
+    const needed = roundGB(memoryNeeded);
+    const weightsGB = roundGB(weightsMemoryGB);
+    const kvOverheadGB = roundGB(kvCacheMemoryGB + runtimeOverheadGB);
+
+    const shortReason = `Insufficient memory (needs ${needed}GB, ${avail}GB avail)`;
+    const reason = `Insufficient memory: required ${memoryNeeded}GB exceeds available ${availableMem}GB for minimum sufficient context ${smallestTier} (available memory ${avail}GB < required ${needed}GB: weights ${weightsGB}GB + KV/overhead ${kvOverheadGB}GB)`;
 
     return {
       modelId: model.id,
       eligible: false,
+      fits: false,
       allocatedContextTokens: 0,
       inputBudgetTokens: 0,
       outputReserveTokens,
@@ -441,7 +475,8 @@ export class ContextMemoryEstimator {
       totalRequiredMemoryGB,
       incrementalRequiredMemoryGB,
       downshiftedFromMax: false,
-      reason: `Insufficient memory: required ${memoryNeeded}GB exceeds available ${params.availableMemoryGB}GB for minimum sufficient context ${smallestTier}`,
+      reason,
+      shortReason,
     };
   }
 }

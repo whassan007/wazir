@@ -22,6 +22,7 @@ export interface RuntimeInfo {
 
 export interface DeviceEligibilityResult {
   eligible: boolean;
+  fits: boolean;
   deviceId: string;
   deviceKind: DeviceKind;
   alreadyLoaded: boolean;
@@ -32,7 +33,11 @@ export interface DeviceEligibilityResult {
   unifiedMemory: boolean;
   reasons: string[];
   rejectionReasons: string[];
+  reason?: string;
+  shortReason?: string;
 }
+
+export type HardwareEligibilityResult = DeviceEligibilityResult;
 
 export interface AssessDeviceParams {
   model: ModelRecord;
@@ -43,6 +48,23 @@ export interface AssessDeviceParams {
   requiredKvCacheGB?: number;
   runtimeOverheadGB?: number;
   safetyReserveGB?: number;
+  isAlreadyLoaded?: boolean;
+  alreadyLoaded?: boolean;
+  loadedWeightsMemoryGB?: number;
+  activeReservedBytes?: number;
+}
+
+export interface CheckModelEligibilityOptions {
+  instance?: ModelInstance;
+  runtime?: RuntimeInfo;
+  requiredWeightGB?: number;
+  requiredKvCacheGB?: number;
+  runtimeOverheadGB?: number;
+  safetyReserveGB?: number;
+  isAlreadyLoaded?: boolean;
+  alreadyLoaded?: boolean;
+  loadedWeightsMemoryGB?: number;
+  activeReservedBytes?: number;
 }
 
 export interface HardwareEligibilityOptions {
@@ -148,6 +170,12 @@ function getActiveUnsettledReservations(computer?: Computer): ParsedReservation[
 }
 
 function isModelResident(params: AssessDeviceParams): boolean {
+  if (params.isAlreadyLoaded !== undefined) {
+    return params.isAlreadyLoaded;
+  }
+  if (params.alreadyLoaded !== undefined) {
+    return params.alreadyLoaded;
+  }
   if (params.instance !== undefined) {
     return Boolean(
       params.instance.loaded ||
@@ -198,8 +226,10 @@ export class HardwareEligibilityService {
         rejectionReasons.push(`Hosted runtime '${runtime.id}' is unavailable`);
       }
       reasons.push('Hosted API execution: model executes remotely with 0GB local memory requirement');
+      const eligible = rejectionReasons.length === 0;
       return {
-        eligible: rejectionReasons.length === 0,
+        eligible,
+        fits: eligible,
         deviceId,
         deviceKind: 'hosted_api',
         alreadyLoaded,
@@ -210,12 +240,15 @@ export class HardwareEligibilityService {
         unifiedMemory: false,
         reasons,
         rejectionReasons,
+        reason: eligible ? reasons.join('; ') : rejectionReasons.join('; '),
+        shortReason: eligible ? 'Hosted' : rejectionReasons[0],
       };
     }
 
     if (!computer) {
       return {
         eligible: false,
+        fits: false,
         deviceId,
         deviceKind: 'hosted_api',
         alreadyLoaded: false,
@@ -226,6 +259,8 @@ export class HardwareEligibilityService {
         unifiedMemory: false,
         reasons: [],
         rejectionReasons: ['No computer provided for local/worker model execution'],
+        reason: 'No computer provided for local/worker model execution',
+        shortReason: 'No computer provided',
       };
     }
 
@@ -305,11 +340,13 @@ export class HardwareEligibilityService {
 
     // 3. Memory & Resource Assessment
     const activeReservations = getActiveUnsettledReservations(computer);
+    const extraReservedGB = (params.activeReservedBytes ?? 0) / (1024 ** 3);
 
     let totalMemoryGB = 0;
     let availableMemoryGB = 0;
     let reservedMemoryGB = 0;
     let requiredMemoryGB = 0;
+    let weightGB = 0;
 
     const kvCacheGB = params.requiredKvCacheGB ?? 0;
     const overheadGB = params.runtimeOverheadGB ?? 0;
@@ -326,16 +363,18 @@ export class HardwareEligibilityService {
           : computer.hardware.memoryGB - (computer.load?.memoryUsedGB ?? 0);
 
       // Active reservations: on unified memory, do NOT double count if a reservation set both memoryBytes & vramBytes
-      reservedMemoryGB = activeReservations.reduce(
-        (sum, r) => sum + Math.max(r.memoryGB, r.vramGB),
-        0,
-      );
+      reservedMemoryGB =
+        activeReservations.reduce(
+          (sum, r) => sum + Math.max(r.memoryGB, r.vramGB),
+          0,
+        ) + extraReservedGB;
 
       availableMemoryGB = Math.max(0, rawAvailableGB - reservedMemoryGB);
 
       // Determine model weights: on unified memory, never add minSystemGB + minGpuGB together
-      let weightGB = params.requiredWeightGB;
-      if (weightGB === undefined) {
+      if (params.requiredWeightGB !== undefined) {
+        weightGB = params.requiredWeightGB;
+      } else {
         weightGB = Math.max(model.memory?.minGpuGB ?? 0, model.memory?.minSystemGB ?? 0);
         if (weightGB === 0 && model.local !== false) {
           const est = estimateModelMemory(model.parameters, model.id, model.quantization);
@@ -345,10 +384,18 @@ export class HardwareEligibilityService {
 
       // INVARIANT 2: Cold-load vs already-loaded incremental memory
       if (alreadyLoaded) {
-        requiredMemoryGB = kvCacheGB;
-        reasons.push(
-          `Model '${model.id}' is already loaded/resident; only incremental KV cache (${roundGB(kvCacheGB)}GB) required`,
-        );
+        if (params.loadedWeightsMemoryGB !== undefined) {
+          const totalRequirement = weightGB + overheadGB + kvCacheGB;
+          requiredMemoryGB = Math.max(0, totalRequirement - params.loadedWeightsMemoryGB);
+          reasons.push(
+            `Model '${model.id}' is already loaded/resident (${roundGB(params.loadedWeightsMemoryGB)}GB resident); incremental memory requirement is ${roundGB(requiredMemoryGB)}GB`,
+          );
+        } else {
+          requiredMemoryGB = kvCacheGB;
+          reasons.push(
+            `Model '${model.id}' is already loaded/resident; only incremental KV cache (${roundGB(kvCacheGB)}GB) required`,
+          );
+        }
       } else {
         requiredMemoryGB = weightGB + overheadGB + kvCacheGB;
         reasons.push(
@@ -392,11 +439,13 @@ export class HardwareEligibilityService {
             ? Math.max(0, totalMemoryGB - computer.load.gpuMemoryUsedGB)
             : totalMemoryGB;
 
-      reservedMemoryGB = activeReservations.reduce((sum, r) => sum + r.vramGB, 0);
+      reservedMemoryGB =
+        activeReservations.reduce((sum, r) => sum + r.vramGB, 0) + extraReservedGB;
       availableMemoryGB = Math.max(0, rawAvailableVramGB - reservedMemoryGB);
 
-      let weightGB = params.requiredWeightGB;
-      if (weightGB === undefined) {
+      if (params.requiredWeightGB !== undefined) {
+        weightGB = params.requiredWeightGB;
+      } else {
         weightGB = model.memory?.minGpuGB ?? model.memory?.minSystemGB ?? 0;
         if (weightGB === 0 && model.local !== false) {
           const est = estimateModelMemory(model.parameters, model.id, model.quantization);
@@ -406,10 +455,18 @@ export class HardwareEligibilityService {
 
       // INVARIANT 2: Cold-load vs already-loaded
       if (alreadyLoaded) {
-        requiredMemoryGB = kvCacheGB;
-        reasons.push(
-          `Model '${model.id}' is already loaded in GPU memory; only incremental KV cache (${roundGB(kvCacheGB)}GB) required`,
-        );
+        if (params.loadedWeightsMemoryGB !== undefined) {
+          const totalRequirement = weightGB + overheadGB + kvCacheGB;
+          requiredMemoryGB = Math.max(0, totalRequirement - params.loadedWeightsMemoryGB);
+          reasons.push(
+            `Model '${model.id}' is already loaded in GPU memory (${roundGB(params.loadedWeightsMemoryGB)}GB resident); incremental memory requirement is ${roundGB(requiredMemoryGB)}GB`,
+          );
+        } else {
+          requiredMemoryGB = kvCacheGB;
+          reasons.push(
+            `Model '${model.id}' is already loaded in GPU memory; only incremental KV cache (${roundGB(kvCacheGB)}GB) required`,
+          );
+        }
       } else {
         requiredMemoryGB = weightGB + overheadGB + kvCacheGB;
         reasons.push(
@@ -450,7 +507,7 @@ export class HardwareEligibilityService {
       const sysReservedGB = activeReservations.reduce((sum, r) => sum + r.memoryGB, 0);
       const availSysGB = Math.max(0, rawSysAvailGB - sysReservedGB);
 
-      if (model.memory?.minSystemGB !== undefined && model.memory.minSystemGB > 0) {
+      if (!alreadyLoaded && model.memory?.minSystemGB !== undefined && model.memory.minSystemGB > 0) {
         if (model.memory.minSystemGB > computer.hardware.memoryGB) {
           rejectionReasons.push(
             `Total system RAM (${roundGB(computer.hardware.memoryGB)}GB) cannot fit required system memory (${roundGB(model.memory.minSystemGB)}GB)`,
@@ -471,11 +528,13 @@ export class HardwareEligibilityService {
           ? computer.load.memoryAvailableGB
           : computer.hardware.memoryGB - (computer.load?.memoryUsedGB ?? 0);
 
-      reservedMemoryGB = activeReservations.reduce((sum, r) => sum + r.memoryGB, 0);
+      reservedMemoryGB =
+        activeReservations.reduce((sum, r) => sum + r.memoryGB, 0) + extraReservedGB;
       availableMemoryGB = Math.max(0, rawAvailableRamGB - reservedMemoryGB);
 
-      let weightGB = params.requiredWeightGB;
-      if (weightGB === undefined) {
+      if (params.requiredWeightGB !== undefined) {
+        weightGB = params.requiredWeightGB;
+      } else {
         weightGB = model.memory?.minSystemGB ?? 0;
         if (weightGB === 0 && model.local !== false) {
           const est = estimateModelMemory(model.parameters, model.id, model.quantization);
@@ -485,10 +544,18 @@ export class HardwareEligibilityService {
 
       // INVARIANT 2: Cold-load vs already-loaded
       if (alreadyLoaded) {
-        requiredMemoryGB = kvCacheGB;
-        reasons.push(
-          `Model '${model.id}' is already loaded in system RAM; only incremental KV cache (${roundGB(kvCacheGB)}GB) required`,
-        );
+        if (params.loadedWeightsMemoryGB !== undefined) {
+          const totalRequirement = weightGB + overheadGB + kvCacheGB;
+          requiredMemoryGB = Math.max(0, totalRequirement - params.loadedWeightsMemoryGB);
+          reasons.push(
+            `Model '${model.id}' is already loaded in system RAM (${roundGB(params.loadedWeightsMemoryGB)}GB resident); incremental memory requirement is ${roundGB(requiredMemoryGB)}GB`,
+          );
+        } else {
+          requiredMemoryGB = kvCacheGB;
+          reasons.push(
+            `Model '${model.id}' is already loaded in system RAM; only incremental KV cache (${roundGB(kvCacheGB)}GB) required`,
+          );
+        }
       } else {
         requiredMemoryGB = weightGB + overheadGB + kvCacheGB;
         reasons.push(
@@ -528,8 +595,31 @@ export class HardwareEligibilityService {
       }
     }
 
+    const eligible = rejectionReasons.length === 0;
+    let reason: string;
+    let shortReason: string;
+
+    if (!eligible) {
+      const isMemoryIssue =
+        requiredMemoryGB > availableMemoryGB ||
+        rejectionReasons.some((r) => r.includes('exceeds available') || r.includes('cannot fit'));
+
+      if (isMemoryIssue) {
+        shortReason = `Insufficient memory (needs ${roundGB(requiredMemoryGB)}GB, ${roundGB(availableMemoryGB)}GB avail)`;
+        const diagnostic = `local: available memory ${roundGB(availableMemoryGB)}GB < required ${roundGB(requiredMemoryGB)}GB (weights ${roundGB(weightGB)}GB + KV/overhead ${roundGB(overheadGB + kvCacheGB)}GB)`;
+        reason = `${diagnostic}; ${rejectionReasons.join('; ')}`;
+      } else {
+        shortReason = rejectionReasons[0];
+        reason = rejectionReasons.join('; ');
+      }
+    } else {
+      reason = reasons.join('; ');
+      shortReason = alreadyLoaded ? 'Loaded' : 'Eligible';
+    }
+
     return {
-      eligible: rejectionReasons.length === 0,
+      eligible,
+      fits: eligible,
       deviceId,
       deviceKind,
       alreadyLoaded,
@@ -540,7 +630,56 @@ export class HardwareEligibilityService {
       unifiedMemory,
       reasons,
       rejectionReasons,
+      reason,
+      shortReason,
     };
+  }
+
+  /**
+   * Evaluates model hardware eligibility on a computer.
+   */
+  checkModelEligibility(params: AssessDeviceParams): DeviceEligibilityResult;
+  checkModelEligibility(
+    model: ModelRecord,
+    computer?: Computer,
+    options?: CheckModelEligibilityOptions,
+  ): DeviceEligibilityResult;
+  checkModelEligibility(
+    modelOrParams: ModelRecord | AssessDeviceParams,
+    computerOrOptions?: Computer | CheckModelEligibilityOptions,
+    maybeOptions?: CheckModelEligibilityOptions,
+  ): DeviceEligibilityResult {
+    if (this.isAssessParams(modelOrParams)) {
+      return this.assessDeviceForModel(modelOrParams);
+    }
+    const model = modelOrParams as ModelRecord;
+    const computer =
+      computerOrOptions && 'hardware' in computerOrOptions
+        ? (computerOrOptions as Computer)
+        : undefined;
+    const opts =
+      computerOrOptions && !('hardware' in computerOrOptions)
+        ? (computerOrOptions as CheckModelEligibilityOptions)
+        : maybeOptions ?? {};
+
+    return this.assessDeviceForModel({
+      model,
+      computer,
+      ...opts,
+    });
+  }
+
+  formatDeviceSummary(computer: Computer, activeReservedBytes?: number): string {
+    return HardwareEligibilityService.formatDeviceSummary(computer, activeReservedBytes, this.options);
+  }
+
+  private isAssessParams(val: unknown): val is AssessDeviceParams {
+    return (
+      typeof val === 'object' &&
+      val !== null &&
+      'model' in val &&
+      !('family' in val && 'provider' in val && 'toolCalling' in val)
+    );
   }
 
   static assessDeviceForModel(
@@ -548,5 +687,118 @@ export class HardwareEligibilityService {
     options?: HardwareEligibilityOptions,
   ): DeviceEligibilityResult {
     return new HardwareEligibilityService(options).assessDeviceForModel(params);
+  }
+
+  static checkModelEligibility(
+    params: AssessDeviceParams,
+    options?: HardwareEligibilityOptions,
+  ): DeviceEligibilityResult;
+  static checkModelEligibility(
+    model: ModelRecord,
+    computer?: Computer,
+    checkOptions?: CheckModelEligibilityOptions,
+    serviceOptions?: HardwareEligibilityOptions,
+  ): DeviceEligibilityResult;
+  static checkModelEligibility(
+    modelOrParams: ModelRecord | AssessDeviceParams,
+    computerOrOptions?: Computer | CheckModelEligibilityOptions,
+    optionsOrServiceOptions?: CheckModelEligibilityOptions | HardwareEligibilityOptions,
+    maybeServiceOptions?: HardwareEligibilityOptions,
+  ): DeviceEligibilityResult {
+    if (typeof modelOrParams === 'object' && modelOrParams !== null && 'model' in modelOrParams) {
+      const serviceOpts = optionsOrServiceOptions as HardwareEligibilityOptions | undefined;
+      return new HardwareEligibilityService(serviceOpts).checkModelEligibility(modelOrParams as AssessDeviceParams);
+    }
+    const model = modelOrParams as ModelRecord;
+    const computer =
+      computerOrOptions && 'hardware' in computerOrOptions
+        ? (computerOrOptions as Computer)
+        : undefined;
+    const checkOpts =
+      computerOrOptions && !('hardware' in computerOrOptions)
+        ? (computerOrOptions as CheckModelEligibilityOptions)
+        : (optionsOrServiceOptions as CheckModelEligibilityOptions | undefined);
+    const serviceOpts = maybeServiceOptions;
+    return new HardwareEligibilityService(serviceOpts).checkModelEligibility(model, computer, checkOpts);
+  }
+
+  static formatDeviceSummary(
+    computer: Computer,
+    activeReservedBytes?: number,
+    options?: HardwareEligibilityOptions,
+  ): string {
+    const unifiedMemory = isUnifiedMemoryArchitecture(computer);
+    const activeReservations = getActiveUnsettledReservations(computer);
+    const extraReservedGB = (activeReservedBytes ?? 0) / (1024 ** 3);
+
+    if (unifiedMemory) {
+      const totalMemoryGB = computer.hardware.memoryGB || (computer.hardware.gpu?.memoryGB ?? 0);
+      const rawAvailableGB =
+        computer.load?.memoryAvailableGB !== undefined
+          ? computer.load.memoryAvailableGB
+          : computer.hardware.memoryGB - (computer.load?.memoryUsedGB ?? 0);
+      const reservedMemoryGB =
+        activeReservations.reduce((sum, r) => sum + Math.max(r.memoryGB, r.vramGB), 0) + extraReservedGB;
+      const availableMemoryGB = Math.max(0, rawAvailableGB - reservedMemoryGB);
+      const safetyReserveGB =
+        options?.safetyReserveGB ??
+        (options?.safetyReservePercent ? (totalMemoryGB * options.safetyReservePercent) / 100 : 0);
+      const usableMemoryGB = Math.max(0, availableMemoryGB - safetyReserveGB);
+
+      let chipName = computer.hardware.gpu?.model || computer.hardware.cpu || 'Apple Silicon';
+      if (!chipName.toLowerCase().includes('apple')) {
+        chipName = `Apple ${chipName}`;
+      }
+      return `${chipName} · ${totalMemoryGB.toFixed(1)}GB Unified Memory (${usableMemoryGB.toFixed(1)}GB usable)`;
+    }
+
+    if (isNvidiaGpuArchitecture(computer) || isDiscreteGpuArchitecture(computer)) {
+      const gpu = computer.hardware.gpu!;
+      const totalMemoryGB = gpu.memoryGB ?? 0;
+      const rawAvailableVramGB =
+        computer.load?.gpuMemoryAvailableGB !== undefined
+          ? computer.load.gpuMemoryAvailableGB
+          : computer.load?.gpuMemoryUsedGB !== undefined
+            ? Math.max(0, totalMemoryGB - computer.load.gpuMemoryUsedGB)
+            : totalMemoryGB;
+      const reservedMemoryGB =
+        activeReservations.reduce((sum, r) => sum + r.vramGB, 0) + extraReservedGB;
+      const availableMemoryGB = Math.max(0, rawAvailableVramGB - reservedMemoryGB);
+      const safetyReserveGB =
+        options?.safetyReserveGB ??
+        (options?.safetyReservePercent ? (totalMemoryGB * options.safetyReservePercent) / 100 : 0);
+      const usableVramGB = Math.max(0, availableMemoryGB - safetyReserveGB);
+
+      let gpuName = gpu.model;
+      const vendorLower = gpu.vendor?.toLowerCase();
+      if (vendorLower === 'nvidia' && !gpuName.toLowerCase().includes('nvidia')) {
+        gpuName = `NVIDIA ${gpuName}`;
+      } else if (vendorLower && vendorLower !== 'unknown' && !gpuName.toLowerCase().includes(vendorLower)) {
+        gpuName = `${gpu.vendor.toUpperCase()} ${gpuName}`;
+      }
+      return `${gpuName} · ${totalMemoryGB.toFixed(1)}GB VRAM (${usableVramGB.toFixed(1)}GB usable)`;
+    }
+
+    // CPU-only
+    const totalMemoryGB = computer.hardware.memoryGB;
+    const rawAvailableRamGB =
+      computer.load?.memoryAvailableGB !== undefined
+        ? computer.load.memoryAvailableGB
+        : computer.hardware.memoryGB - (computer.load?.memoryUsedGB ?? 0);
+    const reservedMemoryGB =
+      activeReservations.reduce((sum, r) => sum + r.memoryGB, 0) + extraReservedGB;
+    const availableMemoryGB = Math.max(0, rawAvailableRamGB - reservedMemoryGB);
+    const safetyReserveGB =
+      options?.safetyReserveGB ??
+      (options?.safetyReservePercent ? (totalMemoryGB * options.safetyReservePercent) / 100 : 0);
+    const usableRamGB = Math.max(0, availableMemoryGB - safetyReserveGB);
+
+    let cpuLabel = computer.hardware.cpu;
+    if (!cpuLabel || cpuLabel.toLowerCase() === 'cpu' || cpuLabel.toLowerCase() === 'unknown') {
+      cpuLabel = computer.local !== false ? 'Local CPU' : 'Remote CPU';
+    } else if (computer.local !== false && cpuLabel === 'Local CPU') {
+      cpuLabel = 'Local CPU';
+    }
+    return `${cpuLabel} · ${totalMemoryGB.toFixed(1)}GB RAM (${usableRamGB.toFixed(1)}GB usable)`;
   }
 }
