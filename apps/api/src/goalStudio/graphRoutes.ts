@@ -1,4 +1,6 @@
 import type { Express, Request, Response, NextFunction, RequestHandler } from 'express';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   GOAL_STUDIO_HTTP_STATUS,
   GoalStudioFailure,
@@ -32,6 +34,125 @@ export function registerGraphRoutes(app: Express, ctx: GoalStudioRouteContext): 
 
   /** Principal for audit fields; derived from the matched credential only, never from the body. */
   const actorOf = (req: Request): string => `user:${ctx.auth.principalFor(req)?.id ?? 'operator'}`;
+
+  // Create a new goal graph revision directly from JSON specification.
+  app.post(`${BASE}/create`, write, handle(async (req, res, graphs) => {
+    const body = bodyOf(req);
+    if (typeof body.name !== 'string' || !body.name.trim()) throw new GoalStudioFailure('VALIDATION', 'name is required');
+    if (typeof body.objective !== 'string' || !body.objective.trim()) throw new GoalStudioFailure('VALIDATION', 'objective is required');
+
+    const projectId = typeof body.projectId === 'string' && body.projectId.trim() ? body.projectId.trim() : 'default';
+    const slug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'goal';
+    const graphId = typeof body.graphId === 'string' && body.graphId.trim() ? body.graphId.trim() : `graph-${slug}`;
+
+    const rawTargets = Array.isArray(body.targets) && body.targets.length > 0 ? (body.targets as Array<Record<string, unknown>>) : undefined;
+    const effectiveTargets = rawTargets ? rawTargets.map((t, idx) => ({
+      id: typeof t.id === 'string' && t.id ? t.id : `T${idx + 1}`,
+      stage: typeof t.stage === 'string' && t.stage ? t.stage : 'execution',
+      title: typeof t.title === 'string' && t.title ? t.title : (body.name as string),
+      dependsOn: Array.isArray(t.dependsOn) ? (t.dependsOn as string[]) : [],
+      priority: typeof t.priority === 'number' && Number.isFinite(t.priority) ? t.priority : 100,
+      executor: typeof t.executor === 'string' && t.executor ? t.executor : 'fleet_harness',
+      artifacts: Array.isArray(t.artifacts) && t.artifacts.length > 0 ? (t.artifacts as string[]) : ['goal-output.md'],
+      acceptance: Array.isArray(t.acceptance) && t.acceptance.length > 0 ? (t.acceptance as string[]) : ['Goal output artifact is produced and non-empty.'],
+      ...(t.requiresApproval !== undefined ? { requiresApproval: Boolean(t.requiresApproval) } : {}),
+      ...(t.externalDependency !== undefined ? { externalDependency: Boolean(t.externalDependency) } : {}),
+    })) : [
+      {
+        id: 'T1',
+        stage: 'execution',
+        title: body.name as string,
+        dependsOn: [] as string[],
+        priority: 100,
+        executor: 'fleet_harness',
+        artifacts: ['goal-output.md'],
+        acceptance: ['Goal output artifact is produced and non-empty.'],
+      }
+    ];
+
+    const executors = new Set<string>(['fleet_harness', ...effectiveTargets.map(t => t.executor)]);
+    const definition = {
+      schemaVersion: '1.0',
+      name: body.name as string,
+      purpose: body.objective as string,
+      constitution: {
+        objectiveOwner: 'human',
+        invariants: ['no_unverified_completion', 'no_fabrication'],
+        needsApproval: ['external_submission', 'protected_branch_merge'],
+        allowedUnattended: [
+          'local read-only research and analysis of authorized sources',
+          'drafting documents, code and formal models in isolated workspaces',
+          'running read-only analysis and tests in a configured sandbox',
+          'writing evidence manifests and updating the target ledger',
+        ],
+        resourceLimits: {
+          maxTasksPerRun: 12,
+          maxRunMinutes: 90,
+          maxRepairsPerTask: 3,
+          maxSameActionNoProgress: 2,
+          hostedSpendUsd: 0,
+          localModelFirst: true,
+          maxConcurrentTargets: 1,
+          maxConcurrentWritersPerWorktree: 1,
+        },
+      },
+      targets: effectiveTargets,
+      executionGraph: {
+        entry: Array.from(executors)[0] || 'fleet_harness',
+        nodes: Array.from(executors).map(id => ({ id, next: [] })),
+      },
+    };
+
+    const validation = graphs.validate(definition as never);
+    if (!validation.valid) {
+      res.status(400).json({ error: { code: 'VALIDATION', message: 'goal graph validation failed', details: { issues: validation.issues } }, validation });
+      return;
+    }
+
+    let record: unknown;
+    try {
+      record = await (graphs as unknown as { createRevision: (id: string, def: unknown, actor: string) => Promise<unknown> }).createRevision(graphId, definition, actorOf(req));
+    } catch {
+      const yaml = buildGoalGraphYaml(body.name as string, body.objective as string, effectiveTargets);
+      const out = await graphs.importYaml(projectId, yaml, actorOf(req));
+      record = out.record;
+    }
+
+    res.status(201).json({ record, validation });
+  }));
+
+  // Seed standard Nobel governance goal graph fixture into the given project.
+  app.post(`${BASE}/seed-nobel`, write, handle(async (req, res, graphs) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const projectId = typeof body.projectId === 'string' && body.projectId.trim() ? body.projectId.trim() : 'nobel-example';
+    const candidatePaths = [
+      path.resolve(process.cwd(), 'packages/goals/fixtures/nobel_goal_graph.yaml'),
+      path.resolve(process.cwd(), '../../packages/goals/fixtures/nobel_goal_graph.yaml'),
+      path.resolve(__dirname, '../../../../packages/goals/fixtures/nobel_goal_graph.yaml'),
+      path.resolve(__dirname, '../../../packages/goals/fixtures/nobel_goal_graph.yaml'),
+    ];
+    let yaml: string | undefined;
+    for (const p of candidatePaths) {
+      try {
+        if (fs.existsSync(p)) {
+          yaml = await fs.promises.readFile(p, 'utf8');
+          break;
+        }
+      } catch {
+        // continue search
+      }
+    }
+    if (!yaml) {
+      throw new GoalStudioFailure('NOT_FOUND', 'nobel_goal_graph.yaml fixture not found');
+    }
+    const result = (await graphs.importYaml(projectId, yaml, actorOf(req))) as Awaited<ReturnType<GoalGraphStore['importYaml']>> & { created?: boolean };
+    if (!result.record) {
+      res.status(400).json({ error: { code: 'VALIDATION', message: 'goal graph validation failed', details: { issues: result.validation.issues } }, validation: result.validation });
+      return;
+    }
+    const created = result.created !== false;
+    res.status(created ? 201 : 200).json({ record: result.record, validation: result.validation, created });
+  }));
 
   // Import a YAML goal graph. Creates revision 1, a new revision when the
   // definition changed, or returns the latest revision unchanged (200).
@@ -145,3 +266,97 @@ function param(req: Request, name: string): string {
   const v = (req.params as Record<string, string | string[] | undefined>)[name];
   return Array.isArray(v) ? v.join('/') : String(v ?? '');
 }
+
+function buildGoalGraphYaml(name: string, objective: string, targets: Array<{
+  id?: string;
+  stage?: string;
+  title: string;
+  dependsOn?: string[];
+  priority?: number;
+  executor?: string;
+  artifacts?: string[];
+  acceptance?: string[];
+  requiresApproval?: boolean;
+  externalDependency?: boolean;
+}>): string {
+  const lines: string[] = [
+    'schema_version: "1.0"',
+    `name: ${JSON.stringify(name)}`,
+    `purpose: ${JSON.stringify(objective)}`,
+    'constitution:',
+    '  objective_owner: human',
+    '  invariants:',
+    '    - no_unverified_completion',
+    '    - no_fabrication',
+    '  needs_approval:',
+    '    - external_submission',
+    '    - protected_branch_merge',
+    '  allowed_unattended:',
+    '    - local_read_only',
+    '    - drafting',
+    '  resource_limits:',
+    '    max_tasks_per_run: 12',
+    '    max_repairs_per_task: 3',
+    '    max_same_action_no_progress: 2',
+    '    max_run_minutes: 90',
+    '    hosted_spend_usd: 0',
+    '    local_model_first: true',
+    '    max_concurrent_targets: 1',
+    '    max_concurrent_writers_per_worktree: 1',
+    'targets:',
+  ];
+
+  const effectiveTargets = targets && targets.length > 0 ? targets : [
+    {
+      id: 'T1',
+      stage: 'execution',
+      title: name,
+      dependsOn: [],
+      priority: 100,
+      executor: 'fleet_harness',
+      artifacts: ['goal-output.md'],
+      acceptance: ['Goal output artifact is produced and non-empty.'],
+    }
+  ];
+
+  for (const t of effectiveTargets) {
+    lines.push(`  - id: ${JSON.stringify(t.id || 'T1')}`);
+    lines.push(`    stage: ${JSON.stringify(t.stage || 'execution')}`);
+    lines.push(`    title: ${JSON.stringify(t.title || name)}`);
+    lines.push('    depends_on:');
+    for (const d of t.dependsOn || []) {
+      lines.push(`      - ${JSON.stringify(d)}`);
+    }
+    if (!t.dependsOn || t.dependsOn.length === 0) {
+      lines.push('      []');
+    }
+    lines.push(`    priority: ${t.priority ?? 100}`);
+    lines.push(`    executor: ${JSON.stringify(t.executor || 'fleet_harness')}`);
+    lines.push('    artifacts:');
+    for (const a of t.artifacts || ['goal-output.md']) {
+      lines.push(`      - ${JSON.stringify(a)}`);
+    }
+    lines.push('    acceptance:');
+    for (const a of t.acceptance || ['Goal output artifact is produced and non-empty.']) {
+      lines.push(`      - ${JSON.stringify(a)}`);
+    }
+    if (t.requiresApproval !== undefined) {
+      lines.push(`    requires_approval: ${Boolean(t.requiresApproval)}`);
+    }
+    if (t.externalDependency !== undefined) {
+      lines.push(`    external_dependency: ${Boolean(t.externalDependency)}`);
+    }
+  }
+
+  const executors = new Set<string>(['fleet_harness', ...effectiveTargets.map(t => t.executor || 'fleet_harness')]);
+  lines.push('execution_graph:');
+  lines.push(`  entry: ${JSON.stringify(Array.from(executors)[0])}`);
+  lines.push('  nodes:');
+  for (const ex of executors) {
+    lines.push(`    - id: ${JSON.stringify(ex)}`);
+    lines.push('      next: []');
+  }
+
+  return lines.join('\n');
+}
+

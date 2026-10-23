@@ -47,6 +47,30 @@ describe('Goal Studio Web Shell & Graph Model (Agent 06)', () => {
         expect(M.TARGET_STATUSES).toContain(term);
       }
     });
+
+    it('prominently links to Goal Studio from the main Wazir Web Dashboard header', () => {
+      const mainHtml = fs.readFileSync(path.join(WEB_DIR, 'public', 'index.html'), 'utf8');
+      expect(mainHtml).toContain('id="nav-goal-studio-link"');
+      expect(mainHtml).toContain('href="/goal-studio"');
+      expect(mainHtml).toContain('◎ Goal Studio');
+    });
+
+    it('verifies Graph toolbar actions for seeding Nobel example and creating new goals', () => {
+      const graphJs = fs.readFileSync(path.join(PUBLIC_GS_DIR, 'graph.js'), 'utf8');
+      expect(graphJs).toContain('data-action="seed-nobel"');
+      expect(graphJs).toContain('graphs/seed-nobel');
+      expect(graphJs).toContain('data-action="create-goal"');
+      expect(graphJs).toContain('graphs/create');
+    });
+
+    it('verifies Control Center cancel execution control and Results & Artifacts summary section', () => {
+      const controlJs = fs.readFileSync(path.join(PUBLIC_GS_DIR, 'control.js'), 'utf8');
+      expect(controlJs).toContain('id="gs-btn-cancel-run"');
+      expect(controlJs).toContain('/cancel');
+      expect(controlJs).toContain('/results');
+      expect(controlJs).toContain('data-testid="gs-results-artifacts"');
+      expect(controlJs).toContain('Results &amp; Artifacts');
+    });
   });
 
   describe('Shell contract (shell.js)', () => {

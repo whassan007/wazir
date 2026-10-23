@@ -423,8 +423,12 @@ export interface ApiStateOptions {
   ledgerPath?: string;
   /** Enable full Goal Studio services on the API server (or pass partial services). */
   enableGoalStudio?: boolean;
+  goalStudioAutoStart?: boolean;
+  goalStudioAutoAdvance?: boolean;
   goalStudio?: Partial<WiredGoalStudioServices>;
 }
+
+export type ApiOptions = ApiStateOptions;
 
 export async function createApiState(options: ApiStateOptions = {}): Promise<ApiState> {
   const store = options.store ?? new MemoryStore();
@@ -630,7 +634,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
 
   if (options.goalStudio) {
     state.goalStudio = options.goalStudio;
-  } else if (options.enableGoalStudio || process.env.WAZIR_ENABLE_GOAL_STUDIO === '1') {
+  } else if (options.enableGoalStudio !== false && process.env.WAZIR_ENABLE_GOAL_STUDIO !== '0') {
     state.goalStudio = await createGoalStudioServices({
       store,
       workspaceRoot: projectRoot,
@@ -638,13 +642,15 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
       runtimes,
       computers,
       mobileApprovals: mobile.approvals,
-      autoStart: true,
-      autoAdvance: true,
+      autoStart: options.goalStudioAutoStart ?? false,
+      autoAdvance: options.goalStudioAutoAdvance ?? false,
     });
   }
 
   return state;
 }
+
+export const createInitialState = createApiState;
 
 const SUMMARY_RESULT_MAX_CHARS = 512;
 const DEFAULT_EXECUTION_PAGE_SIZE = 100;

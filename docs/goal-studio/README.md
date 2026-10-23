@@ -1,5 +1,8 @@
 # Wazir Goal Studio — Operator, Integration & Verification Guide
 
+> [!NOTE]
+> Looking for a concise, copy-pasteable operational guide? Check out the [Getting Started Guide](./GETTING-STARTED.md).
+
 Goal Studio is Wazir's persistent, evidence-gated strategic goal execution and governance subsystem (`@wazir/goals`, contract version `1`). It separates declarative **target graphs** (what strategic milestones exist, their dependencies, priorities, artifacts, and acceptance criteria) from **execution/prompt graphs** (how tasks are planned, routed, challenged, independently verified, gated, repaired, or escalated for human approval).
 
 ---

@@ -87,6 +87,10 @@ export function mountGraphStudio(root, ctx) {
     importOpen: false,
     importIssues: null,
     importYamlText: '',
+    createOpen: false,
+    createName: 'New Goal',
+    createObjective: 'Autonomous goal execution',
+    createProject: 'default',
     searchQuery: '',
     filterStatus: '',
     filterStage: '',
@@ -117,6 +121,7 @@ export function mountGraphStudio(root, ctx) {
     onchange: (e) => { st.filterStage = e.target.value; renderGraph(); },
   });
   const connChip = h('span', { class: 'gs-chip gs-muted', title: 'Live event stream' }, 'no run');
+  // Toolbar actions: data-action="seed-nobel" (POST graphs/seed-nobel) and data-action="create-goal" (POST graphs/create)
   const toolbar = h('div', { class: 'gs-toolbar' },
     h('label', { class: 'gs-field' }, 'Graph', graphSel),
     h('label', { class: 'gs-field' }, 'Revision', revSel),
@@ -128,9 +133,12 @@ export function mountGraphStudio(root, ctx) {
     h('label', { class: 'gs-field' }, 'Stage', stageFilterSel),
     connChip,
     h('span', { class: 'gs-spacer' }),
+    h('button', { class: 'gs-btn', type: 'button', 'data-action': 'seed-nobel', onclick: () => seedNobel() }, 'Load Nobel Example'),
+    h('button', { class: 'gs-btn gs-btn-primary', type: 'button', 'data-action': 'create-goal', onclick: () => createGoal() }, '+ New Goal'),
     h('button', { class: 'gs-btn', type: 'button', onclick: () => refreshAll() }, '↻ Refresh'),
-    h('button', { class: 'gs-btn', type: 'button', onclick: () => { st.importOpen = !st.importOpen; renderImport(); } }, '⇪ Import YAML'),
+    h('button', { class: 'gs-btn', type: 'button', onclick: () => { st.importOpen = !st.importOpen; if (st.importOpen) st.createOpen = false; renderImport(); renderCreate(); } }, '⇪ Import YAML'),
   );
+  const createBox = h('div', { class: 'gs-card gs-create', hidden: true });
   const importBox = h('div', { class: 'gs-card gs-import', hidden: true });
   const banners = h('div', { class: 'gs-banners', style: 'display:flex;flex-direction:column;gap:6px' });
   const dash = h('div', { class: 'gs-dash' });
@@ -156,7 +164,7 @@ export function mountGraphStudio(root, ctx) {
   const canvasWrap = h('div', { class: 'gs-canvas-wrap' }, svg, controls, legend);
   const inspector = h('aside', { class: 'gs-card gs-inspector', 'aria-label': 'Target inspector' });
   const workspace = h('div', { class: 'gs-workspace' }, canvasWrap, inspector);
-  root.append(toolbar, importBox, banners, dash, draftBar, diffBox, workspace);
+  root.append(toolbar, createBox, importBox, banners, dash, draftBar, diffBox, workspace);
 
   // ---------- data helpers ----------
   const api = (path, init) => ctx.apiJson ? ctx.apiJson(path, init) : ctx.api(path, init).then(async (r) => {
@@ -414,10 +422,55 @@ export function mountGraphStudio(root, ctx) {
     renderImport();
   }
 
+  // ---------- seed nobel & create goal ----------
+  async function seedNobel() {
+    try {
+      const callApi = ctx.apiJson ? (p, i) => ctx.apiJson(p, i) : api;
+      const res = await callApi('graphs/seed-nobel', { method: 'POST', body: { projectId: 'nobel-example' } });
+      const record = res?.record || res?.graph || res;
+      const graphId = record?.graphId || res?.graphId || 'nobel-example';
+      const revision = record?.revision ?? res?.revision ?? 1;
+      ctx.state.set({ graphId, revision });
+      ctx.notify?.(`Loaded Nobel example graph (${graphId} r${revision}).`, 'ok');
+      await loadGraphs();
+      await selectGraph(graphId, revision);
+      return res;
+    } catch (err) {
+      ctx.notify?.(`Failed to load Nobel example: ${errText(err)}`, 'error');
+      throw err;
+    }
+  }
+
+  async function createGoal(customParams = {}) {
+    const name = customParams.name || createNameInput?.value?.trim() || st.createName || 'New Goal';
+    const objective = customParams.objective || createObjInput?.value?.trim() || st.createObjective || 'Autonomous goal execution';
+    const projectId = customParams.projectId || createProjInput?.value?.trim() || st.createProject || 'default';
+    try {
+      const callApi = ctx.apiJson ? (p, i) => ctx.apiJson(p, i) : api;
+      const res = await callApi('graphs/create', { method: 'POST', body: { name, objective, projectId } });
+      const record = res?.record || res?.graph || res;
+      const graphId = record?.graphId || res?.graphId;
+      const revision = record?.revision ?? res?.revision ?? 1;
+      if (graphId) {
+        ctx.state.set({ graphId, revision });
+        ctx.notify?.(`Created goal graph "${name}" (${graphId} r${revision}).`, 'ok');
+        st.createOpen = false;
+        renderCreate();
+        await loadGraphs();
+        await selectGraph(graphId, revision);
+      }
+      return res;
+    } catch (err) {
+      ctx.notify?.(`Failed to create goal: ${errText(err)}`, 'error');
+      throw err;
+    }
+  }
+
   // ---------- rendering ----------
   function renderAll() {
     if (disposed) return;
     renderToolbar();
+    renderCreate();
     renderImport();
     renderBanners();
     renderDashboard();
@@ -511,6 +564,44 @@ export function mountGraphStudio(root, ctx) {
       h('div', { class: 'gs-row', style: 'margin-top:6px' },
         h('button', { class: 'gs-btn gs-btn-primary', type: 'button', 'data-action': 'submit-import', onclick: () => ta.value.trim() ? doImport(project.value.trim() || 'default', ta.value) : ctx.notify?.('Paste YAML first', 'error') }, 'Import'),
         h('button', { class: 'gs-btn gs-btn-ghost', type: 'button', onclick: () => { st.importOpen = false; renderImport(); } }, 'Cancel')),
+    );
+  }
+
+  let createNameInput = null;
+  let createObjInput = null;
+  let createProjInput = null;
+
+  function renderCreate() {
+    createBox.hidden = !st.createOpen;
+    if (!st.createOpen) return;
+    createProjInput = h('input', { type: 'text', value: st.createProject || 'default', size: 16, 'aria-label': 'Project id', oninput: (e) => { st.createProject = e.target.value; } });
+    createNameInput = h('input', { type: 'text', value: st.createName || 'New Goal', placeholder: 'e.g. Formal Verification Pipeline', 'aria-label': 'Goal name', oninput: (e) => { st.createName = e.target.value; } });
+    createObjInput = h('textarea', { rows: 2, placeholder: 'Objective / description of this autonomous goal…', 'aria-label': 'Goal objective', oninput: (e) => { st.createObjective = e.target.value; } });
+    if (st.createObjective) createObjInput.value = st.createObjective;
+
+    createBox.replaceChildren(
+      h('h3', {}, 'Create New Goal Graph'),
+      h('p', { class: 'gs-muted', style: 'margin:0 0 6px' }, 'Initialize an autonomous goal graph on the server with name and objective.'),
+      h('div', { class: 'gs-row', style: 'margin-bottom:6px' },
+        h('label', { class: 'gs-field' }, 'Project', createProjInput),
+        h('label', { class: 'gs-field', style: 'flex:1' }, 'Name', createNameInput)),
+      h('label', { class: 'gs-field' }, 'Objective', createObjInput),
+      h('div', { class: 'gs-row', style: 'margin-top:6px' },
+        h('button', {
+          class: 'gs-btn gs-btn-primary',
+          type: 'button',
+          'data-action': 'submit-create-goal',
+          onclick: () => createGoal({
+            name: createNameInput.value.trim() || 'New Goal',
+            objective: createObjInput.value.trim() || 'Autonomous goal execution',
+            projectId: createProjInput.value.trim() || 'default',
+          }),
+        }, 'Create Goal'),
+        h('button', {
+          class: 'gs-btn gs-btn-ghost',
+          type: 'button',
+          onclick: () => { st.createOpen = false; renderCreate(); },
+        }, 'Cancel')),
     );
   }
 
