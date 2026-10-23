@@ -318,6 +318,7 @@ export class Scheduler {
     const isStrictMode = Boolean(
       task.execution?.targetModelId ||
       (task as any).targetModelId ||
+      (task.execution as any)?.modelId ||
       intelligentMode === 'STRICT_MODEL' ||
       (pref?.strict && pref?.modelId)
     );
@@ -960,8 +961,11 @@ export class Scheduler {
       }
     }
 
+    const isLocalRouting = routing.mode === 'LOCAL_ONLY' || routing.mode === 'LOCAL_FIRST' || routing.intelligentMode === 'LOCAL_FIRST';
     if (routing.mode === 'LOCAL_ONLY' && (record.local === false || isHostedOnly)) {
       rejected.push(`routingMode=LOCAL_ONLY: hosted model '${record.id}' is not permitted`);
+    } else if (isLocalRouting && !routing.targetModelId && (record.local === false || isHostedOnly)) {
+      rejected.push(`routingMode=${routing.mode}: hosted model '${record.id}' is excluded by Auto Local Routing`);
     } else if (routing.mode === 'PROVIDER_ONLY') {
       const targetProvider = routing.provider ?? 'nvidia';
       const matchesProvider = this.isModelOfProvider(record, targetProvider);
@@ -1426,6 +1430,8 @@ export class Scheduler {
         model: record,
         computer,
         instance,
+        runtime: runtime ? { id: runtime.id, type: runtime.type, health: runtime.health } : undefined,
+        isAlreadyLoaded: instance.loaded,
       });
       if (!deviceAssessment.eligible) {
         failures.push(...deviceAssessment.rejectionReasons);

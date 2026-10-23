@@ -101,7 +101,7 @@ import {
   type ModelSelectorItem,
   type ModelSelectorAction,
 } from './modelSelectorModal.js';
-import type { ModelSelectionMode } from '@wazir/core';
+import type { ModelSelectionMode, LocalDiscoverySnapshot, LocalDiscoveredModel } from '@wazir/core';
 import {
   formatCommandFeedback,
   type GoalStudioSnapshot,
@@ -1462,22 +1462,31 @@ export class FleetTui {
       const keyForSelector = keyName || keyStr;
       const action = this.modelSelector.handleKey(keyForSelector);
       if (action.type === 'select') {
+        const isStrict = action.mode === 'custom' || (action.mode === 'local' && !!action.modelId);
+        const pref = {
+          mode: action.mode,
+          modelId: action.modelId,
+          strict: isStrict,
+          reasoningEffort: action.reasoningEffort,
+        };
         if (action.scope === 'default') {
-          this.engine.modelPreferences?.setDefaultPreference?.({
-            mode: action.mode,
-            modelId: action.modelId,
-            strict: action.mode === 'custom',
-            reasoningEffort: action.reasoningEffort,
-          });
+          this.engine.modelPreferences?.setDefaultPreference?.(pref);
         } else {
-          this.engine.modelPreferences?.setSessionPreference?.({
-            mode: action.mode,
-            modelId: action.modelId,
-            strict: action.mode === 'custom',
-            reasoningEffort: action.reasoningEffort,
-          });
+          this.engine.modelPreferences?.setSessionPreference?.(pref);
         }
-        if (action.modelId) {
+
+        if (action.mode === 'local' && action.modelId) {
+          this.selectedModelId = action.modelId;
+          this.conversationRenderer.setModel(action.modelId);
+          if (action.requiresLoad && this.engine.lifecycle?.selectAndPrepareLocalModel) {
+            void this.engine.lifecycle.selectAndPrepareLocalModel(action.modelId, { loadNow: true }).catch(() => undefined);
+          } else if (action.requiresLoad && this.engine.lifecycle?.ensureModelReadyForTask) {
+            void this.engine.lifecycle.ensureModelReadyForTask({ modelId: action.modelId }).catch(() => undefined);
+          }
+        } else if (action.mode === 'local' && !action.modelId) {
+          this.selectedModelId = undefined;
+          this.conversationRenderer.setModel('local (auto)');
+        } else if (action.modelId) {
           this.selectedModelId = action.modelId;
           this.conversationRenderer.setModel(action.modelId);
         } else if (action.mode === 'auto') {
@@ -1487,25 +1496,23 @@ export class FleetTui {
           this.selectedModelId = undefined;
           this.conversationRenderer.setModel(action.mode);
         }
+
         const conf = renderModelSelectionConfirmation(action);
         this.statusMessage = conf;
         if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.clearModal?.();
           this.conversationRenderer.append(conf);
         }
         this.modelSelector = undefined;
       } else if (action.type === 'cancel') {
         this.statusMessage = 'Model selection cancelled.';
         if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.clearModal?.();
           this.conversationRenderer.append('Model selection cancelled.');
         }
         this.modelSelector = undefined;
       } else if (action.type === 'rejected') {
         this.statusMessage = `Selection rejected: ${action.reason ?? 'ineligible'}`;
-      } else {
-        if (this.presentationMode === 'conversation') {
-          const rendered = renderModelSelectorModal(this.modelSelector, this.screen.getSize().columns);
-          this.conversationRenderer.append(rendered.join('\n'));
-        }
       }
       this.draw();
       return;
@@ -3734,14 +3741,15 @@ export class FleetTui {
         if (this.presentationMode === 'conversation') {
           const pref = this.engine.modelPreferences?.getEffectivePreference?.();
           const items = this.buildModelSelectorItems();
+          const { deviceSummary, runtimeSummary } = this.getSelectorDeviceAndRuntimeSummary();
           this.modelSelector = new ModelSelectorController({
             initialMode: pref?.mode ?? 'auto',
             initialModelId: pref?.modelId ?? this.selectedModelId,
             initialEffort: pref?.reasoningEffort ?? 'medium',
             models: items,
+            deviceSummary,
+            runtimeSummary,
           });
-          const modalLines = renderModelSelectorModal(this.modelSelector, this.screen.getSize().columns);
-          this.conversationRenderer.append(modalLines.join('\n'));
           this.draw();
           return;
         }
@@ -3773,6 +3781,7 @@ export class FleetTui {
         const mode = arg.toLowerCase() as ModelSelectionMode;
         this.engine.modelPreferences?.setSessionPreference?.({ mode, modelId: undefined, strict: false });
         this.selectedModelId = undefined;
+        this.conversationRenderer.setModel(mode === 'auto' ? 'auto-routed model' : (mode === 'local' ? 'local (auto)' : mode));
         const conf = renderModelSelectionConfirmation({
           scope: 'session',
           mode,
@@ -3792,13 +3801,15 @@ export class FleetTui {
         return;
       }
       this.selectedModelId = match.id;
-      this.engine.modelPreferences?.setSessionPreference?.({ mode: 'custom', modelId: match.id, strict: true });
+      const isLocal = match.local !== false;
+      const mode = isLocal ? 'local' : 'custom';
+      this.engine.modelPreferences?.setSessionPreference?.({ mode, modelId: match.id, strict: true });
       this.conversationRenderer.setModel(match.id);
       this.statusMessage = `Pinned model to '${match.id}' — new tasks will use it instead of auto-routing.`;
       if (this.presentationMode === 'conversation') {
         const conf = renderModelSelectionConfirmation({
           scope: 'session',
-          mode: 'custom',
+          mode,
           modelId: match.id,
           reasoningEffort: this.engine.modelPreferences?.getEffectivePreference?.().reasoningEffort ?? 'medium',
         });
@@ -4992,6 +5003,9 @@ export class FleetTui {
       // A task waiting for its model is already bound to it; show that model, not the pin or "auto".
       const activeAgent = agents.find((agent) => agent.status === 'running')
         ?? agents.find((agent) => !['completed', 'failed', 'cancelled'].includes(agent.status));
+      const modalLines = (this.modelSelector && this.modelSelector.isOpen)
+        ? renderModelSelectorModal(this.modelSelector, this.screen.getSize().columns)
+        : undefined;
       this.conversationRenderer.render({
         identity: process.env.USER ?? process.env.USERNAME ?? 'controller',
         model: activeAgent ? `${activeAgent.computerId} · ${activeAgent.modelId}` : this.selectedModelId ?? 'auto-routed model',
@@ -5006,6 +5020,7 @@ export class FleetTui {
           : undefined,
         status: this.statusMessage,
         copyMode: this.tuiMode === 'COPY' ? this.copyModeStatus() : undefined,
+        modalLines,
       });
   }
 
@@ -5821,20 +5836,108 @@ export class FleetTui {
     });
   }
 
+  private getSelectorDeviceAndRuntimeSummary(): {
+    deviceSummary: string;
+    runtimeSummary: string;
+    discoverySnapshot?: LocalDiscoverySnapshot;
+  } {
+    try {
+      if (this.engine.modelDiscoveryStatus?.discoverLocalModels) {
+        const snapshot = this.engine.modelDiscoveryStatus.discoverLocalModels({
+          hardwareEligibility: (this.engine as any).hardwareEligibility,
+          contextEstimator: (this.engine as any).contextEstimator,
+        });
+        const deviceSummary = snapshot.deviceLabel
+          ? (snapshot.deviceLabel.includes('usable')
+              ? snapshot.deviceLabel
+              : `${snapshot.deviceLabel} (${snapshot.usableMemoryGB.toFixed(1)}GB usable / ${snapshot.totalMemoryGB.toFixed(1)}GB total)`)
+          : 'Local Hardware';
+        const runtimeSummary = snapshot.runtimeSummaryLabel || 'No active local runtime';
+        return { deviceSummary, runtimeSummary, discoverySnapshot: snapshot };
+      }
+    } catch {
+      // Graceful fallback below
+    }
+
+    const computers = this.engine.computers?.list?.() ?? [];
+    const localComp = computers.find((c) => c.local) ?? computers[0];
+    const cpuName = localComp?.hardware?.cpu ?? 'Apple Silicon / Local Hardware';
+    const totalMem = localComp?.hardware?.memoryGB ?? 16;
+    const availMem = (localComp as any)?.load?.memoryAvailableGB ?? Math.max(0, totalMem * 0.75);
+    const deviceSummary = `${cpuName} (${availMem.toFixed(1)}GB usable / ${totalMem.toFixed(1)}GB total)`;
+
+    const runtimes = this.engine.runtimes?.list?.() ?? [];
+    const localRuntimes = runtimes.filter((r) => r.runtimeKind !== 'hosted');
+    const runtimeSummary = localRuntimes.length > 0
+      ? localRuntimes.map((r) => `${r.id} (${r.health || 'degraded'})`).join(', ')
+      : 'No active local runtime';
+
+    return { deviceSummary, runtimeSummary };
+  }
+
   private buildModelSelectorItems(): ModelSelectorItem[] {
     const list = this.engine.models?.list?.() ?? [];
     const computers = this.engine.computers?.list?.() ?? [];
     const localComp = computers.find((c) => c.local) ?? computers[0];
     const availMem = (localComp as any)?.load?.memoryAvailableGB ?? localComp?.hardware?.memoryGB ?? 16;
 
+    let discoverySnapshot: LocalDiscoverySnapshot | undefined;
+    try {
+      if (this.engine.modelDiscoveryStatus?.discoverLocalModels) {
+        discoverySnapshot = this.engine.modelDiscoveryStatus.discoverLocalModels({
+          hardwareEligibility: (this.engine as any).hardwareEligibility,
+          contextEstimator: (this.engine as any).contextEstimator,
+        });
+      }
+    } catch {
+      // Graceful fallback
+    }
+
+    const discoveredMap = new Map<string, LocalDiscoveredModel>();
+    if (discoverySnapshot?.models) {
+      for (const dm of discoverySnapshot.models) {
+        discoveredMap.set(dm.modelId, dm);
+      }
+    }
+
     return list.map((m) => {
       const instances = this.engine.models?.instancesOf?.(m.id) ?? [];
-      const loaded = instances.some((i) => i.loaded);
       const isLocal = m.local !== false;
       const isHosted = !isLocal || m.provider === 'hosted' || m.provider === 'nvidia' || instances.some((i) => !i.computerId);
-      const available = isHosted ? true : instances.length > 0 && instances.some((i) => i.health !== 'unavailable');
       const rawCostTier = this.engine.modelRanker?.determineCostTier(m);
       const costTier: 'T1' | 'T2' | 'T3' | 'T4' = (!rawCostTier || rawCostTier === 'any') ? (isLocal ? 'T1' : 'T2') : rawCostTier;
+
+      const dm = discoveredMap.get(m.id);
+      if (dm && !isHosted) {
+        const statusLabel: 'Loaded' | 'Installed' | 'Unavailable' =
+          dm.status === 'loaded' ? 'Loaded' : dm.status === 'installed' ? 'Installed' : 'Unavailable';
+        const runtimeHealth: 'healthy' | 'degraded' | 'unavailable' =
+          dm.status === 'unavailable' ? 'unavailable' : (dm.loaded ? 'healthy' : 'degraded');
+
+        return {
+          modelId: m.id,
+          name: m.name || m.id,
+          provider: dm.provider || m.provider || 'unknown',
+          costTier,
+          available: dm.available,
+          loaded: dm.loaded,
+          installed: dm.installed,
+          local: true,
+          eligible: dm.eligible,
+          ineligibleReason: dm.ineligibleReason,
+          memoryGB: dm.memoryRequiredGB,
+          contextMax: dm.contextMax,
+          deviceLabel: dm.deviceLabel || (localComp?.hardware?.cpu ?? 'Local Hardware'),
+          runtimeHealth,
+          runtimeName: dm.runtimeType,
+          endpoint: dm.endpoint,
+          statusLabel,
+          readinessLabel: dm.readinessLabel,
+        };
+      }
+
+      const loaded = instances.some((i) => i.loaded);
+      const available = isHosted ? true : instances.length > 0 && instances.some((i) => i.health !== 'unavailable');
       const memoryGB = this.engine.contextEstimator?.estimateWeightsGB(m) ?? (m.parameters ? parseFloat(m.parameters) : 4);
       const contextMax = (m as any).contextWindow ?? m.contextMax ?? 8192;
       const deviceLabel = isHosted
@@ -5851,6 +5954,10 @@ export class FleetTui {
         }
       }
 
+      const statusLabel: 'Loaded' | 'Installed' | 'Unavailable' =
+        loaded ? 'Loaded' : (available ? 'Installed' : 'Unavailable');
+      const readinessLabel = loaded ? 'Ready' : (available ? (eligible ? 'Can load' : 'Insufficient memory') : 'Runtime offline');
+
       return {
         modelId: m.id,
         name: m.name || m.id,
@@ -5858,12 +5965,16 @@ export class FleetTui {
         costTier,
         available,
         loaded,
+        installed: instances.length > 0 || isLocal,
         local: !isHosted,
         eligible,
         ineligibleReason,
         memoryGB: Number(memoryGB.toFixed(1)),
         contextMax,
         deviceLabel,
+        runtimeHealth: available ? (loaded ? 'healthy' : 'degraded') : 'unavailable',
+        statusLabel,
+        readinessLabel,
       };
     });
   }
