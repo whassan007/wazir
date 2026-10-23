@@ -1413,6 +1413,8 @@ export async function runSubagent(
     scheduling: placementDecision,
   });
   const childExecId = childRecord.execution.id;
+  // Sizes every sub-agent provider request the same way executeTask does (one allocator per sub-agent run).
+  const subagentAllocator = new InvocationContextAllocator(engine, childExecId, OUTPUT_RESERVE_TOKENS);
 
   if (placementDecision) {
     context.log(color.cyan(`    [subagent] fleet placement: ${effectiveModelId} via ${effectiveRuntimeId} on ${effectiveComputerId ?? 'hosted'} (${placementDecision.reasons.join('; ')})`));
@@ -1437,6 +1439,21 @@ export async function runSubagent(
       const requestId = generateId('req-');
       if (engine.web) req = { ...req, messages: await recordWebContext(engine.executions, childExecId, req.messages, engine.web.limits.maxGroundingTokens) };
       if (context.signal?.aborted) return;
+      const placement = { runtimeId: effectiveRuntimeId, computerId: effectiveComputerId };
+      let prepared;
+      try {
+        prepared = await subagentAllocator.prepare(
+          { modelId: req.modelId, messages: req.messages, maxTokens: req.maxTokens, tools: req.tools },
+          placement,
+        );
+      } catch {
+        // Allocation is advisory when the model is not registered; fall back to the legacy request.
+        prepared = undefined;
+      }
+      if (prepared?.preflightError) {
+        yield { type: 'error', error: prepared.preflightError, failureClass: 'MODEL_CONTEXT_OVERFLOW' };
+        return;
+      }
       const subTurnAbortController = new AbortController();
       if (context.signal) {
         if (context.signal.aborted) {
@@ -1454,6 +1471,8 @@ export async function runSubagent(
           ? MINIMUM_CONTEXT_TOKENS
           : undefined;
       const retryContext = { requestId, model: req.modelId, provider: engine.models.get(req.modelId)?.provider };
+      const sentMaxTokens = prepared ? prepared.maxTokens : req.maxTokens;
+      const sentContextTokens = prepared?.contextTokens ?? contextTokens;
 
       try {
         if (isLocalPlacement) {
@@ -1468,10 +1487,10 @@ export async function runSubagent(
           };
           for await (const event of adapter.generate({
             requestId,
-            contextTokens,
+            contextTokens: sentContextTokens,
             modelId: req.modelId,
             messages: req.messages,
-            maxTokens: req.maxTokens,
+            maxTokens: sentMaxTokens,
             temperature: req.temperature,
             stream: true,
             tools: req.tools,
@@ -1480,6 +1499,9 @@ export async function runSubagent(
           })) {
             if (subTurnAbortController.signal.aborted || context.signal?.aborted) break;
             await engine.executions.recordProviderEvent(childExecId, event, retryContext);
+            if (event.type === 'completed') {
+              await subagentAllocator.recordUsage(req.modelId, requestId, event.usage).catch(() => undefined);
+            }
             if (event.type === 'completed' && event.usage) {
               await engine.executions.recordUsage(childExecId, {
                 input: event.usage.inputTokens,
@@ -1499,9 +1521,9 @@ export async function runSubagent(
             requestId,
             modelId: req.modelId,
             messages: req.messages,
-            maxTokens: req.maxTokens,
+            maxTokens: sentMaxTokens,
             temperature: req.temperature,
-            contextTokens,
+            contextTokens: sentContextTokens,
           };
           cancelSubGeneration = () => {
             subTurnAbortController.abort();
@@ -1512,6 +1534,9 @@ export async function runSubagent(
               const generationEvent = toGenerationEvent(event);
               if (!generationEvent) continue;
               await engine.executions.recordProviderEvent(childExecId, generationEvent, retryContext);
+              if (generationEvent.type === 'completed') {
+                await subagentAllocator.recordUsage(req.modelId, requestId, generationEvent.usage).catch(() => undefined);
+              }
               if (generationEvent.type === 'completed' && generationEvent.usage) {
                 await engine.executions.recordUsage(childExecId, {
                   input: generationEvent.usage.inputTokens,
