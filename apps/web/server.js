@@ -335,13 +335,24 @@ const server = http.createServer((req, res) => {
     publicReal = path.resolve(PUBLIC);
   }
 
-  const relativeTarget = (decodedPath === '/' ? 'index.html' : decodedPath).replace(/^[/\\]+/, '');
-  const candidatePath = path.resolve(publicReal, relativeTarget);
+  let relativeTarget = (decodedPath === '/' ? 'index.html' : decodedPath).replace(/^[/\\]+/, '');
+  let candidatePath = path.resolve(publicReal, relativeTarget);
   const relToPublic = path.relative(publicReal, candidatePath);
   if (relToPublic.startsWith('..') || path.isAbsolute(relToPublic)) {
     res.writeHead(403, { 'Content-Type': 'text/plain' });
     res.end('forbidden');
     return;
+  }
+
+  try {
+    if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isDirectory()) {
+      const indexCandidate = path.join(candidatePath, 'index.html');
+      if (fs.existsSync(indexCandidate) && fs.statSync(indexCandidate).isFile()) {
+        candidatePath = indexCandidate;
+      }
+    }
+  } catch {
+    // Let realpath/stat handling below respond appropriately
   }
 
   fs.realpath(candidatePath, (realErr, realFilePath) => {
