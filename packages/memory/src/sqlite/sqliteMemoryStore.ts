@@ -8,10 +8,6 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-// Load Node.js 22 built-in node:sqlite cleanly in both CommonJS and ESM
-const nodeSqlite = (process as any).getBuiltinModule?.('node:sqlite') ?? (typeof require !== 'undefined' ? require('node:sqlite') : undefined);
-const DatabaseSync = nodeSqlite?.DatabaseSync;
-
 export interface DialogueSegment {
   id?: number;
   libraryId: string;
@@ -45,6 +41,11 @@ export class SqliteMemoryStore {
   private readonly db: any;
 
   constructor(options: MemoryStoreOptions = {}) {
+    // Do not load node:sqlite just because this module was included in the CLI bundle.
+    // The experimental warning should appear when SQLite-backed memory is actually used.
+    const nodeSqlite = (process as any).getBuiltinModule?.('node:sqlite') ?? (typeof require !== 'undefined' ? require('node:sqlite') : undefined);
+    const DatabaseSync = nodeSqlite?.DatabaseSync;
+    if (!DatabaseSync) throw new Error('node:sqlite is required for SQLite-backed memory');
     const dbPath = options.dbPath ?? ':memory:';
     if (dbPath !== ':memory:') {
       mkdirSync(dirname(dbPath), { recursive: true });
