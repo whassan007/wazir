@@ -215,7 +215,7 @@ export function createFleetTaskExecutor(
         source: model.configuredContext !== undefined ? 'configured' : 'discovered',
       },
       planOutputReserveTokens({
-      requestedOutputTokens: engine.config.context?.reserve?.outputTokens,
+        requestedOutputTokens: engine.config.context?.reserve?.outputTokens,
         taskDescription: task.input,
         taskType: task.type,
         effectiveContextTokens: effectiveContextTokens(model),

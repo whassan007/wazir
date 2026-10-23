@@ -1,0 +1,18 @@
+Usage: wa chat [options]
+
+Open the conversation-first coding assistant
+
+Options:
+  --model <name>          Pin a specific model for the session
+  --routing-mode <mode>   Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID
+  --dashboard             Open the full-screen fleet dashboard
+  --legacy                Use the legacy full-screen fleet dashboard
+  --concurrency <number>  Concurrent agent limit across the fleet (default: 4)
+  --no-worktrees          Disable git worktree isolation
+  --auto-merge            Automatically merge completed agent branches into
+                          main
+  --timeout <seconds>     Stop a job automatically after this many seconds
+                          (default: no limit)
+  --planner               Enable 3-layer Planner-Supervisor-Executor
+                          architecture (pre-execution DAG planning)
+  -h, --help              display help for command

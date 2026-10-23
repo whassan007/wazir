@@ -1,0 +1,274 @@
+{
+  "capturedAt": "2026-10-23T08:08:22.876Z",
+  "phase": "baseline-before-task-output-policy",
+  "jobs": [
+    {
+      "id": "job-41694208-cbaa-45eb-a5e6-f08501a21443",
+      "title": "What is 17 multiplied by 23? Reply with only the number.",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "task-job-41694208-cbaa-45eb-a5e6-f08501a21443-0",
+          "type": "coding",
+          "title": "What is 17 multiplied by 23? Reply with only the n",
+          "input": "What is 17 multiplied by 23? Reply with only the number.",
+          "requirements": {
+            "capabilities": [],
+            "reasoning": "low",
+            "vision": false,
+            "toolCalling": false,
+            "minimumContext": 1024,
+            "minimumMemoryGB": 4,
+            "minimumGPUMemoryGB": 0,
+            "localOnly": false
+          },
+          "capabilities": [
+            "filesystem_read",
+            "shell"
+          ],
+          "expectedArtifacts": [],
+          "mutationRequired": false,
+          "workspaceMode": "repository",
+          "execution": {
+            "targetModelId": "google/gemma-4-12b-qat",
+            "executionMode": "automatic"
+          },
+          "priority": "normal",
+          "status": "completed",
+          "createdAt": "2026-10-23T07:56:19.244Z",
+          "updatedAt": "2026-10-23T07:56:19.244Z"
+        }
+      ],
+      "graph": {
+        "nodes": [
+          {
+            "id": "task-job-41694208-cbaa-45eb-a5e6-f08501a21443-0",
+            "type": "task",
+            "taskId": "task-job-41694208-cbaa-45eb-a5e6-f08501a21443-0",
+            "state": "completed",
+            "dependencies": [],
+            "children": [],
+            "executedAt": "2026-10-23T07:56:19.297Z",
+            "result": "17 multiplied by 23 is 391.",
+            "completedAt": "2026-10-23T07:56:36.172Z"
+          }
+        ],
+        "edges": []
+      },
+      "messages": [],
+      "artifacts": [],
+      "sessions": [],
+      "rootTaskId": "task-job-41694208-cbaa-45eb-a5e6-f08501a21443-0",
+      "priority": "normal",
+      "concurrencyLimit": 4,
+      "maxRetries": 3,
+      "createdAt": "2026-10-23T07:56:19.244Z",
+      "revision": 6,
+      "ownership": {
+        "ownerId": "6282b0d2-ac31-4d7f-a5c0-0b831a385c26",
+        "epoch": 1,
+        "expiresAt": 0
+      },
+      "startedAt": "2026-10-23T07:56:19.274Z",
+      "completedAt": "2026-10-23T07:56:36.181Z"
+    },
+    {
+      "id": "job-b86f5cfb-071b-452e-b3e7-cfdc956d4b70",
+      "title": "Write a complete C++17 program that implements quicksort. In",
+      "status": "failed",
+      "tasks": [
+        {
+          "id": "task-job-b86f5cfb-071b-452e-b3e7-cfdc956d4b70-0",
+          "type": "coding",
+          "title": "Write a complete C++17 program that implements qui",
+          "input": "Write a complete C++17 program that implements quicksort. Include main and print 10 sorted integers.",
+          "requirements": {
+            "capabilities": [],
+            "reasoning": "low",
+            "vision": false,
+            "toolCalling": false,
+            "minimumContext": 1024,
+            "minimumMemoryGB": 4,
+            "minimumGPUMemoryGB": 0,
+            "localOnly": false
+          },
+          "capabilities": [
+            "filesystem_read",
+            "shell",
+            "filesystem_write",
+            "compiler"
+          ],
+          "expectedArtifacts": [],
+          "mutationRequired": true,
+          "workspaceMode": "clean",
+          "execution": {
+            "targetModelId": "google/gemma-4-12b-qat",
+            "executionMode": "automatic"
+          },
+          "priority": "normal",
+          "status": "failed",
+          "createdAt": "2026-10-23T07:57:09.026Z",
+          "updatedAt": "2026-10-23T07:57:09.026Z"
+        }
+      ],
+      "graph": {
+        "nodes": [
+          {
+            "id": "task-job-b86f5cfb-071b-452e-b3e7-cfdc956d4b70-0",
+            "type": "task",
+            "taskId": "task-job-b86f5cfb-071b-452e-b3e7-cfdc956d4b70-0",
+            "state": "failed",
+            "dependencies": [],
+            "children": [],
+            "executedAt": "2026-10-23T07:57:09.080Z",
+            "error": "Task exceeded the 60s timeout and was automatically stopped",
+            "completedAt": "2026-10-23T07:58:09.230Z"
+          }
+        ],
+        "edges": []
+      },
+      "messages": [],
+      "artifacts": [],
+      "sessions": [],
+      "rootTaskId": "task-job-b86f5cfb-071b-452e-b3e7-cfdc956d4b70-0",
+      "priority": "normal",
+      "concurrencyLimit": 4,
+      "maxRetries": 3,
+      "createdAt": "2026-10-23T07:57:09.026Z",
+      "revision": 8,
+      "ownership": {
+        "ownerId": "6282b0d2-ac31-4d7f-a5c0-0b831a385c26",
+        "epoch": 1,
+        "expiresAt": 0
+      },
+      "startedAt": "2026-10-23T07:57:09.052Z",
+      "completedAt": "2026-10-23T07:58:09.230Z"
+    },
+    {
+      "id": "job-3610ca1b-b6b7-49da-9ecd-844fe2dd9fee",
+      "title": "What is 17 multiplied by 23? Reply with only the number.",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "task-job-3610ca1b-b6b7-49da-9ecd-844fe2dd9fee-0",
+          "type": "coding",
+          "title": "What is 17 multiplied by 23? Reply with only the n",
+          "input": "What is 17 multiplied by 23? Reply with only the number.",
+          "requirements": {
+            "capabilities": [],
+            "reasoning": "low",
+            "vision": false,
+            "toolCalling": false,
+            "minimumContext": 1024,
+            "minimumMemoryGB": 4,
+            "minimumGPUMemoryGB": 0,
+            "localOnly": false
+          },
+          "capabilities": [
+            "filesystem_read",
+            "shell"
+          ],
+          "expectedArtifacts": [],
+          "mutationRequired": false,
+          "workspaceMode": "repository",
+          "execution": {
+            "targetModelId": "google/gemma-4-12b-qat",
+            "executionMode": "automatic"
+          },
+          "priority": "normal",
+          "status": "completed",
+          "createdAt": "2026-10-23T07:58:22.686Z",
+          "updatedAt": "2026-10-23T07:58:22.686Z"
+        }
+      ],
+      "graph": {
+        "nodes": [
+          {
+            "id": "task-job-3610ca1b-b6b7-49da-9ecd-844fe2dd9fee-0",
+            "type": "task",
+            "taskId": "task-job-3610ca1b-b6b7-49da-9ecd-844fe2dd9fee-0",
+            "state": "completed",
+            "dependencies": [],
+            "children": [],
+            "executedAt": "2026-10-23T07:58:22.768Z",
+            "result": "The result of 17 multiplied by 23 is 391.",
+            "completedAt": "2026-10-23T07:58:48.829Z"
+          }
+        ],
+        "edges": []
+      },
+      "messages": [],
+      "artifacts": [],
+      "sessions": [],
+      "rootTaskId": "task-job-3610ca1b-b6b7-49da-9ecd-844fe2dd9fee-0",
+      "priority": "normal",
+      "concurrencyLimit": 4,
+      "maxRetries": 3,
+      "createdAt": "2026-10-23T07:58:22.686Z",
+      "revision": 6,
+      "ownership": {
+        "ownerId": "6282b0d2-ac31-4d7f-a5c0-0b831a385c26",
+        "epoch": 1,
+        "expiresAt": 0
+      },
+      "startedAt": "2026-10-23T07:58:22.724Z",
+      "completedAt": "2026-10-23T07:58:48.837Z"
+    }
+  ],
+  "blocks": [
+    {
+      "id": "1",
+      "sessionId": "session-1792742159561-j7suu",
+      "submissionId": "sub-1792742179231-xzj9iip",
+      "source": "keyboard-submit",
+      "sequence": 1792742179231,
+      "timestamp": "2026-10-23T07:56:19.232Z",
+      "command": "What is 17 multiplied by 23? Reply with only the number.",
+      "argv": [],
+      "status": "success",
+      "stdout": "",
+      "stderr": "",
+      "filesChanged": [],
+      "errors": [],
+      "jobId": "job-41694208-cbaa-45eb-a5e6-f08501a21443",
+      "durationMs": 16967,
+      "exitCode": 0
+    },
+    {
+      "id": "2",
+      "sessionId": "session-1792742159561-j7suu",
+      "submissionId": "sub-1792742229013-2l24nhc",
+      "source": "keyboard-submit",
+      "sequence": 1792742229014,
+      "timestamp": "2026-10-23T07:57:09.014Z",
+      "command": "Write a complete C++17 program that implements quicksort. Include main and print 10 sorted integers.",
+      "argv": [],
+      "status": "failed",
+      "stdout": "",
+      "stderr": "",
+      "filesChanged": [],
+      "errors": [],
+      "jobId": "job-b86f5cfb-071b-452e-b3e7-cfdc956d4b70",
+      "durationMs": 60232,
+      "exitCode": 1
+    },
+    {
+      "id": "3",
+      "sessionId": "session-1792742159561-j7suu",
+      "submissionId": "sub-1792742302670-lht9ou2",
+      "source": "keyboard-submit",
+      "sequence": 1792742302671,
+      "timestamp": "2026-10-23T07:58:22.671Z",
+      "command": "What is 17 multiplied by 23? Reply with only the number.",
+      "argv": [],
+      "status": "success",
+      "stdout": "",
+      "stderr": "",
+      "filesChanged": [],
+      "errors": [],
+      "jobId": "job-3610ca1b-b6b7-49da-9ecd-844fe2dd9fee",
+      "durationMs": 26183,
+      "exitCode": 0
+    }
+  ]
+}
