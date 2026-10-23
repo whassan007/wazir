@@ -458,8 +458,8 @@ export class NativeHarnessAdapter {
   ): Promise<UnifiedExecutionResult> {
     const execOpts: NativeHarnessExecuteOptions =
       runtimeOrOptions && 'generate' in runtimeOrOptions && 'executeTool' in runtimeOrOptions
-        ? { runtime: runtimeOrOptions }
-        : (runtimeOrOptions ?? {});
+        ? { runtime: runtimeOrOptions as AgentRuntime }
+        : ((runtimeOrOptions as NativeHarnessExecuteOptions | undefined) ?? {});
 
     const baseRuntime = execOpts.runtime ?? this.options.runtime;
     if (!baseRuntime) {

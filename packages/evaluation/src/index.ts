@@ -22,6 +22,7 @@ export * from './causalAttributionService.js';
 export * from './multiObjectiveOptimizer.js';
 export * from './regressionGuard.js';
 export * from './distributedBenchmarkFabric.js';
+export * from './comparativeRouterBenchmark.js';
 
 export interface EvaluationOptions {
   /** If set, the task is only successful when each of these files changed. */

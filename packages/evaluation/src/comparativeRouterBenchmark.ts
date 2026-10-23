@@ -1156,7 +1156,7 @@ function defaultDeterministicTaskExecutor(params: {
 
   const requiredEvidence = task.acceptanceContract?.requiredEvidence ?? ['TEST'];
   const checks = requiredEvidence.map((evType) => ({
-    name: evType === 'BUILD' ? 'build' : evType === 'TEST' ? 'test' : 'lint',
+    name: (evType === 'BUILD' ? 'build' : evType === 'TEST' ? 'test' : 'lint') as 'build' | 'test' | 'lint',
     command: `wazir verify ${evType.toLowerCase()}`,
     ok: firstAttemptSuccess && policyViolationReasons.length === 0,
     durationMs: 45,
@@ -1175,10 +1175,11 @@ function defaultDeterministicTaskExecutor(params: {
 
   const now = new Date();
   const startedAt = new Date(now.getTime() - endToEndLatencyMs);
+  const execId = `exec-${policy.id}-${task.id}-rep${repetition}`;
 
   const record: ExecutionRecord = {
     execution: {
-      id: `exec-${policy.id}-${task.id}-rep${repetition}`,
+      id: execId,
       taskId: task.id,
       runtimeId: activeCandidate.runtimeId,
       modelId: activeCandidate.modelId,
@@ -1199,33 +1200,49 @@ function defaultDeterministicTaskExecutor(params: {
       acceptanceContract: task.acceptanceContract,
     },
     workspaceState: {
-      root: `/tmp/wazir-router-bench/${task.id}`,
+      workspaceId: `/tmp/wazir-router-bench/${task.id}`,
       revision: 1,
-      dirty: true,
-      filesChanged: task.expectedFiles ?? [],
+      updatedAt: now,
     },
     acceptanceContract: task.acceptanceContract,
     policyDecisions: policyViolationReasons.map((reason) => ({
       action: 'route.execution',
+      decision: 'deny' as const,
+      rule: 'budget_policy',
+      reasons: [reason],
       allowed: false,
       reason,
       at: now,
     })),
     toolCalls: [
       {
+        id: `tc-${execId}-1`,
         tool: 'edit_file',
         input: { files: task.expectedFiles ?? [] },
         output: 'applied',
         ok: true,
         durationMs: 30,
         at: startedAt,
+        policyEffect: 'allow',
+        policyRule: 'workspace_write',
       },
     ],
     filesChanged: task.expectedFiles ? [...task.expectedFiles] : ['src/index.ts'],
     checks,
     evidence,
     errors: firstAttemptSuccess && policyViolationReasons.length === 0 ? [] : ['Verification check failed'],
-    events: retryCount > 0 ? [{ type: 'retry.scheduled', timestamp: now, data: { retryCount } }] : [],
+    events:
+      retryCount > 0
+        ? [
+            {
+              id: `evt-${execId}-retry`,
+              executionId: execId,
+              type: 'retry.scheduled',
+              timestamp: now,
+              data: { retryCount },
+            },
+          ]
+        : [],
     totalModelCalls: 1 + retryCount,
     usage: {
       input: inputTokens,
@@ -1594,8 +1611,14 @@ export class ComparativeRouterBenchmark {
         const fallbackUsed = Boolean(outcome.fallbackUsed);
 
         const deniedDecisions = (outcome.record.policyDecisions ?? [])
-          .filter((d) => !d.allowed)
-          .map((d) => d.reason ?? 'Policy denied action');
+          .filter((d) => {
+            const raw = d as unknown as { allowed?: boolean; decision?: string };
+            return raw.allowed === false || raw.decision === 'deny';
+          })
+          .map((d) => {
+            const raw = d as unknown as { reason?: string; reasons?: string[] };
+            return raw.reason ?? raw.reasons?.[0] ?? 'Policy denied action';
+          });
         const protectedModified = Boolean(
           scoreReport.metrics.rawMetrics?.protectedFixtureModified ||
             scoreReport.rejectionReason?.startsWith('PROTECTED_FIXTURE_MODIFIED'),

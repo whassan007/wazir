@@ -504,6 +504,7 @@ export class TelemetryCollector {
           modelId: c.modelId,
           runtimeId: c.runtimeId,
           exclusionReasons: [...c.reasons],
+          categories: undefined as RoutingExclusionCategory[] | undefined,
         }));
 
     const eligibilityExclusions: RoutingEligibilityExclusion[] = rawExclusions.map((e) => ({

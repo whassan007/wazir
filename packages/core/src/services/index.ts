@@ -29,10 +29,47 @@ export { ModelReliabilityTracker, classifyTerminationForReliability } from './mo
 export { measureModelPerformance } from './modelPerformance.js';
 export { summarizeExecution } from './executionSummary.js';
 export type { ExecutionSummary } from './executionSummary.js';
-export { reconstructExecutionState, planRecovery } from './executionRecovery.js';
-export type { ReconstructedExecutionState, RecoveryBudgetLimits, RecoveryPlan, ToolOutcomeInspection } from './executionRecovery.js';
-export { explainExecution } from './executionExplanation.js';
-export type { ExecutionExplanation } from './executionExplanation.js';
+export {
+  reconstructExecutionState,
+  planRecovery,
+  extractToolCheckpoints,
+  findUnknownOutcomeToolCall,
+  reconcileLocalOutcomes,
+  computeOperationKey,
+  computeSemanticOperationKey,
+  classifyToolOutcome,
+  OperationReconciliationGuard,
+  verifyLeaseFencing,
+  reconcileBeforeCrossHarnessResume,
+} from './executionRecovery.js';
+export type {
+  ReconstructedExecutionState,
+  RecoveryBudgetLimits,
+  RecoveryPlan,
+  ToolOutcomeInspection,
+  ClassifiedToolOutcome,
+  OperationIdentityInput,
+  ConfirmedOperationReceipt,
+  DuplicateOperationCheckResult,
+  LeaseFencingState,
+  LeaseFencingClaim,
+  LeaseFencingResult,
+  OperatorAuthorizedResolution,
+  ReconcileBeforeCrossHarnessResumeOptions,
+  ReconciledCallResolution,
+  CrossHarnessReconciliationResult,
+} from './executionRecovery.js';
+export { explainExecution, formatRoutingExplanationJson } from './executionExplanation.js';
+export type {
+  ExecutionExplanation,
+  RoutingCandidateExplanation,
+  RoutingExclusionExplanation,
+  RoutingCalibrationExplanation,
+  RoutingCostComparison,
+  RoutingLatencyBreakdown,
+  RoutingCacheReuseExplanation,
+  RoutingAuditFields,
+} from './executionExplanation.js';
 export { inspectVerificationEvidence, explainCompletion, assessCompletionEvidence, UNKNOWN as EVIDENCE_UNKNOWN } from './verificationEvidenceInspector.js';
 export type { VerificationInspection, EvidenceSlot, EvidenceSlotStatus, PhysicalMutationRow, ProvenanceStep, CompletionAssessment, WhyCompleteAnswer } from './verificationEvidenceInspector.js';
 export type { CircuitState, CircuitStatus, ModelReliabilityOptions, ReliabilityOutcome } from './modelReliability.js';
@@ -183,10 +220,52 @@ export {
   VerificationPlanner,
 } from './verificationPlanning.js';
 export type { ChangeImpactAnalyzerOptions } from './verificationPlanning.js';
-export { TelemetryCollector } from './telemetryService.js';
+export { TelemetryCollector, classifyExclusionReasons } from './telemetryService.js';
+export type {
+  RoutingExclusionCategory,
+  RoutingCandidateAlternative,
+  RoutingEligibilityExclusion,
+  RoutingCalibrationEvidence,
+  RoutingCacheReuseTelemetry,
+  RoutingTelemetryRecord,
+  RoutingTelemetryInput,
+  RoutingTelemetryFilter,
+  RoutingTelemetrySummary,
+} from './telemetryService.js';
 export { TaskCapabilityClassifier } from './taskCapabilityClassifier.js';
 export { ModelIntelligenceService } from './modelIntelligenceService.js';
-export type { ModelIntelligenceServiceOptions } from './modelIntelligenceService.js';
+export type {
+  ModelIntelligenceServiceOptions,
+  HarnessProfileSegmentationKey,
+  HarnessModelCapabilityProfile,
+} from './modelIntelligenceService.js';
+export {
+  HarnessResolutionError,
+  HarnessDispatchService,
+  createHarnessDispatchService,
+} from './harnessDispatchService.js';
+export type {
+  HarnessRunner,
+  HarnessVerificationOutcome,
+  VerifyExecutionCallback,
+  HarnessDispatchResolution,
+  HarnessDispatchServiceOptions,
+} from './harnessDispatchService.js';
+export * from './harnessPerformanceService.js';
+export * from './shadowRouterService.js';
+export { HarnessResumeService } from './harnessResumeService.js';
+export type {
+  ContinuationPromptOptions,
+  WorkspaceRevalidationResult,
+  PolicyValidationResult,
+  HarnessCompatibilityResult,
+  HarnessResumeStatus,
+  HarnessResumeFailureCode,
+  HarnessResumeOptions,
+  HarnessResumeResult,
+  HarnessResumeServiceOptions,
+} from './harnessResumeService.js';
+export * from './checkpointTransportService.js';
 export { StrategyLearningService } from './strategyLearningService.js';
 export type { StrategyLearningServiceOptions } from './strategyLearningService.js';
 export { StrategySemanticIndex, buildStrategyDocument, buildAntiStrategyDocument, normalizeStrategyText, STRATEGY_DOCUMENT_VERSION } from './strategySemanticIndex.js';

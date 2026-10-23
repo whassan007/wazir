@@ -113,17 +113,18 @@ function mapTransportErrorToStatus(error: unknown): { status: number; code: stri
  * - GET  /api/v1/checkpoints/:checkpointId/bundle
  */
 export function registerCheckpointTransportRoutes(
-  app: Express | Router,
+  app: Express,
   transportService: CheckpointTransportServiceLike,
   authMiddleware?: RequestHandler,
 ): void {
-  const middleware: RequestHandler[] = authMiddleware ? [authMiddleware] : [];
+  const passThrough: RequestHandler = (_req, _res, next) => next();
+  const auth = authMiddleware ?? passThrough;
   const jsonParser = express.json({ limit: '60mb' });
   const textParser = express.text({ type: ['text/*', 'application/octet-stream'], limit: '15mb' });
 
   app.post(
     '/api/v1/checkpoints/manifests',
-    ...middleware,
+    auth,
     jsonParser,
     async (req: Request, res: Response, _next: NextFunction) => {
       try {
@@ -147,7 +148,7 @@ export function registerCheckpointTransportRoutes(
 
   app.put(
     '/api/v1/checkpoints/blobs/:hash',
-    ...middleware,
+    auth,
     jsonParser,
     textParser,
     async (req: Request, res: Response, _next: NextFunction) => {
@@ -190,7 +191,7 @@ export function registerCheckpointTransportRoutes(
 
   app.post(
     '/api/v1/checkpoints/:checkpointId/commit',
-    ...middleware,
+    auth,
     jsonParser,
     async (req: Request, res: Response, _next: NextFunction) => {
       try {
@@ -218,7 +219,7 @@ export function registerCheckpointTransportRoutes(
 
   app.get(
     '/api/v1/checkpoints/:checkpointId/bundle',
-    ...middleware,
+    auth,
     async (req: Request, res: Response, _next: NextFunction) => {
       try {
         const checkpointId = String(req.params.checkpointId ?? '');

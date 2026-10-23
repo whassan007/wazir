@@ -4,3 +4,4 @@ export * from './runtimeDiscovery.js';
 export * from './taskExecutor.js';
 export * from './remoteDispatch.js';
 export * from './preflight.js';
+export * from './checkpointTransportClient.js';
