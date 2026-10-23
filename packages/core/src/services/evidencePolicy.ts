@@ -12,8 +12,23 @@ export function latestEvidenceAtRevision(evidence: VerificationEvidence[], revis
   return [...latest.values()];
 }
 
+/**
+ * True when the evidence is the executor vouching for itself: an explicit
+ * self-report, or a validator identity equal to the executor identity.
+ * Such records are kept for history but never satisfy a check.
+ */
+export function isSelfReportedEvidence(item: VerificationEvidence): boolean {
+  const meta = item.metadata ?? {};
+  if (meta.selfReported === true) return true;
+  const method = typeof meta.validationMethod === 'string' ? meta.validationMethod.toLowerCase() : '';
+  if (method === 'self-report' || method === 'self_report' || method === 'model-claim') return true;
+  const validator = typeof meta.validatorIdentity === 'string' ? meta.validatorIdentity : undefined;
+  const executor = typeof meta.executorIdentity === 'string' ? meta.executorIdentity : undefined;
+  return validator !== undefined && executor !== undefined && validator === executor;
+}
+
 export function evidencePassed(item: VerificationEvidence): boolean {
-  return item.exitCode === 0 && (item.status === undefined || item.status === 'PASS');
+  return item.exitCode === 0 && (item.status === undefined || item.status === 'PASS') && !isSelfReportedEvidence(item);
 }
 
 export function oracleSatisfied(evidence: VerificationEvidence[], revision: number, type: EvidenceType): boolean {

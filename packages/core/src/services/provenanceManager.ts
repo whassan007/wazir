@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { ArtifactProvenance, ArtifactWhyReport, ArtifactFilter } from '../types/artifact.js';
 import type { KeyValueStore } from '@wazir/shared';
 
@@ -34,6 +35,18 @@ export interface CreateArtifactParams {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Stable 16-hex-char id suffix for a content hash. `Buffer.from(x, 'hex')` silently
+ * truncates at the first non-hex character, so a prefixed (`sha256:...`) or
+ * otherwise non-hex hash produced an empty suffix and every such artifact of an
+ * execution collided on one id, overwriting the previous provenance record.
+ */
+export function artifactIdSuffix(contentHash: string): string {
+  const bare = contentHash.replace(/^sha256:/i, '');
+  if (/^[0-9a-f]{16,}$/i.test(bare)) return bare.slice(0, 16).toLowerCase();
+  return createHash('sha256').update(contentHash).digest('hex').slice(0, 16);
+}
+
 export class ProvenanceManager {
   private readonly store: KeyValueStore;
 
@@ -42,7 +55,7 @@ export class ProvenanceManager {
   }
 
   async registerArtifact(params: CreateArtifactParams): Promise<ArtifactProvenance> {
-    const artifactId = `artifact:${params.executionId}:${Buffer.from(params.contentHash, 'hex').slice(0, 8).toString('hex')}`;
+    const artifactId = `artifact:${params.executionId}:${artifactIdSuffix(params.contentHash)}`;
     
     const now = new Date();
     const artifact: ArtifactProvenance = {

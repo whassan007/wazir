@@ -87,11 +87,18 @@ export class VerificationEngine {
       ? (Buffer.isBuffer(input.afterContent) ? input.afterContent.toString('utf8') : String(input.afterContent))
       : null;
 
-    const hashBefore = normBefore !== null
-      ? crypto.createHash('sha256').update(normBefore).digest('hex')
+    // Hash the exact bytes. Decoding to UTF-8 first maps distinct invalid byte
+    // sequences to the same replacement characters, so a real binary change could
+    // look like a no-op and leave stale evidence counting for the new content.
+    const rawBytes = (content: string | Buffer | null | undefined): Buffer | null =>
+      content === null || content === undefined ? null : Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8');
+    const bytesBefore = rawBytes(input.beforeContent);
+    const bytesAfter = rawBytes(input.afterContent);
+    const hashBefore = bytesBefore !== null
+      ? crypto.createHash('sha256').update(bytesBefore).digest('hex')
       : null;
-    const hashAfter = normAfter !== null
-      ? crypto.createHash('sha256').update(normAfter).digest('hex')
+    const hashAfter = bytesAfter !== null
+      ? crypto.createHash('sha256').update(bytesAfter).digest('hex')
       : null;
 
     // Physical state is authoritative: no-op edit or identical bytes = no mutation
@@ -198,6 +205,11 @@ export class VerificationEngine {
     workspaceRevision?: number;
   }): VerificationEvidence {
     const rev = params.workspaceRevision ?? this.currentRevision;
+    // Evidence can describe the current or an earlier revision, never a future one:
+    // pre-recording a PASS for R+1 would certify bytes that do not exist yet.
+    if (!Number.isInteger(rev) || rev < 0 || rev > this.currentRevision) {
+      throw new Error(`Cannot record ${params.oracle} evidence for workspace revision ${rev}; current revision is ${this.currentRevision}`);
+    }
     const status = params.status ?? (params.exitCode === 0 ? 'PASS' : 'FAIL');
     const started = params.startedAt ?? new Date();
     const completed = params.completedAt ?? new Date();
