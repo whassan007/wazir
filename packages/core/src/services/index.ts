@@ -86,11 +86,12 @@ export type { ExecutionEngineOptions } from './executionEngine.js';
 export { ModelRegistry } from './modelRegistry.js';
 export {
   ModelPreferenceService,
+} from './modelPreferenceService.js';
+export type {
   ModelSelectionMode,
   ReasoningEffortLevel,
   ModelPreferenceRecord,
   EffectiveModelPreference,
-  KeyValueStore,
 } from './modelPreferenceService.js';
 export { PolicyEngine, createPolicyEngine, protectedPathReason } from './policyEngine.js';
 export { ProvenanceManager } from './provenanceManager.js';
@@ -305,3 +306,6 @@ export * from './repairContextBuilder.js';
 export * from './diagnosticHintGenerator.js';
 export { approvalScopeKey } from './approvalQueue.js';
 export type { ApprovalScope, ApprovalStatus, ApprovalRecord, ApprovalResolutionResult } from './approvalQueue.js';
+export * from './modelDiscoveryStatus.js';
+export * from './hardwareEligibilityService.js';
+export * from './contextMemoryEstimator.js';

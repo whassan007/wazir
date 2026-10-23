@@ -144,8 +144,8 @@ export class ModelDiscoveryStatusService {
         staleCount++;
       }
 
-      const estMem = estimateModelMemory(model);
-      const estGB = typeof estMem === 'number' ? estMem / (1024 ** 3) : (model.memory?.minSystemGB ?? 4);
+      const estMem = estimateModelMemory(model.parameters, model.id, model.quantization);
+      const estGB = model.memory?.minSystemGB ?? model.memory?.minGpuGB ?? estMem.minSystemGB ?? 4;
 
       const statusSummary = `registered=${registeredCount} available=${available} loaded=${loaded} active=${active}`;
 
@@ -160,7 +160,7 @@ export class ModelDiscoveryStatusService {
         active,
         stale,
         staleReason,
-        contextMax: model.contextWindow ?? model.contextMax ?? 8192,
+        contextMax: (model as unknown as { contextWindow?: number }).contextWindow ?? model.contextMax ?? 8192,
         estimatedMemoryGB: Number(estGB.toFixed(2)),
         runtimeIds: Array.from(runtimeIdsSet),
         computerIds: Array.from(computerIdsSet),

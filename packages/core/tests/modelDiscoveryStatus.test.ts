@@ -1,4 +1,4 @@
-import { describe, it, expect } from './helpers.js';
+import { describe, it, expect } from 'vitest';
 import { ModelRegistry } from '../src/services/modelRegistry.js';
 import { RuntimeRegistry } from '../src/services/runtimeRegistry.js';
 import { ComputerRegistry } from '../src/services/computerRegistry.js';
