@@ -33,6 +33,7 @@ import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
 import { createControlledExecution } from './toolExecution.js';
 import { MobileServices, registerMobileRoutes } from './mobile.js';
 import { wazirVersion } from './version.js';
+import { registerGoalStudioRoutes } from './goalStudio/index.js';
 
 // Bounds on in-memory state so an unauthenticated peer (or a runaway client)
 // cannot grow the control plane without limit (security review F-19).
@@ -1065,6 +1066,7 @@ export function createApp(state: ApiState) {
 
   // Mobile companion routes (public pairing endpoints + authenticated mobile endpoints)
   registerMobileRoutes(app, state, state.mobile);
+  registerGoalStudioRoutes(app, { auth: state.auth, store: state.store, services: {} });
 
   // Read-only control routes allow viewer or operator tokens. Mutating endpoints
   // explicitly enforce operator scope. A paired mobile device is deliberately NOT

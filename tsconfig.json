@@ -22,6 +22,7 @@
     { "path": "packages/scheduler" },
     { "path": "packages/models" },
     { "path": "packages/policies" },
+    { "path": "packages/goals" },
     { "path": "apps/cli" },
     { "path": "apps/api" },
     { "path": "apps/worker" }

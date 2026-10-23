@@ -13,6 +13,7 @@
     "@wazir/agents": "*",
     "@wazir/core": "*",
     "@wazir/database": "*",
+    "@wazir/goals": "*",
     "@wazir/models": "*",
     "@wazir/policies": "*",
     "@wazir/runtimes-lmstudio": "*",
