@@ -17,6 +17,12 @@ export interface DiscoveredModel {
   contextWindow?: number;
   /** Maximum output tokens supported by the model when known. */
   maxOutputTokens?: number;
+  /** Provider-enforced input limit when distinct from contextWindow. */
+  maxInputTokens?: number;
+  /** How the provider counts output against the window, when known. */
+  contextAccounting?: 'shared' | 'independent' | 'unknown';
+  /** Provenance of contextWindow / maxInputTokens / maxOutputTokens. */
+  contextLimitSource?: 'provider-api' | 'runtime-discovered' | 'provider-documented' | 'operator-configured' | 'default-unknown';
   /** Known capabilities, when the runtime/model metadata allows inference. */
   capabilities?: string[];
   toolCalling?: boolean;

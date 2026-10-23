@@ -215,6 +215,7 @@ export type ExecutionEventType =
   | 'retry.scheduled' | 'retry.exhausted'
   | 'policy.allowed' | 'policy.denied' | 'policy.approval_required'
   | 'lease.acquired' | 'lease.renewed' | 'lease.released'
+  | 'context.allocated' | 'context.usage'
   | 'context.compacted' | 'budget.warning' | 'budget.exhausted'
   | 'context.snapshot.created' | 'context.threshold.reached'
   | 'context.compaction.started' | 'context.compaction.completed' | 'context.compaction.failed'

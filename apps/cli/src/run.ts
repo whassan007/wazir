@@ -32,6 +32,7 @@ import { captureDelegationBaseline, verifyDelegatedWork, type DelegationBaseline
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
 import { planAvailableRoute } from './routeAvailability.js';
 import { ensureNvidiaModelRegistered } from './hostedProviders.js';
+import { InvocationContextAllocator, planContext } from './contextAllocationRuntime.js';
 
 /** Registration does not imply a policy execution handler exists. Inspect classification
  * without authorizing or executing dummy arguments; argument-level policy remains enforced
@@ -119,6 +120,8 @@ export interface TaskPlan {
   scheduling: SchedulerDecision;
   context: ContextDecision;
   agent: AgentAdapter;
+  /** Allocation for the initial request (smallest sufficient window, output cap, limit source). */
+  allocation?: import('@wazir/core').ContextAllocation;
 }
 
 export type PlanResult = { ok: true; plan: TaskPlan } | { ok: false; reasons: string[] };
@@ -336,16 +339,14 @@ export async function planTask(
     return { ok: false, reasons };
   }
 
-  const model = engine.models.getRequired(scheduling.modelId);
-  const context = engine.compiler.compile(
-    parts,
-    {
-      tokens: effectiveContextTokens(model),
-      source: model.configuredContext !== undefined ? 'configured' : 'discovered',
-    },
-    OUTPUT_RESERVE_TOKENS,
-  );
+  const planned = planContext(engine, parts, scheduling.modelId, {
+    tools: allowedTools,
+    outputReserveTokens: OUTPUT_RESERVE_TOKENS,
+    placement: { runtimeId: scheduling.runtimeId, computerId: scheduling.computerId },
+  });
+  const { context, allocation } = planned;
   if (!context.fits) {
+    // Only non-critical parts were dropped before giving up; critical/PINNED parts are never removed.
     return { ok: false, reasons: context.reasons };
   }
 
@@ -354,7 +355,7 @@ export async function planTask(
     return { ok: false, reasons: [`scheduler selected agent '${scheduling.agentId ?? '(none)'}' but it is not registered`] };
   }
 
-  return { ok: true, plan: { task, scheduling, context, agent } };
+  return { ok: true, plan: { task, scheduling, context, agent, allocation } };
 }
 
 export async function executeTask(
@@ -578,6 +579,8 @@ export async function executeTask(
   // may move it (another runtime or computer, or a freshly loaded model). Tools always
   // run here, in-process, regardless.
   const placement = { runtimeId: scheduling.runtimeId, computerId: scheduling.computerId, contextTokens: context.available.tokens };
+  // Sizes every provider request (smallest sufficient context, provider-valid output cap, preflight overflow check).
+  const allocator = new InvocationContextAllocator(engine, executionId, OUTPUT_RESERVE_TOKENS);
 
   const activeRuntimeReg = engine.runtimes.get(scheduling.runtimeId);
   const activeModelReg = engine.models.get(scheduling.modelId);
@@ -593,7 +596,10 @@ export async function executeTask(
     tools: availableTools,
     runtimeCapabilities: resolvedCapabilities,
     getCapabilities: () => resolvedCapabilities,
-    getContextTokens: () => placement.contextTokens,
+    // The usable window W (not the small per-call target), so compaction thresholds are not hit early.
+    getContextTokens: () => {
+      try { return allocator.windowFor(currentModelId, placement); } catch { return placement.contextTokens; }
+    },
     cancelCurrentTurn: () => cancelGeneration?.(),
 
     escalate: createEscalationHandler(engine, {
@@ -638,6 +644,24 @@ export async function executeTask(
       }
 
       try {
+        let prepared;
+        try {
+          prepared = await allocator.prepare(
+            { modelId: request.modelId, messages: request.messages, maxTokens: request.maxTokens, tools: request.tools },
+            placement,
+          );
+        } catch {
+          // Allocation is advisory when the model is not registered; fall back to the legacy request.
+          prepared = undefined;
+        }
+        if (prepared?.preflightError) {
+          const preflight = { type: 'error' as const, error: prepared.preflightError, failureClass: 'MODEL_CONTEXT_OVERFLOW' as const };
+          observe(preflight);
+          yield preflight;
+          return;
+        }
+        const sentMaxTokens = prepared?.maxTokens ?? request.maxTokens;
+        const sentContextTokens = prepared ? prepared.contextTokens : placement.contextTokens;
         if (!placement.computerId || placement.computerId === engine.worker.computerId) {
           // engine.adapters already holds local adapters keyed by runtime id
           // (see engine.ts) alongside the hosted ones added in this feature —
@@ -658,9 +682,9 @@ export async function executeTask(
             requestId,
             modelId: request.modelId,
             messages: request.messages,
-            maxTokens: request.maxTokens,
+            maxTokens: sentMaxTokens,
             temperature: request.temperature,
-            contextTokens: placement.contextTokens,
+            contextTokens: sentContextTokens,
             stream: true,
             tools: request.tools,
             signal: turnAbortController.signal,
@@ -688,6 +712,9 @@ export async function executeTask(
                 loader.setText(`Generating response from ${request.modelId}...`);
               }
             }
+            if (event.type === 'completed') {
+              await allocator.recordUsage(request.modelId, requestId, event.usage).catch(() => undefined);
+            }
             if (event.type === 'completed' && event.usage) {
               await engine.executions.recordUsage(executionId, {
                 input: event.usage.inputTokens,
@@ -710,9 +737,9 @@ export async function executeTask(
             requestId,
             modelId: request.modelId,
             messages: request.messages,
-            maxTokens: request.maxTokens,
+            maxTokens: sentMaxTokens,
             temperature: request.temperature,
-            contextTokens: placement.contextTokens,
+            contextTokens: sentContextTokens,
           };
           cancelGeneration = () => {
             turnAbortController.abort();
@@ -742,6 +769,9 @@ export async function executeTask(
                 if (!options.streamTokens) {
                   loader.setText(`Generating response from ${request.modelId}...`);
                 }
+              }
+              if (generationEvent.type === 'completed') {
+                await allocator.recordUsage(request.modelId, requestId, generationEvent.usage).catch(() => undefined);
               }
               if (generationEvent.type === 'completed' && generationEvent.usage) {
                 await engine.executions.recordUsage(executionId, {
@@ -1383,6 +1413,8 @@ export async function runSubagent(
     scheduling: placementDecision,
   });
   const childExecId = childRecord.execution.id;
+  // Sizes every sub-agent provider request the same way executeTask does (one allocator per sub-agent run).
+  const subagentAllocator = new InvocationContextAllocator(engine, childExecId, OUTPUT_RESERVE_TOKENS);
 
   if (placementDecision) {
     context.log(color.cyan(`    [subagent] fleet placement: ${effectiveModelId} via ${effectiveRuntimeId} on ${effectiveComputerId ?? 'hosted'} (${placementDecision.reasons.join('; ')})`));
@@ -1407,6 +1439,21 @@ export async function runSubagent(
       const requestId = generateId('req-');
       if (engine.web) req = { ...req, messages: await recordWebContext(engine.executions, childExecId, req.messages, engine.web.limits.maxGroundingTokens) };
       if (context.signal?.aborted) return;
+      const placement = { runtimeId: effectiveRuntimeId, computerId: effectiveComputerId };
+      let prepared;
+      try {
+        prepared = await subagentAllocator.prepare(
+          { modelId: req.modelId, messages: req.messages, maxTokens: req.maxTokens, tools: req.tools },
+          placement,
+        );
+      } catch {
+        // Allocation is advisory when the model is not registered; fall back to the legacy request.
+        prepared = undefined;
+      }
+      if (prepared?.preflightError) {
+        yield { type: 'error', error: prepared.preflightError, failureClass: 'MODEL_CONTEXT_OVERFLOW' };
+        return;
+      }
       const subTurnAbortController = new AbortController();
       if (context.signal) {
         if (context.signal.aborted) {
@@ -1424,6 +1471,8 @@ export async function runSubagent(
           ? MINIMUM_CONTEXT_TOKENS
           : undefined;
       const retryContext = { requestId, model: req.modelId, provider: engine.models.get(req.modelId)?.provider };
+      const sentMaxTokens = prepared ? prepared.maxTokens : req.maxTokens;
+      const sentContextTokens = prepared?.contextTokens ?? contextTokens;
 
       try {
         if (isLocalPlacement) {
@@ -1438,10 +1487,10 @@ export async function runSubagent(
           };
           for await (const event of adapter.generate({
             requestId,
-            contextTokens,
+            contextTokens: sentContextTokens,
             modelId: req.modelId,
             messages: req.messages,
-            maxTokens: req.maxTokens,
+            maxTokens: sentMaxTokens,
             temperature: req.temperature,
             stream: true,
             tools: req.tools,
@@ -1450,6 +1499,9 @@ export async function runSubagent(
           })) {
             if (subTurnAbortController.signal.aborted || context.signal?.aborted) break;
             await engine.executions.recordProviderEvent(childExecId, event, retryContext);
+            if (event.type === 'completed') {
+              await subagentAllocator.recordUsage(req.modelId, requestId, event.usage).catch(() => undefined);
+            }
             if (event.type === 'completed' && event.usage) {
               await engine.executions.recordUsage(childExecId, {
                 input: event.usage.inputTokens,
@@ -1469,9 +1521,9 @@ export async function runSubagent(
             requestId,
             modelId: req.modelId,
             messages: req.messages,
-            maxTokens: req.maxTokens,
+            maxTokens: sentMaxTokens,
             temperature: req.temperature,
-            contextTokens,
+            contextTokens: sentContextTokens,
           };
           cancelSubGeneration = () => {
             subTurnAbortController.abort();
@@ -1482,6 +1534,9 @@ export async function runSubagent(
               const generationEvent = toGenerationEvent(event);
               if (!generationEvent) continue;
               await engine.executions.recordProviderEvent(childExecId, generationEvent, retryContext);
+              if (generationEvent.type === 'completed') {
+                await subagentAllocator.recordUsage(req.modelId, requestId, generationEvent.usage).catch(() => undefined);
+              }
               if (generationEvent.type === 'completed' && generationEvent.usage) {
                 await engine.executions.recordUsage(childExecId, {
                   input: generationEvent.usage.inputTokens,

@@ -791,6 +791,12 @@ function registerModel(
 
   const configured = config.modelContext[discovered.id];
   const contextMax = discovered.contextWindow ?? configured ?? DEFAULT_CONTEXT;
+  const contextLimitSource: ModelRecord['contextLimitSource'] =
+    discovered.contextWindow !== undefined
+      ? (discovered.contextLimitSource ?? 'provider-documented')
+      : configured !== undefined
+        ? 'operator-configured'
+        : 'default-unknown';
 
   const record: ModelRecord = {
     id: discovered.id,
@@ -801,6 +807,10 @@ function registerModel(
     parameters: discovered.parameters,
     contextMax,
     configuredContext: configured,
+    maxInputTokens: discovered.maxInputTokens,
+    maxOutputTokens: discovered.maxOutputTokens,
+    contextAccounting: discovered.contextAccounting,
+    contextLimitSource,
     capabilities,
     toolCalling: discovered.toolCalling ?? false,
     structuredOutput: discovered.structuredOutput ?? false,

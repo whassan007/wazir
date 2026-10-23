@@ -265,6 +265,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     try {
       const models = await this.nativeModels();
       return models.map(m => ({ id: m.key, name: m.display_name ?? m.key, contextWindow: m.max_context_length,
+        contextLimitSource: typeof m.max_context_length === 'number' ? 'runtime-discovered' : 'default-unknown',
         weightBytes: m.size_bytes, parameters: m.params_string, architecture: m.architecture,
         quantization: m.quantization?.name, embedding: m.type === 'embedding',
         toolCalling: m.capabilities?.trained_for_tool_use, vision: m.capabilities?.vision }));
@@ -296,6 +297,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
               architecture: model.arch,
               quantization: model.quantization,
               contextWindow: model.max_context_length,
+              contextLimitSource: typeof model.max_context_length === 'number' ? 'runtime-discovered' : 'default-unknown',
               capabilities: ['generalChat'],
               toolCalling: isEmbedding ? false : hasToolUse,
               structuredOutput: true,

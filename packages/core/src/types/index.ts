@@ -7,6 +7,7 @@ export * from './model.js';
 export * from './agent.js';
 export * from './tool.js';
 export * from './context.js';
+export * from './contextAllocation.js';
 export * from './policy.js';
 export * from './task.js';
 export * from './scheduler.js';

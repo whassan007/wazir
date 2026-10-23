@@ -417,11 +417,14 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
         .map((model) => {
           const caps = inferModelCapabilities(model.id);
           const isEmbedding = model.id.startsWith('text-embedding');
+          const inTable = MODEL_CAPABILITY_PREFIXES.some((m) => model.id.startsWith(m.prefix));
           return {
             id: model.id,
             name: model.id,
             capabilities: isEmbedding ? ['embedding'] : ['generalChat', 'coding'],
             contextWindow: caps.contextMax,
+            // Table value for a known prefix; the DEFAULT_CAPABILITIES window is an unverified guess.
+            contextLimitSource: inTable ? 'provider-documented' : 'default-unknown',
             toolCalling: caps.toolCalling,
             structuredOutput: caps.structuredOutput,
             vision: caps.vision,
