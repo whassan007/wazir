@@ -117,17 +117,43 @@ export class AcceptanceOracle implements VerificationOracle {
     status: VerificationStatus;
     reasons: string[];
   }> {
-    const root = params.cwd ?? this.projectRoot;
+    const root = path.resolve(params.cwd ?? this.projectRoot);
     const criteria = (params.metadata?.criteria ?? []) as string[];
     const reasons: string[] = [];
-    let ok = true;
+    let failed = false;
+    // A criterion this oracle cannot evaluate is never silently a PASS.
+    let unverifiable = false;
+    const inside = (target: string): string | undefined => {
+      const full = path.resolve(root, target);
+      const rel = path.relative(root, full);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+      // Resolve symlinks for existing paths so a link cannot point outside the workspace.
+      try {
+        const real = fs.realpathSync(full);
+        const realRoot = fs.realpathSync(root);
+        const realRel = path.relative(realRoot, real);
+        if (realRel.startsWith('..') || path.isAbsolute(realRel)) return undefined;
+      } catch { /* missing path: existence check reports it */ }
+      return full;
+    };
+
+    if (criteria.length === 0) {
+      unverifiable = true;
+      reasons.push('Acceptance unverifiable: no machine-checkable criteria were supplied');
+    }
 
     for (const c of criteria) {
-      if (c.startsWith('file_exists:')) {
+      if (typeof c !== 'string') {
+        unverifiable = true;
+        reasons.push('Acceptance unverifiable: criterion is not a string');
+      } else if (c.startsWith('file_exists:')) {
         const target = c.replace('file_exists:', '').trim();
-        const full = path.resolve(root, target);
-        if (!fs.existsSync(full)) {
-          ok = false;
+        const full = target ? inside(target) : undefined;
+        if (!full) {
+          failed = true;
+          reasons.push(`Acceptance failed: '${target}' is empty or outside the workspace`);
+        } else if (!fs.existsSync(full)) {
+          failed = true;
           reasons.push(`Acceptance failed: File '${target}' does not exist`);
         } else {
           reasons.push(`File '${target}' exists`);
@@ -137,27 +163,35 @@ export class AcceptanceOracle implements VerificationOracle {
         const file = parts[0]?.trim();
         const pattern = parts[1]?.trim();
         if (file && pattern) {
-          const full = path.resolve(root, file);
+          const full = inside(file);
           try {
+            if (!full) throw new Error('outside workspace');
             const content = fs.readFileSync(full, 'utf8');
             if (!content.includes(pattern)) {
-              ok = false;
+              failed = true;
               reasons.push(`Acceptance failed: File '${file}' does not contain '${pattern}'`);
             } else {
               reasons.push(`File '${file}' contains expected pattern`);
             }
           } catch {
-            ok = false;
+            failed = true;
             reasons.push(`Acceptance failed: Cannot read file '${file}'`);
           }
+        } else {
+          unverifiable = true;
+          reasons.push(`Acceptance unverifiable: malformed criterion '${c}' (expected file_contains:<file>::<pattern>)`);
         }
+      } else {
+        unverifiable = true;
+        reasons.push(`Acceptance unverifiable: unsupported criterion '${c}'`);
       }
     }
+    const ok = !failed && !unverifiable;
 
     return {
       exitCode: ok ? 0 : 1,
       output: reasons.join('\n'),
-      status: ok ? 'PASS' : 'FAIL',
+      status: ok ? 'PASS' : failed ? 'FAIL' : 'ERROR',
       reasons,
     };
   }

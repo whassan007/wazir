@@ -1,5 +1,5 @@
 import { missingAcceptanceCriteria } from './executionContract.js';
-import { oracleSatisfied } from './evidencePolicy.js';
+import { evidencePassed, oracleSatisfied } from './evidencePolicy.js';
 import type { ExecutionRecord, VerificationEvidence, EvidenceType } from '../types/execution.js';
 import type { ArtifactProvenance } from '../types/artifact.js';
 import type { FileMutationResult } from '../types/tool.js';
@@ -130,7 +130,8 @@ function buildSlot(oracle: EvidenceType, record: ExecutionRecord, currentRevisio
   const slot: EvidenceSlot = {
     oracle,
     required,
-    status: rev < currentRevision ? 'STALE' : recordedStatus,
+    // Evidence for any other revision (older, or a not-yet-existing newer one) does not describe the current bytes.
+    status: rev !== currentRevision ? 'STALE' : recordedStatus,
     recordedStatus,
     evidenceId: latest.id,
     command: latest.command ?? UNKNOWN,
@@ -224,7 +225,7 @@ export function inspectVerificationEvidence(
   const slots = oracles.map((o) => buildSlot(o, record, currentRevision, completion.required.includes(o)));
 
   const passingRevisions = (record.evidence ?? [])
-    .filter((e) => e.exitCode === 0 && (e.status ?? 'PASS') === 'PASS')
+    .filter(evidencePassed)
     .map(revOf);
   const lastVerifiedRevision = passingRevisions.length ? Math.max(...passingRevisions) : null;
 
