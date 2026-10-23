@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Wazir Goal Studio</title>
+<meta name="description" content="Wazir Goal Studio: strategic goal graphs, durable execution, prompts and fleet" />
+<meta name="theme-color" content="#0f131a" />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="/favicon.ico" sizes="any" />
+<link rel="stylesheet" href="/goal-studio/goal-studio.css" />
+<script type="module" src="/goal-studio/shell.js"></script>
+</head>
+<body data-modules="graph,control,prompts,fleet">
+<header class="gs-header">
+  <div class="gs-brand">
+    <a class="gs-home" href="/" title="Back to the Wazir dashboard">
+      <img src="/logo-emblem.svg" alt="" width="28" height="28" />
+    </a>
+    <div class="gs-brand-text">
+      <h1>WAZIR <span>Goal Studio</span></h1>
+      <span class="gs-subtitle">Goals are owned by humans · runs are pinned to immutable revisions</span>
+    </div>
+  </div>
+  <div class="gs-header-right">
+    <span id="gs-host" class="gs-chip gs-muted">host: local</span>
+    <a class="gs-btn gs-btn-ghost" href="/">← Dashboard</a>
+    <button id="gs-theme-toggle" class="gs-btn gs-btn-ghost" type="button">☾ Dark</button>
+  </div>
+</header>
+<nav id="gs-tabs" class="gs-tabs" role="tablist" aria-label="Goal Studio sections"></nav>
+<main id="gs-panels" class="gs-panels"></main>
+<div id="gs-toasts" class="gs-toasts" aria-live="polite"></div>
+<noscript><p class="gs-empty">Goal Studio requires JavaScript.</p></noscript>
+</body>
+</html>
