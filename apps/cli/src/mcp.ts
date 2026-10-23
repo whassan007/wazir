@@ -4,15 +4,17 @@ import readline from 'node:readline/promises';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { auth } from '@modelcontextprotocol/client';
-import { MCPRegistry, MCPError, PolicyEngine, defaultMCPProfiles, hashToolArguments, redactMCPArguments, type MCPServerDefinition, type ToolExecutionContext, type ToolResult } from '@wazir/core';
-import { ToolRegistry, executeTool } from '@wazir/tools';
-import { createSecretBroker } from '@wazir/secrets';
+import type { MCPRegistry, MCPServerDefinition, ToolExecutionContext, ToolResult } from '@wazir/core';
 import { generateId } from '@wazir/shared';
 import { configDir } from './config.js';
 import { promptSecret } from './secretPrompt.js';
 import { createApprover } from './approve.js';
 import type { RookEngine } from './engine.js';
+
+let mcpRuntimeUsed = false;
+export function wasMCPRuntimeUsed(): boolean {
+  return mcpRuntimeUsed;
+}
 
 async function question(label: string): Promise<string> {
   if (!process.stdin.isTTY) throw new Error('Interactive input requires a terminal; use wa mcp import <file>.');
@@ -20,6 +22,9 @@ async function question(label: string): Promise<string> {
   try { return (await rl.question(label)).trim(); } finally { rl.close(); }
 }
 export async function authenticateMCP(registry: MCPRegistry, id: string): Promise<void> {
+  mcpRuntimeUsed = true;
+  const { MCPError } = await import('@wazir/core');
+  const { auth } = await import('@modelcontextprotocol/client');
   const server = registry.get(id).definition;
   if (server.auth?.type === 'oauth') {
     if (!server.url) throw new MCPError('MCP_SERVER_UNAVAILABLE', id);
@@ -72,6 +77,9 @@ export async function authenticateMCP(registry: MCPRegistry, id: string): Promis
 }
 
 export async function executeMCPForAgent(engine: RookEngine, name: string, input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<ToolResult> {
+  mcpRuntimeUsed = true;
+  const { hashToolArguments, redactMCPArguments } = await import('@wazir/core');
+  const { executeTool } = await import('@wazir/tools');
   const safeInput = redactMCPArguments(input);
   const execution = ctx.executionId ? await engine.executions.get(ctx.executionId) : undefined;
   ctx.agentId ??= execution?.execution.agentId;
@@ -225,6 +233,8 @@ async function addMCP(registry: MCPRegistry): Promise<void> {
 }
 
 async function configureMCP(registry: MCPRegistry, id: string, key: string, value: string): Promise<void> {
+  mcpRuntimeUsed = true;
+  const { MCPError, defaultMCPProfiles } = await import('@wazir/core');
   const d = structuredClone(registry.get(id).definition);
   if (key === 'allow-write-tools') {
     if (id !== 'nvidia-runai' || !['true', 'false'].includes(value)) throw new Error('Expected nvidia-runai allow-write-tools true|false.');
@@ -255,6 +265,10 @@ async function configureMCP(registry: MCPRegistry, id: string, key: string, valu
 export function registerMCPCommands(program: Command): void {
   const command = program.command('mcp').description('Manage MCP servers, credentials and discovered capabilities');
   const run = (action: (r: MCPRegistry, ...args: any[]) => Promise<unknown>) => async (...args: any[]) => {
+    mcpRuntimeUsed = true;
+    const { MCPRegistry, MCPError, PolicyEngine } = await import('@wazir/core');
+    const { ToolRegistry } = await import('@wazir/tools');
+    const { createSecretBroker } = await import('@wazir/secrets');
     const registry = new MCPRegistry({ directory: configDir(), tools: new ToolRegistry(), policy: new PolicyEngine({ projectRoot: process.cwd(), approveCallback: createApprover }), secrets: await createSecretBroker({ secretsDir: configDir() }), autoConnect: false });
     try { await registry.initialize(); const output = await action(registry, ...args); if (output !== undefined) console.log(typeof output === 'string' ? output : registry.auth.redact(JSON.stringify(output, null, 2))); }
     catch (e) { console.error(e instanceof MCPError ? e.code : 'MCP operation failed. Check configuration and run wa mcp doctor.'); process.exitCode = 1; }
@@ -270,10 +284,11 @@ export function registerMCPCommands(program: Command): void {
   command.command('remove <id>').action(run(async (r, id) => { await stopDaemon(id); await r.remove(id); }));
   command.command('enable <id>').action(run((r, id) => r.enable(id, true)));
   command.command('disable <id>').action(run(async (r, id) => { await stopDaemon(id); await r.enable(id, false); }));
-  command.command('connect <id>').action(run(async (r, id) => { const s = await startDaemon(id); return `${id}: ${s.state} (${s.tools} tools); persistent connection active.`; }));
+  command.command('connect <id>').action(run(async (_r, id) => { const s = await startDaemon(id); return `${id}: ${s.state} (${s.tools} tools); persistent connection active.`; }));
   command.command('disconnect <id>').action(run(async (_r, id) => { await stopDaemon(id); return `${id}: DISCONNECTED`; }));
   command.command('inspect <id>').action(run(async (r, id) => { const s = r.get(id), daemon = await readDaemonState(id); return { ...s.definition, status: daemon?.state ?? s.state, tools: daemon?.tools ?? s.tools.length, resources: daemon?.resources ?? s.resources.length, prompts: daemon?.prompts ?? s.prompts.length }; }));
   command.command('serve <id>').action(run(async (r, id) => {
+    const { MCPError } = await import('@wazir/core');
     const nonce = randomBytes(24).toString('hex');
     try { await r.connect(id); }
     catch (error) {

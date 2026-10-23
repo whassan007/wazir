@@ -62,3 +62,18 @@ export {
   type StatusLoaderOptions,
   type BrailleFrame,
 } from './spinner.js';
+export {
+  GOAL_PRIMARY_LIFECYCLE_PHASES,
+  GOAL_RECOVERY_PHASES,
+  TUI_KEYBOARD_SHORTCUTS,
+  formatShortcutFooterHint,
+  formatGoalPhaseIndicator,
+  formatTargetStatusBadge,
+  formatGoalRunStatusBadge,
+  summarizeGoalTargets,
+  renderGoalStudioPane,
+  formatCommandFeedback,
+  type KeyboardShortcutEntry,
+  type GoalStudioSnapshot,
+  type CommandFeedbackInput,
+} from './goalStudioPanel.js';

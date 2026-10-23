@@ -77,7 +77,7 @@ export function diffLines(oldText: string, newText: string): DiffLine[] {
   return result;
 }
 
-export type TuiView = 'task' | 'search' | 'fleet' | 'improvement' | 'context' | 'evidence' | 'tail' | 'approval' | 'worktrees' | 'help' | 'models' | 'canary';
+export type TuiView = 'task' | 'search' | 'fleet' | 'improvement' | 'context' | 'evidence' | 'tail' | 'approval' | 'worktrees' | 'help' | 'models' | 'canary' | 'goals';
 
 export type NavCategory = 'MCP' | 'JOBS' | 'EXECUTIONS' | 'AGENTS' | 'COMPUTERS' | 'RUNTIMES';
 
@@ -185,6 +185,8 @@ export interface FleetTuiOptions {
   timeoutSeconds?: number;
   enablePlanner?: boolean;
   presentationMode?: 'conversation' | 'dashboard';
+  /** Optional external AbortSignal to cleanly cancel the TUI session and restore terminal state. */
+  signal?: AbortSignal;
 }
 
 export interface CanaryModalState {

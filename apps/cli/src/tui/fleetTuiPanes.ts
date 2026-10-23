@@ -36,6 +36,7 @@ import {
   padRightAnsi,
   type StructuredError,
 } from './fleetTuiTypes.js';
+import { renderGoalStudioPane as renderGoalStudioPanelView } from './goalStudioPanel.js';
 
 export function buildModalBox(
   title: string,
@@ -1183,12 +1184,26 @@ export function renderApprovalPane(tui: any, cols: number, maxRows: number): str
   return lines;
 }
 
+export function renderGoalPane(tui: any, cols: number, maxRows: number): string[] {
+  return renderGoalStudioPanelView(
+    {
+      run: tui.getGoalStudioSnapshot?.()?.run,
+      graph: tui.getGoalStudioSnapshot?.()?.graph,
+      activePhase: tui.getGoalStudioSnapshot?.()?.activePhase,
+      selectedTargetIndex: tui.selectedGoalTargetIndex ?? 0,
+    },
+    cols,
+    maxRows,
+  );
+}
+
 export function renderHelpPane(cols: number, maxRows: number): string[] {
   const lines: string[] = [
     color.bold('  WAZIR FLEET TUI SHORTCUTS & COMMANDS'),
     '',
     '  Navigation:',
     '    1 / 5 / 6       Mission Control / Models & Providers / Evidence',
+    '    7 / g           Goal Studio DAG, Phase Indicator & Target Ledger (/goals)',
     '    [ / ]           Cycle tasks or pending approvals',
     '    !cmd / /sh cmd  Run an inline workspace shell command',
     '    Tab          Cycle through views (Shift-Tab for reverse traversal)',
@@ -1214,6 +1229,8 @@ export function renderHelpPane(cols: number, maxRows: number): string[] {
     '    [R] (Tail view) View the selected task\'s raw model response',
     '',
     '  Commands & Quick Actions:',
+    '    /status         Show immediate fleet, model, approval & Goal Studio status',
+    '    /goals          Open Goal Studio view (or press 7 / g)',
     '    /fanout <t1;t2> Decompose and run concurrent subtasks',
     '    /steer <msg>    Inject mid-run follow-up instruction to agent',
     '    /compact [id]   Compact model context for active or specified task',
