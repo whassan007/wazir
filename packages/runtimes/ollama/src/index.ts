@@ -131,6 +131,7 @@ export class OllamaAdapter implements RuntimeAdapter {
         parameters: model.details?.parameter_size,
         quantization: model.details?.quantization_level,
         contextWindow: typeof context === 'number' ? context : undefined,
+        contextLimitSource: typeof context === 'number' ? 'runtime-discovered' : 'default-unknown',
         weightBytes: size,
         capabilities: ['generalChat'],
         toolCalling: inferToolCalling(model.name, family),

@@ -20,32 +20,59 @@ const API_BASE = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
 const SECRET_KEY = 'anthropic';
 
-// Anthropic's /v1/models endpoint returns id/display_name/created_at only —
-// no capability or context-window metadata — so a small curated table fills
-// the gap, same pattern as LM Studio's inferCapabilities() heuristic
-// (packages/runtimes/lmstudio/src/index.ts). Keyed by id prefix; an
-// unrecognized future model id still registers via the conservative
-// `DEFAULT_CAPABILITIES` fallback rather than being dropped.
-const DEFAULT_CAPABILITIES = { contextMax: 200_000, toolCalling: true, vision: false, reasoning: false };
-const MODEL_CAPABILITY_PREFIXES: Array<{ prefix: string; contextMax: number; toolCalling: boolean; vision: boolean; reasoning: boolean }> = [
-  { prefix: 'claude-opus-4', contextMax: 200_000, toolCalling: true, vision: true, reasoning: true },
-  { prefix: 'claude-sonnet-4', contextMax: 200_000, toolCalling: true, vision: true, reasoning: true },
-  { prefix: 'claude-haiku-4', contextMax: 200_000, toolCalling: true, vision: true, reasoning: false },
-  { prefix: 'claude-3-7-sonnet', contextMax: 200_000, toolCalling: true, vision: true, reasoning: true },
-  { prefix: 'claude-3-5-sonnet', contextMax: 200_000, toolCalling: true, vision: true, reasoning: false },
-  { prefix: 'claude-3-5-haiku', contextMax: 200_000, toolCalling: true, vision: false, reasoning: false },
-  { prefix: 'claude-3-opus', contextMax: 200_000, toolCalling: true, vision: true, reasoning: false },
+// Anthropic's /v1/models endpoint returns id/display_name/created_at and, for
+// current models, max_input_tokens / max_tokens. When those are absent, a
+// curated table supplies documented values (provenance 'provider-documented').
+// Entries are matched in order: specific IDs MUST precede generic prefixes
+// (e.g. 'claude-opus-4-8' before 'claude-opus-4'). An unrecognized id gets no
+// guessed window: contextWindow is undefined and the source is 'default-unknown'.
+// Capability flags (toolCalling/vision/reasoning) still come from the table.
+const DEFAULT_CAPABILITIES = { toolCalling: true, vision: false, reasoning: false };
+
+interface AnthropicModelEntry {
+  prefix: string;
+  /** Documented context window; undefined when not documented. */
+  contextWindow?: number;
+  /** Documented max output tokens; undefined when not documented. */
+  maxOutputTokens?: number;
+  toolCalling: boolean;
+  vision: boolean;
+  reasoning: boolean;
+}
+
+const MODEL_CAPABILITY_PREFIXES: AnthropicModelEntry[] = [
+  // Current generation — specific IDs first.
+  { prefix: 'claude-fable-5-1', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: true },
+  { prefix: 'claude-opus-5-5', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: true },
+  { prefix: 'claude-opus-5', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: true },
+  { prefix: 'claude-opus-4-8', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: true },
+  { prefix: 'claude-sonnet-5-5', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: true },
+  { prefix: 'claude-sonnet-5', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: true },
+  { prefix: 'claude-haiku-5-5', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: false },
+  { prefix: 'claude-haiku-4-5', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: false },
+  // Older generations — generic prefixes, after every specific entry above.
+  { prefix: 'claude-opus-4', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: true },
+  { prefix: 'claude-sonnet-4', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: true },
+  { prefix: 'claude-haiku-4', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: false },
+  { prefix: 'claude-3-7-sonnet', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: true },
+  { prefix: 'claude-3-5-sonnet', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: false },
+  { prefix: 'claude-3-5-haiku', contextWindow: 200_000, toolCalling: true, vision: false, reasoning: false },
+  { prefix: 'claude-3-opus', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: false },
 ];
 
-function inferModelCapabilities(id: string): { contextMax: number; toolCalling: boolean; vision: boolean; reasoning: boolean } {
+function inferModelCapabilities(id: string): { contextWindow?: number; maxOutputTokens?: number; toolCalling: boolean; vision: boolean; reasoning: boolean } {
   const match = MODEL_CAPABILITY_PREFIXES.find((m) => id.startsWith(m.prefix));
-  return match ?? DEFAULT_CAPABILITIES;
+  return match ?? { ...DEFAULT_CAPABILITIES, contextWindow: undefined, maxOutputTokens: undefined };
 }
 
 interface AnthropicModelListing {
   id: string;
   display_name?: string;
   created_at?: string;
+  /** Context window (input limit), when the Models API reports it. */
+  max_input_tokens?: number;
+  /** Output cap (max_tokens), when the Models API reports it. */
+  max_tokens?: number;
 }
 
 interface SSEBuffer {
@@ -391,11 +418,20 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       const data = (await response.json()) as { data?: AnthropicModelListing[] };
       return (data.data ?? []).map((model) => {
         const caps = inferModelCapabilities(model.id);
+        const apiWindow = typeof model.max_input_tokens === 'number' ? model.max_input_tokens : undefined;
+        const apiOutput = typeof model.max_tokens === 'number' ? model.max_tokens : undefined;
+        const contextWindow = apiWindow ?? caps.contextWindow;
+        const maxOutputTokens = apiOutput ?? caps.maxOutputTokens;
+        const contextLimitSource: DiscoveredModel['contextLimitSource'] =
+          apiWindow !== undefined ? 'provider-api' : caps.contextWindow !== undefined ? 'provider-documented' : 'default-unknown';
         return {
           id: model.id,
           name: model.display_name ?? model.id,
           capabilities: ['generalChat', 'coding'],
-          contextWindow: caps.contextMax,
+          contextWindow,
+          maxOutputTokens,
+          ...(apiWindow !== undefined ? { contextAccounting: 'shared' as const } : {}),
+          contextLimitSource,
           toolCalling: caps.toolCalling,
           structuredOutput: false,
           vision: caps.vision,
