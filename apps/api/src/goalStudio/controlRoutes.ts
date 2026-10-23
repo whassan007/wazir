@@ -230,6 +230,104 @@ export function registerControlRoutes(app: Express, ctx: GoalStudioRouteContext,
     });
   }
 
+  // Cancel is an alias for stop with audited 'cancel' action
+  app.post(`${base}/runs/:runId/cancel`, requireWrite, async (req, res) => {
+    const controller = services().controller;
+    if (!controller) return notConfigured(res, 'controller');
+    const runId = param(req, 'runId');
+    if (!runId) return sendError(res, 'VALIDATION', 'invalid runId');
+    const principal = actorFor(req);
+    try {
+      const run = await controller.stop(runId, principal);
+      await audit(req, 'run.status', { action: 'cancel', principal, status: run.status }, { runId });
+      res.json({ run });
+    } catch (error) {
+      await audit(req, 'error', { action: 'cancel', principal, code: errorCode(error) }, { runId });
+      sendFailure(res, error);
+    }
+  });
+
+  app.get(`${base}/runs/:runId/results`, requireRead, async (req, res) => {
+    const ledger = services().ledger;
+    if (!ledger) return notConfigured(res, 'ledger');
+    const runId = param(req, 'runId');
+    if (!runId) return sendError(res, 'VALIDATION', 'invalid runId');
+    try {
+      const run = await ledger.getRun(runId);
+      if (!run) return sendError(res, 'NOT_FOUND', `run '${runId}' not found`);
+
+      const graphs = services().graphs;
+      const graph = graphs ? await graphs.getRevision(run.graphId, run.graphRevision) : undefined;
+      const attempts = await ledger.attempts(runId);
+      const transitions = await ledger.transitions(runId);
+      const verification = services().verification;
+      const evidence = verification ? await verification.evidence(runId) : [];
+
+      const artifactSet = new Set<string>();
+      for (const e of (evidence as Array<Record<string, unknown>>)) {
+        if (Array.isArray(e.artifacts)) {
+          for (const a of e.artifacts) {
+            if (typeof a === 'string') artifactSet.add(a);
+            else if (a && typeof (a as { path?: unknown }).path === 'string') artifactSet.add((a as { path: string }).path);
+          }
+        }
+        if (typeof e.artifact === 'string') artifactSet.add(e.artifact);
+        else if (e.artifact && typeof (e.artifact as { path?: unknown }).path === 'string') artifactSet.add((e.artifact as { path: string }).path);
+        if (e.data && typeof e.data === 'object') {
+          const dataObj = e.data as Record<string, unknown>;
+          if (Array.isArray(dataObj.artifacts)) {
+            for (const a of dataObj.artifacts) {
+              if (typeof a === 'string') artifactSet.add(a);
+              else if (a && typeof (a as { path?: unknown }).path === 'string') artifactSet.add((a as { path: string }).path);
+            }
+          }
+        }
+      }
+      if (graph && graph.definition && Array.isArray(graph.definition.targets)) {
+        for (const t of graph.definition.targets) {
+          if (Array.isArray(t.artifacts)) {
+            for (const a of t.artifacts) {
+              if (typeof a === 'string') artifactSet.add(a);
+            }
+          }
+        }
+      }
+      const artifacts = Array.from(artifactSet);
+
+      const targets: Record<string, { status: string; title?: string; stage?: string; artifacts?: string[] }> = {};
+      if (graph && graph.definition && Array.isArray(graph.definition.targets)) {
+        for (const t of graph.definition.targets) {
+          targets[t.id] = {
+            status: run.targets?.[t.id]?.status ?? 'pending',
+            title: t.title,
+            stage: t.stage,
+            artifacts: t.artifacts,
+          };
+        }
+      }
+      if (run.targets) {
+        for (const [id, t] of Object.entries(run.targets)) {
+          if (!targets[id]) {
+            targets[id] = { status: (t as { status: string }).status };
+          }
+        }
+      }
+
+      res.json({
+        run,
+        graph,
+        attempts,
+        transitions,
+        evidence,
+        artifacts,
+        targets,
+        targetSummary: targets,
+      });
+    } catch (error) {
+      sendFailure(res, error);
+    }
+  });
+
   for (const [segment, method] of [['retry', 'retryTarget'], ['run', 'runEligible']] as const) {
     app.post(`${base}/runs/:runId/targets/:targetId/${segment}`, requireWrite, async (req, res) => {
       const controller = services().controller;
