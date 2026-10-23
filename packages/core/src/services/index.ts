@@ -159,6 +159,11 @@ export type {
   ResourceAssessment,
   ModelRecommendation,
   RestoreResult,
+  IneligibleModelEntry,
+  EnsureModelReadyForTaskOptions,
+  EnsureModelReadyResult,
+  UnloadIdleModelsOptions,
+  UnloadIdleModelsResult,
 } from './modelLifecycleService.js';
 
 
@@ -309,3 +314,4 @@ export type { ApprovalScope, ApprovalStatus, ApprovalRecord, ApprovalResolutionR
 export * from './modelDiscoveryStatus.js';
 export * from './hardwareEligibilityService.js';
 export * from './contextMemoryEstimator.js';
+export * from './intelligentModelRanker.js';
