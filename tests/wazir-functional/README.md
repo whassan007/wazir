@@ -5,19 +5,19 @@
 List the coverage and validate the manifest:
 
 ```sh
-node test/wazir-functional/run.mjs
+node tests/wazir-functional/run.mjs
 ```
 
 Build the workspaces and run the deterministic cases:
 
 ```sh
-node test/wazir-functional/run.mjs --run
+node tests/wazir-functional/run.mjs --run
 ```
 
 Use `--no-build` only when the workspace packages have already been built:
 
 ```sh
-node test/wazir-functional/run.mjs --run --no-build
+node tests/wazir-functional/run.mjs --run --no-build
 ```
 
 Cases marked `live` require a real-model qualification run. Some deterministic cases also carry a `liveRequirement` for a higher-level real-model check. The manifest lists evidence needed; listing it does not claim that those runs happened or passed.

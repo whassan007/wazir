@@ -5,14 +5,14 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
-const manifestPath = resolve(root, 'test/wazir-functional/manifest.json');
+const manifestPath = resolve(root, 'tests/wazir-functional/manifest.json');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 const args = process.argv.slice(2);
 const shouldRun = args.includes('--run');
 const shouldBuild = !args.includes('--no-build');
 
 if (args.some((arg) => !['--run', '--no-build'].includes(arg))) {
-  console.error('Usage: node test/wazir-functional/run.mjs [--run] [--no-build]');
+  console.error('Usage: node tests/wazir-functional/run.mjs [--run] [--no-build]');
   process.exit(2);
 }
 
