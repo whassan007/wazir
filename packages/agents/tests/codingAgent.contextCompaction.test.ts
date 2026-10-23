@@ -133,7 +133,8 @@ describe('CodingAgent.run — context compaction', () => {
     const agent = createCodingAgent({ maxTurns: 20, contextCompactionRatio: 0.7 });
     const { runtime, messageLengthsSeen } = growingRuntime();
 
-    const turns = await drain(agent.run({ ...baseRequest, contextTokens: 2_000 }, runtime));
+    // Isolate compaction thresholds from the task-output planning heuristic.
+    const turns = await drain(agent.run({ ...baseRequest, contextTokens: 2_000, reserve: { outputTokens: 200 } }, runtime));
     const compactions = turns.filter((t) => t.kind === 'message' && t.content?.includes('context compacted'));
 
     expect(compactions.length).toBeGreaterThan(0);
