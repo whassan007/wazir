@@ -142,6 +142,14 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
     expect(analysis.capabilities).not.toContain('filesystem_write');
   });
 
+  it('does not require filesystem changes for arithmetic answers', () => {
+    const planner = createTaskPlanner();
+    for (const prompt of ['Compute 17 times 23.', 'What is 17 multiplied by 23? Reply with only the number.']) {
+      expect(planner.analyze(prompt).mutationRequired).toBe(false);
+    }
+    expect(planner.analyze('Write a program to compute 17 times 23.').mutationRequired).toBe(true);
+  });
+
   it('analyze() detects build/write intent as requiring mutation with a clean workspace for from-scratch requests', () => {
     const planner = createTaskPlanner();
     const analysis = planner.analyze('write a new program from scratch to reverse a string');
