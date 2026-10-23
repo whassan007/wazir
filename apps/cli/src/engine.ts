@@ -791,6 +791,7 @@ function registerModel(
     architecture: discovered.architecture,
     parameters: discovered.parameters,
     contextMax,
+    maxOutputTokens: discovered.maxOutputTokens,
     configuredContext: configured,
     capabilities,
     toolCalling: discovered.toolCalling ?? false,

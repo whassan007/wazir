@@ -889,7 +889,7 @@ export class ModelLifecycleService {
           if (!this.deps.models.get(m.id)) {
             newlyRegistered++;
             this.deps.models.register({ id: m.id, name: m.name ?? m.id, provider: runtimeId, family: 'other',
-              contextMax: m.contextWindow ?? 0, parameters: m.parameters, quantization: m.quantization,
+              contextMax: m.contextWindow ?? 0, maxOutputTokens: m.maxOutputTokens, parameters: m.parameters, quantization: m.quantization,
               capabilities: ['generalChat'], toolCalling: m.toolCalling ?? false, structuredOutput: m.structuredOutput ?? false,
               vision: m.vision ?? false, audio: m.audio ?? false, embedding: m.embedding ?? false, reasoning: m.reasoning ?? false,
               runtimeCompatibility: [runtime.type], local: true, createdAt: new Date(), updatedAt: new Date() });

@@ -343,13 +343,14 @@ export async function planTask(
       tokens: effectiveContextTokens(model),
       source: model.configuredContext !== undefined ? 'configured' : 'discovered',
     },
-    engine.config.context?.reserve?.outputTokens ?? planOutputReserveTokens({
+    planOutputReserveTokens({
+      requestedOutputTokens: engine.config.context?.reserve?.outputTokens,
       taskDescription: description,
       taskType: task.type,
       effectiveContextTokens: effectiveContextTokens(model),
       maxOutputTokens: model.provider === 'nvidia' && !Array.isArray(engine.config.providers?.nvidia?.limits)
-        ? engine.config.providers?.nvidia?.limits?.maxOutputTokens
-        : undefined,
+        ? Math.min(model.maxOutputTokens ?? Infinity, engine.config.providers?.nvidia?.limits?.maxOutputTokens ?? Infinity)
+        : model.maxOutputTokens,
     }),
   );
   if (!context.fits) {

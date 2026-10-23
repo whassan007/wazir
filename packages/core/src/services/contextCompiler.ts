@@ -56,7 +56,9 @@ export function planOutputReserveTokens(params: {
   taskDescription: string;
   taskType?: string;
   effectiveContextTokens?: number;
+  estimatedInputTokens?: number;
   maxOutputTokens?: number;
+  requestedOutputTokens?: number;
 }): number {
   const task = params.taskDescription.trim();
   const lower = task.toLowerCase();
@@ -79,8 +81,11 @@ export function planOutputReserveTokens(params: {
     planned = Math.max(2048, Math.min(4096, contextScale));
   }
 
-  if (params.effectiveContextTokens !== undefined && params.effectiveContextTokens > 0) {
-    planned = Math.min(planned, Math.max(128, Math.floor(params.effectiveContextTokens * 0.1)));
+  if (params.requestedOutputTokens !== undefined) planned = params.requestedOutputTokens;
+  if (params.requestedOutputTokens === undefined && params.effectiveContextTokens !== undefined && params.effectiveContextTokens > 0) {
+    // A percentage of the window is not an output requirement: an 8K model
+    // can still write a 1.5K example when its prompt leaves that room.
+    planned = Math.min(planned, Math.max(0, Math.floor(params.effectiveContextTokens) - (params.estimatedInputTokens ?? 0) - 128));
   }
   if (params.maxOutputTokens !== undefined && Number.isFinite(params.maxOutputTokens) && params.maxOutputTokens >= 0) {
     planned = Math.min(planned, Math.floor(params.maxOutputTokens));

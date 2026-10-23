@@ -32,6 +32,8 @@ export interface ModelRecord {
   parameters?: string;
   /** Maximum context the model family supports. */
   contextMax: number;
+  /** Provider-reported completion ceiling, when discovery supplies it. */
+  maxOutputTokens?: number;
   /** Operator-configured context (<= contextMax). Used when the runtime does not report it. */
   configuredContext?: number;
   capabilities: ModelCapability[];

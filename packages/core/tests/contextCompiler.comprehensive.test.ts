@@ -367,6 +367,10 @@ describe('Token Budgeting, Reserves, and Prompt Caching', () => {
   it('plans output reserve from task scope and clamps it to provider output limits', () => {
     expect(planOutputReserveTokens({ taskDescription: 'What is a CPU?', taskType: 'chat' })).toBe(128);
     expect(planOutputReserveTokens({ taskDescription: 'Add a validation helper', taskType: 'coding' })).toBe(1536);
+    expect(planOutputReserveTokens({ taskDescription: 'Write a C++17 quicksort program', taskType: 'coding', effectiveContextTokens: 8192, estimatedInputTokens: 3282 })).toBe(1536);
+    expect(planOutputReserveTokens({ taskDescription: 'Write a C++17 quicksort program', taskType: 'coding', effectiveContextTokens: 4096, estimatedInputTokens: 3700 })).toBe(268);
+    expect(planOutputReserveTokens({ taskDescription: 'Write code', requestedOutputTokens: 4096, maxOutputTokens: 512 })).toBe(512);
+    expect(planOutputReserveTokens({ taskDescription: 'Write code', requestedOutputTokens: 4096, effectiveContextTokens: 1024 })).toBe(4096);
     expect(planOutputReserveTokens({
       taskDescription: 'Refactor across the codebase and update multiple services',
       taskType: 'coding',
