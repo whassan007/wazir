@@ -641,7 +641,7 @@ export class NvidiaAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     omittedFields: ReadonlySet<string>,
   ): Record<string, unknown> {
     const stream = request.stream ?? true;
-    const maxTokens = request.maxTokens ?? Math.min(this.defaultMaxOutputTokens, meta.maxOutputTokens);
+    const maxTokens = Math.min(request.maxTokens ?? this.defaultMaxOutputTokens, meta.maxOutputTokens);
     const body: Record<string, unknown> = {
       model: request.modelId,
       messages,

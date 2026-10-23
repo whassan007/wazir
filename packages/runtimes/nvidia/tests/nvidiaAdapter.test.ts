@@ -43,6 +43,14 @@ describe('NvidiaAdapter — First-Class Execution Provider', () => {
     fetchMock = vi.fn();
   });
 
+  it('clamps an explicit completion request to the provider model ceiling', async () => {
+    const broker = await makeBroker();
+    const adapter = createNvidiaAdapter({ secrets: broker, env: { NVIDIA_API_KEY: TEST_NVAPI_KEY }, fetch: fetchMock as unknown as typeof fetch });
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }), { headers: { 'content-type': 'application/json' } }));
+    for await (const _event of adapter.generate({ modelId: NVIDIA_DEFAULT_MODEL_ID, messages: [{ role: 'user', content: 'hello' }], maxTokens: 100000, stream: false })) { /* drain */ }
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).max_tokens).toBe(inferNvidiaModelMetadata(NVIDIA_DEFAULT_MODEL_ID).maxOutputTokens);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
