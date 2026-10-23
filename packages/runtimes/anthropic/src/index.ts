@@ -48,8 +48,8 @@ const MODEL_CAPABILITY_PREFIXES: AnthropicModelEntry[] = [
   { prefix: 'claude-opus-4-8', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: true },
   { prefix: 'claude-sonnet-5-5', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: true },
   { prefix: 'claude-sonnet-5', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: true },
-  { prefix: 'claude-haiku-5-5', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: false },
-  { prefix: 'claude-haiku-4-5', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: false },
+  { prefix: 'claude-haiku-5-5', contextWindow: 1_000_000, maxOutputTokens: 128_000, toolCalling: true, vision: true, reasoning: true },
+  { prefix: 'claude-haiku-4-5', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: true },
   // Older generations — generic prefixes, after every specific entry above.
   { prefix: 'claude-opus-4', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: true },
   { prefix: 'claude-sonnet-4', contextWindow: 200_000, toolCalling: true, vision: true, reasoning: true },
