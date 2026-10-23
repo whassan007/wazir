@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.2.13 — 2026-10-22
+
+**Release**: `v0.2.13`
+**Theme**: Autonomous multi-agent remediation, execution & distributed recovery hardening, security isolation, and fast-startup optimization
+
+- **Execution Correctness & Stream Integrity (`@wazir/agents`, `@wazir/core`, `@wazir/evaluation`, `@wazir/cli`, `@wazir/runtimes-*`)**:
+  - Guarded the conversational fast path (`isConversationalFastPathRequest`) against question-phrased coding or mutation prompts by evaluating `mutationRequired`, `expectedArtifacts`, `expectedFiles`, file paths, and mutation verbs prior to routing (`ISS-006`).
+  - Enforced explicit terminal completion markers across NVIDIA (`[DONE]` / `finish_reason`), LM Studio, Ollama (`done: true`), OpenAI, Anthropic (`message_stop`), and Google (`finishReason`) adapters, rejecting malformed JSON chunks and truncated timeout streams (`ISS-007`).
+  - Removed the `hasCurrentPassingChecks` override in `evaluateExecution` so unresolved failed shell commands cannot be masked by later passing checks, and removed fabricated benchmark/evaluation fallback metrics (`ISS-008`).
+  - Persisted terminal `failed` execution records when preflight, `planTask`, `planTaskResume`, or `activateExecution` fails (`ISS-009`), wired `wa task status <id>` to authoritative `engine.executions` / `engine.orchestrator` state (`ISS-010`), enabled incremental token streaming (`execution.token`) on `wa run`, removed 500-character JSON output truncation, and propagated `AbortSignal` across remote and subagent execution (`ISS-011`).
+- **Durable Recovery, Lease Fencing & Quota Accounting (`@wazir/core`, `@wazir/api`)**:
+  - Enforced terminal job immutability (`completed`, `failed`, `cancelled`) and `canTransitionExecution` guards across `orphan()`, `pause()`, `resume()`, and CLI retry (`ISS-012`).
+  - Fixed `JobManager.load()` store hydration, required `findUnknownOutcomeToolCall` checks before resetting expired `running` tasks (`UNKNOWN_MUTATION_OUTCOME`), and expanded `reconcileLocalOutcomes` to recover interrupted standalone `running`/`verifying` executions on startup (`ISS-013`).
+  - Moved worker `assertLease()` ahead of all in-memory state/event mutations and fenced canonical `execution/${executionId}` updates in `@wazir/api` by `leaseEpoch` (`ISS-014`).
+  - Released token budget reservations with `ambiguous: false` when provider generation fails before emitting output, and released `ResourceReservation` when both `loadModel()` and `inspectModel()` fail (`ISS-015`).
+- **Security Isolation, Mobile Handshake & Auto-Updater (`@wazir/core`, `@wazir/tools`, `@wazir/api`, `@wazir/cli`)**:
+  - Propagated `effectiveIsolation` (`sandboxStatus().mode`) across all `policy.authorize()` call sites, enforced fail-closed `requiredIsolation`, disabled `allowWorkspaceArtifactExecution` auto-approval when unsandboxed (`none`), reclassified `code_mode` as `NON_IDEMPOTENT_WRITE` / `MUTATING` / `exclusive`, and locked down VM realm prototype chains without mutating host globals (`ISS-018`).
+  - Restored the `wa update` subsystem (`apps/cli/src/updater/*`, `scripts/build-cli.mjs`) with SHA-256 verification, atomic staging, rollback, and durable active-work draining across `execution/*`, `job/*`, and `dispatch/*` records (`ISS-001`, `ISS-017`).
+  - Added real semver range and protocol compatibility negotiation on `/api/v1/mobile/handshake`, blocked rotation of expired mobile credentials, and preserved HTTP/HTTPS scheme fidelity (`ISS-016`).
+- **Startup Performance, TUI Truthfulness & Release Packaging (`@wazir/core`, `@wazir/cli`, `@wazir/api`, `packaging/`, `scripts/`)**:
+  - Accelerated warm 9.65 MB disk-store `createEngine({ fastStartup: true })` startup by **79.4%** (`430.52 ms → 88.83 ms`) and store deserialization by **2.24×** via lazy date revival, lazy store hydration, terminal-record skipping, and memoized CPU/PATH/runtime discovery (`ISS-019`).
+  - Modularized `fleetTui.ts`, `commands.ts`, and `mobile.ts` with 100% barrel re-export compatibility and removed fabricated TUI fallback strings (`ISS-020`).
+  - Unified all 26 workspace `package.json` versions, `AGPL-3.0-only` licensing, Node.js `>=22.13.0` floor, exact-SHA CI/release workflows, DEB/RPM systemd units, Homebrew/Scoop/WinGet manifests, dynamic `scripts/build-dmg.sh` versioning, and zero production `npm audit` vulnerabilities (`ISS-002`–`ISS-005`, `RR-001`, `RR-003`).
+
 ## v0.2.12 — 2026-10-21
 
 **Release**: `v0.2.12`

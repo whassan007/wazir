@@ -67,19 +67,25 @@ if (process.platform === 'win32') {
 }
 rmSync(stagingDir, { recursive: true, force: true });
 
-// 3. Package npm tarball
-console.log('\n--- 2. Packaging npm distribution tarball ---');
-execSync(`npm pack --pack-destination="${releaseDir}"`, { cwd: rootDir, stdio: 'inherit' });
+// 3. Package npm tarball & SBOM (generated once on linux-x64 or when --all-artifacts is set to prevent cross-OS duplicate conflicts in CI)
+if (targetId === 'linux-x64' || process.argv.includes('--all-artifacts')) {
+  console.log('\n--- 2. Packaging npm distribution tarball ---');
+  const packedTgz = execSync('node scripts/pack-npm.mjs --skip-bundle', { cwd: rootDir, encoding: 'utf8' }).trim().split('\n').pop().trim();
+  if (packedTgz && existsSync(packedTgz)) {
+    copyFileSync(packedTgz, path.resolve(releaseDir, path.basename(packedTgz)));
+    console.log(`✓ Staged clean npm tarball to ${path.resolve(releaseDir, path.basename(packedTgz))}`);
+  }
 
-// 4. Generate SBOM
-console.log('\n--- 3. Generating Software Bill of Materials (SBOM) ---');
-const sbomPath = path.resolve(releaseDir, `wazir-v${version}-sbom.json`);
-try {
-  const sbomRaw = execSync('npm sbom --sbom-format cyclonedx', { cwd: rootDir, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
-  writeFileSync(sbomPath, sbomRaw);
-  console.log(`✓ SBOM written to ${sbomPath}`);
-} catch (err) {
-  console.warn(`! npm sbom generation failed: ${err.message}`);
+  // 4. Generate SBOM
+  console.log('\n--- 3. Generating Software Bill of Materials (SBOM) ---');
+  const sbomPath = path.resolve(releaseDir, `wazir-v${version}-sbom.json`);
+  try {
+    const sbomRaw = execSync('npm sbom --sbom-format cyclonedx', { cwd: rootDir, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+    writeFileSync(sbomPath, sbomRaw);
+    console.log(`✓ SBOM written to ${sbomPath}`);
+  } catch (err) {
+    console.warn(`! npm sbom generation failed: ${err.message}`);
+  }
 }
 
 // 5. Compute SHA-256 checksums
