@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { parse as parseShell } from 'shell-quote';
 import type { ParseEntry } from 'shell-quote';
 import type {
@@ -135,6 +135,9 @@ const DENY_SHELL_COMMANDS = new Set([
   'sudo', 'su', 'mkfs', 'dd', 'fdisk', 'partprobe', 'shutdown', 'reboot',
   'halt', 'poweroff', 'iptables', 'ip6tables', 'mount', 'umount', 'kill',
   'killall', 'pkill', 'systemctl', 'launchctl', 'eval', 'exec',
+  // Privilege / namespace escalation helpers with the same blast radius as
+  // sudo; before, they fell through to a plain "ask" (governance hardening G-7).
+  'doas', 'pkexec', 'runuser', 'sudoedit', 'chroot', 'nsenter', 'insmod', 'rmmod', 'modprobe',
 ]);
 
 // Interpreters and package managers can run arbitrary code (node -e, npm scripts),
@@ -149,10 +152,90 @@ const ASK_SHELL_COMMANDS = new Set([
 const NETWORK_COMMANDS = new Set([
   'curl', 'wget', 'nc', 'ncat', 'ssh', 'scp', 'sftp', 'ping',
   'traceroute', 'nslookup', 'dig', 'telnet',
+  // Further transfer / exfiltration helpers: with network disabled these are
+  // denied like curl instead of merely asking (governance hardening G-7).
+  'netcat', 'socat', 'rsync', 'ftp', 'lftp', 'tftp', 'aria2c', 'axel', 'http', 'https', 'xh', 'httpie',
+  'nmap', 'whois', 'host', 'mail', 'mailx', 'sendmail', 'mutt', 'smbclient', 'mosh',
+  'gh', 'aws', 'gcloud', 'gsutil', 'az',
 ]);
 
 // Commands that execute their trailing arguments as another command.
-const WRAPPER_COMMANDS = new Set(['env', 'nice', 'nohup', 'time', 'timeout', 'xargs', 'command', 'builtin', 'stdbuf', 'ionice']);
+// `setsid curl ...` / `busybox wget ...` used to hide the real command behind
+// an unknown name, downgrading a network deny to an ask (G-7).
+const WRAPPER_COMMANDS = new Set([
+  'env', 'nice', 'nohup', 'time', 'timeout', 'xargs', 'command', 'builtin', 'stdbuf', 'ionice',
+  'setsid', 'chrt', 'taskset', 'caffeinate', 'arch', 'unbuffer', 'busybox', 'toybox',
+]);
+// Wrappers whose first positional argument is a value, not the command.
+const WRAPPER_POSITIONAL_VALUE = new Set(['timeout', 'chrt', 'taskset']);
+
+// Shells whose `-c <string>` argument is parsed and classified recursively.
+const SHELL_INTERPRETERS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh', 'mksh']);
+// Anything that executes code read from stdin or a fetched file. Piping a
+// network fetch into one of these is remote code execution (G-8).
+const CODE_INTERPRETERS = new Set([...SHELL_INTERPRETERS, 'python', 'python3', 'python2', 'node', 'perl', 'ruby', 'php', 'deno', 'bun', 'lua', 'source', '.', 'osascript', 'pwsh', 'powershell']);
+
+// Environment assignments that change which program runs or inject code into
+// the one that does (`LD_PRELOAD=/tmp/x.so ls`, `NODE_OPTIONS=--require=...`,
+// `PATH=/tmp/evil ls`). They were silently stripped before classification, so
+// a safe-listed command could execute arbitrary code unattended (G-2).
+const DANGEROUS_ENV_ASSIGNMENT = new RegExp(
+  '^(?:PATH|LD_[A-Z0-9_]+|DYLD_[A-Z0-9_]+|NODE_OPTIONS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|BASH_ENV|ENV|BASH_FUNC_[^=]*|SHELLOPTS|BASHOPTS|IFS|PS4|PROMPT_COMMAND|ZDOTDIR' +
+    '|PYTHON[A-Z0-9_]*|PERL5?[A-Z0-9_]*|RUBY(?:OPT|LIB)|GEM_[A-Z0-9_]+|GIT_[A-Z0-9_]+|HOME|XDG_CONFIG_HOME|TMPDIR|SHELL' +
+    '|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|CLASSPATH|GCC_EXEC_PREFIX|COMPILER_PATH|LIBRARY_PATH|CPATH' +
+    '|RUSTC_WRAPPER|RUSTC|RUSTFLAGS|RUSTDOCFLAGS|CARGO_[A-Z0-9_]+|CC|CXX|LD|AR|MAKEFLAGS|MAKEFILES|MFLAGS|GOFLAGS|GOTOOLCHAIN|CGO_[A-Z0-9_]+' +
+    '|NPM_CONFIG_[A-Z0-9_]+|YARN_[A-Z0-9_]+|EDITOR|VISUAL|PAGER|MANPAGER|GIT_PAGER|LESSOPEN|LESSCLOSE|BROWSER|SSH_ASKPASS|SUDO_ASKPASS)=',
+  'i',
+);
+
+// Compiler options that load or execute another program: a plugin, a
+// wrapper around every sub-tool, an alternate tool directory or linker, a
+// spec file (which can run commands) or a response file that may contain any
+// of them (governance hardening G-5).
+function compilerExecOption(name: string, args: string[], i: number): boolean {
+  const arg = args[i];
+  if (arg.startsWith('@')) return true;
+  if (name === 'rustc') {
+    if (/^-C\s*(?:linker|link-arg|link-args|linker-flavor)=/.test(arg) || /^-Z/.test(arg)) return true;
+    if (arg === '-C' && /^(?:linker|link-arg|link-args|linker-flavor)=/.test(args[i + 1] ?? '')) return true;
+    if (/^--codegen=(?:linker|link-arg|link-args)=/.test(arg)) return true;
+    return false;
+  }
+  if (arg === '-wrapper' || arg === '-Xclang' || arg === '-Xlinker' || arg === '-Xfrontend' || arg === '-load') return true;
+  if (/^-B/.test(arg) || /^-f(?:plugin|pass-plugin)/.test(arg) || /^--?specs(?:=|$)/.test(arg)) return true;
+  if (/^--ld-path=/.test(arg) || /^-fuse-ld=.*[/\\]/.test(arg)) return true;
+  if (/^-Wl,.*(?:^|,)-?-plugin/.test(arg)) return true;
+  if (/^-(?:load-plugin-library|load-plugin-executable|plugin-path)/.test(arg)) return true;
+  return false;
+}
+const JAVAC_EXEC_OPTIONS = ['-processor', '-processorpath', '--processor-path', '--processor-module-path', '-Xplugin', '--plugin'];
+
+/** Physical location of `p`: symlinks (including dangling ones) resolved, missing tail kept. */
+function physicalPath(p: string): string {
+  let current = path.resolve(p);
+  const rest: string[] = [];
+  for (let hops = 0; hops < 64; hops++) {
+    try {
+      const real = realpathSync.native(current);
+      return rest.length ? path.join(real, ...[...rest].reverse()) : real;
+    } catch {
+      try {
+        if (lstatSync(current).isSymbolicLink()) {
+          // Dangling link: a write would create its target, so follow it.
+          current = path.resolve(path.dirname(current), readlinkSync(current));
+          continue;
+        }
+      } catch {
+        // component does not exist; walk up
+      }
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(p);
+      rest.push(path.basename(current));
+      current = parent;
+    }
+  }
+  return path.resolve(p);
+}
 
 const WRAPPER_VALUE_FLAGS = new Set(['-n', '--adjustment', '-c', '--class', '-p', '-s', '--signal', '-k', '--kill-after', '-o', '-e', '-i', '-P', '--max-procs', '-L', '-I', '-d', '--delimiter', '-a', '--arg-file']);
 
@@ -164,6 +247,8 @@ const EFFECT_RANK: Record<PolicyEffect, number> = { allow: 0, ask: 1, deny: 2 };
 interface ShellSegment {
   words: string[];
   redirects: Array<{ op: string; target: string }>;
+  /** Segments sharing an id are connected by `|`, `|&` or process substitution. */
+  pipeline?: number;
 }
 
 function basename(word: string): string {
@@ -183,10 +268,12 @@ function stripAssignments(words: string[]): string[] {
 /** Splits a parsed command line into independent simple commands. */
 function splitSegments(entries: ParseEntry[]): ShellSegment[] {
   const segments: ShellSegment[] = [];
-  let current: ShellSegment = { words: [], redirects: [] };
-  const flush = () => {
+  let pipeline = 0;
+  let current: ShellSegment = { words: [], redirects: [], pipeline };
+  const flush = (op?: string) => {
     if (current.words.length > 0 || current.redirects.length > 0) segments.push(current);
-    current = { words: [], redirects: [] };
+    if (op !== '|' && op !== '|&' && op !== '<(' && op !== '>(' && op !== ')') pipeline += 1;
+    current = { words: [], redirects: [], pipeline };
   };
 
   for (let i = 0; i < entries.length; i++) {
@@ -209,10 +296,10 @@ function splitSegments(entries: ParseEntry[]): ShellSegment[] {
       continue;
     }
     if (COMMAND_BOUNDARY_OPS.has(entry.op)) {
-      flush();
+      flush(entry.op);
       continue;
     }
-    flush();
+    flush(entry.op);
   }
   flush();
   return segments;
@@ -230,12 +317,42 @@ function resolveCommand(words: string[]): { name: string; args: string[] } {
       if (WRAPPER_VALUE_FLAGS.has(rest[j])) j += 1;
       j += 1;
     }
-    if (name === 'timeout') j += 1;
+    if (WRAPPER_POSITIONAL_VALUE.has(name)) j += 1;
     const inner = stripAssignments(rest.slice(j));
     if (inner.length === 0) return { name, args: rest.slice(1) };
     rest = inner;
   }
   return rest.length > 0 ? { name: basename(rest[0]), args: rest.slice(1) } : { name: '', args: [] };
+}
+
+/**
+ * Every `NAME=value` word that precedes the command `resolveCommand` finds,
+ * including ones passed to `env` and other wrappers.
+ */
+function leadingAssignments(words: string[], name: string): string[] {
+  const out: string[] = [];
+  for (const word of words) {
+    if (!isAssignment(word) && basename(word) === name) break;
+    if (isAssignment(word)) out.push(word);
+  }
+  return out;
+}
+
+/** `env -S "cmd args"` / `env --split-string=...`: the string env re-splits into a command. */
+function envSplitString(words: string[]): string | undefined {
+  const rest = stripAssignments(words);
+  if (basename(rest[0] ?? '') !== 'env') return undefined;
+  for (let i = 1; i < rest.length; i++) {
+    const w = rest[i];
+    if (w === '-S' || w === '--split-string') return rest.slice(i + 1).join(' ');
+    if (w.startsWith('--split-string=')) return [w.slice('--split-string='.length), ...rest.slice(i + 1)].join(' ');
+    if (/^-[a-zA-Z]*S/.test(w) && !w.startsWith('--')) {
+      const attached = w.slice(w.indexOf('S') + 1);
+      return [attached, ...rest.slice(i + 1)].filter(Boolean).join(' ');
+    }
+    if (!w.startsWith('-')) return undefined;
+  }
+  return undefined;
 }
 
 function mostRestrictive(decisions: PolicyDecision[]): PolicyDecision {
@@ -278,11 +395,21 @@ const GIT_CONFIG_WRITE_FLAGS = ['--edit', '-e', '--unset', '--unset-all', '--add
 const FILE_TOOLS_READ = new Set(['read', 'search', 'glob']);
 const FILE_TOOLS_WRITE = new Set(['write', 'edit']);
 
-function isInside(root: string, target: string): boolean {
+function isInsideLexical(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(target);
   const rel = path.relative(resolvedRoot, resolvedTarget);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Containment on both the lexical path and its physical (symlink-resolved)
+ * location: `etc-link/passwd` with `etc-link -> /etc` is lexically inside the
+ * project but reads the host file (governance hardening G-3).
+ */
+function isInside(root: string, target: string): boolean {
+  if (!isInsideLexical(root, target)) return false;
+  return isInsideLexical(physicalPath(root), physicalPath(target));
 }
 
 /**
@@ -291,6 +418,14 @@ function isInside(root: string, target: string): boolean {
  * Callers pass an absolute path already known to be inside `projectRoot`.
  */
 export function protectedPathReason(projectRoot: string, absolute: string): string | null {
+  const lexical = lexicalProtectedPathReason(projectRoot, absolute);
+  if (lexical) return lexical;
+  // `hooks-link/pre-commit` with `hooks-link -> .git/hooks` lands in a
+  // protected directory under another name (G-3).
+  return lexicalProtectedPathReason(physicalPath(projectRoot), physicalPath(absolute));
+}
+
+function lexicalProtectedPathReason(projectRoot: string, absolute: string): string | null {
   const relative = path.relative(path.resolve(projectRoot), path.resolve(absolute));
   if (!relative || relative.startsWith('..')) return null;
   const segments = relative.split(path.sep);
@@ -351,6 +486,7 @@ export class PolicyEngine {
       this.compiledOutputsByExecution.set(executionId, set);
     }
     set.add(absolutePath);
+    set.add(physicalPath(absolutePath));
   }
 
   private isTrackedCompiledOutput(executionId: string | undefined, absolutePath: string): boolean {
@@ -381,7 +517,8 @@ export class PolicyEngine {
 
   private wasWrittenThisExecution(executionId: string | undefined, absolutePath: string): boolean {
     if (!executionId) return false;
-    return this.writtenPathsByExecution.get(executionId)?.has(absolutePath) ?? false;
+    const set = this.writtenPathsByExecution.get(executionId);
+    return set ? set.has(absolutePath) || set.has(physicalPath(absolutePath)) : false;
   }
 
   private buildRules(): PolicyRule[] {
@@ -938,6 +1075,28 @@ export class PolicyEngine {
       decisions.push(...this.classifyShellSegment(segment, projectRoot, request.executionId, request.effectiveIsolation));
     }
 
+    // `curl https://x | sh`, `bash <(wget -O- x)`: a fetch feeding an
+    // interpreter is remote code execution even when network access is on and
+    // each half alone would only ask (governance hardening G-8).
+    const byPipeline = new Map<number, string[]>();
+    for (const segment of segments) {
+      const { name } = resolveCommand(segment.words);
+      const list = byPipeline.get(segment.pipeline ?? -1) ?? [];
+      list.push(name);
+      byPipeline.set(segment.pipeline ?? -1, list);
+    }
+    for (const names of byPipeline.values()) {
+      const fetch = names.find((n) => NETWORK_COMMANDS.has(n));
+      const interpreter = names.find((n) => CODE_INTERPRETERS.has(n));
+      if (fetch && interpreter && names.length > 1) {
+        decisions.push({
+          decision: 'deny',
+          rule: 'shell-dangerous-deny',
+          reasons: [`'${fetch}' output is fed to the interpreter '${interpreter}' (download-and-execute); denied`],
+        });
+      }
+    }
+
     const merged = mostRestrictive(decisions);
     if (segments.length > 1) {
       merged.reasons.unshift(`command line contains ${segments.length} sub-commands; each was classified and the most restrictive decision applies`);
@@ -950,7 +1109,7 @@ export class PolicyEngine {
     const text = segment.words.join(' ');
 
     for (const redirect of segment.redirects) {
-      const decision = this.classifyRedirect(redirect, projectRoot);
+      const decision = this.classifyRedirect(redirect, projectRoot, executionId);
       if (decision) decisions.push(decision);
     }
 
@@ -959,41 +1118,90 @@ export class PolicyEngine {
     }
 
     // Inspect any command substitutions embedded inside quoted words (e.g. "outer $(reboot)")
+    const substitutions: string[] = [];
     for (const word of segment.words) {
       const match = word.match(/\$\((.+)\)/);
       if (match) {
+        substitutions.push(match[1]);
         decisions.push(this.classifyShell({ tool: 'shell', input: { command: match[1] }, projectRoot, executionId, effectiveIsolation }));
       }
+    }
+
+    // Assignments that hijack the command or inject code into it (G-2).
+    const resolvedName = resolveCommand(segment.words).name;
+    for (const assignment of leadingAssignments(segment.words, resolvedName)) {
+      if (DANGEROUS_ENV_ASSIGNMENT.test(assignment)) {
+        const variable = assignment.slice(0, assignment.indexOf('='));
+        decisions.push({
+          decision: 'ask',
+          rule: 'shell-env-injection-ask',
+          reasons: [`environment assignment '${variable}=...' can change which program runs or inject code into it; approval required`],
+        });
+      }
+    }
+
+    // `env -S "sudo ls"` re-splits its argument into a command line.
+    const split = envSplitString(segment.words);
+    if (split !== undefined) {
+      decisions.push({ decision: 'ask', rule: 'shell-unknown-ask', reasons: ["'env -S' re-splits its argument into a new command line; approval required"] });
+      if (split.trim()) decisions.push(this.classifyShell({ tool: 'shell', input: { command: split }, projectRoot, executionId, effectiveIsolation }));
     }
 
     if (this.options.denyCommands?.some((d) => text.startsWith(d))) {
       decisions.push({ decision: 'deny', rule: 'shell-dangerous-deny', reasons: [`command matches operator deny list: ${text}`] });
       return decisions;
     }
-    if (this.options.allowCommands?.some((a) => text.startsWith(a))) {
+    // Word-boundary match: an allow entry `ls` must not also allow `lsof`/`lsblk` (G-11).
+    if (this.options.allowCommands?.some((a) => text === a || text.startsWith(a.endsWith(' ') ? a : `${a} `))) {
       decisions.push({ decision: 'allow', rule: 'shell-safe-allow', reasons: [`command matches operator allow list: ${text}`] });
       return decisions;
     }
 
     const { name, args } = resolveCommand(segment.words);
 
+    // `bash -c "$(curl ...)"`: an interpreter running fetched text (G-8).
+    if (CODE_INTERPRETERS.has(name)) {
+      const fetched = [...substitutions, ...args.flatMap((a) => [...a.matchAll(/\$\((.+)\)|`([^`]*)`/g)].map((m) => m[1] ?? m[2] ?? ''))]
+        .find((inner) => this.mentionsNetworkCommand(inner));
+      if (fetched !== undefined) {
+        decisions.push({ decision: 'deny', rule: 'shell-dangerous-deny', reasons: [`'${name}' would execute text fetched by '${fetched.trim()}' (download-and-execute); denied`] });
+        return decisions;
+      }
+    }
+
     if (
-      (name === 'sh' || name === 'bash' || name === 'dash') &&
+      SHELL_INTERPRETERS.has(name) &&
       args.length === 2 &&
-      args[0] === '-c' &&
+      /^-[a-zA-Z]*c[a-zA-Z]*$/.test(args[0]) &&
       typeof args[1] === 'string' &&
       !args[1].includes('$(') &&
       !args[1].includes('`')
     ) {
-      decisions.push(
-        this.classifyShell({
-          tool: 'shell',
-          input: { command: args[1] },
-          projectRoot,
-          effectiveIsolation,
-        }),
-      );
+      const inner = this.classifyShell({
+        tool: 'shell',
+        input: { command: args[1] },
+        projectRoot,
+        executionId,
+        effectiveIsolation,
+      });
+      decisions.push(inner);
+      // Extra shell flags (`-l` sources profile files, `-i` rc files) can run
+      // code beyond the inspected string, so they never auto-allow.
+      if (args[0] !== '-c' && inner.decision === 'allow') {
+        decisions.push({ decision: 'ask', rule: 'shell-unknown-ask', reasons: [`'${name} ${args[0]}' may source startup files before the command; approval required`] });
+      }
       return decisions;
+    }
+
+    // `git` through the shell gets the same verb rules as the git tool
+    // (`git push` was only an ask here while the git tool denies it), but
+    // never more permissive than the generic state-modifying ask (G-9).
+    if (name === 'git') {
+      const gitDecision = this.classifyGit({ tool: 'git', input: { args }, projectRoot });
+      if (gitDecision.decision === 'deny') {
+        decisions.push(gitDecision);
+        return decisions;
+      }
     }
 
     // Running a binary this exact task already compiled via an already-approved compile
@@ -1048,6 +1256,19 @@ export class PolicyEngine {
     const buildDecision = this.classifyBuildWorkspace(name, args, projectRoot, executionId);
     if (buildDecision) {
       decisions.push(buildDecision);
+      // make/cargo/go/ninja run model-authored recipes and build scripts. That
+      // is only acceptable unattended inside the OS sandbox, exactly like the
+      // workspace-artifact rule above (G-10).
+      const sandboxDisabled =
+        (effectiveIsolation ?? '').trim().toLowerCase() === 'none' ||
+        (process.env.WAZIR_SANDBOX ?? '').trim().toLowerCase() === 'none';
+      if (buildDecision.decision === 'allow' && sandboxDisabled && ['make', 'cmake', 'ninja', 'cargo', 'go'].includes(name)) {
+        decisions.push({
+          decision: 'ask',
+          rule: 'shell-build-workspace-ask',
+          reasons: [`'${name}' executes project-defined build steps and requires approval when sandbox isolation is disabled (effectiveIsolation=none)`],
+        });
+      }
       return decisions;
     }
 
@@ -1329,6 +1550,18 @@ export class PolicyEngine {
 
 
     if (['g++', 'gcc', 'clang', 'clang++', 'cc', 'c++', 'rustc', 'swiftc'].includes(name)) {
+      // Plugins, sub-tool wrappers, alternate linkers and spec/response files
+      // execute arbitrary programs at compile time; `-fplugin=/tmp/x.so` was
+      // auto-allowed (governance hardening G-5).
+      for (let i = 0; i < args.length; i++) {
+        if (compilerExecOption(name, args, i)) {
+          return {
+            decision: 'deny',
+            rule: 'shell-dangerous-deny',
+            reasons: [`'${name} ${args[i]}${args[i] === '-C' ? ` ${args[i + 1]}` : ''}' loads or executes another program at compile time; denied`],
+          };
+        }
+      }
       for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         if (arg === '-o' || arg === '--out-dir') {
@@ -1386,6 +1619,18 @@ export class PolicyEngine {
         break;
       }
 
+      // `ps eww` / `ps -E` print other processes' environments, i.e. the
+      // operator's API keys (same rationale as excluding env/printenv, F-13).
+      if (name === 'ps' && (arg === '-E' || (!arg.startsWith('-') && /e/.test(arg)) || /^-[a-zA-Z]*E/.test(arg))) {
+        decisions.push({ decision: 'ask', rule: 'shell-unknown-ask', reasons: [`'ps ${arg}' prints process environments (credentials) and requires approval`] });
+        continue;
+      }
+
+      if (name === 'javac' && (JAVAC_EXEC_OPTIONS.some((f) => flagMatches(arg, f)) || arg.startsWith('-J') || arg.startsWith('@'))) {
+        decisions.push({ decision: 'deny', rule: 'shell-dangerous-deny', reasons: [`'javac ${arg}' loads annotation processors, compiler plugins or JVM agents (arbitrary code); denied`] });
+        continue;
+      }
+
       if (name === 'find' && arg === '-delete') {
         decisions.push({ decision: 'ask', rule: 'shell-unknown-ask', reasons: ['find -delete removes files and requires approval'] });
         continue;
@@ -1394,11 +1639,17 @@ export class PolicyEngine {
       const execFlag = execFlags.find((f) => flagMatches(arg, f));
       if (execFlag) {
         if (name === 'find' && args[i + 1]) {
-          // `find -exec <cmd>` is as safe as <cmd> itself; the rest of the -exec
-          // clause is that command's own arguments.
-          decisions.push(this.classifyCommandName(basename(args[i + 1])));
-          const end = args.indexOf(';', i + 1);
-          i = end === -1 ? args.length : end;
+          // `find -exec <cmd> ...` is as safe as `<cmd> ...` itself: the whole
+          // clause (not just its command name) is classified, so its own path
+          // arguments are containment-checked (`-exec cat /etc/passwd`). The
+          // clause ends at `;` or at `{} +`; before, a `+`-terminated clause
+          // swallowed everything up to a later `;`, hiding a second
+          // `-exec rm ...` entirely (governance hardening G-1).
+          let end = i + 1;
+          while (end < args.length && args[end] !== ';' && !(args[end] === '+' && args[end - 1] === '{}')) end++;
+          const clause = args.slice(i + 1, end).map((w) => (w === '{}' ? '.' : w));
+          decisions.push(...this.classifyShellSegment({ words: clause, redirects: [] }, projectRoot, executionId));
+          i = end;
           continue;
         }
         decisions.push({ decision: 'deny', rule: 'shell-dangerous-deny', reasons: [`'${name} ${execFlag}' executes an arbitrary program under a read-only command; denied`] });
@@ -1408,7 +1659,7 @@ export class PolicyEngine {
       const outputFlag = outputFlags.find((f) => flagMatches(arg, f) || attachedValue(arg, f) !== undefined);
       if (outputFlag) {
         const target = attachedValue(arg, outputFlag) ?? args[++i] ?? '';
-        const writeDecision = this.classifyWriteTarget(`${name} ${outputFlag}`, target, projectRoot);
+        const writeDecision = this.classifyWriteTarget(`${name} ${outputFlag}`, target, projectRoot, executionId);
         decisions.push(writeDecision);
         if (writeDecision.decision === 'allow' && NATIVE_COMPILER_COMMANDS.has(name) && target) {
           this.trackCompiledOutput(executionId, path.resolve(projectRoot, target));
@@ -1465,7 +1716,8 @@ export class PolicyEngine {
       return [{ decision: 'ask', rule: 'shell-unknown-ask', reasons: [`'${name}' argument '${candidate}' depends on shell expansion and cannot be verified to stay inside the project`] }];
     }
     const mayEscape = candidate.startsWith('~') || candidate.startsWith('/') || candidate.split('/').includes('..');
-    if (!mayEscape) return [];
+    // Relative paths can still escape through a symlink (G-3).
+    if (!mayEscape && isInside(projectRoot, path.resolve(projectRoot, candidate))) return [];
     if (!candidate.startsWith('~') && isInside(projectRoot, path.resolve(projectRoot, candidate))) return [];
     return [{
       decision: 'deny',
@@ -1475,7 +1727,7 @@ export class PolicyEngine {
   }
 
   /** A file written by an output flag is held to the same rules as a `>` redirect. */
-  private classifyWriteTarget(what: string, target: string, projectRoot: string): PolicyDecision {
+  private classifyWriteTarget(what: string, target: string, projectRoot: string, executionId?: string): PolicyDecision {
     if (!target) {
       return { decision: 'ask', rule: 'shell-unknown-ask', reasons: [`'${what}' with an undetermined output target requires approval`] };
     }
@@ -1491,10 +1743,11 @@ export class PolicyEngine {
     if (protectedReason) {
       return { decision: 'ask', rule: 'filesystem-protected-ask', reasons: [`'${what} ${target}' writes a protected path: ${protectedReason}`] };
     }
+    this.trackWrittenPath(executionId, absolute);
     return { decision: 'allow', rule: 'shell-safe-allow', reasons: [`'${what} ${target}' writes inside the project`] };
   }
 
-  private classifyRedirect(redirect: { op: string; target: string }, projectRoot: string): PolicyDecision | null {
+  private classifyRedirect(redirect: { op: string; target: string }, projectRoot: string, executionId?: string): PolicyDecision | null {
     if (redirect.op === '<&' || redirect.op === '<<<') return null;
     if (redirect.op === '<') {
       // `cat < /etc/passwd` reads the file exactly like `cat /etc/passwd`
@@ -1516,6 +1769,9 @@ export class PolicyEngine {
       if (protectedReason) {
         return { decision: 'ask', rule: 'filesystem-protected-ask', reasons: [`output redirection to protected path '${redirect.target}': ${protectedReason}`] };
       }
+      // A file this execution writes through the shell is no more a
+      // pre-existing test than one written with the write tool (G-4).
+      this.trackWrittenPath(executionId, absolute);
       return null;
     }
     return {
@@ -1523,6 +1779,16 @@ export class PolicyEngine {
       rule: 'filesystem-outside-deny',
       reasons: [`output redirection to '${redirect.target}' is outside project root '${projectRoot}'`],
     };
+  }
+
+  /** Whether any simple command in `command` is a network command. */
+  private mentionsNetworkCommand(command: string): boolean {
+    try {
+      const entries = parseShell(command.replace(/`([^`]*)`/g, '$($1)'), (key: string) => `$${key}`);
+      return splitSegments(entries).some((segment) => NETWORK_COMMANDS.has(resolveCommand(segment.words).name));
+    } catch {
+      return true; // unparseable text fed to an interpreter is treated as hostile
+    }
   }
 
   private classifyCommandName(cmd: string): PolicyDecision {
