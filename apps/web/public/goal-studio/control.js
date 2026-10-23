@@ -83,6 +83,17 @@ export function createControlModule() {
   let currentPhase = null;
   let lastError = null;
   let statusFilter = 'all';
+  let runResults = null;
+
+  function extractArtifacts(res) {
+    if (!res) return [];
+    const list = res.artifacts || res.results?.artifacts || res.verifiedArtifacts || res.results?.verifiedArtifacts || [];
+    if (Array.isArray(list)) return list;
+    if (typeof list === 'object' && list !== null) {
+      return Object.entries(list).map(([k, v]) => (typeof v === 'object' && v !== null ? { path: k, ...v } : { path: k, value: v }));
+    }
+    return [];
+  }
 
   async function apiJson(path, init = {}) {
     if (!currentCtx || typeof currentCtx.api !== 'function') {
@@ -179,6 +190,7 @@ export function createControlModule() {
     if (changed) {
       eventsLog = [];
       currentPhase = null;
+      runResults = null;
       connectStream(runId);
     }
     await refreshActiveRun(runId, changed);
@@ -187,16 +199,18 @@ export function createControlModule() {
   async function refreshActiveRun(runId, loadEventsSnapshot = false) {
     if (!runId) return;
     try {
-      const [runRes, apprRes, attRes, trRes] = await Promise.all([
+      const [runRes, apprRes, attRes, trRes, resultsRes] = await Promise.all([
         apiJson(`/runs/${encodeURIComponent(runId)}`),
         apiJson(`/runs/${encodeURIComponent(runId)}/approvals?status=all`).catch(() => ({ approvals: [] })),
         apiJson(`/runs/${encodeURIComponent(runId)}/attempts`).catch(() => ({ attempts: [] })),
         apiJson(`/runs/${encodeURIComponent(runId)}/transitions`).catch(() => ({ transitions: [] })),
+        apiJson(`/runs/${encodeURIComponent(runId)}/results`).catch(() => null),
       ]);
       currentRun = runRes.run || null;
       approvalsList = Array.isArray(apprRes.approvals) ? apprRes.approvals : [];
       attemptsList = Array.isArray(attRes.attempts) ? attRes.attempts : [];
       transitionsList = Array.isArray(trRes.transitions) ? trRes.transitions : [];
+      runResults = resultsRes?.results || resultsRes || null;
       if (attemptsList.length > 0) {
         const latestAttempt = attemptsList[attemptsList.length - 1];
         if (latestAttempt?.phase) currentPhase = latestAttempt.phase;
@@ -244,7 +258,10 @@ export function createControlModule() {
   async function handleRunControl(action) {
     if (!activeRunId) return;
     try {
-      await apiJson(`/runs/${encodeURIComponent(activeRunId)}/${action}`, { method: 'POST' });
+      const endpoint = action === 'cancel'
+        ? `/runs/${encodeURIComponent(activeRunId)}/cancel`
+        : `/runs/${encodeURIComponent(activeRunId)}/${action}`;
+      await apiJson(endpoint, { method: 'POST' });
       lastError = null;
       await refreshRuns();
       await refreshActiveRun(activeRunId, false);
@@ -331,6 +348,7 @@ export function createControlModule() {
             <button id="gs-btn-pause-run" type="button" ${!currentRun ? 'disabled' : ''} style="padding:6px 12px;background:#eab308;color:#0f131a;border:none;border-radius:4px;font-weight:600;cursor:pointer;">Pause</button>
             <button id="gs-btn-resume-run" type="button" ${!currentRun ? 'disabled' : ''} style="padding:6px 12px;background:#38bdf8;color:#0f131a;border:none;border-radius:4px;font-weight:600;cursor:pointer;">Resume</button>
             <button id="gs-btn-stop-run" type="button" ${!currentRun ? 'disabled' : ''} style="padding:6px 12px;background:#ef4444;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer;">Stop</button>
+            <button id="gs-btn-cancel-run" type="button" ${!currentRun ? 'disabled' : ''} style="padding:6px 12px;background:#b91c1c;color:#fff;border:none;border-radius:4px;font-weight:600;cursor:pointer;">Cancel</button>
             <button id="gs-btn-refresh-run" type="button" style="padding:6px 10px;background:transparent;color:#94a3b8;border:1px solid var(--border, #2f4469);border-radius:4px;cursor:pointer;">Refresh</button>
           </div>
         </section>
@@ -436,6 +454,67 @@ export function createControlModule() {
           </section>
         </div>
 
+        <!-- Results & Artifacts Summary Section -->
+        <section class="gs-panel gs-results-artifacts" data-testid="gs-results-artifacts" style="padding:14px;border:1px solid var(--border, #2f4469);background:var(--panel, #162032);border-radius:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+            <h3 style="margin:0;font-size:14px;">Results &amp; Artifacts</h3>
+            ${activeRunId ? `<span style="font-size:12px;color:var(--muted, #94a3b8);">Run: <code>${escapeHtml(activeRunId)}</code></span>` : ''}
+          </div>
+          ${!activeRunId ? `
+            <div style="color:#94a3b8;font-size:12px;">Select or start a run to view verified results and artifacts.</div>
+          ` : (!runResults || (extractArtifacts(runResults).length === 0 && !runResults.digest && !runResults.summary && !runResults.resultsDigest)) ? `
+            <div style="color:#94a3b8;font-size:12px;">No results or artifacts recorded for run <code>${escapeHtml(activeRunId)}</code> yet.</div>
+          ` : `
+            <div style="display:grid;gap:12px;">
+              ${(runResults.digest || runResults.resultsDigest || runResults.summary || runResults.status) ? `
+                <div style="display:flex;flex-wrap:wrap;gap:12px;padding:8px 12px;background:#0f131a;border:1px solid #1e293b;border-radius:6px;font-size:12px;">
+                  ${runResults.digest || runResults.resultsDigest ? `<div><strong>Digest:</strong> <code title="${escapeHtml(runResults.digest || runResults.resultsDigest)}">${escapeHtml(String(runResults.digest || runResults.resultsDigest).slice(0, 16))}…</code></div>` : ''}
+                  ${runResults.status ? `<div><strong>Status:</strong> <span style="color:${statusBadgeColor(runResults.status)};font-weight:600;">${escapeHtml(runResults.status)}</span></div>` : ''}
+                  ${runResults.summary ? `<div><strong>Summary:</strong> ${escapeHtml(runResults.summary)}</div>` : ''}
+                </div>
+              ` : ''}
+              ${extractArtifacts(runResults).length === 0 ? `
+                <div style="color:#94a3b8;font-size:12px;">No artifacts listed in results.</div>
+              ` : `
+                <div style="overflow-x:auto;">
+                  <table style="width:100%;border-collapse:collapse;font-size:12px;text-align:left;">
+                    <thead>
+                      <tr style="border-bottom:1px solid #2f4469;color:#94a3b8;">
+                        <th style="padding:6px 8px;">Target</th>
+                        <th style="padding:6px 8px;">Artifact Path</th>
+                        <th style="padding:6px 8px;">Verification</th>
+                        <th style="padding:6px 8px;">Digest (SHA-256)</th>
+                        <th style="padding:6px 8px;">Size</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${extractArtifacts(runResults).map((art) => {
+                        const verified = art.verified === true || art.status === 'verified' || art.valid === true;
+                        const digest = art.digest || art.sha256 || art.hash || '—';
+                        return `
+                          <tr style="border-bottom:1px solid #1e293b;">
+                            <td style="padding:6px 8px;"><code>${escapeHtml(art.targetId || art.target || '—')}</code></td>
+                            <td style="padding:6px 8px;font-weight:600;"><code>${escapeHtml(art.path || art.name || art.id || 'artifact')}</code></td>
+                            <td style="padding:6px 8px;">
+                              <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;background:${verified ? '#22c55e22' : '#94a3b822'};color:${verified ? '#22c55e' : '#94a3b8'};border:1px solid ${verified ? '#22c55e' : '#94a3b8'};">
+                                ${verified ? '✓ Verified' : 'Unverified'}
+                              </span>
+                            </td>
+                            <td style="padding:6px 8px;">
+                              ${digest !== '—' ? `<code title="${escapeHtml(digest)}">${escapeHtml(String(digest).slice(0, 16))}…</code>` : '<span style="color:#64748b;">—</span>'}
+                            </td>
+                            <td style="padding:6px 8px;color:#94a3b8;">${escapeHtml(art.size !== undefined ? `${art.size} B` : (art.bytes !== undefined ? `${art.bytes} B` : '—'))}</td>
+                          </tr>
+                        `;
+                      }).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              `}
+            </div>
+          `}
+        </section>
+
         <!-- Live SSE Activity Stream & Attempts -->
         <section class="gs-panel" style="padding:14px;border:1px solid var(--border, #2f4469);background:var(--panel, #162032);border-radius:8px;">
           <h3 style="margin:0 0 10px 0;font-size:14px;">Live Activity Stream (${eventsLog.length} events)</h3>
@@ -479,6 +558,8 @@ export function createControlModule() {
     if (resumeBtn) resumeBtn.addEventListener('click', () => void handleRunControl('resume'));
     const stopBtn = rootEl.querySelector('#gs-btn-stop-run');
     if (stopBtn) stopBtn.addEventListener('click', () => void handleRunControl('stop'));
+    const cancelBtn = rootEl.querySelector('#gs-btn-cancel-run');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => void handleRunControl('cancel'));
     const refreshBtn = rootEl.querySelector('#gs-btn-refresh-run');
     if (refreshBtn) refreshBtn.addEventListener('click', () => void refreshRuns());
 
