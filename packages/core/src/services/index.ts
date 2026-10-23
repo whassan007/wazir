@@ -84,6 +84,14 @@ export { persistExecutionRecord } from './executionPersistence.js';
 export { compileToolSchema, hashToolArguments } from './toolValidation.js';
 export type { ExecutionEngineOptions } from './executionEngine.js';
 export { ModelRegistry } from './modelRegistry.js';
+export {
+  ModelPreferenceService,
+  ModelSelectionMode,
+  ReasoningEffortLevel,
+  ModelPreferenceRecord,
+  EffectiveModelPreference,
+  KeyValueStore,
+} from './modelPreferenceService.js';
 export { PolicyEngine, createPolicyEngine, protectedPathReason } from './policyEngine.js';
 export { ProvenanceManager } from './provenanceManager.js';
 export type { CreateArtifactParams } from './provenanceManager.js';
