@@ -208,3 +208,5 @@ export type { DistributedSearchCoordinatorOptions } from '../types/distributedSe
 
 export * from './evidencePolicy.js';
 export * from './executionContract.js';
+export { approvalScopeKey } from './approvalQueue.js';
+export type { ApprovalScope, ApprovalStatus, ApprovalRecord, ApprovalResolutionResult } from './approvalQueue.js';
