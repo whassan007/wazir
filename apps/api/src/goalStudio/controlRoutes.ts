@@ -264,7 +264,7 @@ export function registerControlRoutes(app: Express, ctx: GoalStudioRouteContext,
       const evidence = verification ? await verification.evidence(runId) : [];
 
       const artifactSet = new Set<string>();
-      for (const e of (evidence as Array<Record<string, unknown>>)) {
+      for (const e of (evidence as unknown as Array<Record<string, unknown>>)) {
         if (Array.isArray(e.artifacts)) {
           for (const a of e.artifacts) {
             if (typeof a === 'string') artifactSet.add(a);
