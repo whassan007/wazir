@@ -58,7 +58,9 @@ import {
 } from '@wazir/shared';
 import { ToolRegistry, defaultTools, createWebTools, createFleetMemoryTools } from '@wazir/tools';
 import { localOutcomeInspector, reconcileLocalOutcomes } from './recovery.js';
-import { createConfiguredWeb } from './web.js';
+import { createConfiguredWeb, primeCoreWebModule } from './web.js';
+import * as coreModule from '@wazir/core';
+import { globalStartupProfiler } from './startupProfiler.js';
 import { AcpAgentAdapter, ChatAgent, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
@@ -215,8 +217,11 @@ async function detectOpenCode(): Promise<boolean> {
 }
 
 export async function createEngine(options: EngineOptions = {}): Promise<RookEngine> {
+  primeCoreWebModule(coreModule);
+  globalStartupProfiler.mark('engine.start', options.fastStartup ? 'fastStartup' : 'full');
   const config = loadConfig();
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
+  globalStartupProfiler.mark('engine.config');
 
   // ---- registries -----------------------------------------------------
   const computers = new ComputerRegistry();
@@ -231,6 +236,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // store — first backend that's configured wins.
   const store: KeyValueStore = await createStore();
   const engineConfigDir = configDir();
+  globalStartupProfiler.mark('engine.store');
 
   const provenance = new ProvenanceManager(store);
   const executions = new ExecutionEngine({
@@ -271,6 +277,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     adapters: adapterList,
   });
   await worker.start();
+  globalStartupProfiler.mark('engine.discovery');
   const discovered = worker.discovered;
   const adapterById = new Map(discovered.map((d) => [d.id, d.adapter]));
   const hardware = worker.hardwareReport!;
@@ -606,6 +613,8 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   if (!options.fastStartup) {
     await optimizer.hydrate();
   }
+  globalStartupProfiler.mark('engine.ready');
+  globalStartupProfiler.emitIfEnabled();
 
   return {
     resources,

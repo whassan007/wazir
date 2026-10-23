@@ -329,7 +329,7 @@ export function missionHeader(
       : ` ${wsFormatted}  ${color.cyan(`[View: ${view.toUpperCase()}]`)}`;
 
   const line3 = color.gray(
-    ' 1 Home   Tab Views   5 Models   6 Evidence   [ / ] Tasks   / Filter   ? Help',
+    ' 1 Home   Tab Views   5 Models   6 Evidence   7/g Goals   [ / ] Tasks   / Filter   ? Help',
   );
 
   const clamp = (str: string): string => {

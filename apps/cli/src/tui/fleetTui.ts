@@ -93,6 +93,10 @@ import {
 } from './fleetTuiTypes.js';
 import { buildFleetWhyExplanation } from './fleetTuiWhy.js';
 import * as fleetPanes from './fleetTuiPanes.js';
+import {
+  formatCommandFeedback,
+  type GoalStudioSnapshot,
+} from './goalStudioPanel.js';
 
 export {
   isScreenFragment,
@@ -177,6 +181,11 @@ export class FleetTui {
   private selectedContextSampleIndex = 0;
   private selectedWorkerIndex = 0;
   private selectedModelProfileIndex = 0;
+  private selectedGoalTargetIndex = 0;
+  private goalStudioSnapshot?: GoalStudioSnapshot;
+  private readonly sessionAbortController = new AbortController();
+  private readonly externalSignal?: AbortSignal;
+  private externalAbortListener?: () => void;
   private viewFilterQuery = '';
   private cachedBuildVersion?: string;
   private evidenceInspection?: { taskId?: string; key: string; inspection: VerificationInspection; artifacts: ArtifactProvenance[] };
@@ -246,6 +255,8 @@ export class FleetTui {
     { id: 'clear-context', title: 'Clear Active Context', cmd: '/clear-context' },
     { id: 'doctor', title: 'System Health Diagnostics', cmd: '/doctor' },
     { id: 'launch-lmstudio', title: 'Launch LM Studio Server', cmd: '/launch lmstudio' },
+    { id: 'goals', title: 'Goal Studio DAG & Ledger', cmd: '/goals' },
+    { id: 'status', title: 'Immediate Fleet & Goal Status', cmd: '/status' },
     { id: 'help', title: 'Toggle Help & Shortcuts', cmd: '/help' },
     { id: 'repaint', title: 'Force Screen Repaint', cmd: '/repaint' },
     { id: 'conversation', title: 'Conversation view', cmd: '/chat' },
@@ -359,9 +370,48 @@ export class FleetTui {
     this.autoMerge = options.autoMerge ?? false;
     this.timeoutSeconds = options.timeoutSeconds;
     this.enablePlanner = options.enablePlanner ?? false;
+    this.externalSignal = options.signal;
     if ((options as { modelId?: string }).modelId) {
       this.selectedModelId = (options as { modelId?: string }).modelId;
     }
+  }
+
+  getAbortSignal(): AbortSignal {
+    return this.sessionAbortController.signal;
+  }
+
+  setGoalStudioSnapshot(snapshot?: GoalStudioSnapshot): void {
+    this.goalStudioSnapshot = snapshot;
+    this.draw();
+  }
+
+  getGoalStudioSnapshot(): GoalStudioSnapshot | undefined {
+    return this.goalStudioSnapshot ?? (this.engine as any).goalStudioSnapshot;
+  }
+
+  private applyCommandFeedback(command: string): string {
+    const models = this.engine.models?.list?.() ?? [];
+    const readiness = this.engine.lifecycle?.getReadiness?.();
+    const readyModels = readiness ? readiness.readyCount : models.length;
+    const installedModels = readiness ? readiness.installedCount : models.length;
+    const activeAgents = Array.from(this.agents.values()).filter((a) => a.status === 'running').length;
+    const totalAgents = this.engine.agents?.list?.()?.length ?? this.agents.size;
+    const msg = formatCommandFeedback({
+      command,
+      currentView: this.currentView,
+      activeAgents,
+      totalAgents,
+      readyModels,
+      installedModels,
+      pendingApprovals: this.pendingApprovals.length,
+      selectedModelId: this.selectedModelId,
+      goalRun: this.getGoalStudioSnapshot()?.run,
+    });
+    this.statusMessage = msg;
+    if (this.presentationMode === 'conversation') {
+      this.conversationRenderer.append(msg);
+    }
+    return msg;
   }
 
   getSessionId(): string {
@@ -1061,8 +1111,24 @@ export class FleetTui {
    * Starts the TUI render loop and input listeners.
    */
   async start(): Promise<void> {
+    if (this.externalSignal?.aborted) {
+      this.exitReason = 'interrupt';
+      this.screen.leave();
+      if (!this.sessionAbortController.signal.aborted) {
+        this.sessionAbortController.abort();
+      }
+      return;
+    }
     this.isRunning = true;
     this.exitReason = undefined;
+    if (this.externalSignal) {
+      this.externalAbortListener = () => {
+        if (this.isRunning) {
+          this.stop('interrupt');
+        }
+      };
+      this.externalSignal.addEventListener('abort', this.externalAbortListener, { once: true });
+    }
     this.refreshUpdateIndicator(false);
     this.updateIndicatorTimer = setInterval(() => this.refreshUpdateIndicator(true), 60_000);
     this.updateIndicatorTimer.unref?.();
@@ -1242,6 +1308,13 @@ export class FleetTui {
     // isRunning so double-stops are a no-op instead of re-running unsubscribe/leave.
     if (!this.isRunning) return;
     this.exitReason = this.exitReason ?? reason;
+    if (this.externalSignal && this.externalAbortListener) {
+      this.externalSignal.removeEventListener('abort', this.externalAbortListener);
+      this.externalAbortListener = undefined;
+    }
+    if (!this.sessionAbortController.signal.aborted) {
+      this.sessionAbortController.abort();
+    }
     if (this.renderTimer) clearInterval(this.renderTimer);
     if (this.updateIndicatorTimer) clearInterval(this.updateIndicatorTimer);
     if (this.unsubscribeApprovals) this.unsubscribeApprovals();
@@ -2036,6 +2109,9 @@ export class FleetTui {
     // 11. '?' for Help (§3) when input buffer is empty
     if ((keyName === '?' || keyStr === '?') && this.inputBuffer.length === 0) {
       this.currentView = this.currentView === 'help' ? 'fleet' : 'help';
+      this.statusMessage = this.currentView === 'help'
+        ? 'Showing keyboard shortcuts & command reference. Press Esc or ? to return.'
+        : 'Returned to Fleet Overview.';
       this.draw();
       return;
     }
@@ -2116,6 +2192,13 @@ export class FleetTui {
       if (keyStr === '6' || keyName === 'f6') {
         this.currentView = 'evidence';
         this.focusedPane = 'main';
+        this.draw();
+        return;
+      }
+      if (keyStr === '7' || ((keyStr === 'g' || keyStr === 'G') && this.focusedPane !== 'prompt')) {
+        this.currentView = 'goals';
+        this.focusedPane = 'main';
+        this.applyCommandFeedback('/goals');
         this.draw();
         return;
       }
@@ -2481,6 +2564,20 @@ export class FleetTui {
         };
         this.evidenceModalOpen = true;
         this.evidenceScrollOffset = 0;
+        this.draw();
+        return;
+      }
+    }
+
+    if (this.currentView === 'goals' && this.inputBuffer.length === 0) {
+      const targetCount = Object.keys(this.getGoalStudioSnapshot()?.run?.targets ?? {}).length;
+      if (keyName === 'up' || keyStr === '\u001b[A' || keyStr === 'k' || keyStr === 'K') {
+        this.selectedGoalTargetIndex = Math.max(0, this.selectedGoalTargetIndex - 1);
+        this.draw();
+        return;
+      }
+      if (keyName === 'down' || keyStr === '\u001b[B' || keyStr === 'j' || keyStr === 'J') {
+        this.selectedGoalTargetIndex = Math.min(Math.max(0, targetCount - 1), this.selectedGoalTargetIndex + 1);
         this.draw();
         return;
       }
@@ -3203,9 +3300,12 @@ export class FleetTui {
         this.presentationMode = 'dashboard';
         if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation('dashboard');
         this.currentView = 'fleet';
+        this.applyCommandFeedback('/fleet');
         this.draw();
       } else {
-        this.currentView = 'fleet'; this.draw();
+        this.currentView = 'fleet';
+        this.applyCommandFeedback('/fleet');
+        this.draw();
       }
       return;
     }
@@ -3344,6 +3444,21 @@ export class FleetTui {
 
     if (trimmed === '/help') {
       this.currentView = 'help';
+      this.applyCommandFeedback('/help');
+      this.draw();
+      return;
+    }
+
+    if (trimmed === '/status') {
+      this.applyCommandFeedback('/status');
+      this.draw();
+      return;
+    }
+
+    if (trimmed === '/goals' || trimmed === '/goal') {
+      this.currentView = 'goals';
+      this.focusedPane = 'main';
+      this.applyCommandFeedback('/goals');
       this.draw();
       return;
     }
@@ -3351,6 +3466,7 @@ export class FleetTui {
     if (trimmed === '/task') {
       this.currentView = 'task';
       this.focusedPane = 'main';
+      this.applyCommandFeedback('/task');
       this.draw();
       return;
     }
@@ -3358,6 +3474,7 @@ export class FleetTui {
     if (trimmed === '/search') {
       this.currentView = 'search';
       this.focusedPane = 'main';
+      this.applyCommandFeedback('/search');
       this.draw();
       return;
     }
@@ -3365,6 +3482,7 @@ export class FleetTui {
     if (trimmed === '/improvement') {
       this.currentView = 'improvement';
       this.focusedPane = 'main';
+      this.applyCommandFeedback('/improvement');
       this.draw();
       return;
     }
@@ -3372,6 +3490,7 @@ export class FleetTui {
     if (trimmed === '/model-intelligence') {
       this.currentView = 'models';
       this.focusedPane = 'main';
+      this.applyCommandFeedback('/model-intelligence');
       this.draw();
       return;
     }
@@ -3380,6 +3499,7 @@ export class FleetTui {
       this.currentView = 'canary';
       this.canaryTab = 'dashboard';
       this.focusedPane = 'main';
+      this.applyCommandFeedback('/canary');
       this.draw();
       return;
     }
@@ -3387,6 +3507,7 @@ export class FleetTui {
     if (trimmed === '/context') {
       this.currentView = 'context';
       this.focusedPane = 'main';
+      this.applyCommandFeedback('/context');
       this.draw();
       return;
     }
@@ -3395,6 +3516,7 @@ export class FleetTui {
       this.evidenceProvenanceDepth = this.evidenceProvenanceDepth === 0 ? 9 : 0;
       this.currentView = 'evidence';
       this.focusedPane = 'main';
+      this.applyCommandFeedback('/provenance');
       this.draw();
       return;
     }
@@ -3403,6 +3525,7 @@ export class FleetTui {
       void this.refreshEvidenceInspection();
       this.currentView = 'evidence';
       this.focusedPane = 'main';
+      this.applyCommandFeedback('/evidence');
       this.draw();
       return;
     }
@@ -3423,18 +3546,21 @@ export class FleetTui {
     if (trimmed === '/tail') {
       this.currentView = 'tail';
       this.focusedPane = 'main';
+      this.applyCommandFeedback('/tail');
       this.draw();
       return;
     }
 
     if (trimmed === '/worktrees') {
       this.currentView = 'worktrees';
+      this.applyCommandFeedback('/worktrees');
       this.draw();
       return;
     }
 
     if (trimmed === '/repaint') {
       this.screen.repaint();
+      this.applyCommandFeedback('/repaint');
       this.draw();
       return;
     }
@@ -3659,6 +3785,17 @@ export class FleetTui {
       } else {
         this.statusMessage = `Injected steering: "${instruction}"`;
       }
+      this.draw();
+      return;
+    }
+
+    if (
+      trimmed.startsWith('/') &&
+      !trimmed.startsWith('/fanout ') &&
+      !trimmed.startsWith('/parallel ') &&
+      !trimmed.startsWith('/p ')
+    ) {
+      this.applyCommandFeedback(trimmed);
       this.draw();
       return;
     }
@@ -4921,6 +5058,9 @@ export class FleetTui {
     if (this.currentView === 'canary') {
       return this.renderCanaryPane(width, maxRows);
     }
+    if (this.currentView === 'goals') {
+      return this.renderGoalPane(width, maxRows);
+    }
     if (this.currentView === 'approval') {
       return this.renderApprovalPane(width, maxRows);
     }
@@ -5953,6 +6093,10 @@ export class FleetTui {
 
   private renderCanaryPane(cols: number, maxRows: number): string[] {
     return fleetPanes.renderCanaryPane(this, cols, maxRows);
+  }
+
+  private renderGoalPane(cols: number, maxRows: number): string[] {
+    return fleetPanes.renderGoalPane(this, cols, maxRows);
   }
 
   private renderModelIntelligencePane(cols: number, maxRows: number): string[] {

@@ -12,15 +12,25 @@ export interface TerminalSessionOptions {
   adapter?: TerminalAdapter;
   inStream?: NodeJS.ReadableStream;
   outStream?: NodeJS.WritableStream;
+  /** Optional external AbortSignal; aborting it immediately triggers idempotent terminal cleanup. */
+  signal?: AbortSignal;
 }
 
 export class TerminalSession {
   readonly adapter: TerminalAdapter;
   readonly input: InputController;
   readonly renderer: TerminalRenderer;
+  private readonly abortController = new AbortController();
+  private readonly externalSignal?: AbortSignal;
+  private externalAbortListener?: () => void;
 
   get inputController(): InputController {
     return this.input;
+  }
+
+  /** Signal that is aborted when the session is cleaned up or cancelled. */
+  get signal(): AbortSignal {
+    return this.abortController.signal;
   }
 
   private active = false;
@@ -39,6 +49,15 @@ export class TerminalSession {
     }
 
     this.renderer = new TerminalRenderer({ adapter: this.adapter });
+    this.externalSignal = options.signal;
+    if (this.externalSignal) {
+      if (this.externalSignal.aborted) {
+        this.cleanup();
+      } else {
+        this.externalAbortListener = () => this.cleanup();
+        this.externalSignal.addEventListener('abort', this.externalAbortListener, { once: true });
+      }
+    }
   }
 
   /**
@@ -77,6 +96,15 @@ export class TerminalSession {
     if (this.cleanedUp) return;
     this.cleanedUp = true;
     this.active = false;
+
+    if (this.externalSignal && this.externalAbortListener) {
+      this.externalSignal.removeEventListener('abort', this.externalAbortListener);
+      this.externalAbortListener = undefined;
+    }
+
+    if (!this.abortController.signal.aborted) {
+      this.abortController.abort();
+    }
 
     if (this.unsubscribeResize) {
       this.unsubscribeResize();

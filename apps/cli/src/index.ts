@@ -5,12 +5,14 @@ import { Command } from 'commander';
 /** Injected by scripts/bundle.mjs from package.json (the canonical version); the literal is for unbundled dev runs. */
 declare const __WAZIR_VERSION__: string | undefined;
 import chalk from 'chalk';
-import { registerMCPCommands } from './mcp.js';
+import { registerMCPCommands, wasMCPRuntimeUsed } from './mcp.js';
 import { registerWebCommands } from './web.js';
 import { registerMobileCommands } from './mobile.js';
-import { closeMCPRegistries } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
 import { createHandoffCommand } from './handoff.js';
+import { globalStartupProfiler } from './startupProfiler.js';
+
+globalStartupProfiler.mark('cli.entry');
 
 // Installed before anything else runs: previously `uncaughtException` had no
 // handler anywhere (Node's default silently crashes with no terminal
@@ -19,6 +21,14 @@ import { createHandoffCommand } from './handoff.js';
 installGlobalCrashHandlers();
 
 const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.13';
+
+const rawArgs = process.argv.slice(2);
+if (rawArgs.length === 1 && (rawArgs[0] === '--version' || rawArgs[0] === '-V')) {
+  process.stdout.write(`${CLI_VERSION}\n`);
+  globalStartupProfiler.mark('cli.fast_version');
+  globalStartupProfiler.emitIfEnabled();
+  process.exit(0);
+}
 
 const program = new Command();
 
@@ -200,7 +210,14 @@ updateCmd.command('config').description('Show or change persistent update config
 });
 program.addCommand(updateCmd);
 
-program.hook('postAction', async () => { await closeMCPRegistries(); });
+program.hook('postAction', async () => {
+  if (wasMCPRuntimeUsed()) {
+    const { closeMCPRegistries } = await import('@wazir/core');
+    await closeMCPRegistries();
+  }
+  globalStartupProfiler.mark('cli.post_action');
+  globalStartupProfiler.emitIfEnabled();
+});
 
 // computers command
 const computersCmd = new Command()
@@ -2005,6 +2022,8 @@ serviceCmd
 program.addCommand(serviceCmd);
 program.addCommand(createHandoffCommand());
 
+globalStartupProfiler.mark('cli.commands_registered');
+
 program.action(async () => {
   const globalOpts = program.opts<{ banner?: boolean; color?: boolean; ascii?: boolean }>();
   if (process.stdout.isTTY && globalOpts.banner !== false) {
@@ -2041,6 +2060,8 @@ program.action(async () => {
   program.outputHelp();
 });
 
+globalStartupProfiler.mark('cli.parse');
 program.parse();
+globalStartupProfiler.emitIfEnabled();
 
 
