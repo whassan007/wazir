@@ -1,0 +1,81 @@
+Wazir functional manifest v1: 20 cases
+WF-01 [deterministic] small context
+WF-02 [deterministic] large context
+WF-03 [deterministic] output clamp
+WF-04 [deterministic] provider limits
+WF-05 [deterministic] overflow recovery
+WF-06 [deterministic] unknown context
+WF-07 [deterministic] device memory
+WF-08 [deterministic] resident incremental memory
+WF-09 [deterministic] unloaded model memory
+WF-10 [deterministic] AUTO fallback
+WF-11 [deterministic] STRICT routing
+WF-12 [deterministic] LOCAL_ONLY routing
+WF-13 [deterministic] stale jobs
+WF-14 [deterministic] duplicate events
+WF-15 [deterministic] CLI suggestions
+WF-16 [deterministic] SQLite
+WF-17 [live] real model
+  Live evidence required: Run against an available local model; record model/runtime, generation evidence, and outcome. Mock adapters do not satisfy this case.
+WF-18 [deterministic] stream after recovery
+  Live evidence required: Live qualification should verify a real generation completes after the injected recovery.
+WF-19 [deterministic] consecutive chats
+  Live evidence required: Live qualification should use two consecutive prompts in one session and capture both completed responses.
+WF-20 [deterministic] coding completion
+  Live evidence required: For live qualification, complete a small coding task with a real model and verify the resulting file or test outcome.
+
+ RUN  v2.1.9 /Users/wael/Code/Wazir
+
+stderr | apps/cli/tests/fleetTui.test.ts > FleetTui — protocol/validation visibility and raw response viewer > Phase 4 — Inline Shell Mode (!), Cross-Task @ References, and Fast-Path Navigation > switches to SHELL mode when typing !, executes inline shell commands in projectRoot, records a Block, and exits on Esc
+[wazir] tool sandbox unavailable — running tool processes directly on the host (sandbox-exec cannot start (exit 71))
+
+ ✓ apps/cli/tests/fleetTui.test.ts (57 tests) 11093ms
+   ✓ FleetTui — interactive terminal UI harness > shows a failed tool call with a plain-language reason, not the raw policy rule id 1608ms
+   ✓ FleetTui — interactive terminal UI harness > reports a timed-out job as stopped by the timeout, not "cancelled by operator" 1316ms
+   ✓ FleetTui — interactive terminal UI harness > cancels an in-flight model turn as soon as the job timeout fires, not just at the turn's own longer timeout 1073ms
+(node:36655) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[-] Waiting for model response (nvidia/nemotron-3.5-super-vl-120b-a12b)...
+[-] Waiting for model response (nvidia/nemotron-3.5-super-vl-120b-a12b)...
+[-] Executing write...
+[-] Waiting for model response (nvidia/nemotron-3.5-super-vl-120b-a12b)...
+[-] Running check (build)...
+[-] Running check (test)...
+[-] Running check (lint)...
+[-] Running check (typecheck)...
+[nvidia/nemotron-3.5-super-vl-120b-a12b]
+ ✓ apps/cli/tests/nvidiaProviderSystem.test.ts (10 tests | 1 skipped) 1664ms
+   ✓ NVIDIA System-Wide Execution Provider Integration > 21. Resource accounting records token usage, requests, retries, latency, explicit unknown-cost vs configured pricing, and enforces quota exhaustion 647ms
+ ✓ packages/core/tests/harnessDispatch.test.ts (13 tests) 88ms
+ ✓ apps/cli/tests/tuiSessionLifecycle.test.ts (11 tests) 924ms
+ ✓ packages/core/tests/contextCompiler.comprehensive.test.ts (21 tests) 884ms
+ ✓ packages/core/tests/modelLifecycleAdmission.test.ts (25 tests) 121ms
+ ✓ packages/core/tests/scheduler.test.ts (7 tests) 21ms
+ ✓ packages/core/tests/executionHistory.test.ts (14 tests) 55ms
+ ✓ apps/cli/tests/conversationProjection.test.ts (12 tests) 25ms
+ ✓ packages/core/tests/contextCompactionService.test.ts (7 tests) 5ms
+ ✓ packages/agents/tests/codingAgent.contextCompaction.test.ts (8 tests) 16ms
+stderr | packages/agents/tests/live-coding/01-bugRepair.test.ts > LIVE-CODE-01: Autonomous Bug Repair (Release Gate G2) > modifies add.js while preserving add.test.js byte-identically and passes external verification
+[wazir] tool sandbox unavailable — running tool processes directly on the host (sandbox-exec cannot start (exit 71))
+
+ ✓ packages/agents/tests/live-coding/01-bugRepair.test.ts (2 tests) 507ms
+   ✓ LIVE-CODE-01: Autonomous Bug Repair (Release Gate G2) > modifies add.js while preserving add.test.js byte-identically and passes external verification 406ms
+ ✓ packages/core/tests/schedulerHostedRouting.test.ts (7 tests) 6ms
+(node:37069) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/memory/tests/sqliteMemoryStore.test.ts (5 tests) 24ms
+ ✓ packages/agents/tests/chatAgent.test.ts (7 tests) 53ms
+ ✓ packages/agents/tests/codingAgent.contextOverflowRecovery.test.ts (2 tests) 13ms
+ ✓ packages/agents/tests/codingAgent.streamRetry.test.ts (2 tests) 2012ms
+   ✓ CodingAgent.run — interrupted model stream > re-requests a generation cut by a connection reset, records it, and never runs the partial turn 508ms
+   ✓ CodingAgent.run — interrupted model stream > gives up after two retries instead of looping 1504ms
+ ✓ packages/workers/tests/hardwareDiscovery.test.ts (2 tests) 1ms
+(node:37282) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ packages/core/tests/resourceLedgerLazyStartup.test.ts (1 test) 5ms
+
+ Test Files  19 passed (19)
+      Tests  212 passed | 1 skipped (213)
+   Start at  01:04:32
+   Duration  27.00s (transform 1.40s, setup 0ms, collect 6.47s, tests 17.52s, environment 2ms, prepare 523ms)
+
