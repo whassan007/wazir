@@ -34,6 +34,7 @@ export class ModelSelectorController {
   public searchQuery = '';
   public providerFilter = 'all';
   public costTierFilter: 'any' | 'T1' | 'T2' | 'T3' | 'T4' = 'any';
+  public isSearching = false;
   public models: ModelSelectorItem[] = [];
   public warningMessage?: string;
 
@@ -136,7 +137,7 @@ export class ModelSelectorController {
         }
         return { type: 'none' };
       }
-      if (key === '\t') {
+      if (key === '\t' || (!this.isSearching && (key === 'f' || key === 'F'))) {
         // Cycle provider filter
         const providers = ['all', ...Array.from(new Set(this.models.map(m => m.provider)))];
         const pIdx = providers.indexOf(this.providerFilter);
@@ -144,11 +145,17 @@ export class ModelSelectorController {
         this.selectedIndex = 0;
         return { type: 'none' };
       }
-      if (key === '\x14' || key === 'Ctrl+T') {
+      if (key === '\x14' || key === 'Ctrl+T' || (!this.isSearching && (key === 't' || key === 'T'))) {
         // Cycle cost tier filter
         const tiers: Array<'any' | 'T1' | 'T2' | 'T3' | 'T4'> = ['any', 'T1', 'T2', 'T3', 'T4'];
         const tIdx = tiers.indexOf(this.costTierFilter);
         this.costTierFilter = tiers[(tIdx + 1) % tiers.length] ?? 'any';
+        this.selectedIndex = 0;
+        return { type: 'none' };
+      }
+      if (key === '/' && !this.isSearching) {
+        this.isSearching = true;
+        this.searchQuery = '';
         this.selectedIndex = 0;
         return { type: 'none' };
       }
@@ -160,6 +167,10 @@ export class ModelSelectorController {
         return { type: 'none' };
       }
       if (key === '\r' || key === 'enter') {
+        if (this.isSearching) {
+          this.isSearching = false;
+          return { type: 'none' };
+        }
         const selectedItem = filtered[this.selectedIndex];
         if (!selectedItem) return { type: 'none' };
         if (selectedItem.eligible === false) {
@@ -172,6 +183,11 @@ export class ModelSelectorController {
         return { type: 'select', scope: 'default', mode: 'custom', modelId: selectedItem.modelId, reasoningEffort: this.reasoningEffort };
       }
       if (key === 's' || key === 'S') {
+        if (this.isSearching) {
+          this.searchQuery += key;
+          this.selectedIndex = 0;
+          return { type: 'none' };
+        }
         const selectedItem = filtered[this.selectedIndex];
         if (!selectedItem) return { type: 'none' };
         if (selectedItem.eligible === false) {
@@ -184,6 +200,10 @@ export class ModelSelectorController {
         return { type: 'select', scope: 'session', mode: 'custom', modelId: selectedItem.modelId, reasoningEffort: this.reasoningEffort };
       }
       if (key === '\x1b' || key === 'escape') {
+        if (this.isSearching) {
+          this.isSearching = false;
+          return { type: 'none' };
+        }
         this.view = 'modes';
         this.selectedIndex = 5; // Highlight Custom
         this.searchQuery = '';
@@ -275,7 +295,7 @@ export function renderModelSelectorModal(state: ModelSelectorController, cols: n
     body.push('');
     body.push(`Reasoning effort: ${color.bold(state.reasoningEffort.charAt(0).toUpperCase() + state.reasoningEffort.slice(1))}`);
 
-    const actions = `${color.bold('↑↓')} Nav  ${color.bold('←→')} Effort  ${color.bold('Tab')} Provider  ${color.bold('Ctrl+T')} Cost  ${color.bold('Enter')} Set default  ${color.bold('Esc')} Back`;
+    const actions = `${color.bold('↑↓')} Nav  ${color.bold('←→')} Effort  ${color.bold('/')} Search  ${color.bold('f')} Provider  ${color.bold('t')} Cost  ${color.bold('Enter')} Set default  ${color.bold('Esc')} Back`;
     return buildModalBox(title, body, actions, modalWidth, 'cyan');
   }
 }
