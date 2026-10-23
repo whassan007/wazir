@@ -99,6 +99,22 @@ function discoverCpu(): string {
 let cachedGpuInfo: { resolved: boolean; value?: GPUInfo } = { resolved: false };
 let cachedGpuLoad: { expiresAt: number; value: { gpuMemoryAvailableGB?: number; gpuMemoryUsedGB?: number; gpuUtilizationPercent?: number } } | undefined;
 
+/** macOS reports only immediately free pages through os.freemem(); inactive,
+ * speculative, and purgeable pages can also be reclaimed for a new allocation. */
+export function macAvailableMemoryGB(vmStat: string): number | undefined {
+  const pageSize = Number(vmStat.match(/page size of (\d+) bytes/i)?.[1]);
+  if (!Number.isFinite(pageSize) || pageSize <= 0) return undefined;
+  let foundCounter = false;
+  const pages = ['free', 'inactive', 'speculative', 'purgeable'].map((name) => {
+    const value = vmStat.match(new RegExp(`Pages ${name}:\\s*([\\d,]+)`, 'i'))?.[1];
+    if (value === undefined) return 0;
+    foundCounter = true;
+    return Number(value.replaceAll(',', ''));
+  });
+  if (!foundCounter || pages.some((value) => !Number.isFinite(value) || value < 0)) return undefined;
+  return pages.reduce((sum, value) => sum + value, 0) * pageSize / (1024 ** 3);
+}
+
 async function discoverGpu(): Promise<GPUInfo | undefined> {
   if (cachedGpuInfo.resolved) {
     return cachedGpuInfo.value;
@@ -169,7 +185,14 @@ export function currentLoad(): {
   }
   const cpuPercent = total > 0 ? Math.round(100 * (1 - idle / total)) : 0;
   const totalGB = Math.round(os.totalmem() / (1024 ** 3) * 10) / 10;
-  const freeGB = Math.round(os.freemem() / (1024 ** 3) * 10) / 10;
+  let availableBytes = os.freemem();
+  if (process.platform === 'darwin') {
+    try {
+      const reported = macAvailableMemoryGB(execSync('vm_stat', { timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).toString());
+      if (reported !== undefined) availableBytes = reported * (1024 ** 3);
+    } catch { /* os.freemem remains a conservative fallback */ }
+  }
+  const freeGB = Math.round(availableBytes / (1024 ** 3) * 10) / 10;
   let gpu: { gpuMemoryAvailableGB?: number; gpuMemoryUsedGB?: number; gpuUtilizationPercent?: number } = {};
   if (process.platform === 'linux' || process.platform === 'win32') {
     const now = Date.now();

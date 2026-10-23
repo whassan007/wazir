@@ -229,11 +229,23 @@ describe('reconcile isolates per-model failures', () => {
    f.add('b');
    await f.service.load('a');
    expect(f.models.isModelReady('a')).toBe(true);
-   f.computers.heartbeat('node', { load: { cpuPercent: 0, memoryUsedGB: 124, memoryAvailableGB: 4 } });
+   f.computers.heartbeat('node', { load: { cpuPercent: 0, memoryUsedGB: 127.9, memoryAvailableGB: 0.1 } });
    const reusePlan = await f.service.load('a');
    expect(reusePlan.reuse).toBe(true);
    expect(reusePlan.admissionDecision.status).toBe('ADMITTED');
    expect(f.adapter.loadModel).toHaveBeenCalledTimes(1);
    await expect(f.service.load('b')).rejects.toMatchObject({ code: 'MODEL_ADMISSION_DENIED' });
+ });
+ it('reserves only the memory increase when a resident model needs a larger context', async () => {
+   const f = setup(20, () => 40);
+   f.loaded.set('a', 4096);
+   f.models.upsertInstance({ ...f.models.instancesOf('a')[0], loaded: true, state: 'READY', contextTokens: 4096, residentMemoryBytes: 30 * G });
+   const plan = await f.service.load('a', { minimumContext: 8192 });
+   expect(plan.reuse).toBe(false);
+   expect(plan.estimate.estimatedTotalMemory).toBe(40 * G);
+   expect(plan.estimate.reservationMemoryBytes).toBe(10 * G);
+   expect(plan.reservation?.memoryBytes).toBe(10 * G);
+   expect(plan.admissionDecision.status).toBe('ADMITTED');
+   expect(f.adapter.loadModel).toHaveBeenCalledTimes(1);
  });
 });
