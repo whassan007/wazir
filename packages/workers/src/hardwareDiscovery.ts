@@ -99,13 +99,14 @@ function discoverCpu(): string {
 let cachedGpuInfo: { resolved: boolean; value?: GPUInfo } = { resolved: false };
 let cachedGpuLoad: { expiresAt: number; value: { gpuMemoryAvailableGB?: number; gpuMemoryUsedGB?: number; gpuUtilizationPercent?: number } } | undefined;
 
-/** macOS reports only immediately free pages through os.freemem(); inactive,
- * speculative, and purgeable pages can also be reclaimed for a new allocation. */
+/** Estimate reclaimable unified memory from vm_stat's free, inactive and
+ * speculative queues. Purgeable pages can overlap those queues, so must not
+ * be added again. Keep the scheduler's safety reserve for reclaim uncertainty. */
 export function macAvailableMemoryGB(vmStat: string): number | undefined {
   const pageSize = Number(vmStat.match(/page size of (\d+) bytes/i)?.[1]);
   if (!Number.isFinite(pageSize) || pageSize <= 0) return undefined;
   let foundCounter = false;
-  const pages = ['free', 'inactive', 'speculative', 'purgeable'].map((name) => {
+  const pages = ['free', 'inactive', 'speculative'].map((name) => {
     const value = vmStat.match(new RegExp(`Pages ${name}:\\s*([\\d,]+)`, 'i'))?.[1];
     if (value === undefined) return 0;
     foundCounter = true;
