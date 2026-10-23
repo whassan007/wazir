@@ -47,6 +47,22 @@ export function normalizeArch(a: string): string {
   return s;
 }
 
+export interface HarnessPerformanceLookup {
+  getSuccessRate(params: {
+    harnessId?: string;
+    modelId: string;
+    runtimeId: string;
+    category: ModelCapabilityCategory;
+  }):
+    | {
+        verifiedSuccessRate?: number;
+        sampleCount: number;
+        uncertainty?: number;
+        avgLatencyMs?: number;
+      }
+    | undefined;
+}
+
 export interface SchedulerDeps {
   computers: ComputerRegistry;
   runtimes: RuntimeRegistry;
@@ -68,6 +84,10 @@ export interface SchedulerDeps {
    * Empirical Model Intelligence Service providing fine-grained capability profiles.
    */
   modelIntelligence?: ModelIntelligenceService;
+  /**
+   * Empirical Harness + Model + Runtime performance lookup (see HarnessPerformanceService).
+   */
+  harnessPerformance?: HarnessPerformanceLookup;
   /**
    * Classifier for decomposing task capability requirements.
    */
@@ -209,7 +229,8 @@ export class Scheduler {
       agentReasons = resolution.reasons;
     }
 
-    const modelDecision = this.routeModel(task, requiredContext, input.excludeModelIds ?? [], routing);
+    const effectiveHarnessId = agentId ?? task.execution?.targetAgentId ?? task.requirements?.agent;
+    const modelDecision = this.routeModel(task, requiredContext, input.excludeModelIds ?? [], routing, effectiveHarnessId);
     const record = this.deps.models.getRequired(modelDecision.modelId);
     const instance = this.deps.models
       .instancesOf(record.id)
@@ -258,6 +279,7 @@ export class Scheduler {
     requiredContext: number,
     excludeModelIds: readonly string[] = [],
     routing: ResolvedRoutingConstraint = this.resolveRoutingConstraint(task),
+    harnessId?: string,
   ): ModelRoutingDecision {
     const records = this.deps.models.list();
     if (records.length === 0) {
@@ -266,9 +288,10 @@ export class Scheduler {
 
     const classification = this.classifier.classify(task);
     const requiredCapability = classification.primaryCategory;
+    const effectiveHarnessId = harnessId ?? task.execution?.targetAgentId ?? task.requirements?.agent;
 
     const scored: ScoredModel[] = records.map((record) => {
-      const result = this.scoreModel(task, record, requiredContext, classification, routing);
+      const result = this.scoreModel(task, record, requiredContext, classification, routing, effectiveHarnessId);
       if (excludeModelIds.includes(record.id)) result.rejected.push('excluded: already tried by this execution');
       return result;
     });
@@ -282,12 +305,31 @@ export class Scheduler {
         candidates: capable.map((s) => {
           const resState = this.residency(s.record.id, requiredContext);
           const placementEst = this.estimatePlacement(s.record, requiredContext);
-          return {
+          const runtimeId = this.preferredRuntime(s.record.id);
+          const workerId = this.preferredWorker(s.record.id);
+          const hp = this.deps.harnessPerformance?.getSuccessRate({
+            harnessId: effectiveHarnessId,
             modelId: s.record.id,
-            runtimeId: this.preferredRuntime(s.record.id),
+            runtimeId,
+            category: requiredCapability,
+          });
+          const sampleCount = hp
+            ? hp.sampleCount
+            : this.measuredSampleCount(s.record, task, requiredCapability);
+          const verifiedSuccessRate = hp
+            ? hp.verifiedSuccessRate
+            : this.measuredSuccessRate(s.record, task, requiredCapability);
+          return {
+            harnessId: effectiveHarnessId,
+            workerId,
+            modelId: s.record.id,
+            runtimeId,
             capabilityScore: Math.max(0, s.score),
             residency: resState,
-            verifiedSuccessRate: this.measuredSuccessRate(s.record, task, requiredCapability),
+            verifiedSuccessRate,
+            sampleCount,
+            uncertainty: hp?.uncertainty,
+            avgLatencyMs: hp?.avgLatencyMs,
             estimatedLoadMs: resState === 'ready' ? 0 : placementEst.estimatedLoadMs,
             evictionRequired: placementEst.evictionRequired,
             kvCacheFits: placementEst.kvCacheFits,
@@ -303,6 +345,9 @@ export class Scheduler {
         const f = a.factors!;
         const isDefaultPreferred = routing.defaultModel && s.record.id === routing.defaultModel;
         s.reasons.push(`resource (${workload}, account ${a.accountId}): score ${a.score} = quality ${f.quality.toFixed(2)}, reliability ${f.reliability.toFixed(2)}, capacity ${f.capacity.toFixed(2)}, cost ${f.cost.toFixed(2)}, latency ${f.latency.toFixed(2)}, quota risk ${f.quotaRisk.toFixed(2)}`);
+        if (a.scoringRationale?.length) {
+          s.reasons.push(`outcome-routing: ${a.scoringRationale.join(' | ')}`);
+        }
         s.score = Math.round(a.score! * 1000) / 10 + (isDefaultPreferred ? 100 : 0);
       }
       const chosen = all.filter((a) => a.admissible).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
@@ -337,6 +382,12 @@ export class Scheduler {
         classification.language && profile?.conditionalMeasurements?.byLanguage?.[classification.language]
           ? profile.conditionalMeasurements.byLanguage[classification.language].find((c) => c.category === requiredCapability)
           : undefined;
+      const hp = this.deps.harnessPerformance?.getSuccessRate({
+        harnessId: effectiveHarnessId,
+        modelId: record.id,
+        runtimeId: this.preferredRuntime(record.id),
+        category: requiredCapability,
+      });
 
       const isEligible = s.rejected.length === 0;
       const policyRejection = s.rejected.find((r) => r.includes('hosted') || r.includes('policy') || r.includes('provider_only') || r.includes('routingMode'));
@@ -345,14 +396,20 @@ export class Scheduler {
       evaluatedCandidates.push({
         modelId: record.id,
         runtimeId,
-        profileFound: !!profile,
+        profileFound: !!profile || (!!hp && hp.sampleCount > 0),
         isStale: !!profile?.isStale,
         staleReason: profile?.staleReason,
-        categoryScore: m ? m.score : undefined,
+        categoryScore: m ? m.score : hp?.verifiedSuccessRate,
         conditionalScore: cond ? cond.score : undefined,
         effectiveScore: s.score,
-        confidence: m ? m.confidence : (profile ? profile.confidence : undefined),
-        sampleCount: m ? m.sampleCount : 0,
+        confidence: m
+          ? m.confidence
+          : profile
+            ? profile.confidence
+            : hp?.uncertainty !== undefined
+              ? Math.max(0, 1 - hp.uncertainty)
+              : undefined,
+        sampleCount: m ? m.sampleCount : (hp ? hp.sampleCount : 0),
         policyAllowed: !policyRejection,
         policyRejection,
         resourceAllowed: !resourceRejection,
@@ -376,6 +433,7 @@ export class Scheduler {
       }
       const instance = this.selectInstance(match.record);
       const circuit = this.deps.reliability?.status(preferred, task.type);
+      const outcomeRationale = match.reasons.find((r) => r.startsWith('outcome-routing:'));
 
       const explanation: EmpiricalRoutingExplanation = {
         requiredCapability,
@@ -384,7 +442,9 @@ export class Scheduler {
         candidateModels: records.map((r) => r.id),
         evaluatedCandidates,
         selectedModelId: preferred,
-        selectionReason: `Explicitly requested model '${preferred}' satisfied all hard constraints`,
+        selectionReason:
+          `Explicitly requested model '${preferred}' satisfied all hard constraints` +
+          (outcomeRationale ? ` (${outcomeRationale})` : ''),
         policyConstraintsApplied,
         resourceConstraintsApplied,
       };
@@ -426,6 +486,7 @@ export class Scheduler {
     eligible.sort((a, b) => b.score - a.score || a.record.id.localeCompare(b.record.id));
     const best = eligible[0];
     const instance = this.selectInstance(best.record);
+    const outcomeRationale = best.reasons.find((r) => r.startsWith('outcome-routing:'));
 
     const explanation: EmpiricalRoutingExplanation = {
       requiredCapability,
@@ -434,7 +495,9 @@ export class Scheduler {
       candidateModels: records.map((r) => r.id),
       evaluatedCandidates,
       selectedModelId: best.record.id,
-      selectionReason: `Selected model '${best.record.id}' with highest verified evidence score (${best.score}) for required capability '${requiredCapability}'`,
+      selectionReason:
+        `Selected model '${best.record.id}' with highest verified evidence score (${best.score}) for required capability '${requiredCapability}'` +
+        (outcomeRationale ? ` (${outcomeRationale})` : ''),
       policyConstraintsApplied,
       resourceConstraintsApplied,
     };
@@ -442,7 +505,7 @@ export class Scheduler {
     return {
       modelId: best.record.id,
       modelInstanceId: instance.id,
-      strategy: this.deps.modelIntelligence ? 'empirical_profile' : 'capability_match',
+      strategy: this.deps.modelIntelligence || this.deps.harnessPerformance ? 'empirical_profile' : 'capability_match',
       score: best.score,
       empiricalExplanation: explanation,
       reasons: [
@@ -466,6 +529,39 @@ export class Scheduler {
   private preferredRuntime(modelId: string): string {
     const instances = this.deps.models.instancesOf(modelId);
     return (instances.find((i) => i.state === 'READY') ?? instances.find((i) => i.loaded) ?? instances[0])?.runtimeId ?? 'unknown';
+  }
+
+  /** Worker/computer of the instance a model would run on: a ready instance first. */
+  private preferredWorker(modelId: string): string | undefined {
+    const instances = this.deps.models.instancesOf(modelId);
+    return (instances.find((i) => i.state === 'READY') ?? instances.find((i) => i.loaded) ?? instances[0])?.computerId;
+  }
+
+  /** Empirical sample count from ModelIntelligenceService or legacy record.performance. */
+  private measuredSampleCount(
+    record: ModelRecord,
+    task: Task,
+    category: ModelCapabilityCategory,
+  ): number | undefined {
+    if (this.deps.modelIntelligence) {
+      const instances = this.deps.models.instancesOf(record.id);
+      const runtimeId = instances[0]?.runtimeId ?? 'unknown';
+      const segKey: ProfileSegmentationKey = {
+        model: record.id,
+        runtime: runtimeId,
+        quantization: record.quantization,
+        modelVersion: (record as unknown as Record<string, unknown>).version as string | undefined,
+        wazirProtocolVersion: '1.0.0',
+      };
+      const profile = this.deps.modelIntelligence.getProfile(segKey);
+      if (profile && !profile.isStale) {
+        const m = profile.categoryMeasurements.find((c) => c.category === category);
+        if (m) return m.sampleCount >= MIN_MEASURED_SAMPLES ? m.sampleCount : undefined;
+      }
+    }
+    const measured = record.performance?.[task.type];
+    if (measured) return measured.samples;
+    return undefined;
   }
 
   /** Empirical verified success rate from ModelIntelligenceService or legacy record.performance. */
@@ -609,6 +705,7 @@ export class Scheduler {
     requiredContext: number,
     classification?: TaskCapabilityClassification,
     routing: ResolvedRoutingConstraint = this.resolveRoutingConstraint(task),
+    harnessId?: string,
   ): ScoredModel {
     const reasons: string[] = [];
     const rejected: string[] = [];
@@ -769,6 +866,32 @@ export class Scheduler {
             `protocol failures ${pct(measured.protocolFailureRate)}` +
             (measured.firstPassBuildRate !== null ? `, first-pass build ${pct(measured.firstPassBuildRate)}` : ''),
         );
+      }
+    }
+
+    if (this.deps.harnessPerformance && classification) {
+      const runtimeId = this.preferredRuntime(record.id);
+      const hp = this.deps.harnessPerformance.getSuccessRate({
+        harnessId,
+        modelId: record.id,
+        runtimeId,
+        category: classification.primaryCategory,
+      });
+      if (hp) {
+        if (hp.sampleCount >= MIN_MEASURED_SAMPLES && hp.verifiedSuccessRate !== undefined && Number.isFinite(hp.verifiedSuccessRate)) {
+          const confidence = hp.uncertainty !== undefined ? Math.max(0.1, 1 - hp.uncertainty) : 1;
+          const hpWeight = Math.round(hp.verifiedSuccessRate * 5 * confidence);
+          score += hpWeight;
+          reasons.push(
+            `harness-performance [harness=${harnessId ?? 'default'}, category=${classification.primaryCategory}]: ` +
+              `verifiedSuccessRate=${pct(hp.verifiedSuccessRate)} over ${hp.sampleCount} samples (+${hpWeight})`,
+          );
+        } else {
+          reasons.push(
+            `harness-performance [harness=${harnessId ?? 'default'}, category=${classification.primaryCategory}]: ` +
+              `insufficient samples (${hp.sampleCount} < ${MIN_MEASURED_SAMPLES}); fallback to rule-based routing`,
+          );
+        }
       }
     }
 
