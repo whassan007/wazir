@@ -52,7 +52,7 @@ if (!shouldRun) {
 }
 
 if (shouldBuild) {
-  const build = spawnSync('npm', ['run', 'build'], { cwd: root, stdio: 'inherit' });
+  const build = spawnSync('npm', ['run', 'build:cli'], { cwd: root, stdio: 'inherit' });
   if (build.status !== 0) process.exit(build.status ?? 1);
 }
 

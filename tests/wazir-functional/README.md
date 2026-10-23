@@ -8,7 +8,7 @@ List the coverage and validate the manifest:
 node tests/wazir-functional/run.mjs
 ```
 
-Build the workspaces and run the deterministic cases:
+Build the CLI workspaces and run the deterministic cases:
 
 ```sh
 node tests/wazir-functional/run.mjs --run
