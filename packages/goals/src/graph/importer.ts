@@ -49,10 +49,11 @@ export interface ParsedGoalGraph {
   prompts: PromptSeed[];
 }
 
-const TOP_LEVEL_KEYS = new Set(['schema_version', 'name', 'kind', 'status', 'sources', 'purpose', 'constitution', 'state_contract', 'targets', 'graph', 'prompts', 'integration_notes']);
+const TOP_LEVEL_KEYS = new Set(['schema_version', 'name', 'program', 'kind', 'status', 'sources', 'purpose', 'constitution', 'completion_states', 'state_contract', 'stages', 'targets', 'graph', 'execution_graph', 'prompts', 'integration_notes']);
 const CONSTITUTION_KEYS = new Set(['objective_owner', 'invariants', 'resource_limits', 'allowed_unattended', 'needs_approval', 'completion_states']);
+const STAGE_KEYS = new Set(['id', 'name', 'title', 'targets']);
 const TARGET_KEYS = new Set(['id', 'stage', 'title', 'depends_on', 'priority', 'executor', 'artifacts', 'acceptance', 'external_dependency', 'requires_approval']);
-const GRAPH_KEYS = new Set(['entry', 'edges', 'transitions']);
+const GRAPH_KEYS = new Set(['entry', 'edges', 'nodes', 'transitions']);
 const LIMIT_KEYS: Record<string, keyof ResourceLimits> = {
   max_tasks_per_run: 'maxTasksPerRun',
   max_repairs_per_task: 'maxRepairsPerTask',
@@ -120,43 +121,84 @@ export function mapGoalGraphDocument(doc: unknown): ParsedGoalGraph {
 
   // -- targets (the goal graph) ---------------------------------------------
   const targets: GoalTarget[] = [];
-  if (!Array.isArray(doc.targets)) {
+  const pushTarget = (raw: unknown, path: string, defaultStage?: string) => {
+    if (!isMap(raw)) {
+      schema('target must be a mapping', path);
+      return;
+    }
+    unknownKeys(raw, TARGET_KEYS, path, schema);
+    const target: GoalTarget = {
+      id: raw.id as string,
+      stage: ((raw.stage ?? defaultStage) as string),
+      title: raw.title as string,
+      dependsOn: (raw.depends_on ?? []) as string[],
+      priority: raw.priority as number,
+      executor: raw.executor as string,
+      artifacts: (raw.artifacts ?? []) as string[],
+      acceptance: raw.acceptance as string[],
+    };
+    if (raw.external_dependency !== undefined && raw.external_dependency !== null) target.externalDependency = raw.external_dependency as boolean;
+    if (raw.requires_approval !== undefined && raw.requires_approval !== null) target.requiresApproval = raw.requires_approval as boolean;
+    targets.push(target);
+  };
+  if (doc.targets !== undefined && doc.stages !== undefined) {
+    schema('document must specify either targets or stages, not both', 'stages');
+  } else if (doc.stages !== undefined) {
+    if (!Array.isArray(doc.stages)) {
+      schema('stages must be a sequence', 'stages');
+    } else {
+      doc.stages.forEach((stageRaw, si) => {
+        const sPath = `stages[${si}]`;
+        if (!isMap(stageRaw)) {
+          schema('stage must be a mapping', sPath);
+          return;
+        }
+        unknownKeys(stageRaw, STAGE_KEYS, sPath, schema);
+        const stageName = (stageRaw.id ?? stageRaw.name ?? stageRaw.title) as string | undefined;
+        if (typeof stageName !== 'string' || stageName.trim() === '') schema('stage must have non-empty string id or name', `${sPath}.id`);
+        if (!Array.isArray(stageRaw.targets)) {
+          schema('stage.targets must be a sequence', `${sPath}.targets`);
+          return;
+        }
+        stageRaw.targets.forEach((raw, ti) => pushTarget(raw, `${sPath}.targets[${ti}]`, stageName));
+      });
+    }
+  } else if (!Array.isArray(doc.targets)) {
     schema('targets must be a sequence', 'targets');
   } else {
-    doc.targets.forEach((raw, i) => {
-      const path = `targets[${i}]`;
-      if (!isMap(raw)) {
-        schema('target must be a mapping', path);
-        return;
-      }
-      unknownKeys(raw, TARGET_KEYS, path, schema);
-      const target: GoalTarget = {
-        id: raw.id as string,
-        stage: raw.stage as string,
-        title: raw.title as string,
-        dependsOn: (raw.depends_on ?? []) as string[],
-        priority: raw.priority as number,
-        executor: raw.executor as string,
-        artifacts: (raw.artifacts ?? []) as string[],
-        acceptance: raw.acceptance as string[],
-      };
-      if (raw.external_dependency !== undefined && raw.external_dependency !== null) target.externalDependency = raw.external_dependency as boolean;
-      if (raw.requires_approval !== undefined && raw.requires_approval !== null) target.requiresApproval = raw.requires_approval as boolean;
-      targets.push(target);
-    });
+    doc.targets.forEach((raw, i) => pushTarget(raw, `targets[${i}]`));
   }
 
   // -- execution (prompt) graph ---------------------------------------------
-  const g = doc.graph;
+  if (doc.graph !== undefined && doc.execution_graph !== undefined) {
+    schema('document must specify either graph or execution_graph, not both', 'execution_graph');
+  }
+  const gKey = doc.execution_graph !== undefined ? 'execution_graph' : 'graph';
+  const g = doc.execution_graph ?? doc.graph;
   let executionGraph: GoalGraphDefinition['executionGraph'] | undefined;
   const transitions: ExecutionTransitionSpec[] = [];
   if (!isMap(g)) {
-    schema('graph must be a mapping with entry and edges', 'graph');
+    schema(`${gKey} must be a mapping with entry and edges/nodes`, gKey);
   } else {
-    unknownKeys(g, GRAPH_KEYS, 'graph', schema);
+    unknownKeys(g, GRAPH_KEYS, gKey, schema);
     const nodes: PromptGraphNode[] = [];
-    if (!isMap(g.edges)) {
-      schema('graph.edges must be a mapping of node -> [next nodes]', 'graph.edges');
+    if (g.edges !== undefined && g.nodes !== undefined) {
+      schema(`${gKey} must specify either edges or nodes, not both`, `${gKey}.nodes`);
+    } else if (Array.isArray(g.nodes)) {
+      g.nodes.forEach((n, i) => {
+        const nPath = `${gKey}.nodes[${i}]`;
+        if (!isMap(n)) {
+          schema('execution node must be a mapping', nPath);
+          return;
+        }
+        unknownKeys(n, new Set(['id', 'next', 'prompt_id', 'promptId']), nPath, schema);
+        const node: PromptGraphNode = { id: n.id as string, next: (n.next ?? []) as string[] };
+        const pid = n.prompt_id ?? n.promptId;
+        if (pid !== undefined && pid !== null) node.promptId = pid as string;
+        nodes.push(node);
+      });
+    } else if (!isMap(g.edges)) {
+      schema(`${gKey}.edges must be a mapping of node -> [next nodes]`, `${gKey}.edges`);
     } else {
       for (const [id, next] of Object.entries(g.edges)) {
         nodes.push({ id, next: next === null ? [] : (next as string[]) });
@@ -165,17 +207,17 @@ export function mapGoalGraphDocument(doc: unknown): ParsedGoalGraph {
     executionGraph = { entry: g.entry as string, nodes };
     if (g.transitions !== undefined && g.transitions !== null) {
       if (!Array.isArray(g.transitions)) {
-        schema('graph.transitions must be a sequence', 'graph.transitions');
+        schema(`${gKey}.transitions must be a sequence`, `${gKey}.transitions`);
       } else {
         const edgeSet = new Set(nodes.flatMap((n) => (Array.isArray(n.next) ? n.next.map((to) => `${n.id}->${to}`) : [])));
         g.transitions.forEach((t, i) => {
-          const path = `graph.transitions[${i}]`;
+          const path = `${gKey}.transitions[${i}]`;
           if (!isMap(t) || typeof t.from !== 'string' || typeof t.to !== 'string' || typeof t.when !== 'string') {
             schema('transition must have string from, to and when', path);
             return;
           }
           unknownKeys(t, new Set(['from', 'to', 'when']), path, schema);
-          if (!edgeSet.has(`${t.from}->${t.to}`)) schema(`transition ${t.from} -> ${t.to} is not an edge of graph.edges`, path);
+          if (!edgeSet.has(`${t.from}->${t.to}`)) schema(`transition ${t.from} -> ${t.to} is not an edge of ${gKey}.edges`, path);
           transitions.push({ from: t.from, to: t.to, when: t.when });
         });
       }
@@ -189,6 +231,11 @@ export function mapGoalGraphDocument(doc: unknown): ParsedGoalGraph {
     for (const p of prompts) if (!nodeIds.has(p.executorKey)) schema(`prompt "${p.executorKey}" does not correspond to an execution-graph node`, `prompts.${p.executorKey}`);
   }
 
+  const rawCompletionStates = doc.completion_states !== undefined ? doc.completion_states : isMap(c) ? c.completion_states : undefined;
+  if (doc.completion_states !== undefined) {
+    completionStates = stringList(rawCompletionStates, 'completion_states', schema);
+  }
+
   const extras: GoalGraphImportExtras = {
     kind: typeof doc.kind === 'string' ? doc.kind : undefined,
     status: typeof doc.status === 'string' ? doc.status : undefined,
@@ -200,9 +247,13 @@ export function mapGoalGraphDocument(doc: unknown): ParsedGoalGraph {
   };
 
   const schemaVersion = typeof doc.schema_version === 'number' ? String(doc.schema_version) : (doc.schema_version as string);
+  if (doc.name !== undefined && doc.program !== undefined) {
+    schema('document must specify either name or program, not both', 'program');
+  }
+  const graphName = (doc.name ?? doc.program) as string;
   const definition: GoalGraphDefinition = {
     schemaVersion,
-    name: doc.name as string,
+    name: graphName,
     constitution: constitution as GoalConstitution,
     targets,
     executionGraph: executionGraph as GoalGraphDefinition['executionGraph'],
