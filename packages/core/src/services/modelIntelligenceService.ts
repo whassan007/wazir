@@ -15,6 +15,17 @@ import {
 import type { Task } from '../types/task.js';
 import { TaskCapabilityClassifier } from './taskCapabilityClassifier.js';
 
+export interface HarnessProfileSegmentationKey extends ProfileSegmentationKey {
+  harnessId?: string;
+  environment?: string;
+  environmentKey?: string;
+}
+
+export interface HarnessModelCapabilityProfile extends ModelCapabilityProfile {
+  harnessId?: string;
+  environment?: string;
+}
+
 export interface ModelIntelligenceServiceOptions {
   store?: KeyValueStore;
   classifier?: TaskCapabilityClassifier;
@@ -27,7 +38,7 @@ export class ModelIntelligenceService {
   private readonly defaultProtocolVersion: string;
 
   /** In-memory profile storage indexed by composite segmentation key. */
-  private readonly profiles = new Map<string, ModelCapabilityProfile>();
+  private readonly profiles = new Map<string, HarnessModelCapabilityProfile>();
 
   /** Deduplication set to avoid double-counting retries or duplicated provenance. */
   private readonly processedExecutionIds = new Set<string>();
@@ -40,15 +51,21 @@ export class ModelIntelligenceService {
 
   /**
    * Deterministic composite segmentation key.
-   * Ensures evidence is segregated by model version, runtime, quantization, and protocol.
+   * Ensures evidence is segregated by model version, runtime, quantization, and protocol,
+   * and optionally by harnessId and environment when provided.
    */
-  public getSegmentKey(key: ProfileSegmentationKey): string {
+  public getSegmentKey(key: HarnessProfileSegmentationKey): string {
     const model = key.model;
     const version = key.modelVersion ?? 'default';
     const runtime = key.runtime;
     const quant = key.quantization ?? 'default';
     const proto = key.wazirProtocolVersion || this.defaultProtocolVersion;
-    return `${model}::${version}::${runtime}::${quant}::${proto}`;
+    const base = `${model}::${version}::${runtime}::${quant}::${proto}`;
+    if (!key.harnessId) {
+      return base;
+    }
+    const env = key.environment ?? key.environmentKey;
+    return env ? `${base}::${key.harnessId}::${env}` : `${base}::${key.harnessId}`;
   }
 
   /**
@@ -56,7 +73,7 @@ export class ModelIntelligenceService {
    * Enforces Gate 56 Drift Invariant: If a model or runtime has changed version,
    * stale evidence is NEVER silently returned as current evidence.
    */
-  public getProfile(key: string | ProfileSegmentationKey): ModelCapabilityProfile | undefined {
+  public getProfile(key: string | HarnessProfileSegmentationKey): HarnessModelCapabilityProfile | undefined {
     if (typeof key === 'string') {
       for (const prof of this.profiles.values()) {
         if (prof.model === key || prof.id === key) {
@@ -78,19 +95,25 @@ export class ModelIntelligenceService {
       return exact;
     }
 
-    // Check if there is an existing profile for the same model/runtime with a DIFFERENT version (drift)
-    for (const [existingKey, prof] of this.profiles.entries()) {
-      if (prof.model === key.model && prof.runtime === key.runtime) {
+    const reqEnv = key.environment ?? key.environmentKey;
+
+    // Check if there is an existing profile for the same model/runtime (and harness when specified) with a DIFFERENT version/config (drift)
+    for (const [, prof] of this.profiles.entries()) {
+      const sameHarness = (prof.harnessId ?? undefined) === (key.harnessId ?? undefined);
+      if (prof.model === key.model && prof.runtime === key.runtime && sameHarness) {
         if (
           prof.modelVersion !== (key.modelVersion ?? 'default') ||
           prof.quantization !== (key.quantization ?? 'default') ||
-          prof.wazirProtocolVersion !== (key.wazirProtocolVersion || this.defaultProtocolVersion)
+          prof.wazirProtocolVersion !== (key.wazirProtocolVersion || this.defaultProtocolVersion) ||
+          (reqEnv !== undefined && prof.environment !== undefined && prof.environment !== reqEnv)
         ) {
           // Stale profile detected! Return it with explicit staleness annotation
+          const existingEnvDesc = prof.environment ? `, env=${prof.environment}` : '';
+          const reqEnvDesc = reqEnv ? `, env=${reqEnv}` : '';
           return {
             ...prof,
             isStale: true,
-            staleReason: `Profile configuration drift: existing profile [ver=${prof.modelVersion}, quant=${prof.quantization}, proto=${prof.wazirProtocolVersion}] does not match requested [ver=${key.modelVersion ?? 'default'}, quant=${key.quantization ?? 'default'}, proto=${key.wazirProtocolVersion}]`,
+            staleReason: `Profile configuration drift: existing profile [ver=${prof.modelVersion}, quant=${prof.quantization}, proto=${prof.wazirProtocolVersion}${existingEnvDesc}] does not match requested [ver=${key.modelVersion ?? 'default'}, quant=${key.quantization ?? 'default'}, proto=${key.wazirProtocolVersion}${reqEnvDesc}]`,
           };
         }
       }
@@ -102,7 +125,7 @@ export class ModelIntelligenceService {
   /**
    * Lists all tracked capability profiles.
    */
-  public listProfiles(): ModelCapabilityProfile[] {
+  public listProfiles(): HarnessModelCapabilityProfile[] {
     return Array.from(this.profiles.values());
   }
 
@@ -133,16 +156,21 @@ export class ModelIntelligenceService {
    */
   public recordExecution(
     record: ExecutionRecord,
-    segment: ProfileSegmentationKey,
-  ): ModelCapabilityProfile {
+    segment: HarnessProfileSegmentationKey,
+  ): HarnessModelCapabilityProfile {
     const execId = record.execution?.id;
-    if (execId && this.processedExecutionIds.has(execId)) {
+    const dedupKey = execId
+      ? segment.harnessId
+        ? `${execId}::${segment.harnessId}`
+        : execId
+      : undefined;
+    if (dedupKey && this.processedExecutionIds.has(dedupKey)) {
       // Deduplication guard: ignore already counted execution
       const existing = this.getProfile(segment);
       if (existing) return existing;
     }
-    if (execId) {
-      this.processedExecutionIds.add(execId);
+    if (dedupKey) {
+      this.processedExecutionIds.add(dedupKey);
     }
 
     const profile = this.getOrCreateProfile(segment);
@@ -242,8 +270,8 @@ export class ModelIntelligenceService {
   public recordBenchmarkResult(
     result: BenchmarkRunResult,
     task: BenchmarkTask,
-    segment: ProfileSegmentationKey,
-  ): ModelCapabilityProfile {
+    segment: HarnessProfileSegmentationKey,
+  ): HarnessModelCapabilityProfile {
     const profile = this.getOrCreateProfile(segment);
     const category = this.mapBenchmarkCategory(task);
     const isSuccess = result.scoreReport.passed;
@@ -296,7 +324,7 @@ export class ModelIntelligenceService {
     }
   }
 
-  private getOrCreateProfile(segment: ProfileSegmentationKey): ModelCapabilityProfile {
+  private getOrCreateProfile(segment: HarnessProfileSegmentationKey): HarnessModelCapabilityProfile {
     const key = this.getSegmentKey(segment);
     let prof = this.profiles.get(key);
     if (!prof) {
@@ -319,6 +347,7 @@ export class ModelIntelligenceService {
         lastEvaluated: new Date(),
       }));
 
+      const env = segment.environment ?? segment.environmentKey;
       prof = {
         id: key,
         model: segment.model,
@@ -327,6 +356,8 @@ export class ModelIntelligenceService {
         hardwareClass: segment.hardwareClass ?? 'local',
         modelVersion: segment.modelVersion ?? 'default',
         wazirProtocolVersion: segment.wazirProtocolVersion || this.defaultProtocolVersion,
+        ...(segment.harnessId ? { harnessId: segment.harnessId } : {}),
+        ...(env ? { environment: env } : {}),
         categoryMeasurements: initialMeasurements,
         conditionalMeasurements: {
           byPhase: {},

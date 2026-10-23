@@ -2,7 +2,17 @@ import type { ComputerRegistry } from './computerRegistry.js';
 import type { ExecutionEngine } from './executionEngine.js';
 import type { JobManager } from './jobManager.js';
 import type { JobOrchestrator } from './jobOrchestrator.js';
-import type { ToolOutcomeInspection } from './executionRecovery.js';
+import {
+  OperationReconciliationGuard,
+  reconcileBeforeCrossHarnessResume,
+  verifyLeaseFencing,
+  type CrossHarnessReconciliationResult,
+  type LeaseFencingClaim,
+  type LeaseFencingResult,
+  type LeaseFencingState,
+  type OperatorAuthorizedResolution,
+  type ToolOutcomeInspection,
+} from './executionRecovery.js';
 import type { ExecutionRecord, ToolCallCheckpoint } from '../types/execution.js';
 
 export interface RecoveryManagerOptions {
@@ -25,6 +35,8 @@ export interface RecoveryManagerOptions {
    * unknown outcome stays blocked for an operator, as before.
    */
   inspectToolOutcome?: (record: ExecutionRecord, call: ToolCallCheckpoint) => Promise<ToolOutcomeInspection>;
+  /** Optional shared operation reconciliation guard for deduplicating side effects across sweeps/resumes. */
+  operationGuard?: OperationReconciliationGuard;
 }
 
 export interface RecoverySweepResult {
@@ -56,8 +68,93 @@ export interface RecoverySweepResult {
  */
 export class RecoveryManager {
   private timer?: NodeJS.Timeout;
+  private readonly operationGuard: OperationReconciliationGuard;
+  private readonly leaseTable = new Map<string, LeaseFencingState>();
 
-  constructor(private readonly deps: RecoveryManagerOptions) {}
+  constructor(private readonly deps: RecoveryManagerOptions) {
+    this.operationGuard = deps.operationGuard ?? new OperationReconciliationGuard();
+  }
+
+  getOperationGuard(): OperationReconciliationGuard {
+    return this.operationGuard;
+  }
+
+  /**
+   * Acquires or reassigns lease ownership for an execution, incrementing the fencing epoch.
+   * Any subsequent reports from previous workers/epochs are rejected by `verifyWorkerReport`.
+   */
+  async reassignExecutionLease(
+    executionId: string,
+    newWorkerId: string,
+    options?: { harnessId?: string; ttlMs?: number; now?: Date },
+  ): Promise<LeaseFencingState> {
+    const now = options?.now ?? new Date();
+    const ttlMs = options?.ttlMs ?? 30_000;
+    const prior = this.leaseTable.get(executionId) ?? this.deps.executions.getLease(executionId);
+    const nextEpoch = (prior?.epoch ?? 0) + 1;
+
+    // If ExecutionEngine has an unexpired lease held by the old lost worker, expire/release it
+    // or acquire under new worker if non-terminal.
+    const record = await this.deps.executions.get(executionId);
+    let leaseId = `lease-${executionId}-epoch-${nextEpoch}`;
+
+    if (record && !['completed', 'failed', 'cancelled'].includes(record.execution.status)) {
+      try {
+        const existingEngineLease = this.deps.executions.getLease(executionId);
+        if (existingEngineLease && !existingEngineLease.released && existingEngineLease.workerId !== newWorkerId) {
+          await this.deps.executions.releaseLease(executionId, existingEngineLease.workerId, {
+            epoch: existingEngineLease.epoch,
+            now,
+          });
+        }
+        const acquired = await this.deps.executions.acquireLease(executionId, newWorkerId, { ttlMs, now });
+        leaseId = acquired.token;
+      } catch {
+        // Fallback to RecoveryManager's fencing table when execution is already transitioning
+      }
+    }
+
+    const fenced: LeaseFencingState = {
+      executionId,
+      leaseId,
+      workerId: newWorkerId,
+      epoch: nextEpoch,
+      harnessId: options?.harnessId,
+      released: false,
+      expiresAt: new Date(now.getTime() + ttlMs),
+    };
+    this.leaseTable.set(executionId, fenced);
+    return structuredClone(fenced);
+  }
+
+  /**
+   * Verifies that a worker reporting completion or events holds the current active lease epoch.
+   */
+  verifyWorkerReport(executionId: string, claim: LeaseFencingClaim): LeaseFencingResult {
+    const tracked = this.leaseTable.get(executionId) ?? this.deps.executions.getLease(executionId);
+    return verifyLeaseFencing(tracked, claim);
+  }
+
+  /**
+   * Reconciles all unresolved side effects for an execution before cross-harness resume.
+   */
+  async reconcileForCrossHarnessResume(
+    executionId: string,
+    options?: {
+      inspectToolOutcome?: (record: ExecutionRecord, call: ToolCallCheckpoint) => Promise<ToolOutcomeInspection>;
+      operatorAuthorizedResolution?: OperatorAuthorizedResolution | OperatorAuthorizedResolution[];
+      advanceRevisionOnApplied?: boolean;
+    },
+  ): Promise<CrossHarnessReconciliationResult> {
+    return reconcileBeforeCrossHarnessResume({
+      executions: this.deps.executions,
+      executionId,
+      inspectToolOutcome: options?.inspectToolOutcome ?? this.deps.inspectToolOutcome,
+      operatorAuthorizedResolution: options?.operatorAuthorizedResolution,
+      guard: this.operationGuard,
+      advanceRevisionOnApplied: options?.advanceRevisionOnApplied,
+    });
+  }
 
   async sweep(): Promise<RecoverySweepResult> {
     const { offline } = this.deps.computers.checkHeartbeats({
@@ -125,6 +222,17 @@ export class RecoveryManager {
       }
       if (inspection.outcome === 'UNDETERMINED') continue;
       await this.deps.executions.reconcileToolCall(executionId, call.callId, { ...inspection, inspectedBy: 'recovery-manager' });
+      if (inspection.outcome === 'APPLIED') {
+        this.operationGuard.recordConfirmedMutation({
+          executionId,
+          callId: call.callId,
+          toolName: call.toolName,
+          argumentsHash: call.argumentsHash,
+          input: call.input,
+          workspaceRevision: call.workspaceRevision,
+          evidence: inspection.evidence,
+        });
+      }
       reconciled.push({ executionId, callId: call.callId, tool: call.toolName, outcome: inspection.outcome, evidence: inspection.evidence });
     }
   }

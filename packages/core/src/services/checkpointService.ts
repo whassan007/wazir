@@ -7,11 +7,60 @@ import type {
   ForkExecutionResult,
   RollbackResult,
   ExecutionRecord,
+  ToolCallCheckpoint,
+  PolicyRequirements,
 } from '../types/index.js';
+import {
+  PORTABLE_CHECKPOINT_SCHEMA_VERSION,
+  computeWorkspaceContentDigest,
+  computePortableCheckpointDigest,
+  validatePortableCheckpoint,
+  classifyPortableResumability,
+  redactPortableText,
+  redactPortableValue,
+  type PortableBudgetState,
+  type PortableRemainingBudget,
+  type PortableActionSummary,
+  type PortableCheckpointEnvelope,
+} from '../types/portableCheckpoint.js';
+import { extractToolCheckpoints } from './executionRecovery.js';
 import type { ExecutionEngine } from './executionEngine.js';
 import type { WorktreeManager, WorktreeMergeResult } from './worktreeManager.js';
 import type { ProvenanceManager } from './provenanceManager.js';
 import { injectFault, type KeyValueStore } from '@wazir/shared';
+
+export interface ExportPortableCheckpointOptions {
+  sourceHarnessId?: string;
+  targetHarnessId?: string;
+  pendingActions?: string[];
+  budgetLimits?: PortableRemainingBudget;
+}
+
+export interface ImportPortableCheckpointOptions {
+  targetWorkspaceRoot?: string;
+}
+
+const LOCAL_RUNTIME_IDS = new Set([
+  'ollama',
+  'lmstudio',
+  'local',
+  'vllm',
+  'mlx',
+  'llamacpp',
+  'llama.cpp',
+]);
+
+function isLocalRuntimeId(runtimeId?: string, localOnlyPolicy?: boolean): boolean {
+  if (localOnlyPolicy === true) return true;
+  if (!runtimeId) return false;
+  const normalized = runtimeId.toLowerCase();
+  return (
+    LOCAL_RUNTIME_IDS.has(normalized) ||
+    normalized.startsWith('ollama') ||
+    normalized.startsWith('lmstudio') ||
+    normalized.startsWith('local')
+  );
+}
 
 export interface CheckpointServiceOptions {
   /** Durable store owned by the host. Without it checkpoints are explicitly ephemeral. */
@@ -536,5 +585,512 @@ export class CheckpointService {
       digest: currentDigest,
       filesRestored,
     };
+  }
+
+  /**
+   * Exports a checkpoint as a cryptographically bound `PortableCheckpointEnvelope`
+   * suitable for cross-harness handoff, remote worker transport, or crash recovery.
+   */
+  public async exportPortableCheckpoint(
+    checkpointId: string,
+    options: ExportPortableCheckpointOptions = {},
+  ): Promise<PortableCheckpointEnvelope> {
+    await this.ready;
+    const checkpoint = this.getCheckpoint(checkpointId);
+    if (!checkpoint) {
+      throw new Error(`Checkpoint '${checkpointId}' not found`);
+    }
+
+    const record = await this.executionEngine.get(checkpoint.executionId);
+    const portableMeta = (checkpoint.metadata?.portableEnvelope ?? {}) as Partial<PortableCheckpointEnvelope>;
+
+    let allToolCheckpoints: ToolCallCheckpoint[] = [];
+    if (record) {
+      try {
+        allToolCheckpoints = this.executionEngine.toolCheckpoints
+          ? this.executionEngine.toolCheckpoints(checkpoint.executionId)
+          : extractToolCheckpoints(record);
+      } catch {
+        allToolCheckpoints = extractToolCheckpoints(record);
+      }
+    }
+
+    const completedActions: PortableActionSummary[] = [];
+    const seenActionIds = new Set<string>();
+
+    if (record) {
+      for (const tc of record.toolCalls ?? []) {
+        const rev =
+          typeof tc.provenance?.workspaceRevision === 'number'
+            ? tc.provenance.workspaceRevision
+            : checkpoint.workspaceRevision;
+        if (rev <= checkpoint.workspaceRevision) {
+          const actionId = tc.callId ?? tc.id;
+          seenActionIds.add(actionId);
+          completedActions.push({
+            actionId,
+            kind: 'tool_call',
+            summary: redactPortableText(
+              `Tool '${tc.tool}' (${tc.ok ? 'completed' : 'failed'})${tc.output ? `: ${String(tc.output).slice(0, 200)}` : ''}`,
+            ),
+            toolName: tc.tool,
+            workspaceRevision: rev,
+            confirmed: Boolean(tc.ok && tc.failureClass !== 'TOOL_OUTCOME_UNKNOWN'),
+            at: (tc.at instanceof Date ? tc.at : new Date(tc.at)).toISOString(),
+          });
+        }
+      }
+
+      for (const mut of record.mutationHistory ?? []) {
+        if (mut.revision <= checkpoint.workspaceRevision) {
+          const actionId = `mutation-${mut.revision}-${mut.path}`;
+          if (!seenActionIds.has(actionId)) {
+            seenActionIds.add(actionId);
+            completedActions.push({
+              actionId,
+              kind: 'file_mutation',
+              summary: redactPortableText(`File '${mut.path}' mutated at revision ${mut.revision}`),
+              targetPath: mut.path,
+              workspaceRevision: mut.revision,
+              confirmed: true,
+              at: (mut.at instanceof Date ? mut.at : new Date(mut.at)).toISOString(),
+            });
+          }
+        }
+      }
+
+      for (const chk of record.checks ?? []) {
+        const chkRev = chk.workspaceRevision ?? 0;
+        if (chkRev <= checkpoint.workspaceRevision) {
+          const actionId = `check-${chk.name}-${chkRev}`;
+          if (!seenActionIds.has(actionId)) {
+            seenActionIds.add(actionId);
+            completedActions.push({
+              actionId,
+              kind: 'verification_check',
+              summary: redactPortableText(
+                `Verification check '${chk.name}' (${chk.ok ? 'PASS' : 'FAIL'}): ${chk.command}`,
+              ),
+              workspaceRevision: chkRev,
+              confirmed: Boolean(chk.ok),
+              at: checkpoint.createdAt.toISOString(),
+            });
+          }
+        }
+      }
+    }
+
+    const extraActions = (checkpoint.metadata?.completedActions ??
+      portableMeta.completedActions ??
+      []) as PortableActionSummary[];
+    for (const act of extraActions) {
+      if (act && typeof act.actionId === 'string' && !seenActionIds.has(act.actionId)) {
+        seenActionIds.add(act.actionId);
+        completedActions.push({
+          ...act,
+          summary: redactPortableText(act.summary ?? ''),
+        });
+      }
+    }
+
+    const rawUnresolved = [
+      ...allToolCheckpoints.filter(
+        (c) =>
+          (c.state === 'STARTED' || c.state === 'OUTCOME_UNKNOWN') &&
+          (c.workspaceRevision ?? 0) <= checkpoint.workspaceRevision,
+      ),
+      ...(((checkpoint.metadata?.unresolvedSideEffects ??
+        portableMeta.unresolvedSideEffects ??
+        []) as ToolCallCheckpoint[])),
+    ];
+    const seenUnresolvedCallIds = new Set<string>();
+    const unresolvedSideEffects: ToolCallCheckpoint[] = [];
+    for (const call of rawUnresolved) {
+      if (!call || seenUnresolvedCallIds.has(call.callId)) continue;
+      seenUnresolvedCallIds.add(call.callId);
+      unresolvedSideEffects.push({
+        ...call,
+        startedAt: call.startedAt instanceof Date ? call.startedAt : new Date(call.startedAt),
+        ...(call.finishedAt !== undefined
+          ? { finishedAt: call.finishedAt instanceof Date ? call.finishedAt : new Date(call.finishedAt) }
+          : {}),
+        input: redactPortableValue(call.input),
+      });
+    }
+
+    const metaConsumed = (checkpoint.metadata?.consumedBudget ??
+      portableMeta.consumedBudget) as Partial<PortableBudgetState> | undefined;
+
+    const tokensUsed =
+      metaConsumed?.tokensUsed ??
+      (record?.usage
+        ? record.usage.total ?? (record.usage.input ?? 0) + (record.usage.output ?? 0)
+        : checkpoint.contextSnapshot?.tokenCount ?? 0);
+
+    const toolCallsUsed =
+      metaConsumed?.toolCallsUsed ??
+      (record ? Math.max(record.toolCalls.length, allToolCheckpoints.length) : 0);
+
+    const modelCallsUsed =
+      metaConsumed?.modelCallsUsed ??
+      (record
+        ? record.totalModelCalls ??
+          record.events.filter(
+            (e) =>
+              (e.eventType ?? e.type) === 'generation.started' ||
+              (e.eventType ?? e.type) === 'model.attempt.started',
+          ).length
+        : 0);
+
+    let costUSD = 0;
+    let costStatus: PortableBudgetState['costStatus'] = 'UNKNOWN';
+    if (metaConsumed?.costStatus !== undefined) {
+      costStatus = metaConsumed.costStatus;
+      costUSD = metaConsumed.costUSD ?? 0;
+    } else if (typeof checkpoint.metadata?.costUSD === 'number') {
+      costUSD = checkpoint.metadata.costUSD;
+      costStatus =
+        (checkpoint.metadata?.costStatus as PortableBudgetState['costStatus'] | undefined) ??
+        'ACTUAL';
+    } else if (isLocalRuntimeId(record?.execution.runtimeId, record?.task?.policy?.localOnly)) {
+      costUSD = 0;
+      costStatus = 'ACTUAL';
+    }
+
+    let durationMs = metaConsumed?.durationMs ?? 0;
+    if (metaConsumed?.durationMs === undefined && record) {
+      const start = record.execution.startedAt ?? record.execution.createdAt;
+      const end = record.execution.completedAt ?? checkpoint.createdAt;
+      if (start) {
+        durationMs = Math.max(0, new Date(end).getTime() - new Date(start).getTime());
+      }
+    }
+
+    const consumedBudget: PortableBudgetState = {
+      tokensUsed,
+      toolCallsUsed,
+      modelCallsUsed,
+      costUSD,
+      costStatus,
+      durationMs,
+    };
+
+    const metaRemaining = (checkpoint.metadata?.remainingBudget ??
+      portableMeta.remainingBudget) as PortableRemainingBudget | undefined;
+
+    const computeRemaining = (
+      limit: number | null | undefined,
+      consumed: number,
+      fallback: number | null | undefined,
+    ): number | null => {
+      if (limit !== undefined) {
+        return limit === null ? null : Math.max(0, Number((limit - consumed).toFixed(6)));
+      }
+      if (fallback !== undefined && fallback !== null) {
+        return Math.max(0, fallback);
+      }
+      return null;
+    };
+
+    const limits = options.budgetLimits;
+    const defaultMaxModelCalls =
+      limits?.maxModelCalls !== undefined
+        ? limits.maxModelCalls
+        : metaRemaining?.maxModelCalls === undefined && record?.task?.maxTurns !== undefined
+          ? record.task.maxTurns
+          : undefined;
+    const defaultMaxDurationMs =
+      limits?.maxDurationMs !== undefined
+        ? limits.maxDurationMs
+        : metaRemaining?.maxDurationMs === undefined &&
+            record?.task?.policy?.maxExecutionTimeSeconds !== undefined
+          ? record.task.policy.maxExecutionTimeSeconds * 1000
+          : undefined;
+
+    const remainingBudget: PortableRemainingBudget = {
+      maxTokens: computeRemaining(
+        limits?.maxTokens,
+        consumedBudget.tokensUsed,
+        metaRemaining?.maxTokens,
+      ),
+      maxToolCalls: computeRemaining(
+        limits?.maxToolCalls,
+        consumedBudget.toolCallsUsed,
+        metaRemaining?.maxToolCalls,
+      ),
+      maxModelCalls: computeRemaining(
+        defaultMaxModelCalls,
+        consumedBudget.modelCallsUsed,
+        metaRemaining?.maxModelCalls,
+      ),
+      maxCostUSD: computeRemaining(
+        limits?.maxCostUSD,
+        consumedBudget.costUSD,
+        metaRemaining?.maxCostUSD,
+      ),
+      maxDurationMs: computeRemaining(
+        defaultMaxDurationMs,
+        consumedBudget.durationMs,
+        metaRemaining?.maxDurationMs,
+      ),
+    };
+
+    const policyContext: PolicyRequirements = redactPortableValue(
+      structuredClone(
+        record?.task?.policy ??
+          (checkpoint.metadata?.policyContext as PolicyRequirements | undefined) ??
+          portableMeta.policyContext ??
+          {},
+      ),
+    );
+
+    const status =
+      record?.execution.status ??
+      checkpoint.planState?.status ??
+      (checkpoint.metadata?.status as string | undefined);
+
+    const resumability = classifyPortableResumability({
+      status,
+      unresolvedSideEffects,
+      remainingBudget,
+    });
+
+    const rawMetadata: Record<string, unknown> | undefined = checkpoint.metadata
+      ? (() => {
+          const copy = { ...checkpoint.metadata };
+          delete copy.portableEnvelope;
+          return Object.keys(copy).length > 0 ? redactPortableValue(copy) : undefined;
+        })()
+      : undefined;
+
+    const workspaceContentDigest = computeWorkspaceContentDigest(
+      checkpoint.worktreeState.filesSnapshot ?? {},
+      checkpoint.workspaceRevision,
+    );
+
+    const pendingActions = (
+      options.pendingActions ??
+      (checkpoint.metadata?.pendingActions as string[] | undefined) ??
+      portableMeta.pendingActions ??
+      []
+    ).map((a) => redactPortableText(String(a)));
+
+    const filesChanged =
+      record?.filesChanged && record.filesChanged.length > 0
+        ? [...record.filesChanged]
+        : portableMeta.filesChanged && portableMeta.filesChanged.length > 0
+          ? [...portableMeta.filesChanged]
+          : Object.keys(checkpoint.worktreeState.filesSnapshot ?? {}).sort();
+
+    const jobId = record?.execution.jobId ?? checkpoint.planState?.jobId ?? portableMeta.jobId;
+    const targetHarnessId =
+      options.targetHarnessId ??
+      (checkpoint.metadata?.targetHarnessId as string | undefined) ??
+      portableMeta.targetHarnessId;
+    const sourceModelId =
+      record?.execution.modelId ??
+      (checkpoint.metadata?.sourceModelId as string | undefined) ??
+      portableMeta.sourceModelId;
+    const sourceRuntimeId =
+      record?.execution.runtimeId ??
+      (checkpoint.metadata?.sourceRuntimeId as string | undefined) ??
+      portableMeta.sourceRuntimeId;
+    const sourceWorkerId =
+      record?.execution.workerId ??
+      (checkpoint.metadata?.sourceWorkerId as string | undefined) ??
+      portableMeta.sourceWorkerId;
+
+    const envelopeWithoutDigest: Omit<PortableCheckpointEnvelope, 'integrityDigest'> = {
+      schemaVersion: PORTABLE_CHECKPOINT_SCHEMA_VERSION,
+      executionId: checkpoint.executionId,
+      taskId:
+        record?.task?.id ??
+        record?.execution.taskId ??
+        (checkpoint.metadata?.taskId as string | undefined) ??
+        portableMeta.taskId ??
+        checkpoint.executionId,
+      ...(jobId !== undefined ? { jobId } : {}),
+      sourceHarnessId:
+        options.sourceHarnessId ??
+        (checkpoint.metadata?.sourceHarnessId as string | undefined) ??
+        portableMeta.sourceHarnessId ??
+        record?.execution.agentId ??
+        'native',
+      ...(targetHarnessId !== undefined ? { targetHarnessId } : {}),
+      ...(sourceModelId !== undefined ? { sourceModelId } : {}),
+      ...(sourceRuntimeId !== undefined ? { sourceRuntimeId } : {}),
+      ...(sourceWorkerId !== undefined ? { sourceWorkerId } : {}),
+      workspaceRevision: String(checkpoint.workspaceRevision),
+      workspaceContentDigest,
+      checkpointId: checkpoint.id,
+      objective: redactPortableText(
+        record?.task?.input ??
+          (checkpoint.metadata?.objective as string | undefined) ??
+          portableMeta.objective ??
+          checkpoint.description ??
+          '',
+      ),
+      completedActions,
+      pendingActions,
+      filesChanged,
+      unresolvedSideEffects,
+      verificationEvidenceIds: [...(checkpoint.verificationState?.evidenceIds ?? [])],
+      consumedBudget,
+      remainingBudget,
+      policyContext,
+      resumable: resumability.resumable,
+      ...(resumability.nonResumableReason !== undefined
+        ? { nonResumableReason: resumability.nonResumableReason }
+        : {}),
+      createdAt: checkpoint.createdAt.toISOString(),
+      worktreeState: structuredClone(checkpoint.worktreeState),
+      verificationState: structuredClone(checkpoint.verificationState),
+      ...(checkpoint.contextSnapshot !== undefined
+        ? { contextSnapshot: redactPortableValue(checkpoint.contextSnapshot) }
+        : {}),
+      ...(checkpoint.planState !== undefined
+        ? { planState: redactPortableValue(checkpoint.planState) }
+        : {}),
+      ...(checkpoint.provenanceCursor !== undefined
+        ? { provenanceCursor: checkpoint.provenanceCursor }
+        : {}),
+      ...(checkpoint.evidenceReferences !== undefined
+        ? { evidenceReferences: structuredClone(checkpoint.evidenceReferences) }
+        : {}),
+      ...(checkpoint.parentCheckpointId !== undefined
+        ? { parentCheckpointId: checkpoint.parentCheckpointId }
+        : {}),
+      ...(checkpoint.workspaceRoot !== undefined
+        ? { workspaceRoot: checkpoint.workspaceRoot }
+        : {}),
+      ...(checkpoint.description !== undefined
+        ? { description: redactPortableText(checkpoint.description) }
+        : {}),
+      ...(rawMetadata !== undefined ? { metadata: rawMetadata } : {}),
+    };
+
+    const integrityDigest = computePortableCheckpointDigest(envelopeWithoutDigest);
+
+    return {
+      ...envelopeWithoutDigest,
+      integrityDigest,
+    };
+  }
+
+  /**
+   * Validates and imports a `PortableCheckpointEnvelope` into `CheckpointService`,
+   * verifying schema version, `workspaceContentDigest`, and `integrityDigest`,
+   * persisting to durable storage, and optionally materializing onto `targetWorkspaceRoot`.
+   */
+  public async importPortableCheckpoint(
+    envelope: unknown,
+    options: ImportPortableCheckpointOptions = {},
+  ): Promise<ExecutionCheckpoint> {
+    await this.ready;
+
+    const validation = validatePortableCheckpoint(envelope);
+    if (!validation.valid || !validation.envelope) {
+      throw new Error(`INVALID_PORTABLE_CHECKPOINT: ${validation.errors.join('; ')}`);
+    }
+
+    const env = validation.envelope;
+    if (!env.worktreeState || !env.worktreeState.filesSnapshot) {
+      throw new Error(
+        `INVALID_PORTABLE_CHECKPOINT: worktreeState.filesSnapshot is required to import a checkpoint`,
+      );
+    }
+
+    const parsedRevision =
+      typeof env.workspaceRevision === 'number'
+        ? env.workspaceRevision
+        : Number.parseInt(String(env.workspaceRevision), 10);
+    if (!Number.isSafeInteger(parsedRevision) || parsedRevision < 0) {
+      throw new Error(
+        `INVALID_PORTABLE_CHECKPOINT: invalid workspaceRevision '${env.workspaceRevision}'`,
+      );
+    }
+
+    const workspaceRoot =
+      options.targetWorkspaceRoot ?? env.workspaceRoot ?? this.defaultWorkspaceRoot;
+
+    const checkpoint: ExecutionCheckpoint = {
+      id: env.checkpointId,
+      executionId: env.executionId,
+      ...(env.parentCheckpointId !== undefined
+        ? { parentCheckpointId: env.parentCheckpointId }
+        : {}),
+      createdAt: new Date(env.createdAt),
+      workspaceRevision: parsedRevision,
+      workspaceRoot,
+      worktreeState: structuredClone(env.worktreeState),
+      contextSnapshot: env.contextSnapshot
+        ? structuredClone(env.contextSnapshot)
+        : { itemUris: [...env.filesChanged] },
+      planState: env.planState
+        ? structuredClone(env.planState)
+        : { ...(env.jobId !== undefined ? { jobId: env.jobId } : {}) },
+      verificationState: env.verificationState
+        ? structuredClone(env.verificationState)
+        : {
+            revision: parsedRevision,
+            evidenceIds: [...env.verificationEvidenceIds],
+            checksPass: env.verificationEvidenceIds.length > 0,
+          },
+      ...(env.provenanceCursor !== undefined ? { provenanceCursor: env.provenanceCursor } : {}),
+      ...(env.evidenceReferences !== undefined
+        ? { evidenceReferences: structuredClone(env.evidenceReferences) }
+        : {}),
+      ...(env.description !== undefined ? { description: env.description } : {}),
+      metadata: {
+        ...(env.metadata ? structuredClone(env.metadata) : {}),
+        portableEnvelope: {
+          taskId: env.taskId,
+          ...(env.jobId !== undefined ? { jobId: env.jobId } : {}),
+          sourceHarnessId: env.sourceHarnessId,
+          ...(env.targetHarnessId !== undefined ? { targetHarnessId: env.targetHarnessId } : {}),
+          ...(env.sourceModelId !== undefined ? { sourceModelId: env.sourceModelId } : {}),
+          ...(env.sourceRuntimeId !== undefined ? { sourceRuntimeId: env.sourceRuntimeId } : {}),
+          ...(env.sourceWorkerId !== undefined ? { sourceWorkerId: env.sourceWorkerId } : {}),
+          objective: env.objective,
+          completedActions: structuredClone(env.completedActions),
+          pendingActions: [...env.pendingActions],
+          filesChanged: [...env.filesChanged],
+          unresolvedSideEffects: structuredClone(env.unresolvedSideEffects),
+          consumedBudget: structuredClone(env.consumedBudget),
+          remainingBudget: structuredClone(env.remainingBudget),
+          policyContext: structuredClone(env.policyContext),
+          resumable: env.resumable,
+          ...(env.nonResumableReason !== undefined
+            ? { nonResumableReason: env.nonResumableReason }
+            : {}),
+          workspaceContentDigest: env.workspaceContentDigest,
+          integrityDigest: env.integrityDigest,
+        },
+      },
+    };
+
+    const computedDigest = this.computeDigest(checkpoint);
+    if (computedDigest !== env.workspaceContentDigest) {
+      throw new Error(
+        `INVALID_PORTABLE_CHECKPOINT: workspaceContentDigest mismatch. Expected '${env.workspaceContentDigest}', got '${computedDigest}'`,
+      );
+    }
+
+    if (options.targetWorkspaceRoot) {
+      await this.materializeOnTarget(
+        options.targetWorkspaceRoot,
+        checkpoint,
+        env.workspaceContentDigest,
+      );
+    }
+
+    await this.store?.put(`checkpoint/${checkpoint.id}`, {
+      version: 1,
+      digest: computedDigest,
+      checkpoint,
+    });
+    this.checkpoints.set(checkpoint.id, structuredClone(checkpoint));
+
+    return structuredClone(checkpoint);
   }
 }

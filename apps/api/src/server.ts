@@ -9,6 +9,7 @@ import {
   ModelLifecycleError,
   RuntimeRegistry,
   EditorProtocolService,
+  CheckpointTransportService,
   ProtocolError,
   JSONRPC_FORBIDDEN,
   type ProtocolPrincipal,
@@ -32,6 +33,7 @@ import { generateId, sanitizeUntrustedOutput, MemoryStore, type KeyValueStore } 
 import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
 import { createControlledExecution } from './toolExecution.js';
 import { MobileServices, registerMobileRoutes } from './mobile.js';
+import { registerCheckpointTransportRoutes } from './checkpointTransportRoutes.js';
 import { wazirVersion } from './version.js';
 import {
   createGoalStudioServices,
@@ -384,6 +386,7 @@ export interface ApiState {
   editorProtocol: EditorProtocolService;
   mobile: MobileServices;
   goalStudio?: Partial<WiredGoalStudioServices>;
+  checkpointTransport: CheckpointTransportService;
 }
 
 /** Starts the production recovery sweep; caller must stop it on shutdown. */
@@ -602,6 +605,12 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   }
   const initialExecutions = sortedStoredExecs.map((item) => item.record);
 
+  const checkpointTransport = new CheckpointTransportService({
+    store,
+    transportSecret: process.env.WAZIR_CHECKPOINT_TRANSPORT_SECRET ?? process.env.WAZIR_API_TOKEN,
+    requireAuth: Boolean(process.env.WAZIR_CHECKPOINT_TRANSPORT_SECRET || process.env.WAZIR_API_TOKEN),
+  });
+
   const state: ApiState = {
     computers,
     runtimes,
@@ -616,6 +625,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     auth,
     editorProtocol,
     mobile: undefined as unknown as MobileServices,
+    checkpointTransport,
   };
 
   const mobile = new MobileServices(state, {
@@ -1096,6 +1106,8 @@ export function createApp(state: ApiState) {
   // Mobile companion routes (public pairing endpoints + authenticated mobile endpoints)
   registerMobileRoutes(app, state, state.mobile);
   registerGoalStudioRoutes(app, { auth: state.auth, store: state.store, services: state.goalStudio ?? {} });
+  // Remote content-addressed checkpoint transport endpoints
+  registerCheckpointTransportRoutes(app, state.checkpointTransport);
 
   // Read-only control routes allow viewer or operator tokens. Mutating endpoints
   // explicitly enforce operator scope. A paired mobile device is deliberately NOT
