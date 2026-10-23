@@ -33,11 +33,20 @@ export const DEFAULT_WEIGHTS: Record<PolicyMode, RoutingWeights> = {
 
 const QUOTA_RISK: Record<BudgetMode, number> = { normal: 0, advisory: 0.3, unknown: 0.4, conserve: 0.7, critical: 0.9, exhausted: 1 };
 
+/** Minimum empirical sample count required before outcome-based routing trusts measured success rates. */
+export const MIN_MEASURED_SAMPLES = 3;
+
 export interface RouteCandidate {
   modelId: string;
   runtimeId: string;
   /** Capability/evidence score from the scheduler (higher = better suited). */
   capabilityScore: number;
+  /** Optional harness identifier (e.g. 'native', 'claude-code', 'codex') for cross-harness routing. */
+  harnessId?: string;
+  /** Optional worker / computer identifier where this candidate would execute. */
+  workerId?: string;
+  /** Optional explicit account identifier override. */
+  accountId?: string;
   /**
    * Local only: is the model resident with enough context for this request? A model that
    * must be loaded or reloaded costs memory and load time, so it is penalised and explained.
@@ -45,29 +54,98 @@ export interface RouteCandidate {
   residency?: 'ready' | 'reload' | 'load';
   /** Empirically measured verified success rate in [0, 1] for this task type/category. */
   verifiedSuccessRate?: number;
+  /** Number of empirical execution/benchmark samples backing `verifiedSuccessRate`. */
+  sampleCount?: number;
+  /** Statistical uncertainty (e.g. Wilson interval half-width) in [0, 1]. */
+  uncertainty?: number;
   /** Estimated cold-start or context-reload latency in milliseconds when not ready. */
   estimatedLoadMs?: number;
+  /** Measured or estimated generation completion latency in milliseconds (excluding cold load). */
+  avgLatencyMs?: number;
   /** True when loading this model on its target computer requires evicting a resident model. */
   evictionRequired?: boolean;
   /** False when usable GPU VRAM on target hardware cannot fit model weights + KV cache. */
   kvCacheFits?: boolean;
+  /** False when the candidate's target runtime is unhealthy or unreachable. */
+  runtimeAvailable?: boolean;
+  /** False when the candidate's target worker/computer is offline or lacks capacity. */
+  workerAvailable?: boolean;
+  /** Expected USD cost of running verification checks for this candidate. */
+  expectedVerificationCostUsd?: number;
+  /** Expected USD cost of retries when an attempt fails verification. */
+  expectedRetryCostUsd?: number;
+  /** Expected USD cost of cold-starting or provisioning the harness/runtime/model. */
+  expectedColdStartCostUsd?: number;
+  /** Hard completion deadline in milliseconds for this candidate. */
+  deadlineMs?: number;
+  /** Hard maximum total cost in USD for this candidate. */
+  maxCostUSD?: number;
 }
 
 export interface RouteAssessment extends RouteCandidate {
   accountId?: string;
+  harnessId?: string;
+  workerId?: string;
   admissible: boolean;
   reasons: string[];
   /** Normalised factors in [0, 1]. */
   factors?: { quality: number; reliability: number; capacity: number; cost: number; latency: number; quotaRisk: number };
   /** Expected total USD cost per verified successful task (accounts for retry probability). */
   effectiveCostPerSuccessUsd?: number;
+  /**
+   * Calibrated probability of verified completion in [0, 1].
+   * Never derived from raw model self-confidence; uses empirical `verifiedSuccessRate * reliability`
+   * when `sampleCount >= MIN_MEASURED_SAMPLES`, or rule-based account reliability prior when insufficient.
+   */
+  predictedVerifiedSuccessProb?: number;
+  /** Expected single-attempt model execution USD cost. */
+  expectedExecutionCostUsd?: number;
+  /** Expected verification USD cost. */
+  expectedVerificationCostUsd?: number;
+  /** Expected retry USD cost given failure probability. */
+  expectedRetryCostUsd?: number;
+  /** Expected cold-start USD cost. */
+  expectedColdStartCostUsd?: number;
+  /** Expected total USD cost (execution + verification + retry + cold-start). */
+  expectedTotalCostUsd?: number;
+  /** Expected end-to-end completion latency in milliseconds (generation + cold-start/reload). */
+  expectedCompletionLatencyMs?: number;
+  /** Alias for `expectedCompletionLatencyMs` per shared telemetry contracts. */
+  expectedLatencyMs?: number;
+  /** Normalised quota exhaustion risk in [0, 1] from the account's current budget mode. */
+  quotaExhaustionRisk?: number;
+  /** True when empirical sampleCount < MIN_MEASURED_SAMPLES (or unmeasured), falling back to rule-based routing. */
+  fallbackRuleBased?: boolean;
+  /** Structured explanation of the outcome-based cost/quality/latency scoring decision. */
+  scoringRationale?: string[];
+  /** Alias for `scoringRationale` per shared contracts. */
+  rationale?: string[];
   score?: number;
   local?: boolean;
+}
+
+export interface RouteAssessInput {
+  task: Pick<Task, 'id'>;
+  workload: WorkloadClass;
+  estimatedInputTokens: number;
+  estimatedOutputTokens?: number;
+  candidates: RouteCandidate[];
+  /** Hard maximum total expected USD cost allowed for this task. */
+  maxCostUSD?: number;
+  /** Hard completion deadline in milliseconds for this task. */
+  deadlineMs?: number;
+  /** Minimum empirically calibrated verified success rate in [0, 1]. */
+  minVerifiedSuccessRate?: number;
 }
 
 export interface RouterOptions {
   budget: TokenBudgetManager;
   resolveAccount: (runtimeId: string, modelId: string) => string | undefined;
+}
+
+function minDefined(...values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((v): v is number => v !== undefined && Number.isFinite(v));
+  return defined.length > 0 ? Math.min(...defined) : undefined;
 }
 
 /**
@@ -104,13 +182,13 @@ export class ResourceRouter {
     return rows.reduce((n, u) => n + u.durationMs! / u.outputTokens, 0) / rows.length;
   }
 
-  assess(input: { task: Pick<Task, 'id'>; workload: WorkloadClass; estimatedInputTokens: number; candidates: RouteCandidate[] }): RouteAssessment[] {
+  assess(input: RouteAssessInput): RouteAssessment[] {
     const { budget } = this.opts;
     const w = this.weights();
-    const estOutput = estimateOutputTokens({}, input.workload);
+    const estOutput = input.estimatedOutputTokens ?? estimateOutputTokens({}, input.workload);
     const maxCapability = Math.max(1, ...input.candidates.map((c) => c.capabilityScore));
-    const minCorrectness = budget.policy.minVerifiedSuccessRate;
-    const maxLatencyMs = budget.policy.maxLatencyMs;
+    const minCorrectness = input.minVerifiedSuccessRate ?? budget.policy.minVerifiedSuccessRate;
+    const policyMaxLatencyMs = budget.policy.maxLatencyMs;
 
     const ledger = budget.ledger;
     const since = ledger.now() - 7 * 86_400_000;
@@ -163,23 +241,115 @@ export class ResourceRouter {
       return statusCache.get(accountId);
     };
 
+    const buildBaseRationale = (
+      c: RouteCandidate,
+      accountId: string | undefined,
+      fallbackRuleBased: boolean,
+      predictedVerifiedSuccessProb: number | undefined,
+      costs: {
+        execution: number;
+        verification: number;
+        retry: number;
+        coldStart: number;
+        total: number;
+        effectivePerSuccess: number;
+      } | undefined,
+      expectedCompletionLatencyMs: number | undefined,
+      quotaRisk: number | undefined,
+      mode: BudgetMode | undefined,
+    ): string[] => {
+      const lines: string[] = [
+        `candidate: harness=${c.harnessId ?? 'default'} model=${c.modelId} runtime=${c.runtimeId} worker=${c.workerId ?? 'local'} account=${accountId ?? 'unassigned'}`,
+      ];
+      if (fallbackRuleBased) {
+        if (c.sampleCount !== undefined && c.sampleCount < MIN_MEASURED_SAMPLES) {
+          lines.push(`fallback: rule-based prior used because empirical sampleCount (${c.sampleCount}) < MIN_MEASURED_SAMPLES (${MIN_MEASURED_SAMPLES})`);
+        } else {
+          lines.push('fallback: rule-based prior used (no empirical verifiedSuccessRate measurement)');
+        }
+      } else {
+        lines.push(
+          `empirical: verifiedSuccessRate=${((c.verifiedSuccessRate ?? 0) * 100).toFixed(1)}% over ${c.sampleCount ?? 'sufficient'} samples` +
+            (c.uncertainty !== undefined ? ` (uncertainty=${(c.uncertainty * 100).toFixed(1)}%)` : '') +
+            `, predictedVerifiedSuccessProb=${((predictedVerifiedSuccessProb ?? 0) * 100).toFixed(1)}%`,
+        );
+      }
+      if (costs) {
+        lines.push(
+          `cost: execution=$${costs.execution.toFixed(6)} verification=$${costs.verification.toFixed(6)} retry=$${costs.retry.toFixed(6)} coldStart=$${costs.coldStart.toFixed(6)} total=$${costs.total.toFixed(6)} effectivePerSuccess=$${costs.effectivePerSuccess.toFixed(6)}`,
+        );
+      }
+      if (expectedCompletionLatencyMs !== undefined) {
+        lines.push(`latency: expectedCompletionLatencyMs=${expectedCompletionLatencyMs}ms`);
+      }
+      if (quotaRisk !== undefined) {
+        lines.push(`quotaRisk: ${(quotaRisk * 100).toFixed(0)}% (mode=${mode ?? 'normal'})`);
+      }
+      return lines;
+    };
+
     const prelim = input.candidates.map((c): RouteAssessment & { estCost: number; ms?: number; mode?: BudgetMode } => {
-      const accountId = this.opts.resolveAccount(c.runtimeId, c.modelId);
-      if (!accountId) return { ...c, admissible: false, reasons: ['no account is configured for this runtime/model'], estCost: 0 };
-      const account = budget.accounts.get(accountId)!;
-      if (c.kvCacheFits === false) {
+      const hasSufficientEmpiricalSamples =
+        c.verifiedSuccessRate !== undefined &&
+        (c.sampleCount === undefined || c.sampleCount >= MIN_MEASURED_SAMPLES);
+      const fallbackRuleBased = !hasSufficientEmpiricalSamples;
+
+      const accountId = c.accountId ?? this.opts.resolveAccount(c.runtimeId, c.modelId);
+      const account = accountId ? budget.accounts.get(accountId) : undefined;
+      if (!accountId || !account) {
+        const reasons = ['no account is configured for this runtime/model'];
+        const scoringRationale = [
+          ...buildBaseRationale(c, accountId, fallbackRuleBased, undefined, undefined, undefined, undefined, undefined),
+          `rejected: ${reasons.join('; ')}`,
+        ];
         return {
-          ...c, accountId, admissible: false, local: account.kind === 'local', estCost: 0,
-          reasons: ['insufficient usable GPU VRAM to fit model weights and KV cache for required context'],
+          ...c,
+          accountId,
+          admissible: false,
+          reasons,
+          fallbackRuleBased,
+          scoringRationale,
+          rationale: scoringRationale,
+          estCost: 0,
         };
       }
-      if (minCorrectness !== undefined && c.verifiedSuccessRate !== undefined && c.verifiedSuccessRate < minCorrectness) {
-        return {
-          ...c, accountId, admissible: false, local: account.kind === 'local', estCost: 0,
-          reasons: [`calibrated correctness ${(c.verifiedSuccessRate * 100).toFixed(0)}% is below policy minimum ${(minCorrectness * 100).toFixed(0)}%`],
-        };
-      }
+
       const pricing = pricingFor(account, c.modelId);
+      const singleCallCost = costUsd(pricing, input.estimatedInputTokens, estOutput);
+      const rel = getReliability(accountId, c.modelId);
+      const rawSuccessProb = hasSufficientEmpiricalSamples ? c.verifiedSuccessRate! * rel : rel;
+      const successProb = Math.max(0.05, Math.min(1, rawSuccessProb));
+      const predictedVerifiedSuccessProb = Number(successProb.toFixed(4));
+
+      const verificationCost = Math.max(0, c.expectedVerificationCostUsd ?? 0);
+      const coldStartCost = Math.max(0, c.expectedColdStartCostUsd ?? 0);
+      const retryCost = c.expectedRetryCostUsd !== undefined
+        ? Math.max(0, c.expectedRetryCostUsd)
+        : (singleCallCost + verificationCost) * ((1 - successProb) / successProb);
+
+      const expectedExecutionCostUsd = Number(singleCallCost.toFixed(6));
+      const expectedVerificationCostUsd = Number(verificationCost.toFixed(6));
+      const expectedRetryCostUsd = Number(retryCost.toFixed(6));
+      const expectedColdStartCostUsd = Number(coldStartCost.toFixed(6));
+      const rawTotalCost = singleCallCost + verificationCost + retryCost + coldStartCost;
+      const expectedTotalCostUsd = Number(rawTotalCost.toFixed(6));
+      const effectiveCostPerSuccess = c.expectedRetryCostUsd !== undefined
+        ? rawTotalCost / successProb
+        : rawTotalCost;
+      const effectiveCostPerSuccessUsd = Number(effectiveCostPerSuccess.toFixed(6));
+
+      const tokenMs = getMsPerToken(c.modelId);
+      const loadPenaltyMs = c.residency && c.residency !== 'ready'
+        ? (c.estimatedLoadMs ?? 4_000)
+        : (c.residency === undefined && c.estimatedLoadMs !== undefined && c.estimatedLoadMs > 0 ? c.estimatedLoadMs : 0);
+      const genLatencyMs = c.avgLatencyMs !== undefined
+        ? c.avgLatencyMs
+        : (tokenMs !== undefined ? tokenMs * estOutput : undefined);
+      const totalLatencyMs = genLatencyMs !== undefined
+        ? genLatencyMs + loadPenaltyMs
+        : (loadPenaltyMs > 0 ? loadPenaltyMs : undefined);
+      const expectedCompletionLatencyMs = totalLatencyMs !== undefined ? Math.round(totalLatencyMs) : undefined;
+
       const hasModelCtxLimit = account.contextLimits?.[c.modelId] !== undefined;
       const previewKey = hasModelCtxLimit
         ? `model:${accountId}:${c.modelId}`
@@ -192,30 +362,110 @@ export class ResourceRouter {
         });
         previewCache.set(previewKey, preview);
       }
+      const quotaExhaustionRisk = QUOTA_RISK[preview.mode ?? 'normal'];
+      const costBreakdown = {
+        execution: expectedExecutionCostUsd,
+        verification: expectedVerificationCostUsd,
+        retry: expectedRetryCostUsd,
+        coldStart: expectedColdStartCostUsd,
+        total: expectedTotalCostUsd,
+        effectivePerSuccess: effectiveCostPerSuccessUsd,
+      };
+
+      const makeRejected = (reasons: string[], estCostVal = 0): RouteAssessment & { estCost: number; ms?: number; mode?: BudgetMode } => {
+        const scoringRationale = [
+          ...buildBaseRationale(c, accountId, fallbackRuleBased, predictedVerifiedSuccessProb, costBreakdown, expectedCompletionLatencyMs, quotaExhaustionRisk, preview.mode),
+          `rejected: ${reasons.join('; ')}`,
+        ];
+        return {
+          ...c,
+          accountId,
+          admissible: false,
+          local: account.kind === 'local',
+          reasons,
+          predictedVerifiedSuccessProb,
+          expectedExecutionCostUsd,
+          expectedVerificationCostUsd,
+          expectedRetryCostUsd,
+          expectedColdStartCostUsd,
+          expectedTotalCostUsd,
+          effectiveCostPerSuccessUsd,
+          expectedCompletionLatencyMs,
+          expectedLatencyMs: expectedCompletionLatencyMs,
+          quotaExhaustionRisk,
+          fallbackRuleBased,
+          scoringRationale,
+          rationale: scoringRationale,
+          estCost: estCostVal,
+          mode: preview.mode,
+        };
+      };
+
+      if (c.runtimeAvailable === false) {
+        return makeRejected([`runtime '${c.runtimeId}' is unavailable`]);
+      }
+      if (c.workerAvailable === false) {
+        return makeRejected([`worker '${c.workerId ?? 'unknown'}' is unavailable or lacks capacity`]);
+      }
+      if (c.kvCacheFits === false) {
+        return makeRejected(['insufficient usable GPU VRAM to fit model weights and KV cache for required context']);
+      }
+      if (minCorrectness !== undefined && hasSufficientEmpiricalSamples && c.verifiedSuccessRate! < minCorrectness) {
+        return makeRejected([`calibrated correctness ${(c.verifiedSuccessRate! * 100).toFixed(0)}% is below policy minimum ${(minCorrectness * 100).toFixed(0)}%`]);
+      }
       const quality = c.capabilityScore / maxCapability;
       if ((input.workload === 'complex' || input.workload === 'critical-review') && quality < 0.5) {
-        return { ...c, accountId, admissible: false, local: account.kind === 'local', estCost: 0,
-          reasons: [`capability ${c.capabilityScore} is below half of the best candidate (${maxCapability}) for ${input.workload} work; not substituted`] };
+        return makeRejected([`capability ${c.capabilityScore} is below half of the best candidate (${maxCapability}) for ${input.workload} work; not substituted`]);
       }
-      const singleCallCost = costUsd(pricing, input.estimatedInputTokens, estOutput);
-      const rel = getReliability(accountId, c.modelId);
-      const successProb = Math.max(0.05, Math.min(1, c.verifiedSuccessRate !== undefined ? c.verifiedSuccessRate * rel : rel));
-      const effectiveCostPerSuccess = singleCallCost / successProb;
-      const tokenMs = getMsPerToken(c.modelId);
-      const loadPenaltyMs = c.residency && c.residency !== 'ready' ? (c.estimatedLoadMs ?? 4_000) : 0;
-      const totalLatencyMs = tokenMs !== undefined ? tokenMs * estOutput + loadPenaltyMs : (loadPenaltyMs > 0 ? loadPenaltyMs : undefined);
-      if (maxLatencyMs !== undefined && totalLatencyMs !== undefined && totalLatencyMs > maxLatencyMs) {
-        return {
-          ...c, accountId, admissible: false, local: account.kind === 'local', estCost: effectiveCostPerSuccess,
-          effectiveCostPerSuccessUsd: Number(effectiveCostPerSuccess.toFixed(6)),
-          reasons: [`estimated latency ${Math.round(totalLatencyMs)}ms exceeds maxLatencyMs ${maxLatencyMs}ms`],
-        };
+      const effectiveMaxLatencyMs = minDefined(input.deadlineMs, c.deadlineMs, policyMaxLatencyMs);
+      if (effectiveMaxLatencyMs !== undefined && totalLatencyMs !== undefined && totalLatencyMs > effectiveMaxLatencyMs) {
+        return makeRejected(
+          [`estimated latency ${Math.round(totalLatencyMs)}ms exceeds maxLatencyMs ${effectiveMaxLatencyMs}ms (deadline exceeded)`],
+          effectiveCostPerSuccess,
+        );
       }
+      const effectiveMaxCostUsd = minDefined(input.maxCostUSD, c.maxCostUSD);
+      if (effectiveMaxCostUsd !== undefined && expectedTotalCostUsd > effectiveMaxCostUsd) {
+        return makeRejected(
+          [`expected total cost $${expectedTotalCostUsd.toFixed(4)} exceeds maxCostUSD budget $${effectiveMaxCostUsd.toFixed(4)}`],
+          effectiveCostPerSuccess,
+        );
+      }
+      if (preview.outcome !== 'admitted') {
+        return makeRejected([`${preview.outcome}: ${preview.reasons.join('; ')}`], effectiveCostPerSuccess);
+      }
+
+      const baseRationale = buildBaseRationale(
+        c,
+        accountId,
+        fallbackRuleBased,
+        predictedVerifiedSuccessProb,
+        costBreakdown,
+        expectedCompletionLatencyMs,
+        quotaExhaustionRisk,
+        preview.mode,
+      );
+
       return {
-        ...c, accountId, local: account.kind === 'local', admissible: preview.outcome === 'admitted',
-        reasons: preview.outcome === 'admitted' ? preview.reasons : [`${preview.outcome}: ${preview.reasons.join('; ')}`],
+        ...c,
+        accountId,
+        local: account.kind === 'local',
+        admissible: true,
+        reasons: preview.reasons,
         estCost: effectiveCostPerSuccess,
-        effectiveCostPerSuccessUsd: Number(effectiveCostPerSuccess.toFixed(6)),
+        effectiveCostPerSuccessUsd,
+        predictedVerifiedSuccessProb,
+        expectedExecutionCostUsd,
+        expectedVerificationCostUsd,
+        expectedRetryCostUsd,
+        expectedColdStartCostUsd,
+        expectedTotalCostUsd,
+        expectedCompletionLatencyMs,
+        expectedLatencyMs: expectedCompletionLatencyMs,
+        quotaExhaustionRisk,
+        fallbackRuleBased,
+        scoringRationale: baseRationale,
+        rationale: baseRationale,
         ms: totalLatencyMs !== undefined ? totalLatencyMs / Math.max(1, estOutput) : tokenMs,
         mode: preview.mode,
       };
@@ -238,10 +488,11 @@ export class ResourceRouter {
           ? 1 - Math.max(...status!.limits.map((l) => l.utilization ?? 0))
           : 0.5;
       const rel = getReliability(p.accountId!, p.modelId);
+      const hasSufficientSamples = !p.fallbackRuleBased && p.verifiedSuccessRate !== undefined;
       const factors = {
         quality: p.capabilityScore / maxCapability,
-        reliability: p.verifiedSuccessRate !== undefined
-          ? Math.max(0, Math.min(1, p.verifiedSuccessRate * rel))
+        reliability: hasSufficientSamples
+          ? Math.max(0, Math.min(1, p.verifiedSuccessRate! * rel))
           : rel,
         capacity: Math.max(0, Math.min(1, capacity)),
         cost: maxCost > 0 ? estCost / maxCost : 0,
@@ -250,19 +501,87 @@ export class ResourceRouter {
       };
       const score = w.quality * factors.quality + w.reliability * factors.reliability + w.capacity * factors.capacity
         - w.cost * factors.cost - w.latency * factors.latency - w.quotaRisk * factors.quotaRisk;
+      const roundedScore = Number(score.toFixed(4));
       const reasons = [...p.reasons];
       if (p.residency === 'reload') reasons.push('loaded with too little context: needs a reload (memory + load time)');
       else if (p.residency === 'load') reasons.push(`not loaded: needs cold load${p.estimatedLoadMs ? ` (~${p.estimatedLoadMs}ms)` : ''} (memory + load time)`);
       if (p.evictionRequired) reasons.push('loading requires evicting a resident model on target hardware');
-      return { ...p, reasons, factors, score: Number(score.toFixed(4)) };
+      const scoringRationale = [
+        ...(p.scoringRationale ?? []),
+        `utility: score=${roundedScore.toFixed(4)} (quality=${factors.quality.toFixed(2)}, reliability=${factors.reliability.toFixed(2)}, capacity=${factors.capacity.toFixed(2)}, cost=${factors.cost.toFixed(2)}, latency=${factors.latency.toFixed(2)}, quotaRisk=${factors.quotaRisk.toFixed(2)})`,
+      ];
+      return {
+        ...p,
+        reasons,
+        factors,
+        score: roundedScore,
+        scoringRationale,
+        rationale: scoringRationale,
+      };
     });
+  }
+
+  /**
+   * Evaluates `Candidate = Harness + Model + Runtime + Worker + Account` against all hard
+   * constraints (`minVerifiedSuccessRate`, `maxCostUSD`, authorization, runtime availability,
+   * hardware capacity, `deadlineMs` / `maxLatencyMs`) and selects the optimal admissible
+   * candidate minimizing expected cost per verified completion or maximizing policy utility.
+   */
+  selectOptimalCandidate(
+    input: RouteAssessInput & { optimizeFor?: 'cost_per_verified_success' | 'policy_score' },
+  ): RouteAssessment | undefined {
+    const assessments = this.assess(input);
+    const admissible = assessments.filter((a) => a.admissible);
+    if (admissible.length === 0) {
+      this.record(input.task.id, input.workload, undefined, assessments);
+      return undefined;
+    }
+
+    const optimizeCost = input.optimizeFor === 'cost_per_verified_success' || this.opts.budget.policy.mode === 'budget-first';
+    admissible.sort((a, b) => {
+      if (optimizeCost) {
+        const costDiff = (a.effectiveCostPerSuccessUsd ?? Number.POSITIVE_INFINITY) - (b.effectiveCostPerSuccessUsd ?? Number.POSITIVE_INFINITY);
+        if (Math.abs(costDiff) > 1e-9) return costDiff;
+      }
+      const scoreDiff = (b.score ?? 0) - (a.score ?? 0);
+      if (Math.abs(scoreDiff) > 1e-9) return scoreDiff;
+      const costTie = (a.effectiveCostPerSuccessUsd ?? Number.POSITIVE_INFINITY) - (b.effectiveCostPerSuccessUsd ?? Number.POSITIVE_INFINITY);
+      if (Math.abs(costTie) > 1e-9) return costTie;
+      const probTie = (b.predictedVerifiedSuccessProb ?? 0) - (a.predictedVerifiedSuccessProb ?? 0);
+      if (Math.abs(probTie) > 1e-9) return probTie;
+      return `${a.harnessId ?? ''}:${a.modelId}:${a.runtimeId}:${a.workerId ?? ''}`.localeCompare(
+        `${b.harnessId ?? ''}:${b.modelId}:${b.runtimeId}:${b.workerId ?? ''}`,
+      );
+    });
+
+    const chosen = admissible[0];
+    this.record(input.task.id, input.workload, chosen, assessments);
+    return chosen;
   }
 
   /** Records a routing decision in the audit trail, with the factors behind it. */
   record(taskId: string, workload: WorkloadClass, chosen: RouteAssessment | undefined, all: RouteAssessment[]): void {
     this.opts.budget.ledger.appendEvent('routing', { accountId: chosen?.accountId, taskId }, {
       workload, mode: this.opts.budget.policy.mode, chosen: chosen ? `${chosen.modelId}@${chosen.runtimeId}` : null,
-      candidates: all.map((a) => ({ model: a.modelId, runtime: a.runtimeId, account: a.accountId, admissible: a.admissible, score: a.score, factors: a.factors, reasons: a.reasons })),
+      chosenHarness: chosen?.harnessId ?? null,
+      chosenWorker: chosen?.workerId ?? null,
+      candidates: all.map((a) => ({
+        harness: a.harnessId,
+        model: a.modelId,
+        runtime: a.runtimeId,
+        worker: a.workerId,
+        account: a.accountId,
+        admissible: a.admissible,
+        score: a.score,
+        predictedVerifiedSuccessProb: a.predictedVerifiedSuccessProb,
+        expectedTotalCostUsd: a.expectedTotalCostUsd,
+        effectiveCostPerSuccessUsd: a.effectiveCostPerSuccessUsd,
+        expectedCompletionLatencyMs: a.expectedCompletionLatencyMs,
+        fallbackRuleBased: a.fallbackRuleBased,
+        factors: a.factors,
+        reasons: a.reasons,
+        scoringRationale: a.scoringRationale,
+      })),
     });
   }
 }
