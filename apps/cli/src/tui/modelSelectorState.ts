@@ -80,13 +80,15 @@ export class ModelSelectorController {
   }
 
   public dedupeKey(key: string, seqId?: number): boolean {
-    const now = Date.now();
-    const sig = `${key}:${seqId ?? ''}`;
-    if (sig === this.lastKeySignature && now - this.lastKeyTimestamp < 50) {
-      return true; // duplicate
+    if (seqId === undefined) {
+      return false;
+    }
+    const sig = `${key}:${seqId}`;
+    if (sig === this.lastKeySignature) {
+      return true; // duplicate event delivery for same seqId
     }
     this.lastKeySignature = sig;
-    this.lastKeyTimestamp = now;
+    this.lastKeyTimestamp = Date.now();
     return false;
   }
 
