@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderPrompt } from '../../src/prompts/index.js';
+import { DEFAULT_PROMPT_SEEDS, renderPrompt } from '../../src/prompts/index.js';
 import { fixturePromptSeeds, makeStudio } from './helpers.js';
 
 describe('seedFromGraph (nobel fixture prompts)', () => {
@@ -10,6 +10,35 @@ describe('seedFromGraph (nobel fixture prompts)', () => {
     const keys = seeds.map((s) => s.executorKey);
     expect(keys).toEqual(expect.arrayContaining(['load_ledger', 'select_target', 'plan_target', 'formal_verify', 'research_author']));
     expect(seeds.find((s) => s.executorKey === 'select_target')?.template).toContain('{{target_ledger}}');
+  });
+
+  it('seedDefaults seeds all Nobel specialist agents and execution-graph nodes', async () => {
+    const { studio } = makeStudio();
+    const results = await studio.seedDefaults();
+    expect(results.length).toBe(DEFAULT_PROMPT_SEEDS.length);
+    const keys = results.map((r) => r.prompt.executorKey);
+    expect(keys).toEqual(expect.arrayContaining([
+      'LiteratureSynthesisAgent',
+      'HypothesisGeneratorAgent',
+      'TheoryConstraintAgent',
+      'ObservablePredictionAgent',
+      'ExperimentalDesignAgent',
+      'DataAnalysisAgent',
+      'ReplicationPackageAgent',
+      'AdversarialReviewerAgent',
+      'PaperDraftingAgent',
+      'load_ledger',
+      'select_target',
+      'plan_target',
+      'formal_verify',
+      'research_author',
+    ]));
+    const lit = await studio.latest('LiteratureSynthesisAgent');
+    expect(lit?.version).toBe(1);
+    expect(lit?.outputSchema).toBeDefined();
+    expect(renderPrompt(lit!, { task: 'SMT safety' }).text).toContain('SMT safety');
+    const second = await studio.seedDefaults();
+    expect(second.every((r) => !r.created)).toBe(true);
   });
 
   it('seeds every prompt at v1 with a derived input schema, and is idempotent', async () => {

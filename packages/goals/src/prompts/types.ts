@@ -190,8 +190,10 @@ export interface PromptAdmin {
   diff(promptId: PromptId, a: PromptVersion, b: PromptVersion): Promise<PromptDiff>;
   /** Writes a NEW version carrying `toVersion`'s content. History is never rewritten. */
   rollback(promptId: PromptId, toVersion: PromptVersion, actor: string, note?: string): Promise<PublishResult>;
-  /** Idempotent: unchanged seeds create no versions. */
-  seedFromGraph(seeds: PromptSeed[], actor: string): Promise<PublishResult[]>;
+  /** Idempotent: unchanged seeds create no versions. Defaults to `DEFAULT_PROMPT_SEEDS` when `seeds` is omitted. */
+  seedFromGraph(seeds?: readonly PromptSeed[], actor?: string): Promise<PublishResult[]>;
+  /** Seeds `DEFAULT_PROMPT_SEEDS` (Nobel specialist agents + execution-graph nodes). Idempotent. */
+  seedDefaults(actor?: string): Promise<PublishResult[]>;
   /** Resolves a historical binding; never follows the head. */
   resolve(ref: { promptId: PromptId; version: PromptVersion }): Promise<PromptVersionRecord>;
   /** True when a runner is configured, i.e. `evaluate`/`compareVersions` can run. */

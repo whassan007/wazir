@@ -13,6 +13,7 @@ import { diffPromptVersions } from './diff.js';
 import { evaluatePrompt, type EvaluatePromptOptions } from './evaluation.js';
 import { deriveInputSchema, lintPrompt } from './render.js';
 import { checkSchema } from './schema.js';
+import { DEFAULT_PROMPT_SEEDS } from './seeds.js';
 import type {
   PromptComparison,
   PromptDraft,
@@ -343,13 +344,17 @@ export function createPromptStore(deps: GoalStudioDeps & PromptStoreOptions): Pr
       );
     },
 
-    async seedFromGraph(seeds: PromptSeed[], actor: string) {
+    async seedFromGraph(seeds: readonly PromptSeed[] = DEFAULT_PROMPT_SEEDS, actor = 'system:seed') {
       if (!Array.isArray(seeds)) fail('seeds must be an array');
       const results: PublishResult[] = [];
       for (const seed of seeds) {
         results.push(await write({ ...seed, id: seed.executorKey, note: 'seeded from goal graph' }, actor, { source: 'seed' }));
       }
       return results;
+    },
+
+    async seedDefaults(actor = 'system:seed') {
+      return studio.seedFromGraph(DEFAULT_PROMPT_SEEDS, actor);
     },
 
     async evaluate(promptId, version, cases: PromptEvalCase[], actor) {

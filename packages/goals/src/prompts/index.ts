@@ -5,6 +5,7 @@ export { checkSchema, validateAgainstSchema, type SchemaIssue } from './schema.j
 export { renderPrompt, templateVariables, deriveInputSchema, lintPrompt, type RenderedPrompt } from './render.js';
 export { diffLines, diffJson, diffPromptVersions } from './diff.js';
 export { evaluatePrompt, parseJsonOutput, validateEvalCases, MAX_EVAL_CASES, DEFAULT_EVAL_TIMEOUT_MS, type EvaluatePromptOptions } from './evaluation.js';
+export { DEFAULT_PROMPT_SEEDS } from './seeds.js';
 export {
   createPromptStore,
   isPromptAdmin,
