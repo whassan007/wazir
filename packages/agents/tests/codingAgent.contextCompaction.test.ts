@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createCodingAgent } from '../src/codingAgent.js';
+import { createCodingAgent, estimateChatTokens } from '../src/codingAgent.js';
 import type { AgentRunRequest, AgentRuntime, AgentTurn, ToolResult } from '@wazir/core';
 
 async function drain(turns: AsyncIterable<AgentTurn>): Promise<AgentTurn[]> {
@@ -46,6 +46,18 @@ function growingRuntime(): { runtime: AgentRuntime; messageLengthsSeen: number[]
 }
 
 describe('CodingAgent.run — context compaction', () => {
+  it('accounts for message framing and native tool-call payloads in the context estimate', () => {
+    const plain = estimateChatTokens([{ role: 'assistant', content: 'call tool' }]);
+    const withNativeCall = estimateChatTokens([{
+      role: 'assistant',
+      content: 'call tool',
+      toolCalls: [{ id: 'call-1', name: 'write', arguments: { path: 'src/main.ts', content: 'large payload' } }],
+    }]);
+
+    expect(plain).toBeGreaterThan(Math.ceil('call tool'.length / 4));
+    expect(withNativeCall).toBeGreaterThan(plain);
+  });
+
   it('collapses older turns into a summary once the estimated token usage crosses the compaction ratio', async () => {
     const agent = createCodingAgent({ maxTurns: 15 });
     const { runtime, messageLengthsSeen } = growingRuntime();

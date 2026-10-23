@@ -20,6 +20,7 @@ import type {
 import {
   ObservationCompactor,
   ContextCompiler,
+  estimateTokens,
   keepEnds,
   WEB_TRUST_INSTRUCTION,
   computeUsableBudget,
@@ -604,6 +605,20 @@ export function buildSystemPrompt(projectRoot: string, tools: AgentRuntime['tool
 }
 
 /**
+ * Conservative chat-token estimate for context allocation. Content-only counts
+ * miss the per-message framing and native tool-call payloads, both of which are
+ * sent to the provider alongside message text.
+ */
+export function estimateChatTokens(messages: ChatMessage[]): number {
+  return messages.reduce((sum, message) => {
+    const framing = 4 + estimateTokens(message.role) + (message.name ? estimateTokens(message.name) : 0) +
+      (message.toolCallId ? estimateTokens(message.toolCallId) : 0);
+    const toolCalls = message.toolCalls?.length ? estimateTokens(JSON.stringify(message.toolCalls)) : 0;
+    return sum + framing + estimateTokens(message.content) + toolCalls;
+  }, 0);
+}
+
+/**
  * Native Wazir coding agent.
  *
  * Loop: PLAN → INSPECT → IMPLEMENT → TEST → DEBUG → REPAIR → VERIFY → COMPLETE
@@ -850,8 +865,6 @@ export class CodingAgent implements AgentAdapter {
     };
 
     // ---- context compaction: keep `messages` under the model's context window ----
-    const estimateTokens = (msgs: ChatMessage[]): number =>
-      Math.ceil(msgs.reduce((sum, m) => sum + m.content.length, 0) / 4);
     /**
      * `force` bypasses the token-estimate gate below — used for reactive
      * recovery when the runtime itself has already reported a context
@@ -869,10 +882,16 @@ export class CodingAgent implements AgentAdapter {
       if (messages.length <= KEEP_HEAD + KEEP_RECENT) return null;
       if (!force && !contextTokens) return null;
       
-      const before = estimateTokens(messages);
+      const before = estimateChatTokens(messages);
       const totalTokens = contextTokens as number;
       const outputReserve = request.reserve?.outputTokens ?? (totalTokens > 32_000 ? 8000 : Math.floor(totalTokens * 0.1));
-      const schemaReserve = request.reserve?.toolSchemaTokens ?? (totalTokens > 32_000 ? 5000 : Math.floor(totalTokens * 0.05));
+      // The system message contains the tool schemas as readable instructions.
+      // Native runtimes also receive a structured tool list separately, so only
+      // reserve that second copy when the active protocol sends it out of band.
+      const nativeSchemaTokens = currentToolSurface.selectedProtocol === 'native_tool_call'
+        ? currentToolSurface.totalSchemaTokens
+        : 0;
+      const schemaReserve = request.reserve?.toolSchemaTokens ?? nativeSchemaTokens;
       const safetyReserve = request.reserve?.safetyTokens ?? (totalTokens > 32_000 ? 5000 : Math.floor(totalTokens * 0.05));
 
       const usableBudget = computeUsableBudget({
@@ -923,10 +942,10 @@ export class CodingAgent implements AgentAdapter {
       // The summary re-embeds active file contents, so it can outweigh the turns it
       // replaces; a compaction that doesn't shrink the transcript only loses history.
       // A forced (overflow-recovery) compaction is still applied.
-      if (!force && estimateTokens([...head, summary, ...tail]) >= before) return null;
+      if (!force && estimateChatTokens([...head, summary, ...tail]) >= before) return null;
       messages.length = 0;
       messages.push(...head, summary, ...tail);
-      const after = estimateTokens(messages);
+      const after = estimateChatTokens(messages);
       const reduction = before > 0 ? Math.round((1 - after / before) * 100) : 0;
       return `context compacted: ${collapsedCount} turn(s) -> 1 summary (~${before}->~${after} tokens, ${reduction}% smaller)`;
     };
