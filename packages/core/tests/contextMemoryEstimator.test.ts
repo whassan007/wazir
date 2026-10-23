@@ -420,4 +420,77 @@ describe('contextMemoryEstimator', () => {
       expect(plan.incrementalRequiredMemoryGB).toBe(0);
     });
   });
+
+  describe('Loaded-model incremental memory and ineligibility reporting', () => {
+    const estimator = new ContextMemoryEstimator();
+
+    const model14gb = mockModel({
+      id: 'qwen-14b',
+      parameters: '14B',
+      memory: { minGpuGB: 14 },
+    });
+
+    it('marks unloaded 14GB model on 1.5GB available memory as eligible: false and fits: false with Insufficient memory', () => {
+      const plan = estimator.planContextAllocation({
+        model: model14gb,
+        availableMemoryGB: 1.5,
+        isAlreadyLoaded: false,
+      });
+
+      expect(plan.eligible).toBe(false);
+      expect(plan.fits).toBe(false);
+      expect(plan.shortReason).toContain('Insufficient memory');
+      expect(plan.reason).toContain('Insufficient memory');
+    });
+
+    it('marks already-loaded 14GB model on 1.5GB remaining memory as eligible: true and fits: true (reusing resident weights)', () => {
+      const plan = estimator.planContextAllocation({
+        model: model14gb,
+        availableMemoryGB: 1.5,
+        isAlreadyLoaded: true,
+        loadedWeightsMemoryGB: 14,
+        estimatedInputTokens: 500,
+        reasoningEffort: 'low', // 4096 context tier
+      });
+
+      expect(plan.eligible).toBe(true);
+      expect(plan.fits).toBe(true);
+      expect(plan.incrementalRequiredMemoryGB).toBeLessThanOrEqual(1.5);
+    });
+
+    it('rejects qwen/qwen3.8-27b requiring ~22GB on 0.1GB available memory with clear shortReason and detailed reason', () => {
+      const qwen27b = mockModel({
+        id: 'qwen/qwen3.8-27b',
+        parameters: '27B',
+        memory: { minGpuGB: 19.76 }, // 19.76GB weights + 0.8GB overhead + 1.44GB KV = 22.0GB required
+      });
+
+      const plan = estimator.planContextAllocation({
+        model: qwen27b,
+        availableMemoryGB: 0.1,
+      });
+
+      expect(plan.eligible).toBe(false);
+      expect(plan.fits).toBe(false);
+      expect(plan.totalRequiredMemoryGB).toBe(22);
+      expect(plan.shortReason).toContain('Insufficient memory');
+      expect(plan.shortReason).toContain('0.1');
+      expect(plan.reason).toContain('available memory 0.1GB < required 22GB');
+    });
+
+    it('supports ContextEstimationInput with currentLoadedContextTokens and usableMemoryGB', () => {
+      const plan = estimator.planContextAllocation({
+        model: model14gb,
+        usableMemoryGB: 1.5,
+        isAlreadyLoaded: true,
+        currentLoadedContextTokens: 4096,
+        estimatedInputTokens: 500,
+        reasoningEffort: 'low',
+      });
+
+      expect(plan.eligible).toBe(true);
+      expect(plan.fits).toBe(true);
+      expect(plan.incrementalRequiredMemoryGB).toBe(0);
+    });
+  });
 });

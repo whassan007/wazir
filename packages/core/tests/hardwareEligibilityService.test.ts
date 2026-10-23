@@ -324,6 +324,10 @@ describe('HardwareEligibilityService', () => {
       // Cold-load requires 22GB weights + 0.05GB KV cache = 22.05GB
       expect(result.requiredMemoryGB).toBe(22.05);
       expect(result.eligible).toBe(false);
+      expect(result.fits).toBe(false);
+      expect(result.shortReason).toContain('Insufficient memory');
+      expect(result.shortReason).toContain('0.1');
+      expect(result.reason).toContain('available memory 0.1GB < required 22');
       expect(result.rejectionReasons.some((r) => r.includes('exceeds available unified memory'))).toBe(true);
     });
 
@@ -553,6 +557,180 @@ describe('HardwareEligibilityService', () => {
       });
       expect(vllmResult.eligible).toBe(false);
       expect(vllmResult.rejectionReasons.some((r) => r.includes('vLLM requires NVIDIA GPU'))).toBe(true);
+    });
+  });
+
+  describe('Loaded-Model Incremental Memory Handling (14GB model on 1.5GB remaining memory)', () => {
+    const memory16GBComputer = createComputer({
+      hardware: {
+        cpu: 'Apple M3 Pro',
+        cpuCores: 12,
+        memoryGB: 16,
+        gpu: { vendor: 'apple', model: 'Apple M3 Pro', memoryGB: 16, unifiedMemory: true },
+      },
+      load: {
+        cpuPercent: 15,
+        memoryUsedGB: 14.5,
+        memoryAvailableGB: 1.5, // 1.5GB remaining usable memory
+      },
+    });
+
+    const model14gb = createModel({
+      id: 'model-14gb',
+      memory: { minGpuGB: 14 },
+    });
+
+    it('marks unloaded 14GB model as eligible: false and fits: false on 1.5GB remaining memory', () => {
+      const result = service.assessDeviceForModel({
+        model: model14gb,
+        computer: memory16GBComputer,
+        isAlreadyLoaded: false,
+      });
+
+      expect(result.eligible).toBe(false);
+      expect(result.fits).toBe(false);
+      expect(result.requiredMemoryGB).toBe(14);
+      expect(result.availableMemoryGB).toBe(1.5);
+      expect(result.shortReason).toContain('Insufficient memory');
+      expect(result.reason).toContain('exceeds available unified memory');
+    });
+
+    it('marks already-loaded 14GB model as eligible: true and fits: true on 1.5GB remaining memory (reusing resident weights)', () => {
+      const result = service.assessDeviceForModel({
+        model: model14gb,
+        computer: memory16GBComputer,
+        isAlreadyLoaded: true,
+        loadedWeightsMemoryGB: 14,
+        requiredKvCacheGB: 0.5, // 0.5GB incremental KV cache fits in 1.5GB
+      });
+
+      expect(result.eligible).toBe(true);
+      expect(result.fits).toBe(true);
+      expect(result.alreadyLoaded).toBe(true);
+      expect(result.requiredMemoryGB).toBe(0.5);
+      expect(result.availableMemoryGB).toBe(1.5);
+      expect(result.shortReason).toBe('Loaded');
+    });
+
+    it('works identically via checkModelEligibility options', () => {
+      const loadedResult = service.checkModelEligibility(model14gb, memory16GBComputer, {
+        isAlreadyLoaded: true,
+        loadedWeightsMemoryGB: 14,
+      });
+      expect(loadedResult.eligible).toBe(true);
+      expect(loadedResult.fits).toBe(true);
+
+      const unloadedResult = service.checkModelEligibility(model14gb, memory16GBComputer, {
+        isAlreadyLoaded: false,
+      });
+      expect(unloadedResult.eligible).toBe(false);
+      expect(unloadedResult.fits).toBe(false);
+      expect(unloadedResult.shortReason).toContain('Insufficient memory');
+    });
+  });
+
+  describe('formatDeviceSummary', () => {
+    it('accurately describes Apple Silicon unified memory', () => {
+      const appleMac = createComputer({
+        hardware: {
+          cpu: 'Apple M3 Max',
+          cpuCores: 16,
+          memoryGB: 64,
+          gpu: {
+            vendor: 'apple',
+            model: 'Apple M3 Max',
+            memoryGB: 64,
+            unifiedMemory: true,
+          },
+        },
+        load: {
+          cpuPercent: 10,
+          memoryUsedGB: 15.8,
+          memoryAvailableGB: 48.2,
+        },
+      });
+
+      const summary = service.formatDeviceSummary(appleMac);
+      expect(summary).toBe('Apple M3 Max · 64.0GB Unified Memory (48.2GB usable)');
+      expect(HardwareEligibilityService.formatDeviceSummary(appleMac)).toBe(
+        'Apple M3 Max · 64.0GB Unified Memory (48.2GB usable)',
+      );
+    });
+
+    it('accurately describes discrete NVIDIA VRAM', () => {
+      const nvidiaRig = createComputer({
+        os: { platform: 'linux', architecture: 'x86_64', version: '6.5' },
+        hardware: {
+          cpu: 'Intel Core i9',
+          cpuCores: 16,
+          memoryGB: 64,
+          gpu: {
+            vendor: 'nvidia',
+            model: 'RTX 4090',
+            memoryGB: 24,
+            cuda: true,
+          },
+        },
+        load: {
+          cpuPercent: 15,
+          memoryUsedGB: 16,
+          memoryAvailableGB: 48,
+          gpuMemoryUsedGB: 3.9,
+          gpuMemoryAvailableGB: 20.1,
+        },
+      });
+
+      const summary = service.formatDeviceSummary(nvidiaRig);
+      expect(summary).toBe('NVIDIA RTX 4090 · 24.0GB VRAM (20.1GB usable)');
+      expect(HardwareEligibilityService.formatDeviceSummary(nvidiaRig)).toBe(
+        'NVIDIA RTX 4090 · 24.0GB VRAM (20.1GB usable)',
+      );
+    });
+
+    it('accurately describes standard CPU RAM', () => {
+      const cpuBox = createComputer({
+        local: true,
+        os: { platform: 'linux', architecture: 'x86_64', version: '6.5' },
+        hardware: {
+          cpu: 'Local CPU',
+          cpuCores: 8,
+          memoryGB: 16,
+        },
+        load: {
+          cpuPercent: 20,
+          memoryUsedGB: 4,
+          memoryAvailableGB: 12.0,
+        },
+      });
+
+      const summary = service.formatDeviceSummary(cpuBox);
+      expect(summary).toBe('Local CPU · 16.0GB RAM (12.0GB usable)');
+      expect(HardwareEligibilityService.formatDeviceSummary(cpuBox)).toBe(
+        'Local CPU · 16.0GB RAM (12.0GB usable)',
+      );
+    });
+
+    it('respects activeReservedBytes when formatting device usable memory', () => {
+      const appleMac = createComputer({
+        hardware: {
+          cpu: 'Apple M3 Max',
+          cpuCores: 16,
+          memoryGB: 64,
+          gpu: {
+            vendor: 'apple',
+            model: 'Apple M3 Max',
+            memoryGB: 64,
+            unifiedMemory: true,
+          },
+        },
+        load: {
+          memoryAvailableGB: 48.2,
+        },
+      });
+
+      const reserved2GB = 2 * 1024 ** 3;
+      const summary = service.formatDeviceSummary(appleMac, reserved2GB);
+      expect(summary).toBe('Apple M3 Max · 64.0GB Unified Memory (46.2GB usable)');
     });
   });
 });
