@@ -30,7 +30,8 @@ export const CAPS = {
 export async function buildEngine(
   projectRoot: string,
   spec: ModelSpec,
-  opts: { usage?: boolean; replies?: string[] } = {},
+  /** runtimeType 'ollama' makes the context per-request configurable (num_ctx); other types fix it at load. */
+  opts: { usage?: boolean; replies?: string[]; runtimeType?: 'ollama' | 'lmstudio' | 'other' } = {},
 ) {
   const computers = new ComputerRegistry();
   const runtimes = new RuntimeRegistry();
@@ -43,7 +44,7 @@ export async function buildEngine(
     hardware: { cpu: 'test-cpu', cpuCores: 4, memoryGB: 16 },
     capabilities: ['localExecution'],
   });
-  runtimes.register({ id: 'fake', type: 'other', name: 'fake-runtime', version: '1.0', computerId: 'local', capabilities: CAPS });
+  runtimes.register({ id: 'fake', type: opts.runtimeType ?? 'other', name: 'fake-runtime', version: '1.0', computerId: 'local', capabilities: CAPS });
   runtimes.update('fake', { health: 'healthy' });
   models.register({
     id: 'fake-model', name: 'fake-model', provider: 'fake', family: 'other',

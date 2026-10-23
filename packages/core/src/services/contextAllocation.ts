@@ -240,15 +240,16 @@ export function allocateContext(
   const reasoningInWindow = shared && reasoningSeparate ? reasoningReserve : 0;
   if (!shared) reasons.push('independent accounting: output does not consume the input window');
 
-  // 4. Safety margin. The fraction applies to the window actually planned for
-  // (a candidate target, or W at the limit), not to W itself: 5% of a 1M
-  // window would reserve 50K tokens and make a 4K allocation impossible.
-  const safetyFor = (window: number): number =>
-    Math.max(
-      policy.minSafetyTokens,
-      Math.ceil(policy.safetyFraction * window),
-      requested.safetyTokens ?? 0,
-    );
+  // 4. Safety margin, as a fraction of what the request actually needs. Basing it on a
+  // window is circular: a need that misses one target would be charged 5% of the next,
+  // larger one (and 5% of a 1M window would make a 4K allocation impossible).
+  const rawNeed = estimatedInput + systemTokens + toolSchemaTokens + outputInWindow + reasoningInWindow;
+  const safetyTokens = Math.max(
+    policy.minSafetyTokens,
+    Math.ceil(policy.safetyFraction * rawNeed),
+    requested.safetyTokens ?? 0,
+  );
+  const safetyFor = (_window: number): number => safetyTokens;
 
   // 5. Need for a candidate window T. Shared: everything in one window.
   // Independent: only the input side must fit in T; output has its own cap.

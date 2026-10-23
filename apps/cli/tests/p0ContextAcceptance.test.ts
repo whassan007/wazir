@@ -48,8 +48,8 @@ describe('P0 acceptance: provider-specific accounting through InvocationContextA
   it('enforces maxInputTokens below the window, even when the window itself would fit', async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-p0-acc-'));
     const base = { contextMax: 32_768, maxInputTokens: 8_000, maxOutputTokens: 1_024, local: true, contextAccounting: 'independent' as const, contextLimitSource: 'runtime-discovered' as const };
-    const over = await buildEngine(projectRoot, base);
-    const under = await buildEngine(projectRoot, base);
+    const over = await buildEngine(projectRoot, base, { runtimeType: 'ollama' });
+    const under = await buildEngine(projectRoot, base, { runtimeType: 'ollama' });
     const placement = { runtimeId: 'fake', computerId: 'local' };
 
     // Estimated input well above maxInputTokens: the window is 32K but the input side is capped at 8K.

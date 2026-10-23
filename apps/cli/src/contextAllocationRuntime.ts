@@ -21,16 +21,58 @@ import type { RookEngine } from './engine.js';
 /** Provider-valid failure text; matches the coding agent's overflow-recovery pattern ("prompt is too long"). */
 export const CONTEXT_PREFLIGHT_OVERFLOW = 'CONTEXT_PREFLIGHT_OVERFLOW';
 
+/** Floor for the output reserve when a fixed (already loaded) context forces it below the requested size. */
+export const MIN_OUTPUT_TOKENS = 1024;
+
 type Placement = { runtimeId: string; computerId?: string };
 
+/**
+ * Only Ollama takes a context size per request (num_ctx). LM Studio and the other
+ * local runtimes fix it at load time, so a loaded instance's context is a hard limit.
+ * Undefined when the runtime is unknown (the resolver then falls back to `model.local`).
+ */
+function acceptsPerRequestContext(engine: Partial<Pick<RookEngine, 'runtimes'>>, placement?: Placement): boolean | undefined {
+  const runtime = placement ? engine.runtimes?.get(placement.runtimeId) : undefined;
+  return runtime ? runtime.type === 'ollama' : undefined;
+}
+
 /** Limits for the model on the given placement (the loaded instance, when one is registered). */
-export function limitsFor(engine: Pick<RookEngine, 'models'>, modelId: string, placement?: Placement): ModelContextLimits {
+export function limitsFor(engine: Pick<RookEngine, 'models'> & Partial<Pick<RookEngine, 'runtimes'>>, modelId: string, placement?: Placement): ModelContextLimits {
   const model = engine.models.getRequired(modelId);
   const instances = engine.models.instancesOf(modelId);
   const instance = placement
     ? instances.find((i) => i.runtimeId === placement.runtimeId && (placement.computerId === undefined || i.computerId === placement.computerId))
     : undefined;
-  return resolveModelContextLimits(model, instance);
+  return resolveModelContextLimits(model, instance, { runtimeContextConfigurable: acceptsPerRequestContext(engine, placement) });
+}
+
+/**
+ * allocateContext, except that when the request only fails because the output reserve
+ * does not fit a fixed window (e.g. a model already loaded with a small context), the
+ * reserve is reduced to the room that is left, down to MIN_OUTPUT_TOKENS. Input is
+ * never trimmed here; if even the floor does not fit, the original cannot-fit stands.
+ */
+export function allocateFitted(
+  limits: ModelContextLimits,
+  request: { estimatedInputTokens: number; toolSchemaTokens?: number; outputTokens: number },
+): ContextAllocation {
+  const reservations = { outputTokens: request.outputTokens, toolSchemaTokens: request.toolSchemaTokens };
+  const first = allocateContext({ limits, estimatedInputTokens: request.estimatedInputTokens, reservations });
+  if (first.outcome !== 'cannot-fit' || limits.accounting === 'independent' || request.outputTokens <= MIN_OUTPUT_TOKENS) return first;
+  const window = first.allocatedWindowTokens;
+  const room = window - first.estimatedInputTokens - (request.toolSchemaTokens ?? 0)
+    - first.reservations.reasoningTokens - first.reservations.safetyTokens;
+  if (room < MIN_OUTPUT_TOKENS) return first;
+  const fitted = allocateContext({
+    limits,
+    estimatedInputTokens: request.estimatedInputTokens,
+    reservations: { ...reservations, outputTokens: Math.min(request.outputTokens, room) },
+  });
+  if (fitted.outcome === 'cannot-fit') return first;
+  fitted.reasons.push(
+    `output reserve reduced from ${request.outputTokens} to ${fitted.maxOutputTokens} to fit the ${window}-token context (floor ${MIN_OUTPUT_TOKENS})`,
+  );
+  return fitted;
 }
 
 /**
@@ -72,11 +114,7 @@ export function planContext(
   const window = effectiveWindow(limits, model);
   const toolSchemaTokens = estimateRequestTokens({ tools: options.tools }).toolSchemaTokens;
   const inputTokens = engine.compiler.budget(parts, 0).inputTokens;
-  const first = allocateContext({
-    limits,
-    estimatedInputTokens: inputTokens,
-    reservations: { outputTokens: options.outputReserveTokens, toolSchemaTokens },
-  });
+  const first = allocateFitted(limits, { estimatedInputTokens: inputTokens, toolSchemaTokens, outputTokens: options.outputReserveTokens });
   const shared = limits.accounting !== 'independent';
   const reserve = (shared ? first.reservations.outputTokens + first.reservations.reasoningTokens : 0)
     + toolSchemaTokens + first.reservations.safetyTokens;
@@ -87,11 +125,7 @@ export function planContext(
   );
   const allocation = context.finalInputTokens === inputTokens
     ? first
-    : allocateContext({
-        limits,
-        estimatedInputTokens: context.finalInputTokens,
-        reservations: { outputTokens: options.outputReserveTokens, toolSchemaTokens },
-      });
+    : allocateFitted(limits, { estimatedInputTokens: context.finalInputTokens, toolSchemaTokens, outputTokens: options.outputReserveTokens });
   if (!context.fits) {
     context.reasons.push(
       `context cannot fit: requires ${context.finalRequiredTokens} tokens, available ${window} tokens (limit source: ${limits.source})`,
@@ -148,10 +182,9 @@ export class InvocationContextAllocator {
       tools: request.tools,
       calibrationRatio: this.calibrationRatio(request.modelId),
     });
-    const allocation = allocateContext({
-      limits,
+    const allocation = allocateFitted(limits, {
       estimatedInputTokens: estimate.totalTokens,
-      reservations: { outputTokens: request.maxTokens ?? this.defaultOutputTokens },
+      outputTokens: request.maxTokens ?? this.defaultOutputTokens,
     });
 
     let contextTokens: number | undefined;

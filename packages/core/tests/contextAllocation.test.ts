@@ -209,9 +209,10 @@ describe('allocateContext: accounting and reasoning', () => {
     });
     expect(shared.allocatedWindowTokens).toBe(8_192);
     expect(independent.allocatedWindowTokens).toBe(8_192);
-    // Shared subtracts output (2048) + safety (410); independent subtracts only safety (410).
-    expect(shared.inputBudgetTokens).toBe(8_192 - 2_048 - 410);
-    expect(independent.inputBudgetTokens).toBe(8_192 - 410);
+    // Safety is 5% of the need: shared needs 4000 + 2048 = 6048 → 303; independent needs 4000 → 200, floored to 256.
+    // Shared subtracts output (2048) + safety (303); independent subtracts only safety (256).
+    expect(shared.inputBudgetTokens).toBe(8_192 - 2_048 - 303);
+    expect(independent.inputBudgetTokens).toBe(8_192 - 256);
   });
 
   it('does not double count reasoning that counts against output', () => {
