@@ -134,7 +134,7 @@ export class IntelligentModelRanker {
         rejectionReasons.push(`Model ${model.id} is hosted, but allowHostedProviders is false`);
       }
 
-      if ((mode === 'LOCAL_FIRST' || mode === 'local') && !options.targetModelId && model.local === false) {
+      if ((mode === 'LOCAL_FIRST' || (mode as string) === 'local') && !options.targetModelId && model.local === false) {
         rejectionReasons.push(`Model ${model.id} is hosted/cloud, excluded by Auto Local Routing`);
       }
 
