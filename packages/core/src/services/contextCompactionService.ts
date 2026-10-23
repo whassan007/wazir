@@ -141,7 +141,7 @@ export class ContextCompactionService implements AgentContextCompressor {
       minimumTokensToReclaim: options.config?.minimumTokensToReclaim ?? 4000,
     };
     this.defaultReserves = options.defaultReserves ?? {
-      outputTokens: 8000,
+      outputTokens: 2048,
       toolSchemaTokens: 5000,
       safetyTokens: 5000,
     };

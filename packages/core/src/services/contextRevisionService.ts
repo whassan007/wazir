@@ -17,6 +17,7 @@ import {
   computeUsableBudget,
   computeUtilization,
   estimateTokens,
+  planOutputReserveTokens,
   tokensForPart,
 } from './contextCompiler.js';
 import { PromptLayoutPlanner, type PromptLayoutStrategy } from './promptLayoutPlanner.js';
@@ -165,7 +166,10 @@ export class ContextRevisionService {
     if (!this.config.enabled) return false;
     const usableBudget = computeUsableBudget({
       effectiveContextTokens: effectiveWindow,
-      reserveOutputTokens: reserve?.outputTokens ?? 8000,
+      reserveOutputTokens: reserve?.outputTokens ?? planOutputReserveTokens({
+        taskDescription: this.getLatestSnapshot(executionId)?.pinned.find((part) => part.kind === 'task')?.content ?? '',
+        effectiveContextTokens: effectiveWindow,
+      }),
       reserveToolSchemaTokens: reserve?.toolSchemaTokens ?? 5000,
       reserveSafetyTokens: reserve?.safetyTokens ?? 5000,
     });
@@ -199,7 +203,12 @@ export class ContextRevisionService {
       : request.effectiveContextWindow;
 
     const reserve: ContextReserve = {
-      outputTokens: request.reserve?.outputTokens ?? 8000,
+      outputTokens: request.reserve?.outputTokens ?? request.config?.reserve?.outputTokens ?? planOutputReserveTokens({
+        taskDescription: request.taskDescription,
+        taskType: request.taskType,
+        effectiveContextTokens: effectiveWindow,
+        maxOutputTokens: request.maxOutputTokens,
+      }),
       toolSchemaTokens: request.reserve?.toolSchemaTokens ?? 5000,
       safetyTokens: request.reserve?.safetyTokens ?? 5000,
     };

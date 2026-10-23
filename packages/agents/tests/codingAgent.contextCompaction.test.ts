@@ -58,6 +58,24 @@ describe('CodingAgent.run — context compaction', () => {
     expect(withNativeCall).toBeGreaterThan(plain);
   });
 
+  it('uses the task-planned output budget for per-turn generation limits', async () => {
+    const maxTokensSeen: number[] = [];
+    const runtime: AgentRuntime = {
+      tools: [],
+      async *generate(request) {
+        maxTokensSeen.push(request.maxTokens ?? 0);
+        yield { type: 'completed', content: '{"action":"done","summary":"ok"}' };
+      },
+      async executeTool(): Promise<ToolResult> {
+        return { ok: true, output: '', durationMs: 0 };
+      },
+    };
+
+    await drain(createCodingAgent({ maxTurns: 1 }).run({ ...baseRequest, contextTokens: 86_096 }, runtime));
+    expect(maxTokensSeen[0]).toBe(1536);
+
+  });
+
   it('collapses older turns into a summary once the estimated token usage crosses the compaction ratio', async () => {
     const agent = createCodingAgent({ maxTurns: 15 });
     const { runtime, messageLengthsSeen } = growingRuntime();

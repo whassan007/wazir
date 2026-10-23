@@ -231,6 +231,7 @@ export interface ContextRequest {
   executionId: string;
   agentId: string;
   agentRole?: 'planner' | 'coder' | 'reviewer' | 'router' | string;
+  taskType?: string;
   phase?: 'plan' | 'inspect' | 'implement' | 'test' | 'debug' | 'repair' | 'verify' | 'complete' | string;
   modelId: string;
   taskDescription: string;
@@ -243,6 +244,8 @@ export interface ContextRequest {
   recentHistory?: ContextPart[];
   effectiveContextWindow: number;
   runtimeLoaded?: number;
+  /** Runtime/provider completion cap, when known. Used to cap inferred output reserves. */
+  maxOutputTokens?: number;
   reserve?: Partial<ContextReserve>;
   config?: ContextConfig;
 }

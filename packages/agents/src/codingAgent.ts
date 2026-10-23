@@ -25,6 +25,7 @@ import {
   WEB_TRUST_INSTRUCTION,
   computeUsableBudget,
   computeUtilization,
+  planOutputReserveTokens,
   ToolSurfaceCompiler,
   type GroundedResult,
   type ToolResult,
@@ -865,6 +866,11 @@ export class CodingAgent implements AgentAdapter {
     };
 
     // ---- context compaction: keep `messages` under the model's context window ----
+    const outputTokenBudget = (): number => request.reserve?.outputTokens ?? planOutputReserveTokens({
+      taskDescription: request.taskDescription,
+      taskType: request.taskType,
+      effectiveContextTokens: runtime.getContextTokens?.() ?? request.contextTokens,
+    });
     /**
      * `force` bypasses the token-estimate gate below — used for reactive
      * recovery when the runtime itself has already reported a context
@@ -884,7 +890,7 @@ export class CodingAgent implements AgentAdapter {
       
       const before = estimateChatTokens(messages);
       const totalTokens = contextTokens as number;
-      const outputReserve = request.reserve?.outputTokens ?? (totalTokens > 32_000 ? 8000 : Math.floor(totalTokens * 0.1));
+      const outputReserve = outputTokenBudget();
       // The system message contains the tool schemas as readable instructions.
       // Native runtimes also receive a structured tool list separately, so only
       // reserve that second copy when the active protocol sends it out of band.
@@ -892,6 +898,7 @@ export class CodingAgent implements AgentAdapter {
         ? currentToolSurface.totalSchemaTokens
         : 0;
       const schemaReserve = request.reserve?.toolSchemaTokens ?? nativeSchemaTokens;
+
       const safetyReserve = request.reserve?.safetyTokens ?? (totalTokens > 32_000 ? 5000 : Math.floor(totalTokens * 0.05));
 
       const usableBudget = computeUsableBudget({
@@ -984,7 +991,7 @@ export class CodingAgent implements AgentAdapter {
           // A snapshot: the request is what the model saw at this turn, and later
           // transcript edits (e.g. dropping a resolved repair note) must not rewrite it.
           messages: messages.map((m) => ({ ...m })),
-          maxTokens: this.maxTokensPerTurn,
+          maxTokens: Math.min(this.maxTokensPerTurn, outputTokenBudget()),
           temperature: this.temperature,
           tools: currentToolSurface.selectedProtocol === 'native_tool_call'
             ? [
@@ -1444,7 +1451,7 @@ export class CodingAgent implements AgentAdapter {
             { role: 'system', content: fastSystemPrompt },
             { role: 'user', content: request.taskDescription },
           ],
-          maxTokens: this.maxTokensPerTurn,
+          maxTokens: Math.min(this.maxTokensPerTurn, outputTokenBudget()),
           temperature: this.temperature,
           tools: undefined,
         })) {

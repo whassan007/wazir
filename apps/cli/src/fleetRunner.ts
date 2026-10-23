@@ -7,6 +7,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import {
   effectiveContextTokens,
+  planOutputReserveTokens,
   type AgentAdapter,
   type AgentErrorKind,
   type AgentRuntime,
@@ -73,7 +74,6 @@ const SOURCE_CODE_EXTENSION_PATTERN = /\.(c|cc|cpp|cxx|h|hpp|hh|py|go|rs|java|kt
 function touchesSourceCode(filesChanged: string[]): boolean {
   return filesChanged.some((f) => SOURCE_CODE_EXTENSION_PATTERN.test(f));
 }
-const OUTPUT_RESERVE_TOKENS = 4096;
 
 export interface FleetRunnerOptions {
   useWorktrees?: boolean;
@@ -214,7 +214,14 @@ export function createFleetTaskExecutor(
         tokens: effectiveContextTokens(model),
         source: model.configuredContext !== undefined ? 'configured' : 'discovered',
       },
-      OUTPUT_RESERVE_TOKENS,
+      engine.config.context?.reserve?.outputTokens ?? planOutputReserveTokens({
+        taskDescription: task.input,
+        taskType: task.type,
+        effectiveContextTokens: effectiveContextTokens(model),
+        maxOutputTokens: model.provider === 'nvidia' && !Array.isArray(engine.config.providers?.nvidia?.limits)
+          ? engine.config.providers?.nvidia?.limits?.maxOutputTokens
+          : undefined,
+      }),
     );
 
     if (assignment.computerId) {
@@ -557,6 +564,7 @@ export function createFleetTaskExecutor(
           maxTurns: task.maxTurns ?? runnerOptions.maxTurns,
           maxRepairCycles: task.maxRepairCycles,
           contextTokens: contextDecision.available.tokens,
+          reserve: { outputTokens: contextDecision.budget.outputReserveTokens },
           isCancelled: () => signal?.aborted ?? false,
           getSteeringInstruction: () => context.getSteeringInstruction?.(),
           mutationRequired: context.mutationRequired ?? task.mutationRequired ?? task.requirements?.mutationRequired,

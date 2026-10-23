@@ -4,7 +4,7 @@ export { OffloadStore } from './offloadStore.js';
 export type { OffloadStoreOptions } from './offloadStore.js';
 export { ComputerRegistry } from './computerRegistry.js';
 export type { HeartbeatPayload } from './computerRegistry.js';
-export { ContextCompiler, estimateTokens, tokensForPart, WEB_TRUST_INSTRUCTION, deduplicateContextParts, computeUsableBudget, computeUtilization } from './contextCompiler.js';
+export { ContextCompiler, estimateTokens, tokensForPart, planOutputReserveTokens, WEB_TRUST_INSTRUCTION, deduplicateContextParts, computeUsableBudget, computeUtilization } from './contextCompiler.js';
 export type { ContextCompilerOptions } from './contextCompiler.js';
 export { ScopedInstructionResolver, DEFAULT_CONTEXT_FILE_PATTERNS } from './instructionResolver.js';
 export type { ContextFileDescriptor, FileInstructionEntry } from './instructionResolver.js';
