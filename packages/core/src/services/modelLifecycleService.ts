@@ -15,6 +15,46 @@ import type { RuntimeRegistry } from './runtimeRegistry.js';
 import type { ComputerRegistry } from './computerRegistry.js';
 import type { AgentRegistry } from './agentRegistry.js';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
+import { HardwareEligibilityService } from './hardwareEligibilityService.js';
+import { ContextMemoryEstimator } from './contextMemoryEstimator.js';
+
+export interface IneligibleModelEntry {
+  reason: string;
+  expiresAt: number;
+  markedAt: number;
+}
+
+export interface EnsureModelReadyForTaskOptions {
+  modelId: string;
+  computerId?: string;
+  runtimeId?: string;
+  requiredContextTokens?: number;
+  onProgress?: (msg: string) => void;
+  timeoutMs?: number;
+}
+
+export interface EnsureModelReadyResult {
+  reused: boolean;
+  modelId: string;
+  computerId?: string;
+  runtimeId?: string;
+  effectiveContext: number;
+  instance?: ModelInstance;
+  plan?: ModelLoadPlan;
+}
+
+export interface UnloadIdleModelsOptions {
+  pinnedModelIds?: Iterable<string>;
+  activeModelIds?: Iterable<string>;
+  targetFreeMemoryGB?: number;
+  computerId?: string;
+}
+
+export interface UnloadIdleModelsResult {
+  unloaded: string[];
+  skippedActive: string[];
+  skippedPinned: string[];
+}
 
 export interface KeyValueStore {
   update?<T>(key: string, mutate: (current: T | undefined) => T): Promise<T>;
@@ -36,6 +76,8 @@ export interface ModelLifecycleServiceDeps {
   queuedAssignments?: () => Promise<Array<{ id: string; modelId: string; computerId: string; runtimeId?: string }>>;
   resources?: { reservePercent?: number; minimumReserveGiB?: number; minimumContext?: number; autoContext?: number };
   refreshResources?: (computerId: string) => Promise<void>;
+  hardwareEligibility?: HardwareEligibilityService;
+  contextEstimator?: ContextMemoryEstimator;
 }
 
 export interface ModelReadiness {
@@ -95,6 +137,9 @@ export class ModelLifecycleService {
   private reservePercent: number;
   private minimumReserveBytes: number;
   private listeners = new Set<(event: ModelLifecycleEvent) => void>();
+  private ineligibleModels = new Map<string, IneligibleModelEntry>();
+  private hardwareEligibility: HardwareEligibilityService;
+  private contextEstimator: ContextMemoryEstimator;
 
   constructor(private readonly deps: ModelLifecycleServiceDeps) {
     this.policy = deps.policy ?? new PolicyEngine({ projectRoot: process.cwd() });
@@ -102,6 +147,43 @@ export class ModelLifecycleService {
     this.minimumReserveBytes = (deps.resources?.minimumReserveGiB ?? 8) * 1024 ** 3;
     if (!Number.isFinite(this.reservePercent) || this.reservePercent < 0 || this.reservePercent > 100 ||
       !Number.isFinite(this.minimumReserveBytes) || this.minimumReserveBytes < 0) throw new Error('INVALID_RESOURCE_CONFIG');
+    this.hardwareEligibility = deps.hardwareEligibility ?? new HardwareEligibilityService();
+    this.contextEstimator = deps.contextEstimator ?? new ContextMemoryEstimator();
+  }
+
+  /**
+   * Records a model as known-ineligible (circuit breaker).
+   */
+  markIneligible(modelId: string, reason: string, ttlMs = 60_000): void {
+    this.ineligibleModels.set(modelId, {
+      reason,
+      expiresAt: Date.now() + ttlMs,
+      markedAt: Date.now(),
+    });
+  }
+
+  /**
+   * Checks whether a model is currently marked known-ineligible.
+   */
+  isKnownIneligible(modelId: string): { ineligible: boolean; reason?: string } {
+    const entry = this.ineligibleModels.get(modelId);
+    if (!entry) return { ineligible: false };
+    if (Date.now() > entry.expiresAt) {
+      this.ineligibleModels.delete(modelId);
+      return { ineligible: false };
+    }
+    return { ineligible: true, reason: entry.reason };
+  }
+
+  /**
+   * Clears known-ineligible status for a model or all models.
+   */
+  clearIneligible(modelId?: string): void {
+    if (modelId) {
+      this.ineligibleModels.delete(modelId);
+    } else {
+      this.ineligibleModels.clear();
+    }
   }
 
   /**
@@ -614,20 +696,46 @@ export class ModelLifecycleService {
   }
 
   async load(modelId: string, options: ModelLoadOptions = {}): Promise<ModelLoadPlan> {
+    const ineligibility = this.isKnownIneligible(modelId);
+    if (ineligibility.ineligible) {
+      throw new ModelLifecycleError('MODEL_ADMISSION_DENIED', [ineligibility.reason ?? 'KNOWN_INELIGIBLE_MODEL']);
+    }
     if (options.dryRun) return this.estimate(modelId, options);
-    await this.verifyAvailable(modelId, options);
-    const placement = await this.estimate(modelId, options);
-    const i = this.target(modelId, { computerId: placement.computerId, runtimeId: placement.runtimeId });
-    const existing = this.inFlightLoads.get(i.id);
+    const targetInst = this.target(modelId, options);
+    const flightKey = `${modelId}::${targetInst.computerId}`;
+    const existing = this.inFlightLoads.get(flightKey) ?? this.inFlightLoads.get(targetInst.id);
     if (existing) {
       await existing;
       return this.load(modelId, options);
     }
-    if (this.operations.has(i.id)) throw new ModelLifecycleError('RESOURCE_BUSY');
-    this.operations.add(i.id);
-    const promise = this.performLoad(i, options);
-    this.inFlightLoads.set(i.id, promise);
-    try { return await promise; } finally { this.inFlightLoads.delete(i.id); this.operations.delete(i.id); }
+    let finalInstance: ModelInstance | undefined;
+    const loadPromise = (async () => {
+      await this.verifyAvailable(modelId, options);
+      const placement = await this.estimate(modelId, options);
+      const i = this.target(modelId, { computerId: placement.computerId, runtimeId: placement.runtimeId });
+      finalInstance = i;
+      this.inFlightLoads.set(i.id, loadPromise);
+      this.inFlightLoads.set(`${modelId}::${i.computerId}`, loadPromise);
+      if (this.operations.has(i.id)) throw new ModelLifecycleError('RESOURCE_BUSY');
+      this.operations.add(i.id);
+      try {
+        return await this.performLoad(i, options);
+      } finally {
+        this.operations.delete(i.id);
+      }
+    })();
+    this.inFlightLoads.set(targetInst.id, loadPromise);
+    this.inFlightLoads.set(flightKey, loadPromise);
+    try {
+      return await loadPromise;
+    } finally {
+      this.inFlightLoads.delete(targetInst.id);
+      this.inFlightLoads.delete(flightKey);
+      if (finalInstance) {
+        this.inFlightLoads.delete(finalInstance.id);
+        this.inFlightLoads.delete(`${modelId}::${finalInstance.computerId}`);
+      }
+    }
   }
 
   private async performLoad(i: ModelInstance, options: ModelLoadOptions): Promise<ModelLoadPlan> {
@@ -643,6 +751,11 @@ export class ModelLifecycleService {
     const deny = (reason?: string): never => {
       if (reason) plan.admissionDecision = { status: 'DENIED', reasons: [reason] };
       this.emitEvent('MODEL_ADMISSION_DENIED', modelId, { ...extra, reason: plan.admissionDecision.reasons.join(','), data: { ...plan, executionId: options.executionId } });
+      if (plan.admissionDecision.reasons.some(r => r.includes('MEMORY') || r.includes('INSUFFICIENT'))) {
+        if (!plan.machineSafeContext || options.fit || options.context === undefined) {
+          this.markIneligible(modelId, plan.admissionDecision.reasons.join(', '));
+        }
+      }
       throw new ModelLifecycleError('MODEL_ADMISSION_DENIED', plan.admissionDecision.reasons, plan);
     };
     if (plan.admissionDecision.status === 'DENIED') deny();
@@ -696,7 +809,22 @@ export class ModelLifecycleService {
     let attempted = false;
     try {
       attempted = true;
-      await adapter.loadModel!(i.runtimeModelId, { contextTokens: plan.effectiveContext });
+      const timeoutMs = options.timeoutMs ?? 60_000;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new ModelLifecycleError('MODEL_LOAD_TIMEOUT', [`Model load timed out after ${timeoutMs}ms`]));
+        }, timeoutMs);
+        timeoutId.unref?.();
+      });
+      try {
+        await Promise.race([
+          adapter.loadModel!(i.runtimeModelId, { contextTokens: plan.effectiveContext }),
+          timeoutPromise,
+        ]);
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
       const observed = await adapter.inspectModel!(i.runtimeModelId);
       this.deps.models.setInstanceHealth(i.id, { loaded: observed.loaded, state: observed.loaded ? 'LOADED' : 'UNLOADED', contextTokens: observed.effectiveContext });
       this.emitEvent('MODEL_LOADED', modelId, extra);
@@ -709,17 +837,24 @@ export class ModelLifecycleService {
       await this.persistReadyModelSet();
       return plan;
     } catch (error) {
-      if (attempted && error instanceof ModelLifecycleError && error.code === 'MODEL_READINESS_FAILED') {
+      if (attempted && (
+        (error instanceof ModelLifecycleError && (error.code === 'MODEL_READINESS_FAILED' || error.code === 'MODEL_LOAD_TIMEOUT')) ||
+        !(error instanceof ModelLifecycleError)
+      )) {
         await adapter.unloadModel?.(i.runtimeModelId).catch(() => undefined);
       }
       const observed = attempted ? await adapter.inspectModel?.(i.runtimeModelId).catch(() => undefined) : undefined;
       const confirmedLoaded = observed?.loaded === true;
+      const errorMsg = error instanceof Error ? error.message : String(error);
       this.deps.models.setInstanceHealth(i.id, {
         loaded: confirmedLoaded,
         state: 'FAILED',
         health: 'degraded',
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMsg,
       });
+      if (/out of memory|oom|insufficient memory|not enough memory|failed to allocate/i.test(errorMsg)) {
+        this.markIneligible(modelId, errorMsg);
+      }
       this.emitEvent('MODEL_LOAD_FAILED', modelId, { ...extra, reason: error instanceof ModelLifecycleError ? error.code : 'RUNTIME_LOAD_FAILED' });
       // Release the reservation unless runtime inspection positively confirms the model remains resident.
       await this.finishReservation(i, reservation!.id, !confirmedLoaded);
@@ -878,6 +1013,271 @@ export class ModelLifecycleService {
   }
   async unpin(modelId: string, options: ModelLoadOptions = {}) {
     const i = this.target(modelId, options); i.pinned = false; await this.persistIntent(i);
+  }
+
+  /**
+   * Ensures a model is loaded, failing fast if marked known-ineligible.
+   */
+  async ensureLoaded(modelId: string, options: ModelLoadOptions = {}): Promise<ModelLoadPlan> {
+    const ineligibility = this.isKnownIneligible(modelId);
+    if (ineligibility.ineligible) {
+      throw new ModelLifecycleError('MODEL_ADMISSION_DENIED', [ineligibility.reason ?? 'KNOWN_INELIGIBLE_MODEL']);
+    }
+    return this.load(modelId, options);
+  }
+
+  /**
+   * Ensures that a model is loaded and ready for task execution.
+   * If already loaded/ready on the target computer with sufficient context, reuses it immediately (0 load calls).
+   * If a hosted model (local === false), verifies runtime health and returns reused: true without calling loadModel.
+   * If local and unloaded, validates preflight hardware/memory eligibility via HardwareEligibilityService and ContextMemoryEstimator.
+   * If ineligible, marks model ineligible and throws MODEL_ADMISSION_DENIED.
+   * Emits progress events: Loading ${modelId} on ${deviceLabel}... -> Ready: ${modelId}.
+   */
+  async ensureModelReadyForTask(options: EnsureModelReadyForTaskOptions): Promise<EnsureModelReadyResult> {
+    const { modelId } = options;
+
+    // 1. Known-ineligible circuit breaker
+    const ineligibility = this.isKnownIneligible(modelId);
+    if (ineligibility.ineligible) {
+      throw new ModelLifecycleError('MODEL_ADMISSION_DENIED', [ineligibility.reason ?? 'KNOWN_INELIGIBLE_MODEL']);
+    }
+
+    const model = this.deps.models.getRequired(modelId);
+
+    // 2. Hosted API model branch
+    if (model.local === false) {
+      const instance = this.deps.models.instancesOf(modelId).find(i =>
+        (!options.computerId || i.computerId === options.computerId) &&
+        (!options.runtimeId || i.runtimeId === options.runtimeId)
+      );
+      const runtimeId = options.runtimeId ?? instance?.runtimeId ?? model.provider;
+      const runtime = this.deps.runtimes.get(runtimeId);
+      const adapter = this.deps.adapters.get(runtimeId);
+
+      if (runtime && runtime.health === 'unavailable') {
+        throw new ModelLifecycleError('RUNTIME_UNAVAILABLE', [`Hosted runtime '${runtimeId}' is unavailable`]);
+      }
+      if (adapter?.healthCheck) {
+        const health = await adapter.healthCheck();
+        if (health.status !== 'healthy') {
+          throw new ModelLifecycleError('RUNTIME_UNAVAILABLE', [`Hosted runtime '${runtimeId}' health check returned ${health.status}`]);
+        }
+      }
+
+      const effectiveContext = options.requiredContextTokens ?? model.contextMax ?? 32_768;
+      options.onProgress?.(`Ready: ${modelId}`);
+      this.emitEvent('MODEL_READY', modelId, { runtimeId, computerId: options.computerId });
+
+      return {
+        reused: true,
+        modelId,
+        computerId: options.computerId,
+        runtimeId,
+        effectiveContext,
+        instance,
+      };
+    }
+
+    // 3. Local model branch: resolve target instance
+    const candidates = this.deps.models.instancesOf(modelId).filter(i =>
+      i.computerId &&
+      (!options.computerId || i.computerId === options.computerId) &&
+      (!options.runtimeId || i.runtimeId === options.runtimeId)
+    );
+    candidates.sort((a, b) => Number(b.state === 'READY') - Number(a.state === 'READY') || a.id.localeCompare(b.id));
+    const instance = candidates[0];
+    if (!instance) {
+      throw new ModelLifecycleError('MODEL_NOT_INSTALLED', [`Model '${modelId}' is not installed on target computer`]);
+    }
+
+    const computerId = instance.computerId!;
+    const runtimeId = instance.runtimeId;
+    const requiredContext = options.requiredContextTokens ?? 0;
+
+    // 4. Check if already READY / loaded with sufficient context
+    const isLoadedAndReady = (instance.state === 'READY' || instance.state === 'LOADED') &&
+      instance.loaded &&
+      instance.health === 'healthy' &&
+      (instance.contextTokens === undefined || instance.contextTokens >= requiredContext);
+
+    if (isLoadedAndReady) {
+      options.onProgress?.(`Ready: ${modelId}`);
+      this.emitEvent('MODEL_READY', modelId, { computerId, runtimeId });
+      return {
+        reused: true,
+        modelId,
+        computerId,
+        runtimeId,
+        effectiveContext: instance.contextTokens ?? requiredContext,
+        instance,
+      };
+    }
+
+    // 5. Concurrent in-flight load deduplication
+    const flightKey = `${modelId}::${computerId}`;
+    const existingFlight = this.inFlightLoads.get(flightKey) ?? this.inFlightLoads.get(instance.id);
+    if (existingFlight) {
+      const plan = await existingFlight;
+      options.onProgress?.(`Ready: ${modelId}`);
+      return {
+        reused: true,
+        modelId,
+        computerId,
+        runtimeId,
+        effectiveContext: plan.effectiveContext,
+        instance,
+        plan,
+      };
+    }
+
+    // 6. Preflight hardware and memory eligibility checks
+    const computer = this.deps.computers.get(computerId);
+    const runtime = this.deps.runtimes.get(runtimeId);
+    const contextPlan = this.contextEstimator.planContextAllocation({
+      model,
+      requiredMinimumContext: options.requiredContextTokens,
+      availableMemoryGB: computer?.load?.memoryAvailableGB,
+      alreadyLoaded: false,
+    });
+    const eligibility = this.hardwareEligibility.assessDeviceForModel({
+      model,
+      computer,
+      instance,
+      runtime: runtime ? { id: runtime.id, type: runtime.type, health: runtime.health } : undefined,
+      requiredKvCacheGB: contextPlan.kvCacheMemoryGB,
+      runtimeOverheadGB: contextPlan.runtimeOverheadGB,
+    });
+
+    if (!eligibility.eligible || !contextPlan.eligible) {
+      const reasons: string[] = [];
+      if (!contextPlan.eligible) reasons.push(contextPlan.reason);
+      if (!eligibility.eligible) reasons.push(...eligibility.rejectionReasons);
+      const combinedReason = reasons.join('; ');
+      this.markIneligible(modelId, combinedReason);
+      this.emitEvent('MODEL_ADMISSION_DENIED', modelId, {
+        computerId,
+        runtimeId,
+        reason: combinedReason,
+      });
+      throw new ModelLifecycleError('MODEL_ADMISSION_DENIED', reasons);
+    }
+
+    // 7. Emit progress callback & lifecycle event
+    const deviceLabel = computer?.name ?? computer?.id ?? computerId;
+    options.onProgress?.(`Loading ${modelId} on ${deviceLabel}...`);
+    this.emitEvent('MODEL_LOADING', modelId, {
+      computerId,
+      runtimeId,
+      data: { deviceLabel, message: `Loading ${modelId} on ${deviceLabel}...` },
+    });
+
+    // 8. Execute load with timeout
+    const loadContext = (contextPlan.allocatedContextTokens && contextPlan.allocatedContextTokens > 0)
+      ? contextPlan.allocatedContextTokens
+      : options.requiredContextTokens;
+
+    const plan = await this.load(modelId, {
+      computerId,
+      runtimeId,
+      context: loadContext,
+      timeoutMs: options.timeoutMs ?? 60_000,
+    });
+
+    options.onProgress?.(`Ready: ${modelId}`);
+    return {
+      reused: false,
+      modelId,
+      computerId,
+      runtimeId,
+      effectiveContext: plan.effectiveContext,
+      instance,
+      plan,
+    };
+  }
+
+  /**
+   * Safely unloads idle, non-pinned models across registered computers.
+   * Invariant 1: NEVER unloads a model in active use (this.active(instance).length > 0 or in activeModelIds).
+   * Invariant 2: NEVER unloads a pinned model (instance.pinned === true or in pinnedModelIds).
+   */
+  async unloadIdleModels(options: UnloadIdleModelsOptions = {}): Promise<UnloadIdleModelsResult> {
+    const pinnedSet = new Set(options.pinnedModelIds ?? []);
+    const activeSet = new Set(options.activeModelIds ?? []);
+    const unloaded: string[] = [];
+    const skippedActive: string[] = [];
+    const skippedPinned: string[] = [];
+
+    const loadedInstances = this.list().filter(i =>
+      (i.loaded || i.state === 'READY' || i.state === 'LOADED') &&
+      (!options.computerId || i.computerId === options.computerId)
+    );
+
+    const checkTargetMet = (computerId?: string): boolean => {
+      if (options.targetFreeMemoryGB === undefined) return false;
+      if (!computerId) return false;
+      const comp = this.deps.computers.get(computerId);
+      const snapshot = this.deps.computers.resourceSnapshot(computerId);
+      const availableGB = snapshot.availableMemoryBytes !== undefined
+        ? snapshot.availableMemoryBytes / (1024 ** 3)
+        : comp?.load?.memoryAvailableGB ?? 0;
+      return availableGB >= options.targetFreeMemoryGB;
+    };
+
+    for (const instance of loadedInstances) {
+      const modelId = instance.modelId;
+
+      if (instance.computerId && checkTargetMet(instance.computerId)) {
+        break;
+      }
+
+      // Check current instance state (it might have been unloaded in previous iteration)
+      const current = this.list().find(x => x.id === instance.id);
+      if (!current?.loaded && current?.state !== 'READY' && current?.state !== 'LOADED') {
+        continue;
+      }
+
+      // CRITICAL INVARIANT 1: Pinned protection
+      if (instance.pinned || current.pinned || pinnedSet.has(modelId)) {
+        if (!skippedPinned.includes(modelId)) {
+          skippedPinned.push(modelId);
+        }
+        continue;
+      }
+
+      // CRITICAL INVARIANT 2: Active task protection
+      const isExplicitlyActive = activeSet.has(modelId);
+      const activeExecutions = await this.active(instance);
+      if (isExplicitlyActive || activeExecutions.length > 0) {
+        if (!skippedActive.includes(modelId)) {
+          skippedActive.push(modelId);
+        }
+        continue;
+      }
+
+      // Safe to unload
+      try {
+        await this.unload(modelId, {
+          computerId: instance.computerId,
+          runtimeId: instance.runtimeId,
+        });
+        if (!unloaded.includes(modelId)) {
+          unloaded.push(modelId);
+        }
+      } catch {
+        // Continue cleaning other models
+      }
+
+      if (instance.computerId && checkTargetMet(instance.computerId)) {
+        break;
+      }
+    }
+
+    return {
+      unloaded,
+      skippedActive,
+      skippedPinned,
+    };
   }
   private async persistIntent(i: ModelInstance): Promise<void> {
     await this.deps.store?.put('models/intent/' + i.id, { desired: i.desired, pinned: i.pinned });
