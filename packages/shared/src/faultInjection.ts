@@ -21,6 +21,11 @@ export const FAULT_POINTS = [
   'DURING_STORE_WRITE',
   'DURING_EVENT_PERSIST',
   'DURING_COMPLETION',
+  // Goal ledger (packages/goals/src/ledger): crash windows around durable commits and
+  // exactly-once effects. Appended; existing points keep their meaning.
+  'AFTER_LEDGER_COMMIT',
+  'BEFORE_IDEMPOTENT_EFFECT',
+  'AFTER_EFFECT_BEFORE_RECORD',
 ] as const;
 
 export type FaultPoint = typeof FAULT_POINTS[number];
