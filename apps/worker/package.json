@@ -1,6 +1,6 @@
 {
   "name": "@wazir/worker",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "license": "AGPL-3.0-only",
   "scripts": {
     "build": "tsc",

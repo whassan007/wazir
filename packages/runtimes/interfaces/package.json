@@ -1,11 +1,13 @@
 {
   "name": "@wazir/runtimes-interfaces",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "license": "AGPL-3.0-only",
   "description": "Runtime adapter interfaces for the meta-harness",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
-  "dependencies": { "@wazir/shared": "*" },
+  "dependencies": {
+    "@wazir/shared": "*"
+  },
   "scripts": {
     "build": "tsc --build"
   },

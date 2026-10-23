@@ -1,6 +1,6 @@
 {
   "name": "@wazir/scheduler",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "license": "AGPL-3.0-only",
   "description": "Deterministic, explainable task scheduling for the Wazir meta-harness",
   "main": "./dist/src/index.js",
