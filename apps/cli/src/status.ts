@@ -144,10 +144,15 @@ export function statusCommand(): Promise<{ code: number; output: string }> {
       lines.push('');
       lines.push(color.bold('Models'));
       const readiness = engine.lifecycle.getReadiness();
-      lines.push(`  registered: ${readiness.installedCount}`);
-      lines.push(`  installed:  ${readiness.installedCount}`);
-      lines.push(`  ready:      ${readiness.readyCount > 0 ? color.green(String(readiness.readyCount)) : color.yellow('0')}`);
-      lines.push(`  loading:    ${readiness.loadingCount}`);
+      const regCount = readiness.registeredCount ?? readiness.installedCount;
+      const availCount = readiness.availableCount ?? readiness.installedCount;
+      const localCount = readiness.localLoadedCount ?? 0;
+      lines.push(`  registered:     ${regCount}`);
+      lines.push(`  available:      ${availCount}`);
+      lines.push(`  locally loaded: ${localCount}`);
+      lines.push(`  installed:      ${readiness.installedCount}`);
+      lines.push(`  ready:          ${readiness.readyCount > 0 ? color.green(String(readiness.readyCount)) : color.yellow('0')}`);
+      lines.push(`  loading:        ${readiness.loadingCount}`);
 
       lines.push('');
       lines.push(color.bold('Executions'));

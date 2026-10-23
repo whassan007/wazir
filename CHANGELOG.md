@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.14 — 2026-10-22
+
+**Release**: `v0.2.14`
+**Theme**: Goal Studio autonomous execution platform, preflight model resource eligibility, cost-aware routing, and accurate model readiness reporting
+
+- **Goal Studio Autonomous Execution Platform (`@wazir/goals`, `@wazir/core`, `@wazir/api`, `@wazir/cli`, `@wazir/web`)**:
+  - Added Goal Studio DAG data model (`GoalNode`, `GoalEdge`, `GoalGraph`, `GoalRun`), continuous goal controller with cycle-detection and verification gates, autonomous recovery & repair, Prompt Studio, and Execution Control Center.
+  - Integrated `wa goals` (`create`, `list`, `show`, `run`, `status`, `pause`, `resume`, `cancel`, `results`, `ui`), interactive TUI Goal Studio view (`/goals`), Web UI Goal Studio canvas & inspector, REST lifecycle endpoints (`/api/v1/goals/*`), and the reusable Nobel Goal Graph example (`examples/nobel-goal-graph/`).
+- **Preflight Model Resource Eligibility & Cost-Aware Routing (`@wazir/core`)**:
+  - Integrated computer placement and resource assessment (`Scheduler.assessPlacements()`) directly into Phase 1 model selection (`routeModel`) so models whose memory requirements exceed available host RAM/VRAM (e.g., a 22 GB model on a host with 0.1 GB available memory) are rejected before model selection rather than failing after routing.
+  - Added cost- and footprint-aware scoring in `Scheduler.scoreModel()` to prefer already-loaded or smaller eligible models on routine tasks over cold-loading 20+ GB local models, while strictly preserving explicit model pins, `allowFallback=false`, and `provider_only` / `local_only` constraints.
+  - Updated `ModelLifecycleService.assessModelSync()` to evaluate estimated model memory against host available/total RAM and classify `SAFE`, `WARNING`, or `INSUFFICIENT`.
+- **Accurate Model Status Reporting & Chat Recovery (`@wazir/core`, `@wazir/cli`)**:
+  - Extended `ModelReadiness` with `registeredCount`, `availableCount`, `localLoadedCount`, and `hostedAvailableCount` so cloud-hosted catalog models are reported as `available` (`AVAILABLE (HOSTED)`) and never misreported as locally loaded in memory.
+  - Replaced misleading `85 model(s) loaded` startup messages across `wa chat`, `FleetTui`, `wa status`, `wa doctor`, `wa models list`, and `wa models loaded` with accurate `registered`, `available`, and `locally loaded` counts, plus actionable scheduling failure recovery and `!<cmd>` / `/sh <cmd>` direct shell execution guidance.
+
 ## v0.2.13 — 2026-10-22
 
 **Release**: `v0.2.13`

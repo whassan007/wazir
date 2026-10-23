@@ -218,11 +218,14 @@ function checkModelAvailability(engine: RookEngine): DoctorCheck {
       if (readiness.installedCount === 0) {
         return { name: 'model availability', status: 'NOT INSTALLED', message: 'no models registered' };
       }
-      const status = readiness.readyCount > 0 ? 'PASS' : 'WARN';
+      const regCount = readiness.registeredCount ?? readiness.installedCount;
+      const availCount = readiness.availableCount ?? readiness.installedCount;
+      const localCount = readiness.localLoadedCount ?? 0;
+      const status = availCount > 0 ? 'PASS' : 'WARN';
       return {
         name: 'model availability',
         status,
-        message: `${readiness.installedCount} model(s) registered (${readiness.readyCount} ready)`,
+        message: `${regCount} model(s) registered, ${availCount} available, ${localCount} locally loaded (${readiness.readyCount} ready)`,
         details: `${readiness.readyGenerativeModels.length} ready generative models, ${readiness.unloadedEligibleModels.length} unloaded eligible`,
       };
     }

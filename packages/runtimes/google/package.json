@@ -1,6 +1,6 @@
 {
   "name": "@wazir/runtimes-google",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "license": "AGPL-3.0-only",
   "description": "Google Gemini hosted runtime adapter for the meta-harness (API key + OAuth 2.0 PKCE)",
   "main": "./dist/src/index.js",

@@ -27,6 +27,7 @@ export function listAgents(engine: RookEngine): string {
 export function listModels(engine: RookEngine, options: { json?: boolean; computer?: string; runtime?: string } = {}): string {
   const instances = engine.lifecycle.list().filter(i => (!options.computer || i.computerId === options.computer) && (!options.runtime || i.runtimeId === options.runtime));
   if (options.json) return JSON.stringify(engine.models.list().map(m => ({ ...m, instances: instances.filter(i => i.modelId === m.id) })), null, 2);
+  const readiness = engine.lifecycle?.getReadiness?.();
   const capacity = engine.computers.list().filter(c => !options.computer || c.id === options.computer).flatMap(c => {
     const snapshot = engine.computers.resourceSnapshot(c.id);
     return engine.runtimes.list().filter(r => r.computerId === c.id && (!options.runtime || r.id === options.runtime)).map(r => {
@@ -36,16 +37,19 @@ export function listModels(engine: RookEngine, options: { json?: boolean; comput
         String(rows.filter(i => i.loaded).length), String(rows.filter(i => i.state === 'READY').length)];
     });
   });
+  const localLoaded = readiness?.localLoadedCount ?? instances.filter(i => Boolean(i.computerId) && i.loaded).length;
+  const regCount = readiness?.registeredCount ?? engine.models.list().length;
+  const availCount = readiness?.availableCount ?? instances.filter(i => i.health !== 'unavailable' && i.state !== 'UNAVAILABLE').length;
   return ['WAZIR MODELS', '', 'Fleet Capacity', table(['COMPUTER', 'MEMORY', 'RUNTIME', 'INSTALLED', 'LOADED', 'READY'], capacity),
     '', 'Models', table(['MODEL', 'COMPUTER', 'RUNTIME', 'STATE', 'CTX', 'PIN'], instances.map(i => [i.modelId, i.computerId ?? 'hosted', i.runtimeId,
-      i.state ?? (i.loaded ? 'LOADED' : 'INSTALLED'), i.contextTokens ? String(i.contextTokens) : '-', i.pinned ? 'yes' : 'no'])),
-    '', `Summary: Installed ${instances.length}  Loaded ${instances.filter(i => i.loaded).length}  Ready ${instances.filter(i => i.state === 'READY').length}  Loading ${instances.filter(i => i.state === 'LOADING').length}  Failed ${instances.filter(i => i.state === 'FAILED').length}`].join('\n');
+      !i.computerId && i.state === 'READY' ? 'AVAILABLE (HOSTED)' : (i.state ?? (i.loaded ? 'LOADED' : 'INSTALLED')), i.contextTokens ? String(i.contextTokens) : '-', i.pinned ? 'yes' : 'no'])),
+    '', `Summary: Registered ${regCount}  Available ${availCount}  Locally Loaded ${localLoaded}  Installed ${instances.length}  Loaded ${instances.filter(i => i.loaded).length}  Ready ${instances.filter(i => i.state === 'READY').length}  Loading ${instances.filter(i => i.state === 'LOADING').length}  Failed ${instances.filter(i => i.state === 'FAILED').length}`].join('\n');
 }
 
 export function listLoadedModels(engine: RookEngine, options: { json?: boolean; computer?: string; runtime?: string } = {}): string {
-  const rows = engine.lifecycle.list().filter(i => i.loaded && (!options.computer || options.computer === i.computerId) && (!options.runtime || options.runtime === i.runtimeId));
+  const rows = engine.lifecycle.list().filter(i => Boolean(i.computerId) && i.loaded && (!options.computer || options.computer === i.computerId) && (!options.runtime || options.runtime === i.runtimeId));
   if (options.json) return JSON.stringify(rows, null, 2);
-  if (!rows.length) return 'No models are currently loaded in memory.';
+  if (!rows.length) return 'No models are currently loaded in local memory.';
   return table(['MODEL', 'COMPUTER', 'RUNTIME', 'STATE', 'CTX', 'PIN'], rows.map(i => [i.modelId, i.computerId ?? 'hosted', i.runtimeId, i.state ?? 'LOADED', String(i.contextTokens ?? '-'), i.pinned ? 'yes' : 'no']));
 }
 
@@ -66,6 +70,9 @@ export async function discoverModelsCommand(engine: RookEngine, options: { json?
     color.bold('Model Discovery & Reconciliation'),
     `  Total discovered across runtimes: ${result.totalDiscovered}`,
     `  Newly registered:                 ${result.newlyRegistered}`,
+    `  Registered models:                ${readiness.registeredCount ?? readiness.totalModels}`,
+    `  Available models:                 ${readiness.availableCount ?? readiness.installedCount}`,
+    `  Locally loaded models:            ${readiness.localLoadedCount ?? 0}`,
     `  Installed models:                 ${readiness.installedCount}`,
     `  Ready in memory:                  ${readiness.readyCount}`,
     '',

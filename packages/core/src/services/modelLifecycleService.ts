@@ -41,6 +41,14 @@ export interface ModelLifecycleServiceDeps {
 export interface ModelReadiness {
   ready: boolean;
   totalModels: number;
+  /** Total models registered in the ModelRegistry. */
+  registeredCount: number;
+  /** Models that are currently available & eligible to execute (fit host memory or hosted provider healthy & permitted). */
+  availableCount: number;
+  /** Local models confirmed loaded in a local runtime's memory (never counts hosted models). */
+  localLoadedCount: number;
+  /** Hosted provider models that are currently reachable and healthy. */
+  hostedAvailableCount: number;
   installedCount: number;
   readyCount: number;
   loadingCount: number;
@@ -150,6 +158,9 @@ export class ModelLifecycleService {
     const unloadedEligibleModels: ModelRecord[] = [];
 
     let readyCount = 0;
+    let localLoadedCount = 0;
+    let hostedAvailableCount = 0;
+    let availableCount = 0;
     let loadingCount = 0;
     let failedCount = 0;
     let unavailableCount = 0;
@@ -157,6 +168,7 @@ export class ModelLifecycleService {
     for (const model of allModels) {
       const modelInstances = this.deps.models.instancesOf(model.id);
       const isGenerative = !model.embedding;
+      const isLocalModel = model.local !== false;
 
       if (modelInstances.length > 0 && isGenerative) {
         installedGenerativeModels.push(model);
@@ -165,13 +177,51 @@ export class ModelLifecycleService {
       const hasReadyInstance = modelInstances.some(
         (i) => i.loaded && i.state === 'READY' && i.health === 'healthy',
       );
+      const hasLocalLoadedInstance =
+        isLocalModel &&
+        modelInstances.some(
+          (i) => Boolean(i.computerId) && i.loaded && (i.state === 'READY' || i.state === 'LOADED') && i.health === 'healthy',
+        );
+
+      const isInstanceAvailable = (i: ModelInstance): boolean => {
+        if (i.health === 'unavailable' || i.state === 'UNAVAILABLE' || i.state === 'FAILED') return false;
+        const runtime = this.deps.runtimes.get(i.runtimeId);
+        if (runtime && runtime.health === 'unavailable') return false;
+        const isHosted = !i.computerId || runtime?.runtimeKind === 'hosted' || !isLocalModel;
+        if (isHosted) {
+          return true;
+        }
+        const computer = this.deps.computers.get(i.computerId!);
+        if (!computer || computer.status !== 'online') return false;
+        const reqSysGB = model.memory?.minSystemGB ?? 0;
+        if (reqSysGB > 0 && reqSysGB > computer.hardware.memoryGB) return false;
+        if (!i.loaded && computer.load?.memoryAvailableGB !== undefined && reqSysGB > computer.load.memoryAvailableGB) {
+          return false;
+        }
+        const reqGpuGB = model.memory?.minGpuGB ?? 0;
+        const gpuGB = computer.hardware.gpu?.memoryGB ?? 0;
+        if (reqGpuGB > 0 && gpuGB > 0 && reqGpuGB > gpuGB) return false;
+        return true;
+      };
+
+      const hasAvailableInstance = modelInstances.some(isInstanceAvailable);
+      if (hasAvailableInstance) {
+        availableCount++;
+        if (!isLocalModel) {
+          hostedAvailableCount++;
+        }
+      }
+
+      if (hasLocalLoadedInstance) {
+        localLoadedCount++;
+      }
 
       if (hasReadyInstance) {
         readyCount++;
-        if (isGenerative) {
+        if (isGenerative && hasAvailableInstance) {
           readyGenerativeModels.push(model);
         }
-      } else if (isGenerative && modelInstances.length > 0) {
+      } else if (isGenerative && modelInstances.length > 0 && hasAvailableInstance) {
         unloadedEligibleModels.push(model);
       }
 
@@ -189,6 +239,10 @@ export class ModelLifecycleService {
     return {
       ready: readyGenerativeModels.length > 0,
       totalModels: allModels.length,
+      registeredCount: allModels.length,
+      availableCount,
+      localLoadedCount,
+      hostedAvailableCount,
       installedCount: installedGenerativeModels.length,
       readyCount,
       loadingCount,
@@ -278,11 +332,86 @@ export class ModelLifecycleService {
    * Assesses resource feasibility synchronously using cached model specs and computer hardware.
    */
   assessModelSync(modelId: string, targetComputerId?: string): ResourceAssessment {
+    const model = this.deps.models.get(modelId);
     const instance = this.deps.models.instancesOf(modelId).find(i => !targetComputerId || i.computerId === targetComputerId);
-    const snapshot = instance?.computerId ? this.deps.computers.resourceSnapshot(instance.computerId) : undefined;
-    return { modelId, estimatedMemoryGB: 0, availableMemoryGB: snapshot?.availableMemoryBytes === undefined ? undefined : snapshot.availableMemoryBytes / 1024 ** 3,
-      totalMemoryGB: snapshot ? snapshot.totalMemoryBytes / 1024 ** 3 : undefined,
-      classification: 'UNKNOWN', message: 'Use estimate for context-aware admission; cached model size is not a load estimate.' };
+    const computerId = targetComputerId ?? instance?.computerId;
+    const snapshot = computerId ? this.deps.computers.resourceSnapshot(computerId) : undefined;
+    const computer = computerId ? this.deps.computers.get(computerId) : undefined;
+
+    const estimatedMemoryGB = model
+      ? model.memory?.minSystemGB ??
+        model.memory?.minGpuGB ??
+        (model.local !== false ? estimateModelMemory(model.parameters, model.id, model.quantization).minSystemGB : 0)
+      : 0;
+    const availableMemoryGB =
+      snapshot?.availableMemoryBytes !== undefined
+        ? Number((snapshot.availableMemoryBytes / 1024 ** 3).toFixed(2))
+        : computer?.load?.memoryAvailableGB;
+    const totalMemoryGB =
+      snapshot?.totalMemoryBytes !== undefined
+        ? Number((snapshot.totalMemoryBytes / 1024 ** 3).toFixed(2))
+        : computer?.hardware.memoryGB;
+
+    if (model?.local === false) {
+      return {
+        modelId,
+        estimatedMemoryGB: 0,
+        availableMemoryGB,
+        totalMemoryGB,
+        classification: 'SAFE',
+        message: 'Hosted model executes remotely (0GB local memory required).',
+      };
+    }
+
+    if (estimatedMemoryGB > 0 && availableMemoryGB !== undefined) {
+      if (!instance?.loaded && estimatedMemoryGB > availableMemoryGB) {
+        return {
+          modelId,
+          estimatedMemoryGB,
+          availableMemoryGB,
+          totalMemoryGB,
+          classification: 'INSUFFICIENT',
+          message: `available memory ${availableMemoryGB}GB < required ${estimatedMemoryGB}GB`,
+        };
+      }
+      if (totalMemoryGB !== undefined && estimatedMemoryGB > totalMemoryGB) {
+        return {
+          modelId,
+          estimatedMemoryGB,
+          availableMemoryGB,
+          totalMemoryGB,
+          classification: 'INSUFFICIENT',
+          message: `memory ${totalMemoryGB}GB < required ${estimatedMemoryGB}GB`,
+        };
+      }
+      if (estimatedMemoryGB > availableMemoryGB * 0.85) {
+        return {
+          modelId,
+          estimatedMemoryGB,
+          availableMemoryGB,
+          totalMemoryGB,
+          classification: 'WARNING',
+          message: `model requires ~${estimatedMemoryGB}GB of ${availableMemoryGB}GB available`,
+        };
+      }
+      return {
+        modelId,
+        estimatedMemoryGB,
+        availableMemoryGB,
+        totalMemoryGB,
+        classification: 'SAFE',
+        message: `fits in available memory (${estimatedMemoryGB}GB <= ${availableMemoryGB}GB)`,
+      };
+    }
+
+    return {
+      modelId,
+      estimatedMemoryGB,
+      availableMemoryGB,
+      totalMemoryGB,
+      classification: 'UNKNOWN',
+      message: 'Use estimate for context-aware admission; cached model size is not a load estimate.',
+    };
   }
 
   async assessResources(modelIds: string | string[], targetComputerId?: string): Promise<ResourceAssessment[]> {

@@ -1,6 +1,6 @@
 {
   "name": "@wazir/runtimes-lmstudio",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "license": "AGPL-3.0-only",
   "description": "LM Studio runtime adapter for the meta-harness",
   "main": "./dist/src/index.js",

@@ -1,4 +1,4 @@
-import { effectiveContextTokens } from '../types/model.js';
+import { effectiveContextTokens, estimateModelMemory } from '../types/model.js';
 import type { Computer } from '../types/computer.js';
 import type { ModelInstance, ModelRecord } from '../types/model.js';
 import { HOSTED_RUNTIME_TYPES } from '../types/runtime.js';
@@ -95,6 +95,7 @@ interface ScoredModel {
   score: number;
   reasons: string[];
   rejected: string[];
+  placementFailures?: string[];
 }
 
 interface ScoredPlacement {
@@ -270,6 +271,13 @@ export class Scheduler {
     const scored: ScoredModel[] = records.map((record) => {
       const result = this.scoreModel(task, record, requiredContext, classification, routing);
       if (excludeModelIds.includes(record.id)) result.rejected.push('excluded: already tried by this execution');
+      if (result.rejected.length === 0) {
+        const placement = this.assessPlacements(task, record, requiredContext, routing);
+        if (placement.placements.length === 0) {
+          result.placementFailures = placement.failures;
+          result.rejected.push(`placement: ${placement.failures.join('; ')}`);
+        }
+      }
       return result;
     });
 
@@ -340,7 +348,7 @@ export class Scheduler {
 
       const isEligible = s.rejected.length === 0;
       const policyRejection = s.rejected.find((r) => r.includes('hosted') || r.includes('policy') || r.includes('provider_only') || r.includes('routingMode'));
-      const resourceRejection = s.rejected.find((r) => r.includes('context') || r.includes('instance') || r.includes('memory') || r.includes('resource:'));
+      const resourceRejection = s.rejected.find((r) => r.includes('context') || r.includes('instance') || r.includes('memory') || r.includes('resource:') || r.includes('placement:'));
 
       evaluatedCandidates.push({
         modelId: record.id,
@@ -366,8 +374,17 @@ export class Scheduler {
     if (preferred) {
       const match = eligible.find((s) => s.record.id === preferred);
       if (!match) {
+        const rejectedEntry = rejected.find((s) => s.record.id === preferred);
+        if (rejectedEntry?.placementFailures && rejectedEntry.rejected.length === 1) {
+          const details = rejectedEntry.placementFailures.length > 0 ? ` ${rejectedEntry.placementFailures.join('; ')}.` : '';
+          throw new SchedulingError(
+            `No computer can host model '${preferred}'.${details} No silent fallback will be performed.`,
+            rejected.flatMap((s) => [`${s.record.id}: ${s.rejected.join('; ')}`]),
+            rejectedEntry.placementFailures,
+          );
+        }
         const detail =
-          rejected.find((s) => s.record.id === preferred)?.rejected.join('; ') ??
+          rejectedEntry?.rejected.join('; ') ??
           `model '${preferred}' is not registered`;
         throw new SchedulingError(
           `Requested model '${preferred}' is not eligible. ${detail}. No silent fallback will be performed.`,
@@ -413,6 +430,20 @@ export class Scheduler {
     }
 
     if (eligible.length === 0) {
+      const placementRejected = rejected
+        .filter((s) => s.placementFailures && s.rejected.length === 1)
+        .sort((a, b) => b.score - a.score || a.record.id.localeCompare(b.record.id));
+      if (placementRejected.length > 0) {
+        const top = placementRejected[0];
+        const allPlacementFailures = placementRejected.flatMap((s) => s.placementFailures ?? []);
+        const details = (top.placementFailures?.length ?? 0) > 0 ? ` ${top.placementFailures!.join('; ')}.` : '';
+        throw new SchedulingError(
+          `No computer can host model '${top.record.id}'.${details} No silent fallback will be performed.`,
+          rejected.flatMap((s) => [`${s.record.id}: ${s.rejected.join('; ')}`]),
+          allPlacementFailures,
+        );
+      }
+
       const modeDesc =
         routing.mode === 'PROVIDER_ONLY'
           ? ` under provider_only (${routing.provider ?? 'nvidia'}) routing`
@@ -780,6 +811,12 @@ export class Scheduler {
     const loadedInstance = this.deps.models
       .instancesOf(record.id)
       .find((i) => i.loaded && i.health === 'healthy');
+    const isLocalModel = record.local !== false && !isHostedOnly;
+    const estimatedMemGB =
+      record.memory?.minSystemGB ??
+      record.memory?.minGpuGB ??
+      (isLocalModel ? estimateModelMemory(record.parameters, record.id, record.quantization).minSystemGB : 0);
+
     if (loadedInstance) {
       // A READY instance answers immediately; one merely 'loaded' (still warming,
       // reconciling, etc.) still needs to be waited on — weight the two differently
@@ -787,8 +824,26 @@ export class Scheduler {
       const bonus = loadedInstance.state === 'READY' ? 30 : 15;
       score += bonus;
       reasons.push(`instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' already loaded${loadedInstance.state === 'READY' ? ' and ready' : ''} (+${bonus})`);
+      if (isLocalModel && task.requirements.reasoning !== 'high' && estimatedMemGB > 16) {
+        const sizeCost = Math.min(4, Math.floor((estimatedMemGB - 12) / 4));
+        if (sizeCost > 0) {
+          score -= sizeCost;
+          reasons.push(`large footprint (${estimatedMemGB}GB) on non-high-reasoning task (-${sizeCost})`);
+        }
+      }
     } else if (this.deps.models.instancesOf(record.id).length > 0) {
       reasons.push('available instance will be loaded on demand');
+      if (isLocalModel && task.requirements.reasoning !== 'high') {
+        const coldEfficiencyBonus = Math.max(0, 6 - Math.floor(estimatedMemGB / 4));
+        if (coldEfficiencyBonus > 0) {
+          score += coldEfficiencyBonus;
+          reasons.push(`cost-aware footprint efficiency (${estimatedMemGB}GB cold load, +${coldEfficiencyBonus})`);
+        } else if (estimatedMemGB >= 20) {
+          const heavyLoadPenalty = Math.min(6, Math.floor((estimatedMemGB - 16) / 4));
+          score -= heavyLoadPenalty;
+          reasons.push(`heavy cold load penalty (${estimatedMemGB}GB model for non-high-reasoning task, -${heavyLoadPenalty})`);
+        }
+      }
     } else {
       rejected.push('no running instance on any computer');
     }
@@ -822,12 +877,12 @@ export class Scheduler {
 
   // ==================== PHASE 2: COMPUTER SCHEDULING ====================
 
-  private scheduleComputer(
+  private assessPlacements(
     task: Task,
     record: ModelRecord,
     requiredContext = 0,
     routing: ResolvedRoutingConstraint = this.resolveRoutingConstraint(task),
-  ): ComputerRoutingDecision {
+  ): { placements: ScoredPlacement[]; failures: string[] } {
     const instances = this.deps.models.instancesOf(record.id);
     const failures: string[] = [];
     const placements: ScoredPlacement[] = [];
@@ -1123,6 +1178,17 @@ export class Scheduler {
 
       placements.push({ instance, computer, score, reasons });
     }
+
+    return { placements, failures };
+  }
+
+  private scheduleComputer(
+    task: Task,
+    record: ModelRecord,
+    requiredContext = 0,
+    routing: ResolvedRoutingConstraint = this.resolveRoutingConstraint(task),
+  ): ComputerRoutingDecision {
+    const { placements, failures } = this.assessPlacements(task, record, requiredContext, routing);
 
     if (placements.length === 0) {
       const details = failures.length > 0 ? ` ${failures.join('; ')}.` : '';

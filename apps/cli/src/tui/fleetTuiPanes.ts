@@ -245,7 +245,7 @@ export function renderStartupSelectorModal(tui: any, cols: number): string[] {
 
     const body: string[] = [
       `Runtime: ${color.bold(healthyRuntimes.join(', ') || 'none')}    Computer: ${color.bold(localComp)}`,
-      `Status: ${color.green(`${readiness.readyCount} READY`)} / ${color.bold(`${readiness.installedCount} INSTALLED`)}`,
+      `Status: ${color.bold(`${readiness.registeredCount ?? readiness.totalModels} REGISTERED`)} / ${color.cyan(`${readiness.availableCount ?? readiness.installedCount} AVAILABLE`)} / ${color.green(`${readiness.localLoadedCount ?? 0} LOCALLY LOADED`)}`,
     ];
     if (selector.statusBanner) {
       body.push(color.yellow(`* ${selector.statusBanner}`));

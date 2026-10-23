@@ -3358,7 +3358,16 @@ export class FleetTui {
     }
     if (trimmed === '/models' && this.presentationMode === 'conversation') {
       const models = this.engine.models.list();
-      this.conversationRenderer.append(models.length ? `Models: ${models.map((model) => model.id).join(', ')}\nUse /model <id> to select a model.` : 'No registered models.');
+      const readiness = this.engine.lifecycle?.getReadiness?.();
+      const counts = readiness
+        ? `${readiness.registeredCount ?? readiness.totalModels} registered, ${readiness.availableCount ?? readiness.installedCount} available, ${readiness.localLoadedCount ?? 0} locally loaded`
+        : `${models.length} registered`;
+      this.conversationRenderer.append(
+        models.length
+          ? `Models (${counts}): ${models.map((model) => model.id).join(', ')}\nUse /model <id> to select a model or /model auto to reset.`
+          : `No registered models (${counts}).`,
+      );
+      this.draw();
       return;
     }
     if (trimmed === '/logs' || trimmed === '/details') {
@@ -3577,9 +3586,12 @@ export class FleetTui {
       if (this.presentationMode === 'conversation') {
         const readiness = this.engine.lifecycle?.getReadiness();
         const modelsCount = this.engine.models?.list().length ?? 0;
-        const summary = readiness && readiness.readyCount === 0 && modelsCount === 0
+        const regCount = readiness?.registeredCount ?? modelsCount;
+        const availCount = readiness?.availableCount ?? readiness?.installedCount ?? modelsCount;
+        const localCount = readiness?.localLoadedCount ?? 0;
+        const summary = readiness && availCount === 0 && regCount === 0
           ? `${this.statusMessage}\n${this.formatMissingModelRecovery(readiness)}`
-          : `${this.statusMessage} (${modelsCount} model(s) registered)`;
+          : `${this.statusMessage} (${regCount} registered, ${availCount} available, ${localCount} locally loaded)`;
         this.conversationRenderer.append(summary);
       }
       this.draw();
@@ -3856,7 +3868,8 @@ export class FleetTui {
     // Installed models are activated on the existing execution after scheduling.
     const readiness = this.engine.lifecycle.getReadiness();
     const hasSchedulable = this.hasSchedulableGenerativeModel();
-    if ((readiness.installedCount === 0 && readiness.readyCount === 0) || (this.presentationMode === 'conversation' && !hasSchedulable)) {
+    const regCount = readiness.registeredCount ?? readiness.totalModels;
+    if ((readiness.installedCount === 0 && readiness.readyCount === 0) || (this.presentationMode === 'conversation' && regCount === 0 && !hasSchedulable)) {
       const recoveryText = this.formatMissingModelRecovery(readiness, prompt);
       this.statusMessage = 'Model unavailable · No models installed. Discover models in LM Studio or Ollama.';
       if (this.currentBlockTracker) {
@@ -4407,7 +4420,15 @@ export class FleetTui {
           kind: isInfra ? 'infra' : 'error',
         });
         if (this.presentationMode === 'conversation') {
-          this.conversationRenderer.append(`✗ Execution failed: ${failureReason.split(/\r?\n/, 1)[0]}\n  /logs for details`);
+          const isSchedulingFailure = /No computer can host model|No model satisfies|is not eligible|Fallback is disabled|No models are registered/i.test(
+            failureReason,
+          );
+          const recoveryDetails = isSchedulingFailure
+            ? `\n${this.formatSchedulingFailureRecovery(failureReason, agent.title)}`
+            : '\n  /logs for details';
+          this.conversationRenderer.append(
+            `✗ Execution failed: ${failureReason.split(/\r?\n/, 1)[0]}${recoveryDetails}`,
+          );
         }
 
         // Structured Error Component (§29).
@@ -5558,6 +5579,65 @@ export class FleetTui {
     return fleetPanes.formatMissingModelRecovery(this, readiness, prompt);
   }
 
+  private formatSchedulingFailureRecovery(errMsg: string, prompt?: string): string {
+    const readiness = this.engine.lifecycle?.getReadiness?.();
+    const allModels = this.engine.models?.list?.() ?? [];
+    const availableAlternatives: string[] = [];
+
+    for (const m of allModels) {
+      if (m.embedding) continue;
+      if (this.selectedModelId && m.id === this.selectedModelId) continue;
+      const instances = this.engine.models?.instancesOf(m.id) ?? [];
+      if (instances.length === 0) continue;
+      if (m.local === false) {
+        const providerType = Array.isArray(m.runtimeCompatibility) ? m.runtimeCompatibility[0] : m.provider;
+        const gate = this.engine.policy?.checkHostedEligibility(undefined, providerType as any);
+        if (!gate || gate.allowed) {
+          availableAlternatives.push(`${m.id} (hosted via ${m.provider})`);
+        }
+        continue;
+      }
+      const assessment = this.engine.lifecycle?.assessModelSync?.(m.id);
+      if (!assessment || assessment.classification === 'SAFE' || assessment.classification === 'WARNING') {
+        availableAlternatives.push(
+          `${m.id} (${assessment?.estimatedMemoryGB ? `~${assessment.estimatedMemoryGB}GB` : 'local'})`,
+        );
+      }
+    }
+
+    const lines: string[] = [];
+    if (this.selectedModelId) {
+      lines.push(
+        `  Strict model selection active ('${this.selectedModelId}') — no silent fallback was performed.`,
+      );
+      if (availableAlternatives.length > 0) {
+        lines.push(`  Eligible alternatives: ${availableAlternatives.slice(0, 5).join(', ')}`);
+        lines.push(`  Switch explicitly with: /model <id>   or clear pin with: /model auto`);
+      } else {
+        lines.push(`  Clear model pin with /model auto or inspect models with /models.`);
+      }
+    } else if (availableAlternatives.length > 0) {
+      lines.push(`  Available eligible models: ${availableAlternatives.slice(0, 5).join(', ')}`);
+      lines.push(`  Select one explicitly with: /model <id>`);
+    } else {
+      const regCount = readiness?.registeredCount ?? allModels.length;
+      const availCount = readiness?.availableCount ?? 0;
+      const localCount = readiness?.localLoadedCount ?? 0;
+      lines.push(
+        `  Model status: ${regCount} registered, ${availCount} available, ${localCount} locally loaded.`,
+      );
+      lines.push(
+        `  Recovery: free host memory, pull a smaller model (e.g. ollama pull qwen2.5-coder:7b), or authenticate a hosted provider (wa auth login <provider>).`,
+      );
+    }
+
+    if (prompt && /^[a-zA-Z0-9_./-]+(\s+[-a-zA-Z0-9_./=~:@]+)*$/.test(prompt.trim()) && prompt.trim().split(/\s+/).length <= 5) {
+      const cmdHint = prompt.trim();
+      lines.push(`  Tip: To run '${cmdHint}' directly as a shell command without an AI model, use !${cmdHint} or /sh ${cmdHint}.`);
+    }
+    return lines.join('\n');
+  }
+
   private hasSchedulableGenerativeModel(): boolean {
     const eligible = this.engine.lifecycle?.getEligibleModels() ?? this.engine.models?.list().filter((m) => !m.embedding) ?? [];
     if (eligible.length === 0) return false;
@@ -5568,6 +5648,10 @@ export class FleetTui {
         const providerType = Array.isArray(m.runtimeCompatibility) ? m.runtimeCompatibility[0] : m.provider;
         const gate = this.engine.policy.checkHostedEligibility(undefined, providerType as any);
         if (!gate.allowed) return false;
+      }
+      if (m.local !== false && this.engine.lifecycle?.assessModelSync) {
+        const assessment = this.engine.lifecycle.assessModelSync(m.id);
+        if (assessment.classification === 'INSUFFICIENT') return false;
       }
       return instances.some((i) => i.health !== 'unavailable' && i.state !== 'UNAVAILABLE');
     });
@@ -5583,9 +5667,13 @@ export class FleetTui {
     // Default: 'prompt'
     const readiness = this.engine.lifecycle.getReadiness();
     const hasSchedulable = this.hasSchedulableGenerativeModel();
+    const regCount = readiness.registeredCount ?? readiness.totalModels;
+    const availCount = readiness.availableCount ?? readiness.installedCount;
+    const localCount = readiness.localLoadedCount ?? 0;
+
     if (readiness.readyCount > 0 && hasSchedulable) {
-      if (readiness.unloadedEligibleModels.length > 0) {
-        this.statusMessage = `Ready: ${readiness.readyCount} model(s) loaded. Press [M] to manage models.`;
+      if (readiness.unloadedEligibleModels.length > 0 || regCount > localCount) {
+        this.statusMessage = `Ready: ${regCount} registered, ${availCount} available, ${localCount} locally loaded. Press [M] to manage models.`;
       }
       return;
     }
@@ -5598,11 +5686,11 @@ export class FleetTui {
     if (this.presentationMode === 'conversation') {
       if (readiness.installedCount === 0 || !hasSchedulable) {
         this.statusMessage = allUnavailable
-          ? 'Provider disconnected · Model unavailable (0 models registered). Shell commands (!cmd) available.'
-          : 'Model unavailable (0 models registered). Shell commands (!cmd) available.';
+          ? `Provider disconnected · Model unavailable (${regCount} registered, ${availCount} available, ${localCount} locally loaded). Shell commands (!cmd) available.`
+          : `Model unavailable (${regCount} registered, ${availCount} available, ${localCount} locally loaded). Shell commands (!cmd) available.`;
         this.conversationRenderer.append(this.formatMissingModelRecovery(readiness));
       } else {
-        this.statusMessage = `${readiness.installedCount} model(s) installed (0 loaded) — will activate on task submission or use /models.`;
+        this.statusMessage = `${regCount} registered, ${availCount} available, ${localCount} locally loaded — will activate on task submission or use /models.`;
       }
       this.draw();
       return;
