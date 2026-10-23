@@ -94,6 +94,15 @@ import {
 import { buildFleetWhyExplanation } from './fleetTuiWhy.js';
 import * as fleetPanes from './fleetTuiPanes.js';
 import {
+  ModelSelectorController,
+  renderModelSelectorModal,
+  renderModelSelectionConfirmation,
+  formatSelectionDetails,
+  type ModelSelectorItem,
+  type ModelSelectorAction,
+} from './modelSelectorModal.js';
+import type { ModelSelectionMode } from '@wazir/core';
+import {
   formatCommandFeedback,
   type GoalStudioSnapshot,
 } from './goalStudioPanel.js';
@@ -242,6 +251,7 @@ export class FleetTui {
   // Model Readiness & Startup Selector state
   private startupSelector?: StartupSelectorState;
   private taskTimeModelRequired?: TaskTimeModelRequiredState;
+  private modelSelector?: ModelSelectorController;
   private unsubscribeModelLifecycle?: () => void;
 
   // Quick actions palette state
@@ -1445,6 +1455,60 @@ export class FleetTui {
       }
       this.stop('interrupt');
       process.exit(0);
+    }
+
+    // Interactive Model Selector Modal routing
+    if (this.modelSelector && this.modelSelector.isOpen) {
+      const keyForSelector = keyName || keyStr;
+      const action = this.modelSelector.handleKey(keyForSelector);
+      if (action.type === 'select') {
+        if (action.scope === 'default') {
+          this.engine.modelPreferences?.setDefaultPreference?.({
+            mode: action.mode,
+            modelId: action.modelId,
+            strict: action.mode === 'custom',
+            reasoningEffort: action.reasoningEffort,
+          });
+        } else {
+          this.engine.modelPreferences?.setSessionPreference?.({
+            mode: action.mode,
+            modelId: action.modelId,
+            strict: action.mode === 'custom',
+            reasoningEffort: action.reasoningEffort,
+          });
+        }
+        if (action.modelId) {
+          this.selectedModelId = action.modelId;
+          this.conversationRenderer.setModel(action.modelId);
+        } else if (action.mode === 'auto') {
+          this.selectedModelId = undefined;
+          this.conversationRenderer.setModel('auto-routed model');
+        } else {
+          this.selectedModelId = undefined;
+          this.conversationRenderer.setModel(action.mode);
+        }
+        const conf = renderModelSelectionConfirmation(action);
+        this.statusMessage = conf;
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(conf);
+        }
+        this.modelSelector = undefined;
+      } else if (action.type === 'cancel') {
+        this.statusMessage = 'Model selection cancelled.';
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append('Model selection cancelled.');
+        }
+        this.modelSelector = undefined;
+      } else if (action.type === 'rejected') {
+        this.statusMessage = `Selection rejected: ${action.reason ?? 'ineligible'}`;
+      } else {
+        if (this.presentationMode === 'conversation') {
+          const rendered = renderModelSelectorModal(this.modelSelector, this.screen.getSize().columns);
+          this.conversationRenderer.append(rendered.join('\n'));
+        }
+      }
+      this.draw();
+      return;
     }
 
     // Model Startup Selector key routing (dashboard mode only — never block conversation mode)
@@ -3362,6 +3426,7 @@ export class FleetTui {
       const counts = readiness
         ? `${readiness.registeredCount ?? readiness.totalModels} registered, ${readiness.availableCount ?? readiness.installedCount} available, ${readiness.localLoadedCount ?? 0} locally loaded`
         : `${models.length} registered`;
+      this.statusMessage = `${counts} — use /model to choose a mode or model.`;
       this.conversationRenderer.append(
         models.length
           ? `Models (${counts}): ${models.map((model) => model.id).join(', ')}\nUse /model <id> to select a model or /model auto to reset.`
@@ -3666,18 +3731,55 @@ export class FleetTui {
       const arg = trimmed.slice(6).trim();
       const available = this.engine.models.list();
       if (!arg) {
+        if (this.presentationMode === 'conversation') {
+          const pref = this.engine.modelPreferences?.getEffectivePreference?.();
+          const items = this.buildModelSelectorItems();
+          this.modelSelector = new ModelSelectorController({
+            initialMode: pref?.mode ?? 'auto',
+            initialModelId: pref?.modelId ?? this.selectedModelId,
+            initialEffort: pref?.reasoningEffort ?? 'medium',
+            models: items,
+          });
+          const modalLines = renderModelSelectorModal(this.modelSelector, this.screen.getSize().columns);
+          this.conversationRenderer.append(modalLines.join('\n'));
+          this.draw();
+          return;
+        }
         const current = this.selectedModelId ?? 'auto (scheduler picks)';
         const ids = available.map((m) => m.id).join(', ') || '(none registered)';
         this.statusMessage = `Model: ${current}. Available: ${ids}. Use /model <id> to pin, /model auto to clear.`;
-        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
         this.draw();
         return;
       }
       if (arg === 'auto' || arg === 'clear') {
         this.selectedModelId = undefined;
+        this.engine.modelPreferences?.clearSessionPreference?.();
+        this.engine.modelPreferences?.setDefaultPreference?.({ mode: 'auto', modelId: undefined, strict: false });
         this.conversationRenderer.setModel('auto-routed model');
         this.statusMessage = 'Cleared model pin — new tasks will be auto-routed by the scheduler again.';
-        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
+        if (this.presentationMode === 'conversation') {
+          const conf = renderModelSelectionConfirmation({
+            scope: 'session',
+            mode: 'auto',
+            reasoningEffort: this.engine.modelPreferences?.getEffectivePreference?.().reasoningEffort ?? 'medium',
+          });
+          this.conversationRenderer.append(conf);
+        }
+        this.draw();
+        return;
+      }
+      const validModes: ModelSelectionMode[] = ['auto', 'fast', 'balanced', 'powerful', 'local', 'custom'];
+      if (validModes.includes(arg.toLowerCase() as ModelSelectionMode)) {
+        const mode = arg.toLowerCase() as ModelSelectionMode;
+        this.engine.modelPreferences?.setSessionPreference?.({ mode, modelId: undefined, strict: false });
+        this.selectedModelId = undefined;
+        const conf = renderModelSelectionConfirmation({
+          scope: 'session',
+          mode,
+          reasoningEffort: this.engine.modelPreferences?.getEffectivePreference?.().reasoningEffort ?? 'medium',
+        });
+        this.statusMessage = conf;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(conf);
         this.draw();
         return;
       }
@@ -3690,9 +3792,18 @@ export class FleetTui {
         return;
       }
       this.selectedModelId = match.id;
+      this.engine.modelPreferences?.setSessionPreference?.({ mode: 'custom', modelId: match.id, strict: true });
       this.conversationRenderer.setModel(match.id);
       this.statusMessage = `Pinned model to '${match.id}' — new tasks will use it instead of auto-routing.`;
-      if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
+      if (this.presentationMode === 'conversation') {
+        const conf = renderModelSelectionConfirmation({
+          scope: 'session',
+          mode: 'custom',
+          modelId: match.id,
+          reasoningEffort: this.engine.modelPreferences?.getEffectivePreference?.().reasoningEffort ?? 'medium',
+        });
+        this.conversationRenderer.append(conf);
+      }
       this.draw();
       return;
     }
@@ -3956,7 +4067,52 @@ export class FleetTui {
       }));
     }
 
+    const pref = this.engine.modelPreferences?.getEffectivePreference?.();
+    const effectiveTargetModel = this.selectedModelId ?? pref?.modelId;
+    const effectiveRoutingMode = pref?.mode;
+    const effectiveReasoning = pref?.reasoningEffort;
+
+    for (const jt of jobTasks) {
+      if (jt.task) {
+        jt.task.execution = {
+          ...(jt.task.execution ?? {}),
+          targetModelId: effectiveTargetModel ?? jt.task.execution?.targetModelId,
+          routingMode: (effectiveRoutingMode as any) ?? jt.task.execution?.routingMode,
+          reasoningEffort: effectiveReasoning ?? jt.task.execution?.reasoningEffort,
+        };
+      }
+    }
+
     try {
+      if (this.engine.lifecycle?.ensureModelReadyForTask && jobTasks.length > 0) {
+        const rawTask = jobTasks[0].task;
+        const firstTask = {
+          ...rawTask,
+          id: rawTask.id ?? 'preview-task',
+          requirements: rawTask.requirements ?? {
+            capabilities: rawTask.requirements?.capabilities ?? [],
+          },
+        };
+        const decision = this.engine.scheduler.plan({ task: firstTask as any });
+        if (decision?.modelId) {
+          if (this.presentationMode === 'conversation') {
+            this.conversationRenderer.append(`Selected: ${decision.modelId}`);
+          }
+          await this.engine.lifecycle.ensureModelReadyForTask({
+            modelId: decision.modelId,
+            computerId: decision.computerId,
+            requiredContextTokens: (decision as any).allocatedContextTokens,
+            onProgress: (statusMsg: string) => {
+              this.statusMessage = statusMsg;
+              if (this.presentationMode === 'conversation') {
+                this.conversationRenderer.append(statusMsg);
+              }
+              this.draw();
+            },
+          });
+        }
+      }
+
       const job = await this.engine.orchestrator.createJob({
         title: prompt.slice(0, 60),
         concurrencyLimit: this.concurrencyLimit,
@@ -4072,7 +4228,9 @@ export class FleetTui {
           this.statusMessage = `${isSched ? 'Scheduler rejected task · ' : 'Execution failed · '}Job execution error: ${errMsg}`;
 
           if (this.presentationMode === 'conversation') {
-            this.conversationRenderer.append(`✗ ${isSched ? 'Scheduler rejected task' : 'Execution failed'}: ${errMsg}\n  Run /doctor or wa models list to inspect runtime readiness.`);
+            const trimmedPrompt = prompt.trim();
+            const tip = trimmedPrompt ? `\n  Tip: Use !${trimmedPrompt} to execute this command directly in your shell.` : '';
+            this.conversationRenderer.append(`✗ ${isSched ? 'Scheduler rejected task' : 'Execution failed'}: ${errMsg}${tip}\n  Run /doctor or wa models list to inspect runtime readiness.`);
           } else {
             // Structured error component (§29)
             this.currentError = {
@@ -4114,7 +4272,9 @@ export class FleetTui {
         await this.refreshRecentBlocks();
       }
       if (this.presentationMode === 'conversation') {
-        this.conversationRenderer.append(`✗ Scheduler rejected task: ${errMsg}\n  Verify task syntax or run /doctor to inspect system readiness.`);
+        const trimmedPrompt = prompt.trim();
+        const tip = trimmedPrompt ? `\n  Tip: Use !${trimmedPrompt} to execute this command directly in your shell.` : '';
+        this.conversationRenderer.append(`✗ Scheduler rejected task: ${errMsg}${tip}\n  Verify task syntax or run /doctor to inspect system readiness.`);
       } else {
         this.currentError = {
           phase: 'scheduling',
@@ -4851,7 +5011,11 @@ export class FleetTui {
 
   private drawDashboardFrame(size: TerminalSize, lines: string[], contentHeight: number): void {
     // Overlays over content region:
-    if (this.startupSelector) {
+    if (this.modelSelector && this.modelSelector.isOpen) {
+      const modalLines = renderModelSelectorModal(this.modelSelector, size.columns);
+      const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
+      this.overlayModal(lines, modalLines, size.columns, startY);
+    } else if (this.startupSelector) {
       const modalLines = this.renderStartupSelectorModal(size.columns);
       const startY = Math.max(4, 4 + Math.floor((contentHeight - modalLines.length) / 2));
       this.overlayModal(lines, modalLines, size.columns, startY);
@@ -5657,6 +5821,53 @@ export class FleetTui {
     });
   }
 
+  private buildModelSelectorItems(): ModelSelectorItem[] {
+    const list = this.engine.models?.list?.() ?? [];
+    const computers = this.engine.computers?.list?.() ?? [];
+    const localComp = computers.find((c) => c.local) ?? computers[0];
+    const availMem = (localComp as any)?.load?.memoryAvailableGB ?? localComp?.hardware?.memoryGB ?? 16;
+
+    return list.map((m) => {
+      const instances = this.engine.models?.instancesOf?.(m.id) ?? [];
+      const loaded = instances.some((i) => i.loaded);
+      const isLocal = m.local !== false;
+      const isHosted = !isLocal || m.provider === 'hosted' || m.provider === 'nvidia' || instances.some((i) => !i.computerId);
+      const available = isHosted ? true : instances.length > 0 && instances.some((i) => i.health !== 'unavailable');
+      const rawCostTier = this.engine.modelRanker?.determineCostTier(m);
+      const costTier: 'T1' | 'T2' | 'T3' | 'T4' = (!rawCostTier || rawCostTier === 'any') ? (isLocal ? 'T1' : 'T2') : rawCostTier;
+      const memoryGB = this.engine.contextEstimator?.estimateWeightsGB(m) ?? (m.parameters ? parseFloat(m.parameters) : 4);
+      const contextMax = (m as any).contextWindow ?? m.contextMax ?? 8192;
+      const deviceLabel = isHosted
+        ? 'Hosted Cloud API'
+        : (localComp?.hardware?.cpu ?? 'Local Hardware');
+
+      let eligible = true;
+      let ineligibleReason: string | undefined;
+
+      if (!isHosted && localComp) {
+        if (availMem < memoryGB) {
+          eligible = false;
+          ineligibleReason = `insufficient RAM (requires ${memoryGB.toFixed(1)}GB, ${availMem.toFixed(1)}GB available)`;
+        }
+      }
+
+      return {
+        modelId: m.id,
+        name: m.name || m.id,
+        provider: m.provider || 'unknown',
+        costTier,
+        available,
+        loaded,
+        local: !isHosted,
+        eligible,
+        ineligibleReason,
+        memoryGB: Number(memoryGB.toFixed(1)),
+        contextMax,
+        deviceLabel,
+      };
+    });
+  }
+
   private async handleStartupModelReadiness(): Promise<void> {
     const mode = this.engine.config.models?.startup?.mode ?? 'prompt';
     if (mode === 'none') {
@@ -5691,6 +5902,15 @@ export class FleetTui {
         this.conversationRenderer.append(this.formatMissingModelRecovery(readiness));
       } else {
         this.statusMessage = `${regCount} registered, ${availCount} available, ${localCount} locally loaded — will activate on task submission or use /models.`;
+        const pref = this.engine.modelPreferences?.getEffectivePreference?.();
+        const selectedMode = pref ? (pref.modelId ? `${pref.mode} (${pref.modelId})` : pref.displayLabel) : 'auto';
+        const reasoning = pref ? (pref.reasoningEffort.charAt(0).toUpperCase() + pref.reasoningEffort.slice(1)) : 'Medium';
+        const banner = [
+          `Models: ${regCount} registered, ${availCount} available, ${localCount} loaded`,
+          `Selected: ${selectedMode}`,
+          `Reasoning: ${reasoning}`,
+        ].join('\n');
+        this.conversationRenderer.append(banner);
       }
       this.draw();
       return;

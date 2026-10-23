@@ -81,7 +81,34 @@ export interface PolicyRequirements {
   allowHostedProviders?: boolean;
 }
 
-export type RoutingMode = 'AUTO' | 'LOCAL_ONLY' | 'NVIDIA' | 'HYBRID' | 'PROVIDER_ONLY';
+export type RoutingMode =
+  | 'AUTO'
+  | 'LOCAL_ONLY'
+  | 'NVIDIA'
+  | 'HYBRID'
+  | 'PROVIDER_ONLY'
+  | 'FAST'
+  | 'BALANCED'
+  | 'POWERFUL'
+  | 'LOCAL_FIRST'
+  | 'LOADED_ONLY'
+  | 'STRICT_MODEL'
+  | 'CUSTOM'
+  | 'COST_AWARE'
+  | 'QUALITY_FIRST'
+  | 'LATENCY_FIRST'
+  | 'auto'
+  | 'fast'
+  | 'balanced'
+  | 'powerful'
+  | 'local'
+  | 'local_first'
+  | 'loaded_only'
+  | 'strict_model'
+  | 'custom'
+  | 'cost_aware'
+  | 'quality_first'
+  | 'latency_first';
 
 export interface ExecutionPreferences {
   targetComputerId?: string;
@@ -91,6 +118,8 @@ export interface ExecutionPreferences {
   executionMode?: 'automatic' | 'local' | 'fastest' | 'highestQuality';
   /** Explicit provider/locality routing mode. */
   routingMode?: RoutingMode;
+  /** Reasoning effort level ('low' | 'medium' | 'high'). */
+  reasoningEffort?: 'low' | 'medium' | 'high';
   /** Target provider when routingMode is PROVIDER_ONLY (e.g. 'nvidia'). */
   routingProvider?: string;
   /** Preferred default model when targetModelId is not explicitly pinned. */

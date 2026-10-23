@@ -38,6 +38,13 @@ import {
   FleetMemoryService,
   createFleetMemoryService,
   HandoffService,
+  ModelPreferenceService,
+  ModelDiscoveryStatusService,
+  IntelligentModelRanker,
+  HardwareEligibilityService,
+  ContextMemoryEstimator,
+  type StructuredModelFleetStatus,
+  type ModelPreferenceRecord,
 } from '@wazir/core';
 import type {
   ComputerRegistration,
@@ -136,6 +143,11 @@ export interface RookEngine {
   handoffs: HandoffService;
   secretBroker: SecretBroker;
   hostedAdapters: Map<ProviderId, HostedAdapter>;
+  modelPreferences: ModelPreferenceService;
+  modelDiscoveryStatus: ModelDiscoveryStatusService;
+  modelRanker: IntelligentModelRanker;
+  hardwareEligibility: HardwareEligibilityService;
+  contextEstimator: ContextMemoryEstimator;
 }
 
 function guessFamily(id: string, provider: string): ModelRecord['family'] {
@@ -464,6 +476,62 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     hostedLimits: nvidiaLimits ? { nvidia: nvidiaLimits } : undefined,
     hostedPricing: config.providers?.nvidia?.pricing ? { nvidia: config.providers.nvidia.pricing } : undefined,
   });
+
+  const hardwareEligibility = new HardwareEligibilityService();
+  const contextEstimator = new ContextMemoryEstimator();
+  const modelRanker = new IntelligentModelRanker(hardwareEligibility, contextEstimator);
+  const prefFilePath = path.join(engineConfigDir, 'model-preference.json');
+  const prefKvStore = {
+    get: async (k: string) => {
+      const val = await store.get<unknown>(k);
+      if (val === undefined || val === null) return null;
+      return typeof val === 'string' ? val : JSON.stringify(val);
+    },
+    set: async (k: string, v: string) => {
+      await store.put(k, v);
+    },
+  };
+  const modelPreferences = new ModelPreferenceService({
+    configFilePath: prefFilePath,
+    kvStore: prefKvStore,
+    kvKey: 'models/preferences',
+  });
+  if (!(modelPreferences as any).loadPersistentPreference) {
+    (modelPreferences as any).loadPersistentPreference = async function (this: any) {
+      if (prefKvStore) {
+        try {
+          const raw = await prefKvStore.get('models/preferences');
+          if (raw) {
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            if (parsed && typeof parsed === 'object') {
+              this.persistentPreference = this.migrateLegacyConfig(parsed);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return this.persistentPreference;
+    };
+  }
+  await (modelPreferences as any).loadPersistentPreference();
+
+  const modelDiscoveryStatus = new ModelDiscoveryStatusService({
+    models,
+    runtimes,
+    computers,
+  });
+  const origFormatStartupSummary = modelDiscoveryStatus.formatStartupSummary.bind(modelDiscoveryStatus);
+  (modelDiscoveryStatus as any).formatStartupSummary = function (arg1?: any, arg2?: any) {
+    if (arg1 && typeof arg1 === 'object') {
+      const reg = arg1.registeredCount ?? arg1.startupBannerCounts?.registered ?? 0;
+      const avail = arg1.availableCount ?? arg1.startupBannerCounts?.available ?? 0;
+      const loaded = arg1.loadedCount ?? arg1.startupBannerCounts?.loaded ?? 0;
+      return `Models: ${reg} registered, ${avail} available, ${loaded} loaded`;
+    }
+    return origFormatStartupSummary(arg1 ?? 'auto', arg2 ?? 'medium');
+  };
+
   const scheduler = new Scheduler({
     computers,
     runtimes,
@@ -474,6 +542,10 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     modelIntelligence,
     resources: { router: resources.router },
     routing: config.routing,
+    ranker: modelRanker,
+    hardwareEligibility,
+    contextEstimator,
+    preferences: modelPreferences,
   });
 
   // ---- jobs & orchestration -----------------------------------------------
@@ -659,6 +731,11 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     secretBroker,
     hostedAdapters,
     mcp,
+    modelPreferences,
+    modelDiscoveryStatus,
+    modelRanker,
+    hardwareEligibility,
+    contextEstimator,
   };
 }
 

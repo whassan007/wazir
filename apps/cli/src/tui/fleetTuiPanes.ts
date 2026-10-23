@@ -1244,3 +1244,13 @@ export function renderHelpPane(cols: number, maxRows: number): string[] {
   while (lines.length < maxRows) lines.push('');
   return lines;
 }
+
+export {
+  ModelSelectorController,
+  renderModelSelectorModal,
+  renderModelSelectionConfirmation,
+  formatSelectionDetails,
+  type ModelSelectorItem,
+  type ModelSelectorAction,
+} from './modelSelectorModal.js';
+

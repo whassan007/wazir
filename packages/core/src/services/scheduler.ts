@@ -27,6 +27,30 @@ import type {
   ProfileSegmentationKey,
   TaskCapabilityClassification,
 } from '../types/modelIntelligence.js';
+import { HardwareEligibilityService, type DeviceEligibilityResult } from './hardwareEligibilityService.js';
+import { ContextMemoryEstimator, type ContextAllocationPlan } from './contextMemoryEstimator.js';
+import { IntelligentModelRanker, type IntelligentRoutingMode, type RankedModelCandidate } from './intelligentModelRanker.js';
+import { ModelPreferenceService, type ModelPreferenceRecord, type ModelSelectionMode, type ReasoningEffortLevel } from './modelPreferenceService.js';
+import { ModelDiscoveryStatusService, type StructuredModelFleetStatus, type ModelDiscoveryEntry } from './modelDiscoveryStatus.js';
+
+export {
+  HardwareEligibilityService,
+  ContextMemoryEstimator,
+  IntelligentModelRanker,
+  ModelPreferenceService,
+  ModelDiscoveryStatusService,
+};
+export type {
+  DeviceEligibilityResult,
+  ContextAllocationPlan,
+  IntelligentRoutingMode,
+  RankedModelCandidate,
+  ModelPreferenceRecord,
+  ModelSelectionMode,
+  ReasoningEffortLevel,
+  StructuredModelFleetStatus,
+  ModelDiscoveryEntry,
+};
 
 /** Measured profiles with fewer runs than this don't influence routing. */
 const MIN_MEASURED_SAMPLES = 3;
@@ -69,7 +93,7 @@ export interface SchedulerDeps {
   models: ModelRegistry;
   agents?: AgentRegistry;
   /** Gates hosted-provider placement — see `scheduleComputer()`'s hosted branch. */
-  policy: PolicyEngine;
+  policy?: PolicyEngine;
   /**
    * Optional engine-wide routing policy (e.g. `routing.mode = 'provider_only'`, `provider = 'nvidia'`).
    */
@@ -97,6 +121,22 @@ export interface SchedulerDeps {
    * (see resources/router.ts). Absent = capability-only routing, as before.
    */
   resources?: { router: ResourceRouter; workloadFor?: (task: Task, category: ModelCapabilityCategory) => WorkloadClass };
+  /**
+   * Intelligent Model Ranker for intelligent routing modes.
+   */
+  ranker?: IntelligentModelRanker;
+  /**
+   * Hardware eligibility service for preflight memory and device checks.
+   */
+  hardwareEligibility?: HardwareEligibilityService;
+  /**
+   * Context memory estimator for safe context tier allocation.
+   */
+  contextEstimator?: ContextMemoryEstimator;
+  /**
+   * Persistent and session model preferences.
+   */
+  preferences?: ModelPreferenceService;
 }
 
 export interface ScheduleInput {
@@ -131,6 +171,10 @@ interface ResolvedRoutingConstraint {
   provider?: string;
   defaultModel?: string;
   allowFallback: boolean;
+  reasoningEffort: 'low' | 'medium' | 'high';
+  intelligentMode: IntelligentRoutingMode;
+  targetModelId?: string;
+  isStrictMode: boolean;
 }
 
 /**
@@ -147,9 +191,17 @@ interface ResolvedRoutingConstraint {
  */
 export class Scheduler {
   private readonly classifier: TaskCapabilityClassifier;
+  private readonly ranker: IntelligentModelRanker;
+  private readonly hardwareEligibility: HardwareEligibilityService;
+  private readonly contextEstimator: ContextMemoryEstimator;
+  private readonly preferences?: ModelPreferenceService;
 
   constructor(private readonly deps: SchedulerDeps) {
     this.classifier = deps.classifier ?? new TaskCapabilityClassifier();
+    this.hardwareEligibility = deps.hardwareEligibility ?? new HardwareEligibilityService();
+    this.contextEstimator = deps.contextEstimator ?? new ContextMemoryEstimator();
+    this.ranker = deps.ranker ?? new IntelligentModelRanker(this.hardwareEligibility, this.contextEstimator);
+    this.preferences = deps.preferences;
   }
 
   public getRoutingPolicy(): RoutingPolicyConfig | undefined {
@@ -158,7 +210,12 @@ export class Scheduler {
 
   private resolveRoutingConstraint(task: Task): ResolvedRoutingConstraint {
     const cfg = this.deps.routing;
+    const pref = this.preferences?.getEffectivePreference();
+    const rawTaskMode = (task.execution?.routingMode ?? (task as any).routingMode)?.toString();
+    const execMode = task.execution?.executionMode;
+
     let mode: RoutingMode = 'AUTO';
+    let intelligentMode: IntelligentRoutingMode = 'AUTO';
     let provider: string | undefined;
 
     if (cfg?.mode === 'provider_only') {
@@ -166,39 +223,106 @@ export class Scheduler {
       provider = cfg.provider?.toLowerCase();
     } else if (cfg?.mode === 'local_only') {
       mode = 'LOCAL_ONLY';
+      intelligentMode = 'LOCAL_FIRST';
     } else if (cfg?.mode === 'hybrid') {
       mode = 'HYBRID';
+      intelligentMode = 'BALANCED';
     }
 
-    const taskMode = task.execution?.routingMode ?? (task.execution?.executionMode === 'local' ? 'LOCAL_ONLY' : undefined);
-    if (taskMode) {
-      if (taskMode === 'NVIDIA') {
+    const normTaskMode = rawTaskMode?.toLowerCase();
+    if (normTaskMode) {
+      if (normTaskMode === 'nvidia') {
         mode = 'PROVIDER_ONLY';
         provider = 'nvidia';
-      } else if (taskMode === 'PROVIDER_ONLY') {
+        intelligentMode = 'POWERFUL';
+      } else if (normTaskMode === 'provider_only') {
         mode = 'PROVIDER_ONLY';
         provider = (task.execution?.routingProvider ?? cfg?.provider ?? 'nvidia').toLowerCase();
+      } else if (normTaskMode === 'local_only' || normTaskMode === 'local') {
+        mode = 'LOCAL_ONLY';
+        intelligentMode = 'LOCAL_FIRST';
+      } else if (normTaskMode === 'local_first') {
+        mode = 'LOCAL_FIRST';
+        intelligentMode = 'LOCAL_FIRST';
+      } else if (normTaskMode === 'fast' || normTaskMode === 'latency_first') {
+        mode = 'FAST';
+        intelligentMode = 'FAST';
+      } else if (normTaskMode === 'powerful' || normTaskMode === 'quality_first') {
+        mode = 'POWERFUL';
+        intelligentMode = 'POWERFUL';
+      } else if (normTaskMode === 'balanced' || normTaskMode === 'cost_aware') {
+        mode = 'BALANCED';
+        intelligentMode = 'BALANCED';
+      } else if (normTaskMode === 'loaded_only') {
+        mode = 'LOADED_ONLY';
+        intelligentMode = 'LOADED_ONLY';
+      } else if (normTaskMode === 'strict_model') {
+        mode = 'STRICT_MODEL';
+        intelligentMode = 'STRICT_MODEL';
+      } else if (normTaskMode === 'custom') {
+        mode = 'CUSTOM';
+        intelligentMode = 'AUTO';
       } else {
-        // Note: if engine config enforces provider_only, task cannot weaken it to AUTO/HYBRID
-        if (cfg?.mode === 'provider_only' && taskMode !== 'LOCAL_ONLY') {
+        if (cfg?.mode === 'provider_only' && normTaskMode !== 'local_only') {
           mode = 'PROVIDER_ONLY';
           provider = cfg.provider?.toLowerCase() ?? 'nvidia';
         } else {
-          mode = taskMode;
+          mode = rawTaskMode as RoutingMode;
         }
       }
+    } else if (execMode) {
+      if (execMode === 'local') {
+        mode = 'LOCAL_ONLY';
+        intelligentMode = 'LOCAL_FIRST';
+      } else if (execMode === 'fastest') {
+        mode = 'FAST';
+        intelligentMode = 'FAST';
+      } else if (execMode === 'highestQuality') {
+        mode = 'POWERFUL';
+        intelligentMode = 'POWERFUL';
+      } else {
+        mode = 'AUTO';
+        intelligentMode = 'AUTO';
+      }
+    } else if (pref) {
+      switch (pref.mode) {
+        case 'fast': mode = 'FAST'; intelligentMode = 'FAST'; break;
+        case 'balanced': mode = 'BALANCED'; intelligentMode = 'BALANCED'; break;
+        case 'powerful': mode = 'POWERFUL'; intelligentMode = 'POWERFUL'; break;
+        case 'local': mode = 'LOCAL_ONLY'; intelligentMode = 'LOCAL_FIRST'; break;
+        case 'custom': mode = 'CUSTOM'; intelligentMode = pref.strict ? 'STRICT_MODEL' : 'AUTO'; break;
+        case 'auto': default: mode = 'AUTO'; intelligentMode = 'AUTO'; break;
+      }
     }
+
+    const reasoningEffort = task.requirements?.reasoning ??
+      (task.execution as any)?.reasoningEffort ??
+      pref?.reasoningEffort ??
+      'medium';
 
     const defaultModel =
       task.execution?.defaultModelId ??
       cfg?.defaultModel ??
       (mode === 'PROVIDER_ONLY' && provider === 'nvidia' ? 'nvidia/nemotron-3.5-super-vl-120b-a12b' : undefined);
+
     const allowFallback =
       task.execution?.allowFallback ??
       cfg?.allowFallback ??
       (mode === 'PROVIDER_ONLY' ? false : true);
 
-    return { mode, provider, defaultModel, allowFallback };
+    const targetModelId = task.execution?.targetModelId ??
+      (task as any).targetModelId ??
+      (task.execution as any)?.modelId ??
+      ((intelligentMode === 'STRICT_MODEL' || pref?.strict) ? pref?.modelId : undefined);
+
+    const isStrictMode = Boolean(
+      task.execution?.targetModelId ||
+      (task as any).targetModelId ||
+      intelligentMode === 'STRICT_MODEL' ||
+      (pref?.strict && pref?.modelId)
+    );
+
+    return { mode, provider, defaultModel, allowFallback, reasoningEffort, intelligentMode, targetModelId, isStrictMode };
   }
 
   private isModelOfProvider(record: ModelRecord, provider: string): boolean {
@@ -212,7 +336,8 @@ export class Scheduler {
 
   plan(input: ScheduleInput): SchedulerDecision {
     const { task } = input;
-    const requiredContext = input.requiredContextTokens ?? task.requirements.minimumContext ?? 0;
+    const req = task.requirements ?? {};
+    const requiredContext = input.requiredContextTokens ?? req.minimumContext ?? 0;
     const routing = this.resolveRoutingConstraint(task);
 
     let agentId: string | undefined;
@@ -230,7 +355,7 @@ export class Scheduler {
       agentReasons = resolution.reasons;
     }
 
-    const effectiveHarnessId = agentId ?? task.execution?.targetAgentId ?? task.requirements?.agent;
+    const effectiveHarnessId = agentId ?? task.execution?.targetAgentId ?? req.agent;
     const modelDecision = this.routeModel(task, requiredContext, input.excludeModelIds ?? [], routing, effectiveHarnessId);
     const record = this.deps.models.getRequired(modelDecision.modelId);
     const instance = this.deps.models
@@ -251,7 +376,16 @@ export class Scheduler {
       computerDecision.resourceType ??
       (computerDecision.placementKind === 'hosted' ? 'HOSTED_API_INFERENCE' : 'LOCAL_GPU_INFERENCE');
 
-    return {
+    const contextPlan = this.contextEstimator.planContextAllocation({
+      model: record,
+      estimatedInputTokens: Math.max(requiredContext, 1),
+      requiredMinimumContext: req.minimumContext ?? 2048,
+      reasoningEffort: routing.reasoningEffort,
+    });
+    (modelDecision as any).allocatedContextTokens = contextPlan.allocatedContextTokens;
+    (modelDecision as any).contextPlan = contextPlan;
+
+    const decision: SchedulerDecision = {
       agentId,
       modelId: record.id,
       modelInstanceId: placed.id,
@@ -271,6 +405,9 @@ export class Scheduler {
       ],
       decidedAt: new Date(),
     };
+    (decision as any).allocatedContextTokens = contextPlan.allocatedContextTokens;
+    (decision as any).contextPlan = contextPlan;
+    return decision;
   }
 
   // ==================== PHASE 1: MODEL ROUTING ====================
@@ -427,29 +564,50 @@ export class Scheduler {
       });
     }
 
-    const preferred = task.execution?.targetModelId;
-    if (preferred) {
-      const match = eligible.find((s) => s.record.id === preferred);
+    const preferred = routing.targetModelId ?? task.execution?.targetModelId;
+    if (routing.isStrictMode || preferred) {
+      const targetId = preferred;
+      if (!targetId) {
+        throw new SchedulingError(
+          `STRICT_MODEL mode specified but no targetModelId provided. No silent fallback will be performed.`,
+          ['STRICT_MODEL mode requires targetModelId'],
+        );
+      }
+      const match = eligible.find((s) => s.record.id === targetId);
       if (!match) {
-        const rejectedEntry = rejected.find((s) => s.record.id === preferred);
+        const structuredAlternatives = eligible.map((s) => ({
+          modelId: s.record.id,
+          name: s.record.name ?? s.record.id,
+          score: s.score,
+          loaded: this.deps.models.instancesOf(s.record.id).some((i) => i.loaded),
+          reasons: s.reasons,
+        }));
+        const altNames = structuredAlternatives.map((a) => a.modelId);
+        const altDetails = altNames.length > 0 ? ` Available alternatives: ${altNames.join(', ')}.` : '';
+
+        const rejectedEntry = rejected.find((s) => s.record.id === targetId);
         if (rejectedEntry?.placementFailures && rejectedEntry.rejected.length === 1) {
           const details = rejectedEntry.placementFailures.length > 0 ? ` ${rejectedEntry.placementFailures.join('; ')}.` : '';
-          throw new SchedulingError(
-            `No computer can host model '${preferred}'.${details} No silent fallback will be performed.`,
+          const err = new SchedulingError(
+            `No computer can host model '${targetId}'.${details}${altDetails} No silent fallback will be performed.`,
             rejected.flatMap((s) => [`${s.record.id}: ${s.rejected.join('; ')}`]),
             rejectedEntry.placementFailures,
           );
+          (err as any).alternatives = structuredAlternatives;
+          throw err;
         }
         const detail =
           rejectedEntry?.rejected.join('; ') ??
-          `model '${preferred}' is not registered`;
-        throw new SchedulingError(
-          `Requested model '${preferred}' is not eligible. ${detail}. No silent fallback will be performed.`,
+          `model '${targetId}' is not registered`;
+        const err = new SchedulingError(
+          `Requested model '${targetId}' is not eligible. ${detail}.${altDetails} No silent fallback will be performed.`,
           [detail],
         );
+        (err as any).alternatives = structuredAlternatives;
+        throw err;
       }
       const instance = this.selectInstance(match.record);
-      const circuit = this.deps.reliability?.status(preferred, task.type);
+      const circuit = this.deps.reliability?.status(targetId, task.type);
       const outcomeRationale = match.reasons.find((r) => r.startsWith('outcome-routing:'));
 
       const explanation: EmpiricalRoutingExplanation = {
@@ -458,22 +616,22 @@ export class Scheduler {
         language: classification.language,
         candidateModels: records.map((r) => r.id),
         evaluatedCandidates,
-        selectedModelId: preferred,
+        selectedModelId: targetId,
         selectionReason:
-          `Explicitly requested model '${preferred}' satisfied all hard constraints` +
+          `Explicitly requested model '${targetId}' satisfied all hard constraints` +
           (outcomeRationale ? ` (${outcomeRationale})` : ''),
         policyConstraintsApplied,
         resourceConstraintsApplied,
       };
 
       return {
-        modelId: preferred,
+        modelId: targetId,
         modelInstanceId: instance.id,
         strategy: 'explicit',
         score: match.score,
         empiricalExplanation: explanation,
         reasons: [
-          `explicitly requested model '${preferred}'`,
+          `explicitly requested model '${targetId}'`,
           `required capability: ${requiredCapability}`,
           ...match.reasons,
           ...(circuit && circuit.state !== 'CLOSED' ? [`warning: ${task.type} ${circuit.reason}`] : []),
@@ -740,7 +898,8 @@ export class Scheduler {
   ): ScoredModel {
     const reasons: string[] = [];
     const rejected: string[] = [];
-    const requiredCapabilities = task.requirements.capabilities ?? [];
+    const req = task.requirements ?? {};
+    const requiredCapabilities = req.capabilities ?? [];
 
     for (const capability of requiredCapabilities) {
       if (record.capabilities.includes(capability)) {
@@ -750,16 +909,16 @@ export class Scheduler {
       }
     }
 
-    if (task.requirements.toolCalling && !record.toolCalling) {
+    if (req.toolCalling && !record.toolCalling) {
       rejected.push('tool calling: required but unsupported');
-    } else if (task.requirements.toolCalling && record.toolCalling) {
+    } else if (req.toolCalling && record.toolCalling) {
       reasons.push('tool calling: supported');
     }
 
-    if (task.requirements.vision && !record.vision) {
+    if (req.vision && !record.vision) {
       rejected.push('vision: required but unsupported');
     }
-    if (task.requirements.reasoning === 'high' && !record.reasoning) {
+    if (req.reasoning === 'high' && !record.reasoning) {
       rejected.push('strong reasoning: required but unsupported');
     }
 
@@ -830,6 +989,11 @@ export class Scheduler {
       reasons.push(`${task.type} ${circuit.reason}`);
     }
 
+    const isLoaded = knownInstances.some((i) => i.loaded && i.health === 'healthy');
+    if (routing.intelligentMode === 'LOADED_ONLY' && !isLoaded) {
+      rejected.push(`Model '${record.id}' is not currently loaded in runtime memory (LOADED_ONLY mode)`);
+    }
+
     if (rejected.length > 0) {
       return { record, score: 0, reasons, rejected };
     }
@@ -843,6 +1007,25 @@ export class Scheduler {
     if (routing.defaultModel && record.id === routing.defaultModel) {
       score += 50;
       reasons.push(`configured defaultModel '${routing.defaultModel}' preferred`);
+    }
+
+    // Intelligent routing mode score adjustments
+    const costTier = this.ranker.determineCostTier(record);
+    if (routing.intelligentMode === 'FAST') {
+      if (costTier === 'T1' || costTier === 'T2') score += 25;
+      if (isLoaded) score += 20;
+    } else if (routing.intelligentMode === 'POWERFUL') {
+      if (costTier === 'T3' || costTier === 'T4' || record.reasoning) score += 30;
+      if (routing.reasoningEffort === 'high' && record.reasoning) score += 15;
+    } else if (routing.intelligentMode === 'LOCAL_FIRST') {
+      if (record.local) score += 35;
+      if (isLoaded) score += 15;
+    } else if (routing.intelligentMode === 'BALANCED') {
+      if (costTier === 'T1' || costTier === 'T2') score += 15;
+      if (isLoaded) score += 15;
+    } else if (routing.intelligentMode === 'AUTO') {
+      if (isLoaded) score += 25;
+      if (record.local) score += 15;
     }
 
     // Empirical Model Intelligence Profile integration
@@ -947,7 +1130,7 @@ export class Scheduler {
       const bonus = loadedInstance.state === 'READY' ? 30 : 15;
       score += bonus;
       reasons.push(`instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' already loaded${loadedInstance.state === 'READY' ? ' and ready' : ''} (+${bonus})`);
-      if (isLocalModel && task.requirements.reasoning !== 'high' && estimatedMemGB > 16) {
+      if (isLocalModel && task.requirements?.reasoning !== 'high' && estimatedMemGB > 16) {
         const sizeCost = Math.min(4, Math.floor((estimatedMemGB - 12) / 4));
         if (sizeCost > 0) {
           score -= sizeCost;
@@ -956,7 +1139,7 @@ export class Scheduler {
       }
     } else if (this.deps.models.instancesOf(record.id).length > 0) {
       reasons.push('available instance will be loaded on demand');
-      if (isLocalModel && task.requirements.reasoning !== 'high') {
+      if (isLocalModel && task.requirements?.reasoning !== 'high') {
         const coldEfficiencyBonus = Math.max(0, 6 - Math.floor(estimatedMemGB / 4));
         if (coldEfficiencyBonus > 0) {
           score += coldEfficiencyBonus;
@@ -1235,6 +1418,31 @@ export class Scheduler {
         failures.push(
           `${computer.id}: usable GPU memory ${usableGpuGB}GB < required ${neededGpuGB}GB (weights ${instance.loaded ? 0 : requiredGpuGB}GB + KV cache ${kvCacheGB}GB)`,
         );
+        continue;
+      }
+
+      // Preflight Hardware Eligibility & Safe Memory Check via HardwareEligibilityService
+      const deviceAssessment = this.hardwareEligibility.assessDeviceForModel({
+        model: record,
+        computer,
+        instance,
+      });
+      if (!deviceAssessment.eligible) {
+        failures.push(...deviceAssessment.rejectionReasons);
+        continue;
+      }
+
+      // Safe Context Tier Allocation Check via ContextMemoryEstimator
+      const contextPlan = this.contextEstimator.planContextAllocation({
+        model: record,
+        estimatedInputTokens: Math.max(requiredContext, 1),
+        requiredMinimumContext: task.requirements?.minimumContext ?? 2048,
+        reasoningEffort: routing.reasoningEffort,
+        availableMemoryGB: deviceAssessment.availableMemoryGB,
+        alreadyLoaded: deviceAssessment.alreadyLoaded,
+      });
+      if (!contextPlan.eligible) {
+        failures.push(`${computer.id}: ${contextPlan.reason}`);
         continue;
       }
 
