@@ -2,6 +2,7 @@ import { executeMCPForAgent } from './mcp.js';
 import { runSubagent } from './run.js';
 import { recordTermination } from './termination.js';
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
+import { InvocationContextAllocator, planContext } from './contextAllocationRuntime.js';
 import { localOutcomeInspector, planTaskResume } from './recovery.js';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
@@ -198,24 +199,30 @@ export function createFleetTaskExecutor(
 
     // 3. Resolve model and context
     const model = engine.models.getRequired(assignment.modelId);
+    const planTools = engine.tools.forModel(undefined, engine.agents.get(assignment.agentId)?.descriptor.capabilities);
     const parts: ContextPart[] = [
       {
         kind: 'system',
         label: 'system prompt',
-        content: buildSystemPrompt(taskRoot, engine.tools.forModel(undefined, engine.agents.get(assignment.agentId)?.descriptor.capabilities)),
+        content: buildSystemPrompt(taskRoot, planTools),
         priority: 'critical',
       },
       { kind: 'task', label: 'task', content: task.input, priority: 'critical' },
     ];
 
-    const contextDecision = engine.compiler.compile(
-      parts,
-      {
-        tokens: effectiveContextTokens(model),
-        source: model.configuredContext !== undefined ? 'configured' : 'discovered',
-      },
-      OUTPUT_RESERVE_TOKENS,
-    );
+    // Compile against the effective window W with allocation-derived reservations; the
+    // per-call target is chosen at each invocation (InvocationContextAllocator below).
+    const contextDecision = planContext(engine, parts, assignment.modelId, {
+      tools: planTools,
+      outputReserveTokens: OUTPUT_RESERVE_TOKENS,
+      placement: { runtimeId: assignment.runtimeId, computerId: assignment.computerId },
+    }).context;
+    if (!contextDecision.fits) {
+      const error = contextDecision.reasons.join('; ');
+      await engine.executions.recordError(executionId, error);
+      await engine.executions.setStatus(executionId, 'failed');
+      return { success: false, error, errorKind: 'infrastructure' };
+    }
 
     if (assignment.computerId) {
       try {
@@ -242,8 +249,13 @@ export function createFleetTaskExecutor(
     let currentModelId = assignment.modelId;
     // Where generation runs; an accepted escalation may move it. Tools always run in taskRoot.
     const placement = { runtimeId: assignment.runtimeId, computerId: assignment.computerId, contextTokens: contextDecision.available.tokens };
+    const allocator = new InvocationContextAllocator(engine, executionId, OUTPUT_RESERVE_TOKENS);
     const runtime: AgentRuntime = {
       tools: engine.tools.forModel(undefined, agent.descriptor.capabilities),
+      // The usable window W (not the small per-call target), so compaction thresholds are not hit early.
+      getContextTokens: () => {
+        try { return allocator.windowFor(currentModelId, placement); } catch { return placement.contextTokens; }
+      },
 
       cancelCurrentTurn(): void {
         void currentTurn?.adapter.cancel?.(currentTurn.requestId);
@@ -282,6 +294,22 @@ export function createFleetTaskExecutor(
         // apps/cli/src/run.ts's equivalent branch. engine.adapters is checked
         // first since worker.adapterForModel() can never resolve a hosted
         // adapter (it only searches the worker's own hardware-bound list).
+        let prepared;
+        try {
+          prepared = await allocator.prepare(
+            { modelId: request.modelId, messages: request.messages, maxTokens: request.maxTokens, tools: request.tools },
+            placement,
+          );
+        } catch {
+          prepared = undefined; // allocation is advisory when the model is not registered
+        }
+        if (prepared?.preflightError) {
+          // Same shape as a provider-reported overflow, so the agent's forced-compaction path handles it.
+          yield { type: 'error', error: prepared.preflightError, failureClass: 'MODEL_CONTEXT_OVERFLOW' };
+          return;
+        }
+        const sentMaxTokens = prepared?.maxTokens ?? request.maxTokens;
+        const sentContextTokens = prepared ? prepared.contextTokens : placement.contextTokens;
         if (!placement.computerId || placement.computerId === engine.worker.computerId) {
           const adapter = engine.adapters.get(placement.runtimeId) ?? engine.worker.adapterForModel(request.modelId);
           if (!adapter) {
@@ -292,9 +320,9 @@ export function createFleetTaskExecutor(
           for await (const event of adapter.generate({
             modelId: request.modelId,
             messages: request.messages,
-            maxTokens: request.maxTokens,
+            maxTokens: sentMaxTokens,
             temperature: request.temperature,
-            contextTokens: placement.contextTokens,
+            contextTokens: sentContextTokens,
             stream: true,
             tools: request.tools,
             requestId,
@@ -304,6 +332,7 @@ export function createFleetTaskExecutor(
               context.onProgress?.({ kind: 'token', content: event.content });
             }
             if (event.type === 'completed') {
+              await allocator.recordUsage(request.modelId, requestId, event.usage).catch(() => undefined);
               completedContent = event.content ?? '';
               if (event.usage) {
                 const usage = {
@@ -332,9 +361,9 @@ export function createFleetTaskExecutor(
             requestId,
             modelId: request.modelId,
             messages: request.messages,
-            maxTokens: request.maxTokens,
+            maxTokens: sentMaxTokens,
             temperature: request.temperature,
-            contextTokens: placement.contextTokens,
+            contextTokens: sentContextTokens,
           };
           try {
             for await (const event of dispatchRemote(engine.config.apiUrl, placement.computerId, workerRequest, { token: engine.config.apiToken })) {
@@ -345,6 +374,7 @@ export function createFleetTaskExecutor(
                 context.onProgress?.({ kind: 'token', content: generationEvent.content });
               }
               if (generationEvent.type === 'completed') {
+                await allocator.recordUsage(request.modelId, requestId, generationEvent.usage).catch(() => undefined);
                 completedContent = generationEvent.content ?? '';
                 if (generationEvent.usage) {
                   const usage = {
