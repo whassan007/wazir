@@ -41,6 +41,58 @@ export interface EnsureModelReadyResult {
   effectiveContext: number;
   instance?: ModelInstance;
   plan?: ModelLoadPlan;
+  deviceLabel?: string;
+  formattedReadiness?: string;
+  status?: 'Ready';
+}
+
+export interface AdmissionCheckResult {
+  admitted: boolean;
+  modelId: string;
+  computerId?: string;
+  reasons: string[];
+  reason?: string;
+  alreadyLoaded: boolean;
+  classification?: 'SAFE' | 'WARNING' | 'INSUFFICIENT' | 'UNKNOWN';
+  allocatedContextTokens?: number;
+  availableMemoryGB?: number;
+  requiredMemoryGB?: number;
+}
+
+export interface SelectAndPrepareOptions {
+  loadNow?: boolean;
+  requiredContext?: number;
+  timeoutMs?: number;
+  onProgress?: (msg: string) => void;
+  pinnedModelIds?: Iterable<string>;
+  activeModelIds?: Iterable<string>;
+}
+
+export interface SelectAndPrepareLocalModelResult {
+  ok: boolean;
+  modelId: string;
+  computerId?: string;
+  deviceLabel: string;
+  contextTokens: number;
+  status: 'Ready' | 'Installed (Can load)' | 'Failed';
+  reused: boolean;
+  error?: string;
+  formattedReadiness: string;
+}
+
+export function formatReadinessBlock(
+  modelId: string,
+  deviceLabel: string,
+  contextTokens: number | string,
+  status: 'Ready' | 'Installed (Can load)' | 'Failed' | string = 'Ready',
+): string {
+  const contextStr = typeof contextTokens === 'number' ? `${contextTokens} tokens` : contextTokens;
+  return [
+    `Model: ${modelId}`,
+    `Device: ${deviceLabel}`,
+    `Context: ${contextStr}`,
+    `Status: ${status}`,
+  ].join('\n');
 }
 
 export interface UnloadIdleModelsOptions {
@@ -445,8 +497,20 @@ export class ModelLifecycleService {
       };
     }
 
+    // If model is already loaded on computerId, do not double-charge resident memory!
+    if (instance?.loaded) {
+      return {
+        modelId,
+        estimatedMemoryGB,
+        availableMemoryGB,
+        totalMemoryGB,
+        classification: 'SAFE',
+        message: `Model is already loaded and resident in memory (${estimatedMemoryGB}GB).`,
+      };
+    }
+
     if (estimatedMemoryGB > 0 && availableMemoryGB !== undefined) {
-      if (!instance?.loaded && estimatedMemoryGB > availableMemoryGB) {
+      if (estimatedMemoryGB > availableMemoryGB) {
         return {
           modelId,
           estimatedMemoryGB,
@@ -493,6 +557,132 @@ export class ModelLifecycleService {
       totalMemoryGB,
       classification: 'UNKNOWN',
       message: 'Use estimate for context-aware admission; cached model size is not a load estimate.',
+    };
+  }
+
+  /**
+   * Performs preflight memory and hardware admission check.
+   * If model is already loaded on computerId (instance.loaded === true),
+   * returns admitted: true without double-charging its resident weight memory!
+   */
+  checkAdmission(
+    modelId: string,
+    computerId?: string,
+    options: { requiredContext?: number; runtimeId?: string } = {},
+  ): AdmissionCheckResult {
+    const ineligibility = this.isKnownIneligible(modelId);
+    if (ineligibility.ineligible) {
+      return {
+        admitted: false,
+        modelId,
+        computerId,
+        alreadyLoaded: false,
+        reasons: [ineligibility.reason ?? 'KNOWN_INELIGIBLE_MODEL'],
+        reason: ineligibility.reason ?? 'KNOWN_INELIGIBLE_MODEL',
+        classification: 'INSUFFICIENT',
+      };
+    }
+
+    const model = this.deps.models.get(modelId);
+    if (!model) {
+      return {
+        admitted: false,
+        modelId,
+        computerId,
+        alreadyLoaded: false,
+        reasons: [`Model '${modelId}' not found`],
+        reason: `Model '${modelId}' not found`,
+        classification: 'INSUFFICIENT',
+      };
+    }
+
+    if (model.local === false) {
+      return {
+        admitted: true,
+        modelId,
+        computerId,
+        alreadyLoaded: true,
+        reasons: [],
+        classification: 'SAFE',
+        allocatedContextTokens: options.requiredContext ?? model.contextMax ?? 32_768,
+      };
+    }
+
+    const instances = this.deps.models.instancesOf(modelId).filter(i =>
+      (!computerId || i.computerId === computerId) &&
+      (!options.runtimeId || i.runtimeId === options.runtimeId)
+    );
+    instances.sort((a, b) => Number(b.state === 'READY') - Number(a.state === 'READY') || a.id.localeCompare(b.id));
+    const instance = instances[0];
+    const targetComputerId = computerId ?? instance?.computerId;
+    const computer = targetComputerId ? this.deps.computers.get(targetComputerId) : undefined;
+    const runtime = instance ? this.deps.runtimes.get(instance.runtimeId) : undefined;
+
+    // Check if already loaded on computerId - do not double-charge resident memory!
+    const isAlreadyLoaded = Boolean(instance?.loaded === true);
+    if (isAlreadyLoaded) {
+      return {
+        admitted: true,
+        modelId,
+        computerId: targetComputerId,
+        alreadyLoaded: true,
+        reasons: [],
+        classification: 'SAFE',
+        allocatedContextTokens: instance?.contextTokens ?? options.requiredContext ?? model.contextMax ?? 32_768,
+        availableMemoryGB: computer?.load?.memoryAvailableGB,
+      };
+    }
+
+    const contextPlan = this.contextEstimator.planContextAllocation({
+      model,
+      requiredMinimumContext: options.requiredContext,
+      availableMemoryGB: computer?.load?.memoryAvailableGB,
+      alreadyLoaded: false,
+    });
+    const eligibility = this.hardwareEligibility.assessDeviceForModel({
+      model,
+      computer,
+      instance,
+      runtime: runtime ? { id: runtime.id, type: runtime.type, health: runtime.health } : undefined,
+      requiredKvCacheGB: contextPlan.kvCacheMemoryGB,
+      runtimeOverheadGB: contextPlan.runtimeOverheadGB,
+      alreadyLoaded: false,
+    });
+
+    const reasons: string[] = [];
+    if (!contextPlan.eligible) reasons.push(contextPlan.reason);
+    if (!eligibility.eligible) reasons.push(...eligibility.rejectionReasons);
+
+    const staticAssessment = this.assessModelSync(modelId, targetComputerId);
+    if (staticAssessment.classification === 'INSUFFICIENT' && !reasons.some(r => r.includes('memory') || r.includes('Memory') || r.includes('available'))) {
+      reasons.push(staticAssessment.message);
+    }
+
+    if (reasons.length > 0) {
+      const combinedReason = reasons.join('; ');
+      return {
+        admitted: false,
+        modelId,
+        computerId: targetComputerId,
+        alreadyLoaded: false,
+        reasons,
+        reason: combinedReason,
+        classification: 'INSUFFICIENT',
+        availableMemoryGB: computer?.load?.memoryAvailableGB,
+        requiredMemoryGB: contextPlan.totalRequiredMemoryGB,
+      };
+    }
+
+    return {
+      admitted: true,
+      modelId,
+      computerId: targetComputerId,
+      alreadyLoaded: false,
+      reasons: [],
+      classification: staticAssessment.classification === 'WARNING' ? 'WARNING' : 'SAFE',
+      allocatedContextTokens: contextPlan.allocatedContextTokens,
+      availableMemoryGB: computer?.load?.memoryAvailableGB,
+      requiredMemoryGB: contextPlan.totalRequiredMemoryGB,
     };
   }
 
@@ -1066,6 +1256,7 @@ export class ModelLifecycleService {
       }
 
       const effectiveContext = options.requiredContextTokens ?? model.contextMax ?? 32_768;
+      const deviceLabel = runtime?.name ?? runtimeId ?? 'Hosted API';
       options.onProgress?.(`Ready: ${modelId}`);
       this.emitEvent('MODEL_READY', modelId, { runtimeId, computerId: options.computerId });
 
@@ -1076,6 +1267,9 @@ export class ModelLifecycleService {
         runtimeId,
         effectiveContext,
         instance,
+        deviceLabel,
+        formattedReadiness: formatReadinessBlock(modelId, deviceLabel, effectiveContext, 'Ready'),
+        status: 'Ready',
       };
     }
 
@@ -1094,6 +1288,8 @@ export class ModelLifecycleService {
     const computerId = instance.computerId!;
     const runtimeId = instance.runtimeId;
     const requiredContext = options.requiredContextTokens ?? 0;
+    const computer = this.deps.computers.get(computerId);
+    const deviceLabel = computer?.name ?? computer?.id ?? computerId;
 
     // 4. Check if already READY / loaded with sufficient context
     const isLoadedAndReady = (instance.state === 'READY' || instance.state === 'LOADED') &&
@@ -1102,6 +1298,7 @@ export class ModelLifecycleService {
       (instance.contextTokens === undefined || instance.contextTokens >= requiredContext);
 
     if (isLoadedAndReady) {
+      const effectiveContext = instance.contextTokens ?? requiredContext;
       options.onProgress?.(`Ready: ${modelId}`);
       this.emitEvent('MODEL_READY', modelId, { computerId, runtimeId });
       return {
@@ -1109,8 +1306,11 @@ export class ModelLifecycleService {
         modelId,
         computerId,
         runtimeId,
-        effectiveContext: instance.contextTokens ?? requiredContext,
+        effectiveContext,
         instance,
+        deviceLabel,
+        formattedReadiness: formatReadinessBlock(modelId, deviceLabel, effectiveContext, 'Ready'),
+        status: 'Ready',
       };
     }
 
@@ -1128,32 +1328,21 @@ export class ModelLifecycleService {
         effectiveContext: plan.effectiveContext,
         instance,
         plan,
+        deviceLabel,
+        formattedReadiness: formatReadinessBlock(modelId, deviceLabel, plan.effectiveContext, 'Ready'),
+        status: 'Ready',
       };
     }
 
     // 6. Preflight hardware and memory eligibility checks
-    const computer = this.deps.computers.get(computerId);
-    const runtime = this.deps.runtimes.get(runtimeId);
-    const contextPlan = this.contextEstimator.planContextAllocation({
-      model,
-      requiredMinimumContext: options.requiredContextTokens,
-      availableMemoryGB: computer?.load?.memoryAvailableGB,
-      alreadyLoaded: false,
-    });
-    const eligibility = this.hardwareEligibility.assessDeviceForModel({
-      model,
-      computer,
-      instance,
-      runtime: runtime ? { id: runtime.id, type: runtime.type, health: runtime.health } : undefined,
-      requiredKvCacheGB: contextPlan.kvCacheMemoryGB,
-      runtimeOverheadGB: contextPlan.runtimeOverheadGB,
+    const admission = this.checkAdmission(modelId, computerId, {
+      requiredContext: options.requiredContextTokens,
+      runtimeId,
     });
 
-    if (!eligibility.eligible || !contextPlan.eligible) {
-      const reasons: string[] = [];
-      if (!contextPlan.eligible) reasons.push(contextPlan.reason);
-      if (!eligibility.eligible) reasons.push(...eligibility.rejectionReasons);
-      const combinedReason = reasons.join('; ');
+    if (!admission.admitted) {
+      const reasons = admission.reasons.length > 0 ? admission.reasons : [admission.reason ?? 'INSUFFICIENT_MEMORY'];
+      const combinedReason = admission.reason ?? reasons.join('; ');
       this.markIneligible(modelId, combinedReason);
       this.emitEvent('MODEL_ADMISSION_DENIED', modelId, {
         computerId,
@@ -1164,7 +1353,6 @@ export class ModelLifecycleService {
     }
 
     // 7. Emit progress callback & lifecycle event
-    const deviceLabel = computer?.name ?? computer?.id ?? computerId;
     options.onProgress?.(`Loading ${modelId} on ${deviceLabel}...`);
     this.emitEvent('MODEL_LOADING', modelId, {
       computerId,
@@ -1173,8 +1361,8 @@ export class ModelLifecycleService {
     });
 
     // 8. Execute load with timeout
-    const loadContext = (contextPlan.allocatedContextTokens && contextPlan.allocatedContextTokens > 0)
-      ? contextPlan.allocatedContextTokens
+    const loadContext = (admission.allocatedContextTokens && admission.allocatedContextTokens > 0)
+      ? admission.allocatedContextTokens
       : options.requiredContextTokens;
 
     const plan = await this.load(modelId, {
@@ -1193,7 +1381,186 @@ export class ModelLifecycleService {
       effectiveContext: plan.effectiveContext,
       instance,
       plan,
+      deviceLabel,
+      formattedReadiness: formatReadinessBlock(modelId, deviceLabel, plan.effectiveContext, 'Ready'),
+      status: 'Ready',
     };
+  }
+
+  /**
+   * Dedicated method to select and prepare a local model.
+   * Inspects model & local computer, reuses already loaded model immediately (0 adapter loads, reused: true),
+   * performs preflight memory admission check (never double-charging resident weights),
+   * and loads + verifies readiness when loadNow !== false.
+   */
+  async selectAndPrepareLocalModel(
+    modelId: string,
+    options: SelectAndPrepareOptions = {},
+  ): Promise<SelectAndPrepareLocalModelResult> {
+    const model = this.deps.models.get(modelId);
+    if (!model) {
+      const formattedReadiness = formatReadinessBlock(modelId, 'Unknown Device', 0, 'Failed');
+      return {
+        ok: false,
+        modelId,
+        deviceLabel: 'Unknown Device',
+        contextTokens: 0,
+        status: 'Failed',
+        reused: false,
+        error: `Model '${modelId}' is not registered`,
+        formattedReadiness,
+      };
+    }
+
+    const candidates = this.deps.models.instancesOf(modelId).filter(i => Boolean(i.computerId));
+    candidates.sort((a, b) => Number(b.state === 'READY') - Number(a.state === 'READY') || a.id.localeCompare(b.id));
+    const instance = candidates[0];
+
+    const computerId = instance?.computerId ?? this.deps.computers.list().find(c => c.local)?.id ?? this.deps.computers.list()[0]?.id;
+    const computer = computerId ? this.deps.computers.get(computerId) : undefined;
+    const deviceLabel = computer?.name ?? computer?.id ?? computerId ?? 'Local Device';
+
+    if (!instance && model.local !== false) {
+      const formattedReadiness = formatReadinessBlock(modelId, deviceLabel, 0, 'Failed');
+      return {
+        ok: false,
+        modelId,
+        computerId,
+        deviceLabel,
+        contextTokens: 0,
+        status: 'Failed',
+        reused: false,
+        error: `Model '${modelId}' is not installed on local computer`,
+        formattedReadiness,
+      };
+    }
+
+    // 1. Check if already loaded and READY with sufficient context -> fast path reuse
+    const requiredContext = options.requiredContext ?? 0;
+    const isAlreadyLoadedAndReady = Boolean(
+      instance?.loaded &&
+      (instance.state === 'READY' || instance.state === 'LOADED') &&
+      instance.health === 'healthy' &&
+      (instance.contextTokens === undefined || instance.contextTokens >= requiredContext)
+    );
+
+    if (isAlreadyLoadedAndReady) {
+      const contextTokens = instance!.contextTokens ?? options.requiredContext ?? model.contextMax ?? 32_768;
+      options.onProgress?.(`Ready: ${modelId}`);
+      this.emitEvent('MODEL_READY', modelId, { computerId, runtimeId: instance?.runtimeId });
+      const formattedReadiness = formatReadinessBlock(modelId, deviceLabel, contextTokens, 'Ready');
+      return {
+        ok: true,
+        modelId,
+        computerId,
+        deviceLabel,
+        contextTokens,
+        status: 'Ready',
+        reused: true,
+        formattedReadiness,
+      };
+    }
+
+    // 2. Preflight admission check
+    let admission = this.checkAdmission(modelId, computerId, {
+      requiredContext: options.requiredContext,
+      runtimeId: instance?.runtimeId,
+    });
+
+    if (!admission.admitted) {
+      // If admission failed, see if idle, non-pinned, non-active models can be safely unloaded
+      const loadedIdle = this.list().some(i =>
+        i.computerId === computerId &&
+        i.modelId !== modelId &&
+        i.loaded &&
+        !i.pinned
+      );
+      if (loadedIdle) {
+        await this.unloadIdleModels({
+          computerId,
+          pinnedModelIds: options.pinnedModelIds,
+          activeModelIds: options.activeModelIds,
+        });
+        admission = this.checkAdmission(modelId, computerId, {
+          requiredContext: options.requiredContext,
+          runtimeId: instance?.runtimeId,
+        });
+      }
+    }
+
+    if (!admission.admitted) {
+      const errorMsg = admission.reason ?? admission.reasons.join('; ') ?? 'Admission denied';
+      this.markIneligible(modelId, errorMsg);
+      const formattedReadiness = formatReadinessBlock(modelId, deviceLabel, 0, 'Failed');
+      return {
+        ok: false,
+        modelId,
+        computerId,
+        deviceLabel,
+        contextTokens: 0,
+        status: 'Failed',
+        reused: false,
+        error: errorMsg,
+        formattedReadiness,
+      };
+    }
+
+    // 3. If loadNow === false, model is eligible but caller asked not to load immediately
+    if (options.loadNow === false) {
+      const contextTokens = admission.allocatedContextTokens ?? options.requiredContext ?? model.contextMax ?? 32_768;
+      const formattedReadiness = formatReadinessBlock(modelId, deviceLabel, contextTokens, 'Installed (Can load)');
+      return {
+        ok: true,
+        modelId,
+        computerId,
+        deviceLabel,
+        contextTokens,
+        status: 'Installed (Can load)',
+        reused: false,
+        formattedReadiness,
+      };
+    }
+
+    // 4. Load and verify model readiness
+    try {
+      const readyResult = await this.ensureModelReadyForTask({
+        modelId,
+        computerId,
+        runtimeId: instance?.runtimeId,
+        requiredContextTokens: options.requiredContext,
+        timeoutMs: options.timeoutMs,
+        onProgress: options.onProgress,
+      });
+
+      const effectiveContext = readyResult.effectiveContext;
+      const resolvedDeviceLabel = readyResult.deviceLabel ?? deviceLabel;
+      const formattedReadiness = readyResult.formattedReadiness ?? formatReadinessBlock(modelId, resolvedDeviceLabel, effectiveContext, 'Ready');
+
+      return {
+        ok: true,
+        modelId,
+        computerId: readyResult.computerId ?? computerId,
+        deviceLabel: resolvedDeviceLabel,
+        contextTokens: effectiveContext,
+        status: 'Ready',
+        reused: readyResult.reused,
+        formattedReadiness,
+      };
+    } catch (err: any) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const formattedReadiness = formatReadinessBlock(modelId, deviceLabel, 0, 'Failed');
+      return {
+        ok: false,
+        modelId,
+        computerId,
+        deviceLabel,
+        contextTokens: 0,
+        status: 'Failed',
+        reused: false,
+        error: errorMsg,
+        formattedReadiness,
+      };
+    }
   }
 
   /**

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ModelLifecycleService } from '../src/services/modelLifecycleService.js';
+import { ModelLifecycleService, formatReadinessBlock } from '../src/services/modelLifecycleService.js';
 import { ModelRegistry } from '../src/services/modelRegistry.js';
 import { RuntimeRegistry } from '../src/services/runtimeRegistry.js';
 import { ComputerRegistry } from '../src/services/computerRegistry.js';
@@ -544,6 +544,149 @@ describe('ModelLoadingLifecycle Service Enhancement', () => {
       // No models needed to be unloaded
       expect(result.unloaded).toHaveLength(0);
       expect(f.localAdapter.unloadModel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('7. selectAndPrepareLocalModel and readiness details', () => {
+    it('reuses an already-loaded local model immediately (reused: true, 0 adapter loads) even when remaining host memory is smaller than weight size, returning exact 4-line formattedReadiness', async () => {
+      // Host has 64GB total, but only 0.1GB remaining free RAM!
+      const f = createFixture({ freeMemoryGB: 0.1, totalMemoryGB: 64 });
+      f.registerModel({
+        id: 'qwen-heavy-22gb',
+        parameters: '32B',
+        minSystemGB: 22,
+        loaded: true,
+        contextMax: 32768,
+      });
+
+      // Synchronous assessment & admission check do NOT double-charge resident memory
+      const assessment = f.service.assessModelSync('qwen-heavy-22gb', 'mac-studio');
+      expect(assessment.classification).toBe('SAFE');
+
+      const admission = f.service.checkAdmission('qwen-heavy-22gb', 'mac-studio');
+      expect(admission.admitted).toBe(true);
+      expect(admission.alreadyLoaded).toBe(true);
+      expect(admission.classification).toBe('SAFE');
+
+      const progressMessages: string[] = [];
+      const result = await f.service.selectAndPrepareLocalModel('qwen-heavy-22gb', {
+        onProgress: (m) => progressMessages.push(m),
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.reused).toBe(true);
+      expect(result.modelId).toBe('qwen-heavy-22gb');
+      expect(result.computerId).toBe('mac-studio');
+      expect(result.deviceLabel).toBe('Mac Studio M2');
+      expect(result.contextTokens).toBe(32768);
+      expect(result.status).toBe('Ready');
+      expect(f.localAdapter.loadModel).toHaveBeenCalledTimes(0);
+      expect(progressMessages).toContain('Ready: qwen-heavy-22gb');
+
+      // Verify exact 4-line runtime execution block
+      const lines = result.formattedReadiness.split('\n');
+      expect(lines).toHaveLength(4);
+      expect(lines[0]).toBe('Model: qwen-heavy-22gb');
+      expect(lines[1]).toBe('Device: Mac Studio M2');
+      expect(lines[2]).toBe('Context: 32768 tokens');
+      expect(lines[3]).toBe('Status: Ready');
+      expect(result.formattedReadiness).toBe(
+        formatReadinessBlock('qwen-heavy-22gb', 'Mac Studio M2', 32768, 'Ready'),
+      );
+    });
+
+    it('loads a compatible installed local model (reused: false), emits Loading ... -> Ready: ..., verifies readiness, and returns Status: Ready', async () => {
+      const f = createFixture({ freeMemoryGB: 64, totalMemoryGB: 128 });
+      f.registerModel({ id: 'gemma-12b', loaded: false, contextMax: 32768 });
+
+      const progressMessages: string[] = [];
+      const result = await f.service.selectAndPrepareLocalModel('gemma-12b', {
+        onProgress: (m) => progressMessages.push(m),
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.reused).toBe(false);
+      expect(result.modelId).toBe('gemma-12b');
+      expect(result.computerId).toBe('mac-studio');
+      expect(result.deviceLabel).toBe('Mac Studio M2');
+      expect(result.status).toBe('Ready');
+      expect(f.localAdapter.loadModel).toHaveBeenCalledTimes(1);
+      expect(f.localAdapter.inspectModel).toHaveBeenCalled();
+      expect(f.localAdapter.probeModel).toHaveBeenCalled();
+      expect(f.service.isModelReady('gemma-12b')).toBe(true);
+
+      // Verify progress emission sequence: Loading ... -> Ready: ...
+      expect(progressMessages.some((msg) => msg.startsWith('Loading gemma-12b on Mac Studio M2...'))).toBe(true);
+      expect(progressMessages).toContain('Ready: gemma-12b');
+
+      // Formatted 4-line block
+      const lines = result.formattedReadiness.split('\n');
+      expect(lines).toHaveLength(4);
+      expect(lines[0]).toBe('Model: gemma-12b');
+      expect(lines[1]).toBe('Device: Mac Studio M2');
+      expect(lines[2]).toContain('Context:');
+      expect(lines[3]).toBe('Status: Ready');
+    });
+
+    it('rejects an incompatible 22GB model on 0.1GB RAM before calling adapter loadModel, returning ok: false with a clear memory error', async () => {
+      const f = createFixture({ freeMemoryGB: 0.1, totalMemoryGB: 64 });
+      f.registerModel({ id: 'heavy-22gb-model', parameters: '32B', minSystemGB: 22, loaded: false });
+
+      const result = await f.service.selectAndPrepareLocalModel('heavy-22gb-model');
+
+      expect(result.ok).toBe(false);
+      expect(result.reused).toBe(false);
+      expect(result.status).toBe('Failed');
+      expect(result.error).toBeDefined();
+      expect(result.error?.toLowerCase()).toMatch(/memory|insufficient|required|tier|fit/);
+      expect(f.localAdapter.loadModel).toHaveBeenCalledTimes(0);
+
+      // Circuit breaker is tripped
+      expect(f.service.isKnownIneligible('heavy-22gb-model').ineligible).toBe(true);
+
+      // Formatted block reflects Failed status
+      const lines = result.formattedReadiness.split('\n');
+      expect(lines).toHaveLength(4);
+      expect(lines[0]).toBe('Model: heavy-22gb-model');
+      expect(lines[1]).toBe('Device: Mac Studio M2');
+      expect(lines[3]).toBe('Status: Failed');
+    });
+
+    it('supports loadNow: false for installed compatible models without loading into memory', async () => {
+      const f = createFixture({ freeMemoryGB: 64, totalMemoryGB: 128 });
+      f.registerModel({ id: 'phi-4-14b', loaded: false, contextMax: 16384 });
+
+      const result = await f.service.selectAndPrepareLocalModel('phi-4-14b', { loadNow: false });
+
+      expect(result.ok).toBe(true);
+      expect(result.reused).toBe(false);
+      expect(result.status).toBe('Installed (Can load)');
+      expect(result.contextTokens).toBeGreaterThan(0);
+      expect(f.localAdapter.loadModel).toHaveBeenCalledTimes(0);
+      expect(f.service.isModelReady('phi-4-14b')).toBe(false);
+
+      const lines = result.formattedReadiness.split('\n');
+      expect(lines).toHaveLength(4);
+      expect(lines[0]).toBe('Model: phi-4-14b');
+      expect(lines[3]).toBe('Status: Installed (Can load)');
+    });
+
+    it('ensures ensureModelReadyForTask also returns deviceLabel, status: Ready, and formattedReadiness', async () => {
+      const f = createFixture();
+      f.registerModel({ id: 'qwen-ready', loaded: true, contextMax: 32768 });
+
+      const readyRes = await f.service.ensureModelReadyForTask({
+        modelId: 'qwen-ready',
+        computerId: 'mac-studio',
+      });
+
+      expect(readyRes.deviceLabel).toBe('Mac Studio M2');
+      expect(readyRes.status).toBe('Ready');
+      expect(readyRes.formattedReadiness).toBeDefined();
+      expect(readyRes.formattedReadiness).toContain('Model: qwen-ready');
+      expect(readyRes.formattedReadiness).toContain('Device: Mac Studio M2');
+      expect(readyRes.formattedReadiness).toContain('Context: 32768 tokens');
+      expect(readyRes.formattedReadiness).toContain('Status: Ready');
     });
   });
 });
