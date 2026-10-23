@@ -1,11 +1,15 @@
 {
   "name": "@wazir/web",
-  "version": "0.1.28",
+  "version": "0.2.13",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "build": "true",
     "start": "node server.js"
   },
   "dependencies": {
     "@wazir/core": "*"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

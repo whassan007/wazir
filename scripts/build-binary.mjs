@@ -27,8 +27,10 @@ function run(cmd, args, opts = {}) {
   return res;
 }
 
-console.log('==> Configuring environment files and shell profiles...');
-run(process.execPath, [join(repoRoot, 'scripts', 'setup-env.mjs')]);
+if (process.env.WAZIR_SETUP_ENV === '1' || process.argv.includes('--setup-env')) {
+  console.log('==> Configuring environment files and shell profiles...');
+  run(process.execPath, [join(repoRoot, 'scripts', 'setup-env.mjs')]);
+}
 
 console.log('==> Building CLI bundle...');
 run(process.execPath, [join(repoRoot, 'scripts', 'bundle.mjs')]);

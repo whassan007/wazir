@@ -1,0 +1,145 @@
+# Phase Results Log
+
+## Phase 0 — Baseline and Architectural Reconnaissance
+- **Status**: **PASS**
+- **Canonical Branch**: `remediation/v0.2.13`
+- **Base Commit SHA**: `2846834280099ed22c29b2f8d058f80343c07320` (`v0.2.12` / `main`)
+- **Reconnaissance Agents**:
+  - `11220237-d201-4e1f-99be-08735b3f3b3d` (Explorer-1: Release, CI, Packaging, Updater & Mobile)
+  - `b89e0fbb-e4b9-41b0-a515-ff5289779636` (Explorer-2: Execution, Fast-Path, Streaming & CLI)
+  - `4e02e39e-360c-4ace-ae60-5d402d0d232c` (Explorer-3: Recovery, Distributed, Sandbox & Performance)
+- **Deliverables Created**:
+  - `docs/remediation/00-baseline.md`
+  - `docs/remediation/feature-parity-matrix.md`
+  - `docs/remediation/issues.csv` (20 tracked issues: `ISS-001` through `ISS-020` covering all P0, P1, and P2 items)
+  - `docs/remediation/agent-activity.md`
+  - `docs/remediation/phase-results.md`
+  - `docs/remediation/HANDOFF.md`
+- **Gate Decision**: **PASS** — All P0, P1, and P2 issues are inventoried with exact file paths, line numbers, commit SHAs, root causes, and reproduction steps, and the canonical baseline (`2846834280099ed22c29b2f8d058f80343c07320`) is verified and justified.
+
+---
+
+## Phase 1 — Release Reconciliation and CI Integrity (P0)
+- **Status**: **PASS**
+- **Integrated Commit SHA**: `1526970b601cbe3d81b197a353eb3f9ef18029b1`
+- **Worker Commits Integrated**:
+  - `0d3c0d2883c2605e7ab706b515636bfccda1f0e4` (Release Engineer 1A: `ISS-001` — Autonomous updater & `build-cli.mjs` restoration)
+  - `9bdf9bab46b22eb73200cd98285a2a637dc571b3` (Release Engineer 1B: `ISS-002`, `ISS-003` — CI Linux Tauri deps, `release.yml` exact commit SHA pinning, `release-integrity.mjs`)
+  - `78a5146899a4904bf66357a1db83dc756f66fc20` & `1526970b601cbe3d81b197a353eb3f9ef18029b1` (Release Engineer 1C + Verifier Remediation: `ISS-004`, `ISS-005` — Node `>= 22.13.0`, `AGPL-3.0-only`, 26 workspace version sync, DEB/RPM/Homebrew/Scoop/WinGet/Tauri parity, `packageParity.test.ts`)
+- **Verification Executed**:
+  - `npm run typecheck`: **PASS** (exit 0)
+  - `npm run build:cli`: **PASS** (exit 0, `bin/wa.js` 18.6 MB)
+  - `npx vitest run apps/cli/tests/updater.test.ts tests/release/packageParity.test.ts tests/release/release-integrity.test.mjs test/packaging/serverDistribution.test.ts test/packaging/packageManagers.test.ts`: **PASS** (5 test files, 70/70 tests passed)
+  - `node --test scripts/build-cli.test.mjs`: **PASS** (3/3 tests passed)
+  - `node scripts/release-integrity.mjs --stable`: **PASS** (`release metadata verified: v0.2.12`)
+  - `node scripts/update-package-managers.mjs --verify --version 0.2.12`: **PASS** (`All package manager manifests verified successfully.`)
+  - `node scripts/package-check.mjs --skip-build`: **PASS** (`15/15 checks passed`)
+- **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
+  - Initial audit at `eaf6816` caught missing `0.2.12` WinGet manifests, unupdated `AGPL-3.0-or-later` assertions in `test/packaging/packageManagers.test.ts`, `22.5.0` doctor check in `apps/cli/src/version.ts`, and `Dockerfile` license annotation.
+  - All 4 items were fixed in `1526970b601cbe3d81b197a353eb3f9ef18029b1` and re-audited: **PASS** (12/12 Phase 1 requirements verified).
+
+---
+
+## Phase 2 — Execution Correctness (P0)
+- **Status**: **PASS**
+- **Integrated Commit SHA**: `65eccd779bda29a093c628e448c9847d6db481c6`
+- **Worker Commits Integrated**:
+  - `62a1360cbeec63d063a5a11468f1b5e8878f5f0c` (Execution Engineer 2A: `ISS-007`, `ISS-008`, `ISS-011` — Terminal SSE/JSONL stream completion across NVIDIA, LM Studio, Ollama, OpenAI, Anthropic, Google; `evaluateExecution` shell/mutation/expected-files integrity; `EvaluationService` & `BenchmarkService` truthfulness)
+  - `71d2db5` (Execution Engineer 2B: `ISS-006`, `ISS-007` — `isConversationalFastPathRequest` mutation/path/tool guardrails before `type === 'chat'`, `ChatAgent`/`CodingAgent`/`StepAgent` terminal stream completion and partial timeout output rejection)
+  - `5f911b3` & `65eccd779bda29a093c628e448c9847d6db481c6` (Execution Engineer 2C + Orchestrator Integration: `ISS-006`, `ISS-008`, `ISS-009`, `ISS-010`, `ISS-011` — `planTask`/`executeTask`/`runSubagent` mutation & expected-file propagation, terminal `'failed'` persistence on preflight/plan/activation failures, `wa task status <id>` authoritative lookup, incremental token streaming, non-truncated results, and `AbortSignal` propagation)
+- **Verification Executed**:
+  - `npm run typecheck`: **PASS** (exit 0)
+  - `npm run build:cli`: **PASS** (exit 0, `bin/wa.js` 18.6 MB)
+  - `./node_modules/.bin/vitest run apps/cli/tests/phase2ExecutionCorrectness.test.ts apps/cli/tests/executeTask.e2e.test.ts apps/cli/tests/executionPerformance.test.ts packages/runtimes/nvidia/tests/terminalCompletion.test.ts packages/evaluation/tests/evaluationIntegrity.test.ts packages/agents/tests/fastPathAndCompletion.test.ts`: **PASS** (6 test files, 47/47 tests passed)
+  - `./node_modules/.bin/vitest run packages/agents/tests/`: **PASS** (52 test files, 304/304 tests passed)
+- **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
+  - Audited `65eccd779bda29a093c628e448c9847d6db481c6` across all 6 Phase 2 issues (`ISS-006`–`ISS-011`) and 4 regression test suites: **PASS**.
+
+---
+
+## Phase 3 — Durable Recovery and Distributed Correctness (P1)
+- **Status**: **PASS**
+- **Integrated Commit SHA**: `dbc76a45e2e42b512a2c59cf1c4b085830e64ec6`
+- **Worker Commits Integrated**:
+  - `6f3e490` (Distributed Systems Engineer 3A: `ISS-012`, `ISS-013` — `canTransitionJob` terminal immutability, `JobManager` startup store reconciliation, `JobManager.acquire()` unknown-outcome mutating tool protection via `findUnknownOutcomeToolCall`, and `reconcileLocalOutcomes` standalone execution recovery)
+  - `3fea2ca` (Distributed Systems Engineer 3B: `ISS-012`, `ISS-014` — `ExecutionEngine.orphan`/`pause`/`resume` transition guards, worker lease lifecycle & `StaleWorkerLeaseError` pre-mutation fencing, and `apps/api/src/server.ts` canonical `executionId` in-place `recordExecution` with `leaseEpoch` fencing and terminal immutability)
+  - `10631c8` (Distributed Systems Engineer 3C: `ISS-015` — `governedAdapter` pre-output error quota accounting via `budget.fail(requestId, { ambiguous: false })` and `ModelLifecycleService` `ResourceReservation` release when both `loadModel()` and `inspectModel()` fail)
+- **Verification Executed**:
+  - `npm run typecheck`: **PASS** (exit 0)
+  - `npm run build:cli`: **PASS** (exit 0, `bin/wa.js` 18.6 MB)
+  - `./node_modules/.bin/vitest run packages/core/tests/phase3RecoveryAndTransitions.test.ts packages/core/tests/phase3LeasesAndFencing.test.ts packages/core/tests/phase3ReservationsAndQuota.test.ts packages/core/tests/statusTransitions.test.ts packages/core/tests/jobOrchestrator.test.ts packages/core/tests/executionRecovery.test.ts packages/core/tests/recoveryManager.test.ts packages/core/tests/executionEngine.test.ts packages/core/tests/resources.test.ts packages/core/tests/modelLifecycleAdmission.test.ts apps/api/tests/durableDispatch.test.ts`: **PASS** (11 test files, 137/137 tests passed)
+- **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
+  - Audited `dbc76a45e2e42b512a2c59cf1c4b085830e64ec6` across all 4 Phase 3 issues (`ISS-012`–`ISS-015`) and all new/existing regression test suites: **PASS**.
+
+---
+
+## Phase 4 — Security, Mobile, and Automatic Updates (P1)
+- **Status**: **PASS**
+- **Integrated Commit SHA**: `8362ee493b90e33b4111c2907cd531946787ecd7`
+- **Worker Commits Integrated**:
+  - `4cdb07c` (Security & Platform Engineer 4A: `ISS-016` — Dynamic `CONTROLLER_VERSION`, real semver & protocol negotiation in `/api/v1/mobile/handshake` & `evaluateMobileCompatibility`, expired credential rejection in `rotateMobileDeviceCredential`, and `detectDefaultAdvertiseHttpsUrl` scheme fidelity)
+  - `56d30f2` (Security & Platform Engineer 4B: `ISS-017` — Durable `execution/*`, `job/*`, and `dispatch/*` active-work inspection, deferral, and `drainAndApply` polling in `UpdateService` and `UpdateScheduler`)
+  - `d871a96` & `8362ee4` (Security & Platform Engineer 4C + Orchestrator Integration: `ISS-018` — `effectiveIsolation` propagation across CLI/Fleet/API/TUI `policy.authorize()`, fail-closed `checkIsolationCompliance`, sandboxed `allowWorkspaceArtifactExecution`, `FleetTui.executeInlineShellCommand` policy/sandbox routing, `codeModeTool` `MUTATING`/`exclusive` classification, and `CodeModeService` VM realm prototype/constructor lockdown)
+- **Verification Executed**:
+  - `npm run typecheck`: **PASS** (exit 0)
+  - `npm run build:cli`: **PASS** (exit 0, `bin/wa.js` 18.7 MB)
+  - `./node_modules/.bin/vitest run packages/core/tests/phase4SandboxAndCodeMode.test.ts packages/core/tests/policyEngine.test.ts packages/core/tests/codeMode.test.ts packages/tools/tests/sandbox.test.ts apps/cli/tests/executeTask.e2e.test.ts apps/cli/tests/updater.test.ts apps/api/tests/phase4MobileCompatibility.test.ts apps/api/tests/mobileApi.test.ts apps/api/tests/multiSurface.test.ts`: **PASS** (9 test files, 130/130 tests passed)
+- **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
+  - Audited `8362ee493b90e33b4111c2907cd531946787ecd7` across all 3 Phase 4 issues (`ISS-016`–`ISS-018`) and all new/existing regression test suites: **PASS**.
+
+---
+
+## Phase 5 — Startup and Performance Optimization (P2)
+- **Status**: **PASS**
+- **Integrated Commit SHA**: `ef82dc37d808ebc97197af3bb98f2d075bd76a67`
+- **Worker Commits Integrated**:
+  - `efa5b9d` & `ef82dc3` (Performance Engineer: `ISS-019` — Fast native `JSON.parse` + lazy per-key `reviveDatesInPlace` in `JsonFileStore`; memoized `discoverCpu()` preferring `os.cpus()[0].model`; lazy `.ready` getters (`lazy: true`) on `JobManager`, `CheckpointService`, and `HandoffService`; `ExecutionEngine` `fastStartup` terminal-record fast path; pre-filtered & deferred `HealthEvidenceLog` hydration; `preDiscovered` runtime reuse, seeded `inventoryProbes`, and unloaded-model `inspectModel` skip in `ModelLifecycleService.discoverAndReconcile`; memoized `PATH` lookups in `apps/cli/src/engine.ts`)
+- **Before vs. After Benchmark Evidence (`createEngine({ fastStartup: true })`)**:
+  - **9.65 MB Disk Store (`wazir.json` with 264 executions / 1,048 keys)**:
+    - Before Phase 5: Cold = `256.56 ms`, Warm = `430.52 ms` (plus background `JobManager.reconcileStaleStatus` race throwing `JOB_REVISION_CONFLICT` across consecutive calls)
+    - After Phase 5: Cold = `186.61 ms` (`-27.3%`), Warm = `[92.79, 84.86, 83.86, 103.12] ms` (`p50 = 88.83 ms`, `min = 83.86 ms`, `-79.4%` vs warm baseline, `0` revision conflicts)
+  - **In-Memory Store (`WAZIR_IN_MEMORY=1`)**:
+    - Before Phase 5: `[206.86, 63.95, 59.97, 56.26, 55.11] ms` (Cold = `206.86 ms`, Warm p50 = `58.12 ms`)
+    - After Phase 5: `[166.13, 58.90, 54.00, 49.72, 49.93] ms` (Cold = `166.13 ms` (`-19.7%`), Warm p50 = `51.97 ms`, min = `49.72 ms`)
+  - **Store Parse + `execution/` Load (`264` records in `9.65 MB` `wazir.json`)**:
+    - Before Phase 5: `96.87 ms`
+    - After Phase 5: `43.32 ms` (`-55.3%`, `2.24x` speedup)
+- **Verification Executed**:
+  - `npm run build:cli`: **PASS** (exit 0, `bin/wa.js` 18.7 MB)
+  - `./node_modules/.bin/vitest run apps/cli/tests/executionPerformance.test.ts packages/shared/tests/store.test.ts packages/core/tests/phase3RecoveryAndTransitions.test.ts packages/core/tests/phase3LeasesAndFencing.test.ts packages/core/tests/phase3ReservationsAndQuota.test.ts apps/cli/tests/phase2ExecutionCorrectness.test.ts`: **PASS** (6 test files, 47/47 tests passed)
+- **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
+  - Audited `ef82dc37d808ebc97197af3bb98f2d075bd76a67` across all Phase 5 optimizations and regression tests (`ISS-019`): **PASS**.
+
+---
+
+## Phase 6 — Maintainability Modularization & TUI Truthfulness (P2)
+- **Status**: **PASS**
+- **Integrated Commit SHA**: `d401462c85acd0bc402fb6854cbd18e2786036fe`
+- **Worker Commits Integrated**:
+  - `797fbda` (Performance Engineer 6A: `ISS-020` — `apps/cli/src/tui/fleetTui.ts` reduced from `8,058` lines to `5,984` lines (`-25.7%`, `-2,074` lines) across `fleetTuiTypes.ts` (`474` lines), `fleetTuiWhy.ts` (`262` lines), and `fleetTuiPanes.ts` (`1,229` lines); removed fake fallback search/improvement/context data (`task-main`, `task-sub`, `exp-001`..`exp-003`, `apps/api/src/routes.ts`, `packages/core/src/scheduler.ts`, `packages/agents/src/stepAgent.ts`, `System prompt & guidelines (1.2k tok)`); added `apps/cli/tests/phase6Maintainability.test.ts`)
+  - `dc87e18` (Performance Engineer 6B: `ISS-020` — `apps/cli/src/commands.ts` reduced from `3,539` lines to `1,126` lines (`-68.2%`, `-2,413` lines) across `apps/cli/src/commands/{formatters,inventoryCommands,contextCommands,artifactAndVerifyCommands,providerCommands,improveAndCanaryCommands}.ts` with barrel re-exports)
+  - `0dab43e` (Performance Engineer 6C: `ISS-020` — `apps/api/src/mobile.ts` reduced from `3,225` lines to `1,595` lines (`-50.5%`, `-1,630` lines) across `apps/api/src/mobile/{typesAndCompatibility,eventHubAndApprovals,pairingService,routes}.ts` with barrel re-exports)
+- **Verification Executed**:
+  - `npm run typecheck`: **PASS** (exit 0)
+  - `npm run build:cli`: **PASS** (exit 0, `bin/wa.js` 18.7 MB)
+  - `./node_modules/.bin/vitest run apps/cli/tests/phase6Maintainability.test.ts apps/cli/tests/missionControlGates.test.ts apps/cli/tests/fleetTui.test.ts apps/cli/tests/phase2ExecutionCorrectness.test.ts apps/cli/tests/executionPerformance.test.ts apps/cli/tests/commands.test.ts apps/cli/tests/updater.test.ts apps/api/tests/phase4MobileCompatibility.test.ts apps/api/tests/mobileApi.test.ts apps/api/tests/multiSurface.test.ts`: **PASS** (10 test files, 182/182 tests passed)
+- **Independent Verifier Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`):
+  - Audited `d401462c85acd0bc402fb6854cbd18e2786036fe` across all Phase 6 modularization targets (`ISS-020`) and TUI truthfulness requirements: **PASS**.
+
+---
+
+## Phase 7 — Final Independent Qualification
+- **Status**: **PASS**
+- **Qualified Commit SHA**: `f133cf5e432063efc7987524ad7294b74d47d5d3`
+- **Qualification Summary**:
+  - **Issue Ledger**: All 20 tracked issues (`ISS-001` through `ISS-020` across P0, P1, and P2) are `CLOSED` with non-empty commit SHAs, test commands, test results, and evidence paths in `docs/remediation/issues.csv`.
+  - **Full Workspace Build**: `npm run build` (`tsc --build` across 24 workspaces + Rust/Tauri `wazir-desktop` release binary + standalone `bin/wa.js` bundle) — **PASS** (exit 0).
+  - **Typecheck**: `npm run typecheck` (`tsc --build --force`) — **PASS** (exit 0).
+  - **Release & Packaging Qualification**:
+    - `node scripts/release-integrity.mjs --stable` — **PASS** (`release metadata verified: v0.2.12`)
+    - `node scripts/update-package-managers.mjs --verify --version 0.2.12` — **PASS** (`All package manager manifests verified successfully.`)
+    - `node scripts/package-check.mjs --skip-build` — **PASS** (`15/15 checks passed`)
+  - **Full Repository Test Suite (`npx vitest run`)**:
+    - **Test Files**: `359 passed | 8 skipped (367)` (`0 failed`)
+    - **Tests**: `2,740 passed | 52 skipped (2,792)` (`0 failed`)
+  - **Independent Success Auditor Decision** (`0a4c5f0c-ff9a-41a2-aba9-99ac84eb0702`): **PASS**.

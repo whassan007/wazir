@@ -1,6 +1,7 @@
 {
   "name": "@wazir/cli",
-  "version": "0.2.12",
+  "version": "0.2.13",
+  "license": "AGPL-3.0-only",
   "description": "Wazir CLI — control plane command line",
   "main": "./dist/index.js",
   "bin": {
@@ -33,5 +34,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

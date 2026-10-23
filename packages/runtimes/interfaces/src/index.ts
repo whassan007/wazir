@@ -27,6 +27,10 @@ export interface DiscoveredModel {
   reasoning?: boolean;
   quantization?: string;
   weightBytes?: number;
+  /** Whether the model is currently resident in runtime memory, when reported by discovery. */
+  loaded?: boolean;
+  /** Effective context length of the loaded instance, when reported by discovery. */
+  effectiveContext?: number;
 }
 
 export interface RuntimeCapabilities {

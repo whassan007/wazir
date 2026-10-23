@@ -140,7 +140,7 @@ export function currentAttemptErrors(record: Pick<ExecutionRecord, 'errors'> & P
 
 export function evaluateExecution(
   record: Pick<ExecutionRecord, 'filesChanged' | 'checks' | 'errors'> &
-    Partial<Pick<ExecutionRecord, 'events' | 'workspaceState' | 'evidence' | 'acceptanceContract' | 'task' | 'result' | 'executionContract' | 'toolCalls'>>,
+    Partial<Pick<ExecutionRecord, 'execution' | 'events' | 'workspaceState' | 'evidence' | 'acceptanceContract' | 'task' | 'result' | 'executionContract' | 'toolCalls'>>,
   options: EvaluationOptions = {},
 ): EvaluationResult {
   const errors = currentAttemptErrors(record);
@@ -191,6 +191,12 @@ export function evaluateExecution(
 
   let success = true;
 
+  const executionStatus = record.execution?.status;
+  if (executionStatus === 'failed' || executionStatus === 'cancelled') {
+    success = false;
+    reasons.push(`execution status is ${executionStatus}`);
+  }
+
   // Ordinary shell failures are not necessarily build/test checks. A model's
   // done message cannot erase them. A successful retry of the same command can;
   // revision-aware checks retain their existing recovery rules below.
@@ -227,7 +233,13 @@ export function evaluateExecution(
     reasons.push(...contractResult.reasons);
   }
 
-if (options.mutationRequired === true && record.filesChanged.length === 0) {
+  const mutationRequired =
+    options.mutationRequired ??
+    (record.task as { mutationRequired?: boolean; requirements?: { mutationRequired?: boolean } } | undefined)?.mutationRequired ??
+    (record.task as { requirements?: { mutationRequired?: boolean } } | undefined)?.requirements?.mutationRequired ??
+    (record as { executionContract?: { mutationRequired?: boolean; requirements?: { mutationRequired?: boolean } } }).executionContract?.mutationRequired ??
+    (record as { executionContract?: { requirements?: { mutationRequired?: boolean } } }).executionContract?.requirements?.mutationRequired;
+  if (mutationRequired === true && record.filesChanged.length === 0) {
     success = false;
     reasons.push('mutation required: task requires code modification but no files changed');
   }

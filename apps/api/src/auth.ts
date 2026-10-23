@@ -201,9 +201,15 @@ export class ApiAuth {
   async rotateMobileDeviceCredential(refreshToken: string, ttlMs = DEFAULT_MOBILE_TOKEN_TTL_MS): Promise<IssuedMobileCredential | undefined> {
     if (!refreshToken) return undefined;
     const presentedRefreshHash = createHash('sha256').update(refreshToken).digest('hex');
+    const nowMs = this.now();
     let matched: MobileDeviceRecord | undefined;
     for (const record of this.mobileDevices.values()) {
-      if (!record.revoked && safeEqual(record.refreshTokenHash, presentedRefreshHash)) {
+      if (
+        !record.revoked &&
+        !record.revokedAt &&
+        (record.expiresAt === undefined || record.expiresAt > nowMs) &&
+        safeEqual(record.refreshTokenHash, presentedRefreshHash)
+      ) {
         matched = record;
       }
     }
@@ -213,7 +219,6 @@ export class ApiAuth {
     const nextRefreshToken = `mob_rt_${randomBytes(32).toString('hex')}`;
     const tokenHash = createHash('sha256').update(accessToken).digest('hex');
     const refreshTokenHash = createHash('sha256').update(nextRefreshToken).digest('hex');
-    const nowMs = this.now();
     const nowIso = new Date(nowMs).toISOString();
     const expiresAt = nowMs + ttlMs;
 

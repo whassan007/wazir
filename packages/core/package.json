@@ -1,6 +1,7 @@
 {
   "name": "@wazir/core",
-  "version": "0.2.12",
+  "version": "0.2.13",
+  "license": "AGPL-3.0-only",
   "description": "Core domain types and services for the Wazir meta-harness",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -8,7 +9,7 @@
     "build": "tsc --build"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.3.1",
     "@wazir/memory": "*",
     "@wazir/runtimes-interfaces": "*",
     "@wazir/shared": "*",
@@ -22,5 +23,8 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/turndown": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

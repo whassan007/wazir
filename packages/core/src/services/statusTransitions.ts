@@ -14,8 +14,8 @@ import type { ExecutionStatus } from '../types/execution.js';
  * Deliberately permissive elsewhere so existing recovery flows keep working:
  *  - same-state writes are always allowed (idempotent re-flushes);
  *  - a failed task/node/execution may be retried via an explicit non-running retry target;
- *  - a terminal job may be re-labelled with another terminal status, because
- *    finalizers reconcile cancel-vs-timeout-vs-failure races after the fact.
+ *  - completed and failed jobs are strictly terminal; only `cancelled -> failed` is
+ *    permitted so timeout-abort finalizers can reconcile after cancelling in-flight tasks.
  */
 export class InvalidStatusTransitionError extends Error {
   readonly code = 'INVALID_STATUS_TRANSITION';
@@ -56,7 +56,8 @@ export function isTerminalExecutionStatus(status: ExecutionStatus): boolean {
 
 export function canTransitionJob(from: JobStatus, to: JobStatus): boolean {
   if (from === to) return true;
-  if (TERMINAL_JOB.has(from)) return TERMINAL_JOB.has(to);
+  if (from === 'cancelled' && to === 'failed') return true;
+  if (TERMINAL_JOB.has(from)) return false;
   return true;
 }
 

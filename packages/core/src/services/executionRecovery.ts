@@ -1,4 +1,6 @@
 import type { ExecutionRecord, ToolCallCheckpoint } from '../types/execution.js';
+import type { ExecutionEngine } from './executionEngine.js';
+import { hashToolArguments } from './toolValidation.js';
 
 /**
  * Event-derived execution reconstruction and recovery planning.
@@ -171,4 +173,146 @@ export function planRecovery(state: ReconstructedExecutionState): RecoveryPlan {
   const readOnlyInterrupted = state.unresolvedToolCalls.length - blocking.length;
   if (readOnlyInterrupted > 0) reasons.push(`${readOnlyInterrupted} interrupted read-only call(s) have no side effect and may simply be repeated`);
   return { action: 'resume', reasons };
+}
+
+function signalZeroAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+export function extractToolCheckpoints(record: Pick<ExecutionRecord, 'execution' | 'events'>): ToolCallCheckpoint[] {
+  const executionId = record.execution.id;
+  const calls = new Map<string, ToolCallCheckpoint>();
+  for (const event of record.events ?? []) {
+    const data = event.data as Partial<ToolCallCheckpoint> & { tool?: string; ok?: boolean; policyEffect?: string; failureClass?: string } | undefined;
+    if (!data) continue;
+    if (event.type === 'tool.started') {
+      const callId = event.callId ?? data.callId ?? event.id;
+      calls.set(callId, {
+        executionId,
+        callId,
+        stepId: event.stepId ?? data.stepId ?? callId,
+        toolName: data.toolName ?? data.tool ?? 'unknown',
+        input: data.input,
+        argumentsHash: data.argumentsHash ?? hashToolArguments(data.input),
+        startedAt: data.startedAt instanceof Date ? data.startedAt : new Date(data.startedAt ?? event.timestamp),
+        state: 'STARTED',
+        workspaceRevision: data.workspaceRevision ?? event.workspaceRevision ?? 0,
+        sideEffectClass: data.sideEffectClass ?? 'NON_IDEMPOTENT_WRITE',
+        legacyCorrelation: data.legacyCorrelation ?? !event.callId,
+      });
+    } else if (event.type === 'tool.completed' || event.type === 'tool.unknownOutcome') {
+      const callId = event.callId ?? data.callId;
+      const call = callId
+        ? calls.get(callId)
+        : [...calls.values()].find(
+            (c) => c.state === 'STARTED' && c.toolName === data.tool && data.policyEffect !== 'deny' && data.policyEffect !== 'ask',
+          );
+      if (!call) continue;
+      call.state =
+        event.type === 'tool.unknownOutcome' || data.failureClass === 'TOOL_OUTCOME_UNKNOWN'
+          ? 'OUTCOME_UNKNOWN'
+          : data.ok
+            ? 'COMPLETED'
+            : 'FAILED';
+      if (event.type === 'tool.completed') {
+        call.finishedAt = event.timestamp instanceof Date ? event.timestamp : new Date(event.timestamp);
+      }
+    }
+  }
+  return [...calls.values()];
+}
+
+export function findUnknownOutcomeToolCall(
+  recordOrCheckpoints: Pick<ExecutionRecord, 'execution' | 'events'> | ToolCallCheckpoint[],
+  options?: { mutatingOnly?: boolean },
+): { tool: string; input: unknown; startedAt: Date; callId: string; sideEffectClass: ToolCallCheckpoint['sideEffectClass'] } | undefined {
+  const checkpoints = Array.isArray(recordOrCheckpoints)
+    ? recordOrCheckpoints
+    : extractToolCheckpoints(recordOrCheckpoints);
+  const mutatingOnly = options?.mutatingOnly ?? false;
+  const call = checkpoints.find(
+    (c) =>
+      (c.state === 'STARTED' || c.state === 'OUTCOME_UNKNOWN') &&
+      (!mutatingOnly || c.sideEffectClass !== 'READ_ONLY'),
+  );
+  return call
+    ? {
+        tool: call.toolName,
+        input: call.input,
+        startedAt: call.startedAt,
+        callId: call.callId,
+        sideEffectClass: call.sideEffectClass,
+      }
+    : undefined;
+}
+
+const ACTIVE_STANDALONE_STATUSES = new Set(['running', 'scheduled', 'waiting', 'assigned']);
+
+export async function reconcileLocalOutcomes(
+  executions: ExecutionEngine,
+  inspect?: (record: ExecutionRecord, call: ToolCallCheckpoint) => Promise<ToolOutcomeInspection>,
+  options?: { isProcessAlive?: (pid: number) => boolean; currentPid?: number },
+): Promise<Array<{ executionId: string; callId: string; outcome: string }>> {
+  const done: Array<{ executionId: string; callId: string; outcome: string }> = [];
+  const engineInternal = executions as unknown as {
+    owner?: { pid: number; host: string };
+    isProcessAlive?: (pid: number) => boolean;
+  };
+  const isAlive = options?.isProcessAlive ?? engineInternal.isProcessAlive ?? signalZeroAlive;
+  const currentPid = options?.currentPid ?? engineInternal.owner?.pid ?? process.pid;
+
+  for (const record of await executions.list()) {
+    if (executions.ownedByAnotherLiveProcess(record)) continue;
+    const executionId = record.execution.id;
+    const checkpoints = executions.toolCheckpoints(executionId);
+
+    if (inspect) {
+      for (const call of checkpoints) {
+        if (call.state !== 'STARTED' && call.state !== 'OUTCOME_UNKNOWN') continue;
+        const inspection = await inspect(record, call).catch(
+          (): ToolOutcomeInspection => ({ outcome: 'UNDETERMINED', evidence: 'inspection failed' }),
+        );
+        if (inspection.outcome === 'UNDETERMINED') continue;
+        await executions.reconcileToolCall(executionId, call.callId, {
+          ...inspection,
+          inspectedBy: 'startup-recovery',
+        });
+        done.push({ executionId, callId: call.callId, outcome: inspection.outcome });
+      }
+    }
+
+    const owner = record.execution.owner;
+    const ownerDeadOrMissing =
+      !owner ||
+      !isAlive(owner.pid) ||
+      (owner.pid !== currentPid && !executions.ownedByAnotherLiveProcess(record));
+
+    if (!record.execution.jobId && ACTIVE_STANDALONE_STATUSES.has(record.execution.status) && ownerDeadOrMissing) {
+      const previousStatus = record.execution.status;
+      const reason = owner
+        ? `OWNER_PROCESS_EXITED: owning process ${owner.pid} exited while standalone execution was ${previousStatus}`
+        : `OWNER_PROCESS_MISSING: standalone execution was left in '${previousStatus}' without a live owner`;
+      await executions.orphan(executionId, reason);
+      done.push({ executionId, callId: 'execution', outcome: 'ORPHANED' });
+    } else if (
+      !record.execution.jobId &&
+      checkpoints.length === 0 &&
+      record.execution.status === 'failed' &&
+      record.events.some(
+        (e) =>
+          (e.eventType ?? e.type) === 'execution.failed' &&
+          (e.data as { reason?: string } | undefined)?.reason === 'OWNER_PROCESS_EXITED',
+      )
+    ) {
+      done.push({ executionId, callId: 'execution', outcome: 'ORPHANED' });
+    }
+  }
+
+  return done;
 }

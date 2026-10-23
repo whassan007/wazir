@@ -1,6 +1,7 @@
 {
   "name": "@wazir/worker",
-  "version": "0.1.28",
+  "version": "0.2.13",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -9,5 +10,8 @@
   "dependencies": {
     "@wazir/core": "*",
     "@wazir/workers": "*"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

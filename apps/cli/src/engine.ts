@@ -153,9 +153,40 @@ function guessFamily(id: string, provider: string): ModelRecord['family'] {
 const DEFAULT_CONTEXT = 32_768;
 const execFileAsync = promisify(execFile);
 
+let cachedPathEnv: string | undefined;
+const onPathCache = new Map<string, boolean>();
+const resolvedExecutableCache = new Map<string, string | null>();
+let cachedAcpSpecs: Array<{ name: string; description: string; requires: string; command: string; args: string[]; initTimeoutMs?: number }> | undefined;
+
+function ensurePathCacheCurrent(): void {
+  const currentPath = process.env.PATH ?? '';
+  if (cachedPathEnv !== currentPath) {
+    cachedPathEnv = currentPath;
+    onPathCache.clear();
+    resolvedExecutableCache.clear();
+    cachedAcpSpecs = undefined;
+  }
+}
+
+function cachedResolveExecutable(bin: string): string | null {
+  ensurePathCacheCurrent();
+  if (resolvedExecutableCache.has(bin)) {
+    return resolvedExecutableCache.get(bin)!;
+  }
+  const resolved = resolveExecutable(bin);
+  resolvedExecutableCache.set(bin, resolved);
+  return resolved;
+}
+
 /** True when `bin` is an executable on PATH. A lookup, not a launch: startup stays fast. */
 function onPath(bin: string): boolean {
-  return isExecutableOnPath(bin);
+  ensurePathCacheCurrent();
+  if (onPathCache.has(bin)) {
+    return onPathCache.get(bin)!;
+  }
+  const found = isExecutableOnPath(bin);
+  onPathCache.set(bin, found);
+  return found;
 }
 
 /**
@@ -164,9 +195,11 @@ function onPath(bin: string): boolean {
  * through Zed's pinned adapters, launched with npx (the first run downloads them).
  */
 function acpAgentSpecs(): Array<{ name: string; description: string; requires: string; command: string; args: string[]; initTimeoutMs?: number }> {
+  ensurePathCacheCurrent();
+  if (cachedAcpSpecs) return cachedAcpSpecs;
   const npx = path.join(path.dirname(process.execPath), process.platform === 'win32' ? 'npx.cmd' : 'npx');
-  const npxCommand = resolveExecutable('npx') ?? (existsSync(npx) ? npx : 'npx');
-  return [
+  const npxCommand = cachedResolveExecutable('npx') ?? (existsSync(npx) ? npx : 'npx');
+  cachedAcpSpecs = [
     { name: 'claude-code', description: 'Claude Code over ACP (@zed-industries/claude-code-acp)', requires: 'claude',
       command: npxCommand, args: ['-y', '@zed-industries/claude-code-acp@0.16.2'], initTimeoutMs: 180_000 },
     { name: 'codex', description: 'OpenAI Codex over ACP (@zed-industries/codex-acp)', requires: 'codex',
@@ -174,10 +207,11 @@ function acpAgentSpecs(): Array<{ name: string; description: string; requires: s
     { name: 'qwen-code', description: 'Qwen Code over ACP', requires: 'qwen', command: 'qwen', args: ['--acp'] },
     { name: 'gemini', description: 'Gemini CLI over ACP', requires: 'gemini', command: 'gemini', args: ['--acp'] },
   ];
+  return cachedAcpSpecs;
 }
 
 async function detectOpenCode(): Promise<boolean> {
-  return Boolean(resolveExecutable('opencode'));
+  return Boolean(cachedResolveExecutable('opencode'));
 }
 
 export async function createEngine(options: EngineOptions = {}): Promise<RookEngine> {
@@ -202,6 +236,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const executions = new ExecutionEngine({
     provenanceManager: provenance,
     workspace: projectRoot,
+    fastStartup: options.fastStartup,
     persist: (record) => persistExecutionRecord(store, `execution/${record.execution.id}`, record),
     load: async () => {
       const entries = await store.list('execution/');
@@ -435,7 +470,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   });
 
   // ---- jobs & orchestration -----------------------------------------------
-  const jobManager = new JobManager({ store });
+  const jobManager = new JobManager({ store, lazy: Boolean(options.fastStartup) });
   if (!options.fastStartup) {
     await jobManager.ready;
   }
@@ -447,13 +482,16 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     worktreeManager: worktrees,
     provenanceManager: provenance,
     defaultWorkspaceRoot: projectRoot,
+    lazy: Boolean(options.fastStartup),
   });
   if (!options.fastStartup) {
     await checkpoints.ready;
   }
 
-  const handoffs = new HandoffService({ store, executions, checkpoints, projectRoot });
-  await handoffs.ready;
+  const handoffs = new HandoffService({ store, executions, checkpoints, projectRoot, lazy: Boolean(options.fastStartup) });
+  if (!options.fastStartup) {
+    await handoffs.ready;
+  }
 
   const orchestrator = new JobOrchestrator({
     scheduler,
@@ -485,6 +523,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const health = new HealthEvidenceLog();
   lifecycle.subscribe(event => health.onLifecycleEvent(event));
   lifecycle.subscribe(event => {
+    if (options.fastStartup && (event.type === 'MODEL_DISCOVERED' || event.type === 'MODEL_RECONCILED')) return;
     void appendAuditEvent({ type: 'model_lifecycle', details: { ...event } }).catch(() => undefined);
     const executionId = event.data?.executionId;
     if (typeof executionId === 'string') void executions.recordEvent(executionId, 'model.lifecycle', event).catch(() => undefined);
@@ -492,10 +531,15 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   await executions.ready;
   const executionHistory = await executions.list();
   reliability.hydrate(executionHistory);
-  health.hydrateFromExecutions(executionHistory);
+  if (options.fastStartup) {
+    health.deferHydration(() => health.hydrateFromExecutions(executionHistory));
+  } else {
+    health.hydrateFromExecutions(executionHistory);
+  }
   await lifecycle.discoverAndReconcile({
     verify: !options.readOnlyLifecycle,
     fastStartup: options.fastStartup ?? true,
+    preDiscovered: new Map(discovered.map((d) => [d.id, { health: d.health, models: d.models }])),
   });
   // After discovery so every model is registered; register() preserves the profiles.
   for (const [modelId, profiles] of measureModelPerformance(executionHistory)) models.setPerformance(modelId, profiles);
@@ -655,13 +699,20 @@ async function applyDiscoveredRuntime(
     });
 
     let loadedModelIds = new Set<string>();
-    try {
-      if (discoveredRuntime.adapter?.getLoadedModels) {
-        const loaded = await discoveredRuntime.adapter.getLoadedModels();
-        loadedModelIds = new Set(loaded);
+    const hasLoadedFlagOnAll =
+      discoveredRuntime.models.length === 0 ||
+      discoveredRuntime.models.every((m) => typeof m.loaded === 'boolean');
+    if (hasLoadedFlagOnAll) {
+      loadedModelIds = new Set(discoveredRuntime.models.filter((m) => m.loaded).map((m) => m.id));
+    } else {
+      try {
+        if (discoveredRuntime.adapter?.getLoadedModels) {
+          const loaded = await discoveredRuntime.adapter.getLoadedModels();
+          loadedModelIds = new Set(loaded);
+        }
+      } catch {
+        // Best effort query for resident models
       }
-    } catch {
-      // Best effort query for resident models
     }
 
     for (const discoveredModel of discoveredRuntime.models) {

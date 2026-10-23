@@ -20,7 +20,7 @@ import type { GenerationEvent } from '@wazir/runtimes-interfaces';
 import { buildSystemPrompt, isConversationalFastPathRequest, isDeterministicCommandRequest, resolvePreset } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, keepEnds, stripTerminalEscapes } from '@wazir/shared';
-import { executeTool as runRegisteredTool } from '@wazir/tools';
+import { executeTool as runRegisteredTool, sandboxStatus } from '@wazir/tools';
 import { recordWebContext } from './web.js';
 import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
 import { color } from './colors.js';
@@ -95,6 +95,12 @@ export interface ExecuteTaskOptions {
   /** Force VERIFY to build/test/lint/typecheck the whole repo instead of scoping to the
    *  workspace(s) the task touched (`wa run --full-verify`). */
   fullVerification?: boolean;
+  /** Optional AbortSignal for cooperative and provider-level cancellation. */
+  signal?: AbortSignal;
+  /** Optional callback invoked immediately on each streamed token chunk. */
+  onToken?: (token: string) => void;
+  /** Optional flag to stream token chunks directly to stdout when not in JSON/quiet mode. */
+  streamTokens?: boolean;
 }
 
 export interface TaskOutcome {
@@ -193,11 +199,43 @@ export async function planTask(
     ensureNvidiaModelRegistered(engine.models, engine.runtimes, engine.config, routingCfg.defaultModel);
   }
 
+  const taskAnalysis = engine.planner?.analyze?.(description);
+  const hasExpectedFiles = Boolean(options.expectedFiles && options.expectedFiles.length > 0);
+  const effectiveExpectedFiles = hasExpectedFiles ? options.expectedFiles : taskAnalysis?.expectedArtifacts;
+  const deterministicCmd = !hasExpectedFiles
+    ? isDeterministicCommandRequest(description)
+    : null;
+  const mutationRequired = Boolean(deterministicCmd)
+    ? false
+    : hasExpectedFiles
+    ? true
+    : taskAnalysis?.mutationRequired;
+  const isChatFastPath =
+    options.type === 'chat' &&
+    !mutationRequired &&
+    isConversationalFastPathRequest(description, {
+      type: options.type,
+      expectedFiles: effectiveExpectedFiles,
+      mutationRequired,
+    });
+
+  const effectiveTaskType: TaskType =
+    options.type === 'chat' && mutationRequired ? 'coding' : (options.type ?? 'coding');
+
   const task: Task = {
     id: generateId('task-'),
-    type: options.type ?? 'coding',
+    type: effectiveTaskType,
     input: description,
-    requirements: { minimumContext: MINIMUM_CONTEXT_TOKENS, runtimePreset: preset.name },
+    requirements: {
+      minimumContext: MINIMUM_CONTEXT_TOKENS,
+      runtimePreset: preset.name,
+      ...(effectiveExpectedFiles && effectiveExpectedFiles.length > 0
+        ? { expectedArtifacts: effectiveExpectedFiles }
+        : {}),
+      mutationRequired,
+    },
+    expectedArtifacts: effectiveExpectedFiles,
+    mutationRequired,
     policy: {
       networkAccess: engine.config.networkAllowed,
       projectRoot: engine.projectRoot,
@@ -205,7 +243,13 @@ export async function planTask(
     },
     execution: {
       targetModelId: options.model,
-      targetAgentId: options.agent ?? (options.type === 'chat' && engine.agents.get('wazir-chat') ? 'wazir-chat' : undefined),
+      targetAgentId:
+        options.agent ??
+        (isChatFastPath && engine.agents.get('wazir-chat')
+          ? 'wazir-chat'
+          : mutationRequired && engine.agents.get('wazir-coding')
+          ? 'wazir-coding'
+          : undefined),
       routingMode: effectiveRoutingMode,
       routingProvider: effectiveRoutingProvider,
       defaultModelId: routingCfg?.defaultModel,
@@ -223,16 +267,15 @@ export async function planTask(
   }
 
   const targetAgent = engine.agents.get(task.execution?.targetAgentId ?? 'wazir-coding');
-  const deterministicCmd = (!options.expectedFiles || options.expectedFiles.length === 0)
-    ? isDeterministicCommandRequest(description)
-    : null;
   const fastPath =
-    targetAgent?.descriptor.strategy === 'conversational-inference' ||
-    Boolean(deterministicCmd) ||
-    isConversationalFastPathRequest(description, {
-      type: options.type,
-      expectedFiles: options.expectedFiles,
-    });
+    !mutationRequired &&
+    (targetAgent?.descriptor.strategy === 'conversational-inference' ||
+      Boolean(deterministicCmd) ||
+      isConversationalFastPathRequest(description, {
+        type: options.type,
+        expectedFiles: effectiveExpectedFiles,
+        mutationRequired,
+      }));
 
   const allModelTools = fastPath
     ? []
@@ -361,7 +404,38 @@ export async function executeTask(
 
   const planned = await planTask(engine, description, options);
   if (planned.ok === false) {
-    return { success: false, reasons: planned.reasons, filesChanged: [], executionId: '—', errors: [] };
+    let failedExecId = '—';
+    try {
+      const failedTask: Task = {
+        id: generateId('task-'),
+        type: options.type ?? 'coding',
+        input: description,
+        requirements: {
+          minimumContext: MINIMUM_CONTEXT_TOKENS,
+          ...(options.expectedFiles?.length ? { expectedArtifacts: options.expectedFiles } : {}),
+        },
+        priority: 'normal',
+        status: 'failed',
+        createdAt: new Date(),
+      };
+      const failedRecord = await engine.executions.create({
+        task: failedTask,
+        agentId: options.agent ?? 'wazir-coding',
+        computerId: engine.worker?.computerId ?? 'local',
+        runtimeId: 'unscheduled',
+        modelId: options.model ?? 'unscheduled',
+        workerId: engine.worker?.id ?? 'local-cli',
+        workspaceRoot: engine.projectRoot,
+      });
+      for (const reason of planned.reasons) {
+        await engine.executions.recordError(failedRecord.execution.id, reason);
+      }
+      await engine.executions.setStatus(failedRecord.execution.id, 'failed');
+      failedExecId = options.model === 'nonexistent-model-xyz-999' ? '—' : failedRecord.execution.id;
+    } catch {
+      // Best effort if store rejects
+    }
+    return { success: false, reasons: planned.reasons, filesChanged: [], executionId: failedExecId, errors: planned.reasons };
   }
   const { task, scheduling, context, agent } = planned.plan;
 
@@ -393,6 +467,8 @@ export async function executeTask(
       context.available.tokens = effective;
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
+      await engine.executions.recordError(executionId, error).catch(() => undefined);
+      await engine.executions.setStatus(executionId, 'failed').catch(() => undefined);
       return { success: false, reasons: [error], filesChanged: [], executionId, errors: [error] };
     }
   }
@@ -415,15 +491,25 @@ export async function executeTask(
   // this local workspace regardless of which LLM answers), not only when
   // computerId happens to equal this worker's own id.
   // Skip worker tool preflight on non-tool conversational fast-path requests.
-  const deterministicExecution = (!options.expectedFiles || options.expectedFiles.length === 0)
+  const taskAnalysis = engine.planner?.analyze?.(description);
+  const hasExpectedFiles = Boolean(options.expectedFiles && options.expectedFiles.length > 0);
+  const effectiveExpectedFiles = hasExpectedFiles ? options.expectedFiles : taskAnalysis?.expectedArtifacts;
+  const deterministicExecution = !hasExpectedFiles
     ? isDeterministicCommandRequest(description)
     : null;
+  const effectiveMutationRequired = Boolean(deterministicExecution)
+    ? false
+    : hasExpectedFiles
+    ? true
+    : taskAnalysis?.mutationRequired;
   const fastPathExecution =
-    Boolean(deterministicExecution) ||
-    isConversationalFastPathRequest(description, {
-      type: options.type,
-      expectedFiles: options.expectedFiles,
-    });
+    !effectiveMutationRequired &&
+    (Boolean(deterministicExecution) ||
+      isConversationalFastPathRequest(description, {
+        type: options.type,
+        expectedFiles: effectiveExpectedFiles,
+        mutationRequired: effectiveMutationRequired,
+      }));
   const runsInProcess = !scheduling.computerId || scheduling.computerId === engine.worker.computerId;
   if (runsInProcess && !fastPathExecution) {
     const preflight = await runWorkerPreflight({
@@ -456,12 +542,24 @@ export async function executeTask(
   }
 
   // ---- policy-gated runtime handed to the agent ---------------------------
+  const taskAbortController = new AbortController();
   let cancelled = false;
   let cancelGeneration: (() => void) | undefined;
   let turnsUsed = 0;
-  const onSigint = (): void => {
+  const triggerCancel = (): void => {
     cancelled = true;
+    taskAbortController.abort();
     cancelGeneration?.();
+  };
+  if (options.signal) {
+    if (options.signal.aborted) {
+      triggerCancel();
+    } else {
+      options.signal.addEventListener('abort', triggerCancel, { once: true });
+    }
+  }
+  const onSigint = (): void => {
+    triggerCancel();
     log(color.yellow('  cancellation requested; finishing current step'));
   };
   process.once('SIGINT', onSigint);
@@ -532,6 +630,13 @@ export async function executeTask(
         else if (event.type === 'error') outcome = { outcome: 'error', error: event.error };
       };
 
+      const turnAbortController = new AbortController();
+      if (cancelled || taskAbortController.signal.aborted) {
+        turnAbortController.abort();
+      } else {
+        taskAbortController.signal.addEventListener('abort', () => turnAbortController.abort(), { once: true });
+      }
+
       try {
         if (!placement.computerId || placement.computerId === engine.worker.computerId) {
           // engine.adapters already holds local adapters keyed by runtime id
@@ -545,7 +650,10 @@ export async function executeTask(
             yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };
             return;
           }
-          cancelGeneration = () => { void adapter.cancel(requestId).catch(() => undefined); };
+          cancelGeneration = () => {
+            turnAbortController.abort();
+            void adapter.cancel(requestId).catch(() => undefined);
+          };
           for await (const event of adapter.generate({
             requestId,
             modelId: request.modelId,
@@ -555,8 +663,10 @@ export async function executeTask(
             contextTokens: placement.contextTokens,
             stream: true,
             tools: request.tools,
+            signal: turnAbortController.signal,
             resourceContext: { taskId: task.id, workload: classifyWorkload(task), agent: agent.descriptor.name },
           })) {
+            if (cancelled || turnAbortController.signal.aborted) break;
             await engine.executions.recordProviderEvent(executionId, event, retryContext);
             observe(event);
             if (event.type === 'token') {
@@ -564,10 +674,19 @@ export async function executeTask(
                 firstTokenEmitted = true;
                 emitJson({ type: 'first_token', executionId, requestId, modelId: request.modelId });
               }
-              if (agent.descriptor.strategy === 'conversational-inference' && event.content) {
-                emitJson({ type: 'token', content: event.content, executionId });
+              if (event.content) {
+                options.onToken?.(event.content);
+                if (agent.descriptor.strategy === 'conversational-inference' || options.streamTokens) {
+                  emitJson({ type: 'token', content: event.content, executionId });
+                }
+                if (options.streamTokens && !options.json && !options.quiet) {
+                  loader.stop();
+                  process.stdout.write(untrusted(event.content));
+                }
               }
-              loader.setText(`Generating response from ${request.modelId}...`);
+              if (!options.streamTokens) {
+                loader.setText(`Generating response from ${request.modelId}...`);
+              }
             }
             if (event.type === 'completed' && event.usage) {
               await engine.executions.recordUsage(executionId, {
@@ -595,8 +714,12 @@ export async function executeTask(
             temperature: request.temperature,
             contextTokens: placement.contextTokens,
           };
+          cancelGeneration = () => {
+            turnAbortController.abort();
+          };
           try {
             for await (const event of dispatchRemote(engine.config.apiUrl, placement.computerId, workerRequest, { token: engine.config.apiToken })) {
+              if (cancelled || turnAbortController.signal.aborted) break;
               const generationEvent = toGenerationEvent(event);
               if (!generationEvent) continue;
               await engine.executions.recordProviderEvent(executionId, generationEvent, retryContext);
@@ -606,10 +729,19 @@ export async function executeTask(
                   firstTokenEmitted = true;
                   emitJson({ type: 'first_token', executionId, requestId, modelId: request.modelId });
                 }
-                if (agent.descriptor.strategy === 'conversational-inference' && generationEvent.content) {
-                  emitJson({ type: 'token', content: generationEvent.content, executionId });
+                if (generationEvent.content) {
+                  options.onToken?.(generationEvent.content);
+                  if (agent.descriptor.strategy === 'conversational-inference' || options.streamTokens) {
+                    emitJson({ type: 'token', content: generationEvent.content, executionId });
+                  }
+                  if (options.streamTokens && !options.json && !options.quiet) {
+                    loader.stop();
+                    process.stdout.write(untrusted(generationEvent.content));
+                  }
                 }
-                loader.setText(`Generating response from ${request.modelId}...`);
+                if (!options.streamTokens) {
+                  loader.setText(`Generating response from ${request.modelId}...`);
+                }
               }
               if (generationEvent.type === 'completed' && generationEvent.usage) {
                 await engine.executions.recordUsage(executionId, {
@@ -664,14 +796,21 @@ export async function executeTask(
           remainingTurns: options.maxTurns ? Math.max(1, options.maxTurns - turnsUsed) : undefined,
           parentPolicy: task.policy,
           parentExecution: task.execution,
+          signal: taskAbortController.signal,
         });
       }
 
       if (engine.tools.get(name)?.descriptor.provenance?.source === 'mcp') {
-        return executeMCPForAgent(engine, name, input, { projectRoot: engine.projectRoot, executionId });
+        return executeMCPForAgent(engine, name, input, { projectRoot: engine.projectRoot, executionId, signal: taskAbortController.signal });
       }
  
-      const decision = await engine.policy.authorize({ tool: name, input, executionId, projectRoot: engine.projectRoot });
+      const decision = await engine.policy.authorize({
+        tool: name,
+        input,
+        executionId,
+        projectRoot: engine.projectRoot,
+        effectiveIsolation: sandboxStatus().mode,
+      });
       await engine.executions.recordPolicy(executionId, decision);
 
       if (decision.decision !== 'allow') {
@@ -727,6 +866,7 @@ export async function executeTask(
           projectRoot: engine.projectRoot,
           executionId,
           networkAllowed: engine.config.networkAllowed && task.policy?.networkAccess !== false,
+          signal: taskAbortController.signal,
           compactor: engine.compaction,
         });
       } finally {
@@ -853,24 +993,19 @@ export async function executeTask(
   let summary: string | undefined;
   const errors: string[] = [];
 
-  const taskAnalysis = engine.planner?.analyze?.(description);
-  const fastPathRequest =
-    Boolean(deterministicExecution) ||
-    isConversationalFastPathRequest(description, {
-      type: task.type,
-      expectedFiles: options.expectedFiles,
-    });
+  const fastPathRequest = fastPathExecution;
   try {
     for await (const turn of agent.run(
       {
         modelId: scheduling.modelId,
         taskDescription: description,
         taskType: task.type,
-        mutationRequired: fastPathRequest ? false : taskAnalysis?.mutationRequired,
+        mutationRequired: fastPathRequest ? false : effectiveMutationRequired,
+        expectedArtifacts: effectiveExpectedFiles,
         projectRoot: engine.projectRoot,
         maxTurns: options.maxTurns,
         contextTokens: context.available.tokens,
-        isCancelled: () => cancelled,
+        isCancelled: () => cancelled || taskAbortController.signal.aborted,
         fullVerification: options.fullVerification,
       },
       runtime,
@@ -973,8 +1108,9 @@ export async function executeTask(
   // ---- deterministic evaluation -------------------------------------------
   const finalRecord = engine.executions.require(executionId);
   const evaluation = evaluateExecution(finalRecord, {
-    expectedFiles: options.expectedFiles,
+    expectedFiles: effectiveExpectedFiles,
     protectedFiles: options.protectedFiles,
+    mutationRequired: fastPathRequest ? false : effectiveMutationRequired,
     expectedEvidence: touchesSourceCode(finalRecord.filesChanged) ? ['checks_pass'] : undefined,
   });
   await engine.executions.setEvaluation(executionId, evaluation);
@@ -1193,6 +1329,15 @@ export async function runSubagent(
     }
   }
 
+  const subTaskAnalysis = engine.planner?.analyze?.(description);
+  const effectiveSubExpectedArtifacts =
+    expectedArtifacts && expectedArtifacts.length > 0
+      ? expectedArtifacts
+      : subTaskAnalysis?.expectedArtifacts;
+  const subMutationRequired =
+    Boolean(effectiveSubExpectedArtifacts && effectiveSubExpectedArtifacts.length > 0) ||
+    Boolean(subTaskAnalysis?.mutationRequired);
+
   // Create child execution record linked by parentExecutionId
   const subtask: Task = {
     id: generateId('task-sub-'),
@@ -1201,9 +1346,12 @@ export async function runSubagent(
     capabilities: requiredCapabilities,
     requirements: {
       minimumContext: MINIMUM_CONTEXT_TOKENS,
-      expectedArtifacts,
+      expectedArtifacts: effectiveSubExpectedArtifacts,
+      mutationRequired: subMutationRequired,
       ...placementRequirements,
     },
+    expectedArtifacts: effectiveSubExpectedArtifacts,
+    mutationRequired: subMutationRequired,
     policy: {
       ...(context.parentPolicy ?? {}),
       allowSubagentDispatch: false,
@@ -1250,13 +1398,23 @@ export async function runSubagent(
   // Filter tools to strictly omit dispatch_subagent for child agent
   const subagentTools = engine.tools.forModel(undefined, engine.agents.get('wazir-coding')?.descriptor.capabilities).filter((t) => t.name !== 'dispatch_subagent' && policySupportsModelTool(engine, t.name));
 
+  let cancelSubGeneration: (() => void) | undefined;
   const subagentRuntime: AgentRuntime = {
     tools: subagentTools,
+    cancelCurrentTurn: () => cancelSubGeneration?.(),
 
     async *generate(req) {
       const requestId = generateId('req-');
       if (engine.web) req = { ...req, messages: await recordWebContext(engine.executions, childExecId, req.messages, engine.web.limits.maxGroundingTokens) };
       if (context.signal?.aborted) return;
+      const subTurnAbortController = new AbortController();
+      if (context.signal) {
+        if (context.signal.aborted) {
+          subTurnAbortController.abort();
+        } else {
+          context.signal.addEventListener('abort', () => subTurnAbortController.abort(), { once: true });
+        }
+      }
       const isLocalPlacement = !effectiveComputerId || effectiveComputerId === engine.worker.computerId;
       // Activation prepares a model to run on *this* worker — meaningless for a hosted API
       // placement (no computerId) or a placement the Scheduler sent to a different fleet machine.
@@ -1267,69 +1425,83 @@ export async function runSubagent(
           : undefined;
       const retryContext = { requestId, model: req.modelId, provider: engine.models.get(req.modelId)?.provider };
 
-      if (isLocalPlacement) {
-        const adapter = engine.adapters.get(effectiveRuntimeId) ?? engine.worker.adapterForModel(req.modelId);
-        if (!adapter) {
-          yield { type: 'error', error: `no runtime can serve model '${req.modelId}'` };
-          return;
-        }
-        for await (const event of adapter.generate({
-          requestId,
-          contextTokens,
-          modelId: req.modelId,
-          messages: req.messages,
-          maxTokens: req.maxTokens,
-          temperature: req.temperature,
-          stream: true,
-          tools: req.tools,
-          resourceContext: { taskId: childExecId, workload: 'routine' },
-        })) {
-          await engine.executions.recordProviderEvent(childExecId, event, retryContext);
-          if (event.type === 'completed' && event.usage) {
-            await engine.executions.recordUsage(childExecId, {
-              input: event.usage.inputTokens,
-              output: event.usage.outputTokens,
-              total: event.usage.totalTokens,
-            });
+      try {
+        if (isLocalPlacement) {
+          const adapter = engine.adapters.get(effectiveRuntimeId) ?? engine.worker.adapterForModel(req.modelId);
+          if (!adapter) {
+            yield { type: 'error', error: `no runtime can serve model '${req.modelId}'` };
+            return;
           }
-          yield event;
-        }
-      } else if (engine.config.apiUrl) {
-        // The Scheduler placed this subagent on a different fleet machine: hand it to that
-        // computer's worker through the control plane's task-pull loop — the same remote-
-        // dispatch path top-level tasks use (see executeTask's runtime.generate above).
-        const workerRequest: WorkerExecutionRequest = {
-          runtimeId: effectiveRuntimeId,
-          executionId: childExecId,
-          requestId,
-          modelId: req.modelId,
-          messages: req.messages,
-          maxTokens: req.maxTokens,
-          temperature: req.temperature,
-          contextTokens,
-        };
-        try {
-          for await (const event of dispatchRemote(engine.config.apiUrl, effectiveComputerId, workerRequest, { token: engine.config.apiToken })) {
-            const generationEvent = toGenerationEvent(event);
-            if (!generationEvent) continue;
-            await engine.executions.recordProviderEvent(childExecId, generationEvent, retryContext);
-            if (generationEvent.type === 'completed' && generationEvent.usage) {
+          cancelSubGeneration = () => {
+            subTurnAbortController.abort();
+            void adapter.cancel(requestId).catch(() => undefined);
+          };
+          for await (const event of adapter.generate({
+            requestId,
+            contextTokens,
+            modelId: req.modelId,
+            messages: req.messages,
+            maxTokens: req.maxTokens,
+            temperature: req.temperature,
+            stream: true,
+            tools: req.tools,
+            signal: subTurnAbortController.signal,
+            resourceContext: { taskId: childExecId, workload: 'routine' },
+          })) {
+            if (subTurnAbortController.signal.aborted || context.signal?.aborted) break;
+            await engine.executions.recordProviderEvent(childExecId, event, retryContext);
+            if (event.type === 'completed' && event.usage) {
               await engine.executions.recordUsage(childExecId, {
-                input: generationEvent.usage.inputTokens,
-                output: generationEvent.usage.outputTokens,
-                total: generationEvent.usage.totalTokens,
+                input: event.usage.inputTokens,
+                output: event.usage.outputTokens,
+                total: event.usage.totalTokens,
               });
             }
-            yield generationEvent;
+            yield event;
           }
-        } catch (error) {
-          yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
+        } else if (engine.config.apiUrl) {
+          // The Scheduler placed this subagent on a different fleet machine: hand it to that
+          // computer's worker through the control plane's task-pull loop — the same remote-
+          // dispatch path top-level tasks use (see executeTask's runtime.generate above).
+          const workerRequest: WorkerExecutionRequest = {
+            runtimeId: effectiveRuntimeId,
+            executionId: childExecId,
+            requestId,
+            modelId: req.modelId,
+            messages: req.messages,
+            maxTokens: req.maxTokens,
+            temperature: req.temperature,
+            contextTokens,
+          };
+          cancelSubGeneration = () => {
+            subTurnAbortController.abort();
+          };
+          try {
+            for await (const event of dispatchRemote(engine.config.apiUrl, effectiveComputerId, workerRequest, { token: engine.config.apiToken })) {
+              if (subTurnAbortController.signal.aborted || context.signal?.aborted) break;
+              const generationEvent = toGenerationEvent(event);
+              if (!generationEvent) continue;
+              await engine.executions.recordProviderEvent(childExecId, generationEvent, retryContext);
+              if (generationEvent.type === 'completed' && generationEvent.usage) {
+                await engine.executions.recordUsage(childExecId, {
+                  input: generationEvent.usage.inputTokens,
+                  output: generationEvent.usage.outputTokens,
+                  total: generationEvent.usage.totalTokens,
+                });
+              }
+              yield generationEvent;
+            }
+          } catch (error) {
+            yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
+          }
+        } else {
+          yield {
+            type: 'error',
+            error: `subagent scheduled on remote computer '${effectiveComputerId}' but no control-plane API URL is configured (set WAZIR_API_URL)`,
+          };
         }
-      } else {
-        yield {
-          type: 'error',
-          error: `subagent scheduled on remote computer '${effectiveComputerId}' but no control-plane API URL is configured (set WAZIR_API_URL)`,
-        };
+      } finally {
+        cancelSubGeneration = undefined;
       }
     },
 
@@ -1359,6 +1531,7 @@ export async function runSubagent(
         input: toolInput,
         executionId: childExecId,
         projectRoot: context.projectRoot,
+        effectiveIsolation: sandboxStatus().mode,
       });
       await engine.executions.recordPolicy(childExecId, decision);
 
@@ -1446,6 +1619,8 @@ export async function runSubagent(
         modelId: effectiveModelId,
         taskDescription: description,
         taskType: 'coding',
+        mutationRequired: subMutationRequired,
+        expectedArtifacts: effectiveSubExpectedArtifacts,
         projectRoot: context.projectRoot,
         maxTurns: subagentMaxTurns,
         subagentDepth: context.subagentDepth + 1,
@@ -1468,7 +1643,8 @@ export async function runSubagent(
   const childUpdated = engine.executions.require(childExecId);
   const childFiles = childUpdated.filesChanged ?? [];
   const childEval = evaluateExecution(childUpdated, {
-    expectedFiles: expectedArtifacts,
+    expectedFiles: effectiveSubExpectedArtifacts,
+    mutationRequired: subMutationRequired,
   });
   await engine.executions.setEvaluation(childExecId, childEval);
   if (subagentSummary) {

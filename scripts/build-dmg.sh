@@ -7,7 +7,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$REPO_ROOT/dist"
 STAGE_DIR="$(mktemp -d -t wazir-dmg-build-XXXXXX)"
-VERSION="0.1.0"
+VERSION="$(node -p "require('$REPO_ROOT/package.json').version")"
 DMG_NAME="Wazir-${VERSION}.dmg"
 OUTPUT_DMG="$DIST_DIR/$DMG_NAME"
 
@@ -44,7 +44,7 @@ APP_TARGET="$RESOURCES/app"
 mkdir -p "$MACOS" "$RESOURCES" "$APP_TARGET"
 
 # Info.plist
-cat << 'EOF' > "$CONTENTS/Info.plist"
+cat << EOF > "$CONTENTS/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -66,9 +66,9 @@ cat << 'EOF' > "$CONTENTS/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>${VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>0.1.0</string>
+    <string>${VERSION}</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>NSHighResolutionCapable</key>

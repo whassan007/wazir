@@ -580,22 +580,37 @@ export class ModelLifecycleService {
       await this.persistReadyModelSet();
       return plan;
     } catch (error) {
-      this.deps.models.setInstanceState(i.id, 'FAILED', { health: 'degraded', error: error instanceof Error ? error.message : String(error) });
-      this.emitEvent('MODEL_LOAD_FAILED', modelId, { ...extra, reason: error instanceof ModelLifecycleError ? error.code : 'RUNTIME_LOAD_FAILED' });
-      // A timeout may have allocated memory. Keep the reservation until runtime inspection proves absence.
+      if (attempted && error instanceof ModelLifecycleError && error.code === 'MODEL_READINESS_FAILED') {
+        await adapter.unloadModel?.(i.runtimeModelId).catch(() => undefined);
+      }
       const observed = attempted ? await adapter.inspectModel?.(i.runtimeModelId).catch(() => undefined) : undefined;
-      if (!attempted || observed?.loaded === false) await this.finishReservation(i, reservation!.id, true);
-      else if (observed?.loaded) await this.finishReservation(i, reservation!.id, false);
+      const confirmedLoaded = observed?.loaded === true;
+      this.deps.models.setInstanceHealth(i.id, {
+        loaded: confirmedLoaded,
+        state: 'FAILED',
+        health: 'degraded',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.emitEvent('MODEL_LOAD_FAILED', modelId, { ...extra, reason: error instanceof ModelLifecycleError ? error.code : 'RUNTIME_LOAD_FAILED' });
+      // Release the reservation unless runtime inspection positively confirms the model remains resident.
+      await this.finishReservation(i, reservation!.id, !confirmedLoaded);
       throw error instanceof ModelLifecycleError ? error : new ModelLifecycleError('RUNTIME_LOAD_FAILED');
     }
   }
 
   private async finishReservation(i: ModelInstance, reservationId: string, release: boolean): Promise<void> {
+    if (release) {
+      this.deps.computers.releaseReservation(i.computerId!, reservationId);
+    } else {
+      this.deps.computers.settleReservation(i.computerId!, reservationId);
+    }
     const mutate = (current: ResourceReservation[] = []) => current.flatMap(r => r.id !== reservationId ? [r] : release ? [] : [{ ...r, settledAt: new Date() }]);
-    const c = this.deps.computers.get(i.computerId!)!;
-    c.reservations = this.deps.store?.update
-      ? await this.deps.store.update<ResourceReservation[]>('computer/' + i.computerId + '/reservations', mutate)
-      : mutate(c.reservations);
+    const c = this.deps.computers.get(i.computerId!);
+    if (c) {
+      c.reservations = this.deps.store?.update
+        ? await this.deps.store.update<ResourceReservation[]>('computer/' + i.computerId + '/reservations', mutate)
+        : mutate(c.reservations);
+    }
     if (release) this.emitEvent('RESOURCE_RESERVATION_RELEASED', i.modelId, { computerId: i.computerId, runtimeId: i.runtimeId, data: { reservationId } });
   }
 
@@ -819,9 +834,13 @@ export class ModelLifecycleService {
   /**
    * Discovers and reconciles all models across all registered runtime adapters.
    */
-  async discoverAndReconcile(options: { verify?: boolean; fastStartup?: boolean } = {}): Promise<DiscoveredModelReconciliation> {
+  async discoverAndReconcile(options: {
+    verify?: boolean;
+    fastStartup?: boolean;
+    preDiscovered?: ReadonlyMap<string, { health: 'healthy' | 'degraded' | 'unavailable'; models: import('@wazir/runtimes-interfaces').DiscoveredModel[] }>;
+  } = {}): Promise<DiscoveredModelReconciliation> {
     if (this.reconciliation) return this.reconciliation;
-    this.reconciliation = this.reconcileObserved(options.verify !== false, options.fastStartup === true);
+    this.reconciliation = this.reconcileObserved(options.verify !== false, options.fastStartup === true, options.preDiscovered);
     try { return await this.reconciliation; } finally { this.reconciliation = undefined; }
   }
   discover() { return this.discoverAndReconcile(); }
@@ -831,7 +850,11 @@ export class ModelLifecycleService {
     timer.unref();
     return () => clearInterval(timer);
   }
-  private async reconcileObserved(verify = true, fastStartup = false): Promise<DiscoveredModelReconciliation> {
+  private async reconcileObserved(
+    verify = true,
+    fastStartup = false,
+    preDiscovered?: ReadonlyMap<string, { health: 'healthy' | 'degraded' | 'unavailable'; models: import('@wazir/runtimes-interfaces').DiscoveredModel[] }>,
+  ): Promise<DiscoveredModelReconciliation> {
     let totalDiscovered = 0, newlyRegistered = 0;
     for (const [runtimeId, adapter] of this.deps.adapters) {
       const runtime = this.deps.runtimes.get(runtimeId);
@@ -839,9 +862,21 @@ export class ModelLifecycleService {
       if (fastStartup && runtime.health === 'unavailable') continue;
       const computerId = runtime.computerId;
       try {
-        if ((await adapter.healthCheck()).status !== 'healthy') throw new Error('RUNTIME_UNAVAILABLE');
-        this.deps.runtimes.update(runtimeId, { health: 'healthy' });
-        const discovered = await adapter.listModels();
+        let discovered: import('@wazir/runtimes-interfaces').DiscoveredModel[];
+        if (preDiscovered?.has(runtimeId)) {
+          const pre = preDiscovered.get(runtimeId)!;
+          if (pre.health !== 'healthy') throw new Error('RUNTIME_UNAVAILABLE');
+          this.deps.runtimes.update(runtimeId, { health: 'healthy' });
+          discovered = pre.models;
+        } else {
+          if ((await adapter.healthCheck()).status !== 'healthy') throw new Error('RUNTIME_UNAVAILABLE');
+          this.deps.runtimes.update(runtimeId, { health: 'healthy' });
+          discovered = await adapter.listModels();
+        }
+        this.inventoryProbes.set(runtimeId, {
+          at: Date.now(),
+          listed: Promise.resolve(new Set(discovered.map((m) => m.id))),
+        });
         totalDiscovered += discovered.length;
         const seen = new Set<string>();
         for (const m of discovered) {
@@ -865,15 +900,19 @@ export class ModelLifecycleService {
           const id = existing?.id ?? installationId;
           const intent = await this.deps.store?.get('models/intent/' + id) as { desired?: ModelInstance['desired']; pinned?: boolean } | undefined;
           let observed: Awaited<ReturnType<NonNullable<typeof adapter.inspectModel>>> | undefined;
-          try {
-            observed = await adapter.inspectModel?.(m.id);
-          } catch {
-            // One model that cannot be inspected (e.g. LM Studio holding two instances of it,
-            // RESOURCE_BUSY) is unavailable on its own. It must not fall through to the
-            // runtime-wide catch below, which would take every model on this runtime offline.
-            this.deps.models.upsertInstance({ ...existing, ...intent, id, installationId, modelId: m.id, runtimeModelId: m.id,
-              computerId, runtimeId, loaded: existing?.loaded ?? false, state: 'UNAVAILABLE', health: 'unavailable' });
-            continue;
+          if (fastStartup && m.loaded === false) {
+            observed = { modelId: m.id, loaded: false, effectiveContext: m.effectiveContext, memoryBytes: m.weightBytes };
+          } else {
+            try {
+              observed = await adapter.inspectModel?.(m.id);
+            } catch {
+              // One model that cannot be inspected (e.g. LM Studio holding two instances of it,
+              // RESOURCE_BUSY) is unavailable on its own. It must not fall through to the
+              // runtime-wide catch below, which would take every model on this runtime offline.
+              this.deps.models.upsertInstance({ ...existing, ...intent, id, installationId, modelId: m.id, runtimeModelId: m.id,
+                computerId, runtimeId, loaded: existing?.loaded ?? false, state: 'UNAVAILABLE', health: 'unavailable' });
+              continue;
+            }
           }
           const loaded = observed?.loaded ?? false;
           const stillVerified = existing?.state === 'READY' && existing.loaded && loaded &&

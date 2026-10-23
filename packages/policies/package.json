@@ -1,6 +1,7 @@
 {
   "name": "@wazir/policies",
-  "version": "0.1.28",
+  "version": "0.2.13",
+  "license": "AGPL-3.0-only",
   "description": "Policy enforcement for the Wazir meta-harness",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -9,5 +10,8 @@
   },
   "dependencies": {
     "@wazir/core": "*"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

@@ -20,10 +20,11 @@ export interface CheckpointServiceOptions {
   worktreeManager: WorktreeManager;
   provenanceManager?: ProvenanceManager;
   defaultWorkspaceRoot?: string;
+  lazy?: boolean;
 }
 
 export class CheckpointService {
-  readonly ready: Promise<void>;
+  private _ready?: Promise<void>;
   private readonly store?: KeyValueStore;
   private readonly checkpoints = new Map<string, ExecutionCheckpoint>();
   private readonly executionEngine: ExecutionEngine;
@@ -31,13 +32,20 @@ export class CheckpointService {
   private readonly provenanceManager?: ProvenanceManager;
   private readonly defaultWorkspaceRoot: string;
 
+  get ready(): Promise<void> {
+    this._ready ??= this.restore();
+    return this._ready;
+  }
+
   constructor(options: CheckpointServiceOptions) {
     this.store = options.store;
     this.executionEngine = options.executionEngine;
     this.worktreeManager = options.worktreeManager;
     this.provenanceManager = options.provenanceManager;
     this.defaultWorkspaceRoot = options.defaultWorkspaceRoot ?? process.cwd();
-    this.ready = this.restore();
+    if (!options.lazy) {
+      void this.ready;
+    }
   }
 
   private async restore(): Promise<void> {

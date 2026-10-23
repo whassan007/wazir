@@ -1,13 +1,13 @@
 Name:           wazir
-Version:        0.2.12
+Version:        0.2.13
 Release:        1%{?dist}
 Summary:        Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator
-License:        AGPL-3.0-or-later
+License:        AGPL-3.0-only
 URL:            https://github.com/whassan007/wazir
 Source0:        wazir-%{version}.tar.gz
 BuildArch:      noarch
 
-Requires:       nodejs >= 22.5.0
+Requires:       nodejs >= 22.13.0
 Requires:       git
 
 %description
@@ -71,6 +71,12 @@ fi
 %attr(0750, wazir, wazir) %dir %{_localstatedir}/log/wazir
 
 %changelog
+* Thu Oct 22 2026 Wael Hassan <wael@wazir.dev> - 0.2.13-1
+- Align Node.js >= 22.13.0 runtime requirement, AGPL-3.0-only license, and v0.2.13 release metadata
+
+* Thu Oct 22 2026 Wazir Contributors <wazir@wazir.ai> - 0.2.12-1
+- Align Node.js >= 22.13.0 runtime requirement, AGPL-3.0-only license, and v0.2.12 release metadata
+
 * Tue Oct 13 2026 Wazir Contributors <wazir@wazir.ai> - 0.1.61-1
 - Protocol authorization, policy-enforced tool execution and evidence-based completion
 

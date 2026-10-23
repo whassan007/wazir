@@ -164,8 +164,8 @@ function probeSandboxExec(): { ok: boolean; reason?: string } {
 
 /** Resolves (once) which sandbox backend this process can actually use. */
 export function sandboxStatus(refresh = false): SandboxStatus {
-  if (probed && !refresh) return probed;
   const requested = requestedMode();
+  if (probed && !refresh && probed.requested === requested) return probed;
 
   if (requested === 'none') {
     probed = { mode: 'none', requested, reason: 'disabled by WAZIR_SANDBOX=none' };
@@ -219,6 +219,11 @@ export function sandboxDegraded(status: SandboxStatus = sandboxStatus()): boolea
 /** True when tool processes must not run at all because the sandbox is unavailable. */
 export function sandboxRequired(status: SandboxStatus = sandboxStatus()): boolean {
   return status.mode === 'none' && status.required === true;
+}
+
+/** Returns the effective OS sandbox isolation mode for the current process/workspace. */
+export function detectEffectiveIsolation(_projectRoot?: string, refresh = false): SandboxMode {
+  return sandboxStatus(refresh).mode;
 }
 
 /** For a git worktree, the main repository's `.git` directory that holds its metadata. */

@@ -7,10 +7,11 @@ import type { CheckpointService } from './checkpointService.js';
 import type { HandoffRecord, HandoffStatus } from '../types/handoff.js';
 const exec = promisify(execFile); const SECRET = /(?:api[_-]?key|token|secret|password|authorization|credential)\s*[:=]\s*[^\s,;]+/gi; const redact = (s: string) => s.replace(SECRET, '[REDACTED]');
 export interface HandoffCreateOptions { executionId?: string; taskId?: string; sourceSession?: string; sourceAgent?: string; targetAgent?: string; objective?: string; nextSteps?: string[]; trigger?: string; }
-export interface HandoffServiceOptions { store: KeyValueStore; executions: ExecutionEngine; checkpoints?: CheckpointService; projectRoot?: string; }
+export interface HandoffServiceOptions { store: KeyValueStore; executions: ExecutionEngine; checkpoints?: CheckpointService; projectRoot?: string; lazy?: boolean; }
 export class HandoffService {
-  readonly ready: Promise<void>; private readonly records = new Map<string, HandoffRecord>();
-  constructor(private readonly o: HandoffServiceOptions) { this.ready = this.restore(); }
+  private _ready?: Promise<void>; private readonly records = new Map<string, HandoffRecord>();
+  get ready(): Promise<void> { return (this._ready ??= this.restore()); }
+  constructor(private readonly o: HandoffServiceOptions) { if (!o.lazy) void this.ready; }
   private digest(r: HandoffRecord) { return createHash('sha256').update(JSON.stringify(r)).digest('hex'); }
   private async restore() { for (const { key, value } of await this.o.store.list('handoff/')) { const e = value as any; if (e?.version !== 1 || !e.handoff || key !== `handoff/${e.handoff.id}` || this.digest(e.handoff) !== e.digest) throw new Error(`INVALID_HANDOFF: ${key}`); this.records.set(e.handoff.id, e.handoff); } }
   async create(x: HandoffCreateOptions = {}): Promise<HandoffRecord> {

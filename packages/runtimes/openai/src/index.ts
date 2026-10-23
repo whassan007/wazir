@@ -64,6 +64,7 @@ interface StreamChunk {
 interface SSEBuffer {
   push(chunk: string): void;
   drain(): string[];
+  flush(): string[];
 }
 
 function createSSEBuffer(): SSEBuffer {
@@ -84,6 +85,26 @@ function createSSEBuffer(): SSEBuffer {
         pending = pending.slice(index + 1);
         index = pending.indexOf('\n');
       }
+      return payloads;
+    },
+    flush(): string[] {
+      const payloads: string[] = [];
+      if (pending.trim().length > 0) {
+        for (const rawLine of pending.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line || line.startsWith(':')) continue;
+          if (line.startsWith('data:')) {
+            const data = line.slice(5).trim();
+            if (!data) {
+              throw new Error('MALFORMED_PROVIDER_STREAM: trailing incomplete line');
+            }
+            payloads.push(data);
+          } else {
+            throw new Error('MALFORMED_PROVIDER_STREAM: trailing incomplete line');
+          }
+        }
+      }
+      pending = '';
       return payloads;
     },
   };
@@ -197,6 +218,13 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
     const controller = control.controller;
     const requestId = control.requestId;
     this.controllers.set(requestId, controller);
+    if (request.signal) {
+      if (request.signal.aborted) {
+        controller.abort(request.signal.reason);
+      } else {
+        request.signal.addEventListener('abort', () => controller.abort(request.signal?.reason), { once: true });
+      }
+    }
 
     const messages: Array<{ role: string; content: string }> = [];
     if (request.systemPrompt) messages.push({ role: 'system', content: request.systemPrompt });
@@ -230,7 +258,10 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       });
     } catch (error) {
       this.controllers.delete(requestId);
-      yield { type: 'error', error: controller.signal.aborted ? 'cancelled' : error instanceof Error ? error.message : String(error) };
+      if (controller.signal.aborted) {
+        throw new Error('Request cancelled');
+      }
+      yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       return;
     }
 
@@ -243,8 +274,50 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
 
     let full = '';
     let usage: GenerationEvent['usage'];
+    let streamDone = false;
+    let finishReason: string | undefined;
     const pendingToolCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
     const buffer = createSSEBuffer();
+
+    const processPayload = function* (payload: string): Generator<GenerationEvent, void, unknown> {
+      if (payload === '[DONE]') {
+        streamDone = true;
+        return;
+      }
+      let chunk: StreamChunk;
+      try {
+        chunk = JSON.parse(payload) as StreamChunk;
+      } catch {
+        throw new Error('MALFORMED_PROVIDER_STREAM: invalid JSON chunk');
+      }
+
+      const choiceFinish = chunk?.choices?.[0]?.finish_reason;
+      if (typeof choiceFinish === 'string' && choiceFinish.length > 0) {
+        finishReason = choiceFinish;
+      }
+
+      const delta = chunk.choices?.[0]?.delta;
+      if (delta?.content) {
+        full += delta.content;
+        yield { type: 'token', content: delta.content };
+      }
+      for (const call of delta?.tool_calls ?? []) {
+        const entry = pendingToolCalls.get(call.index) ?? { arguments: '' };
+        if (call.id) entry.id = call.id;
+        if (call.function?.name) entry.name = call.function.name;
+        if (call.function?.arguments) entry.arguments += call.function.arguments;
+        pendingToolCalls.set(call.index, entry);
+      }
+      if (chunk.usage) {
+        usage = {
+          inputTokens: chunk.usage.prompt_tokens ?? 0,
+          outputTokens: chunk.usage.completion_tokens ?? 0,
+          totalTokens: chunk.usage.total_tokens,
+          cacheReadTokens: chunk.usage.prompt_tokens_details?.cached_tokens,
+          reasoningTokens: chunk.usage.completion_tokens_details?.reasoning_tokens,
+        };
+      }
+    };
 
     try {
       // One decoder per stream: {stream: true} only reassembles multi-byte characters
@@ -252,40 +325,27 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       const decoder = new TextDecoder();
       const reader = response.body.getReader();
       for (;;) {
+        if (controller.signal.aborted) {
+          throw new Error('Request cancelled');
+        }
         const { done, value } = await reader.read();
+        if (controller.signal.aborted) {
+          throw new Error('Request cancelled');
+        }
         if (done) break;
         buffer.push(decoder.decode(value, { stream: true }));
         for (const payload of buffer.drain()) {
-          if (payload === '[DONE]') continue;
-          let chunk: StreamChunk;
-          try {
-            chunk = JSON.parse(payload) as StreamChunk;
-          } catch {
-            continue;
-          }
-
-          const delta = chunk.choices?.[0]?.delta;
-          if (delta?.content) {
-            full += delta.content;
-            yield { type: 'token', content: delta.content };
-          }
-          for (const call of delta?.tool_calls ?? []) {
-            const entry = pendingToolCalls.get(call.index) ?? { arguments: '' };
-            if (call.id) entry.id = call.id;
-            if (call.function?.name) entry.name = call.function.name;
-            if (call.function?.arguments) entry.arguments += call.function.arguments;
-            pendingToolCalls.set(call.index, entry);
-          }
-          if (chunk.usage) {
-            usage = {
-              inputTokens: chunk.usage.prompt_tokens ?? 0,
-              outputTokens: chunk.usage.completion_tokens ?? 0,
-              totalTokens: chunk.usage.total_tokens,
-              cacheReadTokens: chunk.usage.prompt_tokens_details?.cached_tokens,
-              reasoningTokens: chunk.usage.completion_tokens_details?.reasoning_tokens,
-            };
-          }
+          yield* processPayload(payload);
         }
+      }
+
+      buffer.push(decoder.decode());
+      for (const payload of buffer.flush()) {
+        yield* processPayload(payload);
+      }
+
+      if (!streamDone && !finishReason) {
+        throw new Error('INCOMPLETE_PROVIDER_STREAM: missing completion marker');
       }
 
       for (const [index, entry] of [...pendingToolCalls.entries()].sort((a, b) => a[0] - b[0])) {
@@ -298,10 +358,10 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
         yield { type: 'tool_call', toolCallId: entry.id ?? `tool-${index}`, toolName: entry.name ?? 'unknown', toolInput: parsed };
       }
 
-      yield { type: 'completed', content: full, usage: usage ?? { inputTokens: 0, outputTokens: 0 }, rateLimit: readRateLimitHeaders(response.headers) };
+      yield { type: 'completed', finishReason: finishReason ?? 'stop', content: full, usage: usage ?? { inputTokens: 0, outputTokens: 0 }, rateLimit: readRateLimitHeaders(response.headers) };
     } catch (error) {
       if (controller.signal.aborted) {
-        yield { type: 'completed', content: full, usage: usage ?? { inputTokens: 0, outputTokens: 0 }, rateLimit: readRateLimitHeaders(response.headers) };
+        throw new Error('Request cancelled');
       } else {
         yield { type: 'error', error: error instanceof Error ? error.message : String(error) };
       }

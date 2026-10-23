@@ -1,6 +1,7 @@
 {
   "name": "@wazir/runtimes-nvidia",
-  "version": "0.1.28",
+  "version": "0.2.13",
+  "license": "AGPL-3.0-only",
   "description": "NVIDIA API Catalog hosted runtime adapter for the Wazir meta-harness",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -11,5 +12,8 @@
     "@wazir/runtimes-interfaces": "*",
     "@wazir/secrets": "*",
     "@wazir/shared": "*"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

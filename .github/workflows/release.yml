@@ -10,9 +10,9 @@ on:
         description: 'Existing tag to build (optional when triggered via push)'
         required: false
       publish_draft:
-        description: 'Create draft release on GitHub'
+        description: 'Create draft release on GitHub (manual staging only)'
         type: boolean
-        default: true
+        default: false
       publish_npm:
         description: 'Publish npm package to registry'
         type: boolean
@@ -32,6 +32,7 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
+      commit_sha: ${{ steps.meta.outputs.commit_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,16 +53,26 @@ jobs:
         run: |
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           version="$(node -p "require('./package.json').version")"
+          commit_sha="$(git rev-parse HEAD)"
           [ "$tag" = "v$version" ] || { echo "::error::tag $tag does not match package.json version $version"; exit 1; }
+          node scripts/release-integrity.mjs --version "$version" --tag "$tag" --commit "$commit_sha"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$commit_sha" >> "$GITHUB_OUTPUT"
       - run: npm ci
+      - name: Verify lockfile and workspace resolution
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run build
       - run: npm run typecheck
       - run: npm run check-dist -- --quiet
       - run: npm run package:check -- --skip-build
       - run: npm run release:verify
+      - run: npm test
       - run: npm run release:gate
+      - name: Release integrity unit tests
+        run: node --test tests/release/release-integrity.test.mjs
+      - name: API startup and health smoke
+        run: node scripts/api-health-smoke.mjs
 
   verify-cross-platform:
     name: Verify Cross-Platform Tests (${{ matrix.os }})
@@ -77,7 +88,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.verify.outputs.tag }}
+          ref: ${{ needs.verify.outputs.commit_sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
@@ -93,7 +104,10 @@ jobs:
         run: find node_modules/node-pty -name "spawn-helper" -exec chmod +x {} + || true
       - run: npm run build
       - run: npm run typecheck
+      - run: npm test
       - run: npm run release:gate
+      - name: Release integrity unit tests
+        run: node --test tests/release/release-integrity.test.mjs
 
   build-artifacts:
     name: Build Artifacts (${{ matrix.target }})
@@ -118,7 +132,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.verify.outputs.tag }}
+          ref: ${{ needs.verify.outputs.commit_sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
@@ -129,6 +143,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev
       - run: npm ci
+      - name: Verify lockfile and workspace resolution
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Ensure node-pty helper is executable on macOS
         if: runner.os == 'macOS'
         run: |
@@ -159,7 +175,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.verify.outputs.tag }}
+          ref: ${{ needs.verify.outputs.commit_sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
@@ -173,9 +190,15 @@ jobs:
       - name: Consolidate artifacts and generate unified SHA256SUMS
         run: |
           mkdir -p release-dist
-          find all-artifacts -type f ! -name "*.sha256" ! -name "SHA256SUMS.txt" -exec cp {} release-dist/ \;
+          files=$(find all-artifacts -type f ! -name "*.sha256" ! -name "SHA256SUMS.txt" -print)
+          test -n "$files"
+          printf '%s\n' "$files" | while IFS= read -r f; do
+            dest="release-dist/$(basename "$f")"
+            if [ -e "$dest" ]; then cmp -s "$f" "$dest" || { echo "conflicting duplicate artifact: $dest"; exit 1; }; else cp "$f" "$dest"; fi
+          done
           cd release-dist
           sha256sum * > SHA256SUMS.txt
+          node "$GITHUB_WORKSPACE/scripts/release-integrity.mjs" --version "${{ needs.verify.outputs.version }}" --tag "${{ needs.verify.outputs.tag }}" --artifacts "$GITHUB_WORKSPACE/release-dist"
           echo "=== Release Artifacts & Checksums ==="
           cat SHA256SUMS.txt
 
@@ -183,16 +206,31 @@ jobs:
         with:
           subject-path: release-dist/wazir-*
 
-      - name: Create GitHub Release (Draft)
-        if: github.event_name == 'push' || inputs.publish_draft == true
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.verify.outputs.tag }}
-          draft: true
-          prerelease: false
+          draft: false
+          prerelease: ${{ contains(needs.verify.outputs.version, '-') }}
+          make_latest: ${{ !contains(needs.verify.outputs.version, '-') }}
           files: release-dist/*
           generate_release_notes: true
           name: Wazir ${{ needs.verify.outputs.tag }}
+
+      - name: Verify published release integrity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          extra_flags=()
+          if [[ "${{ contains(needs.verify.outputs.version, '-') }}" != "true" ]]; then
+            extra_flags+=(--stable --latest)
+          fi
+          node scripts/release-integrity.mjs \
+            --version "${{ needs.verify.outputs.version }}" \
+            --tag "${{ needs.verify.outputs.tag }}" \
+            --commit "${{ needs.verify.outputs.commit_sha }}" \
+            --artifacts release-dist \
+            "${extra_flags[@]}"
 
       - name: Publish to npm registry (Requires explicit authorization)
         if: inputs.publish_npm == true

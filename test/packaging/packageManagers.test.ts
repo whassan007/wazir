@@ -25,7 +25,7 @@ describe('Cross-Platform Package Manager Integration', () => {
       // Formula class & metadata
       expect(content).toContain('class Wazir < Formula');
       expect(content).toContain(`version "${packageManagerVersion}"`);
-      expect(content).toContain('license "AGPL-3.0-or-later"');
+      expect(content).toContain('license "AGPL-3.0-only"');
       expect(content).toContain('homepage "https://github.com/whassan007/wazir"');
 
       // Platform binary blocks
@@ -64,7 +64,7 @@ describe('Cross-Platform Package Manager Integration', () => {
 
       expect(manifest.version).toBe(packageManagerVersion);
       expect(manifest.description).toContain('Autonomous');
-      expect(manifest.license).toBe('AGPL-3.0-or-later');
+      expect(manifest.license).toBe('AGPL-3.0-only');
       expect(manifest.homepage).toBe('https://github.com/whassan007/wazir');
 
       // Architecture definitions
@@ -131,7 +131,7 @@ describe('Cross-Platform Package Manager Integration', () => {
       expect(content).toContain('PackageLocale: en-US');
       expect(content).toContain('Publisher: Wazir');
       expect(content).toContain('PackageName: Wazir');
-      expect(content).toContain('License: AGPL-3.0-or-later');
+      expect(content).toContain('License: AGPL-3.0-only');
       expect(content).toContain('Moniker: wa');
       expect(content).toContain('ai');
       expect(content).toContain('orchestration');

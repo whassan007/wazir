@@ -39,7 +39,55 @@ import { planRecovery, reconstructExecutionState } from './executionRecovery.js'
 import type { ReconstructedExecutionState, RecoveryBudgetLimits, RecoveryPlan, ToolOutcomeInspection } from './executionRecovery.js';
 import type { ToolSideEffectClass } from '../types/tool.js';
 import type { FileMutationResult } from '../types/tool.js';
-import { assertExecutionTransition } from './statusTransitions.js';
+import { assertExecutionTransition, isTerminalExecutionStatus } from './statusTransitions.js';
+
+export interface ExecutionLease {
+  executionId: string;
+  workerId: string;
+  epoch: number;
+  token: string;
+  acquiredAt: Date;
+  renewedAt: Date;
+  expiresAt: Date;
+  ttlMs: number;
+  released: boolean;
+}
+
+export interface LeaseClaimant {
+  workerId?: string;
+  leaseEpoch?: number;
+  epoch?: number;
+  leaseToken?: string;
+  now?: Date;
+}
+
+export class StaleWorkerLeaseError extends Error {
+  readonly code = 'STALE_WORKER_LEASE';
+  readonly executionId: string;
+  readonly workerId?: string;
+  readonly leaseEpoch?: number;
+  readonly currentWorkerId?: string;
+  readonly currentEpoch?: number;
+
+  constructor(
+    executionId: string,
+    message: string,
+    details: {
+      workerId?: string;
+      leaseEpoch?: number;
+      currentWorkerId?: string;
+      currentEpoch?: number;
+    } = {},
+  ) {
+    super(message);
+    this.name = 'StaleWorkerLeaseError';
+    this.executionId = executionId;
+    this.workerId = details.workerId;
+    this.leaseEpoch = details.leaseEpoch;
+    this.currentWorkerId = details.currentWorkerId;
+    this.currentEpoch = details.currentEpoch;
+  }
+}
 
 export interface ExecutionEngineOptions {
   /** Persists a record after every mutation. */
@@ -54,6 +102,8 @@ export interface ExecutionEngineOptions {
   owner?: ExecutionOwner;
   /** Liveness check for a same-host owner pid; defaults to signal 0. */
   isProcessAlive?: (pid: number) => boolean;
+  /** Skip deep cloning of terminal historical records and startup recovery rewrites on one-shot CLI commands. */
+  fastStartup?: boolean;
 }
 
 function signalZeroAlive(pid: number): boolean {
@@ -82,8 +132,11 @@ function nextId(prefix: string): string {
  * latency, token usage, final result and evaluation.
  */
 export class ExecutionEngine {
+  static readonly StaleWorkerLeaseError = StaleWorkerLeaseError;
+
   private readonly records = new Map<string, ExecutionRecord>();
   private readonly histories = new Map<string, SequencedExecutionEvent[]>();
+  private readonly leases = new Map<string, ExecutionLease>();
   private readonly pausedExecutions = new Set<string>();
   private readonly steeringQueues = new Map<string, SteeringParams[]>();
   private readonly cancelledToolCalls = new Map<string, Set<string>>();
@@ -108,8 +161,46 @@ export class ExecutionEngine {
       if (!loaded) return;
       const migratedIds = new Set<string>();
       for (const record of loaded) {
-        const copy = structuredClone(record);
+        const fastTerminal = Boolean(options.fastStartup && record.execution && isTerminalExecutionStatus(record.execution.status));
+        const copy = fastTerminal ? record : structuredClone(record);
+        if (!(copy.execution.createdAt instanceof Date)) {
+          copy.execution.createdAt = copy.execution.createdAt ? new Date(copy.execution.createdAt) : new Date();
+        }
+        if (copy.execution.startedAt && !(copy.execution.startedAt instanceof Date)) {
+          copy.execution.startedAt = new Date(copy.execution.startedAt);
+        }
+        if (copy.execution.completedAt && !(copy.execution.completedAt instanceof Date)) {
+          copy.execution.completedAt = new Date(copy.execution.completedAt);
+        }
+        if (!Array.isArray(copy.events)) copy.events = [];
+        if (!Array.isArray(copy.policyDecisions)) copy.policyDecisions = [];
+        if (!Array.isArray(copy.toolCalls)) copy.toolCalls = [];
+        if (!Array.isArray(copy.filesChanged)) copy.filesChanged = [];
+        if (!Array.isArray(copy.checks)) copy.checks = [];
+        if (!Array.isArray(copy.errors)) copy.errors = [];
+        if (!copy.workspaceState) {
+          copy.workspaceState = {
+            workspaceId: copy.execution.id,
+            revision: 0,
+            updatedAt: copy.execution.createdAt,
+          };
+        }
+        if (!Array.isArray(copy.evidence)) copy.evidence = [];
+        if (!copy.task) {
+          copy.task = {
+            id: copy.execution.taskId ?? copy.execution.id,
+            type: 'coding',
+            input: '',
+            requirements: {},
+            priority: 'normal',
+            status: copy.execution.status === 'completed' ? 'completed' : copy.execution.status === 'failed' ? 'failed' : copy.execution.status === 'cancelled' ? 'cancelled' : 'running',
+            createdAt: copy.execution.createdAt,
+            updatedAt: copy.execution.createdAt,
+          };
+        }
         let eventsMutated = false;
+        let hasLeaseEvent = false;
+        const seenEventIds = new Set<string>();
         const events = copy.events.map((event, index) => {
           if (event.sequence !== undefined && event.sequence !== index + 1) {
             throw new Error(`Invalid event sequence for execution '${copy.execution.id}'`);
@@ -119,16 +210,24 @@ export class ExecutionEngine {
               (event.eventType !== undefined && event.eventType !== event.type)) {
             throw new Error(`Invalid event identity for execution '${copy.execution.id}'`);
           }
+          if (seenEventIds.has(event.id)) {
+            throw new Error(`Duplicate event identity for execution '${copy.execution.id}'`);
+          }
+          seenEventIds.add(event.id);
+          if (event.type === 'lease.acquired' || event.type === 'lease.renewed' || event.type === 'lease.released') {
+            hasLeaseEvent = true;
+          }
           const expectedJobId = event.jobId ?? copy.execution.jobId ?? null;
           if (
-            event.eventId !== event.id ||
-            event.eventType !== event.type ||
-            event.sequence !== index + 1 ||
-            event.jobId !== expectedJobId ||
-            !(event.timestamp instanceof Date)
+            event.eventId === event.id &&
+            event.eventType === event.type &&
+            event.sequence === index + 1 &&
+            event.jobId === expectedJobId &&
+            event.timestamp instanceof Date
           ) {
-            eventsMutated = true;
+            return event as SequencedExecutionEvent;
           }
+          eventsMutated = true;
           return {
             ...event,
             eventId: event.id,
@@ -138,14 +237,18 @@ export class ExecutionEngine {
             timestamp: event.timestamp instanceof Date ? event.timestamp : new Date(event.timestamp),
           } satisfies SequencedExecutionEvent;
         });
-        if (new Set(events.map(e => e.eventId)).size !== events.length) {
-          throw new Error(`Duplicate event identity for execution '${copy.execution.id}'`);
-        }
         copy.events = events;
         if (eventsMutated) migratedIds.add(copy.execution.id);
-        this.histories.set(copy.execution.id, structuredClone(events));
+        this.histories.set(copy.execution.id, fastTerminal ? events.slice() : structuredClone(events));
         this.records.set(copy.execution.id, copy);
+        if (copy.execution.status === 'paused') {
+          this.pausedExecutions.add(copy.execution.id);
+        }
+        if (hasLeaseEvent) {
+          this.reconstructLeaseFromEvents(copy.execution.id, events);
+        }
       }
+      if (options.fastStartup) return;
       // Detect orphaned tool.start events without a matching completed event — but never
       // in an execution another live process is still running: its "unfinished" call is
       // in flight, and marking it would also fork the record's storage revision.
@@ -180,6 +283,44 @@ export class ExecutionEngine {
       this.persistenceFailure = error instanceof Error ? error : new Error(String(error));
       throw this.persistenceFailure;
     });
+  }
+
+  private reconstructLeaseFromEvents(executionId: string, events: SequencedExecutionEvent[]): void {
+    let current: ExecutionLease | undefined;
+    for (const event of events) {
+      if (event.type !== 'lease.acquired' && event.type !== 'lease.renewed' && event.type !== 'lease.released') {
+        continue;
+      }
+      const data = (event.data ?? {}) as Record<string, unknown>;
+      const workerId = typeof data.workerId === 'string' ? data.workerId : (event.workerId ?? 'unknown');
+      const epoch = typeof data.epoch === 'number'
+        ? data.epoch
+        : typeof data.leaseEpoch === 'number'
+          ? data.leaseEpoch
+          : (current?.epoch ?? 0) + (event.type === 'lease.acquired' ? 1 : 0);
+      const ttlMs = typeof data.ttlMs === 'number' ? data.ttlMs : (current?.ttlMs ?? 30_000);
+      const ts = event.timestamp instanceof Date ? event.timestamp : new Date(event.timestamp);
+      const acquiredAt = data.acquiredAt ? new Date(String(data.acquiredAt)) : (current?.acquiredAt ?? ts);
+      const renewedAt = data.renewedAt ? new Date(String(data.renewedAt)) : ts;
+      const expiresAt = data.expiresAt
+        ? new Date(String(data.expiresAt))
+        : new Date(renewedAt.getTime() + ttlMs);
+      const token = typeof data.token === 'string' ? data.token : (current?.token ?? `lease-${executionId}-${epoch}`);
+      current = {
+        executionId,
+        workerId,
+        epoch,
+        token,
+        acquiredAt,
+        renewedAt,
+        expiresAt: event.type === 'lease.released' ? ts : expiresAt,
+        ttlMs,
+        released: event.type === 'lease.released',
+      };
+    }
+    if (current) {
+      this.leases.set(executionId, current);
+    }
   }
 
   async create(params: {
@@ -256,8 +397,13 @@ export class ExecutionEngine {
     await this.flush(record);
   }
 
-  async setStatus(executionId: string, status: ExecutionStatus, options?: { targetRevision?: number }): Promise<void> {
+  async setStatus(
+    executionId: string,
+    status: ExecutionStatus,
+    options?: { targetRevision?: number } & LeaseClaimant,
+  ): Promise<void> {
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options?.now);
     assertExecutionTransition(executionId, record.execution.status, status);
     if (status === 'completed' && this.toolCheckpoints(executionId).some(call => call.state === 'STARTED' || call.state === 'OUTCOME_UNKNOWN')) {
       this.pushEvent(record, 'completion.rejected', { reason: 'TOOL_OUTCOME_UNKNOWN' });
@@ -295,6 +441,12 @@ export class ExecutionEngine {
       return;
     }
 
+    if (status !== 'paused') {
+      this.pausedExecutions.delete(executionId);
+    } else {
+      this.pausedExecutions.add(executionId);
+    }
+
     record.execution.status = status;
     const now = new Date();
     if (status === 'running' && !record.execution.startedAt) {
@@ -319,8 +471,9 @@ export class ExecutionEngine {
     await this.flush(record);
   }
 
-  async recordPolicy(executionId: string, decision: PolicyDecision): Promise<void> {
+  async recordPolicy(executionId: string, decision: PolicyDecision, options?: LeaseClaimant): Promise<void> {
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options?.now, true);
     record.policyDecisions.push(decision);
     this.pushEvent(record, 'policy.decision', decision);
     void appendAuditEvent({
@@ -337,8 +490,9 @@ export class ExecutionEngine {
     await this.flush(record);
   }
 
-  async recordToolCall(executionId: string, call: ToolCallRecord): Promise<void> {
+  async recordToolCall(executionId: string, call: ToolCallRecord, options?: LeaseClaimant): Promise<void> {
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options?.now, true);
     const checkpoints = this.toolCheckpoints(executionId);
     const checkpoint = checkpoints.find(c => c.callId === (call.callId ?? call.id)) ??
       checkpoints.find(c => c.legacyCorrelation && c.state === 'STARTED' && c.toolName === call.tool && call.policyEffect !== 'deny' && call.policyEffect !== 'ask');
@@ -374,8 +528,9 @@ export class ExecutionEngine {
 
   async recordToolStart(executionId: string, tool: string, input: unknown, options: {
     callId?: string; stepId?: string; sideEffectClass?: ToolSideEffectClass; argumentsHash?: string;
-  } = {}): Promise<string> {
+  } & LeaseClaimant = {}): Promise<string> {
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options.now, true);
     const callId = options.callId ?? `call-${randomUUID()}`;
     await injectFault('BEFORE_TOOL_EXECUTION', { executionId, callId, tool, input, sideEffectClass: options.sideEffectClass });
     if (this.toolCheckpoints(executionId).some(call => call.callId === callId)) {
@@ -477,8 +632,9 @@ export class ExecutionEngine {
     return structuredClone([...calls.values()]);
   }
 
-  async recordCheck(executionId: string, check: CheckRunRecord): Promise<void> {
+  async recordCheck(executionId: string, check: CheckRunRecord, options?: LeaseClaimant): Promise<void> {
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options?.now, true);
     const sanitized = {
       ...check,
       output: check.output !== undefined ? sanitizeUntrustedOutput(check.output) : undefined,
@@ -536,8 +692,10 @@ export class ExecutionEngine {
   async recordEvidence(
     executionId: string,
     evidence: Omit<VerificationEvidence, 'id'> & { id?: string },
+    options?: LeaseClaimant,
   ): Promise<VerificationEvidence> {
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options?.now, true);
     if (!record.evidence) {
       record.evidence = [];
     }
@@ -589,13 +747,30 @@ export class ExecutionEngine {
     return fullEvidence;
   }
 
-  async recordEvent(executionId: string, type: ExecutionEventType, data?: unknown, identity?: ExecutionEventIdentity): Promise<void> {
+  async recordEvent(
+    executionId: string,
+    type: ExecutionEventType,
+    data?: unknown,
+    identity?: ExecutionEventIdentity & LeaseClaimant,
+    lease?: LeaseClaimant,
+  ): Promise<void> {
     const record = this.require(executionId);
+    const claimant = lease ?? identity;
+    this.assertLease(executionId, claimant, claimant?.now, true);
     if (type === 'execution.resumed' && record.execution.status === 'failed') {
       assertExecutionTransition(executionId, record.execution.status, 'queued');
       record.execution.status = 'queued';
     }
-    this.pushEvent(record, type, data, identity);
+    const cleanIdentity: ExecutionEventIdentity = identity
+      ? {
+          ...(identity.eventId !== undefined ? { eventId: identity.eventId } : {}),
+          ...(identity.turnId !== undefined ? { turnId: identity.turnId } : {}),
+          ...(identity.stepId !== undefined ? { stepId: identity.stepId } : {}),
+          ...(identity.attemptId !== undefined ? { attemptId: identity.attemptId } : {}),
+          ...(identity.callId !== undefined ? { callId: identity.callId } : {}),
+        }
+      : {};
+    this.pushEvent(record, type, data, cleanIdentity);
     await this.flush(record);
   }
 
@@ -625,14 +800,16 @@ export class ExecutionEngine {
     });
   }
 
-  async recordError(executionId: string, error: string): Promise<void> {
+  async recordError(executionId: string, error: string, options?: LeaseClaimant): Promise<void> {
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options?.now, true);
     record.errors.push(error);
     await this.flush(record);
   }
 
-  async recordUsage(executionId: string, usage: TokenUsage): Promise<void> {
+  async recordUsage(executionId: string, usage: TokenUsage, options?: LeaseClaimant): Promise<void> {
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options?.now, true);
     record.usage = {
       input: (record.usage?.input ?? 0) + usage.input,
       output: (record.usage?.output ?? 0) + usage.output,
@@ -676,16 +853,22 @@ export class ExecutionEngine {
     await this.flush(record);
   }
 
-  async recordFileMutations(executionId: string, mutations: FileMutationResult[], contentFingerprint?: string): Promise<void> {
+  async recordFileMutations(executionId: string, mutations: FileMutationResult[], contentFingerprint?: string, options?: LeaseClaimant): Promise<void> {
     const changed = mutations.filter(m => m.changed && m.beforeHash !== m.afterHash && (m.existedBefore || m.existsAfter));
     if (changed.length === 0) return;
-    await this.recordFilesChanged(executionId, changed.map(m => m.path), { mutations: changed, contentFingerprint });
+    await this.recordFilesChanged(executionId, changed.map(m => m.path), { mutations: changed, contentFingerprint }, options);
   }
 
-  async recordFilesChanged(executionId: string, files: string[], evidence?: { mutations: FileMutationResult[]; contentFingerprint?: string }): Promise<void> {
+  async recordFilesChanged(
+    executionId: string,
+    files: string[],
+    evidence?: { mutations: FileMutationResult[]; contentFingerprint?: string },
+    options?: LeaseClaimant,
+  ): Promise<void> {
     if (!files || files.length === 0) return;
     files = files.map((f) => f.replace(/\\/g, '/'));
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options?.now, true);
     if (!record.workspaceState) {
       record.workspaceState = {
         workspaceId: executionId,
@@ -796,8 +979,9 @@ export class ExecutionEngine {
     return this.require(executionId).workspaceState?.revision ?? 0;
   }
 
-  async setResult(executionId: string, result: string): Promise<void> {
+  async setResult(executionId: string, result: string, options?: LeaseClaimant): Promise<void> {
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options?.now, true);
     record.result = sanitizeUntrustedOutput(result);
     const sources = new Map<string, import('../types/web.js').Citation>();
     for (const event of record.events) if (event.type === 'web.evidence') {
@@ -857,8 +1041,9 @@ export class ExecutionEngine {
     await this.flush(record);
   }
 
-  async setEvaluation(executionId: string, evaluation: EvaluationResult): Promise<void> {
+  async setEvaluation(executionId: string, evaluation: EvaluationResult, options?: LeaseClaimant): Promise<void> {
     const record = this.require(executionId);
+    this.assertLease(executionId, options, options?.now, true);
     record.evaluation = evaluation;
     this.pushEvent(record, 'evaluation.completed', evaluation);
     
@@ -983,12 +1168,249 @@ export class ExecutionEngine {
    */
   async orphan(executionId: string, reason: string): Promise<void> {
     const record = this.require(executionId);
-    if (!ExecutionEngine.NON_TERMINAL.includes(record.execution.status)) return;
+    assertExecutionTransition(executionId, record.execution.status, 'failed');
+    if (record.execution.status === 'failed') return;
+    this.pausedExecutions.delete(executionId);
     record.execution.status = 'failed';
     record.execution.completedAt = new Date();
     record.errors = [...(record.errors ?? []), `ORPHANED_WORKER_UNREACHABLE: ${reason}`];
     this.pushEvent(record, 'execution.failed', { status: 'failed', reason, kind: 'ORPHANED_WORKER_UNREACHABLE' });
     await this.flush(record);
+  }
+
+  /**
+   * Acquires or takes over an execution lease for a worker, incrementing the lease epoch.
+   * Rejects if the execution is already terminal or if another worker holds an unexpired lease.
+   */
+  async acquireLease(
+    executionId: string,
+    workerId: string,
+    optionsOrTtlMs: number | { ttlMs?: number; now?: Date } = {},
+    nowArg?: Date,
+  ): Promise<ExecutionLease> {
+    const record = this.require(executionId);
+    if (!workerId || typeof workerId !== 'string') {
+      throw new Error('WORKER_ID_REQUIRED');
+    }
+    const ttlMs = typeof optionsOrTtlMs === 'number'
+      ? optionsOrTtlMs
+      : (optionsOrTtlMs.ttlMs ?? 30_000);
+    const now = typeof optionsOrTtlMs === 'number'
+      ? (nowArg ?? new Date())
+      : (optionsOrTtlMs.now ?? nowArg ?? new Date());
+
+    if (isTerminalExecutionStatus(record.execution.status)) {
+      throw new StaleWorkerLeaseError(
+        executionId,
+        `Cannot acquire lease for terminal execution '${executionId}' (status: '${record.execution.status}')`,
+        { workerId },
+      );
+    }
+
+    const existing = this.leases.get(executionId);
+    if (existing && !existing.released && existing.expiresAt.getTime() > now.getTime() && existing.workerId !== workerId) {
+      throw new StaleWorkerLeaseError(
+        executionId,
+        `Execution '${executionId}' already has an active lease held by '${existing.workerId}' (epoch ${existing.epoch})`,
+        { workerId, currentWorkerId: existing.workerId, currentEpoch: existing.epoch },
+      );
+    }
+
+    const epoch = (existing?.epoch ?? 0) + 1;
+    const lease: ExecutionLease = {
+      executionId,
+      workerId,
+      epoch,
+      token: `lease-${executionId}-${epoch}-${randomUUID()}`,
+      acquiredAt: now,
+      renewedAt: now,
+      expiresAt: new Date(now.getTime() + ttlMs),
+      ttlMs,
+      released: false,
+    };
+
+    this.leases.set(executionId, lease);
+    record.execution.workerId = workerId;
+    (record.execution as Execution & { leaseEpoch?: number }).leaseEpoch = epoch;
+    this.pushEvent(record, 'lease.acquired', {
+      workerId,
+      epoch,
+      leaseEpoch: epoch,
+      token: lease.token,
+      acquiredAt: lease.acquiredAt,
+      renewedAt: lease.renewedAt,
+      expiresAt: lease.expiresAt,
+      ttlMs,
+    });
+    await this.flush(record);
+    return structuredClone(lease);
+  }
+
+  /**
+   * Renews an active worker lease. Rejects with StaleWorkerLeaseError if the lease
+   * has expired, been released, been superseded by a newer epoch, or is held by another worker.
+   */
+  async renewLease(
+    executionId: string,
+    workerId: string,
+    optionsOrEpoch?: number | { leaseEpoch?: number; epoch?: number; leaseToken?: string; ttlMs?: number; now?: Date },
+    ttlMsArg?: number,
+    nowArg?: Date,
+  ): Promise<ExecutionLease> {
+    const record = this.require(executionId);
+    const existing = this.leases.get(executionId);
+    let leaseEpoch: number | undefined;
+    let leaseToken: string | undefined;
+    let ttlMs = existing?.ttlMs ?? 30_000;
+    let now = nowArg ?? new Date();
+
+    if (typeof optionsOrEpoch === 'number') {
+      if (ttlMsArg !== undefined || optionsOrEpoch <= (existing?.epoch ?? 0) + 10) {
+        leaseEpoch = optionsOrEpoch;
+        if (ttlMsArg !== undefined) ttlMs = ttlMsArg;
+      } else {
+        ttlMs = optionsOrEpoch;
+      }
+    } else if (optionsOrEpoch && typeof optionsOrEpoch === 'object') {
+      leaseEpoch = optionsOrEpoch.leaseEpoch ?? optionsOrEpoch.epoch;
+      leaseToken = optionsOrEpoch.leaseToken;
+      if (optionsOrEpoch.ttlMs !== undefined) ttlMs = optionsOrEpoch.ttlMs;
+      if (optionsOrEpoch.now !== undefined) now = optionsOrEpoch.now;
+    }
+
+    this.assertLease(executionId, { workerId, leaseEpoch, leaseToken }, now, true);
+    const current = this.leases.get(executionId)!;
+    current.renewedAt = now;
+    current.expiresAt = new Date(now.getTime() + ttlMs);
+    current.ttlMs = ttlMs;
+
+    this.pushEvent(record, 'lease.renewed', {
+      workerId,
+      epoch: current.epoch,
+      leaseEpoch: current.epoch,
+      token: current.token,
+      acquiredAt: current.acquiredAt,
+      renewedAt: current.renewedAt,
+      expiresAt: current.expiresAt,
+      ttlMs,
+    });
+    await this.flush(record);
+    return structuredClone(current);
+  }
+
+  /**
+   * Releases an active worker lease. Rejects with StaleWorkerLeaseError if the caller
+   * is not the current active lease holder.
+   */
+  async releaseLease(
+    executionId: string,
+    workerId: string,
+    optionsOrEpoch?: number | { leaseEpoch?: number; epoch?: number; leaseToken?: string; now?: Date },
+    nowArg?: Date,
+  ): Promise<void> {
+    const record = this.require(executionId);
+    let leaseEpoch: number | undefined;
+    let leaseToken: string | undefined;
+    let now = nowArg ?? new Date();
+
+    if (typeof optionsOrEpoch === 'number') {
+      leaseEpoch = optionsOrEpoch;
+    } else if (optionsOrEpoch && typeof optionsOrEpoch === 'object') {
+      leaseEpoch = optionsOrEpoch.leaseEpoch ?? optionsOrEpoch.epoch;
+      leaseToken = optionsOrEpoch.leaseToken;
+      if (optionsOrEpoch.now !== undefined) now = optionsOrEpoch.now;
+    }
+
+    this.assertLease(executionId, { workerId, leaseEpoch, leaseToken }, now, false);
+    const current = this.leases.get(executionId)!;
+    current.released = true;
+    current.expiresAt = now;
+
+    this.pushEvent(record, 'lease.released', {
+      workerId,
+      epoch: current.epoch,
+      leaseEpoch: current.epoch,
+      token: current.token,
+      releasedAt: now,
+    });
+    await this.flush(record);
+  }
+
+  getLease(executionId: string): ExecutionLease | undefined {
+    this.require(executionId);
+    const lease = this.leases.get(executionId);
+    return lease ? structuredClone(lease) : undefined;
+  }
+
+  /**
+   * Validates that a worker lease claimant holds the current, unexpired lease for the execution.
+   * Throws StaleWorkerLeaseError BEFORE any mutation to in-memory state or events occurs.
+   */
+  assertLease(
+    executionId: string,
+    claimant?: LeaseClaimant,
+    now = new Date(),
+    rejectIfTerminal = false,
+  ): void {
+    const record = this.require(executionId);
+    if (!claimant) return;
+    const claimedEpoch = claimant.leaseEpoch ?? claimant.epoch;
+    const claimedWorker = claimant.workerId;
+    const claimedToken = claimant.leaseToken;
+    if (claimedWorker === undefined && claimedEpoch === undefined && claimedToken === undefined) {
+      return;
+    }
+
+    const current = this.leases.get(executionId);
+    if (!current) {
+      throw new StaleWorkerLeaseError(
+        executionId,
+        `No active lease for execution '${executionId}'`,
+        { workerId: claimedWorker, leaseEpoch: claimedEpoch },
+      );
+    }
+    if (current.released) {
+      throw new StaleWorkerLeaseError(
+        executionId,
+        `Lease for execution '${executionId}' (epoch ${current.epoch}) has already been released`,
+        { workerId: claimedWorker, leaseEpoch: claimedEpoch, currentWorkerId: current.workerId, currentEpoch: current.epoch },
+      );
+    }
+    if (claimedEpoch !== undefined && current.epoch !== claimedEpoch) {
+      throw new StaleWorkerLeaseError(
+        executionId,
+        `Stale lease epoch ${claimedEpoch} for execution '${executionId}' (current epoch is ${current.epoch}, held by '${current.workerId}')`,
+        { workerId: claimedWorker, leaseEpoch: claimedEpoch, currentWorkerId: current.workerId, currentEpoch: current.epoch },
+      );
+    }
+    if (claimedWorker !== undefined && current.workerId !== claimedWorker) {
+      throw new StaleWorkerLeaseError(
+        executionId,
+        `Worker '${claimedWorker}' does not hold the lease for execution '${executionId}' (held by '${current.workerId}' at epoch ${current.epoch})`,
+        { workerId: claimedWorker, leaseEpoch: claimedEpoch, currentWorkerId: current.workerId, currentEpoch: current.epoch },
+      );
+    }
+    if (claimedToken !== undefined && current.token !== claimedToken) {
+      throw new StaleWorkerLeaseError(
+        executionId,
+        `Stale lease token for execution '${executionId}' (current epoch is ${current.epoch})`,
+        { workerId: claimedWorker, leaseEpoch: claimedEpoch, currentWorkerId: current.workerId, currentEpoch: current.epoch },
+      );
+    }
+    if (current.expiresAt.getTime() <= now.getTime()) {
+      throw new StaleWorkerLeaseError(
+        executionId,
+        `Lease for execution '${executionId}' held by '${current.workerId}' (epoch ${current.epoch}) expired at ${current.expiresAt.toISOString()}`,
+        { workerId: claimedWorker, leaseEpoch: claimedEpoch, currentWorkerId: current.workerId, currentEpoch: current.epoch },
+      );
+    }
+    if (rejectIfTerminal && isTerminalExecutionStatus(record.execution.status)) {
+      throw new StaleWorkerLeaseError(
+        executionId,
+        `Execution '${executionId}' is already in terminal state '${record.execution.status}'`,
+        { workerId: claimedWorker, leaseEpoch: claimedEpoch, currentWorkerId: current.workerId, currentEpoch: current.epoch },
+      );
+    }
   }
 
   async listChildren(executionId: string): Promise<ExecutionRecord[]> {
@@ -1062,6 +1484,7 @@ export class ExecutionEngine {
    */
   async pause(executionId: string, reason?: string): Promise<void> {
     const record = this.require(executionId);
+    assertExecutionTransition(executionId, record.execution.status, 'paused');
     this.pausedExecutions.add(executionId);
     record.execution.status = 'paused';
     this.pushEvent(record, 'execution.paused', {
@@ -1192,6 +1615,7 @@ export class ExecutionEngine {
    */
   async resume(executionId: string, reason?: string): Promise<void> {
     const record = this.require(executionId);
+    assertExecutionTransition(executionId, record.execution.status, 'running');
     this.pausedExecutions.delete(executionId);
     record.execution.status = 'running';
     this.pushEvent(record, 'execution.resumed', {
