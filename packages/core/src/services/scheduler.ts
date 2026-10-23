@@ -6,6 +6,7 @@ import type { RoutingMode, Task } from '../types/task.js';
 import type {
   ComputerRoutingDecision,
   ModelRoutingDecision,
+  ModelFallback,
   RoutingPolicyConfig,
   SchedulerDecision,
 } from '../types/scheduler.js';
@@ -230,46 +231,86 @@ export class Scheduler {
     }
 
     const effectiveHarnessId = agentId ?? task.execution?.targetAgentId ?? task.requirements?.agent;
-    const modelDecision = this.routeModel(task, requiredContext, input.excludeModelIds ?? [], routing, effectiveHarnessId);
-    const record = this.deps.models.getRequired(modelDecision.modelId);
-    const instance = this.deps.models
-      .instancesOf(record.id)
-      .find((i) => i.id === modelDecision.modelInstanceId);
-    if (!instance) {
-      throw new SchedulingError(`Selected model instance '${modelDecision.modelInstanceId}' is no longer registered`);
+    const initiallyExcluded = input.excludeModelIds ?? [];
+    const excluded = [...initiallyExcluded];
+    const fallbacks: ModelFallback[] = [];
+    const canFallback = routing.allowFallback && !task.execution?.targetModelId;
+    // One attempt per registered model guarantees a finite preflight even if a placement
+    // fails repeatedly. routeModel re-applies capability, policy, provider, context, and
+    // resource checks after every rejection, so a retry cannot bypass those gates.
+    const maxAttempts = this.deps.models.list().length + 1;
+    let lastPlacementError: SchedulingError | undefined;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      let modelDecision: ModelRoutingDecision;
+      try {
+        modelDecision = this.routeModel(task, requiredContext, excluded, routing, effectiveHarnessId);
+      } catch (error) {
+        if (lastPlacementError && error instanceof SchedulingError) {
+          throw new SchedulingError(
+            `${error.message} Previous placement preflight failures: ${fallbacks.map((f) => `${f.from}: ${f.reason}`).join(' | ')}`,
+            error.modelReasons,
+            [...lastPlacementError.computerReasons, ...error.computerReasons],
+          );
+        }
+        throw error;
+      }
+
+      const record = this.deps.models.getRequired(modelDecision.modelId);
+      if (fallbacks.length) fallbacks[fallbacks.length - 1]!.to = record.id;
+      const instance = this.deps.models
+        .instancesOf(record.id)
+        .find((i) => i.id === modelDecision.modelInstanceId);
+      if (!instance) {
+        throw new SchedulingError(`Selected model instance '${modelDecision.modelInstanceId}' is no longer registered`);
+      }
+
+      let computerDecision: ComputerRoutingDecision;
+      try {
+        computerDecision = this.scheduleComputer(task, record, requiredContext, routing);
+      } catch (error) {
+        if (!(error instanceof SchedulingError) || !canFallback) throw error;
+        lastPlacementError = error;
+        const reason = error.computerReasons.length ? error.computerReasons.join('; ') : error.message;
+        fallbacks.push({ from: record.id, to: '', reason });
+        excluded.push(record.id);
+        continue;
+      }
+
+      const placed =
+        this.deps.models
+          .instancesOf(record.id)
+          .find((i) => i.runtimeId === computerDecision.runtimeId && i.computerId === computerDecision.computerId) ??
+        instance;
+      modelDecision.modelInstanceId = placed.id;
+      const resourceType =
+        computerDecision.resourceType ??
+        (computerDecision.placementKind === 'hosted' ? 'HOSTED_API_INFERENCE' : 'LOCAL_GPU_INFERENCE');
+      return {
+        fallbacks: fallbacks.length ? fallbacks : undefined,
+        agentId,
+        modelId: record.id,
+        modelInstanceId: placed.id,
+        readiness: placed.state === 'READY' ? 'READY_NOW' : 'LOADABLE',
+        runtimeId: computerDecision.runtimeId,
+        computerId: computerDecision.computerId,
+        resourceType,
+        modelDecision,
+        computerDecision: {
+          ...computerDecision,
+          resourceType,
+        },
+        reasons: [
+          ...agentReasons,
+          ...fallbacks.map((f) => `fallback: skipped '${f.from}' for '${f.to}' after placement preflight: ${f.reason}`),
+          `model: ${modelDecision.reasons.join(' | ')}`,
+          `computer: ${computerDecision.reasons.join(' | ')}`,
+        ],
+        decidedAt: new Date(),
+      };
     }
 
-    const computerDecision = this.scheduleComputer(task, record, requiredContext, routing);
-    const placed =
-      this.deps.models
-        .instancesOf(record.id)
-        .find((i) => i.runtimeId === computerDecision.runtimeId && i.computerId === computerDecision.computerId) ??
-      instance;
-    modelDecision.modelInstanceId = placed.id;
-    const resourceType =
-      computerDecision.resourceType ??
-      (computerDecision.placementKind === 'hosted' ? 'HOSTED_API_INFERENCE' : 'LOCAL_GPU_INFERENCE');
-
-    return {
-      agentId,
-      modelId: record.id,
-      modelInstanceId: placed.id,
-      readiness: placed.state === 'READY' ? 'READY_NOW' : 'LOADABLE',
-      runtimeId: computerDecision.runtimeId,
-      computerId: computerDecision.computerId,
-      resourceType,
-      modelDecision,
-      computerDecision: {
-        ...computerDecision,
-        resourceType,
-      },
-      reasons: [
-        ...agentReasons,
-        `model: ${modelDecision.reasons.join(' | ')}`,
-        `computer: ${computerDecision.reasons.join(' | ')}`,
-      ],
-      decidedAt: new Date(),
-    };
+    throw lastPlacementError ?? new SchedulingError('No model passed placement preflight');
   }
 
   // ==================== PHASE 1: MODEL ROUTING ====================

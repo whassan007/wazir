@@ -127,6 +127,79 @@ describe('Scheduler', () => {
     expect(() => scheduler.plan({ task })).toThrow('No model satisfies');
   });
 
+  it('replans once when the highest-ranked model fails device preflight', () => {
+    const computers = new ComputerRegistry();
+    const runtimes = new RuntimeRegistry();
+    const models = new ModelRegistry();
+    for (const [id, gpu] of [['cpu-only', false], ['gpu-ready', true]] as const) {
+      computers.register({
+        id,
+        name: id,
+        type: 'workstation' as const,
+        local: true,
+        os: { platform: 'linux', architecture: 'x64', version: '5.0' },
+        hardware: {
+          cpu: 'test-cpu', cpuCores: 8, memoryGB: 32,
+          ...(gpu ? { gpu: { model: 'test-gpu', memoryGB: 24, cuda: true } } : {}),
+        },
+      });
+      runtimes.register({
+        id: `ollama-${id}`,
+        type: 'ollama' as const,
+        name: 'Ollama',
+        version: '0.1',
+        computerId: id,
+        health: 'healthy' as const,
+        capabilities: {
+          chat: true, streaming: true, toolCalling: false, structuredOutput: false,
+          vision: false, embeddings: false, reasoning: false, modelLoad: true,
+          modelUnload: true, modelDownload: false, statefulChat: false, mcp: false,
+        },
+      });
+    }
+    const model = (id: string) => ({
+      id, name: id, provider: 'ollama', family: 'qwen' as const, contextMax: 32768,
+      capabilities: ['generalChat', 'coding'], toolCalling: false, structuredOutput: false,
+      vision: false, audio: false, embedding: false, reasoning: false,
+      runtimeCompatibility: ['ollama' as const], local: true, createdAt: new Date(), updatedAt: new Date(),
+    });
+    models.register(model('model-1'));
+    models.register(model('model-2'));
+    models.upsertInstance({
+      id: 'model-1-cpu', modelId: 'model-1', computerId: 'cpu-only', runtimeId: 'ollama-cpu-only',
+      runtimeModelId: 'model-1:latest', loaded: true, health: 'healthy',
+    });
+    models.upsertInstance({
+      id: 'model-2-gpu', modelId: 'model-2', computerId: 'gpu-ready', runtimeId: 'ollama-gpu-ready',
+      runtimeModelId: 'model-2:latest', loaded: false, health: 'healthy',
+    });
+
+    const s = new Scheduler({ computers, runtimes, models });
+    const task = {
+      id: 'task-device-fallback', type: 'coding' as const, input: 'Write a test',
+      requirements: { capabilities: [], requiresGpu: true }, priority: 'normal',
+      status: 'pending', createdAt: new Date(),
+    };
+    const decision = s.plan({ task });
+
+    expect(decision.modelId).toBe('model-2');
+    expect(decision.computerId).toBe('gpu-ready');
+    expect(decision.fallbacks).toEqual([
+      expect.objectContaining({ from: 'model-1', to: 'model-2', reason: expect.stringContaining('requires GPU') }),
+    ]);
+  });
+
+  it('does not substitute an explicitly pinned model after placement preflight fails', () => {
+    const task = {
+      id: 'task-pinned-device', type: 'coding' as const, input: 'Write a test',
+      requirements: { capabilities: [], requiresGpu: true }, priority: 'normal',
+      status: 'pending', createdAt: new Date(),
+      execution: { targetModelId: 'model-1' },
+    };
+
+    expect(() => scheduler.plan({ task })).toThrow("No computer can host model 'model-1'");
+  });
+
 
   it('produces explainable reasons', () => {
     const task = {
