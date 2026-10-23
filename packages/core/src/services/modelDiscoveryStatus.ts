@@ -39,6 +39,42 @@ export interface StructuredModelFleetStatus {
   };
 }
 
+export interface LocalRuntimeSummary {
+  runtimeId: string;
+  type: string;
+  health: 'healthy' | 'degraded' | 'unavailable';
+  endpoint?: string;
+  loadedCount: number;
+  installedCount: number;
+}
+
+export interface LocalDiscoveredModel {
+  modelId: string;
+  name: string;
+  provider: string;
+  runtimeType: string;
+  endpoint?: string;
+  status: 'loaded' | 'installed' | 'unavailable';
+  readinessLabel: 'Ready' | 'Can load' | 'Insufficient memory' | 'Runtime offline';
+  loaded: boolean;
+  installed: boolean;
+  available: boolean;
+  eligible: boolean;
+  ineligibleReason?: string;
+  memoryRequiredGB: number;
+  contextMax: number;
+  deviceLabel: string;
+}
+
+export interface LocalDiscoverySnapshot {
+  deviceLabel: string;
+  usableMemoryGB: number;
+  totalMemoryGB: number;
+  runtimeSummaryLabel: string;
+  runtimes: LocalRuntimeSummary[];
+  models: LocalDiscoveredModel[];
+}
+
 export interface ModelDiscoveryStatusDeps {
   models: ModelRegistry;
   runtimes: RuntimeRegistry;
@@ -182,6 +218,203 @@ export class ModelDiscoveryStatusService {
         loaded: loadedCount,
         active: activeCount,
       },
+    };
+  }
+
+  discoverLocalModels(options?: { hardwareEligibility?: any; contextEstimator?: any }): LocalDiscoverySnapshot {
+    const computers = this.deps.computers.list();
+    const localComputer = computers.find(c => c.local === true) ?? computers[0];
+
+    let deviceLabel = 'Apple Silicon (Unified Memory)';
+    let totalMemoryGB = 32;
+    let usableMemoryGB = 24;
+
+    if (localComputer) {
+      const hw = localComputer.hardware;
+      const mem = hw?.memoryGB ?? 32;
+      totalMemoryGB = mem;
+      const gpuName = hw?.gpu?.model;
+      const cpuName = hw?.cpu ?? (hw?.cpuCores ? `${hw.cpuCores}-core CPU` : undefined);
+      const parts = [gpuName, cpuName, `${mem}GB Unified`].filter(Boolean);
+      if (parts.length > 0) {
+        deviceLabel = parts.join(' - ');
+      } else if (localComputer.name) {
+        deviceLabel = localComputer.name;
+      }
+      try {
+        const snap = this.deps.computers.resourceSnapshot(localComputer.id);
+        if (snap && snap.availableMemoryBytes > 0) {
+          usableMemoryGB = Number((snap.availableMemoryBytes / (1024 ** 3)).toFixed(1));
+        } else {
+          usableMemoryGB = mem * 0.75;
+        }
+      } catch {
+        usableMemoryGB = mem * 0.75;
+      }
+    }
+
+    const runtimes = this.deps.runtimes.list();
+    const runtimeSummaries: LocalRuntimeSummary[] = [];
+    const runtimeSummaryParts: string[] = [];
+
+    for (const rt of runtimes) {
+      const instances = this.deps.models.list().flatMap(m => this.deps.models.instancesOf(m.id)).filter(i => i.runtimeId === rt.id);
+      const loadedCount = instances.filter(i => i.loaded === true && i.health !== 'unavailable').length;
+      const installedCount = instances.length - loadedCount;
+
+      runtimeSummaries.push({
+        runtimeId: rt.id,
+        type: rt.runtimeKind || 'local',
+        health: rt.health || 'degraded',
+        endpoint: (rt as any).endpoint || (rt as any).baseUrl,
+        loadedCount,
+        installedCount: Math.max(0, installedCount),
+      });
+
+      runtimeSummaryParts.push(`${rt.id} (${rt.health || 'degraded'})`);
+    }
+
+    const runtimeSummaryLabel = runtimeSummaryParts.length > 0
+      ? runtimeSummaryParts.join(', ')
+      : 'No local runtime detected';
+
+    const allModels = this.deps.models.list();
+    const localGenerativeModels = allModels.filter(m => m.local !== false && !m.embedding);
+
+    const discoveredModels: LocalDiscoveredModel[] = [];
+
+    let residentMemoryUsedGB = 0;
+    for (const m of localGenerativeModels) {
+      const instances = this.deps.models.instancesOf(m.id);
+      for (const inst of instances) {
+        if (inst.loaded === true && inst.health !== 'unavailable') {
+          const estMem = estimateModelMemory(m.parameters, m.id, m.quantization);
+          const memReq = m.memory?.minSystemGB ?? m.memory?.minGpuGB ?? options?.contextEstimator?.estimateWeightsGB?.(m) ?? estMem.minSystemGB ?? 4;
+          residentMemoryUsedGB += memReq;
+        }
+      }
+    }
+
+    const effectiveUsableMemory = usableMemoryGB + residentMemoryUsedGB;
+
+    for (const m of localGenerativeModels) {
+      const instances = this.deps.models.instancesOf(m.id);
+      const estMem = estimateModelMemory(m.parameters, m.id, m.quantization);
+      const memoryRequiredGB = m.memory?.minSystemGB ?? m.memory?.minGpuGB ?? options?.contextEstimator?.estimateWeightsGB?.(m) ?? estMem.minSystemGB ?? 4;
+      const contextMax = (m as any).contextWindow ?? m.contextMax ?? 8192;
+
+      let isLoaded = false;
+      let isInstalled = false;
+      let isUnavailable = false;
+      let runtimeType = m.provider || 'ollama';
+      let endpoint: string | undefined;
+
+      if (instances.length === 0) {
+        isInstalled = true;
+      } else {
+        for (const inst of instances) {
+          const rt = this.deps.runtimes.get(inst.runtimeId);
+          if (rt) {
+            runtimeType = rt.runtimeKind || runtimeType;
+            endpoint = (rt as any).endpoint || (rt as any).baseUrl;
+          }
+
+          const isRuntimeOffline = !rt || rt.health === 'unavailable';
+          if (isRuntimeOffline || inst.health === 'unavailable' || inst.state === 'UNAVAILABLE') {
+            isUnavailable = true;
+          } else if (inst.loaded === true && inst.health === 'healthy' && (!rt || rt.health !== 'unavailable')) {
+            isLoaded = true;
+          } else if ((inst as any).installed !== false) {
+            isInstalled = true;
+          }
+        }
+      }
+
+      const hasUnavailableRuntime = instances.some(inst => {
+        const rt = this.deps.runtimes.get(inst.runtimeId);
+        return rt && rt.health === 'unavailable';
+      }) || (instances.length === 0 && runtimes.length > 0 && runtimes.every(rt => rt.health === 'unavailable'));
+
+      if (hasUnavailableRuntime && !isLoaded) {
+        isUnavailable = true;
+        isInstalled = false;
+      }
+
+      let status: 'loaded' | 'installed' | 'unavailable' = 'installed';
+      let readinessLabel: 'Ready' | 'Can load' | 'Insufficient memory' | 'Runtime offline' = 'Can load';
+      let eligible = true;
+      let ineligibleReason: string | undefined;
+
+      if (isUnavailable) {
+        status = 'unavailable';
+        readinessLabel = 'Runtime offline';
+        eligible = false;
+        const rtId = instances[0]?.runtimeId ?? runtimeType;
+        ineligibleReason = `Runtime ${rtId} is offline`;
+      } else if (isLoaded) {
+        status = 'loaded';
+        readinessLabel = 'Ready';
+        eligible = true;
+      } else {
+        status = 'installed';
+        let customEligible = true;
+        if (options?.hardwareEligibility && typeof options.hardwareEligibility.check === 'function') {
+          const res = options.hardwareEligibility.check(m, { usableMemoryGB: effectiveUsableMemory });
+          customEligible = res?.eligible ?? true;
+          if (!customEligible) ineligibleReason = res?.reason;
+        } else {
+          if (memoryRequiredGB > effectiveUsableMemory) {
+            customEligible = false;
+            ineligibleReason = `Requires ${memoryRequiredGB.toFixed(1)}GB, ${effectiveUsableMemory.toFixed(1)}GB usable`;
+          }
+        }
+
+        if (customEligible) {
+          readinessLabel = 'Can load';
+          eligible = true;
+        } else {
+          readinessLabel = 'Insufficient memory';
+          eligible = false;
+          ineligibleReason = ineligibleReason ?? `Requires ${memoryRequiredGB.toFixed(1)}GB, ${effectiveUsableMemory.toFixed(1)}GB usable`;
+        }
+      }
+
+      discoveredModels.push({
+        modelId: m.id,
+        name: m.name || m.id,
+        provider: m.provider || 'ollama',
+        runtimeType,
+        endpoint,
+        status,
+        readinessLabel,
+        loaded: isLoaded,
+        installed: isInstalled || status === 'installed' || status === 'loaded',
+        available: !isUnavailable,
+        eligible,
+        ineligibleReason,
+        memoryRequiredGB: Number(memoryRequiredGB.toFixed(1)),
+        contextMax,
+        deviceLabel,
+      });
+    }
+
+    discoveredModels.sort((a, b) => {
+      const rank = (model: LocalDiscoveredModel) => {
+        if (model.status === 'loaded') return 0;
+        if (model.status === 'installed' && model.eligible) return 1;
+        if (model.status === 'installed' && !model.eligible) return 2;
+        return 3;
+      };
+      return rank(a) - rank(b);
+    });
+
+    return {
+      deviceLabel,
+      usableMemoryGB: Number(usableMemoryGB.toFixed(1)),
+      totalMemoryGB: Number(totalMemoryGB.toFixed(1)),
+      runtimeSummaryLabel,
+      runtimes: runtimeSummaries,
+      models: discoveredModels,
     };
   }
 
