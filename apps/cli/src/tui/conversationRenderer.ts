@@ -15,6 +15,7 @@ export interface ConversationFrame {
   approval?: string;
   status?: string;
   copyMode?: string;
+  modalLines?: string[];
 }
 
 /** Inline renderer: transcript is append-only; only this small live region is repainted. */
@@ -26,6 +27,9 @@ export class ConversationRenderer {
   private lastFrameKey = '';
   private lastPlainStatus = '';
   private liveCursorCol = 0;
+  private lastNonTtyModalKey = '';
+  private lastAppendedText = '';
+  private currentModalLines: string[] = [];
   private readonly tty: boolean;
   private readonly writer: OutputWriter;
   readonly transcript = new TranscriptStore();
@@ -59,8 +63,23 @@ export class ConversationRenderer {
   append(text: string): void {
     this.clearLive();
     const clean = text.replace(/\r/g, '');
+    this.lastAppendedText = clean.trim();
     this.transcript.append(clean);
     this.writeDurable(`${clean.endsWith('\n') ? clean : `${clean}\n`}\n`);
+  }
+
+  clearModal(): void {
+    this.lastNonTtyModalKey = '';
+    this.currentModalLines = [];
+    this.clearLive();
+  }
+
+  getActiveModalLines(): string[] {
+    return this.currentModalLines;
+  }
+
+  getCurrentModalLines(): string[] {
+    return this.currentModalLines;
   }
 
   render(frame: ConversationFrame): void {
@@ -73,35 +92,69 @@ export class ConversationRenderer {
         ? `● Working${frame.elapsedSeconds === undefined ? '' : ` (${formatElapsed(frame.elapsedSeconds)}) · Esc to interrupt`}${frame.activity ? ` · ${frame.activity}` : ''}`
         : frame.waitingApproval ? `? ${frame.waitingApproval} approval${frame.waitingApproval === 1 ? '' : 's'} required · /fleet to review` : '';
     const idleStatus = 'Ready. Type a task or /fanout <t1; t2; ...> to begin.';
-    const statusText = frame.status && frame.status !== idleStatus ? `• ${frame.status}` : '';
+    
+    let statusText = '';
+    if (frame.status && frame.status !== idleStatus) {
+      const trimmedStatus = frame.status.trim();
+      const isDuplicate = trimmedStatus === this.lastAppendedText ||
+        (this.lastAppendedText.startsWith('Model selection updated') && (trimmedStatus.startsWith('Model selection updated') || trimmedStatus.startsWith('Model selection cancelled')));
+      if (!isDuplicate) {
+        statusText = `• ${frame.status}`;
+      }
+    }
+
+    this.currentModalLines = frame.modalLines ?? [];
+
     const promptLines = wrapWithCursor(frame.prompt || '', frame.cursor, Math.max(1, width - 2));
-    const fixed = (active ? 1 : 0) + (frame.approval ? 1 : 0) + (frame.copyMode ? 1 : 0) + (statusText ? 1 : 0);
-    const maxRows = this.tty ? Math.max(1, Math.min(9, rows - 1)) : 9;
+    const modalLinesFormatted = frame.modalLines ? frame.modalLines.map(line => fit(line, width)) : [];
+    const fixed = (active ? 1 : 0) + (frame.approval ? 1 : 0) + (frame.copyMode ? 1 : 0) + (statusText ? 1 : 0) + modalLinesFormatted.length;
+    
+    const maxRows = this.tty 
+      ? Math.max(modalLinesFormatted.length + 4, Math.min(9, rows - 1))
+      : 9;
     const promptCapacity = Math.max(1, maxRows - fixed);
     const promptStart = Math.max(0, Math.min(promptLines.cursorRow - promptCapacity + 1, promptLines.lines.length - promptCapacity));
     const promptEnd = Math.min(promptLines.lines.length, promptStart + promptCapacity);
     const visiblePrompt = promptLines.lines.slice(promptStart, promptEnd);
+
     let next = [
       ...(active ? [fit(active, width)] : []),
       ...(frame.approval ? [fit(`? ${frame.approval}`, width)] : []),
       ...(frame.copyMode ? [fit(frame.copyMode, width)] : []),
       ...(statusText ? [fit(statusText, width)] : []),
+      ...modalLinesFormatted,
       ...visiblePrompt.map((line, i) => `${promptStart + i === 0 ? '> ' : '  '}${line}`),
     ];
-    const nextCursorRow = fixed + Math.max(0, promptLines.cursorRow - promptStart);
+
+    const nextCursorRow = fixed - modalLinesFormatted.length + Math.max(0, promptLines.cursorRow - promptStart);
+
     if (!this.tty) {
-      // Redirected output is plain text and contains no transient control sequences.
+      const modalKey = modalLinesFormatted.join('\n');
+      if (modalKey && modalKey !== this.lastNonTtyModalKey) {
+        this.lastNonTtyModalKey = modalKey;
+        this.transcript.append(modalKey);
+        this.writeDurable(`${modalKey}\n`);
+      } else if (!modalKey && this.lastNonTtyModalKey) {
+        this.lastNonTtyModalKey = '';
+      }
+
       if (!this.plainRendered) {
         const clean = next.filter((line) => Boolean(line) && (!statusText || line !== fit(statusText, width))).join('\n');
         if (clean) this.writeDurable(`${clean}\n`);
         this.plainRendered = true;
       }
       if (frame.status && frame.status !== this.lastPlainStatus && frame.status !== idleStatus) {
-        this.writeDurable(`${frame.status}\n`);
-        this.lastPlainStatus = frame.status;
+        const trimmedStatus = frame.status.trim();
+        const isDuplicate = trimmedStatus === this.lastAppendedText ||
+          (this.lastAppendedText.startsWith('Model selection updated') && (trimmedStatus.startsWith('Model selection updated') || trimmedStatus.startsWith('Model selection cancelled')));
+        if (!isDuplicate) {
+          this.writeDurable(`${frame.status}\n`);
+          this.lastPlainStatus = frame.status;
+        }
       }
       return;
     }
+
     const frameKey = `${next.join('\n')}\0${nextCursorRow}`;
     if (frameKey === this.lastFrameKey) return;
     this.lastFrameKey = frameKey;
