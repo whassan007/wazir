@@ -233,6 +233,7 @@ describe('FleetTui — session lifecycle & terminal hygiene', () => {
     harness = new TuiTestHarness({ engine, concurrencyLimit: 2, useWorktrees: false });
 
     await harness.start();
+    await harness.start(); // Re-entering start must not register a duplicate listener set.
 
     // While running: the TUI binds one 'keypress' handler and one 'data' fallback.
     // ('data' count is 2 total because screen.enter() also parks readline's
@@ -252,6 +253,39 @@ describe('FleetTui — session lifecycle & terminal hygiene', () => {
     expect(harness.inStream.listenerCount('keypress')).toBe(0);
     expect(harness.inStream.listenerCount('data')).toBe(1); // only readline's parser remains
     expect((harness.screen as any).resizeListeners.length).toBe(0);
+  });
+
+  it('keeps a late error from a replaced chat job out of the new session state', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-job-isolation-'));
+    const engine = await buildFleetTestEngine(projectRoot);
+    harness = new TuiTestHarness({ engine, presentationMode: 'conversation', concurrencyLimit: 2, useWorktrees: false });
+    await harness.start();
+
+    const rejects: Array<(error: Error) => void> = [];
+    vi.spyOn(engine.orchestrator, 'runJob').mockImplementation(() => new Promise<any>((_resolve, reject) => {
+      rejects.push(reject);
+    }));
+    const cancelJob = vi.spyOn(engine.orchestrator, 'cancelJob');
+
+    await harness.tui.submitCommand('first chat turn');
+    for (let i = 0; i < 40 && rejects.length < 1; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(rejects).toHaveLength(1);
+    const firstJobId = harness.tui.getCurrentJob()?.id;
+    expect(firstJobId).toBeTruthy();
+
+    // Bypass only the input-rate guard so the test can exercise replacement directly.
+    (harness.tui as any).submissionTimestamps = [];
+    await harness.tui.submitCommand('second chat turn');
+    for (let i = 0; i < 40 && rejects.length < 2; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(rejects).toHaveLength(2);
+    expect(cancelJob).toHaveBeenCalledWith(firstJobId);
+
+    rejects[0](new Error('stale error from first turn'));
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(harness.tui.getStatusMessage()).toContain('running');
+    expect(harness.tui.getStatusMessage()).not.toContain('stale error from first turn');
+    expect(harness.outStream.getOutput()).not.toContain('stale error from first turn');
   });
 
   it('exits the session on /quit and resolves waitForExit exactly once', async () => {
