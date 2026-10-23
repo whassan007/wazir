@@ -94,7 +94,7 @@ export class ModelSelectorController {
         this.selectedIndex = (this.selectedIndex + 1) % modeCount;
         return { type: 'none' };
       }
-      if (key === '\r' || key === 'enter') {
+      if (key === '\r' || key === 'enter' || key === 'return') {
         if (this.selectedIndex === 5) {
           this.view = 'custom';
           this.selectedIndex = 0;
@@ -166,7 +166,7 @@ export class ModelSelectorController {
         }
         return { type: 'none' };
       }
-      if (key === '\r' || key === 'enter') {
+      if (key === '\r' || key === 'enter' || key === 'return') {
         if (this.isSearching) {
           this.isSearching = false;
           return { type: 'none' };
