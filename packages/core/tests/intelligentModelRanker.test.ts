@@ -192,4 +192,95 @@ describe('IntelligentModelRanker and 7 Routing Modes', () => {
     expect(banner).toContain('Context:');
     expect(banner).toContain('Reason:');
   });
+
+  it('performs Auto Local Routing correctly (excludes hosted models, prefers loaded, skips ineligible)', () => {
+    const computer = createComputer({
+      load: { memoryAvailableGB: 10 },
+    });
+
+    const localLoaded = createModel({ id: 'local-loaded', parameters: '7B', memory: { minSystemGB: 6 } });
+    const localUnloaded = createModel({ id: 'local-unloaded', parameters: '7B', memory: { minSystemGB: 6 } });
+    const hostedModel = createModel({ id: 'hosted-gpt', local: false, provider: 'openai' });
+    const heavyIneligible = createModel({ id: 'heavy-ineligible', parameters: '70B', memory: { minSystemGB: 50 } });
+
+    const instances: ModelInstance[] = [
+      {
+        id: 'inst-loaded',
+        modelId: 'local-loaded',
+        computerId: computer.id,
+        runtimeId: 'ollama',
+        runtimeModelId: 'local-loaded',
+        loaded: true,
+        state: 'READY',
+        health: 'healthy',
+      },
+    ];
+
+    const result = ranker.selectModel([hostedModel, heavyIneligible, localUnloaded, localLoaded], computer, instances, {
+      mode: 'LOCAL_FIRST',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.selected?.model.id).toBe('local-loaded');
+    // Ensure hosted model was excluded from alternatives/selection
+    expect(result.alternatives.some((c) => c.model.id === 'hosted-gpt')).toBe(false);
+    expect(result.alternatives.some((c) => c.model.id === 'heavy-ineligible')).toBe(false);
+  });
+
+  it('handles specific local model selection under LOCAL_FIRST with targetModelId', () => {
+    const computer = createComputer();
+    const modelA = createModel({ id: 'local-model-a', memory: { minSystemGB: 4 } });
+    const modelB = createModel({ id: 'local-model-b', memory: { minSystemGB: 4 } });
+
+    // 1. When eligible, selects model-b
+    const resEligible = ranker.selectModel([modelA, modelB], computer, [], {
+      mode: 'LOCAL_FIRST',
+      targetModelId: 'local-model-b',
+    });
+    expect(resEligible.success).toBe(true);
+    expect(resEligible.selected?.model.id).toBe('local-model-b');
+
+    // 2. When target is ineligible or missing, returns selected: undefined with local alternatives
+    const tightComputer = createComputer({
+      load: { memoryAvailableGB: 2 },
+    });
+    const lightA = createModel({ id: 'local-model-a', memory: { minSystemGB: 1.5 } });
+    const heavyB = createModel({ id: 'local-model-b', memory: { minSystemGB: 25 } });
+
+    const resIneligible = ranker.selectModel([lightA, heavyB], tightComputer, [], {
+      mode: 'LOCAL_FIRST',
+      targetModelId: 'local-model-b',
+    });
+    expect(resIneligible.success).toBe(false);
+    expect(resIneligible.selected).toBeUndefined();
+    expect(resIneligible.alternatives.length).toBeGreaterThan(0);
+    expect(resIneligible.alternatives[0].model.id).toBe('local-model-a');
+  });
+
+  it('gives memory credit to already-loaded 14GB local model with low remaining free RAM under AUTO and LOCAL_FIRST', () => {
+    const lowMemComp = createComputer({
+      load: { memoryAvailableGB: 1.5 },
+    });
+    const model14GB = createModel({ id: 'model-14gb', parameters: '14B', memory: { minSystemGB: 14 } });
+
+    const instances: ModelInstance[] = [
+      {
+        id: 'inst-14',
+        modelId: 'model-14gb',
+        computerId: lowMemComp.id,
+        runtimeId: 'ollama',
+        runtimeModelId: 'model-14gb',
+        loaded: true,
+        state: 'READY',
+        health: 'healthy',
+      },
+    ];
+
+    for (const mode of ['AUTO', 'LOCAL_FIRST'] as const) {
+      const res = ranker.selectModel([model14GB], lowMemComp, instances, { mode });
+      expect(res.success).toBe(true);
+      expect(res.selected?.model.id).toBe('model-14gb');
+      expect(res.selected?.alreadyLoaded).toBe(true);
+    }
+  });
 });
