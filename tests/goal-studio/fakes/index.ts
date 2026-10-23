@@ -253,6 +253,11 @@ export async function resolveGoalStudioServices(opts: CreateFakeServicesOptions)
         clock: opts.clock,
         workspaceRoot: opts.workspaceRoot,
         executor: opts.executor ?? fakeBundle.fakes.executor,
+        holderId: opts.holderId,
+        leaseTtlMs: opts.leaseTtlMs,
+        seedPrompts: opts.seedPrompts,
+        autoStart: opts.autoStart ?? false,
+        autoAdvance: opts.autoAdvance ?? false,
       });
       if (real && real.graphs && real.ledger && real.events && real.controller && real.verification && real.recovery && real.prompts && real.router && real.governance) {
         return {

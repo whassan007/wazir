@@ -33,7 +33,11 @@ import { ApiAuth, bearerToken, type ApiAuthOptions } from './auth.js';
 import { createControlledExecution } from './toolExecution.js';
 import { MobileServices, registerMobileRoutes } from './mobile.js';
 import { wazirVersion } from './version.js';
-import { registerGoalStudioRoutes } from './goalStudio/index.js';
+import {
+  createGoalStudioServices,
+  registerGoalStudioRoutes,
+  type WiredGoalStudioServices,
+} from './goalStudio/index.js';
 
 // Bounds on in-memory state so an unauthenticated peer (or a runaway client)
 // cannot grow the control plane without limit (security review F-19).
@@ -379,6 +383,7 @@ export interface ApiState {
   auth: ApiAuth;
   editorProtocol: EditorProtocolService;
   mobile: MobileServices;
+  goalStudio?: Partial<WiredGoalStudioServices>;
 }
 
 /** Starts the production recovery sweep; caller must stop it on shutdown. */
@@ -416,6 +421,9 @@ export interface ApiStateOptions {
   enableMobileApprovals?: boolean;
   /** SQLite path for ResourceLedger (defaults to :memory:). */
   ledgerPath?: string;
+  /** Enable full Goal Studio services on the API server (or pass partial services). */
+  enableGoalStudio?: boolean;
+  goalStudio?: Partial<WiredGoalStudioServices>;
 }
 
 export async function createApiState(options: ApiStateOptions = {}): Promise<ApiState> {
@@ -619,6 +627,21 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   await mobile.init();
   state.mobile = mobile;
   mobileRef = mobile;
+
+  if (options.goalStudio) {
+    state.goalStudio = options.goalStudio;
+  } else if (options.enableGoalStudio || process.env.WAZIR_ENABLE_GOAL_STUDIO === '1') {
+    state.goalStudio = await createGoalStudioServices({
+      store,
+      workspaceRoot: projectRoot,
+      models,
+      runtimes,
+      computers,
+      mobileApprovals: mobile.approvals,
+      autoStart: true,
+      autoAdvance: true,
+    });
+  }
 
   return state;
 }
@@ -1066,7 +1089,7 @@ export function createApp(state: ApiState) {
 
   // Mobile companion routes (public pairing endpoints + authenticated mobile endpoints)
   registerMobileRoutes(app, state, state.mobile);
-  registerGoalStudioRoutes(app, { auth: state.auth, store: state.store, services: {} });
+  registerGoalStudioRoutes(app, { auth: state.auth, store: state.store, services: state.goalStudio ?? {} });
 
   // Read-only control routes allow viewer or operator tokens. Mutating endpoints
   // explicitly enforce operator scope. A paired mobile device is deliberately NOT

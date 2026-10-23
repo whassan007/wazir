@@ -129,7 +129,7 @@ export const TARGET_TRANSITIONS: Readonly<Record<TargetStatus, readonly TargetSt
   verifying: ['verified', 'failed', 'awaiting_external', 'blocked', 'stopped'],
   verified: ['completed', 'needs_approval', 'awaiting_external', 'failed', 'blocked', 'stopped'],
   failed: ['repairing', 'blocked', 'stopped'],
-  repairing: ['active', 'blocked', 'stopped'],
+  repairing: ['active', 'eligible', 'blocked', 'stopped'],
   needs_approval: ['eligible', 'completed', 'blocked', 'stopped'],
   awaiting_external: ['blocked', 'stopped'],
   blocked: [],

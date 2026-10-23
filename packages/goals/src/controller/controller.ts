@@ -50,6 +50,18 @@ export type GoalControllerDeps = GoalStudioDeps & {
   holderId: string;
   /** Run lease TTL; renewed every ttl/3 while the run is driven. Default 60s. */
   leaseTtlMs?: number;
+  /**
+   * When false, `startRun` initializes the run and unlocks initial root targets to `eligible`,
+   * waiting for explicit `runEligible` or `resume` calls before launching background execution.
+   * Defaults to true.
+   */
+  autoStart?: boolean;
+  /**
+   * When false, `runEligible(runId, targetId, principal)` executes a single attempt for `targetId`,
+   * unlocks newly eligible dependents, and returns the updated `GoalRunLedger` without automatically
+   * advancing to subsequent targets. Defaults to true.
+   */
+  autoAdvance?: boolean;
 };
 
 export type ApprovalKind = 'execute' | 'complete';
@@ -164,6 +176,8 @@ export function createGoalController(deps: GoalControllerDeps): ContinuousGoalCo
   const { ledger, graphs, events, governance, router, prompts, executor, verification, recovery } = services;
   const clock = deps.clock ?? (() => new Date());
   const leaseTtlMs = deps.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
+  const autoStart = deps.autoStart ?? true;
+  const autoAdvance = deps.autoAdvance ?? true;
   const drivers = new Map<GoalRunId, Driver>();
   const settledWaiters = new Map<GoalRunId, Array<() => void>>();
   let shutDown = false;
@@ -518,6 +532,7 @@ export function createGoalController(deps: GoalControllerDeps): ContinuousGoalCo
     }
     for (const targetId of [...repairing, ...fresh]) {
       if (d.active.size >= maxConcurrent) break;
+      if (!autoAdvance && !d.preferred.includes(targetId)) continue;
       if (run.resource.tasksStarted >= limits.maxTasksPerRun) {
         budgetBlocked = true;
         break;
@@ -953,6 +968,9 @@ export function createGoalController(deps: GoalControllerDeps): ContinuousGoalCo
       decision = { action: 'block', failureClass: 'unknown', diagnosis: `recovery unavailable: ${e.message}`, failureSignature: 'recovery-error', reasons: [e.message] };
     }
     attempt.error = { ...input.error, details: { ...(input.error.details ?? {}), failureSignature: decision.failureSignature, failureClass: decision.failureClass } };
+    if (decision.action === 'repair' && decision.hypothesis?.trim()) {
+      attempt.repairHypothesis = decision.hypothesis.trim();
+    }
     await ledger.saveAttempt(attempt);
     await emit('recovery.decided', d.runId, { ...decision }, { targetId: target.id, attemptId: attempt.id });
 
@@ -973,7 +991,7 @@ export function createGoalController(deps: GoalControllerDeps): ContinuousGoalCo
       blockCode = 'NO_PROGRESS';
     } else if (decision.action === 'repair') {
       const hypothesis = decision.hypothesis?.trim();
-      const priorHypotheses = new Set([...prior, attempt].map((a) => a.repairHypothesis?.trim()).filter(Boolean));
+      const priorHypotheses = new Set(prior.map((a) => a.repairHypothesis?.trim()).filter(Boolean));
       if (!hypothesis) blockReason = 'repair requested without a hypothesis';
       else if (priorHypotheses.has(hypothesis)) {
         blockReason = `no novel repair hypothesis (repeated: ${hypothesis})`;
@@ -991,9 +1009,14 @@ export function createGoalController(deps: GoalControllerDeps): ContinuousGoalCo
       attemptId: attempt.id,
       entry: (e) => { e.repairs += 1; },
     });
+    if (!autoAdvance) {
+      await transitionTarget(d, target.id, 'eligible', `ready for retest: ${hypothesis}`, 'recovery', {
+        attemptId: attempt.id,
+      });
+    }
     // REPLAN: the next attempt is recorded durably with its hypothesis before it runs.
     const next: TargetAttempt = { id: attemptIdFor(d.runId, target.id, attempt.attempt + 1), runId: d.runId, targetId: target.id, attempt: attempt.attempt + 1, phase: 'REPLAN', repairHypothesis: hypothesis, startedAt: nowIso() };
-    await ledger.saveAttempt(next);
+    if (autoAdvance) await ledger.saveAttempt(next);
     await emit('target.phase', d.runId, { phase: 'REPLAN' satisfies GoalPhase, hypothesis, nextAttempt: next.attempt }, { targetId: target.id, attemptId: next.id });
     await emit('target.phase', d.runId, { phase: 'RETEST' satisfies GoalPhase, nextAttempt: next.attempt }, { targetId: target.id, attemptId: next.id });
   }
@@ -1093,7 +1116,7 @@ export function createGoalController(deps: GoalControllerDeps): ContinuousGoalCo
   async function runEligible(runId: GoalRunId, targetId: TargetId, principal: string): Promise<GoalRunLedger> {
     const actor = humanActor(principal);
     await audit('target.phase', runId, { action: 'runEligible', actor }, targetId);
-    return withDriver(runId, async (d) => {
+    const updated = await withDriver(runId, async (d) => {
       const run = await requireRun(runId);
       const graph = d.graph ?? (d.graph = await loadGraph(run));
       targetOf(graph, targetId);
@@ -1106,6 +1129,15 @@ export function createGoalController(deps: GoalControllerDeps): ContinuousGoalCo
       d.preferred = [targetId, ...d.preferred.filter((id) => id !== targetId)];
       return run.status === 'running' ? run : setRunStatus(d, 'running', `runEligible(${targetId}) by ${actor}`, actor);
     });
+    if (!autoAdvance) {
+      await settled(runId);
+      const after = await requireRun(runId);
+      if (after.status === 'idle') {
+        return withDriver(runId, (d) => setRunStatus(d, 'running', 'manual step complete', CONTROLLER_ACTOR));
+      }
+      return after;
+    }
+    return updated;
   }
 
   async function resolveApproval(runId: GoalRunId, targetId: TargetId, resolution: ApprovalResolution): Promise<GoalRunLedger> {

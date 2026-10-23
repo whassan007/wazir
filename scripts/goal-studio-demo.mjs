@@ -14,8 +14,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { JsonFileStore } from '../packages/shared/dist/index.js';
-import { GOAL_STUDIO_CONTRACT_VERSION, idempotencyKey } from '../packages/goals/dist/index.js';
+import { JsonFileStore } from '../packages/shared/dist/src/index.js';
+import { GOAL_STUDIO_CONTRACT_VERSION, idempotencyKey } from '../packages/goals/dist/src/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');

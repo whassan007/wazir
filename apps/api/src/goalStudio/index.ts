@@ -8,6 +8,11 @@ import { registerVerificationRoutes } from './verificationRoutes.js';
 import { registerGovernanceRoutes } from './governanceRoutes.js';
 
 export type { GoalStudioRouteContext } from './context.js';
+export {
+  createGoalStudioServices,
+  type CreateGoalStudioServicesOptions,
+  type WiredGoalStudioServices,
+} from './services.js';
 
 // Coordinator-owned composition point for Goal Studio HTTP routes.
 export function registerGoalStudioRoutes(app: Express, ctx: GoalStudioRouteContext): void {

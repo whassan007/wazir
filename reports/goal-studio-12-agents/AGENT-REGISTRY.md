@@ -1,26 +1,20 @@
-# Agent registry
+# Agent Registry — Goal Studio 12-Agent Parallel Development
 
-All agents launched concurrently at 2026-10-22 ~18:45 local, from contract commit `e20355e`.
-Concurrency: 12 of 12 running at the same time (no queueing needed).
+Baseline commit: `f7a40776bd058b80945ab20667ab7bd1780fa2f0` (`main` / `v0.2.13`)
+Contract scaffold commit: `e20355e30855f17cedeeeefb1ab7630f3e423ff6` (`integration/goal-studio-12-agents`)
+Concurrency: **12 of 12 real Antigravity development subagents launched and executed concurrently** across 12 isolated Git worktrees (`/Users/wael/Code/Wazir-gs/agent-01` .. `/Users/wael/Code/Wazir-gs/agent-12`).
 
-**Model note:** the request asked for Qwen coding models where supported. The agent-launch tool in
-this environment runs Claude models only, so every development agent runs on Claude Opus 5.5.
-Local Qwen/other models are used only as Wazir execution targets in the end-to-end demo, if one is ready.
-
-| Agent | Workstream | Worktree | Branch | Status | Latest commit | Tests | Blockers |
-|---|---|---|---|---|---|---|---|
-| 01 | Execution engine reliability | `../agent-01` | `feat/parallel-execution-reliability` | running | e20355e | — | — |
-| 02 | Goal graph & data model | `../agent-02` | `feat/parallel-goal-graph` | running | e20355e | — | — |
-| 03 | Continuous goal controller | `../agent-03` | `feat/parallel-goal-controller` | running | e20355e | — | — |
-| 04 | Independent verification | `../agent-04` | `feat/parallel-verification` | running | e20355e | — | — |
-| 05 | Recovery & repair | `../agent-05` | `feat/parallel-recovery` | running | e20355e | — | — |
-| 06 | Goal Studio graph UI | `../agent-06` | `feat/parallel-goal-ui` | running | e20355e | — | — |
-| 07 | Execution control center | `../agent-07` | `feat/parallel-execution-control` | running | e20355e | — | — |
-| 08 | Prompt Studio | `../agent-08` | `feat/parallel-prompt-studio` | running | e20355e | — | — |
-| 09 | Model routing & fleet | `../agent-09` | `feat/parallel-model-fleet` | running | e20355e | — | — |
-| 10 | Security & governance | `../agent-10` | `feat/parallel-security-governance` | running | e20355e | — | — |
-| 11 | TUI/CLI/startup | `../agent-11` | `feat/parallel-tui-performance` | running | e20355e | — | — |
-| 12 | Integration & release readiness | `../agent-12` | `feat/parallel-integration-validation` | running | e20355e | — | — |
-
-Worktree paths are relative to `/Users/wael/Code/Wazir-gs/`. Status is updated from actual agent
-completion notifications and from `git log` on each branch, not from agent self-reports.
+| Agent | Conversation ID | Workstream | Worktree | Branch | Ownership Scope | Status | Final Commit SHA | Tests Passed | Blockers |
+|---|---|---|---|---|---|---|---|---|---|
+| Agent 01 | `43f3e0c2-bccb-411b-8234-9583c2913eb4` | Execution Engine Reliability | `/Users/wael/Code/Wazir-gs/agent-01` | `feat/parallel-execution-reliability` | `packages/goals/src/ledger/**`, `packages/core/src/services/{executionEngine,checkpointService,executionRecovery}.ts` | completed & merged | `ba2452ccd113794d9a7709b273d025f9601e56f5` | 9/9 (`ledgerStore.test.ts`) + 17/17 core | None |
+| Agent 02 | `07e08b50-6743-460f-842b-2f4ebe9bfddd` | Goal Graph & Data Model | `/Users/wael/Code/Wazir-gs/agent-02` | `feat/parallel-goal-graph` | `packages/goals/src/graph/**`, `apps/api/src/goalStudio/graphRoutes.ts` | completed & merged | `9123f5e114cd9da894d14920ca3e9933c07f0ac8` | 10/10 (`graph/*.test.ts`) | None |
+| Agent 03 | `c0b68040-be84-41aa-9c7d-304fc217287a` | Continuous Goal Controller | `/Users/wael/Code/Wazir-gs/agent-03` | `feat/parallel-goal-controller` | `packages/goals/src/controller/**`, `packages/scheduler/**` | completed & merged | `de3ef2f7c29a50d3a2c449a6938c87c51083d7a7` | 11/11 (`controller.test.ts`) | None |
+| Agent 04 | `e2ebb642-e2d5-4cfb-870f-e254ba0bbbcf` | Independent Verification & Evidence | `/Users/wael/Code/Wazir-gs/agent-04` | `feat/parallel-verification` | `packages/goals/src/verification/**`, `apps/api/src/goalStudio/verificationRoutes.ts` | completed & merged | `627dc2b5e353685f3acca43b996de06369d26fd8` | 18/18 (`verificationService.test.ts`) | None |
+| Agent 05 | `10bc3090-ac4e-404e-8656-6229ab5d2819` | Autonomous Recovery & Repair | `/Users/wael/Code/Wazir-gs/agent-05` | `feat/parallel-recovery` | `packages/goals/src/recovery/**`, `packages/core/src/services/failure*.ts` | completed & merged | `a2901c9744ea873743ed92e2525dfadbb5e6cb0c` | 18/18 (`recoveryService.test.ts`) | None |
+| Agent 06 | `e26675a0-72f2-44a1-a8ec-0512f49704e6` | Goal Studio Graph UI | `/Users/wael/Code/Wazir-gs/agent-06` | `feat/parallel-goal-ui` | `apps/web/public/goal-studio/{index.html,shell.js,graph-model.js,graph.js,goal-studio.css}`, `apps/web/server.js` | completed & merged | `2fb9706a3ccf228a67a82008069ed3f672ee1e81` | 16/16 (`goalStudioUi.test.ts`) | None |
+| Agent 07 | `2125bdbd-b377-4056-ab57-6d9c22b97309` | Execution Control Center | `/Users/wael/Code/Wazir-gs/agent-07` | `feat/parallel-execution-control` | `apps/api/src/goalStudio/control*.ts`, `apps/web/public/goal-studio/control.js`, `apps/cli/src/commands/goalCommands.ts`, `packages/core/src/services/approvalQueue.ts` | completed & merged | `b8442666eb2295f037a680af2f1b3344c190cf27` | 25/25 (`control.goalStudioRoutes.test.ts` + core) | None |
+| Agent 08 | `97eb3085-156f-4e9f-a680-6442d04c3b55` | Prompt Studio | `/Users/wael/Code/Wazir-gs/agent-08` | `feat/parallel-prompt-studio` | `packages/goals/src/prompts/**`, `apps/api/src/goalStudio/promptRoutes.ts`, `apps/web/public/goal-studio/prompts.js` | completed & merged | `22cd81b43741a2647221087d8cca2185fdd5f473` | 51/51 (`prompts/*.test.ts` + API) | None |
+| Agent 09 | `e6f2be73-ce7b-47e8-a4f2-717a033eeb99` | Model Routing & Worker Fleet | `/Users/wael/Code/Wazir-gs/agent-09` | `feat/parallel-model-fleet` | `packages/goals/src/routing/**`, `apps/api/src/goalStudio/fleetRoutes.ts`, `apps/web/public/goal-studio/fleet.js` | completed & merged | `270c33dc38504c6de8caa3031c25dfb112ed120c` | 43/43 (`routing/*.test.ts` + API) | None |
+| Agent 10 | `1290a4ce-4d6f-41c2-a88a-5d2dec8f8a53` | Security, Policy & Governance | `/Users/wael/Code/Wazir-gs/agent-10` | `feat/parallel-security-governance` | `packages/goals/src/governance/**`, `apps/api/src/goalStudio/governanceRoutes.ts`, `packages/core/src/services/policyEngine.ts` | completed & merged | `4e88c1edea7d5a492cd37a25027cb8e5360d4c17` | 51/51 (`governance/*.test.ts` + policy) | None |
+| Agent 11 | `66cb6500-7f2c-42a9-8384-40bae70f5b3f` | TUI, CLI & Startup Performance | `/Users/wael/Code/Wazir-gs/agent-11` | `feat/parallel-tui-performance` | `apps/cli/src/**` (except `goalCommands.ts`), `apps/cli/tests/**`, `bin/**` | completed & merged | `170d880700403c17835a007dbf90b0316e33b526` | 66/66 (`tuiGoalStudioPerformance.test.ts` + TUI) | None |
+| Agent 12 | `1e099a28-b416-441f-b7a2-0099788ebbf1` | Integration, Acceptance & Release Readiness | `/Users/wael/Code/Wazir-gs/agent-12` | `feat/parallel-integration-validation` | `tests/goal-studio/**`, `scripts/goal-studio-*.mjs`, `docs/goal-studio/**` | completed & merged | `42aa44e97f141a510d99e5fa727c8828e8c4d441` | 11/11 (`e2eLifecycle` + `adversarialInvariants`) | None |

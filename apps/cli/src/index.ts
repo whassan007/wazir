@@ -8,6 +8,7 @@ import chalk from 'chalk';
 import { registerMCPCommands, wasMCPRuntimeUsed } from './mcp.js';
 import { registerWebCommands } from './web.js';
 import { registerMobileCommands } from './mobile.js';
+import { registerGoalCommands } from './commands/goalCommands.js';
 import { installGlobalCrashHandlers } from './crashHandler.js';
 import { createHandoffCommand } from './handoff.js';
 import { globalStartupProfiler } from './startupProfiler.js';
@@ -43,6 +44,7 @@ program
 registerMCPCommands(program);
 registerWebCommands(program);
 registerMobileCommands(program);
+registerGoalCommands(program);
 
 program
   .command('banner')

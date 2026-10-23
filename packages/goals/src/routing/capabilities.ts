@@ -34,6 +34,12 @@ const FLAG_ALIASES: Record<string, CapabilityRequirements['flags'][number]> = {
   audio: 'audio',
 };
 
+const DECLARED_SYNONYMS: Record<string, readonly string[]> = {
+  'text-generation': ['generalchat', 'text-generation'],
+  'code-generation': ['coding', 'code-generation'],
+  'formal-verification': ['reasoning', 'formal-verification'],
+};
+
 function parseTokens(value: string): number | undefined {
   const m = value.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*(k|m)?$/);
   if (!m) return undefined;
@@ -108,7 +114,11 @@ export function checkCapabilities(
     reasons.push(`context ${ctx} >= required ${req.minContextTokens}`);
   }
   for (const cap of req.declared) {
-    const has = record.capabilities.some((c) => c.toLowerCase() === cap.toLowerCase());
+    const lowerCap = cap.toLowerCase();
+    const synonyms = DECLARED_SYNONYMS[lowerCap] ?? [lowerCap];
+    const has = record.capabilities.some((c) => synonyms.includes(c.toLowerCase()))
+      || (lowerCap === 'text-generation' && record.capabilities.length > 0)
+      || (lowerCap === 'formal-verification' && record.reasoning);
     if (!has) return { ok: false, reasons, rejection: `capability '${cap}' missing` };
     reasons.push(`capability '${cap}': present`);
   }

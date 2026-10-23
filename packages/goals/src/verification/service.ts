@@ -139,14 +139,14 @@ export function createVerificationService(deps: VerificationServiceDeps): GoalVe
       return { id: evidenceId(base, createdAt), ...base };
     };
 
-    // 1. Checksums of the exact bytes (one record per declared artifact).
+    // 1. Checksums of the exact bytes (one record per declared artifact, bound to the full verified artifact set).
     const problemByUri = new Map(before.problems.map((p) => [p.uri, p.reason]));
     for (const ref of before.artifacts) {
       const problem = problemByUri.get(ref.uri);
       records.push(make({
         validationMethod: 'checksum',
         verdict: problem ? 'FAIL' : 'PASS',
-        artifacts: [ref],
+        artifacts: before.artifacts,
         outputExcerpt: `${ref.uri} ${ref.digest} (${ref.sizeBytes ?? 0} bytes)`,
         limitations: problem ? [problem] : ['checksum binds evidence to bytes; it does not establish correctness'],
       }));
