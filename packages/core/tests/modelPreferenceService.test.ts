@@ -130,4 +130,33 @@ describe('ModelPreferenceService', () => {
     expect(migrated.reasoningEffort).toBe('low');
     expect(migrated.providerFilter).toBe('openai');
   });
+
+  it('preserves Auto Local and Pinned Local preferences across session and persistent scopes', () => {
+    const configPath = path.join(tmpDir, 'wazir-local.json');
+    const service = new ModelPreferenceService({ configFilePath: configPath });
+
+    // 1. Persistent Default: Auto Local
+    service.setDefaultPreference({ mode: 'local', modelId: undefined });
+    const effPersistentAuto = service.getEffectivePreference();
+    expect(effPersistentAuto.mode).toBe('local');
+    expect(effPersistentAuto.modelId).toBeUndefined();
+    expect(effPersistentAuto.strict).toBe(false);
+    expect(effPersistentAuto.displayLabel).toBe('Local (Auto Local)');
+    expect(effPersistentAuto.source).toBe('persistent');
+
+    // 2. Session-only: Pinned Local model
+    service.setSessionPreference({ mode: 'local', modelId: 'qwen2.5-coder:7b' });
+    const effSessionPinned = service.getEffectivePreference();
+    expect(effSessionPinned.mode).toBe('local');
+    expect(effSessionPinned.modelId).toBe('qwen2.5-coder:7b');
+    expect(effSessionPinned.strict).toBe(true);
+    expect(effSessionPinned.displayLabel).toBe('Local (qwen2.5-coder:7b)');
+    expect(effSessionPinned.source).toBe('session');
+
+    // Clear session and check persistent default again
+    service.clearSessionPreference();
+    const effBackToPersistent = service.getEffectivePreference();
+    expect(effBackToPersistent.displayLabel).toBe('Local (Auto Local)');
+    expect(effBackToPersistent.source).toBe('persistent');
+  });
 });

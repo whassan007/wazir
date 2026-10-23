@@ -216,22 +216,28 @@ export class ModelPreferenceService {
   private toEffective(record: ModelPreferenceRecord, source: EffectiveModelPreference['source']): EffectiveModelPreference {
     let displayLabel = 'Auto';
     if (record.modelId) {
-      displayLabel = record.modelId;
+      if (record.mode === 'local') {
+        displayLabel = `Local (${record.modelId})`;
+      } else {
+        displayLabel = record.modelId;
+      }
     } else {
       switch (record.mode) {
         case 'fast': displayLabel = 'Fast'; break;
         case 'balanced': displayLabel = 'Balanced'; break;
         case 'powerful': displayLabel = 'Powerful'; break;
-        case 'local': displayLabel = 'Local'; break;
+        case 'local': displayLabel = 'Local (Auto Local)'; break;
         case 'custom': displayLabel = record.modelId ?? 'Custom'; break;
         case 'auto': default: displayLabel = 'Auto'; break;
       }
     }
 
+    const strict = record.strict ?? (record.modelId !== undefined || (record.mode === 'local' && record.modelId !== undefined));
+
     return {
       mode: record.mode,
       modelId: record.modelId,
-      strict: record.strict ?? (record.modelId !== undefined),
+      strict,
       reasoningEffort: record.reasoningEffort,
       source,
       displayLabel,

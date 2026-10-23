@@ -134,6 +134,10 @@ export class IntelligentModelRanker {
         rejectionReasons.push(`Model ${model.id} is hosted, but allowHostedProviders is false`);
       }
 
+      if ((mode === 'LOCAL_FIRST' || mode === 'local') && !options.targetModelId && model.local === false) {
+        rejectionReasons.push(`Model ${model.id} is hosted/cloud, excluded by Auto Local Routing`);
+      }
+
       // Task capability matching
       if (options.requiresToolCalling && !model.toolCalling) {
         rejectionReasons.push(`Model ${model.id} does not support required tool calling`);
@@ -149,12 +153,14 @@ export class IntelligentModelRanker {
       const matchingInstance = instances?.find(
         (inst) => inst.modelId === model.id || inst.id === model.id,
       );
+      const isLoaded = matchingInstance?.loaded ?? false;
 
       // Assess hardware eligibility via HardwareEligibilityService
       const deviceEligibility = this.hardwareService.assessDeviceForModel({
         model,
         computer,
         instance: matchingInstance,
+        isAlreadyLoaded: isLoaded,
       });
 
       if (!deviceEligibility.eligible) {
@@ -168,6 +174,7 @@ export class IntelligentModelRanker {
         requiredMinimumContext: options.requiredMinimumContext ?? 2048,
         reasoningEffort: options.reasoningEffort ?? 'medium',
         alreadyLoaded: deviceEligibility.alreadyLoaded,
+        isAlreadyLoaded: isLoaded,
       });
 
       if (!contextPlan.eligible) {
@@ -273,7 +280,7 @@ export class IntelligentModelRanker {
     const mode = options.mode ?? 'AUTO';
     const ranked = this.rankModels(models, computer, instances, options);
 
-    if (mode === 'STRICT_MODEL') {
+    if (mode === 'STRICT_MODEL' || ((mode === 'LOCAL_FIRST') && options.targetModelId)) {
       const targetId = options.targetModelId;
       if (!targetId) {
         return {
