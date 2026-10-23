@@ -49,6 +49,8 @@ export interface NvidiaModelMetadata {
   parameters?: string;
   architecture?: string;
   contextWindow: number;
+  /** Provenance of contextWindow: provider-api (remote record), provider-documented (curated table), default-unknown (fallback guess), operator-configured (override). */
+  contextLimitSource?: 'provider-api' | 'provider-documented' | 'default-unknown' | 'operator-configured';
   maxOutputTokens: number;
   capabilities: string[];
   toolCalling: boolean;
@@ -149,7 +151,9 @@ export function inferNvidiaModelMetadata(
     return {
       ...curated,
       ...(remoteCtx && remoteCtx > 0 ? { contextWindow: remoteCtx } : {}),
+      contextLimitSource: remoteCtx && remoteCtx > 0 ? 'provider-api' : 'provider-documented',
       ...(capabilityOverrides ?? {}),
+      ...(typeof capabilityOverrides?.contextWindow === 'number' ? { contextLimitSource: 'operator-configured' as const } : {}),
     };
   }
 
@@ -193,6 +197,8 @@ export function inferNvidiaModelMetadata(
     name: typeof remoteRecord?.name === 'string' ? remoteRecord.name : modelId,
     family,
     contextWindow: remoteCtx && remoteCtx > 0 ? remoteCtx : 131072,
+    // 131072 is a fallback guess for models absent from the curated table and the remote record.
+    contextLimitSource: remoteCtx && remoteCtx > 0 ? 'provider-api' : 'default-unknown',
     maxOutputTokens: 16384,
     capabilities,
     toolCalling: !isNonToolModel,
@@ -205,7 +211,9 @@ export function inferNvidiaModelMetadata(
     supportsThinkingKwargs: isNemotron,
     supportsSeed: !isEmbedding,
   };
-  return capabilityOverrides ? { ...base, ...capabilityOverrides } : base;
+  return capabilityOverrides
+    ? { ...base, ...capabilityOverrides, ...(typeof capabilityOverrides.contextWindow === 'number' ? { contextLimitSource: 'operator-configured' as const } : {}) }
+    : base;
 }
 
 function toDiscoveredModel(meta: NvidiaModelMetadata): DiscoveredModel {
@@ -216,6 +224,7 @@ function toDiscoveredModel(meta: NvidiaModelMetadata): DiscoveredModel {
     parameters: meta.parameters,
     architecture: meta.architecture,
     contextWindow: meta.contextWindow,
+    contextLimitSource: meta.contextLimitSource,
     maxOutputTokens: meta.maxOutputTokens,
     capabilities: [...meta.capabilities],
     toolCalling: meta.toolCalling,

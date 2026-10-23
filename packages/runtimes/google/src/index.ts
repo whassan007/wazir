@@ -457,6 +457,7 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
           name: model.displayName ?? resolveModelId(model.name),
           capabilities: ['generalChat', 'coding'],
           contextWindow: model.inputTokenLimit,
+          contextLimitSource: typeof model.inputTokenLimit === 'number' ? 'provider-api' : 'default-unknown',
           toolCalling: true,
           structuredOutput: true,
           vision: /vision|1\.5|2\.0|2\.5/.test(model.name),
