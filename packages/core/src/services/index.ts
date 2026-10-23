@@ -208,3 +208,8 @@ export type { DistributedSearchCoordinatorOptions } from '../types/distributedSe
 
 export * from './evidencePolicy.js';
 export * from './executionContract.js';
+
+export * from './failureIntelligenceService.js';
+export * from './failureSignatureGenerator.js';
+export * from './repairContextBuilder.js';
+export * from './diagnosticHintGenerator.js';

@@ -15,6 +15,9 @@ export interface SimplifiedFailure {
   messageSummary: string;
 }
 
+/** Bounds that keep the repair context token-efficient regardless of history size. */
+export const REPAIR_CONTEXT_LIMITS = { maxEvidenceItems: 8, maxEvidenceChars: 400 } as const;
+
 export class RepairContextBuilder {
   /**
    * Constructs a compact, token-efficient context for the CodingAgent's repair turns.
@@ -26,6 +29,10 @@ export class RepairContextBuilder {
     evidenceSummaries?: string[]
   ): CompactRepairContext {
     const current = intelligence.current;
+    const evidence = evidenceSummaries
+      ?.filter((item) => typeof item === 'string' && item.length > 0)
+      .slice(0, REPAIR_CONTEXT_LIMITS.maxEvidenceItems)
+      .map((item) => item.length > REPAIR_CONTEXT_LIMITS.maxEvidenceChars ? `${item.slice(0, REPAIR_CONTEXT_LIMITS.maxEvidenceChars)}…` : item);
 
     return {
       currentFailure: this.simplify(current),
@@ -33,15 +40,16 @@ export class RepairContextBuilder {
       progressStatus: intelligence.progressStatus,
       workspaceRevision: current.workspaceRevision ?? 0,
       lastPhysicalMutation: lastMutationPath,
-      relevantToolEvidence: evidenceSummaries,
+      relevantToolEvidence: evidence,
     };
   }
 
   private static simplify(obs: FailureObservation): SimplifiedFailure {
+    const where = obs.tool ? ` in tool ${obs.tool}` : '';
     return {
       category: obs.category,
       signature: obs.repeatedSignature,
-      messageSummary: `Observed ${obs.category} at revision ${obs.workspaceRevision ?? 'unknown'}`
+      messageSummary: `Observed ${obs.category} during ${obs.phase}${where} at revision ${obs.workspaceRevision ?? 'unknown'}`,
     };
   }
 }
