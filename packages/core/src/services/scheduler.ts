@@ -114,6 +114,7 @@ export interface ScheduleInput {
 interface ScoredModel {
   record: ModelRecord;
   score: number;
+  expectedCostUsd?: number;
   reasons: string[];
   rejected: string[];
 }
@@ -244,7 +245,7 @@ export class Scheduler {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       let modelDecision: ModelRoutingDecision;
       try {
-        modelDecision = this.routeModel(task, requiredContext, excluded, routing, effectiveHarnessId);
+        modelDecision = this.routeModel(task, requiredContext, excluded, routing, effectiveHarnessId, fallbacks.length > 0);
       } catch (error) {
         if (lastPlacementError && error instanceof SchedulingError) {
           throw new SchedulingError(
@@ -321,6 +322,7 @@ export class Scheduler {
     excludeModelIds: readonly string[] = [],
     routing: ResolvedRoutingConstraint = this.resolveRoutingConstraint(task),
     harnessId?: string,
+    preferLowestCost = false,
   ): ModelRoutingDecision {
     const records = this.deps.models.list();
     if (records.length === 0) {
@@ -384,6 +386,7 @@ export class Scheduler {
           continue;
         }
         const f = a.factors!;
+        s.expectedCostUsd = a.expectedTotalCostUsd;
         const isDefaultPreferred = routing.defaultModel && s.record.id === routing.defaultModel;
         s.reasons.push(`resource (${workload}, account ${a.accountId}): score ${a.score} = quality ${f.quality.toFixed(2)}, reliability ${f.reliability.toFixed(2)}, capacity ${f.capacity.toFixed(2)}, cost ${f.cost.toFixed(2)}, latency ${f.latency.toFixed(2)}, quota risk ${f.quotaRisk.toFixed(2)}`);
         if (a.scoringRationale?.length) {
@@ -391,7 +394,14 @@ export class Scheduler {
         }
         s.score = Math.round(a.score! * 1000) / 10 + (isDefaultPreferred ? 100 : 0);
       }
-      const chosen = all.filter((a) => a.admissible).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
+      const chosen = all.filter((a) => a.admissible).sort((a, b) => {
+        if (preferLowestCost) {
+          const costA = a.expectedTotalCostUsd ?? Infinity;
+          const costB = b.expectedTotalCostUsd ?? Infinity;
+          if (costA !== costB) return costA < costB ? -1 : 1;
+        }
+        return (b.score ?? 0) - (a.score ?? 0);
+      })[0];
       router.record(task.id, workload, chosen, all);
     }
 
@@ -524,7 +534,13 @@ export class Scheduler {
       );
     }
 
-    eligible.sort((a, b) => b.score - a.score || a.record.id.localeCompare(b.record.id));
+    eligible.sort((a, b) => {
+      if (preferLowestCost) {
+        const cost = (candidate: ScoredModel) => candidate.expectedCostUsd ?? (candidate.record.local ? 0 : Infinity);
+        if (cost(a) !== cost(b)) return cost(a) < cost(b) ? -1 : 1;
+      }
+      return b.score - a.score || a.record.id.localeCompare(b.record.id);
+    });
     const best = eligible[0];
     const instance = this.selectInstance(best.record);
     const outcomeRationale = best.reasons.find((r) => r.startsWith('outcome-routing:'));
@@ -537,7 +553,7 @@ export class Scheduler {
       evaluatedCandidates,
       selectedModelId: best.record.id,
       selectionReason:
-        `Selected model '${best.record.id}' with highest verified evidence score (${best.score}) for required capability '${requiredCapability}'` +
+        `Selected model '${best.record.id}' ${preferLowestCost ? 'with lowest known suitable execution cost after placement rejection' : `with highest verified evidence score (${best.score})`} for required capability '${requiredCapability}'` +
         (outcomeRationale ? ` (${outcomeRationale})` : ''),
       policyConstraintsApplied,
       resourceConstraintsApplied,

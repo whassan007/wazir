@@ -165,6 +165,7 @@ describe('Scheduler', () => {
     });
     models.register(model('model-1'));
     models.register(model('model-2'));
+    models.register(model('model-3'));
     models.upsertInstance({
       id: 'model-1-cpu', modelId: 'model-1', computerId: 'cpu-only', runtimeId: 'ollama-cpu-only',
       runtimeModelId: 'model-1:latest', loaded: true, health: 'healthy',
@@ -173,8 +174,21 @@ describe('Scheduler', () => {
       id: 'model-2-gpu', modelId: 'model-2', computerId: 'gpu-ready', runtimeId: 'ollama-gpu-ready',
       runtimeModelId: 'model-2:latest', loaded: false, health: 'healthy',
     });
+    models.upsertInstance({
+      id: 'model-3-gpu', modelId: 'model-3', computerId: 'gpu-ready', runtimeId: 'ollama-gpu-ready',
+      runtimeModelId: 'model-3:latest', loaded: false, health: 'healthy',
+    });
 
-    const s = new Scheduler({ computers, runtimes, models });
+    const router = {
+      assess: ({ candidates }: { candidates: Array<{ modelId: string }> }) => candidates.map(({ modelId }) => ({
+        modelId, admissible: true, accountId: 'test', reasons: [],
+        score: modelId === 'model-1' ? 100 : modelId === 'model-3' ? 50 : 1,
+        expectedTotalCostUsd: modelId === 'model-2' ? 0.01 : 1,
+        factors: { quality: 1, reliability: 1, capacity: 1, cost: 0, latency: 0, quotaRisk: 0 },
+      })),
+      record: () => {},
+    } as unknown as NonNullable<SchedulerDeps['resources']>['router'];
+    const s = new Scheduler({ computers, runtimes, models, resources: { router } });
     const task = {
       id: 'task-device-fallback', type: 'coding' as const, input: 'Write a test',
       requirements: { capabilities: [], requiresGpu: true }, priority: 'normal',
