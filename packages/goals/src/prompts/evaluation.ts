@@ -84,10 +84,12 @@ async function runWithTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, timeou
       fn(controller.signal),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
-          controller.abort(new Error('timeout'));
+          // Reject before aborting so the caller sees the timeout, not the abort.
           reject(new Error(`runner timed out after ${timeoutMs}ms`));
+          controller.abort(new Error('timeout'));
         }, timeoutMs);
-        controller.signal.addEventListener('abort', () => reject(new Error('evaluation aborted')), { once: true });
+        if (outer?.aborted) reject(new Error('evaluation aborted'));
+        outer?.addEventListener('abort', () => reject(new Error('evaluation aborted')), { once: true });
       }),
     ]);
   } finally {
