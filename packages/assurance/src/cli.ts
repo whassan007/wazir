@@ -87,23 +87,28 @@ const TARGET_REPORTED_VERDICTS: readonly Verdict[] = [
 ];
 
 /**
- * Resolve the repository root containing `tools/` or `skills/formal/`, walking up from `startDir`
- * (including across git worktrees when `.fa/worktrees/<name>` is used).
+ * Resolve the repository root containing `tools/` (with pinned formal binaries/venvs),
+ * walking up from `startDir` (including across `.fa/worktrees/<name>` to the main checkout).
  */
 export function resolveRepoRoot(startDir: string = process.cwd()): string {
   let curr = path.resolve(startDir);
+  let fallbackWithSkills: string | null = null;
   for (let i = 0; i < 8; i++) {
-    if (
-      fssync.existsSync(path.join(curr, 'tools')) ||
-      fssync.existsSync(path.join(curr, 'skills', 'formal'))
-    ) {
+    const hasTools =
+      fssync.existsSync(path.join(curr, 'tools', 'z3-venv')) ||
+      fssync.existsSync(path.join(curr, 'tools', 'alloy')) ||
+      fssync.existsSync(path.join(curr, 'tools', 'dafny'));
+    if (hasTools) {
       return curr;
+    }
+    if (!fallbackWithSkills && fssync.existsSync(path.join(curr, 'skills', 'formal'))) {
+      fallbackWithSkills = curr;
     }
     const parent = path.dirname(curr);
     if (parent === curr) break;
     curr = parent;
   }
-  return path.resolve(startDir);
+  return fallbackWithSkills ?? path.resolve(startDir);
 }
 
 async function runProbe(cmd: string, args: string[], timeoutMs = 8000): Promise<{ ok: boolean; stdout: string; stderr: string }> {
