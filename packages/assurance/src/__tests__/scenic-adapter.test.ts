@@ -1,19 +1,54 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ScenicAdapter } from '../adapters/scenic.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolveScenicPython, ScenicAdapter } from '../adapters/scenic.js';
 import { Verdict, type Obligation } from '../contracts.js';
 
 let directory: string;
 beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'scenic-adapter-')); });
-afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+afterEach(async () => { vi.unstubAllEnvs(); vi.restoreAllMocks(); await rm(directory, { recursive: true, force: true }); });
 async function obligation(source: string, metadata: Record<string, unknown> = {}): Promise<Obligation> {
   const artifactPath = join(directory, 'scenario.scenic');
   await writeFile(artifactPath, source);
   return { id: 'sample', propertyId: 'scene-constraints', specVersion: '1', specHash: 'test', tool: 'scenic', artifactPath, assumptions: [], guarantee: 'sample satisfies scenario requirements', seed: 42, metadata };
 }
 const scenario = 'param label = "fixture"\nego = new Object at Range(-10, 10) @ Range(-10, 10), facing Range(-3, 3)\n';
+
+describe('Scenic Python path resolution', () => {
+  beforeEach(() => {
+    vi.stubEnv('WAZIR_SCENIC_PYTHON', '');
+    vi.stubEnv('WAZIR_TOOLS_DIR', '');
+  });
+
+  it('prefers the Python environment override over the tools directory', () => {
+    const python = join(directory, 'custom-python');
+    vi.stubEnv('WAZIR_SCENIC_PYTHON', python);
+    vi.stubEnv('WAZIR_TOOLS_DIR', join(directory, 'other-tools'));
+    expect(resolveScenicPython()).toBe(python);
+  });
+
+  it('resolves the virtualenv under the tools directory override', () => {
+    vi.stubEnv('WAZIR_TOOLS_DIR', directory);
+    expect(resolveScenicPython()).toBe(join(directory, 'scenic-venv/bin/python3'));
+  });
+
+  it('walks up from a nested working directory to find repository tools', async () => {
+    const python = join(directory, 'tools/scenic-venv/bin/python3');
+    const nested = join(directory, 'packages/assurance');
+    await mkdir(join(directory, 'tools/scenic-venv/bin'), { recursive: true });
+    await mkdir(nested, { recursive: true });
+    await writeFile(python, '');
+    vi.spyOn(process, 'cwd').mockReturnValue(nested);
+    expect(resolveScenicPython()).toBe(python);
+  });
+
+  it('keeps an explicit adapter Python path ahead of environment overrides', async () => {
+    vi.stubEnv('WAZIR_SCENIC_PYTHON', join(directory, 'env-python'));
+    const pythonPath = join(directory, 'explicit-python');
+    expect(await new ScenicAdapter({ pythonPath }).checkAvailability()).toMatchObject({ available: false, path: pythonPath });
+  });
+});
 
 describe('ScenicAdapter (real headless Scenic)', () => {
   it('finds the installed Scenic version', async () => {

@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { Verdict, type Obligation, type SolverAdapter, type ToolAvailability, type VerificationResult, type VerifyOptions } from '../contracts.js';
 
 export interface ScenicAdapterOptions {
@@ -12,7 +13,24 @@ export interface ScenicAdapterOptions {
   maxRejectionRate?: number;
 }
 
-const PYTHON = '/Users/wael/Code/Wazir/tools/scenic-venv/bin/python3';
+/** Resolve local tools from either a checkout/worktree or an installed adapter. */
+export function resolveScenicPython(): string {
+  if (process.env.WAZIR_SCENIC_PYTHON) return process.env.WAZIR_SCENIC_PYTHON;
+  if (process.env.WAZIR_TOOLS_DIR) return resolve(process.env.WAZIR_TOOLS_DIR, 'scenic-venv/bin/python3');
+
+  for (const start of [process.cwd(), __dirname]) {
+    let directory = resolve(start);
+    while (true) {
+      const candidate = resolve(directory, 'tools/scenic-venv/bin/python3');
+      if (existsSync(candidate)) return candidate;
+      const parent = dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+  }
+  // Keep missing installations observable through checkAvailability's NOT_RUN path.
+  return resolve(process.cwd(), 'tools/scenic-venv/bin/python3');
+}
 const MARKER = '__SCENIC_RESULT__';
 const BRIDGE = String.raw`
 import sys, json, random, importlib.metadata
@@ -62,7 +80,7 @@ export class ScenicAdapter implements SolverAdapter {
   constructor(private readonly config: ScenicAdapterOptions = {}) {}
 
   async checkAvailability(): Promise<ToolAvailability> {
-    const path = this.config.pythonPath ?? PYTHON;
+    const path = this.config.pythonPath ?? resolveScenicPython();
     try {
       const { stdout } = await run(path, ['-c', 'import scenic, importlib.metadata; print(importlib.metadata.version("scenic"))'], 10_000);
       return { available: true, version: stdout.trim(), path };
