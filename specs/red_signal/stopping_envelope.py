@@ -13,9 +13,14 @@ Checks:
   2. Safety: A /\\ impl /\\ not P.  sat -> COUNTEREXAMPLE (with witness), unsat -> PROVED.
 
 Exit codes: 0 PROVED, 2 COUNTEREXAMPLE, 3 UNKNOWN, 4 VACUOUS.
+
+--candidate defaults to $WAZIR_RED_SIGNAL_CANDIDATE or "guarded", so Z3Adapter can
+run this file without CLI args. The vacuity probe is reported both as `vacuity_probe`
+and as `vacuityProbe` (the Z3Adapter shape); both are derived from the solver checks.
 """
 import argparse
 import json
+import os
 import sys
 
 from z3 import And, Bool, Not, Or, Real, RealVal, Solver, sat, unsat
@@ -53,7 +58,8 @@ def model_val(m, x):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--candidate", choices=("buggy", "guarded", "mutant"), required=True)
+    parser.add_argument("--candidate", choices=("buggy", "guarded", "mutant"),
+                        default=os.environ.get("WAZIR_RED_SIGNAL_CANDIDATE", "guarded"))
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON only")
     args = parser.parse_args()
 
@@ -78,8 +84,15 @@ def main() -> int:
         s.set(timeout=5000)
         s.add(formula)
         vac[label] = str(s.check())
-    result["vacuity_probe"] = vac
-    if vac["A"] != "sat" or vac["A_and_precondition"] != "sat":
+    probe = {
+        "passed": vac["A"] == "sat" and vac["A_and_precondition"] == "sat",
+        "assumptionsSat": vac["A"] == "sat",
+        "preconditionSat": vac["A_and_precondition"] == "sat",
+        "details": {"assumptions": vac["A"], "precondition": vac["A_and_precondition"]},
+    }
+    result["vacuity_probe"] = probe
+    result["vacuityProbe"] = probe
+    if not probe["passed"]:
         result["status"] = "VACUOUS"
         return emit(result, args.json, 4)
 
