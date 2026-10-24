@@ -183,3 +183,180 @@ The task engine spans four primary layers:
     * **Disposable Candidate Worktree Qualification** (`qualify`, L292–L390): Verifies the candidate directory is outside the protected repository (L295–L296), verifies target branch SHA has not moved (`target moved`, L297–L298) and target worktree is clean (L299–L300), creates a detached worktree, merges candidate branches in deterministic dependency order with `GIT_NO_HOOKS`, and runs `verifyCandidate` checks (`build`, `typecheck`, `unit-tests`, `integration-tests`).
 * **Evidence & Completion Policy (`EvidencePolicy` & `VerificationEvidenceInspector`)**:
   * [`packages/core/src/services/evidencePolicy.ts`](../../packages/core/src/services/evidencePolicy.ts) (L1–L22) & [`packages/core/src/services/verificationEvidenceInspector.ts`](../../packages/core/src/services/verificationEvidenceInspector.ts): Binds `VerificationEvidence` (`BUILD`, `TEST`, `STATIC_CHECK`) to a specific `workspaceRevision`; `ExecutionEngine.setStatus(id, 'completed')` (in `executionEngine.ts` L429–L435) rejects completion with `ARTIFACT_CONTRACT_FAILED` if required verification evidence is missing or stale relative to the current `workspaceState.revision`.
+
+
+---
+
+## Section 2: Scheduler, State Store, Lease Fencing, Worktree Manager
+
+### 2.1 Scheduler (`packages/scheduler`, `packages/core/src/services/scheduler.ts`, `packages/core/src/resources/router.ts`)
+
+Wazir's scheduling layer is split between a thin facade package (`@wazir/scheduler`) and the full two-phase deterministic scheduler + resource router in `@wazir/core`.
+
+| File | Key Symbols & Lines | Responsibility |
+| --- | --- | --- |
+| `packages/scheduler/src/index.ts` | `SchedulerFacade` (`L9–L11`), `createScheduler` (`L13–L18`), `describeDecision` (`L20–L41`) | Facade re-exporting `@wazir/core`'s `Scheduler` (`plan`, `routeModel`, `scheduleComputer`) and human-readable decision summary formatting. |
+| `packages/core/src/services/scheduler.ts` | `Scheduler` (`L149–L1340`), `SchedulerDependencies` (`L65–L90`), `SchedulingContext` (`L92–L116`), `ScoredModel` (`L118–L130`), `ScoredPlacement` (`L132–L145`), `RoutingConstraint` (`L147`), `resolveRoutingConstraint` (`L160–L203`) | Two-phase deterministic scheduler: **Phase 1** (`routeModel`, `L319–L575` & `scoreModel`, `L759–L977`) selects a model; **Phase 2** (`scheduleComputer`, `L1005–L1335`) places the selected model onto a concrete `Computer` and `Runtime`. |
+| `packages/core/src/resources/router.ts` | `ResourceRouter` (`L158–L587`), `RouterAssessmentInput` (`L63–L71`), `CandidateAssessment` (`L94–L134`), `RouterConfig` (`L136–L147`) | Evaluates model/provider/account admissibility (budgets, rate-limit cooldowns, token/request quotas, KV-cache fit, minimum verified success rate, max cost, deadline) and computes weighted utility scores. |
+
+#### Feasibility Set $F(t)$ Construction
+
+Given a task $t$, `Scheduler.plan(task, context)` (`packages/core/src/services/scheduler.ts` `L205–L317`) constructs the feasible model-and-placement set $F(t)$ in two strict phases before selecting an execution plan:
+
+1. **Phase 1 — Model Feasibility (`routeModel`, `L319–L575` & `scoreModel`, `L759–L977`)**:
+   - Evaluates every registered `ModelRecord` from `ModelRegistry.list()` (`L330`). A candidate is admitted to `eligible` (`s.rejected.length === 0`, `L408`) iff it passes all hard feasibility gates in `scoreModel`:
+     - **Capabilities & Modalities**: All `task.requirements.capabilities` must exist in `record.capabilities` (`L771–L777`); `toolCalling` (`L779–L783`), `vision` (`L785–L787`), and `reasoning === 'high'` (`L788–L790`) must be supported when requested.
+     - **Effective Context Window**: `effectiveContextTokens(record) >= requiredContext` (`L792–L799`, where `effectiveContextTokens` at `L651–L657` takes `min(record.contextWindow, min(instance.configuredContextLength))`).
+     - **Policy Model Allowlist & Hosted Eligibility**: `task.policy.allowedModels` (`L801–L803`) and `deps.policy.checkHostedEligibility(task)` (`L808–L828`) must permit the model (checking `localOnly`, `allowExternalNetwork`, `dataSensitivity`, and `requireEncryption` for hosted models).
+     - **Routing Mode Constraints (`resolveRoutingConstraint`, `L160–L203`)**:
+       - `LOCAL_ONLY`: Rejects any model with `record.hosted === true` (`L830–L831`).
+       - `PROVIDER_ONLY`: Strictly rejects any model whose provider (`resolveModelProvider`, `L723–L757`) does not match `routing.targetProvider`, **even if the model was explicitly pinned** (`L832–L840`).
+       - `HYBRID` / `UNCONSTRAINED`: Permits both local and hosted models subject to preference weights (`L899–L925`).
+     - **Instance Health & Availability**: At least one registered `ModelInstance` must have `state !== 'UNAVAILABLE'` and `health !== 'unavailable'` (`L847–L850`).
+     - **Reliability Circuit Breaker**: `deps.reliability.status(record.id, task.type)` must not be `'OPEN'` (rejected at `L852–L857` unless explicitly pinned via `task.execution?.targetModelId === record.id`).
+     - **Exclusion Set (`excludeModelIds`)**: Rejects any model in `context.excludeModelIds` (`L338`), which accumulates models that failed placement in the `plan()` preflight loop (`L235–L279`) or failed mid-execution during escalation.
+     - **ResourceRouter Admissibility (`ResourceRouter.assess`, `packages/core/src/resources/router.ts` `L172–L280`, wired at `scheduler.ts` `L342–L406`)**: Evaluates `CandidateAssessment.admissible` across all accounts/providers for the model (`evaluateCandidate`, `router.ts` `L354–L491`), enforcing:
+       - Account availability (cooldown expiry, active concurrency limit, request/token quota remaining, budget window cap).
+       - `kvCacheFits` (context tokens + expected output $\le$ configured context length and local GPU/unified memory capacity).
+       - `minVerifiedSuccessRate` (historical verified success rate $\ge$ threshold).
+       - `maxCostUSD` (estimated task cost + retry multiplier $\le$ ceiling) and `deadlineMs` (estimated latency $\le$ deadline).
+   - Admissible candidates are ranked using either the ResourceRouter utility formula (`q * quality + r * reliability + c * capacity - k * cost - l * latency - u * quotaRisk`, `router.ts` `L153`, `L479–L486`) or the heuristic multi-factor score (`scheduler.ts` `L859–L976`), with `applyComplexityFloor` (`L581–L649`) demoting under-sized models when a high-tier model is available.
+
+2. **Phase 2 — Placement & Host Capability Feasibility (`scheduleComputer`, `L1005–L1335`)**:
+   - Given the chosen `ModelRecord`, evaluates every `ModelInstance` in `record.instances` (`L1014`) to construct feasible `ScoredPlacement[]` (`L1013`):
+     - **Lifecycle State & Target Pinning**: Rejects instances in `'DRAINING'`, `'UNLOADING'`, or `'LOADING'` states (`L1016–L1018`); enforces `task.execution?.targetComputerId` (`L1019`) and `task.execution?.targetRuntimeId` (`L1020–L1023`).
+     - **Hosted vs. Local Branch**:
+       - For **hosted instances** (`instance.hosted || instance.computerId === 'hosted'`, `L1035–L1102`): Verifies runtime online status (`L1037–L1044`) and `policy.checkHostedEligibility` (`L1046–L1050`). Critically, **hosted placements are rejected whenever hardware/OS constraints are specified** (`task.requirements.os`, `task.requirements.architecture`, `requiresGpu`, `requiresCuda`, or `task.policy.allowedComputers`, `L1053–L1074`).
+       - For **local/remote `Computer` nodes** (`L1104–L1305`): Verifies `computer.status === 'online'` (`L1105–L1108`) and checks heterogeneous host capabilities:
+         - **OS Platform**: Normalizes `'mac' | 'macos' | 'osx' -> 'darwin'` and `'win' | 'win32' -> 'windows'` (`normalizePlatform`, `L36–L42`) and checks against `computer.os` (`L1111–L1119`).
+         - **CPU Architecture**: Normalizes `'aarch64' -> 'arm64'` and `'x86_64' | 'amd64' -> 'x64'` (`normalizeArch`, `L44–L49`) and checks against `computer.hardware.architecture` (`L1122–L1130`).
+         - **GPU & CUDA**: Enforces `task.requirements.requiresGpu` against `computer.hardware.gpus.length` (`L1133–L1136`) and `requiresCuda` against `gpu.cudaAvailable` (`L1137–L1140`).
+         - **Policy Computer & Runtime Allowlists**: Enforces `allowedComputers` (`L1142–L1145`), `localOnly` (`computer.local`, `L1146–L1149`), and `allowedRuntimes` (`L1151–L1154`).
+         - **Memory & KV-Cache Admission**: Checks system RAM (`requiredSystemGB <= computer.hardware.memoryGB` and active `reservations`, `L1173–L1192`) and GPU VRAM (`requiredGpuGB + kvCacheGB <= totalGpuMemoryGB` and unreserved `usableGpuGB`, `L1194–L1241`, where `estimateKvCacheGB` at `L659–L665` adds 25% of base weight per 32k tokens beyond the baseline 4k window).
+   - **Preflight Fallback Loop (`plan`, `L235–L279`)**: If the top-ranked model from Phase 1 has no feasible placement in Phase 2 (`scheduleComputer` throws `SchedulingError`), `plan()` catches the error, appends `route.chosenModel.id` to `excludeModelIds`, and re-runs Phase 1 + Phase 2 until a model with a valid placement is found or all candidates are exhausted.
+
+#### Model Router Bypass & Pinning Rules
+
+- **Explicit Model Pinning (`task.execution?.targetModelId`, `scheduler.ts` `L473–L516`)**:
+  - When `targetModelId` is set, `routeModel` sets `strategy: 'explicit'` (`L506`) and skips comparative score ranking (`eligible.sort` is not used to override the pin).
+  - **Crucial Invariant**: Explicit pinning **never bypasses the feasibility set $F(t)$**. `routeModel` looks up `preferred` inside `eligible` (`L476`). If the pinned model was rejected by any hard constraint (policy, routing mode, context window, or capabilities), `routeModel` immediately throws `SchedulingError('Explicitly requested model ... is not eligible: ... No silent fallback will be performed.')` (`L477–L483`). Similarly, inside `plan()` (`L255–L257`), if a pinned model fails Phase 2 computer placement, the fallback loop is aborted and `SchedulingError` is rethrown immediately.
+- **External Delegated Agent Guard (`scheduler.ts` `L211–L231`)**:
+  - External CLI agents (`source === 'external'` in `AgentRegistry`, such as `claude-code`, `codex`, `gemini-cli`) manage their own internal model selection and would bypass Wazir's model router. Therefore, when `routing.mode === 'PROVIDER_ONLY'`, `Scheduler.plan()` checks `deps.agents.get(targetAgentId)` and throws `SchedulingError` (`L223–L229`), blocking external agent delegation so provider lock-in cannot be circumvented.
+- **Deterministic Read-Only Command Fast Path (`packages/agents/src/codingAgent.ts` `L207–L218`, `L1384–L1412`)**:
+  - For single-command read-only inspection prompts (`ls`, `pwd`, `git status|diff|log`), `CodingAgent` bypasses LLM generation (`modelSelected` is still recorded from the scheduler plan, `L1294–L1301`), but routes execution directly through `runtime.executeTool('run_command', ...)` so all `PolicyEngine` and sandbox checks remain enforced.
+
+---
+
+### 2.2 State Store & Two-Level Lease Fencing (`packages/database`, `packages/shared`, `packages/core`)
+
+| File | Key Symbols & Lines | Responsibility |
+| --- | --- | --- |
+| `packages/shared/src/store.ts` | `KeyValueStore` (`L11–L18`), `InMemoryStore` (`L263–L287`), `JsonFileStore` (`L289–L538`), `withFileLock` (`L55–L105`), `reviveDatesInPlace` (`L201–L240`) | Core storage abstraction (`update`, `put`, `get`, `list`, `delete`, `clear`), in-memory test store, and crash-safe local file store with advisory lockfile and atomic rename. |
+| `packages/database/src/postgresStore.ts` | `PostgresStore` (`L14–L62`), `PoolLike` (`L7–L9`) | PostgreSQL implementation of `KeyValueStore` backed by `wazir_kv_store` (`packages/database/kv-schema.sql`). |
+| `packages/database/src/index.ts` | `Database` (`L10–L28`) | Connection wrapper around `PostgresStore` (`createStore()`). |
+| `packages/core/src/services/executionPersistence.ts` | `persistExecutionRecord` (`L17–L48`), `executionValuesEqual` (`L3–L15`) | Enforces monotonic `storageRevision` increments and append-only `events` prefix invariance on every `ExecutionRecord` write. |
+| `packages/core/src/services/jobManager.ts` | `JobManager` (`L43–L809`), `acquire` (`L126–L191`), `renew` (`L193–L201`), `release` (`L203–L211`), `assertOwnership` (`L213–L218`), `findUnknownMutationsByTask` (`L89–L124`) | **Level 1 (Job-Level) Lease Fencing**: Manages `Job.ownership` (`ownerId`, `epoch`, `expiresAt`) and prevents duplicate or unsafe job replay. |
+| `packages/core/src/services/executionEngine.ts` | `ExecutionLease` (`L44–L54`), `LeaseClaimant` (`L56–L62`), `StaleWorkerLeaseError` (`L64–L90`), `acquireLease` (`L1185–L1247`), `renewLease` (`L1253–L1299`), `releaseLease` (`L1305–L1337`), `assertLease` (`L1349–L1414`), `flush` (`L1651–L1667`) | **Level 2 (Execution-Level) Lease & Epoch Fencing**: Guards every in-memory and persisted state transition on an `ExecutionRecord` with worker ID, monotonic epoch, cryptographic lease token, and TTL expiry. |
+| `packages/core/src/services/recoveryManager.ts` | `RecoveryManager` (`L69–L266`), `reassignExecutionLease` (`L86–L128`), `sweep` (`L159–L211`), `reconcileFromPhysicalState` (`L213–L238`) | Detects dead workers via heartbeat timeout, reconciles in-flight physical mutations, increments lease epochs on takeover, and fences out zombie workers. |
+| `packages/core/src/services/executionRecovery.ts` | `reconcileBeforeCrossHarnessResume` (`L54–L249`), `verifyLeaseFencing` (`L257–L300`) | Cross-harness crash recovery: inspects git worktrees and filesystem artifacts to classify interrupted tool calls before bumping lease epochs. |
+
+#### Durable `KeyValueStore` Implementations & Atomic Read-Modify-Write
+
+1. **`JsonFileStore` (`packages/shared/src/store.ts` `L289–L538`)**:
+   - **Cross-Process Lockfile (`withFileLock`, `L55–L105`)**: Serializes all writes via an exclusive lockfile (`<filePath>.lock`) opened with `fs.open(lockFile, 'wx', 0o600)` (`L60`). Writes `{ pid, token, createdAt }` into the lockfile (`L56–L64`). If contended (`EEXIST`), checks whether the lock is older than `LOCK_STALE_AFTER_MS = 30_000` (`L19`, `L78`) and whether the holder PID is dead via `process.kill(holderPid, 0)` (`isProcessAlive`, `L31–L42`); only if dead or malformed does it atomically steal the lock via `fs.rename(lockFile, breakPath)` (`L83`).
+   - **Crash-Safe Write Pipeline (`writeDataUnlocked`, `L425–L468`)**: Writes serialized JSON to a sibling temporary file, calls `handle.sync()` (`fsync`, `L448`), closes the descriptor, atomically replaces the target via `fs.rename(tempFile, this.filePath)` (`L451`), and calls `fsyncDir(dir)` (`L452`).
+   - **Atomic `update<T>(key, mutate)` (`L470–L489`)**: Acquires the file lock, reloads disk state (`readFromDiskUnlocked`), clones and revives ISO date strings into `Date` instances (`reviveDatesInPlace`, `L201–L240`), runs `mutate(current)`, and persists via `writeDataUnlocked`.
+
+2. **`PostgresStore` (`packages/database/src/postgresStore.ts` `L14–L62`)**:
+   - Stores records in `wazir_kv_store (key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_at TIMESTAMPTZ)` (`packages/database/kv-schema.sql`).
+   - **Transactional Advisory Locking (`update<T>`, `L17–L28`)**: Checks out a dedicated client from the pool, runs `BEGIN`, executes `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))` (`L21`) to serialize concurrent updates on the same key (even when the row does not yet exist), reads the row (`readWithClient`), applies `mutate`, upserts (`writeWithClient`), and `COMMIT`s (`L25`).
+
+3. **Optimistic Storage Revision & Append-Only Event Log (`persistExecutionRecord`, `packages/core/src/services/executionPersistence.ts` `L17–L48`)**:
+   - Every `ExecutionEngine.flush()` (`packages/core/src/services/executionEngine.ts` `L1651–L1667`) increments `record.storageRevision` and calls `persistExecutionRecord(store, key, snapshot)`.
+   - Inside `store.update`:
+     - **Revision Check (`L25–L30`)**: Verifies `nextRevision === currentRevision + 1`; otherwise throws `WazirError('EXECUTION_STORAGE_CONFLICT', ...)` (`L27`).
+     - **History Prefix Check (`L31–L45`)**: Verifies `record.events.length >= current.events.length` and checks deep equality (`executionValuesEqual`) for every existing event `0 .. current.events.length - 1`; otherwise throws `WazirError('EXECUTION_HISTORY_CONFLICT', ...)` (`L33`, `L40`).
+     - If `flush()` catches any persistence conflict, it latches `this.persistenceFailure = err` (`executionEngine.ts` `L1662–L1665`) and rethrows on all subsequent flushes so a split-brain writer halts permanently.
+
+#### Two-Level Lease Fencing Protocol
+
+Wazir enforces lease fencing at two distinct granularities:
+
+1. **Level 1 — Job Ownership Lease (`JobManager`, `packages/core/src/services/jobManager.ts` `L126–L218`)**:
+   - Each `Job` carries `ownership?: { ownerId: string; epoch: number; expiresAt: Date }`.
+   - `acquire(jobId)` (`L126–L191`) runs inside `store.update`:
+     - Rejects if `current.ownership && current.ownership.expiresAt > now` (`JOB_LEASE_BUSY`, `L134–L141`).
+     - Before taking over a previously `RUNNING` job (`L142–L151`), calls `findUnknownMutationsByTask(jobId)` (`L89–L124`) to scan all task execution records for any mutating tool call (`write_file`, `apply_patch`, `run_command`, `git_ops`) that has a `tool.started` event without a matching `tool.completed` event or terminal `record.toolCalls` entry. If found, it marks the job `FAILED` and throws `WazirError('UNKNOWN_MUTATION_OUTCOME', ...)` (`L165–L184`) rather than risking duplicate side effects.
+     - Increments `nextEpoch = (current.ownership?.epoch ?? 0) + 1` (`L153`), writes `ownership`, and caches `this.claims.set(jobId, nextEpoch)` (`L189`).
+   - `assertOwnership(job)` (`L213–L218`) verifies `job.ownership.ownerId === this.ownerId`, `job.ownership.epoch === claimedEpoch`, and `job.ownership.expiresAt > this.now()`, throwing `WazirError('JOB_LEASE_LOST', ...)` on mismatch.
+
+2. **Level 2 — Execution Worker Lease & Epoch Fencing (`ExecutionEngine`, `packages/core/src/services/executionEngine.ts` `L44–L90`, `L1185–L1414`)**:
+   - `ExecutionLease` (`L44–L54`): `{ workerId: string; epoch: number; acquiredAt: Date; expiresAt: Date; released?: boolean; token?: string }`.
+   - **Acquisition & Epoch Bump (`acquireLease`, `L1185–L1247`)**:
+     - Rejects acquisition on terminal executions (`COMPLETED`, `FAILED`, `CANCELLED`, `L1187–L1199`).
+     - If an unreleased, unexpired lease is held by a **different** `workerId` (`L1203–L1215`), throws `StaleWorkerLeaseError` (`code = 'STALE_WORKER_LEASE'`) unless `options.force === true` (used by `RecoveryManager` after heartbeat timeout).
+     - Computes `nextEpoch = (current?.epoch ?? 0) + 1` (`L1217`), generates a cryptographic `token = randomUUID()` (`L1220`), sets `this.activeLease`, updates `this.record.lease`, and emits a durable `lease.acquired` event (`L1231–L1244`).
+   - **Pre-Mutation Fencing Gate (`assertLease`, `L1349–L1414`)**:
+     - Called as the very first line of **every** mutating method on `ExecutionEngine`: `setStatus` (`L1420`), `recordPolicy` (`L1450`), `recordToolStart` (`L1464`), `recordToolCall` (`L1486`), `recordCheck` (`L1514`), `recordEvidence` (`L1537`), `recordEvent` (`L1557`), `recordError` (`L1579`), `recordUsage` (`L1598`), `recordFilesChanged` (`L1613`), `setResult` (`L1622`), and `setEvaluation` (`L1638`).
+     - When `this.fencingEnabled` is true (automatically enabled on the first `acquireLease` or when rehydrated from persisted `lease.*` events via `reconstructLeaseFromEvents` at `L288–L324`), `assertLease` checks:
+       1. `this.activeLease` exists and `!current.released` (`L1354–L1379`).
+       2. `claimedEpoch === current.epoch` (`L1381–L1389`).
+       3. `claimedWorker === current.workerId` (`L1391–L1399`).
+       4. `claimedToken === current.token` (`L1401–L1405`).
+       5. `current.expiresAt.getTime() > now.getTime()` (`L1407–L1413`).
+     - Any failure throws `StaleWorkerLeaseError`, immediately halting the zombie worker before it can mutate memory or flush to storage.
+   - **Crash Recovery & Physical Reconciliation (`RecoveryManager` in `packages/core/src/services/recoveryManager.ts` & `executionRecovery.ts`)**:
+     - `RecoveryManager.sweep()` (`L159–L211`) scans registered workers for missed heartbeats (`now - lastHeartbeat > heartbeatTimeoutMs`, default 30s).
+     - Before reassigning an orphaned execution (`reassignExecutionLease`, `L86–L128`), `reconcileFromPhysicalState` (`L213–L238`) and `reconcileBeforeCrossHarnessResume` (`executionRecovery.ts` `L54–L249`) inspect the physical git worktree (`git status --porcelain`, target file existence/content) to determine whether an interrupted tool call (`tool.started` without `tool.completed`) actually took effect on disk, recording a `recovery.reconciled` event before calling `engine.acquireLease(newWorkerId, ttl, { force: true })` to increment the epoch and fence out the old worker.
+
+---
+
+### 2.3 Worktree Manager & Agent Skill / Prompt Injection (`packages/core`, `packages/agents`, `packages/tools`, `packages/workers`)
+
+| File | Key Symbols & Lines | Responsibility |
+| --- | --- | --- |
+| `packages/core/src/services/worktreeManager.ts` | `WorktreeManager` (`L55–L424`), `WorktreeInfo` (`L14–L29`), `MergeResult` (`L31–L35`), `createWorktree` (`L103–L204`), `createCleanWorkspace` (`L210–L242`), `commitWorktree` (`L244–L305`), `diffWorktree` (`L307–L324`), `mergeBranch` (`L326–L377`), `removeWorktree` (`L379–L397`) | Creates isolated git worktrees per task/job from exact base commits, disables repository git hooks (`GIT_NO_HOOKS`), commits/merges task branches, and cleans up worktrees. |
+| `packages/core/src/services/skillsRegistry.ts` | `SkillsRegistry` (`L27–L191`), `SkillDefinition` (`L11–L20`), `parseSkillFile` (`L97–L141`), `toAgentDescriptors` (`L69–L88`) | Discovers `.wazir/skills/**/*.md` files, parses YAML frontmatter + markdown instruction body, and exposes skills as routable `AgentDescriptor`s or injectable instructions. |
+| `packages/core/src/services/instructionResolver.ts` | `ScopedInstructionResolver` (`L34–L238`), `DEFAULT_CONTEXT_FILE_PATTERNS` (`L15–L21`), `discover` (`L42–L72`), `resolve` (`L77–L137`) | Discovers hierarchical instruction files (`.wazir/INSTRUCTIONS.md`, `WAZIR.md`, `AGENTS.md`, `CLAUDE.md`, `.cursorrules`) and resolves root + package-scoped instructions matching active files/directories. |
+| `packages/core/src/services/contextCompiler.ts` | `ContextCompiler` (`L149–L785`), `SystemContextProvider` (`L283–L312`), `TaskContextProvider` (`L314–L404`), `InstructionContextProvider` (`L406–L472`), `ExecutionStateContextProvider` (`L474–L562`), `CodeIntelligenceContextProvider` (`L564–L673`), `HistoryContextProvider` (`L675–L784`), `WEB_TRUST_INSTRUCTION` (`L34–L35`) | Assembles token-budgeted context items across providers, injects untrusted-web-content warnings, and delegates ordering to `PromptLayoutPlanner`. |
+| `packages/core/src/services/promptLayoutPlanner.ts` | `PromptLayoutPlanner` (`L38–L161`), `StabilityTier` (`L12`), `planLayout` (`L44–L72`) | Orders prompt items into `STATIC` $\rightarrow$ `SEMI_STABLE` $\rightarrow$ `VOLATILE` tiers under `CACHE_STABLE_PREFIX` strategy so volatile turn state never invalidates prefix KV caches. |
+| `packages/core/src/services/toolSurfaceCompiler.ts` | `ToolSurfaceCompiler` (`L221–L416`), `ExecutionPhase` (`L18`), `InteractionMode` (`L24`), `compile` (`L228–L314`), `selectProtocol` (`L148–L172`) | Compiles phase-scoped (`plan`, `implement`, `repair`, `verify`) tool schemas, selects calling protocol (`native_tool_call`, `structured_output`, `legacy_text`), and renders tool instructions. |
+| `packages/agents/src/configurationDiscovery.ts` | `discoverAgentConfiguration` (`L62–L118`), `DiscoveredAgentConfiguration` (`L18–L25`) | Scans workspace root for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.wazir/instructions.md`, and `.wazir/skills/*.md` to build `combinedInstructions` for agent runs. |
+| `packages/agents/src/externalAgent.ts` | `ExternalCliAgent` (`L25–L213`), `PRESET_EXTERNAL_AGENTS` (`packages/agents/src/presets.ts` `L4–L36`) | Wraps external CLI coding agents (`claude-code`, `codex`, `gemini-cli`, `aider`) as `AgentRunner` implementations running inside the task's isolated workspace. |
+| `packages/tools/src/registry.ts` | `ToolRegistry` (`L101–L157`), `executeTool` (`L193–L287`), `proposedOracleWeakening` (`L167–L190`) | Validates tool input/output JSON schemas, runs pre-dispatch test-oracle weakening detection on test files, records workspace before/after snapshots, and dispatches tools. |
+| `packages/tools/src/sandbox.ts` | `SandboxExecutor` (`L211–L563`), `buildBubblewrapArgs` (`L65–L130`), `buildSeatbeltProfile` (`L136–L175`) | OS-level process sandboxing (`bwrap` + seccomp on Linux, `sandbox-exec` seatbelt profiles on macOS) restricting filesystem writes to `workspaceRoot` and gating network access. |
+| `packages/workers/src/worker.ts` | `Worker` (`L52–L474`), `executeRequest` (`packages/workers/src/taskExecutor.ts` `L24–L83`), `dispatchRemote` (`packages/workers/src/remoteDispatch.ts` `L50–L96`) | Execution-plane daemon that registers hardware/runtime capabilities, heartbeats to the control plane, executes dispatched tasks, and filters internal `lease_*` events at the remote boundary. |
+
+#### Worktree Isolation & Git Lifecycle (`WorktreeManager`)
+
+- **Path Sanitization & Hook Neutralization (`packages/core/src/services/worktreeManager.ts` `L37–L41`, `L413–L420`)**:
+  - `assertSafeId` (`L413–L420`) validates `jobId` and `taskId` against `/^[a-zA-Z0-9._-]+$/` to prevent path traversal outside `.wazir/worktrees`.
+  - Every `git` invocation passes `GIT_NO_HOOKS = ['-c', 'core.hooksPath=/dev/null']` (`L41`) so untrusted repository git hooks (`post-checkout`, `pre-commit`, etc.) cannot execute arbitrary code during worktree creation or commits.
+- **Worktree Creation (`createWorktree`, `L103–L204`)**:
+  - Resolves `baseSha` (defaults to `HEAD`), constructs `worktreePath = <repoPath>/.wazir/worktrees/<jobId>-<taskId>` and `branch = wazir/<jobId>/<taskId>`, and runs `git -c core.hooksPath=/dev/null worktree add -B <branch> <worktreePath> <baseSha>` (`L153–L165`).
+  - Creates isolated `.wazir/{tmp,home,cache}` subdirectories inside the worktree (`ensureRuntimeDirs`, `L95–L101`) so tool subprocesses have private `TMPDIR`, `HOME`, and `XDG_CACHE_HOME` directories.
+  - Falls back to a filtered recursive directory copy (`copyWorkspaceFiltered`, `L185–L203`) if the workspace is not a git repository or if `git worktree add` fails.
+- **Commit, Diff, Merge & Cleanup (`L244–L410`)**:
+  - `commitWorktree` (`L244–L305`): Stages all changes (`git add -A`), unstages internal `.wazir` runtime directories (`git reset -q HEAD -- .wazir`), checks `git status --porcelain`, and creates a commit with `GIT_AUTHOR_NAME=Wazir`, returning the new commit SHA and changed file list.
+  - `mergeBranch` (`L326–L377`): Merges a task branch into the target branch using `--no-ff` (`L345`); on merge conflict, extracts conflicted files (`git diff --name-only --diff-filter=U`), runs `git merge --abort` (`L364`) to leave the repository clean, and returns `{ success: false, conflictedFiles }`.
+  - `removeWorktree` (`L379–L397`) & `cleanupDirectory` (`L399–L410`): Verifies `path.resolve(worktreePath)` starts with `path.resolve(this.worktreeRoot) + path.sep` before running `git worktree remove --force` and `fs.rm`.
+
+#### Skill Discovery, Hierarchical Instructions & Cache-Stable Prompt Injection
+
+1. **Skills Discovery (`SkillsRegistry`, `packages/core/src/services/skillsRegistry.ts` `L27–L191`)**:
+   - Recursively scans `.wazir/skills` for `.md` files (`discover`, `L34–L53`).
+   - `parseSkillFile` (`L97–L141`) parses YAML frontmatter (`name`, `description`, `version`, `capabilities`, `taskTypes`) and extracts the markdown body as `instructions`.
+   - Skills can be projected into `AgentDescriptor` records (`id: "skill:<name>"`, `source: 'skill'`, `L69–L88`) for `AgentRegistry` routing, or discovered alongside workspace instructions via `discoverAgentConfiguration` (`packages/agents/src/configurationDiscovery.ts` `L62–L118`).
+
+2. **Scoped Instruction Resolution (`ScopedInstructionResolver`, `packages/core/src/services/instructionResolver.ts` `L34–L238`)**:
+   - Scans up to directory depth 4 for `DEFAULT_CONTEXT_FILE_PATTERNS` (`L15–L21`): `.wazir/INSTRUCTIONS.md` (priority 90), `WAZIR.md` (85), `AGENTS.md` (80), `CLAUDE.md` (70), and `.cursorrules` (65).
+   - `resolve(request)` (`L77–L137`) always includes root-level (`scope === '.'`) instruction files and selectively includes subdirectory-scoped instruction files when `activeFiles`, `workingDirectory`, or task description keywords match that scope (`findMatchingScopes`, `L171–L206`), truncating at `maxTotalChars` (default 12,000 chars).
+
+3. **Prompt Compilation & KV-Cache Stability (`ContextCompiler` & `PromptLayoutPlanner`)**:
+   - `ContextCompiler.compile(input)` (`packages/core/src/services/contextCompiler.ts` `L172–L280`) gathers `ContextItem`s from six ordered providers (`SystemContextProvider`, `TaskContextProvider`, `InstructionContextProvider`, `ExecutionStateContextProvider`, `CodeIntelligenceContextProvider`, `HistoryContextProvider`, `L159–L166`), enforces per-section and total token budgets, and prepends `WEB_TRUST_INSTRUCTION` (`L34–L35`, `L207–L217`) whenever untrusted web search/fetch results are present in task evidence.
+   - `PromptLayoutPlanner.planLayout(items, budget)` (`packages/core/src/services/promptLayoutPlanner.ts` `L44–L160`) partitions items into three stability tiers (`StabilityTier`, `L12`):
+     - `STATIC` (tier 0): System instructions, workspace root instructions, and tool surface definitions.
+     - `SEMI_STABLE` (tier 1): Task specification, scoped instructions, and code-intelligence symbol maps.
+     - `VOLATILE` (tier 2): Current execution state, turn history, verification failures, and repair hints.
+   - Under the default `CACHE_STABLE_PREFIX` strategy (`L74–L160`), `STATIC` and `SEMI_STABLE` items are locked at the beginning of the prompt in deterministic priority/key order, while `VOLATILE` items are appended at the tail—ensuring multi-turn agent loops preserve prefix KV-cache hits.
+   - Finally, `CodingAgent.buildSystemPrompt` (`packages/agents/src/codingAgent.ts` `L575–L606`) combines the base agent persona, phase-compiled tool definitions from `ToolSurfaceCompiler.compile()` (`packages/core/src/services/toolSurfaceCompiler.ts` `L228–L314`), untrusted-content injection defense rules, and `context.systemPromptExtra` (discovered skills and scoped instructions).
