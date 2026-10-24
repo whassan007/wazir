@@ -1,0 +1,31 @@
+# RED_SIGNAL_COMPLIANCE — toy demonstration spec (FORMAL_ASSURANCE.md §2.2, §3).
+# content_hash: computed by compute_hash.py — sha256 over the sorted list of
+# "<file>\n<sha256(file bytes)>\n" records for this manifest (with content_hash
+# blanked to "") plus every listed artifact and monitor file.
+id: RED_SIGNAL_COMPLIANCE
+version: "2.1"
+status: approved
+source:
+  normative_ref: "TOY-TRAFFIC-SIGNAL-001 (Toy educational model, not a certified braking or traffic-law model)"
+  jurisdiction: configured
+  interpretation_date: "2026-10-23"
+assumptions:
+  - signal_state_available
+  - braking_limits_valid
+  - stop_feasible_within_envelope
+guarantee: "vehicle does not cross stop line while stop obligation active"
+artifacts:
+  - tool: alloy
+    file: red_signal.als
+    commands: ["WitnessStop", "NoCrossOnRed"]
+    scope: "for 5 but 8 steps"
+  - tool: z3
+    file: stopping_envelope.py
+  - tool: dafny
+    file: stop_command.dfy
+monitors:
+  - tool: verifai
+    file: red_signal_monitor.py
+reviewers:
+  - wael
+content_hash: "sha256:2979c3a117a8a6afff1bc7777294c1c6b9080744777fd0ba30034f89a38fab59"
