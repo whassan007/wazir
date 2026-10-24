@@ -52,7 +52,8 @@ python3 skills/formal/scripts/validate_skills.py --root .claude/skills --check-m
 (cd skills/formal/z3 && python3 examples/check_stopping_rule.py --candidate buggy)   # needs z3-solver
 (cd skills/formal/dafny && dafny verify examples/stop_command.dfy)                  # needs Dafny
 bash skills/formal/alloy/scripts/run-examples.sh /path/to/org.alloytools.alloy.dist.jar
-node skills/formal/index.mjs --list
+node skills/formal/index.mjs --check                                                 # manifest vs disk
+npx vitest run skills/formal/                                                       # loader tests
 ```
 
 These files don't add `wa` subcommands or solver adapters by themselves. See [`wazir-formal-assurance-skills/README.md`](wazir-formal-assurance-skills/README.md) for the bundle's orchestration notes and how to read results (Z3 UNSAT scope, falsification ≠ proof, fail-closed tool errors).
