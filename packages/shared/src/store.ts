@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { injectFault } from './faultInjection.js';
+import { faultInjector, injectFault } from './faultInjection.js';
 
 export interface StoreEntry {
   key: string;
@@ -47,7 +47,7 @@ const LOCK_MAX_WAIT_MS = 10_000;
  * A dependency-free, cross-process advisory lock built on the atomicity of
  * `open(path, 'wx')` (fails with EEXIST if the file already exists — this is
  * the same primitive libraries like `proper-lockfile` use). Needed because
- * `JsonFileStore`'s own `writeChain` only serializes writers *within one
+ * `JsonFileStore`'s own mutation queue only serializes writers *within one
  * process*; the CLI, the API server, and any worker are separate OS
  * processes that can otherwise race a read-modify-write cycle on the same
  * file and silently drop each other's update.
@@ -177,8 +177,8 @@ export class MemoryStore implements KeyValueStore {
  * Durable JSON file store. Atomic writes (tmp + rename), no external
  * dependencies. Sufficient for local execution history and registries.
  *
- * Safe for concurrent writers across processes: every mutation reloads the
- * freshest on-disk state while holding a cross-process file lock, mutates
+ * Safe for concurrent writers across processes: every batch validates the
+ * latest on-disk snapshot while holding a cross-process file lock, mutates
  * it, and persists — so a `put`/`delete`/`clear` from the CLI and one from
  * the API server (or two worker processes) racing the same file cannot
  * silently drop each other's update. Plain reads (`get`/`list`) use the
@@ -286,6 +286,18 @@ interface FileStatSnapshot {
   size: bigint;
 }
 
+export interface JsonFileStoreOptions {
+  pretty?: boolean;
+  coalesceWrites?: boolean;
+  coalesceWindowMs?: number;
+}
+
+interface PendingMutation {
+  mutate: (data: Map<string, unknown>) => void;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
 export class JsonFileStore implements KeyValueStore {
   private readonly file: string;
   private readonly lockFile: string;
@@ -296,7 +308,10 @@ export class JsonFileStore implements KeyValueStore {
   private loaded = false;
   private observedFile = false;
 
-  constructor(file: string) {
+  private pending: PendingMutation[] = [];
+  private draining = false;
+
+  constructor(file: string, private readonly options: JsonFileStoreOptions = {}) {
     this.file = file;
     this.lockFile = `${file}.lock`;
   }
@@ -398,6 +413,9 @@ export class JsonFileStore implements KeyValueStore {
   }
 
   private serializeMap(data: Map<string, unknown>, mutatedKey?: string): string {
+    if (this.options.pretty === true) {
+      return JSON.stringify(Object.fromEntries(data), null, 2);
+    }
     if (mutatedKey === '*') {
       this.rawJsonByKey.clear();
     } else if (mutatedKey !== undefined) {
@@ -419,7 +437,9 @@ export class JsonFileStore implements KeyValueStore {
       const entry = this.rawJsonByKey.get(k);
       if (entry !== undefined) lines.push(entry);
     }
-    return `{\n${lines.join(',\n')}\n}`;
+    return this.options.pretty === false
+      ? `{${lines.join(',')}}`
+      : `{\n${lines.join(',\n')}\n}`;
   }
 
   private async persist(data: Map<string, unknown>, mutatedKey?: string): Promise<void> {
@@ -467,42 +487,85 @@ export class JsonFileStore implements KeyValueStore {
     this.lastStat = await this.currentStat().catch(() => undefined);
   }
 
-  private async withLock(mutate: (data: Map<string, unknown>) => void, mutatedKey?: string): Promise<void> {
-    // The lock file lives next to the data file, which may not exist yet on
-    // a fresh install (e.g. the first-ever write to ~/.wazir/wazir.json) —
-    // `persist()` below creates this directory too, but that's too late:
-    // acquiring the lock itself needs it to exist first, or `fs.open(lockFile,
-    // 'wx')` fails with ENOENT before `persist()` ever runs.
-    await ensurePrivateDir(path.dirname(this.file));
-    await withFileLock(this.lockFile, async () => {
-      const st = await this.currentStat();
-      let data: Map<string, unknown>;
-      if (this.statMatches(st)) {
-        data = new Map(this.data);
-      } else {
-        data = await this.readFromDisk(st);
+  private withLock(mutate: (data: Map<string, unknown>) => void, _mutatedKey?: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this.pending.push({ mutate, resolve, reject });
+      if (!this.draining) {
+        this.draining = true;
+        void this.drainWrites();
       }
-      mutate(data);
-      await this.persist(data, mutatedKey);
-      this.data = data;
-      this.loaded = true;
     });
+  }
+
+  private async drainWrites(): Promise<void> {
+    try {
+      while (this.pending.length) {
+        const window = this.options.coalesceWindowMs ?? 0;
+        if (window > 0 && this.options.coalesceWrites !== false) {
+          await new Promise((resolve) => setTimeout(resolve, window));
+        }
+        let batch: PendingMutation[] = [];
+        try {
+          await ensurePrivateDir(path.dirname(this.file));
+          await withFileLock(this.lockFile, async () => {
+            // Keep the existing post-fsync fault boundary for every operation.
+            // Fault mode uses individual commits so a failed injection cannot
+            // reject or accidentally commit any sibling mutation.
+            const count = this.options.coalesceWrites === false || faultInjector.isEnabled()
+              ? 1 : this.pending.length;
+            batch = this.pending.splice(0, count);
+            await this.reloadFromDisk();
+            const data = new Map(this.data);
+            const accepted: PendingMutation[] = [];
+            for (const operation of batch) {
+              try {
+                operation.mutate(data);
+                accepted.push(operation);
+              } catch (error) {
+                operation.reject(error);
+              }
+            }
+            batch = accepted;
+            if (!batch.length) return;
+            // Readers may refresh serialization metadata while I/O is pending.
+            // Rebuild it from this writer's private snapshot on every commit.
+            this.rawJsonByKey.clear();
+            await this.persist(data, '*');
+            this.data = data;
+            this.revivedKeys.clear();
+            this.loaded = true;
+          });
+          for (const operation of batch) operation.resolve();
+        } catch (error) {
+          this.lastStat = undefined;
+          this.rawJsonByKey.clear();
+          // A lock acquisition failure happens before a batch is selected.
+          if (!batch.length) batch = this.pending.splice(0);
+          for (const operation of batch) operation.reject(error);
+        }
+      }
+    } finally {
+      this.draining = false;
+    }
   }
 
   async update<T>(key: string, mutate: (current: T | undefined) => T): Promise<T> {
     let value!: T;
     await this.withLock((data) => {
-      const current = this.revivedKeys.has(key) ? data.get(key) : reviveDatesInPlace(data.get(key));
+      const current = reviveDatesInPlace(structuredClone(data.get(key)));
       value = mutate(current as T | undefined);
-      data.set(key, value);
-      this.revivedKeys.add(key);
+      // Validate before changing the working snapshot: a bad value must not
+      // poison otherwise valid operations in the same batch.
+      JSON.stringify(value);
+      data.set(key, structuredClone(value));
     }, key);
     return value;
   }
   async put(key: string, value: unknown): Promise<void> {
     await this.withLock((data) => {
-      data.set(key, value);
-      this.revivedKeys.add(key);
+      const copy = structuredClone(value);
+      JSON.stringify(copy);
+      data.set(key, copy);
     }, key);
   }
 
