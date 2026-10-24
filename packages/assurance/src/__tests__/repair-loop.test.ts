@@ -380,6 +380,53 @@ describe('AssuranceRepairOrchestrator mechanics (unit)', () => {
     // 2 holdout seeds drawn on rev-1-overfit + 2 fresh holdout seeds drawn on rev-2-generalized = 4 distinct seeds
     expect(new Set(report.holdoutSeedsUsed).size).toBe(4);
   });
+
+  it('rejects NOT_FALSIFIED-only obligation sets from returning outcome: passed (requires evaluateReleaseGate PASS with PROVED or BOUNDED_PASS)', async () => {
+    const { ws, store } = initWorkspaceWithSpec();
+    const worker: ImplementationWorker = {
+      async run(_task, workspace) {
+        const gws = workspace as GitWorkspace;
+        mkdirSync(join(gws.dir, 'src'), { recursive: true });
+        writeFileSync(join(gws.dir, 'src', 'impl.py'), 'REV = "rev-1"\n');
+        gws.commitAll('rev-1', 'rev-1');
+        return { label: 'rev-1' };
+      },
+    };
+
+    const verifaiOnlyAdapter: SolverAdapter = {
+      tool: 'verifai',
+      checkAvailability: async () => ({ available: true, version: '2.3.0' }),
+      verify: async (obl) => makeFakeResult(Verdict.NOT_FALSIFIED, { tool: 'verifai', seed: obl.seed }),
+    };
+
+    const orchestrator = new AssuranceRepairOrchestrator({
+      runId: 'not-falsified-only-run',
+      component: 'comp',
+      workspace: ws,
+      worker,
+      adapters: { verifai: verifaiOnlyAdapter },
+      planObligations: () => [
+        sampleObligation({
+          id: 'PROP_A/verifai/sim_only',
+          tool: 'verifai',
+          seed: 5,
+          metadata: { samples: 10, holdoutSeeds: [] },
+        }),
+      ],
+      regressionStore: store,
+      holdout: { seedsPerCheck: 2 },
+    });
+
+    const report = await orchestrator.run({
+      kind: 'implementation',
+      id: 'impl-nf-only',
+      component: 'comp',
+      prompt: 'implement',
+    });
+
+    expect(report.outcome).toBe('blocked');
+    expect(report.reason).toMatch(/only NOT_FALSIFIED/i);
+  });
 });
 
 describe('GAM Appendix B governance case (unit + built-in engine)', () => {

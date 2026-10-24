@@ -45,6 +45,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 
 import { FormalTool, Obligation, SolverAdapter, VerificationResult, Verdict } from './contracts';
 import { canonicalSerialize, EvidenceLedger, LedgerEntry } from './ledger';
+import { evaluateReleaseGate } from './verdict';
 
 export const DEFAULT_MAX_REPAIR_ATTEMPTS = 3;
 export const DEFAULT_HOLDOUT_SEEDS_PER_CHECK = 3;
@@ -1137,6 +1138,13 @@ export class AssuranceRepairOrchestrator {
               revision,
               `non-repairable verdicts: ${blocking.map((r) => `${r.obligation.id}=${r.result.verdict}`).join(', ')}`,
             );
+          }
+          const gate = evaluateReleaseGate(
+            [...runs, ...holdoutRuns].map((r) => r.result.verdict),
+            true,
+          );
+          if (gate.status !== 'PASS') {
+            return finish('blocked', revision, gate.reason ?? 'release gate failed');
           }
           return finish('passed', revision);
         }
