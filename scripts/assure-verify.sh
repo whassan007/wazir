@@ -5,8 +5,28 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TOOLS_DIR="${WAZIR_TOOLS_DIR:-$REPO_ROOT/tools}"
-export PATH="$HOME/.local/bin:$TOOLS_DIR/java/bin:$TOOLS_DIR/dafny:$PATH"
+ROOT_Candidate="$REPO_ROOT"
+while [ ! -d "$ROOT_Candidate/tools/z3-venv" ] && [ "$(dirname "$ROOT_Candidate")" != "$ROOT_Candidate" ]; do
+  ROOT_Candidate="$(dirname "$ROOT_Candidate")"
+done
+TOOLS_DIR="${WAZIR_TOOLS_DIR:-$ROOT_Candidate/tools}"
+CREATED_TOOLS_LINK=0
+if [ ! -e "$REPO_ROOT/tools" ] && [ -d "$TOOLS_DIR" ]; then
+  ln -s "$TOOLS_DIR" "$REPO_ROOT/tools"
+  CREATED_TOOLS_LINK=1
+fi
+cleanup() {
+  if [ "$CREATED_TOOLS_LINK" = "1" ] && [ -L "$REPO_ROOT/tools" ]; then
+    rm -f "$REPO_ROOT/tools"
+  fi
+}
+trap cleanup EXIT
+export PYTHON="${PYTHON:-$TOOLS_DIR/z3-venv/bin/python3}"
+export DAFNY_PATH="${DAFNY_PATH:-$TOOLS_DIR/dafny/dafny}"
+export WAZIR_Z3_PYTHON="${WAZIR_Z3_PYTHON:-$TOOLS_DIR/z3-venv/bin/python3}"
+export WAZIR_SCENIC_PYTHON="${WAZIR_SCENIC_PYTHON:-$TOOLS_DIR/scenic-venv/bin/python3}"
+export WAZIR_VERIFAI_PYTHON="${WAZIR_VERIFAI_PYTHON:-$TOOLS_DIR/verifai-venv/bin/python3}"
+export PATH="$HOME/.local/bin:$TOOLS_DIR/java/bin:$TOOLS_DIR/dafny:$TOOLS_DIR/z3-venv/bin:$PATH"
 
 echo "=== Wazir Formal Assurance Independent Verifier ==="
 echo "Host: $(hostname) ($(uname -s) $(uname -m))"
@@ -46,7 +66,7 @@ echo "--- 3. Running @wazir/assurance Typecheck & Vitest Suite ---"
 if [ -f "$REPO_ROOT/packages/assurance/tsconfig.json" ]; then
   (cd "$REPO_ROOT" && npx tsc -p packages/assurance/tsconfig.json --noEmit)
   echo "[PASS] @wazir/assurance typecheck"
-  (cd "$REPO_ROOT" && npx vitest run packages/assurance/src/__tests__)
+  (cd "$REPO_ROOT" && npx vitest run packages/assurance/src/__tests__/*.test.ts)
   echo "[PASS] @wazir/assurance test suite"
 fi
 
