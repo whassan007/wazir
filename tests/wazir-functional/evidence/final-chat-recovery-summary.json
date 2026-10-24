@@ -1,0 +1,41 @@
+{
+  "pid": 67294,
+  "exit_code": 0,
+  "signal": null,
+  "killed": false,
+  "steps": [
+    {
+      "step": "startup",
+      "ok": true
+    },
+    {
+      "step": 1,
+      "prompt": "What is 17 multiplied by 23?\nReply with only the number.",
+      "job_id": "job-6ce3b856-3a99-4261-9e78-d3fa9b5681b1",
+      "outcome": "completed",
+      "finished_marker_seen": true,
+      "approved_count": 0,
+      "ok": true
+    },
+    {
+      "step": 2,
+      "prompt": "Write a complete C++17 program\nthat implements quicksort.\nInclude main and print 10 sorted integers.",
+      "job_id": "job-f166494e-ca7f-4227-a643-4045bb9e3cf9",
+      "outcome": "failed",
+      "finished_marker_seen": true,
+      "approved_count": 0,
+      "ok": true
+    },
+    {
+      "step": 3,
+      "prompt": "What is 17 multiplied by 23?\nReply with only the number.",
+      "job_id": "job-7d451d06-c34c-4a0c-b596-e9f19e8c8013",
+      "outcome": "completed",
+      "finished_marker_seen": true,
+      "approved_count": 0,
+      "ok": true
+    }
+  ],
+  "output_bytes": 16375,
+  "transcript": "/Users/wael/Code/Wazir/tests/wazir-functional/evidence/final-chat-recovery-transcript.ansi"
+}

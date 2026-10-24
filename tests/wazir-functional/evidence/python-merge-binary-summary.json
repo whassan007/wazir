@@ -1,0 +1,14 @@
+{
+  "pid": 51950,
+  "exit_code": null,
+  "signal": "SIGKILL",
+  "killed": true,
+  "steps": [
+    {
+      "step": "startup",
+      "ok": true
+    }
+  ],
+  "output_bytes": 27620,
+  "transcript": "functional/evidence/python-merge-binary-transcript.ansi"
+}

@@ -26,57 +26,37 @@ WF-20 [deterministic] coding completion
 
  RUN  v2.1.9 /Users/wael/Code/Wazir
 
-stderr | apps/cli/tests/fleetTui.test.ts > FleetTui — protocol/validation visibility and raw response viewer > Phase 4 — Inline Shell Mode (!), Cross-Task @ References, and Fast-Path Navigation > switches to SHELL mode when typing !, executes inline shell commands in projectRoot, records a Block, and exits on Esc
-[wazir] tool sandbox unavailable — running tool processes directly on the host (sandbox-exec cannot start (exit 71))
-
- ✓ apps/cli/tests/fleetTui.test.ts (57 tests) 9515ms
-   ✓ FleetTui — interactive terminal UI harness > shows a failed tool call with a plain-language reason, not the raw policy rule id 1615ms
-   ✓ FleetTui — interactive terminal UI harness > reports a timed-out job as stopped by the timeout, not "cancelled by operator" 1302ms
-   ✓ FleetTui — interactive terminal UI harness > cancels an in-flight model turn as soon as the job timeout fires, not just at the turn's own longer timeout 1071ms
-(node:52734) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-(Use `node --trace-warnings ...` to show where the warning was created)
-[-] Waiting for model response (nvidia/nemotron-3.5-super-vl-120b-a12b)...
-[-] Waiting for model response (nvidia/nemotron-3.5-super-vl-120b-a12b)...
-[-] Executing write...
-[-] Waiting for model response (nvidia/nemotron-3.5-super-vl-120b-a12b)...
-[-] Running check (build)...
-[-] Running check (test)...
-[-] Running check (lint)...
-[-] Running check (typecheck)...
+ ✓ apps/cli/tests/fleetTui.test.ts (57 tests) 8543ms
+   ✓ FleetTui — interactive terminal UI harness > shows a failed tool call with a plain-language reason, not the raw policy rule id 1618ms
+   ✓ FleetTui — interactive terminal UI harness > reports a timed-out job as stopped by the timeout, not "cancelled by operator" 1311ms
+   ✓ FleetTui — interactive terminal UI harness > cancels an in-flight model turn as soon as the job timeout fires, not just at the turn's own longer timeout 1094ms
 [nvidia/nemotron-3.5-super-vl-120b-a12b]
- ✓ apps/cli/tests/nvidiaProviderSystem.test.ts (10 tests | 1 skipped) 856ms
-   ✓ NVIDIA System-Wide Execution Provider Integration > 21. Resource accounting records token usage, requests, retries, latency, explicit unknown-cost vs configured pricing, and enforces quota exhaustion 368ms
- ✓ packages/runtimes/nvidia/tests/nvidiaAdapter.test.ts (16 tests) 558ms
- ✓ packages/core/tests/harnessDispatch.test.ts (13 tests) 87ms
- ✓ apps/cli/tests/tuiSessionLifecycle.test.ts (11 tests) 800ms
- ✓ packages/core/tests/contextCompiler.comprehensive.test.ts (21 tests) 950ms
- ✓ packages/core/tests/modelLifecycleAdmission.test.ts (25 tests) 123ms
- ✓ packages/core/tests/scheduler.test.ts (7 tests) 17ms
- ✓ packages/core/tests/executionHistory.test.ts (14 tests) 90ms
- ✓ apps/cli/tests/conversationProjection.test.ts (12 tests) 20ms
- ✓ packages/core/tests/contextCompactionService.test.ts (7 tests) 4ms
- ✓ packages/agents/tests/codingAgent.contextCompaction.test.ts (8 tests) 14ms
- ✓ packages/core/tests/planner.test.ts (13 tests) 7ms
-stderr | packages/agents/tests/live-coding/01-bugRepair.test.ts > LIVE-CODE-01: Autonomous Bug Repair (Release Gate G2) > modifies add.js while preserving add.test.js byte-identically and passes external verification
-[wazir] tool sandbox unavailable — running tool processes directly on the host (sandbox-exec cannot start (exit 71))
-
- ✓ packages/agents/tests/live-coding/01-bugRepair.test.ts (2 tests) 345ms
+ ✓ apps/cli/tests/nvidiaProviderSystem.test.ts (10 tests | 1 skipped) 959ms
+   ✓ NVIDIA System-Wide Execution Provider Integration > 21. Resource accounting records token usage, requests, retries, latency, explicit unknown-cost vs configured pricing, and enforces quota exhaustion 438ms
+ ✓ packages/runtimes/nvidia/tests/nvidiaAdapter.test.ts (16 tests) 566ms
+ ✓ packages/core/tests/harnessDispatch.test.ts (13 tests) 85ms
+ ✓ apps/cli/tests/tuiSessionLifecycle.test.ts (11 tests) 703ms
+ ✓ packages/core/tests/contextCompiler.comprehensive.test.ts (21 tests) 817ms
+ ✓ packages/core/tests/modelLifecycleAdmission.test.ts (25 tests) 120ms
+ ✓ packages/core/tests/scheduler.test.ts (7 tests) 11ms
+ ✓ packages/core/tests/executionHistory.test.ts (14 tests) 44ms
+ ✓ apps/cli/tests/conversationProjection.test.ts (12 tests) 17ms
+ ✓ packages/core/tests/contextCompactionService.test.ts (7 tests) 3ms
+ ✓ packages/agents/tests/codingAgent.contextCompaction.test.ts (8 tests) 10ms
+ ✓ packages/core/tests/planner.test.ts (13 tests) 5ms
+ ✓ packages/agents/tests/live-coding/01-bugRepair.test.ts (2 tests) 349ms
  ✓ packages/core/tests/schedulerHostedRouting.test.ts (7 tests) 4ms
-(node:53702) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-(Use `node --trace-warnings ...` to show where the warning was created)
- ✓ packages/memory/tests/sqliteMemoryStore.test.ts (5 tests) 9ms
+ ✓ packages/memory/tests/sqliteMemoryStore.test.ts (5 tests) 8ms
  ✓ packages/agents/tests/chatAgent.test.ts (7 tests) 51ms
- ✓ packages/agents/tests/codingAgent.contextOverflowRecovery.test.ts (2 tests) 9ms
- ✓ packages/agents/tests/codingAgent.streamRetry.test.ts (2 tests) 2010ms
-   ✓ CodingAgent.run — interrupted model stream > re-requests a generation cut by a connection reset, records it, and never runs the partial turn 507ms
-   ✓ CodingAgent.run — interrupted model stream > gives up after two retries instead of looping 1503ms
+ ✓ packages/agents/tests/codingAgent.contextOverflowRecovery.test.ts (2 tests) 7ms
+ ✓ packages/agents/tests/codingAgent.streamRetry.test.ts (2 tests) 2012ms
+   ✓ CodingAgent.run — interrupted model stream > re-requests a generation cut by a connection reset, records it, and never runs the partial turn 506ms
+   ✓ CodingAgent.run — interrupted model stream > gives up after two retries instead of looping 1505ms
  ✓ packages/workers/tests/hardwareDiscovery.test.ts (2 tests) 1ms
-(node:53757) ExperimentalWarning: SQLite is an experimental feature and might change at any time
-(Use `node --trace-warnings ...` to show where the warning was created)
- ✓ packages/core/tests/resourceLedgerLazyStartup.test.ts (1 test) 4ms
+ ✓ packages/core/tests/resourceLedgerLazyStartup.test.ts (1 test) 3ms
 
  Test Files  21 passed (21)
       Tests  241 passed | 1 skipped (242)
-   Start at  01:10:22
-   Duration  23.09s (transform 952ms, setup 0ms, collect 4.97s, tests 15.47s, environment 1ms, prepare 457ms)
+   Start at  18:08:17
+   Duration  20.72s (transform 903ms, setup 0ms, collect 3.98s, tests 14.32s, environment 1ms, prepare 382ms)
 

@@ -1,0 +1,15 @@
+{
+  "cwd": "/private/tmp/wazir-repair-a8/functional/projects/python-search",
+  "job_timeout": 240,
+  "env": {
+    "WAZIR_HOME": "/private/tmp/wazir-repair-a8/functional/homes/python-search",
+    "WAZIR_SECRETS_BACKEND": "encrypted-file",
+    "WAZIR_DISABLE_UPDATE_CHECK": "1"
+  },
+  "prompts": [
+    {
+      "prompt": "Write a Python program implementing\nmerge sort, binary search, and unittest tests.",
+      "timeout": 240
+    }
+  ]
+}

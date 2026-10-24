@@ -1,0 +1,25 @@
+{
+  "source_dir": "/private/tmp/wazir-repair-a8/functional/projects/python-search/.wazir/worktrees/clean-job-b53490e3-ace1-421d-a192-b6822495874a-task-job-b53490e3-ace1-421d-a192-b6822495874a-0",
+  "preserved_dir": "tests/wazir-functional/evidence/a8-python-preserved",
+  "job_id": "job-b53490e3-ace1-421d-a192-b6822495874a",
+  "execution_id": "exec-mvkowgoj-1",
+  "unittest_command": "python3 -m unittest -v test_algorithms.py",
+  "unittest_exit_code": 0,
+  "unittest_stdout": "",
+  "unittest_stderr": "test_binary_search (test_algorithms.TestAlgorithms.test_binary_search) ... ok\ntest_merge_sort (test_algorithms.TestAlgorithms.test_merge_sort) ... ok\n\n----------------------------------------------------------------------\nRan 2 tests in 0.000s\n\nOK\n",
+  "merge_sort_sample": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "binary_search_found_index": 6,
+  "binary_search_missing_index": -1,
+  "verified": true
+}

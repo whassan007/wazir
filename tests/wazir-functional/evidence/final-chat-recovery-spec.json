@@ -1,0 +1,29 @@
+{
+  "cwd": "/private/tmp/wazir-live-final/projects/chat-recovery",
+  "job_timeout": 120,
+  "between_prompts_seconds": 1.5,
+  "env": {
+    "WAZIR_HOME": "/private/tmp/wazir-live-final/homes/chat-recovery",
+    "WAZIR_SECRETS_BACKEND": "encrypted-file",
+    "WAZIR_DISABLE_UPDATE_CHECK": "1",
+    "NVIDIA_API_KEY": "",
+    "OPENAI_API_KEY": "",
+    "ANTHROPIC_API_KEY": "",
+    "GEMINI_API_KEY": "",
+    "GOOGLE_API_KEY": ""
+  },
+  "prompts": [
+    {
+      "prompt": "What is 17 multiplied by 23?\nReply with only the number.",
+      "timeout": 90
+    },
+    {
+      "prompt": "Write a complete C++17 program\nthat implements quicksort.\nInclude main and print 10 sorted integers.",
+      "timeout": 75
+    },
+    {
+      "prompt": "What is 17 multiplied by 23?\nReply with only the number.",
+      "timeout": 90
+    }
+  ]
+}

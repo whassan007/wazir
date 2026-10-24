@@ -1,0 +1,22 @@
+{
+  "cwd": "/private/tmp/wazir-live-final/projects/python-search",
+  "job_timeout": 240,
+  "auto_approve": true,
+  "env": {
+    "WAZIR_HOME": "/private/tmp/wazir-live-final/homes/python-search",
+    "WAZIR_SECRETS_BACKEND": "encrypted-file",
+    "WAZIR_DISABLE_UPDATE_CHECK": "1",
+    "NVIDIA_API_KEY": "",
+    "OPENAI_API_KEY": "",
+    "ANTHROPIC_API_KEY": "",
+    "GEMINI_API_KEY": "",
+    "GOOGLE_API_KEY": ""
+  },
+  "prompts": [
+    {
+      "prompt": "Write a Python program implementing\nmerge sort, binary search, and unittest tests.",
+      "timeout": 240,
+      "auto_approve": true
+    }
+  ]
+}

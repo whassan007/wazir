@@ -1,0 +1,21 @@
+{
+  "source": "/private/tmp/wazir-repair-a8/functional/projects/cpp-quicksort/.wazir/worktrees/clean-job-78a23b0b-16b5-4515-ad02-9e8d1c14d105-task-job-78a23b0b-16b5-4515-ad02-9e8d1c14d105-0/main.cpp",
+  "compiler": "g++ -std=c++17 -Wall -Wextra -pedantic",
+  "compile_status": 0,
+  "run_status": 0,
+  "stdout": "Original array: 34 7 23 32 5 62 32 12 45 1 \nSorted array:   1 5 7 12 23 32 32 34 45 62 \n",
+  "stderr": "",
+  "sorted_10_integers": true,
+  "values": [
+    1,
+    5,
+    7,
+    12,
+    23,
+    32,
+    32,
+    34,
+    45,
+    62
+  ]
+}

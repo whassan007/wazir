@@ -1,0 +1,15 @@
+{
+  "cwd": "/private/tmp/wazir-repair-a8/functional/projects/cpp-quicksort",
+  "job_timeout": 240,
+  "env": {
+    "WAZIR_HOME": "/private/tmp/wazir-repair-a8/functional/homes/cpp-quicksort",
+    "WAZIR_SECRETS_BACKEND": "encrypted-file",
+    "WAZIR_DISABLE_UPDATE_CHECK": "1"
+  },
+  "prompts": [
+    {
+      "prompt": "Write a complete C++17 program\nthat implements quicksort.\nInclude main and print 10 sorted integers.",
+      "timeout": 240
+    }
+  ]
+}
