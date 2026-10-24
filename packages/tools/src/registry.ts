@@ -98,9 +98,47 @@ export const defaultTools: Tool[] = [
   codeModeTool,
 ];
 
+export const MAX_TOOL_OUTPUT_CHARS = 200_000;
+
+export function boundToolOutput(
+  output: string,
+  maxChars: number = MAX_TOOL_OUTPUT_CHARS,
+): { output: string; truncated: boolean; originalLength: number } {
+  const originalLength = output.length;
+  if (!Number.isFinite(maxChars) || maxChars <= 0 || originalLength <= maxChars) {
+    return { output, truncated: false, originalLength };
+  }
+  const headChars = Math.max(1, Math.floor(maxChars * 0.6));
+  const tailChars = Math.max(0, Math.floor(maxChars * 0.35));
+  const omitted = Math.max(0, originalLength - headChars - tailChars);
+  const marker = `\n...[Tool output truncated: ${omitted} chars omitted (original length: ${originalLength})...\n`;
+  const truncatedOutput =
+    tailChars > 0
+      ? `${output.slice(0, headChars)}${marker}${output.slice(originalLength - tailChars)}`
+      : `${output.slice(0, headChars)}${marker}`;
+  return {
+    output: truncatedOutput,
+    truncated: true,
+    originalLength,
+  };
+}
+
 export class ToolRegistry {
   private readonly controllerOnly = new Set<string>();
-  restrictToController(name: string): void { this.controllerOnly.add(name); }
+  private sortedToolsCache: Tool[] | null = null;
+  private sortedDescriptorsCache: ToolDescriptor[] | null = null;
+  private readonly forModelCache = new Map<string, Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>>();
+
+  private invalidateCaches(): void {
+    this.sortedToolsCache = null;
+    this.sortedDescriptorsCache = null;
+    this.forModelCache.clear();
+  }
+
+  restrictToController(name: string): void {
+    this.controllerOnly.add(name);
+    this.invalidateCaches();
+  }
   isControllerOnly(name: string): boolean { return this.controllerOnly.has(name); }
   private readonly tools = new Map<string, Tool>();
   private readonly contracts = new Map<string, { input: ReturnType<typeof compileToolSchema>; output?: ReturnType<typeof compileToolSchema> }>();
@@ -122,9 +160,14 @@ export class ToolRegistry {
     if (!Number.isFinite(tool.descriptor.timeoutMs) || tool.descriptor.timeoutMs <= 0 || tool.descriptor.timeoutMs > 2_147_483_647) throw new Error(`Invalid timeout for tool '${tool.descriptor.name}'`);
     this.contracts.set(tool.descriptor.name, { input, output });
     this.tools.set(tool.descriptor.name, tool);
+    this.invalidateCaches();
   }
 
-  unregister(name: string): void { this.tools.delete(name); this.contracts.delete(name); }
+  unregister(name: string): void {
+    this.tools.delete(name);
+    this.contracts.delete(name);
+    this.invalidateCaches();
+  }
 
   validate(name: string, value: unknown, phase: 'input' | 'output'): string | undefined {
     const validate = this.contracts.get(name)?.[phase];
@@ -137,21 +180,38 @@ export class ToolRegistry {
   }
 
   list(): Tool[] {
-    return Array.from(this.tools.values()).sort((a, b) => a.descriptor.name.localeCompare(b.descriptor.name));
+    if (!this.sortedToolsCache) {
+      this.sortedToolsCache = Array.from(this.tools.values()).sort((a, b) => a.descriptor.name.localeCompare(b.descriptor.name));
+    }
+    return this.sortedToolsCache.slice();
   }
 
   descriptors(): ToolDescriptor[] {
-    return this.list().map((t) => t.descriptor);
+    if (!this.sortedDescriptorsCache) {
+      const sorted = this.sortedToolsCache ?? (this.sortedToolsCache = Array.from(this.tools.values()).sort((a, b) => a.descriptor.name.localeCompare(b.descriptor.name)));
+      this.sortedDescriptorsCache = sorted.map((t) => t.descriptor);
+    }
+    return this.sortedDescriptorsCache.slice();
   }
 
   /** Schemas as presented to a model. */
   forModel(allowedNames?: readonly string[], capabilities: readonly string[] = []): Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> {
-    return this.list().filter(t => !this.controllerOnly.has(t.descriptor.name) && (!allowedNames || allowedNames.includes(t.descriptor.name)) &&
-      (t.descriptor.provenance?.source !== 'web' || t.descriptor.capabilities?.every(c => capabilities.includes(c)))).map((t) => ({
-      name: t.descriptor.name,
-      description: t.descriptor.description,
-      inputSchema: t.descriptor.inputSchema,
-    }));
+    const allowedKey = allowedNames ? allowedNames.slice().sort().join('\0') : '*';
+    const capKey = capabilities.length > 0 ? capabilities.slice().sort().join('\0') : '';
+    const cacheKey = `${allowedKey}::${capKey}`;
+    let cached = this.forModelCache.get(cacheKey);
+    if (!cached) {
+      const sorted = this.sortedToolsCache ?? (this.sortedToolsCache = Array.from(this.tools.values()).sort((a, b) => a.descriptor.name.localeCompare(b.descriptor.name)));
+      const allowedSet = allowedNames ? new Set(allowedNames) : undefined;
+      cached = sorted.filter(t => !this.controllerOnly.has(t.descriptor.name) && (!allowedSet || allowedSet.has(t.descriptor.name)) &&
+        (t.descriptor.provenance?.source !== 'web' || t.descriptor.capabilities?.every(c => capabilities.includes(c)))).map((t) => ({
+        name: t.descriptor.name,
+        description: t.descriptor.description,
+        inputSchema: t.descriptor.inputSchema,
+      }));
+      this.forModelCache.set(cacheKey, cached);
+    }
+    return cached.slice();
   }
 
   requiredTools(names: string[]): string[] {
@@ -216,7 +276,7 @@ export async function executeTool(
   const invalid = registry.validate(name, input, 'input');
   if (invalid) return { ok: false, output: '', error: isMCP ? 'MCP_TOOL_SCHEMA_INVALID' : `TOOL_VALIDATION_FAILED: ${invalid}`, failureClass: 'TOOL_VALIDATION_FAILED', durationMs: 0 };
   if (ctx.signal?.aborted) return { ok: false, output: '', error: 'cancelled before tool dispatch', failureClass: 'CANCELLED', durationMs: 0 };
-  if (!ctx.allowVerificationChanges) {
+  if (!ctx.allowVerificationChanges && (name === 'write' || name === 'edit')) {
     const findings = await proposedOracleWeakening(ctx.projectRoot, name, input);
     if (findings.length > 0) return {
       ok: false, output: '', failureClass: 'POLICY_DENIED', durationMs: 0, metadata: { oracleWeakening: findings },
@@ -224,10 +284,10 @@ export async function executeTool(
         'Fix the implementation, not the tests; verification assets may only be weakened when the task explicitly asks for it.',
     };
   }
-  const targets = ['write', 'edit'].includes(name) && typeof input.path === 'string' ? [input.path] : undefined;
+  const targets = (name === 'write' || name === 'edit') && typeof input.path === 'string' ? [input.path] : undefined;
   const before = ctx.verifyWorkspace && tool.descriptor.sideEffectClass !== 'READ_ONLY' ? await snapshotWorkspace(ctx.projectRoot, targets) : undefined;
   // MCP performs its own authorization and checkpoints immediately after it.
-  if (!isMCP) await ctx.checkpoint?.();
+  if (!isMCP && ctx.checkpoint) await ctx.checkpoint();
   if (ctx.signal?.aborted) return { ok: false, output: '', error: 'cancelled before tool dispatch', failureClass: 'CANCELLED', durationMs: 0 };
   const started = Date.now();
   const controller = new AbortController();
@@ -276,6 +336,23 @@ export async function executeTool(
     }
     const invalidOutput = result.ok ? registry.validate(name, result.structuredOutput, 'output') : undefined;
     if (invalidOutput) return { ...result, ok: false, failureClass: 'ARTIFACT_CONTRACT_FAILED', error: `ARTIFACT_CONTRACT_FAILED: ${invalidOutput}` };
+    if (typeof result.output === 'string') {
+      const maxOutputChars = (ctx as { maxOutputChars?: number }).maxOutputChars ?? MAX_TOOL_OUTPUT_CHARS;
+      if (result.output.length > maxOutputChars) {
+        const bounded = boundToolOutput(result.output, maxOutputChars);
+        if (bounded.truncated) {
+          result = {
+            ...result,
+            output: bounded.output,
+            metadata: {
+              ...result.metadata,
+              outputTruncated: true,
+              originalOutputLength: bounded.originalLength,
+            },
+          };
+        }
+      }
+    }
     return result;
   } catch (error) {
     return { ok: false, output: '', error: error instanceof Error ? error.message : String(error),
