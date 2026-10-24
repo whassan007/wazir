@@ -18,7 +18,7 @@ export function scanDafnyTrustedBase(sourceText: string): string[] {
     const line = sourceText.slice(0, offset).split('\n').length;
     gaps.push(`${kind} at line ${line}: ${sourceText.split('\n')[line - 1].trim()}`);
   };
-  for (const match of source.matchAll(/\bassume\b|\{:\s*(?:axiom|extern|verify\s+false|trusted)\b[^}]*\}|\bopaque\b|\binclude\b/g)) {
+  for (const match of source.matchAll(/\bassume\b|\{:\s*(?:axiom|extern|verify\s+false|trusted|contradiction)\b[^}]*\}|\bopaque\b|\binclude\b/g)) {
     record(match.index!, 'trusted declaration');
   }
   // Track enclosing trait/abstract module scopes rather than exempting an entire file.
@@ -73,7 +73,7 @@ export class DafnyAdapter implements SolverAdapter {
       const source = await readFile(path, 'utf8');
       result.inputHash = createHash('sha256').update(source).digest('hex');
       result.trustedBaseGaps = scanDafnyTrustedBase(source);
-      const verified = await run(this.binary, ['verify', path, '--verify-included-files', '--warn-contradictory-assumptions'], timeout, options.workspaceDir);
+      const verified = await run(this.binary, ['verify', path, '--verify-included-files', '--warn-contradictory-assumptions', '--allow-warnings'], timeout, options.workspaceDir);
       result.stdout = verified.stdout;
       result.stderr = verified.stderr;
       const output = verified.stdout + '\n' + verified.stderr;
@@ -95,7 +95,7 @@ export class DafnyAdapter implements SolverAdapter {
         const audit = await run(this.binary, ['audit', path], timeout, options.workspaceDir);
         result.metadata = { ...result.metadata, auditStdout: audit.stdout, auditStderr: audit.stderr };
         if (audit.timeout) return finish(Verdict.UNKNOWN);
-        if (audit.code !== 0 || /\bassum(?:e|ption)|\baxiom\b|\bextern\b|\btrusted\b/i.test(audit.stdout + audit.stderr)) {
+        if (audit.code !== 0 || /completed with [1-9]\d* findings/.test(audit.stdout) || /\bassum(?:e|ption)|\baxiom\b|\bextern\b|\btrusted\b/i.test(audit.stdout + audit.stderr)) {
           result.trustedBaseGaps.push(`Dafny audit: ${(audit.stdout + audit.stderr).trim()}`);
         }
       }
