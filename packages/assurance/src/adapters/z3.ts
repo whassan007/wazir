@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,7 +20,8 @@ const DRIVER = String.raw`
 import sys, json, resource, runpy, io, contextlib
 cfg=json.loads(sys.stdin.read())
 limit=cfg['memory']*1024*1024
-resource.setrlimit(resource.RLIMIT_AS, (limit,limit))
+if sys.platform != 'darwin':
+    resource.setrlimit(resource.RLIMIT_AS, (limit,limit))
 import z3
 z3.set_param('memory_max_size', cfg['memory'])
 z3.set_param('smt.random_seed', cfg['seed'])
@@ -29,7 +30,8 @@ if cfg['python']:
     buf=io.StringIO()
     with contextlib.redirect_stdout(buf):
         try:
-            runpy.run_path(cfg['path'], run_name='__main__')
+            sys.argv=[cfg['path']]+cfg['obligation'].get('metadata',{}).get('args',[])
+            exec(compile(cfg['content'],cfg['path'],'exec'),{'__name__':'__main__','__file__':cfg['path']})
         except SystemExit as exc:
             if exc.code not in (None,0,2): raise
     print(buf.getvalue(),end='')
@@ -66,16 +68,24 @@ export class Z3Adapter implements SolverAdapter {
     this.python = config.pythonPath ?? join(config.toolsDir ?? '/Users/wael/Code/Wazir/tools', 'z3-venv/bin/python3');
   }
 
-  private run(args: string[], input: string, cwd: string, timeout: number) {
+  private run(args: string[], input: string, cwd: string, timeout: number, memoryMb?: number) {
     return new Promise<{ stdout: string; stderr: string; code: number | null; missing: boolean; timedOut: boolean }>((done) => {
       let stdout = '', stderr = '', timedOut = false, missing = false;
-      const child = spawn(this.python, args, { cwd, detached: true, env: { ...process.env, PYTHONHASHSEED: '0', PYTHONDONTWRITEBYTECODE: '1' }, stdio: 'pipe' });
+      const sandboxed = process.platform === 'darwin' && memoryMb !== undefined;
+      const executable = sandboxed ? '/usr/bin/sandbox-exec' : this.python;
+      const commandArgs = sandboxed ? ['-p', `(version 1)(allow default)(deny network*)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(cwd)}))`, this.python, ...args] : args;
+      const child = spawn(executable, commandArgs, { cwd, detached: true, env: { ...process.env, PYTHONHASHSEED: '0', PYTHONDONTWRITEBYTECODE: '1' }, stdio: 'pipe' });
       const kill = () => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { child.kill('SIGKILL'); } };
+      const memoryTimer = memoryMb ? setInterval(() => {
+        execFile('/bin/ps', ['-o', 'rss=', '-p', String(child.pid)], (error, output) => {
+          if (!error && Number(output.trim()) > memoryMb * 1024) { stderr += 'Memory limit exceeded'; kill(); }
+        });
+      }, 25) : undefined;
       const timer = setTimeout(() => { timedOut = true; kill(); }, timeout);
       child.stdout.on('data', (b) => { stdout += b; if (stdout.length > 4_000_000) kill(); });
       child.stderr.on('data', (b) => { stderr += b; if (stderr.length > 4_000_000) kill(); });
       child.on('error', (e: NodeJS.ErrnoException) => { missing = e.code === 'ENOENT'; stderr += e.message; });
-      child.on('close', (code) => { clearTimeout(timer); done({ stdout, stderr, code, missing, timedOut }); });
+      child.on('close', (code) => { clearTimeout(timer); if (memoryTimer) clearInterval(memoryTimer); done({ stdout, stderr, code, missing, timedOut }); });
       child.stdin.on('error', () => {});
       child.stdin.end(input);
     });
@@ -84,7 +94,7 @@ export class Z3Adapter implements SolverAdapter {
   async checkAvailability(): Promise<ToolAvailability> {
     const r = await this.run(['-I', '-c', 'import z3; print(z3.get_version_string())'], '', tmpdir(), 5000);
     const version = r.stdout.trim();
-    return { available: r.code === 0 && (!this.config.expectedVersion || version === this.config.expectedVersion), version, path: this.python };
+    return { available: r.code === 0 && version === (this.config.expectedVersion ?? '5.3.1'), version, path: this.python };
   }
 
   async verify(obligation: Obligation, workspaceRev: string, options: VerifyOptions = {}): Promise<VerificationResult> {
@@ -105,7 +115,7 @@ export class Z3Adapter implements SolverAdapter {
     if (!(timeout > 0 && memory > 0)) { result.stderr = 'Resource limits must be positive'; return finish(); }
     const sandbox = await mkdtemp(join(tmpdir(), 'wazir-z3-'));
     try {
-      const r = await this.run(['-I', '-c', DRIVER], JSON.stringify({ obligation, content, path, python: path.endsWith('.py'), seed, timeout, memory }), sandbox, timeout);
+      const r = await this.run(['-I', '-c', DRIVER], JSON.stringify({ obligation, content, path, python: path.endsWith('.py'), seed, timeout, memory }), sandbox, timeout, memory);
       result.stdout = r.stdout; result.stderr = r.stderr;
       if (r.missing) result.verdict = Verdict.NOT_RUN;
       else if (r.timedOut) result.verdict = Verdict.UNKNOWN;
