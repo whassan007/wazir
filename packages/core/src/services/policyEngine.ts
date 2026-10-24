@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
 import { parse as parseShell } from 'shell-quote';
 import type { ParseEntry } from 'shell-quote';
 import type {
@@ -19,7 +19,45 @@ declare module '../types/policy.js' {
   }
   interface PolicyEngineOptions {
     requiredIsolation?: 'os' | 'container' | 'bwrap' | 'sandbox-exec' | 'seatbelt' | 'none' | string;
+    /**
+     * Repository-relative directories holding formal specifications (default
+     * `['specs']`). Writes into them are denied (`spec-write-fence-deny`) for
+     * every execution whose trusted role is not `spec-author` (WFA §1.5).
+     */
+    specDirs?: string[];
+    /**
+     * Trusted lookup of the persisted task role for an execution. Consulted
+     * when no role was registered via `registerSpecFence`. Never fed from
+     * agent-supplied input.
+     */
+    resolveTaskRole?: (executionId: string) => string | undefined;
   }
+}
+
+declare module '../types/task.js' {
+  interface Task {
+    /**
+     * Formal-assurance role, assigned by the planner and persisted with the
+     * task. Only `spec-author` may change `specs/`; missing means fenced.
+     */
+    role?: TaskRole;
+  }
+}
+
+/** Formal-assurance task roles (WFA §1.5). Anything else is treated as fenced. */
+export type TaskRole = 'spec-author' | 'implementation' | 'repair' | 'verification';
+export const SPEC_AUTHOR_ROLE = 'spec-author' as const;
+export const SPEC_WRITE_FENCE_RULE = 'spec-write-fence-deny' as const;
+export const SPEC_APPROVAL_FENCE_RULE = 'spec-approval-human-only-deny' as const;
+export const SPEC_WRITE_FENCE_BLOCKER = 'SPEC_WRITE_FENCE' as const;
+export const DEFAULT_SPEC_DIRS: readonly string[] = ['specs'];
+/** Statuses an agent (even a spec-author) may leave a spec in. `approved`/`retired` need a human. */
+export const AGENT_WRITABLE_SPEC_STATUSES: readonly string[] = ['draft', 'reviewed'];
+
+export interface SpecFenceRegistration {
+  role?: string;
+  /** Sandbox isolation the fenced execution must run under (Layer A prevention). */
+  requiredIsolation?: string;
 }
 
 // `env`/`printenv` are deliberately absent: they dump the operator's whole
@@ -315,6 +353,239 @@ function attachedValue(arg: string, flag: string): string | undefined {
   return undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Spec write fence (WFA §1.5, DESIGN_REVIEW findings 2–3)
+//
+// Formal specifications live under `specs/`. Only a task whose *persisted*
+// role is `spec-author` may change them; every other role — including a
+// missing or unknown one — is fenced. Layer A (this engine) denies tool
+// calls, shell commands and redirects that target a spec path; Layer B
+// (VerifiedIntegrationCoordinator) rejects any candidate branch whose git
+// history touches `specs/**`. Shell inspection is best effort: interpreter
+// writes with computed paths are not visible here, which is why the merge
+// fence and the read-only worktree mount exist independently.
+// ---------------------------------------------------------------------------
+
+/** Commands that can only read the files they name (for spec-fence purposes). */
+const SPEC_READ_ONLY_COMMANDS = new Set([
+  'ls', 'cat', 'head', 'tail', 'wc', 'file', 'stat', 'du', 'tree', 'rg', 'grep', 'egrep', 'fgrep',
+  'sort', 'cut', 'column', 'diff', 'cmp', 'sha1sum', 'sha256sum', 'sha512sum', 'shasum', 'md5sum', 'md5', 'b2sum',
+  'less', 'more', 'echo', 'printf', 'true', 'false', 'pwd', 'realpath', 'readlink', 'basename', 'dirname',
+  'test', '[', 'find', 'nl', 'od', 'xxd', 'hexdump', 'strings',
+]);
+// Flags that make an otherwise read-only command write a file or run a program.
+const SPEC_READ_ONLY_DENY_FLAGS: Record<string, string[]> = {
+  sort: ['-o', '--output', '--compress-program'],
+  tree: ['-o'],
+  rg: ['--pre', '--hostname-bin'],
+  find: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'],
+  xxd: ['-r', '-revert'],
+};
+// Tools that never write files; every other tool's string inputs are scanned for spec paths.
+const SPEC_FENCE_NON_WRITING_TOOLS = new Set([
+  'read', 'search', 'glob', 'compact_memory', 'recall_facts', 'remember_fact', 'web_search', 'web_fetch',
+]);
+const MAX_SPEC_SYMLINK_HOPS = 40;
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Repository-relative, forward-slash, lower-case spec directories. */
+export function normalizeSpecDirs(dirs: readonly string[] = DEFAULT_SPEC_DIRS): string[] {
+  return dirs
+    .map((dir) => dir.replaceAll('\\', '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '').toLowerCase())
+    .filter((dir) => dir.length > 0 && dir !== '.' && !dir.startsWith('../') && !dir.startsWith('/'));
+}
+
+/** Only the persisted `spec-author` role passes the fence; anything else (incl. missing) is fenced. */
+export function isSpecAuthorRole(role: unknown): boolean {
+  return role === SPEC_AUTHOR_ROLE;
+}
+
+/**
+ * True when a repository-relative path lies in a spec directory. Compared
+ * case-insensitively, because `Specs/x` is `specs/x` on APFS and NTFS.
+ */
+export function isSpecRelativePath(relativePath: string, dirs: readonly string[] = DEFAULT_SPEC_DIRS): boolean {
+  const normalized = path.posix.normalize(relativePath.replaceAll('\\', '/')).replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  if (normalized === '..' || normalized.startsWith('../') || path.posix.isAbsolute(normalized)) return false;
+  const lower = normalized.toLowerCase();
+  return normalizeSpecDirs(dirs).some((dir) => lower === dir || lower.startsWith(`${dir}/`));
+}
+
+/**
+ * Resolves symlinks through the deepest existing ancestor (following
+ * dangling links too); a not-yet-existing tail is appended unchanged, so a
+ * file about to be created through a symlinked directory is still located.
+ */
+function realpathNearest(target: string): string {
+  let current = path.resolve(target);
+  const tail: string[] = [];
+  for (let hops = 0; hops < MAX_SPEC_SYMLINK_HOPS * 4; hops++) {
+    try {
+      return path.join(realpathSync(current), ...[...tail].reverse());
+    } catch {
+      // Not resolvable yet: either missing or a dangling symlink.
+    }
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        current = path.resolve(path.dirname(current), readlinkSync(current));
+        continue;
+      }
+    } catch {
+      // Missing: walk up.
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    tail.push(path.basename(current));
+    current = parent;
+  }
+  return path.join(current, ...[...tail].reverse());
+}
+
+function isWithin(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * True when `target` (absolute, or relative to `projectRoot`) is inside a
+ * spec directory — lexically, after symlink resolution of the target, or
+ * through a spec directory that is itself a symlink elsewhere.
+ */
+export function isSpecPath(projectRoot: string, target: string, dirs: readonly string[] = DEFAULT_SPEC_DIRS): boolean {
+  const specDirs = normalizeSpecDirs(dirs);
+  if (specDirs.length === 0) return false;
+  const root = path.resolve(projectRoot);
+  const absolute = path.resolve(root, target);
+  if (isSpecRelativePath(path.relative(root, absolute), specDirs)) return true;
+  const realRoot = realpathNearest(root);
+  const realTarget = realpathNearest(absolute);
+  if (isSpecRelativePath(path.relative(realRoot, realTarget), specDirs)) return true;
+  return specDirs.some((dir) => isWithin(realpathNearest(path.join(root, dir)), realTarget));
+}
+
+/** True when a glob pattern's first project-relative segment could match a spec directory. */
+function globCouldMatchSpecDir(projectRoot: string, pattern: string, dirs: string[]): boolean {
+  if (!/[*?[]/.test(pattern)) return false;
+  const rel = path.relative(path.resolve(projectRoot), path.resolve(projectRoot, pattern)).replaceAll('\\', '/');
+  if (rel.startsWith('../')) return false;
+  const first = rel.split('/')[0] ?? '';
+  if (!/[*?[]/.test(first)) return false;
+  const source = first.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*+/g, '.*').replace(/\?/g, '.');
+  let matcher: RegExp;
+  try {
+    matcher = new RegExp(`^${source}$`, 'i');
+  } catch {
+    return true; // Unparseable bracket expression: assume it could match.
+  }
+  return dirs.some((dir) => matcher.test(dir.split('/')[0] ?? dir));
+}
+
+/**
+ * True when a command-line word names a spec path: as a path (with symlink
+ * resolution), as a glob that could expand to one, or embedded in a larger
+ * string such as `--out=specs/x`, `D=specs` or `open('specs/x','w')`.
+ */
+function wordMentionsSpec(projectRoot: string, word: string, dirs: string[]): boolean {
+  if (!word) return false;
+  for (const dir of dirs) {
+    const embedded = new RegExp(`(^|[^A-Za-z0-9_.-])${escapeRegExp(dir)}($|[^A-Za-z0-9_-])`, 'i');
+    if (embedded.test(word)) return true;
+  }
+  const candidates = [word];
+  const eq = word.indexOf('=');
+  if (eq >= 0) candidates.push(word.slice(eq + 1));
+  for (const candidate of candidates) {
+    if (!candidate || candidate.includes('$') || candidate.startsWith('~')) continue;
+    if (globCouldMatchSpecDir(projectRoot, candidate, dirs)) return true;
+    if (!candidate.startsWith('-') && isSpecPath(projectRoot, candidate, dirs)) return true;
+  }
+  return false;
+}
+
+/** Collects every string value nested in a tool input, excluding the keys given. */
+function collectStrings(value: unknown, out: string[], skipKeys: Set<string> = new Set(), depth = 0): string[] {
+  if (depth > 8) return out;
+  if (typeof value === 'string') out.push(value);
+  else if (Array.isArray(value)) for (const item of value) collectStrings(item, out, skipKeys, depth + 1);
+  else if (value && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) if (!skipKeys.has(key)) collectStrings(item, out, skipKeys, depth + 1);
+  }
+  return out;
+}
+
+const SPEC_MANIFEST_FILE = /(^|[\\/])manifest\.(ya?ml|json)$/i;
+const AGENT_FORBIDDEN_STATUS = /(^|[\n{,])\s*["']?status["']?\s*:\s*["']?(approved|retired)\b/i;
+
+/** Whether a repository-relative path names a spec manifest file. */
+export function isSpecManifestPath(relativePath: string): boolean {
+  return SPEC_MANIFEST_FILE.test(relativePath);
+}
+
+/**
+ * Reads the top-level `status` of a spec manifest (YAML or JSON). Returns
+ * undefined when it cannot be determined unambiguously, which callers treat
+ * as a fence violation (fail closed).
+ */
+export function parseSpecManifestStatus(text: string, file = 'manifest.yaml'): string | undefined {
+  if (/\.json$/i.test(file)) {
+    try {
+      const parsed = JSON.parse(text) as { status?: unknown };
+      return typeof parsed?.status === 'string' ? parsed.status : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  const matches = [...text.matchAll(/^status\s*:\s*(?:"([^"\n]*)"|'([^'\n]*)'|([^\s#'"]+))\s*(?:#.*)?$/gm)];
+  if (matches.length !== 1) return undefined;
+  const match = matches[0]!;
+  return match[1] ?? match[2] ?? match[3];
+}
+
+/** Repository paths (incl. rename sources) in a change list that lie under a spec directory. */
+export function specFenceTouchedPaths(
+  changes: ReadonlyArray<{ path: string; previousPath?: string }>,
+  dirs: readonly string[] = DEFAULT_SPEC_DIRS,
+): string[] {
+  const touched = new Set<string>();
+  for (const change of changes) {
+    for (const file of [change.previousPath, change.path]) if (file && isSpecRelativePath(file, dirs)) touched.add(file);
+  }
+  return [...touched].sort();
+}
+
+/**
+ * Merge-fence verdict for one task's changes. `role` must come from the
+ * persisted task record, never from an agent-supplied manifest.
+ */
+export function specWriteFenceBlocker(taskId: string, role: string | undefined, touchedSpecPaths: readonly string[]): string | null {
+  if (touchedSpecPaths.length === 0 || isSpecAuthorRole(role)) return null;
+  return `${SPEC_WRITE_FENCE_BLOCKER}: task ${taskId} (role ${role || 'missing'}) modified ${touchedSpecPaths.join(', ')}; only a persisted spec-author task may change specifications`;
+}
+
+/** Whether a command (already unwrapped from env/xargs/...) only reads the files it names. */
+function isSpecReadOnlyCommand(name: string, args: string[]): boolean {
+  if (name === 'git') {
+    const verbIndex = args.findIndex((a) => !a.startsWith('-'));
+    if (verbIndex !== 0) return false; // Global options can redirect or reconfigure git.
+    return isSpecReadOnlyGit(args);
+  }
+  if (!SPEC_READ_ONLY_COMMANDS.has(name)) return false;
+  const deny = SPEC_READ_ONLY_DENY_FLAGS[name] ?? [];
+  return !args.some((arg) => deny.some((flag) => flagMatches(arg, flag) || (flag.length === 2 && !flag.startsWith('--') && arg.startsWith(flag))));
+}
+
+function isSpecReadOnlyGit(args: string[]): boolean {
+  const verbIndex = args.findIndex((a) => !a.startsWith('-'));
+  if (verbIndex !== 0) return false;
+  const verb = args[0]!;
+  if (!GIT_ALLOW.has(verb)) return false;
+  return !args.slice(1).some((arg) => GIT_READ_VERB_DENY_FLAGS.some((flag) => flagMatches(arg, flag)));
+}
+
 export class PolicyEngine {
   webPolicy(): Readonly<import('../types/web.js').WebPolicy> { return structuredClone(this.options.web ?? {}); }
   readonly options: PolicyEngineOptions;
@@ -324,6 +595,157 @@ export class PolicyEngine {
   constructor(options: PolicyEngineOptions = { projectRoot: process.cwd() }) {
     this.options = options ?? { projectRoot: process.cwd() };
     this.rules = this.buildRules();
+  }
+
+  // Trusted per-execution role registrations for the spec write fence. Set by
+  // the host (worktree/task setup) from the persisted task record — never from
+  // a field of the request an agent can influence.
+  private readonly specFenceByExecution = new Map<string, SpecFenceRegistration>();
+
+  /** Registers the trusted role (and required sandbox isolation) of an execution for the spec fence. */
+  registerSpecFence(executionId: string, registration: SpecFenceRegistration): void {
+    if (!executionId) throw new Error('registerSpecFence requires an executionId');
+    if (!this.specFenceByExecution.has(executionId) && this.specFenceByExecution.size >= MAX_TRACKED_EXECUTIONS * 10) {
+      const oldest = this.specFenceByExecution.keys().next().value;
+      if (oldest !== undefined) this.specFenceByExecution.delete(oldest);
+    }
+    this.specFenceByExecution.set(executionId, { ...registration });
+  }
+
+  clearSpecFence(executionId: string): void {
+    this.specFenceByExecution.delete(executionId);
+  }
+
+  /** The trusted role for an execution; undefined (fenced) when none is known. */
+  specFenceRole(executionId?: string): string | undefined {
+    if (!executionId) return undefined;
+    const registered = this.specFenceByExecution.get(executionId);
+    if (registered) return registered.role;
+    try {
+      return this.options.resolveTaskRole?.(executionId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  specDirs(): string[] {
+    return normalizeSpecDirs(this.options.specDirs ?? DEFAULT_SPEC_DIRS);
+  }
+
+  /** True when `target` resolves (lexically or through symlinks) into a spec directory. */
+  isSpecPath(target: string, projectRoot: string = this.options.projectRoot): boolean {
+    return isSpecPath(projectRoot, target, this.specDirs());
+  }
+
+  static isSpecAuthorRole(role: unknown): boolean {
+    return isSpecAuthorRole(role);
+  }
+
+  static specFenceTouchedPaths(changes: ReadonlyArray<{ path: string; previousPath?: string }>, dirs?: readonly string[]): string[] {
+    return specFenceTouchedPaths(changes, dirs);
+  }
+
+  static specWriteFenceBlocker(taskId: string, role: string | undefined, touchedSpecPaths: readonly string[]): string | null {
+    return specWriteFenceBlocker(taskId, role, touchedSpecPaths);
+  }
+
+  /**
+   * Layer A of the spec write fence. Returns a `deny` decision when the
+   * request would write into a spec directory and the execution's trusted
+   * role is not `spec-author`, or when a spec-author tries to mark a spec
+   * `approved`/`retired` (human-only). Returns null when the fence does not
+   * apply; ordinary classification then decides.
+   */
+  evaluateSpecFence(request: PolicyActionRequest): PolicyDecision | null {
+    const dirs = this.specDirs();
+    if (dirs.length === 0) return null;
+    const projectRoot = request.projectRoot ?? this.options.projectRoot;
+    const role = this.specFenceRole(request.executionId);
+    const lower = request.tool.toLowerCase();
+    const deny = (reason: string, rule: string = SPEC_WRITE_FENCE_RULE): PolicyDecision => ({
+      decision: 'deny',
+      rule,
+      reasons: [reason, `execution role '${role || 'missing'}' is not '${SPEC_AUTHOR_ROLE}'; specifications are read-only for this task (no approver may override)`],
+    });
+
+    if (FILE_TOOLS_WRITE.has(lower)) {
+      const rawPath = typeof request.input.path === 'string' ? request.input.path
+        : typeof request.input.file === 'string' ? request.input.file : undefined;
+      if (!rawPath || !isSpecPath(projectRoot, rawPath, dirs)) return null;
+      if (isSpecAuthorRole(role)) {
+        const content = collectStrings(request.input, [], new Set(['path', 'file'])).join('\n');
+        if (isSpecManifestPath(rawPath) && AGENT_FORBIDDEN_STATUS.test(content)) {
+          return {
+            decision: 'deny',
+            rule: SPEC_APPROVAL_FENCE_RULE,
+            reasons: [`'${rawPath}': a spec-author may leave specs only in ${AGENT_WRITABLE_SPEC_STATUSES.join('/')}; approval and retirement go through the human approval path (wa assure spec approve)`],
+          };
+        }
+        return null;
+      }
+      return deny(`${lower} to '${rawPath}' targets a specification directory (${dirs.map((d) => `${d}/`).join(', ')})`);
+    }
+    if (isSpecAuthorRole(role)) return null;
+
+    if (lower === 'shell') {
+      const command = typeof request.input.command === 'string' ? request.input.command.trim() : '';
+      const reason = this.specShellFenceReason(command, projectRoot, dirs, 0);
+      return reason ? deny(reason) : null;
+    }
+    if (lower === 'git') {
+      const args = Array.isArray(request.input.args) ? (request.input.args as unknown[]).map((a) => String(a)) : [];
+      const hit = args.find((arg) => wordMentionsSpec(projectRoot, arg, dirs));
+      if (hit && !isSpecReadOnlyGit(args)) return deny(`git ${args.join(' ')} may modify specification path '${hit}'`);
+      return null;
+    }
+    if (SPEC_FENCE_NON_WRITING_TOOLS.has(lower)) return null;
+    // Any other tool (MCP servers, terminals, code-mode...) may write through
+    // its own arguments; a spec path anywhere in them is denied.
+    const hit = collectStrings(request.input, []).find((value) => wordMentionsSpec(projectRoot, value, dirs));
+    return hit ? deny(`tool '${request.tool}' input references specification path '${hit}'`) : null;
+  }
+
+  private specShellFenceReason(command: string, projectRoot: string, dirs: string[], depth: number): string | null {
+    if (!command || depth > 4) return null;
+    let normalized = command.replace(/\\`([^`\\]+)\\`/g, '$($1)');
+    normalized = normalized.replace(/`([^`]*)`/g, '$($1)');
+    let entries: ParseEntry[];
+    try {
+      entries = parseShell(normalized, (key: string) => `$${key}`);
+    } catch {
+      return null; // doClassify denies unparseable commands.
+    }
+    let mention: string | undefined;
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      if (typeof entry === 'string') {
+        for (const match of entry.matchAll(/\$\(([^)]+)\)/g)) {
+          const inner = this.specShellFenceReason(match[1]!, projectRoot, dirs, depth + 1);
+          if (inner) return inner;
+        }
+        if (!mention && wordMentionsSpec(projectRoot, entry, dirs)) mention = entry;
+        continue;
+      }
+      if ('comment' in entry) continue;
+      if (entry.op === 'glob') {
+        if (!mention && wordMentionsSpec(projectRoot, entry.pattern, dirs)) mention = entry.pattern;
+        continue;
+      }
+      if (entry.op.includes('>')) {
+        const next = entries[i + 1];
+        const target = typeof next === 'string' ? next : next && typeof next === 'object' && 'op' in next && next.op === 'glob' ? next.pattern : '';
+        if (entry.op === '>&' && /^\d+$/.test(target)) continue;
+        if (target && wordMentionsSpec(projectRoot, target, dirs)) return `output redirection '${entry.op} ${target}' targets a specification directory`;
+      }
+    }
+    if (!mention) return null;
+    for (const segment of splitSegments(entries)) {
+      const { name, args } = resolveCommand(segment.words);
+      if (!isSpecReadOnlyCommand(name, args)) {
+        return `command line references specification path '${mention}' and '${name || segment.words.join(' ')}' is not a read-only command`;
+      }
+    }
+    return null;
   }
 
   checkModelLifecycle(request: { operation: 'load' | 'unload' | 'evict'; modelId: string;
@@ -404,6 +826,8 @@ export class PolicyEngine {
       { id: 'shell-build-workspace-install-ask', description: 'Build install targets may mutate system directories outside the workspace and require approval', effect: 'ask' },
       { id: 'shell-test-workspace-allow', description: 'Running an existing, project-local test file via its interpreter (no inline-eval flags, no extra arguments) is allowed', effect: 'allow' },
       { id: 'project-checks-allow', description: 'test / lint / typecheck / build run inside the project', effect: 'allow' },
+      { id: SPEC_WRITE_FENCE_RULE, description: `Writes into specification directories (${this.specDirs().map((d) => `${d}/`).join(', ') || 'none'}) are denied unless the execution's persisted role is '${SPEC_AUTHOR_ROLE}'; missing or unknown roles are denied`, effect: 'deny' },
+      { id: SPEC_APPROVAL_FENCE_RULE, description: `Agents may leave specifications only in ${AGENT_WRITABLE_SPEC_STATUSES.join('/')}; approval and retirement are human-only`, effect: 'deny' },
     ];
     return rules;
   }
@@ -663,7 +1087,12 @@ export class PolicyEngine {
   }
 
   classify(request: PolicyActionRequest): PolicyDecision {
-    const decision = this.doClassify(request);
+    // A fenced execution may be registered with a sandbox requirement; the
+    // registration wins over whatever the request itself claims.
+    const registered = request.executionId ? this.specFenceByExecution.get(request.executionId) : undefined;
+    const effective = registered?.requiredIsolation ? { ...request, requiredIsolation: registered.requiredIsolation } : request;
+    const fence = this.evaluateSpecFence(effective);
+    const decision = fence ?? this.doClassify(effective);
     decision.tool = request.tool;
     return decision;
   }

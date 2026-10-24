@@ -5,6 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { GIT_NO_HOOKS } from '@wazir/shared';
+import {
+  AGENT_WRITABLE_SPEC_STATUSES,
+  DEFAULT_SPEC_DIRS,
+  SPEC_WRITE_FENCE_BLOCKER,
+  isSpecManifestPath,
+  normalizeSpecDirs,
+  parseSpecManifestStatus,
+  specFenceTouchedPaths,
+  specWriteFenceBlocker,
+} from './policyEngine.js';
 
 const execFileAsync = promisify(execFile);
 const MANIFEST_VERSION = 1 as const;
@@ -114,6 +124,26 @@ export interface VerifiedIntegrationCoordinatorOptions {
   protectTestOracles?: boolean;
   /** Trusted out-of-band authorization by task id; these paths must not originate from agent claims. */
   authorizedTestChanges?: Record<string, string[]>;
+  /**
+   * Repository-relative specification directories (default `['specs']`).
+   * Only a task whose persisted role is `spec-author` may change them.
+   */
+  specDirs?: string[];
+  /**
+   * Trusted lookup of the persisted task role by task id (WFA §1.5). The
+   * manifest is agent-supplied and is never consulted for the role. Without a
+   * resolver every role is unknown, so every spec change is rejected.
+   */
+  resolveTaskRole?: (taskId: string) => string | undefined | Promise<string | undefined>;
+}
+
+export interface SpecWriteFenceResult {
+  /** Spec paths (incl. rename sources) the branch changes relative to its merge base with the target. */
+  touchedSpecPaths: string[];
+  /** Trusted role from `resolveTaskRole`; undefined when unknown. */
+  role?: string;
+  /** `SPEC_WRITE_FENCE: ...` blockers; empty when the branch passes the fence. */
+  blockers: string[];
 }
 
 export interface ConflictAnalysisContext {
@@ -150,6 +180,8 @@ export class VerifiedIntegrationCoordinator {
   private readonly protectedPaths: Set<string>;
   private readonly protectTestOracles: boolean;
   private readonly authorizedTestChanges: Map<string, Set<string>>;
+  private readonly specDirs: string[];
+  private readonly resolveTaskRole?: VerifiedIntegrationCoordinatorOptions['resolveTaskRole'];
 
   constructor(options: VerifiedIntegrationCoordinatorOptions = {}) {
     this.candidateRootDir = path.resolve(options.candidateRootDir ?? path.join(os.tmpdir(), 'wazir-integration-candidates'));
@@ -157,6 +189,70 @@ export class VerifiedIntegrationCoordinator {
     this.protectedPaths = new Set((options.protectedPaths ?? []).map((file) => file.replaceAll('\\', '/').replace(/^\.\//, '')));
     this.protectTestOracles = options.protectTestOracles ?? true;
     this.authorizedTestChanges = new Map(Object.entries(options.authorizedTestChanges ?? {}).map(([taskId, files]) => [taskId, new Set(files.map((file) => file.replaceAll('\\', '/').replace(/^\.\//, '')))]));
+    this.specDirs = normalizeSpecDirs(options.specDirs ?? DEFAULT_SPEC_DIRS);
+    this.resolveTaskRole = options.resolveTaskRole;
+  }
+
+  /**
+   * Layer B of the spec write fence. Diffs the branch's actual head against its
+   * merge base with `targetRef` (not the manifest's claimed base or file list,
+   * which the agent controls) and rejects any change under a spec directory
+   * unless the persisted task role is `spec-author`. A spec-author change must
+   * still leave every affected spec `draft`/`reviewed`: approval, retirement
+   * and removal of an approved spec stay with humans.
+   */
+  async checkSpecWriteFence(repository: string, targetRef: string, branch: string, taskId: string): Promise<SpecWriteFenceResult> {
+    if (this.specDirs.length === 0) return { touchedSpecPaths: [], blockers: [] };
+    const resolve = async (ref: string) => (typeof ref === 'string' && ref && !ref.startsWith('-')
+      ? safeGit(repository, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], true)
+      : undefined);
+    const head = await resolve(branch);
+    const target = await resolve(targetRef);
+    if (!head || !target) {
+      return { touchedSpecPaths: [], blockers: [`${SPEC_WRITE_FENCE_BLOCKER}: task ${taskId}: could not resolve branch '${branch}' or target '${targetRef}' to check specification changes`] };
+    }
+    const base = await safeGit(repository, ['merge-base', target, head], true);
+    if (!base) {
+      return { touchedSpecPaths: [], blockers: [`${SPEC_WRITE_FENCE_BLOCKER}: task ${taskId}: branch '${branch}' shares no history with '${targetRef}'`] };
+    }
+    // --no-renames: a rename out of specs/ must show both the deletion and the addition.
+    const changes = await listFileChanges(repository, base, head, true);
+    const touchedSpecPaths = specFenceTouchedPaths(changes, this.specDirs);
+    if (!touchedSpecPaths.length) return { touchedSpecPaths, blockers: [] };
+    let role: string | undefined;
+    try {
+      role = await this.resolveTaskRole?.(taskId);
+    } catch {
+      role = undefined;
+    }
+    const roleBlocker = specWriteFenceBlocker(taskId, role, touchedSpecPaths);
+    if (roleBlocker) return { touchedSpecPaths, role, blockers: [roleBlocker] };
+    const blockers = await this.specAuthorStatusBlockers(repository, taskId, base, head, touchedSpecPaths);
+    return { touchedSpecPaths, role, blockers };
+  }
+
+  private async specAuthorStatusBlockers(repository: string, taskId: string, base: string, head: string, touched: string[]): Promise<string[]> {
+    const problems = new Set<string>();
+    const specRoots = new Set<string>();
+    for (const file of touched) {
+      const root = governingSpecRoot(file, this.specDirs);
+      if (root) specRoots.add(root);
+      else problems.add(`'${file}' is not inside a per-property spec directory`);
+    }
+    for (const root of [...specRoots].sort()) {
+      const atHead = await readSpecManifestStatus(repository, head, root);
+      const atBase = await readSpecManifestStatus(repository, base, root);
+      if (atHead.file) {
+        if (!atHead.status) problems.add(`'${atHead.file}' has no single parseable status`);
+        else if (!AGENT_WRITABLE_SPEC_STATUSES.includes(atHead.status)) problems.add(`'${atHead.file}' has status '${atHead.status}'; only human approval may move a spec beyond ${AGENT_WRITABLE_SPEC_STATUSES.join('/')}`);
+      } else if (atBase.file) {
+        if (!atBase.status || !AGENT_WRITABLE_SPEC_STATUSES.includes(atBase.status)) problems.add(`'${atBase.file}' (status '${atBase.status ?? 'unknown'}') was removed; only a human may remove an approved or retired spec`);
+      } else {
+        problems.add(`'${root}/' has no manifest`);
+      }
+    }
+    if (!problems.size) return [];
+    return [`${SPEC_WRITE_FENCE_BLOCKER}: task ${taskId} (role spec-author): ${[...problems].join('; ')}`];
   }
 
   async createManifest(
@@ -243,8 +339,11 @@ export class VerifiedIntegrationCoordinator {
       const approvedTestChanges = this.authorizedTestChanges.get(candidate.manifest.taskId) ?? new Set<string>();
       const protectedChanges = candidate.manifest.changedFiles.filter((file) => this.protectedPaths.has(file) || (this.protectTestOracles && isTestFixture(file) && !approvedTestChanges.has(file)));
       if (protectedChanges.length) errors.push(`candidate modified protected verification oracle(s): ${protectedChanges.join(', ')}`);
+      // Uses the branch's real history and the trusted task role, never the manifest's claims.
+      const fence = await this.checkSpecWriteFence(repository, targetSha, candidate.branch, candidate.manifest.taskId ?? '(missing task id)');
+      blockers.push(...fence.blockers);
       if (errors.length) blockers.push(`${candidate.branch}: ${errors.join('; ')}`);
-      else valid.push(candidate);
+      if (!errors.length && !fence.blockers.length) valid.push(candidate);
     }
     const orderResult = dependencyOrder(valid);
     blockers.push(...orderResult.errors);
@@ -521,8 +620,8 @@ async function isValidBranch(cwd: string, branch: string): Promise<boolean> {
   return gitSucceeds(cwd, ['check-ref-format', '--branch', branch]);
 }
 
-async function listFileChanges(cwd: string, base: string, head: string): Promise<Array<{ status: string; path: string; previousPath?: string }>> {
-  const raw = await gitRaw(cwd, ['diff', '--name-status', '-z', '--find-renames', `${base}...${head}`, '--']);
+async function listFileChanges(cwd: string, base: string, head: string, noRenames = false): Promise<Array<{ status: string; path: string; previousPath?: string }>> {
+  const raw = await gitRaw(cwd, ['diff', '--name-status', '-z', noRenames ? '--no-renames' : '--find-renames', `${base}...${head}`, '--']);
   const tokens = raw.split('\0').filter(Boolean);
   const changes: Array<{ status: string; path: string; previousPath?: string }> = [];
   for (let i = 0; i < tokens.length;) {
@@ -580,6 +679,27 @@ function hasRenameDelete(a: AgentIntegrationManifest, b: AgentIntegrationManifes
   return a.fileChanges.some((change) => change.status === 'R' && overlap.includes(change.previousPath ?? '') && b.fileChanges.some((other) => other.path === change.previousPath))
     || b.fileChanges.some((change) => change.status === 'R' && overlap.includes(change.previousPath ?? '') && a.fileChanges.some((other) => other.path === change.previousPath));
 }
+/** `specs/<id>` for a path under a spec directory; undefined for files directly in the spec root. */
+function governingSpecRoot(file: string, specDirs: string[]): string | undefined {
+  const normalized = file.replaceAll('\\', '/');
+  const lower = normalized.toLowerCase();
+  for (const dir of specDirs) {
+    if (!lower.startsWith(`${dir}/`)) continue;
+    const rest = normalized.slice(dir.length + 1).split('/');
+    return rest.length < 2 ? undefined : `${normalized.slice(0, dir.length)}/${rest[0]}`;
+  }
+  return undefined;
+}
+
+async function readSpecManifestStatus(cwd: string, ref: string, specRoot: string): Promise<{ file?: string; status?: string }> {
+  for (const name of ['manifest.yaml', 'manifest.yml', 'manifest.json']) {
+    const file = `${specRoot}/${name}`;
+    const text = await safeGit(cwd, ['cat-file', 'blob', `${ref}:${file}`], true);
+    if (text !== undefined && isSpecManifestPath(file)) return { file, status: parseSpecManifestStatus(text, file) };
+  }
+  return {};
+}
+
 function isDependencyFile(file: string): boolean { return /(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.(toml|lock)|requirements[^/]*\.txt|pyproject\.toml)$/.test(file); }
 function isTestFixture(file: string): boolean { return /(^|\/)(tests?|__tests__|fixtures)\//i.test(file) || /\.(test|spec)\.[^.]+$/.test(file); }
 function isGenerated(file: string): boolean { return /(^|\/)(dist|build|generated|coverage)\//i.test(file) || /\.(generated|g)\.[^.]+$/.test(file); }
