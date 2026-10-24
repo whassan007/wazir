@@ -1,0 +1,12 @@
+{
+  "fixtures": [
+    { "path": "test/fixtures/formal/z3/counterexample_sat.smt2", "tool": "z3", "expectedVerdict": "COUNTEREXAMPLE", "description": "Negated property is SAT" },
+    { "path": "test/fixtures/formal/z3/proved_unsat.smt2", "tool": "z3", "expectedVerdict": "PROVED", "description": "Negated property is UNSAT with satisfiable assumptions" },
+    { "path": "test/fixtures/formal/z3/vacuous_assumptions.smt2", "tool": "z3", "expectedVerdict": "INCONSISTENT_ASSUMPTIONS", "description": "Assumptions alone are UNSAT" },
+    { "path": "test/fixtures/formal/z3/parse_error.smt2", "tool": "z3", "expectedVerdict": "ERROR", "description": "Malformed SMT-LIB2 syntax" },
+    { "path": "test/fixtures/formal/alloy/counterexample.als", "tool": "alloy", "expectedVerdict": "COUNTEREXAMPLE", "description": "Assertion check finds counterexample in scope 3" },
+    { "path": "test/fixtures/formal/alloy/bounded_pass.als", "tool": "alloy", "expectedVerdict": "BOUNDED_PASS", "description": "Assertion check finds no counterexample in scope 3 and witness is SAT" },
+    { "path": "test/fixtures/formal/dafny/proved.dfy", "tool": "dafny", "expectedVerdict": "PROVED", "description": "Verified method with empty trusted base" },
+    { "path": "test/fixtures/formal/dafny/trusted_base_assume.dfy", "tool": "dafny", "expectedVerdict": "BOUNDED_PASS", "trustedBaseBlocked": true, "description": "Contains assume statement blocking PROVED" }
+  ]
+}
