@@ -64,16 +64,21 @@ describe('assure CLI — doctor, spec, verify-ledger, run, record', () => {
       }
 
       // On this host, z3, alloy, dafny, scenic, verifai, gam are installed in tools/ and skills/formal/
-      if (report.tools.z3.available) {
-        expect(report.tools.z3.version).toMatch(/^\d+\.\d+/);
-        expect(report.achievableVerdicts).toContain(Verdict.PROVED);
-        expect(report.achievableVerdicts).toContain(Verdict.BOUNDED_PASS);
-        expect(report.achievableVerdicts).toContain(Verdict.COUNTEREXAMPLE);
-      }
-      if (report.tools.verifai.available || report.tools.scenic.available) {
-        expect(report.achievableVerdicts).toContain(Verdict.FALSIFIED);
-        expect(report.achievableVerdicts).toContain(Verdict.NOT_FALSIFIED);
-      }
+      expect(report.tools.z3.available).toBe(true);
+      expect(report.tools.z3.version).toMatch(/^\d+\.\d+/);
+      expect(report.tools.alloy.available).toBe(true);
+      expect(report.tools.dafny.available).toBe(true);
+      expect(report.tools.scenic.available).toBe(true);
+      expect(report.tools.verifai.available).toBe(true);
+      expect(report.tools.gam.available).toBe(true);
+      expect(report.achievableVerdicts).toEqual([
+        Verdict.PROVED,
+        Verdict.BOUNDED_PASS,
+        Verdict.COUNTEREXAMPLE,
+        Verdict.FALSIFIED,
+        Verdict.NOT_FALSIFIED,
+        Verdict.NOT_RUN,
+      ]);
 
       const formatted = formatDoctorReport(report, false);
       expect(formatted).toContain('Formal Assurance Doctor');
