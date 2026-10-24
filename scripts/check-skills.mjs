@@ -58,20 +58,24 @@ function run(command, argv, cwd = root, timeout = 120000) {
 }
 if (args.includes('--smoke')) {
   const python = process.env.PYTHON || (run('python3', ['--version']).status === 0 ? 'python3' : 'python');
-  function test(name, required, available, command, argv, cwd) {
+  function test(name, required, available, command, argv, cwd, expectedExit = 0, expectedStatus) {
     const missing = required.filter(p => !exists(p));
     if (missing.length || !available()) {
       smoke.push({ name, status: 'NOT_RUN', details: missing.length ? `Missing: ${missing.join(', ')}` : 'Required tool or Python module unavailable' });
       return;
     }
     const result = run(command, argv, cwd);
-    smoke.push({ name, status: result.status === 0 ? 'PASS' : 'FAIL', exitCode: result.status, stdout: result.stdout || '', stderr: result.stderr || '', details: result.error?.message || '' });
+    let valid = result.status === expectedExit;
+    if (expectedStatus) {
+      try { valid = valid && JSON.parse(result.stdout).status === expectedStatus; } catch { valid = false; }
+    }
+    smoke.push({ name, status: valid ? 'PASS' : 'FAIL', exitCode: result.status, stdout: result.stdout || '', stderr: result.stderr || '', details: result.error?.message || '' });
   }
   const moduleAvailable = name => () => run(python, ['-c', `import ${name}`]).status === 0;
-  for (const candidate of ['buggy', 'guarded']) test(`z3-${candidate}`, ['skills/formal/z3/examples/check_stopping_rule.py'], moduleAvailable('z3'), python, [path.join(root, 'skills/formal/z3/examples/check_stopping_rule.py'), '--candidate', candidate]);
+  for (const candidate of ['buggy', 'guarded']) test(`z3-${candidate}`, ['skills/formal/z3/examples/check_stopping_rule.py'], moduleAvailable('z3'), python, [path.join(root, 'skills/formal/z3/examples/check_stopping_rule.py'), '--candidate', candidate], root, candidate === 'buggy' ? 2 : 0, candidate === 'buggy' ? 'COUNTEREXAMPLE' : 'BOUNDED_PASS');
   test('alloy', ['skills/formal/alloy/scripts/run-examples.sh', 'tools/alloy/org.alloytools.alloy.dist.jar'], () => run('java', ['-version']).status === 0, 'bash', [path.join(root, 'skills/formal/alloy/scripts/run-examples.sh'), path.join(root, 'tools/alloy/org.alloytools.alloy.dist.jar')]);
   test('dafny', ['skills/formal/dafny/examples/stop_command.dfy'], () => run('dafny', ['--version']).status === 0, 'dafny', ['verify', 'stop_command.dfy'], path.join(root, 'skills/formal/dafny/examples'));
-  for (const [name, script] of [['scenic', 'sample_scenes.py'], ['verifai', 'falsify_with_scenic.py']]) test(name, [`skills/formal/${name}/examples/${script}`], moduleAvailable(name), python, [script], path.join(root, `skills/formal/${name}/examples`));
+  for (const [name, script] of [['scenic', 'sample_scenes.py'], ['verifai', 'falsify_with_scenic.py']]) test(name, [`skills/formal/${name}/examples/${script}`], moduleAvailable(name), python, name === 'scenic' ? [script, 'approach_scene.scenic', '--count', '1', '--seed', '42'] : [script], path.join(root, `skills/formal/${name}/examples`));
 }
 const ok = [...skills, ...claude, ...assets].every(s => s.status !== 'MISSING') && smoke.every(s => s.status !== 'FAIL');
 const report = { version: 1, ok, skills, claude, assets, smoke };
