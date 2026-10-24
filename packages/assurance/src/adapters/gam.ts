@@ -196,9 +196,8 @@ export class GamModel {
   }
 
   get users(): string[] {
-    const users = new Set<string>();
-    for (const edges of this.rel.RUp.values()) for (const e of edges) users.add(e.target);
-    return [...users].sort();
+    // RU⁺ is stored user-major, so its keys are exactly the analysed users.
+    return [...this.rel.RUp.keys()].sort();
   }
 
   edges(key: RelKey, src: string): Edge[] {
@@ -710,6 +709,21 @@ export function checkLawAssumptions(gal: GalCase): AssumptionCheck {
   for (const key of ['PP', 'RR'] as const) {
     const cycle = findCycle(m, key);
     if (cycle) return { inconsistent: true, reason: `Φ_L hierarchy ${key} is cyclic (WellFormed unsatisfiable)`, details: { cycle } };
+  }
+  // Φ_L has no users of its own, so also check role-level polarity over closures: a role whose RA*
+  // includes an activity Φ_L also denies it (or a ± clash on RU / UP / RP) makes Φ_L unsatisfiable.
+  const clashes: string[] = [];
+  for (const role of new Set([...m.rel.RAm.keys(), ...m.rel.RAp.keys(), ...m.rel.RR.keys()])) {
+    const granted = roleActivities(m, role);
+    for (const deny of closure(m, 'RR', role, true).keys()) {
+      for (const e of m.edges('RAm', deny)) if (granted.has(e.target)) clashes.push(`RA± ${role}/${e.target}`);
+    }
+  }
+  for (const [plus, minus] of [['RUp', 'RUm'], ['UPp', 'UPm'], ['RPp', 'RPm']] as const) {
+    for (const [src, edges] of m.rel[minus]) for (const e of edges) if (m.has(plus, src, e.target)) clashes.push(`${plus.slice(0, 2)}± ${src}/${e.target}`);
+  }
+  if (clashes.length > 0) {
+    return { inconsistent: true, reason: 'Φ_L both permits and prohibits the same fact', details: { clashes } };
   }
   return { inconsistent: false };
 }
