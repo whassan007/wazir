@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import {
   type UsageRecord,
   type PhysicalComputeUsage,
@@ -12,6 +13,250 @@ import {
   aggregatePromptCacheTelemetry,
   toPromptCacheTelemetry,
 } from '../types/telemetry.js';
+
+export type TelemetryPhase =
+  | 'cli_startup'
+  | 'engine_init'
+  | 'context_compile'
+  | 'routing'
+  | 'model_first_token'
+  | 'model_stream'
+  | 'tool_dispatch'
+  | 'persistence_write'
+  | 'checkpoint'
+  | 'recovery'
+  | 'verification'
+  | (string & {});
+
+export interface LatencyPercentiles {
+  count: number;
+  minMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  maxMs: number;
+  meanMs: number;
+  sumMs: number;
+}
+
+export interface PhaseSampleMetadata {
+  executionId?: string;
+  provider?: string;
+  modelId?: string;
+  tokensUsed?: number;
+  retryCount?: number;
+  costUSD?: number;
+}
+
+export interface PerformanceObservabilityReport {
+  phases: Record<string, LatencyPercentiles>;
+  routingLatency: {
+    firstToken: LatencyPercentiles;
+    endToEnd: LatencyPercentiles;
+    verification: LatencyPercentiles;
+    coldStart: LatencyPercentiles;
+    retryOverhead: LatencyPercentiles;
+  };
+  byModel: Record<
+    string,
+    {
+      calls: number;
+      verifiedSuccessCount: number;
+      retryCount: number;
+      totalCostUSD: number;
+      endToEndLatency: LatencyPercentiles;
+      firstTokenLatency: LatencyPercentiles;
+    }
+  >;
+  totals: {
+    decisions: number;
+    totalRetries: number;
+    totalActualCostUSD: number;
+    totalEstimatedCostUSD: number;
+    cacheHitRate: number | null;
+  };
+}
+
+/**
+ * Computes p50, p95, p99, min, max, mean, and sum on finite non-negative numbers.
+ * Returns zeros when empty.
+ */
+export function computeLatencyPercentiles(samples: number[]): LatencyPercentiles {
+  const valid = samples.filter((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+  if (valid.length === 0) {
+    return {
+      count: 0,
+      minMs: 0,
+      p50Ms: 0,
+      p95Ms: 0,
+      p99Ms: 0,
+      maxMs: 0,
+      meanMs: 0,
+      sumMs: 0,
+    };
+  }
+
+  const sorted = [...valid].sort((a, b) => a - b);
+  const count = sorted.length;
+  let sum = 0;
+  for (let i = 0; i < count; i++) {
+    sum += sorted[i];
+  }
+
+  const getPercentile = (p: number): number => {
+    if (count === 1) return Number(sorted[0].toFixed(4));
+    const idx = (p / 100) * (count - 1);
+    const lower = Math.floor(idx);
+    const upper = Math.ceil(idx);
+    if (lower === upper) return Number(sorted[lower].toFixed(4));
+    const weight = idx - lower;
+    return Number((sorted[lower] * (1 - weight) + sorted[upper] * weight).toFixed(4));
+  };
+
+  return {
+    count,
+    minMs: Number(sorted[0].toFixed(4)),
+    p50Ms: getPercentile(50),
+    p95Ms: getPercentile(95),
+    p99Ms: getPercentile(99),
+    maxMs: Number(sorted[count - 1].toFixed(4)),
+    meanMs: Number((sum / count).toFixed(4)),
+    sumMs: Number(sum.toFixed(4)),
+  };
+}
+
+/**
+ * Bounded ring-buffer latency histogram for a single phase or metric stream.
+ */
+export class LatencyHistogram {
+  private readonly buffer: Float64Array;
+  private readonly capacity: number;
+  private head = 0;
+  private size = 0;
+
+  constructor(maxSamples = 5000) {
+    this.capacity = Math.max(1, Math.floor(maxSamples));
+    this.buffer = new Float64Array(this.capacity);
+  }
+
+  public record(durationMs: number): void {
+    if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 0) {
+      return;
+    }
+    this.buffer[this.head] = durationMs;
+    this.head = (this.head + 1) % this.capacity;
+    if (this.size < this.capacity) {
+      this.size += 1;
+    }
+  }
+
+  public getSamples(): number[] {
+    const result = new Array<number>(this.size);
+    if (this.size < this.capacity) {
+      for (let i = 0; i < this.size; i++) {
+        result[i] = this.buffer[i];
+      }
+    } else {
+      for (let i = 0; i < this.capacity; i++) {
+        result[i] = this.buffer[(this.head + i) % this.capacity];
+      }
+    }
+    return result;
+  }
+
+  public getPercentiles(): LatencyPercentiles {
+    return computeLatencyPercentiles(this.getSamples());
+  }
+
+  public get count(): number {
+    return this.size;
+  }
+
+  public clear(): void {
+    this.head = 0;
+    this.size = 0;
+  }
+}
+
+export class PhaseLatencyTracker {
+  private readonly maxSamplesPerPhase: number;
+  private readonly histograms = new Map<string, LatencyHistogram>();
+  private readonly metadataEntries = new Map<string, PhaseSampleMetadata[]>();
+
+  constructor(maxSamplesPerPhase = 5000) {
+    this.maxSamplesPerPhase = Math.max(1, Math.floor(maxSamplesPerPhase));
+  }
+
+  public recordPhase(
+    phase: string,
+    durationMs: number,
+    metadata?: PhaseSampleMetadata,
+  ): void {
+    if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 0) {
+      return;
+    }
+    let histogram = this.histograms.get(phase);
+    if (!histogram) {
+      histogram = new LatencyHistogram(this.maxSamplesPerPhase);
+      this.histograms.set(phase, histogram);
+    }
+    histogram.record(durationMs);
+
+    if (metadata) {
+      let list = this.metadataEntries.get(phase);
+      if (!list) {
+        list = [];
+        this.metadataEntries.set(phase, list);
+      }
+      if (list.length >= this.maxSamplesPerPhase) {
+        list.shift();
+      }
+      list.push({ ...metadata });
+    }
+  }
+
+  public startPhase(
+    phase: string,
+    metadata?: { executionId?: string; provider?: string; modelId?: string },
+  ): () => number {
+    const start = performance.now();
+    let stopped = false;
+    let recordedDuration = 0;
+    return () => {
+      if (!stopped) {
+        stopped = true;
+        recordedDuration = Math.max(0, Number((performance.now() - start).toFixed(4)));
+        this.recordPhase(phase, recordedDuration, metadata);
+      }
+      return recordedDuration;
+    };
+  }
+
+  public getPhaseStats(phase: string): LatencyPercentiles {
+    const histogram = this.histograms.get(phase);
+    if (!histogram) {
+      return computeLatencyPercentiles([]);
+    }
+    return histogram.getPercentiles();
+  }
+
+  public getAllPhaseStats(): Record<string, LatencyPercentiles> {
+    const out: Record<string, LatencyPercentiles> = {};
+    for (const [phase, histogram] of this.histograms.entries()) {
+      out[phase] = histogram.getPercentiles();
+    }
+    return out;
+  }
+
+  public getPhaseMetadata(phase: string): PhaseSampleMetadata[] {
+    return [...(this.metadataEntries.get(phase) ?? [])];
+  }
+
+  public clear(): void {
+    this.histograms.clear();
+    this.metadataEntries.clear();
+  }
+}
 
 export type RoutingExclusionCategory =
   | 'policy'
@@ -258,6 +503,30 @@ const LOCAL_RUNTIMES = new Set(['ollama', 'lmstudio', 'local', 'vllm', 'llamacpp
 export class TelemetryCollector {
   private records: UsageRecord[] = [];
   private routingRecords: RoutingTelemetryRecord[] = [];
+  private readonly phaseTracker: PhaseLatencyTracker;
+
+  constructor(options?: { maxPhaseSamples?: number }) {
+    this.phaseTracker = new PhaseLatencyTracker(options?.maxPhaseSamples ?? 5000);
+  }
+
+  public getPhaseTracker(): PhaseLatencyTracker {
+    return this.phaseTracker;
+  }
+
+  public recordPhaseLatency(
+    phase: string,
+    durationMs: number,
+    metadata?: PhaseSampleMetadata,
+  ): void {
+    this.phaseTracker.recordPhase(phase, durationMs, metadata);
+  }
+
+  public startPhaseTimer(
+    phase: string,
+    metadata?: { executionId?: string; provider?: string; modelId?: string },
+  ): () => number {
+    return this.phaseTracker.startPhase(phase, metadata);
+  }
   private pricingTiers: ModelPricingTier[] = [
     {
       provider: 'openai',
@@ -1004,8 +1273,139 @@ export class TelemetryCollector {
     return this.aggregate(this.records);
   }
 
+  public getPerformanceReport(filter?: RoutingTelemetryFilter): PerformanceObservabilityReport {
+    const routingRecords = this.getRoutingTelemetry(filter);
+    const phases = this.phaseTracker.getAllPhaseStats();
+
+    const firstTokenSamples: number[] = [];
+    const e2eSamples: number[] = [];
+    const verificationSamples: number[] = [];
+    const coldStartSamples: number[] = [];
+    const retryOverheadSamples: number[] = [];
+
+    const modelBuckets = new Map<
+      string,
+      {
+        calls: number;
+        verifiedSuccessCount: number;
+        retryCount: number;
+        totalCostUSD: number;
+        e2eSamples: number[];
+        firstTokenSamples: number[];
+      }
+    >();
+
+    let totalRetries = 0;
+    let totalActualCostUSD = 0;
+    let totalEstimatedCostUSD = 0;
+    const hitRateSamples: number[] = [];
+
+    for (const r of routingRecords) {
+      if (r.firstTokenLatencyMs !== null) firstTokenSamples.push(r.firstTokenLatencyMs);
+      if (r.endToEndLatencyMs !== null) e2eSamples.push(r.endToEndLatencyMs);
+      if (r.verificationDurationMs !== null) verificationSamples.push(r.verificationDurationMs);
+      if (r.coldStartOverheadMs !== null) coldStartSamples.push(r.coldStartOverheadMs);
+      if (r.retryOverheadMs !== null) retryOverheadSamples.push(r.retryOverheadMs);
+
+      totalRetries += r.retryCount;
+      if (r.actualCostUSD !== null) {
+        totalActualCostUSD += r.actualCostUSD;
+      }
+      if (r.estimatedCostUSD !== null) {
+        totalEstimatedCostUSD += r.estimatedCostUSD;
+      }
+      if (r.cacheReuse !== 'UNOBSERVED' && r.cacheReuse.hitRate !== null) {
+        hitRateSamples.push(r.cacheReuse.hitRate);
+      }
+
+      let bucket = modelBuckets.get(r.modelId);
+      if (!bucket) {
+        bucket = {
+          calls: 0,
+          verifiedSuccessCount: 0,
+          retryCount: 0,
+          totalCostUSD: 0,
+          e2eSamples: [],
+          firstTokenSamples: [],
+        };
+        modelBuckets.set(r.modelId, bucket);
+      }
+      bucket.calls += 1;
+      if (r.verifiedSuccess === true) {
+        bucket.verifiedSuccessCount += 1;
+      }
+      bucket.retryCount += r.retryCount;
+      const modelCost = r.actualCostUSD ?? r.estimatedCostUSD ?? 0;
+      bucket.totalCostUSD += modelCost;
+      if (r.endToEndLatencyMs !== null) {
+        bucket.e2eSamples.push(r.endToEndLatencyMs);
+      }
+      if (r.firstTokenLatencyMs !== null) {
+        bucket.firstTokenSamples.push(r.firstTokenLatencyMs);
+      }
+    }
+
+    // Also include UsageRecords for models not present in routingRecords if no routing filter is restricting
+    if (!filter) {
+      for (const u of this.records) {
+        if (!modelBuckets.has(u.modelId)) {
+          const bucket = {
+            calls: u.physical.modelCalls,
+            verifiedSuccessCount: 0,
+            retryCount: 0,
+            totalCostUSD: u.monetary.amount ?? 0,
+            e2eSamples: [u.physical.wallTimeMs],
+            firstTokenSamples: [],
+          };
+          modelBuckets.set(u.modelId, bucket);
+        }
+      }
+    }
+
+    const byModel: PerformanceObservabilityReport['byModel'] = {};
+    for (const [modelId, bucket] of modelBuckets.entries()) {
+      byModel[modelId] = {
+        calls: bucket.calls,
+        verifiedSuccessCount: bucket.verifiedSuccessCount,
+        retryCount: bucket.retryCount,
+        totalCostUSD: Number(bucket.totalCostUSD.toFixed(6)),
+        endToEndLatency: computeLatencyPercentiles(bucket.e2eSamples),
+        firstTokenLatency: computeLatencyPercentiles(bucket.firstTokenSamples),
+      };
+    }
+
+    const cacheHitRate =
+      hitRateSamples.length > 0
+        ? Number((hitRateSamples.reduce((a, b) => a + b, 0) / hitRateSamples.length).toFixed(4))
+        : null;
+
+    return {
+      phases,
+      routingLatency: {
+        firstToken: computeLatencyPercentiles(firstTokenSamples),
+        endToEnd: computeLatencyPercentiles(e2eSamples),
+        verification: computeLatencyPercentiles(verificationSamples),
+        coldStart: computeLatencyPercentiles(coldStartSamples),
+        retryOverhead: computeLatencyPercentiles(retryOverheadSamples),
+      },
+      byModel,
+      totals: {
+        decisions: routingRecords.length,
+        totalRetries,
+        totalActualCostUSD: Number(totalActualCostUSD.toFixed(6)),
+        totalEstimatedCostUSD: Number(totalEstimatedCostUSD.toFixed(6)),
+        cacheHitRate,
+      },
+    };
+  }
+
+  public getPerformanceBreakdown(filter?: RoutingTelemetryFilter): PerformanceObservabilityReport {
+    return this.getPerformanceReport(filter);
+  }
+
   public clear(): void {
     this.records = [];
     this.routingRecords = [];
+    this.phaseTracker.clear();
   }
 }
