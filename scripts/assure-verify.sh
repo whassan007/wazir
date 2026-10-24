@@ -10,14 +10,27 @@ while [ ! -d "$ROOT_Candidate/tools/z3-venv" ] && [ "$(dirname "$ROOT_Candidate"
   ROOT_Candidate="$(dirname "$ROOT_Candidate")"
 done
 TOOLS_DIR="${WAZIR_TOOLS_DIR:-$ROOT_Candidate/tools}"
+NM_Candidate="$REPO_ROOT"
+while [ ! -d "$NM_Candidate/node_modules" ] && [ "$(dirname "$NM_Candidate")" != "$NM_Candidate" ]; do
+  NM_Candidate="$(dirname "$NM_Candidate")"
+done
+NODE_MODULES_DIR="${WAZIR_NODE_MODULES_DIR:-$NM_Candidate/node_modules}"
 CREATED_TOOLS_LINK=0
+CREATED_NM_LINK=0
 if [ ! -e "$REPO_ROOT/tools" ] && [ -d "$TOOLS_DIR" ]; then
   ln -s "$TOOLS_DIR" "$REPO_ROOT/tools"
   CREATED_TOOLS_LINK=1
 fi
+if [ ! -e "$REPO_ROOT/node_modules" ] && [ -d "$NODE_MODULES_DIR" ]; then
+  ln -s "$NODE_MODULES_DIR" "$REPO_ROOT/node_modules"
+  CREATED_NM_LINK=1
+fi
 cleanup() {
   if [ "$CREATED_TOOLS_LINK" = "1" ] && [ -L "$REPO_ROOT/tools" ]; then
     rm -f "$REPO_ROOT/tools"
+  fi
+  if [ "$CREATED_NM_LINK" = "1" ] && [ -L "$REPO_ROOT/node_modules" ]; then
+    rm -f "$REPO_ROOT/node_modules"
   fi
 }
 trap cleanup EXIT
@@ -66,7 +79,7 @@ echo "--- 3. Running @wazir/assurance Typecheck & Vitest Suite ---"
 if [ -f "$REPO_ROOT/packages/assurance/tsconfig.json" ]; then
   (cd "$REPO_ROOT" && npx tsc -p packages/assurance/tsconfig.json --noEmit)
   echo "[PASS] @wazir/assurance typecheck"
-  (cd "$REPO_ROOT" && npx vitest run packages/assurance/src/__tests__/*.test.ts)
+  (cd "$REPO_ROOT" && npx vitest run --exclude '**/.fa/**' packages/assurance/src/__tests__)
   echo "[PASS] @wazir/assurance test suite"
 fi
 
