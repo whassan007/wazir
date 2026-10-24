@@ -84,3 +84,7 @@ apps/android/.idea/
 
 # Wazir's own worktree/scratch state for managing other branches locally
 .wazir/
+.fa/
+
+# Formal assurance toolchain cache (JARs, venvs, binaries)
+tools/
