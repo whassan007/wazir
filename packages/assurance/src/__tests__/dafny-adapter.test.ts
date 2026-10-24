@@ -1,8 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { DafnyAdapter, scanDafnyTrustedBase } from '../adapters/dafny';
+import { DafnyAdapter, resolveDafnyBinary, scanDafnyTrustedBase } from '../adapters/dafny';
 import { Obligation, Verdict } from '../contracts';
 
 const adapter = new DafnyAdapter();
@@ -15,6 +15,35 @@ async function verifySource(source: string) {
 }
 beforeAll(async () => { directory = await mkdtemp(join(tmpdir(), 'dafny-adapter-')); });
 afterAll(async () => { await rm(directory, { recursive: true, force: true }); });
+
+describe('Dafny binary resolution', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it('prefers DAFNY_PATH over the tools directory', () => {
+    vi.stubEnv('DAFNY_PATH', '/custom/bin/dafny');
+    vi.stubEnv('WAZIR_TOOLS_DIR', '/custom/tools');
+    expect(resolveDafnyBinary()).toBe('/custom/bin/dafny');
+  });
+  it('uses WAZIR_TOOLS_DIR when configured', () => {
+    vi.stubEnv('DAFNY_PATH', '');
+    vi.stubEnv('WAZIR_TOOLS_DIR', join(directory, 'custom-tools'));
+    expect(resolveDafnyBinary()).toBe(join(directory, 'custom-tools', 'dafny', 'dafny'));
+  });
+  it('walks ancestors of either starting directory to find the repository tools', async () => {
+    vi.stubEnv('DAFNY_PATH', '');
+    vi.stubEnv('WAZIR_TOOLS_DIR', '');
+    const root = join(directory, 'repo');
+    const binary = join(root, 'tools', 'dafny', 'dafny');
+    await mkdir(join(root, 'tools', 'dafny'), { recursive: true });
+    await writeFile(binary, '');
+    expect(resolveDafnyBinary([join(root, 'packages', 'assurance', 'src')])).toBe(binary);
+    expect(resolveDafnyBinary([directory, join(root, 'nested')])).toBe(binary);
+  });
+  it('falls back to dafny on PATH without a repository installation', () => {
+    vi.stubEnv('DAFNY_PATH', '');
+    vi.stubEnv('WAZIR_TOOLS_DIR', '');
+    expect(resolveDafnyBinary([directory])).toBe('dafny');
+  });
+});
 
 describe('DafnyAdapter with real pinned Dafny', () => {
   it('proves stop_command with no trusted base', async () => {

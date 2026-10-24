@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { Obligation, SolverAdapter, ToolAvailability, VerificationResult, Verdict, VerifyOptions } from '../contracts';
 
 /** Mask comments and strings while preserving offsets and line numbers. */
@@ -47,9 +48,26 @@ function run(binary: string, args: string[], timeout: number, cwd?: string): Pro
   }));
 }
 
+/** Prefer explicit configuration, then a repository installation, then PATH. */
+export function resolveDafnyBinary(startDirectories = [__dirname, process.cwd()]): string {
+  if (process.env.DAFNY_PATH) return process.env.DAFNY_PATH;
+  if (process.env.WAZIR_TOOLS_DIR) return resolve(process.env.WAZIR_TOOLS_DIR, 'dafny', 'dafny');
+  for (const start of startDirectories) {
+    let directory = resolve(start);
+    while (true) {
+      const binary = resolve(directory, 'tools', 'dafny', 'dafny');
+      if (existsSync(binary)) return binary;
+      const parent = dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+  }
+  return 'dafny';
+}
+
 export class DafnyAdapter implements SolverAdapter {
   readonly tool = 'dafny' as const;
-  constructor(private readonly binary = process.env.DAFNY_PATH || '/Users/wael/Code/Wazir/tools/dafny/dafny') {}
+  constructor(private readonly binary = resolveDafnyBinary()) {}
 
   async checkAvailability(): Promise<ToolAvailability> {
     const result = await run(this.binary, ['--version'], 5000);
