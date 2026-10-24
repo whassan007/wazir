@@ -1,7 +1,7 @@
 # RED_SIGNAL_COMPLIANCE — toy demonstration spec (FORMAL_ASSURANCE.md §2.2, §3).
-# content_hash: computed by compute_hash.py — sha256 over the sorted list of
-# "<file>\n<sha256(file bytes)>\n" records for this manifest (with content_hash
-# blanked to "") plus every listed artifact and monitor file.
+# content_hash: computeSpecHash() from packages/assurance/src/registry.ts — sha256
+# over the canonical (sorted-key) JSON of the parsed manifest without content_hash.
+# Reproduce with `python3 compute_hash.py --write` / `--check`.
 id: RED_SIGNAL_COMPLIANCE
 version: "2.1"
 status: approved
@@ -28,4 +28,4 @@ monitors:
     file: red_signal_monitor.py
 reviewers:
   - wael
-content_hash: "sha256:2979c3a117a8a6afff1bc7777294c1c6b9080744777fd0ba30034f89a38fab59"
+content_hash: "sha256:214ed5c58e83c68084c5bc4e04f80871ca140d8d92f09860d92fa837f1cc22b7"
