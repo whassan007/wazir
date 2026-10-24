@@ -1,8 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Z3Adapter } from '../adapters/z3';
+import { resolveZ3Python, Z3Adapter } from '../adapters/z3';
 import { Obligation, Verdict } from '../contracts';
 
 const adapter = new Z3Adapter({ expectedVersion: '5.3.1' });
@@ -21,9 +21,25 @@ async function python(source: string, extra: Partial<Obligation> = {}) {
   return adapter.verify(obligation({ artifactPath: path, metadata: {}, ...extra }), 'rev');
 }
 
+describe('Z3 Python path resolution', () => {
+  it('honors environment overrides while preserving explicit config precedence', () => {
+    try {
+      vi.stubEnv('WAZIR_TOOLS_DIR', '/home/wael/Code/Wazir/tools');
+      vi.stubEnv('WAZIR_Z3_PYTHON', '');
+      expect(resolveZ3Python()).toBe('/home/wael/Code/Wazir/tools/z3-venv/bin/python3');
+      vi.stubEnv('WAZIR_Z3_PYTHON', '/custom/python3');
+      expect(resolveZ3Python()).toBe('/custom/python3');
+      expect(resolveZ3Python({ toolsDir: '/explicit/tools' })).toBe('/explicit/tools/z3-venv/bin/python3');
+      expect(resolveZ3Python({ pythonPath: '/explicit/python3', toolsDir: '/explicit/tools' })).toBe('/explicit/python3');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe('Z3Adapter using real pinned Z3', () => {
   it('reports real tool version', async () => {
-    expect(await adapter.checkAvailability()).toMatchObject({ available: true, version: '5.3.1' });
+    expect(await adapter.checkAvailability()).toMatchObject({ available: true, version: '5.3.1', path: resolveZ3Python() });
   });
   it('PROVED requires two satisfiable vacuity checks and unsat on negated P', async () => {
     const r = await adapter.verify(obligation(), 'rev');

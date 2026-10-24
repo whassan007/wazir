@@ -1,8 +1,9 @@
 import { spawn, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { Obligation, SolverAdapter, ToolAvailability, VerificationResult, Verdict, VerifyOptions } from '../contracts';
 
 export interface Z3AdapterConfig {
@@ -12,6 +13,25 @@ export interface Z3AdapterConfig {
   memoryLimitMb?: number;
   seed?: number;
   expectedVersion?: string;
+}
+
+export function resolveZ3Python(config: Z3AdapterConfig = {}): string {
+  if (config.pythonPath) return config.pythonPath;
+  if (config.toolsDir) return join(config.toolsDir, 'z3-venv/bin/python3');
+  if (process.env.WAZIR_Z3_PYTHON) return process.env.WAZIR_Z3_PYTHON;
+  if (process.env.WAZIR_TOOLS_DIR) return join(process.env.WAZIR_TOOLS_DIR, 'z3-venv/bin/python3');
+
+  for (const start of [__dirname, process.cwd()]) {
+    let directory = resolve(start);
+    while (true) {
+      const python = join(directory, 'tools/z3-venv/bin/python3');
+      if (existsSync(python)) return python;
+      const parent = dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+  }
+  return '/Users/wael/Code/Wazir/tools/z3-venv/bin/python3';
 }
 
 // SMT artifacts contain declarations only. Assertions come from the independently
@@ -68,7 +88,7 @@ export class Z3Adapter implements SolverAdapter {
   readonly tool = 'z3' as const;
   private readonly python: string;
   constructor(private readonly config: Z3AdapterConfig = {}) {
-    this.python = config.pythonPath ?? join(config.toolsDir ?? '/Users/wael/Code/Wazir/tools', 'z3-venv/bin/python3');
+    this.python = resolveZ3Python(config);
   }
 
   private run(args: string[], input: string, cwd: string, timeout: number, memoryMb?: number) {
