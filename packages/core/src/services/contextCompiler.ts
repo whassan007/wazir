@@ -68,7 +68,7 @@ export function planOutputReserveTokens(params: {
 
   let planned: number;
   if (factual) {
-    planned = Math.max(128, Math.min(512, Math.ceil(estimateTokens(task) * 2)));
+    planned = Math.max(256, Math.min(512, Math.ceil(estimateTokens(task) * 2)));
   } else if (classifyComplexity(task) !== 'complex') {
     planned = ['coding', 'debugging', 'architecture'].includes(params.taskType ?? '') ||
       /\b(code|implement|write|create|function|class|script|program|fix|patch|modify|update|test)\b/i.test(lower)

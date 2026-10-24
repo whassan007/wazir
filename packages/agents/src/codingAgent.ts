@@ -771,7 +771,7 @@ export class CodingAgent implements AgentAdapter {
     // action during PLAN (see the `action.action === 'done'` branch below), it's the prompt
     // that was pushing the model to always produce a plan first regardless of task shape.
     const fastAnswerHint = request.taskType === 'chat' || request.mutationRequired === false
-      ? '\n- This task only requires a textual answer, not a code change. If you can answer right now, respond immediately with {"action":"done","summary":"..."} — do not produce a plan first.'
+      ? '\n- This task only requires a textual answer, not a code change. If you can answer right now, respond immediately with {"action":"done","summary":"..."} — do not produce a plan first. Inside "summary", match the user\'s requested output format verbatim (for example, if asked for only a number, put only that number in "summary" with no extra words or punctuation).'
       : '';
     const systemPromptExtra = `${this.systemPromptExtra ?? ''}${fastAnswerHint}` || undefined;
 
