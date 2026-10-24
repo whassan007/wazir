@@ -1,6 +1,6 @@
 {
   "name": "@wazir/memory",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "license": "AGPL-3.0-only",
   "description": "In-memory session/conversation store for the Wazir meta-harness",
   "main": "./dist/src/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@wazir/goals",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "license": "AGPL-3.0-only",
   "description": "Goal Studio: durable goal graphs, continuous goal control, independent verification and recovery for Wazir",
   "main": "./dist/src/index.js",

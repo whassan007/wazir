@@ -1,6 +1,6 @@
 {
   "name": "@wazir/models",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "license": "AGPL-3.0-only",
   "description": "Model routing for the Wazir meta-harness",
   "main": "./dist/src/index.js",

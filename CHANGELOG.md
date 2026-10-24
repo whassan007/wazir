@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.15 — 2026-10-23
+
+**Release**: `v0.2.15`
+**Theme**: Interactive model selector (`WAZIR — Select Model`), Local Models browser (`WAZIR — Local Models`), in-place ANSI terminal rendering, Apple Silicon unified memory & context estimation, and model loading lifecycle
+
+- **Interactive Model Selector & In-Place Terminal Rendering (`@wazir/cli`)**:
+  - Added the Codex/Claude-style `/model` interactive selector (`WAZIR — Select Model`) supporting `Auto (recommended)`, `Fast`, `Balanced`, `Powerful`, `Local`, and `Custom` modes, live reasoning effort adjustment (`Low` / `Medium` / `High`), persistent default (`Enter`) vs. session-only (`S`) selection scopes, and searchable custom model filtering (`/`, `f`, `t`).
+  - Implemented in-place live modal overlay rendering (`modalLines`, `clearModal()`) in `ConversationRenderer` so repeated arrow-key navigation updates the active selector box in place without appending duplicate frames to terminal scrollback (`P1-A`), and eliminated duplicate confirmation messages (`P2-C`).
+- **Local Model Discovery & `WAZIR — Local Models` Browser (`@wazir/core`, `@wazir/cli`)**:
+  - Added `ModelDiscoveryStatusService.discoverLocalModels()` and the `WAZIR — Local Models` submenu (`P1-B`), displaying detected device hardware, runtime health (Ollama, LM Studio, local runtimes), `Auto Local Routing`, and discovered local models with live residency and eligibility badges (`● Loaded / Ready`, `○ Installed / Can load`, `× Installed / Insufficient memory`, `Unavailable / Runtime offline`).
+- **Hardware Memory Eligibility, Context Allocation & Model Loading Lifecycle (`@wazir/core`)**:
+  - Added `HardwareEligibilityService`, `ContextMemoryEstimator`, `IntelligentModelRanker`, and `ModelPreferenceService`, enforcing Apple Silicon unified-memory single-pool accounting, discrete GPU VRAM safety margins, loaded-model resident weight credit (`isAlreadyLoaded`), dynamic context tier selection (`4096..131072`), `selectAndPrepareLocalModel()`, concurrent load deduplication, and known-ineligible circuit breaker protection.
+
 ## v0.2.14 — 2026-10-22
 
 **Release**: `v0.2.14`
