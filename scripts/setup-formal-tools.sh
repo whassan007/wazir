@@ -3,10 +3,10 @@ set -euo pipefail
 
 # setup-formal-tools.sh
 # Sets up the formal assurance toolchain for Wazir:
-#   - Java 17+ check
+#   - Java 17+ (OpenJDK 21+)
 #   - Alloy Analyzer 6.2.0 (org.alloytools.alloy.dist.jar)
-#   - Python venv(s) with z3-solver, scenic, verifai
-#   - Dafny 4.x
+#   - Python venv(s) with z3-solver, scenic, verifai (and symlinks z3-venv, scenic-venv, verifai-venv, formal-venv)
+#   - Dafny 4.11.0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -30,16 +30,51 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-mkdir -p "${TOOLS_DIR}"
+mkdir -p "${TOOLS_DIR}" "${HOME}/.local/bin"
 TOOLS_DIR="$(cd "${TOOLS_DIR}" && pwd)"
 echo "==> Setting up formal assurance tools in: ${TOOLS_DIR}"
 
-# 1. Check Java 17+
+OS_NAME="$(uname -s)"
+ARCH_NAME="$(uname -m)"
+
+# 1. Check / Install Java 17+
 echo "==> [1/4] Checking Java 17+..."
-if command -v java >/dev/null 2>&1; then
-  java -version 2>&1 | head -n 3
+JAVA_DIR="${TOOLS_DIR}/java"
+mkdir -p "${JAVA_DIR}/bin"
+
+check_java_17() {
+  local jbin="$1"
+  if [[ ! -x "$jbin" ]]; then
+    return 1
+  fi
+  local ver
+  ver="$("$jbin" -version 2>&1 | head -n 1 | sed -E 's/.*"([0-9]+).*/\1/' || true)"
+  [[ "$ver" =~ ^[0-9]+$ ]] && (( ver >= 17 ))
+}
+
+if check_java_17 "${JAVA_DIR}/bin/java"; then
+  echo "    Java 17+ already in ${JAVA_DIR}/bin/java"
+elif [[ "${OS_NAME}" == "Darwin" && -x "/opt/homebrew/opt/openjdk@21/bin/java" ]]; then
+  ln -sf "/opt/homebrew/opt/openjdk@21/bin/java" "${JAVA_DIR}/bin/java"
+  ln -sf "/opt/homebrew/opt/openjdk@21/bin/java" "${HOME}/.local/bin/java"
+elif [[ "${OS_NAME}" == "Darwin" && -x "/opt/homebrew/opt/openjdk/bin/java" ]]; then
+  ln -sf "/opt/homebrew/opt/openjdk/bin/java" "${JAVA_DIR}/bin/java"
+  ln -sf "/opt/homebrew/opt/openjdk/bin/java" "${HOME}/.local/bin/java"
+elif command -v java >/dev/null 2>&1 && check_java_17 "$(command -v java)"; then
+  ln -sf "$(command -v java)" "${JAVA_DIR}/bin/java"
+elif [[ "${OS_NAME}" == "Linux" && ( "${ARCH_NAME}" == "aarch64" || "${ARCH_NAME}" == "arm64" ) ]]; then
+  JDK_URL="https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13%2B9/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.13_9.tar.gz"
+  echo "    Downloading Temurin OpenJDK 21 (Linux aarch64)..."
+  curl -fsSL -L "${JDK_URL}" -o "${JAVA_DIR}/jdk21.tar.gz"
+  tar -xzf "${JAVA_DIR}/jdk21.tar.gz" -C "${JAVA_DIR}" --strip-components=1
+  rm -f "${JAVA_DIR}/jdk21.tar.gz"
+  ln -sf "${JAVA_DIR}/bin/java" "${HOME}/.local/bin/java"
+fi
+
+if [[ -x "${JAVA_DIR}/bin/java" ]]; then
+  "${JAVA_DIR}/bin/java" -version 2>&1 | head -n 3
 else
-  echo "WARNING: java not found on PATH. Alloy Analyzer requires Java 17+." >&2
+  echo "WARNING: Java 17+ could not be configured at ${JAVA_DIR}/bin/java" >&2
 fi
 
 # 2. Alloy Analyzer 6.2.0
@@ -71,7 +106,6 @@ echo "==> [2/4] Setting up Alloy Analyzer 6.2.0..."
 if verify_sha256 "${ALLOY_JAR}" "${ALLOY_SHA256}"; then
   echo "    Alloy JAR already present and SHA-256 verified at ${ALLOY_JAR}"
 else
-  # Check local caches / Downloads before network fetch
   for candidate in \
     "${HOME}/Downloads/org.alloytools.alloy.dist.jar" \
     "${REPO_ROOT}/org.alloytools.alloy.dist.jar" \
@@ -105,69 +139,76 @@ if [[ ! -x "${Z3_VENV}/bin/python" ]]; then
   "${PYTHON_BIN}" -m venv "${Z3_VENV}"
 fi
 
-"${Z3_VENV}/bin/pip" install --upgrade pip wheel setuptools >/dev/null
-"${Z3_VENV}/bin/pip" install z3-solver scenic verifai
+if ! "${Z3_VENV}/bin/python" -c "import z3, scenic, verifai" >/dev/null 2>&1; then
+  "${Z3_VENV}/bin/pip" install --upgrade pip wheel setuptools >/dev/null
+  "${Z3_VENV}/bin/pip" install z3-solver scenic verifai
+fi
 
-# Ensure symlinks exist so tools/z3-venv, tools/scenic-venv, tools/verifai-venv, and tools/formal-venv all resolve
 for link_name in scenic-venv verifai-venv formal-venv; do
   link_path="${TOOLS_DIR}/${link_name}"
   if [[ ! -e "${link_path}" ]]; then
-    ln -s "z3-venv" "${link_path}"
+    ln -sfn "z3-venv" "${link_path}"
   fi
 done
 
 echo "    Z3 version: $("${Z3_VENV}/bin/python" -c 'import z3; print(z3.get_version_string())')"
-echo "    Scenic version: $("${Z3_VENV}/bin/python" -c 'import scenic; print(getattr(scenic, "__version__", "installed"))')"
-echo "    VerifAI version: $("${Z3_VENV}/bin/python" -c 'import verifai; print(getattr(verifai, "__version__", "installed"))')"
+echo "    Scenic version: $("${Z3_VENV}/bin/python" -c 'import importlib.metadata; print(importlib.metadata.version("scenic"))')"
+echo "    VerifAI version: $("${Z3_VENV}/bin/python" -c 'import importlib.metadata; print(importlib.metadata.version("verifai"))')"
 
-# 4. Dafny
+# 4. Dafny 4.11.0
 echo "==> [4/4] Checking / installing Dafny..."
 DAFNY_DIR="${TOOLS_DIR}/dafny"
 mkdir -p "${DAFNY_DIR}"
+DAFNY_VERSION="4.11.0"
+
+if [[ -x "${DAFNY_DIR}/dafny" ]] && "${DAFNY_DIR}/dafny" --version >/dev/null 2>&1; then
+  echo "    Dafny already installed at ${DAFNY_DIR}/dafny: $("${DAFNY_DIR}/dafny" --version)"
+elif [[ "${OS_NAME}" == "Darwin" ]]; then
+  DAFNY_ZIP="dafny-${DAFNY_VERSION}-arm64-macos-13.zip"
+  if [[ "${ARCH_NAME}" != "arm64" ]]; then
+    DAFNY_ZIP="dafny-${DAFNY_VERSION}-x64-macos-13.zip"
+  fi
+  DAFNY_URL="https://github.com/dafny-lang/dafny/releases/download/v${DAFNY_VERSION}/${DAFNY_ZIP}"
+  echo "    Downloading Dafny from ${DAFNY_URL}..."
+  TMP_ZIP="${TOOLS_DIR}/${DAFNY_ZIP}"
+  curl -fsSL -L "${DAFNY_URL}" -o "${TMP_ZIP}"
+  unzip -q -o "${TMP_ZIP}" -d "${TOOLS_DIR}"
+  rm -f "${TMP_ZIP}"
+  xattr -dr com.apple.quarantine "${DAFNY_DIR}" 2>/dev/null || true
+elif [[ "${OS_NAME}" == "Linux" && ( "${ARCH_NAME}" == "aarch64" || "${ARCH_NAME}" == "arm64" ) ]]; then
+  DOTNET_DIR="${TOOLS_DIR}/dotnet"
+  DAFNY_DOTNET_DIR="${TOOLS_DIR}/dafny-dotnet"
+  mkdir -p "${DOTNET_DIR}" "${DAFNY_DOTNET_DIR}"
+  if [[ ! -x "${DOTNET_DIR}/dotnet" ]]; then
+    curl -fsSL https://dot.net/v1/dotnet-install.sh -o "${DOTNET_DIR}/dotnet-install.sh"
+    chmod +x "${DOTNET_DIR}/dotnet-install.sh"
+    "${DOTNET_DIR}/dotnet-install.sh" --channel 8.0 --install-dir "${DOTNET_DIR}"
+  fi
+  if [[ ! -x "${DAFNY_DOTNET_DIR}/dafny" ]]; then
+    DOTNET_ROOT="${DOTNET_DIR}" "${DOTNET_DIR}/dotnet" tool install --tool-path "${DAFNY_DOTNET_DIR}" dafny --version "${DAFNY_VERSION}"
+  fi
+  cat << EOF > "${DAFNY_DIR}/dafny"
+#!/usr/bin/env bash
+export DOTNET_ROOT="${DOTNET_DIR}"
+export PATH="${Z3_VENV}/bin:${DOTNET_DIR}:\$PATH"
+exec "${DAFNY_DOTNET_DIR}/dafny" "\$@"
+EOF
+  chmod +x "${DAFNY_DIR}/dafny"
+elif [[ "${OS_NAME}" == "Linux" ]]; then
+  DAFNY_ZIP="dafny-${DAFNY_VERSION}-x64-ubuntu-22.04.zip"
+  DAFNY_URL="https://github.com/dafny-lang/dafny/releases/download/v${DAFNY_VERSION}/${DAFNY_ZIP}"
+  echo "    Downloading Dafny from ${DAFNY_URL}..."
+  TMP_ZIP="${TOOLS_DIR}/${DAFNY_ZIP}"
+  curl -fsSL -L "${DAFNY_URL}" -o "${TMP_ZIP}"
+  unzip -q -o "${TMP_ZIP}" -d "${TOOLS_DIR}"
+  rm -f "${TMP_ZIP}"
+fi
 
 if [[ -x "${DAFNY_DIR}/dafny" ]]; then
-  echo "    Dafny already installed at ${DAFNY_DIR}/dafny: $("${DAFNY_DIR}/dafny" --version)"
-elif command -v dafny >/dev/null 2>&1; then
-  SYS_DAFNY="$(command -v dafny)"
-  ln -sf "${SYS_DAFNY}" "${DAFNY_DIR}/dafny"
-  echo "    Linked system Dafny (${SYS_DAFNY}): $("${DAFNY_DIR}/dafny" --version)"
+  ln -sf "${DAFNY_DIR}/dafny" "${HOME}/.local/bin/dafny"
+  echo "    Dafny version: $("${DAFNY_DIR}/dafny" --version)"
 else
-  DAFNY_VERSION="4.9.0"
-  OS_NAME="$(uname -s)"
-  ARCH_NAME="$(uname -m)"
-  DAFNY_ZIP=""
-  if [[ "${OS_NAME}" == "Darwin" ]]; then
-    if command -v brew >/dev/null 2>&1; then
-      echo "    Installing Dafny via Homebrew..."
-      brew install dafny || true
-    fi
-    if command -v dafny >/dev/null 2>&1; then
-      ln -sf "$(command -v dafny)" "${DAFNY_DIR}/dafny"
-    else
-      DAFNY_ZIP="dafny-${DAFNY_VERSION}-arm64-macos-13.zip"
-    fi
-  elif [[ "${OS_NAME}" == "Linux" ]]; then
-    if [[ "${ARCH_NAME}" == "aarch64" || "${ARCH_NAME}" == "arm64" ]]; then
-      DAFNY_ZIP="dafny-${DAFNY_VERSION}-arm64-ubuntu-20.04.zip"
-    else
-      DAFNY_ZIP="dafny-${DAFNY_VERSION}-x64-ubuntu-20.04.zip"
-    fi
-  fi
-
-  if [[ ! -x "${DAFNY_DIR}/dafny" && -n "${DAFNY_ZIP}" ]]; then
-    DAFNY_URL="https://github.com/dafny-lang/dafny/releases/download/v${DAFNY_VERSION}/${DAFNY_ZIP}"
-    echo "    Downloading Dafny from ${DAFNY_URL}..."
-    TMP_ZIP="${TOOLS_DIR}/${DAFNY_ZIP}"
-    curl -fsSL -L "${DAFNY_URL}" -o "${TMP_ZIP}"
-    unzip -q -o "${TMP_ZIP}" -d "${TOOLS_DIR}"
-    rm -f "${TMP_ZIP}"
-  fi
-
-  if [[ -x "${DAFNY_DIR}/dafny" ]]; then
-    echo "    Dafny version: $("${DAFNY_DIR}/dafny" --version)"
-  else
-    echo "WARNING: Dafny binary could not be automatically verified at ${DAFNY_DIR}/dafny" >&2
-  fi
+  echo "WARNING: Dafny binary could not be automatically verified at ${DAFNY_DIR}/dafny" >&2
 fi
 
 echo "==> Formal assurance toolchain setup complete."
