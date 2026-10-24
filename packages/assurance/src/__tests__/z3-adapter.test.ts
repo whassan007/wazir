@@ -88,6 +88,26 @@ describe('Z3Adapter using real pinned Z3', () => {
   it('accepts Python proof with explicit probe evidence', async () => {
     expect((await python('print(\'{"status":"PROVED","solver_result":"unsat","vacuityProbe":{"passed":true}}\')')).verdict).toBe(Verdict.PROVED);
   });
+  it.each([
+    { command: '--label "two words"' },
+    { metadata: { args: ['--label', 'two words'] } },
+    { command: '--ignored', metadata: { args: ['--label', 'two words'] } },
+  ])('forwards Python CLI arguments from %j', async (extra) => {
+    const r = await python('import argparse, json\np = argparse.ArgumentParser()\np.add_argument("--label", required=True)\na = p.parse_args()\nassert a.label == "two words"\nprint(json.dumps({"status":"PROVED","vacuity_probe":{"A":"sat","A_and_precondition":"sat"}}))', extra);
+    expect(r.verdict).toBe(Verdict.PROVED);
+    expect(r.vacuityProbe?.passed).toBe(true);
+  });
+  it.each([
+    [{ passed: true }, Verdict.PROVED],
+    [{ A: 'sat', A_and_precondition: 'sat' }, Verdict.PROVED],
+    [{ A: 'sat', A_and_precondition: 'unknown' }, Verdict.UNKNOWN],
+    [{ A: 'sat' }, Verdict.UNKNOWN],
+    [{ passed: false }, Verdict.UNKNOWN],
+  ])('checks snake_case Python probe evidence %j', async (probe, verdict) => {
+    const output = JSON.stringify({ status: 'PROVED', solver_result: 'unsat', vacuity_probe: probe });
+    const r = await python(`print(${JSON.stringify(output)})`);
+    expect(r.verdict).toBe(verdict);
+  });
   it('reads SMT2 files and hashes both content and revision', async () => {
     const path = join(dir, 'model.smt2');
     await writeFile(path, '(declare-const x Int)');

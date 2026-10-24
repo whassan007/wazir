@@ -17,7 +17,7 @@ export interface Z3AdapterConfig {
 // SMT artifacts contain declarations only. Assertions come from the independently
 // supplied obligation: assumptions, metadata.precondition, metadata.implementation, guarantee.
 const DRIVER = String.raw`
-import sys, json, resource, runpy, io, contextlib
+import sys, json, resource, runpy, io, contextlib, shlex
 cfg=json.loads(sys.stdin.read())
 limit=cfg['memory']*1024*1024
 if sys.platform != 'darwin':
@@ -30,7 +30,10 @@ if cfg['python']:
     buf=io.StringIO()
     with contextlib.redirect_stdout(buf):
         try:
-            sys.argv=[cfg['path']]+cfg['obligation'].get('metadata',{}).get('args',[])
+            o=cfg['obligation']; m=o.get('metadata') or {}
+            args=m.get('args')
+            if args is None: args=shlex.split(o.get('command') or '')
+            sys.argv=[cfg['path']]+args
             exec(compile(cfg['content'],cfg['path'],'exec'),{'__name__':'__main__','__file__':cfg['path']})
         except SystemExit as exc:
             if exc.code not in (None,0,2): raise
@@ -127,13 +130,16 @@ export class Z3Adapter implements SolverAdapter {
         const allowed = ['COUNTEREXAMPLE', 'PROVED', 'BOUNDED_PASS', 'INCONSISTENT_ASSUMPTIONS', 'UNKNOWN', 'ERROR'];
         result.verdict = allowed.includes(data.status) ? data.status as Verdict : Verdict.ERROR;
         result.witness = data.witness ?? data.model;
-        result.vacuityProbe = data.vacuityProbe;
+        const snakeProbe = data.vacuity_probe;
+        const probePassed = data.vacuityProbe?.passed === true || snakeProbe?.passed === true ||
+          (snakeProbe?.A === 'sat' && snakeProbe?.A_and_precondition === 'sat');
+        result.vacuityProbe = data.vacuityProbe ?? (snakeProbe ? { passed: probePassed, details: snakeProbe } : undefined);
         // Raw solver polarity takes precedence over a script's claimed status.
         if (data.solver_result === 'sat') result.verdict = Verdict.COUNTEREXAMPLE;
         if (data.solver_result === 'unknown') result.verdict = Verdict.UNKNOWN;
         if (data.vacuityProbe?.details && Object.values(data.vacuityProbe.details).includes('unsat')) result.verdict = Verdict.INCONSISTENT_ASSUMPTIONS;
         if ([Verdict.PROVED, Verdict.BOUNDED_PASS].includes(result.verdict)) {
-          if (result.vacuityProbe?.passed !== true) result.verdict = Verdict.UNKNOWN;
+          if (!probePassed) result.verdict = Verdict.UNKNOWN;
           else if (obligation.bounded || obligation.scope || data.scope) result.verdict = Verdict.BOUNDED_PASS;
         }
       }
