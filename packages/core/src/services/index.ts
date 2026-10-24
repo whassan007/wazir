@@ -19,8 +19,8 @@ export {
 } from './contextProviders.js';
 export { ObservationCompactor } from './observationCompactor.js';
 export type { CompactedObservation, ObservationCompactorOptions, ObservationKind } from './observationCompactor.js';
-export { ContextCompactionService, STRUCTURED_SUMMARY_SCHEMA } from './contextCompactionService.js';
-export type { ContextCompactionServiceOptions, SummarizerFn } from './contextCompactionService.js';
+export { ContextCompactionService, STRUCTURED_SUMMARY_SCHEMA, optimizeContextPartsForBudget } from './contextCompactionService.js';
+export type { ContextCompactionServiceOptions, SummarizerFn, OptimizeContextPartsOptions, OptimizeContextPartsResult } from './contextCompactionService.js';
 export { ContextRevisionService } from './contextRevisionService.js';
 export type { ContextRevisionConfig, RevisionResult } from './contextRevisionService.js';
 export { PromptLayoutPlanner } from './promptLayoutPlanner.js';
@@ -220,7 +220,13 @@ export {
   VerificationPlanner,
 } from './verificationPlanning.js';
 export type { ChangeImpactAnalyzerOptions } from './verificationPlanning.js';
-export { TelemetryCollector, classifyExclusionReasons } from './telemetryService.js';
+export {
+  TelemetryCollector,
+  classifyExclusionReasons,
+  computeLatencyPercentiles,
+  LatencyHistogram,
+  PhaseLatencyTracker,
+} from './telemetryService.js';
 export type {
   RoutingExclusionCategory,
   RoutingCandidateAlternative,
@@ -231,6 +237,8 @@ export type {
   RoutingTelemetryInput,
   RoutingTelemetryFilter,
   RoutingTelemetrySummary,
+  LatencyPercentiles,
+  PerformanceObservabilityReport,
 } from './telemetryService.js';
 export { TaskCapabilityClassifier } from './taskCapabilityClassifier.js';
 export { ModelIntelligenceService } from './modelIntelligenceService.js';
@@ -287,3 +295,35 @@ export type { DistributedSearchCoordinatorOptions } from '../types/distributedSe
 
 export * from './evidencePolicy.js';
 export * from './executionContract.js';
+export {
+  DeadlineExceededError,
+  ExecutionCancelledError,
+  ExecutionDeadlineBudget,
+  ExecutionCancellationScope,
+  runWithDeadline,
+} from './executionDeadlines.js';
+export type {
+  CancellationReason,
+  ExecutionPhase as DeadlineExecutionPhase,
+  DeadlineBudgetOptions,
+  CancellationScopeOptions,
+  RunWithDeadlineOptions,
+} from './executionDeadlines.js';
+export {
+  StickyRouter,
+  scoreRouteCandidate,
+} from './stickyRouter.js';
+export type {
+  ExecutionPhase as StickyExecutionPhase,
+  ModelLocality,
+  RouteCandidate as StickyRouteCandidate,
+  ScoreWeights,
+  PhaseRoutePolicy,
+  StickyRouteSession,
+  RouteReason,
+  RouteDecision,
+  StickyRouterOptions,
+} from './stickyRouter.js';
+export * from './providerBackpressure.js';
+export * from './schedulerFairness.js';
+export * from './historyRetentionService.js';

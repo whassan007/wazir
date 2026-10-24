@@ -326,7 +326,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // hostedProviders.ts's docstring for the invariant this depends on: nothing
   // that searches `worker.adapterForModel()` can ever reach a hosted adapter,
   // since the worker's own discovery list is strictly local/hardware-bound.
-  const secretBroker = await createSecretBroker({ secretsDir: engineConfigDir });
+  const secretBroker = await getSharedSecretBroker(engineConfigDir);
   const hostedAdapters = createHostedProviders(config, secretBroker, { fastStartup: options.fastStartup });
   for (const [id, rawAdapter] of hostedAdapters) {
     const adapter = govern(rawAdapter);
@@ -867,6 +867,20 @@ function registerModel(
   });
 }
 
+let cachedDefaultSecretBroker: Promise<SecretBroker> | undefined;
+let cachedDefaultSecretDir: string | undefined;
+
+function getSharedSecretBroker(secretsDir: string): Promise<SecretBroker> {
+  if (cachedDefaultSecretDir !== secretsDir || !cachedDefaultSecretBroker) {
+    cachedDefaultSecretDir = secretsDir;
+    cachedDefaultSecretBroker = createSecretBroker({ secretsDir });
+  }
+  return cachedDefaultSecretBroker;
+}
+
+let cachedDefaultStore: Promise<KeyValueStore> | undefined;
+let cachedDefaultStoreKey: string | undefined;
+
 export async function createStore(): Promise<KeyValueStore> {
   if (process.env.WAZIR_DATABASE_URL) {
     const { createPool, runKvMigration, PostgresStore } = await import('@wazir/database');
@@ -877,7 +891,13 @@ export async function createStore(): Promise<KeyValueStore> {
   if (process.env.WAZIR_IN_MEMORY === '1') {
     return new MemoryStore();
   }
-  return new JsonFileStore(path.join(configDir(), 'wazir.json'));
+  const storePath = path.join(configDir(), 'wazir.json');
+  if (cachedDefaultStoreKey === storePath && cachedDefaultStore) {
+    return cachedDefaultStore;
+  }
+  cachedDefaultStoreKey = storePath;
+  cachedDefaultStore = Promise.resolve(new JsonFileStore(storePath));
+  return cachedDefaultStore;
 }
 
 function dedupe<T>(items: T[]): T[] {

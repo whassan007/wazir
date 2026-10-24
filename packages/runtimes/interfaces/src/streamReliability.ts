@@ -118,7 +118,7 @@ export interface StreamDiagnostic {
   toolCallId?: string;
 }
 export interface SafeStreamParserState {
-  decoder: TextDecoder;
+  decoder: { decode(input?: Uint8Array, options?: { stream?: boolean }): string };
   buffer: string;
   data: string[];
 }

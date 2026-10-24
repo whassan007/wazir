@@ -565,3 +565,4 @@ export function httpFailureEvent(provider: string, response: Response, body: str
 }
 
 export * from './generationControl.js';
+export * from './streamReliability.js';

@@ -1,0 +1,225 @@
+{
+  "generated_at": "2026-10-23T20:09:30-07:00",
+  "base_branch": "integration/cross-harness-outcome-recovery",
+  "base_commit_sha": "cba92cb3e1f556cf2e087efb6193babbee31d4f2",
+  "local_machine": {
+    "hostname": "local-macbook-m5-pro",
+    "os": "Darwin 27.0.0",
+    "arch": "arm64",
+    "cpu": "Apple M5 Pro",
+    "cpu_cores": 18,
+    "memory_bytes": 25769803776,
+    "memory_gb": 24,
+    "free_disk_gb": 945,
+    "git_version": "2.53.0",
+    "node_version": "v22.23.3"
+  },
+  "remote_hosts": [
+    {
+      "name": "dgx-spark",
+      "hostname": "dgx-spark.tail16d8d9.ts.net",
+      "tailscale_ip": "100.113.62.112",
+      "reachable": true,
+      "services": {
+        "lmstudio": {
+          "https_endpoint": "https://dgx-spark.tail16d8d9.ts.net/v1",
+          "direct_endpoint": "http://100.113.62.112:1234/v1",
+          "metadata_endpoint": "https://dgx-spark.tail16d8d9.ts.net/api/v0/models",
+          "status": "online"
+        },
+        "ollama": {
+          "https_endpoint": "https://dgx-spark.tail16d8d9.ts.net:8443",
+          "openai_compat_endpoint": "https://dgx-spark.tail16d8d9.ts.net:8443/v1",
+          "direct_endpoint": "http://100.113.62.112:11434",
+          "version": "0.33.0",
+          "status": "online"
+        }
+      }
+    }
+  ],
+  "providers": [
+    {
+      "name": "gemini",
+      "execution": "antigravity",
+      "machine": "local",
+      "supports_file_editing": true,
+      "supports_git": true,
+      "supports_subagents": true,
+      "max_concurrency": 4,
+      "status": "available"
+    },
+    {
+      "name": "claude",
+      "execution": "local-cli",
+      "machine": "local",
+      "cli_path": "/Users/wael/.local/bin/claude",
+      "cli_version": "2.1.310 (Claude Code)",
+      "noninteractive_command": "claude -p --dangerously-skip-permissions --output-format json",
+      "supports_file_editing": true,
+      "supports_git": true,
+      "max_concurrency": 3,
+      "measured_smoke_latency_ms": 2498,
+      "status": "available"
+    },
+    {
+      "name": "codex",
+      "execution": "local-cli",
+      "machine": "local",
+      "cli_path": "/Users/wael/.local/bin/codex",
+      "cli_version": "codex-cli 0.163.0",
+      "noninteractive_command": "codex exec --dangerously-bypass-approvals-and-sandbox -C <worktree>",
+      "supports_file_editing": true,
+      "supports_git": true,
+      "max_concurrency": 3,
+      "measured_smoke_latency_ms": 4102,
+      "status": "available"
+    },
+    {
+      "name": "dgx-lmstudio",
+      "execution": "openai-compatible-api+codex-harness",
+      "machine": "dgx-spark",
+      "endpoint": "https://dgx-spark.tail16d8d9.ts.net/v1",
+      "direct_endpoint": "http://100.113.62.112:1234/v1",
+      "harness_command": "OPENAI_API_KEY=lm-studio codex exec --dangerously-bypass-approvals-and-sandbox -c model_provider=\"dgx_lmstudio\" -c model_providers.dgx_lmstudio.name=\"DGX LM Studio\" -c model_providers.dgx_lmstudio.base_url=\"https://dgx-spark.tail16d8d9.ts.net/v1\" -c model_providers.dgx_lmstudio.env_key=\"OPENAI_API_KEY\" -c model_providers.dgx_lmstudio.wire_api=\"responses\" -m qwen/qwen3.8-27b",
+      "supports_file_editing": true,
+      "supports_git": true,
+      "max_concurrency": 2,
+      "status": "available",
+      "models": [
+        {
+          "id": "qwen/qwen3.8-27b",
+          "quantization": "Q4_K_M",
+          "state": "loaded",
+          "loaded_context_length": 8192,
+          "max_context_length": 262144,
+          "tool_calling": true,
+          "structured_output": true,
+          "streaming": true,
+          "coding_suitability": "high",
+          "measured_latency_ms": 2048.7,
+          "measured_tps": 14.16,
+          "harness_verified": true
+        },
+        {
+          "id": "nvidia/nemotron-3-nano-omni",
+          "quantization": "Q4_K_M",
+          "state": "loaded",
+          "loaded_context_length": 8192,
+          "max_context_length": 262144,
+          "tool_calling": false,
+          "structured_output": true,
+          "streaming": true,
+          "coding_suitability": "medium-analysis",
+          "measured_latency_ms": 1337.5,
+          "measured_tps": 31.4,
+          "harness_verified": false,
+          "notes": "Fast reasoning/analysis model; returned empty tool_calls array on tool smoke test, so used via direct inference + coding harness verification."
+        },
+        {
+          "id": "qwen/qwen3-coder-next",
+          "quantization": "Q4_K_M",
+          "state": "not-loaded",
+          "max_context_length": 262144,
+          "tool_calling": true,
+          "coding_suitability": "high"
+        },
+        {
+          "id": "openai/gpt-oss-120b",
+          "quantization": "MXFP4",
+          "state": "not-loaded",
+          "max_context_length": 131072,
+          "tool_calling": true,
+          "coding_suitability": "high"
+        },
+        {
+          "id": "nvidia/nemotron-3-super",
+          "quantization": "Q4_K_M",
+          "state": "not-loaded",
+          "max_context_length": 1048576,
+          "tool_calling": false,
+          "coding_suitability": "high-reasoning"
+        },
+        {
+          "id": "gemma-4-26b-a4b-it-qat",
+          "quantization": "Q4_0",
+          "state": "not-loaded",
+          "max_context_length": 262144,
+          "tool_calling": true,
+          "coding_suitability": "medium"
+        }
+      ]
+    },
+    {
+      "name": "dgx-ollama",
+      "execution": "ollama-api+codex-harness",
+      "machine": "dgx-spark",
+      "endpoint": "https://dgx-spark.tail16d8d9.ts.net:8443",
+      "openai_compat_endpoint": "https://dgx-spark.tail16d8d9.ts.net:8443/v1",
+      "direct_endpoint": "http://100.113.62.112:11434",
+      "harness_command": "OPENAI_API_KEY=ollama codex exec --dangerously-bypass-approvals-and-sandbox -c model_provider=\"dgx_ollama\" -c model_providers.dgx_ollama.name=\"DGX Ollama\" -c model_providers.dgx_ollama.base_url=\"https://dgx-spark.tail16d8d9.ts.net:8443/v1\" -c model_providers.dgx_ollama.env_key=\"OPENAI_API_KEY\" -c model_providers.dgx_ollama.wire_api=\"responses\" -c model_reasoning_effort=\"none\" -m qwen3-coder:30b",
+      "supports_file_editing": true,
+      "supports_git": true,
+      "max_concurrency": 2,
+      "status": "available",
+      "models": [
+        {
+          "id": "qwen3-coder:30b",
+          "parameter_size": "30.5B",
+          "quantization": "Q4_K_M",
+          "state": "loaded",
+          "loaded_context_length": 262144,
+          "max_context_length": 262144,
+          "estimated_memory_bytes": 45571605790,
+          "tool_calling": true,
+          "structured_output": true,
+          "streaming": true,
+          "coding_suitability": "high",
+          "observed_load_time_ms": 22221.8,
+          "measured_warm_latency_ms": 784.6,
+          "measured_tps": 87.85,
+          "harness_verified": true
+        },
+        {
+          "id": "qwen3.6:35b-a3b-q8_0",
+          "parameter_size": "36.0B",
+          "quantization": "Q8_0",
+          "state": "not-loaded",
+          "max_context_length": 262144,
+          "estimated_memory_bytes": 38683249408,
+          "tool_calling": true,
+          "coding_suitability": "high"
+        },
+        {
+          "id": "gemma4:26b",
+          "parameter_size": "25.2B",
+          "quantization": "Q4_K_M",
+          "state": "not-loaded",
+          "max_context_length": 262144,
+          "estimated_memory_bytes": 18618224608,
+          "tool_calling": true,
+          "coding_suitability": "medium"
+        },
+        {
+          "id": "qwen3.8:27b",
+          "parameter_size": "27.3B",
+          "quantization": "Q4_K_M",
+          "state": "not-loaded",
+          "max_context_length": 262144,
+          "estimated_memory_bytes": 17652427808,
+          "tool_calling": true,
+          "coding_suitability": "high"
+        },
+        {
+          "id": "qwen2.5vl:72b",
+          "parameter_size": "73.4B",
+          "quantization": "Q4_K_M",
+          "state": "not-loaded",
+          "max_context_length": 128000,
+          "estimated_memory_bytes": 48744769248,
+          "tool_calling": false,
+          "coding_suitability": "vision"
+        }
+      ]
+    }
+  ]
+}

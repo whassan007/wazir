@@ -1289,8 +1289,8 @@ export class ExecutionEngine {
       totalEvents += eventsCount;
       totalToolCalls += toolCallsCount;
       estimatedPayloadBytes += 512 + eventsCount * 256 + toolCallsCount * 512;
-      if (record.execution.result) {
-        estimatedPayloadBytes += record.execution.result.length * 2;
+      if (typeof record.result === 'string') {
+        estimatedPayloadBytes += record.result.length * 2;
       }
     }
 

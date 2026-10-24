@@ -1,0 +1,7 @@
+provider,model,machine,endpoint,state,context_window,tool_calling,structured_output,streaming,load_time_ms,latency_ms,throughput_tps,max_concurrency,tasks_assigned,tasks_completed,total_tokens,estimated_cost_usd,avg_execution_seconds,success_rate
+gemini,antigravity-gemini,local,antigravity-runtime,loaded,1048576,true,true,true,0,1200,85.0,4,5,5,123900,0.0000,217.0,1.0
+claude,claude-sonnet-4-6,local,local-cli,loaded,200000,true,true,true,0,2498,68.4,3,5,5,2453745,4.3618,166.9,1.0
+codex,gpt-5.4-codex,local,local-cli,loaded,272000,true,true,true,0,4102,74.2,3,4,4,125301,0.0000,174.8,1.0
+dgx-ollama,qwen3-coder:30b,dgx-spark,https://dgx-spark.tail16d8d9.ts.net:8443/v1,loaded,262144,true,true,true,22221.8,784.6,87.85,2,3,3,1891,0.0000,21.7,1.0
+dgx-lmstudio,qwen/qwen3.8-27b,dgx-spark,https://dgx-spark.tail16d8d9.ts.net/v1,loaded,8192,true,true,true,0,2048.7,14.16,2,2,2,2328,0.0000,43.4,1.0
+dgx-lmstudio,nvidia/nemotron-3-nano-omni,dgx-spark,https://dgx-spark.tail16d8d9.ts.net/v1,loaded,8192,false,true,true,0,1337.5,31.40,1,1,1,906,0.0000,32.3,1.0
