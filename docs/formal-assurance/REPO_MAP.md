@@ -360,3 +360,123 @@ Wazir enforces lease fencing at two distinct granularities:
      - `VOLATILE` (tier 2): Current execution state, turn history, verification failures, and repair hints.
    - Under the default `CACHE_STABLE_PREFIX` strategy (`L74–L160`), `STATIC` and `SEMI_STABLE` items are locked at the beginning of the prompt in deterministic priority/key order, while `VOLATILE` items are appended at the tail—ensuring multi-turn agent loops preserve prefix KV-cache hits.
    - Finally, `CodingAgent.buildSystemPrompt` (`packages/agents/src/codingAgent.ts` `L575–L606`) combines the base agent persona, phase-compiled tool definitions from `ToolSurfaceCompiler.compile()` (`packages/core/src/services/toolSurfaceCompiler.ts` `L228–L314`), untrusted-content injection defense rules, and `context.systemPromptExtra` (discovered skills and scoped instructions).
+
+
+---
+
+## Section 3: CLI Structure and Test Patterns
+
+### 3.1 CLI Architecture & `wa` Subcommand Registration (`apps/cli`)
+
+The `@wazir/cli` package (`apps/cli/package.json`) exposes the `wa` binary (`"bin": { "wa": "./dist/index.js" }`, bundled into a single standalone ESM executable at `dist/wa.mjs` via `scripts/bundle.mjs`). It is built on `commander` (`^12.0.0`) and delegates all domain logic to a central dependency-injection container, `RookEngine` (`apps/cli/src/engine.ts`).
+
+| File | Key Symbols & Lines | Responsibility |
+| --- | --- | --- |
+| `apps/cli/src/index.ts` | `program` (`L23–L2044`), `launchInteractiveTui` (`L1267–L1290`), `exitImproveOk` (`L1626–L1632`) | CLI entry point: installs global crash handlers (`installGlobalCrashHandlers`, `L19`), defines the `Commander` root `program.name('wa')` (`L25–L31`), registers all top-level and nested subcommands, hooks `postAction` to close MCP registries (`L203`), and renders the interactive startup banner + help when invoked with no arguments (`L2008–L2042`). |
+| `apps/cli/src/engine.ts` | `RookEngine` (`L91–L137`), `EngineOptions` (`L79–L89`), `createEngine` (`L217–L765`), `createStore` (`L767–L789`) | Control-plane wiring factory: initializes `ComputerRegistry`, `RuntimeRegistry`, `ModelRegistry`, `AgentRegistry`, `ToolRegistry`, `ContextCompiler`, `KeyValueStore` (`WAZIR_DATABASE_URL` $\rightarrow$ `PostgresStore`, `WAZIR_IN_MEMORY=1` $\rightarrow$ `MemoryStore`, default `.wazir/state.json` $\rightarrow$ `JsonFileStore`), `ExecutionEngine`, `PolicyEngine`, `Scheduler`, `JobOrchestrator`, `WorktreeManager`, `VerificationEngine`, and local/remote runtime discovery. |
+| `apps/cli/src/commands.ts` & `apps/cli/src/commands/*.ts` | `listExecutions` (`L30–L45`), `inspectExecution` (`L47–L178`), `replayExecution` (`L180–L195`), `planTaskCommand` (`L197–L233`), `runTaskCommand` (`L235–L373`), plus re-exports (`L23–L28`) | Pure/testable command handler functions (`{ code, output }` or formatted strings) split across `commands.ts`, `commands/inventoryCommands.ts`, `commands/contextCommands.ts`, `commands/artifactAndVerifyCommands.ts`, `commands/providerCommands.ts`, `commands/improveAndCanaryCommands.ts`, and `commands/formatters.ts`. |
+| `apps/cli/src/run.ts` | `planTask` (`L165–L404`), `executeTask` (`L406–L1697`), `policySupportsModelTool` (`L39–L46`), `ExecuteTaskOptions` (`L77–L104`), `TaskOutcome` (`L106–L115`) | End-to-end single-task planner and controller loop: enforces policy preflight, context budgeting, two-phase scheduling, local/remote worker dispatch, tool surface filtering, mid-run model escalation (`escalation.ts`), and post-execution verification. |
+| `apps/cli/src/fleetRunner.ts` | `createFleetTaskExecutor` (`L97–L765`), `FleetRunnerOptions` (`L48–L81`) | Multi-agent DAG task executor passed to `JobOrchestrator.runJob()`: manages per-node git worktree creation, task resume reconciliation (`planTaskResume` in `recovery.ts`), and branch merges. |
+| `apps/cli/src/tui/fleetTui.ts` | `FleetTui` (`L1–L5000+`) | Interactive terminal UI supporting both inline conversation mode (`wa chat`) and full-screen multi-agent fleet Mission Control (`wa fleet` / `wa chat --dashboard`). |
+
+#### How `wa` Subcommands Are Registered
+
+Subcommands in `apps/cli/src/index.ts` follow three registration patterns on the root `program: Command` instance:
+
+1. **External Module Registrars (`register*Commands(program)` / `create*Command()`)**:
+   - `registerMCPCommands(program)` (`apps/cli/src/mcp.ts`, called at `index.ts` `L33`): Registers `wa mcp list|add|remove|inspect|import|serve`.
+   - `registerWebCommands(program)` (`apps/cli/src/web.ts`, called at `index.ts` `L34`): Registers `wa web status|search|fetch|clear-cache`.
+   - `registerMobileCommands(program)` (`apps/cli/src/mobile.ts`, called at `index.ts` `L35`): Registers `wa mobile pair|status|serve|revoke`.
+   - `program.addCommand(createHandoffCommand())` (`apps/cli/src/handoff.ts` `L2–L10`, called at `index.ts` `L2006`): Registers `wa handoff create|list|show|export|resume`.
+
+2. **Grouped Subcommand Trees (`new Command().name('<group>')` + `program.addCommand(...)`)**:
+   - `update` (`L130–L201`): `status`, `check`, `now`, `enable`, `disable`, `history`, `rollback`, `config`.
+   - `computers` (`L206–L228`): `list`, `inspect <id>`.
+   - `workers` (`L231–L245`): `list`.
+   - `runtimes` (`L248–L272`): `list`, `inspect <id>`.
+   - `providers` (`L275–L318`): `list` (default), `inspect <provider>`, `test <provider>`.
+   - `models` (`L321–L450`): `list` (default), `loaded`, `discover`, `load <modelId>`, `unload <modelId>`, `startup`, `warm|keep-alive|retire <modelId>`, `reconcile`, `health`.
+   - `test` (`L479–L502`): `action-protocol`, `model-protocol`.
+   - `task` (`L517–L604`): `run <description>`, `plan <description>`, `status [id]`.
+   - `executions` (`L655–L707`): `list`, `inspect <id>`, `events <id>`, `replay <id>`.
+   - `history` (`L711–L739`): `list`, `inspect <id>` (block history `@<id>`).
+   - `context` (`L743–L824`): `add <files...>`, `remove <files...>`, `list`, `clear`, `explain`, `inspect`.
+   - `eval` (`L828–L860`): `show [executionId]`, `compare <idA> <idB>`.
+   - `bench` (`L864–L879`): `run`.
+   - `discover` (`L883–L896`): `all`.
+   - `agents` (`L900–L977`): `list`, `inspect|enable|disable|test [name]`, `connect <name>`, `capabilities`, `check [names...]`.
+   - `resources` (`L980–L1105`): default snapshot/watch action plus `stop`, `resume`, `reset <account>`, `validate`, `init`, `explain <task>`, `events`.
+   - `tools` (`L1108–L1122`): `list`.
+   - `policy` (`L1125–L1150`): `inspect`, `explain <command>`.
+   - `auth` (`L1153–L1211`): `login [provider]`, `status`, `logout <provider>`, `providers`.
+   - `config` (`L1227–L1240`): `show`.
+   - `jobs` / alias `job` (`L1378–L1469`): `list`, `inspect <id>`, `merge <id>`, `resume <id>`, `recover`, `checkpoint <executionId>`, `fork <checkpointId>`, `rollback <executionId> <checkpointId>`.
+   - `artifacts` (`L1472–L1509`): `list`, `inspect <id>`, `lineage <id>`, `why <id>`, `inputs <id>`.
+   - `search` (`L1544–L1621`): `run <task>`, `status <searchId>`, `candidates <searchId>`, `inspect <searchId> <candidateId>`, `promote <searchId> <candidateId>`, `cancel <searchId>`.
+   - `improve` (`L1634–L1822`): `status`, `opportunities`, `experiments`, `inspect <experiment>`, `run`, `compare <experiment>`, `promote <candidate>`, `rollback [promotion]`, `explain <experiment>`, `doctor|failures|recommendations|history|pause|resume|stop|preflight|approvals`, `approve <attemptId>`, `start`, `logs`.
+   - `canary` (`L1827–L1922`): `status`, `inspect <id>`, `history`, `compare <id>`, `shadow <id>`, `rollback <id>`, `pause|resume|advance <id>`, `throttle <id> <percentage>`.
+   - `service` (`L1925–L2005`): `install`, `start [name]`, `stop [name]`, `restart [name]`, `status [name]`, `uninstall [name]`.
+
+3. **Direct Top-Level Commands (`program.command(...)`)**:
+   - `wa banner` (`L38–L114`), `wa version` (`L117–L128`), `wa init` (`L454–L463`), `wa doctor` (`L466–L476`), `wa status` (`L506–L514`), `wa run <description>` (`L608–L652`, top-level shortcut for `wa task run` with `fastStartup: true`), `wa audit` (`L1215–L1224`), `wa ask <prompt>` (`L1244–L1264`), `wa chat` (`L1294–L1305`), `wa fleet` (`L1308–L1317`), `wa dashboard` / alias `wa ui` (`L1321–L1375`), `wa explain <ref>` (`L1515–L1526`), and `wa evidence <ref>` (`L1530–L1541`).
+
+#### Lazy Dynamic Import Pattern
+
+Almost every `.action(async (...) => { ... })` handler in `apps/cli/src/index.ts` uses **lazy dynamic `await import('./engine.js')` and `await import('./commands.js')`** rather than static top-level imports. This keeps `wa --help`, `wa version`, and lightweight commands fast and allows read-only commands (`wa banner`, `wa evidence`) to pass `createEngine({ readOnlyLifecycle: true, quiet: true })` or one-shot commands (`wa run`, `wa ask`) to pass `createEngine({ fastStartup: true })` without starting background heartbeat or model-probing timers.
+
+---
+
+### 3.2 Test Conventions & Running Targeted Vitest Suites
+
+#### Test Directory Layout
+
+All tests use **Vitest** (`^2.1.0`) configured via the root `vitest.config.ts` (`L1–L51`):
+
+- **Included globs (`vitest.config.ts` `L8–L12`)**:
+  - `packages/*/tests/**/*.test.ts` — Package-level unit and service tests (e.g., `packages/core/tests/scheduler.test.ts`, `packages/core/tests/executionLeaseFencing.test.ts`, `packages/core/tests/policyEngine.test.ts`, `packages/agents/tests/*.test.ts`, `packages/tools/tests/*.test.ts`, `packages/workers/tests/*.test.ts`, `packages/database/tests/*.test.ts`, `packages/shared/tests/*.test.ts`).
+  - `apps/*/tests/**/*.test.ts` — Application-level tests (`apps/cli/tests/*.test.ts` and `apps/api/tests/*.test.ts`).
+  - `test/**/*.test.ts` — Cross-package integration (`test/integration/*.test.ts`), distributed (`test/distributed/*.test.ts`), reliability (`test/reliability/*.test.ts`), runtime (`test/runtime/*.test.ts`), and acceptance gate suites (`test/acceptance/*.test.ts`).
+- **Excluded globs (`vitest.config.ts` `L13–L19`)**:
+  - `**/node_modules/**`, `**/dist/**`, `**/live-coding/**`, `**/*.live.test.ts`, and `test/agy-mac-gemma/**` (excluded from default offline runs; run via `pnpm test:live-coding`).
+
+#### Existing Test Conventions & Patterns
+
+1. **Direct Handler Invocation vs. Subprocess Spawning**:
+   - CLI tests in `apps/cli/tests/*.test.ts` rarely spawn a full `node dist/index.js` child process unless testing PTY/TUI framing (`terminalIntegrity.test.ts`, `sessionEof.test.ts`). Instead, they import command handlers directly from `../src/commands.js`, `../src/auth.js`, `../src/run.js`, `../src/recovery.js`, or `../src/fleetRunner.js` (e.g., `explainCommand` in `apps/cli/tests/explainExecution.test.ts` `L3`, `authLoginCommand` in `apps/cli/tests/authLogin.test.ts` `L8`, `planTaskResume` in `apps/cli/tests/taskResume.test.ts` `L6`).
+   - Command handlers return structured `{ code: number, output: string }` or formatted strings and support `--json` (`options.json = true`), making assertions deterministic via `JSON.parse(result.output)` without stripping ANSI colors.
+
+2. **Lightweight `RookEngine` Construction & Fake Runtimes**:
+   - Rather than calling `createEngine()` (which probes local ports for Ollama/LM Studio and reads `~/.wazir`), unit and integration tests assemble minimal in-memory `RookEngine` objects using real `@wazir/core` registries (`ComputerRegistry`, `RuntimeRegistry`, `ModelRegistry`, `AgentRegistry`, `ExecutionEngine`, `PolicyEngine`, `Scheduler`) paired with `InMemoryStore` and `FakeRuntimeAdapter` (`test/fakes/runtime.ts` `L3–L66`) or inline scripted `AsyncIterable<GenerationEvent>` generators (see `apps/cli/tests/resume.e2e.test.ts` `L25–L65` and `test/integration/policyBypassSweep.test.ts` `L52–L120`).
+   - `vi.stubGlobal('fetch', ...)` is used when testing hosted provider adapters or authentication flows (`apps/cli/tests/authLogin.test.ts` `L30–L37`).
+
+3. **Filesystem & Git Worktree Isolation in Tests**:
+   - Tests that exercise `PolicyEngine`, `WorktreeManager`, `JsonFileStore`, or `CodingAgent` tools create per-test temporary directories in `beforeEach` via `await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-<suite>-'))` and remove them in `afterEach` via `await fs.rm(tempDir, { recursive: true, force: true })`.
+   - Shared deterministic time/timer helpers (`mockDate`, `mockTimers`) are available in `test/utils.ts` (`L6–L63`).
+
+4. **Workspace Source Aliasing in Vitest**:
+   - Because `vitest.config.ts` (`L22–L49`) maps every `@wazir/*` package directly to `packages/*/src/index.ts`, **no `pnpm build` step is required before running Vitest** after editing TypeScript source files.
+
+#### How to Run Targeted Vitest Tests
+
+From the repository (or worktree) root:
+
+```bash
+# 1. Run a single test file by path (fastest feedback loop)
+pnpm vitest run packages/core/tests/scheduler.test.ts
+pnpm vitest run apps/cli/tests/explainExecution.test.ts
+pnpm vitest run test/integration/policyBypassSweep.test.ts
+
+# 2. Run a specific test or describe block by name pattern (-t)
+pnpm vitest run packages/core/tests/scheduler.test.ts -t "rejects task with incompatible capabilities"
+
+# 3. Run all tests within a specific package or directory
+pnpm vitest run packages/core/tests
+pnpm vitest run apps/cli/tests
+pnpm vitest run test/integration
+
+# 4. Run the full offline test suite across the monorepo
+pnpm test
+
+# 5. Run workspace-wide TypeScript project-reference typechecking
+pnpm typecheck
+```
