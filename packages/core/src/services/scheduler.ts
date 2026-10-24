@@ -48,6 +48,136 @@ export function normalizeArch(a: string): string {
   return s;
 }
 
+export const FORMAL_TOOL_CAPABILITY_PREFIX = 'tool:';
+
+export const KNOWN_FORMAL_TOOL_CAPABILITIES = [
+  'tool:z3',
+  'tool:alloy',
+  'tool:dafny',
+  'tool:scenic',
+  'tool:verifai',
+  'tool:verifai.simulator',
+  'tool:gam',
+] as const;
+
+export type FormalToolCapability = (typeof KNOWN_FORMAL_TOOL_CAPABILITIES)[number] | `tool:${string}`;
+
+const DEFAULT_HEAVY_ALLOY_SCOPE_THRESHOLD = 6;
+
+export function normalizeToolCapability(cap: string): string {
+  const trimmed = cap.trim().toLowerCase();
+  if (!trimmed) return trimmed;
+  return trimmed.startsWith(FORMAL_TOOL_CAPABILITY_PREFIX) ? trimmed : `${FORMAL_TOOL_CAPABILITY_PREFIX}${trimmed}`;
+}
+
+export function extractRequiredToolCapabilities(task: Task): string[] {
+  const caps = new Set<string>();
+  for (const c of task.requirements?.toolCapabilities ?? []) {
+    const norm = normalizeToolCapability(c);
+    if (norm) caps.add(norm);
+  }
+  for (const c of task.requirements?.agentCapabilities ?? []) {
+    if (c.trim().toLowerCase().startsWith(FORMAL_TOOL_CAPABILITY_PREFIX)) {
+      caps.add(normalizeToolCapability(c));
+    }
+  }
+  for (const c of task.capabilities ?? []) {
+    if (c.trim().toLowerCase().startsWith(FORMAL_TOOL_CAPABILITY_PREFIX)) {
+      caps.add(normalizeToolCapability(c));
+    }
+  }
+  if (task.assurance?.tool) {
+    caps.add(normalizeToolCapability(task.assurance.tool));
+  }
+  return Array.from(caps);
+}
+
+export function isDgxClassComputer(computer: Computer): boolean {
+  const idName = `${computer.id} ${computer.name}`.toLowerCase();
+  if (/\b(dgx|gx10|gb10|spark)\b/.test(idName)) return true;
+  const gpu = computer.hardware?.gpu;
+  if (gpu) {
+    const gpuModel = (gpu.model ?? '').toLowerCase();
+    if (/\b(gb10|gx10|dgx|grace\s*blackwell|gh200|gb200|h100|h200|b200)\b/.test(gpuModel)) return true;
+    if (gpu.vendor === 'nvidia' && gpu.unifiedMemory === true) return true;
+  }
+  const caps = (computer.capabilities ?? []).map((c) => c.toLowerCase());
+  if (caps.some((c) => c === 'host:dgx' || c === 'host:gx10' || c === 'host:gb10' || c === 'dgx' || c === 'gx10' || c === 'gb10')) {
+    return true;
+  }
+  return false;
+}
+
+export function parseMaxAlloyScope(scope?: string | number): number {
+  if (typeof scope === 'number') return Number.isFinite(scope) ? scope : 0;
+  if (typeof scope !== 'string' || !scope.trim()) return 0;
+  const matches = scope.match(/\d+/g);
+  if (!matches || matches.length === 0) return 0;
+  return Math.max(...matches.map((m) => parseInt(m, 10)).filter(Number.isFinite));
+}
+
+export function isHeavyVerificationTask(task: Task, alloyScopeThreshold = DEFAULT_HEAVY_ALLOY_SCOPE_THRESHOLD): boolean {
+  const explicitPref =
+    task.requirements?.preferHostClass ??
+    task.execution?.preferHostClass ??
+    task.assurance?.preferHostClass;
+  if (explicitPref === 'dgx') return true;
+  if (explicitPref === 'any') return false;
+  if (task.assurance?.heavy === true) return true;
+
+  const toolCaps = extractRequiredToolCapabilities(task);
+  if (toolCaps.includes('tool:verifai') || toolCaps.includes('tool:verifai.simulator')) {
+    return true;
+  }
+
+  const scopeVal = task.assurance?.scope ?? task.requirements?.scope;
+  if (toolCaps.includes('tool:alloy')) {
+    const maxScope = parseMaxAlloyScope(scopeVal);
+    if (maxScope >= alloyScopeThreshold) return true;
+  } else if (scopeVal !== undefined && parseMaxAlloyScope(scopeVal) >= alloyScopeThreshold) {
+    return true;
+  }
+
+  return false;
+}
+
+export function isSolverOrVerificationTask(task: Task): boolean {
+  return task.type === 'verification' || task.role === 'verification';
+}
+
+export function checkComputerToolFeasibility(
+  computer: Computer,
+  requiredToolCapabilities: readonly string[],
+): { feasible: boolean; matched: string[]; missing: string[] } {
+  const hostCaps = new Set((computer.capabilities ?? []).map((c) => c.trim().toLowerCase()));
+  const matched: string[] = [];
+  const missing: string[] = [];
+  for (const rawReq of requiredToolCapabilities) {
+    const req = normalizeToolCapability(rawReq);
+    const bare = req.startsWith(FORMAL_TOOL_CAPABILITY_PREFIX) ? req.slice(FORMAL_TOOL_CAPABILITY_PREFIX.length) : req;
+    if (hostCaps.has(req) || hostCaps.has(bare)) {
+      matched.push(req);
+    } else {
+      missing.push(req);
+    }
+  }
+  return {
+    feasible: missing.length === 0,
+    matched,
+    missing,
+  };
+}
+
+export interface ToolHostScheduleResult extends ComputerRoutingDecision {
+  status: 'SCHEDULED' | 'NOT_RUN';
+  verdict?: 'NOT_RUN';
+  requiredToolCapabilities: string[];
+  missingCapabilities?: string[];
+  preferDgx: boolean;
+  selectedHostIsDgx?: boolean;
+  bypassesModelRouter: true;
+}
+
 export interface HarnessPerformanceLookup {
   getSuccessRate(params: {
     harnessId?: string;
@@ -213,6 +343,39 @@ export class Scheduler {
 
   plan(input: ScheduleInput): SchedulerDecision {
     const { task } = input;
+
+    if (isSolverOrVerificationTask(task)) {
+      const toolResult = this.scheduleToolHost(task, { throwOnUnschedulable: true });
+      const modelDecision: ModelRoutingDecision = {
+        modelId: '',
+        modelInstanceId: '',
+        strategy: 'tool_bypass',
+        score: toolResult.score,
+        reasons: [
+          'solver/verification task bypasses model router (zero model capacity consumed)',
+          ...(toolResult.requiredToolCapabilities.length > 0
+            ? [`required tool capabilities: ${toolResult.requiredToolCapabilities.join(', ')}`]
+            : []),
+        ],
+      };
+      return {
+        agentId: task.execution?.targetAgentId ?? task.requirements?.agent ?? 'assurance-executor',
+        modelId: '',
+        modelInstanceId: '',
+        readiness: 'READY_NOW',
+        runtimeId: toolResult.runtimeId,
+        computerId: toolResult.computerId,
+        resourceType: toolResult.resourceType ?? 'FORMAL_TOOL_EXECUTION',
+        modelDecision,
+        computerDecision: toolResult,
+        reasons: [
+          `model: ${modelDecision.reasons.join(' | ')}`,
+          `computer: ${toolResult.reasons.join(' | ')}`,
+        ],
+        decidedAt: new Date(),
+      };
+    }
+
     const requiredContext = input.requiredContextTokens ?? task.requirements.minimumContext ?? 0;
     const routing = this.resolveRoutingConstraint(task);
 
@@ -1066,6 +1229,13 @@ export class Scheduler {
           failures.push(`${instance.runtimeId}: hosted provider cannot satisfy local GPU requirement`);
           continue;
         }
+        const reqToolCapsHosted = extractRequiredToolCapabilities(task);
+        if (reqToolCapsHosted.length > 0) {
+          failures.push(
+            `${instance.runtimeId}: hosted provider has no computer identity, cannot satisfy required tool capabilities (${reqToolCapsHosted.join(', ')})`,
+          );
+          continue;
+        }
         // allowedComputers/allowedRuntimes still apply — a hosted provider
         // simply has no computer identity to check against allowedComputers.
         if (effectivePolicy?.allowedComputers) {
@@ -1137,6 +1307,18 @@ export class Scheduler {
       if (task.requirements?.requiresCuda && (!computer.hardware.gpu || !computer.hardware.gpu.cuda)) {
         failures.push(`${computer.id}: task requires NVIDIA CUDA, but computer GPU does not support CUDA`);
         continue;
+      }
+
+      // Formal tool capability feasibility F(t)
+      const requiredToolCaps = extractRequiredToolCapabilities(task);
+      if (requiredToolCaps.length > 0) {
+        const toolCheck = checkComputerToolFeasibility(computer, requiredToolCaps);
+        if (!toolCheck.feasible) {
+          failures.push(
+            `${computer.id}: missing required tool capabilities (${toolCheck.missing.join(', ')}) [NOT_RUN]`,
+          );
+          continue;
+        }
       }
 
       const policy = task.policy;
@@ -1301,15 +1483,29 @@ export class Scheduler {
         reasons.push('unified memory architecture available for model working set');
       }
 
+      if (requiredToolCaps.length > 0) {
+        reasons.push(`pinned tool capabilities present: ${requiredToolCaps.join(', ')}`);
+      }
+      if (isHeavyVerificationTask(task) && isDgxClassComputer(computer)) {
+        score += 10;
+        reasons.push(`DGX/GX10-class host '${computer.id}' preferred for heavy verification campaign (+10)`);
+      }
+
       placements.push({ instance, computer, score, reasons });
     }
 
     if (placements.length === 0) {
       const details = failures.length > 0 ? ` ${failures.join('; ')}.` : '';
+      const requiredToolCaps = extractRequiredToolCapabilities(task);
+      const allComputers = this.deps.computers.listOnline();
+      const fleetMissingTools =
+        requiredToolCaps.length > 0 &&
+        !allComputers.some((c) => checkComputerToolFeasibility(c, requiredToolCaps).feasible);
       throw new SchedulingError(
         `No computer can host model '${record.id}'.${details} No silent fallback will be performed.`,
         [],
         failures,
+        fleetMissingTools ? { verdict: 'NOT_RUN', missingCapabilities: requiredToolCaps } : undefined,
       );
     }
 
@@ -1331,6 +1527,214 @@ export class Scheduler {
       resourceType,
       score: best.score,
       reasons: best.reasons,
+    };
+  }
+
+  /**
+   * Schedules a formal verification or solver task directly onto a feasible `Computer` in `F(t)`
+   * without invoking `routeModel` or `ResourceRouter` (consumes zero LLM model capacity).
+   *
+   * - Requires all `toolCapabilities` (e.g. `tool:z3`, `tool:alloy`, `tool:dafny`, `tool:scenic`,
+   *   `tool:verifai`, `tool:verifai.simulator`, `tool:gam`) to be advertised by the host's `capabilities`.
+   * - Prefers DGX/GX10-class unified memory hosts (`gb10`, `dgx`, NVIDIA unified memory) for heavy
+   *   campaigns (`verifai`, large `alloy` scopes, or `preferHostClass: 'dgx'`), while allowing small
+   *   Z3 checks to run on any feasible host.
+   * - When no host in `F(t)` satisfies the required tool capabilities or constraints, returns an
+   *   explicit `NOT_RUN` result (or throws `SchedulingError` with `verdict: 'NOT_RUN'` when
+   *   `options.throwOnUnschedulable` is true) — never silently skips or dispatches to an incapable host.
+   */
+  public scheduleToolHost(
+    task: Task,
+    options?: { throwOnUnschedulable?: boolean; alloyScopeThreshold?: number },
+  ): ToolHostScheduleResult {
+    const requiredToolCaps = extractRequiredToolCapabilities(task);
+    const preferDgx = isHeavyVerificationTask(task, options?.alloyScopeThreshold);
+    const onlineComputers = this.deps.computers.listOnline();
+    const failures: string[] = [];
+    const missingCapUnion = new Set<string>();
+
+    interface ScoredToolHost {
+      computer: Computer;
+      score: number;
+      reasons: string[];
+      isDgx: boolean;
+    }
+
+    const candidates: ScoredToolHost[] = [];
+
+    for (const computer of onlineComputers) {
+      if (task.execution?.targetComputerId && computer.id !== task.execution.targetComputerId) {
+        failures.push(`${computer.id}: does not match targetComputerId '${task.execution.targetComputerId}'`);
+        continue;
+      }
+
+      if (task.requirements?.os) {
+        const rawReqOs = task.requirements.os;
+        const reqOsList = (Array.isArray(rawReqOs) ? rawReqOs : [rawReqOs]).map(normalizePlatform);
+        const compOs = normalizePlatform(computer.os.platform);
+        if (!reqOsList.includes(compOs)) {
+          failures.push(
+            `${computer.id}: OS platform '${computer.os.platform}' does not match required OS '${Array.isArray(rawReqOs) ? rawReqOs.join(',') : rawReqOs}'`,
+          );
+          continue;
+        }
+      }
+
+      if (task.requirements?.architecture) {
+        const rawArch = task.requirements.architecture;
+        const reqArchList = (Array.isArray(rawArch) ? rawArch : [rawArch]).map(normalizeArch);
+        const compArch = normalizeArch(computer.os.architecture);
+        if (!reqArchList.includes(compArch)) {
+          failures.push(
+            `${computer.id}: architecture '${computer.os.architecture}' does not match required architecture '${Array.isArray(rawArch) ? rawArch.join(',') : rawArch}'`,
+          );
+          continue;
+        }
+      }
+
+      if (task.requirements?.requiresGpu && !computer.hardware.gpu) {
+        failures.push(`${computer.id}: task requires GPU acceleration, but computer has no GPU`);
+        continue;
+      }
+      if (task.requirements?.requiresCuda && (!computer.hardware.gpu || !computer.hardware.gpu.cuda)) {
+        failures.push(`${computer.id}: task requires NVIDIA CUDA, but computer GPU does not support CUDA`);
+        continue;
+      }
+
+      const policy = task.policy;
+      if (policy?.allowedComputers && !policy.allowedComputers.includes(computer.id)) {
+        failures.push(`${computer.id}: not in allowedComputers`);
+        continue;
+      }
+      if ((policy?.localOnly || task.requirements?.localOnly) && !computer.local) {
+        failures.push(`${computer.id}: local-only policy requires a local computer`);
+        continue;
+      }
+
+      const requiredSystemGB = task.requirements?.minimumMemoryGB ?? 0;
+      if (requiredSystemGB > computer.hardware.memoryGB) {
+        failures.push(`${computer.id}: memory ${computer.hardware.memoryGB}GB < required ${requiredSystemGB}GB`);
+        continue;
+      }
+
+      const requiredGpuGB = task.requirements?.minimumGPUMemoryGB ?? 0;
+      const gpuGB = computer.hardware.gpu?.memoryGB ?? 0;
+      if (requiredGpuGB > 0 && gpuGB < requiredGpuGB) {
+        failures.push(`${computer.id}: GPU memory ${gpuGB}GB < required ${requiredGpuGB}GB`);
+        continue;
+      }
+
+      if (requiredToolCaps.length > 0) {
+        const toolCheck = checkComputerToolFeasibility(computer, requiredToolCaps);
+        if (!toolCheck.feasible) {
+          for (const m of toolCheck.missing) missingCapUnion.add(m);
+          failures.push(
+            `${computer.id}: missing required tool capabilities (${toolCheck.missing.join(', ')}) [NOT_RUN]`,
+          );
+          continue;
+        }
+      }
+
+      const reasons: string[] = [
+        'bypassed model router (solver/verification task requires no LLM model)',
+      ];
+      let score = computer.health === 'healthy' ? 2 : computer.health === 'degraded' ? 0 : 1;
+
+      if (requiredToolCaps.length > 0) {
+        reasons.push(`feasible host advertises pinned tools: ${requiredToolCaps.join(', ')}`);
+      }
+
+      const dgx = isDgxClassComputer(computer);
+      if (preferDgx) {
+        if (dgx) {
+          score += 10;
+          reasons.push(`DGX/GX10-class host '${computer.id}' preferred for heavy verification campaign (+10)`);
+        } else {
+          reasons.push(`non-DGX host '${computer.id}' eligible as fallback for heavy verification campaign`);
+        }
+      } else {
+        if (computer.local) {
+          score += 1;
+          reasons.push('local computer (lowest latency for lightweight solver check)');
+        }
+        if (dgx) {
+          score += 0.5;
+          reasons.push('DGX/GX10-class hardware available');
+        }
+      }
+
+      const cpuPercent = computer.load?.cpuPercent ?? 0;
+      score += Math.max(0, 1 - cpuPercent / 100);
+      reasons.push(`current CPU load ${Math.round(cpuPercent)}%`);
+
+      if (computer.load?.memoryAvailableGB !== undefined) {
+        reasons.push(`available RAM ${computer.load.memoryAvailableGB}GB`);
+        if (requiredSystemGB > 0 && computer.load.memoryAvailableGB >= requiredSystemGB * 2) {
+          score += 0.5;
+        }
+      }
+
+      if (computer.health === 'degraded') {
+        reasons.push('computer reports degraded health');
+      }
+
+      candidates.push({ computer, score, reasons, isDgx: dgx });
+    }
+
+    if (candidates.length === 0) {
+      const missingList =
+        missingCapUnion.size > 0 ? Array.from(missingCapUnion) : requiredToolCaps;
+      const details =
+        failures.length > 0
+          ? failures.join('; ')
+          : onlineComputers.length === 0
+            ? 'no online computers in fleet'
+            : 'no feasible computer matched task requirements';
+      const msg =
+        `NOT_RUN: No feasible host in F(t) satisfies verification obligation '${task.id}'` +
+        (requiredToolCaps.length > 0 ? ` (required tools: ${requiredToolCaps.join(', ')})` : '') +
+        `. ${details}. No silent skip or incapable host dispatch will be performed.`;
+
+      if (options?.throwOnUnschedulable) {
+        throw new SchedulingError(msg, [], [msg, ...failures], {
+          verdict: 'NOT_RUN',
+          missingCapabilities: missingList,
+        });
+      }
+
+      return {
+        status: 'NOT_RUN',
+        verdict: 'NOT_RUN',
+        computerId: undefined,
+        runtimeId: 'formal-toolchain',
+        placementKind: 'local',
+        resourceType: 'FORMAL_TOOL_EXECUTION',
+        score: 0,
+        reasons: [msg, ...failures],
+        requiredToolCapabilities: requiredToolCaps,
+        missingCapabilities: missingList,
+        preferDgx,
+        bypassesModelRouter: true,
+      };
+    }
+
+    candidates.sort(
+      (a, b) => b.score - a.score || a.computer.id.localeCompare(b.computer.id),
+    );
+    const best = candidates[0]!;
+
+    return {
+      status: 'SCHEDULED',
+      computerId: best.computer.id,
+      runtimeId: 'formal-toolchain',
+      placementKind: 'local',
+      resourceType: 'FORMAL_TOOL_EXECUTION',
+      score: best.score,
+      reasons: best.reasons,
+      requiredToolCapabilities: requiredToolCaps,
+      preferDgx,
+      selectedHostIsDgx: best.isDgx,
+      bypassesModelRouter: true,
     };
   }
 }

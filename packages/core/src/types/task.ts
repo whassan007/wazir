@@ -11,7 +11,12 @@ export type TaskType =
   | 'document_analysis'
   | 'benchmark'
   | 'evaluation'
-  | 'agent';
+  | 'agent'
+  | 'verification';
+
+export type TaskRole = 'spec-author' | 'implementation' | 'repair' | 'verification';
+
+export type HostClassPreference = 'dgx' | 'any';
 
 export type Priority = 'low' | 'normal' | 'high' | 'critical';
 
@@ -56,6 +61,12 @@ export interface TaskRequirements {
   requiresCuda?: boolean;
   /** Specific agent required. */
   agent?: string;
+  /** Pinned formal verification tool capabilities required on the host (e.g. 'tool:z3', 'tool:alloy'). */
+  toolCapabilities?: string[];
+  /** Preferred host hardware class for heavy verification campaigns (e.g. 'dgx' for DGX/GX10/GB10 unified memory). */
+  preferHostClass?: HostClassPreference;
+  /** Optional Alloy/solver scope bound hint used to infer heavy host preference. */
+  scope?: string | number;
 }
 
 export interface PolicyRequirements {
@@ -98,11 +109,25 @@ export interface ExecutionPreferences {
   /** Whether fallback/escalation to other models is allowed (default: true unless provider_only sets false). */
   allowFallback?: boolean;
   runtimePreset?: string;
+  /** Preferred host hardware class for verification obligations (e.g. 'dgx'). */
+  preferHostClass?: HostClassPreference;
+}
+
+export interface TaskAssuranceMetadata {
+  obligationId?: string;
+  propertyId?: string;
+  specHash?: string;
+  tool?: string;
+  scope?: string | number;
+  heavy?: boolean;
+  preferHostClass?: HostClassPreference;
 }
 
 export interface Task {
   id: string;
   type: TaskType;
+  role?: TaskRole;
+  assurance?: TaskAssuranceMetadata;
   title?: string;
   input: string;
   requirements: TaskRequirements;

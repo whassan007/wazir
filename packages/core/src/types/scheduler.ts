@@ -3,7 +3,8 @@ export type ModelSelectionStrategy =
   | 'capability_match'
   | 'context_fit'
   | 'loaded_preferred'
-  | 'empirical_profile';
+  | 'empirical_profile'
+  | 'tool_bypass';
 
 export interface RoutingPolicyConfig {
   mode: 'provider_only' | 'auto' | 'local_only' | 'hybrid';
@@ -24,7 +25,8 @@ export interface ModelRoutingDecision {
 export type InferenceResourceType =
   | 'LOCAL_GPU_INFERENCE'
   | 'REMOTE_GPU_INFERENCE'
-  | 'HOSTED_API_INFERENCE';
+  | 'HOSTED_API_INFERENCE'
+  | 'FORMAL_TOOL_EXECUTION';
 
 export interface ComputerRoutingDecision {
   /** Absent when `placementKind` is 'hosted' — a hosted provider has no Computer. */
@@ -37,6 +39,10 @@ export interface ComputerRoutingDecision {
   resourceType?: InferenceResourceType;
   score: number;
   reasons: string[];
+  /** Formal verification verdict when placement cannot be scheduled (e.g. 'NOT_RUN'). */
+  verdict?: 'NOT_RUN';
+  /** Missing formal tool capabilities when unschedulable. */
+  missingCapabilities?: string[];
 }
 
 /** One model abandoned before dispatch, and why. */
@@ -67,11 +73,20 @@ export interface SchedulerDecision {
 export class SchedulingError extends Error {
   readonly modelReasons: string[];
   readonly computerReasons: string[];
+  readonly verdict?: 'NOT_RUN';
+  readonly missingCapabilities?: string[];
 
-  constructor(message: string, modelReasons: string[] = [], computerReasons: string[] = []) {
+  constructor(
+    message: string,
+    modelReasons: string[] = [],
+    computerReasons: string[] = [],
+    options?: { verdict?: 'NOT_RUN'; missingCapabilities?: string[] },
+  ) {
     super(message);
     this.name = 'SchedulingError';
     this.modelReasons = modelReasons;
     this.computerReasons = computerReasons;
+    this.verdict = options?.verdict;
+    this.missingCapabilities = options?.missingCapabilities;
   }
 }
