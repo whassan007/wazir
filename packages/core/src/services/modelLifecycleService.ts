@@ -747,7 +747,7 @@ export class ModelLifecycleService {
     if (!computer || computer.status !== 'online' || computer.health !== 'healthy') reasons.push('COMPUTER_UNAVAILABLE');
     if (!runtime || runtime.health !== 'healthy' || !adapter || runtime.runtimeKind === 'hosted') reasons.push('RUNTIME_UNAVAILABLE');
     if (installation && !installation.installed) reasons.push('MODEL_NOT_INSTALLED');
-    if (model.runtimeCompatibility !== 'any' && runtime && !model.runtimeCompatibility.includes(runtime.type)) reasons.push('MODEL_INCOMPATIBLE');
+    if (model.runtimeCompatibility && model.runtimeCompatibility !== 'any' && Array.isArray(model.runtimeCompatibility) && runtime && !model.runtimeCompatibility.includes(runtime.type)) reasons.push('MODEL_INCOMPATIBLE');
     if (['DRAINING', 'UNLOADING'].includes(i.state ?? '')) reasons.push('RESOURCE_BUSY');
     const minimum = Math.max(1, options.minimumContext ?? 0, this.deps.resources?.minimumContext ?? 4096,
       profile?.minimumContext ?? 0, profile?.runtimeMinimumContext ?? 0);

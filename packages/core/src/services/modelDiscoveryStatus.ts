@@ -365,7 +365,7 @@ export class ModelDiscoveryStatusService {
         } else {
           if (memoryRequiredGB > effectiveUsableMemory) {
             customEligible = false;
-            ineligibleReason = `Requires ${memoryRequiredGB.toFixed(1)}GB, ${effectiveUsableMemory.toFixed(1)}GB usable`;
+            ineligibleReason = `insufficient memory: requires ${memoryRequiredGB.toFixed(1)}GB, ${effectiveUsableMemory.toFixed(1)}GB usable`;
           }
         }
 
@@ -375,7 +375,7 @@ export class ModelDiscoveryStatusService {
         } else {
           readinessLabel = 'Insufficient memory';
           eligible = false;
-          ineligibleReason = ineligibleReason ?? `Requires ${memoryRequiredGB.toFixed(1)}GB, ${effectiveUsableMemory.toFixed(1)}GB usable`;
+          ineligibleReason = ineligibleReason ?? `insufficient memory: requires ${memoryRequiredGB.toFixed(1)}GB, ${effectiveUsableMemory.toFixed(1)}GB usable`;
         }
       }
 
