@@ -17,8 +17,9 @@ import {
   type SchedulerDeps,
   type FormalToolCapability,
   type ToolHostScheduleResult,
-} from '@wazir/core';
-import type { SchedulerDecision, Task } from '@wazir/core';
+  type SchedulerDecision,
+  type Task,
+} from '../../core/src/index.js';
 
 export {
   AgentRegistry,
