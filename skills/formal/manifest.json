@@ -1,0 +1,104 @@
+{
+  "manifestVersion": 1,
+  "description": "Wazir formal-assurance skills: tool / task type -> SKILL.md and reference paths. Paths are relative to skills/formal/.",
+  "source": "docs/formal-assurance/SKILLS_INSTALL.md",
+  "evidenceSchema": "evidence.schema.json",
+  "skills": {
+    "alloy": {
+      "name": "alloy-formal-modeling",
+      "dir": "alloy",
+      "claudeDir": ".claude/skills/alloy-formal-modeling",
+      "aliases": ["alloy-formal-modeling", "alloy6", "als"],
+      "priority": null,
+      "use": "relational + temporal models, bounded checks, state machines, right-of-way logic",
+      "taskTypes": ["relational-model", "temporal-model", "bounded-check", "state-machine", "right-of-way", "alloy-model", "alloy-check", "counterexample-triage"],
+      "skill": "alloy/SKILL.md",
+      "references": [
+        "alloy/references/workflow.md",
+        "alloy/references/language.md",
+        "alloy/references/temporal.md",
+        "alloy/references/pitfalls.md",
+        "alloy/references/sources.md"
+      ],
+      "examples": [
+        "alloy/examples/access-control.als",
+        "alloy/examples/filesystem-tree.als",
+        "alloy/examples/mutex-temporal.als",
+        "alloy/examples/self-approval-counterexample.als",
+        "alloy/examples/self-approval-fixed.als"
+      ],
+      "scripts": ["alloy/scripts/run-examples.sh"],
+      "evals": ["alloy/evals/challenges.md"]
+    },
+    "z3": {
+      "name": "wazir-z3-constraint-verification",
+      "dir": "z3",
+      "claudeDir": ".claude/skills/wazir-z3",
+      "aliases": ["wazir-z3", "wazir-z3-constraint-verification", "smt"],
+      "priority": "P0",
+      "use": "arithmetic/Boolean obligations, braking envelopes, bounded decisions",
+      "taskTypes": ["smt-encoding", "arithmetic-obligation", "boolean-obligation", "braking-envelope", "bounded-decision", "constraint-verification", "finite-state-constraint"],
+      "skill": "z3/SKILL.md",
+      "references": ["evidence.schema.json"],
+      "examples": ["z3/examples/check_stopping_rule.py"],
+      "scripts": [],
+      "evals": []
+    },
+    "dafny": {
+      "name": "wazir-dafny-program-verification",
+      "dir": "dafny",
+      "claudeDir": ".claude/skills/wazir-dafny",
+      "aliases": ["wazir-dafny", "wazir-dafny-program-verification", "dfy"],
+      "priority": "P1",
+      "use": "verified decision kernels, contracts, invariants, termination",
+      "taskTypes": ["verified-kernel", "decision-kernel", "contract", "invariant", "termination", "program-verification"],
+      "skill": "dafny/SKILL.md",
+      "references": ["evidence.schema.json"],
+      "examples": ["dafny/examples/stop_command.dfy"],
+      "scripts": [],
+      "evals": []
+    },
+    "scenic": {
+      "name": "wazir-scenic-scenario-generation",
+      "dir": "scenic",
+      "claudeDir": ".claude/skills/wazir-scenic",
+      "aliases": ["wazir-scenic", "wazir-scenic-scenario-generation"],
+      "priority": "P0",
+      "use": "reproducible scenario families",
+      "taskTypes": ["scenario-generation", "scenario-family", "scene-sampling"],
+      "skill": "scenic/SKILL.md",
+      "references": ["evidence.schema.json"],
+      "examples": ["scenic/examples/approach_scene.scenic", "scenic/examples/sample_scenes.py"],
+      "scripts": [],
+      "evals": []
+    },
+    "verifai": {
+      "name": "wazir-verifai-falsification",
+      "dir": "verifai",
+      "claudeDir": ".claude/skills/wazir-verifai",
+      "aliases": ["wazir-verifai", "wazir-verifai-falsification"],
+      "priority": "P0",
+      "use": "counterexample search against monitors",
+      "taskTypes": ["falsification", "counterexample-search", "monitor-falsification", "simulation-search"],
+      "skill": "verifai/SKILL.md",
+      "references": ["evidence.schema.json"],
+      "examples": ["verifai/examples/falsify_with_scenic.py"],
+      "scripts": [],
+      "evals": []
+    },
+    "gam": {
+      "name": "gam",
+      "dir": "gam",
+      "claudeDir": ".claude/skills/gam",
+      "aliases": ["gal-json", "governance-analysis-model"],
+      "priority": null,
+      "use": "legal/policy compliance (GAL-JSON -> Con, ontology, scenario checks, Alloy emission)",
+      "taskTypes": ["legal-compliance", "policy-compliance", "gal-json", "consistency-check", "ontology-check", "compliance-scenario-check", "alloy-emission"],
+      "skill": "gam/SKILL.md",
+      "references": ["gam/references/gal-json.md"],
+      "examples": [],
+      "scripts": [],
+      "evals": []
+    }
+  }
+}
