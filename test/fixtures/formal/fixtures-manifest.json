@@ -1,12 +1,18 @@
 {
   "fixtures": [
-    { "path": "test/fixtures/formal/z3/counterexample_sat.smt2", "tool": "z3", "expectedVerdict": "COUNTEREXAMPLE", "description": "Negated property is SAT" },
-    { "path": "test/fixtures/formal/z3/proved_unsat.smt2", "tool": "z3", "expectedVerdict": "PROVED", "description": "Negated property is UNSAT with satisfiable assumptions" },
-    { "path": "test/fixtures/formal/z3/vacuous_assumptions.smt2", "tool": "z3", "expectedVerdict": "INCONSISTENT_ASSUMPTIONS", "description": "Assumptions alone are UNSAT" },
+    { "path": "test/fixtures/formal/z3/counterexample_sat.smt2", "tool": "z3", "expectedVerdict": "COUNTEREXAMPLE", "description": "Negated property is SAT (standalone z3 -smt2)" },
+    { "path": "test/fixtures/formal/z3/proved_unsat.smt2", "tool": "z3", "expectedVerdict": "PROVED", "description": "Negated property is UNSAT with satisfiable assumptions (standalone z3 -smt2)" },
+    { "path": "test/fixtures/formal/z3/vacuous_assumptions.smt2", "tool": "z3", "expectedVerdict": "INCONSISTENT_ASSUMPTIONS", "description": "Assumptions alone are UNSAT (standalone z3 -smt2)" },
     { "path": "test/fixtures/formal/z3/parse_error.smt2", "tool": "z3", "expectedVerdict": "ERROR", "description": "Malformed SMT-LIB2 syntax" },
+    { "path": "test/fixtures/formal/z3/declarations.smt2", "tool": "z3", "expectedVerdict": "PROVED", "description": "Declarations-only SMT-LIB2 fixture for Z3Adapter obligation queries" },
     { "path": "test/fixtures/formal/alloy/counterexample.als", "tool": "alloy", "expectedVerdict": "COUNTEREXAMPLE", "description": "Assertion check finds counterexample in scope 3" },
     { "path": "test/fixtures/formal/alloy/bounded_pass.als", "tool": "alloy", "expectedVerdict": "BOUNDED_PASS", "description": "Assertion check finds no counterexample in scope 3 and witness is SAT" },
     { "path": "test/fixtures/formal/dafny/proved.dfy", "tool": "dafny", "expectedVerdict": "PROVED", "description": "Verified method with empty trusted base" },
-    { "path": "test/fixtures/formal/dafny/trusted_base_assume.dfy", "tool": "dafny", "expectedVerdict": "BOUNDED_PASS", "trustedBaseBlocked": true, "description": "Contains assume statement blocking PROVED" }
+    { "path": "test/fixtures/formal/dafny/trusted_base_assume.dfy", "tool": "dafny", "expectedVerdict": "SPECIFICATION_REVIEW_REQUIRED", "trustedBaseBlocked": true, "description": "Contains assume statement blocking PROVED (downgraded to SPECIFICATION_REVIEW_REQUIRED by DafnyAdapter and BOUNDED_PASS by applyTrustedBaseGaps)" },
+    { "path": "test/fixtures/formal/scenic/not_falsified.scenic", "tool": "scenic", "expectedVerdict": "NOT_FALSIFIED", "description": "Deterministic scene sampling succeeds without falsification (never PROVED)" },
+    { "path": "test/fixtures/formal/scenic/inconsistent_assumptions.scenic", "tool": "scenic", "expectedVerdict": "INCONSISTENT_ASSUMPTIONS", "description": "Rejection sampling exhausts iteration budget on contradictory require" },
+    { "path": "test/fixtures/formal/verifai/safe_gap_campaign.py", "tool": "verifai", "expectedVerdict": "FALSIFIED", "description": "VerifAI specification_monitor falsifies SafeGap when closing_speed in [0.5, 3.0]" },
+    { "path": "test/fixtures/formal/gam/counterexample_conflict.json", "tool": "gam", "expectedVerdict": "COUNTEREXAMPLE", "description": "Cross-model closure finds ACTIVITY_CONFLICT for Alice (PrivDiv + FinAdmin)" },
+    { "path": "test/fixtures/formal/gam/bounded_pass.json", "tool": "gam", "expectedVerdict": "BOUNDED_PASS", "description": "Disjoint role-user assignments satisfy Con(Phi_L U Phi_E) and ontology" }
   ]
 }
