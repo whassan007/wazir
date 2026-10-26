@@ -204,21 +204,8 @@ export class HarnessResolutionError extends Error {
   }
 }
 
-const MUTATING_TOOLS = new Set([
-  'write',
-  'edit',
-  'shell',
-  'bash',
-  'git',
-  'rm',
-  'mv',
-  'cp',
-  'patch',
-  'apply_patch',
-  'write_file',
-  'edit_file',
-  'delete_file',
-  'create_file',
+const READ_ONLY_TOOLS = new Set([
+  'read', 'read_file', 'glob', 'search', 'web_search', 'web_fetch', 'compaction',
 ]);
 
 function normalizeOracleCheck(check: string): OracleType {
@@ -757,8 +744,8 @@ export class HarnessDispatchService {
     if (result) {
       for (const tc of result.toolCalls ?? []) {
         const isMutating =
-          MUTATING_TOOLS.has(tc.tool.toLowerCase()) ||
-          (tc.provenance && tc.provenance.sideEffectClass && tc.provenance.sideEffectClass !== 'READ_ONLY');
+          !READ_ONLY_TOOLS.has(tc.tool.toLowerCase()) ||
+          (tc.provenance?.sideEffectClass !== undefined && tc.provenance.sideEffectClass !== 'READ_ONLY');
         const isUnknownOutcome =
           tc.failureClass === 'TOOL_OUTCOME_UNKNOWN' ||
           (tc.provenance &&
