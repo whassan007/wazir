@@ -427,11 +427,23 @@ export class ExecutionEngine {
     }
 
     if (status === 'completed') {
-      const { workspaceRevision: revision, missing, missingCriteria, evaluationInvalid, evaluationMissing } = assessCompletionEvidence(record);
-      if (missing.length > 0 || missingCriteria.length > 0 || evaluationInvalid || evaluationMissing) {
-        this.pushEvent(record, 'completion.rejected', { reason: 'VERIFICATION_REQUIRED', workspaceRevision: revision, missing, missingCriteria, evaluationInvalid, evaluationMissing });
+      const assessment = assessCompletionEvidence(record);
+      const { workspaceRevision: revision, missing, missingCriteria, evaluationInvalid, evaluationMissing, mutationRequiredMissing } = assessment;
+      if (!assessment.eligible || missing.length > 0 || missingCriteria.length > 0 || evaluationInvalid || evaluationMissing || mutationRequiredMissing) {
+        this.pushEvent(record, 'completion.rejected', {
+          reason: 'VERIFICATION_REQUIRED',
+          workspaceRevision: revision,
+          missing,
+          missingCriteria,
+          evaluationInvalid,
+          evaluationMissing,
+          mutationRequiredMissing,
+        });
         await this.flush(record);
-        throw new ExecutionFailure('ARTIFACT_CONTRACT_FAILED', `Completion requires current verification for workspace revision ${revision}`);
+        const errMsg = mutationRequiredMissing
+          ? (assessment.reason ?? `Completion requires mutation for workspace revision ${revision}`)
+          : `Completion requires current verification for workspace revision ${revision}`;
+        throw new ExecutionFailure('ARTIFACT_CONTRACT_FAILED', errMsg);
       }
       await injectFault('DURING_COMPLETION', { executionId, status, workspaceRevision: revision });
     }
@@ -700,7 +712,10 @@ export class ExecutionEngine {
       record.evidence = [];
     }
     const currentRev = record.workspaceState?.revision ?? 0;
-    const boundRev = evidence.workspaceRevision !== undefined ? evidence.workspaceRevision : (evidence.revision !== undefined ? evidence.revision : currentRev);
+    // FORMAL-A13-VERIF-05: In recordEvidence, bind workspaceRevision to record.workspaceState.revision
+    // if the caller attempts to supply a revision greater than record.workspaceState.revision.
+    const requestedRev = evidence.workspaceRevision !== undefined ? evidence.workspaceRevision : evidence.revision;
+    const boundRev = requestedRev !== undefined && requestedRev <= currentRev ? requestedRev : currentRev;
     await injectFault('AFTER_REVISION_BEFORE_VERIFICATION', { executionId, currentRevision: currentRev, boundRevision: boundRev, evidenceType: evidence.type ?? evidence.oracle });
     const oracleType = evidence.oracle ?? evidence.type;
     const rawPayload = `${oracleType}:${evidence.command ?? ''}:${evidence.exitCode}:${boundRev}:${evidence.output ?? ''}`;

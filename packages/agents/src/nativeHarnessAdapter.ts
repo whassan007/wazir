@@ -967,13 +967,16 @@ export class NativeHarnessAdapter {
     }
 
     // Check required checks that may not have been run if status is 'completed'
+    // FORMAL-A13-VERIF-03: When requiredChecks is non-empty, require that every required check
+    // has at least one matching executed check (matchingChecks.length > 0 && matchingChecks.every(c => c.ok)).
     if (status === 'completed' && request.verification.requiredChecks.length > 0) {
       for (const reqCheck of request.verification.requiredChecks) {
         if (CHECK_TOOL_NAMES.has(reqCheck)) {
           const matchingChecks = checks.filter(
             (c) => c.name === reqCheck && (c.workspaceRevision ?? numericRevision) === numericRevision,
           );
-          if (matchingChecks.some((c) => !c.ok)) {
+          const satisfied = matchingChecks.length > 0 && matchingChecks.every((c) => c.ok);
+          if (!satisfied) {
             status = 'failed';
             terminationReason = 'VERIFICATION_FAILED';
             errorKind = 'verification';

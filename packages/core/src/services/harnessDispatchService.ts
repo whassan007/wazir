@@ -1184,22 +1184,37 @@ export class HarnessDispatchService {
         });
       }
 
-      // Ensure required evidence on record's contract is satisfied if verificationOutcome.verified is true
-      if (verificationOutcome.verified && (!verificationOutcome.evidence || verificationOutcome.evidence.length === 0)) {
+      // FORMAL-A13-VERIF-01: Do not synthesize fake passing evidence records (status: 'PASS', exitCode: 0)
+      // when verificationOutcome.verified is true but evidenceIds is empty and no actual check output was recorded.
+      const evidenceList = verificationOutcome.evidence ?? [];
+      const evidenceIds = verificationOutcome.evidenceIds ?? result.verificationEvidenceIds ?? [];
+      const hasNoEvidence = evidenceList.length === 0 && evidenceIds.length === 0;
+
+      if (verificationOutcome.verified && hasNoEvidence) {
+        const availableChecks = verificationOutcome.checks ?? result.checks ?? [];
         for (const reqCheck of request.verification.requiredChecks ?? []) {
-          const oracleType = normalizeOracleCheck(reqCheck);
-          const ev = await this.executionEngine.recordEvidence(engineExecutionId, {
-            type: oracleType,
-            oracle: oracleType,
-            command: reqCheck,
-            exitCode: 0,
-            status: 'PASS',
-            workspaceRevision: rev,
-            revision: rev,
-            reasons: verificationOutcome.reasons,
-          });
-          if (!result.verificationEvidenceIds.includes(ev.id)) {
-            result.verificationEvidenceIds.push(ev.id);
+          const matchingCheck = availableChecks.find(
+            (c) =>
+              (c.name === reqCheck || c.command === reqCheck) &&
+              c.output !== undefined &&
+              c.output !== '',
+          );
+          if (matchingCheck && matchingCheck.ok) {
+            const oracleType = normalizeOracleCheck(reqCheck);
+            const ev = await this.executionEngine.recordEvidence(engineExecutionId, {
+              type: oracleType,
+              oracle: oracleType,
+              command: matchingCheck.command ?? reqCheck,
+              exitCode: 0,
+              status: 'PASS',
+              workspaceRevision: rev,
+              revision: rev,
+              output: matchingCheck.output,
+              reasons: verificationOutcome.reasons,
+            });
+            if (!result.verificationEvidenceIds.includes(ev.id)) {
+              result.verificationEvidenceIds.push(ev.id);
+            }
           }
         }
       }
