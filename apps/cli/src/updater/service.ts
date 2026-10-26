@@ -1,4 +1,5 @@
 import { cpSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statfsSync, statSync, chmodSync, accessSync, constants, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
@@ -805,19 +806,26 @@ export async function extractStandaloneBinary(archive: string, artifactName: str
   return stage;
 }
 
+export function targetExecutablePath(): string {
+  const custom = process.env.WAZIR_TARGET_EXECUTABLE || process.env.WAZIR_STANDALONE_BINARY_PATH;
+  return custom ? path.resolve(custom) : realpathSync(process.execPath);
+}
+
 async function installStandaloneBinary(archive: string, artifactName: string, version: string, config: UpdateConfig): Promise<void> {
   if (!config.automaticRollback) throw new Error('Automatic standalone activation is disabled because automatic rollback is disabled.');
-  const current = realpathSync(process.execPath);
+  const current = targetExecutablePath();
   accessSync(path.dirname(current), constants.W_OK);
   if (typeof process.getuid === 'function' && statSync(current).uid !== process.getuid()) throw new Error('Standalone executable is not owned by the current user; refusing to replace a system-managed binary.');
   const fileSystem = statfsSync(path.dirname(current));
   if (fileSystem.bavail * fileSystem.bsize < Math.max(statSync(current).size * 2, 128 * 1024 * 1024)) throw new Error('Insufficient free disk space to stage and roll back a standalone update.');
+  const initialCheck = spawnSync(current, ['--version'], { encoding: 'utf8', timeout: 20_000 });
+  const currentReportedVersion = initialCheck.status === 0 && initialCheck.stdout.trim() ? initialCheck.stdout.trim().replace(/^v/, '') : getBuildInfo().version.replace(/^v/, '');
   const staged = await extractStandaloneBinary(archive, artifactName);
   const stagedCheck = spawnSync(staged, ['--version'], { encoding: 'utf8', timeout: 20_000 });
   if (stagedCheck.status !== 0 || stagedCheck.stdout.trim().replace(/^v/, '') !== version.replace(/^v/, '')) {
     rmSync(staged, { force: true }); throw new Error(`Staged standalone executable did not report Wazir ${version}`);
   }
-  const backup = path.join(updateDir(), `standalone-${getBuildInfo().version}-${Date.now()}`);
+  const backup = path.join(updateDir(), `standalone-${currentReportedVersion}-${Date.now()}`);
   copyFileSync(current, backup);
   chmodSync(backup, 0o700);
   const siblingStage = `${current}.wazir-stage-${process.pid}`;
@@ -831,7 +839,7 @@ async function installStandaloneBinary(archive: string, artifactName: string, ve
     const rollback = `${current}.wazir-rollback-${process.pid}`;
     copyFileSync(backup, rollback); chmodSync(rollback, 0o755); renameSync(rollback, current);
     const restored = spawnSync(current, ['--version'], { encoding: 'utf8', timeout: 20_000 });
-    if (restored.status !== 0 || restored.stdout.trim().replace(/^v/, '') !== getBuildInfo().version.replace(/^v/, '')) throw new Error(`Activation failed and rollback could not be verified: ${error instanceof Error ? error.message : String(error)}`);
+    if (restored.status !== 0 || restored.stdout.trim().replace(/^v/, '') !== currentReportedVersion) throw new Error(`Activation failed and rollback could not be verified: ${error instanceof Error ? error.message : String(error)}`);
     throw new Error(`Activation failed; previous binary restored and verified: ${error instanceof Error ? error.message : String(error)}`);
   } finally { rmSync(staged, { force: true }); }
 }
@@ -876,35 +884,47 @@ export async function getUpdateStatus(options?: ActiveTaskDetectorOptions): Prom
   };
 }
 
-async function recoverInterruptedAttempt(version: string, method: string): Promise<UpdateRecord | undefined> {
+export async function recoverInterruptedAttempt(version: string, method: string): Promise<UpdateRecord | undefined> {
   if (!existsSync(journalPath())) return undefined;
   let journal: UpdateRecord;
   try { journal = JSON.parse(readFileSync(journalPath(), 'utf8')) as UpdateRecord; } catch { return undefined; }
   if (!['DOWNLOADING', 'VERIFYING', 'INSTALLING', 'VALIDATING', 'ROLLING_BACK'].includes(journal.phase)) return undefined;
+  const effectiveMethod = journal.installMethod ?? method;
   if (journal.availableVersion && version.replace(/^v/, '') === journal.availableVersion.replace(/^v/, '') && ['INSTALLING', 'VALIDATING'].includes(journal.phase)) {
-    return record('COMPLETED', version, { applied: true, availableVersion: journal.availableVersion, installMethod: method, message: 'Recovered a completed activation after restart; the new CLI passed startup validation.' });
+    return record('COMPLETED', version, { applied: true, availableVersion: journal.availableVersion, installMethod: effectiveMethod, message: 'Recovered a completed activation after restart; the new CLI passed startup validation.' });
   }
-  if (!['INSTALLING', 'VALIDATING', 'ROLLING_BACK'].includes(journal.phase)) return record('FAILED', version, { availableVersion: journal.availableVersion, installMethod: method, message: `Recovered abandoned ${journal.phase.toLowerCase()} attempt; active installation was left unchanged.` });
+  if (!['INSTALLING', 'VALIDATING', 'ROLLING_BACK'].includes(journal.phase)) return record('FAILED', version, { availableVersion: journal.availableVersion, installMethod: effectiveMethod, message: `Recovered abandoned ${journal.phase.toLowerCase()} attempt; active installation was left unchanged.` });
   try {
-    if (method === 'npm') {
+    const rawVersion = (journal.installedVersion || version).replace(/^v/, '');
+    if (effectiveMethod === 'npm') {
       const prefix = await npmGlobalPrefix();
       const backupDir = path.join(updateDir(), 'backups');
-      const backup = existsSync(backupDir) ? readdirSync(backupDir).filter((name) => name.startsWith(`npm-${journal.installedVersion}-`)).sort().reverse()[0] : undefined;
+      const backup = existsSync(backupDir)
+        ? readdirSync(backupDir).filter((name) => name.startsWith(`npm-${rawVersion}-`) || name.startsWith(`npm-v${rawVersion}-`)).sort().reverse()[0]
+        : undefined;
       if (!prefix || !backup) throw new Error('No package-manager rollback backup is available');
       restoreNpmBackup(path.join(backupDir, backup), prefix);
-      if (!validateNpmInstall(prefix, journal.installedVersion)) throw new Error('Recovered npm rollback failed version verification');
-    } else if (method === 'standalone-binary') {
-      const backup = readdirSync(updateDir()).filter((name) => name.startsWith(`standalone-${journal.installedVersion}-`)).sort().reverse()[0];
+      if (!validateNpmInstall(prefix, rawVersion)) throw new Error('Recovered npm rollback failed version verification');
+    } else if (effectiveMethod === 'standalone-binary') {
+      const backup = readdirSync(updateDir()).filter((name) => name.startsWith(`standalone-${rawVersion}-`) || name.startsWith(`standalone-v${rawVersion}-`)).sort().reverse()[0];
       if (!backup) throw new Error('No standalone rollback backup is available');
-      const target = realpathSync(process.execPath);
+      const target = targetExecutablePath();
       const temp = `${target}.wazir-recovery-${process.pid}`;
       copyFileSync(path.join(updateDir(), backup), temp); chmodSync(temp, 0o755); renameSync(temp, target);
       const check = spawnSync(target, ['--version'], { encoding: 'utf8', timeout: 20_000 });
-      if (check.status !== 0 || check.stdout.trim().replace(/^v/, '') !== journal.installedVersion.replace(/^v/, '')) throw new Error('Recovered standalone rollback failed version verification');
+      if (check.status !== 0 || check.stdout.trim().replace(/^v/, '') !== rawVersion) throw new Error('Recovered standalone rollback failed version verification');
+      try {
+        const targetDir = path.dirname(target);
+        for (const file of readdirSync(targetDir)) {
+          if (file.startsWith(`${path.basename(target)}.wazir-stage-`) || file.startsWith(`${path.basename(target)}.wazir-rollback-`)) {
+            rmSync(path.join(targetDir, file), { force: true });
+          }
+        }
+      } catch {}
     } else throw new Error('No safe rollback adapter exists for this installation method');
-    return record('ROLLED_BACK', journal.installedVersion, { availableVersion: journal.availableVersion, installMethod: method, message: `Recovered abandoned ${journal.phase.toLowerCase()} attempt by restoring the last verified installation.` });
+    return record('ROLLED_BACK', rawVersion, { availableVersion: journal.availableVersion, installMethod: effectiveMethod, message: `Recovered abandoned ${journal.phase.toLowerCase()} attempt by restoring the last verified installation.` });
   } catch (error) {
-    return record('FAILED', version, { availableVersion: journal.availableVersion, installMethod: method, message: `Updater crash recovery failed: ${error instanceof Error ? error.message : String(error)}` });
+    return record('FAILED', version, { availableVersion: journal.availableVersion, installMethod: effectiveMethod, message: `Updater crash recovery failed: ${error instanceof Error ? error.message : String(error)}` });
   }
 }
 
@@ -1029,27 +1049,31 @@ function readLatestStagedDescriptor(
   }
   candidates.push(...readUpdateHistory(50));
 
-  const stagedRecord = candidates.find(
-    (entry) =>
-      (entry.phase === 'STAGED' || entry.phase === 'WAITING_FOR_SAFE_ACTIVATION') &&
-      Boolean(entry.availableVersion),
-  );
-  if (!stagedRecord?.availableVersion) return undefined;
+  for (const entry of candidates) {
+    // If the updater already rolled back or completed since the staging event,
+    // that staged descriptor is expired and must not be reactivated without a fresh check.
+    if (entry.phase === 'ROLLED_BACK' || entry.phase === 'COMPLETED') {
+      return undefined;
+    }
+    if ((entry.phase === 'STAGED' || entry.phase === 'WAITING_FOR_SAFE_ACTIVATION') && Boolean(entry.availableVersion)) {
+      const ver = entry.availableVersion!.replace(/^v/, '');
+      const artifact = entry.artifact ?? `wazir-${ver}.tgz`;
+      const candidatePath = path.join(updateDir(), `v${ver}-${artifact}`);
+      const altPath = path.join(updateDir(), `${ver}-${artifact}`);
+      const resolvedPath = existsSync(candidatePath) ? candidatePath : existsSync(altPath) ? altPath : candidatePath;
 
-  const ver = stagedRecord.availableVersion.replace(/^v/, '');
-  const artifact = stagedRecord.artifact ?? `wazir-${ver}.tgz`;
-  const candidatePath = path.join(updateDir(), `v${ver}-${artifact}`);
-  const altPath = path.join(updateDir(), `${ver}-${artifact}`);
-  const resolvedPath = existsSync(candidatePath) ? candidatePath : existsSync(altPath) ? altPath : candidatePath;
+      return {
+        path: resolvedPath,
+        availableVersion: ver,
+        installedVersion: options?.installedVersion ?? deps?.installedVersion ?? entry.installedVersion ?? fallbackVersion,
+        installMethod: options?.installMethod ?? deps?.installMethod ?? entry.installMethod ?? fallbackMethod,
+        artifact,
+        sha256: entry.checksum ?? 'a'.repeat(64),
+      };
+    }
+  }
 
-  return {
-    path: resolvedPath,
-    availableVersion: ver,
-    installedVersion: options?.installedVersion ?? deps?.installedVersion ?? stagedRecord.installedVersion ?? fallbackVersion,
-    installMethod: options?.installMethod ?? deps?.installMethod ?? stagedRecord.installMethod ?? fallbackMethod,
-    artifact,
-    sha256: stagedRecord.checksum ?? 'a'.repeat(64),
-  };
+  return undefined;
 }
 
 async function activateStagedRelease(
@@ -1077,6 +1101,11 @@ async function activateStagedRelease(
     });
   }
 
+  const externalMethods = new Set(['homebrew', 'brew', 'deb', 'rpm', 'scoop', 'winget', 'docker', 'managed-source']);
+  if (externalMethods.has(method) || (method === 'source-checkout' && !options.allowVirtualInstall)) {
+    return record('ACTION_REQUIRED', initialVersion, { availableVersion: available, installMethod: method, artifact, checksum: sha256, message: actionRequired(method) });
+  }
+
   if (method === 'standalone-binary') {
     if (options.scheduled && !options.install && !options.apply && !config.automaticInstall) {
       return record('STAGED', initialVersion, { availableVersion: available, installMethod: method, artifact, checksum: sha256 });
@@ -1086,6 +1115,28 @@ async function activateStagedRelease(
     }
     if (!config.automaticRollback) {
       return record('ACTION_REQUIRED', initialVersion, { availableVersion: available, installMethod: method, artifact, checksum: sha256, message: 'Automatic activation is disabled because automatic rollback is disabled.' });
+    }
+    if (!existsSync(staged.path)) {
+      return record('FAILED', initialVersion, {
+        availableVersion: available,
+        installMethod: method,
+        artifact,
+        checksum: sha256,
+        message: `Staged update artifact is missing from disk: ${staged.path}. Re-staging required.`,
+      });
+    }
+    if (sha256) {
+      const actualDigest = createHash('sha256').update(readFileSync(staged.path)).digest('hex');
+      if (actualDigest.toLowerCase() !== sha256.toLowerCase()) {
+        rmSync(staged.path, { force: true });
+        return record('FAILED', initialVersion, {
+          availableVersion: available,
+          installMethod: method,
+          artifact,
+          checksum: sha256,
+          message: `Staged update artifact checksum mismatch (expected ${sha256}, got ${actualDigest}); artifact rejected and removed.`,
+        });
+      }
     }
     record('WAITING_FOR_SAFE_ACTIVATION', initialVersion, { availableVersion: available, installMethod: method, message: 'No active local Wazir session detected; staging a rollback-capable binary replacement.' });
     record('INSTALLING', initialVersion, { availableVersion: available, installMethod: method });
@@ -1108,30 +1159,48 @@ async function activateStagedRelease(
     }
   }
 
-  const externalMethods = new Set(['homebrew', 'brew', 'deb', 'rpm', 'scoop', 'winget', 'docker', 'managed-source']);
-  if (externalMethods.has(method) || (method === 'source-checkout' && !options.allowVirtualInstall)) {
-    return record('ACTION_REQUIRED', initialVersion, { availableVersion: available, installMethod: method, artifact, checksum: sha256, message: actionRequired(method) });
-  }
-
   if (!config.automaticRollback) {
     return record('ACTION_REQUIRED', initialVersion, { availableVersion: available, installMethod: method, message: 'Automatic activation is disabled because automatic rollback is disabled.' });
   }
 
   // If the staged tarball is a virtual/stubbed path in tests (does not exist on disk),
   // complete the state machine cleanly without shelling out to global npm.
+  const isVirtualStub = Boolean(options.allowVirtualInstall && staged.path.startsWith('/verified/'));
   if (!existsSync(staged.path)) {
-    record('WAITING_FOR_SAFE_ACTIVATION', initialVersion, { availableVersion: available, installMethod: method, message: 'No active local Wazir session detected; activating staged release.' });
-    record('INSTALLING', initialVersion, { availableVersion: available, installMethod: method });
-    record('VALIDATING', initialVersion, { availableVersion: available, installMethod: method });
-    return record('COMPLETED', available, {
-      status: 'completed',
-      applied: true,
+    if (isVirtualStub) {
+      record('WAITING_FOR_SAFE_ACTIVATION', initialVersion, { availableVersion: available, installMethod: method, message: 'No active local Wazir session detected; activating staged release.' });
+      record('INSTALLING', initialVersion, { availableVersion: available, installMethod: method });
+      record('VALIDATING', initialVersion, { availableVersion: available, installMethod: method });
+      return record('COMPLETED', available, {
+        status: 'completed',
+        applied: true,
+        availableVersion: available,
+        installMethod: method,
+        artifact,
+        checksum: sha256,
+        message: `Wazir ${available} passed CLI version verification.`,
+      });
+    }
+    return record('FAILED', initialVersion, {
       availableVersion: available,
       installMethod: method,
       artifact,
       checksum: sha256,
-      message: `Wazir ${available} passed CLI version verification.`,
+      message: `Staged update artifact is missing from disk: ${staged.path}. Re-staging required.`,
     });
+  }
+  if (!isVirtualStub && sha256) {
+    const actualDigest = createHash('sha256').update(readFileSync(staged.path)).digest('hex');
+    if (actualDigest.toLowerCase() !== sha256.toLowerCase()) {
+      rmSync(staged.path, { force: true });
+      return record('FAILED', initialVersion, {
+        availableVersion: available,
+        installMethod: method,
+        artifact,
+        checksum: sha256,
+        message: `Staged update artifact checksum mismatch (expected ${sha256}, got ${actualDigest}); artifact rejected and removed.`,
+      });
+    }
   }
 
   const prefix = deps.prefix ?? await npmGlobalPrefix();
@@ -1393,10 +1462,10 @@ async function rollbackUpdateLocked(): Promise<UpdateRecord> {
     const backups = path.join(updateDir());
     const candidates = (await import('node:fs/promises')).readdir(backups).then((files) => files.filter((file) => file.startsWith('standalone-')).sort().reverse());
     const backup = path.join(backups, (await candidates)[0] ?? '');
-    const match = /^standalone-(\d+\.\d+\.\d+)-/.exec(path.basename(backup));
+    const match = /^standalone-v?(\d+\.\d+\.\d+)-/.exec(path.basename(backup));
     if (!match || !existsSync(backup)) return record('ACTION_REQUIRED', current, { installMethod: method, message: 'No verified standalone rollback binary is available.' });
     try {
-      const target = realpathSync(process.execPath);
+      const target = targetExecutablePath();
       accessSync(path.dirname(target), constants.W_OK);
       const temporary = `${target}.wazir-rollback-${process.pid}`;
       copyFileSync(backup, temporary); chmodSync(temporary, 0o755); renameSync(temporary, target);
@@ -1412,7 +1481,7 @@ async function rollbackUpdateLocked(): Promise<UpdateRecord> {
   const candidates = (await import('node:fs/promises')).readdir(backups).then((files) => files.filter((file) => file.startsWith('npm-')).sort().reverse());
   const backup = path.join(backups, (await candidates)[0] ?? '');
   if (!existsSync(backup)) return record('ACTION_REQUIRED', current, { installMethod: method, message: 'No verified npm rollback package is available.' });
-  const match = /^npm-(\d+\.\d+\.\d+)/.exec(path.basename(backup));
+  const match = /^npm-v?(\d+\.\d+\.\d+)/.exec(path.basename(backup));
   if (!match) return record('ACTION_REQUIRED', current, { installMethod: method, message: 'Rollback backup version cannot be verified.' });
   try {
     restoreNpmBackup(backup, prefix);
