@@ -163,6 +163,24 @@ export interface PolicyEngineLike {
     executionId?: string;
     projectRoot?: string;
   }) => PolicyDecision | Promise<PolicyDecision>;
+  authorize?: (request: {
+    tool: string;
+    input: Record<string, unknown>;
+    executionId?: string;
+    projectRoot?: string;
+  }) => PolicyDecision | Promise<PolicyDecision>;
+  classify?: (request: {
+    tool: string;
+    input: Record<string, unknown>;
+    executionId?: string;
+    projectRoot?: string;
+  }) => PolicyDecision | Promise<PolicyDecision>;
+  evaluateTask?: (task: {
+    id?: string;
+    title?: string;
+    policy?: PolicyRequirements;
+    [key: string]: unknown;
+  }) => { allowed: boolean; reasons?: string[] };
 }
 
 export interface ExternalVerificationOutcome {
@@ -410,6 +428,32 @@ export class ExternalHarnessAdapter implements AgentAdapter {
 
     // Discover capabilities, environment sanitization, and binary presence (unless custom `connect` test seam is injected)
     const policyCtx = (request.policyContext ?? {}) as PolicyRequirements & Record<string, unknown>;
+
+    if (this.options.policyEngine?.evaluateTask) {
+      const taskCheck = this.options.policyEngine.evaluateTask({
+        id: request.taskId,
+        title: request.objective,
+        policy: policyCtx,
+      });
+      if (taskCheck && !taskCheck.allowed) {
+        return finalizeResult({
+          status: 'failed',
+          verified: false,
+          terminationReason: 'POLICY_DENIED',
+          errorKind: 'policy',
+          workspaceRevision: initialRevision,
+          filesChanged: [],
+          artifacts: [],
+          toolCalls: [],
+          verificationEvidenceIds: [],
+          failureClassification: 'ENVIRONMENT_BLOCKED',
+          errors: taskCheck.reasons && taskCheck.reasons.length > 0 ? taskCheck.reasons : ['Task denied by PolicyEngine policy'],
+          output: '',
+          usage: resolveUsage(Date.now() - startedMs, undefined, 0),
+        });
+      }
+    }
+
     const maxMode: AcpPermissionMode | undefined =
       policyCtx.toolAccess === false
         ? 'read'
@@ -555,20 +599,24 @@ export class ExternalHarnessAdapter implements AgentAdapter {
     }
 
     // 3. Evaluate against Wazir PolicyEngine if provided
-    if (this.options.policyEngine?.evaluate) {
-      const decision = await this.options.policyEngine.evaluate({
-        tool: toolKind,
-        input: { title: permReq.title, ...rawInput },
-        executionId: request.executionId,
-        projectRoot: request.workspace.root,
-      });
-      if (decision.decision !== 'allow') {
-        return {
-          cancelled: true,
-          policyEffect: 'deny',
-          policyRule: decision.rule || 'policy_engine.denied',
-          reason: decision.reasons?.join('; ') || `Denied by PolicyEngine (${decision.decision})`,
-        };
+    const pe = this.options.policyEngine;
+    if (pe) {
+      const evalFn = pe.authorize ?? pe.evaluate ?? pe.classify;
+      if (evalFn) {
+        const decision = await evalFn.call(pe, {
+          tool: toolKind,
+          input: { title: permReq.title, ...rawInput },
+          executionId: request.executionId,
+          projectRoot: request.workspace.root,
+        });
+        if (decision.decision !== 'allow') {
+          return {
+            cancelled: true,
+            policyEffect: 'deny',
+            policyRule: decision.rule || 'policy_engine.denied',
+            reason: decision.reasons?.join('; ') || `Denied by PolicyEngine (${decision.decision})`,
+          };
+        }
       }
     }
 

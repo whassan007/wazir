@@ -304,3 +304,4 @@ export type { DistributedSearchCoordinatorOptions } from '../types/distributedSe
 
 export * from './evidencePolicy.js';
 export * from './executionContract.js';
+export * from './delegatedPolicyGate.js';

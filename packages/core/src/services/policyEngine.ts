@@ -89,7 +89,7 @@ const PATH_READING_COMMANDS = new Set([
 // Flags that make an otherwise read-only binary execute another program.
 // Matched exactly or as `flag=value` (F-6).
 const EXEC_FLAGS: Record<string, string[]> = {
-  rg: ['--pre', '--hostname-bin'],
+  rg: ['--pre', '--pre-glob', '--hostname-bin'],
   sort: ['--compress-program'],
   find: ['-exec', '-execdir', '-ok', '-okdir'],
 };
@@ -304,7 +304,7 @@ const GIT_GLOBAL_DENY_FLAGS = ['-c', '-C', '--git-dir', '--work-tree', '--exec-p
 // Options on read verbs that write a file or run an external program.
 // `--no-index` turns `git diff` into a host-wide file reader; `help -w`
 // launches a browser via xdg-open (second-pass S-3/S-5).
-const GIT_READ_VERB_DENY_FLAGS = ['--output', '--ext-diff', '--textconv', '--exec', '--no-index', '--web', '-w', '--open-files-in-pager', '-O'];
+const GIT_READ_VERB_DENY_FLAGS = ['--output', '--ext-diff', '--textconv', '--exec', '--no-index', '--web', '-w', '--open-files-in-pager', '-O', '--upload-pack', '--receive-pack'];
 // Read-only verbs that contact a remote: allowed only when network access is on (S-4).
 const GIT_NETWORK_READ_VERBS = new Set(['ls-remote']);
 // Options that turn `branch`/`remote`/`config` into writes.
@@ -314,7 +314,7 @@ const GIT_CONFIG_GET_FLAGS = new Set(['--get', '--get-all', '--get-regexp', '--g
 const GIT_CONFIG_WRITE_FLAGS = ['--edit', '-e', '--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section', '--file', '-f', '--blob'];
 
 const FILE_TOOLS_READ = new Set(['read', 'search', 'glob']);
-const FILE_TOOLS_WRITE = new Set(['write', 'edit']);
+const FILE_TOOLS_WRITE = new Set(['write', 'edit', 'patchfile', 'patch_file']);
 
 function isInside(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
@@ -777,7 +777,15 @@ export class PolicyEngine {
 
   private isTrackedCompiledOutput(executionId: string | undefined, absolutePath: string): boolean {
     if (!executionId) return false;
-    return this.compiledOutputsByExecution.get(executionId)?.has(absolutePath) ?? false;
+    let current: string | undefined = executionId;
+    const visited = new Set<string>();
+    while (current) {
+      if (visited.has(current)) break;
+      visited.add(current);
+      if (this.compiledOutputsByExecution.get(current)?.has(absolutePath)) return true;
+      current = this.parentExecutionByExecution.get(current);
+    }
+    return false;
   }
 
   // Mirrors compiledOutputsByExecution above, for the opposite question: has this
@@ -786,6 +794,21 @@ export class PolicyEngine {
   // wrote or edited in this same execution — otherwise a naming convention alone would
   // let arbitrary model-authored code launder itself into an auto-approved run.
   private readonly writtenPathsByExecution = new Map<string, Set<string>>();
+  private readonly parentExecutionByExecution = new Map<string, string>();
+
+  /**
+   * Links a child execution to its parent execution in the delegation hierarchy.
+   * Traversed to check model-authored paths and compiled outputs.
+   */
+  linkParentExecution(childExecId: string, parentExecId: string): void {
+    if (childExecId && parentExecId && childExecId !== parentExecId) {
+      this.parentExecutionByExecution.set(childExecId, parentExecId);
+    }
+  }
+
+  registerDelegation(childExecId: string, parentExecId: string): void {
+    this.linkParentExecution(childExecId, parentExecId);
+  }
 
   private trackWrittenPath(executionId: string | undefined, absolutePath: string): void {
     if (!executionId) return;
@@ -801,9 +824,19 @@ export class PolicyEngine {
     set.add(absolutePath);
   }
 
-  private wasWrittenThisExecution(executionId: string | undefined, absolutePath: string): boolean {
+  wasWrittenThisExecution(executionId: string | undefined, absolutePath: string): boolean {
     if (!executionId) return false;
-    return this.writtenPathsByExecution.get(executionId)?.has(absolutePath) ?? false;
+    let current: string | undefined = executionId;
+    const visited = new Set<string>();
+    while (current) {
+      if (visited.has(current)) break;
+      visited.add(current);
+      if (this.writtenPathsByExecution.get(current)?.has(absolutePath)) {
+        return true;
+      }
+      current = this.parentExecutionByExecution.get(current);
+    }
+    return false;
   }
 
   private buildRules(): PolicyRule[] {
@@ -979,6 +1012,10 @@ export class PolicyEngine {
     return this.resolveAsk(request, decision);
   }
 
+  async evaluate(request: PolicyActionRequest): Promise<PolicyDecision> {
+    return this.authorize(request);
+  }
+
   private async resolveAsk(request: PolicyActionRequest, decision: PolicyDecision): Promise<PolicyDecision> {
     if (decision.decision !== 'ask') {
       return decision;
@@ -1087,6 +1124,9 @@ export class PolicyEngine {
   }
 
   classify(request: PolicyActionRequest): PolicyDecision {
+    if (request.executionId && request.parentExecutionId) {
+      this.linkParentExecution(request.executionId, request.parentExecutionId);
+    }
     // A fenced execution may be registered with a sandbox requirement; the
     // registration wins over whatever the request itself claims.
     const registered = request.executionId ? this.specFenceByExecution.get(request.executionId) : undefined;
@@ -1241,6 +1281,10 @@ export class PolicyEngine {
     const globalOptions = verbIndex === -1 ? args : args.slice(0, verbIndex);
     const verbArgs = verbIndex === -1 ? [] : args.slice(verbIndex + 1);
 
+    if (args.some((arg) => ['-c', '--exec-path', '--upload-pack', '--receive-pack'].some((flag) => flagMatches(arg, flag)))) {
+      return { decision: 'deny', rule: 'git-push-deny', reasons: ['git option can inject configuration or execute another program; denied'] };
+    }
+
     // Global options come before the verb and can point git at another
     // repository or inject config that executes commands (`-c core.fsmonitor`,
     // `-c alias.status=!sh`), so a "read-only" verb is no longer read-only.
@@ -1325,7 +1369,7 @@ export class PolicyEngine {
     return { decision: 'allow', rule: 'git-read-allow', reasons: ['git config (get/list form) is read-only'] };
   }
 
-  private classifyShell(request: PolicyActionRequest): PolicyDecision {
+  private classifyShell(request: PolicyActionRequest & { isSubshell?: boolean }): PolicyDecision {
     const command = typeof request.input.command === 'string' ? request.input.command.trim() : '';
     if (!command) {
       return { decision: 'deny', rule: 'shell-unknown-ask', reasons: ['empty shell command'] };
@@ -1364,7 +1408,7 @@ export class PolicyEngine {
     const projectRoot = request.projectRoot ?? this.options.projectRoot;
     const decisions: PolicyDecision[] = [];
     for (const segment of segments) {
-      decisions.push(...this.classifyShellSegment(segment, projectRoot, request.executionId, request.effectiveIsolation));
+      decisions.push(...this.classifyShellSegment(segment, projectRoot, request.executionId, request.effectiveIsolation, request.isSubshell));
     }
 
     const merged = mostRestrictive(decisions);
@@ -1374,7 +1418,13 @@ export class PolicyEngine {
     return merged;
   }
 
-  private classifyShellSegment(segment: ShellSegment, projectRoot: string, executionId?: string, effectiveIsolation?: string): PolicyDecision[] {
+  private classifyShellSegment(
+    segment: ShellSegment,
+    projectRoot: string,
+    executionId?: string,
+    effectiveIsolation?: string,
+    isSubshell?: boolean,
+  ): PolicyDecision[] {
     const decisions: PolicyDecision[] = [];
     const text = segment.words.join(' ');
 
@@ -1406,6 +1456,14 @@ export class PolicyEngine {
 
     const { name, args } = resolveCommand(segment.words);
 
+    if (name === 'git') {
+      const gitDecision = this.classifyGit({ tool: 'git', input: { args }, projectRoot });
+      decisions.push(gitDecision.decision === 'allow' && args[0] === 'config'
+        ? { decision: 'ask', rule: 'git-write-ask', reasons: ['git config requires approval in shell commands'] }
+        : gitDecision);
+      return decisions;
+    }
+
     if (
       (name === 'sh' || name === 'bash' || name === 'dash') &&
       args.length === 2 &&
@@ -1419,7 +1477,9 @@ export class PolicyEngine {
           tool: 'shell',
           input: { command: args[1] },
           projectRoot,
+          executionId,
           effectiveIsolation,
+          isSubshell: true,
         }),
       );
       return decisions;
@@ -1434,7 +1494,7 @@ export class PolicyEngine {
     // resolveCommand() basenames its result (so `wrapper` unwrapping works uniformly),
     // which strips the very `./`/`/` prefix this check needs — read it off the raw word.
     const rawFirstWord = stripAssignments(segment.words)[0] ?? '';
-    if ((rawFirstWord.startsWith('./') || rawFirstWord.startsWith('.\\') || rawFirstWord.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(rawFirstWord)) && !rawFirstWord.includes('..')) {
+    if (!isSubshell && (rawFirstWord.startsWith('./') || rawFirstWord.startsWith('.\\') || rawFirstWord.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(rawFirstWord)) && !rawFirstWord.includes('..')) {
       const absolute = path.resolve(projectRoot, rawFirstWord);
       if (this.isTrackedCompiledOutput(executionId, absolute)) {
         decisions.push({
@@ -1488,7 +1548,7 @@ export class PolicyEngine {
 
     decisions.push(this.classifyCommandName(name));
     if (SAFE_SHELL_COMMANDS.has(name)) {
-      decisions.push(...this.classifySafeCommandArgs(name, args, projectRoot, executionId));
+      decisions.push(...this.classifySafeCommandArgs(name, args, projectRoot, executionId, effectiveIsolation));
       // `echo /etc/passwd | xargs cat`: the paths xargs hands to `cat` come
       // from stdin, so nothing above could inspect them (second-pass S-2).
       const viaXargs = stripAssignments(segment.words).some((w, i) => i < segment.words.length - 1 && basename(w) === 'xargs');
@@ -1798,7 +1858,13 @@ export class PolicyEngine {
    * This checks the flags that make it execute a program or write a file, and
    * applies project containment to every path it would read.
    */
-  private classifySafeCommandArgs(name: string, args: string[], projectRoot: string, executionId?: string): PolicyDecision[] {
+  private classifySafeCommandArgs(
+    name: string,
+    args: string[],
+    projectRoot: string,
+    executionId?: string,
+    effectiveIsolation?: string,
+  ): PolicyDecision[] {
     const decisions: PolicyDecision[] = [];
     const execFlags = EXEC_FLAGS[name] ?? [];
     const outputFlags = OUTPUT_FLAGS[name] ?? [];
@@ -1822,11 +1888,35 @@ export class PolicyEngine {
 
       const execFlag = execFlags.find((f) => flagMatches(arg, f));
       if (execFlag) {
-        if (name === 'find' && args[i + 1]) {
-          // `find -exec <cmd>` is as safe as <cmd> itself; the rest of the -exec
-          // clause is that command's own arguments.
-          decisions.push(this.classifyCommandName(basename(args[i + 1])));
-          const end = args.indexOf(';', i + 1);
+        if (name === 'find') {
+          // find -exec / -execdir / -ok / -okdir: validate the inner command arguments recursively
+          const semi = args.indexOf(';', i + 1);
+          const plus = args.indexOf('+', i + 1);
+          let end = -1;
+          if (semi !== -1 && plus !== -1) {
+            end = Math.min(semi, plus);
+          } else if (semi !== -1) {
+            end = semi;
+          } else {
+            end = plus;
+          }
+          const innerEnd = end === -1 ? args.length : end;
+          const innerWords = args.slice(i + 1, innerEnd);
+          if (innerWords.length === 0) {
+            decisions.push({
+              decision: 'deny',
+              rule: 'shell-dangerous-deny',
+              reasons: [`'find ${execFlag}' requires an inner command; denied`],
+            });
+          } else {
+            const innerDecisions = this.classifyShellSegment(
+              { words: innerWords, redirects: [] },
+              projectRoot,
+              executionId,
+              effectiveIsolation,
+            );
+            decisions.push(...innerDecisions);
+          }
           i = end === -1 ? args.length : end;
           continue;
         }

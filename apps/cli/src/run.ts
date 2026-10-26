@@ -1392,6 +1392,9 @@ export async function runSubagent(
     scheduling: placementDecision,
   });
   const childExecId = childRecord.execution.id;
+  if (context.parentExecutionId) {
+    engine.policy.linkParentExecution(childExecId, context.parentExecutionId);
+  }
 
   if (placementDecision) {
     context.log(color.cyan(`    [subagent] fleet placement: ${effectiveModelId} via ${effectiveRuntimeId} on ${effectiveComputerId ?? 'hosted'} (${placementDecision.reasons.join('; ')})`));
@@ -1539,6 +1542,7 @@ export async function runSubagent(
         tool: name,
         input: toolInput,
         executionId: childExecId,
+        parentExecutionId: context.parentExecutionId,
         projectRoot: context.projectRoot,
         effectiveIsolation: sandboxStatus().mode,
       });
