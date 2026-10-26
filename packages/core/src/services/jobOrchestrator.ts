@@ -43,6 +43,7 @@ export interface JobOrchestratorOptions {
 export interface OrchestratorTaskAssignment {
   jobId: string;
   taskId: string;
+  executionId: string;
   agentId: string;
   modelId: string;
   runtimeId: string;
@@ -54,6 +55,7 @@ export interface OrchestratorTaskAssignment {
 interface ActiveJobHandle {
   abort: AbortController;
   activeTasks: Map<string, AbortController>;
+  activeExecutions: Map<string, string>;
   /** Tasks whose task:cancelled has already been emitted (by cancelJob/cancelTask), so the
    *  post-executor abort branch doesn't announce the same cancellation a second time. */
   cancelledTaskIds: Set<string>;
@@ -214,8 +216,9 @@ export class JobOrchestrator {
       return null;
     }
 
-    await this.executionEngine.create({
+    const record = await this.executionEngine.create({
       task,
+      jobId,
       agentId: decision.agentId,
       computerId: decision.computerId,
       runtimeId: decision.runtimeId,
@@ -226,6 +229,7 @@ export class JobOrchestrator {
     return {
       jobId,
       taskId,
+      executionId: record.execution.id,
       agentId: decision.agentId,
       modelId: decision.modelId,
       runtimeId: decision.runtimeId,
@@ -259,6 +263,16 @@ export class JobOrchestrator {
     await this.jobManager.failTask(jobId, taskId, error, retryCount);
   }
 
+  async retryTask(jobId: string, taskId: string): Promise<void> {
+    const job = this.jobManager.get(jobId);
+    if (!job) throw new Error(`Job '${jobId}' not found`);
+    if (job.status === 'cancelled' || job.status === 'completed' || job.status === 'failed') {
+      throw new Error(`Cannot retry task in terminal job status '${job.status}'`);
+    }
+    await this.jobManager.retryTask(jobId, taskId);
+    this.activeJobs.get(jobId)?.wakePump?.();
+  }
+
   async cancelTask(jobId: string, taskId: string): Promise<void> {
     const handle = this.activeJobs.get(jobId);
     if (handle) {
@@ -266,6 +280,8 @@ export class JobOrchestrator {
       if (taskAbort) {
         taskAbort.abort();
         handle.activeTasks.delete(taskId);
+        const executionId = handle.activeExecutions.get(taskId);
+        if (executionId) await this.cancelExecution(executionId);
       }
       handle.cancelledTaskIds.add(taskId);
     }
@@ -310,6 +326,8 @@ export class JobOrchestrator {
       handle.abort.abort();
       for (const [taskId, taskAbort] of handle.activeTasks.entries()) {
         taskAbort.abort();
+        const executionId = handle.activeExecutions.get(taskId);
+        if (executionId) await this.cancelExecution(executionId);
         handle.cancelledTaskIds.add(taskId);
         this.emit(jobId, { type: 'task:cancelled', jobId, taskId, error: reason });
       }
@@ -317,6 +335,13 @@ export class JobOrchestrator {
     }
     await this.jobManager.cancel(jobId);
     this.emit(jobId, { type: 'job:cancelled', jobId, error: reason });
+  }
+
+  private async cancelExecution(executionId: string): Promise<void> {
+    const record = await this.executionEngine.get(executionId);
+    if (record && !['completed', 'failed', 'cancelled'].includes(record.execution.status)) {
+      await this.executionEngine.setStatus(executionId, 'cancelled');
+    }
   }
 
   /**
@@ -441,6 +466,7 @@ export class JobOrchestrator {
       const handle: ActiveJobHandle = {
         abort: jobAbortController,
         activeTasks,
+        activeExecutions: new Map(),
         cancelledTaskIds: new Set(),
         orphanedTaskIds: new Set(),
         resolve,
@@ -604,10 +630,19 @@ export class JobOrchestrator {
             break;
           }
 
+          handle.activeExecutions.set(taskId, assignment.executionId);
+          if (taskAbort.signal.aborted) {
+            await this.cancelExecution(assignment.executionId);
+            handle.activeExecutions.delete(taskId);
+            activeTasks.delete(taskId);
+            continue;
+          }
+
           node.state = 'running';
           node.executedAt = new Date();
           await this.jobManager.updateAgentState(job.id, node.id, 'running');
           await this.jobManager.updateTaskStatus(job.id, taskId, 'running');
+          await this.executionEngine.setStatus(assignment.executionId, 'running');
 
           this.emit(jobId, {
             type: 'task:started',
@@ -693,6 +728,7 @@ export class JobOrchestrator {
                   this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
                 }
               } else if (taskAbort.signal.aborted) {
+                await this.cancelExecution(assignment.executionId);
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 // cancelJob()/cancelTask() already emitted this task's cancellation (with
@@ -833,6 +869,7 @@ export class JobOrchestrator {
                   this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
                 }
               } else if (taskAbort.signal.aborted) {
+                await this.cancelExecution(assignment.executionId);
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
@@ -877,6 +914,7 @@ export class JobOrchestrator {
                 }
               }
             } finally {
+              handle.activeExecutions.delete(taskId);
               activeTasks.delete(taskId);
               this.steeringQueues.delete(taskId);
               void pump().catch(reject);
@@ -894,7 +932,10 @@ export class JobOrchestrator {
             const anyFailed = job.graph.nodes.some(
               (n) => n.state === 'failed' && !supersededTaskIds.has(n.taskId ?? n.id),
             );
-            await finishJob(anyFailed ? 'failed' : 'completed');
+            const anyCancelled = job.graph.nodes.some(
+              (n) => n.state === 'cancelled' && !supersededTaskIds.has(n.taskId ?? n.id),
+            );
+            await finishJob(anyFailed ? 'failed' : anyCancelled ? 'cancelled' : 'completed');
             return;
           }
 
