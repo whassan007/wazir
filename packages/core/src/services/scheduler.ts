@@ -301,6 +301,15 @@ export class Scheduler {
       mode = 'HYBRID';
     }
 
+    const isLocalPolicy =
+      task.policy?.localOnly === true ||
+      task.requirements?.localOnly === true ||
+      task.policy?.dataClassification === 'sensitive' ||
+      task.policy?.dataClassification === 'restricted';
+    if (isLocalPolicy) {
+      mode = 'LOCAL_ONLY';
+    }
+
     const taskMode = task.execution?.routingMode ?? (task.execution?.executionMode === 'local' ? 'LOCAL_ONLY' : undefined);
     if (taskMode) {
       if (taskMode === 'NVIDIA') {
@@ -314,7 +323,7 @@ export class Scheduler {
         if (cfg?.mode === 'provider_only' && taskMode !== 'LOCAL_ONLY') {
           mode = 'PROVIDER_ONLY';
           provider = cfg.provider?.toLowerCase() ?? 'nvidia';
-        } else {
+        } else if (!isLocalPolicy) {
           mode = taskMode;
         }
       }
@@ -376,7 +385,11 @@ export class Scheduler {
       };
     }
 
-    const requiredContext = input.requiredContextTokens ?? task.requirements.minimumContext ?? 0;
+    const requiredContext =
+      input.requiredContextTokens ??
+      task.requirements.minimumContext ??
+      (task.requirements as unknown as { contextTokens?: number }).contextTokens ??
+      0;
     const routing = this.resolveRoutingConstraint(task);
 
     let agentId: string | undefined;
@@ -965,6 +978,11 @@ export class Scheduler {
       rejected.push(`policy: model '${record.id}' is not in allowedModels`);
     }
 
+    const allowedProviders = (task.policy as unknown as { allowedProviders?: string[] })?.allowedProviders;
+    if (allowedProviders && record.provider && !allowedProviders.includes(record.provider)) {
+      rejected.push(`policy: provider '${record.provider}' for model '${record.id}' is not in allowedProviders`);
+    }
+
     // A model only servable by a hosted provider must clear the hosted
     // eligibility gate here in Phase 1, not just in Phase 2's computer
     // placement.
@@ -990,8 +1008,15 @@ export class Scheduler {
       }
     }
 
-    if (routing.mode === 'LOCAL_ONLY' && (record.local === false || isHostedOnly)) {
-      rejected.push(`routingMode=LOCAL_ONLY: hosted model '${record.id}' is not permitted`);
+    const isLocalPolicyRequired =
+      routing.mode === 'LOCAL_ONLY' ||
+      task.policy?.localOnly === true ||
+      task.requirements?.localOnly === true ||
+      task.policy?.dataClassification === 'sensitive' ||
+      task.policy?.dataClassification === 'restricted';
+
+    if (isLocalPolicyRequired && (record.local === false || isHostedOnly)) {
+      rejected.push(`policy: local-only / sensitive dataClassification forbids remote or hosted model '${record.id}'`);
     } else if (routing.mode === 'PROVIDER_ONLY') {
       const targetProvider = routing.provider ?? 'nvidia';
       const matchesProvider = this.isModelOfProvider(record, targetProvider);

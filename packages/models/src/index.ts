@@ -10,6 +10,12 @@ export interface ModelRouteInput {
   reasoning?: 'low' | 'medium' | 'high';
   vision?: boolean;
   minimumContext?: number;
+  localOnly?: boolean;
+  isSensitive?: boolean;
+  allowedModels?: string[];
+  allowedProviders?: string[];
+  provider?: string;
+  excludeModelIds?: string[];
 }
 
 export interface ModelRouteDecision {
@@ -21,6 +27,9 @@ export interface ModelRouteDecision {
 /**
  * @wazir/models — model routing facade over the core model registry.
  * Deterministic: highest capability/context score wins, ties break by id.
+ * Strictly enforces privacy (localOnly/isSensitive), authorization (allowedModels),
+ * approved providers (provider/allowedProviders), context, and capability constraints
+ * during primary route selection and failure-driven fallback.
  */
 export class ModelRouter {
   constructor(private readonly models: ModelRecord[]) {}
@@ -31,6 +40,29 @@ export class ModelRouter {
     for (const model of this.models) {
       const reasons: string[] = [];
       let ok = true;
+
+      // Exclude models already tried by prior attempts in failure escalation
+      if (input.excludeModelIds && input.excludeModelIds.includes(model.id)) {
+        continue;
+      }
+
+      // Privacy / Locality Constraint: localOnly or sensitive tasks MUST NOT route to remote/hosted models
+      if ((input.localOnly || input.isSensitive) && model.local === false) {
+        continue;
+      }
+
+      // Authorization Constraint: task allowedModels allowlist
+      if (input.allowedModels && !input.allowedModels.includes(model.id)) {
+        continue;
+      }
+
+      // Provider Constraints: approved provider or explicit provider lock
+      if (input.provider && model.provider !== input.provider) {
+        continue;
+      }
+      if (input.allowedProviders && !input.allowedProviders.includes(model.provider)) {
+        continue;
+      }
 
       for (const capability of input.capabilities ?? []) {
         if (model.capabilities.includes(capability)) {
@@ -67,6 +99,17 @@ export class ModelRouter {
     eligible.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
     const best = eligible[0];
     return { modelId: best.id, score: best.score, reasons: best.reasons };
+  }
+
+  /**
+   * Selects a fallback model after one or more models experienced provider failure,
+   * strictly preserving all original task constraints (privacy, authorization,
+   * capabilities, context, and provider bounds).
+   */
+  routeFallback(input: ModelRouteInput, failedModelIds: string | string[]): ModelRouteDecision | null {
+    const failedList = Array.isArray(failedModelIds) ? failedModelIds : [failedModelIds];
+    const excluded = Array.from(new Set([...(input.excludeModelIds ?? []), ...failedList]));
+    return this.route({ ...input, excludeModelIds: excluded });
   }
 
   list(): ModelRecord[] {
