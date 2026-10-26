@@ -669,7 +669,7 @@ export class JobOrchestrator {
               const executionContext: JobTaskExecutionContext = {
                 jobId,
                 taskId,
-                node,
+                node: structuredClone(node),
                 assignment: {
                   jobId,
                   taskId,
@@ -678,7 +678,7 @@ export class JobOrchestrator {
                   runtimeId: assignment.runtimeId,
                   computerId: assignment.computerId,
                   assignedAt: new Date(),
-                  policy: [],
+                  policy: structuredClone(task.policy ? Object.values(task.policy).flat() : []),
                 },
                 signal: taskAbort.signal,
                 onProgress: (ev) => {
@@ -690,7 +690,7 @@ export class JobOrchestrator {
                     event: ev,
                   });
                 },
-                previousOutcomes: new Map(job.graph.nodes.filter(n => node.dependencies.includes(n.id))
+                previousOutcomes: new Map(job.graph.nodes.filter(n => node.dependencies.includes(n.id) || (task.contextFrom && task.contextFrom.includes(n.taskId ?? n.id)))
                   .map(n => [n.taskId ?? n.id, { success: n.state === 'completed', result: structuredClone(n.result), error: n.error }])),
                 workspaceMode: task.workspaceMode,
                 mutationRequired: task.mutationRequired,
@@ -700,7 +700,7 @@ export class JobOrchestrator {
                 },
               };
 
-              let outcome: JobTaskOutcome = await executor(task, executionContext);
+              let outcome: JobTaskOutcome = await executor(structuredClone(task), executionContext);
               if (node.type === 'supervisor') {
                 const decision = outcome.supervisorDecision;
                 if (!decision || !['approve', 'reject'].includes(decision.decision) || !decision.reason?.trim()) {

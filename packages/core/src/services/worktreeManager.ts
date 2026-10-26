@@ -91,6 +91,7 @@ export interface CreateWorktreeOptions {
 export class WorktreeManager {
   private readonly rootOverride?: string;
   private readonly jobWorktrees = new Map<string, WorktreeInfo>();
+  private readonly inFlightJobWorktrees = new Map<string, Promise<WorktreeInfo>>();
   private readonly specDirs: string[];
 
   constructor(options: WorktreeManagerOptions = {}) {
@@ -197,9 +198,21 @@ export class WorktreeManager {
       const exists = await fs.access(existing.worktreeDir).then(() => true).catch(() => false);
       if (exists) return existing;
     }
-    const info = await this.createWorktree(projectRoot, jobId);
-    this.jobWorktrees.set(jobId, info);
-    return info;
+    const inFlight = this.inFlightJobWorktrees.get(jobId);
+    if (inFlight) return inFlight;
+
+    const promise = (async () => {
+      try {
+        const info = await this.createWorktree(projectRoot, jobId);
+        this.jobWorktrees.set(jobId, info);
+        return info;
+      } finally {
+        this.inFlightJobWorktrees.delete(jobId);
+      }
+    })();
+
+    this.inFlightJobWorktrees.set(jobId, promise);
+    return promise;
   }
 
   async createWorktree(
@@ -463,10 +476,11 @@ export class WorktreeManager {
         const { stdout: status } = await execFileAsync('git', [...GIT_NO_HOOKS, 'status', '--porcelain'], {
           cwd: projectRoot,
         });
+        const conflictPrefixes = ['UU', 'AA', 'UD', 'DU', 'DD', 'AU', 'UA'];
         conflicts = status
           .trim()
           .split('\n')
-          .filter((l) => l.startsWith('UU') || l.startsWith('AA') || l.startsWith('UD'))
+          .filter((l) => conflictPrefixes.some((p) => l.startsWith(p)))
           .map((l) => l.slice(3).trim());
 
         // Abort failed merge to leave repo clean
@@ -486,6 +500,8 @@ export class WorktreeManager {
   }
 
   async removeWorktree(info: WorktreeInfo): Promise<void> {
+    this.jobWorktrees.delete(info.jobId);
+    this.inFlightJobWorktrees.delete(info.jobId);
     await this.releaseSpecReadOnlyFence(info.worktreeDir);
     if (info.isGit) {
       try {
