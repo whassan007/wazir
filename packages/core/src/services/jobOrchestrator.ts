@@ -157,6 +157,16 @@ export class JobOrchestrator {
     }
   }
 
+  private async unknownMutationError(taskId: string): Promise<string | undefined> {
+    for (const record of await this.executionEngine.listByTask(taskId)) {
+      const call = this.executionEngine.findUnknownOutcomeToolCall(record.execution.id);
+      if (call && call.sideEffectClass !== 'READ_ONLY') {
+        return `[TOOL_OUTCOME_UNKNOWN] Tool call '${call.tool}' (${call.callId}) has an unresolved side effect`;
+      }
+    }
+    return undefined;
+  }
+
   steerTask(jobId: string, taskId: string, instruction: string): void {
     const job = this.jobManager.get(jobId);
     const task = job?.tasks.find((t) => t.id === taskId);
@@ -708,7 +718,13 @@ export class JobOrchestrator {
                 const reason = 'Orphaned: the worker running this task stopped responding';
                 const retries = retryCounts.get(taskId) ?? 0;
                 const maxRetries = task.maxRetries ?? job.maxRetries ?? 3;
-                if (retries < maxRetries) {
+                const unknownError = await this.unknownMutationError(taskId);
+                if (unknownError) {
+                  node.state = 'failed';
+                  node.error = unknownError;
+                  await this.failTask(job.id, taskId, unknownError, Infinity);
+                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: unknownError });
+                } else if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
@@ -806,7 +822,13 @@ export class JobOrchestrator {
 
                 const retries = retryCounts.get(taskId) ?? 0;
                 const maxRetries = isPolicyDenial ? 0 : (task.maxRetries ?? job.maxRetries ?? 3);
-                if (retries < maxRetries) {
+                const unknownError = await this.unknownMutationError(taskId);
+                if (unknownError) {
+                  node.state = 'failed';
+                  node.error = unknownError;
+                  await this.failTask(job.id, taskId, unknownError, Infinity);
+                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: unknownError });
+                } else if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
@@ -849,7 +871,13 @@ export class JobOrchestrator {
                 const reason = 'Orphaned: the worker running this task stopped responding';
                 const retries = retryCounts.get(taskId) ?? 0;
                 const maxRetries = task.maxRetries ?? job.maxRetries ?? 3;
-                if (retries < maxRetries) {
+                const unknownError = await this.unknownMutationError(taskId);
+                if (unknownError) {
+                  node.state = 'failed';
+                  node.error = unknownError;
+                  await this.failTask(job.id, taskId, unknownError, Infinity);
+                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: unknownError });
+                } else if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
@@ -877,7 +905,13 @@ export class JobOrchestrator {
                 const isPolicyDenial = errMessage.toLowerCase().includes('policy') || errMessage.toLowerCase().includes('denied');
                 const retries = retryCounts.get(taskId) ?? 0;
                 const maxRetries = isPolicyDenial ? 0 : (task.maxRetries ?? job.maxRetries ?? 3);
-                if (retries < maxRetries) {
+                const unknownError = await this.unknownMutationError(taskId);
+                if (unknownError) {
+                  node.state = 'failed';
+                  node.error = unknownError;
+                  await this.failTask(job.id, taskId, unknownError, Infinity);
+                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: unknownError });
+                } else if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];

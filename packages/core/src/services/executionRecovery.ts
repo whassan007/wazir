@@ -412,6 +412,7 @@ export class OperationReconciliationGuard {
   private readonly byOperationKey = new Map<string, ConfirmedOperationReceipt>();
   private readonly byCallId = new Map<string, ConfirmedOperationReceipt>();
   private readonly bySemanticKey = new Map<string, ConfirmedOperationReceipt>();
+  private readonly byRevisionIndependentKey = new Map<string, ConfirmedOperationReceipt>();
 
   constructor(initialReceipts: ConfirmedOperationReceipt[] = []) {
     for (const receipt of initialReceipts) {
@@ -434,6 +435,11 @@ export class OperationReconciliationGuard {
         const matchingCall = record.toolCalls.find(
           (tc) => (tc.callId ?? tc.id) === cp.callId && tc.ok,
         );
+        const reconciliation = record.events.find((event) => {
+          const data = event.data as { reconciled?: { outcome?: string; evidence?: string } } | undefined;
+          return event.type === 'tool.completed' && event.callId === cp.callId && data?.reconciled?.outcome === 'APPLIED';
+        });
+        const proof = (reconciliation?.data as { reconciled?: { evidence?: string } } | undefined)?.reconciled?.evidence;
         guard.recordConfirmedMutation({
           executionId: cp.executionId,
           callId: cp.callId,
@@ -442,7 +448,7 @@ export class OperationReconciliationGuard {
           input: cp.input,
           workspaceRevision: cp.workspaceRevision,
           output: matchingCall?.output,
-          evidence: 'Confirmed completed in execution record',
+          evidence: proof ?? 'Confirmed completed in execution record',
           confirmedAt: (cp.finishedAt ?? new Date()).toISOString(),
         });
       }
@@ -454,6 +460,7 @@ export class OperationReconciliationGuard {
     this.byOperationKey.set(receipt.operationKey, receipt);
     this.byCallId.set(`${receipt.executionId}:${receipt.callId}`, receipt);
     this.bySemanticKey.set(receipt.semanticKey, receipt);
+    this.byRevisionIndependentKey.set(`${receipt.executionId}:${receipt.toolName}:${receipt.argumentsHash}`, receipt);
   }
 
   recordConfirmedMutation(params: {
@@ -538,7 +545,8 @@ export class OperationReconciliationGuard {
       };
     }
 
-    const bySemantic = this.bySemanticKey.get(semanticKey);
+    const bySemantic = this.bySemanticKey.get(semanticKey) ??
+      this.byRevisionIndependentKey.get(`${params.executionId}:${params.toolName}:${argumentsHash}`);
     if (bySemantic) {
       return {
         duplicate: true,
