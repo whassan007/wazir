@@ -1408,12 +1408,44 @@ export class HarnessDispatchService {
         verificationEvidenceIds: [...(rawResult.verificationEvidenceIds ?? [])],
       };
 
+      const tokenBudgetExhausted =
+        request.constraints.maxTokens !== undefined && accumulatedTokens >= request.constraints.maxTokens;
+      const costBudgetExhausted =
+        request.constraints.maxCostUSD !== undefined &&
+        resolvedCostStatus === 'ACTUAL' &&
+        accumulatedCostUSD > request.constraints.maxCostUSD;
+      const toolBudgetExhausted =
+        request.constraints.maxToolCalls !== undefined && accumulatedToolCalls >= request.constraints.maxToolCalls;
+
+      if (
+        costBudgetExhausted ||
+        (request.constraints.maxTokens !== undefined && accumulatedTokens > request.constraints.maxTokens)
+      ) {
+        const budgetReason = costBudgetExhausted
+          ? `Cumulative cost $${accumulatedCostUSD.toFixed(4)} exceeded maxCostUSD $${request.constraints.maxCostUSD!.toFixed(4)}`
+          : `Cumulative tokens ${accumulatedTokens} exceeded maxTokens ${request.constraints.maxTokens}`;
+        lastResult = {
+          ...lastResult,
+          status: 'failed',
+          verified: false,
+          terminationReason: costBudgetExhausted ? 'RESOURCE_EXHAUSTED' : 'MAX_TOKENS',
+          errorKind: 'other',
+          failureClassification: 'BUDGET_EXCEEDED',
+          errors: [...(lastResult.errors ?? []), budgetReason],
+        };
+        break;
+      }
+
       // Check if fallback should be triggered
       const canFallback =
         this.isFallbackTriggerResult(lastResult) &&
         request.constraints.allowFallback === true &&
         !isStrictUserPin(request) &&
-        this.resolveProviderOnlyConstraint(request).allowFallback;
+        this.resolveProviderOnlyConstraint(request).allowFallback &&
+        !tokenBudgetExhausted &&
+        !costBudgetExhausted &&
+        !toolBudgetExhausted &&
+        !(request.constraints.maxCostUSD !== undefined && accumulatedCostUSD >= request.constraints.maxCostUSD);
 
       if (canFallback) {
         // Invariant 2: Tool Dispatch vs. Confirmed Side Effects

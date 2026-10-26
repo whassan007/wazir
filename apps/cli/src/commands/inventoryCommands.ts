@@ -167,7 +167,10 @@ export function listTools(engine: RookEngine): string {
 export function inspectPolicy(engine: RookEngine): string {
   const lines: string[] = [color.bold('Policy rules'), ''];
   for (const rule of engine.policy.rules) {
-    lines.push(`  ${rule.scope.padEnd(12)} ${rule.pattern.padEnd(10)} → ${rule.effect.padEnd(6)} ${color.gray(rule.description)}`);
+    const scope = (rule.scope ?? '*').padEnd(12);
+    const pattern = (rule.pattern ?? '*').padEnd(10);
+    const effect = (rule.effect ?? 'deny').padEnd(6);
+    lines.push(`  ${scope} ${pattern} → ${effect} ${color.gray(rule.description ?? '')}`);
   }
   lines.push('');
   lines.push(color.bold('Policy options'));

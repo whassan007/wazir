@@ -4373,6 +4373,9 @@ export class FleetTui {
         this.flushStreaming(taskId, logs, timeStr);
         agent.status = 'cancelled';
         agent.phase = 'cancelled';
+        if (this.currentError?.taskId === taskId) {
+          this.currentError = null;
+        }
         // ev.error is set when the system did the cancelling (the job timeout) — without
         // distinguishing it, a timed-out task read as "cancelled by operator", which
         // blames a person for something they didn't do and hides the real cause.

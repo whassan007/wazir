@@ -284,6 +284,10 @@ export class JobOrchestrator {
   }
 
   async cancelTask(jobId: string, taskId: string): Promise<void> {
+    const job = this.jobManager.get(jobId);
+    // A task that already finished keeps its outcome; cancelJob() applies the same rule.
+    const status = job?.tasks.find((t) => t.id === taskId)?.status;
+    if (status === 'completed' || status === 'failed') return;
     const handle = this.activeJobs.get(jobId);
     if (handle) {
       const taskAbort = handle.activeTasks.get(taskId);
@@ -293,14 +297,15 @@ export class JobOrchestrator {
         const executionId = handle.activeExecutions.get(taskId);
         if (executionId) await this.cancelExecution(executionId);
       }
+      if (handle.cancelledTaskIds.has(taskId)) return;
       handle.cancelledTaskIds.add(taskId);
+    } else if (status === 'cancelled') {
+      return;
     }
-    const job = this.jobManager.get(jobId);
-    // A task that already finished keeps its outcome; cancelJob() applies the same rule.
-    const status = job?.tasks.find((t) => t.id === taskId)?.status;
-    if (status === 'completed' || status === 'failed' || status === 'cancelled') return;
     if (job) {
-      await this.jobManager.updateTaskStatus(jobId, taskId, 'cancelled');
+      if (status !== 'cancelled') {
+        await this.jobManager.updateTaskStatus(jobId, taskId, 'cancelled');
+      }
       await this.jobManager.updateAgentState(jobId, taskId, 'cancelled', undefined, 'Cancelled by user');
     }
     this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
@@ -461,6 +466,7 @@ export class JobOrchestrator {
 
     const activeTasks = new Map<string, AbortController>();
     const retryCounts = new Map<string, number>(job.graph.nodes.map(n => [n.taskId ?? n.id, n.retryCount ?? 0]));
+    const replanDepths = new Map<string, number>();
     const supersededTaskIds = new Set<string>();
 
     this.emit(jobId, { type: 'job:started', jobId });
@@ -746,7 +752,8 @@ export class JobOrchestrator {
               } else if (taskAbort.signal.aborted) {
                 await this.cancelExecution(assignment.executionId);
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
-                await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
+                const existingNodeError = job.graph.nodes.find((n) => n.id === node.id)?.error ?? node.error ?? 'Cancelled by user';
+                await this.jobManager.updateAgentState(job.id, node.id, 'cancelled', undefined, existingNodeError);
                 // cancelJob()/cancelTask() already emitted this task's cancellation (with
                 // the reason, when there was one) at the moment it happened; emitting
                 // again here when the executor finally returns produced a second,
@@ -776,7 +783,9 @@ export class JobOrchestrator {
                       outcome.reasons?.some((r) => r.toLowerCase().includes('policy') || r.toLowerCase().includes('deny')),
                     );
 
-                if (options.replanner && !isPolicyDenial) {
+                const currentReplanDepth = replanDepths.get(taskId) ?? 0;
+                const maxReplanDepth = job.maxRetries ?? task.maxRetries ?? 3;
+                if (options.replanner && !isPolicyDenial && currentReplanDepth < maxReplanDepth) {
                   try {
                     const replanResult = await options.replanner({
                       job,
@@ -805,6 +814,9 @@ export class JobOrchestrator {
                       const added = await this.jobManager.addTasksToJob(job.id, inheritedRepairTasks, {
                         replacesTaskId: taskId,
                       });
+                      for (const addedTask of added) {
+                        replanDepths.set(addedTask.id, currentReplanDepth + 1);
+                      }
 
                       this.emit(jobId, {
                         type: 'task:replan',

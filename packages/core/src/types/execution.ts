@@ -47,6 +47,8 @@ export interface Execution {
    * running (see ExecutionEngine.ownedByAnotherLiveProcess).
    */
   owner?: ExecutionOwner;
+  /** Monotonic fencing epoch incremented on each worker lease claim. */
+  leaseEpoch?: number;
   status: ExecutionStatus;
   createdAt: Date;
   startedAt?: Date;

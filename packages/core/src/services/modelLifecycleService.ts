@@ -448,7 +448,15 @@ export class ModelLifecycleService {
       if (this.policy.checkModelLifecycle({ operation: 'evict', modelId: i.modelId, computerId: plan.computerId, runtimeId: i.runtimeId }).decision !== 'allow') continue;
       candidates.push({ instanceId: i.id, reclaimBytes: i.residentMemoryBytes });
     }
-    const shortfall = (plan.estimate.reservationMemoryBytes ?? Infinity) - (plan.estimate.usableMemory ?? 0);
+    const ramShortfall = (plan.estimate.reservationMemoryBytes ?? 0) - (plan.estimate.usableMemory ?? 0);
+    const gpuHeld = plan.resourceSnapshot.activeReservations.reduce((n, r) => n + r.vramBytes, 0);
+    const vramShortfall = (!plan.resourceSnapshot.unifiedMemory && plan.estimate.estimatedVram !== undefined)
+      ? plan.estimate.estimatedVram - ((plan.resourceSnapshot.availableVramBytes ?? 0) - gpuHeld)
+      : 0;
+    const shortfall = Math.max(
+      plan.estimate.reservationMemoryBytes === undefined ? Infinity : ramShortfall,
+      vramShortfall,
+    );
     // Prefer a single sufficient victim; otherwise largest first minimizes victim count.
     const one = candidates.filter(c => c.reclaimBytes >= shortfall).sort((a, b) => a.reclaimBytes - b.reclaimBytes)[0];
     let selected = one ? [one] : candidates.sort((a, b) => b.reclaimBytes - a.reclaimBytes);

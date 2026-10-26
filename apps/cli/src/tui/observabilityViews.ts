@@ -666,10 +666,10 @@ export function renderTaskView(data: TaskViewData): string[] {
   if (b) {
     const tokStr = b.maxTokens ? `${b.tokensUsed} / ${b.maxTokens}` : `${b.tokensUsed}`;
     const repStr = b.maxRepairCycles ? `${b.repairCycles} / ${b.maxRepairCycles}` : `${b.repairCycles}`;
-    const costStr = b.costUsd !== undefined ? `$${b.costUsd.toFixed(4)}` : '$0.00';
+    const costStr = b.costUsd !== undefined ? color.green(`$${b.costUsd.toFixed(4)}`) : color.gray('UNKNOWN');
     lines.push(
       padRight(
-        `  ${color.bold('Budget Governance:')} Tokens: ${color.yellow(tokStr)} │ Repair Cycles: ${color.yellow(repStr)} │ Cost: ${color.green(costStr)}`,
+        `  ${color.bold('Budget Governance:')} Tokens: ${color.yellow(tokStr)} │ Repair Cycles: ${color.yellow(repStr)} │ Cost: ${costStr}`,
         width,
       ),
     );
