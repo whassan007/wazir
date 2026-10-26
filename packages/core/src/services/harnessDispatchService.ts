@@ -273,6 +273,7 @@ function buildTaskFromRequest(request: UnifiedExecutionRequest): Task {
   const policyCtx = (request.policyContext ?? {}) as PolicyRequirements & Record<string, unknown>;
   const now = new Date();
   const requiredEvidence: EvidenceType[] = (request.verification.requiredChecks ?? []).map(normalizeOracleCheck);
+  const strictPin = isStrictUserPin(request);
   return {
     id: request.taskId,
     type: request.taskType ?? 'coding',
@@ -283,6 +284,10 @@ function buildTaskFromRequest(request: UnifiedExecutionRequest): Task {
       expectedArtifacts: request.verification.expectedArtifacts,
       toolCalling: typeof policyCtx.toolCalling === 'boolean' ? policyCtx.toolCalling : undefined,
       localOnly: policyCtx.localOnly,
+      capabilities: (policyCtx as any).capabilities ?? (policyCtx as any).requiredCapabilities,
+      vision: (policyCtx as any).vision,
+      reasoning: (policyCtx as any).reasoning,
+      minimumContext: (policyCtx as any).minimumContext ?? (policyCtx as any).contextTokens ?? request.constraints.maxTokens,
     },
     mutationRequired: request.verification.mutationRequired,
     expectedArtifacts: request.verification.expectedArtifacts,
@@ -308,7 +313,8 @@ function buildTaskFromRequest(request: UnifiedExecutionRequest): Task {
       allowHostedProviders: policyCtx.allowHostedProviders,
     },
     execution: {
-      targetModelId: request.modelPreference,
+      targetModelId: strictPin ? request.modelPreference : undefined,
+      defaultModelId: !strictPin ? request.modelPreference : undefined,
       targetRuntimeId: request.runtimePreference,
       targetAgentId: request.harnessPreference,
       allowFallback: request.constraints.allowFallback,
@@ -523,6 +529,7 @@ export class HarnessDispatchService {
   async resolveHarness(
     request: UnifiedExecutionRequest,
     excludeHarnessIds: readonly string[] = [],
+    excludeModelIds: readonly string[] = [],
   ): Promise<HarnessDispatchResolution> {
     const task = buildTaskFromRequest(request);
 
@@ -676,7 +683,10 @@ export class HarnessDispatchService {
             scheduleTask.execution.targetAgentId = selectedRunner.descriptor.harnessId;
           }
         }
-        const decision = this.scheduler.plan({ task: scheduleTask });
+        const decision = this.scheduler.plan({
+          task: scheduleTask,
+          excludeModelIds: [...excludeModelIds],
+        });
         modelId = decision.modelId;
         runtimeId = decision.runtimeId;
         computerId = decision.computerId;
@@ -686,7 +696,7 @@ export class HarnessDispatchService {
           // If the scheduler rejected because of provider_only or explicit model pin, fail closed
           if (
             providerConstraint.isProviderOnly ||
-            request.modelPreference ||
+            isStrictUserPin(request) ||
             err.message.toLowerCase().includes('provider_only') ||
             err.message.toLowerCase().includes('policy')
           ) {
@@ -696,6 +706,11 @@ export class HarnessDispatchService {
               errorKind: 'policy',
             });
           }
+          throw new HarnessResolutionError(err.message, {
+            code: 'SCHEDULER_EXHAUSTED',
+            reasons: [err.message, ...err.modelReasons, ...err.computerReasons],
+            errorKind: 'infrastructure',
+          });
         } else {
           throw err;
         }
@@ -812,8 +827,8 @@ export class HarnessDispatchService {
 
     const wrappedRequest: UnifiedExecutionRequest = {
       ...request,
-      modelPreference: request.modelPreference ?? modelId,
-      runtimePreference: request.runtimePreference ?? runtimeId,
+      modelPreference: modelId ?? request.modelPreference,
+      runtimePreference: runtimeId ?? request.runtimePreference,
       isCancelled: () => Boolean(timedOut || cancelledMidFlight || request.isCancelled?.()),
     };
 
@@ -1250,6 +1265,7 @@ export class HarnessDispatchService {
     const overallStartedAt = new Date();
     const contractDigest = computeContractDigest(request);
     const triedHarnessIds: string[] = [];
+    const triedModelIds: string[] = [];
 
     let accumulatedTokens = request.resumeContext?.consumed.tokens ?? 0;
     let accumulatedToolCalls = request.resumeContext?.consumed.toolCalls ?? 0;
@@ -1271,7 +1287,9 @@ export class HarnessDispatchService {
     while (currentResolution && attempt < maxAttempts) {
       attempt += 1;
       const { runner, descriptor, modelId, runtimeId } = currentResolution;
-      triedHarnessIds.push(descriptor.harnessId);
+      if (modelId) {
+        triedModelIds.push(modelId);
+      }
 
       // Compute remaining budgets for this attempt, preserving executionId, taskId, and consumed budget
       const remainingTokens =
@@ -1411,9 +1429,26 @@ export class HarnessDispatchService {
           break;
         }
 
-        // Try resolving the next eligible harness
+        // Try resolving the next eligible harness / fallback model
         try {
-          currentResolution = await this.resolveHarness(request, triedHarnessIds);
+          let nextResolution: HarnessDispatchResolution | undefined;
+          if (
+            this.scheduler &&
+            (currentResolution.descriptor.allowsModelSelection || currentResolution.descriptor.kind === 'native')
+          ) {
+            try {
+              // Try finding a fallback model on this harness without immediately excluding the harness
+              nextResolution = await this.resolveHarness(request, triedHarnessIds, triedModelIds);
+            } catch {
+              // If model fallback on this harness failed or models exhausted, exclude the harness and try others
+              triedHarnessIds.push(currentResolution.descriptor.harnessId);
+              nextResolution = await this.resolveHarness(request, triedHarnessIds, triedModelIds);
+            }
+          } else {
+            triedHarnessIds.push(currentResolution.descriptor.harnessId);
+            nextResolution = await this.resolveHarness(request, triedHarnessIds, triedModelIds);
+          }
+          currentResolution = nextResolution;
           continue;
         } catch {
           // No more fallback candidates available; break and return the failure result
