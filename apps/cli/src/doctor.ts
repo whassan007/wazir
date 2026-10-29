@@ -24,7 +24,15 @@ function checkConfig(engine: RookEngine): DoctorCheck {
     const config = engine.config;
     
     if (!config.ollamaUrl && !config.lmstudioUrl) {
-      return { name: 'configuration', status: 'WARN', message: 'no runtimes configured' };
+      return {
+        name: 'configuration',
+        status: 'WARN',
+        message: 'no runtimes configured',
+        details: [
+          'using defaults: Ollama http://localhost:11434, LM Studio http://localhost:1234/v1',
+          'set WAZIR_OLLAMA_URL / WAZIR_LMSTUDIO_URL to point at other endpoints',
+        ].join('\n'),
+      };
     }
     
     return { name: 'configuration', status: 'PASS', message: 'configuration file valid' };
@@ -147,7 +155,15 @@ function checkRuntimeConnectivity(engine: RookEngine): DoctorCheck {
     const totalCount = discovered.length;
     
     if (healthyCount === 0) {
-      return { name: 'runtime connectivity', status: 'UNAVAILABLE', message: 'all runtimes unavailable' };
+      return {
+        name: 'runtime connectivity',
+        status: 'UNAVAILABLE',
+        message: 'all runtimes unavailable',
+        details: [
+          ...discovered.map((r) => `  ${r.id}: ${r.health}`),
+          'start a local runtime (e.g. `ollama serve`, or the LM Studio server), then re-run `wa doctor`',
+        ].join('\n'),
+      };
     }
     
     return {
@@ -405,7 +421,11 @@ function checkRuntimeModelHealth(engine: RookEngine): DoctorCheck {
     const report = collectHealthReport(engine);
     const errors = report.diagnostics.filter((d) => d.severity === 'error');
     const warnings = report.diagnostics.filter((d) => d.severity === 'warning');
-    const details = report.diagnostics.map((d) => `${d.code}: ${d.subject.id} — ${d.reason}`).join('\n') || undefined;
+    const lines = report.diagnostics.map((d) => `${d.code}: ${d.subject.id} — ${d.reason}`);
+    if (report.diagnostics.some((d) => d.code === 'RUNTIME_UNREACHABLE')) {
+      lines.push('unreachable runtimes: start them or override their URL with WAZIR_OLLAMA_URL / WAZIR_LMSTUDIO_URL');
+    }
+    const details = lines.join('\n') || undefined;
     return {
       name: 'runtime & model health',
       status: errors.length ? 'FAIL' : warnings.length ? 'WARN' : 'PASS',

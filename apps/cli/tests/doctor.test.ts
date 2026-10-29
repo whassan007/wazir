@@ -102,6 +102,8 @@ describe('Section 13: wa doctor check-by-check suite', () => {
       const check = findCheck(await doctor(engine), 'configuration');
       expect(check.status).toBe('WARN');
       expect(check.message).toContain('no runtimes configured');
+      expect(check.details).toContain('http://localhost:11434');
+      expect(check.details).toContain('WAZIR_OLLAMA_URL');
     });
 
     it('reports FAIL on configuration access error', async () => {
@@ -304,6 +306,8 @@ describe('Section 13: wa doctor check-by-check suite', () => {
       const check = findCheck(await doctor(engine), 'runtime connectivity');
       expect(check.status).toBe('UNAVAILABLE');
       expect(check.message).toContain('all runtimes unavailable');
+      expect(check.details).toContain('ollama: unavailable');
+      expect(check.details).toContain('ollama serve');
     });
 
     it('reports NOT INSTALLED when zero runtimes are discovered', async () => {
