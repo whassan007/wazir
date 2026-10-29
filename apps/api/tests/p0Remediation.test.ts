@@ -375,9 +375,9 @@ describe('P0/P1 remediation', { timeout: 30_000 }, () => {
         const operator = (await fetch(url, json({}, OP, method))).status;
         const paired = (await fetch(url, json({}, device.accessToken, method))).status;
         if (anon !== 401) failures.push(`${route}: anonymous got ${anon}`);
-        if (viewer === 401) failures.push(`${route}: viewer got ${viewer}`);
-        if (operator === 401) failures.push(`${route}: operator got ${operator}`);
-        if (paired === 401) failures.push(`${route}: paired device got ${paired}`);
+        if (viewer === 401 || viewer === 403) failures.push(`${route}: viewer got ${viewer}`);
+        if (operator === 401 || operator === 403) failures.push(`${route}: operator got ${operator}`);
+        if (paired === 401 || paired === 403) failures.push(`${route}: paired device got ${paired}`);
       }
       expect(failures).toEqual([]);
     });

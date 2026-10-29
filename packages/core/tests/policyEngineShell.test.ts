@@ -205,6 +205,41 @@ describe('PolicyEngine auto-allows compilers with contained output (unlike inter
     expect(classify(engine, './real', 'exec-C').decision).toBe('allow');
   });
 
+  it('does not retain compiler provenance from denied or approval-gated requests', () => {
+    const isolated = new PolicyEngine({ projectRoot: PROJECT, networkAllowed: false });
+    expect(classify(isolated, 'gcc real.c -o trusted', 'exec-rejected').decision).toBe('allow');
+    for (const [command, effect] of [
+      ['gcc real.c -o rejected && reboot', 'deny'],
+      ['gcc real.c -o pending && npm test', 'ask'],
+    ] as const) {
+      expect(classify(isolated, command, 'exec-rejected').decision, command).toBe(effect);
+    }
+    expect(classify(isolated, './rejected', 'exec-rejected').decision).toBe('ask');
+    expect(classify(isolated, './pending', 'exec-rejected').decision).toBe('ask');
+    expect(classify(isolated, './trusted', 'exec-rejected').decision).toBe('allow');
+  });
+
+  it('requires approval for tracked binaries inside backtick and nested substitutions', () => {
+    const isolated = new PolicyEngine({ projectRoot: PROJECT });
+    expect(classify(isolated, 'gcc real.c -o real', 'exec-substitution').decision).toBe('allow');
+    for (const command of ['echo `./real`', 'echo "$(echo $(./real))"']) {
+      expect(classify(isolated, command, 'exec-substitution').decision, command).toBe('ask');
+    }
+  });
+
+  it('does not transfer compiler provenance to relocated or traversal-spelled binaries', () => {
+    const isolated = new PolicyEngine({ projectRoot: PROJECT });
+    expect(classify(isolated, 'gcc real.c -o real', 'exec-paths').decision).toBe('allow');
+    for (const command of ['./sub/real', '/test/elsewhere/real', './sub/../real']) {
+      expect(classify(isolated, command, 'exec-paths').decision, command).toBe('ask');
+    }
+    for (const command of ['cat sub/../../secret', 'gcc real.c -o sub/../../escaped', 'echo x > sub/../../escaped']) {
+      const decision = classify(isolated, command, 'exec-paths');
+      expect(decision.decision, command).toBe('deny');
+      expect(decision.rule, command).toBe('filesystem-outside-deny');
+    }
+  });
+
   it('leaves interpreters ask-gated while workspace-scoped build commands are allowed', () => {
     expect(classify(engine, 'make').decision).toBe('allow');
     expect(classify(engine, 'cmake .').decision).toBe('allow');

@@ -800,7 +800,15 @@ export class PolicyEngine {
   }
 
   classify(request: PolicyActionRequest): PolicyDecision {
+    // Segment classification may discover compiler outputs before a later segment
+    // denies the whole request. Only an allowed request may retain that provenance.
+    const compiledBefore = new Map([...this.compiledOutputsByExecution]
+      .map(([id, outputs]) => [id, new Set(outputs)] as const));
     const decision = this.doClassify(request);
+    if (decision.decision !== 'allow') {
+      this.compiledOutputsByExecution.clear();
+      for (const [id, outputs] of compiledBefore) this.compiledOutputsByExecution.set(id, outputs);
+    }
     decision.tool = request.tool;
     return decision;
   }
