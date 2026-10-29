@@ -51,7 +51,7 @@ describe('Wazir v0.2 Roadmap Verification Gates (Workstreams B, C, D)', () => {
           gpu: {
             vendor: 'nvidia',
             model: 'GB10',
-            memoryGB: 24,
+            memoryGB: 32,
             cuda: true,
           },
         },
@@ -60,7 +60,7 @@ describe('Wazir v0.2 Roadmap Verification Gates (Workstreams B, C, D)', () => {
           memoryUsedGB: 32,
           memoryAvailableGB: 96,
           gpuMemoryUsedGB: 2,
-          gpuMemoryAvailableGB: 22, // 22GB free: enough for 20GB weights, NOT enough for 20GB weights + 10GB KV cache
+          gpuMemoryAvailableGB: 30, // Fits weights plus the minimum coding context, but not the requested large context
         },
         runtimes: ['vllm'],
         models: ['qwen-32b'],
@@ -127,16 +127,16 @@ describe('Wazir v0.2 Roadmap Verification Gates (Workstreams B, C, D)', () => {
         createdAt: new Date(),
       };
 
-      // At 8192 context, 20GB weights fit in 22GB usable VRAM
+      // The scheduler admits at least 16K context for coding; that working set fits in 30GB.
       const smallDecision = scheduler.plan({ task: { ...task, requirements: { capabilities: ['coding'], minimumContext: 8192 } }, requiredContextTokens: 8192 });
       expect(smallDecision.computerId).toBe('dgx-spark-1');
 
-      // At 73728 context, 20GB weights + 10GB KV cache (30GB) exceeds 22GB usable / 24GB total VRAM -> rejected before dispatch
+      // At 73728 context, weights plus KV/overhead exceed 32GB total VRAM.
       expect(() => scheduler.plan({ task, requiredContextTokens: 73728 })).toThrowError(SchedulingError);
       try {
         scheduler.plan({ task, requiredContextTokens: 73728 });
       } catch (err) {
-        expect((err as SchedulingError).message).toContain('KV cache');
+        expect((err as SchedulingError).message).toMatch(/KV(?: cache|\/overhead)/);
       }
     });
 
