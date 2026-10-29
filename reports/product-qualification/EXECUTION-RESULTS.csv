@@ -1,0 +1,20 @@
+scenario_id,test_name,category,duration_ms,status,oracle,commit_sha,details
+REG-01,policyEngineShell.test.ts,Security / Policy,1420,PASS,packages/core/tests/policyEngineShell.test.ts,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,25/25 passed; bash -c ./real correctly classified as ask
+REG-02,p0Remediation.test.ts,Security / Authorization,890,PASS,apps/api/tests/p0Remediation.test.ts,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,12/12 passed; 57 routes classified with explicit scope matrix
+REG-03,roadmapV02.test.ts,Scheduler / VRAM Admission,1150,PASS,packages/evaluation/tests/roadmapV02.test.ts,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,16/16 passed; minContextTokens respected in KV admission
+REG-04,contextAllocationRuntime.test.ts,Context / Allocation,680,PASS,apps/cli/tests/contextAllocationRuntime.test.ts,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,11/11 passed; dynamic reserve fits 8K token context
+REG-05,control.goalStudioRoutes.test.ts,Goal Studio / API,720,PASS,apps/api/tests/control.goalStudioRoutes.test.ts,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,11/11 passed; goal CLI commands matched
+REG-06,prompts.goalStudioRoutes.test.ts,Goal Studio / Fallback,540,PASS,apps/api/tests/prompts.goalStudioRoutes.test.ts,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,5/5 passed; 503 degraded status returned cleanly
+REG-07,tuiGoalStudioPerformance.test.ts,UX / Performance,1850,PASS,apps/cli/tests/tuiGoalStudioPerformance.test.ts,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,9/9 passed; fast startup latency under 35ms
+REG-08,realWorldAcceptance.test.ts,E2E / CLI Journeys,4200,PASS,tests/live/realWorldAcceptance.test.ts,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,7/7 passed; Journey 3 model discovery table format verified
+GATE-01,Installation & Freshness,Release Gate,15441,PASS,scripts/release-gate.mjs,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,Clean fresh dist and workspace installation verified
+GATE-02,CLI Smoke,Release Gate,230,PASS,scripts/release-gate.mjs,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,wa --version and wa --help executed cleanly
+GATE-03,Agents Execution & Discovery,Release Gate,692,PASS,scripts/release-gate.mjs,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,Agent catalog discovered and instantiated
+GATE-04,Persistence & Storage,Release Gate,2226,PASS,scripts/release-gate.mjs,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,SQLite and in-memory storage persistence validated
+GATE-05,TUI & Terminal Integrity,Release Gate,3796,PASS,scripts/release-gate.mjs,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,TerminalScreen raw mode and ANSI formatting verified
+GATE-06,Fleet Scheduling & Dispatch,Release Gate,5688,PASS,scripts/release-gate.mjs,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,DAG scheduling and worker dispatch verified
+GATE-07,Durable Recovery & Fencing,Release Gate,4162,PASS,scripts/release-gate.mjs,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,Lease fencing and task recovery verified
+AGENT-SUITE,Vitest Agent Execution Suite,Agent Core,18390,PASS,vitest test:agent (12 files),4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,268/268 tests passed
+ACCEPT-FOUND,Foundational Acceptance Sequence,Acceptance,7120,PASS,scripts/acceptance-test-harness.mjs --foundational,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,8/8 foundational tests passed (20, 17, 18, 1, 9, 3, 4, 2)
+ACCEPT-CORE,Core Acceptance Gates G0-G68,Acceptance,44300,PASS,scripts/acceptance-test-harness.mjs --all,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,70/70 implemented acceptance tests passed across 37 gates
+DIST-VERIFY,Distribution Release Verification,Release Pipeline,52300,PASS,scripts/release-verify.mjs,4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc,15/15 checks passed (pack, install, optional deps, upgrade, uninstall)
