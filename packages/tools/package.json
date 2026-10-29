@@ -1,6 +1,6 @@
 {
   "name": "@wazir/tools",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "license": "AGPL-3.0-only",
   "description": "Unified tool implementations for the Wazir meta-harness",
   "main": "./dist/src/index.js",
