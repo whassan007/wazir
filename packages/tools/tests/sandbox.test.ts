@@ -24,7 +24,7 @@ describe.skipIf(process.platform === 'win32')('sandbox argument construction (pu
     await fs.rm(home, { recursive: true, force: true });
   });
 
-  it.skipIf(process.platform !== 'linux')('bwrap: read-only root, masked home with toolchains re-exposed, writable project, no network by default', () => {
+  it.skipIf(process.platform !== 'linux')('bwrap: read-only root, masked home with toolchains re-exposed, writable project, no network by default', async () => {
     const args = bwrapArgs({ projectRoot: project, cwd: project }, home, '/tmp');
     const joined = args.join(' ');
     expect(args.slice(0, 2)).toEqual(['--ro-bind', '/']);
@@ -46,6 +46,13 @@ describe.skipIf(process.platform === 'win32')('sandbox argument construction (pu
     expect(args.indexOf(`--tmpfs`)).toBeLessThan(args.lastIndexOf(project));
     expect(joined).toContain(`--bind ${project} ${project}`);
     expect(joined).toContain(`--chdir ${project}`);
+
+    // Protected subdirectories inside project (.git/hooks, .wazir) are remounted read-only (CLAUDE-01 H2)
+    await fs.mkdir(path.join(project, '.git', 'hooks'), { recursive: true });
+    await fs.mkdir(path.join(project, '.wazir'), { recursive: true });
+    const argsWithHooks = bwrapArgs({ projectRoot: project, cwd: project }, home, '/tmp').join(' ');
+    expect(argsWithHooks).toContain(`--ro-bind ${path.join(project, '.git', 'hooks')} ${path.join(project, '.git', 'hooks')}`);
+    expect(argsWithHooks).toContain(`--ro-bind ${path.join(project, '.wazir')} ${path.join(project, '.wazir')}`);
   });
 
   it.skipIf(process.platform !== 'linux')('bwrap: shares the network only when the policy allows it', () => {

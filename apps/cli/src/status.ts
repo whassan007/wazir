@@ -81,13 +81,17 @@ export function getStatus(engine: RookEngine): StatusSummary {
   };
 }
 
-export function statusCommand(): Promise<{ code: number; output: string }> {
+export function statusCommand(options: { json?: boolean } = {}): Promise<{ code: number; output: string }> {
   return new Promise(async (resolve) => {
     try {
       const { createEngine } = require('./engine.js');
-      const engine = await createEngine();
+      const engine = await createEngine({ quiet: Boolean(options.json) });
       
       const status = getStatus(engine);
+      if (options.json) {
+        resolve({ code: 0, output: JSON.stringify(status, null, 2) });
+        return;
+      }
       
       const lines: string[] = [];
       

@@ -299,11 +299,21 @@ export function bwrapArgs(options: SandboxOptions, home: string = os.homedir(), 
   // The project is the only writable tree besides /tmp; it must come after the
   // home mask because it usually lives under $HOME.
   args.push('--bind', project, project);
+  // Protect git hook directories and Wazir internal state inside the project
+  // from tampering by sandboxed build/test subprocesses (CLAUDE-01 H2).
+  for (const protectedSub of [path.join('.git', 'hooks'), '.wazir', '.rook', '.husky', '.githooks', path.join('.github', 'workflows')]) {
+    const fullProtected = path.join(project, protectedSub);
+    if (existsSync(fullProtected)) args.push('--ro-bind', fullProtected, fullProtected);
+  }
   // A git worktree keeps its index/HEAD under the main repository's .git
   // (`.git` is a file with `gitdir: ...`); expose just that slice read-write
   // so `git add`/`commit` inside the worktree keep working.
   const gitCommon = worktreeGitDir(project);
-  if (gitCommon && !isInside(project, gitCommon)) args.push('--bind', gitCommon, gitCommon);
+  if (gitCommon && !isInside(project, gitCommon)) {
+    args.push('--bind', gitCommon, gitCommon);
+    const commonHooks = path.join(gitCommon, 'hooks');
+    if (existsSync(commonHooks)) args.push('--ro-bind', commonHooks, commonHooks);
+  }
   for (const dir of options.readWritePaths ?? []) if (existsSync(dir)) args.push('--bind', dir, dir);
 
   // Temp dirs outside /tmp (macOS-style or TMPDIR overrides) stay writable.

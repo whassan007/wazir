@@ -307,12 +307,18 @@ async function main() {
 
   // Collect unique test files to execute via Vitest
   const testFilesToRun = new Set();
+  const missingSuiteFiles = [];
   for (const t of testQueue) {
     for (const s of t.associatedSuites) {
       if (existsSync(join(root, s))) {
         testFilesToRun.add(s);
+      } else {
+        missingSuiteFiles.push(`${t.gateId}#${t.id}:${s}`);
       }
     }
+  }
+  if (missingSuiteFiles.length > 0) {
+    console.error(`[ERROR] Missing associated acceptance test files: ${missingSuiteFiles.join(', ')}`);
   }
 
   // Also include the acceptance catalog unit test

@@ -1107,21 +1107,33 @@ export class ExecutionEngine {
     return process.env.GIT_REPO;
   }
 
-  private async getGitBranch(filepath: string): Promise<string | undefined> {
+  private async getGitBranch(_filepath: string): Promise<string | undefined> {
     try {
-      const { exec } = await import('node:child_process');
-      return 'main'; // simplified
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      const execFileAsync = promisify(execFile);
+      const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+        cwd: this.workspace,
+        timeout: 2000,
+      });
+      return stdout.trim() || 'main';
     } catch {
-      return undefined;
+      return 'main';
     }
   }
 
-  private async getGitCommit(filepath: string):Promise<string | undefined> {
+  private async getGitCommit(_filepath: string): Promise<string | undefined> {
     try {
-      const { exec } = await import('node:child_process');
-      return 'HEAD'; // simplified
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      const execFileAsync = promisify(execFile);
+      const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
+        cwd: this.workspace,
+        timeout: 2000,
+      });
+      return stdout.trim() || 'HEAD';
     } catch {
-      return undefined;
+      return 'HEAD';
     }
   }
 

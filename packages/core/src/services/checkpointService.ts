@@ -477,7 +477,9 @@ export class CheckpointService {
         if (
           entry.name === '.git' ||
           entry.name === 'node_modules' ||
-          entry.name === '.wazir'
+          entry.name === '.wazir' ||
+          entry.name === '.env' ||
+          (entry.name.startsWith('.env.') && entry.name !== '.env.example')
         ) {
           continue;
         }

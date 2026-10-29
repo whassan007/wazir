@@ -605,10 +605,18 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
   }
   const initialExecutions = sortedStoredExecs.map((item) => item.record);
 
+  const effectiveTransportSecret =
+    process.env.WAZIR_CHECKPOINT_TRANSPORT_SECRET ??
+    process.env.WAZIR_API_TOKEN ??
+    options.auth?.operatorToken;
   const checkpointTransport = new CheckpointTransportService({
     store,
-    transportSecret: process.env.WAZIR_CHECKPOINT_TRANSPORT_SECRET ?? process.env.WAZIR_API_TOKEN,
-    requireAuth: Boolean(process.env.WAZIR_CHECKPOINT_TRANSPORT_SECRET || process.env.WAZIR_API_TOKEN),
+    transportSecret: effectiveTransportSecret,
+    requireAuth: Boolean(
+      effectiveTransportSecret ||
+        options.auth?.viewerToken ||
+        options.auth?.registrationToken,
+    ),
   });
 
   const state: ApiState = {

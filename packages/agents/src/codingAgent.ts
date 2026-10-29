@@ -137,7 +137,7 @@ export interface CodingAgentOptions {
 // against any one provider's error shape.
 const CONTEXT_OVERFLOW_PATTERN = /context.{0,25}(length|window|size).{0,25}(exceed|too (long|large)|maximum)|maximum context length|reduce the (length|number) of (the )?messages|prompt is too long|input is too long/i;
 /** Transport failures of an accepted model stream; safe to re-request (see modelTurnWithStreamRetry). */
-const TRANSIENT_STREAM_PATTERN = /ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|ECONNABORTED|UND_ERR_SOCKET|socket hang up|fetch failed|other side closed/i;
+const TRANSIENT_STREAM_PATTERN = /ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|ECONNABORTED|UND_ERR_SOCKET|\bterminated\b|socket hang up|fetch failed|other side closed/i;
 const MAX_STREAM_RETRIES = 2;
 
 const CHECK_TOOLS = new Set(['test', 'lint', 'typecheck', 'build']);
@@ -334,6 +334,29 @@ function repairBrackets(text: string): string {
   return out;
 }
 
+function hasUnclosedStringLiteral(text: string): boolean {
+  let inString = false;
+  let escape = false;
+  for (const char of text) {
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (char === '\\') {
+        escape = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+    } else if (char === '"') {
+      inString = true;
+    }
+  }
+  return inString;
+}
+
 function tryParseObject(candidate: string): Record<string, unknown> | null {
   for (const attempt of [candidate, repairBrackets(candidate)]) {
     try {
@@ -346,6 +369,21 @@ function tryParseObject(candidate: string): Record<string, unknown> | null {
     }
   }
   return null;
+}
+
+function parseNativeToolCallInput(toolName: string, raw: string): Record<string, unknown> {
+  try {
+    const obj = JSON.parse(raw) as unknown;
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      return obj as Record<string, unknown>;
+    }
+  } catch {
+    // Never synthesize truncated file content when a native write/edit tool call is cut off mid-string.
+    if (MUTATING_FILE_TOOLS.has(toolName) && hasUnclosedStringLiteral(raw)) {
+      return { _truncatedToolInput: true };
+    }
+  }
+  return tryParseObject(raw) ?? { command: raw };
 }
 
 /**
@@ -1027,7 +1065,7 @@ export class CodingAgent implements AgentAdapter {
             if (event.toolInput && typeof event.toolInput === 'object' && !Array.isArray(event.toolInput)) {
               input = event.toolInput as Record<string, unknown>;
             } else if (typeof event.toolInput === 'string') {
-              input = tryParseObject(event.toolInput) ?? { command: event.toolInput };
+              input = parseNativeToolCallInput(event.toolName, event.toolInput);
             }
             toolCall = { name: event.toolName, input };
             if (event.toolCallId) pendingNativeCall = { id: event.toolCallId, name: event.toolName, input };
@@ -1438,7 +1476,7 @@ export class CodingAgent implements AgentAdapter {
             if (event.toolInput && typeof event.toolInput === 'object' && !Array.isArray(event.toolInput)) {
               input = event.toolInput as Record<string, unknown>;
             } else if (typeof event.toolInput === 'string') {
-              input = tryParseObject(event.toolInput) ?? { command: event.toolInput };
+              input = parseNativeToolCallInput(event.toolName, event.toolInput);
             }
             fastToolCall = { name: event.toolName, input };
           }

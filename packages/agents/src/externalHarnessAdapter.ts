@@ -425,7 +425,7 @@ export class ExternalHarnessAdapter implements AgentAdapter {
       maxPermissionMode: maxMode,
     });
 
-    if (discovery.failureClassification === 'ENVIRONMENT_BLOCKED') {
+    if (discovery.failureClassification === 'ENVIRONMENT_BLOCKED' && !this.options.connect) {
       return finalizeResult({
         status: 'failed',
         verified: false,

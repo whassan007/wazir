@@ -125,10 +125,10 @@ const PATTERN_FIRST_COMMANDS = new Set(['grep', 'rg']);
 // (git hooks, Wazir's own state, npm scripts and lifecycle hooks, package
 // resolution). Still project-local, but a model may not touch them without
 // a human seeing it (F-10, F-11).
-const PROTECTED_DIRS = new Set(['.git', '.wazir', '.rook', '.husky', '.githooks', 'node_modules', '.github']);
+const PROTECTED_DIRS = new Set(['.git', '.wazir', '.rook', '.husky', '.githooks', 'node_modules', '.github', '.vscode', '.idea']);
 const PROTECTED_FILES = new Set([
   'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb',
-  '.npmrc', '.yarnrc', '.yarnrc.yml', '.pnpmfile.cjs', 'pnpm-workspace.yaml', '.envrc',
+  '.npmrc', '.yarnrc', '.yarnrc.yml', '.pnpmfile.cjs', 'pnpm-workspace.yaml', '.envrc', '.env', '.gitmodules',
 ]);
 
 const DENY_SHELL_COMMANDS = new Set([
@@ -433,7 +433,7 @@ function lexicalProtectedPathReason(projectRoot: string, absolute: string): stri
     return `'${segments[0]}/' holds hooks, tooling or Wazir state that can change what runs on this machine`;
   }
   const base = segments[segments.length - 1];
-  if (PROTECTED_FILES.has(base)) {
+  if (PROTECTED_FILES.has(base) || (base.startsWith('.env.') && base !== '.env.example')) {
     return `'${base}' controls package scripts, lifecycle hooks or dependency resolution`;
   }
   return null;
