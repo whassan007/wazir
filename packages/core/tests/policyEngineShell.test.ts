@@ -187,7 +187,22 @@ describe('PolicyEngine auto-allows compilers with contained output (unlike inter
     // Only the exact compiled path is trusted — not a same-named binary elsewhere, and
     // not laundering the trusted path through a wrapper command.
     expect(classify(engine, './fake', 'exec-C').decision).toBe('ask');
-    expect(classify(engine, 'bash -c ./real', 'exec-C').decision).toBe('ask');
+    for (const command of [
+      'bash -c ./real',
+      'sh -c "./real"',
+      'bash -c "bash -c ./real"',
+      '(./real)',
+      'echo "$(./real)"',
+      'echo $(./real)',
+      'env ./real',
+      'nohup ./real',
+      'find . -exec ./real \\;',
+      'bash -c ./fake',
+      '(./fake)',
+    ]) {
+      expect(classify(engine, command, 'exec-C').decision, command).toBe('ask');
+    }
+    expect(classify(engine, './real', 'exec-C').decision).toBe('allow');
   });
 
   it('leaves interpreters ask-gated while workspace-scoped build commands are allowed', () => {

@@ -1033,7 +1033,7 @@ export class PolicyEngine {
     return { decision: 'allow', rule: 'git-read-allow', reasons: ['git config (get/list form) is read-only'] };
   }
 
-  private classifyShell(request: PolicyActionRequest): PolicyDecision {
+  private classifyShell(request: PolicyActionRequest, allowArtifactExecution = true): PolicyDecision {
     const command = typeof request.input.command === 'string' ? request.input.command.trim() : '';
     if (!command) {
       return { decision: 'deny', rule: 'shell-unknown-ask', reasons: ['empty shell command'] };
@@ -1064,6 +1064,11 @@ export class PolicyEngine {
       };
     }
 
+    // Grouping and command substitution must not turn a tracked artifact into a
+    // bare invocation after splitSegments discards the shell operators.
+    const allowSegmentArtifactExecution = allowArtifactExecution && !entries.some(
+      (entry) => typeof entry !== 'string' && 'op' in entry && ['(', '<(', '>('].includes(entry.op),
+    );
     const segments = splitSegments(entries);
     if (segments.length === 0) {
       return { decision: 'deny', rule: 'shell-unknown-ask', reasons: ['shell command contains no executable command'] };
@@ -1072,7 +1077,7 @@ export class PolicyEngine {
     const projectRoot = request.projectRoot ?? this.options.projectRoot;
     const decisions: PolicyDecision[] = [];
     for (const segment of segments) {
-      decisions.push(...this.classifyShellSegment(segment, projectRoot, request.executionId, request.effectiveIsolation));
+      decisions.push(...this.classifyShellSegment(segment, projectRoot, request.executionId, request.effectiveIsolation, allowSegmentArtifactExecution));
     }
 
     // `curl https://x | sh`, `bash <(wget -O- x)`: a fetch feeding an
@@ -1104,7 +1109,7 @@ export class PolicyEngine {
     return merged;
   }
 
-  private classifyShellSegment(segment: ShellSegment, projectRoot: string, executionId?: string, effectiveIsolation?: string): PolicyDecision[] {
+  private classifyShellSegment(segment: ShellSegment, projectRoot: string, executionId?: string, effectiveIsolation?: string, allowArtifactExecution = true): PolicyDecision[] {
     const decisions: PolicyDecision[] = [];
     const text = segment.words.join(' ');
 
@@ -1123,7 +1128,7 @@ export class PolicyEngine {
       const match = word.match(/\$\((.+)\)/);
       if (match) {
         substitutions.push(match[1]);
-        decisions.push(this.classifyShell({ tool: 'shell', input: { command: match[1] }, projectRoot, executionId, effectiveIsolation }));
+        decisions.push(this.classifyShell({ tool: 'shell', input: { command: match[1] }, projectRoot, executionId, effectiveIsolation }, false));
       }
     }
 
@@ -1144,7 +1149,7 @@ export class PolicyEngine {
     const split = envSplitString(segment.words);
     if (split !== undefined) {
       decisions.push({ decision: 'ask', rule: 'shell-unknown-ask', reasons: ["'env -S' re-splits its argument into a new command line; approval required"] });
-      if (split.trim()) decisions.push(this.classifyShell({ tool: 'shell', input: { command: split }, projectRoot, executionId, effectiveIsolation }));
+      if (split.trim()) decisions.push(this.classifyShell({ tool: 'shell', input: { command: split }, projectRoot, executionId, effectiveIsolation }, false));
     }
 
     if (this.options.denyCommands?.some((d) => text.startsWith(d))) {
@@ -1183,7 +1188,7 @@ export class PolicyEngine {
         projectRoot,
         executionId,
         effectiveIsolation,
-      });
+      }, false);
       decisions.push(inner);
       // Extra shell flags (`-l` sources profile files, `-i` rc files) can run
       // code beyond the inspected string, so they never auto-allow.
@@ -1213,7 +1218,7 @@ export class PolicyEngine {
     // resolveCommand() basenames its result (so `wrapper` unwrapping works uniformly),
     // which strips the very `./`/`/` prefix this check needs — read it off the raw word.
     const rawFirstWord = stripAssignments(segment.words)[0] ?? '';
-    if ((rawFirstWord.startsWith('./') || rawFirstWord.startsWith('.\\') || rawFirstWord.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(rawFirstWord)) && !rawFirstWord.includes('..')) {
+    if (allowArtifactExecution && (rawFirstWord.startsWith('./') || rawFirstWord.startsWith('.\\') || rawFirstWord.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(rawFirstWord)) && !rawFirstWord.includes('..')) {
       const absolute = path.resolve(projectRoot, rawFirstWord);
       if (this.isTrackedCompiledOutput(executionId, absolute)) {
         decisions.push({
@@ -1648,7 +1653,7 @@ export class PolicyEngine {
           let end = i + 1;
           while (end < args.length && args[end] !== ';' && !(args[end] === '+' && args[end - 1] === '{}')) end++;
           const clause = args.slice(i + 1, end).map((w) => (w === '{}' ? '.' : w));
-          decisions.push(...this.classifyShellSegment({ words: clause, redirects: [] }, projectRoot, executionId));
+          decisions.push(...this.classifyShellSegment({ words: clause, redirects: [] }, projectRoot, executionId, undefined, false));
           i = end;
           continue;
         }
