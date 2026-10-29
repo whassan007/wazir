@@ -70,6 +70,9 @@ export function resolveExternalCommand(
     }
   }
   const resolved = candidates.find((c) => existsSync(c)) ?? command;
+  if (/\.(mjs|cjs)$/i.test(resolved)) {
+    return { command: process.execPath, args: [resolved, ...args], windowsVerbatimArguments: false };
+  }
   if (/\.(cmd|bat)$/i.test(resolved)) {
     const comspec = env.ComSpec || env.COMSPEC || process.env.ComSpec || process.env.COMSPEC || 'cmd.exe';
     const cmdLine = [quoteWindowsCmdArg(resolved), ...args.map(quoteWindowsCmdArg)].join(' ');
@@ -79,6 +82,9 @@ export function resolveExternalCommand(
   if (!isShellScript && existsSync(resolved)) {
     try {
       const head = readFileSync(resolved, { encoding: 'utf8', flag: 'r' }).slice(0, 64);
+      if (/^#!\/usr\/bin\/env node(?:\s|$)/.test(head)) {
+        return { command: process.execPath, args: [resolved, ...args], windowsVerbatimArguments: false };
+      }
       if (head.startsWith('#!')) isShellScript = true;
     } catch {
       // ignore

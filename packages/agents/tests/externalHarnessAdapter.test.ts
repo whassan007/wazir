@@ -16,6 +16,7 @@ import {
   type UnifiedExecutionRequest,
 } from '../src/externalHarnessAdapter.js';
 import type { AcpConnectionLike } from '../src/acp/acpClient.js';
+import { resolveExternalCommand } from '../src/externalAgent.js';
 
 function createRequest(
   workspaceRoot: string,
@@ -542,6 +543,7 @@ process.stdout.write('OpenCode CLI completed task: ' + process.argv.slice(2).joi
     await fs.writeFile(
       crashCli,
       `#!/usr/bin/env node
+process.stderr.write('Terminated by signal SIGTERM\\n');
 process.kill(process.pid, 'SIGTERM');
 `,
       { mode: 0o755 },
@@ -557,6 +559,46 @@ process.kill(process.pid, 'SIGTERM');
     expect(result.status).toBe('interrupted');
     expect(result.verified).toBe(false);
     expect(result.failureClassification).toBe('SUBPROCESS_INTERRUPTED');
+  });
+
+  it.each([
+    [143, ''],
+    [137, ''],
+    [1, 'Terminated by signal SIGTERM'],
+  ])('classifies signal-style exit %i with diagnostic %s as interrupted', async (code, diagnostic) => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-a3-signal-exit-'));
+    const crashCli = path.join(tempDir, 'signal-exit.mjs');
+    await fs.writeFile(crashCli, `process.stderr.write(${JSON.stringify(diagnostic)}); process.exit(${code});`);
+    const adapter = new ExternalHarnessAdapter({
+      preset: 'opencode',
+      command: process.execPath,
+      args: [crashCli],
+    });
+
+    const result = await adapter.execute(createRequest(tempDir));
+    expect(result.status).toBe('interrupted');
+    expect(result.failureClassification).toBe('SUBPROCESS_INTERRUPTED');
+  });
+
+  it.each([
+    ['cli.mjs', ''],
+    ['cli.CJS', ''],
+    ['cli.js', '#!/usr/bin/env node\n'],
+    ['cli', '#!/usr/bin/env node\n'],
+  ])('resolves Windows Node script %s through the Node executable', async (name, contents) => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-a3-node-resolve-'));
+    const script = path.join(tempDir, name);
+    await fs.writeFile(script, contents);
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      expect(resolveExternalCommand(script, ['argument with spaces'])).toEqual({
+        command: process.execPath,
+        args: [script, 'argument with spaces'],
+        windowsVerbatimArguments: false,
+      });
+    } finally {
+      platform.mockRestore();
+    }
   });
 
   it('14. handles mid-turn cancellation cleanly with status="cancelled" and CANCELLED classification', async () => {
