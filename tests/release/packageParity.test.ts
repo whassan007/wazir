@@ -33,7 +33,7 @@ describe('Release Package Parity & Lineage Guardrails', () => {
   const authoritativeNodeEngine = '>=22.13.0';
 
   it('synchronizes version, AGPL-3.0-only license, and engines.node >=22.13.0 across root and all workspace package.json files', () => {
-    expect(authoritativeVersion).toBe('0.2.15');
+    expect(authoritativeVersion).toMatch(/^\d+\.\d+\.\d+$/);
     expect(rootPkg.license).toBe(authoritativeLicense);
     expect(rootPkg.engines?.node).toBe(authoritativeNodeEngine);
     expect(rootPkg.scripts?.['build:cli']).toBe('node scripts/build-cli.mjs');

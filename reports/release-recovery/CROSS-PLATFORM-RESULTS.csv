@@ -1,0 +1,12 @@
+platform,architecture,package_format,test_type,status,evidence
+linux,arm64,standalone-sea,build & execution,PASS,dist/release/wazir-v0.2.17-linux-arm64.tar.gz verified
+linux,arm64,npm-global,global install & smoke,PASS,package-check test 5-7 passed
+linux,x64,deb,manifest & packaging check,PASS,packaging/deb/debian/control aligned at 0.2.17
+linux,x64,rpm,spec & packaging check,PASS,packaging/rpm/wazir.spec aligned at 0.2.17
+darwin,arm64,homebrew,formula check,PASS,Formula/wazir.rb aligned at 0.2.17
+darwin,x64,homebrew,formula check,PASS,Formula/wazir.rb aligned at 0.2.17
+windows,x64,scoop,manifest check,PASS,bucket/wazir.json aligned at 0.2.17
+windows,arm64,scoop,manifest check,PASS,bucket/wazir.json aligned at 0.2.17
+windows,x64,winget,manifest check,PASS,packaging/winget/manifests/w/Whassan/Wazir/0.2.17/
+windows,arm64,winget,manifest check,PASS,packaging/winget/manifests/w/Whassan/Wazir/0.2.17/
+cross-platform,all,tauri,desktop config check,PASS,apps/desktop/src-tauri/tauri.conf.json aligned at 0.2.17

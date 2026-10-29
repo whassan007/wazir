@@ -1,0 +1,25 @@
+{
+  "failed_release": "v0.2.16",
+  "failed_release_sha": "f1f51df1d1fab3d507deee54baf1fae02b0cb34e",
+  "proposed_recovery_release": "v0.2.17",
+  "candidate_sha": "b47811344c25c6a31964e31eb085b0c374c5cfe3",
+  "agents": {
+    "antigravity": 25,
+    "claude": 5,
+    "codex": 5,
+    "total": 35
+  },
+  "packaging_parity": "PASS",
+  "version_automation": "PASS",
+  "ci": "PASS",
+  "cross_platform": "PASS",
+  "artifacts": "PASS",
+  "installation": "PASS",
+  "real_model_acceptance": "PASS",
+  "independent_audit": "PASS",
+  "p0_remaining": 0,
+  "p1_remaining": 0,
+  "release_ready": true,
+  "decision": "GO",
+  "publication_authorized": false
+}

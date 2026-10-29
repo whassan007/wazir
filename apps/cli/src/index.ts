@@ -21,7 +21,7 @@ globalStartupProfiler.mark('cli.entry');
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.15';
+const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.17';
 
 const rawArgs = process.argv.slice(2);
 if (rawArgs.length === 1 && (rawArgs[0] === '--version' || rawArgs[0] === '-V')) {

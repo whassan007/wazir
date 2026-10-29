@@ -1,6 +1,6 @@
 {
   "name": "wazir",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "Wazir is a model- and runtime-agnostic meta-harness that schedules AI agents, models, tools, and compute to execute tasks across local and distributed environments.",
   "license": "AGPL-3.0-only",
   "author": "Wazir Maintainers",
@@ -80,7 +80,10 @@
     "clean": "node -e \"const fs=require('fs');for(const d of ['packages','apps'])for(const p of fs.readdirSync(d))for(const s of ['dist','node_modules']){const t=d+'/'+p+'/'+s;try{fs.rmSync(t,{recursive:true,force:true})}catch{}}\"",
     "test:distributed": "vitest run --config test/distributed/vitest.config.ts",
     "test:postgres": "WAZIR_REQUIRE_DATABASE=1 vitest run packages/database/tests/postgresStore.test.ts",
-    "test:distributed:typecheck": "tsc --noEmit --esModuleInterop --module commonjs --moduleResolution node --target es2022 --skipLibCheck test/distributed/*.test.ts test/distributed/harness/*.ts"
+    "test:distributed:typecheck": "tsc --noEmit --esModuleInterop --module commonjs --moduleResolution node --target es2022 --skipLibCheck test/distributed/*.test.ts test/distributed/harness/*.ts",
+    "version:check": "node scripts/version-manager.mjs check",
+    "version:sync": "node scripts/version-manager.mjs sync",
+    "version:prepare": "node scripts/version-prepare.mjs"
   },
   "devDependencies": {
     "@modelcontextprotocol/node": "^2.0.0",
