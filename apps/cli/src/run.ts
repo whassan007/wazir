@@ -349,7 +349,11 @@ export async function planTask(
   const { context, allocation } = planned;
   if (!context.fits) {
     // Only non-critical parts were dropped before giving up; critical/PINNED parts are never removed.
-    return { ok: false, reasons: context.reasons };
+    const reasons = [...context.reasons];
+    if (context.available.tokens < context.finalRequiredTokens) {
+      reasons.push(`context ${context.available.tokens} < required ${context.finalRequiredTokens}`);
+    }
+    return { ok: false, reasons };
   }
 
   const agent = scheduling.agentId ? engine.agents.get(scheduling.agentId) : undefined;

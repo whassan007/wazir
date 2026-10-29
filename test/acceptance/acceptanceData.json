@@ -3197,7 +3197,7 @@
         "mcts.distributed.backpropagated"
       ],
       "associatedSuites": [
-        "tests/acceptance/distributedMctsGate.test.ts"
+        "test/acceptance/distributedMctsGate.test.ts"
       ],
       "tags": [
         "distributed-mcts",
@@ -3234,7 +3234,7 @@
         "mcts.distributed.reattempt_backpropagated"
       ],
       "associatedSuites": [
-        "tests/acceptance/distributedMctsGate.test.ts"
+        "test/acceptance/distributedMctsGate.test.ts"
       ],
       "tags": [
         "fault-isolation",
@@ -3270,7 +3270,7 @@
         "mcts.distributed.duplicate_prevented"
       ],
       "associatedSuites": [
-        "tests/acceptance/distributedMctsGate.test.ts"
+        "test/acceptance/distributedMctsGate.test.ts"
       ],
       "tags": [
         "stale-rejection",
@@ -3307,7 +3307,7 @@
         "mcts.distributed.leases_reconciled"
       ],
       "associatedSuites": [
-        "tests/acceptance/distributedMctsGate.test.ts"
+        "test/acceptance/distributedMctsGate.test.ts"
       ],
       "tags": [
         "crash-recovery",
@@ -3343,7 +3343,7 @@
         "mcts.distributed.simulation_skipped"
       ],
       "associatedSuites": [
-        "tests/acceptance/distributedMctsGate.test.ts"
+        "test/acceptance/distributedMctsGate.test.ts"
       ],
       "tags": [
         "transposition",
@@ -3379,7 +3379,7 @@
         "mcts.distributed.metrics_stratified"
       ],
       "associatedSuites": [
-        "tests/acceptance/distributedMctsGate.test.ts"
+        "test/acceptance/distributedMctsGate.test.ts"
       ],
       "tags": [
         "benchmark-efficiency",
@@ -3415,7 +3415,7 @@
         "strategy.transfer.verified"
       ],
       "associatedSuites": [
-        "tests/acceptance/semanticStrategyGates.test.ts",
+        "test/acceptance/semanticStrategyGates.test.ts",
         "packages/core/tests/semanticStrategyRetrieval.test.ts"
       ],
       "tags": [
@@ -3451,7 +3451,7 @@
         "strategy.defect_traits.orthogonal"
       ],
       "associatedSuites": [
-        "tests/acceptance/semanticStrategyGates.test.ts",
+        "test/acceptance/semanticStrategyGates.test.ts",
         "packages/core/tests/semanticStrategyRetrieval.test.ts"
       ],
       "tags": [
@@ -3487,7 +3487,7 @@
         "strategy.syntax_leakage.prevented"
       ],
       "associatedSuites": [
-        "tests/acceptance/semanticStrategyGates.test.ts",
+        "test/acceptance/semanticStrategyGates.test.ts",
         "packages/core/tests/semanticStrategyRetrieval.test.ts"
       ],
       "tags": [
@@ -3523,7 +3523,7 @@
         "strategy.policy_denial.prevented"
       ],
       "associatedSuites": [
-        "tests/acceptance/semanticStrategyGates.test.ts",
+        "test/acceptance/semanticStrategyGates.test.ts",
         "packages/core/tests/semanticStrategyRetrieval.test.ts"
       ],
       "tags": [

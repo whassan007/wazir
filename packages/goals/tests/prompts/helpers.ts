@@ -12,7 +12,7 @@ export const FIXTURE = path.resolve(path.dirname(fileURLToPath(import.meta.url))
  *   <2sp>key:\n<4sp>role: x\n<4sp>template: |-\n<6sp>lines...
  */
 export function fixturePromptSeeds(file = FIXTURE): PromptSeed[] {
-  const lines = readFileSync(file, 'utf8').split('\n');
+  const lines = readFileSync(file, 'utf8').split(/\r?\n/);
   const start = lines.findIndex((line) => line === 'prompts:');
   if (start < 0) throw new Error('fixture has no prompts: section');
   const seeds: PromptSeed[] = [];
