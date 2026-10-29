@@ -724,7 +724,7 @@ function installNpmTarball(tarball: string, prefix: string): void {
 }
 
 export function validateNpmReleasePackage(tarball: string, expectedVersion: string): void {
-  const listing = spawnSync('tar', ['-tzf', tarball], { encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
+  const listing = spawnSync('tar', ['-tzf', path.basename(tarball)], { cwd: path.dirname(tarball), encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024 });
   if (listing.status !== 0) throw new Error(`Cannot inspect npm release package: ${(listing.stderr || '').trim()}`);
   const entries = listing.stdout.split(/\r?\n/).filter(Boolean).map((entry) => entry.replace(/\/$/, ''));
   const allowed = new Set(['package', 'package/bin', 'package/bin/wa.js', 'package/package.json', 'package/LICENSE', 'package/README.md']);
@@ -733,7 +733,7 @@ export function validateNpmReleasePackage(tarball: string, expectedVersion: stri
     const normalized = path.posix.normalize(entry);
     if (normalized !== entry || normalized.startsWith('../') || normalized.startsWith('/') || normalized.includes('\\') || !allowed.has(normalized)) throw new Error(`npm release package contains an unexpected path: ${entry}`);
   }
-  const metadata = spawnSync('tar', ['-xOzf', tarball, 'package/package.json'], { encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024 });
+  const metadata = spawnSync('tar', ['-xOzf', path.basename(tarball), 'package/package.json'], { cwd: path.dirname(tarball), encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024 });
   if (metadata.status !== 0) throw new Error('Cannot read npm release package metadata');
   let pkg: { name?: string; version?: string; bin?: Record<string, string> };
   try { pkg = JSON.parse(metadata.stdout) as typeof pkg; } catch { throw new Error('npm release package metadata is not valid JSON'); }

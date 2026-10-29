@@ -12,7 +12,7 @@ export default defineConfig({
     fileParallelism: false,
     // scripts/*.test.mjs are node:test suites, run with `node --test scripts/`.
     // test/codex-dgx-execution holds a long-running autonomous supervisor script and its run artifacts, not a vitest suite.
-    exclude: [...configDefaults.exclude, '**/tmp/**', '**/.wazir/**', '**/.worktrees/**', '**/.claude/**', 'scripts/**/*.test.mjs', 'test/codex-dgx-execution/**'],
+    exclude: [...configDefaults.exclude, '**/tmp/**', '**/.wazir/**', '**/.worktrees/**', '**/.wazir-agent-worktrees/**', '**/.claude/**', 'scripts/**/*.test.mjs', 'test/codex-dgx-execution/**'],
     // Deterministic tests must not reach the host's OS keychain — including through a
     // spawned real `wa` CLI, which inherits this. A locked keychain (e.g. over SSH) costs
     // every CLI start the full keychain-probe timeout. Tests of backend selection opt back in.
