@@ -122,4 +122,17 @@ describe('live session qualification harness integrity (not live qualification)'
       expect(report.results[0].metrics.model_calls).toBeNull();
     } finally { await fs.rm(root, { recursive: true, force: true }); }
   });
+
+  it('scores an unavailable model on an implemented scenario as BLOCKED, not FAIL', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'live-unavailable-test-'));
+    try {
+      const result = await runSession(scenarios[0], { model: 'unregistered-live-model', output: root, maxTurns: 1, timeoutMs: 60000 });
+      expect(result.status).toBe('BLOCKED');
+      expect(result.reasons).toHaveLength(1);
+      expect(result.reasons[0]).toMatch(/^Model unavailable: session was never scheduled/);
+      const scorecard = JSON.parse(await fs.readFile(path.join(result.artifacts, 'scorecard.json'), 'utf8'));
+      expect(scorecard.status).toBe('BLOCKED');
+      await fs.rm(result.workspace, { recursive: true, force: true });
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  }, 120000);
 });

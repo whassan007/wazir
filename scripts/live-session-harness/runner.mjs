@@ -93,6 +93,17 @@ export async function runSession(scenario, options) {
       : [path.join(repoRoot, 'bin/wa.js'), 'task', 'run', scenario.prompt, '--type', 'coding', '--model', options.model, '--max-turns', String(options.maxTurns), '--json'];
     let live = await invoke(process.execPath, liveArgs, 'session', workspace, options.timeoutMs);
     result.process = { code: live.code, signal: live.signal, timed_out: live.timedOut, output_limit: live.outputLimit };
+    const sessionStarted = (await fs.readFile(path.join(artifact, 'session.log'), 'utf8')).split('\n')
+      .some(line => { try { return JSON.parse(line).type === 'start'; } catch { return false; } });
+    if (!sessionStarted && !live.timedOut && live.signal !== 'SIGKILL') {
+      // Scheduling rejected the model before any session began (unregistered, unroutable or
+      // no runtime). The model was never evaluated, so this is a precondition, not a FAIL.
+      let unscheduled = [];
+      try { unscheduled = JSON.parse(live.output.slice(live.output.indexOf('{'))).reasons ?? []; } catch { /* not CLI JSON */ }
+      result.status = 'BLOCKED';
+      result.reasons.push(`Model unavailable: session was never scheduled${unscheduled.length ? ` (${unscheduled.join('; ')})` : ''}`);
+      return result;
+    }
     if (crash) {
       // Restart: a new Wazir process on the same home and workspace. Its startup recovery
       // decides what the killed call did; the session is then completed by the real model.
