@@ -2666,7 +2666,7 @@
         "meta.distributed.aggregation_completed"
       ],
       "associatedSuites": [
-        "tests/acceptance/distributedMetaGate.test.ts",
+        "test/acceptance/distributedMetaGate.test.ts",
         "packages/evaluation/tests/selfImprovementGates.test.ts"
       ],
       "tags": [
@@ -2706,7 +2706,7 @@
         "meta.distributed.aggregation_completed"
       ],
       "associatedSuites": [
-        "tests/acceptance/distributedMetaGate.test.ts",
+        "test/acceptance/distributedMetaGate.test.ts",
         "packages/evaluation/tests/selfImprovementGates.test.ts"
       ],
       "tags": [
@@ -3004,7 +3004,7 @@
       ],
       "associatedSuites": [
         "packages/evaluation/tests/capabilityWeightedScheduler.test.ts",
-        "tests/acceptance/capabilityWeightedGates.test.ts"
+        "test/acceptance/capabilityWeightedGates.test.ts"
       ],
       "tags": [
         "distributed",
@@ -3044,7 +3044,7 @@
       ],
       "associatedSuites": [
         "packages/evaluation/tests/capabilityWeightedScheduler.test.ts",
-        "tests/acceptance/capabilityWeightedGates.test.ts"
+        "test/acceptance/capabilityWeightedGates.test.ts"
       ],
       "tags": [
         "distributed",
