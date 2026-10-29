@@ -6,18 +6,7 @@ import {
 } from '@wazir/core';
 import { color } from '../colors.js';
 
-export function table(headers: string[], rows: string[][]): string {
-  const widths = headers.map((h, i) =>
-    Math.max(h.length, ...rows.map((r) => String(r[i] ?? '').length)),
-  );
-  const line = (cells: string[]) =>
-    cells.map((c, i) => String(c ?? '').padEnd(widths[i] ?? 0)).join('  ');
-  const out = [line(headers), widths.map((w) => '-'.repeat(w)).join('  ')];
-  for (const row of rows) {
-    out.push(line(row));
-  }
-  return out.join('\n');
-}
+export { table } from './table.js';
 
 export function gib(bytes?: number): string {
   return bytes === undefined ? 'unknown' : `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
