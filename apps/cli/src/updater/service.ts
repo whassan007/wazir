@@ -1426,6 +1426,10 @@ export async function rollbackUpdate(options?: ActiveTaskDetectorOptions & { for
   const version = getBuildInfo().version;
   if (!unlock) return record('ACTION_REQUIRED', version, { message: 'Another updater operation is active; rollback was not started.' });
   try {
+    const method = detectInstallMethod();
+    if (method !== 'standalone-binary' && method !== 'npm') {
+      return record('ACTION_REQUIRED', version, { installMethod: method, message: actionRequired(method) });
+    }
     if (!options?.force) {
       const activeWork = await inspectActiveWork(options);
       if (activeWork.busy) {

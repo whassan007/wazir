@@ -13,7 +13,8 @@ const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 export async function runProcess(command, args, { cwd, env = process.env, timeoutMs = 120000, log, maxBytes = 32 * 1024 * 1024 } = {}) {
   const handle = log ? await fs.open(log, 'w') : null;
   let output = '', bytes = 0, timedOut = false, outputLimit = false;
-  const child = spawn(command, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+  const execCmd = process.platform === 'win32' && command === 'npm' ? 'npm.cmd' : command;
+  const child = spawn(execCmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
   const kill = () => {
     try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL'); } catch { /* already exited */ }
   };

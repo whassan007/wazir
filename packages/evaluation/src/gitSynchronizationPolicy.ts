@@ -8,6 +8,11 @@ import { GIT_NO_HOOKS, type KeyValueStore } from '@wazir/shared';
 
 const execFileAsync = promisify(execFile);
 
+function normalizePathForComparison(p: string): string {
+  const resolved = path.resolve(p);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 export type CommitPolicyMode = 'MANUAL_COMMIT' | 'AUTO_COMMIT' | 'NO_COMMIT';
 
 export type CommitAuthorizationSource =
@@ -403,7 +408,7 @@ export function resolveEffectiveCommitPolicy(
     return fallback('Missing authorizing identity for AUTO_COMMIT');
   }
 
-  if (grant.repositoryRoot && path.resolve(grant.repositoryRoot) !== normalizedRepo) {
+  if (grant.repositoryRoot && normalizePathForComparison(grant.repositoryRoot) !== normalizePathForComparison(normalizedRepo)) {
     return fallback(`Commit authorization repository mismatch (${grant.repositoryRoot} !== ${normalizedRepo})`);
   }
 
@@ -434,10 +439,10 @@ export function resolveEffectiveCommitPolicy(
   }
 
   if (grant.allowedWorktreePaths && grant.allowedWorktreePaths.length > 0 && context.worktreePath) {
-    const resolvedWt = path.resolve(context.worktreePath);
-    const allowed = grant.allowedWorktreePaths.some((p) => path.resolve(p) === resolvedWt);
+    const resolvedWt = normalizePathForComparison(context.worktreePath);
+    const allowed = grant.allowedWorktreePaths.some((p) => normalizePathForComparison(p) === resolvedWt);
     if (!allowed) {
-      return fallback(`Worktree '${resolvedWt}' is outside allowedWorktreePaths`);
+      return fallback(`Worktree '${context.worktreePath}' is outside allowedWorktreePaths`);
     }
   }
 

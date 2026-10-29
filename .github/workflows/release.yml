@@ -62,6 +62,8 @@ jobs:
       - run: npm ci
       - name: Verify lockfile and workspace resolution
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Rebuild native dependencies
+        run: npm rebuild node-pty
       - run: npm run build
       - run: npm run typecheck
       - run: npm run check-dist -- --quiet
@@ -145,6 +147,8 @@ jobs:
       - run: npm ci
       - name: Verify lockfile and workspace resolution
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Rebuild native dependencies
+        run: npm rebuild node-pty
       - name: Ensure node-pty helper is executable on macOS
         if: runner.os == 'macOS'
         run: |
