@@ -1,0 +1,7 @@
+platform,arch,runner_type,build_status,test_status,package_status,verdict
+linux,x64,ubuntu-latest,PASS,PASS,PASS,QUALIFIED
+linux,arm64,local-linux-arm64,PASS,PASS,PASS,QUALIFIED
+darwin,arm64,macos-latest,PASS,PASS,PASS,QUALIFIED
+darwin,x64,macos-13,PASS,PASS,PASS,QUALIFIED
+win32,x64,windows-latest,PASS,PASS,PASS,QUALIFIED
+win32,arm64,windows-arm64,PASS,PASS,PASS,QUALIFIED

@@ -1,0 +1,23 @@
+{
+  "version": "0.2.16",
+  "candidate_sha": "f1f51df1d1fab3d507deee54baf1fae02b0cb34e",
+  "agents": {
+    "antigravity": 20,
+    "codex": 10,
+    "claude": 10,
+    "total": 40
+  },
+  "ci": "PASS",
+  "linux_pty": "PASS",
+  "windows_updater": "PASS",
+  "windows_live_harness": "PASS",
+  "release_artifacts": "PASS",
+  "real_model_acceptance": "PASS",
+  "p0_remaining": 0,
+  "p1_remaining": 0,
+  "release_ready": true,
+  "decision": "GO",
+  "verified_baseline_sha": "a2f420f1961202455477e0f2c1309faad4319828",
+  "reconciled": true,
+  "reconciliation_date": "2026-10-29T05:39:00Z"
+}
