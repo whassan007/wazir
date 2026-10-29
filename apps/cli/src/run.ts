@@ -32,7 +32,7 @@ import { captureDelegationBaseline, verifyDelegatedWork, type DelegationBaseline
 import { createEscalationHandler, prepareGenerationPlacement } from './escalation.js';
 import { planAvailableRoute } from './routeAvailability.js';
 import { ensureNvidiaModelRegistered } from './hostedProviders.js';
-import { InvocationContextAllocator, planContext } from './contextAllocationRuntime.js';
+import { InvocationContextAllocator, MIN_OUTPUT_TOKENS, planContext } from './contextAllocationRuntime.js';
 
 /** Registration does not imply a policy execution handler exists. Inspect classification
  * without authorizing or executing dummy arguments; argument-level policy remains enforced
@@ -330,7 +330,9 @@ export async function planTask(
 
   let scheduling: SchedulerDecision;
   try {
-    scheduling = await planAvailableRoute(engine, { task, requiredContextTokens: budget.requiredTokens });
+    // Scheduling must allow the output reserve to shrink; planContext computes the
+    // final reserve, including tool schemas and safety, for the selected model.
+    scheduling = await planAvailableRoute(engine, { task, requiredContextTokens: budget.inputTokens + MIN_OUTPUT_TOKENS });
   } catch (error) {
     const reasons = [error instanceof Error ? error.message : String(error)];
     if (error instanceof SchedulingError) {
