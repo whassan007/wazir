@@ -5,16 +5,37 @@
 // Generates automated release validation matrix across platforms & architectures.
 // ==============================================================================
 
-import { spawnSync, execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
 const VALID_STATUSES = ['PASS', 'FAIL', 'BLOCKED', 'NOT_RUN', 'UNSUPPORTED'];
+
+const CATEGORIES = ['Installation', 'Build', 'CLI', 'Agents', 'Persistence', 'TUI', 'Fleet', 'Recovery'];
+
+// Derive status from evidence; a cached summary must never override failed checks.
+export function normalizeEvaluation(evaluation = {}) {
+  const row = Object.fromEntries(CATEGORIES.map((key) => [key,
+    VALID_STATUSES.includes(evaluation[key]) ? evaluation[key] : 'NOT_RUN',
+  ]));
+  row.Status = ['FAIL', 'BLOCKED', 'NOT_RUN', 'UNSUPPORTED'].find(
+    (status) => Object.values(row).includes(status),
+  ) ?? 'PASS';
+  return row;
+}
+
+export function blockingPlatforms(results, hostId = getHostPlatformId(), strict = false) {
+  return TARGET_PLATFORMS.filter((target) => target.id === hostId || (strict && target.required))
+    .filter((target) => {
+      const row = results.find((r) => r.Platform === target.platform && r.Architecture === target.architecture);
+      return !row || normalizeEvaluation(row).Status !== 'PASS' || row.Status !== 'PASS';
+    });
+}
 
 // Target platforms and architectures
 const TARGET_PLATFORMS = [
@@ -39,9 +60,7 @@ function runStep(name, cmd, args, cwd = rootDir) {
     cwd,
     encoding: 'utf8',
     env: { ...process.env, PATH: `${process.env.PATH}` },
-    // npx is a .cmd wrapper on Windows; spawn it through cmd.exe just like the
-    // CLI package smoke test does, rather than treating the wrapper as a PE exe.
-    shell: process.platform === 'win32',
+    shell: process.platform === 'win32' && /\.cmd$/i.test(cmd),
     timeout: 120000,
   });
   const elapsed = Date.now() - start;
@@ -51,7 +70,8 @@ function runStep(name, cmd, args, cwd = rootDir) {
   } else {
     console.log(`FAIL (${elapsed}ms) - code ${res.status}`);
     if (res.error) console.error(`    ${res.error.message}`);
-    if (res.stderr) console.error(`    ${res.stderr.trim().slice(0, 300)}`);
+    if (res.stderr) console.error(`    ${res.stderr.trim().slice(-1000)}`);
+    if (res.stdout) console.error(`    ${res.stdout.trim().slice(-2000)}`);
     return 'FAIL';
   }
 }
@@ -59,7 +79,8 @@ function runStep(name, cmd, args, cwd = rootDir) {
 function testHostPlatform() {
   console.log(`==> Evaluating Release Gate checks on current host (${process.platform} ${process.arch})...`);
   const nodeBin = process.execPath;
-  const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  // Run the installed test runner directly; npx can fetch unpinned code if absent.
+  const vitest = path.join(rootDir, 'node_modules', 'vitest', 'vitest.mjs');
 
   // 1. Installation
   const installResult = runStep(
@@ -85,36 +106,36 @@ function testHostPlatform() {
   // 4. Agents
   const agentsResult = runStep(
     'Agents Execution & Discovery',
-    npxBin,
-    ['vitest', 'run', 'packages/agents/tests/externalAgent.test.ts']
+    nodeBin,
+    [vitest, 'run', 'packages/agents/tests/externalAgent.test.ts']
   );
 
   // 5. Persistence
   const persistenceResult = runStep(
     'Persistence & Storage Integrity',
-    npxBin,
-    ['vitest', 'run', 'packages/core/tests/offloadStore.test.ts', 'packages/core/tests/checkpointService.test.ts']
+    nodeBin,
+    [vitest, 'run', 'packages/core/tests/offloadStore.test.ts', 'packages/core/tests/checkpointService.test.ts']
   );
 
   // 6. TUI
   const tuiResult = runStep(
     'TUI & Terminal Integrity',
-    npxBin,
-    ['vitest', 'run', 'apps/cli/tests/terminalIntegrity.test.ts']
+    nodeBin,
+    [vitest, 'run', 'apps/cli/tests/terminalIntegrity.test.ts']
   );
 
   // 7. Fleet
   const fleetResult = runStep(
     'Heterogeneous Fleet Scheduling & Dispatch',
-    npxBin,
-    ['vitest', 'run', 'packages/core/tests/schedulerHeterogeneousFleet.test.ts', 'test/integration/crossPlatformFleet.test.ts']
+    nodeBin,
+    [vitest, 'run', 'packages/core/tests/schedulerHeterogeneousFleet.test.ts', 'test/integration/crossPlatformFleet.test.ts']
   );
 
   // 8. Recovery
   const recoveryResult = runStep(
     'Durable Recovery & Lease Fencing',
-    npxBin,
-    ['vitest', 'run', 'test/integration/crossPlatformRecovery.test.ts']
+    nodeBin,
+    [vitest, 'run', 'test/integration/crossPlatformRecovery.test.ts']
   );
 
   const categories = [
@@ -150,7 +171,7 @@ function testHostPlatform() {
   };
 }
 
-function generateReport(options = {}) {
+function generateReport() {
   const hostId = getHostPlatformId();
   const hostEvaluation = testHostPlatform();
 
@@ -175,15 +196,7 @@ function generateReport(options = {}) {
         results.push({
           Platform: target.platform,
           Architecture: target.architecture,
-          Installation: cached.Installation ?? 'NOT_RUN',
-          Build: cached.Build ?? 'NOT_RUN',
-          CLI: cached.CLI ?? 'NOT_RUN',
-          Agents: cached.Agents ?? 'NOT_RUN',
-          Persistence: cached.Persistence ?? 'NOT_RUN',
-          TUI: cached.TUI ?? 'NOT_RUN',
-          Fleet: cached.Fleet ?? 'NOT_RUN',
-          Recovery: cached.Recovery ?? 'NOT_RUN',
-          Status: cached.Status ?? 'NOT_RUN',
+          ...normalizeEvaluation(cached),
         });
         continue;
       } catch (e) {
@@ -289,28 +302,18 @@ async function main() {
   const hostTarget = TARGET_PLATFORMS.find((target) => target.id === hostId);
   const hostRow = hostTarget && results.find((r) => r.Platform === hostTarget.platform && r.Architecture === hostTarget.architecture);
   
-  if (hostRow && hostRow.Status !== 'PASS') {
-    console.error(`✗ RELEASE BLOCKED: Current host ${hostId} evaluation status is ${hostRow.Status}`);
-    process.exit(1);
-  }
-
-  // If strict mode is enabled, all required platforms must be PASS
   const strict = process.argv.includes('--strict');
-  if (strict) {
-    const blocking = results.filter((r) => r.Status === 'FAIL' || r.Status === 'BLOCKED' || (r.Status === 'NOT_RUN' && r.Platform !== 'Windows'));
-    if (blocking.length > 0) {
-      console.error(`✗ RELEASE BLOCKED: Required platforms have not passed all quality gates:`);
-      for (const b of blocking) {
-        console.error(`  - ${b.Platform} ${b.Architecture}: ${b.Status}`);
-      }
-      process.exit(1);
-    }
+  const blocking = blockingPlatforms(results, hostId, strict);
+  if (!hostRow || blocking.length > 0) {
+    console.error(`✗ RELEASE BLOCKED: Missing or unsuccessful quality gates: ${blocking.map((t) => t.id).join(', ') || hostId}`);
+    process.exitCode = 1;
+    return;
   }
 
   console.log('✓ Release gate passed for current host!');
 }
 
-main().catch((err) => {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main().catch((err) => {
   console.error(`Release gate execution failed: ${err.message}`);
   process.exit(1);
 });

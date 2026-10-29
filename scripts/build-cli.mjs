@@ -16,7 +16,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -45,10 +45,14 @@ function main() {
   const names = cliWorkspaces();
   if (names.length === 0) throw new Error('No buildable workspaces were discovered.');
   const args = ['run', 'build', '--if-present', ...names.flatMap((name) => ['--workspace', name])];
-  const result = spawnSync('npm', args, { cwd: rootDir, stdio: 'inherit' });
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const options = { cwd: rootDir, stdio: 'inherit', shell: process.platform === 'win32' };
+  const result = spawnSync(npm, args, options);
+  if (result.error) console.error(result.error.message);
   if (result.status !== 0) process.exit(result.status ?? 1);
-  const bundle = spawnSync('npm', ['run', 'bundle'], { cwd: rootDir, stdio: 'inherit' });
-  process.exit(bundle.status ?? 0);
+  const bundle = spawnSync(npm, ['run', 'bundle'], options);
+  if (bundle.error) console.error(bundle.error.message);
+  process.exit(bundle.status ?? 1);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main();
