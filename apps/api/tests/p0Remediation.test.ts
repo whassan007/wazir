@@ -27,6 +27,9 @@ type Scope =
   | 'registration'
   | 'computer'
   | 'mcp'
+  // Checkpoint service validates its transport secret when configured; these routes
+  // are registered before the API bearer-token middleware in server.ts.
+  | 'checkpoint-transport'
   // Mobile companion surface (apps/api/src/mobile.ts): a paired device credential is
   // structurally narrower than operator/viewer (`isOperatorToken`/`isViewerToken` never
   // match it — see auth.ts) and only reaches routes gated by these two dedicated scopes.
@@ -96,6 +99,73 @@ const MATRIX: Record<string, Scope> = {
   'GET /ap/v1/agent/tasks/:task_id/artifacts/:artifact_id': 'viewer',
   'POST /mcp': 'mcp',
   'POST /mcp/v1': 'mcp',
+
+  // Goal Studio graphs
+  'POST /api/v1/goal-studio/graphs/create': 'operator',
+  'POST /api/v1/goal-studio/graphs/seed-nobel': 'operator',
+  'POST /api/v1/goal-studio/graphs/import': 'operator',
+  'POST /api/v1/goal-studio/graphs/validate': 'operator',
+  'GET /api/v1/goal-studio/graphs': 'viewer',
+  'GET /api/v1/goal-studio/graphs/:graphId': 'viewer',
+  'GET /api/v1/goal-studio/graphs/:graphId/revisions': 'viewer',
+  'GET /api/v1/goal-studio/graphs/:graphId/revisions/:rev': 'viewer',
+  'POST /api/v1/goal-studio/graphs/:graphId/revisions': 'operator',
+  'GET /api/v1/goal-studio/graphs/:graphId/critical-path': 'viewer',
+  'GET /api/v1/goal-studio/graphs/:graphId/diff': 'viewer',
+
+  // Goal Studio runs and approvals
+  'POST /api/v1/goal-studio/runs': 'operator',
+  'GET /api/v1/goal-studio/runs': 'viewer',
+  'GET /api/v1/goal-studio/runs/:runId': 'viewer',
+  'POST /api/v1/goal-studio/runs/:runId/pause': 'operator',
+  'POST /api/v1/goal-studio/runs/:runId/resume': 'operator',
+  'POST /api/v1/goal-studio/runs/:runId/stop': 'operator',
+  'POST /api/v1/goal-studio/runs/:runId/cancel': 'operator',
+  'GET /api/v1/goal-studio/runs/:runId/results': 'viewer',
+  'POST /api/v1/goal-studio/runs/:runId/targets/:targetId/retry': 'operator',
+  'POST /api/v1/goal-studio/runs/:runId/targets/:targetId/run': 'operator',
+  'GET /api/v1/goal-studio/runs/:runId/transitions': 'viewer',
+  'GET /api/v1/goal-studio/runs/:runId/attempts': 'viewer',
+  'GET /api/v1/goal-studio/runs/:runId/events': 'viewer',
+  'GET /api/v1/goal-studio/approvals': 'viewer',
+  'GET /api/v1/goal-studio/runs/:runId/approvals': 'viewer',
+  'POST /api/v1/goal-studio/approvals/:id/approve': 'operator',
+  'POST /api/v1/goal-studio/approvals/:id/deny': 'operator',
+  'POST /api/v1/goal-studio/runs/:runId/approvals/:approvalId/resolve': 'operator',
+
+  // Goal Studio prompts and fleet
+  'GET /api/v1/goal-studio/prompts': 'viewer',
+  'GET /api/v1/goal-studio/prompts/:id': 'viewer',
+  'GET /api/v1/goal-studio/prompts/:id/versions': 'viewer',
+  'GET /api/v1/goal-studio/prompts/:id/versions/:version': 'viewer',
+  'GET /api/v1/goal-studio/prompts/:id/diff': 'viewer',
+  'GET /api/v1/goal-studio/prompts/:id/evaluations': 'viewer',
+  'POST /api/v1/goal-studio/prompts/:id/render': 'viewer',
+  'POST /api/v1/goal-studio/prompts': 'operator',
+  'POST /api/v1/goal-studio/prompts/:id/versions': 'operator',
+  'POST /api/v1/goal-studio/prompts/:id/rollback': 'operator',
+  'POST /api/v1/goal-studio/prompts/:id/evaluate': 'operator',
+  'GET /api/v1/goal-studio/fleet/models': 'viewer',
+  'GET /api/v1/goal-studio/fleet/workers': 'viewer',
+  'POST /api/v1/goal-studio/fleet/models/probe': 'operator',
+  'POST /api/v1/goal-studio/fleet/route': 'viewer',
+  'POST /api/v1/goal-studio/fleet/models/register': 'operator',
+
+  // Goal Studio evidence and governance
+  'GET /api/v1/goal-studio/runs/:runId/evidence': 'viewer',
+  'GET /api/v1/goal-studio/runs/:runId/targets/:targetId/evidence': 'viewer',
+  'POST /api/v1/goal-studio/runs/:runId/targets/:targetId/verify': 'operator',
+  'POST /api/v1/goal-studio/runs/:runId/targets/:targetId/external-evidence': 'operator',
+  'GET /api/v1/goal-studio/governance/audit': 'viewer',
+  'GET /api/v1/goal-studio/governance/policy': 'viewer',
+  'POST /api/v1/goal-studio/governance/preflight': 'operator',
+  'POST /api/v1/goal-studio/governance/spend-check': 'operator',
+
+  // Remote checkpoint transport uses its own optional shared secret.
+  'POST /api/v1/checkpoints/manifests': 'checkpoint-transport',
+  'PUT /api/v1/checkpoints/blobs/:hash': 'checkpoint-transport',
+  'POST /api/v1/checkpoints/:checkpointId/commit': 'checkpoint-transport',
+  'GET /api/v1/checkpoints/:checkpointId/bundle': 'checkpoint-transport',
 
   // Mobile companion surface (apps/api/src/mobile.ts)
   'POST /api/v1/mobile/pair/request': 'pairing-secret',
