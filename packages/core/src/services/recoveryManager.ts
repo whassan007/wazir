@@ -69,7 +69,6 @@ export interface RecoverySweepResult {
 export class RecoveryManager {
   private timer?: NodeJS.Timeout;
   private readonly operationGuard: OperationReconciliationGuard;
-  private readonly leaseTable = new Map<string, LeaseFencingState>();
 
   constructor(private readonly deps: RecoveryManagerOptions) {
     this.operationGuard = deps.operationGuard ?? new OperationReconciliationGuard();
@@ -90,40 +89,25 @@ export class RecoveryManager {
   ): Promise<LeaseFencingState> {
     const now = options?.now ?? new Date();
     const ttlMs = options?.ttlMs ?? 30_000;
-    const prior = this.leaseTable.get(executionId) ?? this.deps.executions.getLease(executionId);
-    const nextEpoch = (prior?.epoch ?? 0) + 1;
-
-    // If ExecutionEngine has an unexpired lease held by the old lost worker, expire/release it
-    // or acquire under new worker if non-terminal.
-    const record = await this.deps.executions.get(executionId);
-    let leaseId = `lease-${executionId}-epoch-${nextEpoch}`;
-
-    if (record && !['completed', 'failed', 'cancelled'].includes(record.execution.status)) {
-      try {
-        const existingEngineLease = this.deps.executions.getLease(executionId);
-        if (existingEngineLease && !existingEngineLease.released && existingEngineLease.workerId !== newWorkerId) {
-          await this.deps.executions.releaseLease(executionId, existingEngineLease.workerId, {
-            epoch: existingEngineLease.epoch,
-            now,
-          });
-        }
-        const acquired = await this.deps.executions.acquireLease(executionId, newWorkerId, { ttlMs, now });
-        leaseId = acquired.token;
-      } catch {
-        // Fallback to RecoveryManager's fencing table when execution is already transitioning
-      }
+    // Persist ownership through the engine so restarts and direct engine mutations
+    // observe the same fencing epoch. A failed persistence operation must propagate.
+    const existing = this.deps.executions.getLease(executionId);
+    if (existing && !existing.released && existing.workerId !== newWorkerId) {
+      await this.deps.executions.releaseLease(executionId, existing.workerId, {
+        epoch: existing.epoch,
+        now,
+      });
     }
-
+    const acquired = await this.deps.executions.acquireLease(executionId, newWorkerId, { ttlMs, now });
     const fenced: LeaseFencingState = {
       executionId,
-      leaseId,
-      workerId: newWorkerId,
-      epoch: nextEpoch,
+      leaseId: acquired.token,
+      workerId: acquired.workerId,
+      epoch: acquired.epoch,
       harnessId: options?.harnessId,
-      released: false,
-      expiresAt: new Date(now.getTime() + ttlMs),
+      released: acquired.released,
+      expiresAt: acquired.expiresAt,
     };
-    this.leaseTable.set(executionId, fenced);
     return structuredClone(fenced);
   }
 
@@ -131,7 +115,7 @@ export class RecoveryManager {
    * Verifies that a worker reporting completion or events holds the current active lease epoch.
    */
   verifyWorkerReport(executionId: string, claim: LeaseFencingClaim): LeaseFencingResult {
-    const tracked = this.leaseTable.get(executionId) ?? this.deps.executions.getLease(executionId);
+    const tracked = this.deps.executions.getLease(executionId);
     return verifyLeaseFencing(tracked, claim);
   }
 
