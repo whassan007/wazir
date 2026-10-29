@@ -296,12 +296,18 @@ describe('Paste Barrier & Accidental Submission Circuit Breaker', () => {
 
       harness.sendKeys('first request');
       harness.sendKey('\r');
-      await new Promise((resolve) => setTimeout(resolve, 120));
+      await expect.poll(() => engine.jobManager.list().length, { timeout: 5000 }).toBe(1);
+      // Escape interrupts active work before it clears a draft. Let this fixture finish first.
+      await expect.poll(() => (harness.tui as any).getAgents().some(
+        (agent: { status: string }) => agent.status === 'running' || agent.status === 'retry',
+      ), { timeout: 5000 }).toBe(false);
+      await expect.poll(() => (harness.tui as any).inputBuffer, { timeout: 5000 }).toBe('');
       harness.tui.handleKey('\r', { name: 'return', ctrl: false, meta: false, shift: true, sequence: '\r' } as any);
       expect((harness.tui as any).inputBuffer).toBe('\n');
       harness.sendKeys('second line');
       expect(engine.jobManager.list()).toHaveLength(1);
       harness.sendKey('\x1b');
+      await expect.poll(() => (harness.tui as any).inputBuffer, { timeout: 5000 }).toBe('');
 
       harness.sendKeys('e\u0301');
       harness.sendKey('\x1b[D');
