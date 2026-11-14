@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:wazir:formal-assurance:evidence:1.0",
+  "title": "Wazir Formal Assurance Result",
+  "description": "Portable evidence exchange schema; adapt to Wazir's native evidence API rather than replacing it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "evidence_id", "skill", "requirement_id", "property_id", "specification_revision",
+    "workspace_id", "workspace_revision", "source_commit", "tool_version",
+    "status", "scope", "assumptions", "command", "artifacts"
+  ],
+  "properties": {
+    "evidence_id": {"type": "string", "minLength": 1},
+    "skill": {"enum": ["z3", "dafny", "scenic", "verifai"]},
+    "requirement_id": {"type": "string", "minLength": 1},
+    "property_id": {"type": "string", "minLength": 1},
+    "specification_revision": {"type": "string", "minLength": 1},
+    "specification_approval": {"enum": ["REVIEWED", "PENDING", "REJECTED"]},
+    "jurisdiction": {"type": ["string", "null"]},
+    "normative_sources": {"type": "array", "items": {"type": "string"}},
+    "workspace_id": {"type": "string", "minLength": 1},
+    "workspace_revision": {"type": ["integer", "string"]},
+    "source_commit": {"type": "string", "minLength": 1},
+    "tool_version": {"type": "string", "minLength": 1},
+    "simulator_version": {"type": ["string", "null"]},
+    "status": {
+      "enum": [
+        "PROVED", "BOUNDED_PASS", "COUNTEREXAMPLE", "FALSIFIED",
+        "NOT_FALSIFIED", "INCONSISTENT_ASSUMPTIONS", "SPECIFICATION_REVIEW_REQUIRED",
+        "NOT_VERIFIED", "UNKNOWN", "ERROR", "NOT_RUN"
+      ]
+    },
+    "scope": {"type": "string", "minLength": 1},
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "command": {"type": "string", "minLength": 1},
+    "exit_code": {"type": ["integer", "null"]},
+    "elapsed_ms": {"type": ["number", "null"], "minimum": 0},
+    "counterexample": {"type": ["object", "null"]},
+    "seed": {"type": ["integer", "null"]},
+    "sample_counts": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

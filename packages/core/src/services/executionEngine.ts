@@ -463,13 +463,26 @@ export class ExecutionEngine {
     }
 
     if (status === 'completed') {
-      const { workspaceRevision: revision, missing, missingCriteria, evaluationInvalid, evaluationMissing } = assessCompletionEvidence(record);
-      if (missing.length > 0 || missingCriteria.length > 0 || evaluationInvalid || evaluationMissing) {
-        this.pushEvent(record, 'completion.rejected', { reason: 'VERIFICATION_REQUIRED', workspaceRevision: revision, missing, missingCriteria, evaluationInvalid, evaluationMissing });
+      const assessment = assessCompletionEvidence(record);
+      const { workspaceRevision: revision, missing, missingCriteria, evaluationInvalid, evaluationMissing, mutationRequiredMissing } = assessment;
+      if (!assessment.eligible || missing.length > 0 || missingCriteria.length > 0 || evaluationInvalid || evaluationMissing || mutationRequiredMissing) {
+        this.pushEvent(record, 'completion.rejected', {
+          reason: 'VERIFICATION_REQUIRED',
+          workspaceRevision: revision,
+          missing,
+          missingCriteria,
+          evaluationInvalid,
+          evaluationMissing,
+          mutationRequiredMissing,
+        });
         await this.flush(record);
-        throw new ExecutionFailure('ARTIFACT_CONTRACT_FAILED', `Completion requires current verification for workspace revision ${revision}`);
+        const errMsg = mutationRequiredMissing
+          ? (assessment.reason ?? `Completion requires mutation for workspace revision ${revision}`)
+          : `Completion requires current verification for workspace revision ${revision}`;
+        throw new ExecutionFailure('ARTIFACT_CONTRACT_FAILED', errMsg);
       }
       await injectFault('DURING_COMPLETION', { executionId, status, workspaceRevision: revision });
+      this.assertLease(executionId, options, options?.now);
     }
 
     if (record.execution.status === status && ['completed', 'failed', 'cancelled'].includes(status)) {
@@ -569,6 +582,7 @@ export class ExecutionEngine {
     this.assertLease(executionId, options, options.now, true);
     const callId = options.callId ?? `call-${randomUUID()}`;
     await injectFault('BEFORE_TOOL_EXECUTION', { executionId, callId, tool, input, sideEffectClass: options.sideEffectClass });
+    this.assertLease(executionId, options, options.now, true);
     if (this.toolCheckpoints(executionId).some(call => call.callId === callId)) {
       throw new Error(`TOOL_ALREADY_DISPATCHED: '${callId}' must be reconciled or its recorded result reused`);
     }
@@ -736,7 +750,10 @@ export class ExecutionEngine {
       record.evidence = [];
     }
     const currentRev = record.workspaceState?.revision ?? 0;
-    const boundRev = evidence.workspaceRevision !== undefined ? evidence.workspaceRevision : (evidence.revision !== undefined ? evidence.revision : currentRev);
+    // FORMAL-A13-VERIF-05: In recordEvidence, bind workspaceRevision to record.workspaceState.revision
+    // if the caller attempts to supply a revision greater than record.workspaceState.revision.
+    const requestedRev = evidence.workspaceRevision !== undefined ? evidence.workspaceRevision : evidence.revision;
+    const boundRev = requestedRev !== undefined && requestedRev <= currentRev ? requestedRev : currentRev;
     await injectFault('AFTER_REVISION_BEFORE_VERIFICATION', { executionId, currentRevision: currentRev, boundRevision: boundRev, evidenceType: evidence.type ?? evidence.oracle });
     const oracleType = evidence.oracle ?? evidence.type;
     const rawPayload = `${oracleType}:${evidence.command ?? ''}:${evidence.exitCode}:${boundRev}:${evidence.output ?? ''}`;
@@ -917,6 +934,7 @@ export class ExecutionEngine {
     }
 
     await injectFault('AFTER_MUTATION_BEFORE_REVISION_RECORD', { executionId, files, currentRevision: record.workspaceState?.revision ?? 0 });
+    this.assertLease(executionId, options, options?.now, true);
 
     record.workspaceState.revision += 1;
     record.workspaceState.updatedAt = new Date();
@@ -996,6 +1014,7 @@ export class ExecutionEngine {
         }
       }
     }
+    this.assertLease(executionId, options, options?.now, true);
     await this.flush(record);
   }
 
@@ -1461,8 +1480,8 @@ export class ExecutionEngine {
    */
   async releaseLease(
     executionId: string,
-    workerId: string,
-    optionsOrEpoch?: number | { leaseEpoch?: number; epoch?: number; leaseToken?: string; now?: Date },
+    workerId?: string,
+    optionsOrEpoch?: number | string | { leaseEpoch?: number; epoch?: number; leaseToken?: string; now?: Date },
     nowArg?: Date,
   ): Promise<void> {
     const record = this.require(executionId);
@@ -1472,12 +1491,17 @@ export class ExecutionEngine {
 
     if (typeof optionsOrEpoch === 'number') {
       leaseEpoch = optionsOrEpoch;
+    } else if (typeof optionsOrEpoch === 'string') {
+      leaseToken = optionsOrEpoch;
     } else if (optionsOrEpoch && typeof optionsOrEpoch === 'object') {
       leaseEpoch = optionsOrEpoch.leaseEpoch ?? optionsOrEpoch.epoch;
       leaseToken = optionsOrEpoch.leaseToken;
       if (optionsOrEpoch.now !== undefined) now = optionsOrEpoch.now;
     }
 
+    if (!workerId) {
+      throw new StaleWorkerLeaseError(executionId, `Worker identity is required to release execution '${executionId}'`);
+    }
     this.assertLease(executionId, { workerId, leaseEpoch, leaseToken }, now, false);
     const current = this.leases.get(executionId)!;
     current.released = true;
@@ -1497,6 +1521,25 @@ export class ExecutionEngine {
     this.require(executionId);
     const lease = this.leases.get(executionId);
     return lease ? structuredClone(lease) : undefined;
+  }
+
+  /** Cancels an execution, optionally fencing the request to its current lease. */
+  async cancelExecution(
+    executionId: string,
+    options?: { expectedWorkerId?: string; leaseToken?: string; expectedEpoch?: number },
+  ): Promise<void> {
+    if (options && (options.expectedWorkerId !== undefined || options.leaseToken !== undefined || options.expectedEpoch !== undefined)) {
+      this.assertLease(executionId, {
+        workerId: options.expectedWorkerId,
+        leaseToken: options.leaseToken,
+        leaseEpoch: options.expectedEpoch,
+      });
+    }
+    await this.setStatus(executionId, 'cancelled', options ? {
+      workerId: options.expectedWorkerId,
+      leaseToken: options.leaseToken,
+      leaseEpoch: options.expectedEpoch,
+    } : undefined);
   }
 
   /**

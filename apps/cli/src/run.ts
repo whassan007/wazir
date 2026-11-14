@@ -1416,6 +1416,9 @@ export async function runSubagent(
   const childExecId = childRecord.execution.id;
   // Sizes every sub-agent provider request the same way executeTask does (one allocator per sub-agent run).
   const subagentAllocator = new InvocationContextAllocator(engine, childExecId, OUTPUT_RESERVE_TOKENS);
+  if (context.parentExecutionId) {
+    engine.policy.linkParentExecution(childExecId, context.parentExecutionId);
+  }
 
   if (placementDecision) {
     context.log(color.cyan(`    [subagent] fleet placement: ${effectiveModelId} via ${effectiveRuntimeId} on ${effectiveComputerId ?? 'hosted'} (${placementDecision.reasons.join('; ')})`));
@@ -1586,6 +1589,7 @@ export async function runSubagent(
         tool: name,
         input: toolInput,
         executionId: childExecId,
+        parentExecutionId: context.parentExecutionId,
         projectRoot: context.projectRoot,
         effectiveIsolation: sandboxStatus().mode,
       });

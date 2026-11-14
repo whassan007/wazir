@@ -60,6 +60,9 @@ export interface CompletionAssessment {
   missingCriteria: string[];
   evaluationInvalid: boolean;
   evaluationMissing: boolean;
+  mutationRequiredMissing?: boolean;
+  reason?: string;
+  reasons?: string[];
   eligible: boolean;
 }
 
@@ -102,6 +105,29 @@ export function assessCompletionEvidence(record: ExecutionRecord): CompletionAss
   const missing = required.filter(type => !oracleSatisfied(record.evidence ?? [], revision, type));
   const evaluationInvalid = Boolean(record.evaluation && (!record.evaluation.success || record.evaluation.workspaceRevision !== revision));
   const evaluationMissing = record.filesChanged.length > 0 && required.length === 0 && !record.evaluation;
+
+  // FORMAL-A13-VERIF-04: If mutationRequired is true and 0 files were changed, reject completion eligibility.
+  const filesChangedCount =
+    (record.workspaceState as any)?.filesChanged !== undefined
+      ? ((record.workspaceState as any).filesChanged?.length ?? 0)
+      : (record.filesChanged?.length ?? 0);
+  const mutationRequiredMissing =
+    record.task?.requirements?.mutationRequired === true && filesChangedCount === 0;
+
+  const reason = mutationRequiredMissing
+    ? 'mutationRequired was not satisfied: 0 files were changed'
+    : evaluationInvalid
+      ? 'evaluation is invalid or for stale revision'
+      : evaluationMissing
+        ? 'evaluation result missing'
+        : missing.length > 0
+          ? `missing required evidence: ${missing.join(', ')}`
+          : missingCriteria.length > 0
+            ? `missing criteria: ${missingCriteria.join(', ')}`
+            : undefined;
+
+  const reasons = reason ? [reason] : [];
+
   return {
     workspaceRevision: revision,
     required,
@@ -109,7 +135,15 @@ export function assessCompletionEvidence(record: ExecutionRecord): CompletionAss
     missingCriteria,
     evaluationInvalid,
     evaluationMissing,
-    eligible: missing.length === 0 && missingCriteria.length === 0 && !evaluationInvalid && !evaluationMissing,
+    mutationRequiredMissing,
+    reason,
+    reasons,
+    eligible:
+      missing.length === 0 &&
+      missingCriteria.length === 0 &&
+      !evaluationInvalid &&
+      !evaluationMissing &&
+      !mutationRequiredMissing,
   };
 }
 
@@ -275,6 +309,7 @@ export function explainCompletion(inspection: VerificationInspection): WhyComple
     else missing.push(`${oracle}: ${slot.status} at R${slot.revision} (exit ${slot.exitCode})`);
   }
   for (const id of c.missingCriteria) missing.push(`ACCEPTANCE: ${id} requires current evidence or human review`);
+  if (c.mutationRequiredMissing) missing.push(c.reason ?? 'mutationRequired: task requires file modifications but 0 files were changed');
   if (c.evaluationInvalid) missing.push(`EVALUATION: controller evaluation failed or is not bound to R${rev}`);
   if (c.evaluationMissing) missing.push(`EVALUATION: files changed but no controller evaluation recorded for R${rev}`);
   if (inspection.unresolvedToolCalls > 0) missing.push(`TOOL_OUTCOME_UNKNOWN: ${inspection.unresolvedToolCalls} dispatched tool call(s) unreconciled`);

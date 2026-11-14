@@ -405,6 +405,59 @@ describe('ExternalHarnessAdapter & ACP Harness Capabilities (Group A3)', () => {
     expect(result.errors?.[0]).toContain('Outbound curl prohibited');
   });
 
+  it('8b. enforces PolicyEngine authorization and evaluateTask (A01-06 fix)', async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-a3-pe-'));
+
+    let clientHandler: any;
+    const mockConn: AcpConnectionLike = {
+      initialize: vi.fn().mockResolvedValue({ protocolVersion: PROTOCOL_VERSION }),
+      newSession: vi.fn().mockResolvedValue({ sessionId: 'sess-pe' }),
+      prompt: vi.fn().mockImplementation(async () => {
+        await clientHandler.requestPermission({
+          requestId: 'tc-sh',
+          sessionId: 'sess-pe',
+          toolCall: { toolCallId: 'tc-sh', title: 'rm -rf /', kind: 'execute' },
+          options: [{ optionId: 'once', name: 'Allow once', kind: 'allow_once' }],
+        });
+        return { stopReason: 'end_turn' };
+      }),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const authorizeFn = vi.fn().mockResolvedValue({
+      decision: 'deny',
+      rule: 'shell-dangerous-deny',
+      reasons: ['System destructive command denied'],
+    });
+
+    const evaluateTaskFn = vi.fn().mockReturnValue({
+      allowed: true,
+      reasons: [],
+    });
+
+    const adapter = new ExternalHarnessAdapter({
+      preset: 'claude-code',
+      permissionMode: 'full',
+      policyEngine: {
+        authorize: authorizeFn,
+        evaluateTask: evaluateTaskFn,
+      },
+      connect: async (cl) => {
+        clientHandler = cl;
+        return mockConn;
+      },
+    });
+
+    const result = await adapter.execute(createRequest(tempDir));
+
+    expect(evaluateTaskFn).toHaveBeenCalledOnce();
+    expect(authorizeFn).toHaveBeenCalledOnce();
+    expect(result.status).toBe('failed');
+    expect(result.terminationReason).toBe('POLICY_DENIED');
+    expect(result.failureClassification).toBe('PERMISSION_DENIED');
+    expect(result.errors?.[0]).toContain('System destructive command denied');
+  });
+
   it('9. bounds output capture to maxOutputChars so runaway child output cannot exhaust memory', async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-a3-bounded-'));
 

@@ -43,6 +43,7 @@ export interface JobOrchestratorOptions {
 export interface OrchestratorTaskAssignment {
   jobId: string;
   taskId: string;
+  executionId: string;
   agentId: string;
   modelId: string;
   runtimeId: string;
@@ -54,6 +55,7 @@ export interface OrchestratorTaskAssignment {
 interface ActiveJobHandle {
   abort: AbortController;
   activeTasks: Map<string, AbortController>;
+  activeExecutions: Map<string, string>;
   /** Tasks whose task:cancelled has already been emitted (by cancelJob/cancelTask), so the
    *  post-executor abort branch doesn't announce the same cancellation a second time. */
   cancelledTaskIds: Set<string>;
@@ -155,6 +157,16 @@ export class JobOrchestrator {
     }
   }
 
+  private async unknownMutationError(taskId: string): Promise<string | undefined> {
+    for (const record of await this.executionEngine.listByTask(taskId)) {
+      const call = this.executionEngine.findUnknownOutcomeToolCall(record.execution.id);
+      if (call && call.sideEffectClass !== 'READ_ONLY') {
+        return `[TOOL_OUTCOME_UNKNOWN] Tool call '${call.tool}' (${call.callId}) has an unresolved side effect`;
+      }
+    }
+    return undefined;
+  }
+
   steerTask(jobId: string, taskId: string, instruction: string): void {
     const job = this.jobManager.get(jobId);
     const task = job?.tasks.find((t) => t.id === taskId);
@@ -214,8 +226,9 @@ export class JobOrchestrator {
       return null;
     }
 
-    await this.executionEngine.create({
+    const record = await this.executionEngine.create({
       task,
+      jobId,
       agentId: decision.agentId,
       computerId: decision.computerId,
       runtimeId: decision.runtimeId,
@@ -226,6 +239,7 @@ export class JobOrchestrator {
     return {
       jobId,
       taskId,
+      executionId: record.execution.id,
       agentId: decision.agentId,
       modelId: decision.modelId,
       runtimeId: decision.runtimeId,
@@ -259,22 +273,39 @@ export class JobOrchestrator {
     await this.jobManager.failTask(jobId, taskId, error, retryCount);
   }
 
+  async retryTask(jobId: string, taskId: string): Promise<void> {
+    const job = this.jobManager.get(jobId);
+    if (!job) throw new Error(`Job '${jobId}' not found`);
+    if (job.status === 'cancelled' || job.status === 'completed' || job.status === 'failed') {
+      throw new Error(`Cannot retry task in terminal job status '${job.status}'`);
+    }
+    await this.jobManager.retryTask(jobId, taskId);
+    this.activeJobs.get(jobId)?.wakePump?.();
+  }
+
   async cancelTask(jobId: string, taskId: string): Promise<void> {
+    const job = this.jobManager.get(jobId);
+    // A task that already finished keeps its outcome; cancelJob() applies the same rule.
+    const status = job?.tasks.find((t) => t.id === taskId)?.status;
+    if (status === 'completed' || status === 'failed') return;
     const handle = this.activeJobs.get(jobId);
     if (handle) {
       const taskAbort = handle.activeTasks.get(taskId);
       if (taskAbort) {
         taskAbort.abort();
         handle.activeTasks.delete(taskId);
+        const executionId = handle.activeExecutions.get(taskId);
+        if (executionId) await this.cancelExecution(executionId);
       }
+      if (handle.cancelledTaskIds.has(taskId)) return;
       handle.cancelledTaskIds.add(taskId);
+    } else if (status === 'cancelled') {
+      return;
     }
-    const job = this.jobManager.get(jobId);
-    // A task that already finished keeps its outcome; cancelJob() applies the same rule.
-    const status = job?.tasks.find((t) => t.id === taskId)?.status;
-    if (status === 'completed' || status === 'failed' || status === 'cancelled') return;
     if (job) {
-      await this.jobManager.updateTaskStatus(jobId, taskId, 'cancelled');
+      if (status !== 'cancelled') {
+        await this.jobManager.updateTaskStatus(jobId, taskId, 'cancelled');
+      }
       await this.jobManager.updateAgentState(jobId, taskId, 'cancelled', undefined, 'Cancelled by user');
     }
     this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
@@ -310,6 +341,8 @@ export class JobOrchestrator {
       handle.abort.abort();
       for (const [taskId, taskAbort] of handle.activeTasks.entries()) {
         taskAbort.abort();
+        const executionId = handle.activeExecutions.get(taskId);
+        if (executionId) await this.cancelExecution(executionId);
         handle.cancelledTaskIds.add(taskId);
         this.emit(jobId, { type: 'task:cancelled', jobId, taskId, error: reason });
       }
@@ -317,6 +350,13 @@ export class JobOrchestrator {
     }
     await this.jobManager.cancel(jobId);
     this.emit(jobId, { type: 'job:cancelled', jobId, error: reason });
+  }
+
+  private async cancelExecution(executionId: string): Promise<void> {
+    const record = await this.executionEngine.get(executionId);
+    if (record && !['completed', 'failed', 'cancelled'].includes(record.execution.status)) {
+      await this.executionEngine.setStatus(executionId, 'cancelled');
+    }
   }
 
   /**
@@ -437,6 +477,7 @@ export class JobOrchestrator {
 
     const activeTasks = new Map<string, AbortController>();
     const retryCounts = new Map<string, number>(job.graph.nodes.map(n => [n.taskId ?? n.id, n.retryCount ?? 0]));
+    const replanDepths = new Map<string, number>();
     const supersededTaskIds = new Set<string>();
 
     this.emit(jobId, { type: 'job:started', jobId });
@@ -452,6 +493,7 @@ export class JobOrchestrator {
       const handle: ActiveJobHandle = {
         abort: jobAbortController,
         activeTasks,
+        activeExecutions: new Map(),
         cancelledTaskIds: new Set(),
         orphanedTaskIds: new Set(),
         resolve,
@@ -620,10 +662,19 @@ export class JobOrchestrator {
             break;
           }
 
+          handle.activeExecutions.set(taskId, assignment.executionId);
+          if (taskAbort.signal.aborted) {
+            await this.cancelExecution(assignment.executionId);
+            handle.activeExecutions.delete(taskId);
+            activeTasks.delete(taskId);
+            continue;
+          }
+
           node.state = 'running';
           node.executedAt = new Date();
           await this.jobManager.updateAgentState(job.id, node.id, 'running');
           await this.jobManager.updateTaskStatus(job.id, taskId, 'running');
+          await this.executionEngine.setStatus(assignment.executionId, 'running');
 
           this.emit(jobId, {
             type: 'task:started',
@@ -640,7 +691,7 @@ export class JobOrchestrator {
               const executionContext: JobTaskExecutionContext = {
                 jobId,
                 taskId,
-                node,
+                node: structuredClone(node),
                 assignment: {
                   jobId,
                   taskId,
@@ -649,7 +700,7 @@ export class JobOrchestrator {
                   runtimeId: assignment.runtimeId,
                   computerId: assignment.computerId,
                   assignedAt: new Date(),
-                  policy: [],
+                  policy: structuredClone(task.policy ? Object.values(task.policy).flat() : []),
                 },
                 signal: taskAbort.signal,
                 onProgress: (ev) => {
@@ -661,7 +712,7 @@ export class JobOrchestrator {
                     event: ev,
                   });
                 },
-                previousOutcomes: new Map(job.graph.nodes.filter(n => node.dependencies.includes(n.id))
+                previousOutcomes: new Map(job.graph.nodes.filter(n => node.dependencies.includes(n.id) || (task.contextFrom && task.contextFrom.includes(n.taskId ?? n.id)))
                   .map(n => [n.taskId ?? n.id, { success: n.state === 'completed', result: structuredClone(n.result), error: n.error }])),
                 workspaceMode: task.workspaceMode,
                 mutationRequired: task.mutationRequired,
@@ -671,7 +722,7 @@ export class JobOrchestrator {
                 },
               };
 
-              let outcome: JobTaskOutcome = await executor(task, executionContext);
+              let outcome: JobTaskOutcome = await executor(structuredClone(task), executionContext);
               if (node.type === 'supervisor') {
                 const decision = outcome.supervisorDecision;
                 if (!decision || !['approve', 'reject'].includes(decision.decision) || !decision.reason?.trim()) {
@@ -689,7 +740,13 @@ export class JobOrchestrator {
                 const reason = 'Orphaned: the worker running this task stopped responding';
                 const retries = retryCounts.get(taskId) ?? 0;
                 const maxRetries = task.maxRetries ?? job.maxRetries ?? 3;
-                if (retries < maxRetries) {
+                const unknownError = await this.unknownMutationError(taskId);
+                if (unknownError) {
+                  node.state = 'failed';
+                  node.error = unknownError;
+                  await this.failTask(job.id, taskId, unknownError, Infinity);
+                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: unknownError });
+                } else if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
@@ -709,8 +766,10 @@ export class JobOrchestrator {
                   this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
                 }
               } else if (taskAbort.signal.aborted) {
+                await this.cancelExecution(assignment.executionId);
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
-                await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
+                const existingNodeError = job.graph.nodes.find((n) => n.id === node.id)?.error ?? node.error ?? 'Cancelled by user';
+                await this.jobManager.updateAgentState(job.id, node.id, 'cancelled', undefined, existingNodeError);
                 // cancelJob()/cancelTask() already emitted this task's cancellation (with
                 // the reason, when there was one) at the moment it happened; emitting
                 // again here when the executor finally returns produced a second,
@@ -740,7 +799,9 @@ export class JobOrchestrator {
                       outcome.reasons?.some((r) => r.toLowerCase().includes('policy') || r.toLowerCase().includes('deny')),
                     );
 
-                if (options.replanner && !isPolicyDenial) {
+                const currentReplanDepth = replanDepths.get(taskId) ?? 0;
+                const maxReplanDepth = job.maxRetries ?? task.maxRetries ?? 3;
+                if (options.replanner && !isPolicyDenial && currentReplanDepth < maxReplanDepth) {
                   try {
                     const replanResult = await options.replanner({
                       job,
@@ -769,6 +830,9 @@ export class JobOrchestrator {
                       const added = await this.jobManager.addTasksToJob(job.id, inheritedRepairTasks, {
                         replacesTaskId: taskId,
                       });
+                      for (const addedTask of added) {
+                        replanDepths.set(addedTask.id, currentReplanDepth + 1);
+                      }
 
                       this.emit(jobId, {
                         type: 'task:replan',
@@ -786,7 +850,13 @@ export class JobOrchestrator {
 
                 const retries = retryCounts.get(taskId) ?? 0;
                 const maxRetries = isPolicyDenial ? 0 : (task.maxRetries ?? job.maxRetries ?? 3);
-                if (retries < maxRetries) {
+                const unknownError = await this.unknownMutationError(taskId);
+                if (unknownError) {
+                  node.state = 'failed';
+                  node.error = unknownError;
+                  await this.failTask(job.id, taskId, unknownError, Infinity);
+                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: unknownError });
+                } else if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
@@ -829,7 +899,13 @@ export class JobOrchestrator {
                 const reason = 'Orphaned: the worker running this task stopped responding';
                 const retries = retryCounts.get(taskId) ?? 0;
                 const maxRetries = task.maxRetries ?? job.maxRetries ?? 3;
-                if (retries < maxRetries) {
+                const unknownError = await this.unknownMutationError(taskId);
+                if (unknownError) {
+                  node.state = 'failed';
+                  node.error = unknownError;
+                  await this.failTask(job.id, taskId, unknownError, Infinity);
+                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: unknownError });
+                } else if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
@@ -849,6 +925,7 @@ export class JobOrchestrator {
                   this.emit(jobId, { type: 'task:failed', jobId, taskId, error: reason });
                 }
               } else if (taskAbort.signal.aborted) {
+                await this.cancelExecution(assignment.executionId);
                 await this.jobManager.updateTaskStatus(job.id, taskId, 'cancelled');
                 await this.jobManager.updateAgentState(job.id, node.id, 'cancelled');
                 this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
@@ -856,7 +933,13 @@ export class JobOrchestrator {
                 const isPolicyDenial = errMessage.toLowerCase().includes('policy') || errMessage.toLowerCase().includes('denied');
                 const retries = retryCounts.get(taskId) ?? 0;
                 const maxRetries = isPolicyDenial ? 0 : (task.maxRetries ?? job.maxRetries ?? 3);
-                if (retries < maxRetries) {
+                const unknownError = await this.unknownMutationError(taskId);
+                if (unknownError) {
+                  node.state = 'failed';
+                  node.error = unknownError;
+                  await this.failTask(job.id, taskId, unknownError, Infinity);
+                  this.emit(jobId, { type: 'task:failed', jobId, taskId, error: unknownError });
+                } else if (retries < maxRetries) {
                   retryCounts.set(taskId, retries + 1);
                   node.retryCount = retries + 1;
                   if (!node.attempts) node.attempts = [];
@@ -893,6 +976,7 @@ export class JobOrchestrator {
                 }
               }
             } finally {
+              handle.activeExecutions.delete(taskId);
               activeTasks.delete(taskId);
               this.steeringQueues.delete(taskId);
               void pump().catch(reject);
@@ -910,7 +994,10 @@ export class JobOrchestrator {
             const anyFailed = job.graph.nodes.some(
               (n) => n.state === 'failed' && !supersededTaskIds.has(n.taskId ?? n.id),
             );
-            await finishJob(anyFailed ? 'failed' : 'completed');
+            const anyCancelled = job.graph.nodes.some(
+              (n) => n.state === 'cancelled' && !supersededTaskIds.has(n.taskId ?? n.id),
+            );
+            await finishJob(anyFailed ? 'failed' : anyCancelled ? 'cancelled' : 'completed');
             return;
           }
 

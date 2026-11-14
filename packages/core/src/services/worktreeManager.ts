@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { GIT_NO_HOOKS, isWindowsReservedName, isPathInside } from '@wazir/shared';
+import { DEFAULT_SPEC_DIRS, isSpecAuthorRole, normalizeSpecDirs } from './policyEngine.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -16,6 +17,31 @@ export interface WorktreeInfo {
   baseSha?: string;
   isGit: boolean;
   createdAt: Date;
+  /** Trusted task role the worktree was created for (WFA §1.5). */
+  role?: string;
+  /** Read-only spec fence applied to this worktree; absent only for `spec-author` tasks. */
+  specFence?: SpecReadOnlyFence;
+}
+
+/**
+ * Layer A of the spec write fence for one worktree. File permissions alone do
+ * not stop an owning process (it can `chmod u+w` or rename the directory), so
+ * callers must also run the task under the OS sandbox with the rules below and
+ * propagate `requiredIsolation` to the policy engine, which then fails closed
+ * when no sandbox is active. The merge fence is the independent backstop.
+ */
+export interface SpecReadOnlyFence {
+  role?: string;
+  /** Absolute spec directories made read-only (created empty when absent). */
+  readOnlyPaths: string[];
+  /** bwrap arguments; place them after the worktree's writable `--bind` so they take precedence. */
+  bwrapArgs: string[];
+  /** Seatbelt rules; append them after the profile's project write allowances (later rules win). */
+  seatbeltRules: string[];
+  /** Isolation the policy engine must require for this execution. */
+  requiredIsolation: 'os';
+  /** Identity of each fenced directory at fence time, used to detect replacement. */
+  identities: Array<{ path: string; dev: number; ino: number }>;
 }
 
 export interface WorktreeCommitResult {
@@ -35,6 +61,16 @@ export interface WorktreeMergeResult {
 
 export interface WorktreeManagerOptions {
   worktreeRootDir?: string;
+  /** Repository-relative spec directories fenced read-only for non-`spec-author` tasks (default `['specs']`). */
+  specDirs?: string[];
+}
+
+export interface CreateWorktreeOptions {
+  /**
+   * Persisted task role from the trusted task record. Every role except
+   * `spec-author` — including a missing one — gets a read-only spec fence.
+   */
+  role?: string;
 }
 
 /**
@@ -55,9 +91,76 @@ export interface WorktreeManagerOptions {
 export class WorktreeManager {
   private readonly rootOverride?: string;
   private readonly jobWorktrees = new Map<string, WorktreeInfo>();
+  private readonly inFlightJobWorktrees = new Map<string, Promise<WorktreeInfo>>();
+  private readonly specDirs: string[];
 
   constructor(options: WorktreeManagerOptions = {}) {
     this.rootOverride = options.worktreeRootDir;
+    this.specDirs = normalizeSpecDirs(options.specDirs ?? DEFAULT_SPEC_DIRS);
+  }
+
+  /**
+   * Makes every spec directory of `worktreeDir` read-only (`chmod -R a-w`,
+   * creating it first when absent so the task cannot create one) and returns
+   * the sandbox rules that make the fence binding. Returns undefined for a
+   * `spec-author` role. Refuses a spec directory that is a symlink.
+   */
+  async applySpecReadOnlyFence(worktreeDir: string, role?: string): Promise<SpecReadOnlyFence | undefined> {
+    if (isSpecAuthorRole(role) || this.specDirs.length === 0) return undefined;
+    const root = path.resolve(worktreeDir);
+    const readOnlyPaths: string[] = [];
+    const identities: SpecReadOnlyFence['identities'] = [];
+    for (const dir of this.specDirs) {
+      const specDir = path.join(root, ...dir.split('/'));
+      if (!isPathInside(root, specDir)) throw new Error(`spec directory '${dir}' escapes worktree '${root}'`);
+      const existing = await fs.lstat(specDir).catch(() => undefined);
+      if (existing?.isSymbolicLink()) throw new Error(`refusing to fence '${specDir}': spec directory is a symlink`);
+      if (existing && !existing.isDirectory()) throw new Error(`refusing to fence '${specDir}': spec path is not a directory`);
+      if (!existing) await fs.mkdir(specDir, { recursive: true });
+      await setTreeWritable(specDir, false);
+      const stat = await fs.stat(specDir);
+      readOnlyPaths.push(specDir);
+      identities.push({ path: specDir, dev: stat.dev, ino: stat.ino });
+    }
+    const real = await Promise.all(readOnlyPaths.map((dir) => fs.realpath(dir).catch(() => dir)));
+    const all = [...new Set([...readOnlyPaths, ...real])];
+    const q = (p: string) => `"${p.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    return {
+      role,
+      readOnlyPaths,
+      bwrapArgs: all.flatMap((dir) => ['--ro-bind', dir, dir]),
+      seatbeltRules: all.map((dir) => `(deny file-write* (subpath ${q(dir)}))`),
+      requiredIsolation: 'os',
+      identities,
+    };
+  }
+
+  /**
+   * Checks that a fence still holds: each spec directory exists, is the same
+   * directory (not replaced or symlinked) and nothing in it is writable.
+   * Returns human-readable violations; empty when intact.
+   */
+  async verifySpecReadOnlyFence(fence: SpecReadOnlyFence): Promise<string[]> {
+    const violations: string[] = [];
+    for (const identity of fence.identities) {
+      const stat = await fs.lstat(identity.path).catch(() => undefined);
+      if (!stat) { violations.push(`${identity.path}: spec directory is missing`); continue; }
+      if (stat.isSymbolicLink()) { violations.push(`${identity.path}: spec directory was replaced by a symlink`); continue; }
+      if (stat.dev !== identity.dev || stat.ino !== identity.ino) violations.push(`${identity.path}: spec directory was replaced`);
+      for (const entry of await listTree(identity.path)) {
+        if (!entry.stat.isSymbolicLink() && (entry.stat.mode & 0o222) !== 0) violations.push(`${entry.path}: write permission restored`);
+      }
+    }
+    return violations;
+  }
+
+  /** Restores owner write permission on fenced spec directories so the worktree can be removed. */
+  async releaseSpecReadOnlyFence(worktreeDir: string): Promise<void> {
+    for (const dir of this.specDirs) {
+      const specDir = path.join(path.resolve(worktreeDir), ...dir.split('/'));
+      const stat = await fs.lstat(specDir).catch(() => undefined);
+      if (stat?.isDirectory()) await setTreeWritable(specDir, true).catch(() => undefined);
+    }
   }
 
   async isGitRepo(projectRoot: string): Promise<boolean> {
@@ -95,15 +198,28 @@ export class WorktreeManager {
       const exists = await fs.access(existing.worktreeDir).then(() => true).catch(() => false);
       if (exists) return existing;
     }
-    const info = await this.createWorktree(projectRoot, jobId);
-    this.jobWorktrees.set(jobId, info);
-    return info;
+    const inFlight = this.inFlightJobWorktrees.get(jobId);
+    if (inFlight) return inFlight;
+
+    const promise = (async () => {
+      try {
+        const info = await this.createWorktree(projectRoot, jobId);
+        this.jobWorktrees.set(jobId, info);
+        return info;
+      } finally {
+        this.inFlightJobWorktrees.delete(jobId);
+      }
+    })();
+
+    this.inFlightJobWorktrees.set(jobId, promise);
+    return promise;
   }
 
   async createWorktree(
     projectRoot: string,
     jobId: string,
     taskId?: string,
+    options: CreateWorktreeOptions = {},
   ): Promise<WorktreeInfo> {
     assertSafeId('jobId', jobId);
     if (taskId !== undefined) assertSafeId('taskId', taskId);
@@ -142,6 +258,7 @@ export class WorktreeManager {
       await fs.mkdir(path.join(worktreeDir, '.wazir', 'tmp'), { recursive: true });
       await fs.mkdir(path.join(worktreeDir, '.wazir', 'home'), { recursive: true });
       await fs.mkdir(path.join(worktreeDir, '.wazir', 'cache'), { recursive: true });
+      const specFence = await this.applySpecReadOnlyFence(worktreeDir, options.role);
       return {
         jobId,
         taskId,
@@ -150,6 +267,8 @@ export class WorktreeManager {
         baseBranch,
         isGit: false,
         createdAt: new Date(),
+        role: options.role,
+        specFence,
       };
     }
 
@@ -190,6 +309,7 @@ export class WorktreeManager {
     await fs.mkdir(path.join(worktreeDir, '.wazir', 'tmp'), { recursive: true });
     await fs.mkdir(path.join(worktreeDir, '.wazir', 'home'), { recursive: true });
     await fs.mkdir(path.join(worktreeDir, '.wazir', 'cache'), { recursive: true });
+    const specFence = await this.applySpecReadOnlyFence(worktreeDir, options.role);
 
     return {
       jobId,
@@ -200,6 +320,8 @@ export class WorktreeManager {
       baseSha,
       isGit: true,
       createdAt: new Date(),
+      role: options.role,
+      specFence,
     };
   }
 
@@ -354,10 +476,11 @@ export class WorktreeManager {
         const { stdout: status } = await execFileAsync('git', [...GIT_NO_HOOKS, 'status', '--porcelain'], {
           cwd: projectRoot,
         });
+        const conflictPrefixes = ['UU', 'AA', 'UD', 'DU', 'DD', 'AU', 'UA'];
         conflicts = status
           .trim()
           .split('\n')
-          .filter((l) => l.startsWith('UU') || l.startsWith('AA') || l.startsWith('UD'))
+          .filter((l) => conflictPrefixes.some((p) => l.startsWith(p)))
           .map((l) => l.slice(3).trim());
 
         // Abort failed merge to leave repo clean
@@ -377,6 +500,9 @@ export class WorktreeManager {
   }
 
   async removeWorktree(info: WorktreeInfo): Promise<void> {
+    this.jobWorktrees.delete(info.jobId);
+    this.inFlightJobWorktrees.delete(info.jobId);
+    await this.releaseSpecReadOnlyFence(info.worktreeDir);
     if (info.isGit) {
       try {
         await execFileAsync(
@@ -402,11 +528,45 @@ export class WorktreeManager {
     if (!underOverride && !underDefault) {
       throw new Error(`refusing to remove '${resolved}': not a Wazir worktree directory`);
     }
+    await this.releaseSpecReadOnlyFence(resolved);
     try {
       await fs.rm(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     } catch {
       // ignore
     }
+  }
+}
+
+type TreeEntry = { path: string; stat: import('node:fs').Stats };
+
+/** Lists `dir` and everything under it without following symlinks. */
+async function listTree(dir: string): Promise<TreeEntry[]> {
+  const out: TreeEntry[] = [];
+  const walk = async (current: string): Promise<void> => {
+    const stat = await fs.lstat(current);
+    out.push({ path: current, stat });
+    if (!stat.isDirectory()) return;
+    for (const name of await fs.readdir(current)) await walk(path.join(current, name));
+  };
+  await walk(dir);
+  return out;
+}
+
+/**
+ * `chmod -R a-w` (or `u+w` when restoring) without following symlinks, which
+ * could otherwise point the chmod at files outside the worktree.
+ */
+async function setTreeWritable(dir: string, writable: boolean): Promise<void> {
+  if (writable) {
+    // Parents first, so their children become reachable for writing.
+    for (const entry of await listTree(dir)) {
+      if (!entry.stat.isSymbolicLink()) await fs.chmod(entry.path, (entry.stat.mode | 0o200) & 0o7777);
+    }
+    return;
+  }
+  // Children first; a read-only directory is still traversable.
+  for (const entry of (await listTree(dir)).reverse()) {
+    if (!entry.stat.isSymbolicLink()) await fs.chmod(entry.path, entry.stat.mode & ~0o222 & 0o7777);
   }
 }
 

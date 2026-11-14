@@ -575,6 +575,26 @@ export class JobManager {
     await this.flush(job);
   }
 
+  async retryTask(jobId: string, taskId: string): Promise<void> {
+    const job = this.require(jobId);
+    if (job.status === 'cancelled' || job.status === 'completed' || job.status === 'failed') {
+      throw new Error(`Cannot retry task in terminal job status '${job.status}'`);
+    }
+    const task = job.tasks.find((t) => t.id === taskId);
+    if (!task) throw new Error(`Task '${taskId}' not found in job '${jobId}'`);
+    if (task.status !== 'failed') throw new Error(`Cannot retry task in status '${task.status}'`);
+    const node = job.graph.nodes.find((n) => n.taskId === taskId || n.id === taskId);
+    if (node) {
+      assertNodeTransition(`${jobId}/${node.id}`, node.state, 'idle');
+      node.state = 'idle';
+      node.error = undefined;
+      node.completedAt = undefined;
+    }
+    assertTaskTransition(`${jobId}/${taskId}`, task.status, 'pending');
+    task.status = 'pending';
+    await this.flush(job);
+  }
+
   async updateAgentState(
     jobId: string,
     nodeId: string,

@@ -22,6 +22,11 @@ export async function persistExecutionRecord(
   if (!store.update) throw new Error('Execution persistence requires atomic store.update');
   await injectFault('DURING_EVENT_PERSIST', { key, executionId: record.execution.id, storageRevision: record.storageRevision });
   await store.update<ExecutionRecord>(key, current => {
+    const storedEpoch = current?.execution.leaseEpoch;
+    const incomingEpoch = record.execution.leaseEpoch;
+    if (storedEpoch !== undefined && (incomingEpoch === undefined || incomingEpoch < storedEpoch)) {
+      throw new Error(`STALE_WORKER_LEASE: ${record.execution.id} (writing epoch ${incomingEpoch ?? 'none'} over epoch ${storedEpoch})`);
+    }
     if ((record.storageRevision ?? 0) !== (current?.storageRevision ?? 0) + 1) {
       // Keep the prefix (callers match on it); the rest makes a conflict explainable.
       const owner = current?.execution.owner;

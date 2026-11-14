@@ -4,7 +4,9 @@ export interface PolicyActionRequest {
   tool: string;
   input: Record<string, unknown>;
   executionId?: string;
+  parentExecutionId?: string;
   projectRoot?: string;
+  effectiveIsolation?: string;
 }
 
 export interface PolicyDecision {

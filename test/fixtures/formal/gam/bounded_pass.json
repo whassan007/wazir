@@ -1,0 +1,30 @@
+{
+  "law": {
+    "model_type": "Law_Model",
+    "entities": [
+      { "id": "AccessPI", "type": "Activity" },
+      { "id": "PrivDiv", "type": "Role" }
+    ],
+    "policies": [
+      { "type": "CanAssignTo", "modality": "Deny", "source": "AccessPI", "target": "PrivDiv" }
+    ]
+  },
+  "enterprise": {
+    "model_type": "Enterprise_Model",
+    "entities": [
+      { "id": "FinDiv", "type": "Role" },
+      { "id": "FinAdmin", "type": "Role" },
+      { "id": "PrivDiv", "type": "Role" },
+      { "id": "AccessPI", "type": "Activity" },
+      { "id": "Alice", "type": "User" },
+      { "id": "Bob", "type": "User" }
+    ],
+    "relations": [
+      { "type": "Includes", "source": "FinDiv", "target": "FinAdmin" },
+      { "type": "AssignedTo", "source": "FinAdmin", "target": "AccessPI" },
+      { "type": "Acts", "source": "PrivDiv", "target": "Alice" },
+      { "type": "Acts", "source": "FinAdmin", "target": "Bob" }
+    ],
+    "policies": []
+  }
+}

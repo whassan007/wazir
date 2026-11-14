@@ -97,8 +97,25 @@ export { PolicyEngine, createPolicyEngine, protectedPathReason } from './policyE
 export { ProvenanceManager } from './provenanceManager.js';
 export type { CreateArtifactParams } from './provenanceManager.js';
 export { RuntimeRegistry } from './runtimeRegistry.js';
-export { Scheduler, createScheduler } from './scheduler.js';
-export type { SchedulerDeps, ScheduleInput } from './scheduler.js';
+export {
+  Scheduler,
+  createScheduler,
+  FORMAL_TOOL_CAPABILITY_PREFIX,
+  KNOWN_FORMAL_TOOL_CAPABILITIES,
+  normalizeToolCapability,
+  extractRequiredToolCapabilities,
+  isDgxClassComputer,
+  parseMaxAlloyScope,
+  isHeavyVerificationTask,
+  isSolverOrVerificationTask,
+  checkComputerToolFeasibility,
+} from './scheduler.js';
+export type {
+  SchedulerDeps,
+  ScheduleInput,
+  FormalToolCapability,
+  ToolHostScheduleResult,
+} from './scheduler.js';
 export { JobManager, createJobManager } from './jobManager.js';
 export type { JobManagerOptions, JobTaskInput } from './jobManager.js';
 export {
@@ -355,3 +372,4 @@ export type {
 export * from './providerBackpressure.js';
 export * from './schedulerFairness.js';
 export * from './historyRetentionService.js';
+export * from './delegatedPolicyGate.js';

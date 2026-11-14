@@ -204,21 +204,8 @@ export class HarnessResolutionError extends Error {
   }
 }
 
-const MUTATING_TOOLS = new Set([
-  'write',
-  'edit',
-  'shell',
-  'bash',
-  'git',
-  'rm',
-  'mv',
-  'cp',
-  'patch',
-  'apply_patch',
-  'write_file',
-  'edit_file',
-  'delete_file',
-  'create_file',
+const READ_ONLY_TOOLS = new Set([
+  'read', 'read_file', 'glob', 'search', 'web_search', 'web_fetch', 'compaction',
 ]);
 
 function normalizeOracleCheck(check: string): OracleType {
@@ -286,6 +273,7 @@ function buildTaskFromRequest(request: UnifiedExecutionRequest): Task {
   const policyCtx = (request.policyContext ?? {}) as PolicyRequirements & Record<string, unknown>;
   const now = new Date();
   const requiredEvidence: EvidenceType[] = (request.verification.requiredChecks ?? []).map(normalizeOracleCheck);
+  const strictPin = isStrictUserPin(request);
   return {
     id: request.taskId,
     type: request.taskType ?? 'coding',
@@ -296,6 +284,10 @@ function buildTaskFromRequest(request: UnifiedExecutionRequest): Task {
       expectedArtifacts: request.verification.expectedArtifacts,
       toolCalling: typeof policyCtx.toolCalling === 'boolean' ? policyCtx.toolCalling : undefined,
       localOnly: policyCtx.localOnly,
+      capabilities: (policyCtx as any).capabilities ?? (policyCtx as any).requiredCapabilities,
+      vision: (policyCtx as any).vision,
+      reasoning: (policyCtx as any).reasoning,
+      minimumContext: (policyCtx as any).minimumContext ?? (policyCtx as any).contextTokens ?? request.constraints.maxTokens,
     },
     mutationRequired: request.verification.mutationRequired,
     expectedArtifacts: request.verification.expectedArtifacts,
@@ -321,7 +313,8 @@ function buildTaskFromRequest(request: UnifiedExecutionRequest): Task {
       allowHostedProviders: policyCtx.allowHostedProviders,
     },
     execution: {
-      targetModelId: request.modelPreference,
+      targetModelId: strictPin ? request.modelPreference : undefined,
+      defaultModelId: !strictPin ? request.modelPreference : undefined,
       targetRuntimeId: request.runtimePreference,
       targetAgentId: request.harnessPreference,
       allowFallback: request.constraints.allowFallback,
@@ -536,6 +529,7 @@ export class HarnessDispatchService {
   async resolveHarness(
     request: UnifiedExecutionRequest,
     excludeHarnessIds: readonly string[] = [],
+    excludeModelIds: readonly string[] = [],
   ): Promise<HarnessDispatchResolution> {
     const task = buildTaskFromRequest(request);
 
@@ -689,7 +683,10 @@ export class HarnessDispatchService {
             scheduleTask.execution.targetAgentId = selectedRunner.descriptor.harnessId;
           }
         }
-        const decision = this.scheduler.plan({ task: scheduleTask });
+        const decision = this.scheduler.plan({
+          task: scheduleTask,
+          excludeModelIds: [...excludeModelIds],
+        });
         modelId = decision.modelId;
         runtimeId = decision.runtimeId;
         computerId = decision.computerId;
@@ -699,7 +696,7 @@ export class HarnessDispatchService {
           // If the scheduler rejected because of provider_only or explicit model pin, fail closed
           if (
             providerConstraint.isProviderOnly ||
-            request.modelPreference ||
+            isStrictUserPin(request) ||
             err.message.toLowerCase().includes('provider_only') ||
             err.message.toLowerCase().includes('policy')
           ) {
@@ -709,6 +706,11 @@ export class HarnessDispatchService {
               errorKind: 'policy',
             });
           }
+          throw new HarnessResolutionError(err.message, {
+            code: 'SCHEDULER_EXHAUSTED',
+            reasons: [err.message, ...err.modelReasons, ...err.computerReasons],
+            errorKind: 'infrastructure',
+          });
         } else {
           throw err;
         }
@@ -757,8 +759,8 @@ export class HarnessDispatchService {
     if (result) {
       for (const tc of result.toolCalls ?? []) {
         const isMutating =
-          MUTATING_TOOLS.has(tc.tool.toLowerCase()) ||
-          (tc.provenance && tc.provenance.sideEffectClass && tc.provenance.sideEffectClass !== 'READ_ONLY');
+          !READ_ONLY_TOOLS.has(tc.tool.toLowerCase()) ||
+          (tc.provenance?.sideEffectClass !== undefined && tc.provenance.sideEffectClass !== 'READ_ONLY');
         const isUnknownOutcome =
           tc.failureClass === 'TOOL_OUTCOME_UNKNOWN' ||
           (tc.provenance &&
@@ -825,8 +827,8 @@ export class HarnessDispatchService {
 
     const wrappedRequest: UnifiedExecutionRequest = {
       ...request,
-      modelPreference: request.modelPreference ?? modelId,
-      runtimePreference: request.runtimePreference ?? runtimeId,
+      modelPreference: modelId ?? request.modelPreference,
+      runtimePreference: runtimeId ?? request.runtimePreference,
       isCancelled: () => Boolean(timedOut || cancelledMidFlight || request.isCancelled?.()),
     };
 
@@ -1184,22 +1186,37 @@ export class HarnessDispatchService {
         });
       }
 
-      // Ensure required evidence on record's contract is satisfied if verificationOutcome.verified is true
-      if (verificationOutcome.verified && (!verificationOutcome.evidence || verificationOutcome.evidence.length === 0)) {
+      // FORMAL-A13-VERIF-01: Do not synthesize fake passing evidence records (status: 'PASS', exitCode: 0)
+      // when verificationOutcome.verified is true but evidenceIds is empty and no actual check output was recorded.
+      const evidenceList = verificationOutcome.evidence ?? [];
+      const evidenceIds = verificationOutcome.evidenceIds ?? result.verificationEvidenceIds ?? [];
+      const hasNoEvidence = evidenceList.length === 0 && evidenceIds.length === 0;
+
+      if (verificationOutcome.verified && hasNoEvidence) {
+        const availableChecks = verificationOutcome.checks ?? result.checks ?? [];
         for (const reqCheck of request.verification.requiredChecks ?? []) {
-          const oracleType = normalizeOracleCheck(reqCheck);
-          const ev = await this.executionEngine.recordEvidence(engineExecutionId, {
-            type: oracleType,
-            oracle: oracleType,
-            command: reqCheck,
-            exitCode: 0,
-            status: 'PASS',
-            workspaceRevision: rev,
-            revision: rev,
-            reasons: verificationOutcome.reasons,
-          });
-          if (!result.verificationEvidenceIds.includes(ev.id)) {
-            result.verificationEvidenceIds.push(ev.id);
+          const matchingCheck = availableChecks.find(
+            (c) =>
+              (c.name === reqCheck || c.command === reqCheck) &&
+              c.output !== undefined &&
+              c.output !== '',
+          );
+          if (matchingCheck && matchingCheck.ok) {
+            const oracleType = normalizeOracleCheck(reqCheck);
+            const ev = await this.executionEngine.recordEvidence(engineExecutionId, {
+              type: oracleType,
+              oracle: oracleType,
+              command: matchingCheck.command ?? reqCheck,
+              exitCode: 0,
+              status: 'PASS',
+              workspaceRevision: rev,
+              revision: rev,
+              output: matchingCheck.output,
+              reasons: verificationOutcome.reasons,
+            });
+            if (!result.verificationEvidenceIds.includes(ev.id)) {
+              result.verificationEvidenceIds.push(ev.id);
+            }
           }
         }
       }
@@ -1248,6 +1265,7 @@ export class HarnessDispatchService {
     const overallStartedAt = new Date();
     const contractDigest = computeContractDigest(request);
     const triedHarnessIds: string[] = [];
+    const triedModelIds: string[] = [];
 
     let accumulatedTokens = request.resumeContext?.consumed.tokens ?? 0;
     let accumulatedToolCalls = request.resumeContext?.consumed.toolCalls ?? 0;
@@ -1269,7 +1287,9 @@ export class HarnessDispatchService {
     while (currentResolution && attempt < maxAttempts) {
       attempt += 1;
       const { runner, descriptor, modelId, runtimeId } = currentResolution;
-      triedHarnessIds.push(descriptor.harnessId);
+      if (modelId) {
+        triedModelIds.push(modelId);
+      }
 
       // Compute remaining budgets for this attempt, preserving executionId, taskId, and consumed budget
       const remainingTokens =
@@ -1388,12 +1408,44 @@ export class HarnessDispatchService {
         verificationEvidenceIds: [...(rawResult.verificationEvidenceIds ?? [])],
       };
 
+      const tokenBudgetExhausted =
+        request.constraints.maxTokens !== undefined && accumulatedTokens >= request.constraints.maxTokens;
+      const costBudgetExhausted =
+        request.constraints.maxCostUSD !== undefined &&
+        resolvedCostStatus === 'ACTUAL' &&
+        accumulatedCostUSD > request.constraints.maxCostUSD;
+      const toolBudgetExhausted =
+        request.constraints.maxToolCalls !== undefined && accumulatedToolCalls >= request.constraints.maxToolCalls;
+
+      if (
+        costBudgetExhausted ||
+        (request.constraints.maxTokens !== undefined && accumulatedTokens > request.constraints.maxTokens)
+      ) {
+        const budgetReason = costBudgetExhausted
+          ? `Cumulative cost $${accumulatedCostUSD.toFixed(4)} exceeded maxCostUSD $${request.constraints.maxCostUSD!.toFixed(4)}`
+          : `Cumulative tokens ${accumulatedTokens} exceeded maxTokens ${request.constraints.maxTokens}`;
+        lastResult = {
+          ...lastResult,
+          status: 'failed',
+          verified: false,
+          terminationReason: costBudgetExhausted ? 'RESOURCE_EXHAUSTED' : 'MAX_TOKENS',
+          errorKind: 'other',
+          failureClassification: 'BUDGET_EXCEEDED',
+          errors: [...(lastResult.errors ?? []), budgetReason],
+        };
+        break;
+      }
+
       // Check if fallback should be triggered
       const canFallback =
         this.isFallbackTriggerResult(lastResult) &&
         request.constraints.allowFallback === true &&
         !isStrictUserPin(request) &&
-        this.resolveProviderOnlyConstraint(request).allowFallback;
+        this.resolveProviderOnlyConstraint(request).allowFallback &&
+        !tokenBudgetExhausted &&
+        !costBudgetExhausted &&
+        !toolBudgetExhausted &&
+        !(request.constraints.maxCostUSD !== undefined && accumulatedCostUSD >= request.constraints.maxCostUSD);
 
       if (canFallback) {
         // Invariant 2: Tool Dispatch vs. Confirmed Side Effects
@@ -1409,9 +1461,26 @@ export class HarnessDispatchService {
           break;
         }
 
-        // Try resolving the next eligible harness
+        // Try resolving the next eligible harness / fallback model
         try {
-          currentResolution = await this.resolveHarness(request, triedHarnessIds);
+          let nextResolution: HarnessDispatchResolution | undefined;
+          if (
+            this.scheduler &&
+            (currentResolution.descriptor.allowsModelSelection || currentResolution.descriptor.kind === 'native')
+          ) {
+            try {
+              // Try finding a fallback model on this harness without immediately excluding the harness
+              nextResolution = await this.resolveHarness(request, triedHarnessIds, triedModelIds);
+            } catch {
+              // If model fallback on this harness failed or models exhausted, exclude the harness and try others
+              triedHarnessIds.push(currentResolution.descriptor.harnessId);
+              nextResolution = await this.resolveHarness(request, triedHarnessIds, triedModelIds);
+            }
+          } else {
+            triedHarnessIds.push(currentResolution.descriptor.harnessId);
+            nextResolution = await this.resolveHarness(request, triedHarnessIds, triedModelIds);
+          }
+          currentResolution = nextResolution;
           continue;
         } catch {
           // No more fallback candidates available; break and return the failure result
