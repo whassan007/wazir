@@ -46,6 +46,9 @@ import {
   MetaHarnessService,
   type StructuredModelFleetStatus,
   type ModelPreferenceRecord,
+  WorkloadDistributor,
+  DEFAULT_HARDWARE_DISTRIBUTION,
+  parseWorkloadDistribution,
 } from '@wazir/core';
 import type {
   ComputerRegistration,
@@ -107,6 +110,8 @@ export interface EngineOptions {
   approvalTimeoutMs?: number;
   /** Opt in to honouring `WAZIR_AUTO_APPROVE=1`; never on by default. */
   allowEnvAutoApprove?: boolean;
+  /** Optional weighted hardware/agent distribution spec (e.g. "local:70,antigravity:15,codex:5"). */
+  distributionSpec?: string;
 }
 
 export function resolveEngineProfile(options: EngineOptions): EngineProfile {
@@ -172,12 +177,14 @@ export interface RookEngine {
   handoffs: HandoffService;
   secretBroker: SecretBroker;
   hostedAdapters: Map<ProviderId, HostedAdapter>;
-  modelPreferences: ModelPreferenceService;
-  modelDiscoveryStatus: ModelDiscoveryStatusService;
-  modelRanker: IntelligentModelRanker;
-  hardwareEligibility: HardwareEligibilityService;
-  contextEstimator: ContextMemoryEstimator;
-  metaHarness: MetaHarnessService;
+  modelPreferences?: ModelPreferenceService;
+  modelDiscoveryStatus?: ModelDiscoveryStatusService;
+  modelRanker?: IntelligentModelRanker;
+  hardwareEligibility?: HardwareEligibilityService;
+  contextEstimator?: ContextMemoryEstimator;
+  metaHarness?: MetaHarnessService;
+  workloadDistributor?: WorkloadDistributor;
+  isBootstrapping?: boolean;
 }
 
 function guessFamily(id: string, provider: string): ModelRecord['family'] {
@@ -738,6 +745,11 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     cliEntrypointPath: process.argv[1],
   });
 
+  const rawDistribution = options.distributionSpec ?? process.env.WAZIR_HARDWARE_DISTRIBUTION;
+  const workloadDistributor = new WorkloadDistributor(
+    rawDistribution ? parseWorkloadDistribution(rawDistribution) : DEFAULT_HARDWARE_DISTRIBUTION,
+  );
+
   return {
     config,
     resources,
@@ -787,6 +799,143 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     hardwareEligibility,
     contextEstimator,
     metaHarness,
+    workloadDistributor,
+    isBootstrapping: false,
+  };
+}
+
+/**
+ * Constructs a zero-I/O, synchronous bootstrap RookEngine (< 2ms) so interactive
+ * `wa` / `wazir` can render the header and editable composer immediately while slow
+ * runtime/provider discovery completes asynchronously in the background.
+ */
+export function createBootstrapEngine(projectRoot?: string, distributionSpec?: string): RookEngine {
+  const resolvedRoot = path.resolve(projectRoot ?? process.cwd());
+  const engineConfigDir = configDir();
+  const config = loadConfig();
+  const store = new MemoryStore();
+  const computers = new ComputerRegistry();
+  const runtimes = new RuntimeRegistry();
+  const models = new ModelRegistry();
+  const agents = new AgentRegistry();
+  const tools = new ToolRegistry(defaultTools);
+  const compiler = new ContextCompiler();
+  const provenance = new ProvenanceManager(store);
+  const executions = new ExecutionEngine({
+    provenanceManager: provenance,
+    workspace: resolvedRoot,
+    fastStartup: true,
+  }) as ExecutionEngine & { store?: KeyValueStore };
+  executions.store = store;
+  const approvalQueue = new ApprovalQueue({ defaultTimeoutMs: 5 * 60_000, allowEnvAutoApprove: false });
+  const policy = new PolicyEngine({
+    projectRoot: resolvedRoot,
+    approvalQueue,
+    allowWorkspaceArtifactExecution: true,
+  });
+  const resources = createResourceSystem(engineConfigDir);
+  const scheduler = new Scheduler({
+    computers,
+    runtimes,
+    models,
+    policy,
+    agents,
+    resources: { router: resources.router },
+    routing: config.routing,
+  });
+  const jobManager = new JobManager({ store, lazy: true });
+  const worktrees = new WorktreeManager();
+  const checkpoints = new CheckpointService({
+    store,
+    executionEngine: executions,
+    worktreeManager: worktrees,
+    provenanceManager: provenance,
+    defaultWorkspaceRoot: resolvedRoot,
+    lazy: true,
+  });
+  const handoffs = new HandoffService({ store, executions, checkpoints, projectRoot: resolvedRoot, lazy: true });
+  const orchestrator = new JobOrchestrator({
+    scheduler,
+    executionEngine: executions,
+    checkpointService: checkpoints,
+    policy,
+    agents,
+    models,
+    runtimes,
+    computers,
+    jobManager,
+  }) as JobOrchestrator & { store?: KeyValueStore };
+  orchestrator.store = store;
+  const adapters = new Map<string, RuntimeAdapter>();
+  const lifecycle = new ModelLifecycleService({
+    models,
+    runtimes,
+    computers,
+    agents,
+    adapters,
+    store,
+    policy,
+    executions,
+  });
+  const health = new HealthEvidenceLog();
+  const planner = createTaskPlanner();
+  const fleetMemory = createFleetMemoryService(store);
+  const mcp = new MCPRegistry({
+    directory: engineConfigDir,
+    tools,
+    policy,
+    secrets: {
+      backendName: 'memory',
+      getSecret: async () => null,
+      setSecret: async () => undefined,
+      deleteSecret: async () => false,
+      listSecretKeys: async () => [],
+    } as unknown as SecretBroker,
+    autoConnect: false,
+  });
+  const rawDist = distributionSpec ?? process.env.WAZIR_HARDWARE_DISTRIBUTION;
+  const workloadDistributor = new WorkloadDistributor(
+    rawDist ? parseWorkloadDistribution(rawDist) : DEFAULT_HARDWARE_DISTRIBUTION,
+  );
+  return {
+    config,
+    resources,
+    projectRoot: resolvedRoot,
+    configDir: engineConfigDir,
+    computers,
+    runtimes,
+    models,
+    lifecycle,
+    health,
+    agents,
+    tools,
+    mcp,
+    policy,
+    scheduler,
+    compiler,
+    executions,
+    provenance,
+    approvalQueue,
+    orchestrator,
+    worktrees,
+    checkpoints,
+    planner,
+    adapters,
+    discovered: [],
+    worker: new Worker({ computerId: 'local', name: 'local', adapters: [] }),
+    store,
+    fleetMemory,
+    handoffs,
+    secretBroker: {
+      backendName: 'probing',
+      getSecret: async () => null,
+      setSecret: async () => undefined,
+      deleteSecret: async () => false,
+      listSecretKeys: async () => [],
+    } as unknown as SecretBroker,
+    hostedAdapters: new Map(),
+    workloadDistributor,
+    isBootstrapping: true,
   };
 }
 

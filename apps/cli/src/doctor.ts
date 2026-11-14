@@ -2,8 +2,9 @@ import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
 import { createBlock } from './blocks.js';
 import { sandboxStatus } from '@wazir/tools';
+import { isExecutableOnPath } from '@wazir/core';
 import { collectHealthReport } from './health.js';
-import { checkRuntimeDependencies, checkGitAvailability, checkPackageVersion } from './version.js';
+import { checkRuntimeDependencies, checkGitAvailability, checkPackageVersion, isNodeSea } from './version.js';
 
 export type DoctorStatus = 'PASS' | 'WARN' | 'FAIL' | 'NOT INSTALLED' | 'UNAVAILABLE';
 
@@ -452,6 +453,89 @@ async function checkExternalAgentsUnsafe(engine: RookEngine): Promise<DoctorChec
   };
 }
 
+function checkLocalContextWindow(engine: RookEngine): DoctorCheck {
+  try {
+    const models = engine.models?.list?.() ?? [];
+    const localModels = models.filter(
+      (m) => !m.embedding && (m.local === true || m.provider === 'ollama' || m.provider === 'lmstudio'),
+    );
+    if (localModels.length === 0) {
+      return {
+        name: 'local context window',
+        status: 'PASS',
+        message: 'no local coding models subject to 16k floor',
+      };
+    }
+    const MIN_RECOMMENDED_CTX = 16_384;
+    const undersized = localModels.filter(
+      (m) => typeof m.contextMax === 'number' && m.contextMax > 0 && m.contextMax < MIN_RECOMMENDED_CTX,
+    );
+    if (undersized.length > 0) {
+      return {
+        name: 'local context window',
+        status: 'WARN',
+        message: `${undersized.length} local model(s) below 16k context floor (risk of multi-tool truncation)`,
+        details: [
+          ...undersized.map((m) => `${m.id} (${m.provider}): contextMax=${m.contextMax} (< ${MIN_RECOMMENDED_CTX})`),
+          'Fix (Ollama): create a Modelfile with `PARAMETER num_ctx 32768` or set `OLLAMA_CONTEXT_LENGTH=32768`.',
+          'Fix (LM Studio): set Context Length >= 32768 in model load settings.',
+        ].join('\n'),
+      };
+    }
+    return {
+      name: 'local context window',
+      status: 'PASS',
+      message: `${localModels.length} local model(s) meet >= 16k context window floor`,
+    };
+  } catch (error) {
+    return {
+      name: 'local context window',
+      status: 'WARN',
+      message: 'unable to inspect model context windows',
+      details: (error as Error).message,
+    };
+  }
+}
+
+function checkOptionalCapabilities(engine: RookEngine): DoctorCheck {
+  try {
+    const sea = isNodeSea();
+    const secretBackend = engine.secretBroker?.backendName ?? (sea ? 'encrypted-file' : 'unknown');
+    let nodePtyAvailable = false;
+    if (!sea) {
+      try {
+        require.resolve('node-pty');
+        nodePtyAvailable = true;
+      } catch {
+        nodePtyAvailable = false;
+      }
+    }
+    const ptyStatus = nodePtyAvailable ? 'node-pty (native)' : 'pipe/python-pty fallback';
+    const packagingMode = sea ? 'standalone-sea' : 'node-runtime';
+    const rgFound = isExecutableOnPath('rg');
+    const qwenFound = isExecutableOnPath('qwen');
+    return {
+      name: 'optional native capabilities',
+      status: 'PASS',
+      message: `secrets=${secretBackend}, pty=${ptyStatus}, rg=${rgFound ? 'installed' : 'fallback'}, qwen-acp=${qwenFound ? 'available' : 'optional'}`,
+      details: [
+        `Secret storage backend: ${secretBackend} (@napi-rs/keyring optional native addon ${secretBackend === 'os-keychain' ? 'active' : 'gracefully degraded to AES-256-GCM encrypted file store'})`,
+        `PTY backend: ${ptyStatus}`,
+        `Fast search (ripgrep): ${rgFound ? 'rg found on PATH' : 'Node recursive search fallback active'}`,
+        `Qwen ACP harness: ${qwenFound ? 'qwen binary detected (`qwen --acp` delegation available)' : 'not installed (native WazirQwenAgent active across all 6 runtimes)'}`,
+        `Executable packaging: ${packagingMode} (launched via wa / wazir)`,
+      ].join('\n'),
+    };
+  } catch (error) {
+    return {
+      name: 'optional native capabilities',
+      status: 'WARN',
+      message: 'capability probe degraded',
+      details: (error as Error).message,
+    };
+  }
+}
+
 export async function doctor(engine: RookEngine): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [
     checkPackageVersion(),
@@ -465,11 +549,13 @@ export async function doctor(engine: RookEngine): Promise<DoctorReport> {
     checkRuntimeConnectivity(engine),
     await checkHostedProviders(engine),
     checkModelAvailability(engine),
+    checkLocalContextWindow(engine),
     checkRuntimeModelHealth(engine),
     checkRequiredPermissions(engine),
     checkSchedulerReadiness(engine),
     checkSecurity(engine),
     checkSandbox(),
+    checkOptionalCapabilities(engine),
     await checkExternalAgents(engine),
   ];
   

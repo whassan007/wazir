@@ -26,6 +26,11 @@ class Wazir < Formula
 
   def install
     bin.install "wa"
+    if File.exist?("wazir")
+      bin.install "wazir"
+    else
+      bin.install_symlink "wa" => "wazir"
+    end
   end
 
   def caveats
@@ -43,6 +48,7 @@ class Wazir < Formula
 
   test do
     assert_match version.to_s, shell_output("#{bin}/wa --version")
+    assert_match version.to_s, shell_output("#{bin}/wazir --version")
     assert_match "Wazir", shell_output("#{bin}/wa --help")
   end
 end

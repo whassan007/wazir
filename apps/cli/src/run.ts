@@ -17,7 +17,7 @@ import type {
 } from '@wazir/core';
 import { buildContextPartsFromActive } from './commands.js';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
-import { buildSystemPrompt, isConversationalFastPathRequest, isDeterministicCommandRequest, resolvePreset } from '@wazir/agents';
+import { buildQwenSystemPrompt, buildSystemPrompt, isConversationalFastPathRequest, isDeterministicCommandRequest, resolvePreset } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, keepEnds, stripTerminalEscapes } from '@wazir/shared';
 import { executeTool as runRegisteredTool, sandboxStatus } from '@wazir/tools';
@@ -54,7 +54,12 @@ function toGenerationEvent(event: WorkerExecutionEvent): GenerationEvent | undef
     case 'token':
       return { type: 'token', content: typeof data?.content === 'string' ? data.content : '' };
     case 'tool_call':
-      return { type: 'tool_call', toolName: data?.toolName as string | undefined, toolInput: data?.toolInput };
+      return {
+        type: 'tool_call',
+        toolCallId: data?.toolCallId as string | undefined,
+        toolName: data?.toolName as string | undefined,
+        toolInput: data?.toolInput,
+      };
     case 'completed':
       return {
         type: 'completed',
@@ -292,7 +297,9 @@ export async function planTask(
       label: 'system prompt',
       content: fastPath
         ? 'You are Wazir, a precise AI assistant. Answer the user request directly and concisely.'
-        : buildSystemPrompt(engine.projectRoot, allowedTools),
+        : process.env.WAZIR_LEGACY_JSON_AGENT === '1'
+          ? buildSystemPrompt(engine.projectRoot, allowedTools)
+          : buildQwenSystemPrompt({ projectRoot: engine.projectRoot, toolNames: allowedTools.map((t) => t.name) }),
       priority: 'critical',
     },
     { kind: 'task', label: 'task', content: description, priority: 'critical' },
@@ -687,6 +694,8 @@ export async function executeTask(
             contextTokens: sentContextTokens,
             stream: true,
             tools: request.tools,
+            toolChoice: request.toolChoice,
+            parallelToolCalls: request.parallelToolCalls,
             signal: turnAbortController.signal,
             resourceContext: { taskId: task.id, workload: classifyWorkload(task), agent: agent.descriptor.name },
           })) {
@@ -1434,9 +1443,20 @@ export async function runSubagent(
   // Filter tools to strictly omit dispatch_subagent for child agent
   const subagentTools = engine.tools.forModel(undefined, engine.agents.get('wazir-coding')?.descriptor.capabilities).filter((t) => t.name !== 'dispatch_subagent' && policySupportsModelTool(engine, t.name));
 
+  const subRuntimeReg = engine.runtimes.get(effectiveRuntimeId);
+  const subModelReg = engine.models.get(effectiveModelId);
+  const subResolvedCapabilities: Partial<import('@wazir/runtimes-interfaces').RuntimeCapabilities> = {
+    ...(subRuntimeReg?.capabilities ?? {}),
+    toolCalling: subModelReg?.toolCalling ?? subRuntimeReg?.capabilities.toolCalling ?? false,
+    nativeToolCalling: subModelReg?.toolCalling ?? subRuntimeReg?.capabilities.toolCalling ?? false,
+    structuredOutput: subModelReg?.structuredOutput ?? subRuntimeReg?.capabilities.structuredOutput ?? false,
+  };
+
   let cancelSubGeneration: (() => void) | undefined;
   const subagentRuntime: AgentRuntime = {
     tools: subagentTools,
+    runtimeCapabilities: subResolvedCapabilities,
+    getCapabilities: () => subResolvedCapabilities,
     cancelCurrentTurn: () => cancelSubGeneration?.(),
 
     async *generate(req) {
@@ -1498,6 +1518,8 @@ export async function runSubagent(
             temperature: req.temperature,
             stream: true,
             tools: req.tools,
+            toolChoice: req.toolChoice,
+            parallelToolCalls: req.parallelToolCalls,
             signal: subTurnAbortController.signal,
             resourceContext: { taskId: childExecId, workload: 'routine' },
           })) {

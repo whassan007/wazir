@@ -20,12 +20,73 @@ describe('LIVE-CODE-03: Batched Tool Execution & Parallel Call Guardrails (Relea
     }
   });
 
-  it('rejects uncoalesced parallel native tool calls in a single turn and recovers cleanly on sequential reissue', async () => {
-    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-live03-batch-'));
+  it('executes parallel read-only native tool calls concurrently in a single turn (Qwen Code 1.0 default)', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-live03-qwen-'));
     await fs.writeFile(path.join(projectRoot, 'a.txt'), 'alpha');
     await fs.writeFile(path.join(projectRoot, 'b.txt'), 'beta');
 
     const agent = createCodingAgent();
+    const executedReads: string[] = [];
+    let turn = 0;
+
+    const runtime: AgentRuntime = {
+      tools: [
+        {
+          name: 'read',
+          description: 'Read a file',
+          inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+        },
+      ],
+      runtimeCapabilities: { toolCalling: true, nativeToolCalling: true },
+      getCapabilities: () => ({ toolCalling: true, nativeToolCalling: true }),
+      async *generate() {
+        turn += 1;
+        if (turn === 1) {
+          yield { type: 'tool_call' as const, toolCallId: 'c1', toolName: 'read', toolInput: { path: 'a.txt' } };
+          yield { type: 'tool_call' as const, toolCallId: 'c2', toolName: 'read', toolInput: { path: 'b.txt' } };
+          yield { type: 'completed' as const, content: '', finishReason: 'tool_calls' };
+        } else {
+          yield { type: 'token' as const, content: 'Read both files: alpha and beta' };
+          yield { type: 'completed' as const, content: 'Read both files: alpha and beta', finishReason: 'stop' };
+        }
+      },
+      async executeTool(name, input): Promise<ToolResult> {
+        if (name === 'read') {
+          const p = String(input.path);
+          executedReads.push(p);
+          const content = await fs.readFile(path.join(projectRoot, p), 'utf8');
+          return { ok: true, output: content, durationMs: 1 };
+        }
+        return { ok: true, output: '', durationMs: 1 };
+      },
+    };
+
+    const turns = await drain(
+      agent.run(
+        {
+          modelId: 'fake-model',
+          taskDescription: 'Read a.txt and b.txt and summarize their contents.',
+          taskType: 'code_analysis',
+          mutationRequired: false,
+          projectRoot,
+          maxTurns: 8,
+        },
+        runtime,
+      ),
+    );
+
+    expect(turn).toBe(2);
+    expect(executedReads).toEqual(['a.txt', 'b.txt']);
+    const doneTurn = turns.find((t) => t.kind === 'done');
+    expect(doneTurn?.content).toContain('alpha and beta');
+  });
+
+  it('legacyJsonLoop: rejects uncoalesced parallel native tool calls in a single turn and recovers cleanly on sequential reissue', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-live03-batch-'));
+    await fs.writeFile(path.join(projectRoot, 'a.txt'), 'alpha');
+    await fs.writeFile(path.join(projectRoot, 'b.txt'), 'beta');
+
+    const agent = createCodingAgent({ legacyJsonLoop: true });
     const executedReads: string[] = [];
     let turn = 0;
 

@@ -412,6 +412,32 @@ describe('Section 13: wa doctor check-by-check suite', () => {
   });
 
   describe('doctor() summary computation', () => {
+    it('warns when a local model has contextMax below the 16k floor', async () => {
+      const smallModels = new ModelRegistry();
+      smallModels.register({
+        id: 'tiny-ctx-local',
+        name: 'tiny-ctx-local',
+        provider: 'ollama',
+        family: 'qwen',
+        contextMax: 4096,
+        capabilities: ['generalChat', 'coding'],
+        toolCalling: true,
+        structuredOutput: false,
+        vision: false,
+        audio: false,
+        embedding: false,
+        reasoning: false,
+        runtimeCompatibility: 'any',
+        local: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const engine = createMockEngine({ models: smallModels });
+      const check = findCheck(await doctor(engine), 'local context window');
+      expect(check.status).toBe('WARN');
+      expect(check.details).toContain('num_ctx 32768');
+    });
+
     it('computes exact counts across all 5 statuses', async () => {
       const engine = createMockEngine({
         config: {} as any, // WARN (configuration)

@@ -90,6 +90,8 @@ export interface PolicyRequirements {
    * regardless of its value — see `PolicyEngine.checkHostedEligibility()`.
    */
   allowHostedProviders?: boolean;
+  /** Hard read-only mode: blocks file mutations and shell execution at the runner choke point. */
+  readOnly?: boolean;
 }
 
 export type RoutingMode =

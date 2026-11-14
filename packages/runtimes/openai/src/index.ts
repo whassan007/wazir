@@ -13,7 +13,7 @@ import type {
   RuntimeInfo,
   StoredCredential,
 } from '@wazir/runtimes-interfaces';
-import { httpFailureEvent, isStoredCredential, readRateLimitHeaders } from '@wazir/runtimes-interfaces';
+import { formatOpenAIChatMessages, httpFailureEvent, isStoredCredential, readRateLimitHeaders } from '@wazir/runtimes-interfaces';
 import type { SecretBroker } from '@wazir/secrets';
 
 const API_BASE = 'https://api.openai.com';
@@ -226,16 +226,7 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       }
     }
 
-    const messages: Array<{ role: string; content: string }> = [];
-    if (request.systemPrompt) messages.push({ role: 'system', content: request.systemPrompt });
-    for (const message of request.messages) {
-      if (message.role === 'tool') {
-        messages.push({ role: 'user', content: `[tool result: ${message.content}]` });
-      } else {
-        messages.push({ role: message.role, content: message.content });
-      }
-    }
-    if (request.prompt) messages.push({ role: 'user', content: request.prompt });
+    const messages = formatOpenAIChatMessages(request);
 
     let response: Response;
     yield control.startAttempt();
@@ -253,6 +244,8 @@ export class OpenAIAdapter implements RuntimeAdapter, ProviderAuthAdapter {
           top_p: request.topP,
           max_tokens: request.maxTokens,
           tools: request.tools?.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
+          parallel_tool_calls: request.tools?.length && request.parallelToolCalls !== undefined ? request.parallelToolCalls : undefined,
+          tool_choice: request.toolChoice,
         }),
         signal: controller.signal,
       });

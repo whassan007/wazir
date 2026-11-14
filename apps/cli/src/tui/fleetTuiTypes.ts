@@ -187,6 +187,15 @@ export interface FleetTuiOptions {
   presentationMode?: 'conversation' | 'dashboard';
   /** Optional external AbortSignal to cleanly cancel the TUI session and restore terminal state. */
   signal?: AbortSignal;
+  modelId?: string;
+  agentId?: string;
+  routingMode?: import('@wazir/core').RoutingMode;
+  permissionMode?: 'ask' | 'auto' | 'read-only';
+  distributionSpec?: string;
+  sessionId?: string;
+  noColor?: boolean;
+  ascii?: boolean;
+  colorMode?: 'default' | 'dark' | 'light' | 'monochrome';
 }
 
 export interface CanaryModalState {

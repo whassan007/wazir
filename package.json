@@ -34,7 +34,8 @@
     "apps/*"
   ],
   "bin": {
-    "wa": "./bin/wa.js"
+    "wa": "./bin/wa.js",
+    "wazir": "./bin/wa.js"
   },
   "files": [
     "bin/wa.js",

@@ -118,6 +118,71 @@ export class MobileEventHub {
     return full;
   }
 
+  /**
+   * Projects multi-tool batches (`read_many_files`, parallel reads, `multi_edit`),
+   * sanitized reasoning summaries, and `--compose` synthesis outcomes onto the SSE hub
+   * so Web, Desktop, and Mobile surfaces stay synchronized with WazirQwenAgent turns.
+   */
+  async publishTurnActivityCard(params: {
+    kind: 'thinking' | 'tool_batch' | 'compose_synthesis';
+    taskId?: string;
+    executionId?: string;
+    agentId?: string;
+    modelId?: string;
+    tools?: Array<{ name: string; status: 'running' | 'completed' | 'failed'; target?: string; parallel?: boolean }>;
+    thoughtSummary?: string;
+    composeVerdict?: 'VERIFIED' | 'UNVERIFIED_CONTRASTIVE' | 'REJECTED_GOVERNANCE' | 'CONFLICT_FALLBACK';
+    sourceCandidateIds?: string[];
+  }): Promise<MobileStreamEvent> {
+    if (params.kind === 'thinking') {
+      const cleanThought = String(params.thoughtSummary ?? '').replace(/\s+/g, ' ').trim().slice(0, 280);
+      return this.publish({
+        type: 'agent.thinking',
+        taskId: params.taskId,
+        executionId: params.executionId,
+        agentId: params.agentId,
+        modelId: params.modelId,
+        status: 'running',
+        summary: cleanThought || 'Analyzing workspace context',
+        payload: { thoughtSummary: cleanThought },
+      });
+    }
+    if (params.kind === 'compose_synthesis') {
+      const verdict = params.composeVerdict ?? 'UNVERIFIED_CONTRASTIVE';
+      return this.publish({
+        type: 'search.composed',
+        taskId: params.taskId,
+        executionId: params.executionId,
+        agentId: params.agentId,
+        modelId: params.modelId,
+        status: verdict === 'VERIFIED' ? 'completed' : verdict === 'REJECTED_GOVERNANCE' ? 'failed' : 'warning',
+        summary: `Composed synthesis (${verdict}) from ${(params.sourceCandidateIds ?? []).length} probe(s)`,
+        payload: {
+          verdictClassification: verdict,
+          sourceCandidateIds: params.sourceCandidateIds ?? [],
+        },
+      });
+    }
+    const tools = params.tools ?? [];
+    const anyRunning = tools.some((t) => t.status === 'running');
+    const anyFailed = tools.some((t) => t.status === 'failed');
+    const names = tools.map((t) => (t.target ? `${t.name}(${t.target})` : t.name)).slice(0, 5);
+    return this.publish({
+      type: anyRunning ? 'tool.batch_started' : 'tool.batch_completed',
+      taskId: params.taskId,
+      executionId: params.executionId,
+      agentId: params.agentId,
+      modelId: params.modelId,
+      status: anyRunning ? 'running' : anyFailed ? 'failed' : 'completed',
+      summary: `${anyRunning ? 'Running' : 'Completed'} ${tools.length} tool call(s): ${names.join(', ')}`,
+      payload: {
+        batchSize: tools.length,
+        parallel: tools.some((t) => t.parallel),
+        tools: redactSensitiveArguments(tools) as unknown,
+      },
+    });
+  }
+
   subscribeSse(req: Request, res: Response): void {
     const cursorHeader = req.headers['last-event-id'];
     const cursorQuery = req.query.cursor;

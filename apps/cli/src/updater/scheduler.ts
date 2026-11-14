@@ -14,9 +14,13 @@ const quoteSystemd = (s: string) => `"${s.replaceAll('\\', '\\\\').replaceAll('"
 const xml = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 
 export function scheduledCommand(): string[] {
+  const isSea = Boolean(
+    (process as NodeJS.Process & { getBuiltinModule?: (id: string) => { isSea?: () => boolean } | undefined }).getBuiltinModule?.('node:sea')?.isSea?.()
+    || (process as NodeJS.Process & { isSea?: () => boolean }).isSea?.(),
+  );
+  if (isSea) return [process.execPath, 'update', 'check', '--scheduled', '--json'];
   const entry = process.argv[1] && existsSync(process.argv[1]) ? path.resolve(process.argv[1]) : undefined;
   if (!entry) throw new Error('Cannot determine the installed Wazir launcher path for the persistent scheduler');
-  if ((process as NodeJS.Process & { isSea?: () => boolean }).isSea?.()) return [process.execPath, 'update', 'check', '--scheduled', '--json'];
   return [process.execPath, entry, 'update', 'check', '--scheduled', '--json'];
 }
 

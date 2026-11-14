@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Installs Wazir from source on Windows natively.
 
@@ -210,6 +210,9 @@ exit /b %ERRORLEVEL%
 
 [System.IO.File]::WriteAllText($WaCmdPath, $WaCmdContent, [System.Text.Encoding]::ASCII)
 Write-Host "✓ Created Command Prompt launcher: $WaCmdPath"
+$WazirCmdPath = Join-Path $BinDir "wazir.cmd"
+[System.IO.File]::WriteAllText($WazirCmdPath, $WaCmdContent, [System.Text.Encoding]::ASCII)
+Write-Host "✓ Created Command Prompt launcher: $WazirCmdPath"
 
 # 10. Install wa.ps1 (PowerShell launcher)
 $WaPs1Path = Join-Path $BinDir "wa.ps1"
@@ -258,6 +261,9 @@ exit `$LASTEXITCODE
 
 [System.IO.File]::WriteAllText($WaPs1Path, $WaPs1Content, [System.Text.Encoding]::UTF8)
 Write-Host "✓ Created PowerShell launcher: $WaPs1Path"
+$WazirPs1Path = Join-Path $BinDir "wazir.ps1"
+[System.IO.File]::WriteAllText($WazirPs1Path, $WaPs1Content, [System.Text.Encoding]::UTF8)
+Write-Host "✓ Created PowerShell launcher: $WazirPs1Path"
 
 # 11. Safe user PATH configuration (Registry User PATH only, never weakens Machine PATH)
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")

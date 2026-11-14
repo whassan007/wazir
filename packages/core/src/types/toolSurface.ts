@@ -3,6 +3,7 @@ import type { PolicyEngine } from '../services/policyEngine.js';
 import type { RuntimeCapabilities } from '@wazir/runtimes-interfaces';
 
 export type ExecutionPhase =
+  | 'unified'
   | 'plan'
   | 'inspect'
   | 'implement'

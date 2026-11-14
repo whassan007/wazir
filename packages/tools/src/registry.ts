@@ -3,7 +3,11 @@ import { compileToolSchema, detectOracleWeakening } from '@wazir/core';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { snapshotWorkspace, workspaceFingerprint, workspaceMutations } from './workspaceSnapshot.js';
+import { computeSmartEdit } from './editMatcher.js';
 import { editTool, readTool, writeTool } from './filesystem.js';
+import { multiEditTool } from './multiEdit.js';
+import { readManyFilesTool } from './readManyFiles.js';
+import { todoWriteTool } from './todoTool.js';
 import { globTool, searchTool } from './search.js';
 import { buildTool, gitTool, lintTool, shellTool, testTool, typecheckTool } from './process-tools.js';
 import { terminalCloseTool, terminalOpenTool, terminalSendTool } from './terminalTools.js';
@@ -78,8 +82,11 @@ export const dispatchSubagentTool: Tool = {
 
 export const defaultTools: Tool[] = [
   readTool,
+  readManyFilesTool,
   writeTool,
   editTool,
+  multiEditTool,
+  todoWriteTool,
   searchTool,
   globTool,
   shellTool,
@@ -225,7 +232,7 @@ export class ToolRegistry {
  * Paths outside the project root are left to PolicyEngine.
  */
 async function proposedOracleWeakening(projectRoot: string, name: string, input: Record<string, unknown>) {
-  if ((name !== 'write' && name !== 'edit') || typeof input.path !== 'string') return [];
+  if ((name !== 'write' && name !== 'edit' && name !== 'multi_edit') || typeof input.path !== 'string') return [];
   const absolute = path.resolve(projectRoot, input.path);
   const relative = path.relative(path.resolve(projectRoot), absolute);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return [];
@@ -240,11 +247,25 @@ async function proposedOracleWeakening(projectRoot: string, name: string, input:
   if (name === 'write') {
     if (typeof input.content !== 'string') return [];
     after = input.content;
-  } else {
+  } else if (name === 'edit') {
     const oldString = typeof input.oldString === 'string' ? input.oldString : '';
     const newString = typeof input.newString === 'string' ? input.newString : '';
-    if (!oldString || !before.includes(oldString)) return [];
-    after = input.replaceAll === true ? before.split(oldString).join(newString) : before.replace(oldString, () => newString);
+    const res = computeSmartEdit(before, oldString, newString, input.replaceAll === true);
+    if (!res.ok) return [];
+    after = res.nextContent;
+  } else {
+    const edits = Array.isArray(input.edits) ? input.edits : [];
+    if (edits.length === 0) return [];
+    let current = before;
+    for (const item of edits) {
+      const rec = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+      const oldString = typeof rec.oldString === 'string' ? rec.oldString : '';
+      const newString = typeof rec.newString === 'string' ? rec.newString : '';
+      const res = computeSmartEdit(current, oldString, newString, rec.replaceAll === true);
+      if (!res.ok) return [];
+      current = res.nextContent;
+    }
+    after = current;
   }
   return detectOracleWeakening(relative, before, after);
 }
@@ -284,7 +305,7 @@ export async function executeTool(
         'Fix the implementation, not the tests; verification assets may only be weakened when the task explicitly asks for it.',
     };
   }
-  const targets = (name === 'write' || name === 'edit') && typeof input.path === 'string' ? [input.path] : undefined;
+  const targets = ['write', 'edit', 'multi_edit'].includes(name) && typeof input.path === 'string' ? [input.path] : undefined;
   const before = ctx.verifyWorkspace && tool.descriptor.sideEffectClass !== 'READ_ONLY' ? await snapshotWorkspace(ctx.projectRoot, targets) : undefined;
   // MCP performs its own authorization and checkpoints immediately after it.
   if (!isMCP && ctx.checkpoint) await ctx.checkpoint();

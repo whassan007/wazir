@@ -6,7 +6,7 @@ export function isInside(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(target);
   const rel = path.relative(resolvedRoot, resolvedTarget);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 export const IGNORED_DIRECTORIES = new Set([

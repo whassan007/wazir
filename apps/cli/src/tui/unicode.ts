@@ -46,6 +46,8 @@ export function isFullWidthCodePoint(codePoint: number): boolean {
     // CJK Unified Ideographs Extension B .. Extension F
     (codePoint >= 0x20000 && codePoint <= 0x2fffd) ||
     (codePoint >= 0x30000 && codePoint <= 0x3fffd) ||
+    // Regional Indicator Symbols (flags) & Emoji Ranges
+    (codePoint >= 0x1f1e6 && codePoint <= 0x1f1ff) ||
     // Common emojis (Miscellaneous Symbols and Pictographs, Emoticons, Transport, etc.)
     (codePoint >= 0x1f300 && codePoint <= 0x1f64f) ||
     (codePoint >= 0x1f680 && codePoint <= 0x1f6ff) ||
@@ -57,32 +59,73 @@ export function isFullWidthCodePoint(codePoint: number): boolean {
   );
 }
 
+const GRAPHEME_SEGMENTER =
+  typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+    : undefined;
+
 /**
  * Returns the terminal cell width of a single character / code point.
- * Zero-width for combining characters and control codes, 2 for full-width/emojis, 1 otherwise.
+ * Zero-width for combining characters, ZWJ, variation selectors, and control codes;
+ * 2 for full-width/emojis; 1 otherwise.
  */
 export function codePointWidth(codePoint: number): number {
   if (codePoint === 0) return 0;
   // Control characters: 0 width
   if (codePoint < 32 || (codePoint >= 0x7f && codePoint < 0xa0)) return 0;
-  // Combining diacritical marks
+  // Combining diacritical marks, zero-width joiner/spaces, variation selectors
   if (
     (codePoint >= 0x0300 && codePoint <= 0x036f) ||
+    (codePoint >= 0x1ab0 && codePoint <= 0x1aff) ||
     (codePoint >= 0x1dc0 && codePoint <= 0x1dff) ||
+    (codePoint >= 0x200b && codePoint <= 0x200f) ||
+    (codePoint >= 0x2060 && codePoint <= 0x2064) ||
     (codePoint >= 0x20d0 && codePoint <= 0x20ff) ||
-    (codePoint >= 0xfe20 && codePoint <= 0xfe2f)
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
+    (codePoint >= 0xfe20 && codePoint <= 0xfe2f) ||
+    codePoint === 0xfeff
   ) {
     return 0;
   }
   return isFullWidthCodePoint(codePoint) ? 2 : 1;
 }
 
+export function graphemeDisplayWidth(grapheme: string): number {
+  if (!grapheme) return 0;
+  // ZWJ emoji sequences (e.g. 👩‍💻) and regional indicator flag pairs (e.g. 🇺🇸) occupy 2 cells
+  if (grapheme.includes('\u200d')) {
+    return 2;
+  }
+  let maxCpWidth = 0;
+  let hasEmojiSkinTone = false;
+  for (const ch of grapheme) {
+    const cp = ch.codePointAt(0);
+    if (cp === undefined) continue;
+    if (cp >= 0x1f3fb && cp <= 0x1f3ff) {
+      hasEmojiSkinTone = true;
+      continue;
+    }
+    const w = codePointWidth(cp);
+    if (w > maxCpWidth) maxCpWidth = w;
+  }
+  if (hasEmojiSkinTone && maxCpWidth > 0) return 2;
+  return maxCpWidth;
+}
+
 /**
  * Computes the visible display width of a string in terminal cells.
- * Accurately handles ANSI styling, CJK, emoji, and combining characters.
+ * Accurately handles ANSI styling, CJK, ZWJ emoji sequences, flags, and combining characters.
  */
 export function stringDisplayWidth(str: string): number {
   const clean = stripAnsi(str);
+  if (!clean) return 0;
+  if (GRAPHEME_SEGMENTER) {
+    let width = 0;
+    for (const seg of GRAPHEME_SEGMENTER.segment(clean)) {
+      width += graphemeDisplayWidth(seg.segment);
+    }
+    return width;
+  }
   let width = 0;
   for (const char of clean) {
     const cp = char.codePointAt(0);
@@ -107,34 +150,51 @@ export function truncateToDisplayWidth(str: string, maxWidth: number, ellipsis =
 
   let currentWidth = 0;
   let result = '';
-  let inEscape = false;
-  let escapeBuf = '';
+  let hasAnsi = false;
 
-  for (let i = 0; i < str.length; i++) {
-    const char = str[i];
-    if (char === '\x1b') {
-      inEscape = true;
-      escapeBuf = char;
-      continue;
+  // Tokenize into ANSI CSI/OSC sequences vs plain-text runs, then segment plain-text runs by grapheme
+  let lastIdx = 0;
+  ANSI_REGEX.lastIndex = 0;
+  const tokens: Array<{ ansi: boolean; value: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = ANSI_REGEX.exec(str)) !== null) {
+    if (m.index > lastIdx) {
+      tokens.push({ ansi: false, value: str.slice(lastIdx, m.index) });
     }
-    if (inEscape) {
-      escapeBuf += char;
-      if (/[a-zA-Z~]/.test(char)) {
-        inEscape = false;
-        result += escapeBuf;
-        escapeBuf = '';
-      }
-      continue;
-    }
-
-    const cp = char.codePointAt(0);
-    const cpWidth = cp !== undefined ? codePointWidth(cp) : 1;
-    if (currentWidth + cpWidth > targetWidth) {
-      break;
-    }
-    currentWidth += cpWidth;
-    result += char;
+    tokens.push({ ansi: true, value: m[0] });
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < str.length) {
+    tokens.push({ ansi: false, value: str.slice(lastIdx) });
   }
 
-  return result + ellipsis + '\x1b[0m';
+  outer: for (const tok of tokens) {
+    if (tok.ansi) {
+      hasAnsi = true;
+      result += tok.value;
+      continue;
+    }
+    if (GRAPHEME_SEGMENTER) {
+      for (const seg of GRAPHEME_SEGMENTER.segment(tok.value)) {
+        const gWidth = graphemeDisplayWidth(seg.segment);
+        if (currentWidth + gWidth > targetWidth) {
+          break outer;
+        }
+        currentWidth += gWidth;
+        result += seg.segment;
+      }
+    } else {
+      for (const ch of tok.value) {
+        const cp = ch.codePointAt(0);
+        const cpWidth = cp !== undefined ? codePointWidth(cp) : 1;
+        if (currentWidth + cpWidth > targetWidth) {
+          break outer;
+        }
+        currentWidth += cpWidth;
+        result += ch;
+      }
+    }
+  }
+
+  return hasAnsi ? `${result}${ellipsis}\x1b[0m` : `${result}${ellipsis}`;
 }

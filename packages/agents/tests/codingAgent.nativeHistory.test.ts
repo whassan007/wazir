@@ -23,7 +23,47 @@ it('preserves native call IDs and tool results through the real agent and accept
   expect(events.at(-1)).toMatchObject({ kind: 'done', content: 'The answer is 42.', terminationReason: 'VERIFICATION_PASSED' });
   expect(turn).toBe(2);
 });
-it('rejects a parallel batch without executing any of it, then recovers on a single call', async () => {
+it('executes a parallel read-only batch in a single turn and correlates every toolCallId (Qwen Code 1.0 default)', async () => {
+  const executed: string[] = [];
+  let turn = 0;
+  const runtime: AgentRuntime = {
+    tools: [
+      {
+        name: 'lookup',
+        description: 'lookup',
+        inputSchema: { type: 'object' },
+        descriptor: { sideEffectClass: 'READ_ONLY', concurrencySafety: 'parallel' },
+      },
+    ],
+    runtimeCapabilities: { nativeToolCalling: true },
+    async *generate(req) {
+      turn += 1;
+      if (turn === 1) {
+        yield { type: 'tool_call', toolName: 'lookup', toolCallId: 'one', toolInput: { key: 'a' } };
+        yield { type: 'tool_call', toolName: 'lookup', toolCallId: 'two', toolInput: { key: 'b' } };
+        yield { type: 'completed', finishReason: 'tool_calls' };
+        return;
+      }
+      const assistantCallMsg = req.messages.find((m) => m.role === 'assistant' && m.toolCalls?.length);
+      expect(assistantCallMsg?.toolCalls).toHaveLength(2);
+      const toolMsgs = req.messages.filter((m) => m.role === 'tool');
+      expect(toolMsgs.map((m) => m.toolCallId)).toEqual(['one', 'two']);
+      yield { type: 'token', content: 'The answer is 42.' };
+      yield { type: 'completed', finishReason: 'stop' };
+    },
+    async executeTool(name, input) {
+      executed.push(`${name}:${JSON.stringify(input)}`);
+      return { ok: true, output: '21', durationMs: 0 };
+    },
+  };
+  const events = [];
+  for await (const event of createCodingAgent().run(request, runtime)) events.push(event);
+  expect(executed).toEqual(['lookup:{"key":"a"}', 'lookup:{"key":"b"}']);
+  expect(turn).toBe(2);
+  expect(events.at(-1)).toMatchObject({ kind: 'done', content: 'The answer is 42.' });
+});
+
+it('legacyJsonLoop: rejects a parallel batch without executing any of it, then recovers on a single call', async () => {
   const executed: string[] = [];
   let turn = 0;
   const runtime: AgentRuntime = {
@@ -51,7 +91,7 @@ it('rejects a parallel batch without executing any of it, then recovers on a sin
     async executeTool(name, input) { executed.push(`${name}:${JSON.stringify(input)}`); return { ok: true, output: '42', durationMs: 0 }; },
   };
   const events = [];
-  for await (const event of createCodingAgent().run(request, runtime)) events.push(event);
+  for await (const event of createCodingAgent({ legacyJsonLoop: true }).run(request, runtime)) events.push(event);
   expect(executed.filter((e) => e.startsWith('lookup'))).toEqual(['lookup:{"key":"a"}']);
   expect(events.some((e: any) => String(e.content ?? '').startsWith('PARALLEL_TOOL_CALLS_REJECTED'))).toBe(true);
   expect(events.at(-1)).toMatchObject({ kind: 'done', content: 'The answer is 42.' });

@@ -646,7 +646,11 @@ export function detectInstallMethod(): string {
     return /[\\/]Cellar[\\/]wazir[\\/]/.test(root) ? 'homebrew' : 'npm';
   }
   if (build.channel === 'homebrew') return 'homebrew';
-  if (build.channel === 'standalone-binary' || (process as NodeJS.Process & { isSea?: () => boolean }).isSea?.()) return 'standalone-binary';
+  const isSea = Boolean(
+    (process as NodeJS.Process & { getBuiltinModule?: (id: string) => { isSea?: () => boolean } | undefined }).getBuiltinModule?.('node:sea')?.isSea?.()
+    || (process as NodeJS.Process & { isSea?: () => boolean }).isSea?.(),
+  );
+  if (build.channel === 'standalone-binary' || isSea) return 'standalone-binary';
   if (build.channel === 'deb' || build.channel === 'rpm') return build.channel;
   if (build.channel === 'scoop' || build.channel === 'winget') return build.channel;
   if (process.env.WAZIR_MANAGED_CHECKOUT === '1') return 'managed-source';
@@ -738,7 +742,9 @@ export function validateNpmReleasePackage(tarball: string, expectedVersion: stri
   if (metadata.status !== 0) throw new Error('Cannot read npm release package metadata');
   let pkg: { name?: string; version?: string; bin?: Record<string, string> };
   try { pkg = JSON.parse(metadata.stdout) as typeof pkg; } catch { throw new Error('npm release package metadata is not valid JSON'); }
-  if (pkg.name !== 'wazir' || pkg.version !== expectedVersion || pkg.bin?.wa !== './bin/wa.js') throw new Error('npm release package metadata does not match expected Wazir name, version, or executable path');
+  const validWaBin = pkg.bin?.wa === './bin/wa.js' || pkg.bin?.wa === 'bin/wa.js';
+  const validWazirBin = !pkg.bin?.wazir || pkg.bin.wazir === './bin/wa.js' || pkg.bin.wazir === 'bin/wa.js';
+  if (pkg.name !== 'wazir' || pkg.version !== expectedVersion || !validWaBin || !validWazirBin) throw new Error('npm release package metadata does not match expected Wazir name, version, or executable path');
 }
 
 function restoreNpmBackup(backup: string, prefix: string): void {
@@ -782,7 +788,7 @@ export async function extractStandaloneBinary(archive: string, artifactName: str
   if (entries.filter((entry) => entry === expected).length !== 1) throw new Error(`Standalone archive must contain exactly one expected executable ${expected}`);
   for (const entry of entries) {
     const normalized = path.posix.normalize(entry);
-    if (normalized.startsWith('../') || normalized.startsWith('/') || normalized.includes('\\') || normalized !== entry || !(entry === base || entry === expected || entry === `${base}/README.md` || entry === `${base}/LICENSE`)) {
+    if (normalized.startsWith('../') || normalized.startsWith('/') || normalized.includes('\\') || normalized !== entry || !(entry === base || entry === expected || entry === `${base}/wazir` || entry === `${base}/README.md` || entry === `${base}/LICENSE`)) {
       throw new Error(`Standalone archive contains an unexpected path: ${entry}`);
     }
   }
@@ -834,6 +840,25 @@ async function installStandaloneBinary(archive: string, artifactName: string, ve
     renameSync(siblingStage, current);
     const installed = spawnSync(current, ['--version'], { encoding: 'utf8', timeout: 20_000 });
     if (installed.status !== 0 || installed.stdout.trim().replace(/^v/, '') !== version.replace(/^v/, '')) throw new Error(`Activated executable did not report Wazir ${version}`);
+    // Keep dual `wa` / `wazir` standalone alias synchronized if installed side-by-side
+    const ext = process.platform === 'win32' ? '.exe' : '';
+    const baseName = path.basename(current).toLowerCase();
+    const aliasName = baseName === `wa${ext}` ? `wazir${ext}` : baseName === `wazir${ext}` ? `wa${ext}` : '';
+    if (aliasName) {
+      const aliasPath = path.join(path.dirname(current), aliasName);
+      if (existsSync(aliasPath)) {
+        try {
+          if (typeof process.getuid !== 'function' || statSync(aliasPath).uid === process.getuid()) {
+            const aliasStage = `${aliasPath}.wazir-stage-${process.pid}`;
+            copyFileSync(current, aliasStage);
+            chmodSync(aliasStage, 0o755);
+            renameSync(aliasStage, aliasPath);
+          }
+        } catch {
+          // Best-effort alias synchronization; primary binary is already verified
+        }
+      }
+    }
   } catch (error) {
     rmSync(siblingStage, { force: true });
     const rollback = `${current}.wazir-rollback-${process.pid}`;

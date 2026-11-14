@@ -181,21 +181,34 @@ export function formatMissingModelRecovery(tui: any, readiness: ModelReadiness, 
     unavailableRuntimes.push('ollama (0 models installed)', 'lmstudio (offline or 0 models installed)');
   }
 
+  const unicode = tui.conversationRenderer?.getTheme?.()?.unicode ?? (process.env.WAZIR_ASCII !== '1' && process.env.WAZIR_UNICODE !== '0');
+  const errGlyph = unicode ? '✗' : 'x';
+  const warnGlyph = unicode ? '⚠' : '!';
+  const bulletGlyph = unicode ? '·' : '-';
+
   const lines: string[] = [
     prompt
-      ? `✗ Model unavailable: cannot execute task "${prompt.slice(0, 60)}" because no eligible AI model is registered or loaded.`
-      : '⚠ Model unavailable: 0 eligible models registered across configured runtimes.',
+      ? `${errGlyph} Model unavailable: cannot execute task "${prompt.slice(0, 60)}" because no eligible AI model is registered or loaded.`
+      : `${warnGlyph} Model unavailable: 0 eligible models registered across configured runtimes.`,
   ];
   if (unavailableRuntimes.length > 0) {
-    lines.push(`  Unavailable runtimes: ${unavailableRuntimes.join(', ')}`);
+    const joined = `  Unavailable runtimes: ${unavailableRuntimes.join(', ')}`;
+    if (joined.length <= 76 && unavailableRuntimes.length === 1) {
+      lines.push(joined);
+    } else {
+      lines.push('  Unavailable runtimes:');
+      for (const rt of unavailableRuntimes) {
+        lines.push(`    ${bulletGlyph} ${rt}`);
+      }
+    }
   }
   lines.push(
-    '  Recovery commands:',
-    '    • Pull a local Ollama model:       ollama pull qwen2.5-coder',
-    '    • Start LM Studio server:          lms server start   (or /launch lmstudio)',
-    '    • Authenticate a hosted provider:  wa auth login <anthropic|openai|google>',
-    '    • Check runtime diagnostics:       wa doctor          (or /doctor)',
-    '  Shell commands (!<cmd> or /sh <cmd>, e.g. !ls -la) remain available without an AI model.',
+    '  Quick setup:',
+    `    ${bulletGlyph} Local Ollama:      ollama pull qwen2.5-coder`,
+    `    ${bulletGlyph} Local LM Studio:   lms server start  (or /launch lmstudio)`,
+    `    ${bulletGlyph} Hosted provider:   wa auth login <anthropic|openai|google>`,
+    `    ${bulletGlyph} Diagnostics:       wa doctor  (or /doctor)`,
+    '  Shell commands (!<cmd> or /sh <cmd>) remain available without a model.',
   );
   return lines.join('\n');
 }

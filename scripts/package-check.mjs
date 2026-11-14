@@ -174,13 +174,13 @@ mkdirSync(home);
 const env = { ...process.env, WAZIR_HOME: home, NO_COLOR: '1', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' };
 delete env.WAZIR_IN_MEMORY;
 
-function smoke(label, waCmd) {
+function smoke(label, waCmd, expectedName = 'wa') {
   const wa = (...a) => run(waCmd, a, { cwd: outside, env, timeout: 180_000 });
   const results = {};
   const v = wa('--version');
   results.version = v.status === 0 && v.stdout.trim() === version ? 'PASS' : 'FAIL';
   const h = wa('--help');
-  results.help = h.status === 0 && /Usage: wa/.test(h.stdout) ? 'PASS' : 'FAIL';
+  results.help = h.status === 0 && new RegExp(`Usage: ${expectedName}\\b`).test(h.stdout) ? 'PASS' : 'FAIL';
   const d = wa('doctor', '--json');
   let doctorOk = false;
   try { doctorOk = !!JSON.parse(d.stdout); } catch { /* not JSON */ }
@@ -208,9 +208,14 @@ function optionalModules(label, nodeModules) {
 const prefix = path.join(work, 'prefix');
 const g = run(npm, ['install', '-g', '--prefix', prefix, tarball], { env, cwd: outside });
 const globalBin = win ? path.join(prefix, 'wa.cmd') : path.join(prefix, 'bin', 'wa');
+const globalWazirBin = win ? path.join(prefix, 'wazir.cmd') : path.join(prefix, 'bin', 'wazir');
 const globalPkgDir = win ? path.join(prefix, 'node_modules', manifest.name) : path.join(prefix, 'lib', 'node_modules', manifest.name);
-record('install:global', g.status === 0 && existsSync(globalBin) ? 'PASS' : 'FAIL', { note: g.status === 0 ? globalBin : g.stderr.slice(-800) });
-if (g.status === 0) { smoke('global', globalBin); optionalModules('global', path.join(globalPkgDir, 'bin')); }
+record('install:global', g.status === 0 && existsSync(globalBin) && existsSync(globalWazirBin) ? 'PASS' : 'FAIL', { note: g.status === 0 ? `${globalBin}, ${globalWazirBin}` : g.stderr.slice(-800) });
+if (g.status === 0) {
+  smoke('global:wa', globalBin, 'wa');
+  smoke('global:wazir', globalWazirBin, 'wazir');
+  optionalModules('global', path.join(globalPkgDir, 'bin'));
+}
 
 // local (non-global) project install, run through npx
 const proj = path.join(work, 'project');
@@ -251,7 +256,7 @@ if (up.status === 0) smoke('after-upgrade', globalBin);
 // ---- 9. uninstall --------------------------------------------------------------------------
 const stateBeforeUninstall = snapshot();
 const un = run(npm, ['uninstall', '-g', '--prefix', prefix, manifest.name], { env, cwd: outside });
-const leftover = existsSync(globalBin) || existsSync(globalPkgDir);
+const leftover = existsSync(globalBin) || existsSync(globalWazirBin) || existsSync(globalPkgDir);
 const stateAfter = snapshot();
 const lost = Object.keys(stateBeforeUninstall).filter((k) => stateBeforeUninstall[k] !== stateAfter[k]);
 record('uninstall', un.status === 0 && !leftover && lost.length === 0 ? 'PASS' : 'FAIL', {

@@ -66,12 +66,14 @@ for (const script of maintainerScripts) {
 }
 
 // 3. Application files
-// /usr/bin/wa
+// /usr/bin/wa & /usr/bin/wazir
 const launcherScript = `#!/bin/sh
 exec node /usr/lib/wazir/wa.js "$@"
 `;
 writeFileSync(path.join(stagingDir, 'usr/bin/wa'), launcherScript, 'utf8');
 chmodSync(path.join(stagingDir, 'usr/bin/wa'), 0o755);
+writeFileSync(path.join(stagingDir, 'usr/bin/wazir'), launcherScript, 'utf8');
+chmodSync(path.join(stagingDir, 'usr/bin/wazir'), 0o755);
 
 // /usr/lib/wazir/wa.js
 writeFileSync(path.join(stagingDir, 'usr/lib/wazir/wa.js'), readFileSync(waBundle, 'utf8'), 'utf8');

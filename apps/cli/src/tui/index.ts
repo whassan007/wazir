@@ -41,7 +41,80 @@ export { RendererMetrics, type RendererMetricsSnapshot } from './metrics.js';
 export { FleetTui } from './fleetTui.js';
 export type { FleetTuiOptions, TuiView, AgentCardState } from './fleetTui.js';
 export { ConversationRenderer } from './conversationRenderer.js';
-export type { ConversationFrame } from './conversationRenderer.js';
+export type { ConversationFrame, ConversationRendererOptions } from './conversationRenderer.js';
+export {
+  createConversationTheme,
+  detectColorMode,
+  detectUnicodeSupport,
+  renderConversationHeader,
+  formatTwoColumnRow,
+  type ConversationTheme,
+  type ThemeColorMode,
+  type ThemeGlyphs,
+  type HeaderRenderState,
+} from './theme.js';
+export {
+  sanitizeAssistantText,
+  wrapPlainText,
+  renderMarkdownMessage,
+  renderUnifiedDiff,
+  buildInlineEditPreview,
+} from './markdownRenderer.js';
+export {
+  segmentGraphemes,
+  clampGraphemeCursor,
+  layoutPromptWithCursor,
+  moveCursorVertically,
+  findLineHomeOffset,
+  findLineEndOffset,
+  killToLineEnd,
+  killToLineStart,
+  isExplicitNewlineChord,
+  type WrappedPromptLayout,
+} from './composerController.js';
+export {
+  CONVERSATION_SLASH_COMMANDS,
+  matchSlashCompletions,
+  listWorkspaceFiles,
+  invalidateWorkspaceFileCache,
+  matchFileMentionCompletions,
+  resolvePromptFileMentions,
+  filterSelectorOptions,
+  detectGitBranch,
+  type SlashCommandSpec,
+  type CompletionItem,
+  type SelectorOption,
+} from './completionEngine.js';
+export {
+  ActivityProjector,
+  formatApprovalPreview,
+  formatUsageAndCost,
+  type ActivityCategory,
+  type CoalescedActivityItem,
+  type ApprovalPreviewBlock,
+} from './activityProjector.js';
+export {
+  createConversationSession,
+  saveConversationSession,
+  loadConversationSession,
+  listConversationSessions,
+  reconcileSessionJobs,
+  buildContextualTaskInput,
+  type ConversationPermissionMode,
+  type RestoredJobState,
+  type ConversationTurnRecord,
+  type LinkedSessionJob,
+  type ConversationSessionRecord,
+  type ReconciledJobInspection,
+} from './sessionStore.js';
+export {
+  ConversationController,
+  checkNodePtyAvailable,
+  type PermissionMode,
+  type InteractiveOverlayKind,
+  type InteractiveOverlayState,
+  type ConversationControllerInit,
+} from './conversationController.js';
 export { StatusProjection, classifyTool } from './statusProjection.js';
 export type { ConversationStatus, ProjectedTaskStatus } from './statusProjection.js';
 export { EventSummarizer } from './eventSummarizer.js';

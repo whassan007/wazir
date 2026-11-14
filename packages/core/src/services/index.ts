@@ -373,3 +373,20 @@ export * from './providerBackpressure.js';
 export * from './schedulerFairness.js';
 export * from './historyRetentionService.js';
 export * from './delegatedPolicyGate.js';
+export {
+  WorkloadDistributor,
+  DEFAULT_HARDWARE_DISTRIBUTION,
+  DEFAULT_WORKLOAD_DISTRIBUTION,
+  parseWorkloadDistribution,
+  formatWorkloadDistribution,
+  resolveMatchingExternalAgent,
+  matchesAgentPool,
+} from './workloadDistributor.js';
+export type {
+  WorkloadPoolKind,
+  WorkloadShare,
+  WorkloadDistributionConfig,
+  AvailableWorkloadPools,
+  AllocatedWorkloadTarget,
+} from './workloadDistributor.js';
+export * from './harnessAssembler.js';

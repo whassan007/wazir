@@ -1,0 +1,56 @@
+---Trace---
+------State 0-------
+univ={Public$0, Sensitive$0, Secret$0, LocalOllama$0, CloudQwenAcp$0, CodexCli$0, TaskRequest$0, RouterState$0, boolean/True$0, boolean/False$0, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7}
+Int={-8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7}
+seq/Int={0, 1, 2, 3}
+String={}
+none={}
+this/Public={Public$0}
+this/Sensitive={Sensitive$0}
+this/Secret={Secret$0}
+this/DataClassification={Public$0, Sensitive$0, Secret$0}
+this/LocalOllama={LocalOllama$0}
+this/CloudQwenAcp={CloudQwenAcp$0}
+this/CodexCli={CodexCli$0}
+this/ExecutionTarget={LocalOllama$0, CloudQwenAcp$0, CodexCli$0}
+this/ExecutionTarget<:spawnsLocalProcess={LocalOllama$0->boolean/True$0, CloudQwenAcp$0->boolean/True$0, CodexCli$0->boolean/True$0}
+this/ExecutionTarget<:endpointIsLocalLoopback={LocalOllama$0->boolean/True$0, CloudQwenAcp$0->boolean/False$0, CodexCli$0->boolean/False$0}
+this/TaskRequest={TaskRequest$0}
+this/TaskRequest<:localOnlyFlag={TaskRequest$0->boolean/True$0}
+this/TaskRequest<:classification={TaskRequest$0->Secret$0}
+this/TaskRequest<:pinnedTarget={}
+this/RouterState={RouterState$0}
+this/RouterState<:dispatched={}
+boolean/True={boolean/True$0}
+boolean/False={boolean/False$0}
+boolean/Bool={boolean/True$0, boolean/False$0}
+skolem $NoCloudExfiltrationForSensitiveOrLocalOnly_req={TaskRequest$0}
+skolem $NoCloudExfiltrationForSensitiveOrLocalOnly_t={CloudQwenAcp$0}
+------State 1 (loop)-------
+univ={Public$0, Sensitive$0, Secret$0, LocalOllama$0, CloudQwenAcp$0, CodexCli$0, TaskRequest$0, RouterState$0, boolean/True$0, boolean/False$0, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7}
+Int={-8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7}
+seq/Int={0, 1, 2, 3}
+String={}
+none={}
+this/Public={Public$0}
+this/Sensitive={Sensitive$0}
+this/Secret={Secret$0}
+this/DataClassification={Public$0, Sensitive$0, Secret$0}
+this/LocalOllama={LocalOllama$0}
+this/CloudQwenAcp={CloudQwenAcp$0}
+this/CodexCli={CodexCli$0}
+this/ExecutionTarget={LocalOllama$0, CloudQwenAcp$0, CodexCli$0}
+this/ExecutionTarget<:spawnsLocalProcess={LocalOllama$0->boolean/True$0, CloudQwenAcp$0->boolean/True$0, CodexCli$0->boolean/True$0}
+this/ExecutionTarget<:endpointIsLocalLoopback={LocalOllama$0->boolean/True$0, CloudQwenAcp$0->boolean/False$0, CodexCli$0->boolean/False$0}
+this/TaskRequest={TaskRequest$0}
+this/TaskRequest<:localOnlyFlag={TaskRequest$0->boolean/True$0}
+this/TaskRequest<:classification={TaskRequest$0->Secret$0}
+this/TaskRequest<:pinnedTarget={}
+this/RouterState={RouterState$0}
+this/RouterState<:dispatched={RouterState$0->TaskRequest$0->CloudQwenAcp$0}
+boolean/True={boolean/True$0}
+boolean/False={boolean/False$0}
+boolean/Bool={boolean/True$0, boolean/False$0}
+skolem $NoCloudExfiltrationForSensitiveOrLocalOnly_req={TaskRequest$0}
+skolem $NoCloudExfiltrationForSensitiveOrLocalOnly_t={CloudQwenAcp$0}
+

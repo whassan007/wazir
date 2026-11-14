@@ -7,8 +7,8 @@
 # of which node (nvm version, conda, system) a later shell has on PATH.
 #
 # Uninstall instructions:
-#   1. Remove the launcher:
-#      rm -f "${WAZIR_BIN_DIR:-$HOME/.local/bin}/wa"
+#   1. Remove the launchers:
+#      rm -f "${WAZIR_BIN_DIR:-$HOME/.local/bin}/wa" "${WAZIR_BIN_DIR:-$HOME/.local/bin}/wazir"
 #   2. Remove PATH additions from ~/.bashrc, ~/.zshrc, ~/.bash_profile, etc.
 #   3. (Optional) Remove data and configuration:
 #      rm -rf "${WAZIR_HOME:-$HOME/.wazir}"
@@ -107,7 +107,7 @@ fi
 echo "==> Configuring environment files and shell profiles"
 "$NODE_BIN" "$REPO_ROOT/scripts/setup-env.mjs"
 
-echo "==> Installing 'wa' launcher to $BIN_DIR/wa"
+echo "==> Installing 'wa' and 'wazir' launchers to $BIN_DIR"
 mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/wa" <<SHIM
 #!/usr/bin/env bash
@@ -138,6 +138,8 @@ fi
 exec "\$NODE_BIN" "\$CLI" "\$@"
 SHIM
 chmod +x "$BIN_DIR/wa"
+cp "$BIN_DIR/wa" "$BIN_DIR/wazir"
+chmod +x "$BIN_DIR/wazir"
 
 # Refuse to leave a stale source launcher installed and record provenance.
 SOURCE_VERSION="$(node -p "require('./package.json').version")"

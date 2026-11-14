@@ -12,6 +12,41 @@ import type {
   MetricValue,
 } from '@wazir/core';
 import { evaluateExecution, type EvaluationOptions } from './index.js';
+import {
+  TrajectoryContrastService,
+  type TrajectoryContrastReport,
+} from './trajectoryContrastService.js';
+import {
+  GovernanceFence,
+  type CapabilityCeiling,
+  type GovernanceValidationResult,
+} from './editors/governanceFence.js';
+
+export type ContrastiveVerdictClassification =
+  | 'VERIFIED'
+  | 'UNVERIFIED_CONTRASTIVE'
+  | 'REJECTED_GOVERNANCE';
+
+export interface ContrastiveCandidateEvaluation {
+  executionId: string;
+  rank: number;
+  contrastiveScore: number;
+  contrastiveVerdict: ContrastiveVerdictClassification;
+  physicallyVerified: boolean;
+  governanceValidation: GovernanceValidationResult;
+  scoreReport: EvaluationScoreReport;
+  rationale: string[];
+}
+
+export interface ContrastiveEnsembleReport {
+  verdictClassification: ContrastiveVerdictClassification;
+  physicallyVerified: boolean;
+  selectedExecutionId?: string;
+  selectedVerdict?: ContrastiveVerdictClassification;
+  candidates: ContrastiveCandidateEvaluation[];
+  contrastReport: TrajectoryContrastReport;
+  summary: string;
+}
 
 export interface EvaluationPricingConfig {
   costPer1kInputTokens?: number;   // default 0.003 USD
@@ -914,6 +949,167 @@ export class EvaluationService {
       passed,
       wallTimeMs: params.wallTimeMs,
       tokensUsed: params.tokensUsed,
+    };
+  }
+
+  /**
+   * Classifies a single ExecutionRecord under Wazir's rubric-sparse contrastive governance rules (`A061`):
+   * - `'REJECTED_GOVERNANCE'` if `GovernanceFence` detects any guardrail, spec, oracle, or reward-hacking violation.
+   * - `'VERIFIED'` ONLY when governance passed AND at least one physical verification oracle ran and passed at the final revision.
+   * - `'UNVERIFIED_CONTRASTIVE'` whenever physical verification oracles did not run or did not pass (never masquerading as `'VERIFIED'`).
+   */
+  public classifyContrastiveVerdict(
+    record: ExecutionRecord,
+    options: EvaluationServiceOptions & { baseCeiling?: CapabilityCeiling } = {},
+  ): ContrastiveVerdictClassification {
+    const fence = new GovernanceFence(options.baseCeiling);
+    const govResult = fence.validateExecutionRecord(record, {
+      expectedFiles: options.expectedFiles,
+      protectedFiles: options.protectedFiles,
+      baseCeiling: options.baseCeiling,
+      workspaceRoot: options.projectRoot ?? record.execution?.workspaceRoot,
+    });
+    if (!govResult.allowed) {
+      return 'REJECTED_GOVERNANCE';
+    }
+
+    const oracleRan =
+      (record.checks?.length ?? 0) > 0 ||
+      (record.evidence?.length ?? 0) > 0;
+    if (!oracleRan) {
+      return 'UNVERIFIED_CONTRASTIVE';
+    }
+
+    const report = this.evaluate(record, {
+      ...options,
+      requirePhysicalVerification: true,
+    });
+    if (report.passed && report.metrics.physicalVerificationSuccess) {
+      return 'VERIFIED';
+    }
+
+    return 'UNVERIFIED_CONTRASTIVE';
+  }
+
+  /**
+   * Evaluates and ranks a multi-candidate ensemble using `TrajectoryContrastService` + `GovernanceFence` (`A061`).
+   * Ensures rubric-sparse contrastive winners are explicitly tagged `'UNVERIFIED_CONTRASTIVE'` when no physical
+   * verification oracle ran/passed, and disqualifies any governance-violating candidate as `'REJECTED_GOVERNANCE'`.
+   */
+  public evaluateContrastiveEnsemble(
+    records: ExecutionRecord[],
+    options: EvaluationServiceOptions & { baseCeiling?: CapabilityCeiling } = {},
+  ): ContrastiveEnsembleReport {
+    if (records.length === 0) {
+      throw new Error('EvaluationService.evaluateContrastiveEnsemble requires at least one ExecutionRecord');
+    }
+
+    const contrastService = new TrajectoryContrastService();
+    const rankingResult = contrastService.rankContrastively(records);
+    const fence = new GovernanceFence(options.baseCeiling);
+    const recordById = new Map(records.map((r) => [r.execution.id, r]));
+
+    const preliminary = rankingResult.rankings.map((ranked) => {
+      const record = recordById.get(ranked.executionId)!;
+      const governanceValidation = fence.validateExecutionRecord(record, {
+        expectedFiles: options.expectedFiles,
+        protectedFiles: options.protectedFiles,
+        baseCeiling: options.baseCeiling,
+        workspaceRoot: options.projectRoot ?? record.execution?.workspaceRoot,
+      });
+
+      const scoreReport = this.evaluate(record, {
+        ...options,
+        requirePhysicalVerification: true,
+      });
+
+      const oracleRan = ranked.profile.physicalVerification.oracleRan;
+      let contrastiveVerdict: ContrastiveVerdictClassification;
+      let physicallyVerified = false;
+      const rationale = [...ranked.rationale];
+
+      if (!governanceValidation.allowed) {
+        contrastiveVerdict = 'REJECTED_GOVERNANCE';
+        physicallyVerified = false;
+        rationale.push(
+          `Rejected by GovernanceFence: ${governanceValidation.violations.map((v) => v.code).join(', ')}`,
+        );
+      } else if (
+        oracleRan &&
+        ranked.verdictTag === 'VERIFIED' &&
+        scoreReport.passed &&
+        scoreReport.metrics.physicalVerificationSuccess
+      ) {
+        contrastiveVerdict = 'VERIFIED';
+        physicallyVerified = true;
+      } else {
+        contrastiveVerdict = 'UNVERIFIED_CONTRASTIVE';
+        physicallyVerified = false;
+        if (!oracleRan) {
+          rationale.push('No physical oracle executed; cannot classify as VERIFIED');
+        }
+      }
+
+      return {
+        executionId: ranked.executionId,
+        contrastiveScore: governanceValidation.allowed ? ranked.contrastiveScore : 0,
+        contrastiveVerdict,
+        physicallyVerified,
+        governanceValidation,
+        scoreReport,
+        rationale,
+      };
+    });
+
+    const verdictPriority: Record<ContrastiveVerdictClassification, number> = {
+      VERIFIED: 0,
+      UNVERIFIED_CONTRASTIVE: 1,
+      REJECTED_GOVERNANCE: 2,
+    };
+
+    preliminary.sort((a, b) => {
+      const pDiff = verdictPriority[a.contrastiveVerdict] - verdictPriority[b.contrastiveVerdict];
+      if (pDiff !== 0) return pDiff;
+      if (b.contrastiveScore !== a.contrastiveScore) return b.contrastiveScore - a.contrastiveScore;
+      return a.executionId.localeCompare(b.executionId);
+    });
+
+    const candidates: ContrastiveCandidateEvaluation[] = preliminary.map((item, idx) => ({
+      ...item,
+      rank: idx + 1,
+    }));
+
+    const bestEligible = candidates.find((c) => c.contrastiveVerdict !== 'REJECTED_GOVERNANCE');
+
+    let verdictClassification: ContrastiveVerdictClassification;
+    let physicallyVerified = false;
+    let selectedExecutionId: string | undefined;
+    let selectedVerdict: ContrastiveVerdictClassification | undefined;
+
+    if (!bestEligible) {
+      verdictClassification = 'REJECTED_GOVERNANCE';
+      physicallyVerified = false;
+    } else {
+      selectedExecutionId = bestEligible.executionId;
+      selectedVerdict = bestEligible.contrastiveVerdict;
+      verdictClassification = bestEligible.contrastiveVerdict;
+      physicallyVerified = bestEligible.contrastiveVerdict === 'VERIFIED';
+    }
+
+    const summary = [
+      `=== Contrastive Ensemble Evaluation (${candidates.length} candidates) ===`,
+      `Ensemble Verdict: ${verdictClassification} | Physically Verified: ${physicallyVerified}`,
+      `Selected Candidate: ${selectedExecutionId ?? 'NONE (all rejected by governance)'}`,
+    ].join('\n');
+
+    return {
+      verdictClassification,
+      physicallyVerified,
+      selectedExecutionId,
+      selectedVerdict,
+      candidates,
+      contrastReport: rankingResult.contrastReport,
+      summary,
     };
   }
 }

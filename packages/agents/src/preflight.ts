@@ -56,10 +56,19 @@ const PROBE_PROMPT = 'Reply with the single word OK. Do not use any tools.';
 /** Where each agent keeps its own model and account settings, for fix hints. */
 const AGENT_CONFIG: Record<string, string> = {
   'qwen-code': '~/.qwen/settings.json',
+  qwen: '~/.qwen/settings.json',
+  'qwen-acp': '~/.qwen/settings.json',
   gemini: '~/.gemini/settings.json',
   codex: '~/.codex/config.toml',
   'claude-code': '~/.claude/settings.json',
 };
+
+function redactAgentSecretMaterial(text: string): string {
+  return text
+    .replace(/\b(QWEN_API_KEY|DASHSCOPE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN)\s*=\s*[^\s,;]+/gi, '$1=[REDACTED]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]');
+}
 
 /** Environments in which an agent refuses to start; checked before launching anything. */
 const BLOCKERS: Array<{ agent: string; env: string; detail: string; hint: string }> = [
@@ -76,9 +85,25 @@ const BLOCKERS: Array<{ agent: string; env: string; detail: string; hint: string
  * wording, so an unmatched message keeps its full detail and simply gets no hint.
  */
 export function classifyAgentFailure(agent: string, text: string): { status: 'FAILED' | 'BLOCKED'; hint?: string } {
-  const config = AGENT_CONFIG[agent];
+  const baseAgent = agent.split('@')[0] ?? agent;
+  const isQwen = baseAgent === 'qwen-code' || baseAgent === 'qwen' || baseAgent === 'qwen-acp';
+  const config = AGENT_CONFIG[baseAgent] ?? AGENT_CONFIG[agent];
+  if (/FH-A8-02|local-only privacy|denied by local-only/i.test(text)) {
+    return {
+      status: 'BLOCKED',
+      hint: 'configure a loopback OPENAI_BASE_URL (e.g. http://127.0.0.1:11434/v1) without cloud API keys, or disable local-only mode',
+    };
+  }
   if (/cannot be launched inside another Claude Code session/i.test(text)) {
     return { status: 'BLOCKED', hint: 'run wa from a normal terminal' };
+  }
+  if (/unknown option ['"]?--acp|unrecognized option ['"]?--acp|ACP protocol version mismatch/i.test(text)) {
+    return {
+      status: 'FAILED',
+      hint: isQwen
+        ? "upgrade the qwen CLI (@qwen-code/qwen-code) to a version that supports 'qwen --acp'"
+        : `upgrade the ${baseAgent} CLI to a version that supports '--acp'`,
+    };
   }
   if (/requires a newer version of Codex|not supported when using Codex with a ChatGPT account/i.test(text)) {
     return {
@@ -90,13 +115,23 @@ export function classifyAgentFailure(agent: string, text: string): { status: 'FA
     return { status: 'FAILED', hint: 'Google retired this tier; use --agent antigravity' };
   }
   if (/ENOENT|command not found|not installed|could not start ACP agent/i.test(text)) {
-    return { status: 'FAILED', hint: `install the ${agent} CLI and make sure it is on PATH` };
+    return {
+      status: 'FAILED',
+      hint: isQwen
+        ? "install the qwen-code ('qwen') CLI and make sure 'qwen' is on PATH so 'qwen --acp' can launch"
+        : `install the ${agent} CLI and make sure it is on PATH`,
+    };
   }
   if (/connection error|ECONNREFUSED|fetch failed|ENOTFOUND|EHOSTUNREACH|socket hang up/i.test(text)) {
     return { status: 'FAILED', hint: `the agent's model endpoint is unreachable; check its own settings${config ? ` (${config})` : ''}` };
   }
-  if (/\b(401|403)\b|unauthori[sz]ed|not (logged|signed) in|log ?in required|authenticat|credential|api key/i.test(text)) {
-    return { status: 'FAILED', hint: `sign in: run the ${agent} CLI once interactively` };
+  if (/\b(401|403)\b|unauthori[sz]ed|not (logged|signed) in|log ?in required|authenticat|credential|api key|dashscope/i.test(text)) {
+    return {
+      status: 'FAILED',
+      hint: isQwen
+        ? "sign in: run 'qwen' once interactively to authenticate, or configure credentials in ~/.qwen/settings.json for 'qwen --acp'"
+        : `sign in: run the ${agent} CLI once interactively`,
+    };
   }
   if (/context length|n_ctx|context window|maximum context|too many tokens/i.test(text)) {
     return { status: 'FAILED', hint: "the agent's model context window is smaller than its prompt; load the model with a larger context (e.g. in LM Studio) or pick a larger-context model" };
@@ -172,6 +207,6 @@ export async function preflightAgent(
   const stage: AgentPreflightStage = sessionOpened ? 'answer' : /^could not start/.test(detail) ? 'start' : 'answer';
   const { status, hint } = classifyAgentFailure(agent, detail);
   // eslint-disable-next-line no-control-regex
-  const plain = detail.replace(/\x1b\[[0-9;]*m/g, '').replace(/\s+/g, ' ').trim();
+  const plain = redactAgentSecretMaterial(detail).replace(/\x1b\[[0-9;]*m/g, '').replace(/\s+/g, ' ').trim();
   return finish({ status, stage, detail: plain.slice(0, 400), hint });
 }

@@ -1,7 +1,15 @@
-import { stringDisplayWidth } from './unicode.js';
+import { stringDisplayWidth, stripAnsi, truncateToDisplayWidth } from './unicode.js';
 import { detectTerminalCapabilities } from './terminalCapabilities.js';
 import { OutputWriter } from './outputWriter.js';
 import { TranscriptStore } from './transcriptStore.js';
+import {
+  createConversationTheme,
+  renderConversationHeader,
+  formatTwoColumnRow,
+  type ConversationTheme,
+  type ThemeColorMode,
+} from './theme.js';
+import { layoutPromptWithCursor } from './composerController.js';
 
 export interface ConversationFrame {
   identity: string;
@@ -15,49 +23,134 @@ export interface ConversationFrame {
   approval?: string;
   status?: string;
   copyMode?: string;
+  /** Optional enriched metadata for the 2-line Wazir header & bounded composer */
+  workspaceName?: string;
+  gitBranch?: string;
+  permissionSummary?: string;
+  placeholder?: string;
+  /** Optional completion, model selector, palette, or approval preview lines above/below composer */
+  trayLines?: string[];
+  footerHints?: string;
+  queuedCount?: number;
+  approvalFocused?: boolean;
+  spinnerFrame?: string;
   modalLines?: string[];
 }
 
-/** Inline renderer: transcript is append-only; only this small live region is repainted. */
+export interface ConversationRendererOptions {
+  isTTY?: boolean;
+  noColor?: boolean;
+  ascii?: boolean;
+  colorMode?: ThemeColorMode;
+}
+
+const IDLE_STATUS_DEFAULT = 'Ready. Type a task or /fanout <t1; t2; ...> to begin.';
+
+/**
+ * Append-only inline terminal conversation renderer:
+ * - Transcript history flows naturally into native terminal scrollback (never enters alt-screen or mouse mode).
+ * - Only the compact live composer + active status tray at the bottom is repainted in place.
+ * - Tracks both `(liveCursorRow, liveCursorCol)` and per-row display widths so horizontal cursor movement,
+ *   multiline wrapping, CJK/emoji graphemes, and narrow/wide terminal resizes stay exact.
+ */
 export class ConversationRenderer {
   private liveRows: string[] = [];
+  private liveRowWidths: number[] = [];
   private liveCursorRow = 0;
+  private liveCursorCol = 0;
+  private lastRenderedColumns = 80;
   private started = false;
   private plainRendered = false;
   private lastFrameKey = '';
   private lastPlainStatus = '';
-  private liveCursorCol = 0;
   private lastNonTtyModalKey = '';
   private lastAppendedText = '';
   private currentModalLines: string[] = [];
   private readonly tty: boolean;
   private readonly writer: OutputWriter;
+  private theme: ConversationTheme;
   readonly transcript = new TranscriptStore();
-
-  constructor(private readonly output: NodeJS.WritableStream, private readonly size: () => { columns: number; rows: number }, options: { isTTY?: boolean; noColor?: boolean } = {}) {
-    this.writer = new OutputWriter(output);
-    this.tty = options.isTTY ?? detectTerminalCapabilities(output).isTTY;
-  }
 
   private activeIdentity = '';
   private activeModel?: string;
+  private workspaceName = '';
+  private gitBranch?: string;
+  private permissionSummary = 'ask · sandbox';
+
+  constructor(
+    private readonly output: NodeJS.WritableStream,
+    private readonly size: () => { columns: number; rows: number },
+    options: ConversationRendererOptions = {},
+  ) {
+    this.writer = new OutputWriter(output);
+    const caps = detectTerminalCapabilities(output);
+    this.tty = options.isTTY ?? caps.isTTY;
+    this.theme = createConversationTheme({
+      capabilities: caps,
+      noColor: !this.tty || Boolean(options.noColor),
+      ascii: options.ascii,
+      colorMode: !this.tty ? 'monochrome' : options.colorMode,
+    });
+  }
+
+  getTheme(): ConversationTheme {
+    return this.theme;
+  }
+
+  setThemeOptions(options: ConversationRendererOptions): void {
+    const caps = detectTerminalCapabilities(this.output);
+    this.theme = createConversationTheme({
+      capabilities: caps,
+      noColor: !this.tty || Boolean(options.noColor),
+      ascii: options.ascii,
+      colorMode: !this.tty ? 'monochrome' : options.colorMode,
+    });
+    this.lastFrameKey = '';
+  }
+
+  setHeaderContext(context: {
+    workspaceName?: string;
+    gitBranch?: string;
+    permissionSummary?: string;
+    model?: string;
+  }): void {
+    if (context.workspaceName !== undefined) this.workspaceName = context.workspaceName;
+    if (context.gitBranch !== undefined) this.gitBranch = context.gitBranch;
+    if (context.permissionSummary !== undefined) this.permissionSummary = context.permissionSummary;
+    if (context.model !== undefined) this.activeModel = context.model;
+  }
 
   setModel(model: string): void {
     this.activeModel = model;
   }
 
-  start(identity: string, model?: string): void {
+  start(
+    identity: string,
+    model?: string,
+    headerMeta?: { workspaceName?: string; gitBranch?: string; permissionSummary?: string },
+  ): void {
     if (this.started) return;
     this.started = true;
     this.activeIdentity = identity;
     if (model) this.activeModel = model;
+    if (headerMeta) this.setHeaderContext(headerMeta);
+
     const { columns } = this.size();
-    const shownModel = this.activeModel ?? model;
-    const right = fit(shownModel ? `${identity} · ${shownModel}` : identity, Math.max(1, columns - 10));
-    const gap = Math.max(1, columns - 2 - stringDisplayWidth('WAZIR') - stringDisplayWidth(right));
-    const subtitle = fit(' Autonomous coding assistant · Ready · Enter to send · Esc to cancel · /help · /exit', Math.max(1, columns - 1));
-    this.writeDurable(` WAZIR${' '.repeat(gap)}${right}\n${subtitle}\n\n`);
+    const shownModel = this.activeModel ?? model ?? 'auto-routed';
+    const workspace = this.workspaceName || identity || 'workspace';
+    const headerLines = renderConversationHeader(
+      {
+        workspaceName: workspace,
+        gitBranch: this.gitBranch,
+        modelSummary: shownModel,
+        permissionSummary: this.permissionSummary,
+      },
+      Math.max(20, columns - 1),
+      this.theme,
+    );
+    this.writeDurable(`${headerLines.join('\n')}\n\n`);
     this.liveRows = [];
+    this.liveRowWidths = [];
   }
 
   append(text: string): void {
@@ -82,53 +175,157 @@ export class ConversationRenderer {
     return this.currentModalLines;
   }
 
+  /**
+   * Clears visible screen above the live composer for `/clear` without entering alternate-screen mode.
+   */
+  clearScreenAndRestart(): void {
+    this.clearLive();
+    this.transcript.clear();
+    this.lastFrameKey = '';
+    if (this.tty) {
+      this.writeTransient('\x1b[2J\x1b[H');
+    }
+    this.started = false;
+    this.start(this.activeIdentity, this.activeModel);
+  }
+
   render(frame: ConversationFrame): void {
+    if (frame.workspaceName !== undefined) this.workspaceName = frame.workspaceName;
+    if (frame.gitBranch !== undefined) this.gitBranch = frame.gitBranch;
+    if (frame.permissionSummary !== undefined) this.permissionSummary = frame.permissionSummary;
     if (!this.started) this.start(frame.identity, frame.model);
     const { columns, rows } = this.size();
-    const width = Math.max(10, columns - 1);
-    const active = frame.active > 1
-      ? `● ${frame.active} agents working${frame.waitingApproval ? ` · ${frame.waitingApproval} waiting for approval` : ''}`
-      : frame.active === 1
-        ? `● Working${frame.elapsedSeconds === undefined ? '' : ` (${formatElapsed(frame.elapsedSeconds)}) · Esc to interrupt`}${frame.activity ? ` · ${frame.activity}` : ''}`
-        : frame.waitingApproval ? `? ${frame.waitingApproval} approval${frame.waitingApproval === 1 ? '' : 's'} required · /fleet to review` : '';
-    const idleStatus = 'Ready. Type a task or /fanout <t1; t2; ...> to begin.';
-    
-    let statusText = '';
-    if (frame.status && frame.status !== idleStatus) {
+    const width = Math.max(12, columns - 1);
+    const compactHeight = rows > 0 && rows <= 14;
+    const g = this.theme.glyphs;
+
+    // 1. Live activity / progress row ("◌ Running tests          3s")
+    let activeLine = '';
+    if (frame.active > 1) {
+      const left = `  ${g.running} ${frame.active} agents working${frame.waitingApproval ? ` ${g.bullet} ${frame.waitingApproval} waiting for approval` : ''}`;
+      const right = frame.elapsedSeconds !== undefined ? formatElapsed(frame.elapsedSeconds) : '';
+      activeLine = formatActivityRow(left, right, width, this.theme);
+    } else if (frame.active === 1) {
+      const spin = frame.spinnerFrame ?? g.running;
+      const label = frame.activity && frame.activity !== 'Working' ? `Working ${g.bullet} ${frame.activity}` : 'Working';
+      const left = `  ${spin} ${label}`;
+      const right = frame.elapsedSeconds !== undefined ? formatElapsed(frame.elapsedSeconds) : '';
+      activeLine = formatActivityRow(left, right, width, this.theme);
+    } else if (frame.waitingApproval > 0 && !frame.approval && (!frame.trayLines || frame.trayLines.length === 0)) {
+      const msg = `  ${g.approval} ${frame.waitingApproval} approval${frame.waitingApproval === 1 ? '' : 's'} required ${g.bullet} Tab to review`;
+      activeLine = this.theme.warning(fitPlain(msg, width));
+    }
+
+    const expandDetailLine =
+      !compactHeight && frame.active >= 1 && width >= 44
+        ? this.theme.muted(fitPlain(`    Expand activity for details (/logs)`, width))
+        : '';
+
+    const approvalLine =
+      frame.approval && (!frame.trayLines || frame.trayLines.length === 0)
+        ? (frame.approvalFocused
+          ? this.theme.warning(fitPlain(`  ${g.approval} ${frame.approval}`, width))
+          : this.theme.warning(fitPlain(`  ${g.approval} ${frame.approval}`, width)))
+        : '';
+
+    const copyLine = frame.copyMode ? this.theme.accent(fitPlain(`  ${frame.copyMode}`, width)) : '';
+
+    this.currentModalLines = frame.modalLines ?? [];
+    const modalLinesFormatted = frame.modalLines ? frame.modalLines.map((line) => clampStyledLine(line, width)) : [];
+
+    let statusRaw = frame.status && frame.status !== IDLE_STATUS_DEFAULT ? frame.status : '';
+    if (frame.status && frame.status !== IDLE_STATUS_DEFAULT) {
       const trimmedStatus = frame.status.trim();
       const isDuplicate = trimmedStatus === this.lastAppendedText ||
         (this.lastAppendedText.startsWith('Model selection updated') && (trimmedStatus.startsWith('Model selection updated') || trimmedStatus.startsWith('Model selection cancelled')));
-      if (!isDuplicate) {
-        statusText = `• ${frame.status}`;
-      }
+      statusRaw = isDuplicate ? '' : frame.status;
     }
 
-    this.currentModalLines = frame.modalLines ?? [];
+    const statusLine = statusRaw ? this.theme.muted(fitPlain(`  ${g.bullet} ${statusRaw}`, width)) : '';
 
-    const promptLines = wrapWithCursor(frame.prompt || '', frame.cursor, Math.max(1, width - 2));
-    const modalLinesFormatted = frame.modalLines ? frame.modalLines.map(line => fit(line, width)) : [];
-    const fixed = (active ? 1 : 0) + (frame.approval ? 1 : 0) + (frame.copyMode ? 1 : 0) + (statusText ? 1 : 0) + modalLinesFormatted.length;
-    
-    const maxRows = this.tty 
-      ? Math.max(modalLinesFormatted.length + 4, Math.min(9, rows - 1))
-      : 9;
-    const promptCapacity = Math.max(1, maxRows - fixed);
-    const promptStart = Math.max(0, Math.min(promptLines.cursorRow - promptCapacity + 1, promptLines.lines.length - promptCapacity));
-    const promptEnd = Math.min(promptLines.lines.length, promptStart + promptCapacity);
-    const visiblePrompt = promptLines.lines.slice(promptStart, promptEnd);
+    const trayLines = (frame.trayLines ?? []).map((line) => clampStyledLine(line, width));
 
-    let next = [
-      ...(active ? [fit(active, width)] : []),
-      ...(frame.approval ? [fit(`? ${frame.approval}`, width)] : []),
-      ...(frame.copyMode ? [fit(frame.copyMode, width)] : []),
-      ...(statusText ? [fit(statusText, width)] : []),
+    // 2. Bounded composer with exact cursor row & column tracking
+    const showChrome = this.tty && !compactHeight && rows >= 16;
+    const ruleWidth = Math.min(width, Math.max(12, width - 2));
+    const ruleLine = showChrome ? `  ${this.theme.muted(g.rule.repeat(Math.max(8, ruleWidth - 2)))}` : '';
+
+    const prefixIndent = showChrome ? '  ' : '';
+    const promptGlyph = `${prefixIndent}${g.prompt} `;
+    const contGlyph = `${prefixIndent}  `;
+    const prefixCells = stringDisplayWidth(promptGlyph);
+
+    const promptLayout = layoutPromptWithCursor(frame.prompt || '', frame.cursor, width, prefixCells);
+
+    const hintLine = showChrome
+      ? `  ${this.theme.muted(
+          fitPlain(
+            frame.footerHints ??
+              (frame.approvalFocused
+                ? `y approve ${g.bullet} n deny ${g.bullet} v details ${g.bullet} Tab composer`
+                : frame.active > 0
+                  ? `/ commands ${g.bullet} @ files ${g.bullet} Enter steer/queue ${g.bullet} Esc interrupt`
+                  : `/ commands ${g.bullet} @ files ${g.bullet} Ctrl+J newline ${g.bullet} Ctrl+P actions`),
+            Math.max(8, width - 2),
+          ),
+        )}`
+      : '';
+
+    const prePromptRows: string[] = [
+      ...(activeLine ? [activeLine] : []),
+      ...(expandDetailLine ? [expandDetailLine] : []),
+      ...(approvalLine ? [approvalLine] : []),
+      ...(copyLine ? [copyLine] : []),
+      ...(statusLine ? [statusLine] : []),
       ...modalLinesFormatted,
-      ...visiblePrompt.map((line, i) => `${promptStart + i === 0 ? '> ' : '  '}${line}`),
+      ...trayLines,
+      ...(ruleLine ? [ruleLine] : []),
     ];
 
-    const nextCursorRow = fixed - modalLinesFormatted.length + Math.max(0, promptLines.cursorRow - promptStart);
+    const postPromptRows: string[] = [
+      ...(ruleLine ? [ruleLine] : []),
+      ...(hintLine ? [hintLine] : []),
+    ];
+
+    const maxLiveRows = this.tty ? Math.max(modalLinesFormatted.length > 0 ? modalLinesFormatted.length + 4 : 2, Math.min(14, rows - 2)) : 12;
+    const fixedCount = prePromptRows.length + postPromptRows.length;
+    const promptCapacity = Math.max(1, maxLiveRows - fixedCount);
+
+    // If tight vertical space, drop non-essential chrome before starving prompt lines
+    if (fixedCount >= maxLiveRows && postPromptRows.length > 0) {
+      postPromptRows.length = 0;
+    }
+
+    const effectiveCapacity = Math.max(1, maxLiveRows - prePromptRows.length - postPromptRows.length);
+    const promptStart = Math.max(
+      0,
+      Math.min(
+        promptLayout.cursorRow - effectiveCapacity + 1,
+        promptLayout.contentLines.length - effectiveCapacity,
+      ),
+    );
+    const promptEnd = Math.min(promptLayout.contentLines.length, promptStart + effectiveCapacity);
+    const visiblePromptLines = promptLayout.contentLines.slice(promptStart, promptEnd);
+
+    const placeholderText = frame.placeholder ?? 'Describe the next change…';
+    const renderedPromptRows =
+      frame.prompt.length === 0 && this.tty
+        ? [
+            `${this.theme.accent(promptGlyph)}${this.theme.muted(
+              fitPlain(placeholderText, Math.max(1, width - prefixCells)),
+            )}`,
+          ]
+        : visiblePromptLines.map((line, idx) => {
+            const pfx = promptStart + idx === 0 ? this.theme.accent(promptGlyph) : contGlyph;
+            return `${pfx}${fitPlain(line, Math.max(1, width - prefixCells))}`;
+          });
+
+    const nextRows = [...prePromptRows, ...renderedPromptRows, ...postPromptRows];
+    const nextCursorRow = prePromptRows.length + Math.max(0, promptLayout.cursorRow - promptStart);
+    const nextCursorCol = Math.max(0, Math.min(Math.max(0, columns - 1), promptLayout.cursorCol));
 
     if (!this.tty) {
+      // Redirected / piped output: plain text only, zero ANSI escape sequences.
       const modalKey = modalLinesFormatted.join('\n');
       if (modalKey && modalKey !== this.lastNonTtyModalKey) {
         this.lastNonTtyModalKey = modalKey;
@@ -139,26 +336,29 @@ export class ConversationRenderer {
       }
 
       if (!this.plainRendered) {
-        const clean = next.filter((line) => Boolean(line) && (!statusText || line !== fit(statusText, width))).join('\n');
-        if (clean) this.writeDurable(`${clean}\n`);
+        const plainLines: string[] = [];
+        if (activeLine) plainLines.push(stripAnsi(activeLine).trimStart());
+        if (approvalLine) plainLines.push(stripAnsi(approvalLine).trimStart());
+        if (copyLine) plainLines.push(stripAnsi(copyLine).trimStart());
+        if (frame.prompt) {
+          plainLines.push(...visiblePromptLines.map((l, i) => `${promptStart + i === 0 ? '> ' : '  '}${l}`));
+        }
+        if (plainLines.length > 0) {
+          this.writeDurable(`${plainLines.join('\n')}\n`);
+        }
         this.plainRendered = true;
       }
-      if (frame.status && frame.status !== this.lastPlainStatus && frame.status !== idleStatus) {
-        const trimmedStatus = frame.status.trim();
-        const isDuplicate = trimmedStatus === this.lastAppendedText ||
-          (this.lastAppendedText.startsWith('Model selection updated') && (trimmedStatus.startsWith('Model selection updated') || trimmedStatus.startsWith('Model selection cancelled')));
-        if (!isDuplicate) {
-          this.writeDurable(`${frame.status}\n`);
-          this.lastPlainStatus = frame.status;
-        }
+      if (statusRaw && statusRaw !== this.lastPlainStatus) {
+        this.writeDurable(`${statusRaw}\n`);
+        this.lastPlainStatus = statusRaw;
       }
       return;
     }
 
-    const frameKey = `${next.join('\n')}\0${nextCursorRow}`;
+    const frameKey = `${columns}x${rows}\0${nextRows.join('\n')}\0${nextCursorRow}:${nextCursorCol}`;
     if (frameKey === this.lastFrameKey) return;
     this.lastFrameKey = frameKey;
-    this.rewriteLive(next, nextCursorRow);
+    this.rewriteLive(nextRows, nextCursorRow, nextCursorCol);
   }
 
   stop(): void {
@@ -166,87 +366,133 @@ export class ConversationRenderer {
     this.clearLive();
     this.writeTransient('\r\n');
     this.liveRows = [];
+    this.liveRowWidths = [];
   }
 
-  private rewriteLive(next: string[], cursorRow: number): void {
-    const oldRows = this.liveRows.length;
+  private computeReflowedMetrics(columns: number): { rowsAboveCursor: number; oldPhysicalRows: number } {
+    const safeCols = Math.max(1, columns);
+    if (this.liveRows.length === 0) {
+      return { rowsAboveCursor: 0, oldPhysicalRows: 0 };
+    }
+    if (safeCols >= this.lastRenderedColumns) {
+      return {
+        rowsAboveCursor: this.liveCursorRow,
+        oldPhysicalRows: this.liveRows.length,
+      };
+    }
+    let rowsAbove = 0;
+    for (let i = 0; i < this.liveCursorRow && i < this.liveRowWidths.length; i++) {
+      const w = this.liveRowWidths[i] ?? 0;
+      rowsAbove += Math.max(1, Math.ceil(Math.max(1, w) / safeCols));
+    }
+    rowsAbove += Math.floor(this.liveCursorCol / safeCols);
+
+    let totalOld = 0;
+    for (const w of this.liveRowWidths) {
+      totalOld += Math.max(1, Math.ceil(Math.max(1, w) / safeCols));
+    }
+    return { rowsAboveCursor: rowsAbove, oldPhysicalRows: Math.max(totalOld, this.liveRows.length) };
+  }
+
+  private rewriteLive(next: string[], cursorRow: number, cursorCol: number): void {
     const { columns } = this.size();
-    const oldPhysicalRows = oldRows;
-    // Each row was terminated explicitly, so terminal resize can wrap only the
-    // row containing the cursor. Earlier live rows remain hard line breaks.
-    const rowsAboveCursor = this.liveCursorRow + Math.floor(this.liveCursorCol / columns);
-    if (oldRows && rowsAboveCursor) this.writeTransient(`\x1b[${rowsAboveCursor}A`);
-    if (oldRows) this.writeTransient('\r');
+    const safeCols = Math.max(1, columns);
+    const { rowsAboveCursor, oldPhysicalRows } = this.computeReflowedMetrics(safeCols);
+
+    if (this.liveRows.length > 0 && rowsAboveCursor > 0) {
+      this.writeTransient(`\x1b[${rowsAboveCursor}A`);
+    }
+    if (this.liveRows.length > 0) {
+      this.writeTransient('\r');
+    }
+
     const count = Math.max(oldPhysicalRows, next.length);
-    const rendered = Array.from({ length: count }, (_, i) => next[i] ?? '');
     for (let i = 0; i < count; i++) {
-      this.writeTransient(`\r\x1b[2K${rendered[i] ?? ''}`);
+      const line = next[i] ?? '';
+      this.writeTransient(`\r\x1b[2K${line}`);
       if (i + 1 < count) this.writeTransient('\n');
     }
-    const last = Math.max(0, next.length - 1);
-    const clampedCursorRow = Math.max(0, Math.min(last, cursorRow));
-    const up = last - clampedCursorRow;
-    if (up) this.writeTransient(`\x1b[${up}A`);
+
+    const lastIdx = Math.max(0, count - 1);
+    const clampedCursorRow = Math.max(0, Math.min(Math.max(0, next.length - 1), cursorRow));
+    const up = lastIdx - clampedCursorRow;
+    if (up > 0) {
+      this.writeTransient(`\x1b[${up}A`);
+    }
     this.writeTransient('\r');
-    const cursorLine = next[Math.max(0, Math.min(last, cursorRow))] ?? '';
-    const col = Math.min(columns - 1, stringDisplayWidth(cursorLine));
-    if (col) this.writeTransient(`\x1b[${col}C`);
+    const col = Math.max(0, Math.min(safeCols - 1, cursorCol));
+    if (col > 0) {
+      this.writeTransient(`\x1b[${col}C`);
+    }
+
     this.liveRows = next;
+    this.liveRowWidths = next.map((line) => stringDisplayWidth(stripAnsi(line)));
     this.liveCursorRow = clampedCursorRow;
     this.liveCursorCol = col;
+    this.lastRenderedColumns = safeCols;
   }
 
   private clearLive(): void {
     if (!this.tty || !this.liveRows.length) return;
     const { columns } = this.size();
-    const count = this.liveRows.length;
-    const rowsAboveCursor = this.liveCursorRow + Math.floor(this.liveCursorCol / columns);
-    if (rowsAboveCursor) this.writeTransient(`\x1b[${rowsAboveCursor}A`);
+    const safeCols = Math.max(1, columns);
+    const { rowsAboveCursor, oldPhysicalRows } = this.computeReflowedMetrics(safeCols);
+
+    if (rowsAboveCursor > 0) {
+      this.writeTransient(`\x1b[${rowsAboveCursor}A`);
+    }
     this.writeTransient('\r');
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < oldPhysicalRows; i++) {
       this.writeTransient('\x1b[2K');
-      if (i + 1 < count) this.writeTransient('\n');
+      if (i + 1 < oldPhysicalRows) this.writeTransient('\n');
+    }
+    if (oldPhysicalRows > 1) {
+      this.writeTransient(`\x1b[${oldPhysicalRows - 1}A`);
     }
     this.writeTransient('\r');
     this.liveRows = [];
+    this.liveRowWidths = [];
     this.liveCursorRow = 0;
     this.liveCursorCol = 0;
+    this.lastFrameKey = '';
   }
 
-  private writeDurable(text: string): void { this.writer.writeDurable(text); }
-  private writeTransient(text: string): void { this.writer.writeTransient(text); }
+  private writeDurable(text: string): void {
+    this.writer.writeDurable(text);
+  }
+
+  private writeTransient(text: string): void {
+    this.writer.writeTransient(text);
+  }
 }
 
 function formatElapsed(seconds: number): string {
   return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
 }
 
-function fit(text: string, width: number): string {
-  let out = ''; let used = 0;
-  for (const char of text) {
-    const cells = stringDisplayWidth(char);
-    if (used + cells > width) break;
-    out += char; used += cells;
-  }
-  return out;
+function formatActivityRow(
+  leftPlain: string,
+  rightPlain: string,
+  width: number,
+  theme: ConversationTheme,
+): string {
+  return formatTwoColumnRow(
+    leftPlain,
+    rightPlain,
+    width,
+    (s) => theme.accent(s),
+    (s) => theme.muted(s),
+    0,
+  );
 }
 
-function wrapWithCursor(text: string, cursor: number, width: number): { lines: string[]; cursorRow: number } {
-  const chars = Array.from(text);
-  const cursorChars = Array.from(text.slice(0, cursor)).length;
-  const lines: string[] = [''];
-  let cells = 0;
-  let cursorRow = 0;
-  for (let i = 0; i <= chars.length; i++) {
-    if (i === cursorChars) cursorRow = lines.length - 1;
-    if (i === chars.length) break;
-    const char = chars[i];
-    if (char === '\n' || cells + Math.max(1, stringDisplayWidth(char)) > width) {
-      lines.push(''); cells = 0;
-      if (char === '\n') continue;
-    }
-    lines[lines.length - 1] += char;
-    cells += stringDisplayWidth(char);
-  }
-  return { lines, cursorRow };
+function fitPlain(text: string, width: number): string {
+  if (width <= 0) return '';
+  return truncateToDisplayWidth(text, width, '');
+}
+
+function clampStyledLine(line: string, width: number): string {
+  const plain = stripAnsi(line);
+  if (stringDisplayWidth(plain) <= width) return line;
+  return truncateToDisplayWidth(plain, width, '…');
 }

@@ -42,6 +42,7 @@ import type { ArtifactIntelligenceService } from './artifactIntelligenceService.
 import type { ModelRegistry } from './modelRegistry.js';
 import { HierarchicalMctsService } from './hierarchicalMctsService.js';
 import type { SearchNode } from '../types/index.js';
+import type { ComposedSynthesisReport } from '../types/solutionSearch.js';
 
 export interface EvaluationServiceInterface {
   evaluate: (record: ExecutionRecord, options?: Record<string, unknown>) => EvaluationScoreReport;
@@ -1266,7 +1267,7 @@ export class SolutionSearchService {
 
       // Check Stopping Criteria after batch
       if (!isAdaptive) {
-        if (request.selectionPolicy?.earlyStopOnSufficient) {
+        if (request.selectionPolicy?.earlyStopOnSufficient && !request.compose) {
           const sufficient = candidates.find((c) => c.evaluation?.qualifies);
           if (sufficient) break;
         }
@@ -1327,6 +1328,239 @@ export class SolutionSearchService {
       }
     }
 
+    // Optional Governed Propose -> Probe -> Compose Synthesis (Harness² A062/A064)
+    let composedSynthesis: ComposedSynthesisReport | undefined;
+    let preferredComposedCandidate: CandidateResult | undefined;
+
+    if (request.compose === true && !searchHandle.cancelled) {
+      const probeGovernanceViolations: string[] = [];
+      const disqualifiedByGovernanceIds = new Set<string>();
+
+      for (const probe of candidates) {
+        const violations = this.inspectCandidateGovernance(probe, request, projectRoot);
+        if (violations.length > 0) {
+          disqualifiedByGovernanceIds.add(probe.candidateId);
+          for (const v of violations) {
+            probeGovernanceViolations.push(`[${probe.candidateId}] ${v}`);
+          }
+          if (probe.evaluation) {
+            probe.evaluation.qualifies = false;
+            probe.evaluation.protectedOraclePassed = false;
+            for (const v of violations) {
+              probe.evaluation.disqualificationReasons.push(`GOVERNANCE_VIOLATION: ${v}`);
+            }
+          } else {
+            probe.failureReason = `GOVERNANCE_VIOLATION: ${violations.join('; ')}`;
+          }
+        } else if (probe.evaluation?.qualifies && !this.hasPassingPhysicalOracle(probe)) {
+          // Rubric-sparse / unverified probe cannot qualify as physically VERIFIED
+          probe.evaluation.qualifies = false;
+          probe.evaluation.verificationPassed = false;
+          probe.evaluation.disqualificationReasons.push(
+            'UNVERIFIED_CONTRASTIVE: No physical verification oracle executed and passed at final revision',
+          );
+        }
+      }
+
+      const cleanProbes = candidates.filter((c) => !disqualifiedByGovernanceIds.has(c.candidateId));
+      const { behavioralGuidance, domainNotes } = this.synthesizeProbeGuidance(cleanProbes);
+
+      const defaultComposePolicy: SelectionPolicy = request.selectionPolicy ?? {
+        requireCorrectness: true,
+        requireProtectedVerification: true,
+        requireTaskAcceptance: true,
+        secondaryCriteria: [
+          'fewer_repair_cycles',
+          'smaller_change_surface',
+          'lower_token_consumption',
+          'lower_wall_time',
+        ],
+      };
+
+      const cleanVerifiedProbes = cleanProbes.filter(
+        (c) => !c.isPruned && c.evaluation?.qualifies === true && this.hasPassingPhysicalOracle(c),
+      );
+      const rankedCleanProbes = this.rankQualifyingCandidatesDeterministically(
+        cleanVerifiedProbes,
+        defaultComposePolicy,
+      );
+
+      if (rankedCleanProbes.length === 0) {
+        if (probeGovernanceViolations.length > 0 && cleanProbes.length === 0) {
+          composedSynthesis = {
+            attempted: false,
+            sourceCandidateIds: [],
+            governancePassed: false,
+            governanceViolations: probeGovernanceViolations,
+            verdictClassification: 'REJECTED_GOVERNANCE',
+            behavioralGuidance,
+            domainNotes,
+          };
+        } else if (probeGovernanceViolations.length > 0 && cleanProbes.every((p) => p.status === 'failed')) {
+          composedSynthesis = {
+            attempted: false,
+            sourceCandidateIds: [],
+            governancePassed: false,
+            governanceViolations: probeGovernanceViolations,
+            verdictClassification: 'REJECTED_GOVERNANCE',
+            behavioralGuidance,
+            domainNotes,
+          };
+        } else {
+          composedSynthesis = {
+            attempted: false,
+            sourceCandidateIds: cleanProbes.map((p) => p.candidateId),
+            governancePassed: probeGovernanceViolations.length === 0,
+            ...(probeGovernanceViolations.length > 0 ? { governanceViolations: probeGovernanceViolations } : {}),
+            verdictClassification: probeGovernanceViolations.length > 0 ? 'REJECTED_GOVERNANCE' : 'UNVERIFIED_CONTRASTIVE',
+            behavioralGuidance,
+            domainNotes,
+          };
+        }
+      } else if (rankedCleanProbes.length === 1) {
+        const sole = rankedCleanProbes[0];
+        composedSynthesis = {
+          attempted: false,
+          candidateId: sole.candidateId,
+          sourceCandidateIds: [sole.candidateId],
+          governancePassed: true,
+          ...(probeGovernanceViolations.length > 0 ? { governanceViolations: probeGovernanceViolations } : {}),
+          verdictClassification: 'VERIFIED',
+          behavioralGuidance,
+          domainNotes,
+        };
+      } else {
+        // Find top complementary verified probes with non-empty disjoint file sets
+        let complementaryGroup: CandidateResult[] = [];
+        for (let i = 0; i < rankedCleanProbes.length; i++) {
+          const base = rankedCleanProbes[i];
+          const baseFiles = (base.executionRecord?.filesChanged ?? []).map((f) => f.replace(/\\/g, '/'));
+          if (baseFiles.length === 0) continue;
+
+          const unionFiles = new Set(baseFiles);
+          const group: CandidateResult[] = [base];
+
+          for (let j = i + 1; j < rankedCleanProbes.length; j++) {
+            const other = rankedCleanProbes[j];
+            const otherFiles = (other.executionRecord?.filesChanged ?? []).map((f) => f.replace(/\\/g, '/'));
+            if (otherFiles.length === 0) continue;
+
+            const overlaps = otherFiles.some((f) => unionFiles.has(f));
+            if (!overlaps) {
+              group.push(other);
+              for (const f of otherFiles) unionFiles.add(f);
+            }
+          }
+
+          if (group.length >= 2) {
+            complementaryGroup = group;
+            break;
+          }
+        }
+
+        if (complementaryGroup.length < 2) {
+          // Overlapping/conflicting file edits -> safe deterministic fallback to top single verified probe
+          const topSingle = rankedCleanProbes[0];
+          composedSynthesis = {
+            attempted: false,
+            candidateId: topSingle.candidateId,
+            sourceCandidateIds: [rankedCleanProbes[0].candidateId, rankedCleanProbes[1].candidateId],
+            governancePassed: true,
+            ...(probeGovernanceViolations.length > 0 ? { governanceViolations: probeGovernanceViolations } : {}),
+            verdictClassification: 'CONFLICT_FALLBACK',
+            behavioralGuidance,
+            domainNotes,
+          };
+        } else {
+          // Disjoint file sets -> run composed candidate in a clean forked worktree and re-verify
+          const sourceIds = complementaryGroup.map((c) => c.candidateId);
+          const combinedFiles = complementaryGroup.flatMap(
+            (c) => (c.executionRecord?.filesChanged ?? []).map((f) => f.replace(/\\/g, '/')),
+          );
+          const composedId = `cand-composed-${searchId.replace(/^search-/, '').slice(0, 8)}`;
+          const composedPromptLines = [
+            '=== GOVERNED PROPOSE-PROBE-COMPOSE SYNTHESIS ===',
+            `Synthesize complementary verified changes from probes [${sourceIds.join(', ')}] across disjoint files: ${combinedFiles.join(', ')}.`,
+            ...behavioralGuidance.map((g) => `Guidance: ${g}`),
+            ...domainNotes.map((n) => `Domain Note: ${n}`),
+          ];
+
+          const composedDescriptor: CandidateDescriptor = {
+            id: composedId,
+            name: `Composed Synthesis (${sourceIds.join(' + ')})`,
+            strategyKind: request.strategy,
+            modelId: complementaryGroup[0].descriptor.modelId,
+            agentId: complementaryGroup[0].descriptor.agentId ?? 'wazir-coding',
+            reasoningStrategy: 'Governed Propose-Probe-Compose Synthesis',
+            implementationApproach: `Combine disjoint verified probe slices: ${combinedFiles.join(', ')}`,
+            promptModifier: composedPromptLines.join('\n'),
+            metadata: {
+              composed: true,
+              sourceCandidateIds: sourceIds,
+              expectedComposedFiles: combinedFiles,
+              behavioralGuidance,
+              domainNotes,
+            },
+          };
+
+          const composedResult = await executeCandidate(composedDescriptor);
+          const composedViolations = this.inspectCandidateGovernance(composedResult, request, projectRoot);
+
+          if (composedViolations.length > 0) {
+            if (composedResult.evaluation) {
+              composedResult.evaluation.qualifies = false;
+              composedResult.evaluation.protectedOraclePassed = false;
+              for (const v of composedViolations) {
+                composedResult.evaluation.disqualificationReasons.push(`GOVERNANCE_VIOLATION: ${v}`);
+              }
+            }
+            candidates.push(composedResult);
+            composedSynthesis = {
+              attempted: true,
+              candidateId: composedResult.candidateId,
+              sourceCandidateIds: sourceIds,
+              governancePassed: false,
+              governanceViolations: [
+                ...probeGovernanceViolations,
+                ...composedViolations.map((v) => `[${composedResult.candidateId}] ${v}`),
+              ],
+              verdictClassification: 'REJECTED_GOVERNANCE',
+              behavioralGuidance,
+              domainNotes,
+            };
+          } else if (composedResult.evaluation?.qualifies && this.hasPassingPhysicalOracle(composedResult)) {
+            candidates.push(composedResult);
+            preferredComposedCandidate = composedResult;
+            composedSynthesis = {
+              attempted: true,
+              candidateId: composedResult.candidateId,
+              sourceCandidateIds: sourceIds,
+              governancePassed: true,
+              ...(probeGovernanceViolations.length > 0 ? { governanceViolations: probeGovernanceViolations } : {}),
+              verdictClassification: 'VERIFIED',
+              behavioralGuidance,
+              domainNotes,
+            };
+          } else {
+            if (composedResult.evaluation) {
+              composedResult.evaluation.qualifies = false;
+            }
+            candidates.push(composedResult);
+            composedSynthesis = {
+              attempted: true,
+              candidateId: composedResult.candidateId,
+              sourceCandidateIds: sourceIds,
+              governancePassed: true,
+              ...(probeGovernanceViolations.length > 0 ? { governanceViolations: probeGovernanceViolations } : {}),
+              verdictClassification: 'CONFLICT_FALLBACK',
+              behavioralGuidance,
+              domainNotes,
+            };
+          }
+        }
+      }
+    }
+
     // Step 3: Selection and Pareto Frontier
     this.emitEvent({
       type: 'solution_search.frontier_computed',
@@ -1359,11 +1593,16 @@ export class SolutionSearchService {
       ],
     };
 
-    const selectionResult = this.selectBestCandidate(
-      qualifyingCandidates,
-      paretoFrontier,
-      selectionPolicy,
-    );
+    const selectionResult = preferredComposedCandidate
+      ? {
+          selected: preferredComposedCandidate,
+          reason: `Selected governed composed candidate '${preferredComposedCandidate.candidateId}' synthesized from [${composedSynthesis?.sourceCandidateIds.join(', ')}] with passing physical verification`,
+        }
+      : this.selectBestCandidate(
+          qualifyingCandidates,
+          paretoFrontier,
+          selectionPolicy,
+        );
 
     const selectedCandidate = selectionResult.selected;
     const selectionReason = selectionResult.reason;
@@ -1488,6 +1727,7 @@ export class SolutionSearchService {
       startedAt: new Date(startTime),
       completedAt: new Date(),
       adaptiveTelemetry: isAdaptive ? telemetry : undefined,
+      ...(composedSynthesis ? { composedSynthesis } : {}),
     };
 
     this.emitEvent({
@@ -2688,6 +2928,261 @@ export class SolutionSearchService {
       },
       effectiveAt: new Date(),
       success: true,
+    };
+  }
+
+  // --- Governed Propose-Probe-Compose Helpers (A060 / A062 / A064) ---
+
+  private hasPassingPhysicalOracle(candidate: CandidateResult): boolean {
+    const checks = candidate.checks ?? candidate.executionRecord?.checks ?? [];
+    const evidence = candidate.evidence ?? candidate.executionRecord?.evidence ?? [];
+    if (checks.length === 0 && evidence.length === 0) {
+      return false;
+    }
+    if ((candidate.executionRecord?.errors?.length ?? 0) > 0) {
+      return false;
+    }
+    if (evidence.length > 0) {
+      const rev = candidate.workspaceRevision ?? candidate.executionRecord?.workspaceState?.revision ?? 0;
+      const atRev = evidence.filter((e) => (e.workspaceRevision ?? e.revision) === rev);
+      if (atRev.length > 0 && !atRev.every((e) => e.exitCode === 0 || e.status === 'PASS')) {
+        return false;
+      }
+    }
+    return checks.every((c) => c.ok);
+  }
+
+  private rankQualifyingCandidatesDeterministically(
+    pool: CandidateResult[],
+    policy: SelectionPolicy,
+  ): CandidateResult[] {
+    const criteria = policy.secondaryCriteria ?? [
+      'fewer_repair_cycles',
+      'smaller_change_surface',
+      'lower_token_consumption',
+      'lower_wall_time',
+    ];
+    return [...pool].sort((a, b) => {
+      const ea = a.evaluation;
+      const eb = b.evaluation;
+      if (!ea || !eb) return a.candidateId.localeCompare(b.candidateId);
+      for (const criterion of criteria) {
+        let diff = 0;
+        switch (criterion) {
+          case 'fewer_repair_cycles':
+            diff = ea.execution.repairCycles - eb.execution.repairCycles;
+            break;
+          case 'smaller_change_surface':
+            diff = ea.engineering.filesChanged.length - eb.engineering.filesChanged.length;
+            break;
+          case 'lower_token_consumption':
+            diff = ea.execution.tokens.total - eb.execution.tokens.total;
+            break;
+          case 'lower_wall_time':
+            diff = ea.execution.wallTimeMs - eb.execution.wallTimeMs;
+            break;
+          case 'lower_cost':
+            diff = (ea.resources.monetaryCostUsd ?? 0) - (eb.resources.monetaryCostUsd ?? 0);
+            break;
+          case 'higher_verification_coverage':
+            diff = eb.engineering.verificationScope.length - ea.engineering.verificationScope.length;
+            break;
+          case 'fewer_unresolved_issues':
+            diff = ea.disqualificationReasons.length - eb.disqualificationReasons.length;
+            break;
+          case 'lower_verification_burden':
+            diff = ea.execution.toolCalls - eb.execution.toolCalls;
+            break;
+        }
+        if (diff !== 0) return diff;
+      }
+      return a.candidateId.localeCompare(b.candidateId);
+    });
+  }
+
+  private inspectCandidateGovernance(
+    candidate: CandidateResult,
+    request: SolutionSearchRequest,
+    projectRoot: string,
+  ): string[] {
+    const violations: string[] = [];
+    const record = candidate.executionRecord;
+    const expectedSet = new Set((request.expectedFiles ?? []).map((f) => f.replace(/\\/g, '/').replace(/^\.\//, '')));
+    const protectedList = (request.protectedFiles ?? []).map((f) => f.replace(/\\/g, '/').replace(/^\.\//, ''));
+
+    const govPathRx = /(^|\/)(policyEngine|permissionBroker|sandbox|fencing|governanceFence)\.(ts|js|mjs|cjs)$|(^|\/)\.wazir\/policy/i;
+    const specPathRx = /(^|\/)specs(\/|$)|\.(als|dfy)$/i;
+    const fixturePathRx = /(^|\/)(__fixtures__|fixtures)\/|\.fixture\.|benchmark\.expect\./i;
+    const skipOnlyRx = /\b(it|test|describe|suite|context)\s*\.\s*(skip|only)\s*\(|\b(xit|xtest|xdescribe|fit|fdescribe)\s*\(/;
+    const expectRx = /\b(expect\s*\(|assert(?:\.\w+)?\s*\()/g;
+
+    // 1. Check allowedTools ceiling escalation in descriptor metadata if configured
+    if (request.baseAllowedTools) {
+      const baseSet = new Set(request.baseAllowedTools);
+      const requestedTools = (candidate.descriptor.metadata as { allowedTools?: unknown } | undefined)?.allowedTools;
+      if (Array.isArray(requestedTools)) {
+        const escalated = requestedTools.filter((t): t is string => typeof t === 'string' && !baseSet.has(t));
+        if (escalated.length > 0) {
+          violations.push(`CAPABILITY_CEILING_ESCALATION: unauthorized tool(s) [${escalated.join(', ')}]`);
+        }
+      }
+    }
+
+    if (!record) return violations;
+
+    const touchedFiles = new Set<string>(
+      (record.filesChanged ?? []).map((f) => f.replace(/\\/g, '/').replace(/^\.\//, '')),
+    );
+    const rawDiff = (record as { diff?: unknown; patch?: unknown }).diff ??
+      (record as { patch?: unknown }).patch;
+    if (typeof rawDiff === 'string') {
+      for (const line of rawDiff.split('\n')) {
+        const m = /^(?:---|\+\+\+) (?:a\/|b\/)?([^\t\n]+)$/.exec(line.trim());
+        if (m && m[1] !== '/dev/null') {
+          touchedFiles.add(m[1].replace(/\\/g, '/').replace(/^\.\//, ''));
+        }
+      }
+    }
+
+    for (const file of touchedFiles) {
+      if (govPathRx.test(file)) {
+        violations.push(`GOVERNANCE_PATH_MODIFIED: touched guardrail file '${file}'`);
+      }
+      if (specPathRx.test(file)) {
+        violations.push(`FROZEN_SPEC_MODIFIED: touched formal spec '${file}'`);
+      }
+      const inProtected = protectedList.some(
+        (p) => file === p || file.endsWith(`/${p}`) || file.startsWith(p.endsWith('/') ? p : `${p}/`),
+      );
+      if (inProtected || (!expectedSet.has(file) && fixturePathRx.test(file))) {
+        violations.push(`ORACLE_ASSERTION_WEAKENED: modified protected fixture/oracle '${file}'`);
+      }
+    }
+
+    // Inspect patch for .skip/.only or net expect() deletion
+    if (typeof rawDiff === 'string') {
+      let removedExpects = 0;
+      let addedExpects = 0;
+      for (const line of rawDiff.split('\n')) {
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          const added = line.slice(1);
+          if (skipOnlyRx.test(added)) {
+            violations.push('ORACLE_ASSERTION_WEAKENED: patch introduced test skip/only bypass');
+          }
+          addedExpects += (added.match(expectRx) ?? []).length;
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          removedExpects += (line.slice(1).match(expectRx) ?? []).length;
+        }
+      }
+      if (removedExpects > addedExpects) {
+        violations.push(
+          `ORACLE_ASSERTION_WEAKENED: patch deleted ${removedExpects - addedExpects} test assertion(s)`,
+        );
+      }
+    }
+
+    const inspectCmdOrUrl = (text: string) => {
+      if (/(?:huggingface\.co|hf\.co)\/(?:datasets|spaces)\b/i.test(text)) {
+        violations.push('REWARD_HACKING_DETECTED: attempted fetch from Hugging Face datasets');
+      }
+      if (/raw\.githubusercontent\.com\//i.test(text)) {
+        violations.push('REWARD_HACKING_DETECTED: attempted fetch from raw.githubusercontent.com');
+      }
+      if (/\b(?:SKIP_TESTS|CI_SKIP_TESTS)\s*=\s*(?:1|true|yes)\b/i.test(text)) {
+        violations.push('REWARD_HACKING_DETECTED: attempted to set SKIP_TESTS');
+      }
+      if (/\bNODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['"]?0['"]?/i.test(text)) {
+        violations.push('REWARD_HACKING_DETECTED: disabled TLS verification');
+      }
+      if (/(?:\.\.\/){2,}.*(?:grading|rubric|answer|solution|eval|benchmark)/i.test(text)) {
+        violations.push('REWARD_HACKING_DETECTED: parent traversal to external grading/rubric files');
+      }
+    };
+
+    const cleanWorkspaceRoot = projectRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+    for (const tc of record.toolCalls ?? []) {
+      const input = (tc.input ?? {}) as Record<string, unknown>;
+      if (typeof input.command === 'string') {
+        inspectCmdOrUrl(input.command);
+      }
+      for (const k of ['url', 'uri', 'endpoint', 'href']) {
+        if (typeof input[k] === 'string') {
+          inspectCmdOrUrl(input[k] as string);
+        }
+      }
+      if (['read_file', 'read_many_files', 'view_file'].includes(tc.tool)) {
+        const readPaths: string[] = [];
+        for (const pk of ['path', 'file_path', 'filePath', 'target']) {
+          if (typeof input[pk] === 'string') readPaths.push(input[pk] as string);
+        }
+        for (const rp of readPaths) {
+          const norm = rp.replace(/\\/g, '/').trim();
+          if (/(^|\/)\.\.(\/|$)/.test(norm)) {
+            violations.push(`REWARD_HACKING_DETECTED: workspace escape read '${norm}'`);
+          } else if (
+            norm.startsWith('/') &&
+            cleanWorkspaceRoot &&
+            !norm.startsWith(`${cleanWorkspaceRoot}/`) &&
+            !(candidate.worktreePath && norm.startsWith(candidate.worktreePath.replace(/\\/g, '/'))) &&
+            !norm.startsWith('/tmp/')
+          ) {
+            violations.push(`REWARD_HACKING_DETECTED: host path read outside workspace '${norm}'`);
+          }
+        }
+      }
+    }
+
+    for (const chk of record.checks ?? []) {
+      if (chk.command) inspectCmdOrUrl(chk.command);
+    }
+
+    return Array.from(new Set(violations));
+  }
+
+  private synthesizeProbeGuidance(cleanProbes: CandidateResult[]): {
+    behavioralGuidance: string[];
+    domainNotes: string[];
+  } {
+    const behavioralGuidance = new Set<string>([
+      'Read target and caller files via read_many_files or read_file before editing.',
+      'Run targeted build and test verification immediately after applying edits.',
+    ]);
+    const domainNotes = new Set<string>();
+    const safeCmdRx = /^(?:npm|pnpm|yarn|bun|npx|node|tsc|vitest|jest|pytest|cargo|go|make)\b[^;&|`$<>]*$/i;
+
+    for (const probe of cleanProbes) {
+      const calls = probe.executionRecord?.toolCalls ?? [];
+      const seenCalls = new Set<string>();
+      let duplicates = 0;
+      for (const tc of calls) {
+        const sig = `${tc.tool}:${JSON.stringify(tc.input ?? {})}`;
+        if (seenCalls.has(sig)) duplicates += 1;
+        seenCalls.add(sig);
+      }
+      if (duplicates >= 2) {
+        behavioralGuidance.add(
+          'Avoid repeating identical tool calls; pivot localization strategy if an action yields no new evidence.',
+        );
+      }
+
+      if (probe.evaluation?.qualifies) {
+        for (const chk of probe.checks) {
+          if (chk.ok && chk.command && safeCmdRx.test(chk.command.trim())) {
+            domainNotes.add(`Verified check (${chk.name}): ${chk.command.trim()}`);
+          }
+        }
+        const files = (probe.executionRecord?.filesChanged ?? [])
+          .map((f) => f.replace(/\\/g, '/'))
+          .filter((f) => !/[;&|`$<>]/.test(f));
+        if (files.length > 0) {
+          domainNotes.add(`Probe ${probe.candidateId} verified clean edit scope: ${files.join(', ')}`);
+        }
+      }
+    }
+
+    return {
+      behavioralGuidance: [...behavioralGuidance],
+      domainNotes: [...domainNotes].slice(0, 8),
     };
   }
 }

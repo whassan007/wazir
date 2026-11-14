@@ -14,6 +14,7 @@ export interface SearchRunOptions {
   maxParallel?: number;
   timeoutMs?: number;
   autoPromote?: boolean;
+  compose?: boolean;
   model?: string;
   agent?: string;
   json?: boolean;
@@ -58,6 +59,7 @@ export async function searchRunCommand(
         timeoutMs: options.timeoutMs ?? 180_000,
       },
       autoPromote: options.autoPromote ?? false,
+      compose: options.compose ?? false,
       projectRoot: engine.projectRoot,
     };
 
@@ -103,6 +105,20 @@ export async function searchRunCommand(
       '',
       color.bold('Selection Decision:'),
       `  ${result.selectionReason}`,
+      ...(result.composedSynthesis
+        ? [
+            '',
+            color.bold('Governed Compose Synthesis (Propose -> Probe -> Compose):'),
+            `  Verdict: ${
+              result.composedSynthesis.verdictClassification === 'VERIFIED'
+                ? color.green(result.composedSynthesis.verdictClassification)
+                : result.composedSynthesis.verdictClassification === 'REJECTED_GOVERNANCE'
+                  ? color.red(result.composedSynthesis.verdictClassification)
+                  : color.yellow(result.composedSynthesis.verdictClassification)
+            } | Governance Gate: ${result.composedSynthesis.governancePassed ? color.green('PASSED') : color.red('BLOCKED')}`,
+            `  Source Probes: ${result.composedSynthesis.sourceCandidateIds.join(', ') || 'none'}`,
+          ]
+        : []),
     ];
 
     if (result.selectedCandidate) {

@@ -5,7 +5,8 @@
   "description": "Wazir CLI — control plane command line",
   "main": "./dist/index.js",
   "bin": {
-    "wa": "./dist/index.js"
+    "wa": "./dist/index.js",
+    "wazir": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc --build",
@@ -13,6 +14,7 @@
   },
   "dependencies": {
     "@wazir/agents": "*",
+    "@wazir/assurance": "*",
     "@wazir/core": "*",
     "@wazir/database": "*",
     "@wazir/evaluation": "*",

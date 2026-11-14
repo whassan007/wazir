@@ -1,5 +1,6 @@
 export * from './chatAgent.js';
 export * from './codingAgent.js';
+export * from './qwenCore/index.js';
 export * from './verificationScope.js';
 export * from './externalAgent.js';
 export * from './stepAgent.js';
@@ -8,6 +9,7 @@ export * from './presets.js';
 export * from './stopConditions.js';
 export * from './acp/acpClient.js';
 export * from './acp/acpAgentAdapter.js';
+export * from './acp/acpEventMapper.js';
 export {
   ALLOWED_ENV_KEYS,
   EXTERNAL_HARNESS_PRESETS,
@@ -16,6 +18,8 @@ export {
   resolveEffectivePermissionMode,
   sanitizeHarnessEnvironment,
   discoverExternalHarnessCapabilities,
+  resolveQwenAcpLaunchArgs,
+  checkAcpPrivacyEligibility,
 } from './acp/acpHarnessCapabilities.js';
 export type {
   ExternalHarnessProtocol,
@@ -25,6 +29,9 @@ export type {
   ExternalHarnessSpec,
   HarnessCapabilityDiscoveryOptions,
   DiscoveredHarnessCapabilities,
+  QwenAcpLaunchOptions,
+  AcpPrivacyEligibilityParams,
+  AcpPrivacyEligibilityResult,
 } from './acp/acpHarnessCapabilities.js';
 export {
   NativeHarnessAdapter,

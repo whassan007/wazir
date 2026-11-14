@@ -376,9 +376,12 @@ export class OllamaAdapter implements RuntimeAdapter {
             full += content;
             yield { type: 'token', content };
           }
+          let callIndex = 0;
           for (const call of parsed.message?.tool_calls ?? []) {
+            const rawId = (call as { id?: string }).id;
             yield {
               type: 'tool_call',
+              toolCallId: rawId ?? `ollama-call-${callIndex++}`,
               toolName: call.function.name,
               toolInput: call.function.arguments,
             };
@@ -456,14 +459,46 @@ export class OllamaAdapter implements RuntimeAdapter {
     this.controllers.get(requestId)?.abort();
   }
 
-  private buildMessages(request: GenerationRequest): Array<{ role: string; content: string }> {
-    const messages: Array<{ role: string; content: string }> = [];
+  private buildMessages(request: GenerationRequest): Array<Record<string, unknown>> {
+    const messages: Array<Record<string, unknown>> = [];
     if (request.systemPrompt) {
       messages.push({ role: 'system', content: request.systemPrompt });
     }
     for (const message of request.messages) {
       if (message.role === 'tool') {
-        messages.push({ role: 'user', content: `[tool result: ${message.content}]` });
+        if (message.toolCallId || message.name) {
+          messages.push({
+            role: 'tool',
+            content: message.content,
+            ...(message.name ? { tool_name: message.name } : {}),
+            ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
+          });
+        } else {
+          messages.push({ role: 'user', content: `[tool result: ${message.content}]` });
+        }
+      } else if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
+        messages.push({
+          role: 'assistant',
+          content: message.content ?? '',
+          tool_calls: message.toolCalls.map((tc) => {
+            let parsedArgs: unknown = tc.arguments ?? {};
+            if (typeof parsedArgs === 'string') {
+              try {
+                parsedArgs = JSON.parse(parsedArgs);
+              } catch {
+                parsedArgs = { raw: parsedArgs };
+              }
+            }
+            return {
+              ...(tc.id ? { id: tc.id } : {}),
+              type: 'function',
+              function: {
+                name: tc.name,
+                arguments: parsedArgs && typeof parsedArgs === 'object' ? parsedArgs : {},
+              },
+            };
+          }),
+        });
       } else {
         messages.push({ role: message.role, content: message.content });
       }

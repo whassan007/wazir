@@ -5,6 +5,7 @@ import {
   resolveExecutable,
   type TaskType,
 } from '@wazir/core';
+import { classifyEndpointUrlLocality, type EndpointLocality } from '../configurationDiscovery.js';
 import type { AcpPermissionMode } from './acpAgentAdapter.js';
 
 export const HARNESS_CONTRACT_SCHEMA_VERSION = 1 as const;
@@ -139,19 +140,20 @@ export const EXTERNAL_HARNESS_PRESETS: Readonly<Record<string, ExternalHarnessSp
     protocol: 'acp',
     command: 'qwen',
     args: ['--acp'],
-    allowedEnvKeys: ['QWEN_CODE_HOME', 'QWEN_API_KEY', 'OPENAI_BASE_URL', 'DASHSCOPE_API_KEY'],
+    allowedEnvKeys: ['QWEN_CODE_HOME', 'QWEN_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'DASHSCOPE_API_KEY', 'QWEN_MODEL'],
     capabilities: [
       'coding',
       'chat',
       'step-execution',
       'streaming',
       'tool-Forwarding',
+      'checkpoint-resume',
       'cancellation',
       'mcp',
       'workspace-isolation',
     ],
     supportedTaskTypes: [],
-    allowsModelSelection: false,
+    allowsModelSelection: true,
     permissionMode: 'edit',
     defaultModelId: 'qwen-code-external',
     defaultRuntimeId: 'acp:qwen-code',
@@ -470,4 +472,142 @@ export function discoverExternalHarnessCapabilities(
     failureClassification,
     diagnostics,
   };
+}
+
+export interface QwenAcpLaunchOptions {
+  modelId?: string;
+  resumeSessionId?: string;
+  approvalMode?: 'plan' | 'default' | 'auto-edit';
+}
+
+const SAFE_ACP_CLI_ARG_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{0,127}$/;
+
+/**
+ * Safely constructs CLI launch arguments for `qwen --acp`, rejecting flag-injection
+ * prefixes (`-...`), whitespace/control characters, and placeholder model sentinels.
+ */
+export function resolveQwenAcpLaunchArgs(options: QwenAcpLaunchOptions = {}): string[] {
+  const args: string[] = ['--acp'];
+  const modelId = options.modelId?.trim();
+  if (
+    modelId &&
+    modelId !== 'external' &&
+    modelId !== 'qwen-code-external' &&
+    SAFE_ACP_CLI_ARG_PATTERN.test(modelId)
+  ) {
+    args.push('--model', modelId);
+  }
+  const resumeSessionId = options.resumeSessionId?.trim();
+  if (resumeSessionId && SAFE_ACP_CLI_ARG_PATTERN.test(resumeSessionId)) {
+    args.push('--resume', resumeSessionId);
+  }
+  if (
+    options.approvalMode === 'plan' ||
+    options.approvalMode === 'default' ||
+    options.approvalMode === 'auto-edit'
+  ) {
+    args.push('--approval-mode', options.approvalMode);
+  }
+  return args;
+}
+
+export interface AcpPrivacyEligibilityParams {
+  harnessId: string;
+  localOnly?: boolean;
+  dataClassification?: string;
+  env?: NodeJS.ProcessEnv;
+  endpointLocality?: EndpointLocality;
+}
+
+export interface AcpPrivacyEligibilityResult {
+  allowed: boolean;
+  reason?: string;
+}
+
+const LOCAL_ONLY_DATA_CLASSIFICATIONS = new Set([
+  'secret',
+  'restricted',
+  'local_only',
+  'local-only',
+  'sensitive',
+  'confidential',
+]);
+
+/**
+ * Enforces `FH-A8-02` privacy / data-classification boundary for external ACP harnesses.
+ * When `localOnly === true` or `dataClassification` is restricted/sensitive, external ACP
+ * harnesses (`qwen-code`, `codex`, `claude-code`, `gemini`, etc.) are DENIED unless
+ * `endpointLocality === 'local'` (exclusively loopback `OPENAI_BASE_URL` with no cloud
+ * `DASHSCOPE_API_KEY` / `QWEN_API_KEY` / vendor cloud credentials).
+ */
+export function checkAcpPrivacyEligibility(
+  params: AcpPrivacyEligibilityParams,
+): AcpPrivacyEligibilityResult {
+  const normalizedClass = params.dataClassification?.trim().toLowerCase();
+  const requiresLocalOnly =
+    params.localOnly === true ||
+    (normalizedClass !== undefined && LOCAL_ONLY_DATA_CLASSIFICATIONS.has(normalizedClass));
+
+  if (!requiresLocalOnly) {
+    return { allowed: true };
+  }
+
+  const env = params.env;
+  const hasCloudVendorKey = Boolean(
+    env?.DASHSCOPE_API_KEY?.trim() ||
+      env?.QWEN_API_KEY?.trim() ||
+      env?.ANTHROPIC_API_KEY?.trim() ||
+      env?.ANTHROPIC_AUTH_TOKEN?.trim() ||
+      env?.GEMINI_API_KEY?.trim() ||
+      env?.GOOGLE_API_KEY?.trim(),
+  );
+
+  if (hasCloudVendorKey) {
+    return {
+      allowed: false,
+      reason: `FH-A8-02 policy denied: external ACP harness '${params.harnessId}' has cloud API credentials configured while local-only privacy mode is active.`,
+    };
+  }
+
+  const openAiBaseUrl = env?.OPENAI_BASE_URL?.trim();
+  const anthropicBaseUrl = env?.ANTHROPIC_BASE_URL?.trim();
+
+  if (openAiBaseUrl && classifyEndpointUrlLocality(openAiBaseUrl) !== 'local') {
+    return {
+      allowed: false,
+      reason: `FH-A8-02 policy denied: external ACP harness '${params.harnessId}' has non-loopback OPENAI_BASE_URL while local-only privacy mode is active.`,
+    };
+  }
+  if (anthropicBaseUrl && classifyEndpointUrlLocality(anthropicBaseUrl) !== 'local') {
+    return {
+      allowed: false,
+      reason: `FH-A8-02 policy denied: external ACP harness '${params.harnessId}' has non-loopback ANTHROPIC_BASE_URL while local-only privacy mode is active.`,
+    };
+  }
+
+  let effectiveLocality: EndpointLocality = params.endpointLocality ?? 'unknown';
+  if (effectiveLocality === 'unknown' && openAiBaseUrl) {
+    const classified = classifyEndpointUrlLocality(openAiBaseUrl);
+    effectiveLocality = classified === 'local' ? 'local' : classified === 'cloud' ? 'cloud' : 'unknown';
+  }
+
+  const normalizedHarness = params.harnessId.trim().toLowerCase();
+  if (
+    (normalizedHarness === 'claude-code' || normalizedHarness === 'claude' || normalizedHarness === 'gemini') &&
+    params.endpointLocality !== 'local'
+  ) {
+    return {
+      allowed: false,
+      reason: `FH-A8-02 policy denied: cloud-backed ACP harness '${params.harnessId}' is blocked under local-only privacy constraint.`,
+    };
+  }
+
+  if (effectiveLocality !== 'local') {
+    return {
+      allowed: false,
+      reason: `FH-A8-02 policy denied: external ACP harness '${params.harnessId}' requires a verified loopback local endpoint (endpointLocality=${effectiveLocality}${normalizedClass ? `, dataClassification=${normalizedClass}` : ''}) when localOnly is enforced.`,
+    };
+  }
+
+  return { allowed: true };
 }

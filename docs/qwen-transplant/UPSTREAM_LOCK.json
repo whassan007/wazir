@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "upstreamProject": "QwenLM/qwen-code",
+  "upstreamLicense": "Apache-2.0",
+  "upstreamReferenceRelease": "v1.0-architecture / local-acp-cli-0.25.3",
+  "lockedAt": "2026-11-14T00:00:00Z",
+  "integrationStrategy": "selective-core-transplant-plus-acp-bridge",
+  "transplantedSubsystems": [
+    {
+      "wazirModule": "packages/agents/src/qwenCore/turn.ts",
+      "upstreamConcept": "packages/core/src/core/turn.ts",
+      "adaptation": "Provider-independent GenerationEvent accumulator over Wazir RuntimeAdapter"
+    },
+    {
+      "wazirModule": "packages/agents/src/qwenCore/coreToolScheduler.ts",
+      "upstreamConcept": "packages/core/src/core/coreToolScheduler.ts",
+      "adaptation": "Parallel read batching + serialized mutating execution gated by Wazir PolicyEngine & PermissionBroker"
+    },
+    {
+      "wazirModule": "packages/agents/src/qwenCore/wazirQwenAgent.ts",
+      "upstreamConcept": "packages/core/src/core/client.ts (GeminiChat / Qwen multi-tool ReAct turn loop)",
+      "adaptation": "Unified ReAct loop over all 6 Wazir runtimes with LoopDetectionService, ChatCompressionService, and ProportionalVerifier"
+    },
+    {
+      "wazirModule": "packages/agents/src/qwenCore/chatCompressionService.ts",
+      "upstreamConcept": "packages/core/src/services/chatCompressionService.ts",
+      "adaptation": "70% context watermark compaction preserving 1:1 assistant.toolCalls <-> role:tool pairing"
+    },
+    {
+      "wazirModule": "packages/agents/src/qwenCore/loopDetectionService.ts",
+      "upstreamConcept": "packages/core/src/services/loopDetectionService.ts",
+      "adaptation": "SHA-256 tool-call repetition & streaming chant loop breaker with steering recovery"
+    },
+    {
+      "wazirModule": "packages/tools/src/editMatcher.ts",
+      "upstreamConcept": "packages/core/src/tools/edit.ts",
+      "adaptation": "3-stage exact -> line-trimmed -> indentation-flexible block-anchor edit matcher inside Wazir sandbox/SPEC_WRITE_FENCE"
+    },
+    {
+      "wazirModule": "packages/agents/src/acp/acpAgentAdapter.ts",
+      "upstreamConcept": "qwen --acp stdio Agent Client Protocol server",
+      "adaptation": "Optional external harness delegation with FH-A8-02 localOnly privacy gate and session handoff"
+    }
+  ],
+  "excludedUpstreamSubsystems": [
+    "packages/cli (Ink UI — Wazir uses its own low-flicker differential terminal renderer in apps/cli/src/tui/*)",
+    "DashScope OAuth & telemetry endpoints (excluded to preserve Wazir provider independence and zero-telemetry privacy)",
+    "Permissive YOLO shell defaults (replaced by Wazir PolicyEngine + sandbox + SPEC_WRITE_FENCE)"
+  ],
+  "preservedWazirMoats": [
+    "@wazir/core PolicyEngine, ExecutionEngine, SolutionSearchService, StrategyLearningService, WorkloadDistributor",
+    "@wazir/assurance Alloy 6 / Dafny / Z3 / Scenic / VerifAI formal repair loop & frozen specs/",
+    "@wazir/evaluation physical verification & Governed Harness^2 Propose-Probe-Compose (GovernanceFence)",
+    "6 provider-independent RuntimeAdapters (Ollama, LM Studio, OpenAI, Anthropic, Google, Remote Worker)"
+  ]
+}

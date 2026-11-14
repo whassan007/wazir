@@ -11,8 +11,11 @@ NestedInstallerType: portable
 NestedInstallerFiles:
   - RelativeFilePath: wa.exe
     PortableCommandAlias: wa
+  - RelativeFilePath: wa.exe
+    PortableCommandAlias: wazir
 Commands:
   - wa
+  - wazir
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/whassan007/wazir/releases/download/v0.2.13/wazir-v0.2.13-windows-x64.zip
