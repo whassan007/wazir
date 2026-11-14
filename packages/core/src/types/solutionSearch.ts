@@ -355,8 +355,29 @@ export interface SolutionSearchRequest {
   customCandidates?: CandidateDescriptor[];
   projectRoot?: string;
   autoPromote?: boolean;
+  compose?: boolean;
+  protectedFiles?: string[];
+  expectedFiles?: string[];
+  baseAllowedTools?: string[];
   adaptive?: AdaptiveSearchConfig;
   hierarchical?: HierarchicalSearchConfig;
+}
+
+export type ComposedSynthesisVerdict =
+  | 'VERIFIED'
+  | 'UNVERIFIED_CONTRASTIVE'
+  | 'REJECTED_GOVERNANCE'
+  | 'CONFLICT_FALLBACK';
+
+export interface ComposedSynthesisReport {
+  attempted: boolean;
+  candidateId?: string;
+  sourceCandidateIds: string[];
+  governancePassed: boolean;
+  governanceViolations?: string[];
+  verdictClassification: ComposedSynthesisVerdict;
+  behavioralGuidance?: string[];
+  domainNotes?: string[];
 }
 
 export interface CandidateEngineeringProperties {
@@ -508,6 +529,7 @@ export interface SolutionSearchResult {
   adaptiveTelemetry?: AdaptiveSearchTelemetry;
   hierarchicalTree?: MCTSSearchTree;
   hierarchicalTelemetry?: HierarchicalSearchTelemetry;
+  composedSynthesis?: ComposedSynthesisReport;
 }
 
 export type SolutionSearchEventType =

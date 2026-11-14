@@ -1984,6 +1984,7 @@ searchCmd
   .option('--max-parallel <n>', 'Maximum parallel candidate worktrees', (val) => parseInt(val, 10), 2)
   .option('--timeout <ms>', 'Per-candidate timeout in milliseconds', (val) => parseInt(val, 10), 180_000)
   .option('--auto-promote', 'Automatically promote winning candidate to parent workspace')
+  .option('--compose', 'Run Governed Harness^2 Propose -> Probe -> Compose synthesis across candidates')
   .option('--model <id>', 'Target model for execution')
   .option('--agent <name>', 'Target agent for execution')
   .option('--json', 'Output in JSON format')

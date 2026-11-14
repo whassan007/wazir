@@ -1,16 +1,35 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
-const INSTRUCTION_CANDIDATES = ['.wazir/instructions.md', 'AGENTS.md', 'QWEN.md'] as const;
+const INSTRUCTION_CANDIDATES = ['.wazir/instructions.md', 'AGENTS.md', 'QWEN.md', '.qwen/QWEN.md'] as const;
 const MAX_INSTRUCTIONS_CHARS = 12 * 1024;
 
+function isInsideRealRoot(realRoot: string, candidateReal: string): boolean {
+  const rel = path.relative(realRoot, candidateReal);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+function sanitizeInstructionFenceBody(raw: string): string {
+  return raw
+    .replace(/<\/\s*project_instructions\s*>/gi, '&lt;/project_instructions&gt;')
+    .replace(/<\s*project_instructions\b/gi, '&lt;project_instructions');
+}
+
 /**
- * Loads repository-level guidance (`.wazir/instructions.md`, `AGENTS.md`, `QWEN.md`)
+ * Loads repository-level guidance (`.wazir/instructions.md`, `AGENTS.md`, `QWEN.md`, `.qwen/QWEN.md`)
  * from `projectRoot` using Qwen Code 1.0's hierarchical memory convention, tagged as
  * untrusted repository context so repo text can never override Wazir policy/security rules.
+ * Rejects symlinks and realpaths escaping `projectRoot` (`FH-A2-01`).
  */
 export function loadProjectInstructions(projectRoot: string): string | undefined {
   if (!projectRoot || !existsSync(projectRoot)) return undefined;
+
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(projectRoot);
+  } catch {
+    return undefined;
+  }
 
   const sections: string[] = [];
   let remaining = MAX_INSTRUCTIONS_CHARS;
@@ -20,9 +39,11 @@ export function loadProjectInstructions(projectRoot: string): string | undefined
     const full = path.join(projectRoot, rel);
     try {
       if (!existsSync(full)) continue;
-      const st = statSync(full);
-      if (!st.isFile() || st.size === 0) continue;
-      const raw = readFileSync(full, 'utf8').trim();
+      const lst = lstatSync(full);
+      if (lst.isSymbolicLink() || !lst.isFile() || lst.size === 0) continue;
+      const realFull = realpathSync(full);
+      if (!isInsideRealRoot(realRoot, realFull)) continue;
+      const raw = sanitizeInstructionFenceBody(readFileSync(realFull, 'utf8').trim());
       if (!raw) continue;
       const clipped = raw.length > remaining ? `${raw.slice(0, remaining)}\n...[truncated]` : raw;
       sections.push(`### ${rel}\n${clipped}`);

@@ -149,19 +149,20 @@ export class ChatCompressionService {
       }
     }
 
+    const escXml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const snapshotLines: string[] = [
       '<state_snapshot>',
-      `  <overall_goal>${request.taskDescription.slice(0, 600)}</overall_goal>`,
-      `  <files_inspected>${[...inspectedPaths].slice(-25).join(', ') || 'none'}</files_inspected>`,
-      `  <files_modified>${[...filesChanged].join(', ') || 'none'}</files_modified>`,
-      `  <compressed_actions count="${recentActions.length}">${recentActions.slice(-20).join(' -> ') || 'none'}</compressed_actions>`,
-      `  <unresolved_diagnostics>${(unresolvedDiagnostics ?? 'none').slice(0, 800)}</unresolved_diagnostics>`,
+      `  <overall_goal>${escXml(request.taskDescription.slice(0, 600))}</overall_goal>`,
+      `  <files_inspected>${escXml([...inspectedPaths].slice(-25).join(', ') || 'none')}</files_inspected>`,
+      `  <files_modified>${escXml([...filesChanged].join(', ') || 'none')}</files_modified>`,
+      `  <compressed_actions count="${recentActions.length}">${escXml(recentActions.slice(-20).join(' -> ') || 'none')}</compressed_actions>`,
+      `  <unresolved_diagnostics>${escXml((unresolvedDiagnostics ?? 'none').slice(0, 800))}</unresolved_diagnostics>`,
     ];
     if (latestTodoBlock) {
-      snapshotLines.push(`  <todo_state>\n${latestTodoBlock}\n  </todo_state>`);
+      snapshotLines.push(`  <todo_state>\n${escXml(latestTodoBlock)}\n  </todo_state>`);
     }
     for (const evidence of webEvidence.values()) {
-      snapshotLines.push(`  <web_evidence>${new ContextCompiler().grounded(evidence, 500).content}</web_evidence>`);
+      snapshotLines.push(`  <web_evidence>${escXml(new ContextCompiler().grounded(evidence, 500).content)}</web_evidence>`);
     }
     snapshotLines.push('</state_snapshot>');
     snapshotLines.push('Earlier conversation turns were compacted into <state_snapshot> above. Continue from the current state.');

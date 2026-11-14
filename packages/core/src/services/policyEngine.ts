@@ -320,7 +320,12 @@ function isInside(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(target);
   const rel = path.relative(resolvedRoot, resolvedTarget);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+function isRealpathInsideProject(projectRoot: string, absolute: string): boolean {
+  if (!isInside(projectRoot, absolute)) return false;
+  return isInside(realpathNearest(projectRoot), realpathNearest(absolute));
 }
 
 /**
@@ -330,7 +335,7 @@ function isInside(root: string, target: string): boolean {
  */
 export function protectedPathReason(projectRoot: string, absolute: string): string | null {
   const relative = path.relative(path.resolve(projectRoot), path.resolve(absolute));
-  if (!relative || relative.startsWith('..')) return null;
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`)) return null;
   const segments = relative.split(path.sep);
   if (PROTECTED_DIRS.has(segments[0])) {
     return `'${segments[0]}/' holds hooks, tooling or Wazir state that can change what runs on this machine`;
@@ -1136,7 +1141,7 @@ export class PolicyEngine {
           };
         }
         const absolute = path.resolve(projectRoot, entry);
-        if (!isInside(projectRoot, absolute)) {
+        if (!isRealpathInsideProject(projectRoot, absolute)) {
           return {
             decision: 'deny',
             rule: 'filesystem-outside-deny',
@@ -1230,7 +1235,7 @@ export class PolicyEngine {
       // process's cwd (path.resolve(rawPath) alone would use cwd) — those
       // only coincide when the CLI happens to be invoked from projectRoot.
       const absolute = path.resolve(projectRoot, rawPath);
-      if (isInside(projectRoot, absolute)) {
+      if (isRealpathInsideProject(projectRoot, absolute)) {
         if (FILE_TOOLS_WRITE.has(lower)) {
           const protectedReason = protectedPathReason(projectRoot, absolute);
           if (protectedReason) {

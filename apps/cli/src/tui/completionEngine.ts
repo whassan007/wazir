@@ -94,7 +94,19 @@ export const CONVERSATION_SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   },
   {
     command: '/compact',
-    summary: 'Compact active execution context window',
+    summary: 'Compact conversation history and active execution context window',
+    tier: 'secondary',
+  },
+  {
+    command: '/init',
+    summary: 'Generate a workspace AGENTS.md guide from repository structure',
+    usage: '/init [--force]',
+    acceptsArgs: true,
+    tier: 'secondary',
+  },
+  {
+    command: '/undo',
+    summary: 'Revert uncommitted file edits from the latest conversation turn',
     tier: 'secondary',
   },
   {

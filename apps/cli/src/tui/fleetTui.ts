@@ -4003,6 +4003,33 @@ export class FleetTui {
         return;
       }
 
+      if (trimmed === '/init' || trimmed.startsWith('/init ')) {
+        const force = trimmed.slice(5).trim() === '--force';
+        const msg = await this.conversation.generateWorkspaceAgentsMd(force, theme);
+        this.conversationRenderer.append(msg);
+        this.draw();
+        return;
+      }
+
+      if (trimmed === '/undo') {
+        const msg = await this.conversation.undoLastTurnChanges(theme);
+        this.conversationRenderer.append(msg);
+        void this.conversation.persist(this.engine);
+        this.draw();
+        return;
+      }
+
+      if (trimmed === '/compact') {
+        const compacted = this.conversation.compactConversation(theme);
+        this.conversationRenderer.append(compacted.message);
+        this.statusMessage = compacted.compactedTurns > 0
+          ? `Compacted ${compacted.compactedTurns} earlier conversation items.`
+          : 'Conversation context already compact.';
+        void this.conversation.persist(this.engine);
+        this.draw();
+        return;
+      }
+
       if (trimmed === '/resume' || trimmed.startsWith('/resume ')) {
         const arg = trimmed.slice(7).trim();
         if (!arg && this.screen.isTTY()) {

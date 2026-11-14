@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -690,6 +691,9 @@ export class ConversationController {
       `  ${theme.code('/permissions [mode]')}       Switch permission mode: ${theme.code('ask')} ${g.bullet} ${theme.code('auto')} ${g.bullet} ${theme.code('read-only')}`,
       `  ${theme.code('/status')}                   Inspect workspace, routing, 70/15/5 distribution, capabilities & usage`,
       `  ${theme.code('/diff [path]')}              Show git working-tree changes as a unified diff`,
+      `  ${theme.code('/init [--force]')}           Generate a concise AGENTS.md guide for this workspace`,
+      `  ${theme.code('/compact')}                  Compact older conversation turns to free context window`,
+      `  ${theme.code('/undo')}                     Revert uncommitted file edits from the latest turn`,
       `  ${theme.code('/resume [id|--last]')}       Resume a saved conversation session without replaying side effects`,
       `  ${theme.code('/clear')}                    Clear visible transcript and start a fresh turn context`,
       `  ${theme.code('/fleet')}                    Open the multi-agent Fleet Mission Control dashboard`,
@@ -783,6 +787,122 @@ export class ConversationController {
     } catch (err) {
       const msg = err instanceof Error ? err.message.split('\n')[0] : String(err);
       return `  ${theme.warning(`Unable to read git diff in ${this.workspaceName}: ${msg}`)}`;
+    }
+  }
+
+  compactConversation(theme: ConversationTheme): { compactedTurns: number; message: string } {
+    const g = theme.glyphs;
+    const keepCount = 4;
+    if (this.turns.length <= keepCount) {
+      return {
+        compactedTurns: 0,
+        message: `  ${theme.muted(`Conversation is already compact (${this.turns.length} turn item${this.turns.length === 1 ? '' : 's'}).`)}`,
+      };
+    }
+    const older = this.turns.slice(0, this.turns.length - keepCount);
+    const recent = this.turns.slice(-keepCount);
+    const summaryLines = older
+      .map((t) => `- ${t.role}: ${t.content.replace(/\s+/g, ' ').trim().slice(0, 120)}`)
+      .slice(-8);
+    const summaryTurn = {
+      id: `turn-compact-${Date.now().toString(36)}`,
+      role: 'assistant' as const,
+      content: `[Compacted ${older.length} earlier conversation items]\n${summaryLines.join('\n')}`,
+      timestamp: new Date().toISOString(),
+      status: 'completed' as const,
+    };
+    this.turns = [summaryTurn, ...recent];
+    return {
+      compactedTurns: older.length,
+      message: `  ${theme.success(g.success)} Compacted ${older.length} earlier turn item(s) into a concise summary (kept latest ${recent.length} verbatim).`,
+    };
+  }
+
+  async generateWorkspaceAgentsMd(force: boolean, theme: ConversationTheme): Promise<string> {
+    const g = theme.glyphs;
+    if (this.permissionMode === 'read-only') {
+      return `  ${theme.error(g.error)} /init blocked in read-only permission mode. Run ${theme.code('/permissions ask')} first.`;
+    }
+    const targetPath = path.join(this.workspaceRoot, 'AGENTS.md');
+    if (!force) {
+      try {
+        await fs.access(targetPath);
+        return `  ${theme.warning(g.warning)} AGENTS.md already exists in ${this.workspaceName}. Run ${theme.code('/init --force')} to overwrite it.`;
+      } catch {
+        // Does not exist; proceed
+      }
+    }
+
+    let projectTitle = this.workspaceName;
+    const commands: string[] = [];
+    try {
+      const pkgRaw = await fs.readFile(path.join(this.workspaceRoot, 'package.json'), 'utf8');
+      const pkg = JSON.parse(pkgRaw) as { name?: string; scripts?: Record<string, string> };
+      if (pkg.name) projectTitle = pkg.name;
+      const scripts = pkg.scripts ?? {};
+      for (const key of ['build', 'test', 'typecheck', 'lint', 'check']) {
+        if (scripts[key]) commands.push(`- \`npm run ${key}\` — \`${scripts[key]}\``);
+      }
+    } catch {
+      // Non-Node workspace or no package.json
+    }
+
+    const entries = await fs.readdir(this.workspaceRoot, { withFileTypes: true }).catch(() => []);
+    const topDirs = entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules' && e.name !== 'dist')
+      .map((e) => e.name)
+      .sort()
+      .slice(0, 12);
+
+    const content = [
+      `# AGENTS.md — ${projectTitle}`,
+      '',
+      '## Commands',
+      ...(commands.length > 0 ? commands : ['- Inspect repository build/test scripts before mutating files.']),
+      '',
+      '## Repository Layout',
+      ...(topDirs.length > 0 ? topDirs.map((d) => `- \`${d}/\``) : ['- Single-directory workspace']),
+      '',
+      '## Working Conventions',
+      '- Read target and caller files (`read` / `read_many_files`) before applying `edit` or `multi_edit`.',
+      '- Run targeted verification checks immediately after modifying code.',
+      '- Keep changes minimal, focused, and strictly inside the workspace root.',
+      '',
+    ].join('\n');
+
+    await fs.writeFile(targetPath, content, 'utf8');
+    return `  ${theme.success(g.success)} Generated ${theme.bold('AGENTS.md')} for ${projectTitle} (${topDirs.length} directories indexed).`;
+  }
+
+  async undoLastTurnChanges(theme: ConversationTheme): Promise<string> {
+    const g = theme.glyphs;
+    if (this.permissionMode === 'read-only') {
+      return `  ${theme.error(g.error)} /undo blocked in read-only permission mode.`;
+    }
+    const lastEditedTurn = [...this.turns]
+      .reverse()
+      .find((t) => t.role === 'user' && Array.isArray(t.filesChanged) && t.filesChanged.length > 0);
+    const rawFiles = lastEditedTurn?.filesChanged ?? [];
+    const safeRelFiles = rawFiles
+      .map((f) => (path.isAbsolute(f) ? path.relative(this.workspaceRoot, f) : f))
+      .filter((rel) => rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+
+    if (safeRelFiles.length === 0) {
+      return `  ${theme.muted('No recorded file edits from a recent conversation turn to undo.')}`;
+    }
+
+    try {
+      await execFileAsync('git', ['checkout', '--', ...safeRelFiles], {
+        cwd: this.workspaceRoot,
+        timeout: 8_000,
+      });
+      if (lastEditedTurn) {
+        lastEditedTurn.filesChanged = [];
+      }
+      return `  ${theme.success(g.success)} Reverted ${safeRelFiles.length} file(s) from the latest turn: ${safeRelFiles.join(', ')}`;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.split('\n')[0] : String(err);
+      return `  ${theme.error(g.error)} Unable to revert files via git checkout: ${msg}`;
     }
   }
 }

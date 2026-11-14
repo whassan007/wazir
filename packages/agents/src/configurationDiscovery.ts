@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { parse } from 'smol-toml';
 
 export type ConnectionState = 'DISCOVERED' | 'CONFIGURED' | 'AUTHENTICATED' | 'CONNECTING' | 'READY' | 'DEGRADED' | 'BLOCKED' | 'FAILED' | 'UNSUPPORTED';
+export type EndpointLocality = 'local' | 'cloud' | 'unknown';
 export interface ConfigurationSource {
   path: string;
   scope: 'user' | 'project' | 'system';
@@ -19,6 +20,8 @@ export interface DiscoveredAgentConfiguration {
   installations: string[];
   state: ConnectionState;
   authentication: 'UNKNOWN' | 'VERIFIED';
+  credentialConfigured?: boolean;
+  endpointLocality?: EndpointLocality;
   model: { status: 'CONFIGURED' | 'AVAILABLE' | 'VERIFIED' | 'UNKNOWN'; value?: string; source?: string };
   sources: ConfigurationSource[];
   fingerprint: string;
@@ -70,6 +73,67 @@ function safeIdentifier(value: unknown): string | undefined {
     && !/sk-|token|secret|password/i.test(value) ? value : undefined;
 }
 
+function hasNonEmptySecret(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * Classifies an HTTP(S) endpoint URL strictly as loopback (`'local'`), remote (`'cloud'`),
+ * or `'invalid'` without echoing credentials, query parameters, or paths.
+ */
+export function classifyEndpointUrlLocality(rawUrl: string): 'local' | 'cloud' | 'invalid' {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'invalid';
+    const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (
+      host === 'localhost' ||
+      host.endsWith('.localhost') ||
+      host === '::1' ||
+      host === '0:0:0:0:0:0:0:1' ||
+      /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(host)
+    ) {
+      return 'local';
+    }
+    return 'cloud';
+  } catch {
+    return 'invalid';
+  }
+}
+
+function collectDeclaredEndpoints(parsed: Record<string, any>): string[] {
+  const endpoints: string[] = [];
+  const push = (val: unknown) => {
+    if (typeof val === 'string' && val.trim().length > 0) endpoints.push(val.trim());
+  };
+  const provider = safeIdentifier(parsed.model_provider);
+  if (provider) push(parsed.model_providers?.[provider]?.base_url);
+  push(parsed.baseUrl);
+  push(parsed.base_url);
+  push(parsed.openaiBaseUrl);
+  push(parsed.apiBaseUrl);
+  if (parsed.env && typeof parsed.env === 'object') {
+    push(parsed.env.OPENAI_BASE_URL);
+  }
+  if (parsed.security?.auth && typeof parsed.security.auth === 'object') {
+    push(parsed.security.auth.baseUrl);
+  }
+  if (parsed.modelProviders && typeof parsed.modelProviders === 'object') {
+    for (const entry of Object.values(parsed.modelProviders)) {
+      if (Array.isArray(entry)) {
+        for (const item of entry) {
+          if (item && typeof item === 'object') {
+            push((item as Record<string, unknown>).baseUrl ?? (item as Record<string, unknown>).base_url);
+          }
+        }
+      } else if (entry && typeof entry === 'object') {
+        push((entry as Record<string, unknown>).baseUrl ?? (entry as Record<string, unknown>).base_url);
+      }
+    }
+  }
+  return endpoints;
+}
+
 export class AgentConfigurationDiscovery {
   discover(options: { cwd?: string; home?: string; env?: NodeJS.ProcessEnv; trustedProject?: boolean } = {}): DiscoveredAgentConfiguration[] {
     const cwd = path.resolve(options.cwd ?? process.cwd());
@@ -78,15 +142,25 @@ export class AgentConfigurationDiscovery {
     const root = repositoryRoot(cwd);
     const codexHome = env.CODEX_HOME || path.join(home, '.codex');
     const claudeHome = env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+    const qwenHome = env.QWEN_CODE_HOME || path.join(home, '.qwen');
     const appHome = process.platform === 'darwin' ? path.join(home, 'Library', 'Application Support')
       : process.platform === 'win32' ? env.APPDATA || path.join(home, 'AppData', 'Roaming')
         : env.XDG_CONFIG_HOME || path.join(home, '.config');
-    return [ ['codex', 'codex'], ['claude-code', 'claude'], ['antigravity', 'agy'] ].map(([agent, bin]) => {
+    return [ ['codex', 'codex'], ['claude-code', 'claude'], ['antigravity', 'agy'], ['qwen-code', 'qwen'] ].map(([agent, bin]) => {
       const sources: ConfigurationSource[] = [];
       const diagnostics: string[] = [];
+      const observedLocalities: Array<'local' | 'cloud' | 'invalid'> = [];
+      let hasCloudAuth = false;
+      let hasOpenAiKey = false;
+      let credentialConfigured = false;
       const hash = createHash('sha256');
       hash.update(JSON.stringify({ schema: 2, cwd, root, home, trusted: !!options.trustedProject, platform: process.platform }));
-      for (const key of ['PATH', 'PATHEXT', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'APPDATA', 'CLAUDECODE', 'ANTHROPIC_MODEL', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', 'WAZIR_ACP_PERMISSIONS']) {
+      for (const key of [
+        'PATH', 'PATHEXT', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'QWEN_CODE_HOME',
+        'XDG_CONFIG_HOME', 'APPDATA', 'CLAUDECODE', 'ANTHROPIC_MODEL', 'QWEN_MODEL',
+        'QWEN_API_KEY', 'DASHSCOPE_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
+        'ANTHROPIC_AUTH_TOKEN', 'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', 'WAZIR_ACP_PERMISSIONS',
+      ]) {
         hash.update(key).update(env[key] ?? '');
       }
       const installations = resolveAgentExecutables(bin!, env);
@@ -125,14 +199,39 @@ export class AgentConfigurationDiscovery {
             const value = safeIdentifier(parsed[key]);
             if (value) source.settings[key] = value;
           }
-          const provider = safeIdentifier(parsed.model_provider);
-          const endpoint = provider && parsed.model_providers?.[provider]?.base_url;
-          if (typeof endpoint === 'string') {
-            try {
+          if (!source.settings.model && parsed.model && typeof parsed.model === 'object') {
+            const nestedModel = safeIdentifier(parsed.model.name ?? parsed.model.id);
+            if (nestedModel) source.settings.model = nestedModel;
+          }
+          for (const endpoint of collectDeclaredEndpoints(parsed)) {
+            const locality = classifyEndpointUrlLocality(endpoint);
+            observedLocalities.push(locality);
+            if (locality !== 'invalid') {
               const url = new URL(endpoint);
               // Credentials, query strings, fragments and endpoint paths are never emitted.
-              if (['http:', 'https:'].includes(url.protocol)) source.settings.providerEndpointOrigin = url.origin;
-            } catch { diagnostics.push('Provider endpoint declaration is not a valid URL.'); }
+              source.settings.providerEndpointOrigin = url.origin;
+            } else {
+              diagnostics.push('Provider endpoint declaration is not a valid URL.');
+            }
+          }
+          const selectedAuth = parsed.security?.auth?.selectedType ?? parsed.authType;
+          if (typeof selectedAuth === 'string' && /qwen|dashscope|oauth|alibaba/i.test(selectedAuth)) {
+            hasCloudAuth = true;
+            credentialConfigured = true;
+          }
+          if (parsed.env && typeof parsed.env === 'object') {
+            if (hasNonEmptySecret(parsed.env.QWEN_API_KEY) || hasNonEmptySecret(parsed.env.DASHSCOPE_API_KEY)) {
+              hasCloudAuth = true;
+              credentialConfigured = true;
+            }
+            if (hasNonEmptySecret(parsed.env.OPENAI_API_KEY)) {
+              hasOpenAiKey = true;
+              credentialConfigured = true;
+            }
+          }
+          if (hasNonEmptySecret(parsed.apiKey)) {
+            hasOpenAiKey = true;
+            credentialConfigured = true;
           }
           if (parsed.permissions && typeof parsed.permissions === 'object') {
             const mode = safeIdentifier(parsed.permissions.defaultMode);
@@ -150,6 +249,9 @@ export class AgentConfigurationDiscovery {
       } else if (agent === 'claude-code') {
         add(path.join(claudeHome, 'settings.json'), 'user', 'settings');
         add(path.join(claudeHome, 'CLAUDE.md'), 'user', 'instructions');
+      } else if (agent === 'qwen-code') {
+        add(path.join(qwenHome, 'settings.json'), 'user', 'settings');
+        add(path.join(qwenHome, 'QWEN.md'), 'user', 'instructions');
       } else {
         add(path.join(home, '.gemini', 'settings.json'), 'user', 'candidate');
         add(path.join(home, '.gemini', 'antigravity-cli', 'settings.json'), 'user', 'candidate');
@@ -168,19 +270,68 @@ export class AgentConfigurationDiscovery {
           add(path.join(dir, 'CLAUDE.md'), 'project', 'instructions');
           add(path.join(dir, '.claude', 'CLAUDE.md'), 'project', 'instructions');
           add(path.join(dir, '.mcp.json'), 'project', 'settings');
+        } else if (agent === 'qwen-code') {
+          add(path.join(dir, '.qwen', 'settings.json'), 'project', 'settings');
+          add(path.join(dir, 'QWEN.md'), 'project', 'instructions');
         } else add(path.join(dir, '.vscode', 'settings.json'), 'project', 'candidate');
+      }
+      if (agent === 'qwen-code') {
+        if (hasNonEmptySecret(env.QWEN_API_KEY) || hasNonEmptySecret(env.DASHSCOPE_API_KEY)) {
+          hasCloudAuth = true;
+          credentialConfigured = true;
+        }
+        if (hasNonEmptySecret(env.OPENAI_API_KEY)) {
+          hasOpenAiKey = true;
+          credentialConfigured = true;
+        }
+        if (hasNonEmptySecret(env.OPENAI_BASE_URL)) {
+          observedLocalities.push(classifyEndpointUrlLocality(env.OPENAI_BASE_URL!));
+        }
+      } else if (agent === 'codex') {
+        if (hasNonEmptySecret(env.OPENAI_API_KEY)) {
+          hasOpenAiKey = true;
+          credentialConfigured = true;
+        }
+        if (hasNonEmptySecret(env.OPENAI_BASE_URL)) {
+          observedLocalities.push(classifyEndpointUrlLocality(env.OPENAI_BASE_URL!));
+        }
+      } else if (agent === 'claude-code') {
+        if (hasNonEmptySecret(env.ANTHROPIC_API_KEY) || hasNonEmptySecret(env.ANTHROPIC_AUTH_TOKEN)) {
+          hasCloudAuth = true;
+          credentialConfigured = true;
+        }
+        if (hasNonEmptySecret(env.ANTHROPIC_BASE_URL)) {
+          observedLocalities.push(classifyEndpointUrlLocality(env.ANTHROPIC_BASE_URL!));
+        }
+      }
+      let endpointLocality: EndpointLocality = 'unknown';
+      if (hasCloudAuth || observedLocalities.includes('cloud')) {
+        endpointLocality = 'cloud';
+      } else if (observedLocalities.includes('invalid')) {
+        endpointLocality = 'unknown';
+      } else if (observedLocalities.length > 0 && observedLocalities.every((l) => l === 'local')) {
+        endpointLocality = 'local';
+      } else if (hasOpenAiKey) {
+        endpointLocality = 'cloud';
       }
       const models = sources.filter(s => s.settings?.model);
       const selected = models.at(-1);
       if (new Set(models.map(s => s.settings!.model)).size > 1) diagnostics.push('Model declarations differ across sources; native CLI precedence determines the effective model.');
       if (sources.some(s => !s.trusted)) diagnostics.push('Project sources are untrusted: contents withheld until explicitly authorized.');
       diagnostics.push('Native CLI resolves effective settings, managed policy, profiles and model access. A declaration is not verified availability.');
-      const modelValue = agent === 'claude-code' ? safeIdentifier(env.ANTHROPIC_MODEL) : undefined;
+      const modelValue = agent === 'claude-code'
+        ? safeIdentifier(env.ANTHROPIC_MODEL)
+        : agent === 'qwen-code'
+          ? safeIdentifier(env.QWEN_MODEL)
+          : undefined;
+      const modelEnvSource = agent === 'claude-code' ? 'environment:ANTHROPIC_MODEL' : 'environment:QWEN_MODEL';
       return {
         agent: agent!, executable: installations[0], installations, sources, projectRoot: root,
         state: !installations.length ? 'UNSUPPORTED' : sources.some(s => s.valid === false) ? 'BLOCKED' : sources.some(s => s.valid) ? 'CONFIGURED' : 'DISCOVERED',
         authentication: 'UNKNOWN',
-        model: selected || modelValue ? { status: 'CONFIGURED', value: modelValue ?? String(selected!.settings!.model), source: modelValue ? 'environment:ANTHROPIC_MODEL' : selected!.path } : { status: 'UNKNOWN' },
+        credentialConfigured,
+        endpointLocality,
+        model: selected || modelValue ? { status: 'CONFIGURED', value: modelValue ?? String(selected!.settings!.model), source: modelValue ? modelEnvSource : selected!.path } : { status: 'UNKNOWN' },
         fingerprint: hash.digest('hex'), diagnostics,
       };
     });

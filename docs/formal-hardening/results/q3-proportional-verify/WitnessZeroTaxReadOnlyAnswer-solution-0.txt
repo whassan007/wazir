@@ -1,0 +1,52 @@
+---Trace---
+------State 0-------
+univ={R0$0, R1$0, R2$0, InProgress$0, ReadOnlyAnswered$0, PhysicalVerified$0, UnverifiedEdited$0, Evidence$0, Evidence$1, Evidence$2, TurnState$0, boolean/True$0, boolean/False$0, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7}
+Int={-8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7}
+seq/Int={0, 1, 2, 3}
+String={}
+none={}
+this/R0={R0$0}
+this/R1={R1$0}
+this/R2={R2$0}
+this/Revision={R0$0, R1$0, R2$0}
+this/InProgress={InProgress$0}
+this/ReadOnlyAnswered={ReadOnlyAnswered$0}
+this/PhysicalVerified={PhysicalVerified$0}
+this/UnverifiedEdited={UnverifiedEdited$0}
+this/VerdictState={InProgress$0, ReadOnlyAnswered$0, PhysicalVerified$0, UnverifiedEdited$0}
+this/Evidence={Evidence$0, Evidence$1, Evidence$2}
+this/Evidence<:atRevision={Evidence$0->R2$0, Evidence$1->R2$0, Evidence$2->R1$0}
+this/Evidence<:passed={Evidence$0->boolean/False$0, Evidence$1->boolean/False$0, Evidence$2->boolean/True$0}
+this/TurnState={TurnState$0}
+this/TurnState<:currentRev={TurnState$0->R0$0}
+this/TurnState<:collectedEvidence={}
+this/TurnState<:verdict={TurnState$0->InProgress$0}
+boolean/True={boolean/True$0}
+boolean/False={boolean/False$0}
+boolean/Bool={boolean/True$0, boolean/False$0}
+------State 1 (loop)-------
+univ={R0$0, R1$0, R2$0, InProgress$0, ReadOnlyAnswered$0, PhysicalVerified$0, UnverifiedEdited$0, Evidence$0, Evidence$1, Evidence$2, TurnState$0, boolean/True$0, boolean/False$0, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7}
+Int={-8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7}
+seq/Int={0, 1, 2, 3}
+String={}
+none={}
+this/R0={R0$0}
+this/R1={R1$0}
+this/R2={R2$0}
+this/Revision={R0$0, R1$0, R2$0}
+this/InProgress={InProgress$0}
+this/ReadOnlyAnswered={ReadOnlyAnswered$0}
+this/PhysicalVerified={PhysicalVerified$0}
+this/UnverifiedEdited={UnverifiedEdited$0}
+this/VerdictState={InProgress$0, ReadOnlyAnswered$0, PhysicalVerified$0, UnverifiedEdited$0}
+this/Evidence={Evidence$0, Evidence$1, Evidence$2}
+this/Evidence<:atRevision={Evidence$0->R2$0, Evidence$1->R2$0, Evidence$2->R1$0}
+this/Evidence<:passed={Evidence$0->boolean/False$0, Evidence$1->boolean/False$0, Evidence$2->boolean/True$0}
+this/TurnState={TurnState$0}
+this/TurnState<:currentRev={TurnState$0->R0$0}
+this/TurnState<:collectedEvidence={}
+this/TurnState<:verdict={TurnState$0->ReadOnlyAnswered$0}
+boolean/True={boolean/True$0}
+boolean/False={boolean/False$0}
+boolean/Bool={boolean/True$0, boolean/False$0}
+

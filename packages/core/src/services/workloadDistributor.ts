@@ -1,6 +1,16 @@
 import type { RoutingMode, ExecutionPreferences } from '../types/task.js';
 
-export type WorkloadPoolKind = 'local' | 'antigravity' | 'codex' | 'claude-code' | 'remote' | 'hosted' | 'auto';
+export type WorkloadPoolKind =
+  | 'local'
+  | 'antigravity'
+  | 'codex'
+  | 'claude-code'
+  | 'qwen-code'
+  | 'qwen'
+  | 'qwen-acp'
+  | 'remote'
+  | 'hosted'
+  | 'auto';
 
 export interface WorkloadShare {
   pool: WorkloadPoolKind | string;
@@ -49,6 +59,54 @@ export const DEFAULT_HARDWARE_DISTRIBUTION: WorkloadDistributionConfig = {
     { pool: 'auto', weight: 10 },
   ],
 };
+
+export const DEFAULT_WORKLOAD_DISTRIBUTION = DEFAULT_HARDWARE_DISTRIBUTION;
+
+/**
+ * Resolves an external agent pool alias (such as `'qwen'`, `'qwen-code'`, `'qwen-acp'`,
+ * `'agy'`, `'claude'`) against the registered external agent IDs.
+ */
+export function resolveMatchingExternalAgent(
+  pool: string,
+  externalAgents: ReadonlySet<string> | readonly string[],
+): string | undefined {
+  const extSet =
+    externalAgents instanceof Set ? externalAgents : new Set(externalAgents);
+  const key = pool.trim().toLowerCase();
+  if (!key) return undefined;
+
+  if (key === 'antigravity' || key === 'agy') {
+    if (extSet.has('antigravity')) return 'antigravity';
+    if (extSet.has('agy')) return 'agy';
+    return undefined;
+  }
+  if (key === 'qwen' || key === 'qwen-code' || key === 'qwen-acp') {
+    if (extSet.has('qwen-code')) return 'qwen-code';
+    if (extSet.has('qwen')) return 'qwen';
+    if (extSet.has('qwen-acp')) return 'qwen-acp';
+    return undefined;
+  }
+  if (key === 'claude' || key === 'claude-code') {
+    if (extSet.has('claude-code')) return 'claude-code';
+    if (extSet.has('claude')) return 'claude';
+    return undefined;
+  }
+  if (key === 'codex' || key === 'codex-acp') {
+    if (extSet.has('codex')) return 'codex';
+    if (extSet.has('codex-acp')) return 'codex-acp';
+    return undefined;
+  }
+  if (extSet.has(key)) return key;
+  if (extSet.has(pool)) return pool;
+  return undefined;
+}
+
+export function matchesAgentPool(
+  pool: string,
+  externalAgents: ReadonlySet<string> | readonly string[],
+): boolean {
+  return resolveMatchingExternalAgent(pool, externalAgents) !== undefined;
+}
 
 /**
  * Parses a compact distribution spec such as `"local:70,antigravity:15,codex:5"`.
@@ -157,13 +215,7 @@ export class WorkloadDistributor {
       if (share.pool === 'auto') {
         return available.hasLocalHardware || (!forbidExternal && extSet.size > 0);
       }
-      if (share.pool === 'antigravity' || share.pool === 'agy') {
-        return !forbidExternal && extSet.has('antigravity');
-      }
-      if (share.pool === 'codex') {
-        return !forbidExternal && extSet.has('codex');
-      }
-      return !forbidExternal && extSet.has(share.pool);
+      return !forbidExternal && matchesAgentPool(share.pool, extSet);
     });
 
     if (eligible.length > 0) return eligible;
@@ -177,11 +229,14 @@ export class WorkloadDistributor {
       available.routingMode === 'NVIDIA';
 
     if (available.pinnedAgentId && !forbidExternal) {
+      const resolvedPin =
+        resolveMatchingExternalAgent(available.pinnedAgentId, available.externalAgents) ??
+        available.pinnedAgentId;
       return {
-        pool: available.pinnedAgentId,
-        targetAgentId: available.pinnedAgentId,
+        pool: resolvedPin,
+        targetAgentId: resolvedPin,
         routingMode: available.routingMode,
-        reason: `explicit agent pin (${available.pinnedAgentId})`,
+        reason: `explicit agent pin (${resolvedPin})`,
       };
     }
     if (available.pinnedModelId) {
@@ -258,19 +313,39 @@ export class WorkloadDistributor {
       };
     }
     if (chosen.pool === 'antigravity' || chosen.pool === 'agy') {
+      const targetAgentId = resolveMatchingExternalAgent(chosen.pool, available.externalAgents) ?? 'antigravity';
       return {
         pool: 'antigravity',
-        targetAgentId: 'antigravity',
+        targetAgentId,
         routingMode: available.routingMode,
         reason: `weighted distribution selected Antigravity (${sharePct}% share)`,
       };
     }
-    if (chosen.pool === 'codex') {
+    if (chosen.pool === 'codex' || chosen.pool === 'codex-acp') {
+      const targetAgentId = resolveMatchingExternalAgent(chosen.pool, available.externalAgents) ?? 'codex';
       return {
         pool: 'codex',
-        targetAgentId: 'codex',
+        targetAgentId,
         routingMode: available.routingMode,
         reason: `weighted distribution selected Codex (${sharePct}% share)`,
+      };
+    }
+    if (chosen.pool === 'qwen' || chosen.pool === 'qwen-code' || chosen.pool === 'qwen-acp') {
+      const targetAgentId = resolveMatchingExternalAgent(chosen.pool, available.externalAgents) ?? 'qwen-code';
+      return {
+        pool: 'qwen-code',
+        targetAgentId,
+        routingMode: available.routingMode,
+        reason: `weighted distribution selected Qwen Code (${sharePct}% share)`,
+      };
+    }
+    if (chosen.pool === 'claude' || chosen.pool === 'claude-code') {
+      const targetAgentId = resolveMatchingExternalAgent(chosen.pool, available.externalAgents) ?? 'claude-code';
+      return {
+        pool: 'claude-code',
+        targetAgentId,
+        routingMode: available.routingMode,
+        reason: `weighted distribution selected Claude Code (${sharePct}% share)`,
       };
     }
     if (chosen.pool === 'auto') {
@@ -280,9 +355,10 @@ export class WorkloadDistributor {
         reason: `weighted distribution selected scheduler auto-route (${sharePct}% share)`,
       };
     }
+    const resolvedTarget = resolveMatchingExternalAgent(chosen.pool, available.externalAgents) ?? chosen.pool;
     return {
       pool: chosen.pool,
-      targetAgentId: chosen.pool,
+      targetAgentId: resolvedTarget,
       routingMode: available.routingMode,
       reason: `weighted distribution selected ${chosen.pool} (${sharePct}% share)`,
     };

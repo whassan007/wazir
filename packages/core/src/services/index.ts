@@ -307,8 +307,11 @@ export * from './executionContract.js';
 export {
   WorkloadDistributor,
   DEFAULT_HARDWARE_DISTRIBUTION,
+  DEFAULT_WORKLOAD_DISTRIBUTION,
   parseWorkloadDistribution,
   formatWorkloadDistribution,
+  resolveMatchingExternalAgent,
+  matchesAgentPool,
 } from './workloadDistributor.js';
 export type {
   WorkloadPoolKind,
@@ -317,3 +320,4 @@ export type {
   AvailableWorkloadPools,
   AllocatedWorkloadTarget,
 } from './workloadDistributor.js';
+export * from './harnessAssembler.js';
