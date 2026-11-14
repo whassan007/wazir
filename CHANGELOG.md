@@ -1,19 +1,23 @@
 # Changelog
 
-## Unreleased (`feat/qwen-code-brain-transplant`)
+## v0.3.0 — 2026-11-13
 
-**Theme**: Qwen Code 1.0 Core Loop Transplant, Polished `wa` / `wazir` Terminal Coding Agent, `qwen --acp` Privacy-Gated Bridge, Governed Harness² (`Propose → Probe → Compose`), and Alloy 6 Formal Hardening (`Q1`–`Q6`)
+**Release**: `v0.3.0`
+**Theme**: Unified Platform Reconciliation — Qwen Code 1.0 Core Loop Transplant, Polished `wa` / `wazir` Interactive Terminal Coding Agent, Governed Harness² (`Propose → Probe → Compose`), Formal Assurance (`@wazir/assurance` & Alloy 6 `Q1`–`Q6` / 30-Agent Hardening), FS5 Autonomous Meta-Harness, and 20-Agent Performance Hardening
 
 - **Native Multi-Tool ReAct Core Loop (`@wazir/agents`, `@wazir/tools`, `@wazir/runtimes-*`, `@wazir/core`)**:
   - Replaced single-action JSON-in-prompt `CodingAgent` with `WazirQwenAgent` (`packages/agents/src/qwenCore/*`): native multi-tool calling across all 6 `RuntimeAdapter`s (Ollama, LM Studio, OpenAI, Anthropic, Google, Remote Worker), parallel read batching + serialized mutating execution in `CoreToolScheduler`, 70% context watermark `ChatCompressionService`, SHA-256 `LoopDetectionService`, hierarchical `AGENTS.md`/`.qwen/QWEN.md` loader, and `ProportionalVerifier` (`WAZIR_CODING_AGENT_LOOP=legacy` preserves instant fallback).
   - Added 3-stage exact / line-trimmed / indentation-flexible `computeSmartEdit` (`edit`), transactional `multi_edit`, glob-aware `read_many_files`, and structured `todo_write` while enforcing `PolicyEngine`, `realpath` workspace containment, and `SPEC_WRITE_FENCE`.
 - **Polished `wa` & `wazir` Terminal Coding Agent (`@wazir/cli`, `scripts/`, `packaging/`)**:
-  - Unified `wa` and `wazir` executables (including standalone Node SEA binaries) with sub-frame bootstrap rendering, grapheme-true horizontal cursor editing, `/model`, `/permissions`, `/status`, `/diff`, `/init`, `/compact`, `/undo`, `/resume`, `/fleet`, `@file` fuzzy completion, `Ctrl+P` palette, focus-gated diff approvals, `wa doctor` `<16k` local context-window check, and deterministic `70/15/5` (`local:70,antigravity:15,codex:5,auto:10`) `WorkloadDistributor`.
+  - Unified `wa` and `wazir` executables across standalone Node SEA binaries, npm, Homebrew, Scoop, WinGet, DEB, RPM, and Tauri desktop metadata, with sub-frame bootstrap rendering, grapheme-true horizontal cursor editing, `WAZIR — Select Model` / `WAZIR — Local Models` modal & searchable overlay, `/permissions`, `/status`, `/diff`, `/init`, `/compact`, `/undo`, `/resume`, `/fleet`, `/goals`, `/hardware`, `/execution`, `/qualify`, `@file` fuzzy completion, `Ctrl+P` palette, focus-gated diff approvals, and deterministic `70/15/5` (`local:70,antigravity:15,codex:5,auto:10`) `WorkloadDistributor`.
 - **Privacy-Gated `qwen --acp` External Harness & Governed Harness² (`@wazir/agents`, `@wazir/evaluation`, `@wazir/core`)**:
   - Added `~/.qwen/settings.json` discovery, streaming ACP thought/tool/diff event mapping, session handoff metadata, and `FH-A8-02` `checkAcpPrivacyEligibility` blocking cloud-backed ACP processes under `LOCAL_ONLY` / sensitive classifications.
   - Added `TrajectoryContrastService`, `BehavioralHarnessEditor`, `DomainKnowledgeEditor`, `GovernanceFence`, `HarnessAssembler` (`minEvidenceThreshold >= 3`), `UNVERIFIED_CONTRASTIVE` verdict separation, and `wa search run --compose`.
-- **Formal Assurance & Security Verification (`docs/formal-hardening/`, `tests/security/`, `tests/benchmarks/`)**:
-  - Verified 6 Alloy 6 temporal models + 6 negative-control mutants (`q1`–`q6`, `16/16` safety assertions `NO_COUNTEREXAMPLE_IN_SCOPE` via SAT4J), `@wazir/assurance` repair compatibility, 5 adversarial red-team suites, and a 50-task everyday coding benchmark corpus.
+- **Formal Assurance (`@wazir/assurance`), 30-Agent Formal Hardening (`fh30/A30`) & FS5 Meta-Harness (`@wazir/core`)**:
+  - Integrated `@wazir/assurance` (`wa assure`, Dafny / Z3 / Alloy 6 / Scenic / VerifAI runners, spec-locked repair loop, and independent review separation), all 30 formal-hardening remediation invariants (`Groups A–J`), 6 Alloy 6 temporal models (`q1`–`q6`), 5 red-team security suites, and the 50-task everyday coding benchmark.
+  - Integrated FS5 `MetaHarnessService` autonomous local + SSH fleet hardware discovery (Apple Silicon unified memory & NVIDIA DGX Spark GB10), natural-language infrastructure routing (`classifyMetaHarnessIntent`), and zero-manual-test qualification.
+- **20-Agent Concurrency & Performance Hardening (`perf/wazir-hardening`)**:
+  - Integrated shared KV store caching, phase latency histograms, execution deadlines & cancellation scopes, sticky phase routing, provider backpressure, scheduler fairness, fault injection, and statistical performance regression gates (`ConcurrencyBenchmarkRunner`, `PerformanceRegressionGate`).
 
 ## v0.2.15 — 2026-10-23
 

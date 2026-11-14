@@ -23,6 +23,7 @@
     { "path": "packages/models" },
     { "path": "packages/policies" },
     { "path": "packages/goals" },
+    { "path": "packages/assurance" },
     { "path": "apps/cli" },
     { "path": "apps/api" },
     { "path": "apps/worker" }

@@ -2176,7 +2176,7 @@ export class PolicyEngine {
 
       const execFlag = execFlags.find((f) => flagMatches(arg, f));
       if (execFlag) {
-        if (name === 'find' && arg === '-exec') {
+        if (name === 'find' && ['-exec', '-execdir', '-ok', '-okdir'].includes(execFlag)) {
           // `find -exec <cmd> ...` is as safe as `<cmd> ...` itself: the whole
           // clause (not just its command name) is classified, so its own path
           // arguments are containment-checked (`-exec cat /etc/passwd`). The
@@ -2186,7 +2186,7 @@ export class PolicyEngine {
           let end = i + 1;
           while (end < args.length && args[end] !== ';' && !(args[end] === '+' && args[end - 1] === '{}')) end++;
           const rawWords = args.slice(i + 1, end);
-          if (rawWords.length === 0) {
+          if (rawWords.length === 0 || (rawWords.length === 1 && (rawWords[0] === '+' || rawWords[0] === ';'))) {
             decisions.push({
               decision: 'deny',
               rule: 'shell-dangerous-deny',

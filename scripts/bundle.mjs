@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import * as esbuild from 'esbuild';
-import { chmodSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import { execSync } from 'node:child_process';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -57,7 +58,6 @@ try {
     target: 'node22.13',
     format: 'cjs',
     outfile: outFile,
-    // Native modules cannot be inlined: their loaders find a platform .node binary relative
     // to their own package directory. They ship as optionalDependencies of the published
     // package and every call site loads them lazily, so a missing one disables only its
     // feature (PTY terminal tool, OS keychain, native Postgres driver).
@@ -75,13 +75,21 @@ try {
     },
   });
 
-  try {
-    chmodSync(outFile, 0o755);
-  } catch {
-    // best-effort on Windows
+    // Sanitize outFile if it contains os.homedir()
+    const bundled = readFileSync(outFile, 'utf8');
+    if (bundled.includes(os.homedir())) {
+      let sanitized = bundled;
+      sanitized = sanitized.replace(new RegExp(`(\\.\\./)+${os.homedir().replace(/^\/+/, '')}/[^"\n]*?/node_modules/`, 'g'), 'node_modules/');
+      sanitized = sanitized.split(os.homedir()).join('~');
+      writeFileSync(outFile, sanitized, 'utf8');
+    }
+    try {
+      chmodSync(outFile, 0o755);
+    } catch {
+      // best-effort on Windows
+    }
+    console.log(`✓ Standalone CLI bundle created at: ${outFile}`);
+  } catch (error) {
+    console.error('Bundle failed:', error);
+    process.exit(1);
   }
-  console.log(`✓ Standalone CLI bundle created at: ${outFile}`);
-} catch (error) {
-  console.error('Bundle failed:', error);
-  process.exit(1);
-}

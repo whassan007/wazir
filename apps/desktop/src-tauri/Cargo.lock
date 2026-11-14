@@ -4215,7 +4215,7 @@ dependencies = [
 
 [[package]]
 name = "wazir-desktop"
-version = "0.2.13"
+version = "0.3.0"
 dependencies = [
  "rand",
  "serde",

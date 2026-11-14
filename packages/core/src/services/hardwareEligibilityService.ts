@@ -287,17 +287,18 @@ export class HardwareEligibilityService {
     }
 
     // CPU checks
-    if (computer.hardware.cpuCores <= 0) {
-      rejectionReasons.push(`Computer '${computer.id}' reports invalid CPU cores (${computer.hardware.cpuCores})`);
+    const cpuCores = typeof computer.hardware?.cpuCores === 'number' ? computer.hardware.cpuCores : ((computer.hardware as unknown as { cpu?: { logicalCores?: number } })?.cpu?.logicalCores ?? 1);
+    if (cpuCores <= 0) {
+      rejectionReasons.push(`Computer '${computer.id}' reports invalid CPU cores (${cpuCores})`);
     } else {
       const cpuPercent = computer.load?.cpuPercent;
       if (cpuPercent !== undefined) {
-        reasons.push(`CPU: ${computer.hardware.cpuCores} cores, current load ${Math.round(cpuPercent)}%`);
+        reasons.push(`CPU: ${cpuCores} cores, current load ${Math.round(cpuPercent)}%`);
         if (cpuPercent >= 100) {
           rejectionReasons.push(`Computer '${computer.id}' CPU is 100% saturated`);
         }
       } else {
-        reasons.push(`CPU: ${computer.hardware.cpuCores} cores available`);
+        reasons.push(`CPU: ${cpuCores} cores available`);
       }
     }
 
@@ -350,16 +351,19 @@ export class HardwareEligibilityService {
     const kvCacheGB = params.requiredKvCacheGB ?? 0;
     const overheadGB = params.runtimeOverheadGB ?? 0;
 
+    const rawHwMem = (computer.hardware as unknown as { memory?: { totalBytes?: number; totalGB?: number } })?.memory;
+    const sysMemGB = typeof computer.hardware?.memoryGB === 'number' && Number.isFinite(computer.hardware.memoryGB) ? computer.hardware.memoryGB : (typeof rawHwMem?.totalGB === 'number' ? rawHwMem.totalGB : (typeof rawHwMem?.totalBytes === 'number' ? rawHwMem.totalBytes / 1024 ** 3 : 0));
+
     if (unifiedMemory) {
       // INVARIANT 1: Apple Silicon Unified Memory
       // Total memory is from the single unified RAM pool
-      totalMemoryGB = computer.hardware.memoryGB || (computer.hardware.gpu?.memoryGB ?? 0);
+      totalMemoryGB = sysMemGB || (computer.hardware.gpu?.memoryGB ?? 0);
 
       // Raw available memory is from the single unified pool (never add gpuMemoryAvailableGB)
       const rawAvailableGB =
         computer.load?.memoryAvailableGB !== undefined
           ? computer.load.memoryAvailableGB
-          : computer.hardware.memoryGB - (computer.load?.memoryUsedGB ?? 0);
+          : (sysMemGB - (computer.load?.memoryUsedGB ?? 0)) || totalMemoryGB - (computer.load?.memoryUsedGB ?? 0);
 
       // Active reservations: on unified memory, do NOT double count if a reservation set both memoryBytes & vramBytes
       reservedMemoryGB =
@@ -502,14 +506,13 @@ export class HardwareEligibilityService {
       const rawSysAvailGB =
         computer.load?.memoryAvailableGB !== undefined
           ? computer.load.memoryAvailableGB
-          : computer.hardware.memoryGB - (computer.load?.memoryUsedGB ?? 0);
+          : sysMemGB - (computer.load?.memoryUsedGB ?? 0);
       const sysReservedGB = activeReservations.reduce((sum, r) => sum + r.memoryGB, 0);
       const availSysGB = Math.max(0, rawSysAvailGB - sysReservedGB);
-
       if (!alreadyLoaded && model.memory?.minSystemGB !== undefined && model.memory.minSystemGB > 0) {
-        if (model.memory.minSystemGB > computer.hardware.memoryGB) {
+        if (model.memory.minSystemGB > sysMemGB) {
           rejectionReasons.push(
-            `Total system RAM (${roundGB(computer.hardware.memoryGB)}GB) cannot fit required system memory (${roundGB(model.memory.minSystemGB)}GB)`,
+            `Total system RAM (${roundGB(sysMemGB)}GB) cannot fit required system memory (${roundGB(model.memory.minSystemGB)}GB)`,
           );
         } else if (model.memory.minSystemGB > availSysGB) {
           rejectionReasons.push(
@@ -521,12 +524,11 @@ export class HardwareEligibilityService {
       }
     } else {
       // CPU-only execution target
-      totalMemoryGB = computer.hardware.memoryGB;
+      totalMemoryGB = sysMemGB;
       const rawAvailableRamGB =
         computer.load?.memoryAvailableGB !== undefined
           ? computer.load.memoryAvailableGB
-          : computer.hardware.memoryGB - (computer.load?.memoryUsedGB ?? 0);
-
+          : sysMemGB - (computer.load?.memoryUsedGB ?? 0);
       reservedMemoryGB =
         activeReservations.reduce((sum, r) => sum + r.memoryGB, 0) + extraReservedGB;
       availableMemoryGB = Math.max(0, rawAvailableRamGB - reservedMemoryGB);

@@ -24,15 +24,19 @@ export class ComputerRegistry {
   register(registration: ComputerRegistration): Computer {
     const now = new Date();
     const existing = this.computers.get(registration.id);
-
+    const rawHw = (registration.hardware ?? {}) as Record<string, any>;
+    const normalizedMemoryGB = typeof rawHw.memoryGB === 'number' && Number.isFinite(rawHw.memoryGB) ? rawHw.memoryGB : (typeof rawHw.memory?.totalGB === 'number' ? rawHw.memory.totalGB : (typeof rawHw.memory?.totalBytes === 'number' ? rawHw.memory.totalBytes / 1024 ** 3 : 0));
+    const normalizedCpuCores = typeof rawHw.cpuCores === 'number' && Number.isFinite(rawHw.cpuCores) ? rawHw.cpuCores : (typeof rawHw.cpu?.logicalCores === 'number' ? rawHw.cpu.logicalCores : 1);
+    const normalizedHardware = { ...registration.hardware, cpuCores: normalizedCpuCores, memoryGB: normalizedMemoryGB };
+    const normalizedOs: Computer['os'] = registration.os ?? { platform: process.platform, architecture: typeof rawHw.cpu?.architecture === 'string' ? rawHw.cpu.architecture : process.arch, version: os.release() };
     const updated: Computer = {
       id: registration.id,
       name: registration.name,
       type: registration.type,
       status: 'online',
       local: existing?.local ?? registration.local ?? false,
-      os: registration.os,
-      hardware: registration.hardware,
+      os: normalizedOs,
+      hardware: normalizedHardware,
       runtimes: registration.runtimes ?? existing?.runtimes ?? [],
       models: registration.models ?? existing?.models ?? [],
       capabilities: registration.capabilities ?? existing?.capabilities ?? [],

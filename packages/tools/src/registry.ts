@@ -297,7 +297,7 @@ export async function executeTool(
   const invalid = registry.validate(name, input, 'input');
   if (invalid) return { ok: false, output: '', error: isMCP ? 'MCP_TOOL_SCHEMA_INVALID' : `TOOL_VALIDATION_FAILED: ${invalid}`, failureClass: 'TOOL_VALIDATION_FAILED', durationMs: 0 };
   if (ctx.signal?.aborted) return { ok: false, output: '', error: 'cancelled before tool dispatch', failureClass: 'CANCELLED', durationMs: 0 };
-  if (!ctx.allowVerificationChanges && (name === 'write' || name === 'edit')) {
+  if (!ctx.allowVerificationChanges && (name === 'write' || name === 'edit' || name === 'multi_edit')) {
     const findings = await proposedOracleWeakening(ctx.projectRoot, name, input);
     if (findings.length > 0) return {
       ok: false, output: '', failureClass: 'POLICY_DENIED', durationMs: 0, metadata: { oracleWeakening: findings },

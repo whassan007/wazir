@@ -19,8 +19,7 @@ import {
   type ToolHostScheduleResult,
   type SchedulerDecision,
   type Task,
-} from '../../core/src/index.js';
-
+} from '@wazir/core';
 export {
   AgentRegistry,
   ComputerRegistry,
