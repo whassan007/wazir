@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 import type { FileMutationResult, Tool, ToolResult } from '@wazir/core';
 import { computeSmartEdit } from './editMatcher.js';
 import { errorMessage, readProjectFile, writeProjectFile } from './paths.js';
-
+import { collectPostEditDiagnostics } from './lspDiagnosticsHook.js';
 function hashContent(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
@@ -119,13 +119,13 @@ export const multiEditTool: Tool = {
       mutation.existsAfter = true;
       mutation.afterHash = hashContent(current);
       mutation.changed = mutation.beforeHash !== mutation.afterHash;
-
+      const diag = await collectPostEditDiagnostics({ projectRoot: ctx.projectRoot, filePath, resolvedPath: resolved, content: current, ctx });
       return {
         ok: true,
-        output: `edited ${resolved} (${edits.length} edit block(s), ${totalReplacements} replacement(s))\n${diffs.join('\n')}`,
+        output: `edited ${resolved} (${edits.length} edit block(s), ${totalReplacements} replacement(s))\n${diffs.join('\n')}${diag.formatted ?? ''}`,
         durationMs: Date.now() - started,
         fileMutations: [mutation],
-        metadata: { strategies },
+        metadata: { strategies, ...(diag.entries.length > 0 ? { diagnostics: diag.entries } : {}) },
       };
     } catch (error) {
       return {

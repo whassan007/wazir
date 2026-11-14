@@ -138,7 +138,17 @@ export class AccountRegistry {
     const covered = (pred: (a: AccountConfig) => boolean) => this.list().some((a) => a.enabled !== false && pred(a));
     for (const r of input.localRuntimes) {
       if (!covered((a) => !!a.runtimeIds?.includes(r))) {
-        this.byId.set(`local:${r}`, { id: `local:${r}`, label: `${r} (this machine)`, provider: r, kind: 'local', integration: 'local-endpoint', runtimeIds: [r], maxConcurrent: 2 });
+        const priority = r === 'mlx' ? 30 : r === 'ollama' ? 10 : undefined;
+        this.byId.set(`local:${r}`, {
+          id: `local:${r}`,
+          label: `${r} (this machine)`,
+          provider: r,
+          kind: 'local',
+          integration: 'local-endpoint',
+          runtimeIds: [r],
+          maxConcurrent: r === 'mlx' ? 1 : 2,
+          ...(priority !== undefined ? { priority } : {}),
+        });
       }
     }
     for (const r of input.hostedRuntimes) {
@@ -146,6 +156,7 @@ export class AccountRegistry {
         const defaultConcurrent = input.hostedConcurrency?.[r] ?? (r === 'nvidia' ? 2 : undefined);
         const limits = input.hostedLimits?.[r];
         const pricing = input.hostedPricing?.[r];
+        const priority = r === 'google' ? 60 : undefined;
         this.byId.set(`api:${r}`, {
           id: `api:${r}`,
           label: `${r} API`,
@@ -157,6 +168,7 @@ export class AccountRegistry {
           ...(defaultConcurrent !== undefined ? { maxConcurrent: defaultConcurrent } : {}),
           ...(limits?.length ? { limits } : {}),
           ...(pricing !== undefined ? { pricing } : {}),
+          ...(priority !== undefined ? { priority } : {}),
         });
       }
     }
@@ -173,9 +185,18 @@ export class AccountRegistry {
 
   /** Accounts able to serve a runtime+model or an agent, most preferred first. */
   candidates(target: { runtimeId?: string; agent?: string; modelId?: string }): AccountConfig[] {
+    const baseRuntimeId =
+      target.runtimeId && target.runtimeId.includes(':')
+        ? target.runtimeId.slice(target.runtimeId.lastIndexOf(':') + 1)
+        : undefined;
     return this.list()
       .filter((a) => a.enabled !== false)
-      .filter((a) => (target.agent ? !!a.agents?.includes(target.agent) : !!target.runtimeId && !!a.runtimeIds?.includes(target.runtimeId)))
+      .filter((a) => {
+        if (target.agent) return !!a.agents?.includes(target.agent);
+        if (!target.runtimeId) return false;
+        if (a.runtimeIds?.includes(target.runtimeId)) return true;
+        return a.kind === 'local' && !!baseRuntimeId && !!a.runtimeIds?.includes(baseRuntimeId);
+      })
       .filter((a) => !target.modelId || servesModel(a, target.modelId))
       .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || a.id.localeCompare(b.id));
   }

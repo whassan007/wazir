@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "1.0.0",
+  "benchmarkId": "A094-formal-assurance-dual-host-verification",
+  "mode": "live-dual-host-formal-toolchain",
+  "generatedAt": "2026-11-14T17:23:30.000Z",
+  "verifierScript": "./scripts/assure-verify.sh",
+  "overallVerdict": "PASS",
+  "toolchain": {
+    "z3": {
+      "version": "z3-5.3.1",
+      "status": "PASS"
+    },
+    "alloy": {
+      "version": "6.2.0",
+      "jar": "tools/alloy/org.alloytools.alloy.dist.jar",
+      "sha256": "6b8c1cb5bc93bedfc7c61435c4e1ab6e688a242dc702a394628d9a9801edb78d",
+      "status": "PASS"
+    },
+    "dafny": {
+      "version": "4.11.0+fcb2042d6d043a2634f0854338c08feeaaaf4ae2",
+      "status": "PASS"
+    },
+    "skills": {
+      "installedPaths": 15,
+      "smokeProbes": [
+        { "id": "z3-buggy", "status": "PASS" },
+        { "id": "z3-guarded", "status": "PASS" },
+        { "id": "alloy", "status": "PASS" },
+        { "id": "dafny", "status": "PASS" },
+        { "id": "scenic", "status": "PASS" },
+        { "id": "verifai", "status": "PASS" }
+      ],
+      "overall": "PASS"
+    }
+  },
+  "hosts": [
+    {
+      "hostname": "WaelMacPro",
+      "hardware": "Apple M5 Pro",
+      "platform": "darwin",
+      "arch": "arm64",
+      "verifiedAt": "2026-11-14T17:21:01Z",
+      "baseCommit": "2bcc397",
+      "typecheckStatus": "PASS",
+      "testSuitesPassed": 18,
+      "testSuitesTotal": 18,
+      "testsPassed": 358,
+      "testsTotal": 358,
+      "vitestWallClockSec": 42.80,
+      "vitestTestsDurationSec": 38.35,
+      "suites": [
+        { "file": "packages/assurance/src/__tests__/alloy-adapter.test.ts", "tests": 19, "durationMs": 3318, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/cli.test.ts", "tests": 6, "durationMs": 2250, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/dafny-adapter.test.ts", "tests": 17, "durationMs": 5630, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/fencing.test.ts", "tests": 9, "durationMs": 590, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/gam-adapter.test.ts", "tests": 17, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/ledger.test.ts", "tests": 12, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/phase1-spec-compliance.test.ts", "tests": 20, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/probes.test.ts", "tests": 40, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/qwenRepairLoop.test.ts", "tests": 3, "durationMs": 379, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/record.test.ts", "tests": 10, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/refinement.test.ts", "tests": 39, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/registry.test.ts", "tests": 48, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/repair-loop.test.ts", "tests": 10, "durationMs": 10592, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/scenic-adapter.test.ts", "tests": 13, "durationMs": 8467, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/scheduler-feasibility.test.ts", "tests": 15, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/verdict.test.ts", "tests": 31, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/verifai-adapter.test.ts", "tests": 20, "durationMs": 4349, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/z3-adapter.test.ts", "tests": 29, "durationMs": 2707, "status": "PASS" }
+      ]
+    },
+    {
+      "hostname": "waelbot",
+      "hardware": "NVIDIA DGX Spark (GB10 Grace Blackwell)",
+      "platform": "linux",
+      "arch": "arm64",
+      "verifiedAt": "2026-11-14T17:22:24Z",
+      "baseCommit": "2bcc3973",
+      "typecheckStatus": "PASS",
+      "testSuitesPassed": 18,
+      "testSuitesTotal": 18,
+      "testsPassed": 358,
+      "testsTotal": 358,
+      "vitestWallClockSec": 40.85,
+      "vitestTestsDurationSec": 34.38,
+      "suites": [
+        { "file": "packages/assurance/src/__tests__/alloy-adapter.test.ts", "tests": 19, "durationMs": 1942, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/cli.test.ts", "tests": 6, "durationMs": 2144, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/dafny-adapter.test.ts", "tests": 17, "durationMs": 7196, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/fencing.test.ts", "tests": 9, "durationMs": 387, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/gam-adapter.test.ts", "tests": 17, "durationMs": 38, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/ledger.test.ts", "tests": 12, "durationMs": 19, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/phase1-spec-compliance.test.ts", "tests": 20, "durationMs": 12, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/probes.test.ts", "tests": 40, "durationMs": 7, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/qwenRepairLoop.test.ts", "tests": 3, "durationMs": 375, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/record.test.ts", "tests": 10, "durationMs": 9, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/refinement.test.ts", "tests": 39, "durationMs": 5, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/registry.test.ts", "tests": 48, "durationMs": 28, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/repair-loop.test.ts", "tests": 10, "durationMs": 9239, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/scenic-adapter.test.ts", "tests": 13, "durationMs": 6967, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/scheduler-feasibility.test.ts", "tests": 15, "durationMs": 12, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/verdict.test.ts", "tests": 31, "durationMs": 5, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/verifai-adapter.test.ts", "tests": 20, "durationMs": 3354, "status": "PASS" },
+        { "file": "packages/assurance/src/__tests__/z3-adapter.test.ts", "tests": 29, "durationMs": 2645, "status": "PASS" }
+      ]
+    }
+  ]
+}

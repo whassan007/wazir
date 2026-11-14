@@ -1,5 +1,5 @@
 Name:           wazir
-Version:        0.3.0
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator
 License:        AGPL-3.0-only
@@ -74,6 +74,9 @@ fi
 %attr(0750, wazir, wazir) %dir %{_localstatedir}/log/wazir
 
 %changelog
+* Sat Nov 14 2026 Wael Hassan <wael@wazir.dev> - 0.3.1-1
+- Complete Qwen Code 1.0 subagent delegation (A038), post-edit LSP diagnostics hook (A053), multi-surface UI cards across Web/Desktop/Android/iOS (A073-A076), live DGX Spark 50-task benchmark (A090), and dual-host formal assurance verification (A094)
+
 * Fri Nov 13 2026 Wael Hassan <wael@wazir.dev> - 0.3.0-1
 - Reconcile Qwen Code 1.0 core transplant, Governed Harness2, Formal Assurance, FS5 Meta-Harness, and v0.3.0 cross-platform release
 

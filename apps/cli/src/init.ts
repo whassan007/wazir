@@ -47,6 +47,7 @@ function discoverCpu(): string {
 
 function createDefaultConfig(): WazirConfig {
   return {
+    mlxUrl: 'http://127.0.0.1:8080/v1',
     ollamaUrl: 'http://localhost:11434',
     lmstudioUrl: 'http://localhost:1234/v1',
     modelContext: {},
@@ -140,12 +141,14 @@ export async function init(engine: RookEngine, options: InitOptions = {}): Promi
     const existingRuntime = engine.runtimes.get(discovered.id);
     
     if (!existingRuntime || options.force) {
-      const runtimeType: 'ollama' | 'lmstudio' | 'other' =
-        discovered.id === 'ollama'
-          ? 'ollama'
-          : discovered.id === 'lmstudio'
-            ? 'lmstudio'
-            : 'other';
+      const runtimeType: 'mlx' | 'ollama' | 'lmstudio' | 'other' =
+        discovered.id === 'mlx'
+          ? 'mlx'
+          : discovered.id === 'ollama'
+            ? 'ollama'
+            : discovered.id === 'lmstudio'
+              ? 'lmstudio'
+              : 'other';
       
       engine.runtimes.register({
         id: discovered.id,
@@ -217,7 +220,14 @@ export async function init(engine: RookEngine, options: InitOptions = {}): Promi
             reasoning: model.reasoning ?? false,
             quantization: model.quantization,
             memory: estimateModelMemory(model.parameters, model.id, model.quantization),
-            runtimeCompatibility: discovered.id === 'ollama' ? ['ollama'] : discovered.id === 'lmstudio' ? ['lmstudio'] : 'any',
+            runtimeCompatibility:
+              discovered.id === 'mlx'
+                ? ['mlx']
+                : discovered.id === 'ollama'
+                  ? ['ollama']
+                  : discovered.id === 'lmstudio'
+                    ? ['lmstudio']
+                    : 'any',
             local: true,
             createdAt: new Date(),
             updatedAt: new Date(),

@@ -127,6 +127,7 @@ export class ClusterHarness {
     });
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      WAZIR_MLX_URL: 'http://127.0.0.1:1/v1',
       ROOK_OLLAMA_URL: this.simulated.baseUrl,
       ROOK_LMSTUDIO_URL: 'http://127.0.0.1:1/v1',
       PORT: String(this.port),
@@ -262,6 +263,7 @@ export class ClusterHarness {
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      WAZIR_MLX_URL: 'http://127.0.0.1:54328/v1',
       ROOK_OLLAMA_URL: this.simulated.baseUrl,
       ROOK_LMSTUDIO_URL: 'http://127.0.0.1:54329/v1', // unreachable fallback
       WAZIR_REGISTRATION_TOKEN: regToken,

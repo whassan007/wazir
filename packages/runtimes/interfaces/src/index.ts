@@ -524,7 +524,7 @@ export interface ResourceEstimate {
  */
 export interface RuntimeAdapter {
   readonly id: string;
-  readonly type: 'ollama' | 'lmstudio' | 'openai-compatible' | 'llama-cpp' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'other';
+  readonly type: 'mlx' | 'ollama' | 'lmstudio' | 'openai-compatible' | 'llama-cpp' | 'anthropic' | 'openai' | 'google' | 'nvidia' | 'other';
 
   discover(): Promise<RuntimeInfo>;
   healthCheck(): Promise<HealthStatus>;

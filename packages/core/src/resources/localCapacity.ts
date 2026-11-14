@@ -69,7 +69,7 @@ async function getJson(url: string): Promise<unknown> {
   return res.json();
 }
 
-export interface LocalEndpoint { runtimeId: string; kind: 'lmstudio' | 'ollama' | 'vllm' | 'openai-compatible'; baseUrl: string }
+export interface LocalEndpoint { runtimeId: string; kind: 'mlx' | 'lmstudio' | 'ollama' | 'vllm' | 'openai-compatible'; baseUrl: string }
 
 /** Probes a local inference server for loaded models (and vLLM scheduler metrics). */
 export async function probeEndpoint(e: LocalEndpoint): Promise<LocalCapacityReport['runtimes'][number]> {

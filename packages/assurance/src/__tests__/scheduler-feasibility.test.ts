@@ -7,7 +7,7 @@ import {
   PolicyEngine,
   SchedulingError,
   type Task,
-} from '../../../core/src/index';
+} from '@wazir/core';
 import {
   createScheduler,
   scheduleToolHost,
@@ -16,7 +16,7 @@ import {
   isDgxClassComputer,
   isHeavyVerificationTask,
   extractRequiredToolCapabilities,
-} from '../../../scheduler/src/index';
+} from '@wazir/scheduler';
 import {
   FORMAL_TOOL_CAPABILITIES,
   advertiseHostToolCapabilities,

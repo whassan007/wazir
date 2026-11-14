@@ -255,4 +255,65 @@ final class WazirControllerApiTests: XCTestCase {
         XCTAssertEqual(lastPath(), "/api/v1/mobile/push/unregister")
         XCTAssertEqual(StubURLProtocol.recorded.last?.httpMethod, "POST")
     }
+
+    func testQwenMultiEditAndComposeStreamCardsDecodeCleanly() throws {
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
+
+        // Test MobileStreamEvent with tool.batch_started
+        let batchStartedJson = """
+        {
+            "type": "tool.batch_started",
+            "payload": {
+                "batchSize": 3,
+                "parallel": true
+            }
+        }
+        """
+        let batchStartedData = batchStartedJson.data(using: .utf8)!
+        let batchEvent = try decoder.decode(MobileStreamEvent.self, from: batchStartedData)
+        XCTAssertEqual(batchEvent.isToolBatch, true)
+        XCTAssertEqual(batchEvent.batchSize, 3)
+        XCTAssertEqual(batchEvent.isParallelBatch, true)
+
+        // Test MobileStreamEvent with search.composed
+        let composedJson = """
+        {
+            "type": "search.composed",
+            "payload": {
+                "verdictClassification": "VERIFIED",
+                "sourceCandidateIds": ["c1", "c2"]
+            }
+        }
+        """
+        let composedData = composedJson.data(using: .utf8)!
+        let composeEvent = try decoder.decode(MobileStreamEvent.self, from: composedData)
+        XCTAssertEqual(composeEvent.isComposeSynthesis, true)
+        XCTAssertEqual(composeEvent.composeVerdict, "VERIFIED")
+        XCTAssertEqual(composeEvent.composeCandidateIds, ["c1", "c2"])
+
+        // Test MobileApprovalRecord with multi_edit
+        let approvalJson = """
+        {
+            "tool": "multi_edit",
+            "redactedArguments": {
+                "path": "src/main.ts",
+                "edits": [
+                    {"oldString": "x", "newString": "y"},
+                    {"oldString": "p", "newString": "q"}
+                ]
+            }
+        }
+        """
+        let approvalData = approvalJson.data(using: .utf8)!
+        let approvalRecord = try decoder.decode(MobileApprovalRecord.self, from: approvalData)
+        XCTAssertEqual(approvalRecord.multiEditHunkCount, 2)
+        XCTAssertEqual(approvalRecord.multiEditPreviews.count, 2)
+
+        // Round-trip test
+        let encodedData = try encoder.encode(approvalRecord)
+        let decodedAgain = try decoder.decode(MobileApprovalRecord.self, from: encodedData)
+        XCTAssertEqual(decodedAgain.multiEditHunkCount, 2)
+        XCTAssertEqual(decodedAgain.multiEditPreviews.count, 2)
+    }
 }

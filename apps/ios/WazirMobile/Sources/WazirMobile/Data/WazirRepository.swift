@@ -76,7 +76,7 @@ final class WazirRepository {
         let profile = ControllerProfile(
             id: controllerId, name: controllerName, baseUrl: trimmedUrl, deviceId: issuedDeviceId,
             scopes: scopes, tlsCertFingerprint: tlsCertFingerprint,
-            controllerVersion: controllerMeta?.version ?? "0.1.68", apiVersion: controllerMeta?.apiVersion ?? "1.0.0",
+            controllerVersion: controllerMeta?.version ?? "0.3.1", apiVersion: controllerMeta?.apiVersion ?? "1.0.0",
             pairedAt: nowMs, lastConnectedAt: nowMs
         )
         store.upsertController(profile)

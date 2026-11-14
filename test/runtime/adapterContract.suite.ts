@@ -5,7 +5,7 @@ import { executeRequest } from '@wazir/workers';
 export interface ContractSuiteOptions {
   name: string;
   createAdapter: () => Promise<RuntimeAdapter> | RuntimeAdapter;
-  expectedType: 'ollama' | 'lmstudio' | 'openai-compatible' | 'other';
+  expectedType: 'mlx' | 'ollama' | 'lmstudio' | 'openai-compatible' | 'other';
   simulateFailure?: {
     createOfflineAdapter: () => Promise<RuntimeAdapter> | RuntimeAdapter;
     createDisconnectingAdapter?: () => Promise<RuntimeAdapter> | RuntimeAdapter;

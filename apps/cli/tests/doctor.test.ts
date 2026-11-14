@@ -97,7 +97,14 @@ describe('Section 13: wa doctor check-by-check suite', () => {
       expect(check.message).toContain('valid');
     });
 
-    it('reports WARN when neither ollamaUrl nor lmstudioUrl is configured', async () => {
+    it('reports PASS when mlxUrl alone is configured', async () => {
+      const engine = createMockEngine({ config: { mlxUrl: 'http://127.0.0.1:8080/v1' } as any });
+      const check = findCheck(await doctor(engine), 'configuration');
+      expect(check.status).toBe('PASS');
+      expect(check.message).toContain('valid');
+    });
+
+    it('reports WARN when none of mlxUrl, ollamaUrl, or lmstudioUrl is configured', async () => {
       const engine = createMockEngine({ config: {} as any });
       const check = findCheck(await doctor(engine), 'configuration');
       expect(check.status).toBe('WARN');
@@ -125,6 +132,15 @@ describe('Section 13: wa doctor check-by-check suite', () => {
       const check = findCheck(await doctor(engine), 'persistence');
       expect(check.status).toBe('PASS');
       expect(check.message).toContain('/home/user/.wazir/store.json');
+    });
+
+    it('reports PASS when JsonFileStore file property is present', async () => {
+      const engine = createMockEngine({
+        executions: { store: { file: '/home/user/.wazir/wazir.json' } } as any,
+      });
+      const check = findCheck(await doctor(engine), 'persistence');
+      expect(check.status).toBe('PASS');
+      expect(check.message).toContain('/home/user/.wazir/wazir.json');
     });
 
     it('reports PASS when in-memory store is active (store.path absent)', async () => {

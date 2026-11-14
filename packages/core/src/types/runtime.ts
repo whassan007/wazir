@@ -1,4 +1,5 @@
 export type RuntimeType =
+  | 'mlx'
   | 'ollama'
   | 'lmstudio'
   | 'openai-compatible'

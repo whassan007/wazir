@@ -39,9 +39,11 @@ function localEndpoints(engine: DashEngine): LocalEndpoint[] {
   const endpoints: LocalEndpoint[] = [];
   for (const r of engine.runtimes.list()) {
     const url = (r as { url?: string; endpoint?: string }).url ?? (r as { endpoint?: string }).endpoint;
+    if (r.type === 'mlx' && url) endpoints.push({ runtimeId: r.id, kind: 'mlx', baseUrl: url });
     if (r.type === 'lmstudio' && url) endpoints.push({ runtimeId: r.id, kind: 'lmstudio', baseUrl: url });
     if (r.type === 'ollama' && url) endpoints.push({ runtimeId: r.id, kind: 'ollama', baseUrl: url });
   }
+  if (!endpoints.some((e) => e.kind === 'mlx')) endpoints.push({ runtimeId: 'mlx', kind: 'mlx', baseUrl: process.env.WAZIR_MLX_URL ?? 'http://127.0.0.1:8080/v1' });
   if (!endpoints.some((e) => e.kind === 'lmstudio')) endpoints.push({ runtimeId: 'lmstudio', kind: 'lmstudio', baseUrl: process.env.WAZIR_LMSTUDIO_URL ?? 'http://127.0.0.1:1234/v1' });
   if (!endpoints.some((e) => e.kind === 'ollama')) endpoints.push({ runtimeId: 'ollama', kind: 'ollama', baseUrl: process.env.WAZIR_OLLAMA_URL ?? 'http://127.0.0.1:11434' });
   if (process.env.WAZIR_VLLM_URL) endpoints.push({ runtimeId: 'vllm', kind: 'vllm', baseUrl: process.env.WAZIR_VLLM_URL });

@@ -16,7 +16,7 @@ export type TaskType =
 
 export type TaskRole = 'spec-author' | 'implementation' | 'repair' | 'verification';
 
-export type HostClassPreference = 'dgx' | 'any';
+export type HostClassPreference = 'dgx' | 'mac_studio' | 'studio' | 'any';
 
 export type Priority = 'low' | 'normal' | 'high' | 'critical';
 

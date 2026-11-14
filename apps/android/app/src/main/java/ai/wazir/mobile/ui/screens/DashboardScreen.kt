@@ -522,6 +522,24 @@ private fun ActivityEventRow(
                 )
             }
             Spacer(modifier = Modifier.height(6.dp))
+            if (event.isToolBatch) {
+                StatusBadge(
+                    label = if (event.isParallelBatch) "PARALLEL • ${event.batchSize} TOOLS" else "BATCH • ${event.batchSize} TOOLS"
+                )
+            } else if (event.isComposeSynthesis) {
+                StatusBadge(label = "COMPOSE • ${event.composeVerdict ?: "SYNTHESIS"}")
+                if (event.composeCandidateIds.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Probes: ${event.composeCandidateIds.joinToString()}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else if (event.isAgentThinking) {
+                StatusBadge(label = "THINKING")
+            }
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = event.summary,
                 style = MaterialTheme.typography.bodyMedium,

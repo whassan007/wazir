@@ -62,13 +62,34 @@ export interface ProvidersConfig {
 
 export type RoutingConfig = RoutingPolicyConfig;
 
+export interface FleetHostConfig {
+  /** Stable computer identifier in ComputerRegistry (e.g. 'mac_studio', 'dgx_spark'). */
+  id: string;
+  /** Human-readable machine label. */
+  name?: string;
+  type?: 'workstation' | 'server';
+  sshAlias?: string;
+  platform?: string;
+  architecture?: string;
+  cpu?: string;
+  cpuCores?: number;
+  memoryGB?: number;
+  ollamaUrl?: string;
+  lmstudioUrl?: string;
+  mlxUrl?: string;
+}
+
 export interface WazirConfig {
   web?: import('@wazir/core').WebConfig;
   resources?: { memory?: { reservePercent?: number; minimumReserveGiB?: number }; minimumContext?: number; autoContext?: number };
   modelLifecyclePolicy?: import('@wazir/core').PolicyEngineOptions['modelLifecycle'];
   mcp?: { autoConnect?: boolean };
+  mlxUrl?: string;
   ollamaUrl?: string;
   lmstudioUrl?: string;
+  /** Direct local-network / SSH-tunneled fleet hardware hosts (e.g. Mac Studio, DGX Spark)
+   * registered directly into the coordinator's Scheduler and adapter registries. */
+  fleetHosts?: FleetHostConfig[];
   /** Control-plane API base URL. When set, the engine pulls remote computers/runtimes/models
    * into its registries so the Scheduler can place tasks on them, and dispatches non-local
    * tasks through the API's task-pull loop instead of running everything in-process. */
@@ -217,6 +238,9 @@ export function loadConfig(): WazirConfig {
 
   const config: WazirConfig = { ...defaults, modelContext: {}, modelCapabilities: {} };
 
+  const mlxUrl = process.env.WAZIR_MLX_URL;
+  if (mlxUrl) config.mlxUrl = mlxUrl;
+
   const ollamaUrl = process.env.WAZIR_OLLAMA_URL ?? process.env.ROOK_OLLAMA_URL;
   if (process.env.ROOK_OLLAMA_URL && !process.env.WAZIR_OLLAMA_URL) {
     console.warn('[DEPRECATION] ROOK_OLLAMA_URL is deprecated; use WAZIR_OLLAMA_URL.');
@@ -228,6 +252,19 @@ export function loadConfig(): WazirConfig {
     console.warn('[DEPRECATION] ROOK_LMSTUDIO_URL is deprecated; use WAZIR_LMSTUDIO_URL.');
   }
   if (lmstudioUrl) config.lmstudioUrl = lmstudioUrl;
+
+  if (process.env.WAZIR_FLEET_HOSTS) {
+    try {
+      const parsedHosts = JSON.parse(process.env.WAZIR_FLEET_HOSTS) as unknown;
+      if (Array.isArray(parsedHosts)) {
+        config.fleetHosts = parsedHosts.filter(
+          (h): h is FleetHostConfig => Boolean(h && typeof h === 'object' && typeof (h as FleetHostConfig).id === 'string'),
+        );
+      }
+    } catch {
+      // Ignore malformed env JSON; fileConfig.fleetHosts can still populate.
+    }
+  }
 
   const apiUrl = process.env.WAZIR_API_URL ?? process.env.ROOK_API_URL;
   if (process.env.ROOK_API_URL && !process.env.WAZIR_API_URL) {
@@ -273,8 +310,14 @@ export function loadConfig(): WazirConfig {
     config.modelLifecyclePolicy = fileConfig.modelLifecyclePolicy;
     // Environment overrides config.json: `wa init` writes localhost URLs to the file, and
     // the documented container setup relies on WAZIR_*_URL pointing elsewhere.
+    config.mlxUrl = mlxUrl ?? fileConfig.mlxUrl ?? config.mlxUrl;
     config.ollamaUrl = ollamaUrl ?? fileConfig.ollamaUrl ?? config.ollamaUrl;
     config.lmstudioUrl = lmstudioUrl ?? fileConfig.lmstudioUrl ?? config.lmstudioUrl;
+    if (!config.fleetHosts && Array.isArray(fileConfig.fleetHosts)) {
+      config.fleetHosts = fileConfig.fleetHosts.filter(
+        (h): h is FleetHostConfig => Boolean(h && typeof h === 'object' && typeof h.id === 'string' && h.id.trim()),
+      );
+    }
     config.apiUrl = apiUrl ?? fileConfig.apiUrl ?? config.apiUrl;
     config.apiToken = process.env.WAZIR_API_TOKEN ?? fileConfig.apiToken ?? config.apiToken;
     config.registrationToken = process.env.WAZIR_REGISTRATION_TOKEN ?? fileConfig.registrationToken ?? config.registrationToken;

@@ -150,6 +150,18 @@ struct DashboardView: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(event.summary).font(.subheadline)
+                if event.isToolBatch {
+                    StatusBadge(text: event.isParallelBatch ? "parallel · \(event.batchSize) tools" : "batch · \(event.batchSize) tools")
+                } else if event.isComposeSynthesis {
+                    StatusBadge(text: event.composeVerdict ?? "composed")
+                    if !event.composeCandidateIds.isEmpty {
+                        Text("Probes: \(event.composeCandidateIds.joined(separator: ", "))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if event.isAgentThinking {
+                    StatusBadge(text: "thinking")
+                }
                 Text("\(event.type) • \(formatShortTimestamp(event.timestamp))")
                     .font(.caption2)
                     .foregroundStyle(.secondary)

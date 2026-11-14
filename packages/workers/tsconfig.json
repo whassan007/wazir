@@ -8,6 +8,7 @@
     { "path": "../core" },
     { "path": "../shared" },
     { "path": "../runtimes/interfaces" },
+    { "path": "../runtimes/mlx" },
     { "path": "../runtimes/ollama" },
     { "path": "../runtimes/lmstudio" }
   ]

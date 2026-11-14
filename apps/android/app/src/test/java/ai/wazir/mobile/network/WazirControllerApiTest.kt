@@ -2,11 +2,14 @@ package ai.wazir.mobile.network
 
 import ai.wazir.mobile.domain.ControllerProfile
 import ai.wazir.mobile.domain.CreateTaskRequest
+import ai.wazir.mobile.domain.MobileApprovalRecord
+import ai.wazir.mobile.domain.MobileStreamEvent
 import ai.wazir.mobile.domain.PairingRequestPayload
 import ai.wazir.mobile.domain.ResolveApprovalRequest
 import ai.wazir.mobile.security.InMemoryCredentialVault
 import ai.wazir.mobile.security.StoredDeviceCredential
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -400,5 +403,36 @@ class WazirControllerApiTest {
         val unregReq = server.takeRequest()
         assertEquals("/api/v1/mobile/push/unregister", unregReq.path)
         assertEquals("POST", unregReq.method)
+    }
+
+    @Test
+    fun qwenMultiEditAndComposeStreamCardsDecodeCleanly() {
+        val json = Json { ignoreUnknownKeys = true }
+
+        // Test tool.batch_started event
+        val batchStartedJson = """
+            {"type":"tool.batch_started","payload":{"batchSize":3,"parallel":true}}
+        """.trimIndent()
+        val batchEvent = json.decodeFromString<MobileStreamEvent>(batchStartedJson)
+        assertTrue(batchEvent.isToolBatch)
+        assertEquals(3, batchEvent.batchSize)
+        assertTrue(batchEvent.isParallelBatch)
+
+        // Test search.composed event
+        val composedJson = """
+            {"type":"search.composed","payload":{"verdictClassification":"VERIFIED","sourceCandidateIds":["cand-1","cand-2"]}}
+        """.trimIndent()
+        val composedEvent = json.decodeFromString<MobileStreamEvent>(composedJson)
+        assertTrue(composedEvent.isComposeSynthesis)
+        assertEquals("VERIFIED", composedEvent.composeVerdict)
+        assertEquals(listOf("cand-1", "cand-2"), composedEvent.composeCandidateIds)
+
+        // Test MobileApprovalRecord
+        val approvalJson = """
+            {"tool":"multi_edit","redactedArguments":{"path":"src/app.ts","edits":[{"oldString":"a","newString":"b"},{"oldString":"c","newString":"d"}]}}
+        """.trimIndent()
+        val approvalRecord = json.decodeFromString<MobileApprovalRecord>(approvalJson)
+        assertEquals(2, approvalRecord.multiEditHunkCount)
+        assertEquals(2, approvalRecord.multiEditPreviews.size)
     }
 }

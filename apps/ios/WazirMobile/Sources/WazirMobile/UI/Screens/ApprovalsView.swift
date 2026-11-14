@@ -267,6 +267,9 @@ struct ApprovalsView: View {
                 Text("\(approval.tool): \(approval.operation)").font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
                 StatusBadge(text: approval.riskClassification)
+                if approval.multiEditHunkCount > 0 {
+                    StatusBadge(text: "\(approval.multiEditHunkCount) hunks")
+                }
             }
             Text("Task: \(approval.taskTitle ?? approval.taskId ?? "—") • Agent: \(approval.agentId ?? "—")")
                 .font(.caption).foregroundStyle(.secondary)
@@ -276,8 +279,14 @@ struct ApprovalsView: View {
             if !approval.expectedSideEffects.isEmpty {
                 Text(approval.expectedSideEffects).font(.caption2).foregroundStyle(.secondary)
             }
+            if approval.multiEditHunkCount > 0 {
+                ForEach(approval.multiEditPreviews, id: \.self) { preview in
+                    Text(preview).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+                }
+            }
 
             if approval.status == "pending" {
+
                 if approval.requiresBiometric {
                     Label("Biometric confirmation required", systemImage: "faceid").font(.caption2).foregroundStyle(WazirColor.cyan)
                 }

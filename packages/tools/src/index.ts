@@ -2,6 +2,7 @@ export * from './registry.js';
 export * from './editMatcher.js';
 export * from './filesystem.js';
 export * from './multiEdit.js';
+export * from './lspDiagnosticsHook.js';
 export * from './readManyFiles.js';
 export * from './todoTool.js';
 export * from './search.js';

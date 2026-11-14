@@ -316,6 +316,10 @@ export class JsonFileStore implements KeyValueStore {
     this.lockFile = `${file}.lock`;
   }
 
+  get path(): string {
+    return this.file;
+  }
+
   private ensureKeyRevived(data: Map<string, unknown>, key: string): unknown {
     if (!data.has(key)) return undefined;
     if (data === this.data && this.revivedKeys.has(key)) {

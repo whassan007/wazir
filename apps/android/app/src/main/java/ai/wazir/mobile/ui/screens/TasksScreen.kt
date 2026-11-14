@@ -655,7 +655,23 @@ fun TaskDetailScreen(
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.Bold,
                                     )
-                                    StatusBadge(label = call.status)
+                                    Row {
+                                        StatusBadge(label = call.status)
+                                        if (call.multiEditHunkCount > 0) {
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            StatusBadge(label = "${call.multiEditHunkCount} HUNKS")
+                                        }
+                                    }
+                                }
+                                if (call.multiEditPreviews.isNotEmpty()) {
+                                    call.multiEditPreviews.forEach { preview ->
+                                        Text(
+                                            text = preview,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
                                 Text(
                                     text = "Args: ${call.input}",

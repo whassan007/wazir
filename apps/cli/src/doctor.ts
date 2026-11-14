@@ -24,7 +24,7 @@ function checkConfig(engine: RookEngine): DoctorCheck {
   try {
     const config = engine.config;
     
-    if (!config.ollamaUrl && !config.lmstudioUrl) {
+    if (!config.ollamaUrl && !config.lmstudioUrl && !config.mlxUrl) {
       return { name: 'configuration', status: 'WARN', message: 'no runtimes configured' };
     }
     
@@ -41,7 +41,8 @@ function checkConfig(engine: RookEngine): DoctorCheck {
 
 function checkPersistence(engine: RookEngine): DoctorCheck {
   try {
-    const storePath = (engine as any).executions?.store?.path;
+    const store = (engine as any).executions?.store ?? engine.store;
+    const storePath = store?.path ?? store?.file;
     
     if (!storePath) {
       return { name: 'persistence', status: 'PASS', message: 'in-memory store active' };
@@ -194,6 +195,9 @@ async function checkHostedProviders(engine: RookEngine): Promise<DoctorCheck> {
     }
 
     const results = await Promise.all(authenticated.map(async ([id, adapter]) => [id, await adapter.healthCheck()] as const));
+    for (const [id, h] of results) {
+      engine.runtimes?.update?.(id, { health: h.status });
+    }
     const healthy = results.filter(([, h]) => h.status === 'healthy');
 
     return {
@@ -410,9 +414,11 @@ function checkRuntimeModelHealth(engine: RookEngine): DoctorCheck {
     return {
       name: 'runtime & model health',
       status: errors.length ? 'FAIL' : warnings.length ? 'WARN' : 'PASS',
-      message: report.diagnostics.length
+      message: errors.length || warnings.length
         ? `${errors.length} error(s), ${warnings.length} warning(s); run \`wa models health --detail\``
-        : 'no problems classified',
+        : report.diagnostics.length
+          ? `healthy (${report.diagnostics.length} non-fatal advisory note(s))`
+          : 'no problems classified',
       details,
     };
   } catch (error) {
@@ -457,7 +463,7 @@ function checkLocalContextWindow(engine: RookEngine): DoctorCheck {
   try {
     const models = engine.models?.list?.() ?? [];
     const localModels = models.filter(
-      (m) => !m.embedding && (m.local === true || m.provider === 'ollama' || m.provider === 'lmstudio'),
+      (m) => !m.embedding && (m.local === true || m.provider === 'mlx' || m.provider === 'ollama' || m.provider === 'lmstudio'),
     );
     if (localModels.length === 0) {
       return {
@@ -581,10 +587,10 @@ export function doctorCommand(options: { json?: boolean } = {}): Promise<{ code:
 
       const report = await doctor(engine);
       if (options.json) {
-        const hasIssues = report.summary.fail > 0 || report.summary.warn > 0;
+        const hasFailures = report.summary.fail > 0;
         const output = JSON.stringify({ ...report, health: collectHealthReport(engine) }, null, 2);
-        await finish?.(hasIssues ? 'failed' : 'success', { stdout: output, exitCode: hasIssues ? 1 : 0 });
-        resolve({ code: hasIssues ? 1 : 0, output });
+        await finish?.(hasFailures ? 'failed' : 'success', { stdout: output, exitCode: hasFailures ? 1 : 0 });
+        resolve({ code: hasFailures ? 1 : 0, output });
         return;
       }
     
@@ -640,10 +646,10 @@ export function doctorCommand(options: { json?: boolean } = {}): Promise<{ code:
       lines.push(`  ${color.gray(`• ${report.summary.unavailable} unavailable`)}`);
     }
     
-    const hasIssues = report.summary.fail > 0 || report.summary.warn > 0;
+    const hasFailures = report.summary.fail > 0;
     
-    await finish?.(hasIssues ? 'failed' : 'success', { stdout: lines.join('\n'), exitCode: hasIssues ? 1 : 0 });
-    resolve({ code: hasIssues ? 1 : 0, output: lines.join('\n') });
+    await finish?.(hasFailures ? 'failed' : 'success', { stdout: lines.join('\n'), exitCode: hasFailures ? 1 : 0 });
+    resolve({ code: hasFailures ? 1 : 0, output: lines.join('\n') });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await finish?.('failed', { stdout: color.red(`doctor failed: ${message}`), exitCode: 2 });

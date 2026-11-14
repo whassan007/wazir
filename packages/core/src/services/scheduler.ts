@@ -943,15 +943,43 @@ export class Scheduler {
     return loaded.length ? 'reload' : 'load';
   }
 
-  /** Runtime of the instance a model would run on: a ready instance first. */
+  /** Canonical runtime priority rank: Gemini (`google`) -> `mlx_lm.server` (`mlx`) -> `ollama` -> `lmstudio`. */
+  private runtimePriorityRank(runtimeId: string): number {
+    switch (runtimeId) {
+      case 'google':
+        return 1;
+      case 'mlx':
+        return 2;
+      case 'ollama':
+        return 3;
+      case 'lmstudio':
+        return 4;
+      default:
+        return 5;
+    }
+  }
+
+  /** Runtime of the instance a model would run on: prioritize `google` / `mlx` among healthy instances, else ready/loaded first. */
   private preferredRuntime(modelId: string): string {
-    const instances = this.deps.models.instancesOf(modelId);
+    const instances = [...this.deps.models.instancesOf(modelId)].sort(
+      (a, b) => this.runtimePriorityRank(a.runtimeId) - this.runtimePriorityRank(b.runtimeId),
+    );
+    const healthyMlxOrGoogle = instances.find(
+      (i) => (i.runtimeId === 'google' || i.runtimeId === 'mlx') && i.health !== 'unavailable',
+    );
+    if (healthyMlxOrGoogle) return healthyMlxOrGoogle.runtimeId;
     return (instances.find((i) => i.state === 'READY') ?? instances.find((i) => i.loaded) ?? instances[0])?.runtimeId ?? 'unknown';
   }
 
-  /** Worker/computer of the instance a model would run on: a ready instance first. */
+  /** Worker/computer of the instance a model would run on: matching preferredRuntime ordering. */
   private preferredWorker(modelId: string): string | undefined {
-    const instances = this.deps.models.instancesOf(modelId);
+    const instances = [...this.deps.models.instancesOf(modelId)].sort(
+      (a, b) => this.runtimePriorityRank(a.runtimeId) - this.runtimePriorityRank(b.runtimeId),
+    );
+    const healthyMlxOrGoogle = instances.find(
+      (i) => (i.runtimeId === 'google' || i.runtimeId === 'mlx') && i.health !== 'unavailable',
+    );
+    if (healthyMlxOrGoogle) return healthyMlxOrGoogle.computerId;
     return (instances.find((i) => i.state === 'READY') ?? instances.find((i) => i.loaded) ?? instances[0])?.computerId;
   }
 
@@ -1273,6 +1301,17 @@ export class Scheduler {
       if (record.local) score += 15;
     }
 
+    if (routing.mode !== 'PROVIDER_ONLY' && !routing.defaultModel) {
+      const prefRuntime = this.preferredRuntime(record.id);
+      if (prefRuntime === 'google' && routing.intelligentMode !== 'LOCAL_FIRST') {
+        score += 110;
+        reasons.push("preferred hosted runtime 'google' (Gemini) prioritized ahead of local runtimes (+110)");
+      } else if (prefRuntime === 'mlx') {
+        score += 65;
+        reasons.push("preferred local runtime 'mlx' (mlx_lm.server) prioritized ahead of lmstudio (+65)");
+      }
+    }
+
     // Empirical Model Intelligence Profile integration
     if (this.deps.modelIntelligence && classification) {
       const instances = this.deps.models.instancesOf(record.id);
@@ -1418,10 +1457,17 @@ export class Scheduler {
     // otherwise every hosted instance would be wrongly excluded from both
     // preference passes below.
     const isOnline = (i: ModelInstance): boolean => !i.computerId || online.has(i.computerId);
+    const byPriority = [...instances].sort(
+      (a, b) => this.runtimePriorityRank(a.runtimeId) - this.runtimePriorityRank(b.runtimeId),
+    );
+    const preferredMlxOrGoogle = byPriority.find(
+      (i) => (i.runtimeId === 'google' || i.runtimeId === 'mlx') && i.health !== 'unavailable' && isOnline(i),
+    );
     const instance =
-      instances.find((i) => i.loaded && i.health === 'healthy' && isOnline(i)) ??
-      instances.find((i) => i.health !== 'unavailable' && isOnline(i)) ??
-      instances[0];
+      preferredMlxOrGoogle ??
+      byPriority.find((i) => i.loaded && i.health === 'healthy' && isOnline(i)) ??
+      byPriority.find((i) => i.health !== 'unavailable' && isOnline(i)) ??
+      byPriority[0];
 
     return instance;
   }
@@ -1750,6 +1796,11 @@ export class Scheduler {
         reasons.push(`runtime '${runtime.id}' is healthy`);
       }
 
+      if (instance.runtimeId === 'mlx') {
+        score += 3.0;
+        reasons.push("preferred local MLX runtime ('mlx') prioritized ahead of lmstudio (+3.0)");
+      }
+
       if (computer.health === 'degraded') {
         score -= 1;
         reasons.push('computer reports degraded health');
@@ -1811,7 +1862,10 @@ export class Scheduler {
     }
 
     placements.sort(
-      (a, b) => b.score - a.score || (a.computer?.id ?? a.instance.runtimeId).localeCompare(b.computer?.id ?? b.instance.runtimeId),
+      (a, b) =>
+        b.score - a.score ||
+        this.runtimePriorityRank(a.instance.runtimeId) - this.runtimePriorityRank(b.instance.runtimeId) ||
+        (a.computer?.id ?? a.instance.runtimeId).localeCompare(b.computer?.id ?? b.instance.runtimeId),
     );
     const best = placements[0];
 

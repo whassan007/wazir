@@ -144,4 +144,6 @@ export interface HealthThresholds {
   memoryCriticalFraction: number;
   /** Only this many trailing inference outcomes are considered "recent". */
   recentWindow: number;
+  /** Max age in ms for a failed inference outcome to remain an active error diagnostic. */
+  inferenceFailureMaxAgeMs: number;
 }

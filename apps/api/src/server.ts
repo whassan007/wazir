@@ -24,6 +24,7 @@ import {
   type WorkerEventType,
 } from '@wazir/core';
 import { currentLoad, discoverHardware, discoverRuntimes, type DiscoveredRuntime } from '@wazir/workers';
+import { createMLXAdapter, MLX_DEFAULT_BASE_URL } from '@wazir/runtimes-mlx';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import { createNvidiaAdapter } from '@wazir/runtimes-nvidia';
@@ -459,6 +460,7 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
     baseURL: process.env.WAZIR_NVIDIA_BASE_URL ?? 'https://integrate.api.nvidia.com/v1',
   });
   const adapters = [
+    createMLXAdapter(process.env.WAZIR_MLX_URL ?? MLX_DEFAULT_BASE_URL),
     createOllamaAdapter(process.env.WAZIR_OLLAMA_URL ?? 'http://localhost:11434'),
     createLMStudioAdapter(process.env.WAZIR_LMSTUDIO_URL ?? 'http://localhost:1234/v1'),
     ...(nvidiaEnabled ? [nvidiaAdapter] : []),
@@ -484,9 +486,19 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
 
   for (const discoveredRuntime of discovered) {
     const isHosted = discoveredRuntime.id === 'nvidia';
+    const runtimeType: RuntimeType =
+      discoveredRuntime.id === 'mlx'
+        ? 'mlx'
+        : discoveredRuntime.id === 'ollama'
+          ? 'ollama'
+          : discoveredRuntime.id === 'lmstudio'
+            ? 'lmstudio'
+            : discoveredRuntime.id === 'nvidia'
+              ? 'nvidia'
+              : 'other';
     runtimes.register({
       id: discoveredRuntime.id,
-      type: discoveredRuntime.id === 'ollama' ? 'ollama' : discoveredRuntime.id === 'lmstudio' ? 'lmstudio' : discoveredRuntime.id === 'nvidia' ? 'nvidia' : 'other',
+      type: runtimeType,
       name: discoveredRuntime.info.name,
       version: discoveredRuntime.info.version,
       url: discoveredRuntime.info.url,
@@ -497,22 +509,24 @@ export async function createApiState(options: ApiStateOptions = {}): Promise<Api
 
     if (discoveredRuntime.health !== 'unavailable') {
       for (const discoveredModel of discoveredRuntime.models) {
+         const prevModel = models.get(discoveredModel.id);
+         const prevCompat = Array.isArray(prevModel?.runtimeCompatibility) ? prevModel.runtimeCompatibility : [];
          models.register({
            id: discoveredModel.id,
-           name: discoveredModel.name ?? discoveredModel.id,
-           provider: discoveredRuntime.id,
-           family: discoveredModel.family as ModelRecord['family'] ?? 'other',
-           contextMax: discoveredModel.contextWindow ?? 32768,
-           capabilities: (discoveredModel.capabilities ?? ['generalChat']) as ModelCapability[],
-           toolCalling: discoveredModel.toolCalling ?? false,
-           structuredOutput: discoveredModel.structuredOutput ?? false,
-           vision: discoveredModel.vision ?? false,
-           audio: discoveredModel.audio ?? false,
-           embedding: discoveredModel.embedding ?? false,
-           reasoning: discoveredModel.reasoning ?? false,
-           runtimeCompatibility: [discoveredRuntime.id as RuntimeType],
+           name: discoveredModel.name ?? prevModel?.name ?? discoveredModel.id,
+           provider: prevModel?.local ? prevModel.provider : discoveredRuntime.id,
+           family: discoveredModel.family as ModelRecord['family'] ?? prevModel?.family ?? 'other',
+           contextMax: Math.max(discoveredModel.contextWindow ?? 32768, prevModel?.contextMax ?? 0),
+           capabilities: (discoveredModel.capabilities ?? prevModel?.capabilities ?? ['generalChat']) as ModelCapability[],
+           toolCalling: Boolean(discoveredModel.toolCalling || prevModel?.toolCalling),
+           structuredOutput: Boolean(discoveredModel.structuredOutput || prevModel?.structuredOutput),
+           vision: Boolean(discoveredModel.vision || prevModel?.vision),
+           audio: Boolean(discoveredModel.audio || prevModel?.audio),
+           embedding: Boolean(discoveredModel.embedding || prevModel?.embedding),
+           reasoning: Boolean(discoveredModel.reasoning || prevModel?.reasoning),
+           runtimeCompatibility: [...new Set([...prevCompat, runtimeType])],
            local: !isHosted,
-           createdAt: new Date(),
+           createdAt: prevModel?.createdAt ?? new Date(),
            updatedAt: new Date(),
          });
          // Without an instance, the Scheduler can never place this model on

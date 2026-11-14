@@ -5,6 +5,7 @@ import type {
   RuntimeCapabilities,
   RuntimeInfo,
 } from '@wazir/runtimes-interfaces';
+import { createMLXAdapter, MLX_DEFAULT_BASE_URL } from '@wazir/runtimes-mlx';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 
@@ -21,6 +22,7 @@ export interface DiscoveredRuntime {
 }
 
 export interface AdapterConfig {
+  mlxUrl?: string;
   ollamaUrl?: string;
   lmstudioUrl?: string;
   /** Extra adapters (e.g. remote runtimes) are appended as-is. */
@@ -28,9 +30,11 @@ export interface AdapterConfig {
 }
 
 export function defaultAdapters(config: AdapterConfig = {}): RuntimeAdapter[] {
-  const ollamaUrl = config.ollamaUrl ?? process.env.ROOK_OLLAMA_URL ?? 'http://localhost:11434';
-  const lmstudioUrl = config.lmstudioUrl ?? process.env.ROOK_LMSTUDIO_URL ?? 'http://localhost:1234/v1';
+  const mlxUrl = config.mlxUrl ?? process.env.WAZIR_MLX_URL ?? MLX_DEFAULT_BASE_URL;
+  const ollamaUrl = config.ollamaUrl ?? process.env.WAZIR_OLLAMA_URL ?? process.env.ROOK_OLLAMA_URL ?? 'http://localhost:11434';
+  const lmstudioUrl = config.lmstudioUrl ?? process.env.WAZIR_LMSTUDIO_URL ?? process.env.ROOK_LMSTUDIO_URL ?? 'http://localhost:1234/v1';
   return [
+    createMLXAdapter(mlxUrl),
     createOllamaAdapter(ollamaUrl),
     createLMStudioAdapter(lmstudioUrl),
     ...(config.extra ?? []),
@@ -93,5 +97,6 @@ export async function discoverRuntimes(adapters: RuntimeAdapter[]): Promise<Disc
     }),
   );
 
-  return results.sort((a, b) => a.id.localeCompare(b.id));
+  // Preserve caller adapter priority order (e.g. mlx -> ollama -> lmstudio).
+  return results;
 }

@@ -278,12 +278,20 @@ fun ApprovalCenterScreen(
                             ) {
                                 Text("${a.tool}: ${a.operation}", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                                 StatusBadge(a.riskClassification)
+                                if (a.multiEditHunkCount > 0) {
+                                    StatusBadge("${a.multiEditHunkCount} HUNKS")
+                                }
                             }
                             Text("Task: ${a.taskTitle ?: a.taskId ?: "—"} • Agent: ${a.agentId ?: "—"}", style = MaterialTheme.typography.bodySmall)
                             Text("Rule: ${a.rule}", style = MaterialTheme.typography.bodySmall)
                             a.reasons.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
                             if (a.expectedSideEffects.isNotBlank()) Text("Side effects: ${a.expectedSideEffects}", style = MaterialTheme.typography.bodySmall)
                             if (a.relevantResources.isNotEmpty()) Text("Resources: ${a.relevantResources.joinToString()}", style = MaterialTheme.typography.bodySmall)
+                            if (a.multiEditPreviews.isNotEmpty()) {
+                                a.multiEditPreviews.forEach { preview ->
+                                    Text(preview, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
                             Text("Arguments (redacted): ${a.redactedArguments}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
                             if (a.status == "pending" && a.expiresAt > now) {
                                 val secs = ((a.expiresAt - now) / 1000).coerceAtLeast(0)

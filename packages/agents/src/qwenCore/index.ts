@@ -7,3 +7,4 @@ export * from './loopDetectionService.js';
 export * from './chatCompressionService.js';
 export * from './proportionalVerify.js';
 export * from './wazirQwenAgent.js';
+export * from './subagentTool.js';

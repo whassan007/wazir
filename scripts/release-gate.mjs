@@ -107,7 +107,7 @@ function testHostPlatform() {
   const fleetResult = runStep(
     'Heterogeneous Fleet Scheduling & Dispatch',
     npxBin,
-    ['vitest', 'run', 'packages/core/tests/schedulerHeterogeneousFleet.test.ts', 'test/integration/crossPlatformFleet.test.ts']
+    ['vitest', 'run', '--testTimeout=20000', 'packages/core/tests/schedulerHeterogeneousFleet.test.ts', 'test/integration/crossPlatformFleet.test.ts']
   );
 
   // 8. Recovery

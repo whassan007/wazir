@@ -35,6 +35,8 @@ import { CoreToolScheduler } from './coreToolScheduler.js';
 import { LoopDetectionService } from './loopDetectionService.js';
 import { ChatCompressionService } from './chatCompressionService.js';
 import { runProportionalVerification } from './proportionalVerify.js';
+import { SubagentsLedger } from '@wazir/core';
+import { createQwenSubagentExecutor } from './subagentTool.js';
 
 export class WazirQwenAgent implements AgentAdapter {
   readonly descriptor: AgentDescriptor;
@@ -53,8 +55,9 @@ export class WazirQwenAgent implements AgentAdapter {
   private readonly toolRepeatLimit: number;
   private readonly contextCompactionRatio: number;
   private readonly systemPromptExtra?: string;
+  readonly subagentsLedger: SubagentsLedger;
 
-  constructor(options: CodingAgentOptions = {}) {
+  constructor(options: CodingAgentOptions & { subagentsLedger?: SubagentsLedger } = {}) {
     this.maxTurns = options.maxTurns ?? 30;
     this.maxRepairCycles = options.maxRepairCycles ?? 3;
     this.maxTokensPerTurn = options.maxTokensPerTurn ?? 8192;
@@ -69,6 +72,7 @@ export class WazirQwenAgent implements AgentAdapter {
     this.toolRepeatLimit = options.toolRepeatLimit ?? 3;
     this.contextCompactionRatio = options.contextCompactionRatio ?? 0.7;
     this.systemPromptExtra = options.systemPromptExtra;
+    this.subagentsLedger = options.subagentsLedger ?? new SubagentsLedger();
 
     this.descriptor = {
       name: 'wazir-coding',
@@ -559,10 +563,60 @@ export class WazirQwenAgent implements AgentAdapter {
         if (effectiveContent) {
           yield { kind: 'message', content: effectiveContent };
         }
+        const inProcessSubagent = createQwenSubagentExecutor({
+          ledger: this.subagentsLedger,
+          parentModelId: currentModelId,
+          parentProjectRoot: request.projectRoot,
+          parentRuntime: runtime,
+          currentDepth: subagentDepth,
+          isCancelled: request.isCancelled,
+        });
+        const scheduledRuntime: AgentRuntime = {
+          ...runtime,
+          executeTool: async (toolName, toolInput) => {
+            if (toolName === 'dispatch_subagent') {
+              const started = Date.now();
+              const trackId = 'ext-sub-' + turnsUsed + '-' + totalToolCalls;
+              const desc = String(toolInput.description ?? toolInput.prompt ?? 'subtask');
+              try {
+                const res = await runtime.executeTool(toolName, toolInput);
+                this.subagentsLedger.upsert({
+                  id: trackId,
+                  kind: 'harness',
+                  title: desc.slice(0, 80),
+                  status: 'running',
+                  createdAt: started,
+                  updatedAt: started,
+                  backend: currentModelId,
+                  request: desc,
+                });
+                this.subagentsLedger.upsert({
+                  id: trackId,
+                  kind: 'harness',
+                  title: desc.slice(0, 80),
+                  status: res.ok ? 'completed' : 'failed',
+                  createdAt: started,
+                  updatedAt: Date.now(),
+                  backend: currentModelId,
+                  request: desc,
+                  output: res.output || res.error || '',
+                });
+                return res;
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('must be executed via the runtime harness')) {
+                  return inProcessSubagent(toolInput, { projectRoot: request.projectRoot });
+                }
+                throw err;
+              }
+            }
+            return runtime.executeTool(toolName, toolInput);
+          },
+        };
 
         const batch = await scheduler.scheduleBatch({
           calls: effectiveToolCalls,
-          runtime,
+          runtime: scheduledRuntime,
           availableToolNames,
           remainingToolBudget: Math.max(0, maxToolCalls - totalToolCalls),
           webEvidence,

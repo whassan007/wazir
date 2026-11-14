@@ -69,9 +69,17 @@ struct TaskDetailView: View {
                         HStack {
                             Text(call.tool).font(.subheadline.weight(.semibold))
                             StatusBadge(text: call.status)
+                            if call.multiEditHunkCount > 0 {
+                                StatusBadge(text: "\(call.multiEditHunkCount) hunks")
+                            }
                         }
                         if let output = call.output { Text(output).font(.caption).lineLimit(3) }
                         if let error = call.error { Text(error).font(.caption).foregroundStyle(WazirColor.crimson) }
+                        if call.multiEditHunkCount > 0 {
+                            ForEach(call.multiEditPreviews, id: \.self) { preview in
+                                Text(preview).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+                            }
+                        }
                     }
                     .padding(8)
                     .background(.quaternary.opacity(0.15))

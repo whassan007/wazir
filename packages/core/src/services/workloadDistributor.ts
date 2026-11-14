@@ -2,6 +2,10 @@ import type { RoutingMode, ExecutionPreferences } from '../types/task.js';
 
 export type WorkloadPoolKind =
   | 'local'
+  | 'mac_studio'
+  | 'studio'
+  | 'dgx_spark'
+  | 'dgx'
   | 'antigravity'
   | 'codex'
   | 'claude-code'
@@ -99,6 +103,28 @@ export function resolveMatchingExternalAgent(
   if (extSet.has(key)) return key;
   if (extSet.has(pool)) return pool;
   return undefined;
+}
+
+export function resolveMatchingHardwareComputer(
+  pool: string,
+  hardwareComputerIds: readonly string[] | undefined,
+): string | undefined {
+  if (!hardwareComputerIds || hardwareComputerIds.length === 0) return undefined;
+  const key = pool.trim().toLowerCase();
+  if (!key || key === 'local' || key === 'auto') return undefined;
+  if (key === 'mac_studio' || key === 'mac-studio' || key === 'studio') {
+    return hardwareComputerIds.find((id) => {
+      const lower = id.toLowerCase();
+      return lower === 'mac_studio' || lower === 'mac-studio' || lower === 'studio';
+    });
+  }
+  if (key === 'dgx_spark' || key === 'dgx-spark' || key === 'dgx' || key === 'spark') {
+    return hardwareComputerIds.find((id) => {
+      const lower = id.toLowerCase();
+      return lower === 'dgx_spark' || lower === 'dgx-spark' || lower === 'dgx' || lower === 'spark';
+    });
+  }
+  return hardwareComputerIds.find((id) => id.toLowerCase() === key);
 }
 
 export function matchesAgentPool(
@@ -212,6 +238,9 @@ export class WorkloadDistributor {
       if (share.pool === 'local') {
         return available.hasLocalHardware || (available.hardwareComputerIds?.length ?? 0) > 0;
       }
+      if (resolveMatchingHardwareComputer(share.pool, available.hardwareComputerIds)) {
+        return true;
+      }
       if (share.pool === 'auto') {
         return available.hasLocalHardware || (!forbidExternal && extSet.size > 0);
       }
@@ -302,6 +331,18 @@ export class WorkloadDistributor {
   ): AllocatedWorkloadTarget {
     const sharePct = Math.round((chosen.weight / Math.max(1, totalWeight)) * 100);
     const computers = available.hardwareComputerIds ?? [];
+    const matchedComputerId = resolveMatchingHardwareComputer(
+      chosen.pool,
+      available.hardwareComputerIds,
+    );
+    if (matchedComputerId) {
+      return {
+        pool: chosen.pool,
+        targetComputerId: matchedComputerId,
+        routingMode: available.routingMode ?? 'LOCAL_ONLY',
+        reason: `weighted distribution selected fleet host '${matchedComputerId}' (${sharePct}% share)`,
+      };
+    }
     if (chosen.pool === 'local') {
       const targetComputerId =
         computers.length > 1 ? computers[this.hardwareCursor++ % computers.length] : computers[0];

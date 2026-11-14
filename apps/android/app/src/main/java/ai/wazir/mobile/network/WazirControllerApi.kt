@@ -15,6 +15,9 @@ import ai.wazir.mobile.domain.ModelsApiResponse
 import ai.wazir.mobile.domain.PairingCompleteResponse
 import ai.wazir.mobile.domain.PairingRequestPayload
 import ai.wazir.mobile.domain.PairingRequestResponse
+import ai.wazir.mobile.domain.PushRelayStatusResponse
+import ai.wazir.mobile.domain.RegisterPushRelayRequest
+import ai.wazir.mobile.domain.RegisterPushRelayResponse
 import ai.wazir.mobile.domain.ResolveApprovalRequest
 import ai.wazir.mobile.domain.ResolveApprovalResponse
 import ai.wazir.mobile.domain.ResourceBudgetSnapshot
@@ -26,6 +29,7 @@ import ai.wazir.mobile.domain.TaskArtifactsResponse
 import ai.wazir.mobile.domain.TaskDetailEnvelope
 import ai.wazir.mobile.domain.TaskDiffReviewResponse
 import ai.wazir.mobile.domain.TaskListResponse
+import ai.wazir.mobile.domain.TestPushWakeupResponse
 import ai.wazir.mobile.domain.TokenRotationResponse
 import ai.wazir.mobile.domain.UpdateAutonomyRequest
 import ai.wazir.mobile.security.CredentialVault

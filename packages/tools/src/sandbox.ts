@@ -152,14 +152,25 @@ function probeSandboxExec(): { ok: boolean; reason?: string } {
   if (process.platform !== 'darwin') return { ok: false, reason: 'sandbox-exec is macOS-only' };
   const bin = onPath('sandbox-exec') ?? (existsSync('/usr/bin/sandbox-exec') ? '/usr/bin/sandbox-exec' : undefined);
   if (!bin) return { ok: false, reason: 'sandbox-exec is not available' };
+  const probeBin = existsSync('/usr/bin/true') ? '/usr/bin/true' : '/bin/sh';
+  const probeArgs = probeBin === '/usr/bin/true' ? [] : ['-c', 'exit 0'];
   const tmp = os.tmpdir();
   const profile = seatbeltProfile({
     projectRoot: tmp,
     cwd: tmp,
-    readOnlyPaths: [path.dirname(process.execPath), path.resolve(path.dirname(process.execPath), '..')],
   });
-  const result = spawnSync(bin, ['-p', profile, process.execPath, '-e', 'process.exit(0)'], { stdio: 'ignore', timeout: 5_000 });
-  return result.status === 0 ? { ok: true } : { ok: false, reason: `sandbox-exec cannot start (exit ${result.status})` };
+  const result = spawnSync(bin, ['-p', profile, probeBin, ...probeArgs], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+    timeout: 5_000,
+  });
+  if (result.status === 0) return { ok: true };
+  const stderr = String(result.stderr ?? '').trim().split('\n')[0];
+  return {
+    ok: false,
+    reason: stderr
+      ? `sandbox-exec cannot start (exit ${result.status}): ${stderr}`
+      : `sandbox-exec cannot start (exit ${result.status})`,
+  };
 }
 
 /** Resolves (once) which sandbox backend this process can actually use. */

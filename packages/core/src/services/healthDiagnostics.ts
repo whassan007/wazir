@@ -30,6 +30,7 @@ export const DEFAULT_HEALTH_THRESHOLDS: HealthThresholds = {
   memoryHighFraction: 0.85,
   memoryCriticalFraction: 0.95,
   recentWindow: 5,
+  inferenceFailureMaxAgeMs: 15 * 60_000,
 };
 
 export interface HealthSnapshotInput {
@@ -65,10 +66,18 @@ function lastOutcome(list: InferenceOutcome[] | undefined): InferenceOutcome | u
   return list && list.length > 0 ? list[list.length - 1] : undefined;
 }
 
-function inferenceState(outcomes: InferenceOutcome[]): InferenceHealthState {
+function isFreshFailure(outcome: InferenceOutcome | undefined, now: Date, maxAgeMs: number): boolean {
+  if (!outcome?.error) return false;
+  const ts = new Date(outcome.at).getTime();
+  if (!Number.isFinite(ts)) return true;
+  return now.getTime() - ts <= maxAgeMs;
+}
+
+function inferenceState(outcomes: InferenceOutcome[], now: Date, maxFailureAgeMs: number): InferenceHealthState {
   const last = lastOutcome(outcomes);
   if (!last) return 'UNKNOWN';
-  return last.error ? 'FAILING' : 'HEALTHY';
+  if (!last.error) return 'HEALTHY';
+  return isFreshFailure(last, now, maxFailureAgeMs) ? 'FAILING' : 'UNKNOWN';
 }
 
 function byTime(a: InferenceOutcome, b: InferenceOutcome): number {
@@ -238,12 +247,12 @@ export function buildHealthReport(input: HealthSnapshotInput): HealthReport {
     }
 
     const last = lastOutcome(outcomes);
-    if (last?.error) {
+    if (isFreshFailure(last, now, t.inferenceFailureMaxAgeMs)) {
       push({
         code: 'INFERENCE_FAILED', domain: 'MODEL', severity: 'error', subject,
         reason: 'the most recent inference request failed',
         evidence: [
-          { label: 'last error', value: last.error, source: 'inference observations', observedAt: last.at },
+          { label: 'last error', value: last!.error!, source: 'inference observations', observedAt: last!.at },
           { label: 'recent failures', value: failures.length, source: 'inference observations' },
           lastOk,
         ],
@@ -252,6 +261,7 @@ export function buildHealthReport(input: HealthSnapshotInput): HealthReport {
   }
 
   // Runtimes
+  const anyRuntimeHealthy = input.runtimes.some((rt) => rt.health === 'healthy');
   const runtimes: RuntimeHealthProjection[] = [];
   for (const r of input.runtimes) {
     const instances = input.instances.filter((i) => i.runtimeId === r.id);
@@ -283,7 +293,7 @@ export function buildHealthReport(input: HealthSnapshotInput): HealthReport {
       loadedModels: [...new Set([...r.loadedModels, ...instances.filter((i) => i.loaded).map((i) => i.modelId)])].sort(),
       queueDepth,
       resourcePressure: (r.computerId && pressureByComputer.get(r.computerId)) || { level: 'UNKNOWN', reservedMemoryBytes: 0 },
-      inference: inferenceState(outcomes),
+      inference: inferenceState(outcomes, now, t.inferenceFailureMaxAgeMs),
       lastSuccessfulInference: [...outcomes].reverse().find((o) => !o.error)?.at,
       lastFailure,
       telemetryStatus,
@@ -294,9 +304,12 @@ export function buildHealthReport(input: HealthSnapshotInput): HealthReport {
     const subject = { kind: 'runtime' as const, id: r.id };
     const before = diagnostics.length;
     if (state === 'UNREACHABLE') {
+      const optionalUnused = anyRuntimeHealthy && instances.length === 0;
       push({
-        code: 'RUNTIME_UNREACHABLE', domain: 'RUNTIME', severity: 'error', subject,
-        reason: `${r.name || r.type} endpoint is not reachable`,
+        code: 'RUNTIME_UNREACHABLE', domain: 'RUNTIME', severity: optionalUnused ? 'info' : 'error', subject,
+        reason: optionalUnused
+          ? `${r.name || r.type} endpoint is not reachable (optional; another runtime is healthy)`
+          : `${r.name || r.type} endpoint is not reachable`,
         evidence: [
           { label: 'runtime health', value: r.health, source: 'RuntimeRegistry' },
           { label: 'endpoint', value: r.url ?? null, source: 'RuntimeRegistry' },

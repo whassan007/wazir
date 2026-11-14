@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 
-const KEYS = ['WAZIR_HOME', 'WAZIR_LMSTUDIO_URL', 'WAZIR_OLLAMA_URL', 'WAZIR_API_URL', 'WAZIR_API_TOKEN', 'WAZIR_REGISTRATION_TOKEN'];
+const KEYS = ['WAZIR_HOME', 'WAZIR_MLX_URL', 'WAZIR_LMSTUDIO_URL', 'WAZIR_OLLAMA_URL', 'WAZIR_API_URL', 'WAZIR_API_TOKEN', 'WAZIR_REGISTRATION_TOKEN'];
 
 describe('config precedence', () => {
   const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
@@ -17,10 +17,11 @@ describe('config precedence', () => {
   it('environment variables override config.json (e.g. containers reaching host runtimes)', () => {
     home = mkdtempSync(path.join(os.tmpdir(), 'wazir-cfg-'));
     writeFileSync(path.join(home, 'config.json'), JSON.stringify({
-      lmstudioUrl: 'http://localhost:1234/v1', ollamaUrl: 'http://localhost:11434',
+      mlxUrl: 'http://127.0.0.1:8080/v1', lmstudioUrl: 'http://localhost:1234/v1', ollamaUrl: 'http://localhost:11434',
       apiUrl: 'http://file-api', apiToken: 'file-token', registrationToken: 'file-reg',
     }));
     process.env.WAZIR_HOME = home;
+    process.env.WAZIR_MLX_URL = 'http://host.docker.internal:8080/v1';
     process.env.WAZIR_LMSTUDIO_URL = 'http://host.docker.internal:1234/v1';
     process.env.WAZIR_OLLAMA_URL = 'http://host.docker.internal:11434';
     process.env.WAZIR_API_URL = 'http://env-api';
@@ -28,6 +29,7 @@ describe('config precedence', () => {
     process.env.WAZIR_REGISTRATION_TOKEN = 'env-reg';
 
     const config = loadConfig();
+    expect(config.mlxUrl).toBe('http://host.docker.internal:8080/v1');
     expect(config.lmstudioUrl).toBe('http://host.docker.internal:1234/v1');
     expect(config.ollamaUrl).toBe('http://host.docker.internal:11434');
     expect(config.apiUrl).toBe('http://env-api');
@@ -37,9 +39,15 @@ describe('config precedence', () => {
 
   it('config.json still applies when the environment does not set a value', () => {
     home = mkdtempSync(path.join(os.tmpdir(), 'wazir-cfg-'));
-    writeFileSync(path.join(home, 'config.json'), JSON.stringify({ lmstudioUrl: 'http://file-lmstudio/v1' }));
+    writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+      mlxUrl: 'http://file-mlx:8080/v1',
+      lmstudioUrl: 'http://file-lmstudio/v1',
+    }));
     process.env.WAZIR_HOME = home;
+    delete process.env.WAZIR_MLX_URL;
     delete process.env.WAZIR_LMSTUDIO_URL;
-    expect(loadConfig().lmstudioUrl).toBe('http://file-lmstudio/v1');
+    const loaded = loadConfig();
+    expect(loaded.mlxUrl).toBe('http://file-mlx:8080/v1');
+    expect(loaded.lmstudioUrl).toBe('http://file-lmstudio/v1');
   });
 });

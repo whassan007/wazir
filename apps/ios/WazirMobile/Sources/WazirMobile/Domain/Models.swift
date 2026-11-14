@@ -9,7 +9,7 @@ struct ControllerProfile: Codable, Identifiable, Equatable {
     var deviceId: String
     var scopes: [String] = ["read", "mutate", "execute"]
     var tlsCertFingerprint: String?
-    var controllerVersion: String = "0.1.68"
+    var controllerVersion: String = "0.3.1"
     var apiVersion: String = "1.0.0"
     var pairedAt: Int64 = Int64(Date().timeIntervalSince1970 * 1000)
     var lastConnectedAt: Int64?
@@ -78,7 +78,7 @@ struct PairedControllerMetadata: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id, default: "")
         name = try c.decode(String.self, forKey: .name, default: "")
-        version = try c.decode(String.self, forKey: .version, default: "0.1.68")
+        version = try c.decode(String.self, forKey: .version, default: "0.3.1")
         apiVersion = try c.decode(String.self, forKey: .apiVersion, default: "1.0.0")
     }
 }
@@ -176,7 +176,7 @@ struct HandshakeResponse: Codable {
         compatible = try c.decode(Bool.self, forKey: .compatible, default: true)
         apiVersion = try c.decode(String.self, forKey: .apiVersion, default: "1.0.0")
         minMobileVersion = try c.decode(String.self, forKey: .minMobileVersion, default: "1.0.0")
-        controllerVersion = try c.decode(String.self, forKey: .controllerVersion, default: "0.1.68")
+        controllerVersion = try c.decode(String.self, forKey: .controllerVersion, default: "0.3.1")
         controllerId = try c.decode(String.self, forKey: .controllerId, default: "local")
         hostname = try c.decode(String.self, forKey: .hostname, default: "localhost")
         principal = try c.decodeIfPresent(HandshakePrincipal.self, forKey: .principal)
@@ -262,7 +262,7 @@ struct DashboardControllerInfo: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id, default: "local")
         hostname = try c.decode(String.self, forKey: .hostname, default: "localhost")
-        version = try c.decode(String.self, forKey: .version, default: "0.1.68")
+        version = try c.decode(String.self, forKey: .version, default: "0.3.1")
         apiVersion = try c.decode(String.self, forKey: .apiVersion, default: "1.0.0")
         timestamp = try c.decode(String.self, forKey: .timestamp, default: "")
     }
@@ -281,11 +281,12 @@ struct MobileStreamEvent: Codable, Identifiable {
     var modelId: String?
     var status: String?
     var summary: String
+    var payload: JSONValue?
 
     var id: String { eventId }
 
     private enum CodingKeys: String, CodingKey {
-        case sequence, eventId, timestamp, type, taskId, executionId, computerId, approvalId, agentId, modelId, status, summary
+        case sequence, eventId, timestamp, type, taskId, executionId, computerId, approvalId, agentId, modelId, status, summary, payload
     }
 
     init(from decoder: Decoder) throws {
@@ -302,6 +303,69 @@ struct MobileStreamEvent: Codable, Identifiable {
         modelId = try c.decodeIfPresent(String.self, forKey: .modelId)
         status = try c.decodeIfPresent(String.self, forKey: .status)
         summary = try c.decode(String.self, forKey: .summary, default: "")
+        payload = try c.decodeIfPresent(JSONValue.self, forKey: .payload)
+    }
+
+    var isToolBatch: Bool {
+        type == "tool.batch_started" || type == "tool.batch_completed"
+    }
+
+    var batchSize: Int {
+        if case .object(let o) = payload {
+            if case .number(let n) = o["batchSize"] {
+                return Int(n)
+            }
+            if case .array(let a) = o["tools"] {
+                return a.count
+            }
+        }
+        return 0
+    }
+
+    var isParallelBatch: Bool {
+        if case .object(let o) = payload,
+           case .bool(let b) = o["parallel"] {
+            return b
+        }
+        return false
+    }
+
+    var isComposeSynthesis: Bool {
+        type == "search.composed"
+    }
+
+    var composeVerdict: String? {
+        if case .object(let o) = payload,
+           case .string(let s) = o["verdictClassification"] {
+            return s
+        }
+        return nil
+    }
+
+    var composeCandidateIds: [String] {
+        if case .object(let o) = payload,
+           case .array(let arr) = o["sourceCandidateIds"] {
+            return arr.compactMap {
+                if case .string(let s) = $0 {
+                    return s
+                } else {
+                    return nil
+                }
+            }
+        }
+        return []
+    }
+
+    var isAgentThinking: Bool {
+        type == "agent.thinking"
+    }
+
+    var thoughtSummary: String? {
+        if case .object(let o) = payload,
+           case .string(let s) = o["thoughtSummary"] {
+            return s
+        }
+        return nil
     }
 }
 
@@ -431,11 +495,12 @@ struct ToolCallRecord: Codable, Identifiable {
     var error: String?
     var durationMs: Int64
     var timestamp: String
+    var input: JSONValue?
 
     var id: String { callId }
 
     private enum CodingKeys: String, CodingKey {
-        case callId, tool, status, output, error, durationMs, timestamp
+        case callId, tool, status, output, error, durationMs, timestamp, input
     }
 
     init(from decoder: Decoder) throws {
@@ -447,6 +512,32 @@ struct ToolCallRecord: Codable, Identifiable {
         error = try c.decodeIfPresent(String.self, forKey: .error)
         durationMs = try c.decode(Int64.self, forKey: .durationMs, default: 0)
         timestamp = try c.decode(String.self, forKey: .timestamp, default: "")
+        input = try c.decodeIfPresent(JSONValue.self, forKey: .input)
+    }
+    
+    var multiEditHunkCount: Int {
+        guard tool == "multi_edit",
+              case .object(let obj) = input,
+              case .array(let edits) = obj["edits"] else { return 0 }
+        return edits.count
+    }
+
+    var multiEditPreviews: [String] {
+        guard tool == "multi_edit",
+              case .object(let obj) = input,
+              case .array(let edits) = obj["edits"] else { return [] }
+        return edits.prefix(4).enumerated().compactMap { idx, edit in
+            guard case .object(let editObj) = edit else { return nil }
+            let oldLine: String = {
+                if case .string(let s) = editObj["oldString"] { return String((s.components(separatedBy: .newlines).first ?? s).prefix(48)) }
+                return ""
+            }()
+            let newLine: String = {
+                if case .string(let s) = editObj["newString"] { return String((s.components(separatedBy: .newlines).first ?? s).prefix(48)) }
+                return ""
+            }()
+            return "Hunk #\(idx + 1): -\(oldLine) -> +\(newLine)"
+        }
     }
 }
 
@@ -682,6 +773,7 @@ struct MobileApprovalRecord: Codable, Identifiable {
     var tool: String
     var operation: String
     var argumentsHash: String
+    var redactedArguments: JSONValue?
     var redactedArgumentsDescription: String
     var relevantResources: [String]
     var riskClassification: String
@@ -713,8 +805,10 @@ struct MobileApprovalRecord: Codable, Identifiable {
         operation = try c.decode(String.self, forKey: .operation, default: "")
         argumentsHash = try c.decode(String.self, forKey: .argumentsHash, default: "")
         if let raw = try c.decodeIfPresent(JSONValue.self, forKey: .redactedArguments) {
+            redactedArguments = raw
             redactedArgumentsDescription = raw.prettyDescription
         } else {
+            redactedArguments = nil
             redactedArgumentsDescription = "{}"
         }
         relevantResources = try c.decode([String].self, forKey: .relevantResources, default: [])
@@ -745,7 +839,11 @@ struct MobileApprovalRecord: Codable, Identifiable {
         try c.encode(tool, forKey: .tool)
         try c.encode(operation, forKey: .operation)
         try c.encode(argumentsHash, forKey: .argumentsHash)
-        try c.encode(redactedArgumentsDescription, forKey: .redactedArguments)
+        if let redactedArguments = redactedArguments {
+            try c.encode(redactedArguments, forKey: .redactedArguments)
+        } else {
+            try c.encode(redactedArgumentsDescription, forKey: .redactedArguments)
+        }
         try c.encode(relevantResources, forKey: .relevantResources)
         try c.encode(riskClassification, forKey: .riskClassification)
         try c.encode(requiresBiometric, forKey: .requiresBiometric)
@@ -758,6 +856,31 @@ struct MobileApprovalRecord: Codable, Identifiable {
         try c.encodeIfPresent(resolvedAt, forKey: .resolvedAt)
         try c.encodeIfPresent(resolvedBy, forKey: .resolvedBy)
         try c.encodeIfPresent(resolutionNote, forKey: .resolutionNote)
+    }
+    
+    var multiEditHunkCount: Int {
+        guard tool == "multi_edit",
+              case .object(let obj) = redactedArguments,
+              case .array(let edits) = obj["edits"] else { return 0 }
+        return edits.count
+    }
+
+    var multiEditPreviews: [String] {
+        guard tool == "multi_edit",
+              case .object(let obj) = redactedArguments,
+              case .array(let edits) = obj["edits"] else { return [] }
+        return edits.prefix(4).enumerated().compactMap { idx, edit in
+            guard case .object(let editObj) = edit else { return nil }
+            let oldLine: String = {
+                if case .string(let s) = editObj["oldString"] { return String((s.components(separatedBy: .newlines).first ?? s).prefix(48)) }
+                return ""
+            }()
+            let newLine: String = {
+                if case .string(let s) = editObj["newString"] { return String((s.components(separatedBy: .newlines).first ?? s).prefix(48)) }
+                return ""
+            }()
+            return "Hunk #\(idx + 1): -\(oldLine) -> +\(newLine)"
+        }
     }
 }
 
@@ -1323,7 +1446,7 @@ struct ResourceBudgetSnapshot: Codable {
 
 // MARK: - Loose JSON passthrough (used only for the redacted-arguments display blob)
 
-indirect enum JSONValue: Decodable {
+indirect enum JSONValue: Codable, Equatable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -1340,6 +1463,18 @@ indirect enum JSONValue: Decodable {
         if let v = try? c.decode([String: JSONValue].self) { self = .object(v); return }
         if let v = try? c.decode([JSONValue].self) { self = .array(v); return }
         self = .null
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let s): try container.encode(s)
+        case .number(let n): try container.encode(n)
+        case .bool(let b): try container.encode(b)
+        case .object(let o): try container.encode(o)
+        case .array(let a): try container.encode(a)
+        case .null: try container.encodeNil()
+        }
     }
 
     var prettyDescription: String {

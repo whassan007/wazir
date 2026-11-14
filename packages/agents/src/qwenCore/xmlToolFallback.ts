@@ -27,8 +27,9 @@ const HABITUAL_TOOL_ALIASES: Readonly<Record<string, string>> = {
   bash: 'shell',
   todowrite: 'todo_write',
   write_todos: 'todo_write',
+  task: 'dispatch_subagent',
+  subagent: 'dispatch_subagent',
 };
-
 /**
  * Resolves a model-emitted tool name to an exposed canonical tool name when possible.
  * If `rawName` is already in `availableNames`, returns it unchanged.
@@ -125,6 +126,21 @@ export function normalizeQwenToolInput(toolName: string, rawInput: unknown): Rec
     if (obj.paths === undefined && Array.isArray(obj.files)) {
       obj.paths = obj.files;
       delete obj.files;
+    }
+  } else if (toolName === 'dispatch_subagent') {
+    if (obj.description === undefined && typeof obj.prompt === 'string') {
+      obj.description = obj.prompt;
+      delete obj.prompt;
+    }
+    if (obj.role === undefined && typeof obj.subagent_type === 'string') {
+      if (obj.subagent_type === 'plan') {
+        obj.role = 'plan';
+      } else if (obj.subagent_type === 'worker' || obj.subagent_type === 'general-purpose' || obj.subagent_type === 'coder') {
+        obj.role = 'worker';
+      } else {
+        obj.role = 'explore';
+      }
+      delete obj.subagent_type;
     }
   }
 

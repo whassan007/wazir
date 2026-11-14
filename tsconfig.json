@@ -5,6 +5,7 @@
     { "path": "packages/shared" },
     { "path": "packages/secrets" },
     { "path": "packages/runtimes/interfaces" },
+    { "path": "packages/runtimes/mlx" },
     { "path": "packages/runtimes/ollama" },
     { "path": "packages/runtimes/lmstudio" },
     { "path": "packages/runtimes/anthropic" },

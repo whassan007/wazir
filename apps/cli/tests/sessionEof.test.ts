@@ -51,8 +51,16 @@ async function isolatedEnv(dir: string): Promise<NodeJS.ProcessEnv> {
   delete cleanEnv.NVIDIA_API_KEY;
   return {
     ...cleanEnv,
+    ANTHROPIC_API_KEY: '',
+    OPENAI_API_KEY: '',
+    GOOGLE_API_KEY: '',
+    GEMINI_API_KEY: '',
+    NVIDIA_API_KEY: '',
+    WAZIR_NVIDIA_BASE_URL: '',
+    WAZIR_NVIDIA_DEFAULT_MODEL: '',
     WAZIR_HOME: dir,
     WAZIR_COMPUTER_ID: `session-eof-${Date.now()}`,
+    WAZIR_MLX_URL: 'http://127.0.0.1:1',
     WAZIR_OLLAMA_URL: 'http://127.0.0.1:1',
     WAZIR_LMSTUDIO_URL: 'http://127.0.0.1:1',
   };

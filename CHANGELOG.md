@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.1 — 2026-11-14
+
+**Release**: `v0.3.1`
+**Theme**: Full Qwen Code 1.0 Multi-Surface Completion — Bounded Subagent Delegation (`A038`), Non-Blocking Post-Edit LSP Diagnostics Hook (`A053`), Web/Desktop/Android/iOS Multi-Surface `multi_edit` & `--compose` Cards (`A073`–`A076`), Live DGX Spark 50-Task Hardware Benchmark (`A090`), and Dual-Host Formal Assurance Verification (`A094`)
+
+- **Bounded Subagent Delegation & Post-Edit LSP Diagnostics (`@wazir/agents`, `@wazir/tools`)**:
+  - Added `createQwenSubagentTool` (`task` / `dispatch_subagent`) with `explore`, `plan`, and `worker` roles backed by `SubagentsLedger`, enforcing `maxDepth = 1` recursion guards and read-only tool filtering for `explore`/`plan` (`A038`).
+  - Added fast (`<= 1200ms` timeout, opt-out via `WAZIR_POST_EDIT_DIAGNOSTICS=0`), non-blocking post-`write`/`edit`/`multi_edit` syntax & custom LSP diagnostics hook appending `[diagnostics]` blocks without failing disk writes (`A053`).
+- **Multi-Surface `multi_edit`, `tool.batch_*`, `agent.thinking` & Governed Harness² `--compose` Cards (`@wazir/web`, `@wazir/cli`, `@wazir/api`, `apps/desktop`, `apps/android`, `apps/ios`)**:
+  - Added unified `multi_edit` hunk badges, parallel tool batch status badges, streaming reasoning previews, and `UNVERIFIED_CONTRASTIVE` `--compose` candidate review cards across the Web dashboard & embedded CLI dashboard (`A073`), Tauri desktop native notifications & `appr-` approval handler (`A074`), Android Jetpack Compose controller (`A075`), and iOS SwiftUI controller (`A076`).
+- **Live Fleet Hardware Benchmarks, Mac Studio Execution Path & Formal Assurance Verification (`@wazir/core`, `@wazir/cli`, `scripts/`, `reports/qwen-transplant/`, `@wazir/assurance`)**:
+  - Added direct fleet hardware host registration (`config.fleetHosts` / `WAZIR_FLEET_HOSTS`), governed per-host runtime namespacing (`mac_studio:lmstudio`, `mac_studio:ollama`, `dgx_spark:ollama`), `WorkloadDistributor` explicit pool & round-robin computer routing (`studio`, `mac_studio`, `dgx`, `dgx_spark`, `local`), and `DEFAULT_FS5_FLEET_CONFIG` SSH tunnel transports (`1235 -> 1234`, `11435 -> 11434`) bringing the Apple M4 Max Mac Studio (`studio` / `100.76.30.71`, 36 GB Unified Memory) directly into the live 3-node execution path alongside Apple M5 Pro and NVIDIA DGX Spark GB10.
+  - Executed the 50-task everyday software engineering corpus (`ST-001`..`ST-050`) live against `qwen3-coder:30b` on NVIDIA DGX Spark GB10 (`waelbot`, `linux-arm64`) via `OllamaAdapter` + `WazirQwenAgent` (`42/50` / `84%` pass rate, `A090`).
+  - Verified `./scripts/assure-verify.sh` (`Z3 5.3.1`, `Alloy 6.2.0`, `Dafny 4.11.0`, `Scenic`, `VerifAI`, `GAM`, and all `18/18` `@wazir/assurance` suites / `358/358` tests) live on both Apple M5 Pro (`darwin-arm64`) and NVIDIA DGX Spark (`linux-arm64`) (`A094`).
+- **Cross-Platform Version Parity (`v0.3.1`)**:
+  - Synchronized `0.3.1` across root `package.json`, all 28 workspaces, `wa`/`wazir` SEA binaries, npm, Homebrew, Scoop, WinGet, DEB, RPM, Tauri desktop, Android, and iOS manifests.
+
 ## v0.3.0 — 2026-11-13
 
 **Release**: `v0.3.0`

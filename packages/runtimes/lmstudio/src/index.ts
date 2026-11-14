@@ -90,6 +90,8 @@ export class LMStudioAdapter implements RuntimeAdapter {
 
   private readonly apiKey?: string;
   private nativeModelsCache?: { expiresAt: number; promise: Promise<NativeModel[]> };
+  private readonly compatLoaded = new Map<string, number>();
+  private readonly compatUnloaded = new Set<string>();
 
   /**
    * `apiKey` is sent as a Bearer token. Any authenticated OpenAI-compatible endpoint
@@ -395,15 +397,82 @@ export class LMStudioAdapter implements RuntimeAdapter {
     };
   }
 
+  private isUnsupportedNativeError(err: unknown): boolean {
+    return err instanceof Error && /LM Studio models HTTP (404|405|501)\b/.test(err.message);
+  }
+
+  private async fetchOpenAIModels(): Promise<OpenAIModel[] | null> {
+    try {
+      const response = await fetch(`${this.baseURL}/models`, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(2000),
+      });
+      if (!response.ok) return null;
+      const data = (await response.json()) as { data?: OpenAIModel[] };
+      return Array.isArray(data.data) ? data.data : [];
+    } catch {
+      return null;
+    }
+  }
+
+  private heuristicMemoryEstimate(modelId: string, contextTokens: number): import('@wazir/runtimes-interfaces').ModelLoadEstimate {
+    const paramMatch = modelId.match(/(?:^|[-_/])(\d+(?:\.\d+)?)\s*[bB](?:[-_/.]|$)/);
+    const paramsBillions = paramMatch ? Number(paramMatch[1]) : 8;
+    const bitMatch = modelId.match(/(?:^|[-_/])(\d+)bit/i) ?? modelId.match(/[qQ](\d+)_/);
+    const bits = bitMatch ? Number(bitMatch[1]) : /fp16|bf16/i.test(modelId) ? 16 : 6;
+    const weightBytes = Math.round(paramsBillions * 1e9 * (bits / 8) * 1.12);
+    const kvBytes = Math.max(256 * 1024 * 1024, Math.round(contextTokens * 96 * 1024));
+    const totalMemoryBytes = weightBytes + kvBytes;
+    return {
+      totalMemoryBytes,
+      vramBytes: totalMemoryBytes,
+      source: 'HEURISTIC',
+      confidence: 'low',
+    };
+  }
+
   async getLoadedModels(): Promise<string[]> {
-    return (await this.nativeModels()).filter(m => m.loaded_instances.length > 0).map(m => m.key);
+    try {
+      return (await this.nativeModels()).filter(m => m.loaded_instances.length > 0).map(m => m.key);
+    } catch (err) {
+      if (!this.isUnsupportedNativeError(err)) throw err;
+      const models = await this.fetchOpenAIModels();
+      if (!models) throw err;
+      if (this.compatLoaded.size > 0) {
+        return models.map((m) => m.id).filter((id) => this.compatLoaded.has(id));
+      }
+      if (models.length === 1 && !this.compatUnloaded.has(models[0].id)) {
+        return [models[0].id];
+      }
+      return [];
+    }
   }
   async inspectModel(modelId: string): Promise<import('@wazir/runtimes-interfaces').RuntimeModelInspection> {
-    const model = (await this.nativeModels()).find(m => m.key === modelId || m.loaded_instances.some(i => i.id === modelId));
-    const instances = model?.loaded_instances ?? [];
-    if (instances.length > 1) throw new Error('RESOURCE_BUSY: multiple runtime instances require explicit selection');
-    return { modelId, loaded: instances.length === 1, instanceId: instances[0]?.id,
-      effectiveContext: instances[0]?.config.context_length };
+    try {
+      const model = (await this.nativeModels()).find(m => m.key === modelId || m.loaded_instances.some(i => i.id === modelId));
+      const instances = model?.loaded_instances ?? [];
+      if (instances.length > 1) throw new Error('RESOURCE_BUSY: multiple runtime instances require explicit selection');
+      return { modelId, loaded: instances.length === 1, instanceId: instances[0]?.id,
+        effectiveContext: instances[0]?.config.context_length };
+    } catch (err) {
+      if (!this.isUnsupportedNativeError(err)) throw err;
+      const models = await this.fetchOpenAIModels();
+      if (!models) throw err;
+      const exists = models.some((m) => m.id === modelId);
+      if (!exists) return { modelId, loaded: false };
+      if (this.compatLoaded.has(modelId)) {
+        return {
+          modelId,
+          loaded: true,
+          instanceId: modelId,
+          effectiveContext: this.compatLoaded.get(modelId),
+        };
+      }
+      if (models.length === 1 && models[0].id === modelId && !this.compatUnloaded.has(modelId)) {
+        return { modelId, loaded: true, instanceId: modelId, effectiveContext: 32768 };
+      }
+      return { modelId, loaded: false };
+    }
   }
   async loadModel(modelId: string, options: { contextTokens?: number } = {}): Promise<void> {
     this.nativeModelsCache = undefined;
@@ -412,7 +481,37 @@ export class LMStudioAdapter implements RuntimeAdapter {
       method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(120_000),
       body: JSON.stringify({ model: resolvedId, context_length: options.contextTokens, echo_load_config: true }),
     });
-    if (!response.ok) throw new Error(`RUNTIME_LOAD_FAILED: LM Studio HTTP ${response.status}`);
+    if (!response.ok) {
+      if ([404, 405, 501].includes(response.status)) {
+        let compatMode = false;
+        try {
+          await this.nativeModels();
+        } catch (err) {
+          compatMode = this.isUnsupportedNativeError(err);
+        }
+        if (compatMode) {
+          const warmRes = await fetch(`${this.baseURL}/chat/completions`, {
+            method: 'POST',
+            headers: this.headers(true),
+            signal: AbortSignal.timeout(120_000),
+            body: JSON.stringify({
+              model: resolvedId,
+              messages: [{ role: 'user', content: 'OK' }],
+              max_tokens: 1,
+              stream: false,
+            }),
+          });
+          if (!warmRes.ok) {
+            throw new Error(`RUNTIME_LOAD_FAILED: OpenAI-compatible HTTP ${warmRes.status}`);
+          }
+          await warmRes.json().catch(() => undefined);
+          this.compatUnloaded.delete(resolvedId);
+          this.compatLoaded.set(resolvedId, options.contextTokens ?? 32768);
+          return;
+        }
+      }
+      throw new Error(`RUNTIME_LOAD_FAILED: LM Studio HTTP ${response.status}`);
+    }
     await response.json();
     this.nativeModelsCache = undefined;
   }
@@ -424,7 +523,22 @@ export class LMStudioAdapter implements RuntimeAdapter {
       method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(30_000),
       body: JSON.stringify({ instance_id: state.instanceId }),
     });
-    if (!response.ok) throw new Error(`RUNTIME_UNLOAD_FAILED: LM Studio HTTP ${response.status}`);
+    if (!response.ok) {
+      if ([404, 405, 501].includes(response.status)) {
+        let compatMode = false;
+        try {
+          await this.nativeModels();
+        } catch (err) {
+          compatMode = this.isUnsupportedNativeError(err);
+        }
+        if (compatMode) {
+          this.compatLoaded.delete(modelId);
+          this.compatUnloaded.add(modelId);
+          return;
+        }
+      }
+      throw new Error(`RUNTIME_UNLOAD_FAILED: LM Studio HTTP ${response.status}`);
+    }
     await response.json();
     this.nativeModelsCache = undefined;
   }
@@ -434,7 +548,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
       if (!state.loaded || state.effectiveContext !== contextTokens) return false;
       const response = await fetch(`${this.baseURL}/chat/completions`, {
         method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(30_000),
-        body: JSON.stringify({ model: state.instanceId, messages: [{ role: 'user', content: 'Reply OK.' }], max_tokens: 1, stream: false }),
+        body: JSON.stringify({ model: state.instanceId ?? modelId, messages: [{ role: 'user', content: 'Reply OK.' }], max_tokens: 1, stream: false }),
       });
       if (!response.ok) return false;
       const data = await response.json() as { choices?: unknown[]; usage?: Record<string, any>; stats?: Record<string, any> };
@@ -474,6 +588,16 @@ export class LMStudioAdapter implements RuntimeAdapter {
       const totalMemoryBytes = parse('Estimated Total Memory');
       if (totalMemoryBytes !== undefined) return { totalMemoryBytes, vramBytes: parse('Estimated GPU Memory'), source: 'RUNTIME', confidence: 'medium' };
     } catch { /* unavailable CLI/estimator remains unknown */ }
+    try {
+      await this.nativeModels();
+    } catch (err) {
+      if (this.isUnsupportedNativeError(err)) {
+        const models = await this.fetchOpenAIModels();
+        if (models) {
+          return this.heuristicMemoryEstimate(resolvedId, contextTokens);
+        }
+      }
+    }
     return { source: 'UNKNOWN', confidence: 'unknown' };
   }
 

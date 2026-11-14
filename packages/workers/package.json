@@ -1,6 +1,6 @@
 {
   "name": "@wazir/workers",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "license": "AGPL-3.0-only",
   "description": "Wazir worker: executes authorized requests on a target computer",
   "main": "./dist/src/index.js",
@@ -12,6 +12,7 @@
   "dependencies": {
     "@wazir/core": "*",
     "@wazir/runtimes-interfaces": "*",
+    "@wazir/runtimes-mlx": "*",
     "@wazir/runtimes-ollama": "*",
     "@wazir/runtimes-lmstudio": "*",
     "@wazir/shared": "*"

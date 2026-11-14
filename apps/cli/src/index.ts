@@ -24,7 +24,7 @@ globalStartupProfiler.mark('cli.entry');
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.3.0';
+export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.3.1';
 
 /**
  * Zero-overhead fast path for version flags (`--version`, `-V`, `version`, `version --json`).
@@ -54,7 +54,7 @@ export function tryHandleFastCliFlags(
   return false;
 }
 
-const isDirectCliEntrypoint = process.env.VITEST !== 'true' || /(?:^|[\\/])(?:wa|wazir)(?:\.(?:c?js|mjs|ts|exe|cmd|ps1|bat))?$/i.test(process.argv[1] ?? '') || /(?:^|[\\/])apps[\\/]cli[\\/]src[\\/]index\.[cm]?[jt]s$/i.test(process.argv[1] ?? '');
+const isDirectCliEntrypoint = process.env.VITEST !== 'true' || /(?:^|[\\/])(?:wa|wazir)(?:\.(?:c?js|mjs|ts|exe|cmd|ps1|bat))?$/i.test(process.argv[1] ?? '') || /(?:^|[\\/])apps[\\/]cli[\\/](?:src|dist)[\\/]index\.[cm]?[jt]s$/i.test(process.argv[1] ?? '');
 
 if (
   isDirectCliEntrypoint &&

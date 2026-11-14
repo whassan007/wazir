@@ -480,20 +480,24 @@ export function classifyApprovalRisk(tool: string, input: Record<string, unknown
     };
   }
 
-  if (tool === 'write' || tool === 'edit') {
+  if (tool === 'write' || tool === 'edit' || tool === 'multi_edit') {
     const isProtected = rule.includes('protected') || resources.some((r) => /(\.git|package\.json|\.env|wazir)/i.test(r));
     const risk: ApprovalRiskLevel = isProtected ? 'high' : 'medium';
+    let operation = `${tool}: ${resources.join(', ') || 'workspace file'}`;
+    if (tool === 'multi_edit') {
+      const editsCount = Array.isArray(input.edits) ? input.edits.length : 0;
+      operation = `multi_edit (${editsCount} hunk${editsCount === 1 ? '' : 's'}): ${resources.join(', ') || 'workspace file'}`;
+    }
     return {
       riskClassification: risk,
       requiresBiometric: risk === 'high',
-      operation: `${tool}: ${resources.join(', ') || 'workspace file'}`,
+      operation,
       relevantResources: resources,
       expectedSideEffects: isProtected
         ? 'Modifies a protected project configuration, manifest, or repository control file.'
         : 'Modifies source files inside the controller workspace.',
     };
   }
-
   if (tool === 'git') {
     const subcommand = typeof input.subcommand === 'string' ? input.subcommand : cmd;
     const isHigh = /\b(reset|rebase|merge|checkout|stash)\b/i.test(String(subcommand));

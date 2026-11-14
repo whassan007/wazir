@@ -73,6 +73,7 @@ import { createConfiguredWeb, primeCoreWebModule } from './web.js';
 import * as coreModule from '@wazir/core';
 import { globalStartupProfiler } from './startupProfiler.js';
 import { AcpAgentAdapter, ChatAgent, createCodingAgent, createStepAgent, ExternalAgentAdapter, parseAcpPermissionMode } from '@wazir/agents';
+import { createMLXAdapter, MLX_DEFAULT_BASE_URL } from '@wazir/runtimes-mlx';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
@@ -314,6 +315,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   const resources = createResourceSystem(engineConfigDir);
   const govern = (adapter: RuntimeAdapter) => governAdapter(adapter, { budget: resources.budget, resolveAccount: resources.resolveAccount });
   const adapterList: RuntimeAdapter[] = [
+    createMLXAdapter(config.mlxUrl ?? MLX_DEFAULT_BASE_URL),
     createOllamaAdapter(config.ollamaUrl ?? 'http://localhost:11434'),
     createLMStudioAdapter(config.lmstudioUrl ?? 'http://localhost:1234/v1'),
   ].map(govern);
@@ -344,12 +346,74 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     local: true,
     os: hardware.os,
     hardware: hardware.hardware,
+    runtimes: worker.info.runtimes,
+    models: worker.info.models,
     capabilities: ['localExecution'],
   };
   computers.register(localComputer);
 
   for (const discoveredRuntime of discovered) {
     await applyDiscoveredRuntime(discoveredRuntime, { runtimes, computers, models, config, computerId: localComputer.id });
+  }
+
+  // ---- direct fleet hardware hosts (e.g. Mac Studio, DGX Spark) ----------
+  const onlineFleetHostIds: string[] = [];
+  const fleetRuntimeIds: string[] = [];
+  if (!skipRuntimeDiscovery && config.fleetHosts && config.fleetHosts.length > 0) {
+    await Promise.all(
+      config.fleetHosts.map(async (hostSpec) => {
+        const hostId = hostSpec.id.trim();
+        if (!hostId || hostId === localComputer.id) return;
+        const hostAdapters: RuntimeAdapter[] = [];
+        if (hostSpec.mlxUrl) {
+          hostAdapters.push(govern(withRuntimeId(createMLXAdapter(hostSpec.mlxUrl), `${hostId}:mlx`)));
+        }
+        if (hostSpec.ollamaUrl) {
+          hostAdapters.push(govern(withRuntimeId(createOllamaAdapter(hostSpec.ollamaUrl), `${hostId}:ollama`)));
+        }
+        if (hostSpec.lmstudioUrl) {
+          hostAdapters.push(govern(withRuntimeId(createLMStudioAdapter(hostSpec.lmstudioUrl), `${hostId}:lmstudio`)));
+        }
+        if (hostAdapters.length === 0) return;
+
+        const hostWorker = new Worker({
+          computerId: hostId,
+          name: hostSpec.name ?? hostId,
+          adapters: hostAdapters,
+        });
+        await hostWorker.start();
+        const reachableRuntimes = hostWorker.discovered.filter((d) => d.health !== 'unavailable');
+        if (reachableRuntimes.length === 0) return;
+
+        computers.register({
+          id: hostId,
+          name: hostSpec.name ?? hostId,
+          type: hostSpec.type ?? 'workstation',
+          local: false,
+          os: {
+            platform: hostSpec.platform ?? 'darwin',
+            architecture: hostSpec.architecture ?? 'arm64',
+            version: 'fleet',
+          },
+          hardware: {
+            cpu: hostSpec.cpu ?? 'Apple Silicon',
+            cpuCores: hostSpec.cpuCores ?? 14,
+            memoryGB: hostSpec.memoryGB ?? 36,
+          },
+          runtimes: hostWorker.info.runtimes,
+          models: hostWorker.info.models,
+          capabilities: ['localExecution'],
+        });
+        onlineFleetHostIds.push(hostId);
+
+        for (const hostRuntime of hostWorker.discovered) {
+          discovered.push(hostRuntime);
+          fleetRuntimeIds.push(hostRuntime.id);
+          adapterById.set(hostRuntime.id, hostRuntime.adapter);
+          await applyDiscoveredRuntime(hostRuntime, { runtimes, computers, models, config, computerId: hostId });
+        }
+      }),
+    );
   }
 
   // ---- hosted providers (Anthropic/OpenAI/Google) ------------------------
@@ -509,7 +573,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // Accounts for anything not configured: local runtimes, hosted APIs (paid only if hosted
   // providers were already authorised), and delegated agents (subscriptions, limits unknown).
   resources.accounts.addImplicit({
-    localRuntimes: adapterList.map((a) => a.id),
+    localRuntimes: [...new Set([...adapterList.map((a) => a.id), ...fleetRuntimeIds])],
     hostedRuntimes: [...hostedAdapters.keys()],
     agents: agents.list().filter((a) => a.source === 'external').map((a) => a.descriptor.name),
     hostedAuthorized: hostedAuthorizedDefault,
@@ -672,6 +736,13 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     await reconcileLocalOutcomes(executions, inspectOutcome);
     // Heartbeat before sweeping: the sweep must never find this live process's own worker offline.
     startLocalHeartbeat(computers, localComputer.id, currentLoad);
+    for (const fleetHostId of onlineFleetHostIds) {
+      startLocalHeartbeat(computers, fleetHostId, () => ({
+        cpuPercent: 10,
+        memoryUsedGB: 6,
+        memoryAvailableGB: Math.max(4, (computers.get(fleetHostId)?.hardware.memoryGB ?? 36) - 6),
+      }));
+    }
     new RecoveryManager({ computers, executions, jobManager, orchestrator, inspectToolOutcome: inspectOutcome }).start();
   }
 
@@ -964,13 +1035,35 @@ export async function createStandaloneMetaHarnessService(options: {
  * so re-probing a runtime after the fact (e.g. the operator starts LM Studio's server
  * from within the TUI) goes through the exact same registration logic, not a copy of it.
  */
+function withRuntimeId(adapter: RuntimeAdapter, runtimeId: string): RuntimeAdapter {
+  return new Proxy(adapter, {
+    get(target, prop, receiver) {
+      if (prop === 'id') return runtimeId;
+      if (prop === 'discover') {
+        return async () => ({ ...(await target.discover()), id: runtimeId });
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 async function applyDiscoveredRuntime(
   discoveredRuntime: DiscoveredRuntime,
   deps: { runtimes: RuntimeRegistry; computers: ComputerRegistry; models: ModelRegistry; config: WazirConfig; computerId: string },
 ): Promise<void> {
   const { runtimes, computers, models, config, computerId } = deps;
+  const baseId = discoveredRuntime.id.includes(':')
+    ? discoveredRuntime.id.slice(discoveredRuntime.id.lastIndexOf(':') + 1)
+    : discoveredRuntime.id;
   const runtimeType: RuntimeType =
-    discoveredRuntime.id === 'ollama' ? 'ollama' : discoveredRuntime.id === 'lmstudio' ? 'lmstudio' : 'other';
+    baseId === 'mlx'
+      ? 'mlx'
+      : baseId === 'ollama'
+        ? 'ollama'
+        : baseId === 'lmstudio'
+          ? 'lmstudio'
+          : 'other';
 
   const existing = runtimes.get(discoveredRuntime.id);
   runtimes.register({
@@ -1094,31 +1187,52 @@ function registerModel(
         ? 'operator-configured'
         : 'default-unknown';
 
+  const existingRecord = models.get(discovered.id);
+  const localPriority = (p: string): number => (p === 'mlx' ? 1 : p === 'ollama' ? 2 : p === 'lmstudio' ? 3 : 4);
+  const effectiveProvider =
+    existingRecord && existingRecord.local && localPriority(existingRecord.provider) < localPriority(provider)
+      ? existingRecord.provider
+      : provider;
+  const currentCompat: RuntimeType[] | 'any' =
+    provider === 'mlx'
+      ? ['mlx']
+      : provider === 'ollama'
+        ? ['ollama']
+        : provider === 'lmstudio'
+          ? ['lmstudio']
+          : 'any';
+  const mergedCompat: RuntimeType[] | 'any' =
+    currentCompat === 'any' || existingRecord?.runtimeCompatibility === 'any'
+      ? 'any'
+      : Array.isArray(existingRecord?.runtimeCompatibility)
+        ? dedupe([...existingRecord.runtimeCompatibility, ...currentCompat])
+        : currentCompat;
+
   const record: ModelRecord = {
     id: discovered.id,
-    name: discovered.name ?? discovered.id,
-    provider,
-    family: guessFamily(discovered.id, provider),
-    architecture: discovered.architecture,
-    parameters: discovered.parameters,
-    contextMax,
-    maxOutputTokens: discovered.maxOutputTokens,
+    name: discovered.name ?? existingRecord?.name ?? discovered.id,
+    provider: effectiveProvider,
+    family: guessFamily(discovered.id, effectiveProvider),
+    architecture: discovered.architecture ?? existingRecord?.architecture,
+    parameters: discovered.parameters ?? existingRecord?.parameters,
+    contextMax: Math.max(contextMax, existingRecord?.contextMax ?? 0),
+    maxOutputTokens: discovered.maxOutputTokens ?? existingRecord?.maxOutputTokens,
     configuredContext: configured,
-    maxInputTokens: discovered.maxInputTokens,
-    contextAccounting: discovered.contextAccounting,
+    maxInputTokens: discovered.maxInputTokens ?? existingRecord?.maxInputTokens,
+    contextAccounting: discovered.contextAccounting ?? existingRecord?.contextAccounting,
     contextLimitSource,
-    capabilities,
-    toolCalling: discovered.toolCalling ?? false,
-    structuredOutput: discovered.structuredOutput ?? false,
-    vision: discovered.vision ?? false,
-    audio: discovered.audio ?? false,
-    embedding: discovered.embedding ?? false,
-    reasoning: discovered.reasoning ?? false,
-    quantization: discovered.quantization,
-    memory: estimateModelMemory(discovered.parameters, discovered.id, discovered.quantization),
-    runtimeCompatibility: provider === 'ollama' ? ['ollama'] : provider === 'lmstudio' ? ['lmstudio'] : 'any',
+    capabilities: existingRecord ? dedupe([...existingRecord.capabilities, ...capabilities]) : capabilities,
+    toolCalling: Boolean(discovered.toolCalling || existingRecord?.toolCalling),
+    structuredOutput: Boolean(discovered.structuredOutput || existingRecord?.structuredOutput),
+    vision: Boolean(discovered.vision || existingRecord?.vision),
+    audio: Boolean(discovered.audio || existingRecord?.audio),
+    embedding: Boolean(discovered.embedding || existingRecord?.embedding),
+    reasoning: Boolean(discovered.reasoning || existingRecord?.reasoning),
+    quantization: discovered.quantization ?? existingRecord?.quantization,
+    memory: estimateModelMemory(discovered.parameters ?? existingRecord?.parameters, discovered.id, discovered.quantization ?? existingRecord?.quantization),
+    runtimeCompatibility: mergedCompat,
     local: true,
-    createdAt: new Date(),
+    createdAt: existingRecord?.createdAt ?? new Date(),
     updatedAt: new Date(),
   };
 

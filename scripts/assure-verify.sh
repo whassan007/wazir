@@ -39,6 +39,7 @@ export DAFNY_PATH="${DAFNY_PATH:-$TOOLS_DIR/dafny/dafny}"
 export WAZIR_Z3_PYTHON="${WAZIR_Z3_PYTHON:-$TOOLS_DIR/z3-venv/bin/python3}"
 export WAZIR_SCENIC_PYTHON="${WAZIR_SCENIC_PYTHON:-$TOOLS_DIR/scenic-venv/bin/python3}"
 export WAZIR_VERIFAI_PYTHON="${WAZIR_VERIFAI_PYTHON:-$TOOLS_DIR/verifai-venv/bin/python3}"
+export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 export PATH="$HOME/.local/bin:$TOOLS_DIR/java/bin:$TOOLS_DIR/dafny:$TOOLS_DIR/z3-venv/bin:$PATH"
 
 echo "=== Wazir Formal Assurance Independent Verifier ==="

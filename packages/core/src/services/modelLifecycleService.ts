@@ -1790,13 +1790,20 @@ export class ModelLifecycleService {
         const seen = new Set<string>();
         for (const m of discovered) {
           seen.add(m.id);
-          if (!this.deps.models.get(m.id)) {
+          const prevModel = this.deps.models.get(m.id);
+          if (!prevModel) {
             newlyRegistered++;
             this.deps.models.register({ id: m.id, name: m.name ?? m.id, provider: runtimeId, family: 'other',
               contextMax: m.contextWindow ?? 0, maxOutputTokens: m.maxOutputTokens, parameters: m.parameters, quantization: m.quantization,
               capabilities: ['generalChat'], toolCalling: m.toolCalling ?? false, structuredOutput: m.structuredOutput ?? false,
               vision: m.vision ?? false, audio: m.audio ?? false, embedding: m.embedding ?? false, reasoning: m.reasoning ?? false,
               runtimeCompatibility: [runtime.type], local: true, createdAt: new Date(), updatedAt: new Date() });
+          } else if (prevModel.local && Array.isArray(prevModel.runtimeCompatibility) && !prevModel.runtimeCompatibility.includes(runtime.type)) {
+            this.deps.models.register({
+              ...prevModel,
+              runtimeCompatibility: [...prevModel.runtimeCompatibility, runtime.type],
+              updatedAt: new Date(),
+            });
           }
           const existing = this.deps.models.instancesOf(m.id).find(i => i.computerId === computerId && i.runtimeId === runtimeId);
           const installationId = existing?.installationId ?? `${m.id}::${computerId}::${runtimeId}`;

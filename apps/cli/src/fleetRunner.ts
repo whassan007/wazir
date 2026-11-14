@@ -348,7 +348,7 @@ export function createFleetTaskExecutor(
         }
         const sentMaxTokens = prepared?.maxTokens ?? request.maxTokens;
         const sentContextTokens = prepared ? prepared.contextTokens : placement.contextTokens;
-        if (!placement.computerId || placement.computerId === engine.worker.computerId) {
+        if (!placement.computerId || placement.computerId === engine.worker.computerId || Boolean(engine.adapters.get(placement.runtimeId))) {
           const adapter = engine.adapters.get(placement.runtimeId) ?? engine.worker.adapterForModel(request.modelId);
           if (!adapter) {
             yield { type: 'error', error: `no runtime can serve model '${request.modelId}'` };

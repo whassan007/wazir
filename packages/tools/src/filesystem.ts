@@ -3,7 +3,7 @@ import * as crypto from 'node:crypto';
 import type { Tool, ToolExecutionContext, ToolResult, FileMutationResult } from '@wazir/core';
 import { computeSmartEdit } from './editMatcher.js';
 import { errorMessage, readProjectFile, resolveInsideProject, writeProjectFile } from './paths.js';
-
+import { collectPostEditDiagnostics } from './lspDiagnosticsHook.js';
 const MAX_READ_BYTES = 1024 * 1024;
 const DEFAULT_READ_LINE_LIMIT = 2000;
 
@@ -106,12 +106,14 @@ export const writeTool: Tool = {
       mutation.existsAfter = true;
       mutation.afterHash = hashContent(newContent);
       mutation.changed = mutation.beforeHash !== mutation.afterHash;
-
+      const diag = await collectPostEditDiagnostics({ projectRoot: ctx.projectRoot, filePath, resolvedPath: resolved, content: newContent, ctx });
+      
       return { 
         ok: true, 
-        output: `wrote ${resolved}`, 
+        output: `wrote ${resolved}${diag.formatted ?? ''}`, 
         durationMs: Date.now() - started,
-        fileMutations: [mutation]
+        fileMutations: [mutation],
+        ...(diag.entries.length > 0 ? { metadata: { diagnostics: diag.entries } } : {})
       };
     } catch (error) {
       return { 
@@ -192,15 +194,17 @@ export const editTool: Tool = {
       mutation.afterHash = hashContent(next);
       mutation.changed = mutation.beforeHash !== mutation.afterHash;
 
+      const diag = await collectPostEditDiagnostics({ projectRoot: ctx.projectRoot, filePath, resolvedPath: resolved, content: next, ctx });
       return {
         ok: true,
-        output: `edited ${resolved} (${matchResult.count} replacement(s), strategy=${matchResult.strategyUsed})\n${matchResult.diffSnippet}`,
+        output: `edited ${resolved} (${matchResult.count} replacement(s), strategy=${matchResult.strategyUsed})\n${matchResult.diffSnippet}${diag.formatted ?? ''}`,
         durationMs: Date.now() - started,
         fileMutations: [mutation],
         metadata: {
           strategyUsed: matchResult.strategyUsed,
           startLine: matchResult.startLine,
           endLine: matchResult.endLine,
+          ...(diag.entries.length > 0 ? { diagnostics: diag.entries } : {}),
         },
       };
     } catch (error) {

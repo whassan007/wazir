@@ -82,4 +82,56 @@ describe('LMStudioAdapter against authenticated OpenAI-compatible endpoints', ()
     expect(events.find((e) => e.type === 'completed')?.content).toBe('8888888');
     expect(events.filter((e) => e.type === 'reasoning').map((e) => e.content).join('')).toContain('Answer 8888888.');
   });
+
+  it('supports OpenAI-compatible lifecycle fallback when /api/v1/models returns 404', async () => {
+    process.env.WAZIR_LMS_DISABLE = '1';
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/v1/models') || url.endsWith('/api/v1/models/load') || url.endsWith('/api/v1/models/unload')) {
+        return new Response('Not Found', { status: 404 });
+      }
+      if (url.endsWith('/v1/models')) {
+        return new Response(
+          JSON.stringify({
+            object: 'list',
+            data: [
+              { id: 'mlx-community/Qwen3.5-9B-6bit', object: 'model', owned_by: 'mlx_lm' },
+              { id: 'mlx-community/Qwen2.5-Coder-7B-4bit', object: 'model', owned_by: 'mlx_lm' },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.endsWith('/v1/chat/completions') && init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            id: 'chatcmpl-1',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new LMStudioAdapter('http://127.0.0.1:8080/v1');
+    const estimate = await adapter.estimateModelLoad('mlx-community/Qwen3.5-9B-6bit', 16384);
+    expect(estimate.source).toBe('HEURISTIC');
+    expect(estimate.totalMemoryBytes).toBeGreaterThan(5 * 1024 ** 3);
+
+    await adapter.loadModel('mlx-community/Qwen3.5-9B-6bit', { contextTokens: 16384 });
+    const inspected = await adapter.inspectModel('mlx-community/Qwen3.5-9B-6bit');
+    expect(inspected).toMatchObject({
+      modelId: 'mlx-community/Qwen3.5-9B-6bit',
+      loaded: true,
+      effectiveContext: 16384,
+    });
+    expect(await adapter.getLoadedModels()).toEqual(['mlx-community/Qwen3.5-9B-6bit']);
+    expect(await adapter.probeModel('mlx-community/Qwen3.5-9B-6bit', 16384)).toBe(true);
+
+    await adapter.unloadModel('mlx-community/Qwen3.5-9B-6bit');
+    expect((await adapter.inspectModel('mlx-community/Qwen3.5-9B-6bit')).loaded).toBe(false);
+    delete process.env.WAZIR_LMS_DISABLE;
+  });
 });

@@ -35,6 +35,15 @@ export const dispatchSubagentTool: Tool = {
           type: 'string',
           description: 'The subtask, written so it is understandable with no other context',
         },
+        role: {
+          type: 'string',
+          enum: ['explore', 'plan', 'worker'],
+          description: 'Subagent role: explore/plan are strictly read-only; worker may edit files within caller policy',
+        },
+        title: {
+          type: 'string',
+          description: 'Short display title for the subagent ledger',
+        },
         expectedArtifacts: {
           type: 'array',
           items: { type: 'string' },

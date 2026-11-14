@@ -499,16 +499,25 @@ export class ResourceRouter {
         latency: ms !== undefined && maxMs > 0 ? ms / maxMs : 0.5,
         quotaRisk: QUOTA_RISK[mode ?? 'normal'],
       };
+      const policyMode = this.opts.budget.policy.mode;
+      const priorityEligible =
+        Boolean(account.priority) &&
+        policyMode !== 'budget-first' &&
+        !(account.kind === 'api' && policyMode === 'local-first');
+      const priorityBonus = priorityEligible
+        ? Math.max(-0.5, Math.min(1.25, (account.priority ?? 0) * 0.02))
+        : 0;
       const score = w.quality * factors.quality + w.reliability * factors.reliability + w.capacity * factors.capacity
-        - w.cost * factors.cost - w.latency * factors.latency - w.quotaRisk * factors.quotaRisk;
+        - w.cost * factors.cost - w.latency * factors.latency - w.quotaRisk * factors.quotaRisk + priorityBonus;
       const roundedScore = Number(score.toFixed(4));
       const reasons = [...p.reasons];
       if (p.residency === 'reload') reasons.push('loaded with too little context: needs a reload (memory + load time)');
       else if (p.residency === 'load') reasons.push(`not loaded: needs cold load${p.estimatedLoadMs ? ` (~${p.estimatedLoadMs}ms)` : ''} (memory + load time)`);
       if (p.evictionRequired) reasons.push('loading requires evicting a resident model on target hardware');
+      const prioritySuffix = priorityBonus !== 0 ? `, priorityBonus=${priorityBonus.toFixed(2)}` : '';
       const scoringRationale = [
         ...(p.scoringRationale ?? []),
-        `utility: score=${roundedScore.toFixed(4)} (quality=${factors.quality.toFixed(2)}, reliability=${factors.reliability.toFixed(2)}, capacity=${factors.capacity.toFixed(2)}, cost=${factors.cost.toFixed(2)}, latency=${factors.latency.toFixed(2)}, quotaRisk=${factors.quotaRisk.toFixed(2)})`,
+        `utility: score=${roundedScore.toFixed(4)} (quality=${factors.quality.toFixed(2)}, reliability=${factors.reliability.toFixed(2)}, capacity=${factors.capacity.toFixed(2)}, cost=${factors.cost.toFixed(2)}, latency=${factors.latency.toFixed(2)}, quotaRisk=${factors.quotaRisk.toFixed(2)}${prioritySuffix})`,
       ];
       return {
         ...p,

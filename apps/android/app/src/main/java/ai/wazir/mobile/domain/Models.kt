@@ -3,6 +3,12 @@ package ai.wazir.mobile.domain
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 @Serializable
 data class ControllerProfile(
@@ -12,7 +18,7 @@ data class ControllerProfile(
     val deviceId: String,
     val scopes: List<String> = listOf("read", "mutate", "execute"),
     val tlsCertFingerprint: String? = null,
-    val controllerVersion: String = "0.1.63",
+    val controllerVersion: String = "0.3.1",
     val apiVersion: String = "1.0.0",
     val pairedAt: Long = System.currentTimeMillis(),
     val lastConnectedAt: Long? = null,
@@ -73,7 +79,7 @@ data class PairingCompleteResponse(
 data class PairedControllerMetadata(
     val id: String,
     val name: String,
-    val version: String = "0.1.63",
+    val version: String = "0.3.1",
     val apiVersion: String = "1.0.0",
 )
 
@@ -93,7 +99,7 @@ data class HandshakeResponse(
     val compatible: Boolean = true,
     val apiVersion: String = "1.0.0",
     val minMobileVersion: String = "1.0.0",
-    val controllerVersion: String = "0.1.63",
+    val controllerVersion: String = "0.3.1",
     val controllerId: String = "local",
     val hostname: String = "localhost",
     val principal: HandshakePrincipal? = null,
@@ -117,7 +123,7 @@ data class DashboardSnapshot(
 data class DashboardControllerInfo(
     val id: String = "local",
     val hostname: String = "localhost",
-    val version: String = "0.1.63",
+    val version: String = "0.3.1",
     val apiVersion: String = "1.0.0",
     val timestamp: String = "",
 )
@@ -147,10 +153,10 @@ data class DashboardResourceStatus(
 
 @Serializable
 data class MobileStreamEvent(
-    val sequence: Long,
-    val eventId: String,
-    val timestamp: String,
-    val type: String,
+    val sequence: Long = 0,
+    val eventId: String = "",
+    val timestamp: String = "",
+    val type: String = "",
     val taskId: String? = null,
     val executionId: String? = null,
     val computerId: String? = null,
@@ -158,10 +164,18 @@ data class MobileStreamEvent(
     val agentId: String? = null,
     val modelId: String? = null,
     val status: String? = null,
-    val summary: String,
+    val summary: String = "",
     val payload: JsonObject = JsonObject(emptyMap()),
-)
-
+) {
+    val isToolBatch: Boolean get() = type == "tool.batch_started" || type == "tool.batch_completed"
+    val batchSize: Int get() = payload["batchSize"]?.jsonPrimitive?.intOrNull ?: payload["tools"]?.let { runCatching { it.jsonArray.size }.getOrNull() } ?: 0
+    val isParallelBatch: Boolean get() = payload["parallel"]?.jsonPrimitive?.booleanOrNull == true
+    val isComposeSynthesis: Boolean get() = type == "search.composed"
+    val composeVerdict: String? get() = payload["verdictClassification"]?.jsonPrimitive?.contentOrNull
+    val composeCandidateIds: List<String> get() = runCatching { payload["sourceCandidateIds"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty() }.getOrDefault(emptyList())
+    val isAgentThinking: Boolean get() = type == "agent.thinking"
+    val thoughtSummary: String? get() = payload["thoughtSummary"]?.jsonPrimitive?.contentOrNull
+}
 @Serializable
 data class RecentEventsResponse(
     val cursor: Long = 0,
@@ -260,8 +274,10 @@ data class ToolCallRecord(
     val error: String? = null,
     val durationMs: Long = 0,
     val timestamp: String = "",
-)
-
+) {
+    val multiEditHunkCount: Int get() = if (tool == "multi_edit") runCatching { input["edits"]?.jsonArray?.size ?: 0 }.getOrDefault(0) else 0
+    val multiEditPreviews: List<String> get() = if (tool != "multi_edit") emptyList() else runCatching { input["edits"]?.jsonArray?.take(4)?.mapIndexed { idx, el -> val obj = el.jsonObject; val oldS = obj["oldString"]?.jsonPrimitive?.contentOrNull?.lineSequence()?.firstOrNull().orEmpty().take(48); val newS = obj["newString"]?.jsonPrimitive?.contentOrNull?.lineSequence()?.firstOrNull().orEmpty().take(48); "Hunk #${idx + 1}: -$oldS -> +$newS" }.orEmpty() }.getOrDefault(emptyList())
+}
 @Serializable
 data class VerificationReport(
     val status: String,
@@ -345,15 +361,15 @@ data class ApprovalListResponse(
 
 @Serializable
 data class MobileApprovalRecord(
-    val id: String,
+    val id: String = "",
     val taskId: String? = null,
     val taskTitle: String? = null,
     val executionId: String? = null,
     val agentId: String? = null,
-    val tool: String,
-    val operation: String,
+    val tool: String = "",
+    val operation: String = "",
     val redactedArguments: JsonObject = JsonObject(emptyMap()),
-    val argumentsHash: String,
+    val argumentsHash: String = "",
     val relevantResources: List<String> = emptyList(),
     val riskClassification: String = "medium",
     val requiresBiometric: Boolean = false,
@@ -366,8 +382,10 @@ data class MobileApprovalRecord(
     val resolvedAt: String? = null,
     val resolvedBy: String? = null,
     val resolutionNote: String? = null,
-)
-
+) {
+    val multiEditHunkCount: Int get() = if (tool == "multi_edit") runCatching { redactedArguments["edits"]?.jsonArray?.size ?: 0 }.getOrDefault(0) else 0
+    val multiEditPreviews: List<String> get() = if (tool != "multi_edit") emptyList() else runCatching { redactedArguments["edits"]?.jsonArray?.take(4)?.mapIndexed { idx, el -> val obj = el.jsonObject; val oldS = obj["oldString"]?.jsonPrimitive?.contentOrNull?.lineSequence()?.firstOrNull().orEmpty().take(48); val newS = obj["newString"]?.jsonPrimitive?.contentOrNull?.lineSequence()?.firstOrNull().orEmpty().take(48); "Hunk #${idx + 1}: -$oldS -> +$newS" }.orEmpty() }.getOrDefault(emptyList())
+}
 @Serializable
 data class ResolveApprovalRequest(
     val decision: String,
@@ -761,13 +779,16 @@ data class ScheduleMutationResponse(
 data class PushRelayRegistration(
     val deviceId: String,
     val deviceName: String = "",
+    val platform: String = "android",
     val provider: String = "fcm",
     val pushToken: String = "",
+    val pushTokenPreview: String = "",
     val relayEndpointUrl: String? = null,
     val enabled: Boolean = true,
     val notifyApprovals: Boolean = true,
     val notifyTaskTerminal: Boolean = true,
-    val registeredAt: String = "",
+    val registeredAt: JsonElement? = null,
+    val lastUpdatedAt: JsonElement? = null,
     val updatedAt: String = "",
     val lastWakeupAt: String? = null,
     val deliveryCount: Int = 0,
@@ -789,6 +810,8 @@ data class PushWakeupEvent(
     val status: String = "delivered",
     val createdAt: String = "",
     val error: String? = null,
+    val dispatchedAt: Long = 0L,
+    val deliveryStatus: String = status,
 )
 
 @Serializable
@@ -807,6 +830,7 @@ data class RegisterPushRelayRequest(
     val enabled: Boolean = true,
     val notifyApprovals: Boolean = true,
     val notifyTaskTerminal: Boolean = true,
+    val platform: String = "android",
 )
 
 @Serializable
@@ -819,5 +843,6 @@ data class RegisterPushRelayResponse(
 data class TestPushWakeupResponse(
     val ok: Boolean = true,
     val wakeups: List<PushWakeupEvent> = emptyList(),
+    val dispatched: List<PushWakeupEvent> = emptyList(),
+    val count: Int = 0,
 )
-

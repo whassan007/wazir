@@ -1321,7 +1321,8 @@ async function syncMultiSurfaceState() {
       const top = approvalsRes.value.approvals[0];
       currentPendingApproval = top;
       $('pending-approval-risk').textContent = `${String(top.riskClassification || 'high').toUpperCase()} RISK`;
-      $('pending-approval-title').textContent = `${top.tool || 'tool'}: ${top.operation || 'requires approval'}`;
+      const hunkTag = top.tool === 'multi_edit' && Array.isArray(top.redactedArguments?.edits) ? ` [${top.redactedArguments.edits.length} hunks]` : '';
+      $('pending-approval-title').textContent = `${top.tool || 'tool'}${hunkTag}: ${top.operation || 'requires approval'}`;
       $('pending-approval-desc').textContent = `${top.expectedSideEffects || (top.reasons || []).join('; ') || 'Waiting for operator approval'} (${approvalsRes.value.approvals.length} pending)`;
       banner.classList.add('active');
     } else if (banner) {
@@ -2173,7 +2174,24 @@ async function showExecutionDrawer(execId) {
               const isOk = evt.type.includes('completed') || evt.type.includes('success') || evt.type.includes('finish');
               const itemClass = isErr ? 'timeline-item item-error' : isOk ? 'timeline-item item-ok' : 'timeline-item';
               let dataStr = '';
-              const payload = evt.data || evt.payload;
+              const payload = evt.data || evt.payload || {};
+              let specialHtml = '';
+              
+              if (evt.type === 'tool.batch_started' || evt.type === 'tool.batch_completed') {
+                specialHtml = `<div class="timeline-card batch-card" data-testid="tool-batch-card"><span class="badge info">${esc(payload.parallel ? 'parallel batch' : 'tool batch')} · ${esc(payload.batchSize ?? (Array.isArray(payload.tools) ? payload.tools.length : 0))} tools</span> ${esc(evt.summary || '')}</div>`;
+              } else if (evt.type === 'agent.thinking') {
+                specialHtml = `<details class="timeline-card thinking-card" data-testid="agent-thinking-card"><summary><span class="badge">thinking</span> ${esc((evt.summary || payload.thoughtSummary || 'Analyzing workspace context').slice(0, 120))}</summary><div class="timeline-data">${esc(payload.thoughtSummary || evt.summary || '')}</div></details>`;
+              } else if (evt.type === 'search.composed') {
+                const verdict = String(payload.verdictClassification || 'UNVERIFIED_CONTRASTIVE');
+                const vClass = verdict === 'VERIFIED' ? 'ok' : verdict === 'REJECTED_GOVERNANCE' ? 'err' : 'warn';
+                const probes = Array.isArray(payload.sourceCandidateIds) ? payload.sourceCandidateIds : [];
+                specialHtml = `<div class="timeline-card compose-card" data-testid="compose-trajectory-card"><span class="badge ${vClass}">${esc(verdict)}</span> <strong>Composed Synthesis</strong> (${probes.length} probe${probes.length === 1 ? '' : 's'}${probes.length ? ': ' + esc(probes.join(', ')) : ''})</div>`;
+              } else if (payload.tool === 'multi_edit' || evt.tool === 'multi_edit') {
+                const editsArr = payload.input?.edits || payload.redactedArguments?.edits || [];
+                const hunkCount = Array.isArray(editsArr) && editsArr.length > 0 ? editsArr.length : 1;
+                specialHtml = `<div class="timeline-card multi-edit-card" data-testid="multi-edit-badge"><span class="badge info">multi_edit [${hunkCount} hunks]</span> ${esc(payload.input?.path || payload.operation || evt.summary || '')}</div>`;
+              }
+              
               if (payload && Object.keys(payload).length > 0) {
                 try {
                   dataStr = JSON.stringify(payload, null, 1).slice(0, 300);
@@ -2181,36 +2199,23 @@ async function showExecutionDrawer(execId) {
                   dataStr = String(payload).slice(0, 300);
                 }
               }
+              
               return `
                 <li class="${itemClass}">
                   <div class="timeline-time">${esc(ts)}</div>
                   <div class="timeline-type">${esc(evt.type)}</div>
-                  ${dataStr ? `<div class="timeline-data">${esc(dataStr)}</div>` : ''}
+                  ${specialHtml || (dataStr ? `<div class="timeline-data">${esc(dataStr)}</div>` : '')}
                 </li>
               `;
             }).join('')}
           </ul>
         </div>
       `;
-    }
-
-    // Subsection: Tool Calls
-    if (e.toolCalls && e.toolCalls.length > 0) {
+    } else {
       html += `
         <div class="drawer-section">
-          <h4>Tool Invocations (${e.toolCalls.length})</h4>
-          <ul class="reason-list">
-            ${e.toolCalls.map((t) => `
-              <li>
-                <strong>${esc(t.tool)}</strong>:
-                ${t.ok ? '<span class="badge ok">ok</span>' : '<span class="badge err">failed</span>'}
-                <span class="tag">${esc(t.durationMs ?? 0)}ms</span>
-                ${t.policyEffect ? `<span class="tag">${esc(t.policyEffect)}</span>` : ''}
-                ${t.provenance?.source === 'subagent' || t.provenance?.subagentExecutionId ? '<span class="badge info">subagent</span>' : ''}
-                ${t.error ? `<div class="detail err">${esc(t.error)}</div>` : ''}
-              </li>
-            `).join('')}
-          </ul>
+          <h4>Execution Trajectory Timeline</h4>
+          <div class="empty">No timeline events recorded.</div>
         </div>
       `;
     }

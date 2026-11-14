@@ -1,3 +1,4 @@
+import { createMLXAdapter } from '@wazir/runtimes-mlx';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 
@@ -52,6 +53,16 @@ export class HardwareDiscovery {
 export class RuntimeDiscovery {
   async discover(): Promise<string[]> {
     const availableRuntimes: string[] = [];
+
+    try {
+      const mlx = createMLXAdapter();
+      const health = await mlx.healthCheck();
+      if (health.status !== 'unavailable') {
+        availableRuntimes.push('mlx');
+      }
+    } catch {
+      // MLX server not available
+    }
     
     try {
       const ollama = createOllamaAdapter();
@@ -75,9 +86,11 @@ export class RuntimeDiscovery {
 
 export class ModelDiscovery {
   async discover(runtimeId: string): Promise<any[]> {
-    const adapter = runtimeId === 'ollama' 
-      ? createOllamaAdapter() 
-      : createLMStudioAdapter();
+    const adapter = runtimeId === 'mlx'
+      ? createMLXAdapter()
+      : runtimeId === 'ollama' 
+        ? createOllamaAdapter() 
+        : createLMStudioAdapter();
 
     try {
       const models = await adapter.listModels();
@@ -93,9 +106,11 @@ export class ModelDiscovery {
 
 export class CapabilityDiscovery {
   async discover(runtimeId: string, modelId: string): Promise<string[]> {
-    const adapter = runtimeId === 'ollama' 
-      ? createOllamaAdapter() 
-      : createLMStudioAdapter();
+    const adapter = runtimeId === 'mlx'
+      ? createMLXAdapter()
+      : runtimeId === 'ollama' 
+        ? createOllamaAdapter() 
+        : createLMStudioAdapter();
 
     try {
       const capabilities = await adapter.getCapabilities();

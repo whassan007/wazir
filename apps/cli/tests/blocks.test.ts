@@ -204,6 +204,7 @@ describe('doctorCommand — real end-to-end Block wiring', () => {
       ...process.env,
       WAZIR_HOME: dir,
       WAZIR_COMPUTER_ID: `test-doctor-${Date.now()}`,
+      WAZIR_MLX_URL: 'http://127.0.0.1:1',
       WAZIR_OLLAMA_URL: 'http://127.0.0.1:1',
       WAZIR_LMSTUDIO_URL: 'http://127.0.0.1:1',
     };

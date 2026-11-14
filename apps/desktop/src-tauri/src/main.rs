@@ -363,6 +363,69 @@ fn send_system_notification(title: &str, body: &str) {
 
 /// Lightweight HTTP GET over loopback to check for pending approvals without adding heavy HTTP crates.
 fn check_pending_approvals(port: u16, token: &str) -> Vec<String> {
+    check_pending_approval_details(port, token)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// Parse pending approval JSON body into vec of (id, summary) pairs.
+fn parse_pending_approvals_json(body: &str) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+    for part in body.split("\"id\":\"") {
+        if let Some(end) = part.find('"') {
+            let candidate = &part[..end];
+            if candidate.starts_with("appr-") || candidate.starts_with("apr-") || candidate.starts_with("approval-") {
+                let id = candidate.to_string();
+                let tool = part
+                    .find("\"tool\":\"")
+                    .and_then(|idx| {
+                        let rest = &part[idx + 8..];
+                        rest.find('"').map(|e| &rest[..e])
+                    });
+                let op = part
+                    .find("\"operation\":\"")
+                    .and_then(|idx| {
+                        let rest = &part[idx + 13..];
+                        rest.find('"').map(|e| &rest[..e])
+                    });
+                let explicit_summary = part
+                    .find("\"summary\":\"")
+                    .and_then(|idx| {
+                        let rest = &part[idx + 11..];
+                        rest.find('"').map(|e| &rest[..e])
+                    });
+                let hunk_count = part.matches("\"oldString\"").count();
+                let summary = if let Some(s) = explicit_summary {
+                    s.to_string()
+                } else if tool == Some("multi_edit") {
+                    let hunks = if hunk_count > 0 {
+                        format!(" ({hunk_count} hunks)")
+                    } else {
+                        String::new()
+                    };
+                    match op {
+                        Some(o) => format!("multi_edit{hunks}: {o}"),
+                        None => format!("Tool: multi_edit{hunks}"),
+                    }
+                } else if let (Some(t), Some(o)) = (tool, op) {
+                    format!("{t}: {o}")
+                } else if let Some(o) = op {
+                    format!("Operation: {o}")
+                } else if let Some(t) = tool {
+                    format!("Tool: {t}")
+                } else {
+                    "High-risk tool operation".to_string()
+                };
+                result.push((id, summary));
+            }
+        }
+    }
+    result
+}
+
+/// Perform HTTP GET to fetch pending approvals and parse details.
+fn check_pending_approval_details(port: u16, token: &str) -> Vec<(String, String)> {
     let addr = match format!("127.0.0.1:{port}").parse() {
         Ok(a) => a,
         Err(_) => return Vec::new(),
@@ -387,18 +450,8 @@ fn check_pending_approvals(port: u16, token: &str) -> Vec<String> {
         Some(b) => b,
         None => return Vec::new(),
     };
-    let mut ids = Vec::new();
-    for part in body.split("\"id\":\"") {
-        if let Some(end) = part.find('"') {
-            let candidate = &part[..end];
-            if candidate.starts_with("apr-") || candidate.starts_with("approval-") {
-                ids.push(candidate.to_string());
-            }
-        }
-    }
-    ids
+    parse_pending_approvals_json(body)
 }
-
 fn build_menu(app: &tauri::AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
     let about = PredefinedMenuItem::about(app, None, None)?;
     let quit = PredefinedMenuItem::quit(app, None)?;
@@ -505,11 +558,11 @@ fn main() {
                 let mut seen_approvals: HashSet<String> = HashSet::new();
                 loop {
                     std::thread::sleep(Duration::from_secs(5));
-                    for id in check_pending_approvals(API_PORT, &monitor_token) {
+                    for (id, summary) in check_pending_approval_details(API_PORT, &monitor_token) {
                         if seen_approvals.insert(id.clone()) {
                             send_system_notification(
                                 "Wazir Approval Required",
-                                &format!("Pending high-risk tool approval ({id}). Open Wazir Desktop to review."),
+                                &format!("{summary} ({id}). Open Wazir Desktop to review."),
                             );
                             let _ = app_handle.emit("wazir://approval-pending", id);
                         }
@@ -635,7 +688,7 @@ mod tests {
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut buf = [0u8; 512];
                 let _ = stream.read(&mut buf);
-                let payload = r#"{"approvals":[{"id":"apr-9001","status":"pending"},{"id":"approval-42","status":"pending"}]}"#;
+                let payload = r#"{"approvals":[{"id":"apr-9001","status":"pending"},{"id":"appr-7701","status":"pending"}]}"#;
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     payload.len(),
@@ -647,7 +700,16 @@ mod tests {
 
         let ids = check_pending_approvals(port, "test-operator-token");
         let _ = handle.join();
-        assert_eq!(ids, vec!["apr-9001".to_string(), "approval-42".to_string()]);
+        assert_eq!(ids, vec!["apr-9001".to_string(), "appr-7701".to_string()]);
+    }
+
+    #[test]
+    fn parses_pending_approval_details_with_multi_edit_summary() {
+        let json = r#"{"approvals":[{"id":"appr-7701","status":"pending","tool":"multi_edit","operation":"src/index.ts","redactedArguments":{"edits":[{"oldString":"a"},{"oldString":"b"},{"oldString":"c"}]}}]}"#;
+        let parsed = parse_pending_approvals_json(json);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].0, "appr-7701");
+        assert_eq!(parsed[0].1, "multi_edit (3 hunks): src/index.ts");
     }
 }
 

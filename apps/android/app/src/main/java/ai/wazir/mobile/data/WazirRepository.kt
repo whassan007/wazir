@@ -160,7 +160,7 @@ class WazirRepository(
                 deviceId = issuedDeviceId,
                 scopes = scopes,
                 tlsCertFingerprint = tlsCertFingerprint,
-                controllerVersion = controllerMeta?.version ?: "0.1.63",
+                controllerVersion = controllerMeta?.version ?: "0.3.1",
                 apiVersion = controllerMeta?.apiVersion ?: "1.0.0",
                 pairedAt = System.currentTimeMillis(),
                 lastConnectedAt = System.currentTimeMillis(),

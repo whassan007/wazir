@@ -669,7 +669,7 @@ export async function executeTask(
         }
         const sentMaxTokens = prepared?.maxTokens ?? request.maxTokens;
         const sentContextTokens = prepared ? prepared.contextTokens : placement.contextTokens;
-        if (!placement.computerId || placement.computerId === engine.worker.computerId) {
+        if (!placement.computerId || placement.computerId === engine.worker.computerId || Boolean(engine.adapters.get(placement.runtimeId))) {
           // engine.adapters already holds local adapters keyed by runtime id
           // (see engine.ts) alongside the hosted ones added in this feature —
           // checked first so a hosted placement (no computerId, so
@@ -1486,10 +1486,12 @@ export async function runSubagent(
           context.signal.addEventListener('abort', () => subTurnAbortController.abort(), { once: true });
         }
       }
-      const isLocalPlacement = !effectiveComputerId || effectiveComputerId === engine.worker.computerId;
-      // Activation prepares a model to run on *this* worker — meaningless for a hosted API
-      // placement (no computerId) or a placement the Scheduler sent to a different fleet machine.
-      const contextTokens = effectiveComputerId && effectiveComputerId === engine.worker.computerId
+      const hasDirectRuntimeAdapter = Boolean(effectiveRuntimeId && engine.adapters.get(effectiveRuntimeId));
+      const isLocalPlacement = !effectiveComputerId || effectiveComputerId === engine.worker.computerId || hasDirectRuntimeAdapter;
+      // Activation prepares a model to run on *this* worker or a directly connected fleet
+      // runtime adapter — meaningless for a hosted API placement (no computerId) or a
+      // placement dispatched through a remote control-plane worker.
+      const contextTokens = effectiveComputerId && (effectiveComputerId === engine.worker.computerId || hasDirectRuntimeAdapter)
         ? await engine.lifecycle.activateExecution(childExecId, MINIMUM_CONTEXT_TOKENS)
         : effectiveComputerId
           ? MINIMUM_CONTEXT_TOKENS

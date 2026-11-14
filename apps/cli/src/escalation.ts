@@ -146,7 +146,7 @@ export async function prepareGenerationPlacement(
     if (!engine.adapters.get(next.runtimeId)) throw new Error(`no adapter is configured for hosted runtime '${next.runtimeId}'`);
     return { contextTokens: effectiveContextTokens(record) };
   }
-  if (next.computerId !== engine.worker.computerId && !engine.config.apiUrl) {
+  if (next.computerId !== engine.worker.computerId && !engine.adapters.get(next.runtimeId) && !engine.config.apiUrl) {
     throw new Error(`'${next.computerId}' is a remote computer and no control-plane API URL is configured (set WAZIR_API_URL)`);
   }
   if (next.readiness === 'READY_NOW') {

@@ -148,6 +148,30 @@ describe('health diagnostics projection', () => {
     expect(r.models[0].recentFailures).toHaveLength(1);
   });
 
+  it('stale historical inference failure ages out instead of failing permanently', () => {
+    const r = report({
+      observations: {
+        inference: { [inferenceKey('lmstudio-dgx', 'qwen3')]: [{ at: minutesAgo(120), error: 'HTTP 404 model retired' }] },
+        telemetry: { 'lmstudio-dgx': 'OBSERVED' },
+      },
+    });
+    expect(codes(r)).toEqual([]);
+    expect(r.runtimes[0]).toMatchObject({ state: 'READY', inference: 'UNKNOWN' });
+    expect(r.models[0].recentFailures).toHaveLength(1);
+  });
+
+  it('unused optional local runtime is non-fatal info when another runtime is healthy', () => {
+    const r = report({
+      runtimes: [
+        runtime({ id: 'lmstudio-dgx', health: 'healthy' }),
+        runtime({ id: 'ollama', type: 'ollama', name: 'Ollama', health: 'unavailable' }),
+      ],
+      instances: [instance({ runtimeId: 'lmstudio-dgx' })],
+    });
+    expect(codes(r)).toEqual(['RUNTIME_UNREACHABLE']);
+    expect(r.diagnostics[0]).toMatchObject({ code: 'RUNTIME_UNREACHABLE', severity: 'info', subject: { id: 'ollama' } });
+  });
+
   it('telemetry unavailable: non-fatal, runtime READY and inference HEALTHY', () => {
     const r = report({ observations: { inference: { [inferenceKey('lmstudio-dgx', 'qwen3')]: [{ at: minutesAgo(1) }] } } });
     expect(codes(r)).toEqual(['TELEMETRY_UNAVAILABLE']);
