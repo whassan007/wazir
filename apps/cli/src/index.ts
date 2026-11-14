@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+import { existsSync, statSync } from 'node:fs';
+import path from 'node:path';
 
 /** Injected by scripts/bundle.mjs from package.json (the canonical version); the literal is for unbundled dev runs. */
 declare const __WAZIR_VERSION__: string | undefined;
@@ -8,7 +10,7 @@ import chalk from 'chalk';
 import { registerMCPCommands } from './mcp.js';
 import { registerWebCommands } from './web.js';
 import { registerMobileCommands } from './mobile.js';
-import { closeMCPRegistries } from '@wazir/core';
+import { closeMCPRegistries, parseWorkloadDistribution, type RoutingMode } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
 import { createHandoffCommand } from './handoff.js';
 
@@ -20,15 +22,111 @@ installGlobalCrashHandlers();
 
 const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.13';
 
+const invokedExecutableName = (() => {
+  const raw = path.basename(process.argv[1] ?? 'wa').replace(/\.(?:c?js|mjs|ts|exe|cmd|ps1|bat)$/i, '');
+  return raw.toLowerCase() === 'wazir' ? 'wazir' : 'wa';
+})();
+
+const VALID_ROUTING_MODES: readonly RoutingMode[] = ['AUTO', 'NVIDIA', 'LOCAL_ONLY', 'HYBRID', 'PROVIDER_ONLY'];
+const VALID_PERMISSION_MODES = ['ask', 'auto', 'read-only'] as const;
+const VALID_THEME_MODES = ['auto', 'dark', 'light', 'mono'] as const;
+
+function validateRoutingModeOption(raw?: string): RoutingMode | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const normalized = String(raw).trim().toUpperCase() as RoutingMode;
+  if (!VALID_ROUTING_MODES.includes(normalized)) {
+    console.error(
+      `Invalid --routing-mode '${raw}'. Expected one of: ${VALID_ROUTING_MODES.join(', ')}.`,
+    );
+    process.exit(2);
+  }
+  return normalized;
+}
+
+function validatePermissionsOption(raw?: string): 'ask' | 'auto' | 'read-only' | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const normalized = String(raw).trim().toLowerCase();
+  const mapped = normalized === 'readonly' ? 'read-only' : normalized;
+  if (!(VALID_PERMISSION_MODES as readonly string[]).includes(mapped)) {
+    console.error(
+      `Invalid --permissions '${raw}'. Expected one of: ${VALID_PERMISSION_MODES.join(', ')}.`,
+    );
+    process.exit(2);
+  }
+  return mapped as 'ask' | 'auto' | 'read-only';
+}
+
+function validateThemeOption(raw?: string): 'auto' | 'dark' | 'light' | 'mono' | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const normalized = String(raw).trim().toLowerCase();
+  if (!(VALID_THEME_MODES as readonly string[]).includes(normalized)) {
+    console.error(
+      `Invalid --theme '${raw}'. Expected one of: ${VALID_THEME_MODES.join(', ')}.`,
+    );
+    process.exit(2);
+  }
+  return normalized as 'auto' | 'dark' | 'light' | 'mono';
+}
+
+function validateDistributionOption(raw?: string): string | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  try {
+    parseWorkloadDistribution(String(raw));
+    return String(raw).trim();
+  } catch (err) {
+    console.error(
+      `Invalid --distribution '${raw}': ${err instanceof Error ? err.message : String(err)}`,
+    );
+    process.exit(2);
+  }
+}
+
+function resolveProjectRootOption(cdOpt?: string): string {
+  if (!cdOpt) return process.cwd();
+  const resolved = path.resolve(process.cwd(), String(cdOpt));
+  try {
+    if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+      console.error(`Directory not found for --cd: '${cdOpt}' (${resolved})`);
+      process.exit(2);
+    }
+  } catch (err) {
+    console.error(`Cannot access directory '${cdOpt}': ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(2);
+  }
+  process.chdir(resolved);
+  return resolved;
+}
+
+async function readPipedStdin(): Promise<string> {
+  if (process.stdin.isTTY) return '';
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 const program = new Command();
 
 program
-  .name('wa')
-  .description('Wazir CLI — meta-harness for local and distributed AI execution')
+  .name(invokedExecutableName)
+  .description('Wazir — local and distributed terminal coding agent')
   .version(CLI_VERSION)
   .option('--no-banner', 'Disable the Wazir terminal startup banner')
   .option('--no-color', 'Disable ANSI colors in terminal output')
-  .option('--ascii', 'Use plain ASCII fallback for terminal branding');
+  .option('--ascii', 'Use plain ASCII fallback for terminal branding')
+  .addHelpText(
+    'after',
+    [
+      '',
+      'Quick Start:',
+      `  ${invokedExecutableName}                         Start an interactive coding conversation in the current directory`,
+      `  ${invokedExecutableName} "fix failing tests"     Start a conversation with an initial coding request`,
+      `  ${invokedExecutableName} exec "summarize diff"   Run non-interactive automation and exit deterministically`,
+      `  ${invokedExecutableName} resume                  Pick and resume a previous conversation (--last for most recent)`,
+      `  ${invokedExecutableName} fleet                   Open the multi-agent fleet dashboard`,
+    ].join('\n'),
+  );
 
 registerMCPCommands(program);
 registerWebCommands(program);
@@ -552,7 +650,7 @@ taskCmd
           ? options.expectedFiles.split(',').map((s) => s.trim())
           : undefined,
         allowHosted: options.allowHosted,
-        routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
+        routingMode: validateRoutingModeOption(options.routingMode),
         json: options.json,
         fullVerification: options.fullVerify,
       },
@@ -568,10 +666,11 @@ taskCmd
   .option('--agent <name>', 'Use specific agent')
   .option('--type <type>', 'Task type: chat, coding, research, etc.')
   .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
-  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID, PROVIDER_ONLY')
   .option('--json', 'Output in JSON format')
   .description('Show scheduling decision without executing')
   .action(async (prompt, options) => {
+    const routingMode = validateRoutingModeOption(options.routingMode);
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine({ fastStartup: true, quiet: Boolean(options.json) });
     const { planTaskCommand } = await import('./commands.js');
@@ -580,7 +679,7 @@ taskCmd
       model: options.model,
       agent: options.agent,
       allowHosted: options.allowHosted,
-      routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
+      routingMode,
       json: options.json,
     });
     console.log(result.output);
@@ -617,11 +716,12 @@ program
   .option('--preset <name>', 'Runtime preset (e.g. standard, minimal)')
   .option('--expected-files <files>', 'Expected changed files (comma-separated)')
   .option('--allow-hosted', 'Allow routing to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
-  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID, PROVIDER_ONLY')
   .option('--json', 'Output in JSON format')
   .option('--full-verify', 'Build/test/lint/typecheck the whole repo instead of scoping to the workspace(s) the task touched')
   .description('Run a new task (alias for wa task run)')
   .action(async (prompt, options) => {
+    const routingMode = validateRoutingModeOption(options.routingMode);
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine({ fastStartup: true, quiet: Boolean(options.json) });
     const { runTaskCommand } = await import('./commands.js');
@@ -639,7 +739,7 @@ program
           ? options.expectedFiles.split(',').map((s) => s.trim())
           : undefined,
         allowHosted: options.allowHosted,
-        routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
+        routingMode,
         json: options.json,
         fullVerification: options.fullVerify,
       },
@@ -1248,14 +1348,15 @@ program
   .option('--model <name>', 'Use specific model')
   .option('--local-only', 'Only run on local computers')
   .option('--allow-hosted', 'Allow this command to route to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
-  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID, PROVIDER_ONLY')
   .action(async (prompt, options) => {
+    const routingMode = validateRoutingModeOption(options.routingMode);
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine({ fastStartup: true });
     const { askCommand } = await import('./commands.js');
     const result = await askCommand(engine, prompt, {
       ...options,
-      routingMode: options.routingMode ? (String(options.routingMode).toUpperCase() as any) : undefined,
+      routingMode,
     });
     if (result.output) {
       console.log(result.output);
@@ -1263,53 +1364,383 @@ program
     process.exit(result.code);
   });
 
-// Shared interactive runner keeps conversation and dashboard on one execution source.
-async function launchInteractiveTui(options: any, presentationMode: 'conversation' | 'dashboard'): Promise<void> {
+async function runNonInteractiveExec(promptInput: string, options: Record<string, any>): Promise<never> {
+  const routingMode = validateRoutingModeOption(options.routingMode);
+  const distributionSpec = validateDistributionOption(options.distribution);
+  const projectRoot = resolveProjectRootOption(options.cd);
+  const trimmed = promptInput.trim();
+  if (!trimmed) {
+    console.error(`${invokedExecutableName} exec requires a non-empty prompt.`);
+    process.exit(2);
+  }
   const { createEngine } = await import('./engine.js');
-  const engine = await createEngine();
-  const { FleetTui } = await import('./tui/index.js');
+  const engine = await createEngine({
+    projectRoot,
+    fastStartup: true,
+    quiet: Boolean(options.json),
+    distributionSpec,
+  });
+  let resolvedAgent = options.agent as string | undefined;
+  let resolvedRoutingMode = routingMode;
+  if (!options.model && !resolvedAgent && engine.workloadDistributor && resolvedRoutingMode !== 'LOCAL_ONLY') {
+    const localModels = (engine.models?.list?.() ?? []).filter((m) => !m.embedding && m.local !== false);
+    const extAgents = (engine.agents?.list?.() ?? [])
+      .filter((a) => a.source === 'external')
+      .map((a) => a.descriptor.name);
+    const hardwareComputerIds = (engine.computers?.list?.() ?? [])
+      .filter((c) => c.status === 'online')
+      .map((c) => c.id);
+    if (Boolean(distributionSpec) || extAgents.length > 0) {
+      const picked = engine.workloadDistributor.next({
+        hasLocalHardware: localModels.length > 0,
+        hardwareComputerIds,
+        externalAgents: extAgents,
+        routingMode: resolvedRoutingMode,
+      });
+      if (picked.targetAgentId) {
+        resolvedAgent = picked.targetAgentId;
+      } else if (picked.pool === 'local' && !resolvedRoutingMode) {
+        resolvedRoutingMode = 'LOCAL_ONLY';
+      }
+    }
+  }
+  const { runTaskCommand } = await import('./commands.js');
+  const result = await runTaskCommand(engine, trimmed, {
+    type: options.type as any,
+    model: options.model,
+    agent: resolvedAgent,
+    force: Boolean(options.force),
+    maxTurns: options.maxTurns ? Number(options.maxTurns) : undefined,
+    preset: options.preset,
+    expectedFiles: options.expectedFiles
+      ? String(options.expectedFiles)
+          .split(',')
+          .map((s) => s.trim())
+      : undefined,
+    allowHosted: Boolean(options.allowHosted),
+    routingMode: resolvedRoutingMode,
+    json: Boolean(options.json),
+    fullVerification: Boolean(options.fullVerify),
+  });
+  if (!options.json || result.output) {
+    console.log(result.output);
+  }
+  await closeMCPRegistries().catch(() => {});
+  process.exit(result.code);
+}
+
+// Shared interactive runner keeps conversation and dashboard on one execution source.
+async function launchInteractiveTui(
+  options: Record<string, any>,
+  presentationMode: 'conversation' | 'dashboard',
+): Promise<void> {
+  const globalOpts = program.opts<{ banner?: boolean; color?: boolean; ascii?: boolean }>();
+  const routingMode = validateRoutingModeOption(options.routingMode);
+  const permissionMode = validatePermissionsOption(options.permissions);
+  const themeMode = validateThemeOption(options.theme);
+  const distributionSpec = validateDistributionOption(options.distribution);
+  const projectRoot = resolveProjectRootOption(options.cd);
+
   const timeout = options.timeout !== undefined ? Number(options.timeout) : undefined;
   if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
     console.error(`--timeout must be a positive number of seconds, got '${options.timeout}'`);
     process.exit(2);
   }
+  const concurrency = options.concurrency !== undefined ? Number(options.concurrency) : 4;
+  if (!Number.isFinite(concurrency) || concurrency < 1) {
+    console.error(`--concurrency must be a positive integer, got '${options.concurrency}'`);
+    process.exit(2);
+  }
+
+  const noColor = options.color === false || globalOpts.color === false || Boolean(process.env.NO_COLOR);
+  const ascii = Boolean(options.ascii || globalOpts.ascii);
+  const isInteractiveConversationTty =
+    presentationMode === 'conversation' && Boolean(process.stdin.isTTY && process.stdout.isTTY);
+
+  const colorMode: 'default' | 'dark' | 'light' | 'monochrome' | undefined =
+    themeMode === 'auto'
+      ? 'default'
+      : themeMode === 'mono'
+        ? 'monochrome'
+        : themeMode;
+
+  const { createEngine, createBootstrapEngine } = await import('./engine.js');
+  const { FleetTui } = await import('./tui/index.js');
+  const { shutdownController } = await import('./shutdownController.js');
+
+  if (isInteractiveConversationTty) {
+    // Render the initial shell & composer immediately (< 50ms) BEFORE slow provider/MCP discovery.
+    const bootstrapEngine = createBootstrapEngine(projectRoot, distributionSpec);
+    const tui = new FleetTui({
+      engine: bootstrapEngine,
+      presentationMode: 'conversation',
+      concurrencyLimit: concurrency,
+      useWorktrees: options.worktrees !== false,
+      autoMerge: options.autoMerge === true,
+      timeoutSeconds: timeout,
+      enablePlanner: Boolean(options.planner || options.plan),
+      routingMode,
+      permissionMode,
+      distributionSpec,
+      noColor,
+      ascii,
+      colorMode,
+      ...(options.model ? { modelId: String(options.model) } : {}),
+      ...(options.agent ? { agentId: String(options.agent) } : {}),
+    });
+    shutdownController().register('chat-tui', () => tui.stop());
+    await tui.start();
+
+    if (typeof options.initialPrompt === 'string' && options.initialPrompt.trim()) {
+      void tui.launchJobFromPrompt(options.initialPrompt.trim());
+    }
+
+    // Discover providers/models asynchronously without blocking typing or editing.
+    void createEngine({ projectRoot, quiet: true, distributionSpec })
+      .then(async (liveEngine) => {
+        await tui.attachLiveEngine(liveEngine);
+        if (options.resumeCommand) {
+          await tui.submitCommand(String(options.resumeCommand));
+        }
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        void tui.submitCommand(`/status`).catch(() => {});
+        if (process.env.WAZIR_DEBUG) {
+          process.stderr.write(`Provider discovery warning: ${msg}\n`);
+        }
+      });
+
+    await tui.waitForExit();
+    await closeMCPRegistries().catch(() => {});
+    process.exit(0);
+  }
+
+  const engine = await createEngine({ projectRoot, distributionSpec });
   const tui = new FleetTui({
     engine,
     presentationMode,
-    concurrencyLimit: options.concurrency ? Number(options.concurrency) : 4,
+    concurrencyLimit: concurrency,
     useWorktrees: options.worktrees !== false,
     autoMerge: options.autoMerge === true,
     timeoutSeconds: timeout,
-    enablePlanner: options.planner === true,
+    enablePlanner: Boolean(options.planner || options.plan),
+    routingMode,
+    permissionMode,
+    distributionSpec,
+    noColor,
+    ascii,
+    colorMode,
     ...(options.model ? { modelId: String(options.model) } : {}),
-  } as any);
-  const { shutdownController } = await import('./shutdownController.js');
+    ...(options.agent ? { agentId: String(options.agent) } : {}),
+  });
   shutdownController().register('chat-tui', () => tui.stop());
   await tui.start();
+  if (options.resumeCommand) {
+    await tui.submitCommand(String(options.resumeCommand));
+  }
+  if (typeof options.initialPrompt === 'string' && options.initialPrompt.trim()) {
+    await tui.launchJobFromPrompt(options.initialPrompt.trim());
+  }
   await tui.waitForExit();
 }
+
+// `wa exec` — deterministic non-interactive automation reusing the authoritative execution path.
+program
+  .command('exec')
+  .argument('[prompt...]', 'Automation prompt (or "-" / omit to read piped stdin)')
+  .description('Execute a coding prompt non-interactively for scripts, pipes, and CI')
+  .option('-m, --model <name>', 'Use a specific model')
+  .option('--agent <name>', 'Use a specific coding agent')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID, PROVIDER_ONLY')
+  .option('--distribution <spec>', 'Weighted workload distribution (default: local:70,antigravity:15,codex:5)')
+  .option('-C, --cd <dir>', 'Run inside the specified workspace directory')
+  .option('--type <type>', 'Task type: coding, chat, research, etc.')
+  .option('--max-turns <number>', 'Maximum turns per task')
+  .option('--preset <name>', 'Runtime preset (standard, minimal)')
+  .option('--expected-files <files>', 'Expected changed files (comma-separated)')
+  .option('--allow-hosted', 'Allow routing to an authenticated hosted provider')
+  .option('--force', 'Run even if the agent failed its last preflight check')
+  .option('--full-verify', 'Run full repository verification')
+  .option('--json', 'Emit structured JSON output')
+  .action(async (promptParts: string[], options) => {
+    const joined = Array.isArray(promptParts) ? promptParts.join(' ').trim() : '';
+    let promptText = joined;
+    if (!joined || joined === '-') {
+      if (process.stdin.isTTY) {
+        console.error(
+          `Usage: ${invokedExecutableName} exec "<prompt>" (or pipe a prompt via stdin).`,
+        );
+        process.exit(2);
+      }
+      promptText = (await readPipedStdin()).trim();
+      if (!promptText) {
+        console.error(`${invokedExecutableName} exec received empty stdin.`);
+        process.exit(2);
+      }
+    }
+    await runNonInteractiveExec(promptText, options);
+  });
+
+// `wa resume` — session picker, `--last`, or explicit `<sessionId>`, safe across TTY and non-TTY.
+program
+  .command('resume')
+  .argument('[sessionId]', 'Session ID (or prefix) to resume')
+  .description('Resume a persisted coding conversation (interactive picker, --last, or by ID)')
+  .option('--last', 'Resume the most recent conversation session')
+  .option('--list', 'List persisted conversation sessions without opening the TUI')
+  .option('--all', 'Include sessions across all workspaces when listing or picking --last')
+  .option('-m, --model <name>', 'Override model for the resumed session')
+  .option('--agent <name>', 'Override agent for the resumed session')
+  .option('--routing-mode <mode>', 'Override routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID, PROVIDER_ONLY')
+  .option('--permissions <mode>', 'Override permission mode: ask, auto, read-only')
+  .option('--distribution <spec>', 'Weighted workload distribution')
+  .option('--theme <mode>', 'Color theme: auto, dark, light, mono')
+  .option('-C, --cd <dir>', 'Workspace directory')
+  .option('--json', 'Output session inspection as JSON')
+  .action(async (sessionId: string | undefined, options) => {
+    validateRoutingModeOption(options.routingMode);
+    validatePermissionsOption(options.permissions);
+    validateThemeOption(options.theme);
+    const distributionSpec = validateDistributionOption(options.distribution);
+    const projectRoot = resolveProjectRootOption(options.cd);
+    const isInteractive = Boolean(process.stdin.isTTY && process.stdout.isTTY) && !options.list && !options.json;
+
+    if (isInteractive) {
+      const resumeCmd = sessionId
+        ? `/resume ${sessionId}`
+        : options.last
+          ? '/resume --last'
+          : '/resume';
+      await launchInteractiveTui({ ...options, resumeCommand: resumeCmd }, 'conversation');
+      return;
+    }
+
+    // Deterministic non-TTY / --list / --json path (never hangs, never replays side effects).
+    const { createEngine } = await import('./engine.js');
+    const {
+      listConversationSessions,
+      loadConversationSession,
+      reconcileSessionJobs,
+    } = await import('./tui/sessionStore.js');
+    const engine = await createEngine({
+      projectRoot,
+      fastStartup: true,
+      readOnlyLifecycle: true,
+      quiet: true,
+      distributionSpec,
+    });
+
+    if (options.list || (!sessionId && !options.last)) {
+      const sessions = await listConversationSessions(engine.store, {
+        projectRoot: options.all ? undefined : projectRoot,
+      });
+      const fallbackSessions =
+        sessions.length === 0 && !options.all ? await listConversationSessions(engine.store) : sessions;
+      if (options.json) {
+        const detailed = await Promise.all(
+          fallbackSessions.map(async (s) => ({
+            ...s,
+            reconciledJobs: await reconcileSessionJobs(engine, s),
+          })),
+        );
+        console.log(JSON.stringify({ sessions: detailed }, null, 2));
+        process.exit(0);
+      }
+      if (fallbackSessions.length === 0) {
+        console.log('No saved conversation sessions found.');
+        process.exit(0);
+      }
+      for (const s of fallbackSessions.slice(0, 20)) {
+        const jobs = await reconcileSessionJobs(engine, s);
+        const latestState = jobs.at(-1)?.state ?? 'idle';
+        const userTurns = s.turns.filter((t) => t.role === 'user').length;
+        console.log(
+          `${s.id}  ${s.updatedAt.slice(0, 19).replace('T', ' ')}  [${latestState}]  ${userTurns} turn(s)  ${s.title}`,
+        );
+      }
+      process.exit(0);
+    }
+
+    let target = sessionId ? await loadConversationSession(engine.store, sessionId) : undefined;
+    if (!target && options.last) {
+      const scoped = await listConversationSessions(engine.store, {
+        projectRoot: options.all ? undefined : projectRoot,
+      });
+      const candidates = scoped.length > 0 ? scoped : await listConversationSessions(engine.store);
+      target = candidates[0];
+    }
+    if (!target) {
+      const label = sessionId ? `session '${sessionId}'` : 'any saved conversation session';
+      if (options.json) {
+        console.log(JSON.stringify({ ok: false, error: `Could not find ${label}.` }, null, 2));
+      } else {
+        console.error(`Could not find ${label}.`);
+      }
+      process.exit(1);
+    }
+
+    const reconciledJobs = await reconcileSessionJobs(engine, target);
+    if (options.json) {
+      console.log(JSON.stringify({ ok: true, session: target, reconciledJobs }, null, 2));
+      process.exit(0);
+    }
+    const lines = [
+      `Session:     ${target.id}`,
+      `Title:       ${target.title}`,
+      `Workspace:   ${target.projectRoot}${target.gitBranch ? ` (${target.gitBranch})` : ''}`,
+      `Updated:     ${target.updatedAt}`,
+      `Model:       ${target.selectedModelId ?? (target.selectedAgentId ? `agent:${target.selectedAgentId}` : 'auto')}`,
+      `Permissions: ${target.permissionMode}`,
+      `Turns:       ${target.turns.length}`,
+    ];
+    if (reconciledJobs.length > 0) {
+      lines.push('Jobs:');
+      for (const j of reconciledJobs) {
+        lines.push(`  - ${j.jobId} [${j.state}]: ${j.detail}`);
+      }
+    }
+    console.log(lines.join('\n'));
+    process.exit(0);
+  });
 
 // `wa chat` is the inline conversation; the full-screen fleet UI remains explicit.
 program
   .command('chat')
+  .argument('[prompt...]', 'Optional initial coding prompt')
   .description('Open the conversation-first coding assistant')
-  .option('--model <name>', 'Pin a specific model for the session')
-  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
+  .option('-m, --model <name>', 'Pin a specific model for the session')
+  .option('--agent <name>', 'Pin a specific coding agent for the session')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID, PROVIDER_ONLY')
+  .option('--permissions <mode>', 'Permission mode: ask, auto, read-only')
+  .option('--distribution <spec>', 'Weighted workload distribution (default: local:70,antigravity:15,codex:5)')
+  .option('--theme <mode>', 'Color theme: auto, dark, light, mono')
+  .option('-C, --cd <dir>', 'Run inside the specified workspace directory')
   .option('--dashboard', 'Open the full-screen fleet dashboard')
   .option('--legacy', 'Use the legacy full-screen fleet dashboard')
-  .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
+  .option('-c, --concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
   .option('--no-worktrees', 'Disable git worktree isolation')
   .option('--auto-merge', 'Automatically merge completed agent branches into main')
   .option('--timeout <seconds>', 'Stop a job automatically after this many seconds (default: no limit)')
   .option('--planner', 'Enable 3-layer Planner-Supervisor-Executor architecture (pre-execution DAG planning)')
-  .action(async (options) => launchInteractiveTui(options, options.dashboard || options.legacy ? 'dashboard' : 'conversation'));
+  .action(async (promptParts: string[], options) => {
+    const initialPrompt = Array.isArray(promptParts) && promptParts.length > 0 ? promptParts.join(' ').trim() : undefined;
+    await launchInteractiveTui(
+      { ...options, ...(initialPrompt ? { initialPrompt } : {}) },
+      options.dashboard || options.legacy ? 'dashboard' : 'conversation',
+    );
+  });
 
 program
   .command('fleet')
   .description('Open the full-screen fleet dashboard (alias: wa chat --dashboard)')
-  .option('--model <name>', 'Pin a specific model for the session')
-  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
-  .option('--concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
+  .option('-m, --model <name>', 'Pin a specific model for the session')
+  .option('--agent <name>', 'Pin a specific coding agent for the session')
+  .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID, PROVIDER_ONLY')
+  .option('--permissions <mode>', 'Permission mode: ask, auto, read-only')
+  .option('--distribution <spec>', 'Weighted workload distribution (default: local:70,antigravity:15,codex:5)')
+  .option('-C, --cd <dir>', 'Run inside the specified workspace directory')
+  .option('-c, --concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
   .option('--no-worktrees', 'Disable git worktree isolation')
   .option('--auto-merge', 'Automatically merge completed agent branches into main')
   .option('--timeout <seconds>', 'Stop a job automatically after this many seconds (default: no limit)')
@@ -2005,42 +2436,145 @@ serviceCmd
 program.addCommand(serviceCmd);
 program.addCommand(createHandoffCommand());
 
-program.action(async () => {
-  const globalOpts = program.opts<{ banner?: boolean; color?: boolean; ascii?: boolean }>();
-  if (process.stdout.isTTY && globalOpts.banner !== false) {
-    const { renderStartupBanner } = await import('./brand.js');
-    const { createEngine } = await import('./engine.js');
-    const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
-    const runtimes = engine.runtimes.list();
-    const onlineRuntimes = runtimes.filter(
-      (rt) => (rt as { status?: string }).status === 'online' || engine.discovered.some((d) => d.id === rt.id && d.health !== 'unavailable'),
-    );
-    const models = engine.models.list();
-    const bannerText = renderStartupBanner(
-      {
-        version: CLI_VERSION,
-        workspace: process.cwd(),
-        runtimeConnected: onlineRuntimes.length > 0,
-        runtimeLabel: onlineRuntimes.length > 0 ? onlineRuntimes.map((r) => r.type).join(', ') : undefined,
-        modelsAvailable: models.length,
-        mode: 'Autonomous',
-      },
-      {
-        isTTY: true,
-        columns: process.stdout.columns ?? 80,
-        noColorFlag: globalOpts.color === false,
-        noBannerFlag: false,
-        asciiFlag: Boolean(globalOpts.ascii),
-      }
-    );
-    if (bannerText) {
-      console.log(bannerText);
-      console.log();
+const ROOT_OPTIONS_TAKING_VALUE = new Set([
+  '-m',
+  '--model',
+  '--agent',
+  '--routing-mode',
+  '--permissions',
+  '--distribution',
+  '-C',
+  '--cd',
+  '--theme',
+  '-c',
+  '--concurrency',
+  '--timeout',
+]);
+
+function collectKnownSubcommands(): Set<string> {
+  const names = new Set<string>(['help']);
+  for (const cmd of program.commands) {
+    names.add(cmd.name());
+    for (const alias of cmd.aliases()) {
+      names.add(alias);
     }
   }
-  program.outputHelp();
-});
+  return names;
+}
 
-program.parse();
+function shouldDispatchSubcommandOrMeta(rawArgs: string[], knownSubcommands: Set<string>): boolean {
+  for (let i = 0; i < rawArgs.length; i += 1) {
+    const token = rawArgs[i]!;
+    if (token === '--') {
+      // Anything after `--` is explicitly forced as a positional prompt, not a subcommand.
+      return false;
+    }
+    if (token === '-h' || token === '--help' || token === '-V' || token === '--version') {
+      return true;
+    }
+    if (token.startsWith('-')) {
+      if (!token.includes('=') && ROOT_OPTIONS_TAKING_VALUE.has(token)) {
+        i += 1; // Skip option value
+      }
+      continue;
+    }
+    // First positional argument before `--`:
+    return knownSubcommands.has(token);
+  }
+  return false;
+}
+
+async function handleRootConversationOrPrompt(rawArgs: string[]): Promise<void> {
+  const rootParser = new Command()
+    .name(invokedExecutableName)
+    .allowUnknownOption(false)
+    .argument('[prompt...]', 'Optional initial coding prompt')
+    .option('--no-banner', 'Disable startup banner')
+    .option('--no-color', 'Disable ANSI colors')
+    .option('--ascii', 'Use plain ASCII glyphs')
+    .option('-m, --model <name>', 'Pin a specific model for the session')
+    .option('--agent <name>', 'Pin a specific coding agent for the session')
+    .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID, PROVIDER_ONLY')
+    .option('--permissions <mode>', 'Permission mode: ask, auto, read-only')
+    .option('--distribution <spec>', 'Weighted workload distribution (default: local:70,antigravity:15,codex:5)')
+    .option('--theme <mode>', 'Color theme: auto, dark, light, mono')
+    .option('-C, --cd <dir>', 'Run inside the specified workspace directory')
+    .option('-c, --concurrency <number>', 'Concurrent agent limit across the fleet (default: 4)')
+    .option('--no-worktrees', 'Disable git worktree isolation')
+    .option('--auto-merge', 'Automatically merge completed agent branches into main')
+    .option('--timeout <seconds>', 'Stop a job automatically after this many seconds')
+    .option('--planner', 'Enable 3-layer Planner-Supervisor-Executor architecture')
+    .option('--plan', 'Enable pre-execution planning')
+    .option('--allow-hosted', 'Allow hosted provider routing in non-interactive execution')
+    .option('--json', 'Emit JSON output in non-interactive execution')
+    .exitOverride()
+    .configureOutput({
+      writeOut: (str) => process.stdout.write(str),
+      writeErr: (str) => process.stderr.write(str),
+    });
+
+  let promptParts: string[] = [];
+  let opts: Record<string, any> = {};
+  try {
+    rootParser.action((parts: string[], parsedOpts: Record<string, any>) => {
+      promptParts = Array.isArray(parts) ? parts : [];
+      opts = parsedOpts;
+    });
+    await rootParser.parseAsync(rawArgs, { from: 'user' });
+  } catch (err: any) {
+    const code = typeof err?.exitCode === 'number' ? err.exitCode : 2;
+    process.exit(code === 0 ? 0 : 2);
+  }
+
+  // Validate interactive/root options upfront so bad flags fail deterministically even before TTY checks.
+  validateRoutingModeOption(opts.routingMode);
+  validatePermissionsOption(opts.permissions);
+  validateThemeOption(opts.theme);
+  validateDistributionOption(opts.distribution);
+
+  const promptText = promptParts.join(' ').trim();
+  const isInteractiveTty = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+
+  if (promptText.length > 0) {
+    if (isInteractiveTty && !opts.json) {
+      await launchInteractiveTui({ ...opts, initialPrompt: promptText }, 'conversation');
+      return;
+    }
+    await runNonInteractiveExec(promptText, opts);
+    return;
+  }
+
+  // Bare `wa` / `wazir` with no positional prompt:
+  if (isInteractiveTty) {
+    await launchInteractiveTui(opts, 'conversation');
+    return;
+  }
+
+  if (!process.stdin.isTTY) {
+    const piped = (await readPipedStdin()).trim();
+    if (piped.length > 0) {
+      await runNonInteractiveExec(piped, opts);
+      return;
+    }
+    // Empty EOF on stdin with no prompt -> deterministic clean exit 0 (never hang!).
+    process.exit(0);
+  }
+
+  // stdin is a TTY, but stdout is piped/redirected and no prompt was given:
+  console.error(
+    `Standard output is not an interactive terminal. Pass a prompt (${invokedExecutableName} "<prompt>") or use '${invokedExecutableName} exec "<prompt>"'.`,
+  );
+  process.exit(2);
+}
+
+void (async () => {
+  const rawArgs = process.argv.slice(2);
+  const knownSubcommands = collectKnownSubcommands();
+  if (shouldDispatchSubcommandOrMeta(rawArgs, knownSubcommands)) {
+    await program.parseAsync(process.argv);
+    return;
+  }
+  await handleRootConversationOrPrompt(rawArgs);
+})();
 
 

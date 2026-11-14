@@ -205,6 +205,9 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       chat: true,
       streaming: true,
       toolCalling: true,
+      nativeToolCalling: true,
+      parallelToolCalling: true,
+      streamingToolCalls: true,
       structuredOutput: true,
       vision: true,
       embeddings: true,
@@ -239,14 +242,65 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       }
     }
 
-    const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+    const systemParts: string[] = [];
+    if (request.systemPrompt) systemParts.push(request.systemPrompt);
+    const callIdToName = new Map<string, string>();
+    const contents: Array<{ role: 'user' | 'model'; parts: Array<Record<string, unknown>> }> = [];
     for (const message of request.messages) {
-      if (message.role === 'system') continue;
+      if (message.role === 'system') {
+        if (message.content) systemParts.push(message.content);
+        continue;
+      }
+      if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
+        const parts: Array<Record<string, unknown>> = [];
+        if (message.content && message.content.trim().length > 0) {
+          parts.push({ text: message.content });
+        }
+        for (const tc of message.toolCalls) {
+          if (tc.id) callIdToName.set(tc.id, tc.name);
+          let parsedArgs: unknown = tc.arguments ?? {};
+          if (typeof parsedArgs === 'string') {
+            try {
+              parsedArgs = JSON.parse(parsedArgs);
+            } catch {
+              parsedArgs = { raw: parsedArgs };
+            }
+          }
+          parts.push({
+            functionCall: {
+              name: tc.name,
+              args: parsedArgs && typeof parsedArgs === 'object' ? parsedArgs : {},
+            },
+          });
+        }
+        contents.push({ role: 'model', parts });
+        continue;
+      }
+      if (message.role === 'tool') {
+        const fnName = message.name ?? (message.toolCallId ? callIdToName.get(message.toolCallId) : undefined);
+        if (fnName) {
+          const fnPart = {
+            functionResponse: {
+              name: fnName,
+              response: { result: message.content },
+            },
+          };
+          const prev = contents[contents.length - 1];
+          if (prev && prev.role === 'user' && prev.parts.every((p) => 'functionResponse' in p)) {
+            prev.parts.push(fnPart);
+          } else {
+            contents.push({ role: 'user', parts: [fnPart] });
+          }
+        } else {
+          contents.push({ role: 'user', parts: [{ text: `[tool result: ${message.content}]` }] });
+        }
+        continue;
+      }
       const role = message.role === 'assistant' ? 'model' : 'user';
-      const content = message.role === 'tool' ? `[tool result: ${message.content}]` : message.content;
-      contents.push({ role, parts: [{ text: content }] });
+      contents.push({ role, parts: [{ text: message.content }] });
     }
     if (request.prompt) contents.push({ role: 'user', parts: [{ text: request.prompt }] });
+    const effectiveSystemPrompt = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
     const url = new URL(`${API_BASE}/v1beta/models/${encodeURIComponent(request.modelId)}:streamGenerateContent`);
     url.searchParams.set('alt', 'sse');
@@ -266,7 +320,7 @@ export class GoogleAdapter implements RuntimeAdapter, ProviderAuthAdapter {
         headers,
         body: JSON.stringify({
           contents,
-          systemInstruction: request.systemPrompt ? { parts: [{ text: request.systemPrompt }] } : undefined,
+          systemInstruction: effectiveSystemPrompt ? { parts: [{ text: effectiveSystemPrompt }] } : undefined,
           generationConfig: { temperature: request.temperature, topP: request.topP, maxOutputTokens: request.maxTokens },
           tools: request.tools?.length
             ? [{ functionDeclarations: request.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) }]

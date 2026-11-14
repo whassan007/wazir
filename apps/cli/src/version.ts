@@ -19,10 +19,33 @@ export interface BuildInfo {
   channel: string;
 }
 
+export function isNodeSea(): boolean {
+  try {
+    const seaMod = (process as NodeJS.Process & { getBuiltinModule?: (id: string) => { isSea?: () => boolean } | undefined }).getBuiltinModule?.('node:sea');
+    if (seaMod?.isSea?.()) return true;
+    return Boolean((process as any).isSea?.());
+  } catch {
+    return false;
+  }
+}
+
 export function detectInstallChannel(): string {
   if (process.env.WAZIR_INSTALL_CHANNEL) return process.env.WAZIR_INSTALL_CHANNEL;
   if (existsSync('/.dockerenv') || process.env.DOCKER_CONTAINER === 'true') {
     return 'docker';
+  }
+  if (isNodeSea()) {
+    const binPath = process.execPath;
+    if (binPath.includes('/Cellar/wazir') || binPath.includes('/opt/homebrew/') || (process.env.HOMEBREW_PREFIX && binPath.startsWith(process.env.HOMEBREW_PREFIX))) {
+      return 'homebrew';
+    }
+    if (binPath.toLowerCase().includes('scoop\\apps\\wazir') || binPath.toLowerCase().includes('scoop/apps/wazir')) {
+      return 'scoop';
+    }
+    if (binPath.includes('WinGet') || binPath.includes('WindowsApps')) {
+      return 'winget';
+    }
+    return 'standalone-binary';
   }
   const execPath = process.argv[1] || process.execPath;
   if (execPath.includes('/Cellar/wazir') || execPath.includes('/opt/homebrew/') || (process.env.HOMEBREW_PREFIX && execPath.startsWith(process.env.HOMEBREW_PREFIX))) {
@@ -34,15 +57,12 @@ export function detectInstallChannel(): string {
   if (execPath.includes('WinGet') || execPath.includes('WindowsApps')) {
     return 'winget';
   }
-  if (execPath.startsWith('/usr/bin/wa') || execPath.startsWith('/usr/lib/wazir')) {
+  if (execPath.startsWith('/usr/bin/wa') || execPath.startsWith('/usr/bin/wazir') || execPath.startsWith('/usr/lib/wazir')) {
     if (existsSync('/etc/debian_version')) return 'deb';
     if (existsSync('/etc/redhat-release') || existsSync('/etc/fedora-release')) return 'rpm';
   }
   if (execPath.includes('node_modules') || execPath.includes('.npm') || execPath.includes('npm/bin')) {
     return 'npm';
-  }
-  if ((process as any).isSea?.()) {
-    return 'standalone-binary';
   }
   return 'source';
 }

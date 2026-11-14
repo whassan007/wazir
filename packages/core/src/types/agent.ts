@@ -26,6 +26,7 @@ export interface AgentInfo {
 }
 
 export type AgentPhase =
+  | 'unified'
   | 'plan'
   | 'inspect'
   | 'implement'
@@ -233,6 +234,7 @@ export interface AgentRuntime {
       temperature?: number;
       tools?: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
       toolChoice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } };
+      parallelToolCalls?: boolean;
       responseFormat?: { type: 'text' | 'json_object' | 'json_schema'; json_schema?: Record<string, unknown> };
     },
   ): AsyncIterable<GenerationEvent>;

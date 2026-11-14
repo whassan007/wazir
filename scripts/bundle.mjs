@@ -59,7 +59,9 @@ try {
     external: ['pg-native', '@napi-rs/keyring', 'node-pty'],
     banner: { js: RUNTIME_GUARD },
     sourcemap: true,
-    minify: false,
+    minifyWhitespace: true,
+    minifySyntax: true,
+    minifyIdentifiers: false,
     logLevel: 'info',
     define: {
       '__WAZIR_VERSION__': JSON.stringify(version),

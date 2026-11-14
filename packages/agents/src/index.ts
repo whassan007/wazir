@@ -1,5 +1,6 @@
 export * from './chatAgent.js';
 export * from './codingAgent.js';
+export * from './qwenCore/index.js';
 export * from './verificationScope.js';
 export * from './externalAgent.js';
 export * from './stepAgent.js';

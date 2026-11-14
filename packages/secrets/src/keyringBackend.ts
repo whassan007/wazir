@@ -52,10 +52,21 @@ entry.deletePassword();
  * timeout; a hang or failure rejects, and the broker falls back to the
  * encrypted-file backend.
  */
+function isNodeSeaRuntime(): boolean {
+  try {
+    return Boolean((process as NodeJS.Process & { getBuiltinModule?: (id: string) => { isSea?: () => boolean } | undefined }).getBuiltinModule?.('node:sea')?.isSea?.());
+  } catch {
+    return false;
+  }
+}
+
 export function probeKeyringInSubprocess(
   timeoutMs = Number(process.env.WAZIR_KEYRING_PROBE_TIMEOUT_MS) || DEFAULT_PROBE_TIMEOUT_MS,
   script = PROBE_SCRIPT,
 ): Promise<void> {
+  if (isNodeSeaRuntime()) {
+    return Promise.reject(new Error('OS keychain native addon is not bundled in standalone SEA binary; falling back to encrypted file store'));
+  }
   return new Promise((resolve, reject) => {
     // cwd = this package, so the child resolves @napi-rs/keyring the same way we do.
     execFile(process.execPath, ['-e', script], { cwd: __dirname, timeout: timeoutMs, killSignal: 'SIGKILL', windowsHide: true }, (error) => {

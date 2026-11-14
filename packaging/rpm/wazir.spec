@@ -38,6 +38,8 @@ cat << 'EOF' > %{buildroot}%{_bindir}/wa
 exec node /usr/lib/wazir/wa.js "$@"
 EOF
 chmod 0755 %{buildroot}%{_bindir}/wa
+cp %{buildroot}%{_bindir}/wa %{buildroot}%{_bindir}/wazir
+chmod 0755 %{buildroot}%{_bindir}/wazir
 
 # Install systemd service files
 install -m 0644 scripts/systemd/wazir-api.service %{buildroot}%{_unitdir}/wazir-api.service
@@ -64,6 +66,7 @@ fi
 %license LICENSE
 %doc README.md
 %{_bindir}/wa
+%{_bindir}/wazir
 %{_prefix}/lib/wazir
 %{_unitdir}/wazir-api.service
 %{_unitdir}/wazir-worker.service

@@ -14,6 +14,7 @@ import type { RuntimeCapabilities } from '@wazir/runtimes-interfaces';
 export const MUTATION_TOOLS = new Set<string>([
   'write',
   'edit',
+  'multi_edit',
   'write_to_file',
   'replace_file_content',
   'code_mode',
@@ -27,6 +28,7 @@ export const VERIFICATION_TOOLS = new Set<string>([
   'typecheck',
   'git',
   'read',
+  'read_many_files',
   'search',
   'glob',
 ]);
@@ -45,6 +47,8 @@ export const CODE_INTELLIGENCE_TOOLS = new Set<string>([
 /** Non-mutating analysis and exploration tools allowed during planning. */
 export const PLAN_ALLOWED_TOOLS = new Set<string>([
   'read',
+  'read_many_files',
+  'todo_write',
   'search',
   'glob',
   'git',
@@ -122,8 +126,11 @@ export function classifyToolSource(tool: Tool): ToolSourceKind {
   if (
     [
       'read',
+      'read_many_files',
       'write',
       'edit',
+      'multi_edit',
+      'todo_write',
       'search',
       'glob',
       'shell',

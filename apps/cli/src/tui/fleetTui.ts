@@ -93,6 +93,17 @@ import {
 } from './fleetTuiTypes.js';
 import { buildFleetWhyExplanation } from './fleetTuiWhy.js';
 import * as fleetPanes from './fleetTuiPanes.js';
+import { ConversationController, type PermissionMode } from './conversationController.js';
+import {
+  moveCursorVertically,
+  findLineHomeOffset,
+  findLineEndOffset,
+  killToLineEnd,
+  killToLineStart,
+  isExplicitNewlineChord,
+} from './composerController.js';
+import { renderMarkdownMessage, sanitizeAssistantText } from './markdownRenderer.js';
+import { CONVERSATION_SLASH_COMMANDS, resolvePromptFileMentions } from './completionEngine.js';
 
 export {
   isScreenFragment,
@@ -116,8 +127,11 @@ export {
 const execFileAsync = promisify(execFile);
 
 export class FleetTui {
-  readonly engine: RookEngine;
+  engine: RookEngine;
   readonly screen: TerminalScreen;
+  readonly conversation: ConversationController;
+  private pendingBootstrapPrompts: string[] = [];
+  private isDrainingQueue = false;
   private readonly concurrencyLimit: number;
   private readonly useWorktrees: boolean;
   private readonly autoMerge: boolean;
@@ -354,16 +368,40 @@ export class FleetTui {
     if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation(this.presentationMode);
     if (this.presentationMode === 'conversation') this.focusedPane = 'prompt';
     const output = typeof (this.screen as any).getOutputStream === 'function' ? this.screen.getOutputStream() : process.stdout;
-    this.conversationRenderer = new ConversationRenderer(output, () => typeof (this.screen as any).getSize === 'function' ? this.screen.getSize() : { columns: 80, rows: 24 });
+    this.conversationRenderer = new ConversationRenderer(
+      output,
+      () => typeof (this.screen as any).getSize === 'function' ? this.screen.getSize() : { columns: 80, rows: 24 },
+      {
+        noColor: options.noColor,
+        ascii: options.ascii,
+        colorMode: options.colorMode,
+      },
+    );
     this.clipboardController = new ClipboardController(output);
     this.concurrencyLimit = options.concurrencyLimit ?? 4;
     this.useWorktrees = options.useWorktrees ?? true;
     this.autoMerge = options.autoMerge ?? false;
     this.timeoutSeconds = options.timeoutSeconds;
     this.enablePlanner = options.enablePlanner ?? false;
-    if ((options as { modelId?: string }).modelId) {
-      this.selectedModelId = (options as { modelId?: string }).modelId;
+    if (options.modelId) {
+      this.selectedModelId = options.modelId;
     }
+    this.conversation = new ConversationController({
+      sessionId: options.sessionId ?? this.sessionId,
+      projectRoot: this.engine.projectRoot || process.cwd(),
+      permissionMode: options.permissionMode,
+      routingMode: options.routingMode,
+      selectedModelId: options.modelId,
+      selectedAgentId: options.agentId,
+      distributionSpec: options.distributionSpec,
+      ascii: options.ascii,
+    });
+    this.conversationRenderer.setHeaderContext({
+      workspaceName: this.conversation.workspaceName,
+      gitBranch: this.conversation.gitBranch,
+      permissionSummary: this.conversation.formatPermissionSummary(),
+      model: this.conversation.formatModelSummary(this.engine),
+    });
   }
 
   getSessionId(): string {
@@ -841,8 +879,10 @@ export class FleetTui {
   }
 
   getMode(): TuiMode {
-    if (this.pendingApprovals.length > 0) return 'APPROVAL';
-    if (this.quickActionsOpen) return 'PALETTE';
+    if (this.pendingApprovals.length > 0 && (this.presentationMode !== 'conversation' || this.conversation.approvalFocused)) {
+      return 'APPROVAL';
+    }
+    if (this.quickActionsOpen || this.conversation.overlay?.kind === 'palette') return 'PALETTE';
     if (this.tuiMode === 'NORMAL' && this.inputBuffer.startsWith('!')) return 'SHELL';
     return this.tuiMode;
   }
@@ -878,6 +918,9 @@ export class FleetTui {
       this.focusedPane = 'prompt';
       this.statusMessage = 'Pasted text inserted.';
       this.checkReferencePicker();
+      if (this.presentationMode === 'conversation') {
+        this.refreshConversationCompletions();
+      }
       this.draw();
     }
   }
@@ -906,7 +949,7 @@ export class FleetTui {
   }
 
   isQuickActionsOpen(): boolean {
-    return this.quickActionsOpen;
+    return this.quickActionsOpen || this.conversation.overlay?.kind === 'palette';
   }
 
   getAgents(): AgentCardState[] {
@@ -1001,6 +1044,32 @@ export class FleetTui {
    * Toggles target focus, transitions views, and redraws screen without buffer leakage.
    */
   consumeTabKey(isShift = false): void {
+    if (this.presentationMode === 'conversation') {
+      if (this.conversation.completionItems.length > 0) {
+        const accepted = this.conversation.acceptCompletion(this.inputBuffer);
+        if (accepted) {
+          this.snapshotInputEdit();
+          this.inputBuffer = accepted.nextPrompt;
+          this.inputCursor = accepted.nextCursor;
+          this.refreshConversationCompletions();
+          this.draw();
+          return;
+        }
+      }
+      if (this.pendingApprovals.length > 0) {
+        this.conversation.approvalFocused = !this.conversation.approvalFocused;
+        this.statusMessage = this.conversation.approvalFocused
+          ? `Approval focused (${this.pendingApprovals[0]?.tool}): press y to approve, n to deny, v for details, Tab for composer`
+          : `Composer focused (${this.pendingApprovals.length} approval pending — press Tab to review)`;
+        this.draw();
+        return;
+      }
+      this.focusedPane = 'prompt';
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+
     // If @ fuzzy reference picker is active, Tab completes the selected candidate into prompt
     if (this.isPickerActive && this.pickerCandidates.length > 0) {
       const chosen = this.pickerCandidates[this.pickerIndex];
@@ -1099,8 +1168,18 @@ export class FleetTui {
     // Verify that stdin is correctly running in raw mode so structured key objects are passed
     this.screen.enter();
     if (this.presentationMode === 'conversation') {
-      // Before a task is scheduled no model is executing; a ready model is not the router's choice.
-      this.conversationRenderer.start(process.env.USER ?? process.env.USERNAME ?? 'controller', this.selectedModelId ?? 'auto-routed model');
+      this.conversationRenderer.start(
+        process.env.USER ?? process.env.USERNAME ?? 'controller',
+        this.conversation.formatModelSummary(this.engine),
+        {
+          workspaceName: this.conversation.workspaceName,
+          gitBranch: this.conversation.gitBranch,
+          permissionSummary: this.conversation.formatPermissionSummary(),
+        },
+      );
+      if (this.engine.isBootstrapping) {
+        this.statusMessage = 'Connecting to providers…';
+      }
     }
 
     this.waitForExit();
@@ -1110,19 +1189,12 @@ export class FleetTui {
       this.draw();
     });
 
-    // Subscribe to approval queue
-    this.unsubscribeApprovals = this.engine.approvalQueue.subscribe((requests) => {
-      this.pendingApprovals = requests;
-      this.statusProjection.setWaitingForApproval(requests.map((request) => request.taskId).filter((id): id is string => Boolean(id)), requests.length > 0);
-      if (requests.length > 0) {
-        const first = requests[0];
-        this.statusMessage = `Waiting for approval: ${first.tool} (${requests.length} pending)`;
-      }
-      this.draw();
-    });
+    this.bindEngineSubscriptions();
 
     // Load initial recent blocks
-    void this.refreshRecentBlocks();
+    if (!this.engine.isBootstrapping) {
+      void this.refreshRecentBlocks();
+    }
 
     // Listen to structured keypress events via screen input stream
     const inStream = this.screen.getInputStream();
@@ -1198,17 +1270,66 @@ export class FleetTui {
       this.draw();
     }, 250);
 
-    // Subscribe to model lifecycle events
+    // Check startup model readiness once live engine is attached
+    if (this.engine.lifecycle && !this.engine.isBootstrapping) {
+      await this.handleStartupModelReadiness();
+    }
+
+    this.draw();
+  }
+
+  private bindEngineSubscriptions(): void {
+    this.unsubscribeApprovals?.();
+    this.unsubscribeModelLifecycle?.();
+    this.unsubscribeSolutionSearch?.();
+    this.unsubscribeOptimizer?.();
+    this.unsubscribeCanaryEvents?.();
+
+    this.unsubscribeApprovals = this.engine.approvalQueue.subscribe((requests) => {
+      if (this.presentationMode === 'conversation' && requests.length > 0) {
+        if (this.conversation.permissionMode === 'read-only') {
+          for (const req of [...requests]) {
+            this.engine.approvalQueue.deny(req.id);
+            this.conversationRenderer.append(
+              `  Blocked ${req.tool} in read-only permission mode (/permissions ask to allow changes).`,
+            );
+          }
+          return;
+        }
+        if (this.conversation.permissionMode === 'auto') {
+          for (const req of [...requests]) {
+            this.engine.approvalQueue.approve(req.id);
+          }
+          return;
+        }
+      }
+
+      const hadApprovals = this.pendingApprovals.length > 0;
+      this.pendingApprovals = requests;
+      if (requests.length === 0) {
+        this.conversation.approvalFocused = false;
+      } else if (!hadApprovals && this.presentationMode === 'conversation') {
+        // Explicit approval focus: never hijack ordinary typing automatically.
+        this.conversation.approvalFocused = false;
+      }
+
+      this.statusProjection.setWaitingForApproval(
+        requests.map((request) => request.taskId).filter((id): id is string => Boolean(id)),
+        requests.length > 0,
+      );
+      if (requests.length > 0) {
+        const first = requests[0]!;
+        this.statusMessage = `Waiting for approval: ${first.tool} (${requests.length} pending)`;
+      }
+      this.draw();
+    });
+
     if (this.engine.lifecycle) {
       this.unsubscribeModelLifecycle = this.engine.lifecycle.subscribe((event) => {
         this.handleModelLifecycleEvent(event);
       });
-
-      // Check startup model readiness according to config mode
-      await this.handleStartupModelReadiness();
     }
 
-    // Subscribe to solution search and optimizer event streams
     if (this.engine.solutionSearch && typeof this.engine.solutionSearch.onEvent === 'function') {
       this.unsubscribeSolutionSearch = this.engine.solutionSearch.onEvent((_event) => {
         this.draw();
@@ -1225,7 +1346,52 @@ export class FleetTui {
     if (canaryEventSource && typeof canaryEventSource.onEvent === 'function') {
       this.unsubscribeCanaryEvents = canaryEventSource.onEvent((event: any) => this.observeCanaryEvent(event));
     }
+  }
 
+  /**
+   * Swaps an instant bootstrap shell engine with the live provider-discovered RookEngine
+   * without dropping any keystrokes, draft buffer content, or queued initial prompts.
+   */
+  async attachLiveEngine(
+    liveEngine: RookEngine,
+    options?: { selectedModel?: string; projectRoot?: string },
+  ): Promise<void> {
+    if (options?.selectedModel) {
+      this.selectedModelId = options.selectedModel;
+      this.conversation.selectedModelId = options.selectedModel;
+    }
+    if (!this.isRunning) {
+      this.engine = liveEngine;
+      return;
+    }
+    this.engine = liveEngine;
+    this.conversation.refreshWorkspaceMeta(options?.projectRoot ?? liveEngine.projectRoot);
+    const modelLabel = this.conversation.formatModelSummary(liveEngine);
+    this.conversationRenderer.setHeaderContext({
+      workspaceName: this.conversation.workspaceName,
+      gitBranch: this.conversation.gitBranch,
+      permissionSummary: this.conversation.formatPermissionSummary(),
+      model: modelLabel,
+    });
+    if (this.presentationMode === 'conversation' && this.conversation.turns.length === 0) {
+      this.conversationRenderer.clearScreenAndRestart();
+    }
+    this.bindEngineSubscriptions();
+    void this.refreshRecentBlocks();
+
+    if (this.statusMessage === 'Connecting to providers…') {
+      this.statusMessage = 'Ready. Type a task or /fanout <t1; t2; ...> to begin.';
+    }
+    this.draw();
+
+    if (this.pendingBootstrapPrompts.length > 0) {
+      const queued = this.pendingBootstrapPrompts.splice(0, this.pendingBootstrapPrompts.length);
+      for (const prompt of queued) {
+        await this.launchJobFromPrompt(prompt, { alreadyEchoed: true });
+      }
+    } else if (this.engine.lifecycle) {
+      await this.handleStartupModelReadiness();
+    }
     this.draw();
   }
 
@@ -1384,9 +1550,10 @@ export class FleetTui {
       process.exit(0);
     }
 
-    // Model Startup Selector key routing (dashboard mode only — never block conversation mode)
-    if (this.startupSelector && this.presentationMode === 'conversation') {
-      this.startupSelector = undefined;
+    // Model Startup Selector & Task-Time modal key routing (dashboard mode only — never block conversation mode)
+    if (this.presentationMode === 'conversation') {
+      if (this.startupSelector) this.startupSelector = undefined;
+      if (this.taskTimeModelRequired) this.taskTimeModelRequired = undefined;
     }
     if (this.startupSelector) {
       if (keyObj.ctrl && (keyName === 'p' || keyName === 'P' || keyStr === '\x10')) {
@@ -1521,33 +1688,29 @@ export class FleetTui {
       return;
     }
 
-    // Ctrl+G: manually toggle FULL <-> FOCUSED sidebar (does not affect selection/scroll).
-    // (Ctrl+B is already bound to "expand latest block from history" — see below —
-    // so the sidebar hide/restore toggle uses Ctrl+T instead.)
-    if ((keyObj.ctrl && (keyName === 'g' || keyName === 'G')) || keyStr === '\u0007') {
-      this.sidebarManuallyOverridden = true;
-      this.sidebarMode = this.sidebarMode === 'full' ? 'focused' : 'full';
-      this.statusMessage = `Sidebar: ${this.sidebarMode.toUpperCase()}`;
-      this.draw();
-      return;
-    }
-
-    // Ctrl+T: hide/restore the entire left pane. Hiding is a manual override that
-    // survives incoming events; restoring hands back to automatic mode selection
-    // (FOCUSED for one active task, FULL otherwise) rather than a hardcoded mode.
-    // Selection, scroll position, and the active task/execution are untouched.
-    if ((keyObj.ctrl && (keyName === 't' || keyName === 'T')) || keyStr === '\u0014') {
-      if (this.sidebarMode === 'hidden') {
-        this.sidebarManuallyOverridden = false;
-        this.sidebarMode = this.computeAutoSidebarMode();
-        this.statusMessage = `Sidebar restored: ${this.sidebarMode.toUpperCase()}`;
-      } else {
+    // Ctrl+G / Ctrl+T sidebar toggles apply only to full-screen dashboard mode
+    if (!this.isConversationPresentation()) {
+      if ((keyObj.ctrl && (keyName === 'g' || keyName === 'G')) || keyStr === '\u0007') {
         this.sidebarManuallyOverridden = true;
-        this.sidebarMode = 'hidden';
-        this.statusMessage = 'Sidebar hidden — Ctrl+T to restore';
+        this.sidebarMode = this.sidebarMode === 'full' ? 'focused' : 'full';
+        this.statusMessage = `Sidebar: ${this.sidebarMode.toUpperCase()}`;
+        this.draw();
+        return;
       }
-      this.draw();
-      return;
+
+      if ((keyObj.ctrl && (keyName === 't' || keyName === 'T')) || keyStr === '\u0014') {
+        if (this.sidebarMode === 'hidden') {
+          this.sidebarManuallyOverridden = false;
+          this.sidebarMode = this.computeAutoSidebarMode();
+          this.statusMessage = `Sidebar restored: ${this.sidebarMode.toUpperCase()}`;
+        } else {
+          this.sidebarManuallyOverridden = true;
+          this.sidebarMode = 'hidden';
+          this.statusMessage = 'Sidebar hidden — Ctrl+T to restore';
+        }
+        this.draw();
+        return;
+      }
     }
 
     // COPY mode handling
@@ -1595,6 +1758,14 @@ export class FleetTui {
     if (keyName === 'tab' || keyStr === '\t' || keyStr === '\x1b[Z') {
       const isShift = Boolean(keyObj.shift || keyStr === '\x1b[Z');
       this.consumeTabKey(isShift);
+      return;
+    }
+
+    // Dedicated conversation-mode composer & interactive key handler:
+    // Prevents dashboard-only single-letter shortcuts ('1'..'6', '?', '\\', nav keys)
+    // from hijacking ordinary typing or accidental approval keys in conversation mode.
+    if (this.isConversationPresentation()) {
+      this.handleConversationModeKey(key, rawKeyObj, keyObj, keyName, keyStr);
       return;
     }
 
@@ -2928,6 +3099,516 @@ export class FleetTui {
     }
   }
 
+  private completionNavigated = false;
+
+  private refreshConversationCompletions(): void {
+    this.completionNavigated = false;
+    this.conversation.updateCompletions(
+      this.inputBuffer,
+      this.inputCursor,
+      this.collectReferenceCandidates(),
+    );
+  }
+
+  private async applyConversationOverlayChoice(): Promise<void> {
+    const overlay = this.conversation.overlay;
+    if (!overlay) return;
+    const filtered = this.conversation.filteredOverlayOptions();
+    const chosen = filtered[Math.max(0, Math.min(filtered.length - 1, overlay.selectedIndex))];
+    this.conversation.overlay = undefined;
+    if (!chosen) {
+      this.draw();
+      return;
+    }
+
+    const theme = this.conversationRenderer.getTheme();
+    const g = theme.glyphs;
+
+    if (overlay.kind === 'model') {
+      if (chosen.id === 'auto') {
+        this.selectedModelId = undefined;
+        this.conversation.selectedModelId = undefined;
+        this.conversation.selectedAgentId = undefined;
+        this.statusMessage = 'Model routing set to auto (scheduler + hardware distribution).';
+        this.conversationRenderer.append(`${theme.success(g.success)} Model set to ${theme.bold('auto')}`);
+      } else if (chosen.id.startsWith('agent:')) {
+        const agentName = chosen.id.slice(6);
+        this.selectedModelId = undefined;
+        this.conversation.selectedModelId = undefined;
+        this.conversation.selectedAgentId = agentName;
+        this.statusMessage = `Pinned external agent '${agentName}'.`;
+        this.conversationRenderer.append(`${theme.success(g.success)} Pinned agent ${theme.bold(agentName)}`);
+      } else {
+        this.selectedModelId = chosen.id;
+        this.conversation.selectedModelId = chosen.id;
+        this.conversation.selectedAgentId = undefined;
+        this.statusMessage = `Pinned model '${chosen.id}'.`;
+        this.conversationRenderer.append(`${theme.success(g.success)} Pinned model ${theme.bold(chosen.id)}`);
+      }
+      this.conversationRenderer.setHeaderContext({
+        model: this.conversation.formatModelSummary(this.engine),
+      });
+      void this.conversation.persist(this.engine);
+      this.draw();
+      return;
+    }
+
+    if (overlay.kind === 'permissions') {
+      const nextMode = chosen.id as 'ask' | 'auto' | 'read-only';
+      this.conversation.permissionMode = nextMode;
+      this.conversationRenderer.setHeaderContext({
+        permissionSummary: this.conversation.formatPermissionSummary(),
+      });
+      this.statusMessage = `Permission mode set to '${nextMode}'.`;
+      this.conversationRenderer.append(
+        `${theme.success(g.success)} Permission mode: ${theme.bold(nextMode)} ${theme.muted(`(${chosen.detail ?? ''})`)}`,
+      );
+      void this.conversation.persist(this.engine);
+      this.draw();
+      return;
+    }
+
+    if (overlay.kind === 'resume') {
+      const size = this.screen.getSize();
+      const restored = await this.conversation.restoreSession(this.engine, chosen.id, theme, size.columns);
+      if (restored.ok) {
+        this.selectedModelId = this.conversation.selectedModelId;
+        this.conversationRenderer.setHeaderContext({
+          model: this.conversation.formatModelSummary(this.engine),
+          permissionSummary: this.conversation.formatPermissionSummary(),
+        });
+      }
+      this.conversationRenderer.append(restored.transcriptText);
+      this.statusMessage = restored.ok ? `Resumed session ${chosen.id}.` : 'Could not resume session.';
+      this.draw();
+      return;
+    }
+
+    if (overlay.kind === 'palette') {
+      const cmd = chosen.id;
+      if (cmd === '/steer' || cmd === '/queue') {
+        this.snapshotInputEdit();
+        this.inputBuffer = `${cmd} `;
+        this.inputCursor = this.inputBuffer.length;
+        this.refreshConversationCompletions();
+        this.draw();
+        return;
+      }
+      await this.submitCommand(cmd);
+    }
+  }
+
+  private isConversationPresentation(): boolean {
+    return this.presentationMode === 'conversation';
+  }
+
+  private handleConversationModeKey(
+    key: string,
+    rawKeyObj: readline.Key | undefined,
+    keyObj: readline.Key,
+    keyName: string,
+    keyStr: string,
+  ): void {
+    this.focusedPane = 'prompt';
+    const cols = this.screen.getSize().columns;
+    const theme = this.conversationRenderer.getTheme();
+
+    // 1. Searchable interactive overlay (/model, /permissions, /resume, Ctrl+P palette)
+    if (this.conversation.overlay) {
+      if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
+        this.conversation.overlay = undefined;
+        this.statusMessage = 'Dismissed selector.';
+        this.draw();
+        return;
+      }
+      const filtered = this.conversation.filteredOverlayOptions();
+      if (keyName === 'up' || keyStr === '\u001b[A') {
+        this.conversation.overlay.selectedIndex = Math.max(0, this.conversation.overlay.selectedIndex - 1);
+        this.draw();
+        return;
+      }
+      if (keyName === 'down' || keyStr === '\u001b[B') {
+        this.conversation.overlay.selectedIndex = Math.min(
+          Math.max(0, filtered.length - 1),
+          this.conversation.overlay.selectedIndex + 1,
+        );
+        this.draw();
+        return;
+      }
+      if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+        void this.applyConversationOverlayChoice();
+        return;
+      }
+      if (keyName === 'backspace' || keyStr === '\u0008' || keyStr === '\x7f') {
+        const q = this.conversation.overlay.query;
+        const prev = previousGraphemeBoundary(q, q.length);
+        this.conversation.overlay.query = q.slice(0, prev);
+        this.conversation.overlay.selectedIndex = 0;
+        this.draw();
+        return;
+      }
+      if ((keyObj.ctrl && (keyName === 'u' || keyName === 'U')) || keyStr === '\u0015') {
+        this.conversation.overlay.query = '';
+        this.conversation.overlay.selectedIndex = 0;
+        this.draw();
+        return;
+      }
+      if ((keyObj.ctrl && (keyName === 'p' || keyName === 'P')) || keyStr === '\x10') {
+        this.conversation.overlay = undefined;
+        this.draw();
+        return;
+      }
+      if (
+        !keyObj.ctrl &&
+        !keyObj.meta &&
+        !keyStr.startsWith('\x1b') &&
+        keyStr.length > 0 &&
+        !/[\x00-\x1f\x7f-\x9f]/.test(keyStr)
+      ) {
+        this.conversation.overlay.query += keyStr;
+        this.conversation.overlay.selectedIndex = 0;
+        this.draw();
+      }
+      return;
+    }
+
+    // 2. Explicit Approval Focus: ONLY active after pressing Tab while an approval is pending.
+    // Ordinary typing in the composer NEVER accidentally approves or denies an action!
+    if (this.pendingApprovals.length > 0 && this.conversation.approvalFocused) {
+      const first = this.pendingApprovals[0]!;
+      const g = theme.glyphs;
+      if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
+        this.conversation.approvalFocused = false;
+        this.statusMessage = 'Composer focused (press Tab or /approve to review pending approval).';
+        this.draw();
+        return;
+      }
+      if (keyStr === 'y' || keyStr === 'Y' || keyStr === 'a' || keyStr === 'A') {
+        const remaining = this.pendingApprovals.length - 1;
+        this.engine.approvalQueue.approve(first.id);
+        this.conversation.approvalFocused = remaining > 0;
+        this.statusMessage = `Approved policy request for ${first.tool}`;
+        this.conversationRenderer.append(`  ${theme.success(g.success)} Approved ${first.tool}`);
+        this.draw();
+        return;
+      }
+      if (keyStr === 'n' || keyStr === 'N' || keyStr === 'd' || keyStr === 'D') {
+        const remaining = this.pendingApprovals.length - 1;
+        this.engine.approvalQueue.deny(first.id);
+        this.conversation.approvalFocused = remaining > 0;
+        this.statusMessage = `Denied policy request for ${first.tool}`;
+        this.conversationRenderer.append(`  ${theme.error(g.error)} Denied ${first.tool}`);
+        this.draw();
+        return;
+      }
+      if (keyStr === 'v' || keyStr === 'V') {
+        this.approvalShowDetails = !this.approvalShowDetails;
+        this.statusMessage = this.approvalShowDetails ? 'Showing expanded approval details' : 'Standard approval preview';
+        this.draw();
+        return;
+      }
+      this.statusMessage = 'Approval focused: press y to approve, n to deny, v for details, or Tab/Esc for composer.';
+      this.draw();
+      return;
+    }
+
+    // 3. Ctrl+P: Keyboard-accessible Command Palette
+    if ((keyObj.ctrl && (keyName === 'p' || keyName === 'P')) || keyStr === '\x10') {
+      this.conversation.openPaletteOverlay();
+      this.draw();
+      return;
+    }
+
+    // 4. Ctrl+L: Repaint cleanly without losing transcript or composer state
+    if ((keyObj.ctrl && (keyName === 'l' || keyName === 'L')) || keyStr === '\x0c') {
+      this.draw();
+      return;
+    }
+
+    // 5. Escape: dismiss completions -> interrupt active run -> clear unsent draft
+    if (key === '\u001b' || key === '\x1b' || keyName === 'escape') {
+      if (this.conversation.completionItems.length > 0) {
+        this.conversation.completionItems = [];
+        this.conversation.completionTrigger = undefined;
+        this.completionNavigated = false;
+        this.draw();
+        return;
+      }
+      const hasRunning = this.getAgents().some((a) => a.status === 'running' || a.status === 'retry');
+      if (hasRunning && this.currentJob) {
+        void this.engine.orchestrator.cancelJob(this.currentJob.id).catch(() => undefined);
+        this.conversation.clearStreamingPreview();
+        this.statusMessage = 'Interrupted active run.';
+        this.draw();
+        return;
+      }
+      if (this.inputBuffer.length > 0) {
+        this.snapshotInputEdit();
+        this.inputBuffer = '';
+        this.inputCursor = 0;
+        this.conversationHistoryIndex = -1;
+        this.refreshConversationCompletions();
+        this.statusMessage = 'Cleared draft.';
+      }
+      this.draw();
+      return;
+    }
+
+    // 6. Non-TTY single-line chunk ending with \r or \n (fallback data listener)
+    if (!keyStr.startsWith('\x1b') && keyStr.length > 1 && /[\r\n]$/.test(keyStr) && !hasInternalLineBreak(keyStr)) {
+      const textPart = keyStr.replace(/[\r\n]+$/, '');
+      this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + textPart + this.inputBuffer.slice(this.inputCursor);
+      const command = this.inputBuffer.trim();
+      this.rememberConversationPrompt(command);
+      this.inputBuffer = '';
+      this.inputCursor = 0;
+      this.refreshConversationCompletions();
+      if (command) void this.submitCommand(command);
+      this.draw();
+      return;
+    }
+
+    // 7. Explicit Newline Shortcuts (Ctrl+J, Alt/Option+Enter, Shift+Enter)
+    const isRawTtyCtrlJ =
+      this.screen.isTTY() &&
+      rawKeyObj !== undefined &&
+      rawKeyObj.sequence === '\n' &&
+      rawKeyObj.name === 'enter';
+    if (isRawTtyCtrlJ || isExplicitNewlineChord(keyStr, keyObj)) {
+      this.snapshotInputEdit();
+      this.inputBuffer =
+        this.inputBuffer.slice(0, this.inputCursor) + '\n' + this.inputBuffer.slice(this.inputCursor);
+      this.inputCursor += 1;
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+
+    // 8. Enter: trailing '\' universal newline fallback, arrow-selected completion, or submit
+    if (keyName === 'return' || keyName === 'enter' || keyStr === '\r' || keyStr === '\n') {
+      if (this.inputBuffer.slice(0, this.inputCursor).endsWith('\\')) {
+        this.snapshotInputEdit();
+        this.inputBuffer =
+          this.inputBuffer.slice(0, this.inputCursor - 1) + '\n' + this.inputBuffer.slice(this.inputCursor);
+        this.refreshConversationCompletions();
+        this.draw();
+        return;
+      }
+      if (this.completionNavigated && this.conversation.completionItems.length > 0) {
+        const accepted = this.conversation.acceptCompletion(this.inputBuffer);
+        if (accepted) {
+          this.snapshotInputEdit();
+          this.inputBuffer = accepted.nextPrompt;
+          this.inputCursor = accepted.nextCursor;
+          this.refreshConversationCompletions();
+          this.draw();
+          return;
+        }
+      }
+      const command = this.inputBuffer.trim();
+      this.rememberConversationPrompt(command);
+      this.inputBuffer = '';
+      this.inputCursor = 0;
+      this.conversation.completionItems = [];
+      this.conversation.completionTrigger = undefined;
+      this.completionNavigated = false;
+      if (command) void this.submitCommand(command);
+      this.draw();
+      return;
+    }
+
+    // 9. Up / Down: Completion navigation -> wrapped/multiline vertical cursor -> prompt history
+    if (keyName === 'up' || keyStr === '\u001b[A' || keyName === 'down' || keyStr === '\u001b[B') {
+      const dir: -1 | 1 = keyName === 'up' || keyStr === '\u001b[A' ? -1 : 1;
+      if (this.conversation.completionItems.length > 0) {
+        this.completionNavigated = true;
+        const maxIdx = Math.min(5, this.conversation.completionItems.length - 1);
+        this.conversation.completionIndex = Math.max(
+          0,
+          Math.min(maxIdx, this.conversation.completionIndex + dir),
+        );
+        this.draw();
+        return;
+      }
+      if (this.conversationHistoryIndex === -1 && this.inputBuffer.length > 0) {
+        const moved = moveCursorVertically(this.inputBuffer, this.inputCursor, dir, cols, 2);
+        if (moved !== null) {
+          this.inputCursor = moved;
+          this.draw();
+          return;
+        }
+      }
+      this.moveConversationHistory(dir);
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+
+    // 10. Left / Right (including word-jump Ctrl/Alt+Left/Right and macOS Option+B / Option+F)
+    const isWordLeft =
+      ((keyName === 'left' || keyStr === '\u001b[D') && (keyObj.ctrl || keyObj.meta)) ||
+      keyStr === '\x1b[1;5D' ||
+      keyStr === '\x1b[1;3D' ||
+      keyStr === '\x1bb' ||
+      (keyObj.meta && keyName === 'b');
+    const isWordRight =
+      ((keyName === 'right' || keyStr === '\u001b[C') && (keyObj.ctrl || keyObj.meta)) ||
+      keyStr === '\x1b[1;5C' ||
+      keyStr === '\x1b[1;3C' ||
+      keyStr === '\x1bf' ||
+      (keyObj.meta && keyName === 'f');
+
+    if (isWordLeft) {
+      const prefix = this.inputBuffer.slice(0, this.inputCursor).replace(/\s+$/, '');
+      const wordIdx = prefix.search(/\S+$/);
+      this.inputCursor = wordIdx === -1 ? 0 : wordIdx;
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+    if (isWordRight) {
+      const suffix = this.inputBuffer.slice(this.inputCursor);
+      const move = suffix.match(/^\s*\S+/)?.[0].length ?? suffix.length;
+      this.inputCursor = Math.min(this.inputBuffer.length, this.inputCursor + move);
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+    if (keyName === 'left' || keyStr === '\u001b[D' || (keyObj.ctrl && keyName === 'b')) {
+      this.inputCursor = previousGraphemeBoundary(this.inputBuffer, this.inputCursor);
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+    if (keyName === 'right' || keyStr === '\u001b[C' || (keyObj.ctrl && keyName === 'f')) {
+      this.inputCursor = nextGraphemeBoundary(this.inputBuffer, this.inputCursor);
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+
+    // 11. Home / End & Ctrl+A / Ctrl+E (logical line-aware)
+    if (
+      keyName === 'home' ||
+      keyStr === '\x1b[H' ||
+      keyStr === '\x1bOH' ||
+      keyStr === '\x1b[1~' ||
+      (keyObj.ctrl && (keyName === 'a' || keyName === 'A')) ||
+      keyStr === '\u0001'
+    ) {
+      this.inputCursor = findLineHomeOffset(this.inputBuffer, this.inputCursor);
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+    if (
+      keyName === 'end' ||
+      keyStr === '\x1b[F' ||
+      keyStr === '\x1bOF' ||
+      keyStr === '\x1b[4~' ||
+      (keyObj.ctrl && (keyName === 'e' || keyName === 'E')) ||
+      keyStr === '\u0005'
+    ) {
+      this.inputCursor = findLineEndOffset(this.inputBuffer, this.inputCursor);
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+
+    // 12. Backspace / Forward Delete / Ctrl+D / Ctrl+K / Ctrl+U / Ctrl+W
+    if (
+      keyName === 'backspace' ||
+      keyStr === '\u0008' ||
+      keyStr === '\x7f' ||
+      /^[\x7f\u0008]+$/.test(keyStr)
+    ) {
+      if (this.inputCursor > 0) {
+        this.snapshotInputEdit();
+        let previous = this.inputCursor;
+        const repeats = /^[\x7f\u0008]+$/.test(keyStr) ? keyStr.length : 1;
+        for (let i = 0; i < repeats; i++) {
+          previous = previousGraphemeBoundary(this.inputBuffer, previous);
+        }
+        this.inputBuffer = this.inputBuffer.slice(0, previous) + this.inputBuffer.slice(this.inputCursor);
+        this.inputCursor = previous;
+        this.refreshConversationCompletions();
+        this.draw();
+      }
+      return;
+    }
+    if (
+      keyName === 'delete' ||
+      keyStr === '\x1b[3~' ||
+      ((keyObj.ctrl && (keyName === 'd' || keyName === 'D')) && this.inputBuffer.length > 0)
+    ) {
+      if (this.inputCursor < this.inputBuffer.length) {
+        this.snapshotInputEdit();
+        const next = nextGraphemeBoundary(this.inputBuffer, this.inputCursor);
+        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(next);
+        this.refreshConversationCompletions();
+        this.draw();
+      }
+      return;
+    }
+    if ((keyObj.ctrl && (keyName === 'd' || keyName === 'D')) || keyStr === '\u0004') {
+      if (this.inputBuffer.length === 0) {
+        this.stop('eof');
+      }
+      return;
+    }
+    if ((keyObj.ctrl && (keyName === 'k' || keyName === 'K')) || keyStr === '\u000b') {
+      this.snapshotInputEdit();
+      const killed = killToLineEnd(this.inputBuffer, this.inputCursor);
+      this.inputBuffer = killed.text;
+      this.inputCursor = killed.cursor;
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+    if ((keyObj.ctrl && (keyName === 'u' || keyName === 'U')) || keyStr === '\u0015') {
+      this.snapshotInputEdit();
+      const killed = killToLineStart(this.inputBuffer, this.inputCursor);
+      this.inputBuffer = killed.text;
+      this.inputCursor = killed.cursor;
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+    if ((keyObj.ctrl && (keyName === 'w' || keyName === 'W')) || keyStr === '\u0017' || keyStr === '\x1b\x7f') {
+      this.snapshotInputEdit();
+      const before = this.inputBuffer.slice(0, this.inputCursor);
+      const after = this.inputBuffer.slice(this.inputCursor);
+      const trimmed = before.replace(/\s*\S*\s*$/, '');
+      this.inputBuffer = trimmed + after;
+      this.inputCursor = trimmed.length;
+      this.refreshConversationCompletions();
+      this.draw();
+      return;
+    }
+
+    // 13. Non-printable / escape sequence guard
+    if (
+      keyObj.ctrl ||
+      keyObj.meta ||
+      keyStr.startsWith('\x1b') ||
+      keyStr.startsWith('\u001b') ||
+      /^[\[O][A-Za-z0-9~]/.test(keyStr) ||
+      /^\[[0-9;]*[a-zA-Z~]/.test(keyStr)
+    ) {
+      return;
+    }
+
+    // 14. Printable text (including multi-codepoint Unicode, combining marks, CJK, and ZWJ emoji)
+    if (keyStr.length > 0 && !/[\x00-\x1f\x7f-\x9f]/.test(keyStr)) {
+      this.snapshotInputEdit();
+      this.inputBuffer =
+        this.inputBuffer.slice(0, this.inputCursor) + keyStr + this.inputBuffer.slice(this.inputCursor);
+      this.inputCursor += keyStr.length;
+      this.refreshConversationCompletions();
+      this.draw();
+    }
+  }
+
   private updateNavSelection(item: NavItem): void {
     this.selectedCategory = item.category;
     this.selectedNavId = item.id;
@@ -3059,6 +3740,15 @@ export class FleetTui {
    * capturing stdout/stderr/exitCode as a persistent Block record that can be referenced via `@<id>`.
    */
   private async executeInlineShellCommand(shellCmd: string, submission: InteractiveSubmission): Promise<void> {
+    if (this.presentationMode === 'conversation' && this.conversation.permissionMode === 'read-only') {
+      const theme = this.conversationRenderer.getTheme();
+      this.conversationRenderer.append(
+        `  ${theme.warning(theme.glyphs.warning)} Shell execution is disabled while permission mode is 'read-only'. Use /permissions to switch to 'ask' or 'auto'.`,
+      );
+      this.statusMessage = 'Blocked inline shell command in read-only mode.';
+      this.draw();
+      return;
+    }
     const rawTrimmed = submission.text.trim();
     const displayCmd = rawTrimmed.startsWith('!') || rawTrimmed.startsWith('/sh') ? rawTrimmed : `!${shellCmd}`;
     if (this.presentationMode === 'conversation') {
@@ -3223,7 +3913,15 @@ export class FleetTui {
       if (this.presentationMode !== 'conversation') {
         this.presentationMode = 'conversation';
         if (typeof (this.screen as any).setPresentation === 'function') this.screen.setPresentation('conversation');
-        this.conversationRenderer.start(process.env.USER ?? process.env.USERNAME ?? 'controller', this.selectedModelId ?? 'auto-routed model');
+        this.conversationRenderer.start(
+          process.env.USER ?? process.env.USERNAME ?? 'controller',
+          this.conversation.formatModelSummary(this.engine),
+          {
+            workspaceName: this.conversation.workspaceName,
+            gitBranch: this.conversation.gitBranch,
+            permissionSummary: this.conversation.formatPermissionSummary(),
+          },
+        );
       }
       this.focusedPane = 'prompt';
       this.draw();
@@ -3237,8 +3935,182 @@ export class FleetTui {
       return;
     }
     if (trimmed === '/help' && this.presentationMode === 'conversation') {
-      this.conversationRenderer.append('Commands: /fleet · /chat · /tasks · /models · /update · /logs · /details · /tail · /verbose · /quiet · /debug · /help');
+      const theme = this.conversationRenderer.getTheme();
+      this.conversationRenderer.append(this.conversation.formatHelpText(theme));
+      this.draw();
       return;
+    }
+    if (this.presentationMode === 'conversation') {
+      const theme = this.conversationRenderer.getTheme();
+      const g = theme.glyphs;
+
+      if (trimmed === '/status') {
+        let totalIn = 0;
+        let totalOut = 0;
+        for (const a of this.agents.values()) {
+          if (a.usage) {
+            totalIn += a.usage.input;
+            totalOut += a.usage.output;
+          }
+        }
+        const usage = totalIn > 0 || totalOut > 0
+          ? { input: totalIn, output: totalOut, total: totalIn + totalOut }
+          : undefined;
+        this.conversationRenderer.append(
+          this.conversation.formatStatusReport(this.engine, theme, usage, undefined),
+        );
+        this.draw();
+        return;
+      }
+
+      if (trimmed === '/permissions' || trimmed.startsWith('/permissions ')) {
+        const arg = trimmed.slice(12).trim().toLowerCase();
+        if (!arg) {
+          if (this.screen.isTTY()) {
+            this.conversation.openPermissionsOverlay();
+            this.draw();
+            return;
+          }
+          this.conversationRenderer.append(
+            `Permission mode: ${this.conversation.permissionMode}. Available: ask · auto · read-only.`,
+          );
+          this.draw();
+          return;
+        }
+        if (arg === 'ask' || arg === 'auto' || arg === 'read-only') {
+          this.conversation.permissionMode = arg;
+          this.conversationRenderer.setHeaderContext({
+            permissionSummary: this.conversation.formatPermissionSummary(),
+          });
+          this.statusMessage = `Permission mode set to '${arg}'.`;
+          this.conversationRenderer.append(`${theme.success(g.success)} Permission mode set to ${theme.bold(arg)}`);
+          void this.conversation.persist(this.engine);
+        } else {
+          this.conversationRenderer.append(
+            `${theme.error(g.error)} Unknown permission mode '${arg}'. Expected: ask, auto, or read-only.`,
+          );
+        }
+        this.draw();
+        return;
+      }
+
+      if (trimmed === '/diff' || trimmed.startsWith('/diff ')) {
+        const diffTarget = trimmed.slice(5).trim() || undefined;
+        const cols = this.screen.getSize().columns;
+        const diffReport = await this.conversation.renderGitDiff(diffTarget, cols, theme);
+        this.conversationRenderer.append(diffReport);
+        this.draw();
+        return;
+      }
+
+      if (trimmed === '/resume' || trimmed.startsWith('/resume ')) {
+        const arg = trimmed.slice(7).trim();
+        if (!arg && this.screen.isTTY()) {
+          const opened = await this.conversation.openResumeOverlay(this.engine);
+          if (!opened) {
+            this.conversationRenderer.append(theme.muted('  No saved conversation sessions found yet.'));
+          }
+          this.draw();
+          return;
+        }
+        const target = arg || '--last';
+        const cols = this.screen.getSize().columns;
+        const restored = await this.conversation.restoreSession(this.engine, target, theme, cols);
+        if (restored.ok) {
+          this.selectedModelId = this.conversation.selectedModelId;
+          this.conversationRenderer.setHeaderContext({
+            model: this.conversation.formatModelSummary(this.engine),
+            permissionSummary: this.conversation.formatPermissionSummary(),
+          });
+        }
+        this.conversationRenderer.append(restored.transcriptText);
+        this.statusMessage = restored.ok ? `Resumed session ${this.conversation.sessionId}.` : 'No session resumed.';
+        this.draw();
+        return;
+      }
+
+      if (trimmed === '/clear') {
+        this.conversation.turns = [];
+        this.conversation.toolHistory = [];
+        this.conversation.jobRefs = [];
+        this.conversation.clearStreamingPreview();
+        this.conversation.activityProjector.reset();
+        this.conversation.sessionId = `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        this.conversation.createdAt = new Date().toISOString();
+        this.conversationRenderer.clearScreenAndRestart();
+        this.statusMessage = 'Conversation cleared.';
+        this.draw();
+        return;
+      }
+
+      if (trimmed === '/approve' || trimmed === '/approve all') {
+        if (this.pendingApprovals.length === 0) {
+          this.conversationRenderer.append(theme.muted('  No pending policy approvals.'));
+        } else if (trimmed === '/approve all') {
+          const count = this.engine.approvalQueue.approveAll();
+          this.conversation.approvalFocused = false;
+          this.conversationRenderer.append(`  ${theme.success(g.success)} Approved all ${count} pending request(s)`);
+        } else {
+          const first = this.pendingApprovals[0]!;
+          this.engine.approvalQueue.approve(first.id);
+          this.conversation.approvalFocused = false;
+          this.conversationRenderer.append(`  ${theme.success(g.success)} Approved ${first.tool}`);
+        }
+        this.draw();
+        return;
+      }
+
+      if (trimmed === '/deny' || trimmed === '/deny all') {
+        if (this.pendingApprovals.length === 0) {
+          this.conversationRenderer.append(theme.muted('  No pending policy approvals.'));
+        } else if (trimmed === '/deny all') {
+          const count = this.engine.approvalQueue.denyAll();
+          this.conversation.approvalFocused = false;
+          this.conversationRenderer.append(`  ${theme.error(g.error)} Denied all ${count} pending request(s)`);
+        } else {
+          const first = this.pendingApprovals[0]!;
+          this.engine.approvalQueue.deny(first.id);
+          this.conversation.approvalFocused = false;
+          this.conversationRenderer.append(`  ${theme.error(g.error)} Denied ${first.tool}`);
+        }
+        this.draw();
+        return;
+      }
+
+      if (trimmed === '/queue' || trimmed.startsWith('/queue ')) {
+        const arg = trimmed.slice(6).trim();
+        if (!arg) {
+          if (this.conversation.queuedPrompts.length === 0) {
+            this.conversationRenderer.append(theme.muted('  Queue is empty. Usage: /queue <follow-up request>'));
+          } else {
+            this.conversationRenderer.append(
+              ['  Queued follow-up prompts:', ...this.conversation.queuedPrompts.map((q, i) => `    ${i + 1}. ${q}`)].join('\n'),
+            );
+          }
+          this.draw();
+          return;
+        }
+        if (arg === 'clear') {
+          const dropped = this.conversation.queuedPrompts.splice(0, this.conversation.queuedPrompts.length).length;
+          this.conversationRenderer.append(`  ${theme.muted(`Cleared ${dropped} queued prompt(s).`)}`);
+          this.draw();
+          return;
+        }
+        const hasActiveJob = Boolean(
+          this.currentJob && !['completed', 'failed', 'cancelled'].includes(this.currentJob.status),
+        );
+        if (!hasActiveJob) {
+          await this.launchJobFromPrompt(arg);
+          return;
+        }
+        this.conversation.queuedPrompts.push(arg);
+        this.statusMessage = `Queued follow-up (${this.conversation.queuedPrompts.length} waiting).`;
+        this.conversationRenderer.append(
+          `  ${theme.accent(g.bullet)} Queued after active run (#${this.conversation.queuedPrompts.length}): "${arg}"`,
+        );
+        this.draw();
+        return;
+      }
     }
     if (trimmed === '/update') {
       try {
@@ -3537,8 +4409,14 @@ export class FleetTui {
     if (trimmed === '/model' || trimmed.startsWith('/model ')) {
       const arg = trimmed.slice(6).trim();
       const available = this.engine.models.list();
+      const extAgents = this.engine.agents?.list?.().filter((a) => a.source === 'external') ?? [];
       if (!arg) {
-        const current = this.selectedModelId ?? 'auto (scheduler picks)';
+        if (this.presentationMode === 'conversation' && this.screen.isTTY()) {
+          this.conversation.openModelOverlay(this.engine);
+          this.draw();
+          return;
+        }
+        const current = this.selectedModelId ?? (this.conversation.selectedAgentId ? `agent:${this.conversation.selectedAgentId}` : 'auto (scheduler picks)');
         const ids = available.map((m) => m.id).join(', ') || '(none registered)';
         this.statusMessage = `Model: ${current}. Available: ${ids}. Use /model <id> to pin, /model auto to clear.`;
         if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
@@ -3547,9 +4425,32 @@ export class FleetTui {
       }
       if (arg === 'auto' || arg === 'clear') {
         this.selectedModelId = undefined;
-        this.conversationRenderer.setModel('auto-routed model');
+        this.conversation.selectedModelId = undefined;
+        this.conversation.selectedAgentId = undefined;
+        this.conversationRenderer.setModel(this.conversation.formatModelSummary(this.engine));
         this.statusMessage = 'Cleared model pin — new tasks will be auto-routed by the scheduler again.';
         if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
+        void this.conversation.persist(this.engine);
+        this.draw();
+        return;
+      }
+      if (arg.startsWith('agent:')) {
+        const agentName = arg.slice(6).trim();
+        const foundAgent = extAgents.find((a) => a.descriptor.name === agentName);
+        if (!foundAgent) {
+          const names = extAgents.map((a) => `agent:${a.descriptor.name}`).join(', ') || '(none discovered)';
+          this.statusMessage = `No external agent '${agentName}'. Available: ${names}.`;
+          if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
+          this.draw();
+          return;
+        }
+        this.selectedModelId = undefined;
+        this.conversation.selectedModelId = undefined;
+        this.conversation.selectedAgentId = agentName;
+        this.conversationRenderer.setModel(`agent:${agentName}`);
+        this.statusMessage = `Pinned external agent '${agentName}'.`;
+        if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
+        void this.conversation.persist(this.engine);
         this.draw();
         return;
       }
@@ -3562,9 +4463,12 @@ export class FleetTui {
         return;
       }
       this.selectedModelId = match.id;
-      this.conversationRenderer.setModel(match.id);
+      this.conversation.selectedModelId = match.id;
+      this.conversation.selectedAgentId = undefined;
+      this.conversationRenderer.setModel(this.conversation.formatModelSummary(this.engine));
       this.statusMessage = `Pinned model to '${match.id}' — new tasks will use it instead of auto-routing.`;
       if (this.presentationMode === 'conversation') this.conversationRenderer.append(this.statusMessage);
+      void this.conversation.persist(this.engine);
       this.draw();
       return;
     }
@@ -3669,8 +4573,24 @@ export class FleetTui {
       } else {
         this.statusMessage = `Injected steering: "${instruction}"`;
       }
+      if (this.presentationMode === 'conversation') {
+        const theme = this.conversationRenderer.getTheme();
+        this.conversationRenderer.append(`  ${theme.accent(theme.glyphs.bullet)} ${this.statusMessage}`);
+      }
       this.draw();
       return;
+    }
+
+    // Active-run steer/replace notice in conversation mode: never drop or duplicate silently
+    if (
+      this.presentationMode === 'conversation' &&
+      this.currentJob &&
+      !['completed', 'failed', 'cancelled'].includes(this.currentJob.status)
+    ) {
+      const theme = this.conversationRenderer.getTheme();
+      this.conversationRenderer.append(
+        `  ${theme.muted(`Replacing active run with new request (tip: use /queue <msg> to run after current task, or /steer <msg> to steer in-place).`)}`,
+      );
     }
 
     // Resolve @ references via references.ts
@@ -3721,15 +4641,40 @@ export class FleetTui {
   /**
    * Decomposes or parses a user prompt and launches concurrent execution.
    */
-  async launchJobFromPrompt(prompt: string): Promise<void> {
-    if (this.presentationMode === 'conversation') {
-      this.conversationRenderer.append(`> ${prompt}`);
+  async launchJobFromPrompt(prompt: string, options?: { alreadyEchoed?: boolean }): Promise<void> {
+    if (this.presentationMode === 'conversation' && !options?.alreadyEchoed) {
+      const theme = this.conversationRenderer.getTheme();
+      this.conversationRenderer.append(`\n  ${theme.accent(theme.glyphs.userPrompt)} ${theme.bold(prompt)}`);
+      this.conversationStartedAt = Date.now();
+    } else if (this.presentationMode === 'conversation') {
       this.conversationStartedAt = Date.now();
     }
+
+    if (this.engine.isBootstrapping) {
+      this.pendingBootstrapPrompts.push(prompt);
+      this.statusMessage = 'Connecting to providers… queued initial request.';
+      this.draw();
+      return;
+    }
+
     // Installed models are activated on the existing execution after scheduling.
     const readiness = this.engine.lifecycle.getReadiness();
     const hasSchedulable = this.hasSchedulableGenerativeModel();
-    if ((readiness.installedCount === 0 && readiness.readyCount === 0) || (this.presentationMode === 'conversation' && !hasSchedulable)) {
+    const externalAgentNames = (this.engine.agents?.list?.() ?? [])
+      .filter((a) => a.source === 'external')
+      .map((a) => a.descriptor.name);
+    const hasPinnedExternalAgent = Boolean(
+      this.conversation.selectedAgentId && externalAgentNames.includes(this.conversation.selectedAgentId),
+    );
+    const hasExplicitDistributionPool = Boolean(
+      this.conversation.distributionSpec && externalAgentNames.length > 0 && this.conversation.routingMode !== 'LOCAL_ONLY',
+    );
+    if (
+      !hasPinnedExternalAgent &&
+      !hasExplicitDistributionPool &&
+      ((readiness.installedCount === 0 && readiness.readyCount === 0) ||
+        (this.presentationMode === 'conversation' && !hasSchedulable))
+    ) {
       const recoveryText = this.formatMissingModelRecovery(readiness, prompt);
       this.statusMessage = 'Model unavailable · No models installed. Discover models in LM Studio or Ollama.';
       if (this.currentBlockTracker) {
@@ -3747,13 +4692,82 @@ export class FleetTui {
     }
 
     this.statusMessage = 'Planning & scheduling job...';
+    this.conversation.activityProjector.reset();
+    this.conversation.clearStreamingPreview();
     this.draw();
 
-    const analysis = this.engine.planner?.analyze(prompt) ?? {
+    const rawAnalysis = this.engine.planner?.analyze(prompt) ?? {
       mutationRequired: true,
       workspaceMode: 'clean' as const,
       expectedArtifacts: [],
       capabilities: [],
+    };
+    const isReadOnlyMode = this.presentationMode === 'conversation' && this.conversation.permissionMode === 'read-only';
+    const isFollowUpConversationTurn =
+      this.presentationMode === 'conversation' &&
+      !this.useWorktrees &&
+      this.conversation.turns.some((t) => t.role === 'assistant');
+    const analysis = isReadOnlyMode
+      ? { ...rawAnalysis, mutationRequired: false }
+      : isFollowUpConversationTurn && rawAnalysis.workspaceMode === 'clean'
+        ? { ...rawAnalysis, workspaceMode: 'continue' as const }
+        : rawAnalysis;
+
+    const attachedMentions = this.presentationMode === 'conversation'
+      ? resolvePromptFileMentions(prompt, this.conversation.workspaceRoot)
+      : [];
+    if (attachedMentions.length > 0 && this.presentationMode === 'conversation') {
+      const theme = this.conversationRenderer.getTheme();
+      this.conversationRenderer.append(
+        `    ${theme.muted(`Attached context: ${attachedMentions.map((f) => `@${f.relativePath}`).join(', ')}`)}`,
+      );
+    }
+
+    const buildExecutionHints = (): JobTaskInput['task']['execution'] => {
+      const pinnedModel = this.selectedModelId ?? this.conversation.selectedModelId;
+      const pinnedAgent = this.conversation.selectedAgentId;
+      const routingMode = this.conversation.routingMode;
+      if (pinnedAgent) {
+        return { targetAgentId: pinnedAgent, routingMode };
+      }
+      if (pinnedModel) {
+        return { targetModelId: pinnedModel, routingMode };
+      }
+      if (this.engine.workloadDistributor && routingMode !== 'LOCAL_ONLY') {
+        const localModels = (this.engine.models?.list?.() ?? []).filter((m) => !m.embedding && m.local !== false);
+        const hardwareComputerIds = (this.engine.computers?.list?.() ?? [])
+          .filter((c) => c.status === 'online')
+          .map((c) => c.id);
+        const localAvailable = localModels.length > 0 && hasSchedulable;
+        if (Boolean(this.conversation.distributionSpec) || externalAgentNames.length > 0 || hardwareComputerIds.length > 1) {
+          const picked = this.engine.workloadDistributor.next({
+            hasLocalHardware: localAvailable,
+            hardwareComputerIds,
+            externalAgents: externalAgentNames,
+            routingMode,
+          });
+          if (picked.pool === 'local') {
+            return {
+              routingMode: routingMode ?? 'LOCAL_ONLY',
+              targetComputerId: picked.targetComputerId,
+            };
+          }
+          if (picked.targetAgentId) {
+            return { targetAgentId: picked.targetAgentId, routingMode };
+          }
+        }
+      }
+      return routingMode ? { routingMode } : undefined;
+    };
+
+    const readOnlyPolicy = isReadOnlyMode ? { readOnly: true } : undefined;
+
+    const decorateInput = (desc: string, multiTask: boolean): string => {
+      if (this.presentationMode !== 'conversation' || multiTask) return desc;
+      const baseInput = isReadOnlyMode
+        ? `[PERMISSION MODE: read-only — inspect and explain only; do NOT edit files or run mutating commands.]\n\n${desc}`
+        : desc;
+      return this.conversation.buildContextualPrompt(baseInput, attachedMentions);
     };
 
     let taskDescriptions: string[] = [];
@@ -3763,14 +4777,23 @@ export class FleetTui {
       this.statusMessage = 'Planning task execution DAG...';
       this.draw();
       const plan = await this.engine.planner.plan(prompt);
+      const execHints = buildExecutionHints();
       jobTasks = this.engine.planner.planToJobTaskInputs(plan, {
         execution: {
-          targetAgentId: 'wazir-step',
-          targetModelId: this.selectedModelId,
+          ...execHints,
+          targetAgentId: execHints?.targetAgentId ?? this.conversation.selectedAgentId ?? 'wazir-step',
+          targetModelId: execHints?.targetModelId ?? this.selectedModelId ?? this.conversation.selectedModelId,
+          routingMode: execHints?.routingMode ?? this.conversation.routingMode,
         },
         mutationRequired: analysis.mutationRequired,
         workspaceMode: analysis.workspaceMode,
       });
+      if (readOnlyPolicy) {
+        jobTasks = jobTasks.map((jt) => ({
+          ...jt,
+          task: { ...jt.task, policy: { ...jt.task.policy, ...readOnlyPolicy } },
+        }));
+      }
     } else if (prompt.startsWith('/fanout ')) {
       const raw = prompt.slice(8).trim();
       taskDescriptions = raw.split(';').map((s) => s.trim()).filter(Boolean);
@@ -3778,26 +4801,29 @@ export class FleetTui {
         task: {
           type: 'coding',
           title: desc.slice(0, 50),
-          input: desc,
+          input: decorateInput(desc, true),
           mutationRequired: analysis.mutationRequired,
           workspaceMode: analysis.workspaceMode,
           expectedArtifacts: analysis.expectedArtifacts,
           capabilities: analysis.capabilities,
-          execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
+          policy: readOnlyPolicy,
+          execution: buildExecutionHints(),
         },
       }));
     } else if (prompt.includes('\n- ') || prompt.includes('\n* ')) {
       taskDescriptions = prompt.split(/\n[-*]\s+/).map((s) => s.trim()).filter(Boolean);
+      const isMulti = taskDescriptions.length > 1;
       jobTasks = taskDescriptions.map((desc) => ({
         task: {
           type: 'coding',
           title: desc.slice(0, 50),
-          input: desc,
+          input: decorateInput(desc, isMulti),
           mutationRequired: analysis.mutationRequired,
           workspaceMode: analysis.workspaceMode,
           expectedArtifacts: analysis.expectedArtifacts,
           capabilities: analysis.capabilities,
-          execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
+          policy: readOnlyPolicy,
+          execution: buildExecutionHints(),
         },
       }));
     } else {
@@ -3806,12 +4832,13 @@ export class FleetTui {
         task: {
           type: 'coding',
           title: desc.slice(0, 50),
-          input: desc,
+          input: decorateInput(desc, false),
           mutationRequired: analysis.mutationRequired,
           workspaceMode: analysis.workspaceMode,
           expectedArtifacts: analysis.expectedArtifacts,
           capabilities: analysis.capabilities,
-          execution: this.selectedModelId ? { targetModelId: this.selectedModelId } : undefined,
+          policy: readOnlyPolicy,
+          execution: buildExecutionHints(),
         },
       }));
     }
@@ -3847,6 +4874,13 @@ export class FleetTui {
       }
 
       this.currentJob = job;
+      if (this.presentationMode === 'conversation') {
+        this.conversation.recordUserMessage(prompt, job.id);
+        this.conversation.recordJobState(job.id, prompt.slice(0, 60), 'running', {
+          executionIds: job.tasks.map((t) => t.id),
+        });
+        void this.conversation.persist(this.engine);
+      }
       this.agents.clear();
       this.agentLogs.clear();
       this.streamingBuffers.clear();
@@ -3933,16 +4967,37 @@ export class FleetTui {
           const prefix = finalJob.status === 'failed' ? 'Execution failed · ' : '';
           this.statusMessage = `${prefix}Job ${job.id} ${outcome} Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
           if (this.presentationMode === 'conversation') {
+            const theme = this.conversationRenderer.getTheme();
+            const g = theme.glyphs;
+            const pendingActivity = this.conversation.activityProjector.flushPending();
+            if (pendingActivity) {
+              this.conversationRenderer.append(`    ${theme.success(g.success)} ${pendingActivity.text}`);
+            }
+            this.conversation.clearStreamingPreview();
+            const files = [...new Set([...this.agents.values()].flatMap((agent) => agent.filesChanged))];
+            this.conversation.recordJobState(
+              job.id,
+              finalJob.title,
+              finalJob.status === 'completed' ? 'completed' : finalJob.status === 'cancelled' ? 'cancelled' : 'failed',
+              {
+                taskIds: finalJob.tasks.map((t) => t.id),
+                executionIds: finalJob.tasks.map((t) => t.id),
+                filesChanged: files,
+              },
+            );
+            void this.conversation.persist(this.engine);
+
             if (finalJob.status === 'completed') {
               const elapsed = Math.max(0, Math.floor(this.currentRollup.durationMs / 1000));
               const elapsedText = elapsed >= 60 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${elapsed}s`;
-              const files = [...new Set([...this.agents.values()].flatMap((agent) => agent.filesChanged))];
               const summaries = this.eventSummarizer.completion(files);
-              this.conversationRenderer.append([`✓ Completed in ${elapsedText}`, ...summaries.map((line) => `  ${line}`)].join('\n'));
+              this.conversationRenderer.append(
+                [`    ${theme.success(g.success)} Completed in ${elapsedText}`, ...summaries.map((line) => `      ${theme.muted(line)}`)].join('\n'),
+              );
             } else if (finalJob.status === 'cancelled') {
-              this.conversationRenderer.append('■ Cancelled');
+              this.conversationRenderer.append(`    ${theme.warning(g.cancelled)} Cancelled`);
             } else {
-              this.conversationRenderer.append('✗ Task failed · /logs for details');
+              this.conversationRenderer.append(`    ${theme.error(g.error)} Task failed ${g.bullet} /logs for details`);
             }
           }
 
@@ -3989,8 +5044,23 @@ export class FleetTui {
           }
         }
         if (this.jobLifecycleGeneration === lifecycleGeneration) {
-          this.unsubscribeJobEvents?.();
-          this.unsubscribeJobEvents = undefined;
+          if (
+            this.isRunning &&
+            this.presentationMode === 'conversation' &&
+            this.conversation.queuedPrompts.length > 0 &&
+            !this.isDrainingQueue
+          ) {
+            const nextQueued = this.conversation.queuedPrompts.shift();
+            if (nextQueued) {
+              this.isDrainingQueue = true;
+              queueMicrotask(() => {
+                this.isDrainingQueue = false;
+                if (this.isRunning) {
+                  void this.launchJobFromPrompt(nextQueued);
+                }
+              });
+            }
+          }
         }
         this.draw();
       })();
@@ -4175,13 +5245,47 @@ export class FleetTui {
           const prev = this.streamingBuffers.get(taskId) ?? '';
           const next = prev + (p.content ?? '');
           this.streamingBuffers.set(taskId, next.length > 12_000 ? next.slice(-12_000) : next);
+          if (this.presentationMode === 'conversation') {
+            this.conversation.updateStreamingToken(next);
+          }
           return;
         }
 
         const summary = this.eventSummarizer.progress(p, p.metadata);
-        if (this.presentationMode === 'conversation' && summary.milestone) {
-          const icon = summary.milestone.kind === 'error' ? '✗' : summary.milestone.kind === 'success' ? '✓' : '•';
-          this.conversationRenderer.append(`${icon} ${summary.milestone.text}${summary.milestone.kind === 'error' ? '\n  /logs for details' : ''}`);
+        if (this.presentationMode === 'conversation') {
+          const theme = this.conversationRenderer.getTheme();
+          const g = theme.glyphs;
+          const milestone = this.conversation.activityProjector.observeProgress(p, p.metadata);
+          if (milestone) {
+            if (milestone.priorText) {
+              this.conversationRenderer.append(`    ${theme.success(g.success)} ${milestone.priorText}`);
+            }
+            const icon = milestone.kind === 'error'
+              ? theme.error(g.error)
+              : milestone.kind === 'success'
+                ? theme.success(g.success)
+                : theme.muted(g.bullet);
+            this.conversationRenderer.append(
+              `    ${icon} ${milestone.text}${milestone.kind === 'error' ? `\n      ${theme.muted('/logs for details')}` : ''}`,
+            );
+          }
+          if (p.tool) {
+            const target = String(p.metadata?.path ?? p.metadata?.command ?? '').slice(0, 120);
+            const lastTool = this.conversation.toolHistory.at(-1);
+            if (lastTool && lastTool.tool === p.tool && !p.error && lastTool.ok) {
+              lastTool.summary = `${p.tool}${target ? ` (${target})` : ''}`;
+            } else {
+              this.conversation.toolHistory.push({
+                tool: p.tool,
+                summary: p.error ? `${p.tool} failed: ${p.error.slice(0, 100)}` : `${p.tool}${target ? ` (${target})` : ''}`,
+                ok: !p.error,
+                timestamp: now.toISOString(),
+              });
+              if (this.conversation.toolHistory.length > 160) {
+                this.conversation.toolHistory.splice(0, 60);
+              }
+            }
+          }
         }
 
         // The model turn just finished (its usage is known): fold the streamed text into
@@ -4285,8 +5389,23 @@ export class FleetTui {
           text: `Task completed successfully (${agent.filesChanged.length} files updated)`,
           kind: 'complete',
         });
-        if (this.presentationMode === 'conversation' && typeof ev.result === 'string' && ev.result.trim()) {
-          this.conversationRenderer.append(ev.result.trim());
+        if (this.presentationMode === 'conversation') {
+          const theme = this.conversationRenderer.getTheme();
+          const g = theme.glyphs;
+          const flushed = this.conversation.activityProjector.flushPending();
+          if (flushed) {
+            this.conversationRenderer.append(`    ${theme.success(g.success)} ${flushed.text}`);
+          }
+          this.conversation.clearStreamingPreview();
+          if (typeof ev.result === 'string' && ev.result.trim()) {
+            const cleanProse = sanitizeAssistantText(ev.result);
+            if (cleanProse) {
+              const cols = Math.max(24, this.screen.getSize().columns - 2);
+              const formattedLines = renderMarkdownMessage(cleanProse, cols, theme, { indent: 4 });
+              this.conversationRenderer.append(`\n${formattedLines.join('\n')}`);
+              this.conversation.recordAssistantMessage(cleanProse, this.currentJob?.id, agent.modelId);
+            }
+          }
         }
       } else if (ev.type === 'task:failed') {
         this.flushStreaming(taskId, logs, timeStr);
@@ -4525,7 +5644,7 @@ export class FleetTui {
       // A runtime that failed discovery (LM Studio's server not started, Ollama not
       // running, ...) was previously indistinguishable from an idle-but-fine one — both
       // just showed the same decorative activity dot. Surface its real health instead.
-      const health = this.engine.discovered.find((d) => d.id === rt.id)?.health;
+      const health = this.engine.discovered?.find((d) => d.id === rt.id)?.health;
       items.push({
         category: 'RUNTIMES',
         id: rt.id,
@@ -4710,29 +5829,46 @@ export class FleetTui {
   }
 
   private drawConversation(): void {
-      const active = this.statusProjection.getTasks().filter((task) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(task.status));
-      const running = active.filter((task) => task.status !== 'WAITING_FOR_APPROVAL');
-      const waiting = active.length - running.length;
-      const activity = running[0]?.activity ?? '';
-      const agents = this.getAgents();
-      // A task waiting for its model is already bound to it; show that model, not the pin or "auto".
-      const activeAgent = agents.find((agent) => agent.status === 'running')
-        ?? agents.find((agent) => !['completed', 'failed', 'cancelled'].includes(agent.status));
-      this.conversationRenderer.render({
-        identity: process.env.USER ?? process.env.USERNAME ?? 'controller',
-        model: activeAgent ? `${activeAgent.computerId} · ${activeAgent.modelId}` : this.selectedModelId ?? 'auto-routed model',
-        prompt: this.inputBuffer,
-        cursor: this.inputCursor,
-        active: running.length,
-        waitingApproval: waiting || this.pendingApprovals.length,
-        activity,
-        elapsedSeconds: this.conversationStartedAt === undefined ? undefined : Math.floor((Date.now() - this.conversationStartedAt) / 1000),
-        approval: this.pendingApprovals[0]
-          ? `${this.pendingApprovals[0].tool}: ${String(this.pendingApprovals[0].input.command ?? this.pendingApprovals[0].input.path ?? JSON.stringify(this.pendingApprovals[0].input)).slice(0, 140)} · A approve · D deny · V details`
-          : undefined,
-        status: this.statusMessage,
-        copyMode: this.tuiMode === 'COPY' ? this.copyModeStatus() : undefined,
-      });
+    const size = this.screen.getSize();
+    const theme = this.conversationRenderer.getTheme();
+    const active = this.statusProjection.getTasks().filter((task) => !['COMPLETED', 'FAILED', 'CANCELLED'].includes(task.status));
+    const running = active.filter((task) => task.status !== 'WAITING_FOR_APPROVAL');
+    const waiting = active.length - running.length;
+    const rawActivity = running[0]?.activity ?? '';
+    const activity = this.conversation.activityProjector.getActiveLabel(rawActivity);
+    const agents = this.getAgents();
+    const activeAgent = agents.find((agent) => agent.status === 'running')
+      ?? agents.find((agent) => !['completed', 'failed', 'cancelled'].includes(agent.status));
+    const trayLines = this.conversation.buildTrayLines(
+      size.columns,
+      theme,
+      this.pendingApprovals,
+      this.approvalShowDetails,
+    );
+    const spinnerFrames = theme.glyphs.runningFrames;
+    const spinnerFrame = spinnerFrames[this.spinnerTick % spinnerFrames.length] ?? theme.glyphs.running;
+    const pasteStatus = this.tuiMode === 'PASTE'
+      ? `[Pasted ${this.pastedContent.length.toLocaleString()} chars / ${this.pastedContent.split(/\r?\n/).length} lines] Ctrl+Enter submit · Esc discard · E edit`
+      : this.statusMessage;
+
+    this.conversationRenderer.render({
+      identity: process.env.USER ?? process.env.USERNAME ?? 'controller',
+      model: this.conversation.formatModelSummary(this.engine, activeAgent),
+      workspaceName: this.conversation.workspaceName,
+      gitBranch: this.conversation.gitBranch,
+      permissionSummary: this.conversation.formatPermissionSummary(),
+      prompt: this.inputBuffer,
+      cursor: this.inputCursor,
+      active: running.length,
+      waitingApproval: waiting || this.pendingApprovals.length,
+      activity,
+      spinnerFrame,
+      elapsedSeconds: this.conversationStartedAt === undefined ? undefined : Math.floor((Date.now() - this.conversationStartedAt) / 1000),
+      approvalFocused: this.conversation.approvalFocused,
+      trayLines,
+      status: pasteStatus,
+      copyMode: this.tuiMode === 'COPY' ? this.copyModeStatus() : undefined,
+    });
   }
 
   private drawDashboardFrame(size: TerminalSize, lines: string[], contentHeight: number): void {
@@ -5252,7 +6388,7 @@ export class FleetTui {
       }
     } else if (selected.category === 'RUNTIMES') {
       const runtime = this.engine.runtimes.get(selected.id);
-      const discovered = this.engine.discovered.find((d) => d.id === selected.id);
+      const discovered = this.engine.discovered?.find((d) => d.id === selected.id);
       if (runtime) {
         lines.push(this.padRightTo(`  Runtime: ${color.bold(runtime.name || runtime.id)} v${runtime.version}`, width));
         lines.push(this.padRightTo(`  Computer: ${runtime.computerId}`, width));

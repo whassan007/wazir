@@ -25,7 +25,7 @@ import {
   taskAuthorizesVerificationChanges,
 } from '@wazir/core';
 import type { GenerationEvent } from '@wazir/runtimes-interfaces';
-import { buildSystemPrompt } from '@wazir/agents';
+import { buildQwenSystemPrompt, buildSystemPrompt } from '@wazir/agents';
 import { evaluateExecution } from '@wazir/evaluation';
 import { generateId, keepEnds } from '@wazir/shared';
 import { executeTool as runRegisteredTool, sandboxStatus } from '@wazir/tools';
@@ -39,7 +39,12 @@ function toGenerationEvent(event: WorkerExecutionEvent): GenerationEvent | undef
     case 'token':
       return { type: 'token', content: typeof data?.content === 'string' ? data.content : '' };
     case 'tool_call':
-      return { type: 'tool_call', toolName: data?.toolName as string | undefined, toolInput: data?.toolInput };
+      return {
+        type: 'tool_call',
+        toolCallId: typeof data?.toolCallId === 'string' ? data.toolCallId : undefined,
+        toolName: data?.toolName as string | undefined,
+        toolInput: data?.toolInput,
+      };
     case 'completed':
       return {
         type: 'completed',
@@ -197,12 +202,32 @@ export function createFleetTaskExecutor(
     await engine.executions.setStatus(executionId, 'running');
 
     // 3. Resolve model and context
+    const READ_ONLY_BLOCKED_TOOLS = new Set([
+      'write',
+      'edit',
+      'multi_edit',
+      'shell',
+      'bash_exec',
+      'terminal_open',
+      'terminal_write',
+      'delete_file',
+    ]);
+    const isReadOnlyPolicy = Boolean(task.policy?.readOnly);
     const model = engine.models.getRequired(assignment.modelId);
+    const rawFleetModelTools = engine.tools.forModel(undefined, engine.agents.get(assignment.agentId)?.descriptor.capabilities);
+    const fleetModelTools = isReadOnlyPolicy
+      ? rawFleetModelTools.filter((t) => !READ_ONLY_BLOCKED_TOOLS.has(t.name))
+      : rawFleetModelTools;
+    const fleetRuntimeReg = engine.runtimes.get(assignment.runtimeId);
+    const fleetNativeTools = Boolean(model.toolCalling ?? fleetRuntimeReg?.capabilities.toolCalling);
     const parts: ContextPart[] = [
       {
         kind: 'system',
         label: 'system prompt',
-        content: buildSystemPrompt(taskRoot, engine.tools.forModel(undefined, engine.agents.get(assignment.agentId)?.descriptor.capabilities)),
+        content:
+          fleetNativeTools && process.env.WAZIR_LEGACY_JSON_AGENT !== '1'
+            ? buildQwenSystemPrompt({ projectRoot: taskRoot, toolNames: fleetModelTools.map((t) => t.name) })
+            : buildSystemPrompt(taskRoot, fleetModelTools),
         priority: 'critical',
       },
       { kind: 'task', label: 'task', content: task.input, priority: 'critical' },
@@ -250,8 +275,17 @@ export function createFleetTaskExecutor(
     let currentModelId = assignment.modelId;
     // Where generation runs; an accepted escalation may move it. Tools always run in taskRoot.
     const placement = { runtimeId: assignment.runtimeId, computerId: assignment.computerId, contextTokens: contextDecision.available.tokens };
+    const fleetResolvedCapabilities: Partial<import('@wazir/runtimes-interfaces').RuntimeCapabilities> = {
+      ...(fleetRuntimeReg?.capabilities ?? {}),
+      toolCalling: fleetNativeTools,
+      nativeToolCalling: fleetNativeTools,
+      structuredOutput: model.structuredOutput ?? fleetRuntimeReg?.capabilities.structuredOutput ?? false,
+    };
     const runtime: AgentRuntime = {
-      tools: engine.tools.forModel(undefined, agent.descriptor.capabilities),
+      tools: fleetModelTools,
+      runtimeCapabilities: fleetResolvedCapabilities,
+      getCapabilities: () => fleetResolvedCapabilities,
+      getContextTokens: () => placement.contextTokens,
 
       cancelCurrentTurn(): void {
         void currentTurn?.adapter.cancel?.(currentTurn.requestId);
@@ -305,6 +339,8 @@ export function createFleetTaskExecutor(
             contextTokens: placement.contextTokens,
             stream: true,
             tools: request.tools,
+            toolChoice: request.toolChoice,
+            parallelToolCalls: request.parallelToolCalls,
             requestId,
           })) {
             await engine.executions.recordProviderEvent(executionId, event, retryContext);
@@ -413,6 +449,14 @@ export function createFleetTaskExecutor(
         // "Task was cancelled" in one real log). Refuse at the choke point instead.
         if (signal?.aborted) {
           return { ok: false, output: '', error: 'cancelled before the tool ran', durationMs: 0 };
+        }
+        if (isReadOnlyPolicy && READ_ONLY_BLOCKED_TOOLS.has(name)) {
+          return {
+            ok: false,
+            output: '',
+            error: `Tool '${name}' is blocked because permission mode is 'read-only'.`,
+            durationMs: 0,
+          };
         }
         const decision = await engine.policy.authorize({
           tool: name,

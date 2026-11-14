@@ -101,6 +101,60 @@ export function supportsNativeToolCalling(capabilities?: Partial<RuntimeCapabili
   return Boolean(capabilities.nativeToolCalling ?? capabilities.toolCalling);
 }
 
+/**
+ * Serializes Wazir's `GenerationRequest` messages into OpenAI-compatible
+ * `/v1/chat/completions` wire format, preserving native `assistant.toolCalls`
+ * and `role: 'tool'` (`tool_call_id`) pairs while keeping legacy ID-less tool
+ * transcripts readable as `[tool result: ...]` user messages.
+ */
+export function formatOpenAIChatMessages(request: Pick<GenerationRequest, 'systemPrompt' | 'messages' | 'prompt'>): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  if (request.systemPrompt) {
+    out.push({ role: 'system', content: request.systemPrompt });
+  }
+  for (const m of request.messages) {
+    if (m.role === 'tool') {
+      if (m.toolCallId) {
+        out.push({
+          role: 'tool',
+          tool_call_id: m.toolCallId,
+          content: m.content,
+        });
+      } else {
+        out.push({
+          role: 'user',
+          content: m.name ? `[tool result: ${m.name}]\n${m.content}` : `[tool result: ${m.content}]`,
+        });
+      }
+      continue;
+    }
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      out.push({
+        role: 'assistant',
+        content: m.content || null,
+        tool_calls: m.toolCalls.map((tc, i) => ({
+          id: tc.id ?? `call_${i}`,
+          type: 'function',
+          function: {
+            name: tc.name,
+            arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments ?? {}),
+          },
+        })),
+      });
+      continue;
+    }
+    out.push({
+      role: m.role,
+      content: m.content,
+      ...(m.name ? { name: m.name } : {}),
+    });
+  }
+  if (request.prompt) {
+    out.push({ role: 'user', content: request.prompt });
+  }
+  return out;
+}
+
 export interface RuntimeDiagnostics {
   cliAvailable: boolean;
   serverRunning: boolean;

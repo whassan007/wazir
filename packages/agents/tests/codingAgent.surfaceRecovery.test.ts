@@ -24,7 +24,27 @@ describe('compiled tool surface protocol recovery', () => {
     expect(turns.at(-1)?.error).toContain('smoke-tested');
   });
 
-  it('advertises the current phase and native protocol in both prompt and schemas', async () => {
+  it('exposes unified read+write tool surface immediately on turn 1 in default Qwen mode without JSON schema prompt bloat', async () => {
+    let calls = 0;
+    const rt: AgentRuntime = {
+      tools: ['read', 'write'].map(name => ({ name, description: name, inputSchema: { type: 'object' } })),
+      runtimeCapabilities: { nativeToolCalling: true },
+      async *generate(req) {
+        calls++;
+        const system = req.messages[0].content;
+        expect(system).not.toContain('MUST output exactly one JSON object');
+        const names = req.tools?.map(t => t.name);
+        expect(names).toEqual(['read', 'write']);
+        yield { type: 'token', content: 'Completed inspection.' };
+        yield { type: 'completed' };
+      },
+      async executeTool() { return { ok: true, output: '', durationMs: 0 }; },
+    };
+    for await (const _t of createCodingAgent({ maxRepairCycles: 0 }).run({ modelId: 'fixture', taskType: 'code_analysis', mutationRequired: false, taskDescription: 'inspect', projectRoot: '/tmp', maxTurns: 2 }, rt)) { /* exhaust */ }
+    expect(calls).toBe(1);
+  });
+
+  it('legacyJsonLoop: advertises the current phase and native protocol in both prompt and schemas', async () => {
     let calls = 0;
     const rt: AgentRuntime = {
       tools: ['read', 'write'].map(name => ({ name, description: name, inputSchema: {} })),
@@ -47,7 +67,7 @@ describe('compiled tool surface protocol recovery', () => {
         yield { type: 'completed' };
       }, async executeTool() { return { ok: true, output: '', durationMs: 0 }; },
     };
-    for await (const t of createCodingAgent({ maxRepairCycles: 0 }).run({ modelId: 'fixture', taskType: 'coding', taskDescription: 'repair', projectRoot: '/tmp', maxTurns: 2 }, rt)) { /* exhaust */ }
+    for await (const t of createCodingAgent({ legacyJsonLoop: true, maxRepairCycles: 0 }).run({ modelId: 'fixture', taskType: 'coding', taskDescription: 'repair', projectRoot: '/tmp', maxTurns: 2 }, rt)) { /* exhaust */ }
     expect(calls).toBe(2);
   });
 });

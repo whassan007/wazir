@@ -161,6 +161,9 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       chat: true,
       streaming: true,
       toolCalling: true,
+      nativeToolCalling: true,
+      parallelToolCalling: true,
+      streamingToolCalls: true,
       structuredOutput: false,
       vision: true,
       embeddings: false,
@@ -196,17 +199,61 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
       }
     }
 
-    const system = request.systemPrompt;
-    const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    const systemParts: string[] = [];
+    if (request.systemPrompt) systemParts.push(request.systemPrompt);
+    const messages: Array<{ role: 'user' | 'assistant'; content: string | Array<Record<string, unknown>> }> = [];
     for (const message of request.messages) {
-      if (message.role === 'system') continue; // folded into `system` above
-      if (message.role === 'tool') {
-        messages.push({ role: 'user', content: `[tool result: ${message.content}]` });
-      } else {
-        messages.push({ role: message.role, content: message.content });
+      if (message.role === 'system') {
+        if (message.content) systemParts.push(message.content);
+        continue;
       }
+      if (message.role === 'tool') {
+        if (message.toolCallId) {
+          const toolResultBlock = {
+            type: 'tool_result',
+            tool_use_id: message.toolCallId,
+            content: message.content,
+          };
+          const prev = messages[messages.length - 1];
+          if (prev && prev.role === 'user' && Array.isArray(prev.content)) {
+            prev.content.push(toolResultBlock);
+          } else {
+            messages.push({ role: 'user', content: [toolResultBlock] });
+          }
+        } else {
+          messages.push({ role: 'user', content: `[tool result: ${message.content}]` });
+        }
+        continue;
+      }
+      if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
+        const blocks: Array<Record<string, unknown>> = [];
+        if (message.content && message.content.trim().length > 0) {
+          blocks.push({ type: 'text', text: message.content });
+        }
+        for (let i = 0; i < message.toolCalls.length; i++) {
+          const tc = message.toolCalls[i];
+          let parsedInput: unknown = tc.arguments ?? {};
+          if (typeof parsedInput === 'string') {
+            try {
+              parsedInput = JSON.parse(parsedInput);
+            } catch {
+              parsedInput = { raw: parsedInput };
+            }
+          }
+          blocks.push({
+            type: 'tool_use',
+            id: tc.id ?? `toolu_${i}`,
+            name: tc.name,
+            input: parsedInput && typeof parsedInput === 'object' ? parsedInput : {},
+          });
+        }
+        messages.push({ role: 'assistant', content: blocks });
+        continue;
+      }
+      messages.push({ role: message.role, content: message.content });
     }
     if (request.prompt) messages.push({ role: 'user', content: request.prompt });
+    const system = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
     let response: Response;
     yield control.startAttempt();
@@ -295,6 +342,8 @@ export class AnthropicAdapter implements RuntimeAdapter, ProviderAuthAdapter {
               if (event.delta?.type === 'text_delta' && event.delta.text) {
                 full += event.delta.text;
                 yield { type: 'token', content: event.delta.text };
+              } else if (event.delta?.type === 'thinking_delta' && event.delta.thinking) {
+                yield { type: 'reasoning', content: event.delta.thinking };
               } else if (event.delta?.type === 'input_json_delta' && event.delta.partial_json) {
                 const entry = pendingToolCalls.get(event.index) ?? { arguments: '' };
                 entry.arguments += event.delta.partial_json;

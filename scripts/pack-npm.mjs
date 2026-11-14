@@ -55,7 +55,7 @@ const pkg = {
   homepage: 'https://github.com/whassan007/wazir#readme',
   repository: { type: 'git', url: 'git+https://github.com/whassan007/wazir.git' },
   bugs: { url: 'https://github.com/whassan007/wazir/issues' },
-  bin: { wa: 'bin/wa.js' },
+  bin: { wa: 'bin/wa.js', wazir: 'bin/wa.js' },
   files: ['bin/wa.js', 'README.md', 'LICENSE'],
   engines: rootPkg.engines,
   optionalDependencies,

@@ -185,6 +185,15 @@ export interface FleetTuiOptions {
   timeoutSeconds?: number;
   enablePlanner?: boolean;
   presentationMode?: 'conversation' | 'dashboard';
+  modelId?: string;
+  agentId?: string;
+  routingMode?: import('@wazir/core').RoutingMode;
+  permissionMode?: 'ask' | 'auto' | 'read-only';
+  distributionSpec?: string;
+  sessionId?: string;
+  noColor?: boolean;
+  ascii?: boolean;
+  colorMode?: 'default' | 'dark' | 'light' | 'monochrome';
 }
 
 export interface CanaryModalState {

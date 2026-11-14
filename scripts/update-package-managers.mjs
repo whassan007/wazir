@@ -137,6 +137,11 @@ function generateHomebrewFormula(ver, h) {
 
   def install
     bin.install "wa"
+    if File.exist?("wazir")
+      bin.install "wazir"
+    else
+      bin.install_symlink "wa" => "wazir"
+    end
   end
 
   def caveats
@@ -154,6 +159,7 @@ function generateHomebrewFormula(ver, h) {
 
   test do
     assert_match version.to_s, shell_output("#{bin}/wa --version")
+    assert_match version.to_s, shell_output("#{bin}/wazir --version")
     assert_match "Wazir", shell_output("#{bin}/wa --help")
   end
 end
@@ -177,7 +183,10 @@ function generateScoopManifest(ver, h) {
         hash: h['windows-arm64'],
       }
     },
-    bin: "wa.exe",
+    bin: [
+      "wa.exe",
+      ["wa.exe", "wazir"],
+    ],
     checkver: {
       github: "https://github.com/whassan007/wazir",
     },
@@ -222,8 +231,11 @@ NestedInstallerType: portable
 NestedInstallerFiles:
   - RelativeFilePath: wa.exe
     PortableCommandAlias: wa
+  - RelativeFilePath: wa.exe
+    PortableCommandAlias: wazir
 Commands:
   - wa
+  - wazir
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/whassan007/wazir/releases/download/v${ver}/wazir-v${ver}-windows-x64.zip
@@ -348,7 +360,10 @@ if (existsSync(scoopPath)) {
     if (parsed.version !== targetVersion) {
       console.error(`✗ Scoop manifest version mismatch! Expected ${targetVersion}, found ${parsed.version}`);
       hasError = true;
-    } else if (parsed.bin !== 'wa.exe') {
+    } else if (
+      parsed.bin !== 'wa.exe' &&
+      !(Array.isArray(parsed.bin) && parsed.bin.includes('wa.exe'))
+    ) {
       console.error('✗ Scoop manifest missing wa.exe bin mapping!');
       hasError = true;
     } else {

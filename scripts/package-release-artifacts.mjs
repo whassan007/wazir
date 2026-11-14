@@ -38,7 +38,9 @@ console.log(`\n--- 1. Building standalone binary for ${targetId} ---`);
 execSync('node scripts/build-binary.mjs', { cwd: rootDir, stdio: 'inherit' });
 
 const binaryName = process.platform === 'win32' ? 'wa.exe' : 'wa';
+const aliasBinaryName = process.platform === 'win32' ? 'wazir.exe' : 'wazir';
 const binaryPath = path.resolve(rootDir, 'dist', binaryName);
+const aliasBinaryPath = path.resolve(rootDir, 'dist', aliasBinaryName);
 
 if (!existsSync(binaryPath)) {
   console.error(`✗ Expected binary at ${binaryPath} was not found!`);
@@ -52,6 +54,9 @@ if (existsSync(stagingDir)) rmSync(stagingDir, { recursive: true, force: true })
 mkdirSync(stagingDir, { recursive: true });
 
 copyFileSync(binaryPath, path.resolve(stagingDir, binaryName));
+if (existsSync(aliasBinaryPath)) {
+  copyFileSync(aliasBinaryPath, path.resolve(stagingDir, aliasBinaryName));
+}
 copyFileSync(path.resolve(rootDir, 'README.md'), path.resolve(stagingDir, 'README.md'));
 copyFileSync(path.resolve(rootDir, 'LICENSE'), path.resolve(stagingDir, 'LICENSE'));
 

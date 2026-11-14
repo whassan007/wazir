@@ -13,7 +13,13 @@
       "hash": "14f1ec83d44cc90c9105ade172efbed47d11031e2a7e4594da084eeb55577ae3"
     }
   },
-  "bin": "wa.exe",
+  "bin": [
+    "wa.exe",
+    [
+      "wa.exe",
+      "wazir"
+    ]
+  ],
   "checkver": {
     "github": "https://github.com/whassan007/wazir"
   },

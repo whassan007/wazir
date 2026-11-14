@@ -314,7 +314,7 @@ const GIT_CONFIG_GET_FLAGS = new Set(['--get', '--get-all', '--get-regexp', '--g
 const GIT_CONFIG_WRITE_FLAGS = ['--edit', '-e', '--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section', '--file', '-f', '--blob'];
 
 const FILE_TOOLS_READ = new Set(['read', 'search', 'glob']);
-const FILE_TOOLS_WRITE = new Set(['write', 'edit']);
+const FILE_TOOLS_WRITE = new Set(['write', 'edit', 'multi_edit']);
 
 function isInside(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
@@ -383,7 +383,7 @@ const SPEC_READ_ONLY_DENY_FLAGS: Record<string, string[]> = {
 };
 // Tools that never write files; every other tool's string inputs are scanned for spec paths.
 const SPEC_FENCE_NON_WRITING_TOOLS = new Set([
-  'read', 'search', 'glob', 'compact_memory', 'recall_facts', 'remember_fact', 'web_search', 'web_fetch',
+  'read', 'read_many_files', 'todo_write', 'search', 'glob', 'compact_memory', 'recall_facts', 'remember_fact', 'web_search', 'web_fetch',
 ]);
 const MAX_SPEC_SYMLINK_HOPS = 40;
 
@@ -826,6 +826,7 @@ export class PolicyEngine {
       { id: 'shell-build-workspace-install-ask', description: 'Build install targets may mutate system directories outside the workspace and require approval', effect: 'ask' },
       { id: 'shell-test-workspace-allow', description: 'Running an existing, project-local test file via its interpreter (no inline-eval flags, no extra arguments) is allowed', effect: 'allow' },
       { id: 'project-checks-allow', description: 'test / lint / typecheck / build run inside the project', effect: 'allow' },
+      { id: 'scratchpad-allow', description: 'In-memory agent scratchpad tools (todo_write) are allowed', effect: 'allow' },
       { id: SPEC_WRITE_FENCE_RULE, description: `Writes into specification directories (${this.specDirs().map((d) => `${d}/`).join(', ') || 'none'}) are denied unless the execution's persisted role is '${SPEC_AUTHOR_ROLE}'; missing or unknown roles are denied`, effect: 'deny' },
       { id: SPEC_APPROVAL_FENCE_RULE, description: `Agents may leave specifications only in ${AGENT_WRITABLE_SPEC_STATUSES.join('/')}; approval and retirement are human-only`, effect: 'deny' },
     ];
@@ -1110,6 +1111,45 @@ export class PolicyEngine {
     const tool = request.tool;
     const projectRoot = request.projectRoot ?? this.options.projectRoot;
     const lower = tool.toLowerCase();
+    if (lower === 'todo_write') {
+      return {
+        decision: 'allow',
+        rule: 'scratchpad-allow',
+        reasons: ['in-memory todo scratchpad has no external side effects'],
+      };
+    }
+    if (lower === 'read_many_files') {
+      const rawPaths = Array.isArray(request.input.paths) ? request.input.paths : undefined;
+      if (!rawPaths || rawPaths.length === 0) {
+        return {
+          decision: 'deny',
+          rule: 'filesystem-outside-deny',
+          reasons: [`tool '${tool}' requires a non-empty paths array`],
+        };
+      }
+      for (const entry of rawPaths) {
+        if (typeof entry !== 'string' || entry.trim().length === 0) {
+          return {
+            decision: 'deny',
+            rule: 'filesystem-outside-deny',
+            reasons: [`tool '${tool}' paths entries must be non-empty strings`],
+          };
+        }
+        const absolute = path.resolve(projectRoot, entry);
+        if (!isInside(projectRoot, absolute)) {
+          return {
+            decision: 'deny',
+            rule: 'filesystem-outside-deny',
+            reasons: [`path '${entry}' is outside project root '${projectRoot}'`],
+          };
+        }
+      }
+      return {
+        decision: 'allow',
+        rule: 'filesystem-project-allow',
+        reasons: ['all read_many_files paths are inside project root'],
+      };
+    }
     if (lower === 'compact_memory') {
       return {
         decision: 'allow',

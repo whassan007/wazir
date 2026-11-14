@@ -517,7 +517,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
               type: 'function',
               function: { name: t.name, description: t.description, parameters: t.parameters },
             })),
-            parallel_tool_calls: request.tools?.length ? false : undefined,
+            parallel_tool_calls: request.tools?.length && request.parallelToolCalls !== undefined ? request.parallelToolCalls : undefined,
             tool_choice: request.toolChoice,
             response_format: request.responseFormat,
           }),

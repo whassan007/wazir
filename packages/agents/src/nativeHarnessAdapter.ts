@@ -234,7 +234,7 @@ export interface NativeHarnessExecuteOptions {
 }
 
 const CHECK_TOOL_NAMES = new Set<string>(['test', 'lint', 'typecheck', 'build']);
-const READ_ONLY_TOOL_NAMES = new Set<string>(['read', 'glob', 'search', 'web_search', 'web_fetch']);
+const READ_ONLY_TOOL_NAMES = new Set<string>(['read', 'read_many_files', 'todo_write', 'glob', 'search', 'web_search', 'web_fetch']);
 const IDEMPOTENT_WRITE_TOOL_NAMES = new Set<string>(['write', 'write_to_file']);
 const LOCAL_RUNTIME_PATTERNS = /^(ollama|lmstudio|local|llamacpp|llama\.cpp|vllm-local|mlx)/i;
 

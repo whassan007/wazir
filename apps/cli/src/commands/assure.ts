@@ -15,18 +15,8 @@ export interface AssureCommandResult {
   output: string;
 }
 
-async function loadAssuranceCli() {
-  // Resolve @wazir/assurance or direct relative module seamlessly before/after workspace link
-  const pkgName = '@wazir/assurance';
-  try {
-    const mod = await import(pkgName);
-    if (mod && typeof mod.runAssureDoctor === 'function') {
-      return mod as typeof import('../../../../packages/assurance/src/cli.js');
-    }
-  } catch {
-    // Fallback to direct source/dist resolution in monorepo
-  }
-  return await import('../../../../packages/assurance/src/cli.js');
+async function loadAssuranceCli(): Promise<typeof import('@wazir/assurance')> {
+  return await import('@wazir/assurance');
 }
 
 export async function assureDoctorCommand(options: {
@@ -193,7 +183,7 @@ export async function assureRunCommand(
     ? (options.tools
         .split(',')
         .map((t) => t.trim())
-        .filter(Boolean) as import('../../../../packages/assurance/src/contracts.js').FormalTool[])
+        .filter(Boolean) as import('@wazir/assurance').FormalTool[])
     : undefined;
 
   const summary = await cli.assureRun({

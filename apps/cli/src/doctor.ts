@@ -3,7 +3,7 @@ import { color } from './colors.js';
 import { createBlock } from './blocks.js';
 import { sandboxStatus } from '@wazir/tools';
 import { collectHealthReport } from './health.js';
-import { checkRuntimeDependencies, checkGitAvailability, checkPackageVersion } from './version.js';
+import { checkRuntimeDependencies, checkGitAvailability, checkPackageVersion, isNodeSea } from './version.js';
 
 export type DoctorStatus = 'PASS' | 'WARN' | 'FAIL' | 'NOT INSTALLED' | 'UNAVAILABLE';
 
@@ -449,6 +449,41 @@ async function checkExternalAgentsUnsafe(engine: RookEngine): Promise<DoctorChec
   };
 }
 
+function checkOptionalCapabilities(engine: RookEngine): DoctorCheck {
+  try {
+    const sea = isNodeSea();
+    const secretBackend = engine.secretBroker?.backendName ?? (sea ? 'encrypted-file' : 'unknown');
+    let nodePtyAvailable = false;
+    if (!sea) {
+      try {
+        require.resolve('node-pty');
+        nodePtyAvailable = true;
+      } catch {
+        nodePtyAvailable = false;
+      }
+    }
+    const ptyStatus = nodePtyAvailable ? 'node-pty (native)' : 'pipe/python-pty fallback';
+    const packagingMode = sea ? 'standalone-sea' : 'node-runtime';
+    return {
+      name: 'optional native capabilities',
+      status: 'PASS',
+      message: `secrets=${secretBackend}, pty=${ptyStatus}, runtime=${packagingMode}`,
+      details: [
+        `Secret storage backend: ${secretBackend} (@napi-rs/keyring optional native addon ${secretBackend === 'os-keychain' ? 'active' : 'gracefully degraded to AES-256-GCM encrypted file store'})`,
+        `PTY backend: ${ptyStatus}`,
+        `Executable packaging: ${packagingMode} (launched via wa / wazir)`,
+      ].join('\n'),
+    };
+  } catch (error) {
+    return {
+      name: 'optional native capabilities',
+      status: 'WARN',
+      message: 'capability probe degraded',
+      details: (error as Error).message,
+    };
+  }
+}
+
 export async function doctor(engine: RookEngine): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [
     checkPackageVersion(),
@@ -467,6 +502,7 @@ export async function doctor(engine: RookEngine): Promise<DoctorReport> {
     checkSchedulerReadiness(engine),
     checkSecurity(engine),
     checkSandbox(),
+    checkOptionalCapabilities(engine),
     await checkExternalAgents(engine),
   ];
   

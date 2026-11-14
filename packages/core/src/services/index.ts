@@ -304,3 +304,16 @@ export type { DistributedSearchCoordinatorOptions } from '../types/distributedSe
 
 export * from './evidencePolicy.js';
 export * from './executionContract.js';
+export {
+  WorkloadDistributor,
+  DEFAULT_HARDWARE_DISTRIBUTION,
+  parseWorkloadDistribution,
+  formatWorkloadDistribution,
+} from './workloadDistributor.js';
+export type {
+  WorkloadPoolKind,
+  WorkloadShare,
+  WorkloadDistributionConfig,
+  AvailableWorkloadPools,
+  AllocatedWorkloadTarget,
+} from './workloadDistributor.js';
