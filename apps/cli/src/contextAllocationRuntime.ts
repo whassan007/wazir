@@ -128,7 +128,7 @@ export function planContext(
     : allocateFitted(limits, { estimatedInputTokens: context.finalInputTokens, toolSchemaTokens, outputTokens: options.outputReserveTokens });
   if (!context.fits) {
     context.reasons.push(
-      `context cannot fit: requires ${context.finalRequiredTokens} tokens, available ${window} tokens (limit source: ${limits.source})`,
+      `context ${window} < required ${context.finalRequiredTokens}: context cannot fit (limit source: ${limits.source})`,
     );
   }
   return { context, allocation, limits };

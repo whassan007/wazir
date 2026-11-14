@@ -374,6 +374,19 @@ describe('Group C4: Remote Checkpoint Transport (Service, HTTP Routes, Worker Cl
     await expect(
       transportService.registerManifest(forgedManifest, { authToken: clusterSecret }),
     ).rejects.toThrow(/UNAUTHORIZED_CHECKPOINT_TRANSFER/);
+
+    // Stored manifest HMAC must NOT substitute for caller authentication on commit or getBundle (CLAUDE-01 H1)
+    await transportService.registerManifest(packaged.manifest, { authToken: clusterSecret });
+    for (const [hash, content] of Object.entries(packaged.blobs)) {
+      await transportService.putBlob(hash, content, { authToken: clusterSecret });
+    }
+    await expect(transportService.commitCheckpoint(checkpoint.id)).rejects.toThrow(
+      /UNAUTHORIZED_CHECKPOINT_TRANSFER/,
+    );
+    await transportService.commitCheckpoint(checkpoint.id, { authToken: clusterSecret });
+    await expect(transportService.getBundle(checkpoint.id)).rejects.toThrow(
+      /UNAUTHORIZED_CHECKPOINT_TRANSFER/,
+    );
   });
 
   it('7. scrubs embedded secrets from descriptions, metadata, contextSnapshot, and planState in redact mode', async () => {

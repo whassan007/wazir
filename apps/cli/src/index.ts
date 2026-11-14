@@ -841,8 +841,8 @@ program.addCommand(testCmd);
 program
   .command('status')
   .description('Show system status')
-  .option('--json', 'Output in JSON format')
-  .action(async (options) => {
+  .option('-j, --json', 'Output status in JSON format')
+  .action(async (options: { json?: boolean }) => {
     const { statusCommand } = await import('./status.js');
     const result = await statusCommand({ json: options.json });
     console.log(result.output);

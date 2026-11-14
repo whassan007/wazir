@@ -1,0 +1,16 @@
+check_id,name,target,expected,actual,status,notes
+1,pack,wazir-0.2.17.tgz,generated,generated,PASS,3.9 MB tarball
+2,contents,tarball,no lifecycle scripts,no lifecycle scripts,PASS,4 files
+3,packaging-parity,distribution manifests,aligned at 0.2.17,aligned at 0.2.17,PASS,DEB/RPM/Homebrew/Scoop/WinGet/Tauri
+4,secrets-scan,source and dist,0 private credentials,0 private credentials,PASS,9 regex patterns scanned
+5,install:global,npm prefix,/tmp/wazir-pkgcheck/prefix/bin/wa,/tmp/wazir-pkgcheck/prefix/bin/wa,PASS,Installed cleanly
+6,smoke:global,CLI execution,valid doctor/version/help,valid doctor/version/help,PASS,Executed successfully
+7,optional-modules:global,native modules,keyring & node-pty loaded,keyring & node-pty loaded,PASS,Both modules loaded
+8,install:local,tarball local,clean install,clean install,PASS,Installed in mock project
+9,smoke:local-npx,npx wa,valid execution,valid execution,PASS,Local npx execution verified
+10,install:omit-optional,npm install --omit=optional,clean install,clean install,PASS,Graceful degradation
+11,smoke:without-optional,CLI execution,valid execution,valid execution,PASS,Runs without optional modules
+12,optional-modules:without-optional,probe,module unavailable,module unavailable,PASS,Handles missing modules
+13,upgrade:preserves-state,reinstall,WAZIR_HOME untouched,WAZIR_HOME untouched,PASS,7 files preserved
+14,smoke:after-upgrade,CLI execution,valid execution,valid execution,PASS,Upgraded binary works
+15,uninstall,npm rm,clean removal,clean removal,PASS,Command removed without leaking state

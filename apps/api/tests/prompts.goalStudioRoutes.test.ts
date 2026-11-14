@@ -61,13 +61,15 @@ describe('Goal Studio prompt routes', () => {
     expect((await call('POST', BASE, OP, DRAFT)).status).toBe(503);
   });
 
-  it('is mounted by the real API server and degrades to 503 there until wired', async () => {
+  it('is mounted and wired by the real API server', async () => {
     const state = await createApiState({ auth: { allowUnauthenticated: true } });
     const server = createApp(state).listen(0);
     servers.push(server);
     await new Promise<void>((resolve) => server.once('listening', resolve));
     const res = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}${BASE}`);
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { prompts: unknown[]; canEvaluate: boolean };
+    expect(Array.isArray(body.prompts)).toBe(true);
   });
 
   it('enforces viewer for reads and operator for mutations', async () => {

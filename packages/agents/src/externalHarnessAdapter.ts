@@ -469,7 +469,7 @@ export class ExternalHarnessAdapter implements AgentAdapter {
       maxPermissionMode: maxMode,
     });
 
-    if (discovery.failureClassification === 'ENVIRONMENT_BLOCKED') {
+    if (discovery.failureClassification === 'ENVIRONMENT_BLOCKED' && !this.options.connect) {
       return finalizeResult({
         status: 'failed',
         verified: false,
@@ -1349,14 +1349,21 @@ export class ExternalHarnessAdapter implements AgentAdapter {
             signal,
             errorMessage: `'${this.spec.command}' timed out after ${timeoutMs}ms`,
           });
-        } else if (signal) {
+        } else if (
+          signal ||
+          code === 143 ||
+          code === 137 ||
+          (code !== 0 && /terminated by signal|SIG(TERM|KILL|INT|ABRT)/i.test(stderr))
+        ) {
           resolve({
             outcome: 'crashed',
             stdout,
             stderr,
             exitCode: code,
             signal,
-            errorMessage: `'${this.spec.command}' terminated by signal ${signal}`,
+            errorMessage: signal
+              ? `'${this.spec.command}' terminated by signal ${signal}`
+              : `'${this.spec.command}' terminated by signal (exit code ${code})`,
           });
         } else if (code === 0) {
           resolve({ outcome: 'completed', stdout, stderr, exitCode: 0, signal: null });

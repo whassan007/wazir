@@ -7,7 +7,7 @@ class Wazir < Formula
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/whassan007/wazir/releases/download/v0.3.1/wazir-v0.3.1-darwin-arm64.tar.gz"
-      sha256 "1676a5f06f62a5528c8b0b3a2bc8444365fa7bb884961a1e05b2353a23cadccc"
+      sha256 "c999a618b9ccda1b939fe8ba2df4b1c0ffd82f98ddb3d1f17af6a239cfc55d86"
     else
       url "https://github.com/whassan007/wazir/releases/download/v0.3.1/wazir-v0.3.1-darwin-x64.tar.gz"
       sha256 "0fa41adcbc4ec613c2fa86a25e585f1f390aa195d2d2311771e76df6051244aa"

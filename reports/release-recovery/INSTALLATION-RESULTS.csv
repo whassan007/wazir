@@ -1,0 +1,6 @@
+test_id,install_method,target_dir,version_reported,exit_code,status,notes
+INST-01,npm-global,/tmp/wazir-pkgcheck/prefix/bin/wa,0.2.17,0,PASS,Standalone global prefix installation
+INST-02,npm-local,/tmp/wazir-pkgcheck/project/node_modules/.bin/wa,0.2.17,0,PASS,Project local npm install from tarball
+INST-03,standalone-binary,/home/wael/Code/wazir/dist/wa,0.2.17,0,PASS,Injected Node SEA executable
+INST-04,reinstall-upgrade,~/.wazir,0.2.17,0,PASS,Preserves ~/.wazir ledger and database intact
+INST-05,uninstall,/tmp/wazir-pkgcheck/prefix/bin/wa,None,0,PASS,Cleanly removed without residue

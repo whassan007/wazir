@@ -511,7 +511,8 @@ export class Scheduler {
       };
     }
 
-    const requiredContext = input.requiredContextTokens ?? req.minimumContext ?? (req as unknown as { contextTokens?: number }).contextTokens ?? 0;
+    const minContextTokens = (req as typeof req & { minContextTokens?: number }).minContextTokens;
+    const requiredContext = input.requiredContextTokens ?? minContextTokens ?? req.minimumContext ?? (req as unknown as { contextTokens?: number }).contextTokens ?? 0;
     const routing = this.resolveRoutingConstraint(task);
 
     let agentId: string | undefined;
@@ -566,8 +567,9 @@ export class Scheduler {
 
       const contextPlan = this.contextEstimator.planContextAllocation({
         model: record,
-        estimatedInputTokens: Math.max(requiredContext, 1),
-        requiredMinimumContext: req.minimumContext ?? 2048,
+        // requiredContext is a total window requirement, not an input token estimate.
+        estimatedInputTokens: 0,
+        requiredMinimumContext: requiredContext || 2048,
         reasoningEffort: routing.reasoningEffort,
       });
       (modelDecision as any).allocatedContextTokens = contextPlan.allocatedContextTokens;
@@ -1747,10 +1749,15 @@ export class Scheduler {
       // Safe Context Tier Allocation Check via ContextMemoryEstimator
       const contextPlan = this.contextEstimator.planContextAllocation({
         model: record,
-        estimatedInputTokens: Math.max(requiredContext, 1),
-        requiredMinimumContext: task.requirements?.minimumContext ?? 2048,
+        // Reserve output within the requested window rather than adding it to the window.
+        estimatedInputTokens: 0,
+        requiredMinimumContext: requiredContext || 2048,
         reasoningEffort: routing.reasoningEffort,
-        availableMemoryGB: deviceAssessment.availableMemoryGB,
+        // GPU minGpuGB includes weights, runtime overhead, and baseline 8K context.
+        // The VRAM checks above already enforce capacity plus incremental KV cache.
+        availableMemoryGB: computer.hardware.gpu && (record.memory?.minGpuGB ?? 0) > 0
+          ? undefined
+          : deviceAssessment.availableMemoryGB,
         alreadyLoaded: deviceAssessment.alreadyLoaded,
       });
       if (!contextPlan.eligible) {

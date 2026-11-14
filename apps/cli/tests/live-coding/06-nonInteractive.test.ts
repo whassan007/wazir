@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /**
  * LIVE-CODE-06: Non-Interactive CLI Subprocess (Release Gate G1)
@@ -69,10 +70,10 @@ import {
   PolicyEngine,
   RuntimeRegistry,
   Scheduler,
-} from ${JSON.stringify(req.resolve('@wazir/core'))};
-import { ToolRegistry, defaultTools } from ${JSON.stringify(req.resolve('@wazir/tools'))};
-import { ChatAgent, createCodingAgent } from ${JSON.stringify(req.resolve('@wazir/agents'))};
-import { executeTask } from ${JSON.stringify(path.join(repoRoot, 'apps/cli/dist/run.js'))};
+} from ${JSON.stringify(pathToFileURL(req.resolve('@wazir/core')).href)};
+import { ToolRegistry, defaultTools } from ${JSON.stringify(pathToFileURL(req.resolve('@wazir/tools')).href)};
+import { ChatAgent, createCodingAgent } from ${JSON.stringify(pathToFileURL(req.resolve('@wazir/agents')).href)};
+import { executeTask } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, 'apps/cli/dist/run.js')).href)};
 
 const projectRoot = process.cwd();
 const computers = new ComputerRegistry();

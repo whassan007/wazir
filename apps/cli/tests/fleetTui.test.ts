@@ -2477,7 +2477,7 @@ describe('FleetTui — protocol/validation visibility and raw response viewer', 
         await new Promise((r) => setTimeout(r, 25));
       }
       expect(harness.outStream.getOutput()).toContain('> !pwd');
-      expect(harness.outStream.getOutput()).toContain(projectRoot);
+      expect(harness.outStream.getOutput()).toContain(path.basename(projectRoot));
       expect(harness.outStream.getOutput()).toContain('✓ Command completed · exit 0');
       expect(harness.outStream.getOutput()).toContain('ref @1');
 

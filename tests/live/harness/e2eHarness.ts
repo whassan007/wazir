@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { createRequire } from 'node:module';
+import { stripVTControlCharacters } from 'node:util';
 
 export type Verdict = 'REAL_LIVE_PASS' | 'DETERMINISTIC_INTEGRATION_PASS' | 'FAILED' | 'BLOCKED' | 'NOT_RUN';
 
@@ -23,6 +25,10 @@ export interface ProcessRunResult {
 export interface PtyStep {
   op: 'wait' | 'send' | 'resize' | 'signal' | 'sleep' | 'exit';
   text?: string;
+  waitFor?: string;
+  send?: string;
+  delayBeforeMs?: number;
+  delayMs?: number;
   data?: string;
   timeout?: number;
   expectCode?: number;
@@ -39,6 +45,10 @@ export interface PtyResult {
   steps: Array<{ op: string; ok: boolean; detail?: string }>;
   outputBytes: number;
   outputTail: string;
+  rawOutput?: string;
+  cleanOutput?: string;
+  timedOut?: boolean;
+  durationMs?: number;
 }
 
 export interface UserJourneyReport {
@@ -150,6 +160,7 @@ export async function runWaPty(
     cwd?: string;
   }
 ): Promise<PtyResult> {
+  if (process.platform === 'win32') return runWaConPty(args, script);
   return new Promise((resolve, reject) => {
     const ptyArgs = [
       PTY_DRIVER,
@@ -187,4 +198,97 @@ export async function runWaPty(
       }
     });
   });
+}
+
+
+/** ConPTY equivalent of the Python driver's step protocol. */
+export async function runWaConPty(
+  args: string[],
+  script: Parameters<typeof runWaPty>[1],
+): Promise<PtyResult> {
+  const start = Date.now();
+  const nodePty = createRequire(import.meta.url)('node-pty') as typeof import('node-pty');
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries({ ...process.env, ...script.env })) {
+    if (value !== undefined) env[key] = value;
+  }
+  const child = nodePty.spawn(process.execPath, [BIN_WA, ...args], {
+    name: 'xterm-256color', cols: script.cols ?? 120, rows: script.rows ?? 40,
+    cwd: script.cwd ?? ROOT, env,
+  });
+  let rawOutput = '';
+  let outputBytes = 0;
+  let alive = true;
+  let exitCode: number | null = null;
+  let signalName: string | null = null;
+  let timedOut = false;
+  let killed = false;
+  const results: PtyResult['steps'] = [];
+  const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  const dataSubscription = child.onData((chunk) => {
+    outputBytes += Buffer.byteLength(chunk);
+    rawOutput = (rawOutput + chunk).slice(-1_000_000);
+  });
+  const exitSubscription = child.onExit((event) => {
+    alive = false;
+    exitCode = event.exitCode;
+    signalName = event.signal ? String(event.signal) : null;
+  });
+  const waitUntil = async (predicate: () => boolean, timeout: number) => {
+    const deadline = Date.now() + timeout * 1000;
+    while (!predicate() && alive && Date.now() < deadline) await pause(25);
+    const ok = predicate();
+    if (!ok && alive) timedOut = true;
+    return ok;
+  };
+  try {
+    for (const step of script.steps) {
+      const record = { op: step.op, ok: true, detail: '' };
+      try {
+        if (step.delayBeforeMs) await pause(step.delayBeforeMs);
+        const needle = step.waitFor ?? (step.op === 'wait' ? step.text ?? '' : undefined);
+        if (needle !== undefined) {
+          record.ok = await waitUntil(() =>
+            stripVTControlCharacters(rawOutput).replace(/\s+/g, '').includes(needle.replace(/\s+/g, '')),
+          step.timeout ?? script.stepTimeout ?? 10);
+          record.detail = `found=${record.ok} needle=${JSON.stringify(needle)}`;
+        }
+        if (record.ok) {
+          if (step.op === 'send' || step.send !== undefined) {
+            child.write(step.send ?? step.data ?? '');
+            if (step.delayMs) await pause(step.delayMs);
+          } else if (step.op === 'resize') {
+            child.resize(step.cols ?? 80, step.rows ?? 24);
+            await pause(200);
+          } else if (step.op === 'signal') {
+            child.kill(step.name ?? 'SIGINT');
+            await pause(300);
+          } else if (step.op === 'sleep') {
+            await pause(step.ms ?? 0);
+          } else if (step.op === 'exit') {
+            record.ok = await waitUntil(() => !alive, step.timeout ?? script.stepTimeout ?? 10);
+            if (step.expectCode !== undefined) record.ok &&= exitCode === step.expectCode;
+            record.detail = `exitCode=${exitCode} signal=${signalName}`;
+          }
+        }
+      } catch (error) {
+        record.ok = false;
+        record.detail = String(error);
+      }
+      results.push(record);
+    }
+  } finally {
+    if (alive) {
+      killed = true;
+      try { child.kill(); } catch { /* already exited */ }
+    }
+    await pause(150);
+    dataSubscription.dispose();
+    exitSubscription.dispose();
+  }
+  return {
+    exitCode, signalName, killed, steps: results, outputBytes,
+    outputTail: rawOutput.slice(-32768), rawOutput,
+    cleanOutput: stripVTControlCharacters(rawOutput), timedOut, durationMs: Date.now() - start,
+  };
 }

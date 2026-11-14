@@ -233,7 +233,7 @@ describe('updater release and safety invariants', () => {
     writeFileSync(path.join(pkgDir, 'bin', 'wa.js'), '#!/usr/bin/env node\n');
     writeFileSync(path.join(pkgDir, 'LICENSE'), 'license'); writeFileSync(path.join(pkgDir, 'README.md'), 'readme');
     const tarball = path.join(home, 'wazir-0.2.8.tgz');
-    const packed = spawnSync('tar', ['-czf', tarball, '-C', home, 'package']);
+    const packed = spawnSync('tar', ['-czf', path.basename(tarball), 'package'], { cwd: home });
     expect(packed.status).toBe(0);
     expect(() => validateNpmReleasePackage(tarball, '0.2.8')).not.toThrow();
     expect(() => validateNpmReleasePackage(tarball, '0.2.9')).toThrow(/metadata/);

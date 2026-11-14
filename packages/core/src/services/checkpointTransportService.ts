@@ -326,6 +326,16 @@ export function scrubCheckpointSecrets(
       'planState.metadata',
     ) as Record<string, unknown>;
   }
+  if (cloned.worktreeState?.filesSnapshot) {
+    for (const [relPath, content] of Object.entries(cloned.worktreeState.filesSnapshot)) {
+      if (typeof content === 'string') {
+        cloned.worktreeState.filesSnapshot[relPath] = scrubString(
+          content,
+          `worktreeState.filesSnapshot[${relPath}]`,
+        );
+      }
+    }
+  }
 
   if (findings.length > 0 && policy === 'reject') {
     throw new Error(
@@ -679,7 +689,7 @@ export class CheckpointTransportService {
       throw new Error(`CHECKPOINT_MANIFEST_NOT_FOUND: '${checkpointId}'`);
     }
 
-    this.verifyAuthentication({ authToken: options.authToken, manifest: entry.manifest });
+    this.verifyAuthentication({ authToken: options.authToken });
 
     if (
       options.sourceWorkerId &&
@@ -778,7 +788,7 @@ export class CheckpointTransportService {
       throw new Error(`CHECKPOINT_NOT_FOUND: Committed checkpoint '${checkpointId}' not found`);
     }
 
-    this.verifyAuthentication({ authToken: options.authToken, manifest: entry.manifest });
+    this.verifyAuthentication({ authToken: options.authToken });
 
     const expiresAtMs = Date.parse(entry.manifest.expiresAt);
     if (Number.isFinite(expiresAtMs) && expiresAtMs <= this.now()) {

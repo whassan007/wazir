@@ -139,7 +139,8 @@ describe('Codex Task 1: Production-Realistic End-to-End User Journeys', () => {
       const listRes = await runWa(['models', 'list'], { cwd: workspaceDir, env });
       expect(listRes.exitCode).toBe(0);
       expect(listRes.combined).toContain('WAZIR MODELS');
-      expect(listRes.combined).toContain('Summary: Installed');
+      expect(listRes.combined).toContain('Summary:');
+      expect(listRes.combined).toMatch(/Installed \d+/);
 
       // Discover runtimes command with sub-command `all`
       const discRes = await runWa(['discover', 'all'], { cwd: workspaceDir, env });

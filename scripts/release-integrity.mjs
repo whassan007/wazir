@@ -1,10 +1,9 @@
-#!/usr/bin/env node
 /** Release metadata, artifact, and publication checks.  No network is used unless --latest is requested. */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -70,4 +69,4 @@ async function main() {
   console.log(`release metadata verified: ${tag}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main().catch((error) => fail(error.message));
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main().catch((error) => fail(error.message));

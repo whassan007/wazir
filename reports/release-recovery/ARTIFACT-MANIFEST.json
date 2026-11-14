@@ -1,0 +1,28 @@
+{
+  "version": "0.2.17",
+  "generated_at": "2026-10-29T06:07:00Z",
+  "artifacts": [
+    {
+      "name": "wazir-v0.2.17-linux-arm64.tar.gz",
+      "path": "dist/release/wazir-v0.2.17-linux-arm64.tar.gz",
+      "sha256": "66c8504150828f034bd54942e3a67c146983e13e61fd36eccc76c47fa8693360",
+      "size_bytes": 48439369,
+      "platform": "linux",
+      "architecture": "arm64"
+    },
+    {
+      "name": "wa",
+      "path": "dist/wa",
+      "platform": "linux",
+      "architecture": "arm64",
+      "type": "standalone-sea-binary",
+      "size_bytes": 142921728
+    },
+    {
+      "name": "wazir-0.2.17.tgz",
+      "path": "wazir-0.2.17.tgz",
+      "type": "npm-tarball",
+      "size_bytes": 4096000
+    }
+  ]
+}

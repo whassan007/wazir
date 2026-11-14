@@ -36,6 +36,9 @@ export function supervisorDirectory(projectRoot = process.cwd()): string {
 
 export function supervisorSocket(directory: string): string {
   const digest = createHash('sha256').update(directory).digest('hex').slice(0, 32);
+  if (process.platform === 'win32') {
+    return `\\\\.\\pipe\\wazir-improve-${digest}`;
+  }
   if (process.platform === 'linux') {
     // Linux abstract sockets are released by the kernel even after SIGKILL.
     return '\0wazir-improve-' + digest;
@@ -45,7 +48,7 @@ export function supervisorSocket(directory: string): string {
 
 export async function supervisorLease(directory: string): Promise<net.Server> {
   const sockPath = supervisorSocket(directory);
-  if (process.platform !== 'linux' && existsSync(sockPath)) {
+  if (process.platform !== 'linux' && !sockPath.startsWith('\\\\.\\pipe\\') && existsSync(sockPath)) {
     const alive = await running(directory);
     if (alive) {
       throw new Error('A supervisor already owns this repository');
@@ -757,9 +760,10 @@ export async function improvementSupervisorCommand(
     process.removeListener('SIGTERM', shutdown);
     process.removeListener('SIGINT', shutdown);
     await new Promise<void>((resolve) => lease.close(() => resolve()));
-    if (process.platform !== 'linux') {
+    const sockPath = supervisorSocket(directory);
+    if (process.platform !== 'linux' && !sockPath.startsWith('\\\\.\\pipe\\')) {
       try {
-        unlinkSync(supervisorSocket(directory));
+        unlinkSync(sockPath);
       } catch {
         // ignore cleanup error
       }

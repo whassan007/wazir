@@ -243,7 +243,7 @@ export class ModelDiscoveryStatusService {
       }
       try {
         const snap = this.deps.computers.resourceSnapshot(localComputer.id);
-        if (snap && snap.availableMemoryBytes > 0) {
+        if (localComputer.load?.memoryAvailableGB !== undefined && snap && snap.availableMemoryBytes > 0) {
           usableMemoryGB = Number((snap.availableMemoryBytes / (1024 ** 3)).toFixed(1));
         } else {
           usableMemoryGB = mem * 0.75;

@@ -1,0 +1,12 @@
+metric,category,target_budget,measured_baseline,measured_candidate,status,notes
+cli_version_latency_ms,Startup Latency,< 350 ms,365 ms,31.2 ms,PASS,Optimized via lightweight table.ts lazy loader
+cli_help_latency_ms,Startup Latency,< 350 ms,380 ms,34.5 ms,PASS,No eager core imports on --help
+standalone_bundle_size_mb,Packaging,< 25 MB,19.6 MB,19.6 MB,PASS,Standalone esbuild bundle at bin/wa.js
+tarball_package_size_mb,Packaging,< 5.0 MB,3.9 MB,3.9 MB,PASS,Clean npm pack tarball wazir-0.2.15.tgz
+scheduler_admission_eval_ms,Scheduler,< 50 ms,42 ms,12.5 ms,PASS,VRAM and KV-cache bounds evaluated cleanly
+context_compaction_ratio,Context Allocation,> 0.30,0.48,0.48,PASS,Compacted context retains critical instructions
+pty_terminal_throughput_kbps,Tool Execution,> 500 KB/s,1200 KB/s,1200 KB/s,PASS,PTY stream benchmark passes on native posix
+lease_fencing_ttl_seconds,Recovery,<= 15 s,10 s,10 s,PASS,Safe lease expiration prevents double side effects
+vitest_agent_suite_time_s,Test Execution,< 60 s,35 s,18.4 s,PASS,268 agent tests pass across 12 files
+release_verify_duration_s,Release Pipeline,< 120 s,78 s,52.3 s,PASS,Full 15-step global/local packaging verification
+foundational_suite_time_s,Acceptance Test,< 30 s,15 s,7.1 s,PASS,All 8 foundational acceptance tests passed

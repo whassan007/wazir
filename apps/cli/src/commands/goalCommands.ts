@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { Command } from 'commander';
 import { color } from '../colors.js';
-import { table } from './formatters.js';
+import { table } from './table.js';
 
 export interface GoalCliConfig {
   controllerUrl: string;

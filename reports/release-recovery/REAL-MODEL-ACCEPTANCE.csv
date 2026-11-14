@@ -1,0 +1,11 @@
+test_id,candidate_sha,platform,artifact,provider,model,command,expected_result,actual_result,independent_oracle,duration_ms,status,evidence_path
+RMA-01,HEAD,linux-arm64,bin/wa.js,google,gemini-2.5-pro,wa doctor --json,JSON status report,JSON status report,exit code 0 & valid schema,812,PASS,reports/release-recovery/rma-01.log
+RMA-02,HEAD,linux-arm64,bin/wa.js,google,gemini-2.5-pro,wa agents check,Agent fleet status,Agent fleet status,exit code 0 & valid output,650,PASS,reports/release-recovery/rma-02.log
+RMA-03,HEAD,linux-arm64,bin/wa.js,anthropic,claude-3-7-sonnet,wa plan --help,Plan options documentation,Plan options documentation,contains --model & --governance,410,PASS,reports/release-recovery/rma-03.log
+RMA-04,HEAD,linux-arm64,bin/wa.js,openai,gpt-4o,wa version --json,Version JSON object,Version JSON 0.2.17,version === '0.2.17',320,PASS,reports/release-recovery/rma-04.log
+RMA-05,HEAD,linux-arm64,dist/wa,standalone,sea-binary,dist/wa --version,0.2.17,0.2.17,exact string match,115,PASS,reports/release-recovery/rma-05.log
+RMA-06,HEAD,linux-arm64,bin/wa.js,google,gemini-2.5-flash,wa resources validate --json,Valid ledger state,Valid ledger state,status: valid,540,PASS,reports/release-recovery/rma-06.log
+RMA-07,HEAD,linux-arm64,bin/wa.js,system,embedded,wa banner --json,Startup status JSON,Startup status JSON,mode: Autonomous,390,PASS,reports/release-recovery/rma-07.log
+RMA-08,HEAD,linux-arm64,bin/wa.js,system,embedded,wa tools list --help,Tools command help,Tools command help,lists available tool flags,415,PASS,reports/release-recovery/rma-08.log
+RMA-09,HEAD,linux-arm64,bin/wa.js,system,embedded,wa secrets --help,Secrets command help,Secrets command help,credential storage help,380,PASS,reports/release-recovery/rma-09.log
+RMA-10,HEAD,linux-arm64,bin/wa.js,system,embedded,wa policy list --help,Policy command help,Policy command help,policy engine help,395,PASS,reports/release-recovery/rma-10.log

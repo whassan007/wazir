@@ -308,10 +308,12 @@ async function main() {
   // Collect unique test files to execute via Vitest
   const testFilesToRun = new Set();
   for (const t of testQueue) {
-    for (const s of t.associatedSuites) {
-      if (existsSync(join(root, s))) {
-        testFilesToRun.add(s);
-      }
+    const existingForTest = t.associatedSuites.filter((s) => existsSync(join(root, s)));
+    if (existingForTest.length === 0 && t.associatedSuites.length > 0) {
+      throw new Error(`Acceptance test ${t.gateId}#${t.id} (${t.title}) has no existing associated test files: ${t.associatedSuites.join(', ')}`);
+    }
+    for (const s of existingForTest) {
+      testFilesToRun.add(s);
     }
   }
 

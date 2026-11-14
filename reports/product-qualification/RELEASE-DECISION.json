@@ -1,0 +1,74 @@
+{
+  "verdict": "GO",
+  "target_commit": "740e227af156073adb1daefe31ad9519dfc0fe6f",
+  "code_candidate_commit": "4f86340cc82cbb8b19e9cb3045cc4f282e5a01dc",
+  "base_commit": "2f052144983f0d1848b8d9be277c01eb44a77bb3",
+  "candidate_branch": "qualification/release-candidate",
+  "version": "0.2.15",
+  "evaluation_timestamp": "2026-10-28T17:45:00Z",
+  "orchestrator": "Google Antigravity",
+  "agent_allocation": {
+    "total_processes": 21,
+    "coordinator": "Google Antigravity (1)",
+    "subagents": {
+      "openai_codex": 10,
+      "anthropic_claude_code": 10
+    }
+  },
+  "counts": {
+    "agents_total": 20,
+    "agents_passed": 20,
+    "agents_failed": 0,
+    "p0_issues_total": 4,
+    "p0_issues_resolved": 4,
+    "p0_issues_remaining": 0,
+    "p1_issues_total": 6,
+    "p1_issues_resolved": 6,
+    "p1_issues_remaining": 0,
+    "p2_issues_total": 0,
+    "p2_issues_remaining": 0,
+    "regression_tests_passed": 96,
+    "agent_tests_passed": 268,
+    "acceptance_gates_passed": 37,
+    "acceptance_tests_passed": 70,
+    "distribution_checks_passed": 15,
+    "total_tests_executed": 449,
+    "total_tests_passed": 449,
+    "total_tests_failed": 0,
+    "total_tests_blocked": 0
+  },
+  "fitness": {
+    "fit_for_purpose": true,
+    "fit_for_use": true,
+    "release_qualified": true
+  },
+  "gate_results": {
+    "policy_engine_security": "PASS",
+    "api_route_authorization": "PASS",
+    "scheduler_kv_admission": "PASS",
+    "context_allocation_runtime": "PASS",
+    "cli_tui_startup_latency": "PASS",
+    "goal_studio_api_alignment": "PASS",
+    "model_discovery_ux": "PASS",
+    "durable_recovery_lease_fencing": "PASS",
+    "pty_sandbox_isolation": "PASS",
+    "automatic_updates_rollback": "PASS",
+    "distribution_packaging_parity": "PASS"
+  },
+  "artifacts": {
+    "master_qualification_report": "reports/product-qualification/PRODUCT-QUALIFICATION.md",
+    "fit_for_purpose": "reports/product-qualification/FIT-FOR-PURPOSE.md",
+    "fit_for_use": "reports/product-qualification/FIT-FOR-USE.md",
+    "security_review": "reports/product-qualification/SECURITY-REVIEW.md",
+    "issues_ranked": "reports/product-qualification/ISSUES-RANKED.csv",
+    "execution_results": "reports/product-qualification/EXECUTION-RESULTS.csv",
+    "agent_status": "reports/product-qualification/AGENT-STATUS.csv",
+    "integration_report": "reports/product-qualification/INTEGRATION-REPORT.md",
+    "performance_results": "reports/product-qualification/PERFORMANCE-RESULTS.csv",
+    "handoff_runbook": "reports/product-qualification/HANDOFF.md"
+  },
+  "sign_off": {
+    "coordinator": "Google Antigravity Principal Engineering Orchestrator",
+    "decision": "APPROVED_FOR_PRODUCTION_TAG_AND_DEPLOYMENT"
+  }
+}
