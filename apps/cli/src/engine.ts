@@ -89,7 +89,7 @@ import { startLocalHeartbeat } from './localHeartbeat.js';
 import { configDir, loadConfig, buildNvidiaHostedLimits, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
-import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, readFileSync } from 'node:fs';
 import { createResourceSystem, type ResourceSystem } from './resources.js';
 import path from 'node:path';
 
@@ -243,8 +243,9 @@ function onPath(bin: string): boolean {
 
 /**
  * External coding agents reachable over the Agent Client Protocol. `requires` is the CLI that
- * must be installed (and signed in) for the agent to work; Claude Code and Codex speak ACP
- * through Zed's pinned adapters, launched with npx (the first run downloads them).
+ * must be installed (and signed in) for the agent to work; Claude Code speaks ACP through
+ * Zed's pinned adapter, while Codex runs natively via `codex exec` so model updates in the
+ * installed `codex` CLI work without waiting on third-party bridge releases.
  */
 function acpAgentSpecs(): Array<{ name: string; description: string; requires: string; command: string; args: string[]; initTimeoutMs?: number }> {
   ensurePathCacheCurrent();
@@ -254,12 +255,171 @@ function acpAgentSpecs(): Array<{ name: string; description: string; requires: s
   cachedAcpSpecs = [
     { name: 'claude-code', description: 'Claude Code over ACP (@zed-industries/claude-code-acp)', requires: 'claude',
       command: npxCommand, args: ['-y', '@zed-industries/claude-code-acp@0.16.2'], initTimeoutMs: 180_000 },
-    { name: 'codex', description: 'OpenAI Codex over ACP (@zed-industries/codex-acp)', requires: 'codex',
-      command: npxCommand, args: ['-y', '@zed-industries/codex-acp@0.16.0'], initTimeoutMs: 180_000 },
     { name: 'qwen-code', description: 'Qwen Code over ACP', requires: 'qwen', command: 'qwen', args: ['--acp'] },
     { name: 'gemini', description: 'Gemini CLI over ACP', requires: 'gemini', command: 'gemini', args: ['--acp'] },
   ];
   return cachedAcpSpecs;
+}
+
+function isLoopbackHttpUrl(rawUrl: string | undefined): boolean {
+  if (!rawUrl) return false;
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const h = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    return h === 'localhost' || h === '::1' || h.startsWith('127.');
+  } catch {
+    return false;
+  }
+}
+
+function isGeminiCliConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.WAZIR_ENABLE_GEMINI_ACP === '1') return true;
+  if (env.GEMINI_API_KEY?.trim() || env.GOOGLE_API_KEY?.trim() || env.GOOGLE_GENAI_USE_VERTEXAI?.trim()) {
+    return true;
+  }
+  const geminiDir = path.join(os.homedir(), '.gemini');
+  try {
+    if (existsSync(path.join(geminiDir, 'oauth_creds.json'))) return true;
+    const dotEnv = path.join(geminiDir, '.env');
+    if (existsSync(dotEnv)) {
+      const text = readFileSync(dotEnv, 'utf8');
+      if (/^\s*(GEMINI_API_KEY|GOOGLE_API_KEY)\s*=\s*\S+/m.test(text)) return true;
+    }
+    const settingsFile = path.join(geminiDir, 'settings.json');
+    if (existsSync(settingsFile)) {
+      const parsed = JSON.parse(readFileSync(settingsFile, 'utf8')) as Record<string, any>;
+      const selected = parsed?.security?.auth?.selectedType ?? parsed?.authType;
+      if (typeof selected === 'string' && selected.trim().length > 0) return true;
+      if (parsed?.security?.auth?.useExternal === true) return true;
+    }
+  } catch {
+    // Unreadable config is treated as unconfigured rather than crashing startup.
+  }
+  return false;
+}
+
+function pickLiveLocalModel(
+  discovered: DiscoveredRuntime[],
+  models: ModelRegistry,
+  preferredRuntimeId?: string,
+): { modelId: string; baseUrl: string; runtimeId: string } | undefined {
+  const candidates = discovered.filter(
+    (d) => d.health === 'healthy' && (d.id === 'lmstudio' || d.id === 'ollama'),
+  );
+  if (preferredRuntimeId) {
+    candidates.sort((a, b) => (a.id === preferredRuntimeId ? -1 : b.id === preferredRuntimeId ? 1 : 0));
+  }
+  const instances = models.listInstances();
+  for (const rt of candidates) {
+    const generative = rt.models.filter((m) => !/embed|nomic-embed|bge-/i.test(m.id));
+    if (generative.length === 0) continue;
+    const loadedReady = generative.find((m) =>
+      instances.some((inst) => inst.runtimeId === rt.id && inst.modelId === m.id && inst.loaded && inst.health === 'healthy'),
+    );
+    const qwenCandidate = generative.find((m) => /qwen/i.test(m.id));
+    const chosen = loadedReady ?? qwenCandidate ?? generative[0]!;
+    const rawUrl = rt.info.url ?? (rt.id === 'lmstudio' ? 'http://127.0.0.1:1234/v1' : 'http://127.0.0.1:11434/v1');
+    const baseUrl = rawUrl.endsWith('/v1') ? rawUrl : `${rawUrl.replace(/\/+$/, '')}/v1`;
+    return { modelId: chosen.id, baseUrl, runtimeId: rt.id };
+  }
+  return undefined;
+}
+
+function resolveQwenCodeLocalDefaults(
+  discovered: DiscoveredRuntime[],
+  models: ModelRegistry,
+  env: NodeJS.ProcessEnv = process.env,
+): { env?: Record<string, string>; modelId?: string } {
+  if (env.QWEN_API_KEY?.trim() || env.DASHSCOPE_API_KEY?.trim() || env.OPENAI_API_KEY?.trim()) {
+    return {};
+  }
+  const qwenHome = env.QWEN_CODE_HOME || path.join(os.homedir(), '.qwen');
+  const settingsFile = path.join(qwenHome, 'settings.json');
+  try {
+    if (!existsSync(settingsFile)) return {};
+    const parsed = JSON.parse(readFileSync(settingsFile, 'utf8')) as Record<string, any>;
+    const selectedAuth = String(parsed?.security?.auth?.selectedType ?? parsed?.authType ?? '');
+    if (selectedAuth && selectedAuth !== 'openai') return {};
+
+    const declaredBaseUrl: string | undefined = parsed?.model?.baseUrl ?? parsed?.baseUrl;
+    const openAiProviders: Array<Record<string, any>> = Array.isArray(parsed?.modelProviders?.openai)
+      ? parsed.modelProviders.openai
+      : [];
+    const urls = [declaredBaseUrl, ...openAiProviders.map((p) => p?.baseUrl as string | undefined)].filter(Boolean) as string[];
+    if (urls.length === 0 || !urls.every((u) => isLoopbackHttpUrl(u))) return {};
+
+    const extraEnv: Record<string, string> = {};
+    for (const providerEntry of openAiProviders) {
+      const envKey = typeof providerEntry?.envKey === 'string' ? providerEntry.envKey.trim() : '';
+      if (/^[A-Z][A-Z0-9_]{1,63}$/.test(envKey) && !env[envKey]?.trim()) {
+        extraEnv[envKey] = 'lm-studio';
+      }
+    }
+    if (!env.OPENAI_API_KEY?.trim()) {
+      extraEnv.OPENAI_API_KEY = 'lm-studio';
+    }
+
+    const configuredModel = typeof parsed?.model?.name === 'string'
+      ? parsed.model.name
+      : typeof parsed?.model === 'string'
+        ? parsed.model
+        : undefined;
+    const prefersLmStudio = urls.some((u) => u.includes(':1234'));
+    const liveLocal = pickLiveLocalModel(discovered, models, prefersLmStudio ? 'lmstudio' : undefined);
+    if (!liveLocal) {
+      return Object.keys(extraEnv).length > 0 ? { env: extraEnv } : {};
+    }
+
+    const runtimeHasConfigured = configuredModel
+      ? discovered.some((d) => d.health === 'healthy' && d.models.some((m) => m.id === configuredModel))
+      : false;
+    if (!runtimeHasConfigured) {
+      extraEnv.OPENAI_BASE_URL = liveLocal.baseUrl;
+      return { env: extraEnv, modelId: liveLocal.modelId };
+    }
+    return Object.keys(extraEnv).length > 0 ? { env: extraEnv } : {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveOpenCodeLocalEnv(
+  discovered: DiscoveredRuntime[],
+  models: ModelRegistry,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> | undefined {
+  if (env.OPENCODE_CONFIG_CONTENT?.trim()) return undefined;
+  const xdgConfig = env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  const configPath = path.join(xdgConfig, 'opencode', 'opencode.json');
+  try {
+    if (!existsSync(configPath)) return undefined;
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, any>;
+    const declaredModel = typeof parsed?.model === 'string' ? parsed.model.trim() : '';
+    if (!declaredModel.startsWith('lmstudio/')) return undefined;
+    const lmstudioBaseUrl = parsed?.provider?.lmstudio?.options?.baseURL;
+    if (lmstudioBaseUrl && !isLoopbackHttpUrl(lmstudioBaseUrl)) return undefined;
+    const modelId = declaredModel.slice('lmstudio/'.length);
+    const lmstudioRuntime = discovered.find((d) => d.id === 'lmstudio' && d.health === 'healthy');
+    if (!lmstudioRuntime || lmstudioRuntime.models.some((m) => m.id === modelId)) return undefined;
+    const live = pickLiveLocalModel([lmstudioRuntime], models, 'lmstudio');
+    if (!live) return undefined;
+    return {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({
+        model: `lmstudio/${live.modelId}`,
+        small_model: `lmstudio/${live.modelId}`,
+        provider: {
+          lmstudio: {
+            models: {
+              [live.modelId]: { name: live.modelId, tool_call: true },
+            },
+          },
+        },
+      }),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 async function detectOpenCode(): Promise<boolean> {
@@ -458,13 +618,15 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // Only registered when the binary is actually reachable, mirroring how
   // Ollama/LM Studio runtimes are auto-discovered rather than assumed.
   if (await detectOpenCode()) {
+    const openCodeEnv = resolveOpenCodeLocalEnv(discovered, models);
     agents.register(
       new ExternalAgentAdapter({
         name: 'opencode',
         version: 'external',
         description: 'OpenCode terminal coding agent, invoked as an external process',
         command: 'opencode',
-        args: ['run'],
+        args: ['run', '--standalone', '--title', 'wazir'],
+        ...(openCodeEnv ? { env: openCodeEnv } : {}),
         taskTypes: [],
         capabilities: ['coding'],
       }),
@@ -472,14 +634,48 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     );
   }
 
-  // ACP delegation (Claude Code, Codex, Qwen Code, Gemini CLI). Same contract as OpenCode:
+  // ACP delegation (Claude Code, Qwen Code, Gemini CLI). Same contract as OpenCode:
   // registered only when the CLI is installed and selected only with `--agent <name>`.
   // Wazir answers every permission request the agent makes, under WAZIR_ACP_PERMISSIONS
   // (read | edit | full; default edit, which never allows shell commands).
   const acpPermissionMode = parseAcpPermissionMode(process.env.WAZIR_ACP_PERMISSIONS);
+  const qwenLocalDefaults = onPath('qwen') ? resolveQwenCodeLocalDefaults(discovered, models) : {};
   for (const spec of acpAgentSpecs()) {
     if (!onPath(spec.requires) || agents.get(spec.name)) continue;
-    agents.register(new AcpAgentAdapter({ ...spec, permissionMode: acpPermissionMode }), 'external');
+    if (spec.name === 'gemini' && !isGeminiCliConfigured()) continue;
+    const extra = spec.name === 'qwen-code' ? qwenLocalDefaults : {};
+    agents.register(
+      new AcpAgentAdapter({
+        ...spec,
+        ...(extra.env ? { env: extra.env } : {}),
+        ...(extra.modelId ? { modelId: extra.modelId } : {}),
+        permissionMode: acpPermissionMode,
+      }),
+      'external',
+    );
+  }
+
+  // Codex runs directly through `codex exec` on the user's installed `codex` CLI so newer
+  // account models work immediately without waiting on third-party ACP bridge releases.
+  const codexExecArgs = acpPermissionMode === 'read'
+    ? ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never']
+    : acpPermissionMode === 'full'
+      ? ['exec', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--ephemeral', '--color', 'never']
+      : ['exec', '--sandbox', 'workspace-write', '--skip-git-repo-check', '--ephemeral', '--color', 'never'];
+  if (onPath('codex') && !agents.get('codex')) {
+    agents.register(
+      new ExternalAgentAdapter({
+        name: 'codex',
+        version: 'external',
+        description: 'OpenAI Codex CLI (codex exec), headless non-interactive mode',
+        command: 'codex',
+        args: codexExecArgs,
+        modelFlag: '--model',
+        taskTypes: [],
+        capabilities: ['coding'],
+      }),
+      'external',
+    );
   }
 
   // Additional subscription logins: a configured subscription account may name an agent
@@ -489,6 +685,23 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     for (const instance of account.agents ?? []) {
       const [base] = instance.split('@');
       if (!instance.includes('@') || agents.get(instance)) continue;
+      if (base === 'codex' && onPath('codex')) {
+        agents.register(
+          new ExternalAgentAdapter({
+            name: instance,
+            version: 'external',
+            description: `OpenAI Codex CLI (codex exec) — account ${account.id}`,
+            command: 'codex',
+            args: codexExecArgs,
+            modelFlag: '--model',
+            env: account.env,
+            taskTypes: [],
+            capabilities: ['coding'],
+          }),
+          'external',
+        );
+        continue;
+      }
       const spec = acpAgentSpecs().find((s) => s.name === base);
       if (!spec || !onPath(spec.requires)) continue;
       agents.register(new AcpAgentAdapter({ ...spec, name: instance, description: `${spec.description} — account ${account.id}`, env: account.env, permissionMode: acpPermissionMode }), 'external');

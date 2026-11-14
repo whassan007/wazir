@@ -142,7 +142,10 @@ export class ExternalAgentAdapter implements AgentAdapter {
         : [];
     const args = [...explicitModel, ...(this.spec.args ?? []), request.taskDescription];
 
-    const timeoutMs = this.spec.timeoutMs ?? 600_000;
+    const baseTimeoutMs = this.spec.timeoutMs ?? 600_000;
+    const timeoutMs = request.maxWallClockMs && request.maxWallClockMs > 0
+      ? Math.min(baseTimeoutMs, request.maxWallClockMs)
+      : baseTimeoutMs;
     const output = await new Promise<string | undefined>((resolve, reject) => {
       let captured = '';
       let stderr = '';
@@ -212,7 +215,7 @@ export class ExternalAgentAdapter implements AgentAdapter {
     });
 
     if (output === undefined || request.isCancelled?.()) {
-      yield { kind: 'error', error: 'cancelled' };
+      yield { kind: 'error', error: 'cancelled', terminationReason: 'CANCELLED' };
       return;
     }
 

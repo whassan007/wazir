@@ -101,4 +101,28 @@ describe('wa agents check', () => {
     expect(fresh.status).toBe('READY');
     expect(fresh.lastVerifiedTask).toMatchObject({ executionId: 'exec-2' });
   }, 15_000);
+
+  it('isolates an unexpected adapter error without aborting sibling agent probes', async () => {
+    const base = engineWith({ good: 'normal' });
+    const throwingAdapter = {
+      get descriptor() {
+        throw new Error('unexpected descriptor explosion');
+      },
+      run: async function* () {
+        throw new Error('unreachable');
+      },
+    } as any;
+    const engine = {
+      agents: {
+        list: () => [
+          { descriptor: { name: 'good' }, source: 'external' },
+          { descriptor: { name: 'exploding' }, source: 'external' },
+        ],
+        get: (n: string) => (n === 'exploding' ? throwingAdapter : base.agents.get(n)),
+      },
+    };
+    const results = await checkAgents(engine, [], { file });
+    expect(results.find((r) => r.agent === 'good')?.status).toBe('READY');
+    expect(results.find((r) => r.agent === 'exploding')?.status).toBe('FAILED');
+  }, 15_000);
 });

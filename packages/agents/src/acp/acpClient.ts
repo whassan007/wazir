@@ -9,6 +9,7 @@ import type { ChildProcess } from 'node:child_process';
 import spawn from 'cross-spawn';
 import { Readable, Writable } from 'node:stream';
 import { spawnGroupWatchdog } from '../processWatchdog.js';
+import { DEFAULT_CHILD_ENV_ALLOW } from '@wazir/shared';
 import {
   killProcessTree,
   terminateProcessTree,
@@ -29,6 +30,33 @@ import {
 export const ACP_INIT_TIMEOUT_MS = 30_000;
 const KILL_GRACE_MS = 2_000;
 const MAX_PENDING_PROMPTS = 8;
+const ACP_CHILD_ENV_ALLOW = new Set([
+  ...DEFAULT_CHILD_ENV_ALLOW,
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'LM_STUDIO_API_KEY',
+  'QWEN_API_KEY',
+  'DASHSCOPE_API_KEY',
+  'QWEN_CODE_HOME',
+  'QWEN_MODEL',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_MODEL',
+  'CLAUDE_CONFIG_DIR',
+  'CODEX_HOME',
+  'GEMINI_API_KEY',
+  'GOOGLE_API_KEY',
+  'GOOGLE_CLOUD_PROJECT',
+  'GOOGLE_CLOUD_LOCATION',
+  'GOOGLE_GENAI_USE_VERTEXAI',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'SSL_CERT_FILE',
+  'NODE_EXTRA_CA_CERTS',
+]);
 
 export interface AcpConnectionLike {
   initialize(params: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -87,7 +115,7 @@ export class AcpClientAdapter {
   private turnSeq = 0;
   private closing = false;
   private detached = false;
-  /** Auth method ids the agent advertised in `initialize`. */
+  /** Non-interactive auth method ids the agent advertised in `initialize`. */
   private authMethodIds: string[] = [];
   private stderrTail = '';
 
@@ -125,7 +153,7 @@ export class AcpClientAdapter {
     const spawnCmd = getSpawnCommand(this.options.command, this.options.args ?? [], { cwd: this.options.cwd });
     const child = spawn(spawnCmd.command, spawnCmd.args, {
       cwd: this.options.cwd,
-      env: sanitizeChildEnvironment(this.options.env),
+      env: sanitizeChildEnvironment(this.options.env, { allowList: ACP_CHILD_ENV_ALLOW }),
       stdio: ['pipe', 'pipe', 'pipe'],
       detached,
       // cross-spawn escapes Windows wrappers itself; shell:true would bypass its escaping.
@@ -170,7 +198,7 @@ export class AcpClientAdapter {
           clientCapabilities: {},
           clientInfo: {
             name: 'wazir',
-            version: '0.1.55',
+            version: '0.3.1',
           },
         }),
         spawnFailed,
@@ -181,8 +209,13 @@ export class AcpClientAdapter {
           );
         }),
       ]);
-      const methods = (init as { authMethods?: Array<{ id?: unknown }> } | undefined)?.authMethods;
-      this.authMethodIds = Array.isArray(methods) ? methods.map((m) => String(m?.id ?? '')).filter(Boolean) : [];
+      const methods = (init as { authMethods?: Array<{ id?: unknown; _meta?: { type?: unknown } }> } | undefined)?.authMethods;
+      this.authMethodIds = Array.isArray(methods)
+        ? methods
+            .filter((m) => m?._meta?.type !== 'terminal')
+            .map((m) => String(m?.id ?? ''))
+            .filter(Boolean)
+        : [];
     } catch (error) {
       this.signal(child, 'SIGKILL');
       this.handleProcessExit();
@@ -200,17 +233,51 @@ export class AcpClientAdapter {
   async createSession(opts?: { cwd?: string }): Promise<string> {
     const conn = await this.ensureConnection();
     const cwd = opts?.cwd ?? this.options.cwd ?? process.cwd();
+    const sessionTimeoutMs = this.options.initTimeoutMs ?? ACP_INIT_TIMEOUT_MS;
+
+    const callNewSession = async (): Promise<Record<string, unknown>> => {
+      let timer: NodeJS.Timeout | undefined;
+      let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+      const exited = new Promise<never>((_, reject) => {
+        if (!this.child) return;
+        onExit = (code, signal) => reject(new Error(`ACP agent '${this.name}' exited before session opened (${signal ?? `code ${code}`})`));
+        this.child.once('exit', onExit);
+      });
+      exited.catch(() => undefined);
+      try {
+        return await Promise.race([
+          conn.newSession({ cwd, mcpServers: [] }),
+          exited,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`ACP agent '${this.name}' did not open a session within ${sessionTimeoutMs}ms`)),
+              sessionTimeoutMs,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+        if (onExit) this.child?.off('exit', onExit);
+      }
+    };
 
     let response: Record<string, unknown>;
     try {
-      response = await conn.newSession({ cwd, mcpServers: [] });
+      response = await callNewSession();
     } catch (err) {
-      // Retry after authenticating only with a method the agent advertised, and only when it
-      // offers exactly one: guessing an id (the old 'default') replaced the real failure with
-      // "Method not implemented". Anything else surfaces the original error with stderr.
+      // Retry after authenticating only with a non-terminal method the agent advertised, and only
+      // when it offers exactly one. If authenticate itself fails, preserve the original error.
       if (conn.authenticate && this.authMethodIds.length === 1) {
-        await conn.authenticate({ methodId: this.authMethodIds[0] });
-        response = await conn.newSession({ cwd, mcpServers: [] });
+        try {
+          await conn.authenticate({ methodId: this.authMethodIds[0] });
+          response = await callNewSession();
+        } catch {
+          const tail = this.stderrTail.trim().split('\n').slice(-5).join('\n');
+          if (tail && err instanceof Error && !err.message.includes('[agent stderr]')) {
+            err.message += `\n[agent stderr]\n${redactPermissionText(tail)}`;
+          }
+          throw err;
+        }
       } else {
         const tail = this.stderrTail.trim().split('\n').slice(-5).join('\n');
         if (tail && err instanceof Error && !err.message.includes('[agent stderr]')) {

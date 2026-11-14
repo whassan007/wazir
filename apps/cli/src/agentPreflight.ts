@@ -85,6 +85,17 @@ export async function checkAgents(
   const results = await Promise.all(targets.map(async (name): Promise<AgentPreflightResult> => {
     const adapter = external.includes(name) ? engine.agents.get(name) : undefined;
     if (!adapter) {
+      const baseName = name.split('@')[0] ?? name;
+      if (baseName === 'gemini' && new AgentConfigurationDiscovery().discover({ cwd: engine.projectRoot, env: process.env }).length >= 0) {
+        return {
+          agent: name,
+          status: 'UNKNOWN',
+          detail: "gemini CLI is not authenticated (run 'gemini' once interactively or set GEMINI_API_KEY)",
+          hint: "run 'gemini' once interactively to sign in, or set GEMINI_API_KEY",
+          durationMs: 0,
+          checkedAt: new Date().toISOString(),
+        };
+      }
       return { agent: name, status: 'UNKNOWN', detail: 'not a registered external agent (is its CLI installed?)', durationMs: 0, checkedAt: new Date().toISOString() };
     }
     const env = { ...process.env, ...engine.resources?.accounts.candidates({ agent: name })[0]?.env };
@@ -95,19 +106,31 @@ export async function checkAgents(
     const budget = engine.resources?.budget;
     const accountId = engine.resources?.accounts.candidates({ agent: name })[0]?.id;
     const requestId = `agent-preflight:${randomUUID()}`;
-    if (budget) {
-      const admission = accountId ? budget.admit({ requestId, accountId, modelId: `agent:${name}`, agent: name, workload: 'routine', requests: 1, estimatedInputTokens: 4096, estimatedOutputTokens: 32 }) : undefined;
-      if (admission?.outcome !== 'admitted') return { agent: name, status: 'BLOCKED', detail: 'Resource governance blocked the probe; inspect wa resources.', durationMs: 0, checkedAt: new Date().toISOString(), fingerprint: config?.fingerprint };
+    if (budget && accountId) {
+      const admission = budget.admit({ requestId, accountId, modelId: `agent:${name}`, agent: name, workload: 'routine', requests: 1, estimatedInputTokens: 4096, estimatedOutputTokens: 32 });
+      if (admission.outcome !== 'admitted') return { agent: name, status: 'BLOCKED', detail: 'Resource governance blocked the probe; inspect wa resources.', durationMs: 0, checkedAt: new Date().toISOString(), fingerprint: config?.fingerprint };
     }
     let result: AgentPreflightResult;
-    const stopLease = budget?.holdLease(requestId);
+    const stopLease = budget && accountId ? budget.holdLease(requestId) : undefined;
     try {
       result = await preflightAgent(adapter, { timeoutMs: options.timeoutMs, env });
-      if (result.status === 'READY') budget?.reconcile(requestId, { inputTokens: 4096, outputTokens: 32, source: 'estimated' }, { agent: name, durationMs: result.durationMs });
-      else budget?.fail(requestId, { ambiguous: result.stage !== 'environment' && result.stage !== 'start' });
+      if (budget && accountId) {
+        if (result.status === 'READY') budget.reconcile(requestId, { inputTokens: 4096, outputTokens: 32, source: 'estimated' }, { agent: name, durationMs: result.durationMs });
+        else budget.fail(requestId, { ambiguous: result.stage !== 'environment' && result.stage !== 'start' });
+      }
     } catch (error) {
-      budget?.fail(requestId, { ambiguous: true });
-      throw error;
+      if (budget && accountId) budget.fail(requestId, { ambiguous: true });
+      const msg = error instanceof Error ? error.message : String(error);
+      return {
+        agent: name,
+        status: 'FAILED',
+        detail: config ? 'Agent execution failed; inspect diagnostics using the vendor CLI.' : msg.slice(0, 400),
+        durationMs: 0,
+        checkedAt: new Date().toISOString(),
+        fingerprint: config?.fingerprint,
+        lastTask: cached?.lastTask,
+        lastVerifiedTask: cached?.lastVerifiedTask,
+      };
     } finally { stopLease?.(); }
     if (config?.executable) {
       const versionAdapter = new ExternalAgentAdapter({ name: 'version-inspection', version: '', description: '', command: config.executable, taskTypes: [], capabilities: [], timeoutMs: 3000, env });

@@ -9,7 +9,7 @@ import type {
   TerminationReason,
 } from '@wazir/core';
 import type { EndpointLocality } from '../configurationDiscovery.js';
-import { AcpClientAdapter, type AcpClientOptions } from './acpClient.js';
+import { AcpClientAdapter, ACP_INIT_TIMEOUT_MS, type AcpClientOptions } from './acpClient.js';
 import {
   AcpSessionEventCollector,
   type AcpSessionHandoffMetadata,
@@ -252,13 +252,17 @@ export class AcpAgentAdapter implements AgentAdapter {
       requestEventCallback?.(ev);
     };
 
+    const effectiveInitTimeoutMs = request.maxWallClockMs
+      ? Math.min(this.spec.initTimeoutMs ?? ACP_INIT_TIMEOUT_MS, request.maxWallClockMs)
+      : this.spec.initTimeoutMs;
+
     const client = new AcpClientAdapter({
       name: this.spec.name,
       command: this.spec.command,
       args: effectiveArgs,
       env: this.spec.env,
       cwd: request.projectRoot,
-      initTimeoutMs: this.spec.initTimeoutMs,
+      initTimeoutMs: effectiveInitTimeoutMs,
       connect: this.spec.connect,
       onSessionUpdate: (sid, update) => {
         const mapped = collector.ingest(sid || activeSessionId, update);

@@ -65,9 +65,10 @@ const AGENT_CONFIG: Record<string, string> = {
 
 function redactAgentSecretMaterial(text: string): string {
   return text
-    .replace(/\b(QWEN_API_KEY|DASHSCOPE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN)\s*=\s*[^\s,;]+/gi, '$1=[REDACTED]')
+    .replace(/\b(QWEN_API_KEY|DASHSCOPE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|GEMINI_API_KEY|GOOGLE_API_KEY|LM_STUDIO_API_KEY)\s*=\s*[^\s,;]+/gi, '$1=[REDACTED]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [REDACTED]')
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]');
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[REDACTED]')
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[REDACTED]');
 }
 
 /** Environments in which an agent refuses to start; checked before launching anything. */
@@ -114,7 +115,7 @@ export function classifyAgentFailure(agent: string, text: string): { status: 'FA
   if (/no longer supported for Gemini Code Assist for individuals/i.test(text)) {
     return { status: 'FAILED', hint: 'Google retired this tier; use --agent antigravity' };
   }
-  if (/ENOENT|command not found|not installed|could not start ACP agent/i.test(text)) {
+  if (/ENOENT|command not found|not installed/i.test(text)) {
     return {
       status: 'FAILED',
       hint: isQwen
@@ -125,7 +126,7 @@ export function classifyAgentFailure(agent: string, text: string): { status: 'FA
   if (/connection error|ECONNREFUSED|fetch failed|ENOTFOUND|EHOSTUNREACH|socket hang up/i.test(text)) {
     return { status: 'FAILED', hint: `the agent's model endpoint is unreachable; check its own settings${config ? ` (${config})` : ''}` };
   }
-  if (/\b(401|403)\b|unauthori[sz]ed|not (logged|signed) in|log ?in required|authenticat|credential|api key|dashscope/i.test(text)) {
+  if (/\b(401|403)\b|unauthori[sz]ed|not (logged|signed) in|log ?in required|authenticat|missing credentials|credential|api key|dashscope/i.test(text)) {
     return {
       status: 'FAILED',
       hint: isQwen
@@ -135,6 +136,12 @@ export function classifyAgentFailure(agent: string, text: string): { status: 'FA
   }
   if (/context length|n_ctx|context window|maximum context|too many tokens/i.test(text)) {
     return { status: 'FAILED', hint: "the agent's model context window is smaller than its prompt; load the model with a larger context (e.g. in LM Studio) or pick a larger-context model" };
+  }
+  if (/UnexpectedStatus:\s*500|\bmodel\b.*\bnot (found|loaded)\b|no model loaded/i.test(text)) {
+    return {
+      status: 'FAILED',
+      hint: `the agent's configured model failed or is not loaded on its provider${config ? `; check ${config}` : ''}`,
+    };
   }
   if (/did not initialize within|exceeded its wall-clock bound|timed out/i.test(text)) {
     return { status: 'FAILED', hint: 'the agent did not respond in time; retry, or run its CLI once to finish any first-run setup' };
