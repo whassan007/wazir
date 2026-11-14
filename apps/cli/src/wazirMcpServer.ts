@@ -1,6 +1,21 @@
+import os from 'node:os';
 import path from 'node:path';
 import type { RoutingMode, TaskType } from '@wazir/core';
 import { getBuildInfo } from './version.js';
+
+function ensureStandardToolPathsOnEnv(): void {
+  const sep = path.delimiter;
+  const current = (process.env.PATH ?? '').split(sep).filter(Boolean);
+  const extra = [
+    path.join(os.homedir(), '.local', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ];
+  for (const candidate of extra) {
+    if (!current.includes(candidate)) current.unshift(candidate);
+  }
+  process.env.PATH = current.join(sep);
+}
 
 interface JsonRpcRequest {
   jsonrpc?: string;
@@ -166,7 +181,6 @@ async function buildFleetSnapshot(workspace?: string) {
   const { getStatus } = await import('./status.js');
   const engine = await createEngine({
     projectRoot: workspace ? path.resolve(workspace) : process.cwd(),
-    fastStartup: true,
     readOnlyLifecycle: true,
     quiet: true,
   });
@@ -196,7 +210,6 @@ async function buildAgentsSnapshot(options: { probe?: boolean; agent?: string; w
   const { AgentConnectionManager } = await import('./agentConnectionManager.js');
   const engine = await createEngine({
     projectRoot: options.workspace ? path.resolve(options.workspace) : process.cwd(),
-    fastStartup: true,
     readOnlyLifecycle: true,
     quiet: true,
   });
@@ -226,7 +239,7 @@ async function handleToolCall(name: string, args: Record<string, any> = {}): Pro
 
     if (name === 'wazir_models_list') {
       const { createEngine } = await import('./engine.js');
-      const engine = await createEngine({ fastStartup: true, readOnlyLifecycle: true, quiet: true });
+      const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
       const localOnly = Boolean(args.localOnly);
       const loadedSet = new Set(engine.runtimes.list().flatMap((r) => r.loadedModels ?? []));
       const models = engine.models
@@ -263,7 +276,7 @@ async function handleToolCall(name: string, args: Record<string, any> = {}): Pro
       const { askCommand } = await import('./commands.js');
       const engine = await createEngine({
         projectRoot: typeof args.workspace === 'string' ? path.resolve(args.workspace) : process.cwd(),
-        fastStartup: true,
+        readOnlyLifecycle: true,
         quiet: true,
       });
       const result = await askCommand(engine, prompt, {
@@ -288,7 +301,7 @@ async function handleToolCall(name: string, args: Record<string, any> = {}): Pro
       const { runTaskCommand } = await import('./commands.js');
       const engine = await createEngine({
         projectRoot: typeof args.workspace === 'string' ? path.resolve(args.workspace) : process.cwd(),
-        fastStartup: true,
+        readOnlyLifecycle: true,
         quiet: true,
       });
       const result = await runTaskCommand(engine, prompt, {
@@ -323,6 +336,7 @@ async function handleToolCall(name: string, args: Record<string, any> = {}): Pro
  * Claude Desktop, Cursor, or Zed.
  */
 export async function runWazirMcpStdioServer(): Promise<void> {
+  ensureStandardToolPathsOnEnv();
   const writeStdout = process.stdout.write.bind(process.stdout);
   // Ensure internal diagnostic logging never corrupts JSON-RPC frames on stdout.
   const redirectToStderr = (...items: unknown[]) => {
