@@ -33,3 +33,4 @@ export * from './permissions/permissionBroker.js';
 export * from './proactive/toolReceipt.js';
 export * from './proactive/taskManager.js';
 export * from './resources/index.js';
+export * from './metaHarness/index.js';

@@ -338,6 +338,17 @@ export class JobOrchestrator {
     this.emit(jobId, { type: 'job:resumed', jobId });
   }
 
+  /** Wake pump loops for jobs waiting on deferred resource admission. */
+  nudge(jobId?: string): void {
+    if (jobId) {
+      this.activeJobs.get(jobId)?.wakePump?.();
+      return;
+    }
+    for (const handle of this.activeJobs.values()) {
+      handle.wakePump?.();
+    }
+  }
+
   /** Permanently removes a job's record. Throws if it's still running/ready/planning. */
   async deleteJob(jobId: string): Promise<boolean> {
     if (this.activeJobs.has(jobId)) {
@@ -461,10 +472,15 @@ export class JobOrchestrator {
       timeoutTimer?.unref?.();
 
       let isFinished = false;
+      let admissionRetryTimer: ReturnType<typeof setTimeout> | undefined;
 
       const finishJob = async (finalStatus: 'completed' | 'failed' | 'cancelled') => {
         if (isFinished) return;
         if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (admissionRetryTimer) {
+          clearTimeout(admissionRetryTimer);
+          admissionRetryTimer = undefined;
+        }
         if (timedOut) {
           finalStatus = 'failed';
           // The per-task abort handler above (see taskAbort.signal.aborted) already marks
@@ -915,6 +931,14 @@ export class JobOrchestrator {
               });
             }
             await finishJob('failed');
+          } else if (!paused && readyNodes.length > 0 && !admissionRetryTimer) {
+            // Ready nodes were deferred due to temporary resource admission saturation;
+            // schedule a bounded re-pump so the job resumes as soon as capacity frees up.
+            admissionRetryTimer = setTimeout(() => {
+              admissionRetryTimer = undefined;
+              handle.wakePump?.();
+            }, 100);
+            admissionRetryTimer.unref?.();
           }
         }
       };

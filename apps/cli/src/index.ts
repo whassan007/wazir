@@ -39,7 +39,18 @@ program
   .version(CLI_VERSION)
   .option('--no-banner', 'Disable the Wazir terminal startup banner')
   .option('--no-color', 'Disable ANSI colors in terminal output')
-  .option('--ascii', 'Use plain ASCII fallback for terminal branding');
+  .option('--ascii', 'Use plain ASCII fallback for terminal branding')
+  .option('--home <dir>', 'Override WAZIR_HOME configuration and state directory')
+  .option('--workspace <dir>', 'Target workspace directory for autonomous multi-agent feature tasks')
+  .hook('preAction', (thisCommand) => {
+    const opts = thisCommand.optsWithGlobals<{ home?: string; workspace?: string }>();
+    if (opts.home) {
+      process.env.WAZIR_HOME = opts.home;
+    }
+    if (opts.workspace) {
+      process.env.WAZIR_WORKSPACE_DIR = opts.workspace;
+    }
+  });
 
 registerMCPCommands(program);
 registerWebCommands(program);
@@ -239,12 +250,127 @@ computersCmd
 computersCmd
   .command('inspect')
   .argument('<id>', 'Computer ID')
+  .option('--json', 'Output in JSON format')
   .description('Inspect a specific computer')
-  .action((id) => {
-    console.log(chalk.green(`Computer: ${id}`));
+  .action(async (id, options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { hardwareInspectCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await hardwareInspectCommand(svc, id, options);
+    console.log(res.output);
+    process.exit(res.code);
   });
 
 program.addCommand(computersCmd);
+
+// hardware command — Part 1 First-Class Hardware & Capability Discovery
+const hardwareCmd = new Command()
+  .name('hardware')
+  .description('Autonomous multi-machine hardware, GPU, runtime, and topology discovery');
+
+hardwareCmd
+  .command('discover')
+  .description('Discover accessible physical hosts, GPUs, runtimes, models, and live server acceptance')
+  .option('--detail', 'Show full progressive-disclosure diagnostics')
+  .option('--no-inference-test', 'Skip bounded real inference verification')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { hardwareDiscoverCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await hardwareDiscoverCommand(svc, {
+      json: options.json,
+      detail: options.detail,
+      noInferenceTest: options.inferenceTest === false,
+    });
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+hardwareCmd
+  .command('list', { isDefault: true })
+  .description('List discovered physical hosts, GPUs, unified/discrete memory, and worker status')
+  .option('--refresh', 'Refresh live discovery before listing')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { hardwareListCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await hardwareListCommand(svc, options);
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+hardwareCmd
+  .command('inspect [host]')
+  .description('Inspect detailed hardware, GPUs, runtimes, loaded models, and conflicts on a host')
+  .option('--json', 'Output in JSON format')
+  .action(async (host, options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { hardwareInspectCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await hardwareInspectCommand(svc, host, options);
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+hardwareCmd
+  .command('topology')
+  .description('Display the 8-entity hardware, network, worker, runtime, model, and slot capability graph')
+  .option('--json', 'Output full CapabilityGraph JSON')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { hardwareTopologyCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await hardwareTopologyCommand(svc, options);
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+hardwareCmd
+  .command('benchmark')
+  .description('Progressively benchmark safe bounded concurrent inference slots across verified runtimes')
+  .option('--host <id>', 'Limit concurrency qualification to a specific host')
+  .option('--max-concurrency <n>', 'Upper concurrency bound to probe', (v) => Number(v))
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { hardwareBenchmarkCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await hardwareBenchmarkCommand(svc, options);
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+hardwareCmd
+  .command('capabilities')
+  .description('Summarize live FS5 server acceptance and model-size host eligibility')
+  .option('--model-billions <n>', 'Model size in billions of parameters to rank (default: 35)', (v) => Number(v))
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { hardwareCapabilitiesCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await hardwareCapabilitiesCommand(svc, options);
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+hardwareCmd
+  .command('refresh')
+  .description('Re-probe authorized hosts, runtimes, loaded models, and server acceptance')
+  .option('--detail', 'Show full progressive-disclosure diagnostics')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { hardwareRefreshCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await hardwareRefreshCommand(svc, options);
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+program.addCommand(hardwareCmd);
 
 // workers command
 const workersCmd = new Command()
@@ -253,12 +379,36 @@ const workersCmd = new Command()
 
 workersCmd
   .command('list')
+  .option('--json', 'Output in JSON format')
   .description('List all workers')
-  .action(async () => {
+  .action(async (options) => {
+    if (options.json) {
+      const { createStandaloneMetaHarnessService } = await import('./engine.js');
+      const svc = await createStandaloneMetaHarnessService();
+      const { workersStatusCommand } = await import('./commands/metaHarnessCommands.js');
+      const res = await workersStatusCommand(svc, { json: true });
+      console.log(res.output);
+      process.exit(res.code);
+    }
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { listWorkers } = await import('./commands.js');
     console.log(listWorkers(engine));
+  });
+
+workersCmd
+  .command('status')
+  .description('Show status of execution workers across the fleet')
+  .option('--all', 'Include all local and remote authorized host workers')
+  .option('--refresh', 'Refresh live discovery first')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { workersStatusCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await workersStatusCommand(svc, options);
+    console.log(res.output);
+    process.exit(res.code);
   });
 
 program.addCommand(workersCmd);
@@ -270,12 +420,36 @@ const runtimesCmd = new Command()
 
 runtimesCmd
   .command('list')
+  .option('--json', 'Output in JSON format')
   .description('List available runtimes')
-  .action(async () => {
+  .action(async (options) => {
+    if (options.json) {
+      const { createStandaloneMetaHarnessService } = await import('./engine.js');
+      const svc = await createStandaloneMetaHarnessService();
+      const { runtimesStatusCommand } = await import('./commands/metaHarnessCommands.js');
+      const res = await runtimesStatusCommand(svc, { json: true });
+      console.log(res.output);
+      process.exit(res.code);
+    }
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { listRuntimes } = await import('./commands.js');
     console.log(listRuntimes(engine));
+  });
+
+runtimesCmd
+  .command('status')
+  .description('Show 11-state execution acceptance status for all runtimes across the fleet')
+  .option('--all', 'Include all local and remote authorized runtimes')
+  .option('--refresh', 'Refresh live discovery and inference checks')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { runtimesStatusCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await runtimesStatusCommand(svc, options);
+    console.log(res.output);
+    process.exit(res.code);
   });
 
 runtimesCmd
@@ -370,10 +544,23 @@ modelsCmd
 modelsCmd
   .command('discover')
   .description('Discover and reconcile runtimes and installed models')
+  .option('--all', 'Discover loaded and installed models across all authorized fleet hosts')
   .option('--computer <id>', 'Target computer')
   .option('--runtime <id>', 'Target runtime')
   .option('--json', 'Output in JSON format')
   .action(async (options) => {
+    if (options.all) {
+      const { createStandaloneMetaHarnessService } = await import('./engine.js');
+      const svc = await createStandaloneMetaHarnessService();
+      const { discoverFleetModelsCommand } = await import('./commands/metaHarnessCommands.js');
+      const res = await discoverFleetModelsCommand(svc, {
+        json: options.json,
+        host: options.computer,
+        runtime: options.runtime,
+      });
+      console.log(res.output);
+      process.exit(res.code);
+    }
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { discoverModelsCommand } = await import('./commands.js');
@@ -524,11 +711,106 @@ program.addCommand(testCmd);
 program
   .command('status')
   .description('Show system status')
-  .action(async () => {
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
     const { statusCommand } = await import('./status.js');
-    const result = await statusCommand();
+    const result = await statusCommand({ json: options.json });
     console.log(result.output);
     process.exit(result.code);
+  });
+
+// execution command — Part 3, 5, 6 & 9 Declarative FS5 Execution Orchestration
+const executionPlanCmd = new Command()
+  .name('execution')
+  .description('Declarative Forge Sovereign-5 (FS5) distributed execution planning, running, status, and reporting');
+
+executionPlanCmd
+  .command('plan <goal>')
+  .description('Generate and resolve a hardware-aware ExecutionPlan against live fleet inventory')
+  .option('--scale <n>', 'Target total agents (e.g. 20 or 100)', (v) => Number(v))
+  .option('--speed-optimize', 'Adaptively size active shards to empirically verified concurrency')
+  .option('--out <file>', 'Write serialized YAML ExecutionPlan to file')
+  .option('--json', 'Output resolved plan in JSON format')
+  .action(async (goal, options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { executionPlanCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await executionPlanCommand(svc, goal, options);
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+executionPlanCmd
+  .command('run')
+  .description('Execute a declarative ExecutionPlan across verified fleet pools with durable leases & receipts')
+  .option('--plan <file>', 'Path to YAML or JSON ExecutionPlan (e.g. examples/fs5.yaml or examples/fs5-100.yaml)')
+  .option('--goal <text>', 'Override execution goal')
+  .option('--scale <n>', 'Override total_agents count', (v) => Number(v))
+  .option('--speed-optimize', 'Enable adaptive speed optimization')
+  .option('--workspace <dir>', 'Workspace directory for execution')
+  .option('--json', 'Output live execution provenance report in JSON format')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { executionRunCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await executionRunCommand(svc, {
+      planPath: options.plan,
+      goal: options.goal,
+      scale: options.scale,
+      speedOptimize: options.speedOptimize,
+      workspace: options.workspace,
+      json: options.json,
+    });
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+executionPlanCmd
+  .command('status')
+  .description('Display 4-quantity pool allocation, queue state, and reconciliation status')
+  .option('--detail', 'Show per-task leases, epochs, and receipt hashes')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { executionStatusCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await executionStatusCommand(svc, options);
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+executionPlanCmd
+  .command('report')
+  .description('Emit machine-readable execution report distinguishing CONFIGURATION_ONLY vs LIVE_OBSERVED_EXECUTION')
+  .option('--out <file>', 'Write JSON report to file')
+  .option('--json', 'Output raw JSON')
+  .action(async (options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { executionReportCommand } = await import('./commands/metaHarnessCommands.js');
+    const res = await executionReportCommand(svc, options);
+    console.log(res.output);
+    process.exit(res.code);
+  });
+
+program.addCommand(executionPlanCmd);
+
+// qualify command — Part 7 & 11 Zero-Manual-Test Qualification
+program
+  .command('qualify [scope]')
+  .description('Run automated user journeys (A-H), 12 fault injections, and 15 acceptance gates (scope: all|journeys|faults|acceptance)')
+  .option('--detail', 'Include full progressive-disclosure evidence')
+  .option('--json', 'Output in JSON format')
+  .action(async (scope = 'all', options) => {
+    const { createStandaloneMetaHarnessService } = await import('./engine.js');
+    const svc = await createStandaloneMetaHarnessService();
+    const { qualifyMetaHarnessCommand } = await import('./commands/metaHarnessCommands.js');
+    const normalized = ['all', 'journeys', 'faults', 'acceptance'].includes(scope)
+      ? (scope as 'all' | 'journeys' | 'faults' | 'acceptance')
+      : 'all';
+    const res = await qualifyMetaHarnessCommand(svc, normalized, options);
+    console.log(res.output);
+    process.exit(res.code);
   });
 
 // task command
@@ -1268,7 +1550,18 @@ program
   .option('--local-only', 'Only run on local computers')
   .option('--allow-hosted', 'Allow this command to route to an authenticated hosted provider (NVIDIA, Anthropic, OpenAI, Google)')
   .option('--routing-mode <mode>', 'Routing policy mode: AUTO, NVIDIA, LOCAL_ONLY, HYBRID')
+  .option('--json', 'Output in JSON format')
   .action(async (prompt, options) => {
+    if (!options.model && !options.computer) {
+      const { classifyMetaHarnessIntent } = await import('@wazir/core');
+      if (classifyMetaHarnessIntent(prompt).intent !== 'ORDINARY_PROMPT') {
+        const { createStandaloneMetaHarnessService } = await import('./engine.js');
+        const svc = await createStandaloneMetaHarnessService();
+        const dispatched = await svc.dispatchNaturalLanguage(prompt);
+        console.log(options.json ? JSON.stringify(dispatched, null, 2) : dispatched.renderedView);
+        process.exit(0);
+      }
+    }
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine({ fastStartup: true });
     const { askCommand } = await import('./commands.js');
@@ -2026,7 +2319,22 @@ program.addCommand(createHandoffCommand());
 
 globalStartupProfiler.mark('cli.commands_registered');
 
-program.action(async () => {
+program
+  .argument('[naturalPrompt...]', 'Natural-language infrastructure or execution goal')
+  .action(async (naturalPrompt: string[]) => {
+  if (Array.isArray(naturalPrompt) && naturalPrompt.length > 0) {
+    const joinedPrompt = naturalPrompt.join(' ').trim();
+    const { classifyMetaHarnessIntent } = await import('@wazir/core');
+    if (classifyMetaHarnessIntent(joinedPrompt).intent !== 'ORDINARY_PROMPT') {
+      const { createStandaloneMetaHarnessService } = await import('./engine.js');
+      const svc = await createStandaloneMetaHarnessService();
+      const dispatched = await svc.dispatchNaturalLanguage(joinedPrompt);
+      console.log(dispatched.renderedView);
+      process.exit(0);
+    }
+    console.error(`error: unknown command '${naturalPrompt[0]}'`);
+    process.exit(1);
+  }
   const globalOpts = program.opts<{ banner?: boolean; color?: boolean; ascii?: boolean }>();
   if (process.stdout.isTTY && globalOpts.banner !== false) {
     const { renderStartupBanner } = await import('./brand.js');

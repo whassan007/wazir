@@ -43,6 +43,7 @@ import {
   IntelligentModelRanker,
   HardwareEligibilityService,
   ContextMemoryEstimator,
+  MetaHarnessService,
   type StructuredModelFleetStatus,
   type ModelPreferenceRecord,
 } from '@wazir/core';
@@ -73,7 +74,13 @@ import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import { createSecretBroker, type SecretBroker } from '@wazir/secrets';
-import { Worker, currentLoad, type DiscoveredRuntime } from '@wazir/workers';
+import {
+  Worker,
+  currentLoad,
+  discoverDetailedLocalHost,
+  discoverAuthorizedSshHost,
+  type DiscoveredRuntime,
+} from '@wazir/workers';
 import { startLocalHeartbeat } from './localHeartbeat.js';
 import { configDir, loadConfig, buildNvidiaHostedLimits, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
@@ -148,6 +155,7 @@ export interface RookEngine {
   modelRanker: IntelligentModelRanker;
   hardwareEligibility: HardwareEligibilityService;
   contextEstimator: ContextMemoryEstimator;
+  metaHarness: MetaHarnessService;
 }
 
 function guessFamily(id: string, provider: string): ModelRecord['family'] {
@@ -688,29 +696,40 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   globalStartupProfiler.mark('engine.ready');
   globalStartupProfiler.emitIfEnabled();
 
-  return {
-    resources,
-    config,
+  const metaHarness = new MetaHarnessService({
+    store,
     projectRoot,
     configDir: engineConfigDir,
-    web,
-    compaction,
-    revision,
-    layoutPlanner,
-    offloadStore,
+    hostDiscoveryDriver: {
+      discoverLocalHost: (opts) => discoverDetailedLocalHost(opts),
+      discoverSshHost: (opts) => discoverAuthorizedSshHost(opts),
+    },
+    cliEntrypointPath: process.argv[1],
+  });
+
+  return {
+    config,
+    resources,
+    projectRoot,
+    configDir: engineConfigDir,
     computers,
-    provenance,
     runtimes,
     models,
     lifecycle,
     health,
     agents,
     tools,
+    web,
     policy,
     scheduler,
     reliability,
     compiler,
+    compaction,
+    revision,
+    layoutPlanner,
+    offloadStore,
     executions,
+    provenance,
     approvalQueue,
     orchestrator,
     worktrees,
@@ -736,7 +755,27 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     modelRanker,
     hardwareEligibility,
     contextEstimator,
+    metaHarness,
   };
+}
+
+export async function createStandaloneMetaHarnessService(options: {
+  projectRoot?: string;
+  localOnlyDiscovery?: boolean;
+} = {}): Promise<MetaHarnessService> {
+  const store = await createStore();
+  const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
+  return new MetaHarnessService({
+    store,
+    projectRoot,
+    configDir: configDir(),
+    localOnlyDiscovery: options.localOnlyDiscovery,
+    hostDiscoveryDriver: {
+      discoverLocalHost: (opts) => discoverDetailedLocalHost(opts),
+      discoverSshHost: (opts) => discoverAuthorizedSshHost(opts),
+    },
+    cliEntrypointPath: process.argv[1],
+  });
 }
 
 /**

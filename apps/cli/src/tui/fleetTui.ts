@@ -3398,7 +3398,25 @@ export class FleetTui {
       return;
     }
     if (trimmed === '/help' && this.presentationMode === 'conversation') {
-      this.conversationRenderer.append('Commands: /fleet · /chat · /tasks · /models · /update · /logs · /details · /tail · /verbose · /quiet · /debug · /help');
+      this.conversationRenderer.append('Commands: /fleet · /chat · /hardware · /execution · /qualify · /tasks · /models · /update · /logs · /details · /tail · /verbose · /quiet · /debug · /help');
+      return;
+    }
+    if (trimmed === '/hardware' || trimmed === '/execution' || trimmed === '/qualify') {
+      const { ensureMetaHarnessService } = await import('../commands/metaHarnessCommands.js');
+      const svc = ensureMetaHarnessService(this.engine);
+      let rendered = '';
+      if (trimmed === '/hardware') {
+        const disc = await svc.discoverInfrastructure({ testRealInference: true });
+        const { renderInfrastructureView } = await import('@wazir/core');
+        rendered = renderInfrastructureView(disc.graph, disc.acceptanceRows, {});
+      } else if (trimmed === '/execution') {
+        rendered = (await svc.getExecutionStatus()).renderedView;
+      } else {
+        rendered = (await svc.runQualification('all')).renderedView;
+      }
+      if (this.presentationMode === 'conversation') this.conversationRenderer.append(rendered);
+      else this.statusMessage = rendered.split('\n')[0] ?? trimmed;
+      this.draw();
       return;
     }
     if (trimmed === '/update') {
@@ -3986,6 +4004,32 @@ export class FleetTui {
     if (this.presentationMode === 'conversation') {
       this.conversationRenderer.append(`> ${prompt}`);
       this.conversationStartedAt = Date.now();
+    }
+    // Part 1.1: Route infrastructure, scheduling, verification, and optimization prompts
+    // through the exact same shared MetaHarnessService state as the CLI.
+    if (!prompt.startsWith('/')) {
+      const { classifyMetaHarnessIntent } = await import('@wazir/core');
+      const classified = classifyMetaHarnessIntent(prompt);
+      if (classified.intent !== 'ORDINARY_PROMPT') {
+        const { ensureMetaHarnessService } = await import('../commands/metaHarnessCommands.js');
+        const svc = ensureMetaHarnessService(this.engine);
+        this.statusMessage = `Executing infrastructure intent (${classified.intent})...`;
+        this.draw();
+        const dispatched = await svc.dispatchNaturalLanguage(prompt);
+        this.statusMessage = dispatched.summary;
+        if (this.currentBlockTracker) {
+          await this.currentBlockTracker
+            .finish('success', { exitCode: 0, stdout: dispatched.renderedView })
+            .catch(() => {});
+          this.currentBlockTracker = undefined;
+          await this.refreshRecentBlocks();
+        }
+        if (this.presentationMode === 'conversation') {
+          this.conversationRenderer.append(dispatched.renderedView);
+        }
+        this.draw();
+        return;
+      }
     }
     // Installed models are activated on the existing execution after scheduling.
     const readiness = this.engine.lifecycle.getReadiness();

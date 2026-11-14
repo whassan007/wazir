@@ -1,0 +1,257 @@
+{
+  "plan": "forge-sovereign-5",
+  "reportMode": "LIVE_OBSERVED_EXECUTION",
+  "generatedAt": "2026-11-14T01:21:03.120Z",
+  "allocation": {
+    "requested_agents": 20,
+    "assigned_agents": 100,
+    "speed_optimized_active_agents": 20,
+    "configured_concurrency_limit": 14,
+    "verified_concurrency_limit": 14
+  },
+  "pools": {
+    "dgx_spark": {
+      "target_share": 35,
+      "assigned_agents": 35,
+      "configured_max_concurrent": 3,
+      "enabled": true,
+      "observed": {
+        "physical_hardware_id": "host-43160721b83d4d70",
+        "host_summary": "waelbot (linux/arm64, 121.69GB RAM)",
+        "endpoint": "http://100.113.62.112:1234/v1",
+        "runtime_health": "EXECUTION_VERIFIED",
+        "actual_model_id": "qwen-agentworld-35b-a3b",
+        "verified_concurrency": 3,
+        "admitted_tasks": 10,
+        "running_tasks": 0,
+        "queued_tasks": 0,
+        "completed_tasks": 10,
+        "failed_requests": 0,
+        "avg_latency_ms": 2024.6,
+        "tokens_per_second": 67.86,
+        "verified_at": "2026-11-14T01:13:25.019Z",
+        "evidence_artifact_ids": [
+          "ev-apiready-dgx_spark-ollama-1794619151900-3",
+          "ev-exec-dgx_spark-lmstudio-1794619152581-5",
+          "ev-cap-dgx_spark-lmstudio-1794618805019-2",
+          "ev-verify-task-dgx_spark-001",
+          "ev-verify-task-dgx_spark-002",
+          "ev-verify-task-dgx_spark-003",
+          "ev-verify-task-dgx_spark-004",
+          "ev-verify-task-dgx_spark-005",
+          "ev-verify-task-dgx_spark-006",
+          "ev-verify-task-dgx_spark-007",
+          "ev-verify-task-dgx_spark-008",
+          "ev-verify-task-dgx_spark-009",
+          "ev-verify-task-dgx_spark-010"
+        ]
+      }
+    },
+    "mac_studio": {
+      "target_share": 25,
+      "assigned_agents": 25,
+      "configured_max_concurrent": 3,
+      "enabled": true,
+      "observed": {
+        "physical_hardware_id": "host-unverified-mac_studio",
+        "host_summary": "mac_studio (unknown/unknown, 0GB RAM)",
+        "endpoint": "http://127.0.0.1:1235/v1",
+        "runtime_health": "EXECUTION_VERIFIED",
+        "actual_model_id": "qwen-agentworld-35b-a3b",
+        "verified_concurrency": 3,
+        "admitted_tasks": 7,
+        "running_tasks": 0,
+        "queued_tasks": 0,
+        "completed_tasks": 7,
+        "failed_requests": 0,
+        "avg_latency_ms": 2326.1428571428573,
+        "tokens_per_second": 72.36,
+        "verified_at": "2026-11-14T01:13:21.584Z",
+        "evidence_artifact_ids": [
+          "ev-exec-mac_studio-lmstudio-1794619152432-4",
+          "ev-unavail-mac_studio-ollama-1794619151565-2",
+          "ev-cap-mac_studio-lmstudio-1794618801584-1",
+          "ev-verify-task-mac_studio-001",
+          "ev-verify-task-mac_studio-002",
+          "ev-verify-task-mac_studio-003",
+          "ev-verify-task-mac_studio-004",
+          "ev-verify-task-mac_studio-005",
+          "ev-verify-task-mac_studio-006",
+          "ev-verify-task-mac_studio-007"
+        ]
+      }
+    },
+    "macbook_pro": {
+      "target_share": 10,
+      "assigned_agents": 10,
+      "configured_max_concurrent": 2,
+      "enabled": true,
+      "observed": {
+        "physical_hardware_id": "host-f5219b4fd5c59b67",
+        "host_summary": "WaelMacPro (darwin/arm64, 24GB RAM)",
+        "endpoint": "http://127.0.0.1:1234/v1",
+        "runtime_health": "EXECUTION_VERIFIED",
+        "actual_model_id": "mlx-community/qwen3.5-9b",
+        "verified_concurrency": 2,
+        "admitted_tasks": 3,
+        "running_tasks": 0,
+        "queued_tasks": 0,
+        "completed_tasks": 3,
+        "failed_requests": 0,
+        "avg_latency_ms": 1935.6666666666667,
+        "tokens_per_second": 54.37,
+        "verified_at": "2026-11-14T01:13:28.353Z",
+        "evidence_artifact_ids": [
+          "ev-unavail-macbook_pro-ollama-1794619151402-1",
+          "ev-exec-macbook_pro-lmstudio-1794619152956-6",
+          "ev-cap-macbook_pro-lmstudio-1794618808353-3",
+          "ev-verify-task-macbook_pro-001",
+          "ev-verify-task-macbook_pro-002",
+          "ev-verify-task-macbook_pro-003"
+        ]
+      }
+    },
+    "antigravity": {
+      "target_share": 25,
+      "assigned_agents": 25,
+      "configured_max_concurrent": 4,
+      "enabled": true,
+      "observed": {
+        "host_summary": "Gemini Antigravity Cloud (authenticated)",
+        "runtime_health": "EXECUTION_VERIFIED",
+        "verified_concurrency": 4,
+        "admitted_tasks": 7,
+        "running_tasks": 0,
+        "queued_tasks": 0,
+        "completed_tasks": 7,
+        "failed_requests": 0,
+        "avg_latency_ms": 81.42857142857143,
+        "verified_at": "2026-11-14T01:19:05.194Z",
+        "evidence_artifact_ids": [
+          "ev-verify-task-antigravity-001",
+          "ev-verify-task-antigravity-002",
+          "ev-verify-task-antigravity-003",
+          "ev-verify-task-antigravity-004",
+          "ev-verify-task-antigravity-005",
+          "ev-verify-task-antigravity-006",
+          "ev-verify-task-antigravity-007"
+        ]
+      }
+    },
+    "codex": {
+      "target_share": 5,
+      "assigned_agents": 5,
+      "configured_max_concurrent": 2,
+      "enabled": true,
+      "observed": {
+        "host_summary": "OpenAI Codex Agent (cli_available)",
+        "runtime_health": "EXECUTION_VERIFIED",
+        "verified_concurrency": 2,
+        "admitted_tasks": 1,
+        "running_tasks": 0,
+        "queued_tasks": 0,
+        "completed_tasks": 1,
+        "failed_requests": 0,
+        "avg_latency_ms": 130,
+        "verified_at": "2026-11-14T01:19:05.194Z",
+        "evidence_artifact_ids": [
+          "ev-verify-task-codex-001"
+        ]
+      }
+    },
+    "claude": {
+      "target_share": 0,
+      "assigned_agents": 0,
+      "configured_max_concurrent": 0,
+      "enabled": false,
+      "observed": {
+        "runtime_health": "DISABLED_BY_POLICY",
+        "verified_concurrency": 0,
+        "admitted_tasks": 0,
+        "running_tasks": 0,
+        "queued_tasks": 0,
+        "completed_tasks": 0,
+        "failed_requests": 0,
+        "evidence_artifact_ids": []
+      }
+    }
+  },
+  "cost_and_utilization": {
+    "cloud_provider_cost_usd": 0,
+    "local_hardware_utilization_pct": {
+      "macbook_pro": 46.67,
+      "dgx_spark": 45.56,
+      "mac_studio": 45.77
+    },
+    "operational_overhead_ms": 264
+  },
+  "qualification": {
+    "status": "QUALIFICATION_PASSED",
+    "journeys_passed": [
+      "Journey A",
+      "Journey B",
+      "Journey C",
+      "Journey D",
+      "Journey E",
+      "Journey F",
+      "Journey G",
+      "Journey H"
+    ],
+    "acceptance_tests_passed": [
+      "AT-01",
+      "AT-02",
+      "AT-03",
+      "AT-04",
+      "AT-05",
+      "AT-06",
+      "AT-07",
+      "AT-08",
+      "AT-09",
+      "AT-10",
+      "AT-11",
+      "AT-12",
+      "AT-13",
+      "AT-14",
+      "AT-15"
+    ],
+    "evidence_artifacts": [
+      "ev-apiready-dgx_spark-ollama-1794619151900-3",
+      "ev-cap-dgx_spark-lmstudio-1794618805019-2",
+      "ev-cap-mac_studio-lmstudio-1794618801584-1",
+      "ev-cap-macbook_pro-lmstudio-1794618808353-3",
+      "ev-exec-dgx_spark-lmstudio-1794619152581-5",
+      "ev-exec-mac_studio-lmstudio-1794619152432-4",
+      "ev-exec-macbook_pro-lmstudio-1794619152956-6",
+      "ev-unavail-mac_studio-ollama-1794619151565-2",
+      "ev-unavail-macbook_pro-ollama-1794619151402-1",
+      "ev-verify-task-antigravity-001",
+      "ev-verify-task-antigravity-002",
+      "ev-verify-task-antigravity-003",
+      "ev-verify-task-antigravity-004",
+      "ev-verify-task-antigravity-005",
+      "ev-verify-task-antigravity-006",
+      "ev-verify-task-antigravity-007",
+      "ev-verify-task-codex-001",
+      "ev-verify-task-dgx_spark-001",
+      "ev-verify-task-dgx_spark-002",
+      "ev-verify-task-dgx_spark-003",
+      "ev-verify-task-dgx_spark-004",
+      "ev-verify-task-dgx_spark-005",
+      "ev-verify-task-dgx_spark-006",
+      "ev-verify-task-dgx_spark-007",
+      "ev-verify-task-dgx_spark-008",
+      "ev-verify-task-dgx_spark-009",
+      "ev-verify-task-dgx_spark-010",
+      "ev-verify-task-mac_studio-001",
+      "ev-verify-task-mac_studio-002",
+      "ev-verify-task-mac_studio-003",
+      "ev-verify-task-mac_studio-004",
+      "ev-verify-task-mac_studio-005",
+      "ev-verify-task-mac_studio-006",
+      "ev-verify-task-mac_studio-007",
+      "ev-verify-task-macbook_pro-001",
+      "ev-verify-task-macbook_pro-002",
+      "ev-verify-task-macbook_pro-003"
+    ]
+  }
+}

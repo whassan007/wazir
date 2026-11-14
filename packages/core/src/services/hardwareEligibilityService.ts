@@ -93,11 +93,10 @@ export function isUnifiedMemoryArchitecture(computer?: Computer): boolean {
 }
 
 /**
- * Detects whether the computer has an NVIDIA GPU with discrete VRAM.
+ * Detects whether the computer has an NVIDIA GPU (discrete VRAM or unified C2C/ATS such as NVIDIA GB10).
  */
 export function isNvidiaGpuArchitecture(computer?: Computer): boolean {
   if (!computer?.hardware?.gpu) return false;
-  if (isUnifiedMemoryArchitecture(computer)) return false;
   const gpu = computer.hardware.gpu;
   return gpu.cuda === true || gpu.vendor?.toLowerCase() === 'nvidia';
 }
@@ -122,11 +121,11 @@ export function determineDeviceKind(computer?: Computer, model?: ModelRecord): D
   if (computer.local === false || computer.type === 'remote-worker') {
     return 'remote_worker';
   }
-  if (isUnifiedMemoryArchitecture(computer)) {
-    return 'apple_unified';
-  }
   if (isNvidiaGpuArchitecture(computer)) {
     return 'nvidia_gpu';
+  }
+  if (isUnifiedMemoryArchitecture(computer)) {
+    return 'apple_unified';
   }
   if (isDiscreteGpuArchitecture(computer)) {
     return 'discrete_gpu';
@@ -316,7 +315,7 @@ export class HardwareEligibilityService {
         );
       }
       const runtimeType = (runtime.type ?? runtime.id).toLowerCase();
-      if (runtimeType === 'mlx' && !unifiedMemory) {
+      if (runtimeType === 'mlx' && (!unifiedMemory || isNvidiaGpuArchitecture(computer))) {
         rejectionReasons.push(`Runtime MLX requires Apple Silicon unified memory`);
       }
       if (runtimeType === 'vllm' && !isNvidiaGpuArchitecture(computer)) {
@@ -745,8 +744,16 @@ export class HardwareEligibilityService {
         (options?.safetyReservePercent ? (totalMemoryGB * options.safetyReservePercent) / 100 : 0);
       const usableMemoryGB = Math.max(0, availableMemoryGB - safetyReserveGB);
 
-      let chipName = computer.hardware.gpu?.model || computer.hardware.cpu || 'Apple Silicon';
-      if (!chipName.toLowerCase().includes('apple')) {
+      const nvidiaUnified = isNvidiaGpuArchitecture(computer);
+      let chipName =
+        computer.hardware.gpu?.model ||
+        computer.hardware.cpu ||
+        (nvidiaUnified ? 'NVIDIA GPU' : 'Apple Silicon');
+      if (nvidiaUnified) {
+        if (!chipName.toLowerCase().includes('nvidia')) {
+          chipName = `NVIDIA ${chipName}`;
+        }
+      } else if (!chipName.toLowerCase().includes('apple')) {
         chipName = `Apple ${chipName}`;
       }
       return `${chipName} · ${totalMemoryGB.toFixed(1)}GB Unified Memory (${usableMemoryGB.toFixed(1)}GB usable)`;

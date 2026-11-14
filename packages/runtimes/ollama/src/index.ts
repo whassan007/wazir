@@ -68,8 +68,12 @@ function normalizeModelId(name: string): string {
   return base;
 }
 
+function canonicalOllamaTag(name: string): string {
+  return name.includes(':') ? name : `${name}:latest`;
+}
+
 export class OllamaAdapter implements RuntimeAdapter {
-  readonly id = 'ollama';
+  readonly id: string;
   readonly type = 'ollama' as const;
   private readonly baseURL: string;
   private readonly controllers = new Map<string, AbortController>();
@@ -80,7 +84,8 @@ export class OllamaAdapter implements RuntimeAdapter {
     cacheWriteMetrics: false,
   };
 
-  constructor(baseURL: string = 'http://localhost:11434') {
+  constructor(baseURL: string = 'http://localhost:11434', options: { id?: string } = {}) {
+    this.id = options.id?.trim() || 'ollama';
     this.baseURL = baseURL.replace(/\/+$/, '');
   }
 
@@ -111,11 +116,26 @@ export class OllamaAdapter implements RuntimeAdapter {
   }
 
   async listModels(): Promise<DiscoveredModel[]> {
-    const response = await fetch(`${this.baseURL}/api/tags`, { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) {
+    const [tagsResponse, runningList] = await Promise.all([
+      fetch(`${this.baseURL}/api/tags`, { signal: AbortSignal.timeout(5000) }),
+      this.runningModels().catch(() => [] as Array<{ name: string; model?: string; context_length?: number; size?: number; size_vram?: number }>),
+    ]);
+    if (!tagsResponse.ok) {
       return [];
     }
-    const data = (await response.json()) as { models?: OllamaTagModel[] };
+    const runningByTag = new Map<string, { name: string; context_length?: number; size?: number; size_vram?: number }>();
+    for (const running of runningList) {
+      if (running.name) {
+        runningByTag.set(running.name, running);
+        runningByTag.set(canonicalOllamaTag(running.name), running);
+      }
+      const runningModelKey = (running as { model?: string }).model;
+      if (runningModelKey) {
+        runningByTag.set(runningModelKey, running);
+        runningByTag.set(canonicalOllamaTag(runningModelKey), running);
+      }
+    }
+    const data = (await tagsResponse.json()) as { models?: OllamaTagModel[] };
     return Promise.all((data.models ?? []).map(async (model) => {
       const details = await this.showModel(model.name).catch(() => ({}));
       const info = (details as { model_info?: Record<string, unknown> }).model_info ?? {};
@@ -124,6 +144,10 @@ export class OllamaAdapter implements RuntimeAdapter {
       this.modelSizes.set(model.name, size);
       this.modelSizes.set(normalizeModelId(model.name), size);
       const family = model.details?.family;
+      const runningMatch =
+        runningByTag.get(model.name) ??
+        runningByTag.get(canonicalOllamaTag(model.name)) ??
+        (model.model ? (runningByTag.get(model.model) ?? runningByTag.get(canonicalOllamaTag(model.model))) : undefined);
       return {
         id: model.name,
         name: model.name,
@@ -140,6 +164,8 @@ export class OllamaAdapter implements RuntimeAdapter {
         audio: false,
         embedding: (model.details?.families ?? []).some((f) => f.includes('bert') || f.includes('nomic-embed')),
         reasoning: inferReasoning(model.name),
+        loaded: Boolean(runningMatch),
+        effectiveContext: runningMatch?.context_length,
       };
     }));
   }
@@ -474,6 +500,6 @@ function createLineBuffer(): LineBuffer {
   };
 }
 
-export function createOllamaAdapter(baseURL?: string): RuntimeAdapter {
-  return new OllamaAdapter(baseURL);
+export function createOllamaAdapter(baseURL?: string, options?: { id?: string }): RuntimeAdapter {
+  return new OllamaAdapter(baseURL, options);
 }

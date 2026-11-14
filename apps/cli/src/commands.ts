@@ -6,6 +6,7 @@ import {
   summarizeExecution,
   captureHeadFingerprint,
   describeUnexpectedHeadDrift,
+  classifyMetaHarnessIntent,
   type BlockStatus,
   type ExecutionRecord,
   type Job,
@@ -19,6 +20,7 @@ import { readAuditEvents, stripTerminalEscapes } from '@wazir/shared';
 import { listBlocks, getBlock } from './blocks.js';
 import { resolveReference } from './references.js';
 import { table, formatAge, formatTaskStatusRecord } from './commands/formatters.js';
+import { ensureMetaHarnessService } from './commands/metaHarnessCommands.js';
 
 export * from './commands/formatters.js';
 export * from './commands/inventoryCommands.js';
@@ -26,6 +28,7 @@ export * from './commands/contextCommands.js';
 export * from './commands/artifactAndVerifyCommands.js';
 export * from './commands/providerCommands.js';
 export * from './commands/improveAndCanaryCommands.js';
+export * from './commands/metaHarnessCommands.js';
 
 export async function listExecutions(engine: RookEngine, json: boolean): Promise<string> {
   const records = await engine.executions.list();
@@ -933,8 +936,23 @@ export async function askCommand(
     localOnly?: boolean;
     allowHosted?: boolean;
     routingMode?: import('@wazir/core').RoutingMode;
+    json?: boolean;
   } = {},
 ): Promise<{ code: number; output: string }> {
+  // Part 1.1: Route infrastructure, execution, verification, and optimization prompts
+  // directly through the shared MetaHarnessService (never as ordinary chat questions).
+  if (!options.model && !options.computer) {
+    const classified = classifyMetaHarnessIntent(prompt);
+    if (classified.intent !== 'ORDINARY_PROMPT') {
+      const svc = ensureMetaHarnessService(engine);
+      const dispatched = await svc.dispatchNaturalLanguage(prompt);
+      return {
+        code: 0,
+        output: options.json ? JSON.stringify(dispatched, null, 2) : dispatched.renderedView,
+      };
+    }
+  }
+
   const routingCfg = engine.config.routing;
   const effectiveRoutingMode: import('@wazir/core').RoutingMode | undefined =
     options.routingMode ??

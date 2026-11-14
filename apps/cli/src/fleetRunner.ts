@@ -68,7 +68,14 @@ const WRITE_TOOLS = new Set(['write', 'edit']);
 // the model had genuinely compiled (or failed to compile) real code.
 // `(?=\s|$)` rather than `\b` — see the identical helper in run.ts for why.
 const BUILD_INVOCATION_PATTERN =
-  /(^|&&|\|\||;)\s*(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)(?=\s|$)/;
+  /(^|&&|\|\||;)\s*(?:npx\s+)?(g\+\+|gcc|cc|c\+\+|clang\+\+|clang|rustc|javac|tsc|make|cmake|cargo\s+build|go\s+build|mvn\s+compile|gradle\s+build|dotnet\s+build|swiftc)(?=\s|$)/;
+const TEST_RUNNER_PATTERN =
+  /(^|&&|\|\||;)\s*(pytest|jest|vitest|mocha|ava|go\s+test|cargo\s+test|mvn\s+test|gradle\s+test|dotnet\s+test|ctest|phpunit|rspec|npm\s+(?:run\s+)?test|yarn\s+test|pnpm\s+test)(?=\s|$)/;
+const TEST_FILE_INVOCATION_PATTERN =
+  /(^|&&|\|\||;)\s*(node|python3?|ruby|php)\s+\S*(\.test\.|_test\.|\.spec\.|test_)\S*/;
+function isTestInvocation(command: string): boolean {
+  return TEST_RUNNER_PATTERN.test(command) || TEST_FILE_INVOCATION_PATTERN.test(command);
+}
 // Kept in sync with the identical helper in apps/cli/src/run.ts.
 const SOURCE_CODE_EXTENSION_PATTERN = /\.(c|cc|cpp|cxx|h|hpp|hh|py|go|rs|java|kt|swift|ts|tsx|js|jsx|mjs|cjs|rb|php|cs|scala|m|mm)$/i;
 function touchesSourceCode(filesChanged: string[]): boolean {
@@ -548,6 +555,15 @@ export function createFleetTaskExecutor(
           await engine.executions.recordCheck(executionId, {
             workspaceRevision: checkRevision,
             name: 'build',
+            command: input.command,
+            ok: result.ok,
+            output: keepEnds(result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n'), 4000),
+            durationMs: result.durationMs,
+          });
+        } else if (name === 'shell' && typeof input.command === 'string' && isTestInvocation(input.command)) {
+          await engine.executions.recordCheck(executionId, {
+            workspaceRevision: checkRevision,
+            name: 'test',
             command: input.command,
             ok: result.ok,
             output: keepEnds(result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n'), 4000),

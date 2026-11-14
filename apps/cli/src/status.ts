@@ -1,5 +1,6 @@
 import type { RookEngine } from './engine.js';
 import { color } from './colors.js';
+import { getBuildInfo } from './version.js';
 
 export interface StatusSummary {
   version: string;
@@ -48,8 +49,20 @@ export function getStatus(engine: RookEngine): StatusSummary {
     }
   }
   
+  const jobs = engine.orchestrator.listJobs();
+  let activeCount = 0;
+  let queuedCount = 0;
+  for (const job of jobs) {
+    if (job.status === 'running' || job.status === 'ready' || job.status === 'pending') {
+      for (const task of job.tasks) {
+        if (task.status === 'running') activeCount++;
+        else if (task.status === 'pending' || task.status === 'scheduled') queuedCount++;
+      }
+    }
+  }
+
   return {
-    version: '0.1.2',
+    version: getBuildInfo().version,
     configDir: engine.configDir,
     projectRoot: engine.projectRoot,
     computers: {
@@ -75,101 +88,103 @@ export function getStatus(engine: RookEngine): StatusSummary {
       modelsDiscovered: engine.worker.info.models.length,
     },
     executions: {
-      active: 0,
-      queued: 0,
+      active: activeCount,
+      queued: queuedCount,
     },
   };
 }
 
-export function statusCommand(): Promise<{ code: number; output: string }> {
-  return new Promise(async (resolve) => {
-    try {
-      const { createEngine } = require('./engine.js');
-      const engine = await createEngine();
-      
-      const status = getStatus(engine);
-      
-      const lines: string[] = [];
-      
-      lines.push(color.bold('Wazir Status'));
-      lines.push('');
-      
-      lines.push(color.bold('Control Plane'));
-      lines.push(`  version:   ${status.version}`);
-      lines.push(`  configDir: ${status.configDir}`);
-      lines.push(`  project:   ${status.projectRoot}`);
-      
-      lines.push('');
-      lines.push(color.bold('Computers'));
-      lines.push(`  total:     ${status.computers.total}`);
-      lines.push(`  online:    ${status.computers.online}`);
-      if (status.computers.runtimes.length > 0) {
-        lines.push(`  runtimes:  ${status.computers.runtimes.join(', ')}`);
-      }
-      lines.push(`  models:    ${status.computers.models}`);
-      
-      lines.push('');
-      lines.push(color.bold('Runtimes'));
-      lines.push(`  total:     ${status.runtimes.total}`);
-      lines.push(`  healthy:   ${status.runtimes.healthy}`);
-      if (status.runtimes.unhealthy > 0) {
-        lines.push(color.yellow(`  unhealthy: ${status.runtimes.unhealthy}`));
-      }
-      
-      lines.push('');
-      lines.push(color.bold('Providers'));
-      lines.push(`  connected: ${status.providers.authenticated}/${status.providers.total}`);
-      if (status.providers.models > 0) {
-        lines.push(`  models:    ${status.providers.models} available`);
-      }
-      if (status.providers.authenticated === 0) {
-        lines.push(color.gray('  none authenticated — run `wa auth login` to connect a hosted provider'));
-      }
+export async function statusCommand(options: { json?: boolean } = {}): Promise<{ code: number; output: string }> {
+  try {
+    const { createEngine } = await import('./engine.js');
+    const engine = await createEngine({ quiet: Boolean(options.json) });
 
-      lines.push('');
-      lines.push(color.bold('Worker'));
-      const workerStatus = status.workers.running ? color.green('running') : color.red('stopped');
-      lines.push(`  id:        ${status.workers.id}`);
-      lines.push(`  computer:  ${status.workers.computerId}`);
-      lines.push(`  status:    ${workerStatus}`);
-      lines.push(`  models:    ${status.workers.modelsDiscovered} discovered`);
-      
-      lines.push('');
-      lines.push(color.bold('Agents'));
-      const registeredAgents = engine.agents.list().length;
-      lines.push(`  registered: ${registeredAgents}`);
-      lines.push(`  active:     0`);
-      lines.push(`  slots:      ${engine.config?.concurrencyLimit ?? 4}`);
-
-      lines.push('');
-      lines.push(color.bold('Models'));
-      const readiness = engine.lifecycle.getReadiness();
-      const regCount = readiness.registeredCount ?? readiness.installedCount;
-      const availCount = readiness.availableCount ?? readiness.installedCount;
-      const localCount = readiness.localLoadedCount ?? 0;
-      lines.push(`  registered:     ${regCount}`);
-      lines.push(`  available:      ${availCount}`);
-      lines.push(`  locally loaded: ${localCount}`);
-      lines.push(`  installed:      ${readiness.installedCount}`);
-      lines.push(`  ready:          ${readiness.readyCount > 0 ? color.green(String(readiness.readyCount)) : color.yellow('0')}`);
-      lines.push(`  loading:        ${readiness.loadingCount}`);
-
-      lines.push('');
-      lines.push(color.bold('Executions'));
-      lines.push(`  active:    ${status.executions.active}`);
-      lines.push(`  queued:    ${status.executions.queued}`);
-      
-      lines.push('');
-      if (status.computers.online > 0 && status.runtimes.healthy > 0) {
-        lines.push(color.green('System is operational'));
-      } else {
-        lines.push(color.yellow('System has issues - run wa doctor for details'));
-      }
-      
-      resolve({ code: 0, output: lines.join('\n') });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      resolve({ code: 1, output: color.red(`status failed: ${message}`) });
+    const status = getStatus(engine);
+    if (options.json) {
+      return { code: 0, output: JSON.stringify(status, null, 2) };
     }
-  });
+
+    const lines: string[] = [];
+
+    lines.push(color.bold('Wazir Status'));
+    lines.push('');
+
+    lines.push(color.bold('Control Plane'));
+    lines.push(`  version:   ${status.version}`);
+    lines.push(`  configDir: ${status.configDir}`);
+    lines.push(`  project:   ${status.projectRoot}`);
+
+    lines.push('');
+    lines.push(color.bold('Computers'));
+    lines.push(`  total:     ${status.computers.total}`);
+    lines.push(`  online:    ${status.computers.online}`);
+    if (status.computers.runtimes.length > 0) {
+      lines.push(`  runtimes:  ${status.computers.runtimes.join(', ')}`);
+    }
+    lines.push(`  models:    ${status.computers.models}`);
+
+    lines.push('');
+    lines.push(color.bold('Runtimes'));
+    lines.push(`  total:     ${status.runtimes.total}`);
+    lines.push(`  healthy:   ${status.runtimes.healthy}`);
+    if (status.runtimes.unhealthy > 0) {
+      lines.push(color.yellow(`  unhealthy: ${status.runtimes.unhealthy}`));
+    }
+
+    lines.push('');
+    lines.push(color.bold('Providers'));
+    lines.push(`  connected: ${status.providers.authenticated}/${status.providers.total}`);
+    if (status.providers.models > 0) {
+      lines.push(`  models:    ${status.providers.models} available`);
+    }
+    if (status.providers.authenticated === 0) {
+      lines.push(color.gray('  none authenticated — run `wa auth login` to connect a hosted provider'));
+    }
+
+    lines.push('');
+    lines.push(color.bold('Worker'));
+    const workerStatus = status.workers.running ? color.green('running') : color.red('stopped');
+    lines.push(`  id:        ${status.workers.id}`);
+    lines.push(`  computer:  ${status.workers.computerId}`);
+    lines.push(`  status:    ${workerStatus}`);
+    lines.push(`  models:    ${status.workers.modelsDiscovered} discovered`);
+
+    lines.push('');
+    lines.push(color.bold('Agents'));
+    const registeredAgents = engine.agents.list().length;
+    lines.push(`  registered: ${registeredAgents}`);
+    lines.push(`  active:     ${status.executions.active}`);
+    const configuredSlots = (engine.config as { concurrencyLimit?: number } | undefined)?.concurrencyLimit ?? 4;
+    lines.push(`  slots:      ${configuredSlots}`);
+
+    lines.push('');
+    lines.push(color.bold('Models'));
+    const readiness = engine.lifecycle.getReadiness();
+    const regCount = readiness.registeredCount ?? readiness.installedCount;
+    const availCount = readiness.availableCount ?? readiness.installedCount;
+    const localCount = readiness.localLoadedCount ?? 0;
+    lines.push(`  registered:     ${regCount}`);
+    lines.push(`  available:      ${availCount}`);
+    lines.push(`  locally loaded: ${localCount}`);
+    lines.push(`  installed:      ${readiness.installedCount}`);
+    lines.push(`  ready:          ${readiness.readyCount > 0 ? color.green(String(readiness.readyCount)) : color.yellow('0')}`);
+    lines.push(`  loading:        ${readiness.loadingCount}`);
+
+    lines.push('');
+    lines.push(color.bold('Executions'));
+    lines.push(`  active:    ${status.executions.active}`);
+    lines.push(`  queued:    ${status.executions.queued}`);
+
+    lines.push('');
+    if (status.computers.online > 0 && status.runtimes.healthy > 0) {
+      lines.push(color.green('System is operational'));
+    } else {
+      lines.push(color.yellow('System has issues - run wa doctor for details'));
+    }
+
+    return { code: 0, output: lines.join('\n') };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { code: 1, output: color.red(`status failed: ${message}`) };
+  }
 }

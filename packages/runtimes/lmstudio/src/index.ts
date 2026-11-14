@@ -78,7 +78,7 @@ interface NativeModel {
   loaded_instances: Array<{ id: string; config: { context_length?: number } }>;
 }
 export class LMStudioAdapter implements RuntimeAdapter {
-  readonly id = 'lmstudio';
+  readonly id: string;
   readonly type = 'lmstudio' as const;
   private readonly baseURL: string;
   private readonly controllers = new Map<string, AbortController>();
@@ -95,7 +95,8 @@ export class LMStudioAdapter implements RuntimeAdapter {
    * `apiKey` is sent as a Bearer token. Any authenticated OpenAI-compatible endpoint
    * (LiteLLM, vLLM --api-key, LM Studio with auth enabled) rejects requests without it.
    */
-  constructor(baseURL: string = 'http://localhost:1235/v1', options: { apiKey?: string } = {}) {
+  constructor(baseURL: string = 'http://localhost:1235/v1', options: { id?: string; apiKey?: string } = {}) {
+    this.id = options.id?.trim() || 'lmstudio';
     this.baseURL = baseURL.replace(/\/+$/, '');
     this.apiKey = options.apiKey ?? (process.env.WAZIR_LMSTUDIO_API_KEY || undefined);
   }
@@ -264,11 +265,25 @@ export class LMStudioAdapter implements RuntimeAdapter {
   async listModels(): Promise<DiscoveredModel[]> {
     try {
       const models = await this.nativeModels();
-      return models.map(m => ({ id: m.key, name: m.display_name ?? m.key, contextWindow: m.max_context_length,
-        contextLimitSource: typeof m.max_context_length === 'number' ? 'runtime-discovered' : 'default-unknown',
-        weightBytes: m.size_bytes, parameters: m.params_string, architecture: m.architecture,
-        quantization: m.quantization?.name, embedding: m.type === 'embedding',
-        toolCalling: m.capabilities?.trained_for_tool_use, vision: m.capabilities?.vision }));
+      return models.map(m => {
+        const instances = Array.isArray(m.loaded_instances) ? m.loaded_instances : [];
+        const isLoaded = instances.length > 0;
+        return {
+          id: m.key,
+          name: m.display_name ?? m.key,
+          contextWindow: m.max_context_length,
+          contextLimitSource: typeof m.max_context_length === 'number' ? 'runtime-discovered' : 'default-unknown',
+          weightBytes: m.size_bytes,
+          parameters: m.params_string,
+          architecture: m.architecture,
+          quantization: m.quantization?.name,
+          embedding: m.type === 'embedding',
+          toolCalling: m.capabilities?.trained_for_tool_use,
+          vision: m.capabilities?.vision,
+          loaded: isLoaded,
+          effectiveContext: instances[0]?.config?.context_length,
+        };
+      });
     } catch { /* older runtimes may still expose inventory through v0 */ }
 
     // 1. Try LM Studio v0 API which returns rich metadata for all installed models
@@ -281,8 +296,11 @@ export class LMStudioAdapter implements RuntimeAdapter {
             id: string;
             type?: string;
             arch?: string;
+            state?: string;
             quantization?: string;
             max_context_length?: number;
+            loaded_context_length?: number;
+            loaded_instances?: Array<{ id: string; config?: { context_length?: number } }>;
             capabilities?: string[];
           }>;
         };
@@ -291,6 +309,13 @@ export class LMStudioAdapter implements RuntimeAdapter {
             const capabilities = inferCapabilities(model.id);
             const isEmbedding = model.type === 'embeddings' || /embed|bert|nomic/.test(model.id.toLowerCase());
             const hasToolUse = (model.capabilities ?? []).includes('tool_use') || capabilities.toolCalling;
+            const isLoaded =
+              model.state === 'loaded' ||
+              (Array.isArray(model.loaded_instances) && model.loaded_instances.length > 0);
+            const effectiveContext =
+              typeof model.loaded_context_length === 'number'
+                ? model.loaded_context_length
+                : model.loaded_instances?.[0]?.config?.context_length;
             return {
               id: model.id,
               name: model.id,
@@ -305,6 +330,8 @@ export class LMStudioAdapter implements RuntimeAdapter {
               audio: false,
               embedding: isEmbedding,
               reasoning: capabilities.reasoning,
+              loaded: isLoaded,
+              effectiveContext,
             };
           });
         }
@@ -317,10 +344,13 @@ export class LMStudioAdapter implements RuntimeAdapter {
     try {
       const response = await fetch(`${this.baseURL}/models`, { headers: this.headers(), signal: AbortSignal.timeout(3000) });
       if (!response.ok) return [];
-      const data = (await response.json()) as { data?: OpenAIModel[] };
+      const data = (await response.json()) as { data?: Array<OpenAIModel & { state?: string; loaded_instances?: unknown[] }> };
       return (data.data ?? []).map((model) => {
         const capabilities = inferCapabilities(model.id);
         const isEmbedding = /embed|bert|nomic/.test(model.id.toLowerCase());
+        const isLoaded =
+          model.state === 'loaded' ||
+          (Array.isArray(model.loaded_instances) && model.loaded_instances.length > 0);
         return {
           id: model.id,
           name: model.id,
@@ -331,6 +361,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
           audio: false,
           embedding: isEmbedding,
           reasoning: capabilities.reasoning,
+          loaded: isLoaded,
         };
       });
     } catch {
@@ -743,6 +774,10 @@ function createSSEBuffer(): SSEBuffer {
   };
 }
 
-export function createLMStudioAdapter(baseURL?: string): RuntimeAdapter {
-  return new LMStudioAdapter(baseURL);
+export function createLMStudioAdapter(
+  baseURL?: string,
+  apiKeyOrOptions?: string | { id?: string; apiKey?: string },
+): RuntimeAdapter {
+  const options = typeof apiKeyOrOptions === 'string' ? { apiKey: apiKeyOrOptions } : apiKeyOrOptions;
+  return new LMStudioAdapter(baseURL, options);
 }

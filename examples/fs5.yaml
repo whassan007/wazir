@@ -1,0 +1,95 @@
+apiVersion: wazir.dev/v1
+kind: ExecutionPlan
+
+metadata:
+  name: forge-sovereign-5
+  version: 1
+  description: "Forge Sovereign-5 (FS5) 20-agent reference execution configuration (0% Claude)"
+
+spec:
+  goal: "Execute a distributed software engineering task"
+
+  execution:
+    mode: autonomous
+    total_agents: 20
+    speed_optimization: true
+    queue_when_saturated: true
+    verify_outputs: true
+    recover_failures: true
+    max_repair_attempts: 3
+
+  discovery:
+    refresh_before_execution: true
+    authorized_hosts_only: true
+    probe_runtimes: true
+    enumerate_models: true
+    test_real_inference: true
+
+  pools:
+    - id: dgx_spark
+      share: 35
+      enabled: true
+      host: dgx_spark
+      preferred_runtime: lmstudio
+      preferred_model: qwen-agentworld-35b-a3b
+      fallback_model: qwen3-coder:30b
+      max_concurrent: 5
+      agent_prefix: D
+
+    - id: mac_studio
+      share: 25
+      enabled: true
+      host: mac_studio
+      preferred_runtime: lmstudio
+      preferred_model: qwen-agentworld-35b-a3b
+      fallback_model: qwen/qwen3-30b-a3b
+      max_concurrent: 3
+      agent_prefix: M
+
+    - id: macbook_pro
+      share: 10
+      enabled: true
+      host: macbook_pro
+      preferred_runtime: lmstudio
+      preferred_model: qwen3.5-4b
+      fallback_model: mlx-community/qwen3.5-9b
+      max_concurrent: 2
+      agent_prefix: L
+
+    - id: antigravity
+      share: 25
+      enabled: true
+      provider: antigravity
+      max_concurrent: 4
+      agent_prefix: A
+
+    - id: codex
+      share: 5
+      enabled: true
+      provider: codex
+      max_concurrent: 2
+      agent_prefix: X
+
+    - id: claude
+      share: 0
+      enabled: false
+      provider: claude
+      max_concurrent: 0
+
+  routing:
+    strategy: capability_cost_latency
+    preserve_disabled_pools: true
+    strict_shares: false
+    dynamic_health_checks: true
+    verify_execution_capability: true
+    require_resource_admission: true
+    fallback_policy: compatible_authorized_pool
+    prevent_gpu_double_counting: true
+    constraints:
+      - "Do not use Claude."
+
+  qualification:
+    enabled: true
+    real_execution_required: true
+    independent_verification: true
+    evidence_required: true
