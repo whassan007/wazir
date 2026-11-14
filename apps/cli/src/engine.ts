@@ -510,6 +510,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
         description: 'Google Antigravity CLI (agy), headless print mode',
         command: 'agy',
         args: [...agyMode, '--output-format', 'text', '-p'],
+        modelFlag: '--model',
         taskTypes: [],
         capabilities: ['coding'],
       }),

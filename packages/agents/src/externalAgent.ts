@@ -100,6 +100,8 @@ export interface ExternalAgentSpec {
   taskTypes: TaskType[];
   capabilities: string[];
   timeoutMs?: number;
+  /** Optional CLI flag (e.g. '--model') used to forward explicit model selections. */
+  modelFlag?: string;
   /** Extra environment, e.g. a vendor CLI config dir selecting one account's login. */
   env?: Record<string, string>;
 }
@@ -130,7 +132,15 @@ export class ExternalAgentAdapter implements AgentAdapter {
   }
 
   async *run(request: AgentRunRequest, _runtime: AgentRuntime): AsyncIterable<AgentTurn> {
-    const args = [...(this.spec.args ?? []), request.taskDescription];
+    const explicitModel =
+      this.spec.modelFlag &&
+      request.modelId &&
+      request.modelId !== 'external' &&
+      request.modelId !== 'auto' &&
+      !request.modelId.startsWith('external:')
+        ? [this.spec.modelFlag, request.modelId]
+        : [];
+    const args = [...explicitModel, ...(this.spec.args ?? []), request.taskDescription];
 
     const timeoutMs = this.spec.timeoutMs ?? 600_000;
     const output = await new Promise<string | undefined>((resolve, reject) => {

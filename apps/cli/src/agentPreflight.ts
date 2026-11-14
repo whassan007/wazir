@@ -48,6 +48,28 @@ export function externalAgentNames(engine: PreflightEngine): string[] {
 }
 
 /**
+ * Parses `agy models` stdout across Antigravity 1.3 (`id<TAB>label`) and 1.5+ (`id  label`
+ * preceded by carriage-return spinner frames). Never emits secret-like identifiers.
+ */
+export function parseAntigravityModelCatalog(raw: string): Array<{ id: string; status: 'AVAILABLE'; source: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ id: string; status: 'AVAILABLE'; source: string }> = [];
+  for (const rawLine of raw.split('\n')) {
+    // Strip ANSI escape sequences and keep only the final segment after TTY carriage returns (`\r`).
+    // eslint-disable-next-line no-control-regex
+    const cleaned = (rawLine.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split('\r').pop() ?? '').trimEnd();
+    if (!cleaned || /^(NAME|ID|MODEL)\s+/i.test(cleaned)) continue;
+    const match = /^([a-z][a-z0-9._-]{0,100})(?:\t|\s{2,})(\S[^\r\n]*)$/.exec(cleaned);
+    if (!match) continue;
+    const modelId = match[1]!;
+    if (/secret|token|key|password|credential/i.test(modelId) || seen.has(modelId)) continue;
+    seen.add(modelId);
+    out.push({ id: modelId, status: 'AVAILABLE', source: 'agy models' });
+  }
+  return out;
+}
+
+/**
  * Probes the requested external agents (all of them by default), in parallel. A cached result
  * younger than the TTL is reused unless `fresh` is set. Unknown names are reported as UNKNOWN.
  */
@@ -93,15 +115,24 @@ export async function checkAgents(
         for await (const turn of versionAdapter.run({ taskDescription: '--version', projectRoot: os.tmpdir(), maxWallClockMs: 3000 } as any, {} as any)) {
           if (turn.kind === 'message') result.version = turn.content?.match(/\b\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?\b/)?.[0];
         }
-        // The installed agy 1.3 CLI documents `models` and emits id<TAB>label rows.
-        // This is a catalog declaration, not proof that each listed model can execute.
-        if (name.split('@')[0] === 'antigravity' && result.version?.startsWith('1.3.')) {
-          for await (const turn of versionAdapter.run({ taskDescription: 'models', projectRoot: os.tmpdir(), maxWallClockMs: 3000 } as any, {} as any)) {
+        // Antigravity CLI (`agy` 1.3+ and 1.5+) documents `models` and emits either
+        // `id<TAB>label` rows (1.3.x) or space-aligned `id  label` rows (1.5.x, preceded by
+        // carriage-return spinner frames). This is a catalog declaration, not execution proof.
+        if (name.split('@')[0] === 'antigravity') {
+          const catalogAdapter = new ExternalAgentAdapter({
+            name: 'model-catalog-inspection',
+            version: '',
+            description: '',
+            command: config.executable,
+            taskTypes: [],
+            capabilities: [],
+            timeoutMs: 12_000,
+            env,
+          });
+          for await (const turn of catalogAdapter.run({ taskDescription: 'models', projectRoot: os.tmpdir(), maxWallClockMs: 12_000 } as any, {} as any)) {
             if (turn.kind !== 'message') continue;
-            result.availableModels = (turn.content ?? '').split('\n').flatMap(line => {
-              const match = /^([a-z][a-z0-9.-]{0,100})\t[^\r\n]+$/.exec(line);
-              return match && !/secret|token|key/i.test(match[1]) ? [{ id: match[1], status: 'AVAILABLE' as const, source: 'agy models' }] : [];
-            });
+            const parsedModels = parseAntigravityModelCatalog(turn.content ?? '');
+            if (parsedModels.length > 0) result.availableModels = parsedModels;
           }
         }
       } catch { /* Version inspection is optional and does not invalidate a completed task. */ }

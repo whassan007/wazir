@@ -14,8 +14,11 @@
   - Added direct fleet hardware host registration (`config.fleetHosts` / `WAZIR_FLEET_HOSTS`), governed per-host runtime namespacing (`mac_studio:lmstudio`, `mac_studio:ollama`, `dgx_spark:ollama`), `WorkloadDistributor` explicit pool & round-robin computer routing (`studio`, `mac_studio`, `dgx`, `dgx_spark`, `local`), and `DEFAULT_FS5_FLEET_CONFIG` SSH tunnel transports (`1235 -> 1234`, `11435 -> 11434`) bringing the Apple M4 Max Mac Studio (`studio` / `100.76.30.71`, 36 GB Unified Memory) directly into the live 3-node execution path alongside Apple M5 Pro and NVIDIA DGX Spark GB10.
   - Executed the 50-task everyday software engineering corpus (`ST-001`..`ST-050`) live against `qwen3-coder:30b` on NVIDIA DGX Spark GB10 (`waelbot`, `linux-arm64`) via `OllamaAdapter` + `WazirQwenAgent` (`42/50` / `84%` pass rate, `A090`).
   - Verified `./scripts/assure-verify.sh` (`Z3 5.3.1`, `Alloy 6.2.0`, `Dafny 4.11.0`, `Scenic`, `VerifAI`, `GAM`, and all `18/18` `@wazir/assurance` suites / `358/358` tests) live on both Apple M5 Pro (`darwin-arm64`) and NVIDIA DGX Spark (`linux-arm64`) (`A094`).
+- **Bi-Directional Google Antigravity (`agy` 1.5+) & MCP Host Integration (`@wazir/agents`, `@wazir/cli`)**:
+  - Updated `wa agents connect antigravity` / `checkAgents` (`parseAntigravityModelCatalog`) to parse `agy` 1.5+ spinner and space-aligned model catalogs alongside 1.3 tab rows (discovering all 22 live Antigravity models) and added `--model` forwarding (`modelFlag: '--model'`) on `ExternalAgentAdapter`.
+  - Added `wa mcp host` (`wa mcp stdio`) exposing Wazir's fleet status, model inventory, agent readiness, governed `wazir_ask`, and governed `wazir_exec` over Model Context Protocol stdio so Antigravity (`agy mcp add wazir wa mcp host`) and MCP-capable IDEs connect directly to Wazir's 3-node local fleet.
 - **Cross-Platform Version Parity (`v0.3.1`)**:
-  - Synchronized `0.3.1` across root `package.json`, all 28 workspaces, `wa`/`wazir` SEA binaries, npm, Homebrew, Scoop, WinGet, DEB, RPM, Tauri desktop, Android, and iOS manifests.
+  - Synchronized `0.3.1` across root `package.json`, all 29 workspaces, `wa`/`wazir` SEA binaries, npm, Homebrew, Scoop, WinGet, DEB, RPM, Tauri desktop, Android, and iOS manifests.
 
 ## v0.3.0 — 2026-11-13
 

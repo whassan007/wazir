@@ -324,4 +324,12 @@ export function registerMCPCommands(program: Command): void {
   command.command('export').action(run(async r => ({ servers: r.list().map(s => s.definition) })));
   command.command('read <id> <uri>').action(run((r, id, uri) => r.readResource(id, uri, { projectRoot: process.cwd() })));
   command.command('prompt <id> <name> [arguments]').action(run((r, id, name, args) => r.getPrompt(id, name, JSON.parse(args ?? '{}'), { projectRoot: process.cwd() })));
+  command
+    .command('host')
+    .alias('stdio')
+    .description('Expose Wazir itself as an MCP stdio server (e.g. agy mcp add wazir wa mcp host)')
+    .action(async () => {
+      const { runWazirMcpStdioServer } = await import('./wazirMcpServer.js');
+      await runWazirMcpStdioServer();
+    });
 }
