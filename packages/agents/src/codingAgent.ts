@@ -20,10 +20,12 @@ import type {
 import {
   ObservationCompactor,
   ContextCompiler,
+  estimateTokens,
   keepEnds,
   WEB_TRUST_INSTRUCTION,
   computeUsableBudget,
   computeUtilization,
+  planOutputReserveTokens,
   ToolSurfaceCompiler,
   type GroundedResult,
   type ToolResult,
@@ -604,6 +606,20 @@ export function buildSystemPrompt(projectRoot: string, tools: AgentRuntime['tool
 }
 
 /**
+ * Conservative chat-token estimate for context allocation. Content-only counts
+ * miss the per-message framing and native tool-call payloads, both of which are
+ * sent to the provider alongside message text.
+ */
+export function estimateChatTokens(messages: ChatMessage[]): number {
+  return messages.reduce((sum, message) => {
+    const framing = 4 + estimateTokens(message.role) + (message.name ? estimateTokens(message.name) : 0) +
+      (message.toolCallId ? estimateTokens(message.toolCallId) : 0);
+    const toolCalls = message.toolCalls?.length ? estimateTokens(JSON.stringify(message.toolCalls)) : 0;
+    return sum + framing + estimateTokens(message.content) + toolCalls;
+  }, 0);
+}
+
+/**
  * Native Wazir coding agent.
  *
  * Loop: PLAN → INSPECT → IMPLEMENT → TEST → DEBUG → REPAIR → VERIFY → COMPLETE
@@ -755,7 +771,7 @@ export class CodingAgent implements AgentAdapter {
     // action during PLAN (see the `action.action === 'done'` branch below), it's the prompt
     // that was pushing the model to always produce a plan first regardless of task shape.
     const fastAnswerHint = request.taskType === 'chat' || request.mutationRequired === false
-      ? '\n- This task only requires a textual answer, not a code change. If you can answer right now, respond immediately with {"action":"done","summary":"..."} — do not produce a plan first.'
+      ? '\n- This task only requires a textual answer, not a code change. If you can answer right now, respond immediately with {"action":"done","summary":"..."} — do not produce a plan first. Inside "summary", match the user\'s requested output format verbatim (for example, if asked for only a number, put only that number in "summary" with no extra words or punctuation).'
       : '';
     const systemPromptExtra = `${this.systemPromptExtra ?? ''}${fastAnswerHint}` || undefined;
 
@@ -850,8 +866,11 @@ export class CodingAgent implements AgentAdapter {
     };
 
     // ---- context compaction: keep `messages` under the model's context window ----
-    const estimateTokens = (msgs: ChatMessage[]): number =>
-      Math.ceil(msgs.reduce((sum, m) => sum + m.content.length, 0) / 4);
+    const outputTokenBudget = (): number => request.reserve?.outputTokens ?? planOutputReserveTokens({
+      taskDescription: request.taskDescription,
+      taskType: request.taskType,
+      effectiveContextTokens: runtime.getContextTokens?.() ?? request.contextTokens,
+    });
     /**
      * `force` bypasses the token-estimate gate below — used for reactive
      * recovery when the runtime itself has already reported a context
@@ -869,10 +888,17 @@ export class CodingAgent implements AgentAdapter {
       if (messages.length <= KEEP_HEAD + KEEP_RECENT) return null;
       if (!force && !contextTokens) return null;
       
-      const before = estimateTokens(messages);
+      const before = estimateChatTokens(messages);
       const totalTokens = contextTokens as number;
-      const outputReserve = request.reserve?.outputTokens ?? (totalTokens > 32_000 ? 8000 : Math.floor(totalTokens * 0.1));
-      const schemaReserve = request.reserve?.toolSchemaTokens ?? (totalTokens > 32_000 ? 5000 : Math.floor(totalTokens * 0.05));
+      const outputReserve = outputTokenBudget();
+      // The system message contains the tool schemas as readable instructions.
+      // Native runtimes also receive a structured tool list separately, so only
+      // reserve that second copy when the active protocol sends it out of band.
+      const nativeSchemaTokens = currentToolSurface.selectedProtocol === 'native_tool_call'
+        ? currentToolSurface.totalSchemaTokens
+        : 0;
+      const schemaReserve = request.reserve?.toolSchemaTokens ?? nativeSchemaTokens;
+
       const safetyReserve = request.reserve?.safetyTokens ?? (totalTokens > 32_000 ? 5000 : Math.floor(totalTokens * 0.05));
 
       const usableBudget = computeUsableBudget({
@@ -923,10 +949,10 @@ export class CodingAgent implements AgentAdapter {
       // The summary re-embeds active file contents, so it can outweigh the turns it
       // replaces; a compaction that doesn't shrink the transcript only loses history.
       // A forced (overflow-recovery) compaction is still applied.
-      if (!force && estimateTokens([...head, summary, ...tail]) >= before) return null;
+      if (!force && estimateChatTokens([...head, summary, ...tail]) >= before) return null;
       messages.length = 0;
       messages.push(...head, summary, ...tail);
-      const after = estimateTokens(messages);
+      const after = estimateChatTokens(messages);
       const reduction = before > 0 ? Math.round((1 - after / before) * 100) : 0;
       return `context compacted: ${collapsedCount} turn(s) -> 1 summary (~${before}->~${after} tokens, ${reduction}% smaller)`;
     };
@@ -965,7 +991,7 @@ export class CodingAgent implements AgentAdapter {
           // A snapshot: the request is what the model saw at this turn, and later
           // transcript edits (e.g. dropping a resolved repair note) must not rewrite it.
           messages: messages.map((m) => ({ ...m })),
-          maxTokens: this.maxTokensPerTurn,
+          maxTokens: Math.min(this.maxTokensPerTurn, outputTokenBudget()),
           temperature: this.temperature,
           tools: currentToolSurface.selectedProtocol === 'native_tool_call'
             ? [
@@ -1425,7 +1451,7 @@ export class CodingAgent implements AgentAdapter {
             { role: 'system', content: fastSystemPrompt },
             { role: 'user', content: request.taskDescription },
           ],
-          maxTokens: this.maxTokensPerTurn,
+          maxTokens: Math.min(this.maxTokensPerTurn, outputTokenBudget()),
           temperature: this.temperature,
           tools: undefined,
         })) {

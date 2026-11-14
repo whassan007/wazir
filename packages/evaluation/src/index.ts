@@ -23,6 +23,40 @@ export * from './multiObjectiveOptimizer.js';
 export * from './regressionGuard.js';
 export * from './distributedBenchmarkFabric.js';
 export * from './comparativeRouterBenchmark.js';
+export {
+  ConcurrencyBenchmarkRunner,
+  compareBenchmarkReports,
+  DEFAULT_CONCURRENCY_LEVELS,
+} from './concurrencyBenchmarkRunner.js';
+export type {
+  BenchmarkExecutionMode,
+  LatencyDistribution,
+  MemorySnapshotDelta,
+  TokenUsageMetrics,
+  ConcurrencyLevelBenchmarkResult,
+  SubsystemMicrobenchmarkMetrics,
+  BenchmarkSuiteRunReport,
+  BenchmarkComparisonSummary,
+} from './concurrencyBenchmarkRunner.js';
+export {
+  PerformanceRegressionGate,
+  evaluatePerformanceGate,
+  summarizeSamples,
+  welchTTest,
+  mannWhitneyUTest,
+} from './performanceGate.js';
+export type {
+  PerformanceMetricCategory,
+  PerformanceGateStatus,
+  LatencySummaryMetrics,
+  MemorySummaryMetrics,
+  ThroughputSummaryMetrics,
+  CorrectnessMetrics,
+  PerformanceSnapshot,
+  PerformanceGateOptions,
+  PerformanceGateCheck,
+  PerformanceGateVerdict,
+} from './performanceGate.js';
 
 export interface EvaluationOptions {
   /** If set, the task is only successful when each of these files changed. */

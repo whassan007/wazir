@@ -1,0 +1,23 @@
+{
+  "pid": 67706,
+  "exit_code": 0,
+  "signal": null,
+  "killed": false,
+  "steps": [
+    {
+      "step": "startup",
+      "ok": true
+    },
+    {
+      "step": 1,
+      "prompt": "Write a Python program implementing\nmerge sort, binary search, and unittest tests.",
+      "job_id": "job-fcddaf35-dfc4-4ca7-a5e7-7b8d8cd10db6",
+      "outcome": "completed",
+      "finished_marker_seen": true,
+      "approved_count": 1,
+      "ok": true
+    }
+  ],
+  "output_bytes": 12520,
+  "transcript": "/Users/wael/Code/Wazir/tests/wazir-functional/evidence/final-python-transcript.ansi"
+}

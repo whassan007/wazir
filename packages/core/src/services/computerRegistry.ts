@@ -98,7 +98,7 @@ export class ComputerRegistry {
     const c = this.computers.get(id);
     if (!c) throw new Error('COMPUTER_UNAVAILABLE');
     const now = new Date();
-    const observedAt = c.local ? now : c.resourceObservedAt ?? new Date(0);
+    const observedAt = c.resourceObservedAt ?? (c.local ? now : new Date(0));
     const fresh = now.getTime() - observedAt.getTime() <= maxAgeMs;
     const unifiedMemory = c.hardware.gpu?.unifiedMemory === true;
     const bytes = (n: number | undefined) => n !== undefined && Number.isFinite(n) && n >= 0 ? n * 1024 ** 3 : undefined;

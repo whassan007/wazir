@@ -41,7 +41,9 @@ function run(args: string[], env: Record<string, string> = {}): Promise<{ code: 
 describe('ledger across real processes', () => {
   it('six processes racing for one budget admit exactly the limit, never more', async () => {
     const file = path.join(dir, 'race.db');
-    new ResourceLedger(file).close(); // create the schema once, before the race
+    const seed = new ResourceLedger(file);
+    seed.setMeta('prepared', 'true'); // initialize the schema once, before the race
+    seed.close();
     const startAt = Date.now() + 1_500;
     const results = await Promise.all(Array.from({ length: 6 }, () => run(['race', file, JSON.stringify(accounts), String(startAt)])));
     expect(results.every((r) => r.code === 0)).toBe(true);
@@ -54,7 +56,9 @@ describe('ledger across real processes', () => {
 
   it('a process killed between reservation and settlement is charged once, conservatively, even when several processes recover at once', async () => {
     const file = path.join(dir, 'kill.db');
-    new ResourceLedger(file).close();
+    const seed = new ResourceLedger(file);
+    seed.setMeta('prepared', 'true');
+    seed.close();
     const p = spawn(process.execPath, [worker, 'reserve-and-hang', file, JSON.stringify(accounts), 'req-killed'], { env: { ...process.env, LEASE_MS: '500' } });
     const line = await new Promise<string>((resolve) => p.stdout.once('data', (d) => resolve(String(d).trim())));
     expect(line).toBe('admitted');

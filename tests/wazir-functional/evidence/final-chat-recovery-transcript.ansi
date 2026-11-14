@@ -1,0 +1,269 @@
+[?2004h[?25h[0 q WAZIR                                                                                                                            wael · google/gemma-4-12b-qat
+ Autonomous coding assistant · Ready · Enter to send · Esc to cancel · /help · /exit
+
+[2K• Ready: 1 model(s) loaded. Press [M] to manage models.
+[2K> [2C[1A[2K
+[2K> What is 17 multiplied by 23?
+Reply with only the number.
+
+[2K• Planning & scheduling job...
+[2K> [2C[1A[2K● Working (0s) · Esc to interrupt · Working...
+[2K• Job job-6ce3b856-3a99-4261-9e78-d3fa9b5681b1 running up to 4 agents concurrently...
+[2K> [2C(node:67294) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[2A[2K● Working (0s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (0s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (1s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (2s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (3s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (4s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (5s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (6s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (7s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (8s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (9s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (10s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (11s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (12s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (13s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (14s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (15s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (16s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (17s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (17s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (18s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (18s) · Esc to interrupt · Verifying changes...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (18s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K
+[2K
+[2K391
+
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[1A[2K
+[2K✓ Completed in 18s
+
+[2K• Job job-6ce3b856-3a99-4261-9e78-d3fa9b5681b1 completed! Tokens: In 2864/Out 99, Dur: 18.2s
+[2K> [2C[1A[2K
+[2K> Write a complete C++17 program
+that implements quicksort.
+Include main and print 10 sorted integers.
+
+[2K• Planning & scheduling job...
+[2K> [2C[1A[2K● Working (0s) · Esc to interrupt · Working...
+[2K• Job job-f166494e-ca7f-4227-a643-4045bb9e3cf9 running up to 4 agents concurrently...
+[2K> [2C[2A[2K● Working (0s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (0s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (1s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (2s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (3s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (4s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (5s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (6s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (7s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (8s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (9s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (9s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (10s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (11s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (12s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (13s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (14s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (15s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (16s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (17s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (18s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (19s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (20s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (21s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (22s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (23s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (24s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (25s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (26s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (27s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (28s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (29s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (30s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (31s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (32s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (33s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (34s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (35s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (36s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (37s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (38s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (39s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (40s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (41s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (42s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (43s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (44s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (45s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (46s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (46s) · Esc to interrupt · Updating source files...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (47s) · Esc to interrupt · Updating source files...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (48s) · Esc to interrupt · Updating source files...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (49s) · Esc to interrupt · Updating source files...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (50s) · Esc to interrupt · Updating source files...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (50s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (51s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (52s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (53s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (54s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (55s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (56s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (57s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (58s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (59s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (1m 0s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> 
+[2K[2C[1A[2K
+[2K✗ Task failed · /logs for details
+
+[2K• Execution failed · Job job-f166494e-ca7f-4227-a643-4045bb9e3cf9 failed (Task exceeded the 60s timeout and was automatically stopped) Tokens: In 6158/Out 778,
+[2K> [2C[1A[2K
+[2K> What is 17 multiplied by 23?
+Reply with only the number.
+
+[2K• Planning & scheduling job...
+[2K> [2C[1A[2K● Working (0s) · Esc to interrupt · Working...
+[2K• Job job-7d451d06-c34c-4a0c-b596-e9f19e8c8013 running up to 4 agents concurrently...
+[2K> [2C[2A[2K● Working (0s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (0s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (1s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (2s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (3s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (4s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (5s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (6s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (7s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (8s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (9s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (10s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (11s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (12s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (13s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (14s) · Esc to interrupt · Planning approach...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (14s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (14s) · Esc to interrupt · Verifying changes...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K● Working (14s) · Esc to interrupt · Working...
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[2A[2K
+[2K
+[2K391
+
+[2K• WAITING_FOR_MODEL: google/gemma-4-12b-qat
+[2K> [2C[1A[2K
+[2K✓ Completed in 14s
+
+[2K• Job job-7d451d06-c34c-4a0c-b596-e9f19e8c8013 completed! Tokens: In 2863/Out 74, Dur: 14.9s
+[2K> [2C[1A[2K
+[2K
+[?2004l[?25h

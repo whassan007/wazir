@@ -2,9 +2,6 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 
-// Loaded at runtime: some bundlers and test runners cannot resolve the newer `node:sqlite`
-// specifier statically. getBuiltinModule (Node >= 22.3) works everywhere Wazir runs.
-const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as typeof import('node:sqlite');
 import type { AccountHealth, LimitUnit, UsageMeasurement, WorkloadClass } from './types.js';
 
 /** One row of attributable usage. Exactly one per request id (idempotent reconciliation). */
@@ -106,15 +103,26 @@ const unitColumn = (unit: LimitUnit, prefix: '' | 'est_'): string => {
  * agents and concurrent `wa` processes cannot both pass the same check and double-spend.
  */
 export class ResourceLedger {
-  readonly db: DatabaseSyncType;
+  private database?: DatabaseSyncType;
+  private closed = false;
+
+  /** Opens SQLite only when accounting is first read or written. */
+  get db(): DatabaseSyncType {
+    if (this.closed) throw new Error('ResourceLedger is closed');
+    if (!this.database) {
+      if (this.file !== ':memory:') mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
+      const sqlite = process.getBuiltinModule('node:sqlite') as typeof import('node:sqlite');
+      const database = new sqlite.DatabaseSync(this.file);
+      // Set the wait policy before journal_mode/schema changes, since those can
+      // contend during concurrent process startup before SCHEMA reaches its pragma.
+      database.exec('PRAGMA busy_timeout = 10000;');
+      database.exec(SCHEMA);
+      this.database = database;
+    }
+    return this.database;
+  }
 
   constructor(readonly file: string, private readonly clock: () => number = Date.now) {
-    if (file !== ':memory:') mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(file);
-    // Set the wait policy before journal_mode/schema changes, since those can
-    // contend during concurrent process startup before SCHEMA reaches its pragma.
-    this.db.exec('PRAGMA busy_timeout = 10000;');
-    this.db.exec(SCHEMA);
   }
 
   now(): number {
@@ -135,7 +143,10 @@ export class ResourceLedger {
   }
 
   close(): void {
-    this.db.close();
+    if (this.closed) return;
+    this.database?.close();
+    this.database = undefined;
+    this.closed = true;
   }
 
   // ---- settings -------------------------------------------------------------------------

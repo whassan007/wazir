@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import type {
@@ -22,6 +22,7 @@ import {
   deduplicateContextParts,
   estimateTokens,
   tokensForPart,
+  WEB_TRUST_INSTRUCTION,
 } from './contextCompiler.js';
 
 export const STRUCTURED_SUMMARY_SCHEMA = {
@@ -109,6 +110,223 @@ export interface ContextCompactionServiceOptions {
   summarizer?: SummarizerFn;
   config?: ContextCompactionConfig;
   defaultReserves?: ContextReserve;
+  /** Maximum number of snapshots retained per execution (default 20). Always keeps generation 1 + recent snapshots. */
+  maxSnapshotsPerExecution?: number;
+}
+
+export interface OptimizeContextPartsOptions {
+  maxTotalTokens?: number;
+  preservePinned?: boolean;
+  deduplicate?: boolean;
+  stripRepeatedHeaders?: boolean;
+}
+
+export interface OptimizeContextPartsResult {
+  parts: ContextPart[];
+  tokensBefore: number;
+  tokensAfter: number;
+  tokensSaved: number;
+  duplicatesRemoved: number;
+  truncatedParts: number;
+}
+
+function isPinnedContextPart(part: ContextPart, preservePinned = true): boolean {
+  if (!preservePinned) return false;
+  const priorityStr = String(part.priority ?? '');
+  return (
+    part.category === 'PINNED' ||
+    part.kind === 'system' ||
+    part.kind === 'task' ||
+    priorityStr === 'must' ||
+    priorityStr === 'critical'
+  );
+}
+
+function computeFastPartFingerprint(part: ContextPart): string {
+  const normalized = part.content.trim().replace(/\s+/g, ' ');
+  return (
+    part.contentHash ??
+    createHash('sha1')
+      .update(`${part.kind}:${normalized}`)
+      .digest('hex')
+      .slice(0, 20)
+  );
+}
+
+function stripRedundantRepeatedHeaders(
+  content: string,
+  seenTrustHeader: { value: boolean },
+  seenEvidenceHeaders: Set<string>,
+): string {
+  let updated = content;
+  if (updated.includes(WEB_TRUST_INSTRUCTION)) {
+    if (seenTrustHeader.value) {
+      updated = updated.split(WEB_TRUST_INSTRUCTION).join('').replace(/\n{3,}/g, '\n\n').trim();
+    } else {
+      seenTrustHeader.value = true;
+    }
+  }
+  const lines = updated.split('\n');
+  const filteredLines: string[] = [];
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if (
+      /^\[(?:SYSTEM|TRUST|UNTRUSTED_EXTERNAL_CONTENT|EVIDENCE_HEADER)[^\]]*\]$/i.test(trimmedLine)
+    ) {
+      if (seenEvidenceHeaders.has(trimmedLine)) {
+        continue;
+      }
+      seenEvidenceHeaders.add(trimmedLine);
+    }
+    filteredLines.push(line);
+  }
+  return filteredLines.join('\n').trim();
+}
+
+function truncateContentHeadTail(content: string, targetTokens: number): string {
+  const targetChars = Math.max(32, targetTokens * 4);
+  if (content.length <= targetChars) return content;
+  const marker = '\n...[context truncated for budget]...\n';
+  if (targetChars <= marker.length + 16) {
+    return content.slice(0, Math.max(4, targetChars));
+  }
+  const available = targetChars - marker.length;
+  const headChars = Math.ceil(available * 0.65);
+  const tailChars = Math.max(0, available - headChars);
+  return `${content.slice(0, headChars)}${marker}${tailChars > 0 ? content.slice(content.length - tailChars) : ''}`;
+}
+
+function getTrimmingPriorityScore(part: ContextPart): number {
+  const p = String(part.priority ?? 'normal');
+  if (p === 'optional' || part.category === 'OFFLOADABLE') return 0;
+  if (p === 'normal' || part.category === 'COMPRESSIBLE') return 1;
+  if (p === 'important' || part.category === 'RELEVANT') return 2;
+  return 3;
+}
+
+/**
+ * Fast content-hash deduplication, repeated trust/system header stripping, and
+ * deterministic head+tail budget trimming while strictly preserving all PINNED / `must` parts.
+ */
+export function optimizeContextPartsForBudget(
+  parts: ContextPart[],
+  options?: OptimizeContextPartsOptions,
+): OptimizeContextPartsResult {
+  const preservePinned = options?.preservePinned ?? true;
+  const deduplicate = options?.deduplicate ?? true;
+  const stripRepeatedHeaders = options?.stripRepeatedHeaders ?? true;
+  const maxTotalTokens = options?.maxTotalTokens;
+
+  const tokensBefore = parts.reduce((sum, part) => sum + tokensForPart(part), 0);
+  const seenFingerprints = new Set<string>();
+  const seenTrustHeader = { value: false };
+  const seenEvidenceHeaders = new Set<string>();
+
+  let duplicatesRemoved = 0;
+  let lastToolSig: string | null = null;
+  const working: ContextPart[] = [];
+
+  for (const rawPart of parts) {
+    const pinned = isPinnedContextPart(rawPart, preservePinned);
+    let content = rawPart.content;
+
+    if (stripRepeatedHeaders && !pinned) {
+      content = stripRedundantRepeatedHeaders(content, seenTrustHeader, seenEvidenceHeaders);
+    } else if (content.includes(WEB_TRUST_INSTRUCTION)) {
+      seenTrustHeader.value = true;
+    }
+
+    const candidate: ContextPart =
+      content !== rawPart.content
+        ? { ...rawPart, content, tokens: estimateTokens(content) }
+        : { ...rawPart, tokens: tokensForPart(rawPart) };
+
+    if (deduplicate && !pinned) {
+      const fp = computeFastPartFingerprint(candidate);
+      if (seenFingerprints.has(fp)) {
+        duplicatesRemoved += 1;
+        continue;
+      }
+      // Collapse consecutive identical tool error/status outputs
+      const isToolOrConv = candidate.kind === 'tools' || candidate.kind === 'conversation';
+      const toolSig = isToolOrConv ? `${candidate.kind}:${candidate.label}:${fp}` : null;
+      if (toolSig && toolSig === lastToolSig) {
+        duplicatesRemoved += 1;
+        continue;
+      }
+      seenFingerprints.add(fp);
+      lastToolSig = toolSig;
+    } else {
+      seenFingerprints.add(computeFastPartFingerprint(candidate));
+      lastToolSig = null;
+    }
+
+    working.push(candidate);
+  }
+
+  let truncatedParts = 0;
+  let currentTokens = working.reduce((sum, p) => sum + tokensForPart(p), 0);
+
+  if (maxTotalTokens !== undefined && Number.isFinite(maxTotalTokens) && currentTokens > maxTotalTokens) {
+    // Identify indices of non-pinned parts ordered from lowest priority ('optional' -> 'normal' -> 'important') and oldest first
+    const candidateIndices = working
+      .map((part, idx) => ({ part, idx, score: getTrimmingPriorityScore(part) }))
+      .filter(({ part }) => !isPinnedContextPart(part, preservePinned))
+      .sort((a, b) => (a.score !== b.score ? a.score - b.score : a.idx - b.idx));
+
+    for (const { idx } of candidateIndices) {
+      if (currentTokens <= maxTotalTokens) break;
+      const item = working[idx]!;
+      const itemTokens = tokensForPart(item);
+      const excessTokens = currentTokens - maxTotalTokens;
+
+      const minUsefulTokens = 16;
+      if (itemTokens - excessTokens >= minUsefulTokens) {
+        const targetPartTokens = Math.max(minUsefulTokens, itemTokens - excessTokens);
+        const truncatedContent = truncateContentHeadTail(item.content, targetPartTokens);
+        const newTokens = estimateTokens(truncatedContent);
+        if (newTokens < itemTokens) {
+          working[idx] = {
+            ...item,
+            content: truncatedContent,
+            tokens: newTokens,
+          };
+          currentTokens -= itemTokens - newTokens;
+          truncatedParts += 1;
+        }
+      } else {
+        // Truncate down to a minimal stub or drop if still over budget
+        const stubTokens = Math.max(0, itemTokens - excessTokens);
+        if (stubTokens >= 8) {
+          const truncatedContent = truncateContentHeadTail(item.content, stubTokens);
+          const newTokens = estimateTokens(truncatedContent);
+          working[idx] = {
+            ...item,
+            content: truncatedContent,
+            tokens: newTokens,
+          };
+          currentTokens -= itemTokens - newTokens;
+          truncatedParts += 1;
+        } else {
+          working[idx] = { ...item, content: '', tokens: 0 };
+          currentTokens -= itemTokens;
+          truncatedParts += 1;
+        }
+      }
+    }
+  }
+
+  const finalParts = working.filter((p) => p.content.length > 0 || isPinnedContextPart(p, preservePinned));
+  const tokensAfter = finalParts.reduce((sum, p) => sum + tokensForPart(p), 0);
+
+  return {
+    parts: finalParts,
+    tokensBefore,
+    tokensAfter,
+    tokensSaved: Math.max(0, tokensBefore - tokensAfter),
+    duplicatesRemoved,
+    truncatedParts,
+  };
 }
 
 /**
@@ -127,6 +345,7 @@ export class ContextCompactionService implements AgentContextCompressor {
   private readonly summarizer?: SummarizerFn;
   private readonly config: Required<ContextCompactionConfig>;
   private readonly defaultReserves: ContextReserve;
+  private readonly maxSnapshotsPerExecution: number;
   private readonly snapshotsByExecution = new Map<string, ContextSnapshot[]>();
   private readonly compactionLocks = new Set<string>();
 
@@ -141,10 +360,18 @@ export class ContextCompactionService implements AgentContextCompressor {
       minimumTokensToReclaim: options.config?.minimumTokensToReclaim ?? 4000,
     };
     this.defaultReserves = options.defaultReserves ?? {
-      outputTokens: 8000,
+      outputTokens: 2048,
       toolSchemaTokens: 5000,
       safetyTokens: 5000,
     };
+    this.maxSnapshotsPerExecution = Math.max(2, options.maxSnapshotsPerExecution ?? 20);
+  }
+
+  /**
+   * Returns all retained snapshots for an execution in generation order.
+   */
+  getSnapshots(executionId: string): readonly ContextSnapshot[] {
+    return this.snapshotsByExecution.get(executionId) ?? [];
   }
 
   /**
@@ -157,12 +384,19 @@ export class ContextCompactionService implements AgentContextCompressor {
   }
 
   /**
-   * Registers a snapshot for an execution.
+   * Registers a snapshot for an execution while bounding per-execution snapshot retention
+   * to `maxSnapshotsPerExecution` (always preserving generation 1 and the most recent N - 1 snapshots).
    */
   registerSnapshot(snapshot: ContextSnapshot): void {
     const list = this.snapshotsByExecution.get(snapshot.executionId) ?? [];
     list.push(snapshot);
-    this.snapshotsByExecution.set(snapshot.executionId, list);
+    if (list.length > this.maxSnapshotsPerExecution) {
+      const firstSnapshot = list[0]!;
+      const recentTail = list.slice(-(this.maxSnapshotsPerExecution - 1));
+      this.snapshotsByExecution.set(snapshot.executionId, [firstSnapshot, ...recentTail]);
+    } else {
+      this.snapshotsByExecution.set(snapshot.executionId, list);
+    }
   }
 
   /**

@@ -12,6 +12,24 @@ describe('scheduled conversational agent', () => {
     expect(await collect(new ChatAgent(), r)).toEqual([expect.objectContaining({ kind: 'done', content: '31' })]);
     expect(r.executeTool).not.toHaveBeenCalled();
   });
+  it('keeps consecutive chat requests independent while reusing the same agent and runtime', async () => {
+    const replies = ['first answer', 'second answer'];
+    let call = 0;
+    const generate = vi.fn(async function* () {
+      const content = replies[call++];
+      yield { type: 'token' as const, content };
+      yield { type: 'completed' as const, content };
+    });
+    const agent = new ChatAgent();
+    const r = runtime(generate);
+
+    const first = await collect(agent, r, { ...request, taskDescription: 'first prompt' });
+    const second = await collect(agent, r, { ...request, taskDescription: 'second prompt' });
+
+    expect(first).toEqual([expect.objectContaining({ kind: 'done', content: 'first answer' })]);
+    expect(second).toEqual([expect.objectContaining({ kind: 'done', content: 'second answer' })]);
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
   it('F01 bounds a stalled iterator and aborts it', async () => {
     const r = runtime(async function* () { await new Promise(() => {}); });
     const turns = await collect(new ChatAgent({ timeoutMs: 20 }), r);

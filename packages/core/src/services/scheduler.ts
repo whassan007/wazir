@@ -6,6 +6,7 @@ import type { RoutingMode, Task } from '../types/task.js';
 import type {
   ComputerRoutingDecision,
   ModelRoutingDecision,
+  ModelFallback,
   RoutingPolicyConfig,
   SchedulerDecision,
 } from '../types/scheduler.js';
@@ -153,6 +154,7 @@ export interface ScheduleInput {
 interface ScoredModel {
   record: ModelRecord;
   score: number;
+  expectedCostUsd?: number;
   reasons: string[];
   rejected: string[];
   placementFailures?: string[];
@@ -356,59 +358,99 @@ export class Scheduler {
       agentReasons = resolution.reasons;
     }
 
-    const effectiveHarnessId = agentId ?? task.execution?.targetAgentId ?? req.agent;
-    const modelDecision = this.routeModel(task, requiredContext, input.excludeModelIds ?? [], routing, effectiveHarnessId);
-    const record = this.deps.models.getRequired(modelDecision.modelId);
-    const instance = this.deps.models
-      .instancesOf(record.id)
-      .find((i) => i.id === modelDecision.modelInstanceId);
-    if (!instance) {
-      throw new SchedulingError(`Selected model instance '${modelDecision.modelInstanceId}' is no longer registered`);
+    const effectiveHarnessId = agentId ?? task.execution?.targetAgentId ?? task.requirements?.agent;
+    const initiallyExcluded = input.excludeModelIds ?? [];
+    const excluded = [...initiallyExcluded];
+    const fallbacks: ModelFallback[] = [];
+    const canFallback = routing.allowFallback && !task.execution?.targetModelId;
+    // One attempt per registered model guarantees a finite preflight even if a placement
+    // fails repeatedly. routeModel re-applies capability, policy, provider, context, and
+    // resource checks after every rejection, so a retry cannot bypass those gates.
+    const maxAttempts = this.deps.models.list().length + 1;
+    let lastPlacementError: SchedulingError | undefined;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      let modelDecision: ModelRoutingDecision;
+      try {
+        modelDecision = this.routeModel(task, requiredContext, excluded, routing, effectiveHarnessId, fallbacks.length > 0);
+      } catch (error) {
+        if (lastPlacementError && error instanceof SchedulingError) {
+          throw new SchedulingError(
+            `${error.message} Previous placement preflight failures: ${fallbacks.map((f) => `${f.from}: ${f.reason}`).join(' | ')}`,
+            error.modelReasons,
+            [...lastPlacementError.computerReasons, ...error.computerReasons],
+          );
+        }
+        throw error;
+      }
+
+      const record = this.deps.models.getRequired(modelDecision.modelId);
+      if (fallbacks.length) fallbacks[fallbacks.length - 1]!.to = record.id;
+      const instance = this.deps.models
+        .instancesOf(record.id)
+        .find((i) => i.id === modelDecision.modelInstanceId);
+      if (!instance) {
+        throw new SchedulingError(`Selected model instance '${modelDecision.modelInstanceId}' is no longer registered`);
+      }
+
+      const contextPlan = this.contextEstimator.planContextAllocation({
+        model: record,
+        estimatedInputTokens: Math.max(requiredContext, 1),
+        requiredMinimumContext: req.minimumContext ?? 2048,
+        reasoningEffort: routing.reasoningEffort,
+      });
+      (modelDecision as any).allocatedContextTokens = contextPlan.allocatedContextTokens;
+      (modelDecision as any).contextPlan = contextPlan;
+
+      let computerDecision: ComputerRoutingDecision;
+      try {
+        computerDecision = this.scheduleComputer(task, record, requiredContext, routing);
+      } catch (error) {
+        if (!(error instanceof SchedulingError) || !canFallback) throw error;
+        lastPlacementError = error;
+        const reason = error.computerReasons.length ? error.computerReasons.join('; ') : error.message;
+        fallbacks.push({ from: record.id, to: '', reason });
+        excluded.push(record.id);
+        continue;
+      }
+
+      const placed =
+        this.deps.models
+          .instancesOf(record.id)
+          .find((i) => i.runtimeId === computerDecision.runtimeId && i.computerId === computerDecision.computerId) ??
+        instance;
+      modelDecision.modelInstanceId = placed.id;
+      const resourceType =
+        computerDecision.resourceType ??
+        (computerDecision.placementKind === 'hosted' ? 'HOSTED_API_INFERENCE' : 'LOCAL_GPU_INFERENCE');
+      const decision: SchedulerDecision = {
+        fallbacks: fallbacks.length ? fallbacks : undefined,
+        agentId,
+        modelId: record.id,
+        modelInstanceId: placed.id,
+        readiness: placed.state === 'READY' ? 'READY_NOW' : 'LOADABLE',
+        runtimeId: computerDecision.runtimeId,
+        computerId: computerDecision.computerId,
+        resourceType,
+        modelDecision,
+        computerDecision: {
+          ...computerDecision,
+          resourceType,
+        },
+        reasons: [
+          ...agentReasons,
+          ...fallbacks.map((f) => `fallback: skipped '${f.from}' for '${f.to}' after placement preflight: ${f.reason}`),
+          `model: ${modelDecision.reasons.join(' | ')}`,
+          `computer: ${computerDecision.reasons.join(' | ')}`,
+        ],
+        decidedAt: new Date(),
+      };
+      (decision as any).allocatedContextTokens = contextPlan.allocatedContextTokens;
+      (decision as any).contextPlan = contextPlan;
+      return decision;
     }
 
-    const computerDecision = this.scheduleComputer(task, record, requiredContext, routing);
-    const placed =
-      this.deps.models
-        .instancesOf(record.id)
-        .find((i) => i.runtimeId === computerDecision.runtimeId && i.computerId === computerDecision.computerId) ??
-      instance;
-    modelDecision.modelInstanceId = placed.id;
-    const resourceType =
-      computerDecision.resourceType ??
-      (computerDecision.placementKind === 'hosted' ? 'HOSTED_API_INFERENCE' : 'LOCAL_GPU_INFERENCE');
-
-    const contextPlan = this.contextEstimator.planContextAllocation({
-      model: record,
-      estimatedInputTokens: Math.max(requiredContext, 1),
-      requiredMinimumContext: req.minimumContext ?? 2048,
-      reasoningEffort: routing.reasoningEffort,
-    });
-    (modelDecision as any).allocatedContextTokens = contextPlan.allocatedContextTokens;
-    (modelDecision as any).contextPlan = contextPlan;
-
-    const decision: SchedulerDecision = {
-      agentId,
-      modelId: record.id,
-      modelInstanceId: placed.id,
-      readiness: placed.state === 'READY' ? 'READY_NOW' : 'LOADABLE',
-      runtimeId: computerDecision.runtimeId,
-      computerId: computerDecision.computerId,
-      resourceType,
-      modelDecision,
-      computerDecision: {
-        ...computerDecision,
-        resourceType,
-      },
-      reasons: [
-        ...agentReasons,
-        `model: ${modelDecision.reasons.join(' | ')}`,
-        `computer: ${computerDecision.reasons.join(' | ')}`,
-      ],
-      decidedAt: new Date(),
-    };
-    (decision as any).allocatedContextTokens = contextPlan.allocatedContextTokens;
-    (decision as any).contextPlan = contextPlan;
-    return decision;
+    throw lastPlacementError ?? new SchedulingError('No model passed placement preflight');
   }
 
   // ==================== PHASE 1: MODEL ROUTING ====================
@@ -419,6 +461,7 @@ export class Scheduler {
     excludeModelIds: readonly string[] = [],
     routing: ResolvedRoutingConstraint = this.resolveRoutingConstraint(task),
     harnessId?: string,
+    preferLowestCost = false,
   ): ModelRoutingDecision {
     const records = this.deps.models.list();
     if (records.length === 0) {
@@ -489,6 +532,7 @@ export class Scheduler {
           continue;
         }
         const f = a.factors!;
+        s.expectedCostUsd = a.expectedTotalCostUsd;
         const isDefaultPreferred = routing.defaultModel && s.record.id === routing.defaultModel;
         s.reasons.push(`resource (${workload}, account ${a.accountId}): score ${a.score} = quality ${f.quality.toFixed(2)}, reliability ${f.reliability.toFixed(2)}, capacity ${f.capacity.toFixed(2)}, cost ${f.cost.toFixed(2)}, latency ${f.latency.toFixed(2)}, quota risk ${f.quotaRisk.toFixed(2)}`);
         if (a.scoringRationale?.length) {
@@ -496,7 +540,14 @@ export class Scheduler {
         }
         s.score = Math.round(a.score! * 1000) / 10 + (isDefaultPreferred ? 100 : 0);
       }
-      const chosen = all.filter((a) => a.admissible).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
+      const chosen = all.filter((a) => a.admissible).sort((a, b) => {
+        if (preferLowestCost) {
+          const costA = a.expectedTotalCostUsd ?? Infinity;
+          const costB = b.expectedTotalCostUsd ?? Infinity;
+          if (costA !== costB) return costA < costB ? -1 : 1;
+        }
+        return (b.score ?? 0) - (a.score ?? 0);
+      })[0];
       router.record(task.id, workload, chosen, all);
     }
 
@@ -673,7 +724,13 @@ export class Scheduler {
       );
     }
 
-    eligible.sort((a, b) => b.score - a.score || a.record.id.localeCompare(b.record.id));
+    eligible.sort((a, b) => {
+      if (preferLowestCost) {
+        const cost = (candidate: ScoredModel) => candidate.expectedCostUsd ?? (candidate.record.local ? 0 : Infinity);
+        if (cost(a) !== cost(b)) return cost(a) < cost(b) ? -1 : 1;
+      }
+      return b.score - a.score || a.record.id.localeCompare(b.record.id);
+    });
     const best = eligible[0];
     const instance = this.selectInstance(best.record);
     const outcomeRationale = best.reasons.find((r) => r.startsWith('outcome-routing:'));
@@ -686,7 +743,7 @@ export class Scheduler {
       evaluatedCandidates,
       selectedModelId: best.record.id,
       selectionReason:
-        `Selected model '${best.record.id}' with highest verified evidence score (${best.score}) for required capability '${requiredCapability}'` +
+        `Selected model '${best.record.id}' ${preferLowestCost ? 'with lowest known suitable execution cost after placement rejection' : `with highest verified evidence score (${best.score})`} for required capability '${requiredCapability}'` +
         (outcomeRationale ? ` (${outcomeRationale})` : ''),
       policyConstraintsApplied,
       resourceConstraintsApplied,

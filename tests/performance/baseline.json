@@ -1,0 +1,109 @@
+{
+  "captured_at": "2026-10-23T20:09:30-07:00",
+  "branch": "integration/cross-harness-outcome-recovery",
+  "commit_sha": "cba92cb3e1f556cf2e087efb6193babbee31d4f2",
+  "environment": {
+    "os": "Darwin 27.0.0",
+    "arch": "arm64",
+    "cpu": "Apple M5 Pro (18 cores)",
+    "memory_gb": 24,
+    "node": "v22.23.3"
+  },
+  "metrics": {
+    "cli_startup": {
+      "cold_version_ms": 313.09,
+      "warm_version": {
+        "samples": 14,
+        "min_ms": 251.17,
+        "p50_ms": 261.52,
+        "p95_ms": 299.25,
+        "p99_ms": 299.25,
+        "max_ms": 299.25,
+        "mean_ms": 263.64
+      },
+      "cold_help_ms": 283.25,
+      "warm_help": {
+        "samples": 14,
+        "min_ms": 251.14,
+        "p50_ms": 260.93,
+        "p95_ms": 274.49,
+        "p99_ms": 274.49,
+        "max_ms": 274.49,
+        "mean_ms": 262.6
+      },
+      "bundle_bytes": 20046551,
+      "cli_index_bytes": 89997,
+      "cli_engine_bytes": 34367
+    },
+    "engine_init": {
+      "fast_startup": {
+        "samples": 6,
+        "min_ms": 79.709,
+        "p50_ms": 95.675,
+        "p95_ms": 184.914,
+        "p99_ms": 184.914,
+        "max_ms": 184.914,
+        "mean_ms": 108.391
+      }
+    },
+    "persistence_json_file_store": {
+      "sequential_put_100": {
+        "samples": 100,
+        "min_ms": 7.766,
+        "p50_ms": 8.927,
+        "p95_ms": 10.572,
+        "p99_ms": 11.597,
+        "max_ms": 11.597,
+        "mean_ms": 8.851,
+        "total_ms": 885.1
+      }
+    },
+    "checkpoint_service": {
+      "create_25": {
+        "samples": 25,
+        "min_ms": 30.121,
+        "p50_ms": 32.273,
+        "p95_ms": 39.192,
+        "p99_ms": 44.057,
+        "max_ms": 44.057,
+        "mean_ms": 32.963
+      },
+      "list_by_execution_100": {
+        "samples": 100,
+        "min_ms": 0.045,
+        "p50_ms": 0.046,
+        "p95_ms": 0.047,
+        "p99_ms": 0.121,
+        "max_ms": 0.121,
+        "mean_ms": 0.047
+      }
+    },
+    "context_compiler": {
+      "compile_snapshot_50": {
+        "samples": 50,
+        "min_ms": 0.015,
+        "p50_ms": 0.016,
+        "p95_ms": 0.202,
+        "p99_ms": 1.142,
+        "max_ms": 1.142,
+        "mean_ms": 0.055
+      }
+    },
+    "tool_dispatch": {
+      "execute_tool_200": {
+        "samples": 200,
+        "min_ms": 0.002,
+        "p50_ms": 0.002,
+        "p95_ms": 0.005,
+        "p99_ms": 0.227,
+        "max_ms": 0.251,
+        "mean_ms": 0.006
+      }
+    },
+    "memory_footprint": {
+      "six_engines_heap_delta_mb": 138.91,
+      "per_engine_heap_delta_mb": 23.15,
+      "process_rss_mb": 325.56
+    }
+  }
+}

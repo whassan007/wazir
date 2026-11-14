@@ -62,6 +62,23 @@ function isLocalRuntimeId(runtimeId?: string, localOnlyPolicy?: boolean): boolea
   );
 }
 
+export interface CheckpointSummary {
+  id: string;
+  executionId: string;
+  jobId?: string;
+  workspaceRevision: number;
+  createdAt: Date;
+  filesCount: number;
+  checksPass: boolean;
+  description?: string;
+}
+
+export interface CheckpointIntegrityResult {
+  valid: boolean;
+  reason?: string;
+  digestMatch: boolean;
+}
+
 export interface CheckpointServiceOptions {
   /** Durable store owned by the host. Without it checkpoints are explicitly ephemeral. */
   store?: KeyValueStore;
@@ -76,6 +93,12 @@ export class CheckpointService {
   private _ready?: Promise<void>;
   private readonly store?: KeyValueStore;
   private readonly checkpoints = new Map<string, ExecutionCheckpoint>();
+  /** Secondary index: executionId -> checkpoint ids. */
+  private readonly byExecutionId = new Map<string, Set<string>>();
+  /** Secondary index: planState.jobId -> checkpoint ids. */
+  private readonly byJobId = new Map<string, Set<string>>();
+  /** Digest committed alongside each checkpoint, used for fail-closed integrity checks. */
+  private readonly committedDigests = new Map<string, string>();
   private readonly executionEngine: ExecutionEngine;
   private readonly worktreeManager: WorktreeManager;
   private readonly provenanceManager?: ProvenanceManager;
@@ -109,8 +132,39 @@ export class CheckpointService {
       }
       if (this.computeDigest(checkpoint) !== envelope.digest) throw new Error(`CHECKPOINT_DIGEST_MISMATCH: ${key}`);
       checkpoint.createdAt = new Date(checkpoint.createdAt);
-      this.checkpoints.set(checkpoint.id, checkpoint);
+      this.register(checkpoint, envelope.digest);
     }
+  }
+
+  /** Stores a checkpoint in memory and keeps all secondary indexes consistent. */
+  private register(checkpoint: ExecutionCheckpoint, digest: string): void {
+    this.unregister(checkpoint.id);
+    this.checkpoints.set(checkpoint.id, checkpoint);
+    this.committedDigests.set(checkpoint.id, digest);
+    addToIndex(this.byExecutionId, checkpoint.executionId, checkpoint.id);
+    const jobId = checkpoint.planState?.jobId;
+    if (jobId) addToIndex(this.byJobId, jobId, checkpoint.id);
+  }
+
+  private unregister(checkpointId: string): boolean {
+    const existing = this.checkpoints.get(checkpointId);
+    if (!existing) return false;
+    this.checkpoints.delete(checkpointId);
+    this.committedDigests.delete(checkpointId);
+    removeFromIndex(this.byExecutionId, existing.executionId, checkpointId);
+    const jobId = existing.planState?.jobId;
+    if (jobId) removeFromIndex(this.byJobId, jobId, checkpointId);
+    return true;
+  }
+
+  private indexed(ids: Set<string> | undefined): ExecutionCheckpoint[] {
+    if (!ids) return [];
+    const result: ExecutionCheckpoint[] = [];
+    for (const id of ids) {
+      const checkpoint = this.checkpoints.get(id);
+      if (checkpoint) result.push(checkpoint);
+    }
+    return result;
   }
 
   /**
@@ -188,10 +242,9 @@ export class CheckpointService {
     await injectFault('DURING_CHECKPOINT', { executionId, checkpointId, workspaceRevision: currentRevision });
 
     // A successful return means the snapshot is committed, not merely cached.
-    await this.store?.put(`checkpoint/${checkpointId}`, {
-      version: 1, digest: this.computeDigest(checkpoint), checkpoint,
-    });
-    this.checkpoints.set(checkpointId, structuredClone(checkpoint));
+    const digest = this.computeDigest(checkpoint);
+    await this.store?.put(`checkpoint/${checkpointId}`, { version: 1, digest, checkpoint });
+    this.register(structuredClone(checkpoint), digest);
 
     // Record audit / provenance event on ExecutionEngine
     (this.executionEngine as any).pushEvent?.(record, 'execution.checkpoint.created', {
@@ -217,9 +270,104 @@ export class CheckpointService {
    * Lists checkpoints for an execution.
    */
   public listCheckpoints(executionId?: string): ExecutionCheckpoint[] {
-    const all = structuredClone(Array.from(this.checkpoints.values()));
-    if (!executionId) return all;
-    return all.filter((c) => c.executionId === executionId);
+    if (executionId === undefined || executionId === '') {
+      return structuredClone(Array.from(this.checkpoints.values()));
+    }
+    return structuredClone(this.indexed(this.byExecutionId.get(executionId)));
+  }
+
+  /**
+   * Lists checkpoints whose plan state belongs to a job.
+   */
+  public listCheckpointsByJob(jobId: string): ExecutionCheckpoint[] {
+    return structuredClone(this.indexed(this.byJobId.get(jobId)));
+  }
+
+  /**
+   * Returns the most recent checkpoint for an execution (highest workspaceRevision,
+   * then latest createdAt), cloning only that checkpoint.
+   */
+  public getLatestCheckpoint(executionId: string): ExecutionCheckpoint | undefined {
+    let latest: ExecutionCheckpoint | undefined;
+    for (const checkpoint of this.indexed(this.byExecutionId.get(executionId))) {
+      if (
+        !latest ||
+        checkpoint.workspaceRevision > latest.workspaceRevision ||
+        (checkpoint.workspaceRevision === latest.workspaceRevision &&
+          checkpoint.createdAt.getTime() > latest.createdAt.getTime())
+      ) {
+        latest = checkpoint;
+      }
+    }
+    return latest ? structuredClone(latest) : undefined;
+  }
+
+  /**
+   * Lists lightweight checkpoint metadata without cloning file snapshots.
+   */
+  public listCheckpointSummaries(executionId?: string): CheckpointSummary[] {
+    const source =
+      executionId === undefined || executionId === ''
+        ? Array.from(this.checkpoints.values())
+        : this.indexed(this.byExecutionId.get(executionId));
+    return source.map((c) => ({
+      id: c.id,
+      executionId: c.executionId,
+      ...(c.planState?.jobId !== undefined ? { jobId: c.planState.jobId } : {}),
+      workspaceRevision: c.workspaceRevision,
+      createdAt: new Date(c.createdAt),
+      filesCount: Object.keys(c.worktreeState?.filesSnapshot ?? {}).length,
+      checksPass: c.verificationState?.checksPass === true,
+      ...(c.description !== undefined ? { description: c.description } : {}),
+    }));
+  }
+
+  /**
+   * Removes a checkpoint from memory, indexes, and the durable store.
+   */
+  public async deleteCheckpoint(checkpointId: string): Promise<boolean> {
+    await this.ready;
+    if (!this.checkpoints.has(checkpointId)) return false;
+    await this.store?.delete(`checkpoint/${checkpointId}`);
+    return this.unregister(checkpointId);
+  }
+
+  /**
+   * Removes all but the `keep` most recent checkpoints for an execution.
+   * Returns the ids that were pruned.
+   */
+  public async pruneCheckpoints(executionId: string, keep: number): Promise<string[]> {
+    await this.ready;
+    const ordered = this.indexed(this.byExecutionId.get(executionId)).sort(
+      (a, b) =>
+        b.workspaceRevision - a.workspaceRevision || b.createdAt.getTime() - a.createdAt.getTime(),
+    );
+    const pruned: string[] = [];
+    for (const checkpoint of ordered.slice(Math.max(0, keep))) {
+      if (await this.deleteCheckpoint(checkpoint.id)) pruned.push(checkpoint.id);
+    }
+    return pruned;
+  }
+
+  /**
+   * Recomputes a checkpoint's digest and validates its structure. Fails closed:
+   * a missing, malformed, or tampered checkpoint is never reported as valid.
+   */
+  public verifyCheckpointIntegrity(checkpointId: string): CheckpointIntegrityResult {
+    const checkpoint = this.checkpoints.get(checkpointId);
+    if (!checkpoint) return { valid: false, reason: 'CHECKPOINT_NOT_FOUND', digestMatch: false };
+
+    const structuralError = checkpointStructuralError(checkpoint, checkpointId);
+    let digestMatch = false;
+    try {
+      const expected = this.committedDigests.get(checkpointId);
+      digestMatch = expected !== undefined && this.computeDigest(checkpoint) === expected;
+    } catch {
+      digestMatch = false;
+    }
+    if (structuralError) return { valid: false, reason: structuralError, digestMatch };
+    if (!digestMatch) return { valid: false, reason: 'CHECKPOINT_DIGEST_MISMATCH', digestMatch };
+    return { valid: true, digestMatch };
   }
 
   /**
@@ -1089,8 +1237,45 @@ export class CheckpointService {
       digest: computedDigest,
       checkpoint,
     });
-    this.checkpoints.set(checkpoint.id, structuredClone(checkpoint));
+    this.register(structuredClone(checkpoint), computedDigest);
 
     return structuredClone(checkpoint);
   }
+}
+
+function addToIndex(index: Map<string, Set<string>>, key: string, id: string): void {
+  let ids = index.get(key);
+  if (!ids) {
+    ids = new Set();
+    index.set(key, ids);
+  }
+  ids.add(id);
+}
+
+function removeFromIndex(index: Map<string, Set<string>>, key: string, id: string): void {
+  const ids = index.get(key);
+  if (!ids) return;
+  ids.delete(id);
+  if (ids.size === 0) index.delete(key);
+}
+
+function checkpointStructuralError(checkpoint: ExecutionCheckpoint, checkpointId: string): string | undefined {
+  if (checkpoint.id !== checkpointId) return 'CHECKPOINT_ID_MISMATCH';
+  if (typeof checkpoint.executionId !== 'string' || checkpoint.executionId === '') return 'INVALID_EXECUTION_ID';
+  if (!Number.isSafeInteger(checkpoint.workspaceRevision) || checkpoint.workspaceRevision < 0) {
+    return 'INVALID_WORKSPACE_REVISION';
+  }
+  if (!(checkpoint.createdAt instanceof Date) || !Number.isFinite(checkpoint.createdAt.getTime())) {
+    return 'INVALID_CREATED_AT';
+  }
+  if (typeof checkpoint.workspaceRoot !== 'string') return 'INVALID_WORKSPACE_ROOT';
+  const snapshot = checkpoint.worktreeState?.filesSnapshot;
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return 'INVALID_FILES_SNAPSHOT';
+  for (const [filePath, content] of Object.entries(snapshot)) {
+    if (typeof content !== 'string') return `INVALID_FILES_SNAPSHOT_ENTRY: ${filePath}`;
+  }
+  if (!checkpoint.verificationState || typeof checkpoint.verificationState.checksPass !== 'boolean') {
+    return 'INVALID_VERIFICATION_STATE';
+  }
+  return undefined;
 }

@@ -13,19 +13,15 @@ const rootDir = resolve(__dirname, '..');
 // instead of a stack trace from deep inside the ledger.
 const RUNTIME_GUARD = `
 (() => {
-  // node:sqlite is still flagged experimental; that one warning would print on every command.
-  const emit = process.emitWarning;
-  process.emitWarning = function (warning, ...rest) {
-    const type = typeof rest[0] === 'string' ? rest[0] : rest[0] && rest[0].type;
-    if (type === 'ExperimentalWarning' && /SQLite/.test(String(warning))) return;
-    return emit.call(this, warning, ...rest);
-  };
   const [maj, min] = process.versions.node.split('.').map(Number);
-  let sqlite = false;
-  try { sqlite = !!(process.getBuiltinModule && process.getBuiltinModule('node:sqlite')); } catch {}
-  if (maj < 22 || (maj === 22 && min < 13) || !sqlite) {
+  if (maj < 22 || (maj === 22 && min < 13)) {
     process.stderr.write('wa: Node.js >= 22.13.0 with node:sqlite is required (found ' + process.versions.node + ').\\n');
     process.exit(1);
+  }
+  const argv = process.argv.slice(2);
+  if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-V')) {
+    process.stdout.write(${JSON.stringify(process.env.WAZIR_BUILD_VERSION || JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8')).version)} + '\\n');
+    process.exit(0);
   }
 })();`;
 

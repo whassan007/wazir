@@ -32,12 +32,12 @@ export interface ModelRecord {
   parameters?: string;
   /** Maximum context the model family supports. */
   contextMax: number;
+  /** Provider-reported completion ceiling, when discovery supplies it. */
+  maxOutputTokens?: number;
   /** Operator-configured context (<= contextMax). Used when the runtime does not report it. */
   configuredContext?: number;
   /** Provider-enforced input limit when distinct from contextMax. */
   maxInputTokens?: number;
-  /** Provider-enforced output (max_tokens) limit. */
-  maxOutputTokens?: number;
   /** How the provider counts output against the window. Absent = unknown. */
   contextAccounting?: import('./contextAllocation.js').ContextAccounting;
   /** Where contextMax/maxInputTokens/maxOutputTokens came from. Absent = legacy record, treat as 'provider-documented'. */

@@ -4,7 +4,7 @@ export { OffloadStore } from './offloadStore.js';
 export type { OffloadStoreOptions } from './offloadStore.js';
 export { ComputerRegistry } from './computerRegistry.js';
 export type { HeartbeatPayload } from './computerRegistry.js';
-export { ContextCompiler, estimateTokens, tokensForPart, WEB_TRUST_INSTRUCTION, deduplicateContextParts, computeUsableBudget, computeUtilization } from './contextCompiler.js';
+export { ContextCompiler, estimateTokens, tokensForPart, planOutputReserveTokens, WEB_TRUST_INSTRUCTION, deduplicateContextParts, computeUsableBudget, computeUtilization } from './contextCompiler.js';
 export type { ContextCompilerOptions } from './contextCompiler.js';
 export { allocateContext, estimateRequestTokens, DEFAULT_RESERVATION_POLICY } from './contextAllocation.js';
 export type { TokenEstimateInput, TokenEstimate, ReservationPolicy } from './contextAllocation.js';
@@ -23,8 +23,8 @@ export {
 } from './contextProviders.js';
 export { ObservationCompactor } from './observationCompactor.js';
 export type { CompactedObservation, ObservationCompactorOptions, ObservationKind } from './observationCompactor.js';
-export { ContextCompactionService, STRUCTURED_SUMMARY_SCHEMA } from './contextCompactionService.js';
-export type { ContextCompactionServiceOptions, SummarizerFn } from './contextCompactionService.js';
+export { ContextCompactionService, STRUCTURED_SUMMARY_SCHEMA, optimizeContextPartsForBudget } from './contextCompactionService.js';
+export type { ContextCompactionServiceOptions, SummarizerFn, OptimizeContextPartsOptions, OptimizeContextPartsResult } from './contextCompactionService.js';
 export { ContextRevisionService } from './contextRevisionService.js';
 export type { ContextRevisionConfig, RevisionResult } from './contextRevisionService.js';
 export { PromptLayoutPlanner } from './promptLayoutPlanner.js';
@@ -238,7 +238,13 @@ export {
   VerificationPlanner,
 } from './verificationPlanning.js';
 export type { ChangeImpactAnalyzerOptions } from './verificationPlanning.js';
-export { TelemetryCollector, classifyExclusionReasons } from './telemetryService.js';
+export {
+  TelemetryCollector,
+  classifyExclusionReasons,
+  computeLatencyPercentiles,
+  LatencyHistogram,
+  PhaseLatencyTracker,
+} from './telemetryService.js';
 export type {
   RoutingExclusionCategory,
   RoutingCandidateAlternative,
@@ -249,6 +255,8 @@ export type {
   RoutingTelemetryInput,
   RoutingTelemetryFilter,
   RoutingTelemetrySummary,
+  LatencyPercentiles,
+  PerformanceObservabilityReport,
 } from './telemetryService.js';
 export { TaskCapabilityClassifier } from './taskCapabilityClassifier.js';
 export { ModelIntelligenceService } from './modelIntelligenceService.js';
@@ -315,3 +323,35 @@ export * from './modelDiscoveryStatus.js';
 export * from './hardwareEligibilityService.js';
 export * from './contextMemoryEstimator.js';
 export * from './intelligentModelRanker.js';
+export {
+  DeadlineExceededError,
+  ExecutionCancelledError,
+  ExecutionDeadlineBudget,
+  ExecutionCancellationScope,
+  runWithDeadline,
+} from './executionDeadlines.js';
+export type {
+  CancellationReason,
+  ExecutionPhase as DeadlineExecutionPhase,
+  DeadlineBudgetOptions,
+  CancellationScopeOptions,
+  RunWithDeadlineOptions,
+} from './executionDeadlines.js';
+export {
+  StickyRouter,
+  scoreRouteCandidate,
+} from './stickyRouter.js';
+export type {
+  ExecutionPhase as StickyExecutionPhase,
+  ModelLocality,
+  RouteCandidate as StickyRouteCandidate,
+  ScoreWeights,
+  PhaseRoutePolicy,
+  StickyRouteSession,
+  RouteReason,
+  RouteDecision,
+  StickyRouterOptions,
+} from './stickyRouter.js';
+export * from './providerBackpressure.js';
+export * from './schedulerFairness.js';
+export * from './historyRetentionService.js';

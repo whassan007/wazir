@@ -1,7 +1,7 @@
 import { executeMCPForAgent } from './mcp.js';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { classifyWorkload, effectiveContextTokens, estimateOutputTokens, estimateTextTokens, padEstimate, SchedulingError, taskAuthorizesVerificationChanges } from '@wazir/core';
+import { classifyWorkload, effectiveContextTokens, estimateOutputTokens, estimateTextTokens, padEstimate, planOutputReserveTokens, SchedulingError, taskAuthorizesVerificationChanges } from '@wazir/core';
 import type {
   AgentAdapter,
   AgentRuntime,
@@ -33,7 +33,7 @@ import { createEscalationHandler, prepareGenerationPlacement } from './escalatio
 import { planAvailableRoute } from './routeAvailability.js';
 import { ensureNvidiaModelRegistered } from './hostedProviders.js';
 import { InvocationContextAllocator, planContext } from './contextAllocationRuntime.js';
-
+const OUTPUT_RESERVE_TOKENS = 4096;
 /** Registration does not imply a policy execution handler exists. Inspect classification
  * without authorizing or executing dummy arguments; argument-level policy remains enforced
  * at dispatch. In particular, never advertise registry-only SDK/terminal tools as callable. */
@@ -162,7 +162,6 @@ const SOURCE_CODE_EXTENSION_PATTERN = /\.(c|cc|cpp|cxx|h|hpp|hh|py|go|rs|java|kt
 function touchesSourceCode(filesChanged: string[]): boolean {
   return filesChanged.some((f) => SOURCE_CODE_EXTENSION_PATTERN.test(f));
 }
-const OUTPUT_RESERVE_TOKENS = 4096;
 const MINIMUM_CONTEXT_TOKENS = 8192;
 
 /** Policy check, context budget, two-phase scheduling and agent resolution — no side effects. */
@@ -301,7 +300,8 @@ export async function planTask(
 
   const activeContextParts = fastPath ? [] : await buildContextPartsFromActive(engine);
   const parts = [...baseParts, ...activeContextParts];
-  const budget = engine.compiler.budget(parts, OUTPUT_RESERVE_TOKENS);
+  const outputReserveTokens = engine.config.context?.reserve?.outputTokens ?? planOutputReserveTokens({ taskDescription: description, taskType: task.type });
+  const budget = engine.compiler.budget(parts, outputReserveTokens);
 
   // External delegated agents select and run their own models on their vendor's account.
   // When provider-only routing is active, external agents MUST NOT bypass the provider restriction.
@@ -324,7 +324,7 @@ export async function planTask(
       modelDecision: { modelId: `external:${name}`, modelInstanceId: `external:${name}`, strategy: 'explicit', score: 0, reasons },
       computerDecision: { computerId, runtimeId: 'external', reasons },
     } as unknown as SchedulerDecision;
-    const context = engine.compiler.compile(parts, { tokens: 1_000_000, source: 'configured' }, OUTPUT_RESERVE_TOKENS);
+    const context = engine.compiler.compile(parts, { tokens: 1_000_000, source: 'configured' }, outputReserveTokens);
     return { ok: true, plan: { task, scheduling, context, agent: pinnedAgent } };
   }
 
@@ -341,7 +341,7 @@ export async function planTask(
 
   const planned = planContext(engine, parts, scheduling.modelId, {
     tools: allowedTools,
-    outputReserveTokens: OUTPUT_RESERVE_TOKENS,
+    outputReserveTokens: outputReserveTokens,
     placement: { runtimeId: scheduling.runtimeId, computerId: scheduling.computerId },
   });
   const { context, allocation } = planned;
@@ -1035,6 +1035,7 @@ export async function executeTask(
         projectRoot: engine.projectRoot,
         maxTurns: options.maxTurns,
         contextTokens: context.available.tokens,
+        reserve: { outputTokens: context.budget.outputReserveTokens },
         isCancelled: () => cancelled || taskAbortController.signal.aborted,
         fullVerification: options.fullVerification,
       },

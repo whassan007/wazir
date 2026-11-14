@@ -52,3 +52,4 @@ export type {
 } from './externalHarnessAdapter.js';
 export * from './preflight.js';
 export * from './configurationDiscovery.js';
+export * from './fastPathClassifier.js';

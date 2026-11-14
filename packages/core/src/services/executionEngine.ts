@@ -104,6 +104,39 @@ export interface ExecutionEngineOptions {
   isProcessAlive?: (pid: number) => boolean;
   /** Skip deep cloning of terminal historical records and startup recovery rewrites on one-shot CLI commands. */
   fastStartup?: boolean;
+  /** Optional bound on how many terminal (completed/failed/cancelled) records are retained in memory. */
+  maxInMemoryTerminalRecords?: number;
+}
+
+export interface ExecutionListFilter {
+  jobId?: string;
+  status?: ExecutionStatus;
+  taskId?: string;
+  agentId?: string;
+  computerId?: string;
+  parentExecutionId?: string;
+}
+
+export interface ExecutionSummary {
+  id: string;
+  jobId?: string;
+  taskId: string;
+  status: ExecutionStatus;
+  agentId?: string;
+  modelId?: string;
+  createdAt: Date;
+  completedAt?: Date;
+  errorCount: number;
+  toolCallCount: number;
+}
+
+export interface ExecutionMemoryStats {
+  totalRecords: number;
+  activeRecords: number;
+  terminalRecords: number;
+  totalEvents: number;
+  totalToolCalls: number;
+  estimatedPayloadBytes: number;
 }
 
 function signalZeroAlive(pid: number): boolean {
@@ -148,6 +181,8 @@ export class ExecutionEngine {
   private readonly workspace: string;
   private readonly owner: ExecutionOwner;
   private readonly isProcessAlive: (pid: number) => boolean;
+  private readonly maxInMemoryTerminalRecords?: number;
+  private readonly recordVersions = new Map<string, number>();
   readonly ready: Promise<void>;
 
   constructor(options: ExecutionEngineOptions = {}) {
@@ -157,6 +192,7 @@ export class ExecutionEngine {
     this.workspace = options.workspace ?? process.cwd();
     this.owner = options.owner ?? { pid: process.pid, host: hostname() };
     this.isProcessAlive = options.isProcessAlive ?? signalZeroAlive;
+    this.maxInMemoryTerminalRecords = options.maxInMemoryTerminalRecords;
     this.ready = Promise.resolve().then(() => options.load?.()).then(async (loaded) => {
       if (!loaded) return;
       const migratedIds = new Set<string>();
@@ -1130,6 +1166,13 @@ export class ExecutionEngine {
     return this.records.get(executionId);
   }
 
+  /**
+   * Synchronous zero-clone read-only lookup for an in-memory execution record.
+   */
+  getReadOnly(executionId: string): ExecutionRecord | undefined {
+    return this.records.get(executionId);
+  }
+
   require(executionId: string): ExecutionRecord {
     if (this.persistenceFailure) throw this.persistenceFailure;
     const record = this.records.get(executionId);
@@ -1139,25 +1182,139 @@ export class ExecutionEngine {
     return record;
   }
 
-  async list(): Promise<ExecutionRecord[]> {
+  private matchesFilter(record: ExecutionRecord, filter?: ExecutionListFilter): boolean {
+    if (!filter) return true;
+    const exec = record.execution;
+    if (filter.jobId !== undefined && exec.jobId !== filter.jobId) return false;
+    if (filter.status !== undefined && exec.status !== filter.status) return false;
+    if (filter.taskId !== undefined && exec.taskId !== filter.taskId) return false;
+    if (filter.agentId !== undefined && exec.agentId !== filter.agentId) return false;
+    if (filter.computerId !== undefined && exec.computerId !== filter.computerId) return false;
+    if (filter.parentExecutionId !== undefined && exec.parentExecutionId !== filter.parentExecutionId) return false;
+    return true;
+  }
+
+  async list(filter?: ExecutionListFilter): Promise<ExecutionRecord[]> {
     await this.ready;
-    return Array.from(this.records.values()).sort((a, b) =>
+    const matched: ExecutionRecord[] = [];
+    for (const record of this.records.values()) {
+      if (this.matchesFilter(record, filter)) {
+        matched.push(record);
+      }
+    }
+    return matched.sort((a, b) =>
       b.execution.createdAt.getTime() - a.execution.createdAt.getTime(),
     );
   }
 
+  /**
+   * Returns lightweight execution summaries without deep-cloning full records, events, or tool call payloads.
+   */
+  listSummaries(filter?: ExecutionListFilter): ExecutionSummary[] {
+    const summaries: ExecutionSummary[] = [];
+    for (const record of this.records.values()) {
+      if (!this.matchesFilter(record, filter)) continue;
+      const exec = record.execution;
+      summaries.push({
+        id: exec.id,
+        jobId: exec.jobId,
+        taskId: exec.taskId,
+        status: exec.status,
+        agentId: exec.agentId,
+        modelId: exec.modelId,
+        createdAt: exec.createdAt,
+        completedAt: exec.completedAt,
+        errorCount: record.errors?.length ?? 0,
+        toolCallCount: record.toolCalls?.length ?? 0,
+      });
+    }
+    return summaries.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  /**
+   * Evicts the oldest terminal (completed/failed/cancelled) execution records from in-memory maps
+   * until at most `maxKeep` terminal records remain. Active/non-terminal records are never evicted.
+   */
+  pruneTerminalCache(maxKeep: number): number {
+    const normalizedMax = Math.max(0, Math.floor(maxKeep));
+    const terminalRecords: ExecutionRecord[] = [];
+    for (const record of this.records.values()) {
+      if (isTerminalExecutionStatus(record.execution.status)) {
+        terminalRecords.push(record);
+      }
+    }
+    if (terminalRecords.length <= normalizedMax) {
+      return 0;
+    }
+    // Sort oldest first (by completedAt, falling back to createdAt)
+    terminalRecords.sort((a, b) => {
+      const aTime = (a.execution.completedAt ?? a.execution.createdAt).getTime();
+      const bTime = (b.execution.completedAt ?? b.execution.createdAt).getTime();
+      return aTime - bTime;
+    });
+    const toEvictCount = terminalRecords.length - normalizedMax;
+    for (let i = 0; i < toEvictCount; i++) {
+      const id = terminalRecords[i].execution.id;
+      this.records.delete(id);
+      this.histories.delete(id);
+      this.leases.delete(id);
+      this.pausedExecutions.delete(id);
+      this.steeringQueues.delete(id);
+      this.cancelledToolCalls.delete(id);
+      this.recordVersions.delete(id);
+    }
+    return toEvictCount;
+  }
+
+  /**
+   * Computes current in-memory record, event, tool call, and estimated payload byte statistics.
+   */
+  getMemoryStats(): ExecutionMemoryStats {
+    let totalRecords = 0;
+    let activeRecords = 0;
+    let terminalRecords = 0;
+    let totalEvents = 0;
+    let totalToolCalls = 0;
+    let estimatedPayloadBytes = 0;
+
+    for (const record of this.records.values()) {
+      totalRecords += 1;
+      if (isTerminalExecutionStatus(record.execution.status)) {
+        terminalRecords += 1;
+      } else {
+        activeRecords += 1;
+      }
+      const eventsCount = record.events?.length ?? 0;
+      const toolCallsCount = record.toolCalls?.length ?? 0;
+      totalEvents += eventsCount;
+      totalToolCalls += toolCallsCount;
+      estimatedPayloadBytes += 512 + eventsCount * 256 + toolCallsCount * 512;
+      if (typeof record.result === 'string') {
+        estimatedPayloadBytes += record.result.length * 2;
+      }
+    }
+
+    return {
+      totalRecords,
+      activeRecords,
+      terminalRecords,
+      totalEvents,
+      totalToolCalls,
+      estimatedPayloadBytes,
+    };
+  }
+
   async listByTask(taskId: string): Promise<ExecutionRecord[]> {
-    const records = await this.list();
-    return records.filter((r) => r.execution.taskId === taskId);
+    return this.list({ taskId });
   }
 
   private static readonly NON_TERMINAL: ExecutionStatus[] = ['queued', 'scheduled', 'assigned', 'running', 'waiting'];
 
   /** Non-terminal executions currently assigned to a computer — the set a dead worker leaves stranded. */
   async listActiveByComputer(computerId: string): Promise<ExecutionRecord[]> {
-    const records = await this.list();
+    const records = await this.list({ computerId });
     return records.filter(
-      (r) => r.execution.computerId === computerId && ExecutionEngine.NON_TERMINAL.includes(r.execution.status),
+      (r) => ExecutionEngine.NON_TERMINAL.includes(r.execution.status),
     );
   }
 
@@ -1414,13 +1571,12 @@ export class ExecutionEngine {
   }
 
   async listChildren(executionId: string): Promise<ExecutionRecord[]> {
-    const records = await this.list();
-    return records.filter((r) => r.execution.parentExecutionId === executionId);
+    return this.list({ parentExecutionId: executionId });
   }
 
   async events(executionId: string): Promise<SequencedExecutionEvent[]> {
     await this.ready;
-    const record = await this.get(executionId);
+    const record = this.records.get(executionId);
     if (!record) {
       throw new Error(`Execution '${executionId}' not found`);
     }
@@ -1447,7 +1603,7 @@ export class ExecutionEngine {
       return;
     }
     const id = identity.eventId ?? `evt-${randomUUID()}`;
-    history.push(structuredClone({
+    const eventEntry: SequencedExecutionEvent = {
       ...identity,
       id,
       eventId: id,
@@ -1463,9 +1619,11 @@ export class ExecutionEngine {
       computerId: record.execution.computerId,
       workerId: record.execution.workerId,
       workspaceRevision: record.workspaceState?.revision ?? 0,
-      data,
-    }));
-    record.events = structuredClone(history);
+      data: data !== undefined ? structuredClone(data) : undefined,
+    };
+    history.push(eventEntry);
+    record.events = history.slice();
+    this.recordVersions.set(record.execution.id, (this.recordVersions.get(record.execution.id) ?? 0) + 1);
   }
 
   /**
@@ -1663,6 +1821,12 @@ export class ExecutionEngine {
         this.persistenceFailure = error instanceof Error ? error : new Error(String(error));
       });
       await pending;
+    }
+    if (
+      this.maxInMemoryTerminalRecords !== undefined &&
+      isTerminalExecutionStatus(record.execution.status)
+    ) {
+      this.pruneTerminalCache(this.maxInMemoryTerminalRecords);
     }
   }
 }

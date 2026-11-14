@@ -155,9 +155,9 @@ export class TaskPlanner {
       /\b(?:write|implement|generate|provide|show)\s+(?:me\s+)?(?:a|an)\s+(?:[\w+#-]+\s+){0,3}(?:function|method|snippet|helper|class|expression|regex|query|algorithm|one-liner)\b/i.test(input);
     const isInlineResponseOnly =
       isStandaloneSnippet ||
-      /\b(return\s+(?:only\b|valid\s+json\b|code\s+only\b|corrected\b.*?\bonly\b|its\s+\w+\s+field\b)|respond\s+with\b|nothing\s+else\b)/i.test(input);
+      /\b(return\s+(?:only\b|valid\s+json\b|code\s+only\b|corrected\b.*?\bonly\b|its\s+\w+\s+field\b)|(?:respond|reply)\s+with\b|nothing\s+else\b)/i.test(input);
     const isBuildOrWrite = !isInlineResponseOnly && /\b(build|write|create|implement|add|code|make|generate|scaffold)\b/i.test(input);
-    const isCheckOrInspect = isInlineResponseOnly || /\b(check|inspect|verify|test|read|examine|review|explain|list|what\s+is|how\s+many|reverse\b|does\b.*work)\b/i.test(input);
+    const isCheckOrInspect = isInlineResponseOnly || /\b(check|inspect|verify|test|read|examine|review|explain|list|calculate|compute|evaluate|solve|what\s+is|how\s+many|reverse\b|does\b.*work)\b/i.test(input);
     const isFix = !isInlineResponseOnly && /\b(fix|patch|repair|resolve|update)\b/i.test(input);
 
     const mutationRequired = isBuildOrWrite || isFix || (!isCheckOrInspect);

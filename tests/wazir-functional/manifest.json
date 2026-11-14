@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "description": "Deterministic regression coverage and explicit live qualification requirements for the Wazir functional suite.",
+  "cases": [
+    {
+      "id": "WF-01",
+      "area": "small context",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/contextCompiler.comprehensive.test.ts",
+        "packages/core/tests/modelLifecycleAdmission.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-02",
+      "area": "large context",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/contextCompiler.comprehensive.test.ts",
+        "packages/core/tests/contextCompactionService.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-03",
+      "area": "output clamp",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/contextCompiler.comprehensive.test.ts",
+        "packages/agents/tests/codingAgent.contextCompaction.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-04",
+      "area": "provider limits",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/contextCompiler.comprehensive.test.ts",
+        "packages/runtimes/nvidia/tests/nvidiaAdapter.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-05",
+      "area": "overflow recovery",
+      "kind": "deterministic",
+      "tests": [
+        "packages/agents/tests/codingAgent.contextOverflowRecovery.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-06",
+      "area": "unknown context",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/modelLifecycleAdmission.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-07",
+      "area": "device memory",
+      "kind": "deterministic",
+      "tests": [
+        "packages/workers/tests/hardwareDiscovery.test.ts",
+        "packages/core/tests/modelLifecycleAdmission.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-08",
+      "area": "resident incremental memory",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/modelLifecycleAdmission.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-09",
+      "area": "unloaded model memory",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/modelLifecycleAdmission.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-10",
+      "area": "AUTO fallback",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/modelLifecycleAdmission.test.ts",
+        "packages/core/tests/scheduler.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-11",
+      "area": "STRICT routing",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/harnessDispatch.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-12",
+      "area": "LOCAL_ONLY routing",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/schedulerHostedRouting.test.ts",
+        "apps/cli/tests/nvidiaProviderSystem.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-13",
+      "area": "stale jobs",
+      "kind": "deterministic",
+      "tests": [
+        "apps/cli/tests/tuiSessionLifecycle.test.ts",
+        "apps/cli/tests/conversationProjection.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-14",
+      "area": "duplicate events",
+      "kind": "deterministic",
+      "tests": [
+        "apps/cli/tests/conversationProjection.test.ts",
+        "packages/core/tests/executionHistory.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-15",
+      "area": "CLI suggestions",
+      "kind": "deterministic",
+      "tests": [
+        "apps/cli/tests/fleetTui.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-16",
+      "area": "SQLite",
+      "kind": "deterministic",
+      "tests": [
+        "packages/core/tests/resourceLedgerLazyStartup.test.ts",
+        "packages/memory/tests/sqliteMemoryStore.test.ts"
+      ],
+      "liveRequirement": null
+    },
+    {
+      "id": "WF-17",
+      "area": "real model",
+      "kind": "live",
+      "tests": [],
+      "liveRequirement": "Run against an available local model; record model/runtime, generation evidence, and outcome. Mock adapters do not satisfy this case."
+    },
+    {
+      "id": "WF-18",
+      "area": "stream after recovery",
+      "kind": "deterministic",
+      "tests": [
+        "packages/agents/tests/codingAgent.streamRetry.test.ts",
+        "packages/agents/tests/codingAgent.contextOverflowRecovery.test.ts"
+      ],
+      "liveRequirement": "Live qualification should verify a real generation completes after the injected recovery."
+    },
+    {
+      "id": "WF-19",
+      "area": "consecutive chats",
+      "kind": "deterministic",
+      "tests": [
+        "packages/agents/tests/chatAgent.test.ts",
+        "apps/cli/tests/tuiSessionLifecycle.test.ts",
+        "packages/core/tests/planner.test.ts"
+      ],
+      "liveRequirement": "Live qualification should use two consecutive prompts in one session and capture both completed responses."
+    },
+    {
+      "id": "WF-20",
+      "area": "coding completion",
+      "kind": "deterministic",
+      "tests": [
+        "packages/agents/tests/live-coding/01-bugRepair.test.ts",
+        "packages/agents/tests/codingAgent.contextOverflowRecovery.test.ts"
+      ],
+      "liveRequirement": "For live qualification, complete a small coding task with a real model and verify the resulting file or test outcome."
+    }
+  ]
+}

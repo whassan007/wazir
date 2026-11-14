@@ -767,10 +767,14 @@ export class ModelLifecycleService {
     const usable = available === undefined ? undefined : Math.max(0, available - safetyReserve - held);
     const reuse = (i.state === 'READY' || i.state === 'LOADED') && i.loaded && i.health === 'healthy' &&
       i.contextTokens !== undefined && i.contextTokens >= minimum && (requested === undefined || i.contextTokens === context);
+    // Runtime estimates describe the model's full post-load footprint. When the
+    // model is already resident and needs a context resize, only the increase is
+    // new pressure on the machine: current availability already excludes the
+    // resident weights and KV cache.
+    const residentBytes = i.loaded ? (i.residentMemoryBytes ?? profile?.weightBytes) : undefined;
     const estimateAt = async (candidateContext: number): Promise<LoadEstimate> => {
       let e: import('@wazir/runtimes-interfaces').ModelLoadEstimate = { source: 'UNKNOWN', confidence: 'unknown' };
-      if (reuse && !options.dryRun) {
-        const residentBytes = i.residentMemoryBytes ?? profile?.weightBytes;
+      if (reuse) {
         if (residentBytes !== undefined && residentBytes > 0) {
           e = { weightBytes: profile?.weightBytes, totalMemoryBytes: residentBytes, source: 'RUNTIME', confidence: 'high' };
         }
@@ -784,6 +788,8 @@ export class ModelLifecycleService {
       }
       const total = e.totalMemoryBytes;
       const known = total !== undefined && Number.isFinite(total) && total > 0 && e.source !== 'UNKNOWN';
+      const additionalMemory = known && residentBytes !== undefined && residentBytes > 0
+        ? Math.max(0, total! - residentBytes) : total;
       const gpuHeld = snapshot.activeReservations.reduce((n, r) => n + r.vramBytes, 0);
       const gpuUnknown = !snapshot.unifiedMemory && snapshot.totalVramBytes !== undefined && (e.vramBytes === undefined || snapshot.availableVramBytes === undefined);
       const gpuInsufficient = !snapshot.unifiedMemory && e.vramBytes !== undefined && e.vramBytes > (snapshot.availableVramBytes ?? 0) - gpuHeld;
@@ -792,11 +798,11 @@ export class ModelLifecycleService {
       return { modelId, runtimeId: i.runtimeId, computerId: i.computerId!, requestedContext: requested, candidateContext,
         weightMemory: e.weightBytes, contextMemory: e.contextBytes, runtimeOverhead: e.overheadBytes,
         estimatedTotalMemory: known ? total : undefined, estimatedVram: e.vramBytes,
-        reservationMemoryBytes: known ? total : Number.isFinite(unknownBound) && (unknownBound ?? 0) > 0 ? unknownBound : undefined,
+        reservationMemoryBytes: known ? additionalMemory : Number.isFinite(unknownBound) && (unknownBound ?? 0) > 0 ? unknownBound : undefined,
         currentlyAvailableMemory: available, safetyReserve, usableMemory: usable,
-        postLoadAvailableMemory: known && available !== undefined ? available - total! - held : undefined,
+        postLoadAvailableMemory: known && available !== undefined ? available - additionalMemory! - held : undefined,
         estimateSource: known ? e.source : 'UNKNOWN', confidence: known ? e.confidence : 'unknown',
-        classification: reuse && !options.dryRun ? 'SAFE' : !known || usable === undefined || gpuUnknown ? 'UNKNOWN' : total! > usable || gpuInsufficient ? 'INSUFFICIENT' : total! > usable * 0.9 ? 'WARNING' : 'SAFE' };
+        classification: reuse ? 'SAFE' : !known || usable === undefined || gpuUnknown ? 'UNKNOWN' : additionalMemory! > usable || gpuInsufficient ? 'INSUFFICIENT' : additionalMemory! > usable * 0.9 ? 'WARNING' : 'SAFE' };
     };
     let estimate = await estimateAt(context);
     let safeContext: number | undefined;
@@ -814,7 +820,6 @@ export class ModelLifecycleService {
     } else if (estimate.classification !== 'UNKNOWN') safeContext = context;
     if (!reuse) {
       if (!adapter?.loadModel || !adapter.inspectModel || !adapter.probeModel) reasons.push('UNSUPPORTED_CAPABILITY');
-      if (i.loaded) reasons.push('CONTEXT_RELOAD_REQUIRED');
       if (estimate.classification === 'INSUFFICIENT') reasons.push('INSUFFICIENT_MEMORY');
       if (estimate.classification === 'UNKNOWN') {
         if (estimate.reservationMemoryBytes === undefined || usable === undefined ||
@@ -823,7 +828,7 @@ export class ModelLifecycleService {
       }
     }
     const policy = this.policy.checkModelLifecycle({ operation: 'load', modelId, computerId: i.computerId!, runtimeId: i.runtimeId,
-      context, memoryBytes: estimate.estimatedTotalMemory, automatic: !!options.executionId });
+      context, memoryBytes: estimate.reservationMemoryBytes ?? estimate.estimatedTotalMemory, automatic: !!options.executionId });
     if (policy.decision !== 'allow') reasons.push('POLICY_DENIED');
     const plan: ModelLoadPlan = { modelId, installationId: installation?.id ?? i.id, instanceId: i.id,
       computerId: i.computerId!, runtimeId: i.runtimeId, requestedContext: requested, configuredContextLimit: model.configuredContext,
@@ -844,7 +849,7 @@ export class ModelLifecycleService {
       if (this.policy.checkModelLifecycle({ operation: 'evict', modelId: i.modelId, computerId: plan.computerId, runtimeId: i.runtimeId }).decision !== 'allow') continue;
       candidates.push({ instanceId: i.id, reclaimBytes: i.residentMemoryBytes });
     }
-    const shortfall = (plan.estimate.estimatedTotalMemory ?? Infinity) - (plan.estimate.usableMemory ?? 0);
+    const shortfall = (plan.estimate.reservationMemoryBytes ?? Infinity) - (plan.estimate.usableMemory ?? 0);
     // Prefer a single sufficient victim; otherwise largest first minimizes victim count.
     const one = candidates.filter(c => c.reclaimBytes >= shortfall).sort((a, b) => a.reclaimBytes - b.reclaimBytes)[0];
     let selected = one ? [one] : candidates.sort((a, b) => b.reclaimBytes - a.reclaimBytes);
@@ -1780,7 +1785,7 @@ export class ModelLifecycleService {
           if (!this.deps.models.get(m.id)) {
             newlyRegistered++;
             this.deps.models.register({ id: m.id, name: m.name ?? m.id, provider: runtimeId, family: 'other',
-              contextMax: m.contextWindow ?? 0, parameters: m.parameters, quantization: m.quantization,
+              contextMax: m.contextWindow ?? 0, maxOutputTokens: m.maxOutputTokens, parameters: m.parameters, quantization: m.quantization,
               capabilities: ['generalChat'], toolCalling: m.toolCalling ?? false, structuredOutput: m.structuredOutput ?? false,
               vision: m.vision ?? false, audio: m.audio ?? false, embedding: m.embedding ?? false, reasoning: m.reasoning ?? false,
               runtimeCompatibility: [runtime.type], local: true, createdAt: new Date(), updatedAt: new Date() });

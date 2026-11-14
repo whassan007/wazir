@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ScopedInstructionResolver } from '../src/services/instructionResolver.js';
 import { HeuristicContextRelevanceSelector } from '../src/services/contextRelevanceSelector.js';
-import { ContextCompiler } from '../src/services/contextCompiler.js';
+import { ContextCompiler, planOutputReserveTokens } from '../src/services/contextCompiler.js';
 import type { ContextCandidate, ContextRequest } from '../src/types/context.js';
 
 describe('ScopedInstructionResolver & Context Discovery', () => {
@@ -177,6 +177,7 @@ describe('Tiered Priority, Deduplication, and Revision Selection', () => {
       taskDescription: 'Crucial User Task',
       projectRoot: '/tmp',
       effectiveContextWindow: 20000, // tight window: after reserves (18000), usable input is only 2000 tokens
+      reserve: { outputTokens: 8000, toolSchemaTokens: 5000, safetyTokens: 5000 },
       activeFiles: ['src/index.ts'],
       recentHistory: [
         {
@@ -362,6 +363,25 @@ describe('Execution Phase and Agent Specific Context', () => {
 
 describe('Token Budgeting, Reserves, and Prompt Caching', () => {
   const compiler = new ContextCompiler();
+
+  it('plans output reserve from task scope and clamps it to provider output limits', () => {
+    expect(planOutputReserveTokens({ taskDescription: 'What is a CPU?', taskType: 'chat' })).toBe(256);
+    expect(planOutputReserveTokens({ taskDescription: 'Add a validation helper', taskType: 'coding' })).toBe(1536);
+    expect(planOutputReserveTokens({ taskDescription: 'Write a C++17 quicksort program', taskType: 'coding', effectiveContextTokens: 8192, estimatedInputTokens: 3282 })).toBe(1536);
+    expect(planOutputReserveTokens({ taskDescription: 'Write a C++17 quicksort program', taskType: 'coding', effectiveContextTokens: 4096, estimatedInputTokens: 3700 })).toBe(268);
+    expect(planOutputReserveTokens({ taskDescription: 'Write code', requestedOutputTokens: 4096, maxOutputTokens: 512 })).toBe(512);
+    expect(planOutputReserveTokens({ taskDescription: 'Write code', requestedOutputTokens: 4096, effectiveContextTokens: 1024 })).toBe(4096);
+    expect(planOutputReserveTokens({
+      taskDescription: 'Refactor across the codebase and update multiple services',
+      taskType: 'coding',
+      effectiveContextTokens: 64000,
+    })).toBe(3200);
+    expect(planOutputReserveTokens({
+      taskDescription: 'What is a CPU?',
+      taskType: 'chat',
+      maxOutputTokens: 64,
+    })).toBe(64);
+  });
 
   it('24 & 25. 32K and 96K models receive different budgeted contexts and runtimeLoaded overrides max', async () => {
     const smallReq: ContextRequest = {

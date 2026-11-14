@@ -8,6 +8,7 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import {
   effectiveContextTokens,
+  planOutputReserveTokens,
   type AgentAdapter,
   type AgentErrorKind,
   type AgentRuntime,
@@ -32,7 +33,7 @@ import { executeTool as runRegisteredTool, sandboxStatus } from '@wazir/tools';
 import { recordWebContext } from './web.js';
 import { dispatchRemote, runWorkerPreflight } from '@wazir/workers';
 import type { RookEngine } from './engine.js';
-
+const OUTPUT_RESERVE_TOKENS = 4096;
 function toGenerationEvent(event: WorkerExecutionEvent): GenerationEvent | undefined {
   const data = event.data as Record<string, unknown> | undefined;
   switch (event.type) {
@@ -81,7 +82,6 @@ const SOURCE_CODE_EXTENSION_PATTERN = /\.(c|cc|cpp|cxx|h|hpp|hh|py|go|rs|java|kt
 function touchesSourceCode(filesChanged: string[]): boolean {
   return filesChanged.some((f) => SOURCE_CODE_EXTENSION_PATTERN.test(f));
 }
-const OUTPUT_RESERVE_TOKENS = 4096;
 
 export interface FleetRunnerOptions {
   useWorktrees?: boolean;
@@ -603,6 +603,7 @@ export function createFleetTaskExecutor(
           maxTurns: task.maxTurns ?? runnerOptions.maxTurns,
           maxRepairCycles: task.maxRepairCycles,
           contextTokens: contextDecision.available.tokens,
+          reserve: { outputTokens: contextDecision.budget.outputReserveTokens },
           isCancelled: () => signal?.aborted ?? false,
           getSteeringInstruction: () => context.getSteeringInstruction?.(),
           mutationRequired: context.mutationRequired ?? task.mutationRequired ?? task.requirements?.mutationRequired,

@@ -305,6 +305,8 @@ export class FleetTui {
   private lastShellOutput?: ShellExecutionSummary;
 
   private currentJob?: Job;
+  /** Fences late events and completion handlers when a newer chat job takes ownership. */
+  private jobLifecycleGeneration = 0;
   private currentRollup?: JobRollup;
   // Rollup (tokens, duration, tok/s) per job id, fetched on demand when a JOBS nav item
   // is selected — getJobRollup() is async (it reads execution records per task), so this
@@ -1121,6 +1123,10 @@ export class FleetTui {
    * Starts the TUI render loop and input listeners.
    */
   async start(): Promise<void> {
+    // start() is public and can be reached by both the CLI and test/embed callers.
+    // Re-entering it would register a second set of terminal and engine listeners.
+    if (this.isRunning) return;
+
     if (this.externalSignal?.aborted) {
       this.exitReason = 'interrupt';
       this.screen.leave();
@@ -1325,10 +1331,15 @@ export class FleetTui {
     if (!this.sessionAbortController.signal.aborted) {
       this.sessionAbortController.abort();
     }
+    this.jobLifecycleGeneration++;
+    if (this.currentJob && !['completed', 'failed', 'cancelled'].includes(this.currentJob.status)) {
+      void this.engine.orchestrator.cancelJob(this.currentJob.id).catch(() => undefined);
+    }
     if (this.renderTimer) clearInterval(this.renderTimer);
     if (this.updateIndicatorTimer) clearInterval(this.updateIndicatorTimer);
     if (this.unsubscribeApprovals) this.unsubscribeApprovals();
     if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
+    this.unsubscribeJobEvents = undefined;
     if (this.unsubscribeResize) this.unsubscribeResize();
     if (this.unsubscribeModelLifecycle) this.unsubscribeModelLifecycle();
     if (this.unsubscribeSolutionSearch) this.unsubscribeSolutionSearch();
@@ -4138,6 +4149,16 @@ export class FleetTui {
       }
     }
 
+    const lifecycleGeneration = ++this.jobLifecycleGeneration;
+    const previousJob = this.currentJob;
+    this.currentError = undefined;
+    if (previousJob && !['completed', 'failed', 'cancelled'].includes(previousJob.status)) {
+      // A new chat turn takes ownership of the single visible execution context.
+      // Stop the previous job so it cannot continue invisibly in the background.
+      void this.engine.orchestrator.cancelJob(previousJob.id).catch(() => undefined);
+    }
+    this.unsubscribeJobEvents?.();
+    this.unsubscribeJobEvents = undefined;
     try {
       if (this.engine.lifecycle?.ensureModelReadyForTask && jobTasks.length > 0) {
         const rawTask = jobTasks[0].task;
@@ -4173,15 +4194,25 @@ export class FleetTui {
         concurrencyLimit: this.concurrencyLimit,
         tasks: jobTasks,
       });
+      if (this.jobLifecycleGeneration !== lifecycleGeneration) {
+        void this.engine.orchestrator.cancelJob(job.id).catch(() => undefined);
+        return;
+      }
 
       if (this.currentBlockTracker) {
         await this.currentBlockTracker.update({ jobId: job.id });
         await this.refreshRecentBlocks();
+        if (this.jobLifecycleGeneration !== lifecycleGeneration) {
+          void this.engine.orchestrator.cancelJob(job.id).catch(() => undefined);
+          return;
+        }
       }
 
       this.currentJob = job;
       this.agents.clear();
       this.agentLogs.clear();
+      this.streamingBuffers.clear();
+      this.lastRawResponse.clear();
       this.eventSummarizer = new EventSummarizer(this.eventSummarizer.getVerbosity());
       this.statusProjection.seed(job.tasks.map((task) => task.id));
       // A new job means a fresh execution context — reset dismissed-error tracking so
@@ -4223,7 +4254,10 @@ export class FleetTui {
 
       // Subscribe to live orchestrator events
       if (this.unsubscribeJobEvents) this.unsubscribeJobEvents();
-      this.unsubscribeJobEvents = this.engine.orchestrator.subscribe(job.id, this.onJobEvent);
+      this.unsubscribeJobEvents = this.engine.orchestrator.subscribe(job.id, (event) => {
+        if (this.jobLifecycleGeneration !== lifecycleGeneration || this.currentJob?.id !== job.id) return;
+        this.onJobEvent(event);
+      });
 
       // Create executor and launch job
       const executor = createFleetTaskExecutor(this.engine, {
@@ -4243,10 +4277,15 @@ export class FleetTui {
             timeoutSeconds: this.timeoutSeconds,
           });
 
+          // A later prompt may have replaced this job while runJob was pending.
+          // Its completion belongs to its own job and must not repaint the new chat.
+          if (this.jobLifecycleGeneration !== lifecycleGeneration || this.currentJob?.id !== job.id) return;
+
           const finalJob = await this.engine.orchestrator.getJob(job.id);
-          if (!finalJob) return;
+          if (!finalJob || this.jobLifecycleGeneration !== lifecycleGeneration || this.currentJob?.id !== job.id) return;
           this.currentJob = finalJob;
           this.currentRollup = await this.engine.orchestrator.getJobRollup(job.id);
+          if (this.jobLifecycleGeneration !== lifecycleGeneration || this.currentJob?.id !== job.id) return;
           if (!this.engine.orchestrator.getJob(job.id)) return;
           this.jobRollups.set(job.id, this.currentRollup);
           // A timeout is reported as 'failed' with the reason on the task node; say so
@@ -4278,6 +4317,7 @@ export class FleetTui {
             await this.refreshRecentBlocks();
           }
         } catch (err) {
+          if (this.jobLifecycleGeneration !== lifecycleGeneration || this.currentJob?.id !== job.id) return;
           const errMsg = err instanceof Error ? err.message : String(err);
           const isSched = /schedul|eligible|model|capacity|admission|reject/i.test(errMsg);
           this.statusMessage = `${isSched ? 'Scheduler rejected task · ' : 'Execution failed · '}Job execution error: ${errMsg}`;
@@ -4312,9 +4352,14 @@ export class FleetTui {
             await this.refreshRecentBlocks();
           }
         }
+        if (this.jobLifecycleGeneration === lifecycleGeneration) {
+          this.unsubscribeJobEvents?.();
+          this.unsubscribeJobEvents = undefined;
+        }
         this.draw();
       })();
     } catch (err) {
+      if (lifecycleGeneration !== this.jobLifecycleGeneration) return;
       const errMsg = err instanceof Error ? err.message : String(err);
       this.statusMessage = `Scheduler rejected task · Scheduling failed: ${errMsg}`;
       if (this.currentBlockTracker) {

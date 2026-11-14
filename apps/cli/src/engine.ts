@@ -92,7 +92,12 @@ import path from 'node:path';
 import { EvaluationService, BenchmarkService, MetaOptimizerService } from '@wazir/evaluation';
 import { VerificationEngine } from '@wazir/core';
 
+export type EngineProfile = 'minimal' | 'interactive' | 'full';
+
 export interface EngineOptions {
+  profile?: EngineProfile;
+  /** Override local hardware/runtime probing, including opting in for a minimal profile. */
+  skipRuntimeDiscovery?: boolean;
   projectRoot?: string;
   quiet?: boolean;
   readOnlyLifecycle?: boolean;
@@ -102,6 +107,23 @@ export interface EngineOptions {
   approvalTimeoutMs?: number;
   /** Opt in to honouring `WAZIR_AUTO_APPROVE=1`; never on by default. */
   allowEnvAutoApprove?: boolean;
+}
+
+export function resolveEngineProfile(options: EngineOptions): EngineProfile {
+  return options.profile ?? (options.fastStartup && options.readOnlyLifecycle ? 'minimal' : 'full');
+}
+
+/** Cache successful construction while keeping service access synchronous. */
+function memoizeService<T>(create: () => T): () => T {
+  let value: T;
+  let initialized = false;
+  return () => {
+    if (!initialized) {
+      value = create();
+      initialized = true;
+    }
+    return value;
+  };
 }
 
 export interface RookEngine {
@@ -237,7 +259,8 @@ async function detectOpenCode(): Promise<boolean> {
 }
 
 export async function createEngine(options: EngineOptions = {}): Promise<RookEngine> {
-  primeCoreWebModule(coreModule);
+  const profile = resolveEngineProfile(options);
+  const skipRuntimeDiscovery = options.skipRuntimeDiscovery ?? (profile === 'minimal');
   globalStartupProfiler.mark('engine.start', options.fastStartup ? 'fastStartup' : 'full');
   const config = loadConfig();
   const projectRoot = path.resolve(options.projectRoot ?? process.cwd());
@@ -296,11 +319,16 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     name: process.env.WAZIR_COMPUTER_NAME ?? os.hostname() ?? 'local',
     adapters: adapterList,
   });
-  await worker.start();
+  if (!skipRuntimeDiscovery) await worker.start();
   globalStartupProfiler.mark('engine.discovery');
   const discovered = worker.discovered;
   const adapterById = new Map(discovered.map((d) => [d.id, d.adapter]));
-  const hardware = worker.hardwareReport!;
+  // Do not access worker.hardwareReport here: its fallback performs full hardware discovery.
+  const cpus = skipRuntimeDiscovery ? os.cpus() : [];
+  const hardware = skipRuntimeDiscovery ? {
+    os: { platform: process.platform, architecture: process.arch, version: process.version },
+    hardware: { cpu: cpus[0]?.model ?? 'unknown', cpuCores: cpus.length, memoryGB: Math.max(1, Math.round(os.totalmem() / (1024 ** 3))) },
+  } : worker.hardwareReport!;
 
   const localComputer: ComputerRegistration = {
     id: process.env.WAZIR_COMPUTER_ID ?? 'local',
@@ -324,7 +352,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // hostedProviders.ts's docstring for the invariant this depends on: nothing
   // that searches `worker.adapterForModel()` can ever reach a hosted adapter,
   // since the worker's own discovery list is strictly local/hardware-bound.
-  const secretBroker = await createSecretBroker({ secretsDir: engineConfigDir });
+  const secretBroker = await getSharedSecretBroker(engineConfigDir);
   const hostedAdapters = createHostedProviders(config, secretBroker, { fastStartup: options.fastStartup });
   for (const [id, rawAdapter] of hostedAdapters) {
     const adapter = govern(rawAdapter);
@@ -468,7 +496,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
 
   // ---- scheduler ----------------------------------------------------------
   const classifier = new TaskCapabilityClassifier();
-  const modelIntelligence = new ModelIntelligenceService({ classifier, store });
+  const getModelIntelligence = memoizeService(() => new ModelIntelligenceService({ classifier, store }));
   const reliability = new ModelReliabilityTracker();
   const nvidiaLimits = buildNvidiaHostedLimits(config.providers?.nvidia);
   // Accounts for anything not configured: local runtimes, hosted APIs (paid only if hosted
@@ -547,7 +575,7 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     policy,
     agents,
     reliability,
-    modelIntelligence,
+    get modelIntelligence() { return getModelIntelligence(); },
     resources: { router: resources.router },
     routing: config.routing,
     ranker: modelRanker,
@@ -640,23 +668,23 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     new RecoveryManager({ computers, executions, jobManager, orchestrator, inspectToolOutcome: inspectOutcome }).start();
   }
 
-  const offloadStore = new OffloadStore({
+  const getOffloadStore = memoizeService(() => new OffloadStore({
     workspace: projectRoot,
     enabled: config.context?.offload?.enabled ?? true,
-  });
+  }));
 
-  const compaction = new ContextCompactionService({
+  const getCompaction = memoizeService(() => new ContextCompactionService({
     engine: executions,
     config: config.context?.compaction,
     defaultReserves: config.context?.reserve as any,
-  });
+  }));
 
-  const layoutPlanner = new PromptLayoutPlanner();
+  const getLayoutPlanner = memoizeService(() => new PromptLayoutPlanner());
 
-  const revision = new ContextRevisionService({
+  const getRevision = memoizeService(() => new ContextRevisionService({
     compiler,
-    compactionService: compaction,
-    layoutPlanner,
+    compactionService: getCompaction(),
+    layoutPlanner: getLayoutPlanner(),
     engine: executions,
     config: {
       enabled: config.context?.revision?.enabled ?? true,
@@ -665,33 +693,36 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
       preserveRecentTailRatio: config.context?.revision?.preserveRecentTailRatio ?? 0.50,
       layoutStrategy: config.context?.layout?.strategy ?? 'CACHE_STABLE_PREFIX',
     },
-  });
+  }));
 
-  const evaluation = new EvaluationService();
-  const benchmark = new BenchmarkService(evaluation);
-  const verificationEngine = new VerificationEngine({ projectRoot });
+  const getEvaluation = memoizeService(() => new EvaluationService());
+  const getBenchmark = memoizeService(() => new BenchmarkService(getEvaluation()));
+  const getVerification = memoizeService(() => new VerificationEngine({ projectRoot }));
 
-  const solutionSearch = new SolutionSearchService({
+  const getSolutionSearch = memoizeService(() => new SolutionSearchService({
     checkpointService: checkpoints,
     worktreeManager: worktrees,
     executionEngine: executions,
-    evaluationService: evaluation,
-    verificationEngine,
+    evaluationService: getEvaluation(),
+    verificationEngine: getVerification(),
     provenanceManager: provenance,
     defaultProjectRoot: projectRoot,
-  });
+  }));
 
-  const optimizer = new MetaOptimizerService({
-    benchmarkService: benchmark,
-    evaluationService: evaluation,
-    verificationEngine,
+  const getOptimizer = memoizeService(() => new MetaOptimizerService({
+    benchmarkService: getBenchmark(),
+    evaluationService: getEvaluation(),
+    verificationEngine: getVerification(),
     worktreeManager: worktrees,
     checkpointService: checkpoints,
     policyEngine: policy,
     store,
-  });
-  if (!options.fastStartup) {
-    await optimizer.hydrate();
+  }));
+  if (profile !== 'minimal' && !skipRuntimeDiscovery) {
+    getOffloadStore();
+    getCompaction();
+    getLayoutPlanner();
+    getRevision();
   }
   globalStartupProfiler.mark('engine.ready');
   globalStartupProfiler.emitIfEnabled();
@@ -712,6 +743,11 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     resources,
     projectRoot,
     configDir: engineConfigDir,
+    web,
+    get compaction() { return getCompaction(); },
+    get revision() { return getRevision(); },
+    get layoutPlanner() { return getLayoutPlanner(); },
+    get offloadStore() { return getOffloadStore(); },
     computers,
     runtimes,
     models,
@@ -719,27 +755,22 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     health,
     agents,
     tools,
-    web,
     policy,
     scheduler,
     reliability,
     compiler,
-    compaction,
-    revision,
-    layoutPlanner,
-    offloadStore,
     executions,
     provenance,
     approvalQueue,
     orchestrator,
     worktrees,
     checkpoints,
-    solutionSearch,
-    evaluation,
-    benchmark,
-    optimizer,
-    modelIntelligence,
-    verification: verificationEngine,
+    get solutionSearch() { return getSolutionSearch(); },
+    get evaluation() { return getEvaluation(); },
+    get benchmark() { return getBenchmark(); },
+    get optimizer() { return getOptimizer(); },
+    get modelIntelligence() { return getModelIntelligence(); },
+    get verification() { return getVerification(); },
     planner,
     adapters: adapterById,
     discovered,
@@ -922,9 +953,9 @@ function registerModel(
     architecture: discovered.architecture,
     parameters: discovered.parameters,
     contextMax,
+    maxOutputTokens: discovered.maxOutputTokens,
     configuredContext: configured,
     maxInputTokens: discovered.maxInputTokens,
-    maxOutputTokens: discovered.maxOutputTokens,
     contextAccounting: discovered.contextAccounting,
     contextLimitSource,
     capabilities,
@@ -969,6 +1000,20 @@ function registerModel(
   });
 }
 
+let cachedDefaultSecretBroker: Promise<SecretBroker> | undefined;
+let cachedDefaultSecretDir: string | undefined;
+
+function getSharedSecretBroker(secretsDir: string): Promise<SecretBroker> {
+  if (cachedDefaultSecretDir !== secretsDir || !cachedDefaultSecretBroker) {
+    cachedDefaultSecretDir = secretsDir;
+    cachedDefaultSecretBroker = createSecretBroker({ secretsDir });
+  }
+  return cachedDefaultSecretBroker;
+}
+
+let cachedDefaultStore: Promise<KeyValueStore> | undefined;
+let cachedDefaultStoreKey: string | undefined;
+
 export async function createStore(): Promise<KeyValueStore> {
   if (process.env.WAZIR_DATABASE_URL) {
     const { createPool, runKvMigration, PostgresStore } = await import('@wazir/database');
@@ -979,7 +1024,13 @@ export async function createStore(): Promise<KeyValueStore> {
   if (process.env.WAZIR_IN_MEMORY === '1') {
     return new MemoryStore();
   }
-  return new JsonFileStore(path.join(configDir(), 'wazir.json'));
+  const storePath = path.join(configDir(), 'wazir.json');
+  if (cachedDefaultStoreKey === storePath && cachedDefaultStore) {
+    return cachedDefaultStore;
+  }
+  cachedDefaultStoreKey = storePath;
+  cachedDefaultStore = Promise.resolve(new JsonFileStore(storePath));
+  return cachedDefaultStore;
 }
 
 function dedupe<T>(items: T[]): T[] {

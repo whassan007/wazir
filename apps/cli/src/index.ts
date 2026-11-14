@@ -21,11 +21,40 @@ globalStartupProfiler.mark('cli.entry');
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.15';
+export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.2.15';
 
-const rawArgs = process.argv.slice(2);
-if (rawArgs.length === 1 && (rawArgs[0] === '--version' || rawArgs[0] === '-V')) {
-  process.stdout.write(`${CLI_VERSION}\n`);
+/**
+ * Zero-overhead fast path for version flags (`--version`, `-V`, `version`, `version --json`).
+ * Avoids constructing heavy subcommand trees or booting the engine when only version metadata is requested.
+ */
+export function tryHandleFastCliFlags(
+  argv: readonly string[],
+  version: string = CLI_VERSION,
+  writeOut: (text: string) => void = (text) => {
+    process.stdout.write(text);
+  },
+): boolean {
+  if (argv.length === 1) {
+    const flag = argv[0];
+    if (flag === '--version' || flag === '-V' || flag === 'version') {
+      writeOut(`${version}\n`);
+      return true;
+    }
+  } else if (
+    argv.length === 2 &&
+    argv[0] === 'version' &&
+    (argv[1] === '--json' || argv[1] === '-j')
+  ) {
+    writeOut(`${JSON.stringify({ version })}\n`);
+    return true;
+  }
+  return false;
+}
+
+if (
+  process.env.VITEST !== 'true' &&
+  tryHandleFastCliFlags(process.argv.slice(2), CLI_VERSION)
+) {
   globalStartupProfiler.mark('cli.fast_version');
   globalStartupProfiler.emitIfEnabled();
   process.exit(0);
@@ -2370,8 +2399,10 @@ program
   program.outputHelp();
 });
 
-globalStartupProfiler.mark('cli.parse');
-program.parse();
-globalStartupProfiler.emitIfEnabled();
+if (process.env.VITEST !== 'true') {
+  globalStartupProfiler.mark('cli.parse');
+  program.parse();
+  globalStartupProfiler.emitIfEnabled();
+}
 
 
