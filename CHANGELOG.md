@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.3.2 — 2026-11-14
+
+**Release**: `v0.3.2`
+**Theme**: Autonomous Execution, Model Admission, and Distributed Runtime Reliability Recovery (`P0-A`–`P1-I`)
+
+- **Model Admission & Gemma 4 / Ollama Estimation (`P0-A`, `P0-B`)**:
+  - Replaced blanket `MODEL_ADMISSION_DENIED: ESTIMATE_UNKNOWN` rejections with structured admission diagnostics distinguishing missing metadata, stale/missing telemetry, insufficient physical/available memory, runtime incompatibility, policy denial, and load failures, triggering bounded discovery or safe fallback.
+  - Updated `@wazir/runtime-ollama` memory estimation to support both scalar and per-layer array `attention.head_count_kv`, explicit key/value head dimensions, language-model vs. vision metadata separation, live `/api/show` and `/api/tags` discovery, and conservative weights + FP32 KV-cache + overhead estimates.
+- **Remote DGX Unified-Memory Telemetry (`P0-C`)**:
+  - Fixed remote fleet host telemetry refresh, unified CPU/GPU memory modeling for NVIDIA DGX Spark (GB10), provenance/timestamp tracking, and stale-heartbeat handling without substituting local host memory.
+- **Context Preflight & Tool-Loop Progress (`P0-D`, `P0-E`)**:
+  - Implemented preflight context accounting against runtime-discovered effective capacity with ordered mitigation (redundant observation pruning, history compaction, schema reduction, fallback/clear failure).
+  - Updated progress detection to recognize useful read-only analysis, adding tool-call fingerprinting, duplicate-result detection, and bounded exploration stopping criteria.
+- **Workspace Resolution, Job Lifecycle, LM Studio & TUI (`P0-F`, `P0-G`, `P1-H`, `P1-I`)**:
+  - Fixed polyglot repository-root resolution, worktree initialization, and path canonicalization without requiring a root `package.json` and while preserving sandbox boundaries.
+  - Enforced terminal job states, bounded retry classification, reservation release, accurate duration reporting, and TUI event reconciliation.
+  - Distinguished installed vs. loaded LM Studio instances for safe unload-by-instance/unload-all, and fixed TUI error recommendations so natural-language requests are not suggested as `!` shell commands.
+
 ## v0.3.1 — 2026-11-14
 
 **Release**: `v0.3.1`
