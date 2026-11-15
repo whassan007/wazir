@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { resolveNodeRuntimeBinary, resolveWazirCliCommand } from '@wazir/shared';
 import {
   detectOracleWeakening,
   type OracleWeakeningFinding,
@@ -1586,10 +1587,11 @@ async function executeDisposableGitRepoJourneyD(
     });
     stepsVerified.push('Initialized disposable Git repo with baseline failing test');
 
+    const nodeRuntimeBin = resolveNodeRuntimeBinary();
     // Confirm test initially fails before feature implementation
     const preTest = await runIsolatedCommand({
       id: 'pre-feature-test',
-      command: process.execPath,
+      command: nodeRuntimeBin,
       args: ['--test', 'test/waveAllocator.test.js'],
       cwd: tempRoot,
       expectedExitCode: 1,
@@ -1648,10 +1650,11 @@ async function executeDisposableGitRepoJourneyD(
       },
     ];
     if (options.cliEntrypointPath && fs.existsSync(options.cliEntrypointPath)) {
+      const cliInvoke = resolveWazirCliCommand(['--help'], options.cliEntrypointPath);
       extraCommands.push({
         id: 'wazir-cli-help',
-        command: process.execPath,
-        args: [options.cliEntrypointPath, '--help'],
+        command: cliInvoke.command,
+        args: cliInvoke.args,
         cwd: tempRoot,
       });
     }
@@ -1675,7 +1678,7 @@ async function executeDisposableGitRepoJourneyD(
       acceptanceTestCommands: [
         {
           id: 'node-test-wave-allocator',
-          command: process.execPath,
+          command: nodeRuntimeBin,
           args: ['--test', 'test/waveAllocator.test.js'],
           cwd: tempRoot,
         },

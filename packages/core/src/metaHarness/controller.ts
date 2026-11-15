@@ -3,7 +3,7 @@ import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MemoryStore, type KeyValueStore } from '@wazir/shared';
+import { MemoryStore, resolveNodeRuntimeBinary, type KeyValueStore } from '@wazir/shared';
 
 import type {
   AcceptanceState,
@@ -2382,6 +2382,7 @@ test('canAcceptExecution requires verified inference and blocks DISABLED_BY_POLI
         : v.failureReasons.join('; ');
 
     // Run independent verification separated from producing agents (`verifier-X01` != `D01,M01,L01`)
+    const nodeRuntimeBin = resolveNodeRuntimeBinary();
     const runVerification = () =>
       verifyDeliverableIndependently({
         verificationId: `deliv-${Date.now()}`,
@@ -2395,7 +2396,7 @@ test('canAcceptExecution requires verified inference and blocks DISABLED_BY_POLI
         verificationCommands: [
           {
             id: 'node-test-suite',
-            command: process.execPath,
+            command: nodeRuntimeBin,
             args: ['--test', testRelPath],
             expectedExitCode: 0,
           },
@@ -2415,7 +2416,7 @@ test('canAcceptExecution requires verified inference and blocks DISABLED_BY_POLI
             .filter((c) => !c.passed)
             .map((c) => c.summary)
             .join('\n'),
-          failingCommand: `${process.execPath} --test ${testRelPath}`,
+          failingCommand: `${nodeRuntimeBin} --test ${testRelPath}`,
           verificationCriteriaBefore: ['allocatePoolShares', 'computeUtilizationRatio', 'canAcceptExecution'],
         },
         {

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { WorktreeManager } from '@wazir/core';
-import type { KeyValueStore } from '@wazir/shared';
+import { resolveWazirCliCommand, type KeyValueStore } from '@wazir/shared';
 import {
   computeCandidateRevisionHash,
   ensureAuthorizedCandidateBranch,
@@ -355,9 +355,7 @@ export async function executeRepairScope(params: {
       agentExitCode = 1;
     }
   } else {
-    const cliEntry = path.resolve(process.argv[1]);
-    const args = [
-      cliEntry,
+    const subcommandArgs = [
       'task',
       'run',
       `${scope.mode.toUpperCase()} scoped repair. ${
@@ -373,8 +371,9 @@ export async function executeRepairScope(params: {
       String(scope.maxTurns ?? 8),
       '--json',
     ];
-    if (scope.model) args.push('--model', scope.model);
-    const agent = await boundedCommand(process.execPath, args, cwd, timeoutMs, params.signal);
+    if (scope.model) subcommandArgs.push('--model', scope.model);
+    const cli = resolveWazirCliCommand(subcommandArgs);
+    const agent = await boundedCommand(cli.command, cli.args, cwd, timeoutMs, params.signal);
     agentExitCode = agent.exitCode;
   }
 

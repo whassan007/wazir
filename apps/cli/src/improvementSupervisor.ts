@@ -8,7 +8,7 @@ import net from 'node:net';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { JsonFileStore } from '@wazir/shared';
+import { JsonFileStore, isNodeSeaRuntime, resolveNodeRuntimeBinary, resolveWazirCliCommand } from '@wazir/shared';
 import {
   SelfImprovementSupervisor,
   formatCompletionSummaryReport,
@@ -88,9 +88,11 @@ export async function running(directory: string): Promise<boolean> {
 }
 
 export function buildSystemdUserUnit(projectRoot = process.cwd(), modes = 'harden,optimize'): string {
-  const nodeBin = process.execPath;
+  const isSea = isNodeSeaRuntime();
+  const nodeBin = resolveNodeRuntimeBinary();
   const cliEntry = path.resolve(process.argv[1]);
-  const nodeDir = path.dirname(nodeBin);
+  const binDir = path.dirname(isSea ? process.execPath : nodeBin);
+  const execStartPrefix = isSea ? process.execPath : `${nodeBin} ${cliEntry}`;
   return [
     '[Unit]',
     'Description=Wazir Continuous Self-Improvement Supervisor',
@@ -99,8 +101,8 @@ export function buildSystemdUserUnit(projectRoot = process.cwd(), modes = 'harde
     '[Service]',
     'Type=simple',
     `WorkingDirectory=${path.resolve(projectRoot)}`,
-    `Environment="PATH=${nodeDir}:/usr/local/bin:/usr/bin:/bin"`,
-    `ExecStart=${nodeBin} ${cliEntry} improve start --foreground --continuous --mode ${modes}`,
+    `Environment="PATH=${binDir}:/usr/local/bin:/usr/bin:/bin"`,
+    `ExecStart=${execStartPrefix} improve start --foreground --continuous --mode ${modes}`,
     'Restart=on-failure',
     'RestartSec=15',
     'KillMode=process',
@@ -435,8 +437,7 @@ export async function improvementSupervisorCommand(
   if (command === 'start' && !options.foreground) {
     if (await running(directory)) throw new Error('A supervisor already owns this repository');
     const logHandle = await fs.open(logFile, 'a', 0o600);
-    const args = [
-      path.resolve(process.argv[1]),
+    const subcommandArgs = [
       'improve',
       'start',
       '--foreground',
@@ -447,11 +448,12 @@ export async function improvementSupervisorCommand(
       '--max-cycles',
       String(maxCycles),
     ];
-    if (options.continuous) args.push('--continuous');
-    if (scope) args.push('--scope', scope);
-    if (requestedCommitMode === 'AUTO_COMMIT') args.push('--auto-commit');
-    if (requestedCommitMode === 'NO_COMMIT') args.push('--no-commit');
-    const child = spawn(process.execPath, args, {
+    if (options.continuous) subcommandArgs.push('--continuous');
+    if (scope) subcommandArgs.push('--scope', scope);
+    if (requestedCommitMode === 'AUTO_COMMIT') subcommandArgs.push('--auto-commit');
+    if (requestedCommitMode === 'NO_COMMIT') subcommandArgs.push('--no-commit');
+    const cli = resolveWazirCliCommand(subcommandArgs);
+    const child = spawn(cli.command, cli.args, {
       cwd: projectRoot,
       detached: true,
       stdio: ['ignore', logHandle.fd, logHandle.fd],

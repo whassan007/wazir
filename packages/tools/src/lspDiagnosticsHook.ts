@@ -1,6 +1,7 @@
 import { execFile as _execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as path from 'node:path';
+import { resolveNodeRuntimeBinary } from '@wazir/shared';
 import type { ToolExecutionContext } from '@wazir/core';
 
 const execFile = promisify(_execFile);
@@ -90,7 +91,7 @@ export async function checkSyntaxDiagnostics(
     } else if (['.js', '.mjs', '.cjs'].includes(ext)) {
       if (!resolvedPath) return [];
       try {
-        await timeoutPromise(execFile(process.execPath, ['--check', resolvedPath], { timeout: timeoutMs }), timeoutMs);
+        await timeoutPromise(execFile(resolveNodeRuntimeBinary(), ['--check', resolvedPath], { timeout: timeoutMs }), timeoutMs);
         return [];
       } catch (err: any) {
         if (err.code !== 0 && err.stderr && err.stderr.includes('SyntaxError')) {

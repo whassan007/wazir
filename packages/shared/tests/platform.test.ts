@@ -14,6 +14,9 @@ import {
   isWindowsReservedName,
   quoteWindowsArg,
   quotePosixArg,
+  isNodeSeaRuntime,
+  resolveNodeRuntimeBinary,
+  resolveWazirCliCommand,
 } from '../src/platform.js';
 
 describe('platform utilities', () => {
@@ -170,5 +173,22 @@ describe('platform utilities', () => {
       expect(quotePosixArg("it's")).toBe("'it'\\''s'");
     });
   });
+
+  describe('SEA binary vs Node runtime command resolution', () => {
+    it('resolves node runtime binary and JS CLI entrypoints in standard Node mode', () => {
+      expect(isNodeSeaRuntime()).toBe(false);
+      expect(resolveNodeRuntimeBinary()).toBe(process.execPath);
+      const cli = resolveWazirCliCommand(['--help'], '/tmp/fake-wazir/bin/wa.js');
+      expect(cli.command).toBe(process.execPath);
+      expect(cli.args).toEqual(['/tmp/fake-wazir/bin/wa.js', '--help']);
+    });
+
+    it('invokes native executable entrypoints directly without prepending script path', () => {
+      const cli = resolveWazirCliCommand(['--help'], process.execPath);
+      expect(cli.command).toBe(path.resolve(process.execPath));
+      expect(cli.args).toEqual(['--help']);
+    });
+  });
 });
+
 

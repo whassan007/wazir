@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import type { MCPRegistry, MCPServerDefinition, ToolExecutionContext, ToolResult } from '@wazir/core';
-import { generateId } from '@wazir/shared';
+import { generateId, resolveWazirCliCommand } from '@wazir/shared';
 import { configDir } from './config.js';
 import { promptSecret } from './secretPrompt.js';
 import { createApprover } from './approve.js';
@@ -185,8 +185,9 @@ async function startDaemon(id: string): Promise<MCPDaemonState> {
   try {
     const existing = await readDaemonState(id); if (existing?.state === 'CONNECTED') return existing;
     await stopDaemon(id, true);
-    const entry = process.argv[1]; if (!entry) throw new Error('Cannot locate the Wazir CLI entry point.');
-    const child = spawn(process.execPath, [entry, 'mcp', 'serve', id], { detached: true, stdio: 'ignore', env: process.env });
+    if (!process.argv[1] && !process.execPath) throw new Error('Cannot locate the Wazir CLI entry point.');
+    const cli = resolveWazirCliCommand(['mcp', 'serve', id]);
+    const child = spawn(cli.command, cli.args, { detached: true, stdio: 'ignore', env: process.env });
     child.unref();
     let spawnFailed = false; child.once('error', () => { spawnFailed = true; });
     const deadline = Date.now() + 15_000;

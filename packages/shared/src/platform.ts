@@ -358,3 +358,73 @@ export function quotePosixArg(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
+/**
+ * Returns true when running inside a Node.js Single Executable Application (SEA) binary.
+ */
+export function isNodeSeaRuntime(): boolean {
+  try {
+    const proc = process as NodeJS.Process & {
+      getBuiltinModule?: (id: string) => { isSea?: () => boolean } | undefined;
+      isSea?: () => boolean;
+    };
+    return Boolean(proc.getBuiltinModule?.('node:sea')?.isSea?.() || proc.isSea?.());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolves a standalone `node` runtime binary suitable for flags such as `--test`, `--check`, or `-e`.
+ * When running inside a Node.js SEA standalone binary (`wa` / `wazir`), `process.execPath` points to
+ * the packaged Wazir binary rather than `node`, so `node` is resolved from `PATH` or standard locations.
+ */
+export function resolveNodeRuntimeBinary(envPath?: string): string {
+  if (!isNodeSeaRuntime()) {
+    return process.execPath;
+  }
+  const seaExecResolved = path.resolve(process.execPath);
+  const rawPath = envPath ?? getEnvCaseInsensitive('PATH') ?? '';
+  const dirs = rawPath
+    .split(path.delimiter)
+    .map((d) => d.trim().replace(/^"|"$/g, ''))
+    .filter(Boolean);
+  const fallbackDirs = isWindows
+    ? ['C:\\Program Files\\nodejs']
+    : ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'];
+  const nodeNames = isWindows ? ['node.exe', 'node.cmd', 'node'] : ['node'];
+
+  for (const dir of [...dirs, ...fallbackDirs]) {
+    for (const name of nodeNames) {
+      const candidate = path.join(dir, name);
+      if (path.resolve(candidate) === seaExecResolved) continue;
+      if (isExecutableFile(candidate)) return candidate;
+    }
+  }
+  return isWindows ? 'node.exe' : 'node';
+}
+
+/**
+ * Resolves `{ command, args }` to invoke the Wazir CLI itself, handling both standard `node bin/wa.js`
+ * invocations and standalone Node.js SEA binaries where `process.execPath` is already the CLI executable.
+ */
+export function resolveWazirCliCommand(
+  subcommandArgs: readonly string[],
+  explicitEntrypoint?: string,
+): { command: string; args: string[] } {
+  const isSea = isNodeSeaRuntime();
+  const entry = explicitEntrypoint ?? process.argv[1];
+  if (isSea) {
+    if (!entry || path.resolve(entry) === path.resolve(process.execPath)) {
+      return { command: process.execPath, args: [...subcommandArgs] };
+    }
+  }
+  if (entry && !/\.(?:[cm]?[jt]s)$/i.test(entry) && isExecutableFile(entry)) {
+    return { command: path.resolve(entry), args: [...subcommandArgs] };
+  }
+  if (!entry) {
+    return { command: process.execPath, args: [...subcommandArgs] };
+  }
+  return { command: resolveNodeRuntimeBinary(), args: [path.resolve(entry), ...subcommandArgs] };
+}
+
+
