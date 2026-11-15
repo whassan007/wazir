@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-11-15T02:52:48.116Z",
+  "endpoint": "http://100.113.62.112:11434",
+  "runtime": {
+    "id": "dgx_spark:ollama",
+    "name": "Ollama",
+    "version": "0.33.0",
+    "url": "http://100.113.62.112:11434"
+  },
+  "health": {
+    "status": "healthy"
+  },
+  "installedCount": 6,
+  "gemma4Model": {
+    "id": "gemma4:26b",
+    "name": "gemma4:26b",
+    "family": "gemma4",
+    "parameters": "25.2B",
+    "quantization": "Q4_K_M",
+    "contextWindow": 262144,
+    "contextLimitSource": "runtime-discovered",
+    "weightBytes": 18604148513,
+    "capabilities": [
+      "generalChat"
+    ],
+    "toolCalling": true,
+    "structuredOutput": false,
+    "vision": true,
+    "audio": false,
+    "embedding": false,
+    "reasoning": true,
+    "loaded": false
+  },
+  "loadedModels": [],
+  "estimate32k": {
+    "weightBytes": 18604148513,
+    "contextBytes": 32212254720,
+    "overheadBytes": 2790622276.95,
+    "totalMemoryBytes": 53607025509.95,
+    "vramBytes": 53607025509.95,
+    "source": "HEURISTIC",
+    "confidence": "low"
+  }
+}

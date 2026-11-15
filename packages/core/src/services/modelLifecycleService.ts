@@ -1,4 +1,4 @@
-import { ModelLifecycleError, type ModelLoadOptions, type ModelLoadPlan, type LoadEstimate, type ResourceReservation } from '../types/modelLifecycle.js';
+import { ModelLifecycleError, type ModelLoadOptions, type ModelLoadPlan, type LoadEstimate, type ResourceReservation, type ResourceSnapshot } from '../types/modelLifecycle.js';
 import { PolicyEngine } from './policyEngine.js';
 import type { ExecutionEngine } from './executionEngine.js';
 import type {
@@ -23,6 +23,26 @@ export interface IneligibleModelEntry {
   expiresAt: number;
   markedAt: number;
 }
+
+export interface AdmissionExplanation {
+  decision: 'ADMITTED' | 'DENIED';
+  model: string;
+  computer: string;
+  runtime: string;
+  context_tokens: number;
+  memory_estimate_source: 'RUNTIME' | 'HEURISTIC' | 'UNKNOWN';
+  hardware_measurement_source: 'HEARTBEAT' | 'OS_FREEMEM' | 'UNAVAILABLE';
+  measurement_fresh: boolean;
+  reused_loaded_model: boolean;
+  reservation_created: boolean;
+  reasons: string[];
+}
+
+export type AdmittedModelLoadPlan = ModelLoadPlan & {
+  admissionDecision: ModelLoadPlan['admissionDecision'] & {
+    explanation?: AdmissionExplanation;
+  };
+};
 
 export interface EnsureModelReadyForTaskOptions {
   modelId: string;
@@ -717,11 +737,11 @@ export class ModelLifecycleService {
       !['completed', 'failed', 'cancelled'].includes(r.execution.status)).map(r => r.execution.id)];
   }
 
-  async estimate(modelId: string, options: ModelLoadOptions = {}): Promise<ModelLoadPlan> {
+  async estimate(modelId: string, options: ModelLoadOptions & { _refreshedComputers?: Set<string> } = {}): Promise<AdmittedModelLoadPlan> {
     const candidates = this.deps.models.instancesOf(modelId).filter(i => i.computerId &&
       (!options.computerId || options.computerId === i.computerId) && (!options.runtimeId || options.runtimeId === i.runtimeId));
     candidates.sort((a, b) => Number(b.state === 'READY') - Number(a.state === 'READY') || a.id.localeCompare(b.id));
-    let first: ModelLoadPlan | undefined;
+    let first: AdmittedModelLoadPlan | undefined;
     for (const i of candidates) {
       const plan = await this.estimateTarget(modelId, { ...options, computerId: i.computerId, runtimeId: i.runtimeId });
       first ??= plan;
@@ -730,7 +750,7 @@ export class ModelLifecycleService {
     if (!first) throw new ModelLifecycleError('MODEL_NOT_INSTALLED');
     return first;
   }
-  private async estimateTarget(modelId: string, options: ModelLoadOptions): Promise<ModelLoadPlan> {
+  private async estimateTarget(modelId: string, options: ModelLoadOptions & { _refreshedComputers?: Set<string> }): Promise<AdmittedModelLoadPlan> {
     const i = this.target(modelId, options);
     const model = this.deps.models.getRequired(modelId);
     const runtime = this.deps.runtimes.get(i.runtimeId);
@@ -742,7 +762,35 @@ export class ModelLifecycleService {
       const persisted = await this.deps.store.get('computer/' + i.computerId + '/reservations');
       if (Array.isArray(persisted) && computer) computer.reservations = persisted as ResourceReservation[];
     }
-    const snapshot = this.deps.computers.resourceSnapshot(i.computerId!);
+    const isTelemetryMissingOrStale = (snap: ResourceSnapshot): boolean => {
+      const snapWithFlag = snap as ResourceSnapshot & { telemetryFresh?: boolean };
+      if (snapWithFlag.telemetryFresh === false) return true;
+      if (snap.availableMemoryBytes === undefined) return true;
+      if (!snap.unifiedMemory && snap.totalVramBytes !== undefined && snap.availableVramBytes === undefined) return true;
+      return false;
+    };
+    let snapshot = this.deps.computers.resourceSnapshot(i.computerId!);
+    const refreshedComputers = options._refreshedComputers;
+    if (isTelemetryMissingOrStale(snapshot) && this.deps.refreshResources && !refreshedComputers?.has(i.computerId!)) {
+      refreshedComputers?.add(i.computerId!);
+      await this.deps.refreshResources(i.computerId!).catch(() => undefined);
+      snapshot = this.deps.computers.resourceSnapshot(i.computerId!);
+    }
+    const snapWithFlag = snapshot as ResourceSnapshot & { telemetryFresh?: boolean };
+    const hasObservedTelemetry = Boolean(computer?.resourceObservedAt) || snapshot.observedAt.getTime() > 0;
+    const telemetryExplicitlyStale = snapWithFlag.telemetryFresh === false;
+    const memoryTelemetryMissing = snapshot.availableMemoryBytes === undefined;
+    const vramTelemetryMissing = !snapshot.unifiedMemory && snapshot.totalVramBytes !== undefined && snapshot.availableVramBytes === undefined;
+    const snapshotAgeMs = Date.now() - snapshot.observedAt.getTime();
+    const isAgeStale = hasObservedTelemetry && snapshotAgeMs > 30_000;
+    const telemetryStale = hasObservedTelemetry && (telemetryExplicitlyStale || (isAgeStale && (memoryTelemetryMissing || vramTelemetryMissing)));
+    const telemetryUnavailable = !telemetryStale && (memoryTelemetryMissing || vramTelemetryMissing || telemetryExplicitlyStale);
+    const measurementFresh = !telemetryStale && !telemetryUnavailable;
+    const hardwareMeasurementSource: AdmissionExplanation['hardware_measurement_source'] = !computer
+      ? 'UNAVAILABLE'
+      : computer.local
+        ? (computer.load?.memoryAvailableGB !== undefined && measurementFresh ? 'HEARTBEAT' : 'OS_FREEMEM')
+        : (snapshot.availableMemoryBytes !== undefined && !telemetryStale ? 'HEARTBEAT' : 'UNAVAILABLE');
     const reasons: string[] = [];
     if (!computer || computer.status !== 'online' || computer.health !== 'healthy') reasons.push('COMPUTER_UNAVAILABLE');
     if (!runtime || runtime.health !== 'healthy' || !adapter || runtime.runtimeKind === 'hosted') reasons.push('RUNTIME_UNAVAILABLE');
@@ -764,7 +812,7 @@ export class ModelLifecycleService {
     const available = snapshot.availableMemoryBytes;
     const safetyReserve = Math.max((available ?? 0) * this.reservePercent / 100, this.minimumReserveBytes);
     const held = snapshot.activeReservations.reduce((n, r) => n + r.memoryBytes, 0);
-    const usable = available === undefined ? undefined : Math.max(0, available - safetyReserve - held);
+    const usable = available === undefined || telemetryExplicitlyStale ? undefined : Math.max(0, available - safetyReserve - held);
     const reuse = (i.state === 'READY' || i.state === 'LOADED') && i.loaded && i.health === 'healthy' &&
       i.contextTokens !== undefined && i.contextTokens >= minimum && (requested === undefined || i.contextTokens === context);
     // Runtime estimates describe the model's full post-load footprint. When the
@@ -772,6 +820,17 @@ export class ModelLifecycleService {
     // new pressure on the machine: current availability already excludes the
     // resident weights and KV cache.
     const residentBytes = i.loaded ? (i.residentMemoryBytes ?? profile?.weightBytes) : undefined;
+    const hasUnsupportedProfileMetadata = Boolean(profile && (
+      (profile.weightBytes !== undefined && (!Number.isFinite(profile.weightBytes) || profile.weightBytes <= 0)) ||
+      (profile.contextBytesPerToken !== undefined && (!Number.isFinite(profile.contextBytesPerToken) || profile.contextBytesPerToken < 0)) ||
+      (profile.runtimeOverheadBytes !== undefined && (!Number.isFinite(profile.runtimeOverheadBytes) || profile.runtimeOverheadBytes < 0))
+    ));
+    const hasCompleteProfile = Boolean(
+      profile &&
+      profile.weightBytes !== undefined && Number.isFinite(profile.weightBytes) && profile.weightBytes > 0 &&
+      profile.contextBytesPerToken !== undefined && Number.isFinite(profile.contextBytesPerToken) && profile.contextBytesPerToken >= 0 &&
+      profile.runtimeOverheadBytes !== undefined && Number.isFinite(profile.runtimeOverheadBytes) && profile.runtimeOverheadBytes >= 0,
+    );
     const estimateAt = async (candidateContext: number): Promise<LoadEstimate> => {
       let e: import('@wazir/runtimes-interfaces').ModelLoadEstimate = { source: 'UNKNOWN', confidence: 'unknown' };
       if (reuse) {
@@ -781,9 +840,9 @@ export class ModelLifecycleService {
       } else if (adapter?.estimateModelLoad) {
         try { e = await adapter.estimateModelLoad(i.runtimeModelId, candidateContext); } catch { /* unknown is denied below */ }
       }
-      if (e.totalMemoryBytes === undefined && profile?.weightBytes !== undefined && profile.contextBytesPerToken !== undefined && profile.runtimeOverheadBytes !== undefined) {
-        e = { weightBytes: profile.weightBytes, contextBytes: profile.contextBytesPerToken * candidateContext,
-          overheadBytes: profile.runtimeOverheadBytes, totalMemoryBytes: profile.weightBytes + profile.contextBytesPerToken * candidateContext + profile.runtimeOverheadBytes,
+      if (e.totalMemoryBytes === undefined && hasCompleteProfile && profile) {
+        e = { weightBytes: profile.weightBytes, contextBytes: profile.contextBytesPerToken! * candidateContext,
+          overheadBytes: profile.runtimeOverheadBytes, totalMemoryBytes: profile.weightBytes! + profile.contextBytesPerToken! * candidateContext + profile.runtimeOverheadBytes!,
           source: 'HEURISTIC', confidence: 'low' };
       }
       const total = e.totalMemoryBytes;
@@ -820,28 +879,51 @@ export class ModelLifecycleService {
     } else if (estimate.classification !== 'UNKNOWN') safeContext = context;
     if (!reuse) {
       if (!adapter?.loadModel || !adapter.inspectModel || !adapter.probeModel) reasons.push('UNSUPPORTED_CAPABILITY');
-      if (estimate.classification === 'INSUFFICIENT') reasons.push('INSUFFICIENT_MEMORY');
-      if (estimate.classification === 'UNKNOWN') {
-        if (estimate.reservationMemoryBytes === undefined || usable === undefined ||
-          (!snapshot.unifiedMemory && snapshot.totalVramBytes !== undefined)) reasons.push('ESTIMATE_UNKNOWN');
-        else if (estimate.reservationMemoryBytes > usable) reasons.push('INSUFFICIENT_MEMORY');
+      if (telemetryStale) reasons.push('HARDWARE_TELEMETRY_STALE');
+      else if (telemetryUnavailable) reasons.push('HARDWARE_TELEMETRY_UNAVAILABLE');
+      else if (estimate.classification === 'INSUFFICIENT') reasons.push('INSUFFICIENT_MEMORY');
+      else if (estimate.classification === 'UNKNOWN') {
+        if (estimate.reservationMemoryBytes === undefined) {
+          if (hasUnsupportedProfileMetadata) reasons.push('MODEL_METADATA_UNSUPPORTED');
+          else if (!adapter?.estimateModelLoad && !hasCompleteProfile) reasons.push('MODEL_METADATA_MISSING');
+          else reasons.push('ESTIMATE_UNKNOWN');
+        } else if (!snapshot.unifiedMemory && snapshot.totalVramBytes !== undefined) {
+          reasons.push('ESTIMATE_UNKNOWN');
+        } else if (estimate.reservationMemoryBytes > usable!) {
+          reasons.push('INSUFFICIENT_MEMORY');
+        }
       }
     }
     const policy = this.policy.checkModelLifecycle({ operation: 'load', modelId, computerId: i.computerId!, runtimeId: i.runtimeId,
       context, memoryBytes: estimate.reservationMemoryBytes ?? estimate.estimatedTotalMemory, automatic: !!options.executionId });
     if (policy.decision !== 'allow') reasons.push('POLICY_DENIED');
-    const plan: ModelLoadPlan = { modelId, installationId: installation?.id ?? i.id, instanceId: i.id,
+    const effectiveContext = reuse ? i.contextTokens! : context;
+    const status: 'ADMITTED' | 'DENIED' = reasons.length ? 'DENIED' : 'ADMITTED';
+    const explanation: AdmissionExplanation = {
+      decision: status,
+      model: modelId,
+      computer: i.computerId!,
+      runtime: i.runtimeId,
+      context_tokens: effectiveContext,
+      memory_estimate_source: estimate.estimateSource,
+      hardware_measurement_source: hardwareMeasurementSource,
+      measurement_fresh: measurementFresh,
+      reused_loaded_model: reuse,
+      reservation_created: false,
+      reasons: [...reasons],
+    };
+    const plan: AdmittedModelLoadPlan = { modelId, installationId: installation?.id ?? i.id, instanceId: i.id,
       computerId: i.computerId!, runtimeId: i.runtimeId, requestedContext: requested, configuredContextLimit: model.configuredContext,
       modelContextLimit: model.contextMax, runtimeContextLimit: profile?.runtimeMaximumContext, machineSafeContext: safeContext,
-      effectiveContext: reuse ? i.contextTokens! : context, minimumContext: minimum,
+      effectiveContext, minimumContext: minimum,
       contextReason: context < desired ? (context < Math.min(desired, limit) ? 'MACHINE_RESOURCE_LIMIT' : 'CONTEXT_LIMIT') : undefined,
       resourceSnapshot: snapshot, estimate, modelsToEvict: [], reuse,
-      admissionDecision: { status: reasons.length ? 'DENIED' : 'ADMITTED', reasons } };
+      admissionDecision: { status, reasons, explanation } };
     if (options.evict && reasons.includes('INSUFFICIENT_MEMORY')) await this.planEviction(plan, options);
     return plan;
   }
 
-  private async planEviction(plan: ModelLoadPlan, options: ModelLoadOptions): Promise<void> {
+  private async planEviction(plan: AdmittedModelLoadPlan, options: ModelLoadOptions): Promise<void> {
     const candidates: Array<{ instanceId: string; reclaimBytes: number }> = [];
     for (const i of this.deps.models.instanceOn(plan.computerId)) {
       if (i.id === plan.instanceId || !i.loaded || i.pinned || i.state !== 'READY' || this.operations.has(i.id) ||
@@ -867,6 +949,10 @@ export class ModelLifecycleService {
     // This is a conditional plan, not permission to allocate without fresh post-eviction admission.
     plan.admissionDecision.reasons = plan.admissionDecision.reasons.filter(r => r !== 'INSUFFICIENT_MEMORY');
     plan.admissionDecision.status = plan.admissionDecision.reasons.length ? 'DENIED' : 'ADMITTED';
+    if (plan.admissionDecision.explanation) {
+      plan.admissionDecision.explanation.reasons = [...plan.admissionDecision.reasons];
+      plan.admissionDecision.explanation.decision = plan.admissionDecision.status;
+    }
   }
 
   /**
@@ -898,12 +984,13 @@ export class ModelLifecycleService {
     throw new ModelLifecycleError('MODEL_UNAVAILABLE', [reason, `list installed models with the runtime's CLI or pick another with /model`]);
   }
 
-  async load(modelId: string, options: ModelLoadOptions = {}): Promise<ModelLoadPlan> {
+  async load(modelId: string, options: ModelLoadOptions = {}): Promise<AdmittedModelLoadPlan> {
     const ineligibility = this.isKnownIneligible(modelId);
     if (ineligibility.ineligible) {
       throw new ModelLifecycleError('MODEL_ADMISSION_DENIED', [ineligibility.reason ?? 'KNOWN_INELIGIBLE_MODEL']);
     }
-    if (options.dryRun) return this.estimate(modelId, options);
+    const refreshedComputers = new Set<string>();
+    if (options.dryRun) return this.estimate(modelId, { ...options, _refreshedComputers: refreshedComputers });
     const targetInst = this.target(modelId, options);
     const flightKey = `${modelId}::${targetInst.computerId}`;
     const existing = this.inFlightLoads.get(flightKey) ?? this.inFlightLoads.get(targetInst.id);
@@ -914,7 +1001,7 @@ export class ModelLifecycleService {
     let finalInstance: ModelInstance | undefined;
     const loadPromise = (async () => {
       await this.verifyAvailable(modelId, options);
-      const placement = await this.estimate(modelId, options);
+      const placement = await this.estimate(modelId, { ...options, _refreshedComputers: refreshedComputers });
       const i = this.target(modelId, { computerId: placement.computerId, runtimeId: placement.runtimeId });
       finalInstance = i;
       this.inFlightLoads.set(i.id, loadPromise);
@@ -922,7 +1009,7 @@ export class ModelLifecycleService {
       if (this.operations.has(i.id)) throw new ModelLifecycleError('RESOURCE_BUSY');
       this.operations.add(i.id);
       try {
-        return await this.performLoad(i, options);
+        return await this.performLoad(i, options, refreshedComputers);
       } finally {
         this.operations.delete(i.id);
       }
@@ -941,20 +1028,32 @@ export class ModelLifecycleService {
     }
   }
 
-  private async performLoad(i: ModelInstance, options: ModelLoadOptions): Promise<ModelLoadPlan> {
+  private async performLoad(i: ModelInstance, options: ModelLoadOptions, refreshedComputers?: Set<string>): Promise<AdmittedModelLoadPlan> {
     const modelId = i.modelId;
     const extra = { runtimeId: i.runtimeId, computerId: i.computerId, initiator: options.initiator, data: { executionId: options.executionId } };
     this.emitEvent('MODEL_LOAD_REQUESTED', modelId, extra);
     this.emitEvent('MODEL_ADMISSION_STARTED', modelId, extra);
-    if (!(i.state === 'READY' && i.loaded && i.health === 'healthy')) {
-      await this.deps.refreshResources?.(i.computerId!);
+    if (!(i.state === 'READY' && i.loaded && i.health === 'healthy') && !refreshedComputers?.has(i.computerId!)) {
+      refreshedComputers?.add(i.computerId!);
+      await this.deps.refreshResources?.(i.computerId!).catch(() => undefined);
     }
-    let plan = await this.estimate(modelId, { ...options, computerId: i.computerId, runtimeId: i.runtimeId });
+    let plan = await this.estimate(modelId, { ...options, computerId: i.computerId, runtimeId: i.runtimeId, _refreshedComputers: refreshedComputers });
     this.emitEvent('MODEL_LOAD_PLAN_CREATED', modelId, { ...extra, data: { ...plan, executionId: options.executionId } });
     const deny = (reason?: string): never => {
-      if (reason) plan.admissionDecision = { status: 'DENIED', reasons: [reason] };
+      if (reason) {
+        plan.admissionDecision = {
+          status: 'DENIED',
+          reasons: [reason],
+          explanation: plan.admissionDecision.explanation
+            ? { ...plan.admissionDecision.explanation, decision: 'DENIED', reasons: [reason] }
+            : undefined,
+        };
+      }
       this.emitEvent('MODEL_ADMISSION_DENIED', modelId, { ...extra, reason: plan.admissionDecision.reasons.join(','), data: { ...plan, executionId: options.executionId } });
-      if (plan.admissionDecision.reasons.some(r => r.includes('MEMORY') || r.includes('INSUFFICIENT'))) {
+      const isTransientTelemetryGap = plan.admissionDecision.reasons.some(
+        r => r === 'HARDWARE_TELEMETRY_UNAVAILABLE' || r === 'HARDWARE_TELEMETRY_STALE' || r === 'ESTIMATE_UNKNOWN',
+      );
+      if (!isTransientTelemetryGap && plan.admissionDecision.reasons.some(r => r.includes('MEMORY') || r.includes('INSUFFICIENT'))) {
         if (!plan.machineSafeContext || options.fit || options.context === undefined) {
           this.markIneligible(modelId, plan.admissionDecision.reasons.join(', '));
         }
@@ -979,9 +1078,9 @@ export class ModelLifecycleService {
         await this.unload(v.modelId, { computerId: v.computerId, runtimeId: v.runtimeId, eviction: true });
         this.emitEvent('MODEL_EVICTED', v.modelId, { computerId: v.computerId, runtimeId: v.runtimeId });
       }
-      await this.deps.refreshResources?.(i.computerId!);
+      await this.deps.refreshResources?.(i.computerId!).catch(() => undefined);
       const victims = plan.modelsToEvict;
-      plan = await this.estimate(modelId, { ...options, computerId: i.computerId, runtimeId: i.runtimeId, evict: false });
+      plan = await this.estimate(modelId, { ...options, computerId: i.computerId, runtimeId: i.runtimeId, evict: false, _refreshedComputers: refreshedComputers });
       plan.modelsToEvict = victims;
       if (plan.admissionDecision.status === 'DENIED') deny();
     }
@@ -998,6 +1097,9 @@ export class ModelLifecycleService {
     } else reserve();
     if (!reservation) deny('RESOURCE_RESERVATION_FAILED');
     plan.reservation = reservation;
+    if (plan.admissionDecision.explanation) {
+      plan.admissionDecision.explanation.reservation_created = true;
+    }
     this.emitEvent('RESOURCE_RESERVATION_CREATED', modelId, { ...extra, data: { reservation } });
     this.emitEvent('MODEL_ADMISSION_GRANTED', modelId, extra);
     this.emitEvent('MODEL_CONTEXT_SELECTED', modelId, { ...extra, data: { requestedContext: plan.requestedContext, effectiveContext: plan.effectiveContext } });
@@ -1112,7 +1214,7 @@ export class ModelLifecycleService {
     }
   }
 
-  async ensureReady(modelId: string, options: ModelLoadOptions = {}): Promise<ModelLoadPlan> {
+  async ensureReady(modelId: string, options: ModelLoadOptions = {}): Promise<AdmittedModelLoadPlan> {
     this.emitEvent('WAITING_FOR_MODEL', modelId, { data: { executionId: options.executionId } });
     return this.load(modelId, options);
   }
@@ -1221,7 +1323,7 @@ export class ModelLifecycleService {
   /**
    * Ensures a model is loaded, failing fast if marked known-ineligible.
    */
-  async ensureLoaded(modelId: string, options: ModelLoadOptions = {}): Promise<ModelLoadPlan> {
+  async ensureLoaded(modelId: string, options: ModelLoadOptions = {}): Promise<AdmittedModelLoadPlan> {
     const ineligibility = this.isKnownIneligible(modelId);
     if (ineligibility.ineligible) {
       throw new ModelLifecycleError('MODEL_ADMISSION_DENIED', [ineligibility.reason ?? 'KNOWN_INELIGIBLE_MODEL']);
@@ -1356,7 +1458,12 @@ export class ModelLifecycleService {
     if (!admission.admitted) {
       const reasons = admission.reasons.length > 0 ? admission.reasons : [admission.reason ?? 'INSUFFICIENT_MEMORY'];
       const combinedReason = admission.reason ?? reasons.join('; ');
-      this.markIneligible(modelId, combinedReason);
+      const isMemoryOrHardwareCapacityFailure = reasons.some(r =>
+        /insufficient|memory|ram|vram/i.test(r) && !/telemetry|unavailable|stale|unknown/i.test(r),
+      );
+      if (isMemoryOrHardwareCapacityFailure) {
+        this.markIneligible(modelId, combinedReason);
+      }
       this.emitEvent('MODEL_ADMISSION_DENIED', modelId, {
         computerId,
         runtimeId,
@@ -1503,7 +1610,12 @@ export class ModelLifecycleService {
 
     if (!admission.admitted) {
       const errorMsg = admission.reason ?? admission.reasons.join('; ') ?? 'Admission denied';
-      this.markIneligible(modelId, errorMsg);
+      const isMemoryOrHardwareCapacityFailure = admission.reasons.some(r =>
+        /insufficient|memory|ram|vram/i.test(r) && !/telemetry|unavailable|stale|unknown/i.test(r),
+      );
+      if (isMemoryOrHardwareCapacityFailure) {
+        this.markIneligible(modelId, errorMsg);
+      }
       const formattedReadiness = formatReadinessBlock(modelId, deviceLabel, 0, 'Failed');
       return {
         ok: false,

@@ -13,11 +13,28 @@ function canonicalSignature(tool: string, input: Record<string, unknown>): strin
 }
 
 export interface LoopAssessment {
-  action: 'ok' | 'nudge' | 'stop';
+  action: 'ok' | 'nudge' | 'synthesize' | 'stop';
   nudgeMessage?: string;
   stopReason?: TerminationReason;
   stopMessage?: string;
   escalatable?: boolean;
+}
+
+const SCAN_TOOL_NAMES = new Set(['glob', 'search']);
+const READ_TOOL_NAMES = new Set(['read', 'read_many_files', 'web_fetch', 'web_search', 'glob', 'search']);
+const SHELL_SCAN_CMD_RE = /^(?:ls|find|tree|dir|rg|grep|ag|fd)\b/i;
+
+function isScanTool(toolName: string, input: Record<string, unknown>): boolean {
+  if (SCAN_TOOL_NAMES.has(toolName)) return true;
+  if (toolName === 'shell') {
+    const cmd = String(input.command ?? input.cmd ?? '').trim();
+    return SHELL_SCAN_CMD_RE.test(cmd);
+  }
+  return false;
+}
+
+function isReadOrScanTool(toolName: string, input: Record<string, unknown>): boolean {
+  return READ_TOOL_NAMES.has(toolName) || isScanTool(toolName, input);
 }
 
 /**
@@ -31,12 +48,18 @@ export class LoopDetectionService {
   private lastToolSig: string | null = null;
   private consecutiveIdenticalTool = 0;
   private recentSigs: string[] = [];
+  private seenToolSigs = new Set<string>();
   private seenObservations = new Set<string>();
   public noProgressStreak = 0;
   public longestNoProgressStreak = 0;
   public duplicateActionsBlocked = 0;
+  public uniqueReadObservations = 0;
+  public duplicateToolCalls = 0;
   private issuedNudgeForCurrentStreak = false;
   private issuedNoProgressNudge = false;
+  private issuedSynthesisNudge = false;
+  private synthesisTriggered = false;
+  private totalReadOnlyCalls = 0;
   private lastAssistantTextHash: string | null = null;
   private identicalTextStreak = 0;
 
@@ -44,6 +67,8 @@ export class LoopDetectionService {
     private readonly options: {
       toolRepeatLimit: number;
       maxNoProgressIterations: number;
+      readOnlyMode?: boolean;
+      readOnlyExplorationBudget?: number;
     },
   ) {}
 
@@ -63,6 +88,9 @@ export class LoopDetectionService {
       if (!outcome.executed) continue;
 
       const sig = canonicalSignature(outcome.canonicalName, outcome.input);
+      const isDuplicateCall = this.seenToolSigs.has(sig);
+      this.seenToolSigs.add(sig);
+
       if (sig === this.lastToolSig) {
         this.consecutiveIdenticalTool += 1;
       } else {
@@ -78,8 +106,26 @@ export class LoopDetectionService {
       // Check physical mutation or novel observation
       const mutated = this.didMutate(outcome.canonicalName, outcome.result);
       const fp = observationFingerprint(outcome.result);
+      const isEmptyObservation = fp === 'ok:EMPTY' || fp === 'fail:EMPTY';
       const isNovelObservation = !this.seenObservations.has(fp);
       this.seenObservations.add(fp);
+
+      if (!mutated && (isDuplicateCall || !isNovelObservation)) {
+        this.duplicateToolCalls += 1;
+      }
+
+      if (
+        outcome.result.ok &&
+        isNovelObservation &&
+        !isEmptyObservation &&
+        isReadOrScanTool(outcome.canonicalName, outcome.input)
+      ) {
+        this.uniqueReadObservations += 1;
+      }
+
+      if (this.options.readOnlyMode) {
+        this.totalReadOnlyCalls += 1;
+      }
 
       if (mutated || (outcome.result.ok && isNovelObservation)) {
         this.noProgressStreak = 0;
@@ -141,13 +187,60 @@ export class LoopDetectionService {
         }
       }
 
-      // 3. Semantic no-progress streak
+      // 3. Read-only review / exploration budget & early duplicate-scan handling
+      if (this.options.readOnlyMode) {
+        const readOnlyMaxNoProgress = Math.min(this.options.maxNoProgressIterations, 4);
+        const explorationBudget = this.options.readOnlyExplorationBudget ?? 16;
+        const budgetExhausted =
+          (this.totalReadOnlyCalls >= explorationBudget && this.duplicateToolCalls > 0) ||
+          this.totalReadOnlyCalls >= explorationBudget + 4;
+
+        if (this.noProgressStreak >= readOnlyMaxNoProgress || budgetExhausted) {
+          if (this.uniqueReadObservations > 0 && !this.synthesisTriggered) {
+            this.synthesisTriggered = true;
+            return {
+              action: 'synthesize',
+              nudgeMessage:
+                'Synthesize your findings from the files already read instead of repeating directory scans. Provide your final response now.',
+            };
+          }
+          if (this.noProgressStreak >= readOnlyMaxNoProgress) {
+            return {
+              action: 'stop',
+              stopReason: 'NO_PROGRESS',
+              stopMessage: `NO_PROGRESS: ${this.noProgressStreak} consecutive read-only tool calls produced no new information`,
+              escalatable: true,
+            };
+          }
+        }
+      }
+
+      // 4. Semantic no-progress streak
       if (this.noProgressStreak >= this.options.maxNoProgressIterations) {
         return {
           action: 'stop',
           stopReason: 'NO_PROGRESS',
           stopMessage: `NO_PROGRESS: ${this.noProgressStreak} consecutive tool calls produced no file changes and no new information`,
           escalatable: true,
+        };
+      }
+    }
+
+    if (this.options.readOnlyMode && !this.issuedSynthesisNudge) {
+      const readOnlyMaxNoProgress = Math.min(this.options.maxNoProgressIterations, 4);
+      const explorationBudget = this.options.readOnlyExplorationBudget ?? 16;
+      const shouldNudgeSynthesis =
+        this.noProgressStreak >= Math.max(2, readOnlyMaxNoProgress - 2) ||
+        (this.duplicateToolCalls >= 2 && this.noProgressStreak >= 1) ||
+        this.totalReadOnlyCalls >= explorationBudget;
+      if (shouldNudgeSynthesis) {
+        this.issuedSynthesisNudge = true;
+        return {
+          action: 'nudge',
+          nudgeMessage:
+            this.uniqueReadObservations > 0
+              ? '[loop warning] Synthesize your findings from the files already read instead of repeating directory scans.'
+              : '[loop warning] Repeated directory scans returned empty or identical results. Switch strategy: read a specific file directly or synthesize your findings.',
         };
       }
     }

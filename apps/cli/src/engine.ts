@@ -52,6 +52,7 @@ import {
 } from '@wazir/core';
 import type {
   ComputerRegistration,
+  GPUInfo,
   ModelCapability,
   ModelLifecycleState,
   ModelRecord,
@@ -86,7 +87,7 @@ import {
   type DiscoveredRuntime,
 } from '@wazir/workers';
 import { startLocalHeartbeat } from './localHeartbeat.js';
-import { configDir, loadConfig, buildNvidiaHostedLimits, type WazirConfig } from './config.js';
+import { configDir, loadConfig, buildNvidiaHostedLimits, type FleetHostConfig, type WazirConfig } from './config.js';
 import { applyHostedProvider, createHostedProviders, type HostedAdapter } from './hostedProviders.js';
 import { syncRemoteInventory } from './remoteInventory.js';
 import { accessSync, constants as fsConstants, existsSync, readFileSync } from 'node:fs';
@@ -426,6 +427,195 @@ async function detectOpenCode(): Promise<boolean> {
   return Boolean(cachedResolveExecutable('opencode'));
 }
 
+export type FleetHostSpec = FleetHostConfig & {
+  gpu?: Partial<GPUInfo> & { architecture?: string };
+  unifiedMemory?: boolean;
+  workerUrl?: string;
+};
+
+export function buildFleetHostHardware(hostSpec: FleetHostSpec): Pick<ComputerRegistration, 'type' | 'os' | 'hardware'> {
+  const rawGpu = hostSpec.gpu;
+  const descriptor = `${hostSpec.id} ${hostSpec.name ?? ''} ${hostSpec.cpu ?? ''} ${rawGpu?.model ?? ''}`;
+  const isDgxOrGb10 = /dgx|gb10|grace/i.test(descriptor);
+  const isAppleSilicon = /apple|m1|m2|m3|m4|mac/i.test(descriptor);
+  const unifiedMemory =
+    typeof rawGpu?.unifiedMemory === 'boolean'
+      ? rawGpu.unifiedMemory
+      : typeof hostSpec.unifiedMemory === 'boolean'
+        ? hostSpec.unifiedMemory
+        : isDgxOrGb10 || isAppleSilicon
+          ? true
+          : undefined;
+  const memoryGB =
+    typeof hostSpec.memoryGB === 'number' && Number.isFinite(hostSpec.memoryGB)
+      ? hostSpec.memoryGB
+      : isDgxOrGb10
+        ? 128
+        : 36;
+  const vendor = rawGpu?.vendor ?? (isDgxOrGb10 ? 'nvidia' : isAppleSilicon ? 'apple' : 'unknown');
+  const gpu =
+    rawGpu || unifiedMemory !== undefined
+      ? {
+          vendor,
+          model: rawGpu?.model ?? (isDgxOrGb10 ? 'NVIDIA GB10' : isAppleSilicon ? (hostSpec.cpu ?? 'Apple Silicon GPU') : 'Unknown GPU'),
+          memoryGB: typeof rawGpu?.memoryGB === 'number' && Number.isFinite(rawGpu.memoryGB) ? rawGpu.memoryGB : memoryGB,
+          ...(unifiedMemory !== undefined ? { unifiedMemory } : {}),
+          ...(typeof rawGpu?.cuda === 'boolean' ? { cuda: rawGpu.cuda } : vendor === 'nvidia' ? { cuda: true } : {}),
+          ...(rawGpu?.architecture ? { architecture: rawGpu.architecture } : {}),
+        }
+      : undefined;
+
+  return {
+    type: hostSpec.type ?? (isDgxOrGb10 ? 'server' : 'workstation'),
+    os: {
+      platform: hostSpec.platform ?? (isDgxOrGb10 ? 'linux' : 'darwin'),
+      architecture: hostSpec.architecture ?? 'arm64',
+      version: 'fleet',
+    },
+    hardware: {
+      cpu: hostSpec.cpu ?? (isDgxOrGb10 ? 'NVIDIA Grace' : 'Apple Silicon'),
+      cpuCores: hostSpec.cpuCores ?? (isDgxOrGb10 ? 20 : 14),
+      memoryGB,
+      ...(gpu ? { gpu: gpu as GPUInfo } : {}),
+    },
+  };
+}
+
+async function fetchJsonWithTimeout(url: string, headers?: Record<string, string>): Promise<Record<string, any> | undefined> {
+  try {
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(3_000) });
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    return data && typeof data === 'object' ? (data as Record<string, any>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function refreshRemoteHostTelemetry(
+  computers: ComputerRegistry,
+  hostId: string,
+  hostSpec: FleetHostSpec,
+  hostAdapters: RuntimeAdapter[] = [],
+  apiConfig?: { apiUrl?: string; apiToken?: string },
+): Promise<boolean> {
+  const comp = computers.get(hostId);
+  if (!comp || comp.local) return false;
+
+  if (hostSpec.workerUrl) {
+    const base = hostSpec.workerUrl.replace(/\/+$/, '');
+    for (const pathSuffix of ['/telemetry', '/health']) {
+      const payload = await fetchJsonWithTimeout(`${base}${pathSuffix}`);
+      const loadObj = (payload?.load ?? payload) as Record<string, any> | undefined;
+      const availGB =
+        typeof loadObj?.memoryAvailableGB === 'number' && Number.isFinite(loadObj.memoryAvailableGB)
+          ? loadObj.memoryAvailableGB
+          : typeof payload?.memory?.availableBytes === 'number' && Number.isFinite(payload.memory.availableBytes)
+            ? payload.memory.availableBytes / 1024 ** 3
+            : undefined;
+      if (availGB !== undefined) {
+        const totalGB = comp.hardware.memoryGB > 0 ? comp.hardware.memoryGB : 0;
+        const usedGB =
+          typeof loadObj?.memoryUsedGB === 'number' && Number.isFinite(loadObj.memoryUsedGB)
+            ? loadObj.memoryUsedGB
+            : totalGB > 0
+              ? Math.max(0, totalGB - availGB)
+              : 0;
+        computers.heartbeat(hostId, {
+          load: {
+            cpuPercent: typeof loadObj?.cpuPercent === 'number' && Number.isFinite(loadObj.cpuPercent) ? loadObj.cpuPercent : 0,
+            memoryUsedGB: usedGB,
+            memoryAvailableGB: availGB,
+            ...(typeof loadObj?.gpuUtilizationPercent === 'number' ? { gpuUtilizationPercent: loadObj.gpuUtilizationPercent } : {}),
+          },
+          telemetryTimestamp: payload?.observedAt ? new Date(String(payload.observedAt)) : new Date(),
+          telemetrySource: `worker:${pathSuffix}`,
+        });
+        return true;
+      }
+    }
+  }
+
+  if (apiConfig?.apiUrl) {
+    const base = apiConfig.apiUrl.replace(/\/+$/, '');
+    const headers = apiConfig.apiToken ? { Authorization: `Bearer ${apiConfig.apiToken}` } : undefined;
+    const remoteComp = await fetchJsonWithTimeout(`${base}/api/computers/${encodeURIComponent(hostId)}`, headers);
+    const remoteLoad = remoteComp?.load as Record<string, any> | undefined;
+    if (remoteLoad && typeof remoteLoad.memoryAvailableGB === 'number' && Number.isFinite(remoteLoad.memoryAvailableGB)) {
+      computers.heartbeat(hostId, {
+        load: {
+          cpuPercent: typeof remoteLoad.cpuPercent === 'number' ? remoteLoad.cpuPercent : 0,
+          memoryUsedGB: typeof remoteLoad.memoryUsedGB === 'number' ? remoteLoad.memoryUsedGB : 0,
+          memoryAvailableGB: remoteLoad.memoryAvailableGB,
+          ...(typeof remoteLoad.gpuUtilizationPercent === 'number' ? { gpuUtilizationPercent: remoteLoad.gpuUtilizationPercent } : {}),
+        },
+        telemetryTimestamp: remoteComp?.resourceObservedAt ? new Date(String(remoteComp.resourceObservedAt)) : new Date(),
+        telemetrySource: 'control-plane:/api/computers',
+      });
+      return true;
+    }
+  }
+
+  let residentBytes = 0;
+  let probedSource: string | undefined;
+  if (hostSpec.ollamaUrl) {
+    const base = hostSpec.ollamaUrl.replace(/\/+$/, '');
+    const ps = await fetchJsonWithTimeout(`${base}/api/ps`);
+    if (ps && Array.isArray(ps.models)) {
+      probedSource = 'ollama:/api/ps';
+      for (const m of ps.models as Array<Record<string, any>>) {
+        const sz = typeof m.size === 'number' && Number.isFinite(m.size) ? m.size : (typeof m.size_vram === 'number' && Number.isFinite(m.size_vram) ? m.size_vram : 0);
+        residentBytes += Math.max(0, sz);
+      }
+    }
+  } else if (hostSpec.lmstudioUrl) {
+    const base = hostSpec.lmstudioUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
+    const data = await fetchJsonWithTimeout(`${base}/api/v0/models`);
+    if (data && Array.isArray(data.data)) {
+      probedSource = 'lmstudio:/api/v0/models';
+      for (const m of data.data as Array<Record<string, any>>) {
+        if (m.state === 'loaded') {
+          const sz = typeof m.size_bytes === 'number' ? m.size_bytes : (typeof m.memory_bytes === 'number' ? m.memory_bytes : 0);
+          residentBytes += Math.max(0, sz);
+        }
+      }
+    }
+  } else if (hostAdapters.length > 0) {
+    for (const adapter of hostAdapters) {
+      try {
+        const listed = await adapter.listModels();
+        probedSource = `adapter:${adapter.type}`;
+        for (const m of listed) {
+          const inspected = await adapter.inspectModel?.(m.id).catch(() => undefined);
+          if (inspected?.loaded && typeof inspected.memoryBytes === 'number' && Number.isFinite(inspected.memoryBytes)) {
+            residentBytes += Math.max(0, inspected.memoryBytes);
+          }
+        }
+      } catch {
+        // Ignore unreachable adapter
+      }
+    }
+  }
+
+  if (probedSource && comp.hardware.memoryGB > 0) {
+    const residentGB = residentBytes / 1024 ** 3;
+    const memoryUsedGB = Number(residentGB.toFixed(3));
+    const memoryAvailableGB = Math.max(0, Number((comp.hardware.memoryGB - residentGB).toFixed(3)));
+    computers.heartbeat(hostId, {
+      load: {
+        cpuPercent: comp.load?.cpuPercent ?? 0,
+        memoryUsedGB,
+        memoryAvailableGB,
+      },
+      telemetryTimestamp: new Date(),
+      telemetrySource: probedSource,
+    });
+    return true;
+  }
+
+  return false;
+}
+
 export async function createEngine(options: EngineOptions = {}): Promise<RookEngine> {
   const profile = resolveEngineProfile(options);
   const skipRuntimeDiscovery = options.skipRuntimeDiscovery ?? (profile === 'minimal');
@@ -519,9 +709,11 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // ---- direct fleet hardware hosts (e.g. Mac Studio, DGX Spark) ----------
   const onlineFleetHostIds: string[] = [];
   const fleetRuntimeIds: string[] = [];
+  const fleetHostRefreshers = new Map<string, () => Promise<boolean>>();
   if (!skipRuntimeDiscovery && config.fleetHosts && config.fleetHosts.length > 0) {
     await Promise.all(
-      config.fleetHosts.map(async (hostSpec) => {
+      config.fleetHosts.map(async (rawHostSpec) => {
+        const hostSpec = rawHostSpec as FleetHostSpec;
         const hostId = hostSpec.id.trim();
         if (!hostId || hostId === localComputer.id) return;
         const hostAdapters: RuntimeAdapter[] = [];
@@ -545,25 +737,25 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
         const reachableRuntimes = hostWorker.discovered.filter((d) => d.health !== 'unavailable');
         if (reachableRuntimes.length === 0) return;
 
+        const hostHw = buildFleetHostHardware(hostSpec);
         computers.register({
           id: hostId,
           name: hostSpec.name ?? hostId,
-          type: hostSpec.type ?? 'workstation',
+          type: hostHw.type,
           local: false,
-          os: {
-            platform: hostSpec.platform ?? 'darwin',
-            architecture: hostSpec.architecture ?? 'arm64',
-            version: 'fleet',
-          },
-          hardware: {
-            cpu: hostSpec.cpu ?? 'Apple Silicon',
-            cpuCores: hostSpec.cpuCores ?? 14,
-            memoryGB: hostSpec.memoryGB ?? 36,
-          },
+          os: hostHw.os,
+          hardware: hostHw.hardware,
           runtimes: hostWorker.info.runtimes,
           models: hostWorker.info.models,
           capabilities: ['localExecution'],
         });
+        const refreshHost = () =>
+          refreshRemoteHostTelemetry(computers, hostId, hostSpec, hostAdapters, {
+            apiUrl: config.apiUrl,
+            apiToken: config.apiToken,
+          });
+        fleetHostRefreshers.set(hostId, refreshHost);
+        await refreshHost().catch(() => false);
         onlineFleetHostIds.push(hostId);
 
         for (const hostRuntime of hostWorker.discovered) {
@@ -916,7 +1108,21 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     store, policy, executions,
     resources: { ...config.resources?.memory, minimumContext: config.resources?.minimumContext, autoContext: config.resources?.autoContext },
     refreshResources: async computerId => {
-      if (computers.get(computerId)?.local) computers.heartbeat(computerId, { load: currentLoad() });
+      const comp = computers.get(computerId);
+      if (!comp) return;
+      if (comp.local) {
+        computers.heartbeat(computerId, { load: currentLoad(), telemetrySource: 'local-os' });
+        return;
+      }
+      const refreshRemote = fleetHostRefreshers.get(computerId);
+      if (refreshRemote) {
+        await refreshRemote();
+      } else if (config.apiUrl) {
+        await refreshRemoteHostTelemetry(computers, computerId, { id: computerId }, [], {
+          apiUrl: config.apiUrl,
+          apiToken: config.apiToken,
+        });
+      }
     },
   });
 
@@ -951,11 +1157,12 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
     // Heartbeat before sweeping: the sweep must never find this live process's own worker offline.
     startLocalHeartbeat(computers, localComputer.id, currentLoad);
     for (const fleetHostId of onlineFleetHostIds) {
-      startLocalHeartbeat(computers, fleetHostId, () => ({
-        cpuPercent: 10,
-        memoryUsedGB: 6,
-        memoryAvailableGB: Math.max(4, (computers.get(fleetHostId)?.hardware.memoryGB ?? 36) - 6),
-      }));
+      const refreshRemote = fleetHostRefreshers.get(fleetHostId);
+      if (!refreshRemote) continue;
+      const timer = setInterval(() => {
+        void refreshRemote().catch(() => undefined);
+      }, 15_000);
+      timer.unref?.();
     }
     new RecoveryManager({ computers, executions, jobManager, orchestrator, inspectToolOutcome: inspectOutcome }).start();
   }

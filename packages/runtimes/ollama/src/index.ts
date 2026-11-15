@@ -49,7 +49,7 @@ interface OllamaChatLine {
 }
 
 const TOOL_CAPABLE_FAMILIES = new Set([
-  'qwen', 'llama', 'mistral', 'mixtral', 'gemma', 'deepseek', 'phi', 'granite', 'nemotron', 'codestral',
+  'qwen', 'llama', 'mistral', 'mixtral', 'gemma', 'gemma4', 'deepseek', 'phi', 'granite', 'nemotron', 'codestral',
 ]);
 
 function inferToolCalling(id: string, family?: string): boolean {
@@ -70,6 +70,40 @@ function normalizeModelId(name: string): string {
 
 function canonicalOllamaTag(name: string): string {
   return name.includes(':') ? name : `${name}:latest`;
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function getArchValue(info: Record<string, unknown>, suffix: string): unknown {
+  const arch = typeof info['general.architecture'] === 'string' ? info['general.architecture'].trim() : '';
+  if (arch) {
+    const exactKey = `${arch}.${suffix}`;
+    if (info[exactKey] !== undefined) {
+      return info[exactKey];
+    }
+  }
+  const dotSuffix = `.${suffix}`;
+  for (const [key, value] of Object.entries(info)) {
+    if (key.includes('.vision.') || key.includes('.mmproj.') || key.startsWith('vision.') || key.startsWith('mmproj.')) {
+      continue;
+    }
+    if (key.endsWith(dotSuffix) || key === suffix) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function resolveKvBytesPerElem(kvQuant: unknown): number {
+  if (typeof kvQuant !== 'string') return 2;
+  const normalized = kvQuant.trim().toLowerCase();
+  if (normalized === 'f32' || normalized === 'fp32') return 4;
+  if (normalized === 'f16' || normalized === 'fp16' || normalized === 'bf16') return 2;
+  if (normalized.startsWith('q8') || normalized === 'int8') return 1;
+  if (normalized.startsWith('q4') || normalized === 'int4') return 0.5;
+  return 2;
 }
 
 export class OllamaAdapter implements RuntimeAdapter {
@@ -137,12 +171,19 @@ export class OllamaAdapter implements RuntimeAdapter {
     }
     const data = (await tagsResponse.json()) as { models?: OllamaTagModel[] };
     return Promise.all((data.models ?? []).map(async (model) => {
-      const details = await this.showModel(model.name).catch(() => ({}));
-      const info = (details as { model_info?: Record<string, unknown> }).model_info ?? {};
-      const context = Object.entries(info).find(([key]) => key.endsWith('.context_length'))?.[1];
-      const size = model.size ?? 0;
-      this.modelSizes.set(model.name, size);
-      this.modelSizes.set(normalizeModelId(model.name), size);
+      const details = await this.showModel(model.name).catch(() => ({} as { model_info?: Record<string, unknown>; size?: number; capabilities?: string[] }));
+      const info = details.model_info ?? {};
+      const showCaps = Array.isArray(details.capabilities) ? details.capabilities : [];
+      const context = getArchValue(info, 'context_length');
+      const size =
+        (isPositiveFiniteNumber(model.size) ? model.size : undefined) ??
+        (isPositiveFiniteNumber(details.size) ? details.size : undefined) ??
+        (isPositiveFiniteNumber(info['general.file_size']) ? info['general.file_size'] : undefined) ??
+        0;
+      if (size > 0) {
+        this.modelSizes.set(model.name, size);
+        this.modelSizes.set(normalizeModelId(model.name), size);
+      }
       const family = model.details?.family;
       const runningMatch =
         runningByTag.get(model.name) ??
@@ -158,12 +199,12 @@ export class OllamaAdapter implements RuntimeAdapter {
         contextLimitSource: typeof context === 'number' ? 'runtime-discovered' : 'default-unknown',
         weightBytes: size,
         capabilities: ['generalChat'],
-        toolCalling: inferToolCalling(model.name, family),
+        toolCalling: showCaps.includes('tools') || inferToolCalling(model.name, family),
         structuredOutput: false,
-        vision: (model.details?.families ?? []).includes('clip'),
+        vision: showCaps.includes('vision') || (model.details?.families ?? []).includes('clip'),
         audio: false,
         embedding: (model.details?.families ?? []).some((f) => f.includes('bert') || f.includes('nomic-embed')),
-        reasoning: inferReasoning(model.name),
+        reasoning: showCaps.includes('thinking') || inferReasoning(model.name),
         loaded: Boolean(runningMatch),
         effectiveContext: runningMatch?.context_length,
       };
@@ -196,11 +237,60 @@ export class OllamaAdapter implements RuntimeAdapter {
     };
   }
 
-  private async showModel(modelId: string): Promise<{ model_info?: Record<string, unknown> }> {
+  private async showModel(modelId: string): Promise<{ model_info?: Record<string, unknown>; size?: number; capabilities?: string[] }> {
     const response = await fetch(`${this.baseURL}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: modelId }), signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error('MODEL_NOT_INSTALLED');
-    return await response.json() as { model_info?: Record<string, unknown> };
+    return await response.json() as { model_info?: Record<string, unknown>; size?: number; capabilities?: string[] };
+  }
+
+  private cacheModelSize(modelId: string, size: number): void {
+    this.modelSizes.set(modelId, size);
+    this.modelSizes.set(canonicalOllamaTag(modelId), size);
+    this.modelSizes.set(normalizeModelId(modelId), size);
+  }
+
+  private async resolveWeightBytes(
+    modelId: string,
+    showDetails: { model_info?: Record<string, unknown>; size?: number },
+  ): Promise<number | undefined> {
+    const cached =
+      this.modelSizes.get(modelId) ??
+      this.modelSizes.get(canonicalOllamaTag(modelId)) ??
+      this.modelSizes.get(normalizeModelId(modelId));
+    if (isPositiveFiniteNumber(cached)) return cached;
+
+    if (isPositiveFiniteNumber(showDetails.size)) {
+      this.cacheModelSize(modelId, showDetails.size);
+      return showDetails.size;
+    }
+
+    const fileSize = showDetails.model_info?.['general.file_size'];
+    if (isPositiveFiniteNumber(fileSize)) {
+      this.cacheModelSize(modelId, fileSize);
+      return fileSize;
+    }
+
+    try {
+      const response = await fetch(`${this.baseURL}/api/tags`, { signal: AbortSignal.timeout(5000) });
+      if (!response.ok) return undefined;
+      const data = (await response.json()) as { models?: OllamaTagModel[] };
+      const models = data.models ?? [];
+      for (const m of models) {
+        if (isPositiveFiniteNumber(m.size)) {
+          this.cacheModelSize(m.name, m.size);
+        }
+      }
+      const canonical = canonicalOllamaTag(modelId);
+      const base = normalizeModelId(modelId);
+      const match =
+        models.find((m) => m.name === modelId || m.model === modelId) ??
+        models.find((m) => canonicalOllamaTag(m.name) === canonical || (m.model ? canonicalOllamaTag(m.model) === canonical : false)) ??
+        models.find((m) => normalizeModelId(m.name) === base);
+      return match && isPositiveFiniteNumber(match.size) ? match.size : undefined;
+    } catch {
+      return undefined;
+    }
   }
   private async runningModels(): Promise<Array<{ name: string; context_length?: number; size?: number; size_vram?: number }>> {
     const response = await fetch(`${this.baseURL}/api/ps`, { signal: AbortSignal.timeout(5000) });
@@ -241,14 +331,63 @@ export class OllamaAdapter implements RuntimeAdapter {
     return (await response.json() as { done?: boolean }).done === true;
   }
   async estimateModelLoad(modelId: string, contextTokens: number): Promise<import('@wazir/runtimes-interfaces').ModelLoadEstimate> {
+    if (!isPositiveFiniteNumber(contextTokens)) {
+      return { source: 'UNKNOWN', confidence: 'unknown' };
+    }
     // Ollama has no pre-load estimation endpoint. Use architecture metadata only;
     // file size alone is insufficient to estimate the KV cache at a chosen context.
-    const info = (await this.showModel(modelId)).model_info ?? {};
-    const get = (suffix: string) => Object.entries(info).find(([k]) => k.endsWith(suffix))?.[1];
-    const weightBytes = this.modelSizes.get(modelId) ?? this.modelSizes.get(normalizeModelId(modelId));
-    const layers = get('.block_count'), heads = get('.attention.head_count'), kvHeads = get('.attention.head_count_kv'), embedding = get('.embedding_length');
-    if (!weightBytes || ![layers, heads, kvHeads, embedding].every(n => typeof n === 'number' && n > 0)) return { source: 'UNKNOWN', confidence: 'unknown' };
-    const contextBytes = 2 * 2 * Number(layers) * Number(kvHeads) * Number(embedding) / Number(heads) * contextTokens;
+    const showDetails = await this.showModel(modelId);
+    const info = showDetails.model_info ?? {};
+    const weightBytes = await this.resolveWeightBytes(modelId, showDetails);
+    const layers = getArchValue(info, 'block_count');
+    const kvHeadsRaw = getArchValue(info, 'attention.head_count_kv');
+    if (!isPositiveFiniteNumber(weightBytes) || !isPositiveFiniteNumber(layers)) {
+      return { source: 'UNKNOWN', confidence: 'unknown' };
+    }
+
+    let totalKvHeads: number;
+    if (isPositiveFiniteNumber(kvHeadsRaw)) {
+      totalKvHeads = layers * kvHeadsRaw;
+    } else if (Array.isArray(kvHeadsRaw) && kvHeadsRaw.length > 0 && kvHeadsRaw.every(isPositiveFiniteNumber)) {
+      const sumKvHeads = kvHeadsRaw.reduce((sum, h) => sum + h, 0);
+      totalKvHeads = kvHeadsRaw.length === layers ? sumKvHeads : (sumKvHeads / kvHeadsRaw.length) * layers;
+    } else if (kvHeadsRaw === null || kvHeadsRaw === undefined) {
+      // Ollama /api/show serializes GGUF per-layer array tensors (such as gemma4.attention.head_count_kv) as null.
+      // Fall back to a conservative MHA upper bound using attention.head_count when available.
+      const headsFallback = getArchValue(info, 'attention.head_count');
+      if (!isPositiveFiniteNumber(headsFallback)) {
+        return { source: 'UNKNOWN', confidence: 'unknown' };
+      }
+      totalKvHeads = layers * headsFallback;
+    } else {
+      return { source: 'UNKNOWN', confidence: 'unknown' };
+    }
+
+    const keyLengthRaw = getArchValue(info, 'attention.key_length');
+    const valueLengthRaw = getArchValue(info, 'attention.value_length');
+    if (keyLengthRaw !== undefined && !isPositiveFiniteNumber(keyLengthRaw)) {
+      return { source: 'UNKNOWN', confidence: 'unknown' };
+    }
+    if (valueLengthRaw !== undefined && !isPositiveFiniteNumber(valueLengthRaw)) {
+      return { source: 'UNKNOWN', confidence: 'unknown' };
+    }
+
+    let keyDim = keyLengthRaw as number | undefined;
+    let valueDim = valueLengthRaw as number | undefined;
+    if (keyDim === undefined || valueDim === undefined) {
+      const heads = getArchValue(info, 'attention.head_count');
+      const embedding = getArchValue(info, 'embedding_length');
+      if (!isPositiveFiniteNumber(heads) || !isPositiveFiniteNumber(embedding)) {
+        return { source: 'UNKNOWN', confidence: 'unknown' };
+      }
+      const fallbackHeadDim = embedding / heads;
+      keyDim ??= fallbackHeadDim;
+      valueDim ??= fallbackHeadDim;
+    }
+
+    const kvQuant = getArchValue(info, 'attention.kv_quant') ?? info['general.kv_quant'] ?? info['kv_quant'];
+    const bytesPerElem = resolveKvBytesPerElem(kvQuant);
+    const contextBytes = Math.ceil(totalKvHeads * (keyDim + valueDim) * bytesPerElem * contextTokens);
     const overheadBytes = Math.max(1024 ** 3, weightBytes * 0.15);
     const totalMemoryBytes = weightBytes + contextBytes + overheadBytes;
     return { weightBytes, contextBytes, overheadBytes, totalMemoryBytes, vramBytes: totalMemoryBytes, source: 'HEURISTIC', confidence: 'low' };

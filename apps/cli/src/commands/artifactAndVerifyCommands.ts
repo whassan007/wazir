@@ -156,15 +156,21 @@ export async function verifyRunCommand(
   }
 
   // Get telemetry snapshot from execution
+  const execMeta = record.execution as unknown as {
+    cpuPercent?: number;
+    memoryBytes?: number;
+    exitCode?: number;
+    hardwareReport?: { cpuPercent?: number; memoryBytes?: number };
+  };
   const telemetry: TelemetryMetricSnapshot = {
     timestamp: record.execution.createdAt.toISOString(),
     durationMs: record.execution.completedAt
       ? record.execution.completedAt.getTime() - (record.execution.startedAt ?? record.execution.createdAt).getTime()
       : Date.now() - record.execution.createdAt.getTime(),
-    cpuPercent: 0, // TODO: extract from worker hardware report if available
-    memoryBytes: 0, // TODO: extract from worker hardware report if available
+    cpuPercent: execMeta.hardwareReport?.cpuPercent ?? execMeta.cpuPercent ?? 0,
+    memoryBytes: execMeta.hardwareReport?.memoryBytes ?? execMeta.memoryBytes ?? 0,
     errorCount: record.errors.length,
-    exitCode: 0, // TODO: extract from execution result
+    exitCode: execMeta.exitCode ?? (record.execution.status === 'failed' || record.errors.length > 0 ? 1 : 0),
   };
 
   // Get baselines (from store or create fresh)
@@ -216,13 +222,16 @@ export async function verifyRunCommand(
     options?.sensitivity ?? 'medium',
   );
 
-  // If rollback is triggered, execute it
+  // If rollback is triggered, execute it via CheckpointService if a checkpoint exists
   if (result.rollbackTriggered) {
     try {
-      // TODO: Implement worktree rollback via WorktreeManager
-      // const worktreePath = getWorktreeForExecution(engine, executionId);
-      // await engine.worktrees.rollback(worktreePath);
-      result.rollbackReason = `rollback triggered for ${executionId}`;
+      const latestCheckpoint = engine.checkpoints?.getLatestCheckpoint(executionId);
+      if (latestCheckpoint) {
+        await engine.checkpoints.rollback(executionId, latestCheckpoint.id);
+        result.rollbackReason = `rolled back ${executionId} to checkpoint ${latestCheckpoint.id}`;
+      } else {
+        result.rollbackReason = `rollback triggered for ${executionId} (no checkpoint available)`;
+      }
     } catch (err) {
       result.rollbackReason = `rollback failed: ${String(err)}`;
     }
@@ -335,10 +344,18 @@ export async function verifyStatusCommand(
     if (records.length > 0) {
       // Use the latest execution
       const record = records[records.length - 1];
+      const evalData = record.evaluation as { success?: boolean; score?: number } | undefined;
+      const computedScore = evalData
+        ? (typeof evalData.score === 'number'
+            ? evalData.score
+            : evalData.success
+              ? Math.max(0, 1.0 - record.errors.length * 0.25)
+              : 0)
+        : undefined;
       results.push({
         taskId: task.id,
-        passed: record.evaluation?.success ?? false,
-        score: record.evaluation ? 1.0 : undefined, // TODO: calculate from anomalies
+        passed: evalData?.success ?? false,
+        score: computedScore,
       });
     }
   }

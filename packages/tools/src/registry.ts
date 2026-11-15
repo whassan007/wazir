@@ -11,7 +11,6 @@ import { todoWriteTool } from './todoTool.js';
 import { globTool, searchTool } from './search.js';
 import { buildTool, gitTool, lintTool, shellTool, testTool, typecheckTool } from './process-tools.js';
 import { terminalCloseTool, terminalOpenTool, terminalSendTool } from './terminalTools.js';
-import { lspTools } from './lspToolsStub';
 import { compactMemoryTool } from './compactionTools.js';
 import { codeIntelligenceTools } from './codeIntelligenceTools.js';
 import { codeModeTool, setCodeModeToolRegistry } from './codeModeTool.js';
@@ -109,7 +108,6 @@ export const defaultTools: Tool[] = [
   terminalSendTool,
   terminalCloseTool,
   compactMemoryTool,
-  ...lspTools,
   ...codeIntelligenceTools,
   codeModeTool,
 ];

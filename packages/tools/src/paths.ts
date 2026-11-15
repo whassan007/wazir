@@ -40,15 +40,7 @@ async function canonicalize(target: string): Promise<string> {
  * Returns the lexically resolved path so callers keep project-relative names.
  */
 export async function assertInsideProject(root: string, target: string): Promise<string> {
-  const resolved = path.resolve(root, target);
-  if (!isInside(root, resolved)) {
-    throw new PathEscapeError(target, root);
-  }
-  const realRoot = await fs.realpath(root);
-  const realTarget = await canonicalize(resolved);
-  if (!isInside(realRoot, realTarget)) {
-    throw new PathEscapeError(target, root);
-  }
+  const { resolved } = await resolveInsideProject(root, target);
   return resolved;
 }
 
@@ -57,11 +49,19 @@ export async function assertInsideProject(root: string, target: string): Promise
  * be done on a name that contained no symlinks at check time.
  */
 export async function resolveInsideProject(root: string, target: string, knownRealRoot?: string): Promise<{ resolved: string; real: string }> {
-  const resolved = path.resolve(root, target);
-  if (!isInside(root, resolved)) {
+  const resolvedRoot = path.resolve(root);
+  const realRoot = knownRealRoot ?? await canonicalize(resolvedRoot);
+  const rawResolved = path.resolve(resolvedRoot, target);
+  let resolved: string;
+  if (isInside(resolvedRoot, rawResolved)) {
+    resolved = rawResolved;
+  } else if (path.isAbsolute(target) && isInside(realRoot, rawResolved)) {
+    // Allow canonicalized paths inside a symlinked project/worktree root while
+    // keeping lexical containment and returning a root-relative path.
+    resolved = path.resolve(resolvedRoot, path.relative(realRoot, rawResolved));
+  } else {
     throw new PathEscapeError(target, root);
   }
-  const realRoot = knownRealRoot ?? await fs.realpath(root);
   const real = await canonicalize(resolved);
   if (!isInside(realRoot, real)) {
     throw new PathEscapeError(target, root);

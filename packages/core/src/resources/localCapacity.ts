@@ -9,12 +9,12 @@ const execFileAsync = promisify(execFile);
 export interface LocalCapacityReport {
   observedAt: string;
   memory?: { totalBytes: number; availableBytes: number; source: 'measured:/proc/meminfo' };
-  gpu?: { name?: string; utilizationPercent?: number; temperatureC?: number; powerW?: number; memoryUsedBytes?: number; memoryTotalBytes?: number; source: 'measured:nvidia-smi' };
+  gpu?: { name?: string; utilizationPercent?: number; temperatureC?: number; powerW?: number; memoryUsedBytes?: number; memoryTotalBytes?: number; unifiedMemory?: boolean; source: 'measured:nvidia-smi' };
   runtimes: Array<{
     runtimeId: string;
     endpoint: string;
     reachable: boolean;
-    loadedModels: Array<{ id: string; contextLength?: number }>;
+    loadedModels: Array<{ id: string; contextLength?: number; sizeBytes?: number }>;
     /** vLLM only: provider-reported scheduler state. */
     running?: number;
     waiting?: number;
@@ -53,10 +53,18 @@ export async function readNvidiaSmi(): Promise<LocalCapacityReport['gpu']> {
     const { stdout } = await execFileAsync('nvidia-smi', ['--query-gpu=name,utilization.gpu,temperature.gpu,power.draw,memory.used,memory.total', '--format=csv,noheader,nounits'], { timeout: 5_000 });
     const [name, util, temp, power, used, total] = stdout.trim().split('\n')[0].split(',').map((s) => s.trim());
     const mib = (v: string) => { const n = num(v); return n === undefined ? undefined : n * 1024 * 1024; };
+    const memoryUsedBytes = mib(used);
+    const memoryTotalBytes = mib(total);
+    const unifiedMemory =
+      memoryUsedBytes === undefined &&
+      memoryTotalBytes === undefined &&
+      /gb10|grace|dgx/i.test(name ?? '')
+        ? true
+        : undefined;
     return {
       name, utilizationPercent: num(util), temperatureC: num(temp), powerW: num(power),
       // On unified-memory systems (GB10) nvidia-smi reports [N/A] for memory: left undefined.
-      memoryUsedBytes: mib(used), memoryTotalBytes: mib(total), source: 'measured:nvidia-smi',
+      memoryUsedBytes, memoryTotalBytes, unifiedMemory, source: 'measured:nvidia-smi',
     };
   } catch {
     return undefined;
@@ -80,8 +88,14 @@ export async function probeEndpoint(e: LocalEndpoint): Promise<LocalCapacityRepo
       const data = await getJson(`${base}/api/v0/models`) as { data?: Array<{ id: string; state?: string; loaded_context_length?: number; max_context_length?: number }> };
       out.loadedModels = (data.data ?? []).filter((m) => m.state === 'loaded').map((m) => ({ id: m.id, contextLength: m.loaded_context_length ?? m.max_context_length }));
     } else if (e.kind === 'ollama') {
-      const data = await getJson(`${base}/api/ps`) as { models?: Array<{ name: string; context_length?: number }> };
-      out.loadedModels = (data.models ?? []).map((m) => ({ id: m.name, contextLength: m.context_length }));
+      const data = await getJson(`${base}/api/ps`) as { models?: Array<{ name: string; context_length?: number; size?: number; size_vram?: number }> };
+      out.loadedModels = (data.models ?? []).map((m) => ({
+        id: m.name,
+        contextLength: m.context_length,
+        sizeBytes: typeof m.size === 'number' && Number.isFinite(m.size)
+          ? m.size
+          : (typeof m.size_vram === 'number' && Number.isFinite(m.size_vram) ? m.size_vram : undefined),
+      }));
     } else {
       const data = await getJson(`${base}/v1/models`) as { data?: Array<{ id: string; max_model_len?: number }> };
       out.loadedModels = (data.data ?? []).map((m) => ({ id: m.id, contextLength: m.max_model_len }));

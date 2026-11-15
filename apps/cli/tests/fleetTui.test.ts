@@ -2516,5 +2516,83 @@ describe('FleetTui — protocol/validation visibility and raw response viewer', 
       expect(harness.tui.getExitReason()).toBe('user_exit');
     });
   });
+
+  describe('FleetTui — error guidance and job lifecycle cleanup (P1-I / P0-G)', () => {
+    it('natural-language prompt failure does NOT recommend !prompt shell execution', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      const harness = new TuiTestHarness({
+        engine,
+        concurrencyLimit: 1,
+        useWorktrees: false,
+        presentationMode: 'conversation',
+      });
+
+      engine.orchestrator.runJob = async () => {
+        throw new Error('No eligible model available for scheduling');
+      };
+
+      await harness.start();
+      harness.sendLine('explain why the build failed');
+      for (let i = 0; i < 60 && !/Job execution error/.test(harness.tui.getStatusMessage()); i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      const output = harness.outStream.getOutput();
+      expect(output).not.toContain('!explain why the build failed');
+      expect(output).not.toContain('execute this command directly in your shell');
+      expect(output).toContain('Run /doctor or wa models list');
+
+      harness.stop();
+    });
+
+    it('cancelled job terminates cleanly, sets completedAt, and stops advancing the duration timer', async () => {
+      projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-tui-test-'));
+      const engine = await buildFleetTestEngine(projectRoot);
+      const harness = new TuiTestHarness({
+        engine,
+        concurrencyLimit: 1,
+        useWorktrees: false,
+        presentationMode: 'conversation',
+      });
+
+      const adapter = engine.worker.adapterForModel('fake-model')!;
+      let release: (() => void) | undefined;
+      adapter.generate = async function* (req: any) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+          req?.signal?.addEventListener?.('abort', () => resolve(), { once: true });
+        });
+        yield { type: 'completed' as const, content: 'stopped', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+      };
+
+      await harness.start();
+      harness.sendLine('run a cancellable task');
+      for (let i = 0; i < 60 && harness.tui.getAgents().length === 0; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      harness.sendLine('/cancel');
+      release?.();
+
+      for (let i = 0; i < 80; i++) {
+        const job = harness.tui.getCurrentJob();
+        if (job && ['cancelled', 'failed', 'completed'].includes(job.status)) break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      const agents = harness.tui.getAgents();
+      expect(agents.length).toBeGreaterThan(0);
+      for (const agent of agents) {
+        expect(['cancelled', 'failed', 'completed']).toContain(agent.status);
+        expect(agent.completedAt).toBeInstanceOf(Date);
+      }
+      const frozenDuration = agents[0].durationMs;
+      await new Promise((r) => setTimeout(r, 350));
+      expect(harness.tui.getAgents()[0].durationMs).toBe(frozenDuration);
+
+      harness.stop();
+    });
+  });
 });
 

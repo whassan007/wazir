@@ -61,13 +61,129 @@ export interface CompressionInput {
 }
 
 /**
+ * Qwen Code 1.0 structured state-snapshot summarization prompt (`getCompressionPrompt`).
+ */
+export function getQwenCompressionPrompt(): string {
+  return [
+    'You are the component that summarizes internal chat history into a compact `<state_snapshot>` XML block.',
+    'Preserve all crucial technical facts so the agent can continue seamlessly without re-reading everything:',
+    '- <overall_goal>: concise statement of the user objective',
+    '- <key_knowledge>: important findings, root causes, exact file paths, line numbers, symbol names, and error messages',
+    '- <file_system_state>: files read, created, or modified and their current status',
+    '- <recent_actions>: key tool calls/tests already run and their outcomes',
+    '- <current_state>: exact next step or unresolved diagnostic',
+    'Respond ONLY with the `<state_snapshot>...</state_snapshot>` XML block.',
+  ].join('\n');
+}
+
+export interface CompressionWithModelInput extends CompressionInput {
+  summarize?: (messagesToSummarize: ChatMessage[], systemPrompt: string) => Promise<string | null>;
+}
+
+/**
  * Qwen Code 1.0 `ChatCompressionService`:
  *  - Compacts older turn groups into a structured `<state_snapshot>` XML block when
  *    context utilization reaches `compactionRatio` (default `0.70`) or on forced overflow recovery.
+ *  - Supports LLM-backed semantic `<state_snapshot>` summarization via `maybeCompressWithModel`
+ *    with automatic fallback to deterministic snapshot compaction.
  *  - Slices strictly at atomic turn-group boundaries so `assistant.toolCalls` and `role: 'tool'`
  *    (`tool_call_id`) invariants are never broken for OpenAI, Anthropic, or Gemini.
  */
 export class ChatCompressionService {
+  async maybeCompressWithModel(input: CompressionWithModelInput): Promise<string | null> {
+    const {
+      messages,
+      request,
+      effectiveContextTokens,
+      maxTokensPerTurn,
+      toolSchemaTokens,
+      compactionRatio,
+      force = false,
+      summarize,
+    } = input;
+
+    if (!summarize) {
+      return this.maybeCompress(input);
+    }
+    if (!force && (!effectiveContextTokens || effectiveContextTokens <= 0)) {
+      return null;
+    }
+
+    const headCount = Math.min(2, messages.length);
+    if (messages.length <= headCount + 2) {
+      return null;
+    }
+
+    const beforeTokens = estimateMessagesTokens(messages);
+    if (!force && effectiveContextTokens) {
+      const outputReserve =
+        request.reserve?.outputTokens ??
+        planOutputReserveTokens({
+          taskDescription: request.taskDescription,
+          taskType: request.taskType,
+          effectiveContextTokens,
+        });
+      const schemaReserve = request.reserve?.toolSchemaTokens ?? toolSchemaTokens;
+      const safetyReserve =
+        request.reserve?.safetyTokens ?? (effectiveContextTokens > 32_000 ? 5000 : Math.floor(effectiveContextTokens * 0.05));
+      const usableBudget = computeUsableBudget({
+        effectiveContextTokens,
+        reserveOutputTokens: outputReserve,
+        reserveToolSchemaTokens: schemaReserve,
+        reserveSafetyTokens: safetyReserve,
+      });
+      if (computeUtilization(beforeTokens, usableBudget) < compactionRatio) {
+        return null;
+      }
+    }
+
+    const groups = partitionAtomicTurnGroups(messages, headCount);
+    const keepTailGroups = Math.min(2, Math.max(1, groups.length - 1));
+    const compressCount = groups.length - keepTailGroups;
+    if (compressCount <= 0) {
+      return null;
+    }
+
+    const compressedGroups = groups.slice(0, compressCount);
+    const preservedTailGroups = groups.slice(compressCount);
+    const boundedHistory: ChatMessage[] = compressedGroups.flat().map((m) => ({
+      role: m.role === 'tool' ? 'user' : m.role,
+      content: keepEnds(
+        m.role === 'tool'
+          ? `[tool:${m.name ?? 'tool'}] ${m.content || ''}`
+          : m.toolCalls?.length
+            ? `${m.content || ''}\n[toolCalls: ${m.toolCalls.map((tc) => `${tc.name}(${JSON.stringify(tc.arguments ?? {})})`).join(', ')}]`
+            : m.content || '',
+        1500,
+      ),
+    }));
+
+    try {
+      const rawSummary = (await summarize(boundedHistory, getQwenCompressionPrompt()))?.trim();
+      if (rawSummary) {
+        const snapshotBody = rawSummary.includes('<state_snapshot>')
+          ? rawSummary
+          : `<state_snapshot>\n${rawSummary}\n</state_snapshot>`;
+        const summaryMessage: ChatMessage = {
+          role: 'user',
+          content: `${snapshotBody}\nEarlier conversation turns were compacted into <state_snapshot> above. Continue from the current state.`,
+        };
+        const candidate = [...messages.slice(0, headCount), summaryMessage, ...preservedTailGroups.flat()];
+        const afterTokens = estimateMessagesTokens(candidate);
+        if (force || afterTokens < beforeTokens) {
+          messages.length = 0;
+          messages.push(...candidate);
+          const reduction = beforeTokens > 0 ? Math.round((1 - afterTokens / beforeTokens) * 100) : 0;
+          return `context compacted (LLM): ${compressCount} turn group(s) -> <state_snapshot> (~${beforeTokens}->~${afterTokens} tokens, ${reduction}% smaller)`;
+        }
+      }
+    } catch {
+      // Fall back to deterministic snapshot compaction below.
+    }
+
+    return this.maybeCompress(input);
+  }
+
   maybeCompress(input: CompressionInput): string | null {
     const {
       messages,

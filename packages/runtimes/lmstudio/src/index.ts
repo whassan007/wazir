@@ -401,14 +401,14 @@ export class LMStudioAdapter implements RuntimeAdapter {
     return err instanceof Error && /LM Studio models HTTP (404|405|501)\b/.test(err.message);
   }
 
-  private async fetchOpenAIModels(): Promise<OpenAIModel[] | null> {
+  private async fetchOpenAIModels(): Promise<Array<OpenAIModel & { state?: string; loaded_instances?: Array<{ id: string; config?: { context_length?: number } }> }> | null> {
     try {
       const response = await fetch(`${this.baseURL}/models`, {
         headers: this.headers(),
         signal: AbortSignal.timeout(2000),
       });
       if (!response.ok) return null;
-      const data = (await response.json()) as { data?: OpenAIModel[] };
+      const data = (await response.json()) as { data?: Array<OpenAIModel & { state?: string; loaded_instances?: Array<{ id: string; config?: { context_length?: number } }> }> };
       return Array.isArray(data.data) ? data.data : [];
     } catch {
       return null;
@@ -433,11 +433,19 @@ export class LMStudioAdapter implements RuntimeAdapter {
 
   async getLoadedModels(): Promise<string[]> {
     try {
-      return (await this.nativeModels()).filter(m => m.loaded_instances.length > 0).map(m => m.key);
+      return (await this.nativeModels())
+        .filter((m) => Array.isArray(m.loaded_instances) && m.loaded_instances.length > 0)
+        .map((m) => m.key);
     } catch (err) {
       if (!this.isUnsupportedNativeError(err)) throw err;
       const models = await this.fetchOpenAIModels();
       if (!models) throw err;
+      const explicitlyLoaded = models
+        .filter((m) => !this.compatUnloaded.has(m.id) && (m.state === 'loaded' || (Array.isArray(m.loaded_instances) && m.loaded_instances.length > 0)))
+        .map((m) => m.id);
+      if (explicitlyLoaded.length > 0) {
+        return explicitlyLoaded;
+      }
       if (this.compatLoaded.size > 0) {
         return models.map((m) => m.id).filter((id) => this.compatLoaded.has(id));
       }
@@ -449,17 +457,48 @@ export class LMStudioAdapter implements RuntimeAdapter {
   }
   async inspectModel(modelId: string): Promise<import('@wazir/runtimes-interfaces').RuntimeModelInspection> {
     try {
-      const model = (await this.nativeModels()).find(m => m.key === modelId || m.loaded_instances.some(i => i.id === modelId));
-      const instances = model?.loaded_instances ?? [];
+      const model = (await this.nativeModels()).find(
+        (m) => m.key === modelId || (Array.isArray(m.loaded_instances) && m.loaded_instances.some((i) => i.id === modelId)),
+      );
+      const instances = Array.isArray(model?.loaded_instances) ? model.loaded_instances : [];
+      const exactInstance = instances.find((i) => i.id === modelId);
+      if (exactInstance) {
+        return {
+          modelId,
+          loaded: true,
+          instanceId: exactInstance.id,
+          effectiveContext: exactInstance.config?.context_length,
+        };
+      }
       if (instances.length > 1) throw new Error('RESOURCE_BUSY: multiple runtime instances require explicit selection');
-      return { modelId, loaded: instances.length === 1, instanceId: instances[0]?.id,
-        effectiveContext: instances[0]?.config.context_length };
+      return {
+        modelId,
+        loaded: instances.length === 1,
+        instanceId: instances[0]?.id,
+        effectiveContext: instances[0]?.config?.context_length,
+      };
     } catch (err) {
       if (!this.isUnsupportedNativeError(err)) throw err;
       const models = await this.fetchOpenAIModels();
       if (!models) throw err;
-      const exists = models.some((m) => m.id === modelId);
-      if (!exists) return { modelId, loaded: false };
+      const matched = models.find(
+        (m) => m.id === modelId || (Array.isArray(m.loaded_instances) && m.loaded_instances.some((i) => i.id === modelId)),
+      );
+      if (!matched) return { modelId, loaded: false };
+      if (!this.compatUnloaded.has(matched.id)) {
+        if (Array.isArray(matched.loaded_instances) && matched.loaded_instances.length > 0) {
+          const inst = matched.loaded_instances.find((i) => i.id === modelId) ?? matched.loaded_instances[0];
+          return {
+            modelId,
+            loaded: true,
+            instanceId: inst.id,
+            effectiveContext: inst.config?.context_length,
+          };
+        }
+        if (matched.state === 'loaded') {
+          return { modelId, loaded: true, instanceId: matched.id };
+        }
+      }
       if (this.compatLoaded.has(modelId)) {
         return {
           modelId,
@@ -521,7 +560,7 @@ export class LMStudioAdapter implements RuntimeAdapter {
     if (!state.loaded) return;
     const response = await fetch(`${this.baseURL.replace(/\/v1$/, '')}/api/v1/models/unload`, {
       method: 'POST', headers: this.headers(true), signal: AbortSignal.timeout(30_000),
-      body: JSON.stringify({ instance_id: state.instanceId }),
+      body: JSON.stringify({ instance_id: state.instanceId ?? modelId }),
     });
     if (!response.ok) {
       if ([404, 405, 501].includes(response.status)) {
@@ -533,14 +572,26 @@ export class LMStudioAdapter implements RuntimeAdapter {
         }
         if (compatMode) {
           this.compatLoaded.delete(modelId);
+          if (state.instanceId) this.compatLoaded.delete(state.instanceId);
           this.compatUnloaded.add(modelId);
+          return;
+        }
+        // In native mode, HTTP 404 on /api/v1/models/unload means the instance was already unloaded.
+        if (response.status === 404) {
+          this.nativeModelsCache = undefined;
           return;
         }
       }
       throw new Error(`RUNTIME_UNLOAD_FAILED: LM Studio HTTP ${response.status}`);
     }
-    await response.json();
+    await response.json().catch(() => undefined);
     this.nativeModelsCache = undefined;
+  }
+  async unloadAllModels(): Promise<void> {
+    const loaded = await this.getLoadedModels();
+    for (const modelId of loaded) {
+      await this.unloadModel(modelId);
+    }
   }
   async probeModel(modelId: string, contextTokens: number): Promise<boolean> {
     try {

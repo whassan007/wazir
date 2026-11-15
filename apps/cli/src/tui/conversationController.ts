@@ -847,6 +847,18 @@ export class ConversationController {
     } catch {
       // Non-Node workspace or no package.json
     }
+    if (commands.length === 0) {
+      const hasFile = async (name: string) => fs.access(path.join(this.workspaceRoot, name)).then(() => true, () => false);
+      if (await hasFile('Cargo.toml')) {
+        commands.push('- `cargo test`', '- `cargo check`', '- `cargo build`');
+      } else if (await hasFile('go.mod')) {
+        commands.push('- `go test ./...`', '- `go vet ./...`', '- `go build ./...`');
+      } else if (await hasFile('pyproject.toml') || await hasFile('pytest.ini') || await hasFile('setup.py')) {
+        commands.push('- `pytest`');
+      } else if (await hasFile('Makefile')) {
+        commands.push('- `make test` / `make build` (inspect `Makefile` targets)');
+      }
+    }
 
     const entries = await fs.readdir(this.workspaceRoot, { withFileTypes: true }).catch(() => []);
     const topDirs = entries

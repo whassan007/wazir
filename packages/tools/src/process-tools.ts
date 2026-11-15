@@ -131,19 +131,98 @@ interface CheckToolInput {
   workspaces?: string[];
 }
 
-async function readProjectScripts(projectRoot: string): Promise<Record<string, string>> {
+type CheckName = 'test' | 'lint' | 'typecheck' | 'build';
+
+interface PackageScriptsResult {
+  exists: boolean;
+  scripts: Record<string, string>;
+}
+
+async function readProjectScripts(projectRoot: string): Promise<PackageScriptsResult> {
   try {
     const raw = await fs.readFile(path.join(projectRoot, 'package.json'), 'utf8');
     const pkg = JSON.parse(raw) as { scripts?: unknown };
-    return pkg.scripts && typeof pkg.scripts === 'object' ? (pkg.scripts as Record<string, string>) : {};
-  } catch {
-    return {};
+    const scripts = pkg.scripts && typeof pkg.scripts === 'object' ? (pkg.scripts as Record<string, string>) : {};
+    return { exists: true, scripts };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { exists: false, scripts: {} };
+    }
+    return { exists: true, scripts: {} };
   }
 }
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface DetectedCheckCommand {
+  projectType: string | null;
+  command: { file: string; args: string[] } | null;
+}
+
+const RUST_CHECK_ARGS: Record<CheckName, string[]> = {
+  test: ['test'],
+  lint: ['clippy'],
+  typecheck: ['check'],
+  build: ['build'],
+};
+
+const GO_CHECK_ARGS: Record<CheckName, string[]> = {
+  test: ['test', './...'],
+  lint: ['vet', './...'],
+  typecheck: ['vet', './...'],
+  build: ['build', './...'],
+};
+
+async function detectNonNodeCheck(projectRoot: string, checkName: CheckName): Promise<DetectedCheckCommand> {
+  if (await fileExists(path.join(projectRoot, 'Cargo.toml'))) {
+    return { projectType: 'rust', command: { file: 'cargo', args: RUST_CHECK_ARGS[checkName] } };
+  }
+  if (await fileExists(path.join(projectRoot, 'go.mod'))) {
+    return { projectType: 'go', command: { file: 'go', args: GO_CHECK_ARGS[checkName] } };
+  }
+  const hasPythonManifest = (
+    await Promise.all([
+      fileExists(path.join(projectRoot, 'pyproject.toml')),
+      fileExists(path.join(projectRoot, 'pytest.ini')),
+      fileExists(path.join(projectRoot, 'setup.py')),
+      fileExists(path.join(projectRoot, 'setup.cfg')),
+    ])
+  ).some(Boolean);
+  if (hasPythonManifest) {
+    if (checkName === 'test') {
+      return { projectType: 'python', command: { file: 'pytest', args: [] } };
+    }
+    // Fall through to Makefile check in case a Python/mixed repo defines lint/build targets there.
+  }
+
+  const makefilePath = path.join(projectRoot, 'Makefile');
+  try {
+    const makefile = await fs.readFile(makefilePath, 'utf8');
+    const targetPattern = new RegExp(`^${checkName}\\s*:`, 'm');
+    if (targetPattern.test(makefile)) {
+      return {
+        projectType: hasPythonManifest ? 'python' : 'make',
+        command: { file: 'make', args: [checkName] },
+      };
+    }
+  } catch {
+    // No Makefile or unreadable; fall through.
+  }
+
+  return { projectType: hasPythonManifest ? 'python' : null, command: null };
+}
+
 // Check tools are auto-allowed by policy, so they must never run caller-supplied
-// shell text: only a script name that already exists in package.json is accepted.
-function makeCheckTool(name: string, description: string, defaultScript: string, permission: 'test_run' | 'build_run'): Tool {
+// shell text: only a script name that already exists in package.json (or a fixed
+// manifest-detected command for non-Node repos) is accepted.
+function makeCheckTool(name: string, description: string, defaultScript: CheckName, permission: 'test_run' | 'build_run'): Tool {
   return {
     descriptor: {
       name,
@@ -172,8 +251,55 @@ function makeCheckTool(name: string, description: string, defaultScript: string,
     },
     async execute(input: CheckToolInput, ctx): Promise<ToolResult> {
       const started = Date.now();
-      const script = typeof input.script === 'string' && input.script.trim() ? input.script.trim() : defaultScript;
-      const scripts = await readProjectScripts(ctx.projectRoot);
+      const requestedScript = typeof input.script === 'string' && input.script.trim() ? input.script.trim() : undefined;
+      const script = requestedScript ?? defaultScript;
+      const { exists: hasPackageJson, scripts } = await readProjectScripts(ctx.projectRoot);
+
+      if (!hasPackageJson) {
+        if (requestedScript) {
+          return {
+            ok: false,
+            output: '',
+            error: `missing script: no package.json in project root; refusing to run arbitrary script '${requestedScript}'`,
+            durationMs: Date.now() - started,
+          };
+        }
+        const detected = await detectNonNodeCheck(ctx.projectRoot, defaultScript);
+        if (!detected.command) {
+          return {
+            ok: true,
+            output: `not applicable: no package.json in ${ctx.projectRoot}${detected.projectType ? ` (${detected.projectType} project has no default '${defaultScript}' command)` : ' and no recognized project manifest'}`,
+            durationMs: Date.now() - started,
+            metadata: {
+              applicable: false,
+              reason: 'no_package_json',
+              projectType: detected.projectType ?? 'unknown',
+              check: defaultScript,
+              cwd: ctx.projectRoot,
+              projectRoot: ctx.projectRoot,
+            },
+          };
+        }
+        const command = [detected.command.file, ...detected.command.args].join(' ');
+        try {
+          const result = await runFile(detected.command.file, detected.command.args, {
+            cwd: ctx.projectRoot,
+            projectRoot: ctx.projectRoot,
+            timeoutMs: typeof input.timeoutMs === 'number' ? input.timeoutMs : 300_000,
+            env: ctx.env,
+            networkAllowed: ctx.networkAllowed,
+            signal: ctx.signal,
+          });
+          return toToolResult(command, result, {
+            cwd: ctx.projectRoot,
+            projectRoot: ctx.projectRoot,
+            projectType: detected.projectType,
+          });
+        } catch (error) {
+          return { ok: false, output: '', error: errorMessage(error), durationMs: Date.now() - started };
+        }
+      }
+
       if (!Object.prototype.hasOwnProperty.call(scripts, script)) {
         return {
           ok: false,

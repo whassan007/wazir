@@ -352,6 +352,7 @@ export class FleetTui {
   private updateIndicatorTimer?: NodeJS.Timeout;
   private renderTimer?: NodeJS.Timeout;
   private spinnerTick = 0;
+  private readonly jobStopReasons = new Map<string, string>();
 
   private tuiMode: TuiMode = 'NORMAL';
   private isPasting = false;
@@ -5366,10 +5367,13 @@ export class FleetTui {
           if (this.jobLifecycleGeneration !== lifecycleGeneration || this.currentJob?.id !== job.id) return;
           if (!this.engine.orchestrator.getJob(job.id)) return;
           this.jobRollups.set(job.id, this.currentRollup);
-          // A timeout is reported as 'failed' with the reason on the task node; say so
-          // here rather than a bare "failed!" that hides why.
+          // A timeout is reported as 'failed' with the reason on the task node or stop-reason event;
+          // say so here rather than a bare "failed!" that hides why.
           const timeoutNode = finalJob.graph.nodes.find((n) => /timeout/i.test(n.error ?? ''));
-          const outcome = timeoutNode ? `failed (${timeoutNode.error})` : `${finalJob.status}!`;
+          const timeoutReason = timeoutNode?.error ?? this.jobStopReasons.get(job.id);
+          const terminalStatus = finalJob.status === 'completed' ? 'completed' : finalJob.status === 'cancelled' ? 'cancelled' : 'failed';
+          this.finalizeJobTasks(job.id, terminalStatus, timeoutReason);
+          const outcome = timeoutReason ? `failed (${timeoutReason})` : `${finalJob.status}!`;
           const prefix = finalJob.status === 'failed' ? 'Execution failed · ' : '';
           this.statusMessage = `${prefix}Job ${job.id} ${outcome} Tokens: In ${this.currentRollup.tokens.input}/Out ${this.currentRollup.tokens.output}, Dur: ${(this.currentRollup.durationMs / 1000).toFixed(1)}s`;
           if (this.presentationMode === 'conversation') {
@@ -5418,13 +5422,17 @@ export class FleetTui {
         } catch (err) {
           if (this.jobLifecycleGeneration !== lifecycleGeneration || this.currentJob?.id !== job.id) return;
           const errMsg = err instanceof Error ? err.message : String(err);
+          this.finalizeJobTasks(job.id, 'failed', errMsg);
+          this.conversation.clearStreamingPreview();
+          this.conversation.activityProjector.flushPending();
           const isSched = /schedul|eligible|model|capacity|admission|reject/i.test(errMsg);
           this.statusMessage = `${isSched ? 'Scheduler rejected task · ' : 'Execution failed · '}Job execution error: ${errMsg}`;
 
           if (this.presentationMode === 'conversation') {
-            const trimmedPrompt = prompt.trim();
-            const tip = trimmedPrompt ? `\n  Tip: Use !${trimmedPrompt} to execute this command directly in your shell.` : '';
-            this.conversationRenderer.append(`✗ ${isSched ? 'Scheduler rejected task' : 'Execution failed'}: ${errMsg}${tip}\n  Run /doctor or wa models list to inspect runtime readiness.`);
+            const guidance = isSched
+              ? 'Run /doctor or wa models list to check model readiness & memory.'
+              : 'Run /doctor or retry with a different model.';
+            this.conversationRenderer.append(`✗ ${isSched ? 'Scheduler rejected task' : 'Execution failed'}: ${errMsg}\n  ${guidance}`);
           } else {
             // Structured error component (§29)
             this.currentError = {
@@ -5486,9 +5494,7 @@ export class FleetTui {
         await this.refreshRecentBlocks();
       }
       if (this.presentationMode === 'conversation') {
-        const trimmedPrompt = prompt.trim();
-        const tip = trimmedPrompt ? `\n  Tip: Use !${trimmedPrompt} to execute this command directly in your shell.` : '';
-        this.conversationRenderer.append(`✗ Scheduler rejected task: ${errMsg}${tip}\n  Verify task syntax or run /doctor to inspect system readiness.`);
+        this.conversationRenderer.append(`✗ Scheduler rejected task: ${errMsg}\n  Run /doctor or wa models list to check model readiness & memory.`);
       } else {
         this.currentError = {
           phase: 'scheduling',
@@ -5909,9 +5915,16 @@ export class FleetTui {
       } else if (ev.type === 'task:cancelled') {
         this.flushStreaming(taskId, logs, timeStr);
         agent.status = 'cancelled';
+        agent.completedAt = now;
+        if (agent.startedAt) {
+          agent.durationMs = Math.max(0, now.getTime() - agent.startedAt.getTime());
+        }
         agent.phase = 'cancelled';
         if (this.currentError?.taskId === taskId) {
           this.currentError = null;
+        }
+        if (ev.error) {
+          this.jobStopReasons.set(ev.jobId, ev.error);
         }
         // ev.error is set when the system did the cancelling (the job timeout) — without
         // distinguishing it, a timed-out task read as "cancelled by operator", which
@@ -5932,10 +5945,41 @@ export class FleetTui {
         });
       }
       this.agentLogs.set(taskId, logs);
+    } else if (ev.type === 'job:completed' || ev.type === 'job:failed' || ev.type === 'job:cancelled') {
+      if (ev.type === 'job:cancelled' && ev.error) {
+        this.jobStopReasons.set(ev.jobId, ev.error);
+      } else if (ev.type === 'job:failed' && ev.error && /timeout/i.test(ev.error) && !this.jobStopReasons.has(ev.jobId)) {
+        this.jobStopReasons.set(ev.jobId, ev.error);
+      }
+      const terminalStatus = ev.type === 'job:completed' ? 'completed' : ev.type === 'job:cancelled' ? 'cancelled' : 'failed';
+      this.finalizeJobTasks(ev.jobId, terminalStatus, ev.error);
     }
 
     this.draw();
   };
+
+  /** Transitions any still-active projected tasks and agent cards for a finished job to terminal state. */
+  private finalizeJobTasks(jobId: string, terminalStatus: 'completed' | 'failed' | 'cancelled', reason?: string): void {
+    const now = new Date();
+    const mappedEvent = terminalStatus === 'completed' ? 'task:completed' : terminalStatus === 'cancelled' ? 'task:cancelled' : 'task:failed';
+    for (const task of this.statusProjection.getTasks()) {
+      if (!['COMPLETED', 'FAILED', 'CANCELLED'].includes(task.status)) {
+        this.statusProjection.apply({ type: mappedEvent, taskId: task.taskId, error: reason }, now.getTime());
+      }
+    }
+    if (this.currentJob?.id === jobId) {
+      for (const agent of this.agents.values()) {
+        if (!['completed', 'failed', 'cancelled'].includes(agent.status)) {
+          agent.status = terminalStatus;
+          agent.phase = terminalStatus;
+          agent.completedAt = agent.completedAt ?? now;
+          if (agent.startedAt) {
+            agent.durationMs = Math.max(0, agent.completedAt.getTime() - agent.startedAt.getTime());
+          }
+        }
+      }
+    }
+  }
 
   private updateAgentDurations(): void {
     this.spinnerTick++;

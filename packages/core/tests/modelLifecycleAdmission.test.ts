@@ -249,3 +249,205 @@ describe('reconcile isolates per-model failures', () => {
    expect(f.adapter.loadModel).toHaveBeenCalledTimes(1);
  });
 });
+
+describe('telemetry refresh, structured explanations, and admission invariants', () => {
+ it('refreshes telemetry once on missing or stale telemetry before admission and does not permanently blacklist on transient gaps', async () => {
+   const computers = new ComputerRegistry();
+   computers.register({ id: 'node', name: 'node', type: 'server', local: false,
+     os: { platform: 'linux', architecture: 'arm64', version: '1' },
+     hardware: { cpu: 'cpu', cpuCores: 8, memoryGB: 128, gpu: { vendor: 'nvidia', model: 'gpu', memoryGB: 128, unifiedMemory: true } } });
+   const models = new ModelRegistry(), runtimes = new RuntimeRegistry(), executions = new ExecutionEngine();
+   const caps = { chat: true, streaming: true, toolCalling: true, structuredOutput: false, vision: false, embeddings: false, reasoning: false,
+     modelLoad: true, modelUnload: true, modelDownload: false, statefulChat: false, mcp: false };
+   runtimes.register({ id: 'r', type: 'lmstudio', name: 'runtime', version: '1', computerId: 'node', capabilities: caps });
+   runtimes.update('r', { health: 'healthy' });
+   const loaded = new Map<string, number>();
+   const adapter = {
+     id: 'r', type: 'lmstudio', discover: async () => ({ id: 'r', name: 'r', version: '1' }), healthCheck: async () => ({ status: 'healthy' }),
+     getCapabilities: async () => caps,
+     listModels: async () => models.list().map(m => ({ id: m.id, contextWindow: m.contextMax })),
+     estimateModelLoad: vi.fn(async () => ({ totalMemoryBytes: 30 * G, source: 'RUNTIME', confidence: 'high' })),
+     loadModel: vi.fn(async (id: string, opts: { contextTokens: number }) => { loaded.set(id, opts.contextTokens); }),
+     unloadModel: vi.fn(async (id: string) => { loaded.delete(id); }),
+     inspectModel: vi.fn(async (id: string) => ({ modelId: id, loaded: loaded.has(id), effectiveContext: loaded.get(id), memoryBytes: 30 * G })),
+     probeModel: vi.fn(async () => true),
+     async *generate() { yield { type: 'completed', content: 'ok' }; },
+   } as unknown as RuntimeAdapter;
+   models.register({ id: 'a', name: 'a', provider: 'r', family: 'other', contextMax: 131072, capabilities: ['generalChat'],
+     toolCalling: true, structuredOutput: false, vision: false, audio: false, embedding: false, reasoning: false,
+     runtimeCompatibility: ['lmstudio'], local: true, createdAt: new Date(), updatedAt: new Date() });
+   models.upsertInstallation({ id: 'a', modelId: 'a', computerId: 'node', runtimeId: 'r', runtimeModelId: 'a', installed: true, observedAt: new Date() });
+   models.upsertInstance({ id: 'a', installationId: 'a', modelId: 'a', computerId: 'node', runtimeId: 'r', runtimeModelId: 'a', loaded: false, state: 'INSTALLED', health: 'healthy' });
+
+   let allowHeartbeat = false;
+   const refreshResources = vi.fn(async (computerId: string) => {
+     if (allowHeartbeat) {
+       computers.heartbeat(computerId, { load: { cpuPercent: 0, memoryUsedGB: 64, memoryAvailableGB: 64 } });
+     }
+   });
+   const service = new ModelLifecycleService({
+     models, computers, runtimes, executions, adapters: new Map([['r', adapter]]),
+     policy: new PolicyEngine({ projectRoot: '/tmp' }), refreshResources,
+   });
+
+   // 1. Missing telemetry: refreshResources is called once, still unavailable -> denied with HARDWARE_TELEMETRY_UNAVAILABLE
+   await expect(service.load('a')).rejects.toMatchObject({
+     code: 'MODEL_ADMISSION_DENIED',
+     reasons: ['HARDWARE_TELEMETRY_UNAVAILABLE'],
+   });
+   expect(refreshResources).toHaveBeenCalledTimes(1);
+   expect(adapter.loadModel).not.toHaveBeenCalled();
+   expect(service.isKnownIneligible('a').ineligible).toBe(false);
+
+   // 2. Stale telemetry: heartbeat older than 30s -> refreshResources called once, still stale -> denied with HARDWARE_TELEMETRY_STALE
+   computers.get('node')!.resourceObservedAt = new Date(Date.now() - 60_000);
+   computers.get('node')!.load = { cpuPercent: 0, memoryUsedGB: 64, memoryAvailableGB: 64 };
+   await expect(service.load('a')).rejects.toMatchObject({
+     code: 'MODEL_ADMISSION_DENIED',
+     reasons: ['HARDWARE_TELEMETRY_STALE'],
+   });
+   expect(refreshResources).toHaveBeenCalledTimes(2);
+   expect(service.isKnownIneligible('a').ineligible).toBe(false);
+
+   // 3. Telemetry recovers via refreshResources -> admitted on retry without blacklisting (1 pre-admission refresh + 1 post-load refresh)
+   allowHeartbeat = true;
+   refreshResources.mockClear();
+   const plan = await service.load('a');
+   expect(refreshResources).toHaveBeenCalledTimes(2);
+   expect(plan.admissionDecision.status).toBe('ADMITTED');
+   expect(plan.admissionDecision.explanation?.measurement_fresh).toBe(true);
+   expect(adapter.loadModel).toHaveBeenCalledTimes(1);
+ });
+
+ it('distinguishes MODEL_METADATA_MISSING and MODEL_METADATA_UNSUPPORTED from ESTIMATE_UNKNOWN', async () => {
+   const f = setup();
+   delete (f.adapter as any).estimateModelLoad;
+   await expect(f.service.load('a')).rejects.toMatchObject({
+     code: 'MODEL_ADMISSION_DENIED',
+     reasons: ['MODEL_METADATA_MISSING'],
+   });
+
+   const inst = f.models.getInstallation('a')!;
+   f.models.upsertInstallation({
+     ...inst,
+     profile: { weightBytes: -10, contextBytesPerToken: 1024, runtimeOverheadBytes: 1024 },
+   });
+   await expect(f.service.load('a')).rejects.toMatchObject({
+     code: 'MODEL_ADMISSION_DENIED',
+     reasons: ['MODEL_METADATA_UNSUPPORTED'],
+   });
+ });
+
+ it('populates structured admission explanation fields for admitted, dry-run, reused, and denied plans', async () => {
+   const f = setup(64, () => 30);
+
+   const dryPlan = await f.service.load('a', { dryRun: true });
+   expect(dryPlan.admissionDecision.explanation).toEqual({
+     decision: 'ADMITTED',
+     model: 'a',
+     computer: 'node',
+     runtime: 'r',
+     context_tokens: 32768,
+     memory_estimate_source: 'RUNTIME',
+     hardware_measurement_source: 'HEARTBEAT',
+     measurement_fresh: true,
+     reused_loaded_model: false,
+     reservation_created: false,
+     reasons: [],
+   });
+
+   const loadPlan = await f.service.load('a');
+   expect(loadPlan.admissionDecision.explanation).toEqual({
+     decision: 'ADMITTED',
+     model: 'a',
+     computer: 'node',
+     runtime: 'r',
+     context_tokens: 32768,
+     memory_estimate_source: 'RUNTIME',
+     hardware_measurement_source: 'HEARTBEAT',
+     measurement_fresh: true,
+     reused_loaded_model: false,
+     reservation_created: true,
+     reasons: [],
+   });
+
+   const reusePlan = await f.service.load('a');
+   expect(reusePlan.admissionDecision.explanation).toEqual({
+     decision: 'ADMITTED',
+     model: 'a',
+     computer: 'node',
+     runtime: 'r',
+     context_tokens: 32768,
+     memory_estimate_source: 'RUNTIME',
+     hardware_measurement_source: 'HEARTBEAT',
+     measurement_fresh: true,
+     reused_loaded_model: true,
+     reservation_created: false,
+     reasons: [],
+   });
+
+   f.add('b');
+   f.computers.heartbeat('node', { load: { cpuPercent: 0, memoryUsedGB: 118, memoryAvailableGB: 10 } });
+   const deniedPlan = await f.service.estimate('b');
+   expect(deniedPlan.admissionDecision.explanation).toEqual({
+     decision: 'DENIED',
+     model: 'b',
+     computer: 'node',
+     runtime: 'r',
+     context_tokens: 32768,
+     memory_estimate_source: 'RUNTIME',
+     hardware_measurement_source: 'HEARTBEAT',
+     measurement_fresh: true,
+     reused_loaded_model: false,
+     reservation_created: false,
+     reasons: ['INSUFFICIENT_MEMORY'],
+   });
+ });
+
+ it('atomically enforces concurrent memory reservations and marks reservation_created only for the admitted load', async () => {
+   const f = setup(60, () => 40);
+   f.add('b');
+   const results = await Promise.allSettled([f.service.load('a'), f.service.load('b')]);
+   const fulfilled = results.filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof f.service.load>>> => r.status === 'fulfilled');
+   const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+   expect(fulfilled).toHaveLength(1);
+   expect(rejected).toHaveLength(1);
+   expect(fulfilled[0].value.admissionDecision.explanation?.reservation_created).toBe(true);
+   expect(rejected[0].reason).toMatchObject({ code: 'MODEL_ADMISSION_DENIED' });
+   expect(f.adapter.loadModel).toHaveBeenCalledTimes(1);
+ });
+
+ it('reuses already-loaded model without double-charging weights', async () => {
+   const f = setup(64, () => 40);
+   await f.service.load('a');
+   expect(f.adapter.loadModel).toHaveBeenCalledTimes(1);
+
+   // Simulate almost no free memory left after 'a' is resident
+   f.computers.heartbeat('node', { load: { cpuPercent: 0, memoryUsedGB: 127.5, memoryAvailableGB: 0.5 } });
+   const plan = await f.service.load('a');
+   expect(plan.reuse).toBe(true);
+   expect(plan.admissionDecision.status).toBe('ADMITTED');
+   expect(plan.admissionDecision.explanation?.reused_loaded_model).toBe(true);
+   expect(plan.admissionDecision.explanation?.reservation_created).toBe(false);
+   expect(f.adapter.loadModel).toHaveBeenCalledTimes(1);
+ });
+
+ it('never silently substitutes a pinned model on fallback or eviction', async () => {
+   const f = setup(40, () => 30);
+   f.add('b');
+   f.add('c');
+   await f.service.load('b');
+   await f.service.pin('b');
+   f.computers.heartbeat('node', { load: { cpuPercent: 0, memoryUsedGB: 110, memoryAvailableGB: 18 } });
+
+   // Attempting to load 'a' with eviction must not evict pinned 'b' and must not substitute 'b'
+   await expect(f.service.load('a', { evict: true })).rejects.toMatchObject({ code: 'MODEL_ADMISSION_DENIED' });
+   expect(f.adapter.unloadModel).not.toHaveBeenCalled();
+   expect(f.models.isModelReady('b')).toBe(true);
+
+   // Requesting a pinned model 'c' that cannot fit must deny 'c' rather than substituting 'b'
+   await f.service.pin('c');
+   await expect(f.service.load('c')).rejects.toMatchObject({ code: 'MODEL_ADMISSION_DENIED' });
+   expect(f.adapter.loadModel).toHaveBeenCalledTimes(1); // only 'b' was loaded
+ });
+});

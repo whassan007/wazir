@@ -134,4 +134,65 @@ describe('LMStudioAdapter against authenticated OpenAI-compatible endpoints', ()
     expect((await adapter.inspectModel('mlx-community/Qwen3.5-9B-6bit')).loaded).toBe(false);
     delete process.env.WAZIR_LMS_DISABLE;
   });
+
+  it('distinguishes installed-but-not-loaded models from loaded instances and unloads by instanceId', async () => {
+    const unloadCalls: Array<{ instance_id?: string }> = [];
+    let return404OnUnload = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/v1/models')) {
+        return new Response(
+          JSON.stringify({
+            models: [
+              {
+                key: 'qwen/installed-only',
+                loaded_instances: [],
+              },
+              {
+                key: 'qwen/loaded-model',
+                loaded_instances: [{ id: 'inst-loaded-1', config: { context_length: 8192 } }],
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      if (url.endsWith('/api/v1/models/unload') && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body ?? '{}')) as { instance_id?: string };
+        unloadCalls.push(body);
+        if (return404OnUnload) {
+          return new Response('Model Not Found', { status: 404 });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('Not Found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new LMStudioAdapter('http://127.0.0.1:1234/v1');
+
+    expect(await adapter.getLoadedModels()).toEqual(['qwen/loaded-model']);
+    expect(await adapter.inspectModel('qwen/installed-only')).toMatchObject({
+      modelId: 'qwen/installed-only',
+      loaded: false,
+      instanceId: undefined,
+    });
+    expect(await adapter.inspectModel('qwen/loaded-model')).toMatchObject({
+      modelId: 'qwen/loaded-model',
+      loaded: true,
+      instanceId: 'inst-loaded-1',
+      effectiveContext: 8192,
+    });
+
+    // Unloading an installed-but-not-loaded model must return cleanly without hitting /unload
+    await expect(adapter.unloadModel('qwen/installed-only')).resolves.toBeUndefined();
+    expect(unloadCalls).toHaveLength(0);
+
+    // Unloading a loaded model must target its resolved instanceId
+    await expect(adapter.unloadModel('qwen/loaded-model')).resolves.toBeUndefined();
+    expect(unloadCalls).toEqual([{ instance_id: 'inst-loaded-1' }]);
+
+    // If /api/v1/models/unload returns 404 (already unloaded), it must not throw
+    return404OnUnload = true;
+    await expect(adapter.unloadModel('qwen/loaded-model')).resolves.toBeUndefined();
+  });
 });

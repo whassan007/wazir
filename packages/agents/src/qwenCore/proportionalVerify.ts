@@ -6,13 +6,35 @@ import { resolveVerificationScope } from '../verificationScope.js';
 const PURE_DOC_FILE_RE = /\.(?:md|markdown|txt|rst|adoc)$/i;
 
 const EXPLICIT_MUTATION_TASK_RE =
-  /(?<!\bhow\s+to\s+)(?<!\bhow\s+(?:do|can|should)\s+(?:i|we)\s+)\b(?:fix|repair|resolve|patch|implement|update|modify|edit|refactor|rewrite|add|create|remove|delete|rename|wire|integrate|restore)\s+(?:the\s+|a\s+|an\s+|our\s+|this\s+|my\s+|all\s+)?(?:[\w./+#-]+\s+){0,3}(?:files?|bugs?|issues?|defects?|errors?|regressions?|functions?|methods?|class(?:es)?|components?|endpoints?|routes?|services?|adapters?|controllers?|modules?|configs?|scripts?|tests?|code|implementations?|features?|cli|tui|api)\b/i;
+  /(?<!\bhow\s+to\s+)(?<!\bhow\s+(?:do|can|should)\s+(?:i|we)\s+)\b(?:fix|repair|resolve|patch|implement|update|modify|edit|refactor|rewrite|add|create|remove|delete|rename|wire|integrate|restore|thread|propagate|include|pass|forward|convert|extract|inline|wrap|unwrap|split|merge|move|support|handle|enforce|enable|disable|sanitize|normalize|escape|decode|encode|sort|dedupe|guard|validate|ensure|preserve|export|import|expose|register|attach|set|change|replace|swap)\s+(?:the\s+|a\s+|an\s+|our\s+|this\s+|my\s+|all\s+)?(?:[\w./+#-]+\s+){0,5}(?:files?|bugs?|issues?|defects?|errors?|regressions?|functions?|methods?|class(?:es)?|components?|endpoints?|routes?|services?|adapters?|controllers?|modules?|configs?|scripts?|tests?|code|implementations?|features?|cli|tui|api|parameters?|args?|arguments?|fields?|metadata|headers?|options?|helpers?|handlers?|validators?|\S+\.(?:[cm]?[jt]sx?|py|go|rs|java|rb|json|ya?ml|toml|sql|sh))\b/i;
+
+const WORKSPACE_FILE_REF_RE =
+  /(?:\b[\w.-]+\.(?:[cm]?[jt]sx?|py|go|rs|java|rb|json|ya?ml|toml|sql|sh)\b|(?:^|[\s`'"])(?:src|packages|apps|tests?|lib|scripts)\/[\w./-]+)/i;
 
 const QUESTION_OR_INSPECTION_ONLY_RE =
   /^\s*(?:what|why|how|when|where|who|which|explain|describe|summarize|list|show|find|count|tell\s+me|can\s+you\s+(?:explain|tell|show|list|summarize)|does\s+|is\s+|are\s+)/i;
 
 const SNIPPET_PROMPT_RE =
   /\b(?:in\s+this\s+(?:code|function|snippet|python|javascript|typescript)|the\s+following\s+(?:code|function|snippet))\b/i;
+
+/**
+ * Returns true when a prompt references concrete workspace files/paths or requires
+ * workspace mutation, so a 0-tool-call plain-text answer on turn 1 should be nudged
+ * to inspect/edit the actual files first.
+ */
+export function requiresWorkspaceGrounding(request: AgentRunRequest): boolean {
+  if (request.taskType === 'chat' || request.mutationRequired === false) {
+    return false;
+  }
+  const desc = request.taskDescription.trim();
+  if (SNIPPET_PROMPT_RE.test(desc)) {
+    return false;
+  }
+  if (inferMutationRequired(request)) {
+    return true;
+  }
+  return WORKSPACE_FILE_REF_RE.test(desc);
+}
 
 /**
  * Infers whether zero file modifications should fail verification when `request.mutationRequired`

@@ -7,6 +7,10 @@ import {
 } from '../stopConditions.js';
 import {
   ToolSurfaceCompiler,
+  computeUsableBudget,
+  computeUtilization,
+  estimateTokens,
+  planOutputReserveTokens,
   type AgentAdapter,
   type AgentDescriptor,
   type AgentPhase,
@@ -34,9 +38,54 @@ import { runQwenModelTurn, type QwenToolCallRequest } from './turn.js';
 import { CoreToolScheduler } from './coreToolScheduler.js';
 import { LoopDetectionService } from './loopDetectionService.js';
 import { ChatCompressionService } from './chatCompressionService.js';
-import { runProportionalVerification } from './proportionalVerify.js';
+import { inferMutationRequired, requiresWorkspaceGrounding, runProportionalVerification } from './proportionalVerify.js';
 import { SubagentsLedger } from '@wazir/core';
 import { createQwenSubagentExecutor } from './subagentTool.js';
+
+const OPTIONAL_TOOL_NAMES = new Set(['read_many_files', 'multi_edit', 'todo_write', 'dispatch_subagent']);
+
+function isOptionalToolName(name: string): boolean {
+  return OPTIONAL_TOOL_NAMES.has(name) || name.startsWith('web_');
+}
+
+function estimateMessagesTokens(messages: readonly ChatMessage[]): number {
+  let total = 0;
+  for (const m of messages) {
+    total += estimateTokens(m.content || '');
+    if (m.toolCalls && m.toolCalls.length > 0) {
+      total += estimateTokens(JSON.stringify(m.toolCalls));
+    }
+  }
+  return total;
+}
+
+function computePreflightBudget(params: {
+  messages: readonly ChatMessage[];
+  request: AgentRunRequest;
+  effectiveContextTokens: number;
+  toolSchemaTokens: number;
+}) {
+  const messagesTokens = estimateMessagesTokens(params.messages);
+  const outputReserve =
+    params.request.reserve?.outputTokens ??
+    planOutputReserveTokens({
+      taskDescription: params.request.taskDescription,
+      taskType: params.request.taskType,
+      effectiveContextTokens: params.effectiveContextTokens,
+    });
+  const schemaReserve = params.request.reserve?.toolSchemaTokens ?? params.toolSchemaTokens;
+  const safetyReserve =
+    params.request.reserve?.safetyTokens ??
+    (params.effectiveContextTokens > 32_000 ? 5000 : Math.floor(params.effectiveContextTokens * 0.05));
+  const usableBudget = computeUsableBudget({
+    effectiveContextTokens: params.effectiveContextTokens,
+    reserveOutputTokens: outputReserve,
+    reserveToolSchemaTokens: schemaReserve,
+    reserveSafetyTokens: safetyReserve,
+  });
+  const utilization = computeUtilization(messagesTokens, usableBudget);
+  return { messagesTokens, outputReserve, schemaReserve, safetyReserve, usableBudget, utilization };
+}
 
 export class WazirQwenAgent implements AgentAdapter {
   readonly descriptor: AgentDescriptor;
@@ -252,10 +301,18 @@ export class WazirQwenAgent implements AgentAdapter {
       { role: 'user', content: initialUserContent },
     ];
 
+    const readOnlyMode =
+      request.taskType === 'review' ||
+      request.taskType === 'research' ||
+      request.taskType === 'chat' ||
+      request.mutationRequired === false ||
+      !inferMutationRequired(request);
+
     const scheduler = new CoreToolScheduler();
     const loopDetector = new LoopDetectionService({
       toolRepeatLimit: this.toolRepeatLimit,
       maxNoProgressIterations,
+      readOnlyMode,
     });
     const compressor = new ChatCompressionService();
 
@@ -269,6 +326,9 @@ export class WazirQwenAgent implements AgentAdapter {
     let totalTokensUsed = request.resume?.consumed.tokens ?? 0;
     let repairCyclesUsed = 0;
     let emptyTurnStrikes = 0;
+    let groundingNudged = false;
+    let forceSynthesis = false;
+    let strippedOptionalTools = false;
     let lastAssistantSummary: string | undefined;
 
     const currentMetrics = (): ModelProtocolMetrics => ({
@@ -386,34 +446,146 @@ export class WazirQwenAgent implements AgentAdapter {
         return;
       }
 
-      // Proactive context compression before calling model
+      // Proactive / preflight context budget & compression before calling model
       const effectiveCtx = runtime.getContextTokens?.() ?? request.contextTokens;
       const turnMaxTokens =
         effectiveCtx && effectiveCtx > 0
           ? Math.min(this.maxTokensPerTurn, Math.max(1024, Math.floor(effectiveCtx * 0.35)))
           : this.maxTokensPerTurn;
-      const compressionNote = compressor.maybeCompress({
-        messages,
-        request,
-        effectiveContextTokens: effectiveCtx,
-        maxTokensPerTurn: turnMaxTokens,
-        toolSchemaTokens: toolSurface.totalSchemaTokens,
-        compactionRatio: this.contextCompactionRatio,
-        filesChanged: filesChangedSet,
-        unresolvedDiagnostics,
-        webEvidence,
-      });
-      if (compressionNote) {
-        yield { kind: 'message', content: compressionNote };
+
+      const getActiveTools = () => {
+        if (inConversationalFastPath || forceSynthesis) {
+          return { schemas: [] as typeof toolSurface.serializedSchemas, schemaTokens: 0 };
+        }
+        if (strippedOptionalTools) {
+          const reduced = toolSurface.serializedSchemas.filter((s) => !isOptionalToolName(s.name));
+          return { schemas: reduced, schemaTokens: estimateTokens(JSON.stringify(reduced)) };
+        }
+        return { schemas: toolSurface.serializedSchemas, schemaTokens: toolSurface.totalSchemaTokens };
+      };
+
+      let activeTools = getActiveTools();
+
+      const summarizeWithModel = async (history: ChatMessage[], summarySystemPrompt: string) => {
+        const summaryTurn = await runQwenModelTurn({
+          runtime,
+          modelId: currentModelId,
+          messages: [
+            { role: 'system', content: summarySystemPrompt },
+            ...history,
+            { role: 'user', content: 'Generate the <state_snapshot> summary now.' },
+          ],
+          tools: [],
+          maxTokens: Math.min(1024, turnMaxTokens),
+          temperature: 0,
+          modelTurnTimeoutMs: Math.min(20_000, this.modelTurnTimeoutMs),
+          turnIndex: turnsUsed,
+          isCancelled: request.isCancelled,
+        });
+        return summaryTurn.error || summaryTurn.timedOut ? null : summaryTurn.content;
+      };
+
+      if (effectiveCtx && effectiveCtx > 0) {
+        let preflight = computePreflightBudget({
+          messages,
+          request,
+          effectiveContextTokens: effectiveCtx,
+          toolSchemaTokens: activeTools.schemaTokens,
+        });
+
+        if (preflight.utilization >= 0.95) {
+          const trimNote = compressor.trimOversizedToolOutputs({
+            messages,
+            effectiveContextTokens: effectiveCtx,
+            toolSchemaTokens: activeTools.schemaTokens,
+          });
+          if (trimNote) {
+            yield { kind: 'message', content: `context preflight: ${trimNote}` };
+          }
+          const forcedNote = await compressor.maybeCompressWithModel({
+            messages,
+            request,
+            effectiveContextTokens: effectiveCtx,
+            maxTokensPerTurn: turnMaxTokens,
+            toolSchemaTokens: activeTools.schemaTokens,
+            compactionRatio: this.contextCompactionRatio,
+            filesChanged: filesChangedSet,
+            unresolvedDiagnostics,
+            webEvidence,
+            force: true,
+            summarize: summarizeWithModel,
+          });
+          if (forcedNote) {
+            yield { kind: 'message', content: forcedNote };
+          }
+
+          preflight = computePreflightBudget({
+            messages,
+            request,
+            effectiveContextTokens: effectiveCtx,
+            toolSchemaTokens: activeTools.schemaTokens,
+          });
+
+          if (
+            preflight.utilization >= 0.95 &&
+            !strippedOptionalTools &&
+            activeTools.schemas.some((s) => isOptionalToolName(s.name))
+          ) {
+            strippedOptionalTools = true;
+            activeTools = getActiveTools();
+            yield {
+              kind: 'message',
+              content: 'context preflight: stripped optional tool schemas to fit context window',
+            };
+            preflight = computePreflightBudget({
+              messages,
+              request,
+              effectiveContextTokens: effectiveCtx,
+              toolSchemaTokens: activeTools.schemaTokens,
+            });
+          }
+
+          if (preflight.utilization >= 0.95) {
+            const preflightOverflowReason =
+              `MODEL_CONTEXT_OVERFLOW: Prompt (~${preflight.messagesTokens} tokens + ${activeTools.schemaTokens} schema tokens + ${preflight.outputReserve} output reserve) exceeds ${effectiveCtx}-token window`;
+            if (yield* tryEscalate('RESOURCE_EXHAUSTED', preflightOverflowReason)) {
+              continue;
+            }
+            yield {
+              kind: 'error',
+              error: preflightOverflowReason,
+              errorKind: 'infrastructure',
+              terminationReason: 'RESOURCE_EXHAUSTED',
+              content: lastAssistantSummary,
+              protocolMetrics: currentMetrics(),
+            };
+            return;
+          }
+        } else {
+          const compressionNote = await compressor.maybeCompressWithModel({
+            messages,
+            request,
+            effectiveContextTokens: effectiveCtx,
+            maxTokensPerTurn: turnMaxTokens,
+            toolSchemaTokens: activeTools.schemaTokens,
+            compactionRatio: this.contextCompactionRatio,
+            filesChanged: filesChangedSet,
+            unresolvedDiagnostics,
+            webEvidence,
+            summarize: summarizeWithModel,
+          });
+          if (compressionNote) {
+            yield { kind: 'message', content: compressionNote };
+          }
+        }
       }
 
       turnsUsed += 1;
-      const turnTools = inConversationalFastPath ? [] : toolSurface.serializedSchemas;
       let turnRes = await runQwenModelTurn({
         runtime,
         modelId: currentModelId,
         messages,
-        tools: turnTools,
+        tools: activeTools.schemas,
         maxTokens: turnMaxTokens,
         temperature: this.temperature,
         modelTurnTimeoutMs: this.modelTurnTimeoutMs,
@@ -425,35 +597,70 @@ export class WazirQwenAgent implements AgentAdapter {
         yield { kind: 'message', content: note };
       }
 
-      // Reactive context overflow recovery (forced compression + oversized tool trim + retry, then model escalation)
+      // Reactive context overflow recovery (trim -> compact -> strip optional schemas -> retry if reduced -> escalate -> error)
       if (turnRes.contextOverflow) {
+        const trimmed = compressor.trimOversizedToolOutputs({
+          messages,
+          effectiveContextTokens: effectiveCtx,
+          toolSchemaTokens: activeTools.schemaTokens,
+        });
         const compacted = compressor.maybeCompress({
           messages,
           request,
           effectiveContextTokens: effectiveCtx,
           maxTokensPerTurn: turnMaxTokens,
-          toolSchemaTokens: toolSurface.totalSchemaTokens,
+          toolSchemaTokens: activeTools.schemaTokens,
           compactionRatio: this.contextCompactionRatio,
           filesChanged: filesChangedSet,
           unresolvedDiagnostics,
           webEvidence,
           force: true,
         });
-        const trimmed = compressor.trimOversizedToolOutputs({
-          messages,
-          effectiveContextTokens: effectiveCtx,
-          toolSchemaTokens: toolSurface.totalSchemaTokens,
-        });
-        const recoveryNotes = [compacted, trimmed].filter(Boolean);
-        const forcedNote = recoveryNotes.length > 0 ? recoveryNotes.join('; ') : 'forced compaction (no collapsible turns)';
+        let didStripTools = false;
+        const stillTight =
+          !trimmed && !compacted
+            ? true
+            : Boolean(
+                effectiveCtx &&
+                  effectiveCtx > 0 &&
+                  (effectiveCtx <= 16_384 ||
+                    computePreflightBudget({
+                      messages,
+                      request,
+                      effectiveContextTokens: effectiveCtx,
+                      toolSchemaTokens: activeTools.schemaTokens,
+                    }).utilization >= 0.95),
+              );
+        if (stillTight && !strippedOptionalTools && activeTools.schemas.some((s) => isOptionalToolName(s.name))) {
+          strippedOptionalTools = true;
+          activeTools = getActiveTools();
+          didStripTools = true;
+        }
+        const recoveryNotes = [
+          trimmed,
+          compacted,
+          didStripTools ? 'stripped optional tool schemas' : null,
+        ].filter(Boolean);
+        const forcedNote = recoveryNotes.length > 0 ? recoveryNotes.join('; ') : 'no further reduction possible';
         yield { kind: 'message', content: `context overflow recovery: ${forcedNote}` };
 
-        if (recoveryNotes.length > 0) {
+        const canRetryAfterReduction =
+          recoveryNotes.length > 0 &&
+          (!effectiveCtx ||
+            effectiveCtx <= 0 ||
+            computePreflightBudget({
+              messages,
+              request,
+              effectiveContextTokens: effectiveCtx,
+              toolSchemaTokens: activeTools.schemaTokens,
+            }).utilization < 0.95);
+
+        if (canRetryAfterReduction) {
           turnRes = await runQwenModelTurn({
             runtime,
             modelId: currentModelId,
             messages,
-            tools: turnTools,
+            tools: activeTools.schemas,
             maxTokens: turnMaxTokens,
             temperature: this.temperature,
             modelTurnTimeoutMs: this.modelTurnTimeoutMs,
@@ -463,10 +670,19 @@ export class WazirQwenAgent implements AgentAdapter {
         }
 
         if (turnRes.contextOverflow) {
-          const overflowReason = turnRes.error ?? 'Model context window exhausted';
+          const overflowReason = turnRes.error ?? 'MODEL_CONTEXT_OVERFLOW: Model context window exhausted';
           if (yield* tryEscalate('RESOURCE_EXHAUSTED', overflowReason)) {
             continue;
           }
+          yield {
+            kind: 'error',
+            error: overflowReason,
+            errorKind: 'infrastructure',
+            terminationReason: 'RESOURCE_EXHAUSTED',
+            content: lastAssistantSummary,
+            protocolMetrics: currentMetrics(),
+          };
+          return;
         }
       }
 
@@ -576,7 +792,7 @@ export class WazirQwenAgent implements AgentAdapter {
       }
 
       // Case A: Model requested one or more tool calls
-      if (effectiveToolCalls.length > 0) {
+      if (effectiveToolCalls.length > 0 && !forceSynthesis) {
         inConversationalFastPath = false;
         emptyTurnStrikes = 0;
         if (effectiveContent) {
@@ -701,7 +917,12 @@ export class WazirQwenAgent implements AgentAdapter {
         }
 
         const loopCheck = loopDetector.recordToolOutcomes(batch.outcomes);
-        if (loopCheck.action === 'nudge' && loopCheck.nudgeMessage) {
+        if (loopCheck.action === 'synthesize' && loopCheck.nudgeMessage) {
+          forceSynthesis = true;
+          messages.push({ role: 'user', content: loopCheck.nudgeMessage });
+          yield { kind: 'message', content: loopCheck.nudgeMessage };
+          continue;
+        } else if (loopCheck.action === 'nudge' && loopCheck.nudgeMessage) {
           messages.push({ role: 'user', content: loopCheck.nudgeMessage });
           yield { kind: 'message', content: loopCheck.nudgeMessage };
         } else if (loopCheck.action === 'stop' && loopCheck.stopReason && loopCheck.stopMessage) {
@@ -773,6 +994,24 @@ export class WazirQwenAgent implements AgentAdapter {
 
       emptyTurnStrikes = 0;
       lastAssistantSummary = effectiveContent;
+
+      if (
+        totalToolCalls === 0 &&
+        availableToolNames.size > 0 &&
+        !groundingNudged &&
+        requiresWorkspaceGrounding(request) &&
+        turnsUsed < maxTurns
+      ) {
+        groundingNudged = true;
+        messages.push({ role: 'assistant', content: effectiveContent });
+        messages.push({
+          role: 'user',
+          content:
+            '[grounding required] You have not inspected or modified any workspace files yet. ' +
+            'Use read, search, or glob (and edit/write if changes are needed) to ground your answer in the actual workspace files before finishing.',
+        });
+        continue;
+      }
 
       const proseLoop = loopDetector.recordProseTurn(effectiveContent);
       if (proseLoop.action === 'stop' && proseLoop.stopReason && proseLoop.stopMessage) {
