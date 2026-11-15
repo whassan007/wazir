@@ -156,12 +156,22 @@ export class TaskPlanner {
     const isInlineResponseOnly =
       isStandaloneSnippet ||
       /\b(return\s+(?:only\b|valid\s+json\b|code\s+only\b|corrected\b.*?\bonly\b|its\s+\w+\s+field\b)|(?:respond|reply)\s+with\b|nothing\s+else\b)/i.test(input);
-    const isBuildOrWrite = !isInlineResponseOnly && /\b(build|write|create|implement|add|code|make|generate|scaffold)\b/i.test(input);
-    const isCheckOrInspect = isInlineResponseOnly || /\b(check|inspect|verify|test|read|examine|review|explain|list|calculate|compute|evaluate|solve|what\s+is|how\s+many|reverse\b|does\b.*work)\b/i.test(input);
+    const hasExplicitRepoContext =
+      /\b(?:in|across|within|throughout|inside)\s+(?:this\s+|the\s+|our\s+)?(?:repo|repository|codebase|workspace|project|backend|frontend|app|module|service|directory|folder)\b/i.test(input) ||
+      /\b(?:existing\s+(?:code|repo|repository|codebase|files|project)|current\s+(?:repo|repository|codebase|workspace|project))\b/i.test(input);
+    const isBuildOrWrite =
+      !isInlineResponseOnly &&
+      /\b((?<!(?:the|our|this|current|existing)\s+)build|write|create|implement|add|code\s+(?:up\b|a\b|an\b)|make(?!\s+(?:recommendations?\b|suggestions?\b|sense\b|sure\b|notes?\b))|generate|scaffold|refactor|modify|edit)\b/i.test(input);
+    const isCheckOrInspect =
+      isInlineResponseOnly ||
+      /\b(check|inspect|verify|test|read|examine|review|audit|analyze|analyse|summarize|summarise|describe|explain|list|calculate|compute|evaluate|solve|recommend|recommendations|what\s+is|how\s+many|reverse\b|does\b.*work)\b/i.test(input);
     const isFix = !isInlineResponseOnly && /\b(fix|patch|repair|resolve|update)\b/i.test(input);
 
     const mutationRequired = isBuildOrWrite || isFix || (!isCheckOrInspect);
-    const isFromScratch = /\b(from scratch|new program|new project|empty workspace)\b/i.test(input) || (isBuildOrWrite && !isFix);
+    const explicitCleanWorkspace = /\b(from scratch|new program|new project|empty workspace)\b/i.test(input);
+    const isFromScratch =
+      explicitCleanWorkspace ||
+      (isBuildOrWrite && !isFix && !hasExplicitRepoContext && (!isCheckOrInspect || /\b(?:program|script|app|project|cli|tool|file)\b/i.test(input)));
     const workspaceMode: WorkspaceMode = isFromScratch ? 'clean' : 'repository';
 
     // Only treat this as an expected artifact when the user actually named a

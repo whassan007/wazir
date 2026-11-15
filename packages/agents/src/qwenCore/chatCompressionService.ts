@@ -3,6 +3,7 @@ import {
   computeUsableBudget,
   computeUtilization,
   estimateTokens,
+  keepEnds,
   planOutputReserveTokens,
   type AgentRunRequest,
   type ChatMessage,
@@ -185,5 +186,68 @@ export class ChatCompressionService {
     messages.push(...candidate);
     const reduction = beforeTokens > 0 ? Math.round((1 - afterTokens / beforeTokens) * 100) : 0;
     return `context compacted: ${compressCount} turn group(s) -> <state_snapshot> (~${beforeTokens}->~${afterTokens} tokens, ${reduction}% smaller)`;
+  }
+
+  /**
+   * Emergency in-place trimmer for oversized `role: 'tool'` outputs when a single turn
+   * overflows a tight context window and `maybeCompress` has no older turn groups to slice.
+   * Preserves exact message count, `messages[0..1]`, `role`, `toolCallId`, and `name` so
+   * strict `assistant.toolCalls` <-> `role: 'tool'` pairing invariants never break.
+   */
+  trimOversizedToolOutputs(params: {
+    messages: ChatMessage[];
+    effectiveContextTokens?: number;
+    toolSchemaTokens?: number;
+  }): string | null {
+    const { messages, effectiveContextTokens = 8192, toolSchemaTokens = 0 } = params;
+    const headCount = Math.min(2, messages.length);
+    const toolIndices: number[] = [];
+    for (let i = headCount; i < messages.length; i += 1) {
+      if (messages[i].role === 'tool' && messages[i].content.length > 500) {
+        toolIndices.push(i);
+      }
+    }
+    if (toolIndices.length === 0) {
+      return null;
+    }
+
+    const beforeTokens = estimateMessagesTokens(messages);
+    let fixedTokens = toolSchemaTokens;
+    for (let i = 0; i < messages.length; i += 1) {
+      const m = messages[i];
+      if (m.role !== 'tool') {
+        fixedTokens += estimateTokens(m.content || '');
+        if (m.toolCalls) {
+          fixedTokens += estimateTokens(JSON.stringify(m.toolCalls));
+        }
+      }
+    }
+
+    const targetWindowTokens = Math.max(2048, effectiveContextTokens);
+    const minReserveTokens = Math.min(1800, Math.floor(targetWindowTokens * 0.25));
+    const availableToolTokens = Math.max(400, targetWindowTokens - fixedTokens - minReserveTokens);
+    const perToolCharBudget = Math.max(400, Math.floor((availableToolTokens * 3.2) / toolIndices.length));
+
+    let trimmedCount = 0;
+    for (const idx of toolIndices) {
+      const prev = messages[idx].content;
+      if (prev.length > perToolCharBudget) {
+        const next = keepEnds(prev, perToolCharBudget);
+        if (next.length < prev.length) {
+          messages[idx] = { ...messages[idx], content: next };
+          trimmedCount += 1;
+        }
+      }
+    }
+    if (trimmedCount === 0) {
+      return null;
+    }
+
+    const afterTokens = estimateMessagesTokens(messages);
+    if (afterTokens >= beforeTokens) {
+      return null;
+    }
+    const reduction = beforeTokens > 0 ? Math.round((1 - afterTokens / beforeTokens) * 100) : 0;
+    return `trimmed ${trimmedCount} oversized tool output(s) (~${beforeTokens}->~${afterTokens} tokens, ${reduction}% smaller)`;
   }
 }

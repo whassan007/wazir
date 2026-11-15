@@ -148,6 +148,13 @@ function signalZeroAlive(pid: number): boolean {
   }
 }
 
+function isSameLocalHost(a: string, b: string): boolean {
+  if (a === b) return true;
+  const stripLocalSuffix = (h: string) =>
+    h.toLowerCase().replace(/\.(local|lan|home\.arpa|attlocal\.net|localdomain)$/, '');
+  return stripLocalSuffix(a) === stripLocalSuffix(b);
+}
+
 /** Statuses that mean "a live process is working on this". */
 const INTERRUPTIBLE = new Set<ExecutionStatus>(['assigned', 'running', 'waiting']);
 
@@ -302,11 +309,24 @@ export class ExecutionEngine {
         // whether it may be retried is planTaskResume's decision, never automatic here.
         const owner = record.execution.owner;
         const previous = record.execution.status;
-        if (INTERRUPTIBLE.has(previous) && owner && owner.host === this.owner.host && owner.pid !== this.owner.pid && !this.isProcessAlive(owner.pid)) {
+        if (INTERRUPTIBLE.has(previous) && owner && isSameLocalHost(owner.host, this.owner.host) && owner.pid !== this.owner.pid && !this.isProcessAlive(owner.pid)) {
           record.errors.push(`INTERRUPTED: owning process ${owner.pid} exited while this execution was ${previous}; its outcome is unknown`);
           record.execution.status = 'failed';
           record.execution.completedAt = new Date();
           this.pushEvent(record, 'execution.failed', { status: 'failed', reason: 'OWNER_PROCESS_EXITED', ownerPid: owner.pid, previousStatus: previous });
+          recovered = true;
+        } else if (
+          (previous === 'queued' || previous === 'scheduled') &&
+          owner &&
+          isSameLocalHost(owner.host, this.owner.host) &&
+          owner.pid !== this.owner.pid &&
+          !this.isProcessAlive(owner.pid) &&
+          Date.now() - record.execution.createdAt.getTime() > 3_600_000
+        ) {
+          record.errors.push(`ABANDONED: owning process ${owner.pid} exited and execution remained ${previous} past 1h staleness window`);
+          record.execution.status = 'cancelled';
+          record.execution.completedAt = new Date();
+          this.pushEvent(record, 'execution.cancelled', { status: 'cancelled', reason: 'ABANDONED_QUEUED_EXECUTION', ownerPid: owner.pid, previousStatus: previous });
           recovered = true;
         }
         // Persist legacy envelope migration and recovered unknown outcomes before ready.
@@ -1857,7 +1877,7 @@ export class ExecutionEngine {
 
   ownedByAnotherLiveProcess(record: ExecutionRecord): boolean {
     const owner = record.execution.owner;
-    if (!owner || owner.host !== this.owner.host || owner.pid === this.owner.pid) return false;
+    if (!owner || !isSameLocalHost(owner.host, this.owner.host) || owner.pid === this.owner.pid) return false;
     return this.isProcessAlive(owner.pid);
   }
 

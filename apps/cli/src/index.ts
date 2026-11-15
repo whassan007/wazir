@@ -1999,8 +1999,9 @@ program
         const jobs = await reconcileSessionJobs(engine, s);
         const latestState = jobs.at(-1)?.state ?? 'idle';
         const userTurns = s.turns.filter((t) => t.role === 'user').length;
+        const updatedIso = typeof s.updatedAt === 'string' ? s.updatedAt : new Date(s.updatedAt).toISOString();
         console.log(
-          `${s.id}  ${s.updatedAt.slice(0, 19).replace('T', ' ')}  [${latestState}]  ${userTurns} turn(s)  ${s.title}`,
+          `${s.id}  ${updatedIso.slice(0, 19).replace('T', ' ')}  [${latestState}]  ${userTurns} turn(s)  ${s.title}`,
         );
       }
       process.exit(0);

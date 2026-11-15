@@ -402,4 +402,129 @@ describe('Scheduler', () => {
     expect(decision.modelInstanceId).toBe('m-on-healthy');
     expect(decision.computerId).toBe('c-healthy');
   });
+
+  it('deprioritizes a cramped 8k loaded instance on coding tasks in favor of a >=16k resident model and marks <requiredContext READY instances LOADABLE', () => {
+    const computers = new ComputerRegistry();
+    const runtimes = new RuntimeRegistry();
+    const models = new ModelRegistry();
+
+    computers.register({
+      id: 'local',
+      name: 'Local Mac',
+      type: 'workstation' as const,
+      local: true,
+      os: { platform: 'darwin', architecture: 'arm64', version: '25.0' },
+      hardware: { cpu: 'Apple M5 Pro', cpuCores: 14, memoryGB: 48 },
+      runtimes: ['lmstudio', 'ollama'],
+      models: [],
+      capabilities: ['localExecution'],
+    });
+    for (const rt of ['lmstudio', 'ollama'] as const) {
+      runtimes.register({
+        id: rt,
+        type: rt,
+        name: rt,
+        version: '1.0',
+        computerId: 'local',
+        health: 'healthy' as const,
+        capabilities: {
+          chat: true, streaming: true, toolCalling: true, structuredOutput: true,
+          vision: false, embeddings: false, reasoning: true, modelLoad: true,
+          modelUnload: true, modelDownload: false, statefulChat: false, mcp: false,
+        },
+        loadedModels: [],
+      });
+    }
+
+    models.register({
+      id: 'qwen-9b-cramped',
+      name: 'Qwen 9B',
+      provider: 'lmstudio',
+      family: 'qwen' as const,
+      contextMax: 32768,
+      capabilities: ['generalChat', 'coding'],
+      toolCalling: true,
+      structuredOutput: true,
+      vision: false,
+      audio: false,
+      embedding: false,
+      reasoning: true,
+      runtimeCompatibility: ['lmstudio' as const],
+      local: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    models.register({
+      id: 'qwen-30b-wide',
+      name: 'Qwen 30B',
+      provider: 'ollama',
+      family: 'qwen' as const,
+      contextMax: 65536,
+      capabilities: ['generalChat', 'coding'],
+      toolCalling: true,
+      structuredOutput: true,
+      vision: false,
+      audio: false,
+      embedding: false,
+      reasoning: true,
+      runtimeCompatibility: ['ollama' as const],
+      local: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    models.upsertInstance({
+      id: 'qwen-9b-cramped::local::lmstudio',
+      modelId: 'qwen-9b-cramped',
+      computerId: 'local',
+      runtimeId: 'lmstudio',
+      runtimeModelId: 'qwen-9b',
+      loaded: true,
+      state: 'READY',
+      contextTokens: 8192,
+      health: 'healthy',
+    });
+    models.upsertInstance({
+      id: 'qwen-30b-wide::local::ollama',
+      modelId: 'qwen-30b-wide',
+      computerId: 'local',
+      runtimeId: 'ollama',
+      runtimeModelId: 'qwen-30b',
+      loaded: true,
+      state: 'READY',
+      contextTokens: 32768,
+      health: 'healthy',
+    });
+
+    const s = new Scheduler({ computers, runtimes, models });
+    const codingDecision = s.plan({
+      task: {
+        id: 'task-coding-floor',
+        type: 'coding',
+        input: 'review VLA forge code and provide recommendations',
+        requirements: { capabilities: ['coding'], toolCalling: true },
+        priority: 'normal',
+        status: 'pending',
+        createdAt: new Date(),
+      },
+    });
+    expect(codingDecision.modelId).toBe('qwen-30b-wide');
+
+    // When qwen-9b-cramped is pinned with requiredContextTokens = 16384 (> 8192 loaded), readiness must be LOADABLE
+    const pinnedReloadDecision = s.plan({
+      task: {
+        id: 'task-pinned-reload',
+        type: 'coding',
+        input: 'review VLA forge code',
+        requirements: { capabilities: ['coding'] },
+        execution: { targetModelId: 'qwen-9b-cramped' },
+        priority: 'normal',
+        status: 'pending',
+        createdAt: new Date(),
+      },
+      requiredContextTokens: 16_384,
+    });
+    expect(pinnedReloadDecision.modelId).toBe('qwen-9b-cramped');
+    expect(pinnedReloadDecision.readiness).toBe('LOADABLE');
+  });
 });

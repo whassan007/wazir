@@ -57,6 +57,43 @@ export interface ReconciledJobInspection {
 
 const SESSION_PREFIX = 'conversation/session/';
 
+export function normalizeIsoTimestamp(value: unknown, fallback?: string): string {
+  if (typeof value === 'string' && value.length > 0) {
+    return value;
+  }
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  return fallback ?? new Date(0).toISOString();
+}
+
+function normalizeSessionRecord(raw: ConversationSessionRecord): ConversationSessionRecord {
+  const createdAt = normalizeIsoTimestamp(raw.createdAt);
+  const updatedAt = normalizeIsoTimestamp(raw.updatedAt, createdAt);
+  const turns = Array.isArray(raw.turns)
+    ? raw.turns.map((t) => ({
+        ...t,
+        timestamp: normalizeIsoTimestamp(t.timestamp, updatedAt),
+      }))
+    : [];
+  const jobs = Array.isArray(raw.jobs)
+    ? raw.jobs.map((j) => ({
+        ...j,
+        updatedAt: normalizeIsoTimestamp(j.updatedAt, updatedAt),
+      }))
+    : [];
+  return {
+    ...raw,
+    createdAt,
+    updatedAt,
+    turns,
+    jobs,
+  };
+}
+
 export function createConversationSession(params: {
   id: string;
   projectRoot: string;
@@ -104,7 +141,7 @@ export async function loadConversationSession(
 ): Promise<ConversationSessionRecord | undefined> {
   if (!store) return undefined;
   const direct = await store.get<ConversationSessionRecord>(`${SESSION_PREFIX}${sessionId}`);
-  if (direct && typeof direct === 'object' && direct.id) return direct;
+  if (direct && typeof direct === 'object' && direct.id) return normalizeSessionRecord(direct);
 
   // Support prefix matching (e.g. `wa resume conv-abc1` matching `conv-abc12345`)
   const all = await listConversationSessions(store);
@@ -122,6 +159,7 @@ export async function listConversationSessions(
   const sessions = entries
     .map((e) => e.value as Partial<ConversationSessionRecord> | null | undefined)
     .filter((s): s is ConversationSessionRecord => Boolean(s && typeof s === 'object' && typeof s.id === 'string'))
+    .map((s) => normalizeSessionRecord(s))
     .filter((s) => options.includeEmpty || s.turns.length > 0 || s.jobs.length > 0)
     .filter((s) => !normalizedProject || path.resolve(s.projectRoot) === normalizedProject);
 
@@ -241,7 +279,7 @@ export function buildContextualTaskInput(params: {
   permissionMode?: ConversationPermissionMode;
   maxHistoryChars?: number;
 }): string {
-  const maxChars = params.maxHistoryChars ?? 12_000;
+  const maxChars = params.maxHistoryChars ?? 8_000;
   const priorTurns = params.session.turns.filter(
     (t) => (t.role === 'user' || t.role === 'assistant') && t.content.trim().length > 0,
   );
@@ -267,7 +305,7 @@ export function buildContextualTaskInput(params: {
       for (let i = historyTurns.length - 1; i >= 0; i--) {
         const t = historyTurns[i]!;
         const speaker = t.role === 'user' ? 'User' : 'Assistant';
-        const snippet = t.content.length > 2400 ? `${t.content.slice(0, 2400)}…` : t.content;
+        const snippet = t.content.length > 1800 ? `${t.content.slice(0, 1800)}…` : t.content;
         const toolsLine = t.toolSummaries?.length ? `\n  Tools: ${t.toolSummaries.slice(0, 6).join('; ')}` : '';
         const filesLine = t.filesChanged?.length ? `\n  Files changed: ${t.filesChanged.join(', ')}` : '';
         const statusLine = t.status && t.status !== 'completed' ? ` [${t.status}]` : '';

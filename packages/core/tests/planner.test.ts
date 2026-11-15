@@ -159,6 +159,25 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
     expect(analysis.capabilities).toContain('filesystem_write');
   });
 
+  it('analyze() keeps read-only code review and recommendation prompts in repository workspace without requiring file mutations', () => {
+    const planner = createTaskPlanner();
+    for (const prompt of [
+      'review the code in the repo',
+      'review VLA forge code and provide recommendations',
+      'audit the codebase and make recommendations on error handling',
+      'check why the build fails and summarize root causes',
+    ]) {
+      const analysis = planner.analyze(prompt);
+      expect(analysis.mutationRequired, prompt).toBe(false);
+      expect(analysis.workspaceMode, prompt).toBe('repository');
+      expect(analysis.capabilities, prompt).not.toContain('filesystem_write');
+    }
+
+    const inRepoEdit = planner.analyze('add retry backoff in this repo');
+    expect(inRepoEdit.mutationRequired).toBe(true);
+    expect(inRepoEdit.workspaceMode).toBe('repository');
+  });
+
   describe('trivial fast path', () => {
     it('skips the multi-step DAG and model-based decomposition for a trivial request', async () => {
       const planner = createTaskPlanner();

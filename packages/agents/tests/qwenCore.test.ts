@@ -383,4 +383,129 @@ describe('WazirQwenAgent — Qwen Code 1.0 Core Loop Transplant', () => {
       { id: 'xml-call-2-0', name: 'search', input: { pattern: 'TODO', path: 'src' } },
     ]);
   });
+
+  it('8. LoopDetectionService injects a pre-halt [loop warning] nudge when distinct empty searches approach maxNoProgressIterations', async () => {
+    let turn = 0;
+    const seenMessages: ChatMessage[][] = [];
+
+    const rt: AgentRuntime = {
+      tools: [{ name: 'glob', description: 'glob', inputSchema: { type: 'object' } }],
+      runtimeCapabilities: { nativeToolCalling: true },
+      async *generate(req) {
+        turn += 1;
+        seenMessages.push(structuredClone(req.messages));
+        if (seenMessages.at(-1)?.some((m) => m.content.includes('empty or duplicate observations'))) {
+          yield { type: 'token', content: 'Workspace contains no matching files; here is my review summary.' };
+          yield { type: 'completed', finishReason: 'stop' };
+          return;
+        }
+        yield {
+          type: 'tool_call',
+          toolCallId: `g_${turn}`,
+          toolName: 'glob',
+          toolInput: { pattern: `**/*.ext${turn}` },
+        };
+        yield { type: 'completed', finishReason: 'tool_calls' };
+      },
+      async executeTool() {
+        // Every distinct glob returns the identical empty result -> novel observation on turn 1, then streak 1, 2, 3...
+        return { ok: true, output: '', durationMs: 1 };
+      },
+    };
+
+    const turns = await collectTurns(
+      createCodingAgent({ maxNoProgressIterations: 5, maxModelEscalations: 0 }).run(
+        {
+          modelId: 'qwen3-coder',
+          taskDescription: 'review the code in the repo',
+          taskType: 'coding',
+          mutationRequired: false,
+          projectRoot: root,
+        },
+        rt,
+      ),
+    );
+
+    expect(turns.at(-1)).toMatchObject({
+      kind: 'done',
+      content: 'Workspace contains no matching files; here is my review summary.',
+    });
+    expect(seenMessages.some((batch) => batch.some((m) => m.content.includes('[loop warning]')))).toBe(true);
+  });
+
+  it('9. Recovers from single-turn CONTEXT_PREFLIGHT_OVERFLOW via in-place tool trimming and escalates when window remains exhausted', async () => {
+    const svc = new ChatCompressionService();
+    const singleGroupMsgs: ChatMessage[] = [
+      { role: 'system', content: 'SYS' },
+      { role: 'user', content: 'Inspect repo' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 'tc1', name: 'read', arguments: { path: 'a.ts' } },
+          { id: 'tc2', name: 'read', arguments: { path: 'b.ts' } },
+        ],
+      },
+      { role: 'tool', toolCallId: 'tc1', name: 'read', content: 'A'.repeat(24_000) },
+      { role: 'tool', toolCallId: 'tc2', name: 'read', content: 'B'.repeat(24_000) },
+    ];
+    const trimNote = svc.trimOversizedToolOutputs({
+      messages: singleGroupMsgs,
+      effectiveContextTokens: 8192,
+      toolSchemaTokens: 500,
+    });
+    expect(trimNote).toContain('trimmed 2 oversized tool output(s)');
+    expect(singleGroupMsgs).toHaveLength(5);
+    expect(singleGroupMsgs[3].toolCallId).toBe('tc1');
+    expect(singleGroupMsgs[4].toolCallId).toBe('tc2');
+    expect(singleGroupMsgs[3].content.length).toBeLessThan(12_000);
+
+    // End-to-end agent escalation when 8k model keeps overflowing even after forced compaction
+    const modelsCalled: string[] = [];
+    let currentWindow = 8192;
+    const rt: AgentRuntime = {
+      tools: [{ name: 'read', description: 'read', inputSchema: { type: 'object' } }],
+      runtimeCapabilities: { nativeToolCalling: true },
+      getContextTokens: () => currentWindow,
+      async escalate(req) {
+        expect(req.currentModelId).toBe('qwen-9b-8k');
+        expect(req.failureClass).toBe('RESOURCE_EXHAUSTED');
+        currentWindow = 32_768;
+        return { modelId: 'qwen-30b-32k', reason: 'escalated to 32k context model' };
+      },
+      async *generate(req) {
+        modelsCalled.push(req.modelId);
+        if (req.modelId === 'qwen-9b-8k') {
+          yield {
+            type: 'error',
+            error: 'CONTEXT_PREFLIGHT_OVERFLOW: Prompt requires 16356 tokens, available 8192',
+            failureClass: 'MODEL_CONTEXT_OVERFLOW',
+          };
+          return;
+        }
+        yield { type: 'token', content: 'Completed review on 32k model.' };
+        yield { type: 'completed', finishReason: 'stop' };
+      },
+      async executeTool() {
+        return { ok: true, output: 'ok', durationMs: 1 };
+      },
+    };
+
+    const turns = await collectTurns(
+      createCodingAgent({ maxModelEscalations: 2 }).run(
+        {
+          modelId: 'qwen-9b-8k',
+          taskDescription: 'review VLA forge code and provide recommendations',
+          taskType: 'coding',
+          mutationRequired: false,
+          projectRoot: root,
+        },
+        rt,
+      ),
+    );
+
+    expect(modelsCalled).toContain('qwen-30b-32k');
+    expect(turns.some((t) => t.content?.includes('model escalated: qwen-9b-8k -> qwen-30b-32k'))).toBe(true);
+    expect(turns.at(-1)).toMatchObject({ kind: 'done', content: 'Completed review on 32k model.' });
+  });
 });

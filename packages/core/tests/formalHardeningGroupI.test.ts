@@ -151,8 +151,8 @@ describe('Formal Hardening Group I — Multi-Agent Conflict, Concurrency & Conte
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-groupI-repo-'));
     candidateRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'wazir-groupI-candidates-'));
     await exec('git', ['init', '-b', 'main'], { cwd: root });
-    await exec('git', ['config', 'user.name', 'Wazir Hardening Suite']);
-    await exec('git', ['config', 'user.email', 'hardening@wazir.ai']);
+    await exec('git', ['config', 'user.name', 'Wazir Hardening Suite'], { cwd: root });
+    await exec('git', ['config', 'user.email', 'hardening@wazir.ai'], { cwd: root });
     for (const [name, content] of Object.entries(files)) {
       const filePath = path.join(root, name);
       await fs.mkdir(path.dirname(filePath), { recursive: true });

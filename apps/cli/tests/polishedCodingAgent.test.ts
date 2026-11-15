@@ -25,13 +25,14 @@ import { ToolRegistry, defaultTools } from '@wazir/tools';
 import { createCodingAgent } from '@wazir/agents';
 import type { RuntimeAdapter } from '@wazir/runtimes-interfaces';
 import type { Worker } from '@wazir/workers';
-import { MemoryStore } from '@wazir/shared';
+import { MemoryStore, JsonFileStore } from '@wazir/shared';
 import type { RookEngine } from '../src/engine.js';
 import { createBootstrapEngine } from '../src/engine.js';
 import { TuiTestHarness } from '../src/tui/inputHarness.js';
 import {
   createConversationSession,
   saveConversationSession,
+  loadConversationSession,
   listConversationSessions,
   reconcileSessionJobs,
 } from '../src/tui/sessionStore.js';
@@ -721,5 +722,61 @@ describe('Polished Terminal Coding Agent (wa / wazir) — End-to-End Acceptance 
 
     harness.stop();
     xterm.dispose();
+  });
+
+  it('10. normalizes Date-hydrated timestamps from JsonFileStore across loadConversationSession, listConversationSessions, and openResumeOverlay', async () => {
+    const workspace = makeTempWorkspace();
+    const storeDir = mkdtempSync(path.join(os.tmpdir(), 'wazir-json-store-'));
+    tempDirs.push(storeDir);
+    const storeFile = path.join(storeDir, 'wazir.json');
+
+    const writer = new JsonFileStore(storeFile);
+    const session = createConversationSession({
+      id: 'session-date-revival-1',
+      projectRoot: workspace,
+      permissionMode: 'read-only',
+    });
+    session.title = 'review VLA forge code and provide recommendations';
+    session.turns.push({
+      id: 't1',
+      role: 'user',
+      content: 'review VLA forge code and provide recommendations',
+      timestamp: '2026-11-14T22:47:34.123Z',
+    });
+    session.jobs.push({
+      jobId: 'job-1',
+      prompt: 'review VLA forge code',
+      taskIds: [],
+      executionIds: [],
+      recordedStatus: 'failed',
+      updatedAt: '2026-11-14T22:47:35.000Z',
+    });
+    await saveConversationSession(writer, session);
+
+    // Re-open from disk so JsonFileStore revives ISO strings into Date objects
+    const reader = new JsonFileStore(storeFile);
+    const listed = await listConversationSessions(reader);
+    expect(listed).toHaveLength(1);
+    expect(typeof listed[0]!.updatedAt).toBe('string');
+    expect(typeof listed[0]!.createdAt).toBe('string');
+    expect(typeof listed[0]!.turns[0]!.timestamp).toBe('string');
+    expect(typeof listed[0]!.jobs[0]!.updatedAt).toBe('string');
+    expect(() => listed[0]!.updatedAt.slice(0, 19)).not.toThrow();
+
+    const loaded = await loadConversationSession(reader, 'session-date-revival-1');
+    expect(loaded).toBeDefined();
+    expect(typeof loaded!.updatedAt).toBe('string');
+
+    const { engine } = await buildMockEngine(workspace);
+    (engine as { store?: JsonFileStore }).store = reader;
+    const harness = new TuiTestHarness({
+      engine,
+      presentationMode: 'conversation',
+    });
+    await harness.start();
+    const opened = await harness.tui.conversation.openResumeOverlay(engine);
+    expect(opened).toBe(true);
+    expect(harness.tui.conversation.overlay?.options[0]?.label).toContain('review VLA forge code');
+    harness.stop();
   });
 });

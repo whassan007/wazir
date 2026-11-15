@@ -171,7 +171,11 @@ export async function improvementSupervisorCommand(
     const candidates = entries
       .map((e) => e.value as DurableCandidateRecord)
       .filter((c) => Boolean(c?.attemptId))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      .sort((a, b) => {
+        const aIso = typeof a.updatedAt === 'string' ? a.updatedAt : new Date(a.updatedAt as unknown as Date).toISOString();
+        const bIso = typeof b.updatedAt === 'string' ? b.updatedAt : new Date(b.updatedAt as unknown as Date).toISOString();
+        return bIso.localeCompare(aIso);
+      });
     const pending = candidates.filter((c) => c.state === 'AWAITING_COMMIT_APPROVAL');
     const savedState = await store.get<SupervisorState>('supervisor/state');
     const effectivePolicy = resolveEffectiveCommitPolicy(

@@ -163,7 +163,7 @@ describe('native context allocation wired into executeTask', () => {
   it('planTask shrinks the output reserve to fit a fixed 8K context, and still refuses a prompt that cannot fit', async () => {
     const spec = { contextMax: 8192, maxOutputTokens: 2048, local: true, contextAccounting: 'shared' as const, contextLimitSource: 'operator-configured' as const };
     // Fits once tool schemas and safety are reserved only if the output reserve gives way (floor 1024).
-    const fitted = await planTask((await buildEngine(await root(), spec)).engine, 'refactor everything. ' + 'detail '.repeat(1000));
+    const fitted = await planTask((await buildEngine(await root(), spec)).engine, 'refactor everything. ' + 'detail '.repeat(1450));
     expect(fitted.ok).toBe(true);
     if (fitted.ok) {
       expect(fitted.plan.allocation!.maxOutputTokens).toBeLessThan(2048);
@@ -171,7 +171,7 @@ describe('native context allocation wired into executeTask', () => {
       expect(fitted.plan.allocation!.reasons.some((r) => r.includes('output reserve reduced'))).toBe(true);
     }
     // Too large for the window at any output reserve: refused before any provider call, with required vs available.
-    const refused = await planTask((await buildEngine(await root(), spec)).engine, 'refactor everything. ' + 'detail '.repeat(1400));
+    const refused = await planTask((await buildEngine(await root(), spec)).engine, 'refactor everything. ' + 'detail '.repeat(2100));
     expect(refused.ok).toBe(false);
     if (refused.ok === false) expect(refused.reasons.join(' | ')).toMatch(/context 8192 < required \d+/);
   });

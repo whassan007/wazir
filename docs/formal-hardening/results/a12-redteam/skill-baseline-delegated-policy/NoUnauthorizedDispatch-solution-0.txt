@@ -1,0 +1,23 @@
+---Trace---
+------State 0 (loop)-------
+univ={Agent$0, Tool$0, Resource$0, Request$0, State$0, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7}
+Int={-8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7}
+seq/Int={0, 1, 2}
+String={}
+none={}
+this/Agent={Agent$0}
+this/Tool={Tool$0}
+this/Resource={Resource$0}
+this/Request={Request$0}
+this/Request<:actor={Request$0->Agent$0}
+this/Request<:tool={Request$0->Tool$0}
+this/Request<:target={Request$0->Resource$0}
+this/Grant={}
+this/Grant<:principal={}
+this/Grant<:tool={}
+this/Grant<:target={}
+this/State={State$0}
+this/State<:grants={}
+this/State<:dispatched={State$0->Request$0}
+skolem $NoUnauthorizedDispatch_r={Request$0}
+

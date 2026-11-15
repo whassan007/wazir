@@ -388,11 +388,15 @@ export class WazirQwenAgent implements AgentAdapter {
 
       // Proactive context compression before calling model
       const effectiveCtx = runtime.getContextTokens?.() ?? request.contextTokens;
+      const turnMaxTokens =
+        effectiveCtx && effectiveCtx > 0
+          ? Math.min(this.maxTokensPerTurn, Math.max(1024, Math.floor(effectiveCtx * 0.35)))
+          : this.maxTokensPerTurn;
       const compressionNote = compressor.maybeCompress({
         messages,
         request,
         effectiveContextTokens: effectiveCtx,
-        maxTokensPerTurn: this.maxTokensPerTurn,
+        maxTokensPerTurn: turnMaxTokens,
         toolSchemaTokens: toolSurface.totalSchemaTokens,
         compactionRatio: this.contextCompactionRatio,
         filesChanged: filesChangedSet,
@@ -410,7 +414,7 @@ export class WazirQwenAgent implements AgentAdapter {
         modelId: currentModelId,
         messages,
         tools: turnTools,
-        maxTokens: this.maxTokensPerTurn,
+        maxTokens: turnMaxTokens,
         temperature: this.temperature,
         modelTurnTimeoutMs: this.modelTurnTimeoutMs,
         turnIndex: turnsUsed,
@@ -421,34 +425,49 @@ export class WazirQwenAgent implements AgentAdapter {
         yield { kind: 'message', content: note };
       }
 
-      // Reactive context overflow recovery (single forced compression + retry)
+      // Reactive context overflow recovery (forced compression + oversized tool trim + retry, then model escalation)
       if (turnRes.contextOverflow) {
-        const forcedNote =
-          compressor.maybeCompress({
-            messages,
-            request,
-            effectiveContextTokens: effectiveCtx,
-            maxTokensPerTurn: this.maxTokensPerTurn,
-            toolSchemaTokens: toolSurface.totalSchemaTokens,
-            compactionRatio: this.contextCompactionRatio,
-            filesChanged: filesChangedSet,
-            unresolvedDiagnostics,
-            webEvidence,
-            force: true,
-          }) ?? 'forced compaction (no collapsible turns)';
+        const compacted = compressor.maybeCompress({
+          messages,
+          request,
+          effectiveContextTokens: effectiveCtx,
+          maxTokensPerTurn: turnMaxTokens,
+          toolSchemaTokens: toolSurface.totalSchemaTokens,
+          compactionRatio: this.contextCompactionRatio,
+          filesChanged: filesChangedSet,
+          unresolvedDiagnostics,
+          webEvidence,
+          force: true,
+        });
+        const trimmed = compressor.trimOversizedToolOutputs({
+          messages,
+          effectiveContextTokens: effectiveCtx,
+          toolSchemaTokens: toolSurface.totalSchemaTokens,
+        });
+        const recoveryNotes = [compacted, trimmed].filter(Boolean);
+        const forcedNote = recoveryNotes.length > 0 ? recoveryNotes.join('; ') : 'forced compaction (no collapsible turns)';
         yield { kind: 'message', content: `context overflow recovery: ${forcedNote}` };
 
-        turnRes = await runQwenModelTurn({
-          runtime,
-          modelId: currentModelId,
-          messages,
-          tools: turnTools,
-          maxTokens: this.maxTokensPerTurn,
-          temperature: this.temperature,
-          modelTurnTimeoutMs: this.modelTurnTimeoutMs,
-          turnIndex: turnsUsed,
-          isCancelled: request.isCancelled,
-        });
+        if (recoveryNotes.length > 0) {
+          turnRes = await runQwenModelTurn({
+            runtime,
+            modelId: currentModelId,
+            messages,
+            tools: turnTools,
+            maxTokens: turnMaxTokens,
+            temperature: this.temperature,
+            modelTurnTimeoutMs: this.modelTurnTimeoutMs,
+            turnIndex: turnsUsed,
+            isCancelled: request.isCancelled,
+          });
+        }
+
+        if (turnRes.contextOverflow) {
+          const overflowReason = turnRes.error ?? 'Model context window exhausted';
+          if (yield* tryEscalate('RESOURCE_EXHAUSTED', overflowReason)) {
+            continue;
+          }
+        }
       }
 
       totalTokensUsed += turnRes.tokensUsed;

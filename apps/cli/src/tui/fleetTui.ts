@@ -5066,11 +5066,16 @@ export class FleetTui {
       this.presentationMode === 'conversation' &&
       !this.useWorktrees &&
       this.conversation.turns.some((t) => t.role === 'assistant');
-    const analysis = isReadOnlyMode
-      ? { ...rawAnalysis, mutationRequired: false }
-      : isFollowUpConversationTurn && rawAnalysis.workspaceMode === 'clean'
-        ? { ...rawAnalysis, workspaceMode: 'continue' as const }
-        : rawAnalysis;
+    const explicitCleanInChat = /\b(from scratch|empty workspace)\b/i.test(prompt);
+    const resolvedWorkspaceMode =
+      this.presentationMode === 'conversation' && rawAnalysis.workspaceMode === 'clean' && !explicitCleanInChat
+        ? (isFollowUpConversationTurn ? ('continue' as const) : ('repository' as const))
+        : rawAnalysis.workspaceMode;
+    const analysis = {
+      ...rawAnalysis,
+      mutationRequired: isReadOnlyMode ? false : rawAnalysis.mutationRequired,
+      workspaceMode: resolvedWorkspaceMode,
+    };
 
     const attachedMentions = this.presentationMode === 'conversation'
       ? resolvePromptFileMentions(prompt, this.conversation.workspaceRoot)
@@ -5123,10 +5128,7 @@ export class FleetTui {
 
     const decorateInput = (desc: string, multiTask: boolean): string => {
       if (this.presentationMode !== 'conversation' || multiTask) return desc;
-      const baseInput = isReadOnlyMode
-        ? `[PERMISSION MODE: read-only — inspect and explain only; do NOT edit files or run mutating commands.]\n\n${desc}`
-        : desc;
-      return this.conversation.buildContextualPrompt(baseInput, attachedMentions);
+      return this.conversation.buildContextualPrompt(desc, attachedMentions);
     };
 
     let taskDescriptions: string[] = [];
@@ -5203,8 +5205,8 @@ export class FleetTui {
     }
 
     const pref = this.engine.modelPreferences?.getEffectivePreference?.();
-    const effectiveTargetModel = this.selectedModelId ?? pref?.modelId;
-    const effectiveRoutingMode = pref?.mode;
+    const effectiveTargetModel = this.selectedModelId ?? this.conversation.selectedModelId ?? pref?.modelId;
+    const explicitSessionRouting = this.conversation.routingMode;
     const effectiveReasoning = pref?.reasoningEffort;
 
     for (const jt of jobTasks) {
@@ -5212,7 +5214,7 @@ export class FleetTui {
         jt.task.execution = {
           ...(jt.task.execution ?? {}),
           targetModelId: effectiveTargetModel ?? jt.task.execution?.targetModelId,
-          routingMode: (effectiveRoutingMode as any) ?? jt.task.execution?.routingMode,
+          routingMode: explicitSessionRouting ?? jt.task.execution?.routingMode ?? (pref?.mode as any),
           reasoningEffort: effectiveReasoning ?? jt.task.execution?.reasoningEffort,
         };
       }

@@ -338,7 +338,8 @@ export class ConversationController {
       const reconciled = await reconcileSessionJobs(engine, s);
       const latestJobState = reconciled.at(-1)?.state;
       const turnCount = s.turns.filter((m) => m.role === 'user').length;
-      const updated = s.updatedAt.slice(0, 16).replace('T', ' ');
+      const updatedIso = typeof s.updatedAt === 'string' ? s.updatedAt : new Date(s.updatedAt).toISOString();
+      const updated = updatedIso.slice(0, 16).replace('T', ' ');
       options.push({
         id: s.id,
         label: truncateToDisplayWidth(s.title || s.id, 46, '…'),

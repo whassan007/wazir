@@ -539,6 +539,7 @@ export class Scheduler {
     // fails repeatedly. routeModel re-applies capability, policy, provider, context, and
     // resource checks after every rejection, so a retry cannot bypass those gates.
     const maxAttempts = this.deps.models.list().length + 1;
+    let firstPlacementError: SchedulingError | undefined;
     let lastPlacementError: SchedulingError | undefined;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -547,8 +548,9 @@ export class Scheduler {
         modelDecision = this.routeModel(task, requiredContext, excluded, routing, effectiveHarnessId, fallbacks.length > 0);
       } catch (error) {
         if (lastPlacementError && error instanceof SchedulingError) {
+          const primaryError = firstPlacementError ?? lastPlacementError;
           throw new SchedulingError(
-            `${error.message} Previous placement preflight failures: ${fallbacks.map((f) => `${f.from}: ${f.reason}`).join(' | ')}`,
+            `${primaryError.message} Previous placement preflight failures: ${fallbacks.map((f) => `${f.from}: ${f.reason}`).join(' | ')}`,
             error.modelReasons,
             [...lastPlacementError.computerReasons, ...error.computerReasons],
           );
@@ -580,6 +582,7 @@ export class Scheduler {
         computerDecision = this.scheduleComputer(task, record, requiredContext, routing);
       } catch (error) {
         if (!(error instanceof SchedulingError) || !canFallback) throw error;
+        firstPlacementError ??= error;
         lastPlacementError = error;
         const reason = error.computerReasons.length ? error.computerReasons.join('; ') : error.message;
         fallbacks.push({ from: record.id, to: '', reason });
@@ -601,7 +604,11 @@ export class Scheduler {
         agentId,
         modelId: record.id,
         modelInstanceId: placed.id,
-        readiness: placed.state === 'READY' ? 'READY_NOW' : 'LOADABLE',
+        readiness:
+          placed.state === 'READY' &&
+          (requiredContext <= 0 || placed.contextTokens === undefined || placed.contextTokens >= requiredContext)
+            ? 'READY_NOW'
+            : 'LOADABLE',
         runtimeId: computerDecision.runtimeId,
         computerId: computerDecision.computerId,
         resourceType,
@@ -645,10 +652,11 @@ export class Scheduler {
     const requiredCapability = classification.primaryCategory;
     const effectiveHarnessId = harnessId ?? task.execution?.targetAgentId ?? task.requirements?.agent;
 
+    const hasPinnedTarget = Boolean(routing.isStrictMode || routing.targetModelId || task.execution?.targetModelId || !routing.allowFallback);
     const scored: ScoredModel[] = records.map((record) => {
       const result = this.scoreModel(task, record, requiredContext, classification, routing, effectiveHarnessId);
       if (excludeModelIds.includes(record.id)) result.rejected.push('excluded: already tried by this execution');
-      if (result.rejected.length === 0) {
+      if (result.rejected.length === 0 && hasPinnedTarget) {
         const placement = this.assessPlacements(task, record, requiredContext, routing);
         if (placement.placements.length === 0) {
           result.placementFailures = placement.failures;
@@ -1400,9 +1408,13 @@ export class Scheduler {
       reasons.push('context headroom: at least 2x the requirement');
     }
 
-    const loadedInstance = this.deps.models
+    const healthyLoadedInstances = this.deps.models
       .instancesOf(record.id)
-      .find((i) => i.loaded && i.health === 'healthy');
+      .filter((i) => i.loaded && i.health === 'healthy');
+    const desiredLoadedFloor = Math.max(requiredContext, task.type === 'coding' ? 16_384 : 0);
+    const loadedInstance =
+      healthyLoadedInstances.find((i) => i.contextTokens === undefined || i.contextTokens >= desiredLoadedFloor) ??
+      healthyLoadedInstances[0];
     const isLocalModel = record.local !== false && !isHostedOnly;
     const estimatedMemGB =
       record.memory?.minSystemGB ??
@@ -1410,12 +1422,22 @@ export class Scheduler {
       (isLocalModel ? estimateModelMemory(record.parameters, record.id, record.quantization).minSystemGB : 0);
 
     if (loadedInstance) {
-      // A READY instance answers immediately; one merely 'loaded' (still warming,
-      // reconciling, etc.) still needs to be waited on — weight the two differently
-      // instead of treating any loaded instance as equally fast (ported from main@ed4f1d9).
-      const bonus = loadedInstance.state === 'READY' ? 30 : 15;
+      const crampedLoadedContext =
+        desiredLoadedFloor > 0 &&
+        loadedInstance.contextTokens !== undefined &&
+        loadedInstance.contextTokens < desiredLoadedFloor;
+      // A READY instance with adequate context answers immediately; an instance
+      // loaded at a cramped context window (<16k on coding or <requiredContext)
+      // gets only a minimal residency credit so >=16k models win cleanly.
+      const bonus = crampedLoadedContext ? 4 : loadedInstance.state === 'READY' ? 30 : 15;
       score += bonus;
-      reasons.push(`instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' already loaded${loadedInstance.state === 'READY' ? ' and ready' : ''} (+${bonus})`);
+      if (crampedLoadedContext) {
+        reasons.push(
+          `instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' loaded at cramped context ${loadedInstance.contextTokens} (< ${desiredLoadedFloor} floor, +${bonus})`,
+        );
+      } else {
+        reasons.push(`instance on '${loadedInstance.computerId ?? loadedInstance.runtimeId}' already loaded${loadedInstance.state === 'READY' ? ' and ready' : ''} (+${bonus})`);
+      }
       if (isLocalModel && task.requirements?.reasoning !== 'high' && estimatedMemGB > 16) {
         const sizeCost = Math.min(4, Math.floor((estimatedMemGB - 12) / 4));
         if (sizeCost > 0) {
@@ -1459,14 +1481,17 @@ export class Scheduler {
     // otherwise every hosted instance would be wrongly excluded from both
     // preference passes below.
     const isOnline = (i: ModelInstance): boolean => !i.computerId || online.has(i.computerId);
+    const hasAdequateCtx = (i: ModelInstance): boolean => i.contextTokens === undefined || i.contextTokens >= 16_384;
     const byPriority = [...instances].sort(
       (a, b) => this.runtimePriorityRank(a.runtimeId) - this.runtimePriorityRank(b.runtimeId),
     );
     const preferredMlxOrGoogle = byPriority.find(
-      (i) => (i.runtimeId === 'google' || i.runtimeId === 'mlx') && i.health !== 'unavailable' && isOnline(i),
+      (i) => (i.runtimeId === 'google' || i.runtimeId === 'mlx') && i.health !== 'unavailable' && isOnline(i) && hasAdequateCtx(i),
     );
     const instance =
       preferredMlxOrGoogle ??
+      byPriority.find((i) => i.loaded && i.health === 'healthy' && isOnline(i) && hasAdequateCtx(i)) ??
+      byPriority.find((i) => i.health !== 'unavailable' && isOnline(i) && hasAdequateCtx(i)) ??
       byPriority.find((i) => i.loaded && i.health === 'healthy' && isOnline(i)) ??
       byPriority.find((i) => i.health !== 'unavailable' && isOnline(i)) ??
       byPriority[0];
@@ -1768,9 +1793,15 @@ export class Scheduler {
       const reasons: string[] = [];
       let score = instance.health === 'healthy' ? 1 : 0;
 
+      const desiredPlacementFloor = Math.max(requiredContext, task.type === 'coding' ? 16_384 : 0);
       if (instance.state === 'READY' || instance.loaded) {
-        score += 2;
-        reasons.push(`model already loaded via '${instance.runtimeId}' (no load latency)`);
+        if (desiredPlacementFloor > 0 && instance.contextTokens !== undefined && instance.contextTokens < desiredPlacementFloor) {
+          score -= 0.5;
+          reasons.push(`model loaded via '${instance.runtimeId}' at cramped context ${instance.contextTokens} (< ${desiredPlacementFloor} floor)`);
+        } else {
+          score += 2;
+          reasons.push(`model already loaded via '${instance.runtimeId}' (no load latency)`);
+        }
       } else {
         const estimatedLoadMs = instance.loadTimeMs ?? Math.max(1500, Math.round(requiredGpuGB * 400));
         const coldStartPenalty = Math.min(1.5, estimatedLoadMs / 20_000);

@@ -3,7 +3,7 @@ import { injectFault } from '@wazir/shared';
 import { parseXmlToolCalls } from './xmlToolFallback.js';
 
 export const QWEN_CONTEXT_OVERFLOW_PATTERN =
-  /context.{0,25}(length|window|size).{0,25}(exceed|too (long|large)|maximum)|maximum context length|reduce the (length|number) of (the )?messages|prompt is too long|input is too long/i;
+  /CONTEXT_PREFLIGHT_OVERFLOW|MODEL_CONTEXT_OVERFLOW|context.{0,25}(length|window|size).{0,25}(exceed|too (long|large)|maximum)|maximum context length|reduce the (length|number) of (the )?messages|prompt is too long|input is too long|exceeds the available context size|n_ctx/i;
 
 const TRANSIENT_STREAM_PATTERN =
   /ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|ECONNABORTED|UND_ERR_SOCKET|socket hang up|fetch failed|other side closed/i;
@@ -51,6 +51,7 @@ async function runSingleQwenTurnAttempt(options: RunQwenTurnOptions): Promise<Qw
   let tokensUsed = 0;
   let finishReason: string | undefined;
   let timedOut = false;
+  let explicitOverflowClass = false;
   let error: string | undefined;
   const retryNotes: string[] = [];
 
@@ -125,6 +126,9 @@ async function runSingleQwenTurnAttempt(options: RunQwenTurnOptions): Promise<Qw
         }
       } else if (event.type === 'error') {
         error = event.error ?? 'Unknown model generation error';
+        if (event.failureClass === 'MODEL_CONTEXT_OVERFLOW') {
+          explicitOverflowClass = true;
+        }
       }
     }
   } catch (err) {
@@ -146,7 +150,7 @@ async function runSingleQwenTurnAttempt(options: RunQwenTurnOptions): Promise<Qw
     }
   }
 
-  const contextOverflow = Boolean(error && QWEN_CONTEXT_OVERFLOW_PATTERN.test(error));
+  const contextOverflow = explicitOverflowClass || Boolean(error && QWEN_CONTEXT_OVERFLOW_PATTERN.test(error));
 
   return {
     content,

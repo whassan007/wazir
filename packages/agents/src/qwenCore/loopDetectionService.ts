@@ -36,6 +36,7 @@ export class LoopDetectionService {
   public longestNoProgressStreak = 0;
   public duplicateActionsBlocked = 0;
   private issuedNudgeForCurrentStreak = false;
+  private issuedNoProgressNudge = false;
   private lastAssistantTextHash: string | null = null;
   private identicalTextStreak = 0;
 
@@ -52,6 +53,7 @@ export class LoopDetectionService {
     this.recentSigs = [];
     this.noProgressStreak = 0;
     this.issuedNudgeForCurrentStreak = false;
+    this.issuedNoProgressNudge = false;
     this.lastAssistantTextHash = null;
     this.identicalTextStreak = 0;
   }
@@ -82,6 +84,7 @@ export class LoopDetectionService {
       if (mutated || (outcome.result.ok && isNovelObservation)) {
         this.noProgressStreak = 0;
         this.issuedNudgeForCurrentStreak = false;
+        this.issuedNoProgressNudge = false;
       } else {
         this.noProgressStreak += 1;
         if (this.noProgressStreak > this.longestNoProgressStreak) {
@@ -147,6 +150,21 @@ export class LoopDetectionService {
           escalatable: true,
         };
       }
+    }
+
+    if (
+      !this.issuedNoProgressNudge &&
+      this.options.maxNoProgressIterations >= 4 &&
+      this.noProgressStreak >= this.options.maxNoProgressIterations - 2
+    ) {
+      this.issuedNoProgressNudge = true;
+      const remaining = Math.max(1, this.options.maxNoProgressIterations - this.noProgressStreak);
+      return {
+        action: 'nudge',
+        nudgeMessage:
+          `[loop warning] Your last ${this.noProgressStreak} tool calls returned empty or duplicate observations with no workspace changes (${remaining} attempt(s) remaining before halt). ` +
+          'Stop repeating empty searches — synthesize what you have observed and provide your response, or switch to a concrete action.',
+      };
     }
 
     return { action: 'ok' };

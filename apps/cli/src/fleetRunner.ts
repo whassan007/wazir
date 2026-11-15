@@ -306,7 +306,11 @@ export function createFleetTaskExecutor(
         task,
         requiredContextTokens: contextDecision.finalRequiredTokens,
         placement: () => placement,
-        prepare: (next) => prepareGenerationPlacement(engine, next, { executionId, minimumContext: contextDecision.finalRequiredTokens }),
+        prepare: (next, minCtx) =>
+          prepareGenerationPlacement(engine, next, {
+            executionId,
+            minimumContext: Math.max(contextDecision.finalRequiredTokens, minCtx ?? 0),
+          }),
         onEscalated: (_request, next, contextTokens) => {
           currentModelId = next.modelId;
           placement.runtimeId = next.runtimeId;

@@ -17,12 +17,32 @@ export interface EscalationPlan {
  * which, and the handler below prepares it before the switch is accepted. A pinned
  * model is never substituted.
  */
+function resolveEscalationContextFloor(params: {
+  baseRequiredContext?: number;
+  currentContextTokens?: number;
+  request: ModelEscalationRequest;
+}): number | undefined {
+  const isContextOverflow =
+    params.request.failureClass === 'RESOURCE_EXHAUSTED' ||
+    /context|overflow|preflight_overflow|tokens/i.test(params.request.reason);
+  if (!isContextOverflow) {
+    return params.baseRequiredContext;
+  }
+  const reqMatch = params.request.reason.match(/requires\s+(\d+)\s+tokens/i);
+  const parsedRequired = reqMatch ? Number.parseInt(reqMatch[1]!, 10) : 0;
+  const steppedCurrent =
+    params.currentContextTokens && params.currentContextTokens > 0
+      ? Math.max(16_384, params.currentContextTokens * 2)
+      : 16_384;
+  return Math.max(params.baseRequiredContext ?? 0, parsedRequired || 0, steppedCurrent);
+}
+
 export function planEscalation(
   scheduler: Pick<Scheduler, 'plan'>,
   params: {
     task: Task;
     requiredContextTokens?: number;
-    placement: { runtimeId: string; computerId?: string };
+    placement: { runtimeId: string; computerId?: string; contextTokens?: number };
     request: ModelEscalationRequest;
   },
 ): EscalationPlan {
@@ -31,11 +51,16 @@ export function planEscalation(
   if (pinned) {
     return { decision: { reason: `task pins model '${pinned}'; no silent substitution` } };
   }
+  const effectiveRequiredContext = resolveEscalationContextFloor({
+    baseRequiredContext: params.requiredContextTokens,
+    currentContextTokens: placement.contextTokens,
+    request,
+  });
   let next: SchedulerDecision;
   try {
     next = scheduler.plan({
       task: { ...task, execution: { ...task.execution, targetModelId: undefined } },
-      requiredContextTokens: params.requiredContextTokens,
+      requiredContextTokens: effectiveRequiredContext,
       excludeModelIds: request.triedModelIds,
     });
   } catch (error) {
@@ -71,29 +96,35 @@ export function createEscalationHandler(
     task: Task;
     requiredContextTokens?: number;
     /** The execution's current generation placement (read at each escalation). */
-    placement: () => { runtimeId: string; computerId?: string };
+    placement: () => { runtimeId: string; computerId?: string; contextTokens?: number };
     /**
      * Makes the chosen placement serve generation — load the model, check the route
      * exists — and resolves with the context window it will serve. Throwing declines
      * the escalation with that reason; the current model keeps running.
      */
-    prepare: (next: SchedulerDecision) => Promise<{ contextTokens: number }>;
+    prepare: (next: SchedulerDecision, requiredContextTokens?: number) => Promise<{ contextTokens: number }>;
     onEscalated: (request: ModelEscalationRequest, next: SchedulerDecision, contextTokens: number) => void;
     onDeclined?: (request: ModelEscalationRequest, reason: string) => void;
   },
 ): (request: ModelEscalationRequest) => Promise<ModelEscalationDecision> {
   return async (request) => {
+    const currentPlacement = params.placement();
+    const effectiveRequiredContext = resolveEscalationContextFloor({
+      baseRequiredContext: params.requiredContextTokens,
+      currentContextTokens: currentPlacement.contextTokens,
+      request,
+    });
     const planned = planEscalation(engine.scheduler, {
       task: params.task,
-      requiredContextTokens: params.requiredContextTokens,
-      placement: params.placement(),
+      requiredContextTokens: effectiveRequiredContext,
+      placement: currentPlacement,
       request,
     });
     let decision = planned.decision;
     let contextTokens = 0;
     if (planned.scheduling) {
       try {
-        ({ contextTokens } = await params.prepare(planned.scheduling));
+        ({ contextTokens } = await params.prepare(planned.scheduling, effectiveRequiredContext));
       } catch (error) {
         decision = { reason: `could not prepare '${planned.scheduling.modelId}': ${error instanceof Error ? error.message : String(error)}` };
       }
@@ -132,7 +163,7 @@ export function createEscalationHandler(
 export async function prepareGenerationPlacement(
   engine: {
     models: { getRequired(id: string): ModelRecord; instancesOf(id: string): Array<{ id: string; contextTokens?: number }> };
-    runtimes: { get(id: string): { runtimeKind?: string } | undefined };
+    runtimes: { get(id: string): { runtimeKind?: string; computerId?: string } | undefined };
     adapters: { get(id: string): unknown };
     worker: { computerId?: string };
     config: { apiUrl?: string };
@@ -146,7 +177,11 @@ export async function prepareGenerationPlacement(
     if (!engine.adapters.get(next.runtimeId)) throw new Error(`no adapter is configured for hosted runtime '${next.runtimeId}'`);
     return { contextTokens: effectiveContextTokens(record) };
   }
-  if (next.computerId !== engine.worker.computerId && !engine.adapters.get(next.runtimeId) && !engine.config.apiUrl) {
+  const hasDirectRemoteAdapter =
+    Boolean(engine.adapters.get(next.runtimeId)) &&
+    (next.runtimeId.startsWith(`${next.computerId}:`) ||
+      engine.runtimes.get(next.runtimeId)?.computerId === next.computerId);
+  if (next.computerId !== engine.worker.computerId && !hasDirectRemoteAdapter && !engine.config.apiUrl) {
     throw new Error(`'${next.computerId}' is a remote computer and no control-plane API URL is configured (set WAZIR_API_URL)`);
   }
   if (next.readiness === 'READY_NOW') {

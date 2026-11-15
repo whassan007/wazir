@@ -84,6 +84,7 @@ apps/android/.idea/
 
 # Wazir's own worktree/scratch state for managing other branches locally
 .wazir/
+.worktrees/
 .fa/worktrees/
 .fa/logs/
 .fa/status/
