@@ -465,11 +465,29 @@ fn build_menu(app: &tauri::AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
     let autonomy_review = MenuItem::with_id(app, "autonomy_review", "Autonomy: Request-Review (Balanced)", true, None::<&str>)?;
     let autonomy_sandbox = MenuItem::with_id(app, "autonomy_sandbox", "Autonomy: Auto-Sandbox (Permissive)", true, None::<&str>)?;
     let manage_schedules = MenuItem::with_id(app, "manage_schedules", "Scheduled Tasks (@wazir/scheduler)", true, Some("CmdOrCtrl+Shift+S"))?;
+    let surface_mission_control = MenuItem::with_id(app, "surface_mission_control", "Wazir Mission Control", true, Some("CmdOrCtrl+Shift+M"))?;
+    let surface_fleet = MenuItem::with_id(app, "surface_fleet", "Wazir Fleet", true, Some("CmdOrCtrl+Shift+F"))?;
+    let surface_monitor = MenuItem::with_id(app, "surface_monitor", "Wazir Agent Monitor", true, Some("CmdOrCtrl+Shift+E"))?;
+    let surface_approvals = MenuItem::with_id(app, "surface_approvals", "Wazir Approvals", true, Some("CmdOrCtrl+Shift+A"))?;
+    let surface_settings = MenuItem::with_id(app, "surface_settings", "Wazir Settings", true, Some("CmdOrCtrl+,"))?;
     let open_browser = MenuItem::with_id(app, "open_browser", "Open in Browser", true, None::<&str>)?;
     let view_logs = MenuItem::with_id(app, "view_logs", "View Logs", true, None::<&str>)?;
 
     let app_menu = Submenu::with_items(app, "Wazir Desktop", true, &[&about, &separator, &quit])?;
     let view_menu = Submenu::with_items(app, "View", true, &[&reload, &manage_schedules])?;
+    let surfaces_menu = Submenu::with_items(
+        app,
+        "Surfaces",
+        true,
+        &[
+            &surface_mission_control,
+            &surface_fleet,
+            &surface_monitor,
+            &surface_approvals,
+            &separator,
+            &surface_settings,
+        ],
+    )?;
     let control_menu = Submenu::with_items(
         app,
         "Control",
@@ -486,7 +504,7 @@ fn build_menu(app: &tauri::AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
     )?;
     let help_menu = Submenu::with_items(app, "Help", true, &[&open_browser, &view_logs])?;
 
-    Menu::with_items(app, &[&app_menu, &view_menu, &control_menu, &help_menu])
+    Menu::with_items(app, &[&app_menu, &view_menu, &surfaces_menu, &control_menu, &help_menu])
 }
 
 /// Parses concrete OpenSSH `Host <alias>` entries (ignoring wildcard patterns).
@@ -613,6 +631,31 @@ fn main() {
             "manage_schedules" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.eval("window.__WAZIR_SURFACE__ && window.__WAZIR_SURFACE__.switchTab('schedules')");
+                }
+            }
+            "surface_mission_control" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval(&format!("window.location.assign('{DASHBOARD_URL}/goal-studio/')"));
+                }
+            }
+            "surface_fleet" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval(&format!("window.location.assign('{DASHBOARD_URL}/#fleet')"));
+                }
+            }
+            "surface_monitor" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval(&format!("window.location.assign('{DASHBOARD_URL}/#executions')"));
+                }
+            }
+            "surface_approvals" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval(&format!("window.location.assign('{DASHBOARD_URL}/#approvals')"));
+                }
+            }
+            "surface_settings" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval(&format!("window.location.assign('{DASHBOARD_URL}/#settings')"));
                 }
             }
             "open_browser" => {

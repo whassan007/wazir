@@ -1,0 +1,7 @@
+[Keyboard]
+RepeatDelay=250
+RepeatRate=35
+
+[Libinput]
+NaturalScroll=true
+TapToClick=true

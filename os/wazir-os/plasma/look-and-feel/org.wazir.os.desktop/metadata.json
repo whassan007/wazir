@@ -1,0 +1,18 @@
+{
+  "KPackageStructure": "Plasma/LookAndFeel",
+  "KPlugin": {
+    "Authors": [
+      {
+        "Email": "wael@wazir.dev",
+        "Name": "Wazir Maintainers"
+      }
+    ],
+    "Category": "Global Themes (Plasma 6)",
+    "Description": "Wazir OS — Native Mac-like developer desktop with Wazir CVI Dark Abyss & Electric Blue design system",
+    "Id": "org.wazir.os.desktop",
+    "License": "AGPL-3.0-only",
+    "Name": "Wazir OS",
+    "Version": "1.0.0",
+    "Website": "https://github.com/whassan007/wazir"
+  }
+}

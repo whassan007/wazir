@@ -1,0 +1,75 @@
+# Wazir OS — Bootable Fedora Atomic / KDE Plasma 6 Wayland Image
+# Base: Universal Blue Kinoite (Fedora Atomic KDE Plasma 6)
+ARG BASE_IMAGE=ghcr.io/ublue-os/kinoite-main:41
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.title="Wazir OS" \
+      org.opencontainers.image.description="Developer-first Macified Linux desktop with Wazir CVI Design System and policy-governed AI execution" \
+      org.opencontainers.image.source="https://github.com/whassan007/wazir" \
+      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      containers.bootc="1"
+
+# 1. Core developer & desktop integration packages
+RUN dnf -y install \
+        nodejs \
+        ripgrep \
+        zsh \
+        git \
+        inter-fonts \
+        jetbrains-mono-fonts \
+        plasma-workspace-wayland \
+        dbus-python \
+        python3-gobject \
+        libnotify \
+    && dnf clean all
+
+# 2. Install Wazir CLI, API, Web, and Spotlight runtime
+COPY bin/ /usr/lib/wazir/bin/
+COPY dist/ /usr/lib/wazir/dist/
+COPY package.json /usr/lib/wazir/package.json
+COPY packages/design-tokens/dist/ /usr/lib/wazir/packages/design-tokens/dist/
+COPY packages/spotlight/dist/ /usr/lib/wazir/packages/spotlight/dist/
+COPY apps/web/public/ /usr/lib/wazir/apps/web/public/
+
+RUN printf '#!/bin/sh\nexec node /usr/lib/wazir/bin/wa.js "$@"\n' > /usr/bin/wa \
+    && chmod 0755 /usr/bin/wa \
+    && cp /usr/bin/wa /usr/bin/wazir \
+    && printf '#!/bin/sh\nexec node /usr/lib/wazir/packages/spotlight/dist/cli.js "$@"\n' > /usr/bin/wazir-spotlight \
+    && chmod 0755 /usr/bin/wazir-spotlight
+
+# 3. Install Wazir Design System (KDE Color Schemes, Konsole, SDDM, Plymouth, Wallpaper)
+COPY os/wazir-os/theme/color-schemes/ /usr/share/color-schemes/
+COPY os/wazir-os/theme/konsole/ /usr/share/konsole/
+COPY os/wazir-os/theme/sddm/ /usr/share/sddm/themes/wazir/
+COPY os/wazir-os/theme/sddm/10-wazir.conf /etc/sddm.conf.d/10-wazir.conf
+COPY os/wazir-os/theme/plymouth/wazir.plymouth /usr/share/plymouth/themes/wazir/wazir.plymouth
+COPY os/wazir-os/theme/wallpapers/WazirAbyss/ /usr/share/wallpapers/WazirAbyss/
+COPY assets/brand/generated/emblem-transparent.png /usr/share/pixmaps/wazir-emblem.png
+COPY assets/brand/generated/logo-emblem.svg /usr/share/icons/hicolor/scalable/apps/wazir.svg
+
+# 4. Install Plasma 6 Look-and-Feel, Wazir Fleet Plasmoid, and Desktop Launchers
+COPY os/wazir-os/plasma/look-and-feel/org.wazir.os.desktop/ /usr/share/plasma/look-and-feel/org.wazir.os.desktop/
+COPY os/wazir-os/plasma/plasmoids/org.wazir.fleet/ /usr/share/plasma/plasmoids/org.wazir.fleet/
+COPY os/wazir-os/apps/ /usr/share/applications/
+COPY packaging/linux/wazir.desktop /usr/share/applications/wazir-desktop.desktop
+
+# 5. Install Wazir Spotlight KRunner D-Bus provider & systemd units
+COPY os/wazir-os/spotlight/org.wazir.Spotlight.service /usr/share/dbus-1/services/org.wazir.Spotlight.service
+COPY os/wazir-os/spotlight/wazir-spotlight.desktop /usr/share/krunner/dbusplugins/wazir-spotlight.desktop
+COPY os/wazir-os/spotlight/wazir-spotlight-dbus.py /usr/libexec/wazir-spotlight-dbus.py
+COPY os/wazir-os/spotlight/wazir-spotlight.service /usr/lib/systemd/user/wazir-spotlight.service
+COPY scripts/systemd/wazir-api.service /usr/lib/systemd/system/wazir-api.service
+COPY scripts/systemd/wazir-worker.service /usr/lib/systemd/system/wazir-worker.service
+RUN chmod 0755 /usr/libexec/wazir-spotlight-dbus.py
+
+# 6. Pre-seed /etc/skel & environment.d so Macification works out-of-the-box without post-install scripts
+COPY os/wazir-os/skel/.config/ /etc/skel/.config/
+COPY os/wazir-os/environment.d/20-wazir-desktop.conf /etc/environment.d/20-wazir-desktop.conf
+
+# 7. OS branding & systemd presets
+RUN printf 'NAME="Wazir OS"\nID=wazir-os\nID_LIKE=fedora\nPRETTY_NAME="Wazir OS 41 (KDE Plasma Wayland)"\nHOME_URL="https://github.com/whassan007/wazir"\n' > /usr/lib/os-release \
+    && systemctl enable wazir-api.service || true \
+    && systemctl --global enable wazir-spotlight.service || true
+
+# 8. Validate bootc container structure when bootc is present
+RUN if command -v bootc >/dev/null 2>&1; then bootc container lint; fi

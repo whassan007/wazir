@@ -1,0 +1,36 @@
+name: Wazir OS Image Validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'os/wazir-os/**'
+      - 'packages/design-tokens/**'
+      - 'packages/spotlight/**'
+
+jobs:
+  validate-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies and build tokens + spotlight
+        run: |
+          npm ci
+          npm run build --workspace @wazir/design-tokens
+          npm run generate --workspace @wazir/design-tokens
+          npm run build --workspace @wazir/spotlight
+
+      - name: Run Wazir OS automated verification suite
+        run: npx vitest run tests/wazir-os/
+
+      - name: Build OCI image (no push)
+        run: |
+          podman build -f os/wazir-os/image/Containerfile -t localhost/wazir-os:pr-test .

@@ -1,0 +1,18 @@
+[kwin]
+Overview=Meta+Up,Meta+W,Toggle Overview
+ShowDesktopGrid=Meta+Down,none,Show Desktop Grid
+Switch One Desktop to the Left=Meta+Ctrl+Left,none,Switch One Desktop to the Left
+Switch One Desktop to the Right=Meta+Ctrl+Right,none,Switch One Desktop to the Right
+Walk Through Windows=Meta+Tab,Alt+Tab,Walk Through Windows
+Walk Through Windows (Reverse)=Meta+Shift+Tab,Alt+Shift+Tab,Walk Through Windows (Reverse)
+Walk Through Windows of Current Application=Meta+`,Alt+`,Walk Through Windows of Current Application
+Window Close=Meta+Q,Alt+F4,Close Window
+Window Maximize=Meta+Ctrl+F,Meta+PgUp,Maximize Window
+Window Minimize=Meta+M,Meta+PgDown,Minimize Window
+
+[org.kde.krunner.desktop]
+_launch=Meta+Space\tAlt+Space,Alt+Space,KRunner
+
+[org.kde.spectacle.desktop]
+FullScreenScreenShot=Meta+Shift+3,Print,Capture Entire Desktop
+RectangularRegionScreenShot=Meta+Shift+4,Meta+Shift+Print,Capture Rectangular Region
