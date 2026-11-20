@@ -31,6 +31,12 @@ import {
   type EngineProfile,
   type WazirOsJobKind,
 } from '@wazir/models';
+import {
+  ExecutionBackendRegistry,
+  loadUbuntuSettings,
+  saveUbuntuSettings,
+  type WazirUbuntuSettings,
+} from '@wazir/ubuntu-os';
 import { createMLXAdapter, MLX_DEFAULT_BASE_URL } from '@wazir/runtimes-mlx';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
@@ -1382,6 +1388,48 @@ export function createApp(state: ApiState) {
     };
     const resolution = registry.resolveForJob(body, state.models.list());
     res.json(resolution);
+  });
+
+  // Wazir Ubuntu OS Settings & Replaceable Execution Backend API
+  app.get('/api/v1/ubuntu/settings', auth.requireViewerOrOperator, (_req, res) => {
+    res.json(loadUbuntuSettings());
+  });
+
+  app.post('/api/v1/ubuntu/settings', auth.requireOperator, (req, res) => {
+    const current = loadUbuntuSettings();
+    const patch = (req.body ?? {}) as Partial<WazirUbuntuSettings>;
+    const next: WazirUbuntuSettings = {
+      ...current,
+      ...patch,
+      voice: { ...current.voice, ...(patch.voice ?? {}) },
+    };
+    saveUbuntuSettings(next);
+    res.json({ ok: true, settings: next });
+  });
+
+  app.get('/api/v1/ubuntu/backends', auth.requireViewerOrOperator, (_req, res) => {
+    const reg = new ExecutionBackendRegistry();
+    res.json({
+      activeBackendId: reg.getActiveId(),
+      backends: reg.list().map((b) => ({
+        id: b.id,
+        name: b.name,
+        version: b.version,
+        source: b.source,
+        capabilities: b.capabilities,
+      })),
+    });
+  });
+
+  app.post('/api/v1/ubuntu/backends/use', auth.requireOperator, (req, res) => {
+    try {
+      const backendId = String((req.body as { backendId?: string })?.backendId ?? '').trim();
+      const reg = new ExecutionBackendRegistry();
+      const chosen = reg.use(backendId);
+      res.json({ ok: true, activeBackendId: chosen.id, capabilities: chosen.capabilities });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   app.get('/api/v1/agents/capabilities', (_req, res) => {

@@ -1,0 +1,22 @@
+#cloud-config
+# Wazir OS Ubuntu 26.04.1 LTS Autoinstall Profile
+# Preserves standard Ubuntu GNOME 50 / Wayland / APT / systemd semantics
+# and layers Wazir as an independently removable Debian package.
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  apt:
+    preserve_sources_list: true
+  packages:
+    - nodejs
+    - ripgrep
+    - python3-dbus
+    - python3-gi
+    - libnotify-bin
+    - pipewire-audio
+  late-commands:
+    - curtin in-target --target=/target -- dpkg -i /cdrom/wazir/wazir.deb || true
+    - curtin in-target --target=/target -- apt-get -f install -y
+    - curtin in-target --target=/target -- systemctl --global enable wazir-gnome-search.service || true

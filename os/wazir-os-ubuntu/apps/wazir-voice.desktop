@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wazir Voice (Push-to-Talk)
+GenericName=Offline Voice Command Overlay
+Comment=Push-to-talk local voice command via whisper.cpp and Piper TTS
+Exec=wa voice --push-to-talk
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=Wazir;Voice;Speech;Microphone;
