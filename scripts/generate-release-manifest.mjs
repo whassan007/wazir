@@ -60,9 +60,9 @@ for (const c of candidates) {
   const basename = path.basename(full);
   const sizeHuman = `${(buf.length / (1024 * 1024)).toFixed(2)} MB`;
   shaLines.push(`${sha256}  ${c.file}`);
-  // Copy smaller/CLI artifacts into portal/releases if <= 20MB (Cloudflare Pages 25MB per-file limit)
+  // Copy artifacts <= 24MB into portal/releases (Cloudflare Pages 25MB per-file limit)
   let url = `https://github.com/whassan007/wazir/releases/tag/v${version}`;
-  if (buf.length <= 20 * 1024 * 1024) {
+  if (buf.length <= 24 * 1024 * 1024) {
     fs.copyFileSync(full, path.join(PORTAL, 'releases', basename));
     url = `/releases/${basename}`;
   }

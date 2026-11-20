@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Download Wazir — Wazir AI OS</title>
+  <meta name="description" content="Download Wazir Shell, Wazir Mission Control, Wazir CLI, and GrapheneOS companion. One intelligent shell. Every machine." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles/design-system.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="nav-inner">
+      <a class="brand" href="/">
+        <img src="/logo-emblem.svg" alt="" width="24" height="24" />
+        <span>Wazir</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/">Overview</a>
+        <a href="#get-started">Desktop &amp; Mobile</a>
+        <a href="#terminal-install">Terminal</a>
+        <a href="#work-across-machines">Architecture</a>
+        <a href="#faq">FAQ</a>
+        <button id="theme-toggle" class="btn sm" type="button" aria-label="Toggle color theme">Theme</button>
+        <a id="nav-download-cta" class="btn primary sm" href="#get-started">Download</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Section A: Hero -->
+    <section class="hero" aria-labelledby="hero-title">
+      <h1 id="hero-title">Download Wazir</h1>
+      <p class="lead">One intelligent shell. Every machine.</p>
+      <p class="sub">Run commands, delegate work to AI, and manage execution across your computers. Locally, securely, and with verifiable results.</p>
+      <div class="hero-actions">
+        <a id="hero-primary-btn" class="btn primary" href="/releases/Wazir-Shell-0.3.2-macos-arm64.tar.gz" download>
+          Download for macOS
+        </a>
+        <a href="#get-started" class="muted" style="font-size:14px;">Explore all installation options ↓</a>
+      </div>
+    </section>
+
+    <!-- Section B: Get Started -->
+    <section id="get-started" class="container">
+      <h2 class="section-heading">Get started with Wazir</h2>
+      <p class="section-sub">One platform for terminal work, AI execution, and distributed machine management.</p>
+
+      <div class="grid-2">
+        <!-- Card 1: Wazir Desktop -->
+        <article class="card elevated" aria-labelledby="card-desktop-title">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+            <img src="/logo-emblem.svg" alt="Wazir Desktop icon" width="36" height="36" />
+            <div>
+              <h3 id="card-desktop-title" style="margin:0;">Wazir Desktop</h3>
+              <span class="muted" style="font-size:13px;">macOS &amp; Linux · v<span class="manifest-version">0.3.2</span></span>
+            </div>
+          </div>
+
+          <div style="display:grid;gap:14px;margin-bottom:20px;">
+            <div style="padding:14px;border-radius:12px;background:var(--surface-soft);">
+              <strong>Wazir Shell</strong>
+              <div class="muted" style="font-size:14px;">The terminal, reimagined for AI. Native PTY with <code>!</code> shell, <code>?</code> AI, and automatic routing.</div>
+            </div>
+            <div style="padding:14px;border-radius:12px;background:var(--surface-soft);">
+              <strong>Wazir Mission Control</strong>
+              <div class="muted" style="font-size:14px;">See every machine, model, and task in one place with 10-state execution graphs.</div>
+            </div>
+          </div>
+
+          <div style="margin-bottom:16px;">
+            <label for="desktop-arch" style="font-size:13px;font-weight:500;display:block;margin-bottom:6px;">Architecture</label>
+            <select id="desktop-arch" class="btn sm" style="border-radius:8px;width:100%;justify-content:flex-start;">
+              <option value="arm64">Apple Silicon / ARM64 (aarch64)</option>
+              <option value="x64">x86_64 (Linux / CLI Universal)</option>
+            </select>
+          </div>
+
+          <div id="desktop-downloads" style="display:grid;gap:10px;margin-bottom:16px;"></div>
+
+          <details style="font-size:13px;color:var(--text-secondary);">
+            <summary style="cursor:pointer;font-weight:500;color:var(--text);">System requirements &amp; installation instructions</summary>
+            <ul style="padding-left:18px;margin-top:8px;">
+              <li>macOS 14+ (Apple Silicon) or Ubuntu 24.04+ / Debian / Fedora</li>
+              <li>Node.js 22.13+ for CLI/worker runtime</li>
+              <li>Verify checksum: <code>shasum -a 256 -c SHA256SUMS.txt</code></li>
+              <li>Note: macOS archives are unsigned development builds (no Apple Developer ID notarization yet).</li>
+            </ul>
+          </details>
+        </article>
+
+        <!-- Card 2: Wazir Mobile -->
+        <article class="card elevated" aria-labelledby="card-mobile-title">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+            <img src="/logo-emblem.svg" alt="Wazir Mobile icon" width="36" height="36" />
+            <div>
+              <h3 id="card-mobile-title" style="margin:0;">Wazir on your phone</h3>
+              <span class="muted" style="font-size:13px;">GrapheneOS &amp; Android · Zero-root companion</span>
+            </div>
+          </div>
+
+          <p class="muted" style="margin-top:0;">Start a task anywhere. Let your machines do the work.</p>
+
+          <div id="mobile-downloads" style="display:grid;gap:10px;margin-bottom:18px;">
+            <a class="btn primary" href="/releases/wazir-mobile-0.3.2-android-debug.apk" download>
+              Download GrapheneOS / Android APK (v0.3.2)
+            </a>
+            <a class="btn" href="#terminal-install" onclick="selectTermPlatform('termux')">
+              Install Termux ARM64 CLI
+            </a>
+          </div>
+
+          <div style="display:flex;gap:16px;align-items:center;padding:14px;border-radius:12px;background:var(--surface-soft);margin-bottom:14px;">
+            <svg width="64" height="64" viewBox="0 0 21 21" aria-label="QR code linking to Wazir download page" style="flex-shrink:0;background:#fff;padding:4px;border-radius:6px;">
+              <rect width="21" height="21" fill="#fff"/>
+              <path d="M1,1h7v7h-7z M2,2v5h5v-5z M3,3h3v3h-3z M13,1h7v7h-7z M14,2v5h5v-5z M15,3h3v3h-3z M1,13h7v7h-7z M2,14v5h5v-5z M3,15h3v3h-3z M9,2h2v2h-2z M9,6h2v4h-2z M10,11h3v2h-3z M14,10h2v3h-2z M17,12h2v4h-2z M12,15h4v4h-4z M17,17h2v2h-2z" fill="#141413"/>
+            </svg>
+            <div style="font-size:13px;">
+              <strong>Secure pairing</strong>
+              <div class="muted">Scan or open <a href="https://wazir-portal.pages.dev/download">wazir-portal.pages.dev/download</a> on GrapheneOS, then pair via scoped URI/QR token in Mission Control.</div>
+            </div>
+          </div>
+
+          <details style="font-size:13px;color:var(--text-secondary);">
+            <summary style="cursor:pointer;font-weight:500;color:var(--text);">Supported Android versions &amp; permissions</summary>
+            <ul style="padding-left:18px;margin-top:8px;">
+              <li>Android 8.0+ / GrapheneOS (API 26–35, ARM64)</li>
+              <li>Never requires root access; respects GrapheneOS storage &amp; network scopes</li>
+              <li>APK is debug-signed for development evaluation</li>
+            </ul>
+          </details>
+        </article>
+      </div>
+    </section>
+
+    <!-- Section C: Go Further -->
+    <section id="integrations" class="container tight">
+      <h2 class="section-heading">Go further with Wazir</h2>
+      <p class="section-sub">Bring intelligent execution into the tools and machines you already use.</p>
+
+      <div class="grid-4">
+        <a class="card" href="#terminal-install" style="color:inherit;text-decoration:none;">
+          <span class="pill">Available</span>
+          <h3 style="margin-top:10px;font-size:17px;">Wazir CLI</h3>
+          <p class="muted" style="font-size:14px;margin:0;">Universal <code>wa</code> binary for shell, exec, fleet, and diagnostics.</p>
+        </a>
+        <a class="card" href="/#docs" style="color:inherit;text-decoration:none;">
+          <span class="pill">Available</span>
+          <h3 style="margin-top:10px;font-size:17px;">Wazir Workers</h3>
+          <p class="muted" style="font-size:14px;margin:0;">SSE-connected daemons with lease-fenced execution on Linux, macOS, and Windows.</p>
+        </a>
+        <a class="card" href="/#docs" style="color:inherit;text-decoration:none;">
+          <span class="pill">Available</span>
+          <h3 style="margin-top:10px;font-size:17px;">MCP Integrations</h3>
+          <p class="muted" style="font-size:14px;margin:0;">Standardized Model Context Protocol server &amp; client tool interoperability.</p>
+        </a>
+        <a class="card" href="/#docs" style="color:inherit;text-decoration:none;">
+          <span class="pill">Available</span>
+          <h3 style="margin-top:10px;font-size:17px;">ACP Integrations</h3>
+          <p class="muted" style="font-size:14px;margin:0;">Zero-fork Agent Client Protocol bridge for external coding harnesses.</p>
+        </a>
+        <a class="card" href="/#docs" style="color:inherit;text-decoration:none;">
+          <span class="pill">Available</span>
+          <h3 style="margin-top:10px;font-size:17px;">Ollama</h3>
+          <p class="muted" style="font-size:14px;margin:0;">First-class local &amp; DGX Spark routing for Qwen3-Coder and Gemma models.</p>
+        </a>
+        <a class="card" href="/#docs" style="color:inherit;text-decoration:none;">
+          <span class="pill">Available</span>
+          <h3 style="margin-top:10px;font-size:17px;">LM Studio &amp; MLX</h3>
+          <p class="muted" style="font-size:14px;margin:0;">Apple Silicon unified-memory inference over local OpenAI-compatible endpoints.</p>
+        </a>
+        <a class="card" href="#work-across-machines" style="color:inherit;text-decoration:none;">
+          <span class="pill">Available</span>
+          <h3 style="margin-top:10px;font-size:17px;">Distributed Fleet</h3>
+          <p class="muted" style="font-size:14px;margin:0;">Hardware- and capability-aware routing across local and remote machines.</p>
+        </a>
+        <div class="card">
+          <span class="pill muted">Preview</span>
+          <h3 style="margin-top:10px;font-size:17px;">VS Code Integration</h3>
+          <p class="muted" style="font-size:14px;margin:0;">Connect editor tasks to Wazir Core via MCP/ACP bridge.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section D: Wazir Shell Environments -->
+    <section id="environments" class="container tight">
+      <h2 class="section-heading">Work where you work best</h2>
+      <p class="section-sub">Choose the surface that fits the task—every environment shares the same governed execution model.</p>
+
+      <div class="tab-row" role="tablist" aria-label="Wazir environments">
+        <button class="tab-btn active" role="tab" aria-selected="true" onclick="selectEnv('desktop', this)">Desktop</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="selectEnv('terminal', this)">Terminal</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="selectEnv('mc', this)">Mission Control</button>
+        <button class="tab-btn" role="tab" aria-selected="false" onclick="selectEnv('mobile', this)">Mobile</button>
+      </div>
+
+      <div class="card" id="env-panel"></div>
+    </section>
+
+    <!-- Section E: Command-Line Installation -->
+    <section id="terminal-install" class="container tight">
+      <h2 class="section-heading">Prefer the terminal?</h2>
+      <p class="section-sub">Install Wazir using your existing shell with checksum-verified packages.</p>
+
+      <div class="terminal-box">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
+          <div class="tab-row" style="margin-bottom:0;" role="tablist" aria-label="CLI installation platforms">
+            <button class="tab-btn active" data-plat="macos" onclick="selectTermPlatform('macos', this)">macOS</button>
+            <button class="tab-btn" data-plat="debian" onclick="selectTermPlatform('debian', this)">Ubuntu / Debian</button>
+            <button class="tab-btn" data-plat="fedora" onclick="selectTermPlatform('fedora', this)">Fedora / RHEL</button>
+            <button class="tab-btn" data-plat="linux" onclick="selectTermPlatform('linux', this)">Other Linux</button>
+            <button class="tab-btn" data-plat="termux" onclick="selectTermPlatform('termux', this)">GrapheneOS / Termux</button>
+          </div>
+          <button id="copy-cmd-btn" class="btn sm" type="button" style="background:rgba(255,255,255,0.1);color:#faf9f5;border-color:rgba(255,255,255,0.2);">Copy command</button>
+        </div>
+
+        <pre id="term-cmd" class="code-block"></pre>
+
+        <div id="term-meta" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:16px;font-size:12.5px;color:var(--terminal-muted);"></div>
+      </div>
+    </section>
+
+    <!-- Section F: Work Across Machines -->
+    <section id="work-across-machines" class="container tight">
+      <h2 class="section-heading">Start here. Execute anywhere.</h2>
+      <p class="section-sub">Wazir plans locally, routes to the right hardware, and verifies every outcome before reporting success. <span class="pill muted">Synthetic Demo Data</span></p>
+
+      <div class="card">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;" id="flow-steps"></div>
+        <div id="flow-detail" style="padding:18px;border-radius:12px;background:var(--bg-elevated);border:1px solid var(--border);"></div>
+        <div style="margin-top:16px;">
+          <a href="/#docs" style="font-size:14px;font-weight:500;">Read Mission Control &amp; distributed execution documentation →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section G: Take Wazir With You -->
+    <section id="mobile-handoff" class="container tight">
+      <div class="card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:28px;align-items:center;">
+        <div>
+          <h2 class="section-heading" style="font-size:34px;">Your machines. Within reach.</h2>
+          <p class="muted">Initiate a coding or diagnostic task from GrapheneOS, review the execution plan, and approve sensitive tool actions from your phone while your authorized macOS or Linux workers do the heavy compute.</p>
+          <p class="muted" style="font-size:14px;margin-bottom:0;">Wazir respects Android and GrapheneOS app sandboxing—never requiring root access or unrestricted device control.</p>
+        </div>
+        <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:16px;padding:20px;">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Example Mobile Approval Workflow</div>
+          <div style="font-weight:600;margin-bottom:6px;">Approval Requested · Worker: Linux GPU Node</div>
+          <p class="muted" style="font-size:13px;margin:0 0 14px;">Task: Run integration suite &amp; build release package (<code>npm run build:deb</code>)</p>
+          <div style="display:flex;gap:8px;">
+            <span class="pill">Approve on Device</span>
+            <span class="pill muted">Inspect Trace</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section H: FAQ -->
+    <section id="faq" class="container tight">
+      <h2 class="section-heading">Frequently asked questions</h2>
+      <p class="section-sub">Clear, evidence-backed answers about Wazir AI OS.</p>
+      <div id="faq-list"></div>
+    </section>
+  </main>
+
+  <!-- Section I: Footer -->
+  <footer class="site-footer">
+    <div class="footer-grid">
+      <div>
+        <div class="brand" style="margin-bottom:10px;">
+          <img src="/logo-emblem.svg" alt="" width="22" height="22" />
+          <span>Wazir AI OS</span>
+        </div>
+        <p style="margin:0 0 8px;">Copyright © 2026 Wael Hassan (<code>whassan007</code>).</p>
+        <p style="margin:0;font-size:12px;">Includes selective Apache-2.0 components adapted from <code>QwenLM/qwen-code</code>.</p>
+      </div>
+      <div class="footer-col">
+        <h4>Product</h4>
+        <ul>
+          <li><a href="#get-started">Wazir Shell</a></li>
+          <li><a href="#get-started">Mission Control</a></li>
+          <li><a href="#get-started">Mobile</a></li>
+          <li><a href="#work-across-machines">Workers</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>Developers</h4>
+        <ul>
+          <li><a href="#terminal-install">CLI</a></li>
+          <li><a href="/#docs">Documentation</a></li>
+          <li><a href="https://github.com/whassan007/wazir" target="_blank" rel="noopener">Source code</a></li>
+          <li><a href="/release-manifest.json">Releases</a></li>
+          <li><a href="#integrations">Integrations</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>Resources</h4>
+        <ul>
+          <li><a href="#terminal-install">Installation</a></li>
+          <li><a href="/#first-run">Getting started</a></li>
+          <li><a href="/#docs">Troubleshooting</a></li>
+          <li><a href="https://github.com/whassan007/wazir/discussions" target="_blank" rel="noopener">Community</a></li>
+          <li><a href="https://github.com/whassan007/wazir/issues" target="_blank" rel="noopener">Report a bug</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="/#licensing">License</a></li>
+          <li><a href="/#licensing">Commercial authorization</a></li>
+          <li><a href="/#privacy">Privacy</a></li>
+          <li><a href="/#privacy">Diagnostics</a></li>
+          <li><a href="/#licensing">Credits &amp; Notices</a></li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Theme toggle
+    const root = document.documentElement;
+    const savedTheme = localStorage.getItem('wazir_theme');
+    if (savedTheme) root.setAttribute('data-theme', savedTheme);
+    document.getElementById('theme-toggle').onclick = () => {
+      const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      localStorage.setItem('wazir_theme', next);
+    };
+
+    // Hydrate from verified release-manifest.json
+    let manifestData = null;
+    async function loadManifest() {
+      try {
+        const res = await fetch('/release-manifest.json');
+        if (!res.ok) return;
+        manifestData = await res.json();
+        document.querySelectorAll('.manifest-version').forEach(el => el.textContent = manifestData.version);
+        renderDesktopDownloads();
+        detectHeroPlatform();
+      } catch {}
+    }
+
+    function detectHeroPlatform() {
+      const ua = navigator.userAgent.toLowerCase();
+      const btn = document.getElementById('hero-primary-btn');
+      if (/android/.test(ua)) {
+        btn.textContent = 'Download for Android / GrapheneOS';
+        btn.href = '/releases/wazir-mobile-0.3.2-android-debug.apk';
+      } else if (/linux/.test(ua) && !/mac/.test(ua)) {
+        btn.textContent = 'Download for Linux (.deb)';
+        btn.href = '/releases/wazir_0.3.2_all.deb';
+      } else {
+        btn.textContent = 'Download for macOS';
+        btn.href = '/releases/Wazir-Shell-0.3.2-macos-arm64.tar.gz';
+      }
+    }
+
+    function renderDesktopDownloads() {
+      const arch = document.getElementById('desktop-arch').value;
+      const box = document.getElementById('desktop-downloads');
+      if (arch === 'arm64') {
+        box.innerHTML = `
+          <a class="btn primary" href="/releases/Wazir-Shell-0.3.2-macos-arm64.tar.gz" download>Download Wazir Shell (macOS ARM64)</a>
+          <a class="btn" href="/releases/Wazir-Mission-Control-0.3.2-macos-arm64.tar.gz" download>Download Mission Control (macOS ARM64)</a>
+          <a class="btn" href="/releases/wazir_0.3.2_all.deb" download>Download Linux .deb (ARM64 / x64)</a>
+        `;
+      } else {
+        box.innerHTML = `
+          <a class="btn primary" href="/releases/wazir_0.3.2_all.deb" download>Download Linux .deb (x86_64)</a>
+          <a class="btn" href="/releases/wazir-cli-0.3.2-any.tar.gz" download>Download Universal CLI Bundle</a>
+          <a class="btn" href="/releases/wazir-0.3.2.tar.gz" download>Download Linux Source &amp; RPM Spec</a>
+        `;
+      }
+    }
+    document.getElementById('desktop-arch').onchange = renderDesktopDownloads;
+    renderDesktopDownloads();
+
+    // Environments tabs
+    const ENVS = {
+      desktop: { title: 'Desktop — Native Wazir Shell', body: 'Launch Wazir Shell from the macOS Dock or Linux application launcher. Uses a real native PTY with tabs, keyboard shortcuts, and an optional AI command bar.', cmd: 'open -a "Wazir Shell"' },
+      terminal: { title: 'Terminal — Existing Bash, Zsh, or Fish', body: 'Run `wa shell` inside your existing terminal emulator. Ordinary commands run offline in your native shell; natural-language requests route through Wazir Core.', cmd: 'wa shell' },
+      mc: { title: 'Mission Control — Fleet & Execution Console', body: 'Inspect registered machines, CPU/GPU/memory telemetry, 10-state execution graphs, pending approvals, and sanitized traces in one dedicated app.', cmd: 'npm run desktop:dev' },
+      mobile: { title: 'Mobile — GrapheneOS Companion & Termux', body: 'Pair your GrapheneOS device with authorized Wazir hosts over scoped credentials. Submit tasks, stream progress, and approve actions on the go.', cmd: 'bash scripts/install-termux.sh' },
+    };
+    window.selectEnv = (key, btn) => {
+      document.querySelectorAll('#environments .tab-btn').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected','false'); });
+      if (btn) { btn.classList.add('active'); btn.setAttribute('aria-selected','true'); }
+      const e = ENVS[key];
+      document.getElementById('env-panel').innerHTML = `<h3>${e.title}</h3><p class="muted">${e.body}</p><pre class="code-block" style="background:var(--terminal-bg);color:var(--terminal-text);">${e.cmd}</pre>`;
+    };
+    selectEnv('desktop');
+
+    // Terminal install tabs
+    const TERM_PLATS = {
+      macos: {
+        cmd: `curl -LO https://wazir-portal.pages.dev/releases/wazir-cli-0.3.2-any.tar.gz\ncurl -LO https://wazir-portal.pages.dev/releases/SHA256SUMS.txt\nshasum -a 256 -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-cli-0.3.2-any.tar.gz\nnode bin/wa.js about`,
+        arch: 'arm64 (Apple Silicon)', dest: './bin/wa.js or /usr/local/bin/wa', verify: 'wa about && wa doctor', upgrade: 'Re-download & verify new tarball', uninstall: 'rm -rf ~/.wazir bin/wa.js'
+      },
+      debian: {
+        cmd: `curl -LO https://wazir-portal.pages.dev/releases/wazir_0.3.2_all.deb\ncurl -LO https://wazir-portal.pages.dev/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\nsudo dpkg -i wazir_0.3.2_all.deb`,
+        arch: 'x86_64, arm64', dest: '/usr/bin/wa & systemd units', verify: 'wa about && wa doctor', upgrade: 'sudo dpkg -i wazir_<ver>_all.deb', uninstall: 'sudo apt remove wazir'
+      },
+      fedora: {
+        cmd: `curl -LO https://wazir-portal.pages.dev/releases/wazir-0.3.2.tar.gz\ntar -xzf wazir-0.3.2.tar.gz\nrpmbuild -tb wazir-0.3.2.tar.gz`,
+        arch: 'x86_64, arm64', dest: '/usr/bin/wa', verify: 'wa about', upgrade: 'sudo dnf upgrade wazir', uninstall: 'sudo dnf remove wazir'
+      },
+      linux: {
+        cmd: `git clone https://github.com/whassan007/wazir.git\ncd wazir && npm install && npm run build\nnode bin/wa.js shell`,
+        arch: 'x86_64, arm64', dest: './bin/wa.js', verify: 'node bin/wa.js doctor', upgrade: 'git pull && npm run build', uninstall: 'rm -rf wazir ~/.wazir'
+      },
+      termux: {
+        cmd: `pkg update -y && pkg install -y nodejs-lts git\ngit clone https://github.com/whassan007/wazir.git\ncd wazir && bash scripts/install-termux.sh`,
+        arch: 'aarch64 (ARM64)', dest: '$PREFIX/bin/wa', verify: 'wa about && wa shell --no-ai', upgrade: 'git pull && bash scripts/install-termux.sh', uninstall: 'rm -rf ~/wazir-cli $PREFIX/bin/wa'
+      },
+    };
+    let currentTermCmd = TERM_PLATS.macos.cmd;
+    window.selectTermPlatform = (plat, btn) => {
+      document.querySelectorAll('#terminal-install .tab-btn').forEach(b => b.classList.remove('active'));
+      const target = btn || document.querySelector(`#terminal-install [data-plat="${plat}"]`);
+      if (target) target.classList.add('active');
+      const d = TERM_PLATS[plat];
+      currentTermCmd = d.cmd;
+      document.getElementById('term-cmd').textContent = d.cmd;
+      document.getElementById('term-meta').innerHTML = `
+        <div><strong>Version:</strong> v0.3.2</div>
+        <div><strong>Arch:</strong> ${d.arch}</div>
+        <div><strong>Destination:</strong> <code>${d.dest}</code></div>
+        <div><strong>Verify:</strong> <code>${d.verify}</code></div>
+        <div><strong>Upgrade:</strong> <code>${d.upgrade}</code></div>
+        <div><strong>Uninstall:</strong> <code>${d.uninstall}</code></div>
+      `;
+    };
+    selectTermPlatform('macos');
+    document.getElementById('copy-cmd-btn').onclick = async () => {
+      try { await navigator.clipboard.writeText(currentTermCmd); } catch {}
+      const btn = document.getElementById('copy-cmd-btn');
+      btn.textContent = 'Copied';
+      setTimeout(() => btn.textContent = 'Copy command', 1500);
+    };
+
+    // Work across machines 7-step diagram
+    const FLOW = [
+      { n:1, title:'1. User enters task on Mac', desc:'User types a request in Wazir Shell on macOS (`Sample Apple Silicon Workstation`).' },
+      { n:2, title:'2. Wazir plans work', desc:'Wazir Core parses intent, checks PolicyEngine rules, and builds a step plan.' },
+      { n:3, title:'3. Local model evaluates', desc:'Model Router selects local Qwen (`qwen3.5-9b-local` or `qwen3-coder:30b`) over external APIs.' },
+      { n:4, title:'4. Worker assigned', desc:'Scheduler dispatches a lease-fenced job to an authorized Linux GPU worker.' },
+      { n:5, title:'5. Worker executes', desc:'Worker runs sandboxed tools and streams progress events back over SSE.' },
+      { n:6, title:'6. Wazir verifies result', desc:'VerificationEngine checks real test/build evidence—never model self-reporting.' },
+      { n:7, title:'7. Mission Control records', desc:'Mission Control displays the 10-state execution graph, timestamps, and verification receipt.' },
+    ];
+    window.selectFlow = (n) => {
+      document.getElementById('flow-steps').innerHTML = FLOW.map(f => `<button class="tab-btn ${f.n===n?'active':''}" onclick="selectFlow(${f.n})">${f.title}</button>`).join('');
+      const cur = FLOW.find(f => f.n === n) || FLOW[0];
+      document.getElementById('flow-detail').innerHTML = `<strong>${cur.title}</strong><p class="muted" style="margin:6px 0 0;">${cur.desc}</p>`;
+    };
+    selectFlow(1);
+
+    // FAQ
+    const FAQS = [
+      ['What is Wazir?', 'Wazir AI OS is a cross-platform, AI-native execution environment unifying a real OS shell, local AI routing, distributed workers, and evidence-gated verification.'],
+      ['What is the difference between Wazir Shell and Mission Control?', 'Wazir Shell is your native PTY terminal for commands and AI requests. Mission Control is the separate graphical operations console for monitoring machines, jobs, approvals, and execution graphs.'],
+      ['Can I use ordinary Linux and macOS commands?', 'Yes. Known shell commands, builtins, pipes, and `!`-prefixed lines run directly in your persistent native PTY.'],
+      ['Does Wazir work without an internet connection?', 'Yes. Ordinary shell commands and local inference (Ollama, MLX, LM Studio) work completely offline.'],
+      ['Which local AI models are supported?', 'Qwen (Qwen3-Coder, Qwen3.5, Qwen3.6), Gemma, and any OpenAI-compatible or Ollama local model.'],
+      ['Can I use Qwen, LM Studio, or Ollama?', 'Yes. Wazir discovers and routes to Ollama, LM Studio, and MLX servers automatically.'],
+      ['Can Wazir execute tasks on another computer?', 'Yes. Registered Wazir Workers on Linux, macOS, or Windows accept authenticated, lease-fenced tasks over SSE.'],
+      ['Which Linux distributions are supported?', 'Ubuntu / Debian (.deb), Fedora / RHEL (RPM spec), and source builds on Linux x86_64 and ARM64.'],
+      ['Does Wazir work on GrapheneOS?', 'Yes. The Android companion (`ai.wazir.mobile`) and Termux ARM64 CLI run in unprivileged user space without root.'],
+      ['How are permissions handled?', 'PolicyEngine enforces workspace containment and approval queues. Destructive or remote actions require explicit authorization.'],
+      ['What information does Wazir send back to its developers?', 'Zero telemetry is sent before affirmative acceptance. When enabled, only sanitized error codes, OS/arch, and component IDs are sent—never shell histories, source code, prompts, or tokens.'],
+      ['Is Wazir open source or source-available?', 'Existing Core, CLI, API, Desktop, and Mobile code is licensed under AGPL-3.0-only. Newly authored standalone modules are proposed under a source-available noncommercial license with commercial authorization.'],
+      ['Can I use Wazir commercially?', 'Commercial use of Wazir-branded noncommercial modules requires prior written commercial authorization. See the Licensing section to submit an inquiry.'],
+      ['How do I upgrade or uninstall it?', 'Upgrade by installing the new verified package or pulling the git tag; uninstall via your package manager (`apt remove wazir`) or removing `~/.wazir` and the app bundle.'],
+      ['Where can I report bugs?', 'Report issues on GitHub at https://github.com/whassan007/wazir/issues.'],
+    ];
+    document.getElementById('faq-list').innerHTML = FAQS.map(([q, a]) => `<details class="faq-item"><summary>${q}</summary><p>${a}</p></details>`).join('');
+
+    loadManifest();
+  </script>
+</body>
+</html>

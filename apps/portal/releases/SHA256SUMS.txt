@@ -1,6 +1,6 @@
-6df76117345c32410992fb3ed8dd2a49bfdad487d21c18b8eb2d111c1068df2e  Wazir-Shell-0.3.2-macos-arm64.tar.gz
-a5c7450c5c469b8c197d3d14a880ecc5e8770632bb876ea5191d102a330841bf  Wazir-Mission-Control-0.3.2-macos-arm64.tar.gz
-ba46b2b3c12fa685747f5cea3a22923d249b43ac60bbec813f434d0e81d15ec7  wazir-cli-0.3.2-any.tar.gz
+44a5de2d28763dad72e02f0cce21e76b91a7a43caabb367e9d99df4db322914a  Wazir-Shell-0.3.2-macos-arm64.tar.gz
+93bd96961784a3d68fe4779cfc5615647efb20c1f099f94a3fa1e6ae441094ba  Wazir-Mission-Control-0.3.2-macos-arm64.tar.gz
+631a69ecce1b03db5da8a3ad7393cdf49c6435bf6833cef03afa13794169c544  wazir-cli-0.3.2-any.tar.gz
 cf6e7f8b277318c8cd1c584fb3d3a4a4aefd7adf70297b642570256ee2ac5689  wazir_0.3.2_all.deb
 46f6bea6dfc506bac67d59378bfe8f1d8693a15814bb659e204e96ded276253b  rpmbuild/SOURCES/wazir-0.3.2.tar.gz
 aab7586428e7951a0b2c5bad1f3363c26888d7fa889c65aabb7a74d3a69ec9a2  wazir-mobile-0.3.2-android-debug.apk
