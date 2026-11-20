@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wazir Shell</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #111827;
+      --border: #1e293b;
+      --accent: #38bdf8;
+      --ok: #22c55e;
+      --warn: #eab308;
+      --err: #ef4444;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; height: 100vh; display: flex; flex-direction: column;
+      background: var(--bg); color: var(--text); font-family: var(--mono);
+    }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+      gap: 10px;
+    }
+    .tabs { display: flex; gap: 6px; align-items: center; overflow-x: auto; }
+    .tab {
+      padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+      background: #0f172a; color: var(--muted); cursor: pointer; font-size: 12px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .tab.active { border-color: var(--accent); color: var(--text); background: #162235; }
+    .actions { display: flex; gap: 8px; align-items: center; }
+    button {
+      background: #1e293b; color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: #0284c7; border-color: #38bdf8; font-weight: 600; }
+    #terminal-output {
+      flex: 1; padding: 14px; overflow-y: auto; white-space: pre-wrap;
+      word-break: break-word; font-size: 13px; line-height: 1.45;
+      background: #070a10;
+    }
+    .composer {
+      display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+      background: var(--panel); border-top: 1px solid var(--border);
+    }
+    select, input {
+      background: #0f172a; color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 10px; font-family: var(--mono); font-size: 13px;
+    }
+    input#cmd-input { flex: 1; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #1e293b; color: var(--accent); }
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+      display: flex; align-items: center; justify-content: center; z-index: 999;
+    }
+    .modal {
+      width: min(620px, 92vw); background: var(--panel); border: 1px solid var(--border);
+      border-radius: 12px; padding: 22px; box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+    }
+    .modal h2 { margin-top: 0; font-size: 18px; color: var(--accent); }
+    .modal p, .modal li { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="tabs" id="tabs"></div>
+    <div class="actions">
+      <span class="badge" id="diag-badge">Diagnostics: Pending</span>
+      <button id="new-tab-btn">+ Tab</button>
+      <button id="mc-btn" class="primary">Mission Control</button>
+      <button id="about-btn">About</button>
+    </div>
+  </header>
+
+  <main id="terminal-output" aria-live="polite"></main>
+
+  <form class="composer" id="cmd-form">
+    <select id="mode-select" aria-label="Execution mode">
+      <option value="auto">Auto</option>
+      <option value="shell">! Shell</option>
+      <option value="ai">? AI</option>
+    </select>
+    <input id="cmd-input" type="text" placeholder="Type a shell command (ls -la, git status) or natural-language task..." autocomplete="off" autofocus />
+    <button type="submit" class="primary">Run</button>
+  </form>
+
+  <div class="modal-backdrop" id="consent-modal" style="display:none;">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="consent-title">
+      <h2 id="consent-title">Wazir Shell — Terms &amp; Diagnostic Disclosure (v2026-11-20.1)</h2>
+      <p>Before enabling diagnostic telemetry, please review:</p>
+      <ul>
+        <li><strong>Licensing:</strong> Existing Wazir Core/CLI/Desktop components are licensed under <strong>AGPL-3.0-only</strong>. Commercial authorization is required for commercial use of Wazir-branded noncommercial modules.</li>
+        <li><strong>Minimum Diagnostics:</strong> If accepted, only sanitized crash/error metadata (version, OS/arch, error code, component, random installation ID) is collected.</li>
+        <li><strong>Never Collected:</strong> Raw shell histories, prompts, source files, env vars, API keys, tokens, or private paths.</li>
+        <li><strong>Declining:</strong> Declining keeps telemetry completely disabled (zero events sent) and <strong>never blocks your native OS shell</strong>.</li>
+      </ul>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#cbd5e1;margin-top:8px;">
+        <input type="checkbox" id="rich-optin" /> Optional: Also opt in to extended performance traces (previewed before upload)
+      </label>
+      <div class="modal-actions">
+        <button id="decline-btn" type="button">Decline Diagnostics (Shell Only)</button>
+        <button id="accept-btn" type="button" class="primary">Accept &amp; Enable</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="about-modal" style="display:none;">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h2>About Wazir Shell</h2>
+      <div id="about-body" style="font-size:12.5px;color:#cbd5e1;line-height:1.6;"></div>
+      <div class="modal-actions">
+        <button id="about-close" type="button" class="primary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const invoke = window.__TAURI__?.core?.invoke;
+    const listen = window.__TAURI__?.event?.listen;
+
+    const tabs = [];
+    let activeId = null;
+
+    const outputEl = document.getElementById('terminal-output');
+    const tabsEl = document.getElementById('tabs');
+    const cmdForm = document.getElementById('cmd-form');
+    const cmdInput = document.getElementById('cmd-input');
+    const modeSelect = document.getElementById('mode-select');
+    const diagBadge = document.getElementById('diag-badge');
+
+    function stripAnsi(s) {
+      return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    }
+
+    function renderTabs() {
+      tabsEl.innerHTML = '';
+      tabs.forEach((t, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'tab' + (t.id === activeId ? ' active' : '');
+        btn.textContent = `Terminal ${idx + 1}`;
+        btn.onclick = () => { activeId = t.id; renderTabs(); renderOutput(); };
+        tabsEl.appendChild(btn);
+      });
+    }
+
+    function renderOutput() {
+      const active = tabs.find(t => t.id === activeId);
+      outputEl.textContent = active ? active.buffer : '';
+      outputEl.scrollTop = outputEl.scrollHeight;
+    }
+
+    async function createTab() {
+      if (!invoke) {
+        const id = 'web-' + (tabs.length + 1);
+        tabs.push({ id, buffer: '[Wazir Shell preview mode — launch via Tauri for native PTY]\n' });
+        activeId = id;
+        renderTabs(); renderOutput();
+        return;
+      }
+      const id = await invoke('pty_spawn', { cols: 120, rows: 32, cwd: null });
+      tabs.push({ id, buffer: '' });
+      activeId = id;
+      renderTabs(); renderOutput();
+    }
+
+    function isLikelyShell(line) {
+      const t = line.trim();
+      if (!t) return true;
+      if (t.startsWith('!')) return true;
+      if (t.startsWith('?')) return false;
+      if (/[|><;]|&&|\|\|/.test(t) || /^(\.\/|\.\.\/|\/|~\/)/.test(t)) return true;
+      const first = t.split(/\s+/)[0];
+      return ['cd','ls','pwd','git','grep','rg','cat','echo','export','ssh','docker','npm','node','python3','cargo','which','env'].includes(first);
+    }
+
+    cmdForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const raw = cmdInput.value.trim();
+      if (!raw || !activeId) return;
+      cmdInput.value = '';
+      const active = tabs.find(t => t.id === activeId);
+      const mode = modeSelect.value;
+      const runAsShell = mode === 'shell' || (mode === 'auto' && isLikelyShell(raw));
+      const clean = raw.replace(/^[!?]\s*/, '');
+
+      if (runAsShell) {
+        if (invoke) {
+          await invoke('pty_write', { sessionId: activeId, data: clean + '\n' });
+        } else {
+          active.buffer += `$ ${clean}\n[PTY unavailable in browser preview]\n`;
+          renderOutput();
+        }
+      } else {
+        active.buffer += `\n[wazir-ai] Dispatching governed task: ${clean}\n`;
+        renderOutput();
+        if (invoke) {
+          try {
+            const res = await invoke('run_wazir_ai_task', { prompt: clean, cwd: null });
+            active.buffer += res + '\n';
+          } catch (err) {
+            active.buffer += `[wazir-ai error] ${err}\n`;
+          }
+          renderOutput();
+        }
+      }
+    });
+
+    document.getElementById('new-tab-btn').onclick = createTab;
+    document.getElementById('mc-btn').onclick = () => invoke && invoke('open_mission_control');
+    document.getElementById('about-btn').onclick = async () => {
+      const modal = document.getElementById('about-modal');
+      const body = document.getElementById('about-body');
+      if (invoke) {
+        const info = await invoke('get_about_info');
+        body.innerHTML = `<p><strong>${info.name}</strong> v${info.version}</p><p>Author: ${info.author}</p><p>Repo: ${info.repository}</p><p>Website: ${info.website}</p><p>License: ${info.license}</p>`;
+      } else {
+        body.innerHTML = '<p><strong>Wazir Shell</strong> v0.3.2 — Wael Hassan (whassan007)</p>';
+      }
+      modal.style.display = 'flex';
+    };
+    document.getElementById('about-close').onclick = () => {
+      document.getElementById('about-modal').style.display = 'none';
+    };
+
+    function initConsent() {
+      const saved = localStorage.getItem('wazir_shell_consent_v1');
+      if (!saved) {
+        document.getElementById('consent-modal').style.display = 'flex';
+      } else {
+        const parsed = JSON.parse(saved);
+        diagBadge.textContent = parsed.accepted ? 'Diagnostics: Enabled' : 'Diagnostics: Disabled';
+      }
+      document.getElementById('accept-btn').onclick = () => {
+        const rich = document.getElementById('rich-optin').checked;
+        localStorage.setItem('wazir_shell_consent_v1', JSON.stringify({ accepted: true, rich, at: new Date().toISOString() }));
+        diagBadge.textContent = 'Diagnostics: Enabled';
+        document.getElementById('consent-modal').style.display = 'none';
+      };
+      document.getElementById('decline-btn').onclick = () => {
+        localStorage.setItem('wazir_shell_consent_v1', JSON.stringify({ accepted: false, rich: false, at: new Date().toISOString() }));
+        diagBadge.textContent = 'Diagnostics: Disabled';
+        document.getElementById('consent-modal').style.display = 'none';
+      };
+    }
+
+    if (listen) {
+      listen('pty-output', (ev) => {
+        const { session_id, data } = ev.payload;
+        const tab = tabs.find(t => t.id === session_id);
+        if (tab) {
+          tab.buffer += stripAnsi(data);
+          if (tab.buffer.length > 200000) tab.buffer = tab.buffer.slice(-150000);
+          if (session_id === activeId) renderOutput();
+        }
+      });
+      listen('wazir-menu', (ev) => {
+        if (ev.payload === 'new_tab') createTab();
+        if (ev.payload === 'about') document.getElementById('about-btn').click();
+      });
+    }
+
+    initConsent();
+    createTab();
+  </script>
+</body>
+</html>

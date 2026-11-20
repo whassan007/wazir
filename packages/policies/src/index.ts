@@ -62,3 +62,9 @@ export function specWriteFenceBlocker(
 ): string | null {
   return PolicyEngine.specWriteFenceBlocker(taskId, role, PolicyEngine.specFenceTouchedPaths(changes, specDirs));
 }
+
+export {
+  SessionPolicyTracker,
+  type SessionPolicyConfig,
+  type SessionPolicyState,
+} from './sessionPolicyHooks.js';

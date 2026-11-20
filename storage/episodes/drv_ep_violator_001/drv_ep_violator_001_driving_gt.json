@@ -1,0 +1,139 @@
+{
+  "episode_id": "drv_ep_violator_001",
+  "scenario_id": "DRIVE-INTERSECTION-001",
+  "policy_id": "aggressive_red_light_violator",
+  "seed": 42,
+  "outcome": "collision",
+  "metrics": {
+    "evaluator_version": "2.0.0",
+    "evaluation_mode": "mode_a_paused_step",
+    "success": false,
+    "goal_reached": false,
+    "collision_detected": true,
+    "safety_margin_met": "FAIL",
+    "termination_reason": "collision",
+    "route_completion_ratio": 0.3258,
+    "time_to_completion_s": null,
+    "timed_out": false,
+    "final_distance_to_goal_m": 33.035,
+    "final_standstill_gap_m": null,
+    "red_light_Running_detected": true,
+    "stop_line_violation": true,
+    "stopped_before_line_on_red": false,
+    "min_stop_line_margin_m": -2.965,
+    "collision_count": 1,
+    "collision_steps": 1,
+    "collision_events": [
+      {
+        "event_idx": 1,
+        "first_step_idx": 19,
+        "last_step_idx": 19,
+        "first_timestamp_s": 1.9,
+        "last_timestamp_s": 1.9,
+        "ego_part": "tractor",
+        "actor_id": "veh_cross_eastbound_01",
+        "min_clearance_m": 0.0,
+        "conflict_geometry": "intersection_conflict"
+      }
+    ],
+    "minimum_clearance_m": 0.0,
+    "near_contact_detected": false,
+    "near_contact_steps": 0,
+    "near_miss_count": 5,
+    "min_ttc_s": 0.0,
+    "lane_invasion_steps": 0,
+    "off_road_steps": 8,
+    "max_lateral_lane_offset_m": 1.2306,
+    "peak_longitudinal_jerk_mps3": 39.8,
+    "rms_longitudinal_jerk_mps3": 9.262,
+    "peak_lateral_accel_mps2": 2.925,
+    "harsh_braking_events": 0,
+    "mean_cross_track_error_m": 0.3735,
+    "max_cross_track_error_m": 0.6952,
+    "mean_speed_tracking_error_mps": 1.201,
+    "mean_inference_latency_ms": 0.037,
+    "p95_inference_latency_ms": 0.045,
+    "missed_deadlines_count": 0,
+    "episode_runtime_s": 0.007
+  },
+  "replay_index": {
+    "episode_id": "drv_ep_violator_001",
+    "total_steps": 20,
+    "duration_s": 1.9,
+    "dt_s": 0.1,
+    "step_timestamps_s": [
+      0.0,
+      0.1,
+      0.2,
+      0.3,
+      0.4,
+      0.5,
+      0.6,
+      0.7,
+      0.8,
+      0.9,
+      1.0,
+      1.1,
+      1.2,
+      1.3,
+      1.4,
+      1.5,
+      1.6,
+      1.7,
+      1.8,
+      1.9
+    ],
+    "signal_transition_steps": {},
+    "annotation_step_markers": [
+      {
+        "label_id": "lbl_864c88fc",
+        "category": "stop_line_violation",
+        "severity": "critical",
+        "step_start": 17,
+        "step_end": 19,
+        "source": "level_b_deterministic_detector"
+      },
+      {
+        "label_id": "lbl_1b2e7de3",
+        "category": "red_light_violation",
+        "severity": "critical",
+        "step_start": 17,
+        "step_end": 19,
+        "source": "level_b_deterministic_detector"
+      },
+      {
+        "label_id": "lbl_7008133a",
+        "category": "vehicle_collision",
+        "severity": "critical",
+        "step_start": 19,
+        "step_end": 19,
+        "source": "level_b_deterministic_detector"
+      },
+      {
+        "label_id": "lbl_8ce09dde",
+        "category": "near_miss_ttc",
+        "severity": "warning",
+        "step_start": 15,
+        "step_end": 18,
+        "source": "level_b_deterministic_detector"
+      },
+      {
+        "label_id": "lbl_59655594",
+        "category": "harsh_braking_jerk",
+        "severity": "info",
+        "step_start": 1,
+        "step_end": 1,
+        "source": "level_b_deterministic_detector"
+      },
+      {
+        "label_id": "lbl_bc8c83f0",
+        "category": "vlm_root_cause_traffic_violation",
+        "severity": "warning",
+        "step_start": 0,
+        "step_end": 19,
+        "source": "level_c_vlm_proposal"
+      }
+    ],
+    "deterministic_seed": 42
+  }
+}

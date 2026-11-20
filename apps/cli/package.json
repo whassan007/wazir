@@ -18,6 +18,7 @@
     "@wazir/core": "*",
     "@wazir/database": "*",
     "@wazir/evaluation": "*",
+    "@wazir/observability": "*",
     "@wazir/registry": "*",
     "@wazir/runtimes-anthropic": "*",
     "@wazir/runtimes-google": "*",

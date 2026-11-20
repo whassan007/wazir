@@ -71,3 +71,6 @@ export class Metrics {
 export function createMetrics(): Metrics {
   return new Metrics();
 }
+
+export * from './consent.js';
+export * from './diagnostics.js';

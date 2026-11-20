@@ -10,6 +10,10 @@ export * from './stopConditions.js';
 export * from './acp/acpClient.js';
 export * from './acp/acpAgentAdapter.js';
 export * from './acp/acpEventMapper.js';
+export * from './acp/acpServer.js';
+export * from './qwenCore/skillRegistry.js';
+export * from './qwenCore/reasoningSandwich.js';
+export * from './qwenCore/toolAliasing.js';
 export {
   ALLOWED_ENV_KEYS,
   EXTERNAL_HARNESS_PRESETS,

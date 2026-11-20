@@ -32,6 +32,8 @@ import { createControlledExecution } from './toolExecution.js';
 import { MobileServices, registerMobileRoutes } from './mobile.js';
 import { registerCheckpointTransportRoutes } from './checkpointTransportRoutes.js';
 import { registerProtocolRoutes } from './protocolRoutes.js';
+import { registerDiagnosticsIngestionRoute, registerDiagnosticsAdminRoutes } from './diagnosticsRoutes.js';
+import { registerPublicRoutes } from './publicRoutes.js';
 import { wazirVersion } from './version.js';
 import {
   createGoalStudioServices,
@@ -385,6 +387,7 @@ export interface ApiState {
   mobile: MobileServices;
   goalStudio?: Partial<WiredGoalStudioServices>;
   checkpointTransport: CheckpointTransportService;
+  recovery?: { sweep: () => Promise<unknown> };
 }
 
 /** Starts the production recovery sweep; caller must stop it on shutdown. */
@@ -399,6 +402,7 @@ export function startDispatchRecovery(state: ApiState): () => void {
       }
       const { offline } = state.computers.checkHeartbeats();
       await state.dispatcher.reconcile(new Set(offline));
+      await state.recovery?.sweep();
     } catch (error) { console.error('Dispatch recovery failed:', error instanceof Error ? error.message : String(error)); }
     finally { running = false; }
   };
@@ -1127,6 +1131,9 @@ export function createApp(state: ApiState) {
   registerGoalStudioRoutes(app, { auth: state.auth, store: state.store, services: state.goalStudio ?? {} });
   // Remote content-addressed checkpoint transport endpoints
   registerCheckpointTransportRoutes(app, state.checkpointTransport);
+  // Public demo/licensing & client diagnostic ingestion (rate-limited, redacted)
+  registerPublicRoutes(app);
+  registerDiagnosticsIngestionRoute(app);
 
   // Read-only control routes allow viewer or operator tokens. Mutating endpoints
   // explicitly enforce operator scope. A paired mobile device is deliberately NOT
@@ -1136,6 +1143,7 @@ export function createApp(state: ApiState) {
   // `requireViewerOperatorOrDevice` in mobile.ts.
   app.use('/api/v1', auth.requireViewerOrOperator);
   app.use('/executions', auth.requireOperator);
+  registerDiagnosticsAdminRoutes(app);
 
   app.get('/api/v1/overview', async (_req, res) => {
     const allExecutions = await collectAllExecutions(state);

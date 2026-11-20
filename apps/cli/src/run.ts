@@ -962,7 +962,9 @@ export async function executeTask(
       // same call has already landed.
       const checkRevision = engine.executions.getWorkspaceRevision(executionId);
       if (CHECK_TOOLS.has(name)) {
-        const notApplicable = !result.ok && (!existsSync(path.join(engine.projectRoot, 'package.json')) || /missing script|paths\[0\]|package\.json/i.test(result.error ?? ''));
+        const notApplicable =
+          result.metadata?.applicable === false ||
+          (!result.ok && (!existsSync(path.join(engine.projectRoot, 'package.json')) || /missing script|paths\[0\]|package\.json/i.test(result.error ?? '')));
         if (!notApplicable) {
           const script = typeof input.script === 'string' && input.script.trim() ? input.script.trim() : name;
           await engine.executions.recordCheck(executionId, {

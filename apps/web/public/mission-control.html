@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wazir Mission Control — AI OS Operations Console</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <style>
+    :root {
+      --bg: #0b0f17; --panel: #111827; --panel2: #162032; --border: #24324a;
+      --text: #f8fafc; --muted: #94a3b8; --accent: #38bdf8;
+      --ok: #22c55e; --warn: #eab308; --err: #ef4444; --purple: #a855f7;
+      --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; }
+    header {
+      position: sticky; top: 0; z-index: 50; background: rgba(11,15,23,0.95);
+      backdrop-filter: blur(8px); border-bottom: 1px solid var(--border);
+      padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand h1 { margin: 0; font-size: 16px; letter-spacing: 0.02em; }
+    .brand span { color: var(--accent); font-family: var(--mono); font-size: 11px; }
+    nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .btn, a.btn {
+      background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; text-decoration: none;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .btn.primary { background: #0284c7; border-color: #38bdf8; font-weight: 600; }
+    main { max-width: 1440px; margin: 0 auto; padding: 18px 20px; display: grid; gap: 18px; }
+    .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+    .kpi .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .kpi .val { font-size: 24px; font-weight: 700; margin-top: 4px; font-family: var(--mono); }
+    .grid-2 { display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; }
+    @media (max-width: 1024px) { .grid-2 { grid-template-columns: 1fr; } }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .card h2 { margin: 0 0 12px; font-size: 14px; display: flex; align-items: center; justify-content: space-between; }
+    .fleet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+    .machine-card {
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px; cursor: pointer; transition: border-color 0.15s;
+    }
+    .machine-card:hover { border-color: var(--accent); }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-family: var(--mono); }
+    .pill.ok { background: rgba(34,197,94,0.15); color: var(--ok); }
+    .pill.warn { background: rgba(234,179,8,0.15); color: var(--warn); }
+    .pill.err { background: rgba(239,68,68,0.15); color: var(--err); }
+    .pill.info { background: rgba(56,189,248,0.15); color: var(--accent); }
+    .pill.muted { background: rgba(148,163,184,0.15); color: var(--muted); }
+    .graph-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+    input, select {
+      background: #0b0f17; color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 10px; font-size: 12px;
+    }
+    .graph-stage-row {
+      display: flex; align-items: center; gap: 8px; overflow-x: auto; padding: 12px 4px;
+    }
+    .stage-node {
+      min-width: 150px; background: var(--panel2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px; flex-shrink: 0;
+    }
+    .stage-node.active { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(56,189,248,0.4); }
+    .arrow { color: var(--muted); font-family: var(--mono); font-size: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+    .drawer {
+      position: fixed; right: 0; top: 0; bottom: 0; width: min(460px, 95vw);
+      background: var(--panel); border-left: 1px solid var(--border); padding: 20px;
+      z-index: 100; overflow-y: auto; display: none; box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+    }
+    .mono { font-family: var(--mono); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="/logo-emblem.svg" alt="Wazir" width="26" height="26" />
+      <div>
+        <h1>Wazir Mission Control</h1>
+        <span>AI OS Operations Console · Real-Time Fleet &amp; Execution Graph</span>
+      </div>
+    </div>
+    <nav>
+      <a class="btn" href="/">Classic Dashboard</a>
+      <a class="btn" href="/goal-studio">Goal Studio</a>
+      <button class="btn" id="replay-btn">▶ Replay Execution</button>
+      <button class="btn" id="refresh-btn">↻ Refresh</button>
+      <button class="btn primary" id="about-btn">About &amp; License</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="kpi-row">
+      <div class="kpi"><div class="label">Registered Machines</div><div class="val" id="kpi-machines">—</div></div>
+      <div class="kpi"><div class="label">Online Workers</div><div class="val" id="kpi-online">—</div></div>
+      <div class="kpi"><div class="label">Available Models</div><div class="val" id="kpi-models">—</div></div>
+      <div class="kpi"><div class="label">Active / Total Jobs</div><div class="val" id="kpi-jobs">—</div></div>
+      <div class="kpi"><div class="label">Pending Approvals</div><div class="val" id="kpi-approvals">—</div></div>
+      <div class="kpi"><div class="label">Diagnostic Issues</div><div class="val" id="kpi-issues">—</div></div>
+    </section>
+
+    <section class="card">
+      <h2>
+        <span>Visual Execution Graph (10-State Canonical Pipeline)</span>
+        <span class="mono" style="font-size:11px;color:var(--muted)" id="graph-meta">Select a job or inspect live pipeline</span>
+      </h2>
+      <div class="graph-toolbar">
+        <input id="graph-search" placeholder="Search job, model, or machine..." />
+        <select id="state-filter">
+          <option value="all">All 10 Execution States</option>
+          <option>Planned</option><option>Queued</option><option>Running</option>
+          <option>Waiting for approval</option><option>Verifying</option>
+          <option>Completed and verified</option><option>Completed but unverified</option>
+          <option>Failed</option><option>Cancelled</option><option>Disconnected</option>
+        </select>
+        <button class="btn" id="zoom-in">+</button>
+        <button class="btn" id="zoom-out">-</button>
+      </div>
+      <div class="graph-stage-row" id="execution-graph"></div>
+    </section>
+
+    <section class="card">
+      <h2><span>Fleet Machines (Click any machine for hardware &amp; model drill-down)</span></h2>
+      <div class="fleet-grid" id="fleet-grid"></div>
+    </section>
+
+    <section class="grid-2">
+      <div class="card">
+        <h2><span>Jobs Queue, Active &amp; History</span></h2>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>Job / Request</th><th>State</th><th>Machine / Model</th><th>Actions</th></tr></thead>
+            <tbody id="jobs-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2><span>Pending Approvals &amp; Diagnostic Issues</span></h2>
+        <div id="approvals-box" style="margin-bottom:14px;"></div>
+        <div id="issues-box"></div>
+      </div>
+    </section>
+  </main>
+
+  <aside class="drawer" id="detail-drawer" aria-label="Details"></aside>
+
+  <script>
+    const STATES = [
+      'Planned','Queued','Running','Waiting for approval','Verifying',
+      'Completed and verified','Completed but unverified','Failed','Cancelled','Disconnected'
+    ];
+    let graphZoom = 1;
+    let replayTimer = null;
+
+    function pillClass(state) {
+      if (state === 'Completed and verified' || state === 'online') return 'ok';
+      if (state === 'Waiting for approval' || state === 'Completed but unverified' || state === 'Verifying') return 'warn';
+      if (state === 'Failed' || state === 'Disconnected' || state === 'offline') return 'err';
+      if (state === 'Running' || state === 'Queued') return 'info';
+      return 'muted';
+    }
+
+    function mapStatusToCanonical(exec) {
+      const s = String(exec.status || exec.state || '').toLowerCase();
+      if (s === 'completed' || s === 'succeeded') return exec.verified === false ? 'Completed but unverified' : 'Completed and verified';
+      if (s === 'running' || s === 'in_progress') return 'Running';
+      if (s === 'queued' || s === 'pending') return 'Queued';
+      if (s === 'planned') return 'Planned';
+      if (s === 'waiting_approval' || s === 'waiting for approval') return 'Waiting for approval';
+      if (s === 'verifying') return 'Verifying';
+      if (s === 'failed' || s === 'error') return 'Failed';
+      if (s === 'cancelled') return 'Cancelled';
+      if (s === 'disconnected') return 'Disconnected';
+      return 'Planned';
+    }
+
+    async function fetchJson(url) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch { return null; }
+    }
+
+    function openDrawer(title, html) {
+      const d = document.getElementById('detail-drawer');
+      d.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;"><h3 style="margin:0">${title}</h3><button class="btn" onclick="document.getElementById('detail-drawer').style.display='none'">✕</button></div>${html}`;
+      d.style.display = 'block';
+    }
+
+    function renderGraph(stages, activeIdx = -1) {
+      const container = document.getElementById('execution-graph');
+      container.style.transform = `scale(${graphZoom})`;
+      container.style.transformOrigin = 'left center';
+      container.innerHTML = stages.map((st, idx) => `
+        <div class="stage-node ${idx === activeIdx ? 'active' : ''}">
+          <div style="font-weight:700;font-size:12px;">${st.label}</div>
+          <div style="margin:6px 0;"><span class="pill ${pillClass(st.state)}">${st.state}</span></div>
+          <div class="mono" style="font-size:11px;color:var(--muted);">host: ${st.machine || 'unavailable'}</div>
+          <div class="mono" style="font-size:11px;color:var(--accent);">model: ${st.model || 'unavailable'}</div>
+        </div>
+        ${idx < stages.length - 1 ? '<div class="arrow">→</div>' : ''}
+      `).join('');
+    }
+
+    async function refreshAll() {
+      const [overview, computersData, execData, approvalsData, issuesData] = await Promise.all([
+        fetchJson('/api/v1/overview'),
+        fetchJson('/api/v1/computers'),
+        fetchJson('/api/v1/executions'),
+        fetchJson('/api/v1/approvals'),
+        fetchJson('/api/v1/diagnostics/issues'),
+      ]);
+
+      const computers = computersData?.computers || overview?.computers || [];
+      const executions = execData?.executions || overview?.executions || [];
+      const approvals = approvalsData?.approvals || [];
+      const issues = issuesData?.issues || [];
+
+      document.getElementById('kpi-machines').textContent = String(computers.length);
+      document.getElementById('kpi-online').textContent = String(computers.filter(c => c.status === 'online').length);
+      document.getElementById('kpi-models').textContent = String(overview?.models?.length ?? computers.reduce((a,c)=>a+(c.models?.length||0),0));
+      document.getElementById('kpi-jobs').textContent = `${executions.filter(e=>e.status==='running').length} / ${executions.length}`;
+      document.getElementById('kpi-approvals').textContent = String(approvals.length);
+      document.getElementById('kpi-issues').textContent = String(issues.length);
+
+      const fleetGrid = document.getElementById('fleet-grid');
+      fleetGrid.innerHTML = computers.length ? computers.map(c => {
+        const cpu = c.telemetry?.cpuPercent != null ? `${c.telemetry.cpuPercent}%` : 'unavailable';
+        const gpu = c.telemetry?.gpuPercent != null ? `${c.telemetry.gpuPercent}%` : 'unavailable';
+        const mem = c.telemetry?.memoryPercent != null ? `${c.telemetry.memoryPercent}%` : (c.hardware?.memoryGB ? `${c.hardware.memoryGB} GB` : 'unavailable');
+        return `<div class="machine-card" data-id="${c.id}">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <strong>${c.name || c.id}</strong>
+            <span class="pill ${pillClass(c.status || 'offline')}">${c.status || 'unknown'}</span>
+          </div>
+          <div class="mono" style="font-size:11px;color:var(--muted);margin-top:4px;">${c.hardware?.cpu || c.platform || 'arch unavailable'}</div>
+          <div class="mono" style="font-size:11px;margin-top:8px;">CPU: ${cpu} · GPU: ${gpu} · Mem: ${mem}</div>
+          <div class="mono" style="font-size:11px;color:var(--accent);margin-top:4px;">Models: ${(c.models || []).length} · Heartbeat: ${c.lastHeartbeatAt || 'unavailable'}</div>
+        </div>`;
+      }).join('') : '<div style="color:var(--muted)">No machines registered with local controller yet. Start `wa start:api` to inspect live fleet.</div>';
+
+      fleetGrid.querySelectorAll('.machine-card').forEach(card => {
+        card.onclick = () => {
+          const c = computers.find(x => x.id === card.dataset.id);
+          if (!c) return;
+          openDrawer(`Machine: ${c.name || c.id}`, `
+            <p><strong>Status:</strong> ${c.status || 'unknown'}</p>
+            <p><strong>Last Heartbeat:</strong> ${c.lastHeartbeatAt || 'unavailable'}</p>
+            <p><strong>Capabilities:</strong> ${(c.capabilities || c.runtimes || []).join(', ') || 'unavailable'}</p>
+            <p><strong>Models:</strong></p>
+            <ul>${(c.models || []).map(m => `<li class="mono">${m}</li>`).join('') || '<li>unavailable</li>'}</ul>
+            <pre class="mono" style="font-size:11px;background:#0b0f17;padding:10px;border-radius:6px;overflow:auto;">${JSON.stringify(c.hardware || {}, null, 2)}</pre>
+          `);
+        };
+      });
+
+      const search = document.getElementById('graph-search').value.toLowerCase();
+      const filterState = document.getElementById('state-filter').value;
+      const filtered = executions.filter(ex => {
+        const canonical = mapStatusToCanonical(ex);
+        if (filterState !== 'all' && canonical !== filterState) return false;
+        if (search && !JSON.stringify(ex).toLowerCase().includes(search)) return false;
+        return true;
+      });
+
+      const tbody = document.getElementById('jobs-tbody');
+      tbody.innerHTML = filtered.slice(0, 25).map(ex => {
+        const canonical = mapStatusToCanonical(ex);
+        return `<tr>
+          <td><div style="font-weight:600">${(ex.prompt || ex.description || ex.id || 'Job').slice(0, 64)}</div><div class="mono" style="font-size:11px;color:var(--muted)">${ex.id || ''}</div></td>
+          <td><span class="pill ${pillClass(canonical)}">${canonical}</span></td>
+          <td class="mono">${ex.computerId || 'local'} / ${ex.model || 'auto'}</td>
+          <td><button class="btn" onclick='inspectJob(${JSON.stringify(ex).replace(/'/g, "&#39;")})'>Trace</button></td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No matching executions.</td></tr>';
+
+      const sampleStages = filtered[0] ? [
+        { label: 'User Request', state: 'Completed and verified', machine: filtered[0].computerId || 'local', model: 'cli/shell' },
+        { label: 'Planner', state: 'Completed and verified', machine: 'local', model: 'planner-v1' },
+        { label: 'Model Router', state: 'Completed and verified', machine: 'local', model: filtered[0].model || 'qwen3-coder:30b' },
+        { label: 'Worker', state: mapStatusToCanonical(filtered[0]), machine: filtered[0].computerId || 'local', model: filtered[0].model || 'qwen3-coder:30b' },
+        { label: 'Tool Execution', state: mapStatusToCanonical(filtered[0]), machine: filtered[0].computerId || 'local', model: 'sandbox' },
+        { label: 'Verification', state: mapStatusToCanonical(filtered[0]), machine: 'local', model: 'evidence-gate' },
+        { label: 'Result', state: mapStatusToCanonical(filtered[0]), machine: 'local', model: 'signed-report' },
+      ] : [
+        { label: 'User Request', state: 'Planned', machine: 'local', model: 'shell' },
+        { label: 'Planner', state: 'Planned', machine: 'local', model: 'qwen' },
+        { label: 'Model Router', state: 'Planned', machine: 'local', model: 'policy-router' },
+        { label: 'Worker', state: 'Queued', machine: 'dgx_spark', model: 'qwen3-coder:30b' },
+        { label: 'Tool Execution', state: 'Planned', machine: 'dgx_spark', model: 'sandbox' },
+        { label: 'Verification', state: 'Planned', machine: 'local', model: 'verifier' },
+        { label: 'Result', state: 'Planned', machine: 'local', model: 'report' },
+      ];
+      window.__currentStages = sampleStages;
+      renderGraph(sampleStages);
+
+      document.getElementById('approvals-box').innerHTML = approvals.length
+        ? approvals.map(a => `<div style="padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;"><strong>${a.tool || 'Approval'}</strong>: ${a.reason || a.id}</div>`).join('')
+        : '<div style="color:var(--muted)">No pending approvals.</div>';
+
+      document.getElementById('issues-box').innerHTML = issues.length
+        ? issues.slice(0, 6).map(i => `<div style="padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;"><span class="pill err">${i.severity}</span> <strong>${i.component}</strong> · ${i.errorCode} (${i.count}x)</div>`).join('')
+        : '<div style="color:var(--muted)">No diagnostic issues reported.</div>';
+    }
+
+    window.inspectJob = function(ex) {
+      openDrawer(`Execution Trace: ${ex.id || 'Job'}`, `
+        <p><strong>Canonical State:</strong> ${mapStatusToCanonical(ex)}</p>
+        <p><strong>Machine:</strong> ${ex.computerId || 'local'} · <strong>Model:</strong> ${ex.model || 'auto'}</p>
+        <p><strong>Started:</strong> ${ex.createdAt || 'unavailable'}</p>
+        <pre class="mono" style="font-size:11px;background:#0b0f17;padding:10px;border-radius:6px;overflow:auto;">${JSON.stringify(ex, null, 2)}</pre>
+      `);
+    };
+
+    document.getElementById('zoom-in').onclick = () => { graphZoom = Math.min(1.4, graphZoom + 0.1); renderGraph(window.__currentStages || []); };
+    document.getElementById('zoom-out').onclick = () => { graphZoom = Math.max(0.7, graphZoom - 0.1); renderGraph(window.__currentStages || []); };
+    document.getElementById('refresh-btn').onclick = refreshAll;
+    document.getElementById('graph-search').oninput = refreshAll;
+    document.getElementById('state-filter').onchange = refreshAll;
+    document.getElementById('replay-btn').onclick = () => {
+      if (replayTimer) clearInterval(replayTimer);
+      let idx = 0;
+      const stages = window.__currentStages || [];
+      replayTimer = setInterval(() => {
+        renderGraph(stages, idx);
+        idx += 1;
+        if (idx >= stages.length) { clearInterval(replayTimer); replayTimer = null; }
+      }, 450);
+    };
+    document.getElementById('about-btn').onclick = () => {
+      openDrawer('About Wazir Mission Control', `
+        <p><strong>Wazir AI OS — Mission Control</strong> v0.3.2</p>
+        <p>Author: Wael Hassan (whassan007)</p>
+        <p>Repository: <a href="https://github.com/whassan007/wazir" style="color:var(--accent)">github.com/whassan007/wazir</a></p>
+        <p>Public Portal: <a href="https://wazir.wael.bot" style="color:var(--accent)">wazir.wael.bot</a></p>
+        <p>License: AGPL-3.0-only (existing core/CLI/API/desktop); includes selective Apache-2.0 components from QwenLM/qwen-code.</p>
+      `);
+    };
+
+    refreshAll();
+  </script>
+</body>
+</html>

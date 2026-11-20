@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Wazir Mission Control
+Comment=Distributed AI Fleet & Execution Operations Console
+Exec=wazir-desktop
+Icon=wazir-mission-control
+Terminal=false
+Categories=System;Monitor;Development;
+Keywords=fleet;orchestration;ai;wazir;
+StartupNotify=true

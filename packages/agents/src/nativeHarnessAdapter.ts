@@ -797,9 +797,10 @@ export class NativeHarnessAdapter {
 
         if (CHECK_TOOL_NAMES.has(toolName)) {
           const checkOutput = result.ok ? result.output : [result.error, result.output].filter(Boolean).join('\n');
-          // Skip recording missing script skips as check runs if CodingAgent ignores them
+          // Skip recording missing script / non-applicable skips as check runs if CodingAgent ignores them
           const isSkippedMissingScript =
-            !result.ok && checkOutput && /missing script|no such file|not found/i.test(checkOutput);
+            result.metadata?.applicable === false ||
+            (!result.ok && checkOutput && /missing script|no such file|not found/i.test(checkOutput));
           if (!isSkippedMissingScript) {
             checks.push({
               workspaceRevision: numericRevision,

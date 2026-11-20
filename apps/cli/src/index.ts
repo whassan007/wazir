@@ -14,6 +14,7 @@ import { registerGoalCommands } from './commands/goalCommands.js';
 import { closeMCPRegistries, parseWorkloadDistribution, type RoutingMode } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
 import { createHandoffCommand } from './handoff.js';
+import { registerShellAndMetaCommands } from './commands/shellCommand.js';
 import { globalStartupProfiler } from './startupProfiler.js';
 
 globalStartupProfiler.mark('cli.entry');
@@ -186,6 +187,7 @@ registerMCPCommands(program);
 registerWebCommands(program);
 registerMobileCommands(program);
 registerGoalCommands(program);
+registerShellAndMetaCommands(program, CLI_VERSION);
 
 program
   .command('banner')

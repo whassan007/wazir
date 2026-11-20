@@ -86,6 +86,67 @@ function ulimitScript(limits: ResourceLimits): string {
  * every limit is unset/zero — callers should check `applied` before
  * reporting a limit as active.
  */
+export interface ResourceLimitExceededInfo {
+  kind: 'cpu' | 'file_size' | 'memory' | 'processes';
+  signal?: string;
+  exitCode?: number;
+  limit?: number;
+  detail: string;
+}
+
+/**
+ * Classifies a subprocess termination into a structured resource-limit crash
+ * report when exit code, signal, or stderr indicates an rlimit kill.
+ */
+export function classifyResourceLimitCrash(
+  code: number,
+  signal: NodeJS.Signals | null | undefined,
+  stderr: string,
+  limits: ResourceLimits,
+  timedOut: boolean,
+): ResourceLimitExceededInfo | undefined {
+  const sig = signal ?? undefined;
+  const lower = stderr.toLowerCase();
+
+  if (sig === 'SIGXCPU' || code === 152 || lower.includes('cpu time limit exceeded') || lower.includes('cputime limit exceeded')) {
+    return {
+      kind: 'cpu',
+      signal: sig ?? 'SIGXCPU',
+      exitCode: code,
+      limit: limits.maxCpuSeconds,
+      detail: `Process exceeded CPU time limit${limits.maxCpuSeconds ? ` (${limits.maxCpuSeconds}s)` : ''}.`,
+    };
+  }
+  if (sig === 'SIGXFSZ' || code === 153 || lower.includes('file size limit exceeded')) {
+    return {
+      kind: 'file_size',
+      signal: sig ?? 'SIGXFSZ',
+      exitCode: code,
+      limit: limits.maxFileSizeMB,
+      detail: `Process exceeded max file size limit${limits.maxFileSizeMB ? ` (${limits.maxFileSizeMB}MB)` : ''}.`,
+    };
+  }
+  if (!timedOut && (sig === 'SIGKILL' || code === 137) && (limits.maxMemoryMB || lower.includes('out of memory') || lower.includes('cannot allocate memory'))) {
+    return {
+      kind: 'memory',
+      signal: sig ?? 'SIGKILL',
+      exitCode: code,
+      limit: limits.maxMemoryMB,
+      detail: `Process was killed for exceeding memory limit${limits.maxMemoryMB ? ` (${limits.maxMemoryMB}MB)` : ''}.`,
+    };
+  }
+  if (lower.includes('resource temporarily unavailable') && limits.maxProcesses) {
+    return {
+      kind: 'processes',
+      signal: sig,
+      exitCode: code,
+      limit: limits.maxProcesses,
+      detail: `Process exceeded max process/thread limit (${limits.maxProcesses}).`,
+    };
+  }
+  return undefined;
+}
+
 export function wrapWithResourceLimits(
   file: string,
   args: string[],

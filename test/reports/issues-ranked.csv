@@ -1,0 +1,6 @@
+issue_id,severity,component,description,status,blocker_type
+ISS-001,P0,wazir.wael.bot,Custom domain wazir.wael.bot currently returns 502 from Cloudflare; needs DNS/Pages custom domain binding after staging verification,open,External DNS/Cloudflare zone route
+ISS-002,P1,packaging-macos,Apple Developer ID code signing and notarization credentials not configured on build host (unsigned dev .app/.tar.gz produced; hdiutil DMG blocked in sandbox),open,External signing credentials
+ISS-003,P1,packaging-linux,dpkg-deb and rpmbuild not installed on macOS host (archived deb structure + RPM spec/tarball produced),open,Linux build host tool
+ISS-004,P1,mcp-server,wazir_ask MCP tool returned 'invalid character q looking for beginning of value' on stdout,open,Needs stdout isolation audit in wazirMcpServer.ts
+ISS-005,P2,fleet-hosts,mac_studio (100.76.30.71) and rtx_win (100.84.209.95) unreachable during session,open,Hardware offline

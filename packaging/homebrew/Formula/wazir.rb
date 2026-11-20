@@ -47,6 +47,8 @@ class Wazir < Formula
   end
 
   test do
-    assert_match version.to_s, shell_output("#{bin}/wa --version "0.3.2"#{bin}/wazir --version "0.3.2"Wazir", shell_output("#{bin}/wa --help")
+    assert_match version.to_s, shell_output("#{bin}/wa --version")
+    assert_match version.to_s, shell_output("#{bin}/wazir --version")
+    assert_match "Wazir", shell_output("#{bin}/wa --help")
   end
 end

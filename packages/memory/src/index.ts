@@ -5,6 +5,8 @@ export interface MemoryEntry<T> {
 
 export * from './memoryService.js';
 export * from './sqlite/sqliteMemoryStore.js';
+export * from './dreaming.js';
+export * from './codeMemory.js';
 
 /** In-memory key-value store with optional TTL. Deterministic eviction by expiry. */
 export class InMemoryStore<T = unknown> {

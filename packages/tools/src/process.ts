@@ -3,7 +3,13 @@ import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import { sandboxDegraded, sandboxStatus, wrapInSandbox, type SandboxMode, type WrappedCommand } from './sandbox.js';
-import { defaultResourceLimits, wrapWithResourceLimits, type ResourceLimits } from './resourceLimits.js';
+import {
+  classifyResourceLimitCrash,
+  defaultResourceLimits,
+  wrapWithResourceLimits,
+  type ResourceLimitExceededInfo,
+  type ResourceLimits,
+} from './resourceLimits.js';
 import { SpillingBuffer } from './outputSpill.js';
 import { randomBytes } from 'node:crypto';
 
@@ -17,6 +23,8 @@ export interface CommandResult {
   sandbox: SandboxMode;
   /** Whether an rlimit cap (memory/CPU/process count/file size) was applied. */
   resourceLimited: boolean;
+  /** Structured classification when the process was killed by an rlimit (CPU/FSIZE/memory/nproc). */
+  resourceLimitExceeded?: ResourceLimitExceededInfo;
   /** True once stdout or stderr exceeded maxBuffer and was spilled to disk instead of being held in memory or killing the process. */
   outputSpilled: boolean;
   /** Absolute paths to the full spilled output, when outputSpilled is true. */
@@ -291,21 +299,30 @@ function runProcess(
     options.signal?.addEventListener('abort', onAbort, { once: true });
     if (options.signal?.aborted) onAbort();
 
-    const finish = (code: number) => {
+    const finish = (code: number, signal?: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       options.signal?.removeEventListener('abort', onAbort);
       void Promise.all([stdoutBuffer.finish(), stderrBuffer.finish()]).then(([stdoutResult, stderrResult]) => {
         const outputSpilled = stdoutResult.spilled || stderrResult.spilled;
+        const resolvedCode = cancelled && code === 0 ? 1 : code;
+        const resourceLimitExceeded = classifyResourceLimitCrash(
+          resolvedCode,
+          signal,
+          stderrResult.preview,
+          limits,
+          timedOut,
+        );
         resolve({
-          code: cancelled && code === 0 ? 1 : code,
+          code: resolvedCode,
           stdout: stdoutResult.preview,
           stderr: stderrResult.preview,
           durationMs: Date.now() - started,
           timedOut,
           sandbox: wrapped.mode,
           resourceLimited: limited.applied,
+          ...(resourceLimitExceeded ? { resourceLimitExceeded } : {}),
           outputSpilled,
           spillPaths: outputSpilled ? { stdout: stdoutResult.filePath, stderr: stderrResult.filePath } : undefined,
         });
@@ -330,6 +347,6 @@ function runProcess(
       finish(127);
     });
 
-    child.on('close', (code) => finish(code ?? 1));
+    child.on('close', (code, signal) => finish(code ?? 1, signal));
   });
 }

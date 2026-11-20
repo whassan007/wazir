@@ -1,0 +1,26 @@
+{
+  "name": "@wazir/shell",
+  "version": "0.3.2",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "description": "Wazir Shell — native AI-native universal terminal application",
+  "wazir": {
+    "excludeFromCliBuild": true,
+    "excludeFromCliBuildReason": "tauri build requires Cargo; the CLI never depends on it."
+  },
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build --no-bundle",
+    "bundle": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.1"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-opener": "^2.5.1"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

@@ -1,0 +1,10 @@
+agent_id,task_id,machine,model,branch,files_owned,status,notes
+coordinator,audit-and-contracts,WaelMacPro.local,Gemini 4 Hydrogen,feat/wazir-ai-os-launch,docs/implementation/current-state-audit.md;docs/legal/*;NOTICE;AUTHORS;CONTRIBUTORS,completed,Baseline audit and licensing boundaries
+A2,shell-classifier-and-cli,WaelMacPro.local,Gemini 4 Hydrogen,feat/wazir-ai-os-launch,packages/core/src/services/shellClassifier.ts;apps/cli/src/commands/shellCommand.ts,completed,5/5 tests pass
+A3,wazir-shell-tauri,WaelMacPro.local,Gemini 4 Hydrogen,feat/wazir-ai-os-launch,apps/shell/*,completed,Compiled release binary and Wazir Shell.app
+A5,mission-control-ui,WaelMacPro.local,Gemini 4 Hydrogen,feat/wazir-ai-os-launch,apps/desktop/*;apps/web/public/mission-control.html,completed,Compiled release binary and Wazir Mission Control.app
+A7,diagnostics-and-public-api,WaelMacPro.local,Gemini 4 Hydrogen,feat/wazir-ai-os-launch,packages/observability/*;apps/api/src/diagnosticsRoutes.ts;apps/api/src/publicRoutes.ts,completed,4/4 observability + 2/2 API route tests pass
+A8,grapheneos-mobile,WaelMacPro.local,Gemini 4 Hydrogen,feat/wazir-ai-os-launch,apps/android/*;scripts/install-termux.sh;docs/mobile/*,completed,Gradle assembleDebug + testDebugUnitTest passed
+A9,portal-and-cloudflare,WaelMacPro.local,Gemini 4 Hydrogen,feat/wazir-ai-os-launch,apps/portal/*,completed,Deployed to Cloudflare Pages staging
+qwen-dgx,arch-doc,dgx_spark,qwen3-coder:30b,feat/wazir-ai-os-launch,/tmp/wazir-prompts/arch-out.md,completed,50+248 tokens in 9655ms
+qwen-mlx,threat-doc,WaelMacPro.local,mlx-community/Qwen3.5-9B-6bit,feat/wazir-ai-os-launch,/tmp/wazir-prompts/threat-out.md,completed,50+1797 tokens in 93333ms

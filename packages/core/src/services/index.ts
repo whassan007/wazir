@@ -390,3 +390,4 @@ export type {
   AllocatedWorkloadTarget,
 } from './workloadDistributor.js';
 export * from './harnessAssembler.js';
+export * from './shellClassifier.js';

@@ -534,7 +534,7 @@ export class JobOrchestrator {
           for (const node of job.graph.nodes) {
             if (node.state !== 'completed' && node.state !== 'failed') {
               node.state = 'failed';
-              node.error = node.error ?? reason;
+              node.error = reason;
               node.completedAt = node.completedAt ?? new Date();
             }
           }

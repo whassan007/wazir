@@ -76,7 +76,10 @@ describe('Cross-Platform Package Manager Integration', () => {
       expect(manifest.architecture['arm64'].url).toContain(`wazir-v${packageManagerVersion}-windows-arm64.zip`);
 
       // Binary shim & checkver
-      expect(manifest.bin).toBe('wa.exe');
+      expect(
+        manifest.bin === 'wa.exe' ||
+          (Array.isArray(manifest.bin) && manifest.bin.includes('wa.exe')),
+      ).toBe(true);
       expect(manifest.checkver.github).toBe('https://github.com/whassan007/wazir');
       expect(manifest.autoupdate.architecture['64bit'].url).toContain('windows-x64.zip');
       expect(manifest.autoupdate.architecture['arm64'].url).toContain('windows-arm64.zip');

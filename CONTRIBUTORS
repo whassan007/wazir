@@ -1,0 +1,10 @@
+# Contributors
+
+Contributors to Wazir AI OS (verified from Git commit history):
+
+- Wael Hassan (`whassan007`) — Core architecture, Wazir Shell, Mission Control, Wazir Core, Distributed Workers, Mobile, Portal, Diagnostics
+- Wazir Hardening Suite (`hardening@wazir.ai`) — Automated formal hardening & verification test commits
+
+## Future Contributions
+
+All future contributions require acceptance of the project's Contributor License Agreement (CLA) / contributor-rights policy (subject to legal review) so that both noncommercial source-available distributions and separately authorized commercial licenses remain legally consistent.

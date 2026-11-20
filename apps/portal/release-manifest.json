@@ -1,0 +1,63 @@
+{
+  "name": "Wazir AI OS",
+  "version": "0.3.2",
+  "releasedAt": "2026-11-20T17:04:43.782Z",
+  "repository": "https://github.com/whassan007/wazir",
+  "artifacts": [
+    {
+      "filename": "Wazir-Shell-0.3.2-macos-arm64.tar.gz",
+      "platform": "macOS Apple Silicon (Wazir Shell.app)",
+      "arch": "arm64",
+      "sizeBytes": 4159253,
+      "sizeHuman": "3.97 MB",
+      "sha256": "e51c0f541e366a1c1735a8abe96451bb95750ea9c8d16eb21209870cdaa23c99",
+      "signing": "Unsigned development build (Apple Developer ID not configured)",
+      "license": "AGPL-3.0-only",
+      "url": "/releases/Wazir-Shell-0.3.2-macos-arm64.tar.gz"
+    },
+    {
+      "filename": "Wazir-Mission-Control-0.3.2-macos-arm64.tar.gz",
+      "platform": "macOS Apple Silicon (Mission Control.app)",
+      "arch": "arm64",
+      "sizeBytes": 5333765,
+      "sizeHuman": "5.09 MB",
+      "sha256": "95af6317007e043514db119bcf1cc7e46ec7585188ca1e83507413f650a51e09",
+      "signing": "Unsigned development build (Apple Developer ID not configured)",
+      "license": "AGPL-3.0-only",
+      "url": "/releases/Wazir-Mission-Control-0.3.2-macos-arm64.tar.gz"
+    },
+    {
+      "filename": "wazir-cli-0.3.2-any.tar.gz",
+      "platform": "Universal CLI (macOS / Linux / Termux ARM64)",
+      "arch": "x86_64 / arm64",
+      "sizeBytes": 3602914,
+      "sizeHuman": "3.44 MB",
+      "sha256": "ab70e9d3c9bb446900170305079896cac1e280a3aad118fad283113ac38f7fe9",
+      "signing": "SHA-256 verified bundle",
+      "license": "AGPL-3.0-only",
+      "url": "/releases/wazir-cli-0.3.2-any.tar.gz"
+    },
+    {
+      "filename": "wazir-0.3.2.tar.gz",
+      "platform": "Linux Source Tarball & RPM Spec",
+      "arch": "x86_64 / arm64",
+      "sizeBytes": 3617003,
+      "sizeHuman": "3.45 MB",
+      "sha256": "46f6bea6dfc506bac67d59378bfe8f1d8693a15814bb659e204e96ded276253b",
+      "signing": "SHA-256 verified",
+      "license": "AGPL-3.0-only",
+      "url": "/releases/wazir-0.3.2.tar.gz"
+    },
+    {
+      "filename": "wazir-mobile-0.3.2-android-debug.apk",
+      "platform": "GrapheneOS / Android Companion (APK)",
+      "arch": "arm64-v8a / universal",
+      "sizeBytes": 22517141,
+      "sizeHuman": "21.47 MB",
+      "sha256": "aab7586428e7951a0b2c5bad1f3363c26888d7fa889c65aabb7a74d3a69ec9a2",
+      "signing": "Debug key (unsigned release)",
+      "license": "AGPL-3.0-only",
+      "url": "https://github.com/whassan007/wazir/releases/tag/v0.3.2"
+    }
+  ]
+}

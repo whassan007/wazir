@@ -1,0 +1,7 @@
+platform,arch,component,build_status,test_status,package_artifact,notes
+macOS,arm64,Wazir Shell,passed,verified,dist/Wazir-Shell-0.3.2-macos-arm64.tar.gz,Tauri 2 + portable-pty native app; unsigned dev build (no Apple Developer ID)
+macOS,arm64,Wazir Mission Control,passed,verified,dist/Wazir-Mission-Control-0.3.2-macos-arm64.tar.gz,Tauri 2 operations console; unsigned dev build
+macOS,arm64,Wazir CLI (wa),passed,5/5 shell tests,dist/wazir-cli-0.3.2-any.tar.gz,Includes wa shell + wa about + wa license + wa diagnostics
+Linux,aarch64/x86_64,Wazir CLI + Systemd,passed,11/11 packaging tests,dist/rpmbuild/SOURCES/wazir-0.3.2.tar.gz,deb/rpm structures + .desktop launchers generated (dpkg-deb/rpmbuild not on macOS host)
+Android/GrapheneOS,arm64,Wazir Mobile (ai.wazir.mobile),passed,Gradle unit tests + APK,dist/wazir-mobile-0.3.2-android-debug.apk,Zero-root Jetpack Compose app; debug-signed
+Android/Termux,arm64,Wazir CLI Termux,ready,scripted,scripts/install-termux.sh,Requires Termux nodejs-lts

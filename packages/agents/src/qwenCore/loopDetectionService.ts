@@ -51,6 +51,7 @@ export class LoopDetectionService {
   private seenToolSigs = new Set<string>();
   private seenObservations = new Set<string>();
   public noProgressStreak = 0;
+  private consecutiveFailures = 0;
   public longestNoProgressStreak = 0;
   public duplicateActionsBlocked = 0;
   public uniqueReadObservations = 0;
@@ -77,6 +78,7 @@ export class LoopDetectionService {
     this.consecutiveIdenticalTool = 0;
     this.recentSigs = [];
     this.noProgressStreak = 0;
+    this.consecutiveFailures = 0;
     this.issuedNudgeForCurrentStreak = false;
     this.issuedNoProgressNudge = false;
     this.lastAssistantTextHash = null;
@@ -125,6 +127,12 @@ export class LoopDetectionService {
 
       if (this.options.readOnlyMode) {
         this.totalReadOnlyCalls += 1;
+      }
+
+      if (outcome.result.ok) {
+        this.consecutiveFailures = 0;
+      } else {
+        this.consecutiveFailures += 1;
       }
 
       if (mutated || (outcome.result.ok && isNovelObservation)) {
@@ -196,7 +204,11 @@ export class LoopDetectionService {
           this.totalReadOnlyCalls >= explorationBudget + 4;
 
         if (this.noProgressStreak >= readOnlyMaxNoProgress || budgetExhausted) {
-          if (this.uniqueReadObservations > 0 && !this.synthesisTriggered) {
+          if (
+            this.uniqueReadObservations > 0 &&
+            !this.synthesisTriggered &&
+            this.consecutiveFailures < readOnlyMaxNoProgress
+          ) {
             this.synthesisTriggered = true;
             return {
               action: 'synthesize',

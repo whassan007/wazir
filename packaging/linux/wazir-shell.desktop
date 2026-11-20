@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Wazir Shell
+Comment=Universal AI-Native Terminal for Wazir AI OS
+Exec=wa shell
+Icon=wazir-shell
+Terminal=true
+Categories=System;TerminalEmulator;Development;
+Keywords=terminal;shell;ai;wazir;
+StartupNotify=true

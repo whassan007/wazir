@@ -1,17 +1,17 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Wazir Desktop",
+  "productName": "Wazir Mission Control",
   "version": "0.3.2",
   "identifier": "ai.wazir.desktop",
   "build": {
-    "devUrl": "http://127.0.0.1:4801",
+    "devUrl": "http://127.0.0.1:4801/mission-control.html",
     "frontendDist": "../../web/public"
   },
   "app": {
     "windows": [
       {
         "label": "main",
-        "title": "Wazir — A Local AI Fleet Counselor",
+        "title": "Wazir Mission Control — AI OS Operations Console",
         "width": 1280,
         "height": 820,
         "minWidth": 960,

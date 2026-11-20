@@ -28,16 +28,17 @@
 - **Root Cause:** Read-only code reviews with repeated `ls`/`find`/scan calls could hit `NO_PROGRESS` instead of synthesizing from already-gathered observations.
 - **Files & Functions:** `packages/agents/src/qwenCore/loopDetectionService.ts`, `packages/agents/src/qwenCore/wazirQwenAgent.ts`.
 - **Fix:** Added `readOnlyMode`, `uniqueReadObservations`, `duplicateToolCalls`, bounded scan budget, synthesis nudge, and `action: 'synthesize'` (`forceSynthesis = true` with `tools: []`) when unique observations exist.
-- **Verification:** `qwenCore.test.ts` (14/14) & `codingAgent.noProgress.test.ts` (6/6) — **20/20 passed**.
+- **Verification:** `qwenCore.test.ts` (14/14), `codingAgent.noProgress.test.ts` (6/6), & `tests/security/qwenPromptInjection.test.ts` (4/4) — **24/24 passed**.
+- **Additional Hardening (Post-Audit):** Tracked `consecutiveFailures` in `LoopDetectionService` (`packages/agents/src/qwenCore/loopDetectionService.ts`) so 4+ consecutive failed/policy-denied tool calls in `readOnlyMode` do not trigger `action: 'synthesize'` and instead stop with `NO_PROGRESS`.
 
 ## P0-F: Non-Node Workspace & Path Resolution
 - **Root Cause:** `process-tools.ts` assumed every repo has a root `package.json` (`ENOENT` on `~/Code/sim`), and `paths.ts` needed clean canonicalization for symlinked worktrees.
-- **Files & Functions:** `packages/tools/src/process-tools.ts`, `packages/tools/src/paths.ts`, `apps/cli/src/tui/conversationController.ts`.
-- **Fix:** Added non-Node project detection (`Cargo.toml`, `go.mod`, `pyproject.toml`, `Makefile`) returning structured `not applicable` instead of `ENOENT` when no `package.json` exists, while preserving strict workspace containment and symlink/traversal blocks.
-- **Verification:** `nonNodeWorkspace.test.ts`, `sandbox.test.ts`, `security.test.ts` — **35 passed, 10 platform-skipped**.
+- **Files & Functions:** `packages/tools/src/process-tools.ts`, `packages/tools/src/paths.ts`, `apps/cli/src/tui/conversationController.ts`, `apps/cli/src/run.ts`, `apps/cli/src/fleetRunner.ts`, `packages/agents/src/nativeHarnessAdapter.ts`.
+- **Fix:** Added non-Node project detection (`Cargo.toml`, `go.mod`, `pyproject.toml`, `Makefile`) returning structured `not applicable` instead of `ENOENT` when no `package.json` exists, while preserving strict workspace containment and symlink/traversal blocks. Updated check-recording callers (`run.ts`, `fleetRunner.ts`, `nativeHarnessAdapter.ts`) to check `result.metadata?.applicable === false` so non-applicable checks are never recorded as passing `checks`.
+- **Verification:** `nonNodeWorkspace.test.ts`, `sandbox.test.ts`, `security.test.ts` — **35 passed, 10 platform-skipped**; `executeTask.e2e.test.ts` — **11/11 passed**.
 
 ## P0-G, P1-H, P1-I: Job Lifecycle, LM Studio Unload, & TUI Error Guidance
-- **Root Cause:** `LMStudioAdapter.unloadModel()` failed on installed-but-unloaded models; `fleetTui.ts` suggested `!prompt` shell execution for natural-language prompts and overwrote timeout stop reasons with `cancelled by operator` without freezing task durations.
-- **Files & Functions:** `packages/runtimes/lmstudio/src/index.ts`, `apps/cli/src/tui/fleetTui.ts`.
-- **Fix:** Distinguished installed vs loaded instances in `LMStudioAdapter` and added `unloadAllModels()`; removed `!prompt` shell tips in `fleetTui.ts`; preserved timeout reasons and added `finalizeJobTasks()` to enforce terminal state and frozen `durationMs`.
-- **Verification:** `fleetTui.test.ts` (59/59) & `openaiCompat.test.ts` (8/8) — **67/67 passed**.
+- **Root Cause:** `LMStudioAdapter.unloadModel()` failed on installed-but-unloaded models; `fleetTui.ts` suggested `!prompt` shell execution for natural-language prompts and overwrote timeout stop reasons with `cancelled by operator` without freezing task durations; `JobOrchestrator.finishJob()` used `node.error ?? reason` on timeout, leaving `'Cancelled by user'` intact.
+- **Files & Functions:** `packages/runtimes/lmstudio/src/index.ts`, `apps/cli/src/tui/fleetTui.ts`, `packages/core/src/services/jobOrchestrator.ts` (`finishJob`).
+- **Fix:** Distinguished installed vs loaded instances in `LMStudioAdapter` and added `unloadAllModels()`; removed `!prompt` shell tips in `fleetTui.ts`; preserved timeout reasons, added `finalizeJobTasks()` to enforce terminal state and frozen `durationMs`, and forced `node.error = reason` on `timedOut` in `JobOrchestrator.finishJob()`.
+- **Verification:** `fleetTui.test.ts` (59/59), `openaiCompat.test.ts` (8/8), & `jobOrchestrator.test.ts` (19/19) — **86/86 passed**.
