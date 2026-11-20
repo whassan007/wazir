@@ -44,6 +44,7 @@ const candidates = [
   { file: `Wazir-Shell-${version}-macos-arm64.tar.gz`, platform: 'macOS Apple Silicon (Wazir Shell.app)', arch: 'arm64', signing: 'Unsigned development build (Apple Developer ID not configured)', license: 'AGPL-3.0-only' },
   { file: `Wazir-Mission-Control-${version}-macos-arm64.tar.gz`, platform: 'macOS Apple Silicon (Mission Control.app)', arch: 'arm64', signing: 'Unsigned development build (Apple Developer ID not configured)', license: 'AGPL-3.0-only' },
   { file: `wazir-cli-${version}-any.tar.gz`, platform: 'Universal CLI (macOS / Linux / Termux ARM64)', arch: 'x86_64 / arm64', signing: 'SHA-256 verified bundle', license: 'AGPL-3.0-only' },
+  { file: `wazir_${version}_all.deb`, platform: 'Debian / Ubuntu (.deb)', arch: 'all (x86_64 / arm64)', signing: 'SHA-256 verified (built on Ubuntu 24.04 aarch64)', license: 'AGPL-3.0-only' },
   { file: `rpmbuild/SOURCES/wazir-${version}.tar.gz`, platform: 'Linux Source Tarball & RPM Spec', arch: 'x86_64 / arm64', signing: 'SHA-256 verified', license: 'AGPL-3.0-only' },
   { file: `wazir-mobile-${version}-android-debug.apk`, platform: 'GrapheneOS / Android Companion (APK)', arch: 'arm64-v8a / universal', signing: 'Debug key (unsigned release)', license: 'AGPL-3.0-only' },
 ];

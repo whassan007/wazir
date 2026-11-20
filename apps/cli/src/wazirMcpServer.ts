@@ -338,7 +338,8 @@ async function handleToolCall(name: string, args: Record<string, any> = {}): Pro
 export async function runWazirMcpStdioServer(): Promise<void> {
   ensureStandardToolPathsOnEnv();
   const writeStdout = process.stdout.write.bind(process.stdout);
-  // Ensure internal diagnostic logging never corrupts JSON-RPC frames on stdout.
+  // Ensure internal diagnostic logging and direct stdout writes never corrupt JSON-RPC frames on stdout.
+  process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write;
   const redirectToStderr = (...items: unknown[]) => {
     process.stderr.write(items.map((item) => (typeof item === 'string' ? item : JSON.stringify(item))).join(' ') + '\n');
   };

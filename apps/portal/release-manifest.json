@@ -1,7 +1,7 @@
 {
   "name": "Wazir AI OS",
   "version": "0.3.2",
-  "releasedAt": "2026-11-20T17:04:43.782Z",
+  "releasedAt": "2026-11-20T17:10:22.959Z",
   "repository": "https://github.com/whassan007/wazir",
   "artifacts": [
     {
@@ -10,7 +10,7 @@
       "arch": "arm64",
       "sizeBytes": 4159253,
       "sizeHuman": "3.97 MB",
-      "sha256": "e51c0f541e366a1c1735a8abe96451bb95750ea9c8d16eb21209870cdaa23c99",
+      "sha256": "6df76117345c32410992fb3ed8dd2a49bfdad487d21c18b8eb2d111c1068df2e",
       "signing": "Unsigned development build (Apple Developer ID not configured)",
       "license": "AGPL-3.0-only",
       "url": "/releases/Wazir-Shell-0.3.2-macos-arm64.tar.gz"
@@ -21,7 +21,7 @@
       "arch": "arm64",
       "sizeBytes": 5333765,
       "sizeHuman": "5.09 MB",
-      "sha256": "95af6317007e043514db119bcf1cc7e46ec7585188ca1e83507413f650a51e09",
+      "sha256": "a5c7450c5c469b8c197d3d14a880ecc5e8770632bb876ea5191d102a330841bf",
       "signing": "Unsigned development build (Apple Developer ID not configured)",
       "license": "AGPL-3.0-only",
       "url": "/releases/Wazir-Mission-Control-0.3.2-macos-arm64.tar.gz"
@@ -30,12 +30,23 @@
       "filename": "wazir-cli-0.3.2-any.tar.gz",
       "platform": "Universal CLI (macOS / Linux / Termux ARM64)",
       "arch": "x86_64 / arm64",
-      "sizeBytes": 3602914,
+      "sizeBytes": 3602922,
       "sizeHuman": "3.44 MB",
-      "sha256": "ab70e9d3c9bb446900170305079896cac1e280a3aad118fad283113ac38f7fe9",
+      "sha256": "ba46b2b3c12fa685747f5cea3a22923d249b43ac60bbec813f434d0e81d15ec7",
       "signing": "SHA-256 verified bundle",
       "license": "AGPL-3.0-only",
       "url": "/releases/wazir-cli-0.3.2-any.tar.gz"
+    },
+    {
+      "filename": "wazir_0.3.2_all.deb",
+      "platform": "Debian / Ubuntu (.deb)",
+      "arch": "all (x86_64 / arm64)",
+      "sizeBytes": 2586988,
+      "sizeHuman": "2.47 MB",
+      "sha256": "cf6e7f8b277318c8cd1c584fb3d3a4a4aefd7adf70297b642570256ee2ac5689",
+      "signing": "SHA-256 verified (built on Ubuntu 24.04 aarch64)",
+      "license": "AGPL-3.0-only",
+      "url": "/releases/wazir_0.3.2_all.deb"
     },
     {
       "filename": "wazir-0.3.2.tar.gz",
