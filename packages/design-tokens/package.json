@@ -1,6 +1,6 @@
 {
   "name": "@wazir/design-tokens",
-  "version": "1.0.0",
+  "version": "0.4.0",
   "license": "AGPL-3.0-only",
   "description": "Versioned Wazir OS design tokens and generators for KDE Plasma, Konsole, and Wazir Web/Desktop",
   "type": "module",
