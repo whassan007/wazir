@@ -78,12 +78,16 @@ wa:Wazir$ find the startup bottleneck in Wazir
 
     <section id="first-run" class="container tight">
       <h2 class="section-heading">Your first five minutes</h2>
-      <p class="section-sub">From installation to your first verified distributed task.</p>
+      <p class="section-sub">From installation to your first verified distributed task—while keeping your ordinary shell 100% functional offline.</p>
       <div class="grid-4">
-        <div class="card"><strong>1. Launch Wazir Shell</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Open Wazir Shell from your Dock, launcher, or <code>wa shell</code>.</p></div>
-        <div class="card"><strong>2. Review Disclosures</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Accept or decline minimal diagnostics. Native shell always works.</p></div>
-        <div class="card"><strong>3. Connect Local Model</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Auto-discover Ollama, MLX, or LM Studio with <code>wa doctor</code>.</p></div>
-        <div class="card"><strong>4. Verify in Mission Control</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Inspect the 10-state execution graph and verification evidence.</p></div>
+        <div class="card"><strong>1. Launch Wazir Shell</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Open Wazir Shell from the macOS Dock, Linux launcher, or run <code>wa shell</code>.</p></div>
+        <div class="card"><strong>2. Review Disclosures</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Accept or decline minimal diagnostics. Declining never blocks your native shell.</p></div>
+        <div class="card"><strong>3. Discover Local Model</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Run <code>wa doctor</code> to discover local Ollama, MLX, or LM Studio endpoints.</p></div>
+        <div class="card"><strong>4. Test a Native Command</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Run <code>git status -s</code> or <code>!ls -la</code> directly in your persistent PTY.</p></div>
+        <div class="card"><strong>5. Run an AI Task</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Type <code>?explain the failing test and run vitest</code> to route to local Qwen.</p></div>
+        <div class="card"><strong>6. Open Mission Control</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Launch <code>Wazir Mission Control</code> or run <code>wa fleet</code> to monitor jobs.</p></div>
+        <div class="card"><strong>7. Inspect Verified Result</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Inspect the 10-state execution graph and real test/build verification receipt.</p></div>
+        <div class="card"><strong>8. Pair Another Machine</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Register authorized macOS/Linux workers or pair GrapheneOS over scoped URI.</p></div>
       </div>
     </section>
 
@@ -125,6 +129,12 @@ wa:Wazir$ find the startup bottleneck in Wazir
             <div id="lic-result" class="mono" style="font-size:12px;"></div>
           </form>
         </div>
+      </div>
+
+      <div id="credits-notices" class="card" style="margin-top:20px;">
+        <h3>Credits &amp; third-party notices</h3>
+        <p class="muted" style="margin-bottom:8px;"><strong>Primary Authorship &amp; Copyright:</strong> Copyright © 2026 Wael Hassan (<code>whassan007</code>). See <code>AUTHORS</code>, <code>CONTRIBUTORS</code>, and <code>NOTICE</code> in the source repository.</p>
+        <p class="muted" style="margin-bottom:0;"><strong>Third-Party Attributions:</strong> Includes selective Apache-2.0 components adapted from <code>QwenLM/qwen-code</code> (Alibaba Group / QwenLM), alongside Tauri, Node.js, and xterm/PTY runtime dependencies documented in <code>THIRD_PARTY_LICENSES.md</code>.</p>
       </div>
     </section>
   </main>
@@ -173,6 +183,8 @@ wa:Wazir$ find the startup bottleneck in Wazir
           <li><a href="#licensing">Commercial authorization</a></li>
           <li><a href="#privacy">Privacy</a></li>
           <li><a href="#privacy">Diagnostics</a></li>
+          <li><a href="#credits-notices">Credits</a></li>
+          <li><a href="#credits-notices">Third-party notices</a></li>
         </ul>
       </div>
     </div>

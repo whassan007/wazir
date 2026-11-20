@@ -2,11 +2,13 @@ import os
 from playwright.sync_api import sync_playwright
 
 BASE = os.environ.get("WAZIR_PORTAL_URL", "https://wazir-portal.pages.dev")
-OUT = "test/reports/screenshots"
+EXEC_PATH = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or None
+OUT = os.environ.get("WAZIR_SCREENSHOT_DIR", "test/reports/screenshots")
 os.makedirs(OUT, exist_ok=True)
 
 with sync_playwright() as p:
-    browser = p.chromium.launch()
+    launch_kwargs = {"executable_path": EXEC_PATH} if EXEC_PATH else {}
+    browser = p.chromium.launch(**launch_kwargs)
     errors = []
 
     def check_page(path, name, viewports):
@@ -22,18 +24,32 @@ with sync_playwright() as p:
             page.screenshot(path=f"{OUT}/wazir-{name}-{label}.png", full_page=False)
             assert page.locator("h1").is_visible(), f"H1 not visible on {path}"
 
+            if name == "home" and label == "desktop":
+                assert page.locator("#first-run .card").count() == 8, "Expected 8 first-run steps"
+                assert page.locator("#credits-notices").is_visible(), "Credits & notices must be visible"
+
             if name == "download" and label == "desktop":
+                # Test hero OS selector
+                page.select_option("#hero-os-select", "linux-deb")
+                assert "wazir_0.3.2_all.deb" in (page.locator("#hero-primary-btn").get_attribute("href") or "")
+                page.select_option("#hero-os-select", "macos")
+                assert "Wazir-Shell-0.3.2-macos-arm64.tar.gz" in (page.locator("#hero-primary-btn").get_attribute("href") or "")
+
                 # Test arch selector
                 page.select_option("#desktop-arch", "x64")
                 assert "x86_64" in page.locator("#desktop-downloads").inner_text()
                 page.select_option("#desktop-arch", "arm64")
                 assert "Wazir Shell" in page.locator("#desktop-downloads").inner_text()
 
+                # Verify release history table hydrated
+                assert page.locator("#release-history").is_visible()
+                assert page.locator("#manifest-artifact-list tr").count() >= 5
+
                 # Test terminal platform tabs & copy button
                 page.click('[data-plat="debian"]')
                 assert "dpkg -i" in page.locator("#term-cmd").inner_text()
                 page.click("#copy-cmd-btn")
-                page.wait_for_timeout(150)
+                page.wait_for_function("document.getElementById('copy-cmd-btn').innerText === 'Copied'", timeout=3000)
                 assert page.locator("#copy-cmd-btn").inner_text() == "Copied"
 
                 # Test FAQ accordion

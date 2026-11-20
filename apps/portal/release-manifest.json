@@ -1,7 +1,7 @@
 {
   "name": "Wazir AI OS",
   "version": "0.3.2",
-  "releasedAt": "2026-11-20T17:41:30.309Z",
+  "releasedAt": "2026-11-20T17:44:44.071Z",
   "repository": "https://github.com/whassan007/wazir",
   "artifacts": [
     {
@@ -10,7 +10,7 @@
       "arch": "arm64",
       "sizeBytes": 4159253,
       "sizeHuman": "3.97 MB",
-      "sha256": "44a5de2d28763dad72e02f0cce21e76b91a7a43caabb367e9d99df4db322914a",
+      "sha256": "4edfb1db6f51fc1796397afdfaa01b3ccd43da273b1c84aa8bc5c22d73ab67d6",
       "signing": "Unsigned development build (Apple Developer ID not configured)",
       "license": "AGPL-3.0-only",
       "url": "/releases/Wazir-Shell-0.3.2-macos-arm64.tar.gz"
@@ -21,7 +21,7 @@
       "arch": "arm64",
       "sizeBytes": 5333765,
       "sizeHuman": "5.09 MB",
-      "sha256": "93bd96961784a3d68fe4779cfc5615647efb20c1f099f94a3fa1e6ae441094ba",
+      "sha256": "e1326da8a3751adc56e7f611674873dbb6b234b1bbe83fa7e89df12482907630",
       "signing": "Unsigned development build (Apple Developer ID not configured)",
       "license": "AGPL-3.0-only",
       "url": "/releases/Wazir-Mission-Control-0.3.2-macos-arm64.tar.gz"
@@ -32,7 +32,7 @@
       "arch": "x86_64 / arm64",
       "sizeBytes": 3602922,
       "sizeHuman": "3.44 MB",
-      "sha256": "631a69ecce1b03db5da8a3ad7393cdf49c6435bf6833cef03afa13794169c544",
+      "sha256": "3238c6ce437afde3a8737ab06ed98e29b95bf73816a354f25f11e8a20dc090c7",
       "signing": "SHA-256 verified bundle",
       "license": "AGPL-3.0-only",
       "url": "/releases/wazir-cli-0.3.2-any.tar.gz"

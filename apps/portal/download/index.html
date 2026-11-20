@@ -42,6 +42,15 @@
         <a id="hero-primary-btn" class="btn primary" href="/releases/Wazir-Shell-0.3.2-macos-arm64.tar.gz" download>
           Download for macOS
         </a>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
+          <label for="hero-os-select" class="muted" style="font-size:13px;">Platform:</label>
+          <select id="hero-os-select" aria-label="Select operating system" class="btn sm" style="border-radius:8px;">
+            <option value="macos">macOS (Apple Silicon · Wazir Shell.app)</option>
+            <option value="linux-deb">Linux (Ubuntu / Debian · .deb)</option>
+            <option value="linux-tar">Linux / Universal CLI (.tar.gz)</option>
+            <option value="android">Android / GrapheneOS (.apk)</option>
+          </select>
+        </div>
         <a href="#get-started" class="muted" style="font-size:14px;">Explore all installation options ↓</a>
       </div>
     </section>
@@ -122,7 +131,7 @@
             </svg>
             <div style="font-size:13px;">
               <strong>Secure pairing</strong>
-              <div class="muted">Scan or open <a href="https://wazir-portal.pages.dev/download">wazir-portal.pages.dev/download</a> on GrapheneOS, then pair via scoped URI/QR token in Mission Control.</div>
+              <div class="muted">Scan or open <a href="https://wazir.wael.bot/download">wazir.wael.bot/download</a> on GrapheneOS, then pair via scoped URI/QR token in Mission Control.</div>
             </div>
           </div>
 
@@ -259,6 +268,56 @@
       </div>
     </section>
 
+    <!-- Release History & Verification (Section 5) -->
+    <section id="release-history" class="container tight">
+      <h2 class="section-heading">Release history &amp; verification</h2>
+      <p class="section-sub">Canonical release artifacts from <code>release-manifest.json</code> with SHA-256 checksums, signature status, rollback instructions, and troubleshooting.</p>
+
+      <div class="card" style="overflow-x:auto;margin-bottom:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+          <strong>Release v<span class="manifest-version">0.3.2</span></strong>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:13px;">
+            <a href="/releases/SHA256SUMS.txt">SHA256SUMS.txt</a>
+            <a href="/release-manifest.json">release-manifest.json</a>
+            <a href="https://github.com/whassan007/wazir/releases" target="_blank" rel="noopener">GitHub Releases</a>
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;text-align:left;">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border);color:var(--text-muted);">
+              <th style="padding:8px 6px;">Artifact</th>
+              <th style="padding:8px 6px;">Platform</th>
+              <th style="padding:8px 6px;">Arch</th>
+              <th style="padding:8px 6px;">Size</th>
+              <th style="padding:8px 6px;">Signing &amp; License</th>
+              <th style="padding:8px 6px;">SHA-256</th>
+            </tr>
+          </thead>
+          <tbody id="manifest-artifact-list"></tbody>
+        </table>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>Upgrade &amp; rollback</h3>
+          <p class="muted" style="font-size:14px;">Configuration and consent records in <code>~/.wazir</code> are preserved across upgrades and rollbacks.</p>
+          <pre class="code-block" style="background:var(--terminal-bg);color:var(--terminal-text);"># Debian/Ubuntu upgrade or rollback:
+sudo dpkg -i wazir_&lt;version&gt;_all.deb
+
+# Source build pin / rollback:
+git checkout v0.3.1 &amp;&amp; npm install &amp;&amp; npm run build</pre>
+        </div>
+        <div class="card">
+          <h3>Installer troubleshooting</h3>
+          <ul class="muted" style="font-size:14px;padding-left:18px;margin:0;display:grid;gap:8px;">
+            <li><strong>macOS Gatekeeper:</strong> Unsigned development bundles require clearing quarantine once: <code>xattr -cr "/Applications/Wazir Shell.app"</code>.</li>
+            <li><strong>Node.js runtime:</strong> CLI/worker requires Node.js <code>&gt;= 22.13.0</code>. Run <code>wa doctor --detail</code> to verify runtimes.</li>
+            <li><strong>Checksum mismatch:</strong> Re-download from <code>SHA256SUMS.txt</code> and do not install modified packages.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <!-- Section H: FAQ -->
     <section id="faq" class="container tight">
       <h2 class="section-heading">Frequently asked questions</h2>
@@ -293,7 +352,7 @@
           <li><a href="#terminal-install">CLI</a></li>
           <li><a href="/#docs">Documentation</a></li>
           <li><a href="https://github.com/whassan007/wazir" target="_blank" rel="noopener">Source code</a></li>
-          <li><a href="/release-manifest.json">Releases</a></li>
+          <li><a href="#release-history">Releases</a></li>
           <li><a href="#integrations">Integrations</a></li>
         </ul>
       </div>
@@ -302,7 +361,7 @@
         <ul>
           <li><a href="#terminal-install">Installation</a></li>
           <li><a href="/#first-run">Getting started</a></li>
-          <li><a href="/#docs">Troubleshooting</a></li>
+          <li><a href="#release-history">Troubleshooting</a></li>
           <li><a href="https://github.com/whassan007/wazir/discussions" target="_blank" rel="noopener">Community</a></li>
           <li><a href="https://github.com/whassan007/wazir/issues" target="_blank" rel="noopener">Report a bug</a></li>
         </ul>
@@ -314,7 +373,8 @@
           <li><a href="/#licensing">Commercial authorization</a></li>
           <li><a href="/#privacy">Privacy</a></li>
           <li><a href="/#privacy">Diagnostics</a></li>
-          <li><a href="/#licensing">Credits &amp; Notices</a></li>
+          <li><a href="/#credits-notices">Credits</a></li>
+          <li><a href="/#credits-notices">Third-party notices</a></li>
         </ul>
       </div>
     </div>
@@ -331,6 +391,53 @@
       localStorage.setItem('wazir_theme', next);
     };
 
+    const ORIGIN = (typeof window !== 'undefined' && window.location.origin && window.location.origin.startsWith('http'))
+      ? window.location.origin
+      : 'https://wazir.wael.bot';
+
+    const HERO_PLATFORMS = {
+      macos: { label: 'Download for macOS', href: '/releases/Wazir-Shell-0.3.2-macos-arm64.tar.gz' },
+      'linux-deb': { label: 'Download for Linux (.deb)', href: '/releases/wazir_0.3.2_all.deb' },
+      'linux-tar': { label: 'Download Universal CLI (.tar.gz)', href: '/releases/wazir-cli-0.3.2-any.tar.gz' },
+      android: { label: 'Download for Android / GrapheneOS', href: '/releases/wazir-mobile-0.3.2-android-debug.apk' },
+    };
+
+    function applyHeroPlatform(key) {
+      const spec = HERO_PLATFORMS[key] || HERO_PLATFORMS.macos;
+      const btn = document.getElementById('hero-primary-btn');
+      const sel = document.getElementById('hero-os-select');
+      if (btn) {
+        btn.textContent = spec.label;
+        btn.href = spec.href;
+      }
+      if (sel && sel.value !== key) sel.value = key;
+    }
+
+    function detectHeroPlatform() {
+      const ua = navigator.userAgent.toLowerCase();
+      if (/android/.test(ua)) applyHeroPlatform('android');
+      else if (/linux/.test(ua) && !/mac/.test(ua)) applyHeroPlatform('linux-deb');
+      else applyHeroPlatform('macos');
+    }
+
+    document.getElementById('hero-os-select').onchange = (e) => applyHeroPlatform(e.target.value);
+    detectHeroPlatform();
+
+    function renderManifestTable() {
+      const tbody = document.getElementById('manifest-artifact-list');
+      if (!tbody || !manifestData || !Array.isArray(manifestData.artifacts)) return;
+      tbody.innerHTML = manifestData.artifacts.map(a => `
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:8px 6px;"><a href="${a.url}" download><code>${a.filename}</code></a></td>
+          <td style="padding:8px 6px;">${a.platform}</td>
+          <td style="padding:8px 6px;">${a.arch}</td>
+          <td style="padding:8px 6px;">${a.sizeHuman}</td>
+          <td style="padding:8px 6px;" class="muted">${a.signing} · ${a.license}</td>
+          <td style="padding:8px 6px;" class="mono" style="font-size:11px;"><code>${a.sha256.slice(0, 16)}…</code></td>
+        </tr>
+      `).join('');
+    }
+
     // Hydrate from verified release-manifest.json
     let manifestData = null;
     async function loadManifest() {
@@ -340,23 +447,8 @@
         manifestData = await res.json();
         document.querySelectorAll('.manifest-version').forEach(el => el.textContent = manifestData.version);
         renderDesktopDownloads();
-        detectHeroPlatform();
+        renderManifestTable();
       } catch {}
-    }
-
-    function detectHeroPlatform() {
-      const ua = navigator.userAgent.toLowerCase();
-      const btn = document.getElementById('hero-primary-btn');
-      if (/android/.test(ua)) {
-        btn.textContent = 'Download for Android / GrapheneOS';
-        btn.href = '/releases/wazir-mobile-0.3.2-android-debug.apk';
-      } else if (/linux/.test(ua) && !/mac/.test(ua)) {
-        btn.textContent = 'Download for Linux (.deb)';
-        btn.href = '/releases/wazir_0.3.2_all.deb';
-      } else {
-        btn.textContent = 'Download for macOS';
-        btn.href = '/releases/Wazir-Shell-0.3.2-macos-arm64.tar.gz';
-      }
     }
 
     function renderDesktopDownloads() {
@@ -397,15 +489,15 @@
     // Terminal install tabs
     const TERM_PLATS = {
       macos: {
-        cmd: `curl -LO https://wazir-portal.pages.dev/releases/wazir-cli-0.3.2-any.tar.gz\ncurl -LO https://wazir-portal.pages.dev/releases/SHA256SUMS.txt\nshasum -a 256 -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-cli-0.3.2-any.tar.gz\nnode bin/wa.js about`,
+        cmd: `curl -LO ${ORIGIN}/releases/wazir-cli-0.3.2-any.tar.gz\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nshasum -a 256 -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-cli-0.3.2-any.tar.gz\nnode bin/wa.js about`,
         arch: 'arm64 (Apple Silicon)', dest: './bin/wa.js or /usr/local/bin/wa', verify: 'wa about && wa doctor', upgrade: 'Re-download & verify new tarball', uninstall: 'rm -rf ~/.wazir bin/wa.js'
       },
       debian: {
-        cmd: `curl -LO https://wazir-portal.pages.dev/releases/wazir_0.3.2_all.deb\ncurl -LO https://wazir-portal.pages.dev/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\nsudo dpkg -i wazir_0.3.2_all.deb`,
+        cmd: `curl -LO ${ORIGIN}/releases/wazir_0.3.2_all.deb\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\nsudo dpkg -i wazir_0.3.2_all.deb`,
         arch: 'x86_64, arm64', dest: '/usr/bin/wa & systemd units', verify: 'wa about && wa doctor', upgrade: 'sudo dpkg -i wazir_<ver>_all.deb', uninstall: 'sudo apt remove wazir'
       },
       fedora: {
-        cmd: `curl -LO https://wazir-portal.pages.dev/releases/wazir-0.3.2.tar.gz\ntar -xzf wazir-0.3.2.tar.gz\nrpmbuild -tb wazir-0.3.2.tar.gz`,
+        cmd: `curl -LO ${ORIGIN}/releases/wazir-0.3.2.tar.gz\ntar -xzf wazir-0.3.2.tar.gz\nrpmbuild -tb wazir-0.3.2.tar.gz`,
         arch: 'x86_64, arm64', dest: '/usr/bin/wa', verify: 'wa about', upgrade: 'sudo dnf upgrade wazir', uninstall: 'sudo dnf remove wazir'
       },
       linux: {
@@ -436,10 +528,14 @@
     };
     selectTermPlatform('macos');
     document.getElementById('copy-cmd-btn').onclick = async () => {
-      try { await navigator.clipboard.writeText(currentTermCmd); } catch {}
       const btn = document.getElementById('copy-cmd-btn');
       btn.textContent = 'Copied';
       setTimeout(() => btn.textContent = 'Copy command', 1500);
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(currentTermCmd);
+        }
+      } catch {}
     };
 
     // Work across machines 7-step diagram
