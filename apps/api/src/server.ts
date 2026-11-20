@@ -24,6 +24,13 @@ import {
   type WorkerEventType,
 } from '@wazir/core';
 import { currentLoad, discoverHardware, discoverRuntimes, type DiscoveredRuntime } from '@wazir/workers';
+import {
+  WazirOsEngineRegistry,
+  loadOsEngineConfig,
+  saveOsEngineConfig,
+  type EngineProfile,
+  type WazirOsJobKind,
+} from '@wazir/models';
 import { createMLXAdapter, MLX_DEFAULT_BASE_URL } from '@wazir/runtimes-mlx';
 import { createOllamaAdapter } from '@wazir/runtimes-ollama';
 import { createLMStudioAdapter } from '@wazir/runtimes-lmstudio';
@@ -1310,6 +1317,72 @@ export function createApp(state: ApiState) {
       catch (error) { lifecycleError(res, error); }
     });
   }
+
+  // Pluggable Wazir OS Engine (Liquid AI / Gemma 4 / Qwen / Super Nemo / custom per-job)
+  const osEngineJobs: WazirOsJobKind[] = [
+    'offline-edge',
+    'quick-chat',
+    'spotlight-ai',
+    'vision',
+    'coding',
+    'code-review',
+    'reasoning',
+    'autonomous-goal',
+  ];
+
+  app.get('/api/v1/os/engine', auth.requireViewerOrOperator, (_req, res) => {
+    const registry = new WazirOsEngineRegistry(loadOsEngineConfig());
+    const models = state.models.list();
+    const resolvedByJob = Object.fromEntries(
+      osEngineJobs.map((job) => [job, registry.resolveForJob({ jobKind: job }, models)]),
+    );
+    res.json({
+      ...registry.getConfig(),
+      profiles: registry.listProfiles(),
+      resolvedByJob,
+    });
+  });
+
+  app.post('/api/v1/os/engine', auth.requireOperator, (req, res) => {
+    try {
+      const registry = new WazirOsEngineRegistry(loadOsEngineConfig());
+      const body = (req.body ?? {}) as {
+        activeEngineId?: string;
+        jobOverrides?: Partial<Record<WazirOsJobKind, string | null>>;
+        customProfile?: EngineProfile;
+      };
+      if (body.customProfile) {
+        registry.registerCustomProfile(body.customProfile);
+      }
+      if (typeof body.activeEngineId === 'string' && body.activeEngineId.trim().length > 0) {
+        registry.setActiveEngine(body.activeEngineId.trim());
+      }
+      if (body.jobOverrides && typeof body.jobOverrides === 'object') {
+        for (const [job, engineId] of Object.entries(body.jobOverrides)) {
+          registry.setJobOverride(job as WazirOsJobKind, engineId ?? null);
+        }
+      }
+      const next = registry.getConfig();
+      saveOsEngineConfig(next);
+      res.json({ ok: true, ...next, profiles: registry.listProfiles() });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post('/api/v1/os/engine/resolve', auth.requireViewerOrOperator, (req, res) => {
+    const registry = new WazirOsEngineRegistry(loadOsEngineConfig());
+    const body = (req.body ?? {}) as {
+      jobKind?: WazirOsJobKind;
+      prompt?: string;
+      explicitEngineId?: string;
+      localOnly?: boolean;
+      vision?: boolean;
+      minimumContext?: number;
+    };
+    const resolution = registry.resolveForJob(body, state.models.list());
+    res.json(resolution);
+  });
 
   app.get('/api/v1/agents/capabilities', (_req, res) => {
     res.json({ capabilities: state.agents.catalog() });

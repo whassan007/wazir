@@ -640,6 +640,57 @@ providersCmd
 
 program.addCommand(providersCmd);
 
+// engine command (pluggable Wazir OS engine: Liquid AI, Gemma 4, Qwen, Super Nemo)
+const engineCmd = new Command()
+  .name('engine')
+  .description('Inspect or replace the Wazir OS AI engine per job (Liquid AI, Gemma 4, Qwen, Super Nemo)');
+
+engineCmd
+  .command('status', { isDefault: true })
+  .description('Show active Wazir OS engine, job overrides, and available profiles')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { WazirOsEngineRegistry, loadOsEngineConfig } = await import('@wazir/models');
+    const registry = new WazirOsEngineRegistry(loadOsEngineConfig());
+    const payload = { ...registry.getConfig(), profiles: registry.listProfiles() };
+    if (options.json) {
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+    console.log(`Active Wazir OS Engine: ${payload.activeEngineId}`);
+    console.log(`Job Overrides: ${Object.keys(payload.jobOverrides).length ? JSON.stringify(payload.jobOverrides) : '(none — auto per job)'}`);
+    console.log('Available Profiles:');
+    for (const p of payload.profiles) {
+      console.log(`  - ${p.id} [${p.family} / ${p.latencyTier}]: ${p.displayName}`);
+    }
+  });
+
+engineCmd
+  .command('use <engineId>')
+  .description('Replace the main Wazir OS engine (auto, liquid-light, gemma4-generic, qwen-coder, super-nemo, or custom id)')
+  .action(async (engineId: string) => {
+    const { WazirOsEngineRegistry, loadOsEngineConfig, saveOsEngineConfig } = await import('@wazir/models');
+    const registry = new WazirOsEngineRegistry(loadOsEngineConfig());
+    registry.setActiveEngine(engineId);
+    const next = registry.getConfig();
+    saveOsEngineConfig(next);
+    console.log(`Wazir OS main engine set to: ${next.activeEngineId}`);
+  });
+
+engineCmd
+  .command('map <jobKind> <engineId>')
+  .description('Override the engine for a specific job kind (or pass "clear" as engineId)')
+  .action(async (jobKind: string, engineId: string) => {
+    const { WazirOsEngineRegistry, loadOsEngineConfig, saveOsEngineConfig } = await import('@wazir/models');
+    const registry = new WazirOsEngineRegistry(loadOsEngineConfig());
+    registry.setJobOverride(jobKind as any, engineId === 'clear' ? null : engineId);
+    const next = registry.getConfig();
+    saveOsEngineConfig(next);
+    console.log(`Updated job override '${jobKind}': ${engineId === 'clear' ? 'cleared' : engineId}`);
+  });
+
+program.addCommand(engineCmd);
+
 // models command
 const modelsCmd = new Command()
   .name('models')

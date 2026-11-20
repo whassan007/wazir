@@ -7,6 +7,7 @@ export type SpotlightCategory =
   | 'terminal'
   | 'code'
   | 'models'
+  | 'engine'
   | 'fleet'
   | 'sessions'
   | 'surface'
@@ -24,7 +25,7 @@ export interface SpotlightMatch {
   /** Whether executing this match requires policy-governed AI orchestration */
   requiresAi: boolean;
   actionPayload: {
-    kind: 'exec-terminal' | 'open-file' | 'open-url' | 'dispatch-ai' | 'noop';
+    kind: 'exec-terminal' | 'open-file' | 'open-url' | 'dispatch-ai' | 'switch-engine' | 'noop';
     target: string;
     args?: string[];
   };
@@ -277,6 +278,40 @@ export async function querySpotlight(
     }));
   }
 
+  // 3b. Deterministic OS Engine Switch / Status (`engine`, `engine:<id>`, `use <liquid|gemma4|qwen|nemo|auto>`)
+  const lowerQuery = query.toLowerCase();
+  if (
+    lowerQuery === 'engine' ||
+    lowerQuery === 'engines' ||
+    lowerQuery.startsWith('engine:') ||
+    /^use\s+(liquid|gemma4|qwen|nemo|super-nemo|auto)\b/.test(lowerQuery)
+  ) {
+    const ENGINE_OPTIONS = [
+      { id: 'auto', aliases: ['auto'], label: 'Auto (Per-Job Smart Engine)', sub: 'Liquid AI for edge/quick, Gemma 4 for general, Qwen for code, Super Nemo for deep reasoning' },
+      { id: 'liquid-light', aliases: ['liquid', 'liquid-light', 'lfm'], label: 'Liquid AI (Light / Edge)', sub: 'Ultra-fast local/offline engine (LFM2 / small edge models)' },
+      { id: 'gemma4-generic', aliases: ['gemma4', 'gemma4-generic', 'gemma'], label: 'Gemma 4 (Generic / Balanced)', sub: 'Balanced multimodal & everyday desktop assistant' },
+      { id: 'qwen-coder', aliases: ['qwen', 'qwen-coder'], label: 'Qwen (Coding & Agentic)', sub: 'Code-specialized repository & tool-calling engine' },
+      { id: 'super-nemo', aliases: ['nemo', 'super-nemo', 'nemotron'], label: 'Super Nemo (Deep Reasoning)', sub: 'High-capacity Nemotron Super engine for architecture & formal tasks' },
+    ];
+    const arg = lowerQuery.replace(/^(engine:?|engines|use)\s*/, '').trim();
+    const filtered = arg
+      ? ENGINE_OPTIONS.filter((e) => e.id.includes(arg) || e.aliases.some((a) => a.includes(arg)))
+      : ENGINE_OPTIONS;
+    return (filtered.length > 0 ? filtered : ENGINE_OPTIONS).map((e) => ({
+      id: `engine:${e.id}`,
+      text: `Switch Wazir OS Engine: ${e.label}`,
+      subtext: e.sub,
+      iconName: 'cpu',
+      category: 'engine' as const,
+      relevance: 0.96,
+      requiresAi: false,
+      actionPayload: {
+        kind: 'switch-engine' as const,
+        target: e.id,
+      },
+    }));
+  }
+
   // 4. Deterministic Active Agents & Remote Workers (`fleet`, `agents`, `workers`)
   const lower = query.toLowerCase();
   if (lower === 'fleet' || lower === 'agents' || lower === 'workers') {
@@ -421,6 +456,35 @@ export async function executeSpotlightMatch(
 ): Promise<{ executed: boolean; detail: string }> {
   const apiBase = options.apiBaseUrl ?? DEFAULT_API_BASE;
   const fetchFn = options.fetchImpl ?? fetch;
+
+  if (match.actionPayload.kind === 'switch-engine') {
+    const token = resolveOperatorToken(options.operatorToken);
+    if (!token) {
+      return {
+        executed: false,
+        detail: 'Operator credential required to switch Wazir OS engine',
+      };
+    }
+    try {
+      const res = await fetchFn(`${apiBase}/api/v1/os/engine`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ activeEngineId: match.actionPayload.target }),
+      });
+      if (!res.ok) {
+        return { executed: false, detail: `Engine switch rejected (${res.status})` };
+      }
+      return { executed: true, detail: `Wazir OS engine set to ${match.actionPayload.target}` };
+    } catch (err) {
+      return {
+        executed: false,
+        detail: err instanceof Error ? err.message : 'Control plane unreachable',
+      };
+    }
+  }
 
   if (match.actionPayload.kind === 'dispatch-ai') {
     const token = resolveOperatorToken(options.operatorToken);

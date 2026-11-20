@@ -101,4 +101,28 @@ describe('Wazir Spotlight (KRunner Provider)', () => {
     expect(dispatchedAuth).toBe('Bearer test-operator-secret');
     expect(noToken).toBeDefined();
   });
+
+  it('switches the Wazir OS engine deterministically via Spotlight (use liquid/gemma4/qwen/nemo)', async () => {
+    const liquidHits = await querySpotlight('use liquid');
+    expect(liquidHits).toHaveLength(1);
+    expect(liquidHits[0].category).toBe('engine');
+    expect(liquidHits[0].requiresAi).toBe(false);
+    expect(liquidHits[0].actionPayload).toEqual({
+      kind: 'switch-engine',
+      target: 'liquid-light',
+    });
+
+    let postedBody = '';
+    const mockSwitch = (async (_url: string, init?: RequestInit) => {
+      postedBody = String(init?.body ?? '');
+      return new Response(JSON.stringify({ ok: true, activeEngineId: 'liquid-light' }), { status: 200 });
+    }) as typeof fetch;
+
+    const switched = await executeSpotlightMatch(liquidHits[0], {
+      operatorToken: 'test-operator-secret',
+      fetchImpl: mockSwitch,
+    });
+    expect(switched.executed).toBe(true);
+    expect(JSON.parse(postedBody)).toEqual({ activeEngineId: 'liquid-light' });
+  });
 });

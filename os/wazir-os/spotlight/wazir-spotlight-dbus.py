@@ -68,7 +68,7 @@ class WazirSpotlightRunner(dbus.service.Object):
             subprocess.Popen(["xdg-open", target])
         elif kind == "open-url":
             subprocess.Popen(["xdg-open", target])
-        elif kind == "dispatch-ai":
+        elif kind in ("dispatch-ai", "switch-engine"):
             subprocess.Popen(["wazir-spotlight", "run", json.dumps(item)])
 
 
