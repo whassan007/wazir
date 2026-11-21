@@ -679,4 +679,19 @@ export function registerWorkflowCommands(program: Command): void {
         if (res.code !== 0) process.exitCode = res.code;
       });
   }
+
+  if (!hasTopLevel('status')) {
+    program
+      .command('status [runId]')
+      .description('Show status for a workflow run or list active workflow runs')
+      .option('--workspace <dir>', 'Workspace root directory')
+      .option('-j, --json', 'Output JSON')
+      .action(async (runId: string | undefined, opts) => {
+        const res = runId
+          ? await workflowStatusCommand(runId, opts)
+          : await workflowJobsCommand(opts);
+        console.log(res.output);
+        if (res.code !== 0) process.exitCode = res.code;
+      });
+  }
 }

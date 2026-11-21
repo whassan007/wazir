@@ -11,6 +11,7 @@ import { registerMCPCommands, wasMCPRuntimeUsed } from './mcp.js';
 import { registerWebCommands } from './web.js';
 import { registerMobileCommands } from './mobile.js';
 import { registerGoalCommands } from './commands/goalCommands.js';
+import { registerWorkflowCommands } from './commands/workflowCommands.js';
 import { closeMCPRegistries, parseWorkloadDistribution, type RoutingMode } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
 import { createHandoffCommand } from './handoff.js';
@@ -842,10 +843,17 @@ program.addCommand(testCmd);
 
 // status command
 program
-  .command('status')
-  .description('Show system status')
+  .command('status [runId]')
+  .description('Show system status or inspect a specific workflow run')
+  .option('--workspace <dir>', 'Workspace root directory')
   .option('-j, --json', 'Output status in JSON format')
-  .action(async (options: { json?: boolean }) => {
+  .action(async (runId: string | undefined, options: { workspace?: string; json?: boolean }) => {
+    if (runId) {
+      const { workflowStatusCommand } = await import('./commands/workflowCommands.js');
+      const res = await workflowStatusCommand(runId, options);
+      console.log(res.output);
+      process.exit(res.code);
+    }
     const { statusCommand } = await import('./status.js');
     const result = await statusCommand({ json: options.json });
     console.log(result.output);
@@ -1944,8 +1952,22 @@ program
   .option('--distribution <spec>', 'Weighted workload distribution')
   .option('--theme <mode>', 'Color theme: auto, dark, light, mono')
   .option('-C, --cd <dir>', 'Workspace directory')
-  .option('--json', 'Output session inspection as JSON')
+  .option('--detach', 'Resume workflow run without waiting for completion')
+  .option('--json', 'Output session or workflow inspection as JSON')
   .action(async (sessionId: string | undefined, options) => {
+    if (sessionId && !options.list && !options.last) {
+      const { tryResumeWorkflowRun } = await import('./commands/workflowCommands.js');
+      const wfRes = await tryResumeWorkflowRun(sessionId, {
+        detach: Boolean(options.detach),
+        workspace: options.cd,
+        json: Boolean(options.json),
+      });
+      if (wfRes.handled) {
+        console.log(wfRes.output);
+        if (wfRes.code !== 0) process.exitCode = wfRes.code;
+        return;
+      }
+    }
     validateRoutingModeOption(options.routingMode);
     validatePermissionsOption(options.permissions);
     validateThemeOption(options.theme);
@@ -2157,7 +2179,17 @@ program
 const jobsCmd = new Command()
   .name('jobs')
   .alias('job')
-  .description('Manage fleet jobs and DAGs');
+  .description('Manage fleet jobs, DAGs, and persistent Loop/Graph/Goal workflows')
+  .option('-s, --status <status>', 'Filter workflow runs by status')
+  .option('--mode <mode>', 'Filter workflow runs by mode (single|loop|graph|hybrid)')
+  .option('--workspace <dir>', 'Workspace root directory')
+  .option('-j, --json', 'Output JSON')
+  .action(async (opts: { status?: string; mode?: string; workspace?: string; json?: boolean }) => {
+    const { workflowJobsCommand } = await import('./commands/workflowCommands.js');
+    const res = await workflowJobsCommand(opts);
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+  });
 
 jobsCmd
   .command('list')
@@ -2784,6 +2816,7 @@ serviceCmd
 
 program.addCommand(serviceCmd);
 program.addCommand(createHandoffCommand());
+registerWorkflowCommands(program);
 
 globalStartupProfiler.mark('cli.commands_registered');
 

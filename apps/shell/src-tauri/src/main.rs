@@ -292,7 +292,7 @@ async fn run_wazir_workflow(
         args.push(max_iter.to_string());
     }
     if let Some(max_conc) = max_concurrency {
-        args.push("--max-concurrency".into());
+        args.push("--concurrency".into());
         args.push(max_conc.to_string());
     }
 

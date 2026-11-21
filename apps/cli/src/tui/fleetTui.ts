@@ -3946,7 +3946,7 @@ export class FleetTui {
    * capturing stdout/stderr/exitCode as a persistent Block record that can be referenced via `@<id>`.
    */
   private async executeInlineShellCommand(shellCmd: string, submission: InteractiveSubmission): Promise<void> {
-    if (this.presentationMode === 'conversation' && this.conversation.permissionMode === 'read-only') {
+    if (this.presentationMode === 'conversation' && this.conversation?.permissionMode === 'read-only') {
       const theme = this.conversationRenderer.getTheme();
       this.conversationRenderer.append(
         `  ${theme.warning(theme.glyphs.warning)} Shell execution is disabled while permission mode is 'read-only'. Use /permissions to switch to 'ask' or 'auto'.`,

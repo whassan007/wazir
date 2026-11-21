@@ -161,6 +161,26 @@ const MATRIX: Record<string, Scope> = {
   'POST /api/v1/goal-studio/governance/preflight': 'operator',
   'POST /api/v1/goal-studio/governance/spend-check': 'operator',
 
+  // Goal Studio unified workflows (Loop / Graph / Goal)
+  'POST /api/v1/goal-studio/workflows/compile': 'operator',
+  'POST /api/v1/goal-studio/workflows/loop': 'operator',
+  'POST /api/v1/goal-studio/workflows/graph': 'operator',
+  'POST /api/v1/goal-studio/workflows/goal': 'operator',
+  'GET /api/v1/goal-studio/workflows/jobs': 'viewer',
+  'GET /api/v1/goal-studio/workflows/:runId': 'viewer',
+  'POST /api/v1/goal-studio/workflows/:runId/pause': 'operator',
+  'POST /api/v1/goal-studio/workflows/:runId/resume': 'operator',
+  'POST /api/v1/goal-studio/workflows/:runId/stop': 'operator',
+  'POST /api/v1/goal-studio/workflows/:runId/approve': 'operator',
+
+  // Public portal & telemetry ingestion/admin routes
+  'GET /api/v1/public/demo-fleet': 'public',
+  'POST /api/v1/public/commercial-license': 'public',
+  'POST /api/v1/diagnostics/events': 'public',
+  'GET /api/v1/diagnostics/issues': 'viewer',
+  'DELETE /api/v1/diagnostics/events': 'viewer',
+  'POST /api/v1/diagnostics/triage': 'viewer',
+
   // Remote checkpoint transport uses its own optional shared secret.
   'POST /api/v1/checkpoints/manifests': 'checkpoint-transport',
   'PUT /api/v1/checkpoints/blobs/:hash': 'checkpoint-transport',

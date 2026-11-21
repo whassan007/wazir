@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.4.0 — 2026-11-21
+
+**Release**: `v0.4.0`
+**Theme**: Wazir AI OS — Interactive Native Shell + Standard `wa` CLI + Bounded Loop + Acyclic DAG Graph + Automatic Goal Execution
+
+- **Native Wazir Shell (`wazir`, `wa shell`, `@wazir/core` `shellClassifier.ts`)**:
+  - Bare `wazir` launches Wazir Shell interactively (`readline` TTY REPL) or line-by-line on piped stdin, preserving native OS shell semantics (`cd`, `cd -`, `export`, `unset`, `alias`, `unalias`, quoting, pipes, redirections, exit codes, `SIGINT`, command history).
+  - Added deterministic Precedence 1 dispatch for all 14 reserved Wazir commands (`loop`, `graph`, `goal`, `jobs`, `agents`, `models`, `fleet`, `status`, `inspect`, `pause`, `resume`, `stop`, `history`, `help`), quote-aware operator detection (`loop "Improve X && test it"`), and OS collision escapes (`! cmd`, `\cmd`, `os:cmd`, `sh:cmd`).
+- **Native Bounded Loop Execution (`loop "..."` / `wa loop "..."`, `@wazir/goals/workflow`)**:
+  - Automatic collection discovery (Lorecraft `cities.json` / `cities/` directories, markdown/test/code workspace files, explicit `--items`, continuation predicates, or bounded iteration counts).
+  - Sequential (`--concurrency 1`) and parallel item execution, durable cursor tracking, retry & `no_progress` bounds (`maxRepairsPerTask`, `maxSameActionNoProgress`), pause/resume/stop, and crash recovery without re-executing completed items.
+- **Native DAG Graph Execution (`graph "..."` / `wa graph "..."`, `@wazir/goals/workflow`)**:
+  - Compiles natural-language goals into acyclic `GoalGraphDefinition` DAGs (`validateGoalGraph`, `criticalPath`, `topologicalOrder`) with parallel branches, dependency ordering, branch isolation, independent verification gates, and human approval release gates.
+- **Automatic Goal Mode & Unified Multi-Surface Parity (`goal "..."` / `wa goal run "..."`)**:
+  - Intent analyzer automatically classifies requests into `single`, `loop`, `graph`, or `hybrid` (DAG with bounded nested loops) with explainable rationales and `--mode` override.
+  - Unified `@wazir/goals` `WorkflowRuntimeService` shared across Wazir Shell, `wa` CLI (`loop`, `graph`, `goal run`, `jobs`, `status`, `inspect`, `pause`, `resume`, `stop`, `approve`), TUI (`/loop`, `/graph`, `/goal`), API (`/api/v1/goal-studio/workflows/*`), standalone `wa dashboard`, Web Mission Control, and Tauri Desktop Shell.
+  - Preserved all existing verification invariants (rejecting self-certified agent completion and unbudgeted hosted spend) without adding new self-improvement features.
+
 ## v0.3.2 — 2026-11-14
 
 **Release**: `v0.3.2`

@@ -664,6 +664,7 @@ describe('Goal Studio Execution Control Center (Workstream 07)', { timeout: 20_0
     const program = new Command();
     const goalCmd = registerGoalCommands(program);
     expect(goalCmd.commands.map((c) => c.name())).toEqual([
+      'run',
       'import',
       'create',
       'inspect',

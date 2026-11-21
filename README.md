@@ -10,7 +10,8 @@ Wazir AI OS is a cross-platform, AI-native execution environment and model-agnos
 
 - **Public Portal & Downloads:** [wazir-portal.pages.dev](https://wazir-portal.pages.dev) ([Download Page](https://wazir-portal.pages.dev/download)) · Target domain: `https://wazir.wael.bot`
 - **Core Components:**
-  1. **Wazir Shell** (`apps/shell/`, `wa shell`) — Native Tauri 2 + `portable-pty` terminal & CLI with deterministic `!` shell / `?` AI / auto routing (`shellClassifier.ts`) and offline resilience.
+  1. **Wazir Shell & CLI (`wazir`, `wa`)** (`apps/cli/`, `apps/shell/`, `wa shell`) — Native interactive terminal (`loop`, `graph`, `goal`, `jobs`, `status`, `inspect`, `pause`, `resume`, `stop`) combining deterministic OS shell compatibility (`!`, `\`, `os:`, pipes, redirections, `cd`), natural-language AI routing (`?`), and standalone `wa` CLI automation over one shared `@wazir/goals` workflow runtime.
+  2. **Loop, Graph & Goal Orchestration** (`packages/goals/src/workflow/`) — Bounded iterative Loop engine with collection discovery and crash recovery, acyclic DAG Graph compiler/controller with critical-path scheduling and branch isolation, and explainable automatic Goal compiler (`single` / `loop` / `graph` / `hybrid`).
   2. **Wazir Mission Control** (`apps/desktop/`, `apps/web/public/mission-control.html`) — Graphical operations console with machine drill-down, 10-state execution graph, replay, and approvals inbox.
   3. **Wazir Core** (`packages/core/`, `packages/agents/`, `packages/policies/`, `packages/scheduler/`, `packages/models/`) — Planning, policy enforcement, local-first Qwen routing, checkpoints, and `VerificationEngine`.
   4. **Wazir Workers** (`apps/worker/`, `apps/api/`) — Distributed execution services with SSE task streams, heartbeats, and lease-fenced execution claims.

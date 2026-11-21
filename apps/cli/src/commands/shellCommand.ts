@@ -143,6 +143,18 @@ export async function executeShellLine(
     return 0;
   }
 
+  if (classified.mode === 'wazir' && classified.wazirCommand) {
+    const code = await executeWazirShellCommand(
+      classified.wazirCommand,
+      classified.wazirArgs ?? '',
+      state,
+      onAiRequest,
+      options,
+    );
+    state.lastExitCode = code;
+    return code;
+  }
+
   if (classified.mode === 'ambiguous') {
     console.error(
       `[wazir-shell] Ambiguous input: "${classified.command}". Prefix with '! ' to execute in native shell or '? ' to route to Wazir AI.`,
@@ -568,21 +580,28 @@ export async function executeWazirShellCommand(
     case 'agents':
     case 'models':
     case 'fleet': {
-      const { createStore } = await import('../engine.js');
-      const { AgentRegistry, ComputerRegistry, ModelRegistry, RuntimeRegistry } = await import('@wazir/core');
-      const store = await createStore();
+      const { createEngine } = await import('../engine.js');
+      const engine = await createEngine({ readOnlyLifecycle: true, quiet: true, projectRoot: state.cwd });
       if (cmd === 'agents') {
-        const agents = await new AgentRegistry(store).list();
-        console.log(parsed.json ? JSON.stringify(agents, null, 2) : `Agents registered: ${agents.length}${agents.length ? '\n' + agents.map((a) => `  - ${a.id} (${a.status})`).join('\n') : ''}`);
+        const agents = engine.agents.list();
+        console.log(
+          parsed.json
+            ? JSON.stringify(agents, null, 2)
+            : `Agents registered: ${agents.length}${agents.length ? '\n' + agents.map((a) => `  - ${a.descriptor.name} (${a.source})`).join('\n') : ''}`,
+        );
         return 0;
       }
       if (cmd === 'models') {
-        const models = await new ModelRegistry(store).list();
-        console.log(parsed.json ? JSON.stringify(models, null, 2) : `Models registered: ${models.length}${models.length ? '\n' + models.map((m) => `  - ${m.id} (${m.family})`).join('\n') : ''}`);
+        const models = engine.models.list();
+        console.log(
+          parsed.json
+            ? JSON.stringify(models, null, 2)
+            : `Models registered: ${models.length}${models.length ? '\n' + models.map((m) => `  - ${m.id} (${m.family})`).join('\n') : ''}`,
+        );
         return 0;
       }
-      const computers = await new ComputerRegistry(store).list();
-      const runtimes = await new RuntimeRegistry(store).list();
+      const computers = engine.computers.list();
+      const runtimes = engine.runtimes.list();
       const payload = { computers, runtimes };
       console.log(parsed.json ? JSON.stringify(payload, null, 2) : `Fleet: ${computers.length} computer(s), ${runtimes.length} runtime(s)`);
       return 0;

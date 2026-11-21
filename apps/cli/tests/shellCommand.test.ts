@@ -107,4 +107,33 @@ describe('Wazir universal shell session', () => {
     expect(state.history).toContain('jobs');
     expect(state.history).toContain('history');
   });
+
+  it('executes loop, graph, goal, jobs, inspect, status directly from Wazir Shell using shared store', async () => {
+    const prevHome = process.env.WAZIR_HOME;
+    const prevWs = process.env.WAZIR_WORKSPACE_DIR;
+    const wazirHome = path.join(tmpDir, '.wazir-home');
+    fs.mkdirSync(wazirHome, { recursive: true });
+    process.env.WAZIR_HOME = wazirHome;
+    process.env.WAZIR_WORKSPACE_DIR = tmpDir;
+    fs.writeFileSync(
+      path.join(tmpDir, 'cities.json'),
+      JSON.stringify([{ name: 'Solis' }, { name: 'Vespera' }]),
+    );
+
+    try {
+      const state = createInitialShellState(tmpDir);
+      expect(await executeShellLine(`loop "Improve every Lorecraft city" --workspace "${tmpDir}" --json`, state)).toBe(0);
+      expect(await executeShellLine(`graph "Build multiplayer platform with auth and QA" --workspace "${tmpDir}" --dry-run --json`, state)).toBe(0);
+      expect(await executeShellLine(`goal "Check Lorecraft cities" --workspace "${tmpDir}" --json`, state)).toBe(0);
+      expect(await executeShellLine('jobs --json', state)).toBe(0);
+      expect(await executeShellLine('status --json', state)).toBe(0);
+      expect((state as { lastRunId?: string }).lastRunId).toBeTruthy();
+      expect(await executeShellLine('inspect --json', state)).toBe(0);
+    } finally {
+      if (prevHome === undefined) delete process.env.WAZIR_HOME;
+      else process.env.WAZIR_HOME = prevHome;
+      if (prevWs === undefined) delete process.env.WAZIR_WORKSPACE_DIR;
+      else process.env.WAZIR_WORKSPACE_DIR = prevWs;
+    }
+  });
 });

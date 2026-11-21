@@ -36,10 +36,10 @@
 
   <main id="main">
     <section class="hero" aria-labelledby="home-hero-title">
-      <div class="pill" style="margin-bottom:14px;">Wazir AI OS v0.3.2 · Local-First · Verified Execution</div>
+      <div class="pill" style="margin-bottom:14px;">Wazir AI OS v0.4.0 · Local-First · Verified Execution</div>
       <h1 id="home-hero-title">Wazir AI OS</h1>
-      <p class="lead">One intelligent shell. Every machine. Verified execution.</p>
-      <p class="sub">Execute traditional operating-system commands in a persistent native PTY, delegate complex engineering tasks to local Qwen models across your machines, and verify every result with observed evidence.</p>
+      <p class="lead">Wazir: Run commands. Describe goals. Execute workflows.</p>
+      <p class="sub">Execute traditional OS commands inside Wazir Shell, run bounded Loops and acyclic DAG Graphs with independent verification, or let automatic Goal mode compile and orchestrate the workflow across your local fleet.</p>
       <div class="hero-actions-row">
         <a class="btn primary" href="/download">Download Wazir</a>
         <a class="btn" href="#architecture">Component Explorer</a>
@@ -49,35 +49,51 @@
     </section>
 
     <section class="container tight">
-      <div class="terminal-box" aria-label="Wazir Shell interactive demonstration">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-          <span class="mono" style="font-size:12px;color:var(--terminal-muted);">Wazir Shell · Universal Command &amp; AI Prompt</span>
-          <span class="pill" style="background:rgba(96,165,250,0.18);color:#93c5fd;">Simulated Preview</span>
+      <div class="grid-2" style="gap:16px;margin-bottom:18px;">
+        <div class="terminal-box" aria-label="Wazir Shell interactive demonstration">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <span class="mono" style="font-size:12px;color:var(--terminal-muted);">Interface A · Interactive Wazir Shell (wazir)</span>
+            <span class="pill" style="background:rgba(96,165,250,0.18);color:#93c5fd;">OS + AI + Workflows</span>
+          </div>
+          <pre class="code-block">wazir:Lorecraft$ git status -s
+ M cities.json
+wazir:Lorecraft$ loop "Improve every Lorecraft city and test it"
+[LOOP] Run run-8a4f -> 4/4 completed (verified evidence)
+wazir:Lorecraft$ graph "Build multiplayer platform with auth and QA"
+[GRAPH] DAG 6 targets -> critical path G1 -> G6.qa -> completed
+wazir:Lorecraft$ goal "Make Lorecraft production-ready"
+[GOAL] Selected HYBRID (DAG + Loop) -> 7/7 completed</pre>
         </div>
-        <pre class="code-block">wa:Wazir$ git status -s
- M apps/portal/index.html
-wa:Wazir$ loop "Run unit tests and verify zero errors" --max-iterations 3
-[wazir-workflow] loop-1 -> Iteration 1/3 -> Verified (41/41 tests pass)
-wa:Wazir$ find the startup bottleneck in Wazir
-[wazir-ai] Planned -> Routed to local (qwen3-coder:30b) -> Verified</pre>
+        <div class="terminal-box" aria-label="Wazir CLI automation demonstration">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <span class="mono" style="font-size:12px;color:var(--terminal-muted);">Interface B · Standard Wazir CLI (wa)</span>
+            <span class="pill" style="background:rgba(52,211,153,0.18);color:#6ee7b7;">Scripts &amp; CI/CD</span>
+          </div>
+          <pre class="code-block">$ wa loop "Improve every Lorecraft city" --concurrency 2
+$ wa graph "Build multiplayer platform" --budget 0
+$ wa goal run "Make Lorecraft production-ready" --dry-run
+$ wa jobs --json
+$ wa inspect run-8a4f
+$ wa pause run-8a4f &amp;&amp; wa resume run-8a4f</pre>
+        </div>
       </div>
     </section>
 
     <section id="explore" class="container tight">
-      <h2 class="section-heading">Built for real systems</h2>
-      <p class="section-sub">Three principles that separate Wazir from a conventional chat assistant.</p>
+      <h2 class="section-heading">Built for real workflows</h2>
+      <p class="section-sub">One shared @wazir/goals orchestration backend powering Wazir Shell, standard CLI, API, Web, and Desktop.</p>
       <div class="grid-3">
         <div class="card">
-          <h3>Shell &amp; AI Coexist</h3>
-          <p class="muted">Deterministic classification routes <code>ls</code>, <code>git</code>, pipes, and SSH straight to your native PTY, while natural language routes to governed AI.</p>
+          <h3>Native Loop Mode</h3>
+          <p class="muted">Discovers workspace collections and iterates cleanly with cursor checkpoints, retry limits, no-progress blocking, and crash recovery.</p>
         </div>
         <div class="card">
-          <h3>Local-First Fleet</h3>
-          <p class="muted">Run Qwen models on Apple Silicon (MLX / Ollama) and Linux GPUs (DGX Spark) with lease-fenced worker dispatch.</p>
+          <h3>Acyclic DAG Graph</h3>
+          <p class="muted">Decomposes complex goals into parallel milestones, critical paths, branch isolation, and human production release approval gates.</p>
         </div>
         <div class="card">
-          <h3>Verified Execution</h3>
-          <p class="muted">Completion requires observed test, build, or tool evidence—never an LLM's self-reported summary.</p>
+          <h3>Automatic Goal &amp; Shell</h3>
+          <p class="muted">Combines native OS PTY semantics (<code>cd</code>, pipes, <code>!cmd</code>/<code>\cmd</code> escapes) with explainable Single / Loop / Graph / Hybrid compilation.</p>
         </div>
       </div>
     </section>
@@ -270,13 +286,13 @@ wa:Wazir$ find the startup bottleneck in Wazir
 
     // 9 Interactive Components (Section 8.3)
     const COMPONENTS = [
-      { id:'shell', name:'Wazir Shell', status:'Operational · v0.3.2', purpose:'Universal AI-native terminal combining native PTY shell execution, 14 reserved workflow commands (loop, graph, goal, jobs, agents, models, fleet, status, inspect, pause, resume, stop, history, help), and governed AI tasks.', caps:'Persistent cwd/env, pipes, Ctrl+C, ! / ? / auto routing, optional tool discovery (fzf, zoxide, rg, bat, atuin, lazygit), offline fallback', deps:'Tauri 2, portable-pty, @wazir/core', src:'apps/shell/, apps/cli/src/commands/shellCommand.ts', install:'Download Wazir Shell.app or run wa shell', cfg:'wa shell / Wazir Shell.app', interacts:'Sends AI & workflow requests to Wazir Core; deep-links active jobs into Mission Control.' },
-      { id:'mc', name:'Mission Control', status:'Operational · v0.3.2', purpose:'Graphical machine and agent orchestration operations console.', caps:'Interactive machine drill-down, 10-state execution graph, approvals inbox, execution replay', deps:'Tauri 2, @wazir/web, @wazir/api', src:'apps/desktop/, apps/web/public/mission-control.html', install:'Download Wazir Mission Control.app', cfg:'npm run desktop:dev / :4801/mission-control.html', interacts:'Streams real-time SSE job state from Wazir Core and worker telemetry from Fleet Registry.' },
-      { id:'core', name:'Wazir Core', status:'Operational · v0.3.2', purpose:'Task planning, policy enforcement, persistence, checkpoints, and verification orchestration.', caps:'JobOrchestrator, durable checkpoints, lease fencing, PolicyEngine, ExecutionRecovery', deps:'Node.js >= 22.13, SQLite / Postgres', src:'packages/core/src/services/, packages/policies/', install:'Included in @wazir/core & wa bundle', cfg:'~/.wazir/config.json', interacts:'Coordinates Planner, Model Router, Worker dispatch, and Verification Engine.' },
+      { id:'shell', name:'Wazir Shell', status:'Operational · v0.4.0', purpose:'Universal AI-native terminal combining native PTY shell execution, 14 reserved workflow commands (loop, graph, goal, jobs, agents, models, fleet, status, inspect, pause, resume, stop, history, help), and governed AI tasks.', caps:'Persistent cwd/env, pipes, Ctrl+C, ! / \\ / os: escapes, optional tool discovery (fzf, zoxide, rg, bat, atuin, lazygit), offline fallback', deps:'Tauri 2, portable-pty, @wazir/core, @wazir/goals', src:'apps/shell/, apps/cli/src/commands/shellCommand.ts', install:'Download Wazir Shell.app or run wazir / wa shell', cfg:'wazir / wa shell / Wazir Shell.app', interacts:'Executes OS commands in native PTY and shares persistent workflow runs with wa CLI & Mission Control.' },
+      { id:'mc', name:'Mission Control', status:'Operational · v0.4.0', purpose:'Graphical machine and agent orchestration operations console.', caps:'Interactive machine drill-down, Loop cursor viewer, DAG Graph view, approvals inbox, execution replay', deps:'Tauri 2, @wazir/web, @wazir/api, @wazir/goals', src:'apps/desktop/, apps/web/public/mission-control.html', install:'Download Wazir Mission Control.app', cfg:'npm run desktop:dev / :4801/mission-control.html', interacts:'Streams real-time SSE job state from Wazir Core and worker telemetry from Fleet Registry.' },
+      { id:'core', name:'Wazir Core', status:'Operational · v0.4.0', purpose:'Shared Goal/Loop/Graph orchestration, policy enforcement, persistence, checkpoints, and verification engine.', caps:'WorkflowRuntimeService, ContinuousGoalController, lease fencing, PolicyEngine, ExecutionRecovery', deps:'Node.js >= 22.13, SQLite / Postgres', src:'packages/goals/src/workflow/, packages/core/src/services/, packages/policies/', install:'Included in @wazir/core, @wazir/goals & wa bundle', cfg:'~/.wazir/config.json', interacts:'Coordinates Planner, Model Router, Worker dispatch, and Verification Engine.' },
       { id:'router', name:'Model Router', status:'Operational · 90%+ Local Target', purpose:'Capability-aware model selection across local MLX, Ollama, LM Studio, and authorized providers.', caps:'Local-first Qwen preference, hardware capability matching, backpressure & fallback', deps:'@wazir/models, @wazir/scheduler', src:'packages/models/, packages/core/src/services/scheduler.ts', install:'Included in Wazir Core', cfg:'fleetHosts & model preferences in ~/.wazir/config.json', interacts:'Selects optimal local or remote model endpoint for Agent Runtime.' },
       { id:'agent', name:'Agent Runtime', status:'Operational · Qwen Core + ACP', purpose:'Unified ReAct coding and execution agent with smart edit and context compression.', caps:'Parallel read-only tool scheduling, loop detection, proportional verification, ACP/MCP bridge', deps:'@wazir/agents, @wazir/tools', src:'packages/agents/src/qwenCore/, packages/agents/src/acp/', install:'Bundled in bin/wa.js', cfg:'wa exec "<task>"', interacts:'Executes sandboxed tools on assigned Worker Machines and reports evidence to Verification Engine.' },
       { id:'worker', name:'Worker Machines', status:'Operational · Multi-Host SSE', purpose:'Distributed execution services on local and remote macOS, Linux/DGX Spark, and Windows hosts.', caps:'SSE task streaming, heartbeats, hardware/model discovery, lease-fenced job claims', deps:'@wazir/workers, @wazir/worker', src:'apps/worker/src/, apps/api/src/', install:'wa workers start or systemd/launchd service', cfg:'WAZIR_REGISTRATION_TOKEN & API URL', interacts:'Claims lease-fenced tasks from Wazir Core and streams execution events back to Mission Control.' },
-      { id:'mobile', name:'GrapheneOS Mobile', status:'Operational · Zero-Root APK + Termux', purpose:'GrapheneOS-compatible Android companion application and Termux ARM64 CLI integration.', caps:'Task input, fleet view, live execution progress, approval requests, QR/URI host pairing', deps:'Android SDK 35, Jetpack Compose, Termux nodejs-lts', src:'apps/android/, scripts/install-termux.sh', install:'Install wazir-mobile-0.3.2-android-debug.apk or run install-termux.sh', cfg:'Scoped device pairing URI / QR token', interacts:'Connects to authorized Wazir API over TLS/SSE for remote monitoring and approvals.' },
+      { id:'mobile', name:'GrapheneOS Mobile', status:'Operational · Zero-Root APK + Termux', purpose:'GrapheneOS-compatible Android companion application and Termux ARM64 CLI integration.', caps:'Task input, fleet view, live execution progress, approval requests, QR/URI host pairing', deps:'Android SDK 35, Jetpack Compose, Termux nodejs-lts', src:'apps/android/, scripts/install-termux.sh', install:'Install wazir-mobile-0.4.0-android-debug.apk or run install-termux.sh', cfg:'Scoped device pairing URI / QR token', interacts:'Connects to authorized Wazir API over TLS/SSE for remote monitoring and approvals.' },
       { id:'diag', name:'Diagnostic Pipeline', status:'Operational · Consent-Gated', purpose:'Consent-managed error collection, redaction, crash fingerprinting, and local Qwen issue triage.', caps:'First-launch disclosure gate, allowlist + regex redaction, bounded offline queue, deduplication', deps:'@wazir/observability', src:'packages/observability/src/, apps/api/src/diagnosticsRoutes.ts', install:'Built into CLI, Shell, and API server', cfg:'wa diagnostics status | accept | decline | purge', interacts:'Ingests sanitized client errors and uses local Qwen models to classify reproduction candidates.' },
       { id:'verify', name:'Verification Engine', status:'Operational · Evidence-Gated', purpose:'Independent verification engine ensuring tasks never complete on model self-reporting alone.', caps:'Test/build execution oracles, file-diff verification, formal assurance adapters', deps:'@wazir/assurance, @wazir/core', src:'packages/core/src/services/verificationEngine.ts', install:'Built into Wazir Core execution pipeline', cfg:'Automatic on every governed AI task', interacts:'Validates Worker tool outputs before transitioning job state to Completed and verified.' },
     ];
