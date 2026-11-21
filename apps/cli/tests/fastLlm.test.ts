@@ -8,6 +8,7 @@ import {
   discoverFastLocalEndpoints,
   getFastLatencyFilePath,
   getFastModelCachePath,
+  isFastHostedFallbackPermitted,
   loadCachedFastModels,
   resolveConfiguredFastModelOverride,
   saveCachedFastModels,
@@ -683,5 +684,72 @@ describe('fastLlm zero-RookEngine local discovery, benchmarking, caching, and st
     expect(bench.selected?.candidate.id).toBe('small-4b');
     expect(bench.entries.find((e) => e.candidate.id === 'small-4b')?.candidate.measuredTtftMs).toBeGreaterThan(0);
     expect(bench.entries.find((e) => e.candidate.id === 'huge-70b')?.candidate.measuredTtftMs).toBeUndefined();
+  });
+
+  it('respects networkAllowed=false/WAZIR_LOCAL_ONLY privacy policy and recovers from stale warm cache via fresh discovery', async () => {
+    const deadUrl = await getUnusedPortUrl();
+    const policyHome = makeWazirHome({
+      lmstudioUrl: `${deadUrl}/v1`,
+      ollamaUrl: deadUrl,
+      networkAllowed: false,
+    });
+    expect(isFastHostedFallbackPermitted({ wazirHome: policyHome, env: {} })).toBe(false);
+    expect(isFastHostedFallbackPermitted({ env: { WAZIR_LOCAL_ONLY: '1' } })).toBe(false);
+
+    const liveLm = await startMockServer((req, res) => {
+      if (req.url === '/api/v0/models') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ data: [{ id: 'fresh-loaded-4b', state: 'loaded', quantization: 'Q4_K_M' }] }));
+        return;
+      }
+      if (req.url === '/v1/models') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ data: [{ id: 'fresh-loaded-4b' }] }));
+        return;
+      }
+      if (req.url === '/v1/chat/completions') {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'recovered' } }] })}\n\n`);
+        res.end('data: [DONE]\n\n');
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    cleanupServers.push(liveLm);
+
+    const recoveryHome = makeWazirHome({
+      lmstudioUrl: `${liveLm.url}/v1`,
+      ollamaUrl: deadUrl,
+      mlxUrl: `${deadUrl}/v1`,
+    });
+    // Seed stale cache pointing primary (loaded) -> dead tunnel and secondary (unloaded) -> dead tunnel
+    await saveCachedFastModels(
+      [
+        {
+          candidate: { id: 'stale-tunnel-30b', provider: 'lmstudio', local: true, loaded: true, available: true, health: 'healthy', parameterBillions: 30 },
+          endpoint: 'mac_studio:lmstudio',
+          runtimeType: 'lmstudio',
+          baseUrl: `${deadUrl}/v1`,
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          candidate: { id: 'stale-unloaded-9b', provider: 'lmstudio', local: true, loaded: false, available: true, health: 'healthy', parameterBillions: 9 },
+          endpoint: 'local:lmstudio',
+          runtimeType: 'lmstudio',
+          baseUrl: `${deadUrl}/v1`,
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      recoveryHome,
+    );
+
+    const res = await streamFastLocalCompletion('what is TCP', {
+      wazirHome: recoveryHome,
+      env: {},
+    });
+    expect(res.status).toBe('success');
+    expect(res.model).toBe('fresh-loaded-4b');
+    expect(res.output).toBe('recovered');
   });
 });

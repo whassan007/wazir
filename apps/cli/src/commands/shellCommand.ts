@@ -27,6 +27,7 @@ import {
 import {
   discoverFastLocalEndpoints,
   getFastLatencyFilePath,
+  isFastHostedFallbackPermitted,
   loadCachedFastModels,
   streamFastLocalCompletion,
   triggerBackgroundFastModelWarmup,
@@ -1568,7 +1569,13 @@ export function createShellAiHandler(handlerOpts: CreateShellAiHandlerOptions = 
         process.env.NVIDIA_API_KEY ||
         process.env.NVAPI_KEY,
       );
-      if (skipDiscovery || s.model || !hasHostedKey) {
+      const allowHostedFallback =
+        hasHostedKey &&
+        isFastHostedFallbackPermitted({
+          wazirHome: wazirHome || undefined,
+          env: s.env,
+        });
+      if (skipDiscovery || s.model || !allowHostedFallback) {
         const rawErr = fastRes.error || 'No qualifying local model is available.';
         const errMsg = !s.model && /No fast local LLM/i.test(rawErr)
           ? `No AI models or providers are configured or reachable (${rawErr})`

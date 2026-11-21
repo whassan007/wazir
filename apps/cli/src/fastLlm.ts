@@ -65,6 +65,8 @@ interface RawFastConfig {
   lmstudioUrl?: string | null;
   mlxUrl?: string | null;
   strictLoopbackOnly?: boolean;
+  networkAllowed?: boolean;
+  localOnly?: boolean;
   fleetHosts?: RawFleetHostConfig[];
   routing?: {
     mode?: string;
@@ -288,6 +290,24 @@ function readFastConfig(wazirHome?: string, env?: Record<string, string | undefi
   } catch {
     return {};
   }
+}
+
+export function isFastHostedFallbackPermitted(options?: {
+  wazirHome?: string;
+  env?: Record<string, string | undefined>;
+}): boolean {
+  const env = options?.env ?? process.env;
+  if (env.WAZIR_LOCAL_ONLY === '1' || env.WAZIR_LOCAL_ONLY === 'true') {
+    return false;
+  }
+  const config = readFastConfig(options?.wazirHome, env);
+  if (config.networkAllowed === false || config.localOnly === true) {
+    return false;
+  }
+  if (config.routing?.mode?.trim().toLowerCase() === 'local_only') {
+    return false;
+  }
+  return true;
 }
 
 function normalizeOverrideValue(raw: string | undefined): string | undefined {
@@ -1673,13 +1693,48 @@ export async function streamFastLocalCompletion(
   recordObservedFastModelMetrics(entries, primaryEntry, primaryResult, options?.wazirHome);
 
   // Fallback ONCE to the next highest-ranked eligible local candidate when no override was pinned
-  // and no tokens were emitted to the caller yet.
+  // and no tokens were emitted to the caller yet. When warm cache fails, refresh live endpoints
+  // first if the cached fallback isn't loaded so newly loaded local models are found immediately.
   if (!overrideModel && !primaryResult.emittedAnyToken) {
-    const fallbackCandidate = selection.ranked.find(
+    const failedKeys = new Set<string>([`${primaryEntry.baseUrl}|${primaryEntry.candidate.id}`]);
+    const cachedFallbackCandidate = selection.ranked.find(
       (item) => item.candidate !== primaryEntry.candidate,
     )?.candidate;
-    const fallbackEntry = fallbackCandidate ? entryByCandidate.get(fallbackCandidate) : undefined;
-    if (fallbackEntry) {
+    const cachedFallbackEntry = cachedFallbackCandidate
+      ? entryByCandidate.get(cachedFallbackCandidate)
+      : undefined;
+
+    let fallbackEntry = cachedFallbackEntry;
+    if (
+      usedWarmCache &&
+      env.WAZIR_SKIP_RUNTIME_DISCOVERY !== '1' &&
+      (!fallbackEntry || !fallbackEntry.candidate.loaded)
+    ) {
+      const freshEntries = await discoverFastLocalEndpoints({
+        wazirHome: options?.wazirHome,
+        env,
+        timeoutMs: 900,
+      });
+      if (freshEntries.length > 0) {
+        entries = freshEntries;
+        await saveCachedFastModels(entries, options?.wazirHome).catch(() => undefined);
+        const freshMap = new Map<FastModelCandidate, FastModelCacheEntry>(
+          entries.map((entry) => [entry.candidate, entry]),
+        );
+        const eligibleFresh = entries
+          .filter((entry) => !failedKeys.has(`${entry.baseUrl}|${entry.candidate.id}`))
+          .map((entry) => entry.candidate);
+        const freshSelection = selectFastLocalModel(eligibleFresh, {
+          env,
+          localOnly,
+        });
+        if (freshSelection.selected) {
+          fallbackEntry = freshMap.get(freshSelection.selected);
+        }
+      }
+    }
+
+    if (fallbackEntry && !failedKeys.has(`${fallbackEntry.baseUrl}|${fallbackEntry.candidate.id}`)) {
       const fallbackResult = await executeStreamingRequest(fallbackEntry, {
         prompt: request,
         systemPrompt,
@@ -1724,6 +1779,7 @@ export async function streamFastLocalCompletion(
         };
       }
 
+      recordObservedFastModelMetrics(entries, fallbackEntry, fallbackResult, options?.wazirHome);
       return {
         status: 'error',
         error: fallbackResult.error ?? primaryResult.error,
