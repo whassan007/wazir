@@ -12,6 +12,7 @@ import {
   createRecoveryService,
   createTargetTaskExecutor,
   createVerificationService,
+  createWorkflowRuntimeService,
   type ContinuousGoalController,
   type DeclaredCheck,
   type EvidenceRecord,
@@ -28,6 +29,7 @@ import {
   type PromptStudio,
   type TargetId,
   type TargetTaskExecutor,
+  type WorkflowRuntimeService,
 } from '@wazir/goals';
 import { createGoalStudioApprovals, type GoalStudioApprovals, type MobileApprovalMirror } from './controlApprovals.js';
 import { createGoalEventLog } from './controlEventLog.js';
@@ -40,6 +42,7 @@ export interface CreateGoalStudioServicesOptions extends GoalStudioDeps {
   events?: GoalEventLog;
   approvals?: GoalStudioApprovals;
   mobileApprovals?: MobileApprovalMirror;
+  workflow?: WorkflowRuntimeService;
   holderId?: string;
   leaseTtlMs?: number;
   seedPrompts?: boolean;
@@ -73,6 +76,8 @@ export interface WiredGoalStudioServices extends GoalStudioServices {
     shutdown?: ContinuousGoalController['shutdown'];
   };
   approvals: GoalStudioApprovals;
+  workflow: WorkflowRuntimeService;
+  workspaceRoot: string;
 }
 
 function ensureDefaultFleetModels(
@@ -557,6 +562,16 @@ export async function createGoalStudioServices(
     },
   };
 
+  const workflow =
+    options.workflow ??
+    createWorkflowRuntimeService({
+      store,
+      workspaceRoot,
+      clock,
+      holderId: options.holderId ? `${options.holderId}:workflow` : undefined,
+      leaseTtlMs: options.leaseTtlMs,
+    });
+
   return {
     graphs,
     ledger,
@@ -569,5 +584,7 @@ export async function createGoalStudioServices(
     executor,
     controller,
     approvals,
+    workflow,
+    workspaceRoot,
   };
 }

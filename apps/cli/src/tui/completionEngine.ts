@@ -48,9 +48,37 @@ export const CONVERSATION_SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   },
   {
     command: '/resume',
-    summary: 'Resume a previous conversation session in this workspace',
-    usage: '/resume [session-id | --last]',
+    summary: 'Resume a paused workflow run or previous conversation session',
+    usage: '/resume [runId | session-id | --last]',
     acceptsArgs: true,
+    tier: 'primary',
+  },
+  {
+    command: '/loop',
+    summary: 'Run a bounded iterative Loop workflow across items or until a condition',
+    usage: '/loop <task>',
+    acceptsArgs: true,
+    tier: 'primary',
+  },
+  {
+    command: '/graph',
+    summary: 'Compile and execute a dependency-ordered DAG Graph workflow',
+    usage: '/graph <goal>',
+    acceptsArgs: true,
+    tier: 'primary',
+  },
+  {
+    command: '/goal',
+    aliases: ['/goals'],
+    summary: 'Auto-select single, loop, graph, or hybrid workflow or open Goal Studio',
+    usage: '/goal [goal]',
+    acceptsArgs: true,
+    tier: 'primary',
+  },
+  {
+    command: '/jobs',
+    summary: 'List active and persisted Loop, Graph, and Goal workflow runs',
+    usage: '/jobs [status | mode]',
     tier: 'primary',
   },
   {
@@ -112,6 +140,27 @@ export const CONVERSATION_SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   {
     command: '/copy',
     summary: 'Enter keyboard transcript copy mode (or drag-select with mouse)',
+    tier: 'secondary',
+  },
+  {
+    command: '/inspect',
+    summary: 'Inspect workflow plan, loop cursor, critical path, targets, and evidence',
+    usage: '/inspect <runId>',
+    acceptsArgs: true,
+    tier: 'secondary',
+  },
+  {
+    command: '/pause',
+    summary: 'Pause a running workflow run cleanly at its durable checkpoint',
+    usage: '/pause <runId>',
+    acceptsArgs: true,
+    tier: 'secondary',
+  },
+  {
+    command: '/stop',
+    summary: 'Stop a workflow run cleanly and release its lease',
+    usage: '/stop <runId>',
+    acceptsArgs: true,
     tier: 'secondary',
   },
   {
@@ -220,7 +269,14 @@ export function matchSlashCompletions(prompt: string, cursor: number): ActiveCom
     label: spec.command,
     detail: spec.summary,
     kind: 'command',
-    executeOnEnter: !spec.acceptsArgs || spec.command === '/model' || spec.command === '/permissions' || spec.command === '/resume' || spec.command === '/diff',
+    executeOnEnter:
+      !spec.acceptsArgs ||
+      spec.command === '/model' ||
+      spec.command === '/permissions' ||
+      spec.command === '/resume' ||
+      spec.command === '/diff' ||
+      spec.command === '/goal' ||
+      spec.command === '/jobs',
   }));
 
   return {

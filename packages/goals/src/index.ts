@@ -10,3 +10,5 @@ export * from './prompts/index.js';
 export { canonicalJson, sha256Hex, type PromptSeed } from './prompts/index.js';
 export * from './routing/index.js';
 export * from './governance/index.js';
+export * from './workflow/index.js';
+

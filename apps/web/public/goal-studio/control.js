@@ -84,6 +84,19 @@ export function createControlModule() {
   let lastError = null;
   let statusFilter = 'all';
   let runResults = null;
+  let wfPrompt = '';
+  let wfMode = 'auto';
+  let wfMaxIterations = '';
+  let wfMaxConcurrency = '';
+  let wfItems = '';
+  let wfDryRun = false;
+  let wfFilterStatus = 'all';
+  let wfFilterMode = 'all';
+  let wfAnalysis = null;
+  let wfJobs = [];
+  let wfInspection = null;
+  let wfError = null;
+  let wfBusy = false;
 
   function extractArtifacts(res) {
     if (!res) return [];
@@ -168,8 +181,19 @@ export function createControlModule() {
 
   async function refreshRuns() {
     try {
-      const data = await apiJson('/runs');
-      runsList = Array.isArray(data.runs) ? data.runs : [];
+      const [runsResult, wfResult] = await Promise.allSettled([
+        apiJson('/runs'),
+        refreshWorkflowJobs(false),
+      ]);
+      if (runsResult.status === 'fulfilled') {
+        runsList = Array.isArray(runsResult.value.runs) ? runsResult.value.runs : [];
+        lastError = null;
+      } else {
+        runsList = [];
+        if (wfResult.status === 'rejected') {
+          lastError = runsResult.reason?.message || String(runsResult.reason);
+        }
+      }
       const stateRunId = currentCtx?.state?.runId;
       const targetRunId = activeRunId || stateRunId || (runsList[0] && runsList[0].runId) || null;
       if (targetRunId) {
@@ -181,6 +205,176 @@ export function createControlModule() {
       lastError = err.message || String(err);
       render();
     }
+  }
+
+  function buildWorkflowPayload() {
+    const prompt = wfPrompt.trim();
+    const payload = {
+      prompt,
+      originInterface: 'web',
+      dryRun: Boolean(wfDryRun),
+    };
+    const maxIter = Number(wfMaxIterations);
+    if (wfMaxIterations !== '' && Number.isFinite(maxIter) && maxIter > 0) {
+      payload.maxIterations = Math.floor(maxIter);
+    }
+    const maxConc = Number(wfMaxConcurrency);
+    if (wfMaxConcurrency !== '' && Number.isFinite(maxConc) && maxConc > 0) {
+      payload.maxConcurrency = Math.floor(maxConc);
+    }
+    const parsedItems = wfItems
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (parsedItems.length > 0) {
+      payload.items = parsedItems;
+    }
+    return payload;
+  }
+
+  async function refreshWorkflowJobs(shouldRender = true) {
+    try {
+      const params = new URLSearchParams();
+      if (wfFilterStatus && wfFilterStatus !== 'all') params.set('status', wfFilterStatus);
+      if (wfFilterMode && wfFilterMode !== 'all') params.set('mode', wfFilterMode);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const data = await apiJson(`/workflows/jobs${qs}`);
+      wfJobs = Array.isArray(data.jobs) ? data.jobs : [];
+      if (wfInspection?.summary?.runId) {
+        const refreshed = await apiJson(`/workflows/${encodeURIComponent(wfInspection.summary.runId)}`).catch(() => null);
+        if (refreshed) wfInspection = refreshed;
+      }
+      wfError = null;
+    } catch (err) {
+      wfError = err.message || String(err);
+    }
+    if (shouldRender) render();
+  }
+
+  async function handleWorkflowCompile() {
+    syncWorkflowInputsFromDom();
+    const payload = buildWorkflowPayload();
+    if (!payload.prompt) {
+      wfError = 'Enter a goal or task prompt to analyze.';
+      render();
+      return;
+    }
+    wfBusy = true;
+    wfError = null;
+    render();
+    try {
+      const body = {
+        ...payload,
+        requestedMode: wfMode === 'auto' ? 'auto' : wfMode,
+      };
+      wfAnalysis = await apiJson('/workflows/compile', { method: 'POST', body });
+      wfError = null;
+    } catch (err) {
+      wfError = err.message || String(err);
+    } finally {
+      wfBusy = false;
+      render();
+    }
+  }
+
+  async function handleWorkflowLaunch() {
+    syncWorkflowInputsFromDom();
+    const payload = buildWorkflowPayload();
+    if (!payload.prompt) {
+      wfError = 'Enter a goal or task prompt to launch.';
+      render();
+      return;
+    }
+    let endpoint = '/workflows/goal';
+    const body = { ...payload };
+    if (wfMode === 'loop') {
+      endpoint = '/workflows/loop';
+    } else if (wfMode === 'graph') {
+      endpoint = '/workflows/graph';
+    } else if (wfMode === 'single' || wfMode === 'hybrid') {
+      endpoint = '/workflows/goal';
+      body.overrideMode = wfMode;
+    }
+    wfBusy = true;
+    wfError = null;
+    render();
+    try {
+      const res = await apiJson(endpoint, { method: 'POST', body });
+      wfAnalysis = res;
+      wfError = null;
+      await refreshWorkflowJobs(false);
+      if (res.run?.runId) {
+        await inspectWorkflowRun(res.run.runId, false);
+        await apiJson(`/runs/${encodeURIComponent(res.run.runId)}`)
+          .then(async () => {
+            await selectRun(res.run.runId);
+          })
+          .catch(() => undefined);
+      }
+    } catch (err) {
+      wfError = err.message || String(err);
+    } finally {
+      wfBusy = false;
+      render();
+    }
+  }
+
+  async function inspectWorkflowRun(runId, shouldRender = true) {
+    if (!runId) return;
+    try {
+      wfInspection = await apiJson(`/workflows/${encodeURIComponent(runId)}`);
+      wfError = null;
+    } catch (err) {
+      wfError = err.message || String(err);
+    }
+    if (shouldRender) render();
+  }
+
+  async function handleWorkflowControl(runId, action, targetId, note) {
+    if (!runId) return;
+    wfError = null;
+    try {
+      if (action === 'approve') {
+        await apiJson(`/workflows/${encodeURIComponent(runId)}/approve`, {
+          method: 'POST',
+          body: {
+            ...(targetId ? { targetId } : {}),
+            note: note || 'Approved in Goal Studio Control Center',
+          },
+        });
+      } else {
+        await apiJson(`/workflows/${encodeURIComponent(runId)}/${action}`, {
+          method: 'POST',
+          body: {},
+        });
+      }
+      await refreshWorkflowJobs(false);
+      await inspectWorkflowRun(runId, false);
+      if (activeRunId === runId) {
+        await refreshActiveRun(runId, false);
+      } else {
+        render();
+      }
+    } catch (err) {
+      wfError = err.message || String(err);
+      render();
+    }
+  }
+
+  function syncWorkflowInputsFromDom() {
+    if (!rootEl) return;
+    const pEl = rootEl.querySelector('#gs-wf-prompt');
+    if (pEl) wfPrompt = pEl.value;
+    const mEl = rootEl.querySelector('#gs-wf-mode');
+    if (mEl) wfMode = mEl.value;
+    const iterEl = rootEl.querySelector('#gs-wf-max-iterations');
+    if (iterEl) wfMaxIterations = iterEl.value;
+    const concEl = rootEl.querySelector('#gs-wf-max-concurrency');
+    if (concEl) wfMaxConcurrency = concEl.value;
+    const itemsEl = rootEl.querySelector('#gs-wf-items');
+    if (itemsEl) wfItems = itemsEl.value;
+    const dryEl = rootEl.querySelector('#gs-wf-dry-run');
+    if (dryEl) wfDryRun = Boolean(dryEl.checked);
   }
 
   async function selectRun(runId) {
@@ -318,8 +512,57 @@ export function createControlModule() {
     }
   }
 
+  function renderWorkflowAnalysisHtml() {
+    if (!wfAnalysis) {
+      return '<div style="color:#94a3b8;font-size:12px;">Enter a natural-language goal or task and click <strong>Analyze / Preview</strong> to inspect intent classification, Loop items, DAG critical path, and policy gates.</div>';
+    }
+    const exp = wfAnalysis.explanation || wfAnalysis.plan?.explanation || {};
+    const mode = wfAnalysis.mode || wfAnalysis.plan?.mode || exp.selectedMode || 'single';
+    const reasons = Array.isArray(exp.reasons) ? exp.reasons : [];
+    const signals = exp.signals || {};
+    const policy = exp.policyAssessment || {};
+    const cp = wfAnalysis.criticalPath?.targets || wfAnalysis.plan?.criticalPath?.targets || [];
+    const loop = wfAnalysis.loop || wfAnalysis.plan?.loop;
+    const targets = wfAnalysis.definition?.targets || wfAnalysis.graph?.definition?.targets || [];
+
+    return `
+      <div style="display:grid;gap:8px;font-size:12px;">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;">
+          <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+            <strong>Selected Mode:</strong>
+            <span style="padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;background:#38bdf822;color:#38bdf8;border:1px solid #38bdf8;">${escapeHtml(mode)}</span>
+            ${exp.overridden ? '<span style="padding:2px 8px;border-radius:999px;font-size:11px;background:#eab30822;color:#eab308;border:1px solid #eab308;">overridden</span>' : ''}
+            ${wfAnalysis.plan?.dryRun ? '<span style="padding:2px 8px;border-radius:999px;font-size:11px;background:#eab30822;color:#eab308;border:1px solid #eab308;">dry-run</span>' : ''}
+            ${wfAnalysis.run?.runId ? `<span style="padding:2px 8px;border-radius:999px;font-size:11px;background:#22c55e22;color:#22c55e;border:1px solid #22c55e;">run: ${escapeHtml(wfAnalysis.run.runId)}</span>` : ''}
+          </div>
+          <span style="font-size:11px;color:#94a3b8;">Confidence: ${Number(exp.confidence ?? 0).toFixed(2)}</span>
+        </div>
+        ${reasons.length ? `<ul style="margin:0;padding-left:18px;color:#cbd5e1;">${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : ''}
+        <div style="font-size:11px;color:#94a3b8;">
+          Signals: loop=[${escapeHtml((signals.loopSignals || []).join(', ') || 'none')}] · graph=[${escapeHtml((signals.graphSignals || []).join(', ') || 'none')}] · items=${escapeHtml(signals.iterativeTargetsCount ?? 0)} · localFirst=${escapeHtml(policy.localModelFirst !== false)}
+        </div>
+        ${(policy.requiresApprovalGates || []).length ? `<div style="font-size:11px;color:#eab308;">Approval Gate: ${escapeHtml(policy.requiresApprovalGates.join('; '))}</div>` : ''}
+        ${(policy.blockedUnsafeActions || []).length ? `<div style="font-size:11px;color:#ef4444;">Policy Blocked: ${escapeHtml(policy.blockedUnsafeActions.join('; '))}</div>` : ''}
+        ${cp.length ? `<div style="font-size:11px;color:#38bdf8;"><strong>Critical Path (${cp.length}):</strong> ${cp.map(escapeHtml).join(' → ')}</div>` : ''}
+        ${loop ? `<div style="font-size:11px;color:#22c55e;"><strong>Loop (${escapeHtml(loop.kind)}):</strong> cursor ${escapeHtml(loop.cursor ?? 0)}/${escapeHtml((loop.items || []).length)} · maxIter=${escapeHtml(loop.maxIterations)} · conc=${escapeHtml(loop.maxConcurrency)}</div>` : ''}
+        ${targets.length ? `
+          <div style="display:grid;gap:4px;max-height:150px;overflow:auto;">
+            ${targets.slice(0, 12).map((t) => `
+              <div style="padding:4px 8px;background:#0f131a;border:1px solid #1e293b;border-radius:4px;font-size:11px;">
+                <strong>${escapeHtml(t.id)}</strong> [${escapeHtml(t.stage)}] — ${escapeHtml(t.title)}
+                ${t.dependsOn?.length ? `<span style="color:#94a3b8;"> (deps: ${t.dependsOn.map(escapeHtml).join(', ')})</span>` : ''}
+                ${t.requiresApproval ? '<span style="margin-left:6px;color:#eab308;">[requires_approval]</span>' : ''}
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
   function render() {
     if (!rootEl) return;
+    syncWorkflowInputsFromDom();
     const targets = Object.values(currentRun?.targets || {});
     const filteredTargets = statusFilter === 'all'
       ? targets
@@ -330,6 +573,199 @@ export function createControlModule() {
     rootEl.innerHTML = `
       <div class="gs-control-center" data-testid="gs-control-center" style="display:grid;gap:16px;font-family:var(--font-mono, monospace);color:var(--text, #f8fafc);">
         ${lastError ? `<div class="gs-alert-error" role="alert" style="padding:10px 14px;border:1px solid #ef4444;background:rgba(239,68,68,0.12);color:#fca5a5;border-radius:6px;">${escapeHtml(lastError)}</div>` : ''}
+        ${wfError ? `<div class="gs-alert-error" role="alert" style="padding:10px 14px;border:1px solid #ef4444;background:rgba(239,68,68,0.12);color:#fca5a5;border-radius:6px;">${escapeHtml(wfError)}</div>` : ''}
+
+        <!-- Unified Workflow Launcher (Goal / Loop / Graph) -->
+        <section class="gs-panel" data-testid="gs-workflow-launcher" style="padding:14px;border:1px solid var(--border, #2f4469);background:var(--panel, #162032);border-radius:8px;display:grid;gap:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <h3 style="margin:0;font-size:14px;">Workflow Launcher (Goal · Loop · Graph)</h3>
+            <span style="font-size:11px;color:var(--muted, #94a3b8);">Shared @wazir/goals runtime across Shell, CLI, API &amp; Web</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:12px;">
+            <div style="display:grid;gap:8px;">
+              <textarea id="gs-wf-prompt" rows="3" placeholder="Describe a goal, bounded loop across items/cities/files, or multi-stage dependency graph..." style="padding:8px 10px;border:1px solid var(--border, #2f4469);background:#0f131a;color:#f8fafc;border-radius:6px;width:100%;">${escapeHtml(wfPrompt)}</textarea>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+                <label style="display:grid;gap:4px;font-size:11px;color:#94a3b8;">
+                  <span>Mode</span>
+                  <select id="gs-wf-mode" style="padding:6px 10px;border:1px solid var(--border, #2f4469);background:#0f131a;color:#f8fafc;border-radius:4px;">
+                    <option value="auto" ${wfMode === 'auto' ? 'selected' : ''}>Auto (Goal)</option>
+                    <option value="loop" ${wfMode === 'loop' ? 'selected' : ''}>Loop</option>
+                    <option value="graph" ${wfMode === 'graph' ? 'selected' : ''}>Graph</option>
+                    <option value="single" ${wfMode === 'single' ? 'selected' : ''}>Single</option>
+                    <option value="hybrid" ${wfMode === 'hybrid' ? 'selected' : ''}>Hybrid</option>
+                  </select>
+                </label>
+                <label style="display:grid;gap:4px;font-size:11px;color:#94a3b8;">
+                  <span>Loop Max Iterations</span>
+                  <input id="gs-wf-max-iterations" type="number" min="1" max="100" placeholder="25" value="${escapeHtml(wfMaxIterations)}" style="padding:6px 8px;border:1px solid var(--border, #2f4469);background:#0f131a;color:#f8fafc;border-radius:4px;width:115px;" />
+                </label>
+                <label style="display:grid;gap:4px;font-size:11px;color:#94a3b8;">
+                  <span>Concurrency</span>
+                  <input id="gs-wf-max-concurrency" type="number" min="1" max="16" placeholder="1-16" value="${escapeHtml(wfMaxConcurrency)}" style="padding:6px 8px;border:1px solid var(--border, #2f4469);background:#0f131a;color:#f8fafc;border-radius:4px;width:95px;" />
+                </label>
+                <label style="display:grid;gap:4px;font-size:11px;color:#94a3b8;flex:1;min-width:140px;">
+                  <span>Items (optional CSV)</span>
+                  <input id="gs-wf-items" type="text" placeholder="alpha, beta, gamma" value="${escapeHtml(wfItems)}" style="padding:6px 8px;border:1px solid var(--border, #2f4469);background:#0f131a;color:#f8fafc;border-radius:4px;" />
+                </label>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#94a3b8;cursor:pointer;">
+                  <input id="gs-wf-dry-run" type="checkbox" ${wfDryRun ? 'checked' : ''} />
+                  <span>Dry-run preview</span>
+                </label>
+                <div style="display:flex;gap:8px;">
+                  <button id="gs-btn-wf-compile" type="button" ${wfBusy ? 'disabled' : ''} style="padding:6px 12px;background:transparent;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;font-weight:600;cursor:pointer;">Analyze / Preview</button>
+                  <button id="gs-btn-wf-start" type="button" ${wfBusy ? 'disabled' : ''} style="padding:6px 12px;background:#22c55e;color:#0f131a;border:none;border-radius:4px;font-weight:700;cursor:pointer;">Launch Workflow</button>
+                </div>
+              </div>
+            </div>
+            <div id="gs-wf-analysis" data-testid="gs-wf-explanation" style="padding:10px;border:1px solid #1e293b;background:#0f131a;border-radius:6px;max-height:240px;overflow:auto;">
+              ${renderWorkflowAnalysisHtml()}
+            </div>
+          </div>
+        </section>
+
+        <!-- Live Workflow Jobs Table -->
+        <section class="gs-panel" data-testid="gs-workflow-jobs" style="padding:14px;border:1px solid var(--border, #2f4469);background:var(--panel, #162032);border-radius:8px;display:grid;gap:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <h3 style="margin:0;font-size:14px;">Live Workflow Jobs (${wfJobs.length})</h3>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <select id="gs-wf-filter-mode" style="padding:4px 8px;border:1px solid var(--border, #2f4469);background:#0f131a;color:#f8fafc;border-radius:4px;font-size:12px;">
+                <option value="all" ${wfFilterMode === 'all' ? 'selected' : ''}>All modes</option>
+                ${['loop', 'graph', 'hybrid', 'single'].map((m) => `<option value="${m}" ${wfFilterMode === m ? 'selected' : ''}>${m}</option>`).join('')}
+              </select>
+              <select id="gs-wf-filter-status" style="padding:4px 8px;border:1px solid var(--border, #2f4469);background:#0f131a;color:#f8fafc;border-radius:4px;font-size:12px;">
+                <option value="all" ${wfFilterStatus === 'all' ? 'selected' : ''}>All statuses</option>
+                ${['running', 'paused', 'idle', 'completed', 'stopped', 'failed', 'created'].map((s) => `<option value="${s}" ${wfFilterStatus === s ? 'selected' : ''}>${s}</option>`).join('')}
+              </select>
+              <button id="gs-btn-wf-refresh" type="button" style="padding:4px 10px;background:transparent;color:#94a3b8;border:1px solid var(--border, #2f4469);border-radius:4px;font-size:12px;cursor:pointer;">Refresh Jobs</button>
+            </div>
+          </div>
+          ${wfJobs.length === 0 ? '<div style="color:#94a3b8;font-size:12px;">No workflow jobs recorded yet. Launch a Goal, Loop, or Graph above or via Shell / CLI.</div>' : `
+            <div style="overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;font-size:12px;text-align:left;">
+                <thead>
+                  <tr style="border-bottom:1px solid #2f4469;color:#94a3b8;">
+                    <th style="padding:6px 8px;">Run / Goal</th>
+                    <th style="padding:6px 8px;">Origin / Mode</th>
+                    <th style="padding:6px 8px;">Status</th>
+                    <th style="padding:6px 8px;">Loop Cursor &amp; Progress</th>
+                    <th style="padding:6px 8px;">DAG Nodes / Critical Path</th>
+                    <th style="padding:6px 8px;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${wfJobs.map((job) => {
+                    const p = job.progress || {};
+                    const loopTotal = job.loop?.total;
+                    const cursorVal = p.cursor ?? job.loop?.cursor;
+                    const hasLoop = typeof cursorVal === 'number' && typeof loopTotal === 'number' && loopTotal > 0;
+                    const cpTargets = job.criticalPath?.targets || [];
+                    const wfTargets = Array.isArray(job.targets) ? job.targets : [];
+                    const depCount = wfTargets.reduce((sum, t) => sum + (Array.isArray(t.dependsOn) ? t.dependsOn.length : 0), 0);
+                    const pendingTarget = wfTargets.find((t) => t.status === 'needs_approval');
+                    const needsAppr = (p.needsApproval || 0) > 0 || Boolean(pendingTarget);
+                    const canPause = job.status === 'running';
+                    const canResume = job.status === 'paused' || job.status === 'idle' || job.status === 'created';
+                    const canStop = !['completed', 'stopped', 'failed'].includes(job.status);
+
+                    return `
+                      <tr data-wf-run-id="${escapeHtml(job.runId)}" style="border-bottom:1px solid #1e293b;">
+                        <td style="padding:6px 8px;">
+                          <div style="font-weight:600;">${escapeHtml(String(job.prompt || job.graphId).slice(0, 72))}</div>
+                          <div style="font-size:11px;color:#94a3b8;"><code>${escapeHtml(job.runId)}</code></div>
+                        </td>
+                        <td style="padding:6px 8px;">
+                          <span style="padding:1px 6px;border-radius:4px;font-size:11px;background:#38bdf822;color:#38bdf8;border:1px solid #38bdf8;">${escapeHtml(job.originInterface || 'cli')}</span>
+                          <span style="margin-left:4px;padding:1px 6px;border-radius:4px;font-size:11px;background:#94a3b822;color:#cbd5e1;border:1px solid #475569;">${escapeHtml(job.mode)}</span>
+                        </td>
+                        <td style="padding:6px 8px;">
+                          <span style="padding:2px 7px;border-radius:999px;font-size:11px;font-weight:700;color:${statusBadgeColor(job.status)};border:1px solid ${statusBadgeColor(job.status)};">${escapeHtml(job.status)}</span>
+                          ${needsAppr ? '<div style="margin-top:3px;font-size:10px;color:#eab308;">approval required</div>' : ''}
+                        </td>
+                        <td style="padding:6px 8px;font-size:11px;">
+                          ${hasLoop ? `<div>Cursor: <strong>${escapeHtml(cursorVal)}/${escapeHtml(loopTotal)}</strong></div>` : ''}
+                          <div>Done: ${escapeHtml(p.completed || 0)}/${escapeHtml(p.total || 0)}${p.failed ? ` · <span style="color:#ef4444;">${escapeHtml(p.failed)} failed</span>` : ''}</div>
+                        </td>
+                        <td style="padding:6px 8px;font-size:11px;">
+                          <div>${escapeHtml(wfTargets.length || p.total || 0)} node(s) · ${escapeHtml(depCount)} dep(s)</div>
+                          <div style="color:#38bdf8;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(cpTargets.join(' → '))}">
+                            ${cpTargets.length ? cpTargets.map(escapeHtml).join(' → ') : '—'}
+                          </div>
+                        </td>
+                        <td style="padding:6px 8px;">
+                          <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                            <button type="button" class="gs-btn-wf-inspect" data-run-id="${escapeHtml(job.runId)}" style="padding:3px 7px;background:#0f131a;color:#38bdf8;border:1px solid #38bdf8;border-radius:4px;font-size:11px;cursor:pointer;">Inspect</button>
+                            ${canPause ? `<button type="button" class="gs-btn-wf-action" data-action="pause" data-run-id="${escapeHtml(job.runId)}" style="padding:3px 7px;background:#eab308;color:#0f131a;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;">Pause</button>` : ''}
+                            ${canResume ? `<button type="button" class="gs-btn-wf-action" data-action="resume" data-run-id="${escapeHtml(job.runId)}" style="padding:3px 7px;background:#38bdf8;color:#0f131a;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;">Resume</button>` : ''}
+                            ${canStop ? `<button type="button" class="gs-btn-wf-action" data-action="stop" data-run-id="${escapeHtml(job.runId)}" style="padding:3px 7px;background:#ef4444;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;">Stop</button>` : ''}
+                            ${needsAppr ? `<button type="button" class="gs-btn-wf-action" data-action="approve" data-run-id="${escapeHtml(job.runId)}" data-target-id="${escapeHtml(pendingTarget?.id || '')}" style="padding:3px 7px;background:#22c55e;color:#0f131a;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">Approve</button>` : ''}
+                          </div>
+                        </td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+
+          ${wfInspection ? (() => {
+            const ins = wfInspection;
+            const insSummary = ins.summary || {};
+            const insRun = ins.run || {};
+            const insCp = ins.criticalPath?.targets || [];
+            const insTargets = Array.isArray(ins.targets) ? ins.targets : [];
+            const insLoop = ins.loop;
+            const insExp = ins.explanation || {};
+            const insEvidence = Array.isArray(ins.evidence) ? ins.evidence : [];
+            const approvalPendingTargets = insTargets.filter((t) => insRun.targets?.[t.id]?.status === 'needs_approval');
+            return `
+              <div data-testid="gs-wf-inspection" style="margin-top:8px;padding:12px;border:1px solid #2f4469;background:#0f131a;border-radius:6px;display:grid;gap:8px;font-size:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                  <strong>Workflow Inspection: <code>${escapeHtml(insSummary.runId)}</code> (${escapeHtml(insSummary.mode)} · ${escapeHtml(insRun.status)})</strong>
+                  <span style="color:#38bdf8;font-size:11px;">Critical Path: ${insCp.length ? insCp.map(escapeHtml).join(' → ') : '—'}</span>
+                </div>
+                ${insExp.reasons?.length ? `<div style="color:#cbd5e1;font-size:11px;"><strong>Intent:</strong> ${insExp.reasons.map(escapeHtml).join(' | ')}</div>` : ''}
+                ${insLoop ? `
+                  <div style="font-size:11px;color:#22c55e;">
+                    <strong>Loop (${escapeHtml(insLoop.kind)}):</strong> cursor ${escapeHtml(insSummary.progress?.cursor ?? insLoop.cursor ?? 0)}/${escapeHtml((insLoop.items || []).length)}
+                  </div>
+                ` : ''}
+                ${approvalPendingTargets.length ? `
+                  <div style="padding:8px;border:1px solid #eab308;border-radius:4px;background:rgba(234,179,8,0.08);display:grid;gap:6px;">
+                    <strong style="color:#eab308;">Human Approval Gate Pending</strong>
+                    ${approvalPendingTargets.map((t) => `
+                      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                        <code>${escapeHtml(t.id)}</code>
+                        <input type="text" class="gs-wf-approve-note" data-target-id="${escapeHtml(t.id)}" placeholder="Approval note (optional)" style="flex:1;padding:4px 8px;border:1px solid #2f4469;background:#162032;color:#f8fafc;border-radius:4px;font-size:11px;" />
+                        <button type="button" class="gs-btn-wf-approve-gate" data-run-id="${escapeHtml(insSummary.runId)}" data-target-id="${escapeHtml(t.id)}" style="padding:4px 10px;background:#22c55e;color:#0f131a;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">Approve Gate</button>
+                      </div>
+                    `).join('')}
+                  </div>
+                ` : ''}
+                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:6px;">
+                  ${insTargets.map((t) => {
+                    const st = insRun.targets?.[t.id]?.status || 'queued';
+                    return `
+                      <div style="padding:6px 8px;border:1px solid #1e293b;background:#162032;border-radius:4px;font-size:11px;">
+                        <div style="display:flex;justify-content:space-between;">
+                          <strong>${escapeHtml(t.id)}</strong>
+                          <span style="color:${statusBadgeColor(st)};font-weight:700;">${escapeHtml(st)}</span>
+                        </div>
+                        <div style="color:#cbd5e1;">${escapeHtml(t.title)}</div>
+                        ${t.dependsOn?.length ? `<div style="color:#94a3b8;">deps: ${t.dependsOn.map(escapeHtml).join(', ')}</div>` : ''}
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+                <div style="font-size:11px;color:#94a3b8;">
+                  Evidence records: ${escapeHtml(insEvidence.length)} · Events recorded: ${escapeHtml((ins.events || []).length)}
+                </div>
+              </div>
+            `;
+          })() : ''}
+        </section>
 
         <!-- Top Control Bar -->
         <section class="gs-panel" style="padding:14px;border:1px solid var(--border, #2f4469);background:var(--panel, #162032);border-radius:8px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
@@ -598,6 +1034,64 @@ export function createControlModule() {
         const appr = approvalsList.find((a) => a.id === id);
         const reasonInput = rootEl.querySelector(`.gs-approval-reason[data-approval-id="${id}"]`);
         void handleResolveApproval(appr, 'deny', reasonInput?.value);
+      });
+    }
+
+    const wfPromptEl = rootEl.querySelector('#gs-wf-prompt');
+    if (wfPromptEl) wfPromptEl.addEventListener('input', (e) => { wfPrompt = e.target.value; });
+    const wfModeEl = rootEl.querySelector('#gs-wf-mode');
+    if (wfModeEl) wfModeEl.addEventListener('change', (e) => { wfMode = e.target.value; });
+    const wfIterEl = rootEl.querySelector('#gs-wf-max-iterations');
+    if (wfIterEl) wfIterEl.addEventListener('input', (e) => { wfMaxIterations = e.target.value; });
+    const wfConcEl = rootEl.querySelector('#gs-wf-max-concurrency');
+    if (wfConcEl) wfConcEl.addEventListener('input', (e) => { wfMaxConcurrency = e.target.value; });
+    const wfItemsEl = rootEl.querySelector('#gs-wf-items');
+    if (wfItemsEl) wfItemsEl.addEventListener('input', (e) => { wfItems = e.target.value; });
+    const wfDryEl = rootEl.querySelector('#gs-wf-dry-run');
+    if (wfDryEl) wfDryEl.addEventListener('change', (e) => { wfDryRun = Boolean(e.target.checked); });
+
+    const wfCompileBtn = rootEl.querySelector('#gs-btn-wf-compile');
+    if (wfCompileBtn) wfCompileBtn.addEventListener('click', () => void handleWorkflowCompile());
+    const wfStartBtn = rootEl.querySelector('#gs-btn-wf-start');
+    if (wfStartBtn) wfStartBtn.addEventListener('click', () => void handleWorkflowLaunch());
+
+    const wfModeFilterEl = rootEl.querySelector('#gs-wf-filter-mode');
+    if (wfModeFilterEl) {
+      wfModeFilterEl.addEventListener('change', (e) => {
+        wfFilterMode = e.target.value;
+        void refreshWorkflowJobs();
+      });
+    }
+    const wfStatusFilterEl = rootEl.querySelector('#gs-wf-filter-status');
+    if (wfStatusFilterEl) {
+      wfStatusFilterEl.addEventListener('change', (e) => {
+        wfFilterStatus = e.target.value;
+        void refreshWorkflowJobs();
+      });
+    }
+    const wfRefreshBtn = rootEl.querySelector('#gs-btn-wf-refresh');
+    if (wfRefreshBtn) wfRefreshBtn.addEventListener('click', () => void refreshWorkflowJobs());
+
+    for (const btn of rootEl.querySelectorAll('.gs-btn-wf-inspect')) {
+      btn.addEventListener('click', () => {
+        const runId = btn.getAttribute('data-run-id');
+        void inspectWorkflowRun(runId);
+      });
+    }
+    for (const btn of rootEl.querySelectorAll('.gs-btn-wf-action')) {
+      btn.addEventListener('click', () => {
+        const runId = btn.getAttribute('data-run-id');
+        const action = btn.getAttribute('data-action');
+        const targetId = btn.getAttribute('data-target-id');
+        void handleWorkflowControl(runId, action, targetId);
+      });
+    }
+    for (const btn of rootEl.querySelectorAll('.gs-btn-wf-approve-gate')) {
+      btn.addEventListener('click', () => {
+        const runId = btn.getAttribute('data-run-id');
+        const targetId = btn.getAttribute('data-target-id');
+        const noteInput = rootEl.querySelector(`.gs-wf-approve-note[data-target-id="${targetId}"]`);
+        void handleWorkflowControl(runId, 'approve', targetId, noteInput?.value);
       });
     }
   }

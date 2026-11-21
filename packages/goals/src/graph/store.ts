@@ -68,6 +68,7 @@ export interface GoalGraphSummary {
 /** Contract store plus graph-workstream extensions used by the UI routes. */
 export interface GoalGraphStoreExtended extends GoalGraphStore {
   importYaml(projectId: ProjectId, yaml: string, actor: string): Promise<GoalGraphImportResult>;
+  createGraph(projectId: ProjectId, definition: GoalGraphDefinition, actor: string): Promise<{ record: GoalGraphRevisionRecord; created: boolean }>;
   getGraph(graphId: GraphId): Promise<GoalGraphHead | undefined>;
   diff(graphId: GraphId, fromRevision: GraphRevision, toRevision: GraphRevision): Promise<GoalGraphDiff>;
   criticalPath(graphId: GraphId, revision?: GraphRevision): Promise<CriticalPathResult & { graphId: GraphId; revision: GraphRevision; order: string[] }>;
@@ -214,6 +215,26 @@ export function createGoalGraphStore(deps: GoalGraphStoreDeps): GoalGraphStoreEx
       }
       const record = await writeRevision(graphId, projectId, definition, actor, 1);
       return { record, validation: parsed.validation, created: true, extras: parsed.extras, prompts: parsed.prompts };
+    },
+
+    async createGraph(projectId, definition, actor) {
+      if (typeof projectId !== 'string' || !PROJECT_ID_PATTERN.test(projectId)) throw new GoalStudioFailure('VALIDATION', `invalid project id ${JSON.stringify(projectId)}`);
+      checkActor(actor);
+      assertValid(definition);
+      const cloned = structuredClone(definition);
+      const graphId = deriveGraphId(projectId, cloned.name);
+      const head = await store.get<GoalGraphHead>(GOAL_STORE_KEYS.graph(graphId));
+      const latest = await latestRevisionOf(graphId, head);
+      if (latest > 0) {
+        const current = await api.getRevision(graphId, latest);
+        if (current && current.digest === sha256Hex(canonicalJson(cloned))) {
+          return { record: current, created: false };
+        }
+        const record = await writeRevision(graphId, projectId, cloned, actor, latest + 1, latest);
+        return { record, created: true };
+      }
+      const record = await writeRevision(graphId, projectId, cloned, actor, 1);
+      return { record, created: true };
     },
 
     async createRevision(graphId, definition, actor, parentRevision) {

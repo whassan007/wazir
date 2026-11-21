@@ -756,6 +756,32 @@ export function registerGoalCommands(program: Command): Command {
     .description('Goal Studio execution control center commands');
 
   goal
+    .command('run <prompt>')
+    .description('Automatically analyze intent, select Single/Loop/Graph/Hybrid mode, compile, and execute a goal')
+    .option('--mode <mode>', 'Override or select mode (auto|single|loop|graph|hybrid)')
+    .option('--workspace <dir>', 'Workspace root directory')
+    .option('--max-iterations <n>', 'Maximum loop iterations', (v) => parseInt(v, 10))
+    .option('--concurrency <n>', 'Maximum concurrent targets', (v) => parseInt(v, 10))
+    .option('--budget <usd>', 'Maximum hosted spend budget in USD', (v) => Number(v))
+    .option('--duration <min>', 'Maximum duration in minutes', (v) => parseInt(v, 10))
+    .option('--repairs <n>', 'Maximum repair attempts per target', (v) => parseInt(v, 10))
+    .option('--model <id>', 'Preferred model ID')
+    .option('--computer <id>', 'Preferred computer ID')
+    .option('--items <items>', 'Comma-separated explicit loop items')
+    .option('--until <predicate>', 'Completion predicate')
+    .option('--verify <cmd...>', 'Independent verification command(s)')
+    .option('--dry-run', 'Compile and print intent/mode rationale without executing targets')
+    .option('--detach', 'Start and persist run without waiting for completion')
+    .option('-j, --json', 'Output JSON')
+    .option('--approve-all', 'Approve policy gates automatically for this operator invocation')
+    .action(async (promptText: string, opts) => {
+      const { runWorkflowCommand } = await import('./workflowCommands.js');
+      const res = await runWorkflowCommand(promptText, { ...opts, originInterface: 'cli' });
+      console.log(res.output);
+      if (res.code !== 0) process.exitCode = res.code;
+    });
+
+  goal
     .command('import <file>')
     .description('Import a Goal Studio YAML graph definition')
     .option('-p, --project <projectId>', 'Project ID', 'default')

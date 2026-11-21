@@ -23,7 +23,16 @@ import {
   assembleSearchNodeInspection,
 } from '@wazir/core';
 import type { RookEngine } from '../engine.js';
-import { refreshRuntime } from '../engine.js';
+import { createStore, refreshRuntime } from '../engine.js';
+import {
+  createWorkflowRuntimeService,
+  type GoalPhase,
+  type GoalStudioEvent,
+  type WorkflowInspection,
+  type WorkflowJobSummary,
+  type WorkflowMode,
+  type WorkflowRuntimeService,
+} from '@wazir/goals';
 import { color } from '../colors.js';
 import { createFleetTaskExecutor } from '../fleetRunner.js';
 import { getBuildInfo } from '../version.js';
@@ -104,6 +113,10 @@ import {
 import type { ModelSelectionMode, LocalDiscoverySnapshot, LocalDiscoveredModel } from '@wazir/core';
 import {
   formatCommandFeedback,
+  formatWorkflowInspectionSummary,
+  formatWorkflowJobsList,
+  formatWorkflowModeBadge,
+  renderGoalStudioPane,
   type GoalStudioSnapshot,
 } from './goalStudioPanel.js';
 import { ConversationController, type PermissionMode } from './conversationController.js';
@@ -206,6 +219,13 @@ export class FleetTui {
   private selectedModelProfileIndex = 0;
   private selectedGoalTargetIndex = 0;
   private goalStudioSnapshot?: GoalStudioSnapshot;
+  private workflowRuntime?: WorkflowRuntimeService;
+  private workflowRuntimeStore?: unknown;
+  private workflowRuntimePromise?: Promise<WorkflowRuntimeService>;
+  private activeWorkflowRunId?: string;
+  private workflowRefreshInFlight = false;
+  private workflowRefreshPending?: { runId: string; activePhase?: GoalPhase };
+  private workflowEventUnsub?: () => void;
   private readonly sessionAbortController = new AbortController();
   private readonly externalSignal?: AbortSignal;
   private externalAbortListener?: () => void;
@@ -285,6 +305,10 @@ export class FleetTui {
     { id: 'repaint', title: 'Force Screen Repaint', cmd: '/repaint' },
     { id: 'conversation', title: 'Conversation view', cmd: '/chat' },
     { id: 'fleet-dashboard', title: 'Fleet dashboard', cmd: '/fleet' },
+    { id: 'workflow-loop', title: 'Run Bounded Loop Workflow', cmd: '/loop ' },
+    { id: 'workflow-graph', title: 'Run DAG Graph Workflow', cmd: '/graph ' },
+    { id: 'workflow-goal', title: 'Auto-Plan & Run Goal Workflow', cmd: '/goal ' },
+    { id: 'workflow-jobs', title: 'List Loop/Graph/Goal Workflow Jobs', cmd: '/jobs' },
   ];
 
   private readonly agents = new Map<string, AgentCardState>();
@@ -1512,6 +1536,13 @@ export class FleetTui {
     if (this.unsubscribeSolutionSearch) this.unsubscribeSolutionSearch();
     if (this.unsubscribeOptimizer) this.unsubscribeOptimizer();
     if (this.unsubscribeCanaryEvents) this.unsubscribeCanaryEvents();
+    if (this.workflowEventUnsub) {
+      this.workflowEventUnsub();
+      this.workflowEventUnsub = undefined;
+    }
+    if (this.workflowRuntime) {
+      void this.workflowRuntime.shutdown({ releaseLeases: true }).catch(() => undefined);
+    }
     if (this.restoreFatalRejectionHandler) {
       this.restoreFatalRejectionHandler();
       this.restoreFatalRejectionHandler = undefined;
@@ -4136,6 +4167,11 @@ export class FleetTui {
       this.draw();
       return;
     }
+    if (this.isWorkflowSlashDispatch(trimmed)) {
+      if (await this.tryHandleWorkflowSlashCommand(trimmed)) {
+        return;
+      }
+    }
     if (this.presentationMode === 'conversation') {
       const theme = this.conversationRenderer.getTheme();
       const g = theme.glyphs;
@@ -4227,6 +4263,9 @@ export class FleetTui {
       }
 
       if (trimmed === '/resume' || trimmed.startsWith('/resume ')) {
+        if (await this.tryHandleWorkflowSlashCommand(trimmed)) {
+          return;
+        }
         const arg = trimmed.slice(7).trim();
         if (!arg && this.screen.isTTY()) {
           const opened = await this.conversation.openResumeOverlay(this.engine);
@@ -7832,7 +7871,391 @@ export class FleetTui {
   }
 
   private renderGoalPane(cols: number, maxRows: number): string[] {
-    return fleetPanes.renderGoalPane(this, cols, maxRows);
+    const snap = this.getGoalStudioSnapshot();
+    return renderGoalStudioPane(
+      {
+        ...(snap ?? {}),
+        selectedTargetIndex: this.selectedGoalTargetIndex ?? snap?.selectedTargetIndex ?? 0,
+      },
+      cols,
+      maxRows,
+    );
+  }
+
+  private async getWorkflowRuntime(): Promise<WorkflowRuntimeService> {
+    const store = this.engine.isBootstrapping
+      ? await createStore()
+      : (this.engine.store ?? (await createStore()));
+    if (this.workflowRuntime && this.workflowRuntimeStore === store) {
+      return this.workflowRuntime;
+    }
+    if (this.workflowRuntimePromise && this.workflowRuntimeStore === store) {
+      return this.workflowRuntimePromise;
+    }
+    this.workflowRuntimeStore = store;
+    const workspaceRoot = this.engine.projectRoot || this.conversation.workspaceRoot || process.cwd();
+    const defaultModel = this.selectedModelId ?? this.conversation.selectedModelId;
+    this.workflowRuntimePromise = Promise.resolve().then(() => {
+      const svc = createWorkflowRuntimeService({
+        store,
+        workspaceRoot,
+        defaultModel,
+        holderId: `wazir-tui:${this.sessionId}`,
+      });
+      this.workflowRuntime = svc;
+      return svc;
+    });
+    return this.workflowRuntimePromise;
+  }
+
+  private publishWorkflowMessage(message: string, statusLine?: string): void {
+    const firstLine = statusLine ?? (message.split('\n')[0]?.trim() || message);
+    this.statusMessage = firstLine;
+    if (this.presentationMode === 'conversation') {
+      this.conversationRenderer.append(message);
+    }
+    if (!this.sessionAbortController.signal.aborted) {
+      this.draw();
+    }
+  }
+
+  private async syncGoalStudioFromRun(
+    runId: string,
+    activePhase?: GoalPhase,
+  ): Promise<WorkflowInspection | undefined> {
+    const runtime = await this.getWorkflowRuntime();
+    const [inspection, jobs] = await Promise.all([
+      runtime.inspect(runId),
+      runtime.listJobs(),
+    ]);
+    if (!inspection) {
+      this.goalStudioSnapshot = {
+        ...(this.goalStudioSnapshot ?? {}),
+        jobs,
+      };
+      if (!this.sessionAbortController.signal.aborted) {
+        this.draw();
+      }
+      return undefined;
+    }
+    this.activeWorkflowRunId = inspection.run.runId;
+    this.goalStudioSnapshot = {
+      run: inspection.run,
+      graph: inspection.graph.definition,
+      plan: inspection.plan,
+      summary: inspection.summary,
+      jobs,
+      inspection,
+      activePhase: activePhase ?? this.goalStudioSnapshot?.activePhase ?? 'SELECT_TARGET',
+      selectedTargetIndex: this.selectedGoalTargetIndex,
+    };
+    if (!this.sessionAbortController.signal.aborted) {
+      this.draw();
+    }
+    return inspection;
+  }
+
+  private scheduleWorkflowSnapshotRefresh(runId: string, activePhase?: GoalPhase): void {
+    this.workflowRefreshPending = { runId, activePhase };
+    if (this.workflowRefreshInFlight) return;
+    this.workflowRefreshInFlight = true;
+    void (async () => {
+      try {
+        while (this.workflowRefreshPending && !this.sessionAbortController.signal.aborted) {
+          const next = this.workflowRefreshPending;
+          this.workflowRefreshPending = undefined;
+          await this.syncGoalStudioFromRun(next.runId, next.activePhase).catch(() => undefined);
+        }
+      } finally {
+        this.workflowRefreshInFlight = false;
+      }
+    })();
+  }
+
+  private extractPhaseFromEvent(ev: GoalStudioEvent): GoalPhase | undefined {
+    const phase = ev.data?.phase;
+    return typeof phase === 'string' ? (phase as GoalPhase) : undefined;
+  }
+
+  private launchWorkflowInBackground(requestedMode: 'loop' | 'graph' | 'auto', prompt: string): void {
+    const modeTag = requestedMode === 'auto' ? 'GOAL' : requestedMode.toUpperCase();
+    this.applyCommandFeedback(`/${requestedMode === 'auto' ? 'goal' : requestedMode} ${prompt}`);
+    if (this.presentationMode !== 'conversation') {
+      this.currentView = 'goals';
+      this.focusedPane = 'main';
+    } else {
+      this.conversationRenderer.append(`  Starting [${modeTag}] workflow: ${prompt}`);
+    }
+    this.draw();
+
+    const workspaceRoot = this.engine.projectRoot || this.conversation.workspaceRoot || process.cwd();
+    const preferredModel = this.selectedModelId ?? this.conversation.selectedModelId;
+    const cols = this.screen.getSize().columns;
+
+    void (async () => {
+      try {
+        const runtime = await this.getWorkflowRuntime();
+        const result = await runtime.executeToCompletion({
+          prompt,
+          requestedMode,
+          originInterface: 'tui',
+          workspaceRoot,
+          preferredModel,
+          onEvent: (ev) => {
+            if (!ev.runId) return;
+            this.activeWorkflowRunId = ev.runId;
+            this.scheduleWorkflowSnapshotRefresh(ev.runId, this.extractPhaseFromEvent(ev));
+          },
+        });
+
+        const inspection = await this.syncGoalStudioFromRun(
+          result.run.runId,
+          result.run.status === 'completed' ? 'PERSIST_STATE' : 'DIAGNOSE',
+        );
+        const badge = formatWorkflowModeBadge(result.plan.mode, result.plan.requestedMode);
+        const total = Object.keys(result.run.targets).length;
+        const completed = Object.values(result.run.targets).filter((t) => t.status === 'completed').length;
+        const cursorPart = result.plan.loop ? ` · cursor ${result.plan.loop.cursor}/${result.plan.loop.items.length}` : '';
+        const statusLine = `${badge} ${result.run.runId} ${result.run.status.toUpperCase()} (${completed}/${total}${cursorPart})`;
+        const detailText = inspection
+          ? formatWorkflowInspectionSummary(inspection, cols).join('\n')
+          : statusLine;
+        this.publishWorkflowMessage(detailText, statusLine);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.publishWorkflowMessage(`✗ [${modeTag}] workflow failed: ${msg}`, `Workflow error: ${msg}`);
+      }
+    })();
+  }
+
+  private isWorkflowSlashDispatch(trimmed: string): boolean {
+    if (
+      trimmed === '/loop' ||
+      trimmed.startsWith('/loop ') ||
+      trimmed === '/graph' ||
+      trimmed.startsWith('/graph ') ||
+      trimmed.startsWith('/goal ') ||
+      trimmed === '/jobs' ||
+      trimmed.startsWith('/jobs ') ||
+      trimmed === '/inspect' ||
+      trimmed.startsWith('/inspect ') ||
+      trimmed === '/pause' ||
+      trimmed.startsWith('/pause ') ||
+      trimmed === '/stop' ||
+      trimmed.startsWith('/stop ')
+    ) {
+      return true;
+    }
+    if ((trimmed === '/goals' || trimmed === '/goal') && this.presentationMode === 'conversation') {
+      return true;
+    }
+    if ((trimmed === '/resume' || trimmed.startsWith('/resume ')) && this.presentationMode !== 'conversation') {
+      return true;
+    }
+    return false;
+  }
+
+  private async tryHandleWorkflowSlashCommand(trimmed: string): Promise<boolean> {
+    const cols = this.screen.getSize().columns;
+
+    if (trimmed === '/loop' || trimmed.startsWith('/loop ')) {
+      const task = trimmed.slice(5).trim();
+      if (!task) {
+        this.publishWorkflowMessage('Usage: /loop <task> — compile and run a bounded iterative Loop workflow.');
+        return true;
+      }
+      this.launchWorkflowInBackground('loop', task);
+      return true;
+    }
+
+    if (trimmed === '/graph' || trimmed.startsWith('/graph ')) {
+      const goal = trimmed.slice(6).trim();
+      if (!goal) {
+        this.publishWorkflowMessage('Usage: /graph <goal> — compile and run a dependency-ordered DAG Graph workflow.');
+        return true;
+      }
+      this.launchWorkflowInBackground('graph', goal);
+      return true;
+    }
+
+    if (trimmed.startsWith('/goal ')) {
+      const goal = trimmed.slice(5).trim();
+      if (!goal) {
+        return false;
+      }
+      this.launchWorkflowInBackground('auto', goal);
+      return true;
+    }
+
+    if ((trimmed === '/goals' || trimmed === '/goal') && this.presentationMode === 'conversation') {
+      const snap = this.getGoalStudioSnapshot();
+      if (snap?.inspection) {
+        this.publishWorkflowMessage(
+          formatWorkflowInspectionSummary(snap.inspection, cols).join('\n'),
+          this.applyCommandFeedback('/goals'),
+        );
+        return true;
+      }
+      const runtime = await this.getWorkflowRuntime();
+      const jobs = await runtime.listJobs();
+      this.goalStudioSnapshot = { ...(snap ?? {}), jobs };
+      if (jobs.length > 0) {
+        const latest = await this.syncGoalStudioFromRun(jobs[0]!.runId);
+        if (latest) {
+          this.publishWorkflowMessage(
+            formatWorkflowInspectionSummary(latest, cols).join('\n'),
+            `Goal Studio: ${latest.run.graphId} (${latest.run.status.toUpperCase()})`,
+          );
+          return true;
+        }
+      }
+      this.publishWorkflowMessage(
+        'No active Goal Studio workflow run yet. Start one with /loop <task>, /graph <goal>, or /goal <goal>.',
+        'No active Goal Studio workflow run yet.',
+      );
+      return true;
+    }
+
+    if (trimmed === '/jobs' || trimmed.startsWith('/jobs ')) {
+      const filterToken = trimmed.slice(5).trim().toLowerCase();
+      const modeValues = new Set(['single', 'loop', 'graph', 'hybrid']);
+      const runtime = await this.getWorkflowRuntime();
+      const jobs = await runtime.listJobs(
+        filterToken && modeValues.has(filterToken)
+          ? { mode: filterToken as WorkflowMode }
+          : filterToken
+            ? { status: filterToken as any }
+            : undefined,
+      );
+      this.goalStudioSnapshot = { ...(this.getGoalStudioSnapshot() ?? {}), jobs };
+      if (this.presentationMode !== 'conversation') {
+        this.currentView = 'goals';
+        this.focusedPane = 'main';
+      }
+      const latest = jobs[0];
+      const summaryLine = latest
+        ? `Workflow jobs: ${jobs.length} (latest: ${latest.runId} [${latest.mode.toUpperCase()} ${latest.status.toUpperCase()}])`
+        : 'No Loop, Graph, or Goal workflow jobs recorded yet.';
+      this.publishWorkflowMessage(formatWorkflowJobsList(jobs, cols).join('\n'), summaryLine);
+      return true;
+    }
+
+    if (trimmed === '/inspect' || trimmed.startsWith('/inspect ')) {
+      const arg = trimmed.slice(8).trim();
+      const targetId = arg || this.activeWorkflowRunId || this.goalStudioSnapshot?.run?.runId;
+      if (!targetId) {
+        this.publishWorkflowMessage('Usage: /inspect <runId> — inspect workflow plan, loop cursor, DAG targets, and evidence.');
+        return true;
+      }
+      const runtime = await this.getWorkflowRuntime();
+      const inspection = await this.syncGoalStudioFromRun(targetId);
+      if (!inspection) {
+        this.publishWorkflowMessage(`Workflow run not found: ${targetId}`);
+        return true;
+      }
+      if (this.presentationMode !== 'conversation') {
+        this.currentView = 'goals';
+        this.focusedPane = 'main';
+      }
+      this.publishWorkflowMessage(
+        formatWorkflowInspectionSummary(inspection, cols).join('\n'),
+        `Inspected ${inspection.run.runId} [${inspection.summary.mode.toUpperCase()} · ${inspection.run.status.toUpperCase()}]`,
+      );
+      return true;
+    }
+
+    if (trimmed === '/pause' || trimmed.startsWith('/pause ')) {
+      const arg = trimmed.slice(6).trim();
+      const targetId = arg || this.activeWorkflowRunId || this.goalStudioSnapshot?.run?.runId;
+      if (!targetId) {
+        this.publishWorkflowMessage('Usage: /pause <runId> — pause an active workflow run cleanly.');
+        return true;
+      }
+      try {
+        const runtime = await this.getWorkflowRuntime();
+        const paused = await runtime.pause(targetId, 'user:tui', 'Paused from Wazir TUI');
+        await this.syncGoalStudioFromRun(targetId, 'PERSIST_STATE');
+        this.publishWorkflowMessage(`Paused workflow ${paused.runId} (status: ${paused.status.toUpperCase()})`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.publishWorkflowMessage(`Could not pause ${targetId}: ${msg}`);
+      }
+      return true;
+    }
+
+    if (trimmed === '/stop' || trimmed.startsWith('/stop ')) {
+      const arg = trimmed.slice(5).trim();
+      const targetId = arg || this.activeWorkflowRunId || this.goalStudioSnapshot?.run?.runId;
+      if (!targetId) {
+        this.publishWorkflowMessage('Usage: /stop <runId> — stop a workflow run cleanly.');
+        return true;
+      }
+      try {
+        const runtime = await this.getWorkflowRuntime();
+        const stopped = await runtime.stop(targetId, 'user:tui', 'Stopped from Wazir TUI');
+        await this.syncGoalStudioFromRun(targetId, 'PERSIST_STATE');
+        this.publishWorkflowMessage(`Stopped workflow ${stopped.runId} (status: ${stopped.status.toUpperCase()})`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.publishWorkflowMessage(`Could not stop ${targetId}: ${msg}`);
+      }
+      return true;
+    }
+
+    if (trimmed === '/resume' || trimmed.startsWith('/resume ')) {
+      const arg = trimmed.slice(7).trim();
+      const fallbackRunId = this.presentationMode !== 'conversation'
+        ? (arg || this.activeWorkflowRunId || this.goalStudioSnapshot?.run?.runId)
+        : (arg && arg !== '--last' && !arg.startsWith('conv-') ? arg : undefined);
+      if (fallbackRunId) {
+        const runtime = await this.getWorkflowRuntime();
+        const existing = await runtime.getStatus(fallbackRunId);
+        if (existing) {
+          try {
+            const resumed = await runtime.resume(fallbackRunId, 'user:tui', { wait: false });
+            this.activeWorkflowRunId = resumed.runId;
+            await this.syncGoalStudioFromRun(resumed.runId, 'SELECT_TARGET');
+            if (this.presentationMode !== 'conversation') {
+              this.currentView = 'goals';
+              this.focusedPane = 'main';
+            }
+            this.publishWorkflowMessage(`Resumed workflow ${resumed.runId} (status: ${resumed.status.toUpperCase()})`);
+            this.workflowEventUnsub?.();
+            this.workflowEventUnsub = runtime.events.subscribe(resumed.runId, (ev) => {
+              this.scheduleWorkflowSnapshotRefresh(resumed.runId, this.extractPhaseFromEvent(ev));
+            });
+            void runtime.controller.settled(resumed.runId)
+              .then(async (finalRun) => {
+                this.workflowEventUnsub?.();
+                this.workflowEventUnsub = undefined;
+                if (finalRun) {
+                  await this.syncGoalStudioFromRun(
+                    finalRun.runId,
+                    finalRun.status === 'completed' ? 'PERSIST_STATE' : 'DIAGNOSE',
+                  );
+                  this.statusMessage = `Workflow ${finalRun.runId} ${finalRun.status.toUpperCase()}`;
+                  if (!this.sessionAbortController.signal.aborted) this.draw();
+                }
+              })
+              .catch(() => undefined);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.publishWorkflowMessage(`Could not resume ${fallbackRunId}: ${msg}`);
+          }
+          return true;
+        }
+        if (this.presentationMode !== 'conversation') {
+          this.publishWorkflowMessage(`Workflow run not found: ${fallbackRunId}`);
+          return true;
+        }
+      } else if (this.presentationMode !== 'conversation') {
+        this.publishWorkflowMessage('Usage: /resume <runId> — resume a paused workflow run.');
+        return true;
+      }
+      return false;
+    }
+
+    return false;
   }
 
   private renderModelIntelligencePane(cols: number, maxRows: number): string[] {

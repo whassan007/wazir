@@ -6,6 +6,7 @@ import { registerPromptRoutes } from './promptRoutes.js';
 import { registerFleetRoutes } from './fleetRoutes.js';
 import { registerVerificationRoutes } from './verificationRoutes.js';
 import { registerGovernanceRoutes } from './governanceRoutes.js';
+import { registerWorkflowRoutes } from './workflowRoutes.js';
 
 export type { GoalStudioRouteContext } from './context.js';
 export {
@@ -13,6 +14,7 @@ export {
   type CreateGoalStudioServicesOptions,
   type WiredGoalStudioServices,
 } from './services.js';
+export { registerWorkflowRoutes } from './workflowRoutes.js';
 
 // Coordinator-owned composition point for Goal Studio HTTP routes.
 export function registerGoalStudioRoutes(app: Express, ctx: GoalStudioRouteContext): void {
@@ -22,4 +24,5 @@ export function registerGoalStudioRoutes(app: Express, ctx: GoalStudioRouteConte
   registerFleetRoutes(app, ctx);
   registerVerificationRoutes(app, ctx);
   registerGovernanceRoutes(app, ctx);
+  registerWorkflowRoutes(app, ctx);
 }

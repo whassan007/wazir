@@ -47,13 +47,71 @@ fn default_shell() -> String {
     })
 }
 
+fn resolve_node_binary() -> String {
+    if let Ok(explicit) = std::env::var("WAZIR_NODE_BIN") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() && std::path::Path::new(trimmed).exists() {
+            return trimmed.to_string();
+        }
+    }
+    for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
+        if std::path::Path::new(candidate).exists() {
+            return candidate.to_string();
+        }
+    }
+    "node".to_string()
+}
+
 fn resolve_wa_binary() -> String {
+    if let Ok(explicit) = std::env::var("WAZIR_CLI_BIN") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() && std::path::Path::new(trimmed).exists() {
+            return trimmed.to_string();
+        }
+    }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let bundled = manifest_dir.join("../../../bin/wa.js");
     if bundled.exists() {
         return bundled.to_string_lossy().to_string();
     }
     "wa".to_string()
+}
+
+fn build_wa_command(cwd: Option<&str>) -> std::process::Command {
+    let wa_path = resolve_wa_binary();
+    let mut cmd = if wa_path.ends_with(".js") {
+        let mut c = std::process::Command::new(resolve_node_binary());
+        c.arg(&wa_path);
+        c
+    } else {
+        std::process::Command::new(&wa_path)
+    };
+    if let Some(dir) = cwd {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() && std::path::Path::new(trimmed).is_dir() {
+            cmd.current_dir(trimmed);
+        }
+    }
+    cmd
+}
+
+fn run_wa_subcommand(args: Vec<String>, cwd: Option<String>) -> Result<String, String> {
+    let mut cmd = build_wa_command(cwd.as_deref());
+    cmd.args(&args);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run wa {}: {e}", args.first().map(String::as_str).unwrap_or("")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if output.status.success() {
+        Ok(stdout)
+    } else if stderr.trim().is_empty() {
+        Err(stdout)
+    } else if stdout.trim().is_empty() {
+        Err(stderr)
+    } else {
+        Err(format!("{stderr}\n{stdout}"))
+    }
 }
 
 #[tauri::command]
@@ -182,28 +240,117 @@ fn pty_close(state: State<'_, ShellState>, session_id: String) -> Result<(), Str
 
 #[tauri::command]
 fn run_wazir_ai_task(prompt: String, cwd: Option<String>) -> Result<String, String> {
-    let wa_path = resolve_wa_binary();
-    let mut cmd = if wa_path.ends_with(".js") {
-        let mut c = std::process::Command::new("/opt/homebrew/bin/node");
-        c.arg(&wa_path);
-        c
-    } else {
-        std::process::Command::new(&wa_path)
-    };
-    cmd.arg("exec").arg("--json").arg(&prompt);
-    if let Some(dir) = cwd {
-        if !dir.trim().is_empty() {
-            cmd.current_dir(dir);
+    run_wa_subcommand(vec!["exec".into(), "--json".into(), prompt], cwd)
+}
+
+#[tauri::command]
+async fn run_wazir_workflow(
+    mode: String,
+    prompt: String,
+    cwd: Option<String>,
+    dry_run: Option<bool>,
+    max_iterations: Option<u32>,
+    max_concurrency: Option<u32>,
+    override_mode: Option<String>,
+) -> Result<String, String> {
+    let trimmed_prompt = prompt.trim().to_string();
+    if trimmed_prompt.is_empty() {
+        return Err("workflow prompt must not be empty".to_string());
+    }
+    let normalized_mode = mode.trim().to_ascii_lowercase();
+    let mut args: Vec<String> = match normalized_mode.as_str() {
+        "loop" => vec!["loop".into(), trimmed_prompt, "--json".into()],
+        "graph" => vec!["graph".into(), trimmed_prompt, "--json".into()],
+        "goal" | "auto" | "single" | "hybrid" | "" => {
+            let mut v = vec!["goal".into(), "run".into(), trimmed_prompt, "--json".into()];
+            let effective_override = override_mode
+                .as_deref()
+                .map(str::trim)
+                .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("auto"))
+                .map(str::to_string)
+                .or_else(|| {
+                    if normalized_mode == "single" || normalized_mode == "hybrid" {
+                        Some(normalized_mode.clone())
+                    } else {
+                        None
+                    }
+                });
+            if let Some(m) = effective_override {
+                v.push("--mode".into());
+                v.push(m);
+            }
+            v
         }
+        other => return Err(format!("unsupported workflow mode '{other}'")),
+    };
+
+    if dry_run == Some(true) {
+        args.push("--dry-run".into());
     }
-    let output = cmd.output().map_err(|e| format!("failed to run wa exec: {e}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if output.status.success() {
-        Ok(stdout)
-    } else {
-        Err(if stderr.is_empty() { stdout } else { stderr })
+    if let Some(max_iter) = max_iterations {
+        args.push("--max-iterations".into());
+        args.push(max_iter.to_string());
     }
+    if let Some(max_conc) = max_concurrency {
+        args.push("--max-concurrency".into());
+        args.push(max_conc.to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || run_wa_subcommand(args, cwd))
+        .await
+        .map_err(|e| format!("workflow task join failed: {e}"))?
+}
+
+#[tauri::command]
+async fn list_wazir_jobs(
+    status: Option<String>,
+    mode: Option<String>,
+    cwd: Option<String>,
+) -> Result<String, String> {
+    let mut args: Vec<String> = vec!["jobs".into(), "--json".into()];
+    if let Some(st) = status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        args.push("--status".into());
+        args.push(st.to_string());
+    }
+    if let Some(md) = mode.as_deref().map(str::trim).filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("all")) {
+        args.push("--mode".into());
+        args.push(md.to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || run_wa_subcommand(args, cwd))
+        .await
+        .map_err(|e| format!("list_wazir_jobs join failed: {e}"))?
+}
+
+#[tauri::command]
+async fn control_wazir_job(
+    action: String,
+    run_id: String,
+    cwd: Option<String>,
+) -> Result<String, String> {
+    let act = action.trim().to_ascii_lowercase();
+    if !matches!(act.as_str(), "pause" | "resume" | "stop") {
+        return Err(format!("unsupported job control action '{action}'; expected pause, resume, or stop"));
+    }
+    let id = run_id.trim().to_string();
+    if id.is_empty() {
+        return Err("runId must not be empty".to_string());
+    }
+    let args = vec![act, id, "--json".into()];
+    tauri::async_runtime::spawn_blocking(move || run_wa_subcommand(args, cwd))
+        .await
+        .map_err(|e| format!("control_wazir_job join failed: {e}"))?
+}
+
+#[tauri::command]
+async fn inspect_wazir_job(run_id: String, cwd: Option<String>) -> Result<String, String> {
+    let id = run_id.trim().to_string();
+    if id.is_empty() {
+        return Err("runId must not be empty".to_string());
+    }
+    let args = vec!["inspect".into(), id, "--json".into()];
+    tauri::async_runtime::spawn_blocking(move || run_wa_subcommand(args, cwd))
+        .await
+        .map_err(|e| format!("inspect_wazir_job join failed: {e}"))?
 }
 
 #[tauri::command]
@@ -285,6 +432,10 @@ fn main() {
             pty_resize,
             pty_close,
             run_wazir_ai_task,
+            run_wazir_workflow,
+            list_wazir_jobs,
+            control_wazir_job,
+            inspect_wazir_job,
             get_about_info,
             open_mission_control
         ])

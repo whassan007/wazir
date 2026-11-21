@@ -344,6 +344,385 @@ export async function executeShellLine(
   });
 }
 
+function stripOuterQuotes(value: string): string {
+  const t = value.trim();
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+function shellHelpText(): string {
+  return [
+    'Wazir Shell — Interactive Native OS + AI + Loop + Graph + Goal Shell',
+    '',
+    'Reserved Wazir Commands (precedence 1):',
+    '  loop "<task>"         Execute an iterative bounded Loop with independent verification',
+    '  graph "<goal>"        Construct & execute an acyclic DAG workflow',
+    '  goal "<goal>"         Analyze intent, pick Single/Loop/Graph/Hybrid, and run',
+    '  jobs                  List persistent Loop/Graph/Goal runs across Shell, CLI & Web',
+    '  status [run-id]       Show workflow or workspace runtime status',
+    '  inspect <run-id>      Inspect DAG, Loop cursor, targets, blockers & evidence',
+    '  pause <run-id>        Pause an active run cleanly in the shared store',
+    '  resume <run-id>       Resume a paused run from its durable checkpoint',
+    '  stop <run-id>         Stop an active or paused run cleanly',
+    '  agents | models | fleet   Inspect live fleet registries',
+    '  history [--runs]      Show shell command history',
+    '  help                  Show this help screen',
+    '',
+    'Overrides & OS Collision Escapes:',
+    '  !<cmd>, \\<cmd>, os:<cmd>, sh:<cmd>   Force OS shell execution (bypass Wazir commands)',
+    '  ?<prompt>                             Force AI execution',
+    '  /mode auto | shell | ai               Switch session routing mode',
+  ].join('\n');
+}
+
+export async function executeWazirShellCommand(
+  cmd: string,
+  rawArgs: string,
+  state: ShellSessionState,
+  _aiHandler?: (request: string, state: ShellSessionState) => Promise<number>,
+  _options?: ExecuteShellLineOptions,
+): Promise<number> {
+  const wf = await import('../workflowRuntime.js');
+  const cmds = await import('./workflowCommands.js');
+  const parsed = wf.parseShellWorkflowArgs(rawArgs);
+  const runOpts = {
+    workspace: parsed.workspace ?? state.cwd,
+    mode: parsed.mode,
+    maxIterations: parsed.maxIterations,
+    concurrency: parsed.concurrency,
+    budget: parsed.budget,
+    duration: parsed.duration,
+    repairs: parsed.repairs,
+    model: parsed.model,
+    computer: parsed.computer,
+    items: parsed.items,
+    until: parsed.until,
+    verify: parsed.verify.length > 0 ? parsed.verify : undefined,
+    dryRun: parsed.dryRun,
+    detach: parsed.detach || parsed.background,
+    json: parsed.json,
+    approveAll: parsed.approveAll,
+    originInterface: 'shell' as const,
+  };
+
+  switch (cmd) {
+    case 'help': {
+      console.log(shellHelpText());
+      return 0;
+    }
+
+    case 'history': {
+      if (state.history.length === 0) {
+        console.log('No command history recorded yet.');
+      } else {
+        state.history.forEach((entry, idx) => {
+          console.log(`${String(idx + 1).padStart(4)}  ${entry}`);
+        });
+      }
+      return 0;
+    }
+
+    case 'loop': {
+      if (parsed.help || !parsed.prompt) {
+        console.log('Usage: loop "<task>" [--max-iterations N] [--concurrency N] [--budget USD] [--dry-run] [--detach] [--json]');
+        return parsed.help ? 0 : 1;
+      }
+      console.log(`[LOOP] Running workflow in ${runOpts.workspace}...`);
+      const res = await cmds.loopCommand(parsed.prompt, runOpts);
+      console.log(res.output);
+      const data = res.data as { runId?: string } | undefined;
+      if (data?.runId) (state as ShellSessionState & { lastRunId?: string }).lastRunId = data.runId;
+      return res.code;
+    }
+
+    case 'graph': {
+      if (parsed.help || !parsed.prompt) {
+        console.log('Usage: graph "<goal>" [--concurrency N] [--budget USD] [--dry-run] [--detach] [--json]');
+        return parsed.help ? 0 : 1;
+      }
+      console.log(`[GRAPH] Constructing DAG in ${runOpts.workspace}...`);
+      const res = await cmds.graphCommand(parsed.prompt, runOpts);
+      console.log(res.output);
+      const data = res.data as { runId?: string } | undefined;
+      if (data?.runId) (state as ShellSessionState & { lastRunId?: string }).lastRunId = data.runId;
+      return res.code;
+    }
+
+    case 'goal': {
+      if (parsed.help || parsed.positionals.length === 0) {
+        console.log('Usage: goal [run] "<goal>" [--mode auto|single|loop|graph|hybrid] [--dry-run] [--detach] [--json]');
+        return parsed.help ? 0 : 1;
+      }
+      const sub = parsed.positionals[0]?.toLowerCase();
+      if (sub === 'run') {
+        const subPrompt = parsed.positionals.slice(1).join(' ').trim();
+        console.log(`[GOAL] Compiling goal in ${runOpts.workspace}...`);
+        const res = await cmds.runWorkflowCommand(subPrompt, { ...runOpts, defaultRequestedMode: 'auto' });
+        console.log(res.output);
+        const data = res.data as { runId?: string } | undefined;
+        if (data?.runId) (state as ShellSessionState & { lastRunId?: string }).lastRunId = data.runId;
+        return res.code;
+      }
+      if (sub === 'inspect' || sub === 'status' || sub === 'pause' || sub === 'resume' || sub === 'stop') {
+        return executeWazirShellCommand(
+          sub,
+          parsed.positionals.slice(1).join(' '),
+          state,
+        );
+      }
+      console.log(`[GOAL] Compiling goal in ${runOpts.workspace}...`);
+      const res = await cmds.runWorkflowCommand(parsed.prompt, { ...runOpts, defaultRequestedMode: 'auto' });
+      console.log(res.output);
+      const data = res.data as { runId?: string } | undefined;
+      if (data?.runId) (state as ShellSessionState & { lastRunId?: string }).lastRunId = data.runId;
+      return res.code;
+    }
+
+    case 'jobs': {
+      const res = await cmds.workflowJobsCommand({
+        status: parsed.status,
+        mode: parsed.mode,
+        workspace: state.cwd,
+        json: parsed.json,
+      });
+      console.log(res.output);
+      return res.code;
+    }
+
+    case 'status': {
+      const targetRunId = parsed.positionals[0] || (state as ShellSessionState & { lastRunId?: string }).lastRunId;
+      if (targetRunId) {
+        const res = await cmds.workflowStatusCommand(stripOuterQuotes(targetRunId), {
+          workspace: state.cwd,
+          json: parsed.json,
+        });
+        console.log(res.output);
+        return res.code;
+      }
+      const jobsRes = await cmds.workflowJobsCommand({ workspace: state.cwd, json: parsed.json });
+      console.log(jobsRes.output);
+      return jobsRes.code;
+    }
+
+    case 'inspect': {
+      const targetRunId = parsed.positionals[0] || (state as ShellSessionState & { lastRunId?: string }).lastRunId;
+      if (!targetRunId) {
+        console.error('Usage: inspect <run-id>');
+        return 1;
+      }
+      const res = await cmds.workflowInspectCommand(stripOuterQuotes(targetRunId), {
+        workspace: state.cwd,
+        json: parsed.json,
+      });
+      console.log(res.output);
+      return res.code;
+    }
+
+    case 'pause': {
+      const targetRunId = parsed.positionals[0] || (state as ShellSessionState & { lastRunId?: string }).lastRunId;
+      if (!targetRunId) {
+        console.error('Usage: pause <run-id>');
+        return 1;
+      }
+      const res = await cmds.workflowPauseCommand(stripOuterQuotes(targetRunId), {
+        reason: parsed.reason,
+        workspace: state.cwd,
+        json: parsed.json,
+      });
+      console.log(res.output);
+      return res.code;
+    }
+
+    case 'resume': {
+      const targetRunId = parsed.positionals[0] || (state as ShellSessionState & { lastRunId?: string }).lastRunId;
+      if (!targetRunId) {
+        console.error('Usage: resume <run-id>');
+        return 1;
+      }
+      const res = await cmds.workflowResumeCommand(stripOuterQuotes(targetRunId), {
+        detach: parsed.detach || parsed.background,
+        workspace: state.cwd,
+        json: parsed.json,
+      });
+      console.log(res.output);
+      return res.code;
+    }
+
+    case 'stop': {
+      const targetRunId = parsed.positionals[0] || (state as ShellSessionState & { lastRunId?: string }).lastRunId;
+      if (!targetRunId) {
+        console.error('Usage: stop <run-id>');
+        return 1;
+      }
+      const res = await cmds.workflowStopCommand(stripOuterQuotes(targetRunId), {
+        reason: parsed.reason,
+        workspace: state.cwd,
+        json: parsed.json,
+      });
+      console.log(res.output);
+      return res.code;
+    }
+
+    case 'agents':
+    case 'models':
+    case 'fleet': {
+      const { createStore } = await import('../engine.js');
+      const { AgentRegistry, ComputerRegistry, ModelRegistry, RuntimeRegistry } = await import('@wazir/core');
+      const store = await createStore();
+      if (cmd === 'agents') {
+        const agents = await new AgentRegistry(store).list();
+        console.log(parsed.json ? JSON.stringify(agents, null, 2) : `Agents registered: ${agents.length}${agents.length ? '\n' + agents.map((a) => `  - ${a.id} (${a.status})`).join('\n') : ''}`);
+        return 0;
+      }
+      if (cmd === 'models') {
+        const models = await new ModelRegistry(store).list();
+        console.log(parsed.json ? JSON.stringify(models, null, 2) : `Models registered: ${models.length}${models.length ? '\n' + models.map((m) => `  - ${m.id} (${m.family})`).join('\n') : ''}`);
+        return 0;
+      }
+      const computers = await new ComputerRegistry(store).list();
+      const runtimes = await new RuntimeRegistry(store).list();
+      const payload = { computers, runtimes };
+      console.log(parsed.json ? JSON.stringify(payload, null, 2) : `Fleet: ${computers.length} computer(s), ${runtimes.length} runtime(s)`);
+      return 0;
+    }
+
+    default:
+      return 1;
+  }
+}
+
+export async function launchInteractiveWazirShell(options: {
+  command?: string;
+  ai?: boolean;
+  tools?: boolean;
+  version?: string;
+  batch?: boolean;
+} = {}): Promise<void> {
+  const effectiveVersion =
+    options.version && options.version !== '0.3.1' ? options.version : resolveAuthoritativePackageVersion();
+  const wazirHome = process.env.WAZIR_HOME || path.join(os.homedir(), '.wazir');
+  const state = createInitialShellState({
+    initialCwd: process.cwd(),
+    historyFile: path.join(wazirHome, 'shell_history'),
+  });
+
+  if (options.tools) {
+    for (const tool of state.optionalTools) {
+      console.log(`${tool.name.padEnd(10)} ${tool.available ? `available (${tool.executablePath})` : 'not installed'}`);
+    }
+    return;
+  }
+
+  const aiHandler = options.ai === false
+    ? undefined
+    : async (request: string, s: ShellSessionState) => {
+        console.log(`[AI] Routing request: "${request}" (cwd: ${s.cwd})`);
+        const previousCwd = process.cwd();
+        try {
+          if (fs.existsSync(s.cwd)) {
+            process.chdir(s.cwd);
+          }
+          const { createEngine } = await import('../engine.js');
+          const { executeTask } = await import('../run.js');
+          const engine = await createEngine({ projectRoot: s.cwd, quiet: true });
+          const outcome = await executeTask(engine, request, {});
+          return outcome.success ? 0 : 1;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[wazir-ai] Execution failed: ${msg}`);
+          const diag = new DiagnosticQueue();
+          diag.enqueue({
+            appVersion: effectiveVersion,
+            errorCode: 'ERR_SHELL_AI_EXEC',
+            failureCategory: 'command_routing',
+            component: 'wa-shell',
+            exceptionCategory: err instanceof Error ? err.name : 'Error',
+            taskPhase: 'execute',
+          });
+          return 1;
+        } finally {
+          try {
+            process.chdir(previousCwd);
+          } catch {
+            // ignore restore errors
+          }
+        }
+      };
+
+  if (options.command) {
+    const code = await executeShellLine(options.command, state, aiHandler);
+    process.exitCode = code;
+    return;
+  }
+
+  if (options.batch || !process.stdin.isTTY) {
+    const rlBatch = readline.createInterface({
+      input: process.stdin,
+      crlfDelay: Infinity,
+    });
+    for await (const line of rlBatch) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      await executeShellLine(trimmed, state, aiHandler);
+      if (state.shouldExit) break;
+    }
+    process.exitCode = state.lastExitCode;
+    return;
+  }
+
+  const availableEnhancements = state.optionalTools.filter((t) => t.available).map((t) => t.name);
+  console.log(`Wazir Shell v${effectiveVersion} — Native OS + AI + Loop + Graph + Goal Shell`);
+  console.log(`Reserved: loop | graph | goal | jobs | status | inspect | pause | resume | stop | help`);
+  console.log(`Escapes:  '! <cmd>' / '\\<cmd>' / 'os:<cmd>' for OS shell · '? <req>' for AI · '/mode <auto|shell|ai>'`);
+  if (availableEnhancements.length > 0) {
+    console.log(`Detected tools: ${availableEnhancements.join(', ')}\n`);
+  } else {
+    console.log('');
+  }
+
+  const completer = (line: string): [string[], string] => {
+    const builtins = [
+      'loop ', 'graph ', 'goal ', 'jobs', 'status', 'inspect ', 'pause ', 'resume ', 'stop ',
+      'agents', 'models', 'fleet', 'history', 'help',
+      'cd ', 'pwd', 'export ', 'unset ', 'alias ', 'unalias ', 'tools', 'exit', 'quit',
+      '/mode auto', '/mode shell', '/mode ai',
+    ];
+    const hits = builtins.filter((c) => c.startsWith(line));
+    return [hits.length ? hits : builtins, line];
+  };
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: `wazir:${path.basename(state.cwd) || '/'}$ `,
+    completer,
+  });
+
+  rl.on('SIGINT', () => {
+    if (state.activeChild && state.activeChild.exitCode === null) {
+      state.activeChild.kill('SIGINT');
+      return;
+    }
+    console.log('^C');
+    rl.prompt();
+  });
+
+  rl.prompt();
+  for await (const line of rl) {
+    const trimmed = line.trim();
+    await executeShellLine(trimmed, state, aiHandler);
+    if (state.shouldExit) {
+      rl.close();
+      break;
+    }
+    rl.setPrompt(`wazir:${path.basename(state.cwd) || '/'}$ `);
+    rl.prompt();
+  }
+  process.exitCode = state.lastExitCode;
+}
+
 export function registerShellAndMetaCommands(program: Command, cliVersion?: string): void {
   const effectiveVersion = cliVersion && cliVersion !== '0.3.1' ? cliVersion : resolveAuthoritativePackageVersion();
 
@@ -354,104 +733,7 @@ export function registerShellAndMetaCommands(program: Command, cliVersion?: stri
     .option('--no-ai', 'Run strictly in offline native-shell mode')
     .option('--tools', 'List discovered optional shell enhancement tools (fzf, zoxide, rg, bat, atuin, lazygit) and exit')
     .action(async (options: { command?: string; ai?: boolean; tools?: boolean }) => {
-      const wazirHome = process.env.WAZIR_HOME || path.join(os.homedir(), '.wazir');
-      const state = createInitialShellState({
-        initialCwd: process.cwd(),
-        historyFile: path.join(wazirHome, 'shell_history'),
-      });
-
-      if (options.tools) {
-        for (const tool of state.optionalTools) {
-          console.log(`${tool.name.padEnd(10)} ${tool.available ? `available (${tool.executablePath})` : 'not installed'}`);
-        }
-        return;
-      }
-
-      const aiHandler = options.ai === false
-        ? undefined
-        : async (request: string, s: ShellSessionState) => {
-            console.log(`[wazir-ai] Routing request: "${request}" (cwd: ${s.cwd})`);
-            const previousCwd = process.cwd();
-            try {
-              if (fs.existsSync(s.cwd)) {
-                process.chdir(s.cwd);
-              }
-              const { createEngine } = await import('../engine.js');
-              const { executeTask } = await import('../run.js');
-              const engine = await createEngine({ projectRoot: s.cwd, quiet: true });
-              const outcome = await executeTask(engine, request, {});
-              return outcome.success ? 0 : 1;
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              console.error(`[wazir-ai] Execution failed: ${msg}`);
-              const diag = new DiagnosticQueue();
-              diag.enqueue({
-                appVersion: effectiveVersion,
-                errorCode: 'ERR_SHELL_AI_EXEC',
-                failureCategory: 'command_routing',
-                component: 'wa-shell',
-                exceptionCategory: err instanceof Error ? err.name : 'Error',
-                taskPhase: 'execute',
-              });
-              return 1;
-            } finally {
-              try {
-                process.chdir(previousCwd);
-              } catch {
-                // ignore restore errors
-              }
-            }
-          };
-
-      if (options.command) {
-        const code = await executeShellLine(options.command, state, aiHandler);
-        process.exitCode = code;
-        return;
-      }
-
-      const availableEnhancements = state.optionalTools.filter((t) => t.available).map((t) => t.name);
-      console.log(`Wazir Shell v${effectiveVersion} — Universal AI-Native Terminal`);
-      console.log(`Tip: '! <cmd>' forces shell, '? <req>' forces AI, '/mode <auto|shell|ai>' switches mode, 'exit' quits.`);
-      if (availableEnhancements.length > 0) {
-        console.log(`Detected tools: ${availableEnhancements.join(', ')}\n`);
-      } else {
-        console.log('');
-      }
-
-      const completer = (line: string): [string[], string] => {
-        const builtins = ['cd', 'pwd', 'export', 'unset', 'alias', 'unalias', 'history', 'tools', 'exit', 'quit', '/mode auto', '/mode shell', '/mode ai'];
-        const hits = builtins.filter((c) => c.startsWith(line));
-        return [hits.length ? hits : builtins, line];
-      };
-
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-        prompt: `wa:${path.basename(state.cwd) || '/'}$ `,
-        completer,
-      });
-
-      rl.on('SIGINT', () => {
-        if (state.activeChild && state.activeChild.exitCode === null) {
-          state.activeChild.kill('SIGINT');
-          return;
-        }
-        console.log('^C');
-        rl.prompt();
-      });
-
-      rl.prompt();
-      for await (const line of rl) {
-        const trimmed = line.trim();
-        await executeShellLine(trimmed, state, aiHandler);
-        if (state.shouldExit) {
-          rl.close();
-          break;
-        }
-        rl.setPrompt(`wa:${path.basename(state.cwd) || '/'}$ `);
-        rl.prompt();
-      }
-      process.exitCode = state.lastExitCode;
+      await launchInteractiveWazirShell({ ...options, version: effectiveVersion });
     });
 
   program

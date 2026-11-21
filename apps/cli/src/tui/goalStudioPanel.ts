@@ -14,6 +14,10 @@ import type {
   GoalRunLedger,
   GoalGraphDefinition,
   TargetLedgerEntry,
+  WorkflowInspection,
+  WorkflowJobSummary,
+  WorkflowMode,
+  WorkflowPlanRecord,
 } from '@wazir/goals';
 import { color } from '../colors.js';
 import { padRightAnsi, stripAnsiStr, truncateAnsiStr } from './fleetTuiTypes.js';
@@ -161,6 +165,156 @@ export interface GoalStudioSnapshot {
   readonly graph?: GoalGraphDefinition;
   readonly activePhase?: GoalPhase;
   readonly selectedTargetIndex?: number;
+  readonly plan?: WorkflowPlanRecord;
+  readonly summary?: WorkflowJobSummary;
+  readonly jobs?: readonly WorkflowJobSummary[];
+  readonly inspection?: WorkflowInspection;
+}
+
+export function formatWorkflowModeBadge(mode: WorkflowMode | 'goal', requestedMode?: string): string {
+  const badgeFor = (m: WorkflowMode | 'goal'): string => {
+    switch (m) {
+      case 'loop':
+        return color.bold(color.cyan('[LOOP]'));
+      case 'graph':
+        return color.bold(color.magenta('[GRAPH]'));
+      case 'hybrid':
+        return color.bold(color.yellow('[HYBRID]'));
+      case 'single':
+      case 'goal':
+      default:
+        return color.bold(color.green('[GOAL]'));
+    }
+  };
+  if (requestedMode === 'auto' && mode !== 'single' && mode !== 'goal') {
+    return `${color.bold(color.green('[GOAL]'))} ${badgeFor(mode)}`;
+  }
+  return badgeFor(mode);
+}
+
+export function formatWorkflowRationaleLines(plan: WorkflowPlanRecord, width = 100): string[] {
+  const lines: string[] = [];
+  const exp = plan.explanation;
+  const conf = `${Math.round(exp.confidence * 100)}%`;
+  const overrideTag = plan.overridden ? ' (overridden)' : '';
+  const modeBadge = formatWorkflowModeBadge(plan.mode, plan.requestedMode);
+  lines.push(`  Mode: ${modeBadge}  ·  Origin: ${plan.originInterface}  ·  Confidence: ${conf}${overrideTag}`);
+  for (const reason of exp.reasons.slice(0, 2)) {
+    lines.push(`  Rationale: ${reason}`);
+  }
+  const signals: string[] = [];
+  if (exp.signals.loopSignals.length > 0) signals.push(`loop=[${exp.signals.loopSignals.join(', ')}]`);
+  if (exp.signals.graphSignals.length > 0) signals.push(`graph=[${exp.signals.graphSignals.join(', ')}]`);
+  if (exp.policyAssessment.requiresApprovalGates.length > 0) {
+    signals.push(`gates=[${exp.policyAssessment.requiresApprovalGates.join('; ')}]`);
+  }
+  if (signals.length > 0) {
+    lines.push(`  Signals: ${color.gray(signals.join(' · '))}`);
+  }
+  return lines.map((l) => (stripAnsiStr(l).length > width ? truncateAnsiStr(l, width) : l));
+}
+
+export function formatLoopCursorProgressLines(
+  plan: WorkflowPlanRecord,
+  run?: GoalRunLedger,
+  width = 100,
+  maxItems = 5,
+): string[] {
+  const loops = plan.loop
+    ? [plan.loop]
+    : (plan.nestedLoops?.map((n) => n.loop) ?? []);
+  if (loops.length === 0) return [];
+  const loop = loops[0]!;
+  const total = loop.items.length;
+  const completedCount = run
+    ? loop.items.filter((it) => run.targets[it.targetId]?.status === 'completed').length
+    : 0;
+  const cursor = run
+    ? loop.items.filter((it) => {
+        const s = run.targets[it.targetId]?.status;
+        return s === 'completed' || s === 'blocked' || s === 'stopped';
+      }).length
+    : loop.cursor;
+
+  const lines: string[] = [];
+  lines.push(
+    `  Loop Cursor: ${color.bold(color.cyan(`${cursor}/${total}`))} (${completedCount} completed)  ·  Kind: ${loop.kind}  ·  Concurrency: ${loop.maxConcurrency}`,
+  );
+  lines.push(`  Until: ${color.gray(loop.completionPredicate)}`);
+  for (const item of loop.items.slice(0, maxItems)) {
+    const status = run?.targets[item.targetId]?.status ?? 'queued';
+    const pathPart = item.path ? color.gray(` (${item.path})`) : '';
+    lines.push(`    • [${item.index + 1}/${total}] ${color.bold(item.targetId)} ${formatTargetStatusBadge(status)} ${item.label}${pathPart}`);
+  }
+  if (loop.items.length > maxItems) {
+    lines.push(color.gray(`    … +${loop.items.length - maxItems} more loop item(s)`));
+  }
+  return lines.map((l) => (stripAnsiStr(l).length > width ? truncateAnsiStr(l, width) : l));
+}
+
+export function formatGraphCriticalPathLines(
+  plan?: WorkflowPlanRecord,
+  summary?: WorkflowJobSummary,
+  run?: GoalRunLedger,
+  width = 100,
+): string[] {
+  const lines: string[] = [];
+  if (plan?.criticalPath && plan.criticalPath.targets.length > 0) {
+    lines.push(
+      `  Critical Path (depth ${plan.criticalPath.depth}): ${color.magenta(plan.criticalPath.targets.join(' → '))}`,
+    );
+  }
+  if (summary) {
+    const p = summary.progress;
+    const cursorPart = p.cursor !== undefined ? ` · cursor=${p.cursor}/${p.total}` : '';
+    lines.push(
+      `  DAG Progress: ${color.green(`${p.completed}/${p.total} completed`)} · ${color.cyan(`${p.active} active`)} · ${color.gray(`${p.queued} queued`)}${p.blocked > 0 ? ` · ${color.red(`${p.blocked} blocked`)}` : ''}${p.failed > 0 ? ` · ${color.red(`${p.failed} failed`)}` : ''}${p.needsApproval > 0 ? ` · ${color.yellow(`${p.needsApproval} needs_approval`)}` : ''}${cursorPart}`,
+    );
+  } else if (run) {
+    const c = summarizeGoalTargets(run.targets);
+    lines.push(
+      `  DAG Progress: ${color.green(`${c.completed}/${c.total} completed`)} · ${color.cyan(`${c.active} active`)} · ${color.gray(`${c.queued} queued`)}`,
+    );
+  }
+  return lines.map((l) => (stripAnsiStr(l).length > width ? truncateAnsiStr(l, width) : l));
+}
+
+export function formatWorkflowJobsList(jobs: readonly WorkflowJobSummary[], width = 100): string[] {
+  if (jobs.length === 0) {
+    return ['  No Loop, Graph, or Goal workflow jobs recorded yet.'];
+  }
+  const lines: string[] = [`  ${color.bold(`Workflow Jobs (${jobs.length})`)}`];
+  for (const job of jobs) {
+    const badge = formatWorkflowModeBadge(job.mode);
+    const status = formatGoalRunStatusBadge(job.status);
+    const cursorPart = job.progress.cursor !== undefined ? ` · cursor ${job.progress.cursor}/${job.progress.total}` : '';
+    const progress = `${job.progress.completed}/${job.progress.total} done${cursorPart}`;
+    const promptPreview = job.prompt.replace(/\s+/g, ' ').trim();
+    const line = `  ${badge} ${color.bold(job.runId)} · ${status} · ${progress} · [${job.originInterface}] ${color.gray(promptPreview)}`;
+    lines.push(stripAnsiStr(line).length > width ? truncateAnsiStr(line, width) : line);
+  }
+  return lines;
+}
+
+export function formatWorkflowInspectionSummary(inspection: WorkflowInspection, width = 100): string[] {
+  const { summary, run, plan, evidence, targets } = inspection;
+  const lines: string[] = [
+    `  ${formatWorkflowModeBadge(summary.mode, plan?.requestedMode)} ${color.bold(run.runId)} · Status: ${formatGoalRunStatusBadge(run.status)} · Origin: ${summary.originInterface}`,
+    `  Prompt: ${summary.prompt}`,
+  ];
+  if (plan) {
+    lines.push(...formatWorkflowRationaleLines(plan, width));
+    lines.push(...formatLoopCursorProgressLines(plan, run, width, 8));
+  }
+  lines.push(...formatGraphCriticalPathLines(plan, summary, run, width));
+  const defMap = new Map(targets.map((t) => [t.id, t]));
+  for (const entry of Object.values(run.targets).slice(0, 10)) {
+    const def = defMap.get(entry.targetId);
+    const deps = def?.dependsOn?.length ? color.gray(` deps=[${def.dependsOn.join(',')}]`) : '';
+    lines.push(`    ${color.bold(entry.targetId)} ${formatTargetStatusBadge(entry.status)} ${def?.title ?? entry.targetId}${deps}`);
+  }
+  lines.push(`  Evidence records: ${evidence.length}`);
+  return lines.map((l) => (stripAnsiStr(l).length > width ? truncateAnsiStr(l, width) : l));
 }
 
 export function summarizeGoalTargets(entries: Record<string, TargetLedgerEntry>): {
@@ -245,12 +399,22 @@ export function renderGoalStudioPane(
   if (!run) {
     lines.push(formatGoalPhaseIndicator(snapshot.activePhase ?? 'LOAD_LEDGER', cols));
     lines.push('');
-    lines.push(color.yellow('  No active Goal Studio run loaded in this workspace.'));
-    lines.push('  Start or inspect a goal run via CLI or TUI:');
-    lines.push(`    • ${color.cyan('wa goals init')}          Initialize a GoalGraphDefinition`);
-    lines.push(`    • ${color.cyan('wa goals run <goalId>')}  Start continuous autonomous goal execution`);
-    lines.push(`    • ${color.cyan('wa goals status')}        Inspect pinned graph digest & target ledger`);
-    lines.push(`    • ${color.cyan('/status')}                Display immediate fleet & Goal Studio status summary`);
+    if (snapshot.jobs && snapshot.jobs.length > 0) {
+      lines.push(...formatWorkflowJobsList(snapshot.jobs, cols));
+      lines.push('');
+      lines.push(color.gray('  Commands: /loop <task> · /graph <goal> · /goal <goal> · /inspect <runId> · /pause|/resume|/stop <runId>'));
+    } else {
+      lines.push(color.yellow('  No active Goal Studio run loaded in this workspace.'));
+      lines.push('  Start or inspect a workflow via TUI slash commands or CLI:');
+      lines.push(`    • ${color.cyan('/loop <task>')}           Run bounded iterative Loop workflow`);
+      lines.push(`    • ${color.cyan('/graph <goal>')}          Compile & run DAG Graph workflow`);
+      lines.push(`    • ${color.cyan('/goal <goal>')}           Auto-select Single, Loop, Graph, or Hybrid workflow`);
+      lines.push(`    • ${color.cyan('/jobs')} · ${color.cyan('/inspect <id>')}   List and inspect shared workflow runs`);
+      lines.push(`    • ${color.cyan('wa goals init')}          Initialize a GoalGraphDefinition`);
+      lines.push(`    • ${color.cyan('wa goals run <goalId>')}  Start continuous autonomous goal execution`);
+      lines.push(`    • ${color.cyan('wa goals status')}        Inspect pinned graph digest & target ledger`);
+      lines.push(`    • ${color.cyan('/status')}                Display immediate fleet & Goal Studio status summary`);
+    }
     while (lines.length < maxRows) lines.push('');
     return lines.slice(0, maxRows).map((l) => padRightAnsi(l, cols));
   }
@@ -259,13 +423,25 @@ export function renderGoalStudioPane(
   const currentEntries = Object.values(run.targets);
   const activePhase = snapshot.activePhase ?? 'SELECT_TARGET';
   const limits = graph?.constitution?.resourceLimits;
+  const modeBadge = snapshot.plan
+    ? `  ·  Mode: ${formatWorkflowModeBadge(snapshot.plan.mode, snapshot.plan.requestedMode)}`
+    : snapshot.summary
+      ? `  ·  Mode: ${formatWorkflowModeBadge(snapshot.summary.mode)}`
+      : '';
 
   lines.push(
-    `  Run: ${color.bold(run.runId)}  ·  Graph: ${color.cyan(run.graphId)} (rev ${run.graphRevision})  ·  Status: ${formatGoalRunStatusBadge(run.status)}`,
+    `  Run: ${color.bold(run.runId)}  ·  Graph: ${color.cyan(run.graphId)} (rev ${run.graphRevision})  ·  Status: ${formatGoalRunStatusBadge(run.status)}${modeBadge}`,
   );
   lines.push(
     `  Graph Digest: ${color.gray(run.graphDigest.slice(0, 24))}  ·  Tasks: ${run.resource.tasksStarted}/${limits?.maxTasksPerRun ?? '∞'}  ·  Spend: $${run.resource.hostedSpendUsd.toFixed(2)}/$${limits?.hostedSpendUsd?.toFixed(2) ?? '∞'}`,
   );
+  if (snapshot.plan) {
+    lines.push(...formatWorkflowRationaleLines(snapshot.plan, cols));
+    lines.push(...formatLoopCursorProgressLines(snapshot.plan, run, cols, 4));
+    lines.push(...formatGraphCriticalPathLines(snapshot.plan, snapshot.summary, run, cols));
+  } else if (snapshot.summary) {
+    lines.push(...formatGraphCriticalPathLines(undefined, snapshot.summary, run, cols));
+  }
   lines.push(formatGoalPhaseIndicator(activePhase, cols));
   lines.push(
     `  Targets (${counts.total}): ${color.green(`${counts.completed} completed`)} · ${color.cyan(`${counts.verifiedOnly} verified`)} · ${color.blue(`${counts.eligible} eligible`)} · ${color.cyan(`${counts.active} active`)} · ${color.gray(`${counts.queued} queued`)} · ${counts.blockedOrFailed > 0 ? color.red(`${counts.blockedOrFailed} blocked/failed`) : color.gray('0 blocked')}`,
@@ -326,7 +502,38 @@ export function formatCommandFeedback(input: CommandFeedbackInput): string {
   if (cmd === '/goals' || cmd === '/goal') {
     return input.goalRun
       ? `Goal Studio: ${input.goalRun.graphId} (${input.goalRun.status.toUpperCase()}) — press ↑/↓ to inspect targets, ? for help.`
-      : 'Switched to Goal Studio view (7 / g). Use wa goals init / wa goals run to start a goal ledger.';
+      : 'Switched to Goal Studio view (7 / g). Use /loop <task>, /graph <goal>, /goal <goal>, or /jobs.';
+  }
+  if (cmd === '/loop' || cmd.startsWith('/loop ')) {
+    const task = cmd.slice(5).trim();
+    return task ? `Starting Loop workflow: ${task}` : 'Usage: /loop <task> — run a bounded iterative Loop workflow.';
+  }
+  if (cmd === '/graph' || cmd.startsWith('/graph ')) {
+    const goal = cmd.slice(6).trim();
+    return goal ? `Starting Graph workflow: ${goal}` : 'Usage: /graph <goal> — compile and run a DAG Graph workflow.';
+  }
+  if (cmd.startsWith('/goal ')) {
+    const goal = cmd.slice(5).trim();
+    return goal ? `Starting Goal workflow: ${goal}` : 'Usage: /goal <goal> — auto-select and run a workflow.';
+  }
+  if (cmd === '/jobs' || cmd.startsWith('/jobs ')) {
+    return 'Listing shared Loop, Graph, and Goal workflow jobs...';
+  }
+  if (cmd === '/inspect' || cmd.startsWith('/inspect ')) {
+    const id = cmd.slice(8).trim();
+    return id ? `Inspecting workflow run ${id}...` : 'Usage: /inspect <runId>';
+  }
+  if (cmd === '/pause' || cmd.startsWith('/pause ')) {
+    const id = cmd.slice(6).trim();
+    return id ? `Pausing workflow run ${id}...` : 'Usage: /pause <runId>';
+  }
+  if (cmd === '/resume' || cmd.startsWith('/resume ')) {
+    const id = cmd.slice(7).trim();
+    return id ? `Resuming workflow run or session ${id}...` : 'Usage: /resume <runId | session-id>';
+  }
+  if (cmd === '/stop' || cmd.startsWith('/stop ')) {
+    const id = cmd.slice(5).trim();
+    return id ? `Stopping workflow run ${id}...` : 'Usage: /stop <runId>';
   }
   if (cmd === '/help' || cmd === '?') {
     return 'Showing keyboard shortcuts & command reference. Press Esc or ? to return.';

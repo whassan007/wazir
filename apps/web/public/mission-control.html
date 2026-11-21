@@ -52,10 +52,25 @@
     .pill.info { background: rgba(56,189,248,0.15); color: var(--accent); }
     .pill.muted { background: rgba(148,163,184,0.15); color: var(--muted); }
     .graph-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-    input, select {
+    input, select, textarea {
       background: #0b0f17; color: var(--text); border: 1px solid var(--border);
-      border-radius: 6px; padding: 6px 10px; font-size: 12px;
+      border-radius: 6px; padding: 6px 10px; font-size: 12px; font-family: inherit;
     }
+    textarea { width: 100%; resize: vertical; }
+    .wf-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px; }
+    @media (max-width: 1024px) { .wf-grid { grid-template-columns: 1fr; } }
+    .wf-controls-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+    .wf-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }
+    .wf-box {
+      background: #0b0f17; border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px; font-size: 12px; max-height: 280px; overflow: auto;
+    }
+    .wf-bar-wrap { width: 110px; height: 6px; background: #1e293b; border-radius: 999px; overflow: hidden; margin-top: 4px; }
+    .wf-bar-fill { height: 100%; background: var(--accent); border-radius: 999px; }
+    .btn.warn { background: rgba(234,179,8,0.18); border-color: var(--warn); color: var(--warn); }
+    .btn.danger { background: rgba(239,68,68,0.18); border-color: var(--err); color: var(--err); }
+    .btn.ok { background: rgba(34,197,94,0.18); border-color: var(--ok); color: var(--ok); }
+    .btn.sm { padding: 3px 8px; font-size: 11px; }
     .graph-stage-row {
       display: flex; align-items: center; gap: 8px; overflow-x: auto; padding: 12px 4px;
     }
@@ -102,6 +117,102 @@
       <div class="kpi"><div class="label">Active / Total Jobs</div><div class="val" id="kpi-jobs">—</div></div>
       <div class="kpi"><div class="label">Pending Approvals</div><div class="val" id="kpi-approvals">—</div></div>
       <div class="kpi"><div class="label">Diagnostic Issues</div><div class="val" id="kpi-issues">—</div></div>
+    </section>
+
+    <section class="card" id="workflow-launcher-card">
+      <h2>
+        <span>Workflow Launcher (Goal · Loop · Graph Orchestration)</span>
+        <span class="mono" style="font-size:11px;color:var(--muted)">Unified @wazir/goals runtime · Shell · CLI · API · Web</span>
+      </h2>
+      <div class="wf-grid">
+        <div>
+          <label class="wf-field">
+            <span>Goal / Task Prompt</span>
+            <textarea id="wf-prompt" rows="3" placeholder="e.g. Build a multi-stage SaaS API with auth, database, and QA — or iterate across every city in cities.json until verified..."></textarea>
+          </label>
+          <div class="wf-controls-row">
+            <label class="wf-field">
+              <span>Mode</span>
+              <select id="wf-mode">
+                <option value="auto">Auto (Goal)</option>
+                <option value="loop">Loop</option>
+                <option value="graph">Graph</option>
+                <option value="single">Single</option>
+                <option value="hybrid">Hybrid</option>
+              </select>
+            </label>
+            <label class="wf-field">
+              <span>Loop Max Iterations</span>
+              <input id="wf-max-iterations" type="number" min="1" max="100" placeholder="25" style="width:120px;" />
+            </label>
+            <label class="wf-field">
+              <span>Concurrency</span>
+              <input id="wf-max-concurrency" type="number" min="1" max="16" placeholder="1-16" style="width:100px;" />
+            </label>
+            <label class="wf-field" style="flex:1;min-width:160px;">
+              <span>Items (optional, comma-separated)</span>
+              <input id="wf-items" type="text" placeholder="alpha, beta, gamma" />
+            </label>
+          </div>
+          <div class="wf-controls-row" style="justify-content:space-between;margin-top:10px;">
+            <label style="display:flex;align-items:center;gap:6px;color:var(--muted);cursor:pointer;">
+              <input id="wf-dry-run" type="checkbox" />
+              <span>Dry-run preview (create plan without executing targets)</span>
+            </label>
+            <div style="display:flex;gap:8px;">
+              <button class="btn" id="wf-compile-btn" type="button">Analyze / Preview</button>
+              <button class="btn primary" id="wf-launch-btn" type="button">Launch Workflow</button>
+            </div>
+          </div>
+          <div id="wf-error-box" style="display:none;margin-top:10px;padding:8px 10px;border:1px solid var(--err);background:rgba(239,68,68,0.12);color:#fca5a5;border-radius:6px;"></div>
+        </div>
+        <div class="wf-box" id="wf-analysis-box">
+          <div style="color:var(--muted);">Enter a natural-language goal or task and click <strong>Analyze / Preview</strong> to inspect intent classification, policy gates, Loop items, and DAG critical path before launching.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="workflow-jobs-card">
+      <h2>
+        <span>Live Workflow Jobs (Shell · CLI · API · Web)</span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <select id="wf-filter-mode" aria-label="Filter workflow mode">
+            <option value="">All Modes</option>
+            <option value="loop">Loop</option>
+            <option value="graph">Graph</option>
+            <option value="hybrid">Hybrid</option>
+            <option value="single">Single</option>
+          </select>
+          <select id="wf-filter-status" aria-label="Filter workflow status">
+            <option value="">All Statuses</option>
+            <option value="running">running</option>
+            <option value="paused">paused</option>
+            <option value="idle">idle</option>
+            <option value="completed">completed</option>
+            <option value="stopped">stopped</option>
+            <option value="failed">failed</option>
+            <option value="created">created</option>
+          </select>
+          <button class="btn sm" id="wf-refresh-btn" type="button">↻ Refresh Workflows</button>
+        </div>
+      </h2>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Run / Prompt</th>
+              <th>Surface &amp; Mode</th>
+              <th>State</th>
+              <th>Loop Cursor / Progress</th>
+              <th>DAG Targets &amp; Critical Path</th>
+              <th>Controls</th>
+            </tr>
+          </thead>
+          <tbody id="wf-jobs-tbody">
+            <tr><td colspan="6" style="color:var(--muted)">Loading workflow jobs...</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section class="card">
@@ -182,10 +293,320 @@
 
     async function fetchJson(url) {
       try {
-        const res = await fetch(url);
+        const res = await fetch(url, { credentials: 'same-origin' });
         if (!res.ok) return null;
         return await res.json();
       } catch { return null; }
+    }
+
+    function escHtml(val) {
+      return String(val ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    async function workflowRequest(path, init = {}) {
+      const headers = new Headers(init.headers || {});
+      try {
+        const hostId = window.localStorage && window.localStorage.getItem('wazir_target_host');
+        if (hostId && hostId !== 'local' && !headers.has('X-Wazir-Target-Host')) {
+          headers.set('X-Wazir-Target-Host', hostId);
+        }
+      } catch { /* ignore storage errors */ }
+      if (!headers.has('Accept')) headers.set('Accept', 'application/json');
+      let body = init.body;
+      if (body && typeof body !== 'string') {
+        headers.set('Content-Type', 'application/json');
+        body = JSON.stringify(body);
+      }
+      const res = await fetch(`/api/v1/goal-studio/workflows${path}`, {
+        credentials: 'same-origin',
+        ...init,
+        headers,
+        body,
+      });
+      const text = await res.text();
+      let payload = {};
+      try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: text }; }
+      if (!res.ok) {
+        const msg = payload?.error?.message || payload?.error || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      return payload;
+    }
+
+    function wfStatusPillClass(status) {
+      if (status === 'completed') return 'ok';
+      if (status === 'running' || status === 'created') return 'info';
+      if (status === 'paused' || status === 'pausing' || status === 'idle' || status === 'needs_approval') return 'warn';
+      if (status === 'failed' || status === 'stopped' || status === 'stopping' || status === 'blocked') return 'err';
+      return 'muted';
+    }
+
+    function showWorkflowError(msg) {
+      const box = document.getElementById('wf-error-box');
+      if (!box) return;
+      if (!msg) {
+        box.style.display = 'none';
+        box.textContent = '';
+        return;
+      }
+      box.style.display = 'block';
+      box.textContent = msg;
+    }
+
+    function readWorkflowFormPayload() {
+      const prompt = (document.getElementById('wf-prompt')?.value || '').trim();
+      const mode = document.getElementById('wf-mode')?.value || 'auto';
+      const maxIterRaw = document.getElementById('wf-max-iterations')?.value;
+      const maxConcRaw = document.getElementById('wf-max-concurrency')?.value;
+      const itemsRaw = (document.getElementById('wf-items')?.value || '').trim();
+      const dryRun = Boolean(document.getElementById('wf-dry-run')?.checked);
+      const payload = { prompt, originInterface: 'web', dryRun };
+      if (maxIterRaw && Number(maxIterRaw) > 0) payload.maxIterations = Number(maxIterRaw);
+      if (maxConcRaw && Number(maxConcRaw) > 0) payload.maxConcurrency = Number(maxConcRaw);
+      if (itemsRaw) {
+        const items = itemsRaw.split(',').map((s) => s.trim()).filter(Boolean);
+        if (items.length > 0) payload.items = items;
+      }
+      return { mode, payload };
+    }
+
+    function renderWorkflowAnalysis(data) {
+      const box = document.getElementById('wf-analysis-box');
+      if (!box) return;
+      if (!data) {
+        box.innerHTML = '<div style="color:var(--muted);">No analysis generated yet.</div>';
+        return;
+      }
+      const exp = data.explanation || data.plan?.explanation || {};
+      const mode = data.mode || data.plan?.mode || exp.selectedMode || 'single';
+      const reasons = Array.isArray(exp.reasons) ? exp.reasons : [];
+      const loop = data.loop || data.plan?.loop;
+      const cp = data.criticalPath?.targets || data.plan?.criticalPath?.targets || [];
+      const targets = data.definition?.targets || data.graph?.definition?.targets || [];
+      const policy = exp.policyAssessment || {};
+      const signals = exp.signals || {};
+
+      box.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <div>
+            <strong>Mode:</strong> <span class="pill info">${escHtml(mode)}</span>
+            ${exp.overridden ? '<span class="pill warn">overridden</span>' : ''}
+            ${data.plan?.dryRun ? '<span class="pill warn">dry-run</span>' : ''}
+            ${data.run?.runId ? `<span class="pill ok">run: ${escHtml(data.run.runId)}</span>` : ''}
+          </div>
+          <span class="mono" style="font-size:11px;color:var(--muted);">confidence: ${Number(exp.confidence ?? 0).toFixed(2)}</span>
+        </div>
+        ${reasons.length ? `<ul style="margin:4px 0 8px;padding-left:18px;">${reasons.map((r) => `<li>${escHtml(r)}</li>`).join('')}</ul>` : ''}
+        <div class="mono" style="font-size:11px;color:var(--muted);margin-bottom:6px;">
+          Signals: loop=${escHtml((signals.loopSignals || []).join(', ') || 'none')} · graph=${escHtml((signals.graphSignals || []).join(', ') || 'none')} · items=${escHtml(signals.iterativeTargetsCount ?? 0)}
+        </div>
+        <div class="mono" style="font-size:11px;margin-bottom:6px;">
+          Policy: localFirst=${escHtml(policy.localModelFirst !== false)}
+          ${(policy.requiresApprovalGates || []).length ? ` · <span class="pill warn">Approval gates: ${escHtml(policy.requiresApprovalGates.join('; '))}</span>` : ''}
+          ${(policy.blockedUnsafeActions || []).length ? ` · <span class="pill err">Blocked: ${escHtml(policy.blockedUnsafeActions.join('; '))}</span>` : ''}
+        </div>
+        ${cp.length ? `<div class="mono" style="font-size:11px;color:var(--accent);margin-bottom:6px;">Critical Path (${cp.length}): ${cp.map(escHtml).join(' → ')}</div>` : ''}
+        ${loop ? `<div class="mono" style="font-size:11px;color:var(--ok);margin-bottom:6px;">Loop (${escHtml(loop.kind)}): cursor ${escHtml(loop.cursor ?? 0)} / ${escHtml((loop.items || []).length)} · maxIter=${escHtml(loop.maxIterations)} · conc=${escHtml(loop.maxConcurrency)}</div>` : ''}
+        ${targets.length ? `
+          <div style="margin-top:6px;">
+            <strong style="font-size:11px;color:var(--muted);">Compiled Targets (${targets.length}):</strong>
+            <div style="display:grid;gap:4px;margin-top:4px;">
+              ${targets.slice(0, 10).map((t) => `
+                <div class="mono" style="font-size:11px;padding:4px 6px;background:var(--panel);border:1px solid var(--border);border-radius:4px;">
+                  <strong>${escHtml(t.id)}</strong> [${escHtml(t.stage)}] — ${escHtml(t.title)}
+                  ${t.dependsOn?.length ? `<span style="color:var(--muted)"> (deps: ${t.dependsOn.map(escHtml).join(', ')})</span>` : ''}
+                  ${t.requiresApproval ? ' <span class="pill warn">needs_approval</span>' : ''}
+                </div>
+              `).join('')}
+              ${targets.length > 10 ? `<div class="mono" style="font-size:11px;color:var(--muted);">+${targets.length - 10} more target(s)</div>` : ''}
+            </div>
+          </div>
+        ` : ''}
+      `;
+    }
+
+    async function loadWorkflowJobs() {
+      const tbody = document.getElementById('wf-jobs-tbody');
+      if (!tbody) return;
+      const mode = document.getElementById('wf-filter-mode')?.value || '';
+      const status = document.getElementById('wf-filter-status')?.value || '';
+      const params = new URLSearchParams();
+      if (mode) params.set('mode', mode);
+      if (status) params.set('status', status);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      try {
+        const data = await workflowRequest(`/jobs${qs}`);
+        const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+        window.__wfJobs = jobs;
+        if (jobs.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">No workflow runs found yet. Launch a Goal, Loop, or Graph above or from CLI/Shell.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = jobs.map((job) => {
+          const p = job.progress || {};
+          const loopTotal = job.loop?.total;
+          const cursorVal = p.cursor ?? job.loop?.cursor;
+          const hasLoop = typeof cursorVal === 'number' && typeof loopTotal === 'number' && loopTotal > 0;
+          const pct = hasLoop
+            ? Math.min(100, Math.round((cursorVal / loopTotal) * 100))
+            : (p.total > 0 ? Math.min(100, Math.round(((p.completed || 0) / p.total) * 100)) : 0);
+          const cpTargets = job.criticalPath?.targets || [];
+          const targets = Array.isArray(job.targets) ? job.targets : [];
+          const depCount = targets.reduce((acc, t) => acc + (Array.isArray(t.dependsOn) ? t.dependsOn.length : 0), 0);
+          const pendingApprovalTarget = targets.find((t) => t.status === 'needs_approval');
+          const needsAppr = (p.needsApproval || 0) > 0 || Boolean(pendingApprovalTarget);
+          const canPause = job.status === 'running';
+          const canResume = job.status === 'paused' || job.status === 'idle' || job.status === 'created';
+          const canStop = !['completed', 'stopped', 'failed'].includes(job.status);
+
+          return `<tr data-wf-run="${escHtml(job.runId)}">
+            <td>
+              <div style="font-weight:600;">${escHtml(String(job.prompt || job.graphId).slice(0, 80))}</div>
+              <div class="mono" style="font-size:11px;color:var(--muted);">${escHtml(job.runId)} · ${escHtml(job.createdAt || '')}</div>
+            </td>
+            <td>
+              <span class="pill info">${escHtml(job.originInterface || 'cli')}</span>
+              <span class="pill muted">${escHtml(job.mode || 'graph')}</span>
+            </td>
+            <td>
+              <span class="pill ${wfStatusPillClass(job.status)}">${escHtml(job.status)}</span>
+              ${needsAppr ? '<div style="margin-top:4px;"><span class="pill warn">approval needed</span></div>' : ''}
+            </td>
+            <td class="mono" style="font-size:11px;">
+              ${hasLoop ? `<div>Cursor: <strong>${escHtml(cursorVal)}/${escHtml(loopTotal)}</strong></div>` : ''}
+              <div>Targets: ${escHtml(p.completed || 0)}/${escHtml(p.total || 0)} done${p.active ? ` · ${escHtml(p.active)} active` : ''}${p.failed ? ` · ${escHtml(p.failed)} failed` : ''}</div>
+              <div class="wf-bar-wrap"><div class="wf-bar-fill" style="width:${pct}%"></div></div>
+            </td>
+            <td class="mono" style="font-size:11px;">
+              <div>${targets.length || p.total || 0} node(s) · ${depCount} dep(s)</div>
+              <div style="color:var(--accent);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(cpTargets.join(' → '))}">
+                ${cpTargets.length ? cpTargets.map(escHtml).join(' → ') : '—'}
+              </div>
+            </td>
+            <td>
+              <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                <button class="btn sm wf-action-btn" data-action="inspect" data-run-id="${escHtml(job.runId)}" type="button">Inspect</button>
+                ${canPause ? `<button class="btn sm warn wf-action-btn" data-action="pause" data-run-id="${escHtml(job.runId)}" type="button">Pause</button>` : ''}
+                ${canResume ? `<button class="btn sm wf-action-btn" data-action="resume" data-run-id="${escHtml(job.runId)}" type="button">Resume</button>` : ''}
+                ${canStop ? `<button class="btn sm danger wf-action-btn" data-action="stop" data-run-id="${escHtml(job.runId)}" type="button">Stop</button>` : ''}
+                ${needsAppr ? `<button class="btn sm ok wf-action-btn" data-action="approve" data-run-id="${escHtml(job.runId)}" data-target-id="${escHtml(pendingApprovalTarget?.id || '')}" type="button">Approve</button>` : ''}
+              </div>
+            </td>
+          </tr>`;
+        }).join('');
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="6" style="color:var(--muted)">Workflow jobs unavailable (${escHtml(err.message)})</td></tr>`;
+      }
+    }
+
+    async function inspectWorkflowRun(runId) {
+      try {
+        const data = await workflowRequest(`/${encodeURIComponent(runId)}`);
+        const summary = data.summary || {};
+        const run = data.run || {};
+        const exp = data.explanation || {};
+        const cp = data.criticalPath?.targets || [];
+        const loop = data.loop;
+        const targets = Array.isArray(data.targets) ? data.targets : [];
+        const evidence = Array.isArray(data.evidence) ? data.evidence : [];
+        const events = Array.isArray(data.events) ? data.events : [];
+        const pendingApprovals = targets.filter((t) => run.targets?.[t.id]?.status === 'needs_approval');
+
+        openDrawer(`Workflow Inspection: ${escHtml(runId)}`, `
+          <div style="display:grid;gap:10px;">
+            <div>
+              <span class="pill info">${escHtml(summary.originInterface || 'api')}</span>
+              <span class="pill muted">${escHtml(summary.mode || 'graph')}</span>
+              <span class="pill ${wfStatusPillClass(run.status)}">${escHtml(run.status)}</span>
+            </div>
+            <div><strong>Prompt:</strong> ${escHtml(summary.prompt || '')}</div>
+            ${exp.reasons?.length ? `
+              <div>
+                <strong>Intent Explanation:</strong>
+                <ul style="margin:4px 0;padding-left:18px;">${exp.reasons.map((r) => `<li>${escHtml(r)}</li>`).join('')}</ul>
+              </div>
+            ` : ''}
+            ${cp.length ? `<div class="mono" style="font-size:11px;color:var(--accent);"><strong>Critical Path:</strong> ${cp.map(escHtml).join(' → ')}</div>` : ''}
+            ${loop ? `
+              <div>
+                <strong>Loop Progress (${escHtml(loop.kind)}):</strong>
+                <span class="mono">${escHtml(summary.progress?.cursor ?? loop.cursor ?? 0)} / ${escHtml((loop.items || []).length)}</span>
+                <div style="display:grid;gap:4px;margin-top:6px;">
+                  ${(loop.items || []).map((item) => {
+                    const st = run.targets?.[item.targetId]?.status || 'queued';
+                    return `<div class="mono" style="font-size:11px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;display:flex;justify-content:space-between;">
+                      <span>#${escHtml(item.index + 1)} ${escHtml(item.targetId)}: ${escHtml(item.label)}</span>
+                      <span class="pill ${wfStatusPillClass(st)}">${escHtml(st)}</span>
+                    </div>`;
+                  }).join('')}
+                </div>
+              </div>
+            ` : ''}
+            ${pendingApprovals.length ? `
+              <div style="padding:10px;border:1px solid var(--warn);border-radius:6px;background:rgba(234,179,8,0.08);">
+                <strong>Approval Gate Required</strong>
+                ${pendingApprovals.map((t) => `
+                  <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                    <span class="mono">${escHtml(t.id)}</span>
+                    <input type="text" class="drawer-approve-note" data-target-id="${escHtml(t.id)}" placeholder="Approval note (optional)" style="flex:1;" />
+                    <button type="button" class="btn sm ok drawer-approve-btn" data-run-id="${escHtml(runId)}" data-target-id="${escHtml(t.id)}">Approve Gate</button>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+            <div>
+              <strong>DAG Targets (${targets.length}):</strong>
+              <div style="display:grid;gap:4px;margin-top:6px;">
+                ${targets.map((t) => {
+                  const st = run.targets?.[t.id]?.status || 'queued';
+                  return `<div class="mono" style="font-size:11px;padding:5px 8px;background:#0b0f17;border:1px solid var(--border);border-radius:4px;">
+                    <div style="display:flex;justify-content:space-between;">
+                      <strong>${escHtml(t.id)} [${escHtml(t.stage)}]</strong>
+                      <span class="pill ${wfStatusPillClass(st)}">${escHtml(st)}</span>
+                    </div>
+                    <div style="color:var(--muted);margin-top:2px;">${escHtml(t.title)}</div>
+                    ${t.dependsOn?.length ? `<div style="color:var(--accent);margin-top:2px;">dependsOn: ${t.dependsOn.map(escHtml).join(', ')}</div>` : ''}
+                  </div>`;
+                }).join('')}
+              </div>
+            </div>
+            <div>
+              <strong>Evidence (${evidence.length}):</strong>
+              <div class="mono" style="font-size:11px;color:var(--muted);margin-top:4px;">
+                ${evidence.length ? evidence.slice(0, 8).map((e) => `<div>${escHtml(e.targetId)} · ${escHtml(e.validationMethod)} · <strong>${escHtml(e.verdict)}</strong></div>`).join('') : 'No evidence recorded yet.'}
+              </div>
+            </div>
+            <div>
+              <strong>Recent Events (${events.length}):</strong>
+              <pre class="mono" style="font-size:11px;background:#0b0f17;padding:8px;border-radius:6px;max-height:180px;overflow:auto;">${escHtml(JSON.stringify(events.slice(-10), null, 2))}</pre>
+            </div>
+          </div>
+        `);
+
+        document.querySelectorAll('.drawer-approve-btn').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const targetId = btn.getAttribute('data-target-id');
+            const noteInput = document.querySelector(`.drawer-approve-note[data-target-id="${targetId}"]`);
+            try {
+              await workflowRequest(`/${encodeURIComponent(runId)}/approve`, {
+                method: 'POST',
+                body: { targetId, note: noteInput?.value || undefined },
+              });
+              await loadWorkflowJobs();
+              await inspectWorkflowRun(runId);
+            } catch (err) {
+              showWorkflowError(err.message);
+            }
+          });
+        });
+      } catch (err) {
+        showWorkflowError(err.message);
+      }
     }
 
     function openDrawer(title, html) {
@@ -308,6 +729,8 @@
       document.getElementById('issues-box').innerHTML = issues.length
         ? issues.slice(0, 6).map(i => `<div style="padding:8px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;"><span class="pill err">${i.severity}</span> <strong>${i.component}</strong> · ${i.errorCode} (${i.count}x)</div>`).join('')
         : '<div style="color:var(--muted)">No diagnostic issues reported.</div>';
+
+      await loadWorkflowJobs();
     }
 
     window.inspectJob = function(ex) {
@@ -343,6 +766,76 @@
         <p>License: AGPL-3.0-only (existing core/CLI/API/desktop); includes selective Apache-2.0 components from QwenLM/qwen-code.</p>
       `);
     };
+
+    document.getElementById('wf-compile-btn')?.addEventListener('click', async () => {
+      showWorkflowError('');
+      const { mode, payload } = readWorkflowFormPayload();
+      if (!payload.prompt) { showWorkflowError('Please enter a goal or task prompt.'); return; }
+      const compileBody = {
+        ...payload,
+        requestedMode: mode === 'auto' ? 'auto' : mode,
+      };
+      try {
+        const res = await workflowRequest('/compile', { method: 'POST', body: compileBody });
+        renderWorkflowAnalysis(res);
+      } catch (err) {
+        showWorkflowError(err.message);
+      }
+    });
+
+    document.getElementById('wf-launch-btn')?.addEventListener('click', async () => {
+      showWorkflowError('');
+      const { mode, payload } = readWorkflowFormPayload();
+      if (!payload.prompt) { showWorkflowError('Please enter a goal or task prompt.'); return; }
+      let endpoint = '/goal';
+      let body = { ...payload };
+      if (mode === 'loop') {
+        endpoint = '/loop';
+      } else if (mode === 'graph') {
+        endpoint = '/graph';
+      } else if (mode === 'single' || mode === 'hybrid') {
+        endpoint = '/goal';
+        body.overrideMode = mode;
+      }
+      try {
+        const res = await workflowRequest(endpoint, { method: 'POST', body });
+        renderWorkflowAnalysis(res);
+        await loadWorkflowJobs();
+      } catch (err) {
+        showWorkflowError(err.message);
+      }
+    });
+
+    document.getElementById('wf-refresh-btn')?.addEventListener('click', () => { void loadWorkflowJobs(); });
+    document.getElementById('wf-filter-mode')?.addEventListener('change', () => { void loadWorkflowJobs(); });
+    document.getElementById('wf-filter-status')?.addEventListener('change', () => { void loadWorkflowJobs(); });
+
+    document.getElementById('wf-jobs-tbody')?.addEventListener('click', async (event) => {
+      const btn = event.target?.closest?.('.wf-action-btn');
+      if (!btn) return;
+      const action = btn.getAttribute('data-action');
+      const runId = btn.getAttribute('data-run-id');
+      const targetId = btn.getAttribute('data-target-id');
+      if (!action || !runId) return;
+      showWorkflowError('');
+      if (action === 'inspect') {
+        await inspectWorkflowRun(runId);
+        return;
+      }
+      try {
+        if (action === 'approve') {
+          await workflowRequest(`/${encodeURIComponent(runId)}/approve`, {
+            method: 'POST',
+            body: { ...(targetId ? { targetId } : {}), note: 'Approved from Mission Control' },
+          });
+        } else {
+          await workflowRequest(`/${encodeURIComponent(runId)}/${action}`, { method: 'POST', body: {} });
+        }
+        await loadWorkflowJobs();
+      } catch (err) {
+        showWorkflowError(err.message);
+      }
+    });
 
     refreshAll();
   </script>

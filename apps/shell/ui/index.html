@@ -41,11 +41,77 @@
     }
     button:hover { border-color: var(--accent); }
     button.primary { background: #0284c7; border-color: #38bdf8; font-weight: 600; }
+    button.active-pill { border-color: var(--accent); background: #162235; color: var(--accent); }
+    button.warn-btn { border-color: rgba(234, 179, 8, 0.45); color: var(--warn); }
+    button.danger-btn { border-color: rgba(239, 68, 68, 0.45); color: var(--err); }
+    button.ok-btn { border-color: rgba(34, 197, 94, 0.45); color: var(--ok); }
+    .workspace {
+      flex: 1; display: flex; min-height: 0; overflow: hidden;
+    }
     #terminal-output {
       flex: 1; padding: 14px; overflow-y: auto; white-space: pre-wrap;
       word-break: break-word; font-size: 13px; line-height: 1.45;
-      background: #070a10;
+      background: #070a10; min-width: 0; outline: none;
     }
+    .jobs-drawer {
+      width: 440px; max-width: 48vw; display: none; flex-direction: column;
+      background: #0d131f; border-left: 1px solid var(--border); min-height: 0;
+    }
+    .jobs-drawer.open { display: flex; }
+    .drawer-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--panel); gap: 8px;
+    }
+    .drawer-title { font-size: 12px; font-weight: 700; color: var(--text); letter-spacing: 0.03em; }
+    .drawer-filters {
+      display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap;
+    }
+    .drawer-body {
+      flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .job-card {
+      border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: #111827;
+      display: flex; flex-direction: column; gap: 6px; cursor: pointer;
+    }
+    .job-card.selected { border-color: var(--accent); background: #152033; }
+    .job-card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+    .job-prompt { font-size: 12px; color: var(--text); line-height: 1.4; word-break: break-word; }
+    .job-meta { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .job-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+    .job-actions button { padding: 3px 8px; font-size: 11px; }
+    .inspector-box {
+      border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: #0b111d;
+      display: flex; flex-direction: column; gap: 8px; font-size: 11.5px;
+    }
+    .inspector-section-title { font-size: 11px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+    .progress-track { width: 100%; height: 6px; border-radius: 999px; background: #1e293b; overflow: hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #38bdf8, #22c55e); transition: width 0.2s ease; }
+    .target-row {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+      padding: 5px 6px; border-radius: 6px; background: #111827; border: 1px solid #1e293b;
+    }
+    .launcher-strip {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 6px 14px; background: #0d1422; border-top: 1px solid var(--border); font-size: 11.5px; flex-wrap: wrap;
+    }
+    .launcher-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .mode-pill {
+      font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 4px;
+      letter-spacing: 0.04em; border: 1px solid transparent; display: inline-block;
+    }
+    .mode-os { background: rgba(148, 163, 184, 0.16); color: #cbd5e1; border-color: rgba(148, 163, 184, 0.35); }
+    .mode-ai { background: rgba(56, 189, 248, 0.16); color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); }
+    .mode-loop { background: rgba(34, 211, 238, 0.16); color: #22d3ee; border-color: rgba(34, 211, 238, 0.45); }
+    .mode-graph { background: rgba(192, 132, 252, 0.16); color: #d8b4fe; border-color: rgba(192, 132, 252, 0.45); }
+    .mode-goal { background: rgba(34, 197, 94, 0.16); color: #4ade80; border-color: rgba(34, 197, 94, 0.45); }
+    .mode-hybrid { background: rgba(234, 179, 8, 0.18); color: #facc15; border-color: rgba(234, 179, 8, 0.45); }
+    .status-pill {
+      font-size: 10.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
+    }
+    .status-running { color: #38bdf8; border-color: rgba(56, 189, 248, 0.5); }
+    .status-completed { color: #4ade80; border-color: rgba(34, 197, 94, 0.5); }
+    .status-paused { color: #facc15; border-color: rgba(234, 179, 8, 0.5); }
+    .status-failed, .status-blocked { color: #f87171; border-color: rgba(239, 68, 68, 0.5); }
     .composer {
       display: flex; align-items: center; gap: 8px; padding: 10px 14px;
       background: var(--panel); border-top: 1px solid var(--border);
@@ -74,6 +140,7 @@
     <div class="tabs" id="tabs"></div>
     <div class="actions">
       <span class="badge" id="diag-badge">Diagnostics: Pending</span>
+      <button id="jobs-drawer-btn" title="Toggle Live Loop, Graph & Goal Workflows Drawer">Workflows (0)</button>
       <button id="ctrlc-btn" title="Send SIGINT (Ctrl+C) to active PTY">Ctrl+C</button>
       <button id="clear-btn" title="Clear terminal buffer">Clear</button>
       <button id="new-tab-btn">+ Tab</button>
@@ -82,15 +149,56 @@
     </div>
   </header>
 
-  <main id="terminal-output" aria-live="polite" tabindex="0" title="Click here for direct interactive PTY keyboard input, or use the command bar below"></main>
+  <div class="workspace">
+    <main id="terminal-output" aria-live="polite" tabindex="0" title="Click here for direct interactive PTY keyboard input, or use the command bar below"></main>
+    <aside class="jobs-drawer" id="jobs-drawer" aria-label="Workflows and Jobs">
+      <div class="drawer-header">
+        <span class="drawer-title">WORKFLOWS · LOOP / GRAPH / GOAL</span>
+        <div class="actions">
+          <button id="refresh-jobs-btn" type="button">Refresh</button>
+          <button id="close-drawer-btn" type="button">Close</button>
+        </div>
+      </div>
+      <div class="drawer-filters" id="drawer-filters">
+        <button type="button" class="filter-btn active-pill" data-mode="all">All</button>
+        <button type="button" class="filter-btn" data-mode="loop">LOOP</button>
+        <button type="button" class="filter-btn" data-mode="graph">GRAPH</button>
+        <button type="button" class="filter-btn" data-mode="single">GOAL</button>
+        <button type="button" class="filter-btn" data-mode="hybrid">HYBRID</button>
+      </div>
+      <div class="drawer-body">
+        <div id="jobs-list"></div>
+        <div id="job-inspector"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="launcher-strip">
+    <div class="launcher-group">
+      <span style="color:var(--muted);">Workflows:</span>
+      <button type="button" id="launch-loop-btn" title="Run prompt as a bounded iterative Loop">[LOOP] Loop</button>
+      <button type="button" id="launch-graph-btn" title="Compile & run prompt as a DAG Graph">[GRAPH] Graph</button>
+      <button type="button" id="launch-goal-btn" title="Auto-select Single, Loop, Graph, or Hybrid">[GOAL] Goal</button>
+      <label style="display:inline-flex;align-items:center;gap:4px;color:var(--muted);cursor:pointer;">
+        <input type="checkbox" id="dry-run-toggle" /> Dry-run
+      </label>
+    </div>
+    <div class="launcher-group">
+      <span id="active-workflow-pill" class="badge">No active workflow</span>
+    </div>
+  </div>
 
   <form class="composer" id="cmd-form">
+    <span id="route-badge" class="mode-pill mode-os">[OS]</span>
     <select id="mode-select" aria-label="Execution mode">
       <option value="auto">Auto</option>
-      <option value="shell">! Shell</option>
-      <option value="ai">? AI</option>
+      <option value="shell">! [OS] Shell</option>
+      <option value="ai">? [AI] Task</option>
+      <option value="loop">[LOOP] Loop</option>
+      <option value="graph">[GRAPH] Graph</option>
+      <option value="goal">[GOAL] Goal</option>
     </select>
-    <input id="cmd-input" type="text" placeholder="Type a shell command (ls -la, git status) or natural-language task..." autocomplete="off" autofocus />
+    <input id="cmd-input" type="text" placeholder="Type shell cmd (ls, git status), AI prompt, or /loop, /graph, /goal, /jobs..." autocomplete="off" autofocus />
     <button type="submit" class="primary">Run</button>
   </form>
 
@@ -136,10 +244,462 @@
     const cmdForm = document.getElementById('cmd-form');
     const cmdInput = document.getElementById('cmd-input');
     const modeSelect = document.getElementById('mode-select');
+    const routeBadge = document.getElementById('route-badge');
     const diagBadge = document.getElementById('diag-badge');
+    const jobsDrawerEl = document.getElementById('jobs-drawer');
+    const jobsDrawerBtn = document.getElementById('jobs-drawer-btn');
+    const jobsListEl = document.getElementById('jobs-list');
+    const jobInspectorEl = document.getElementById('job-inspector');
+    const dryRunToggle = document.getElementById('dry-run-toggle');
+    const activeWorkflowPill = document.getElementById('active-workflow-pill');
+
+    let workflowJobs = [];
+    let selectedJobId = null;
+    let inspectedJob = null;
+    let workflowModeFilter = 'all';
+    let jobsPollTimer = null;
 
     function stripAnsi(s) {
       return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    }
+
+    function modeBadgeMeta(mode) {
+      const m = String(mode || 'shell').toLowerCase();
+      if (m === 'loop') return { label: '[LOOP]', cls: 'mode-loop' };
+      if (m === 'graph') return { label: '[GRAPH]', cls: 'mode-graph' };
+      if (m === 'hybrid') return { label: '[HYBRID]', cls: 'mode-hybrid' };
+      if (m === 'goal' || m === 'single') return { label: '[GOAL]', cls: 'mode-goal' };
+      if (m === 'ai') return { label: '[AI]', cls: 'mode-ai' };
+      return { label: '[OS]', cls: 'mode-os' };
+    }
+
+    function makeModePill(mode) {
+      const meta = modeBadgeMeta(mode);
+      const span = document.createElement('span');
+      span.className = `mode-pill ${meta.cls}`;
+      span.textContent = meta.label;
+      return span;
+    }
+
+    function makeStatusPill(status) {
+      const st = String(status || 'unknown').toLowerCase();
+      const span = document.createElement('span');
+      const cls = st === 'running' ? 'status-running'
+        : st === 'completed' ? 'status-completed'
+        : (st === 'paused' || st === 'pausing') ? 'status-paused'
+        : (st === 'failed' || st === 'blocked') ? 'status-failed' : '';
+      span.className = `status-pill ${cls}`;
+      span.textContent = st.toUpperCase();
+      return span;
+    }
+
+    function detectIntentBadge(raw, selectMode) {
+      const t = (raw || '').trim();
+      if (selectMode === 'shell') return 'shell';
+      if (selectMode === 'ai') return 'ai';
+      if (selectMode === 'loop') return 'loop';
+      if (selectMode === 'graph') return 'graph';
+      if (selectMode === 'goal') return 'goal';
+      if (/^\/loop\b/i.test(t)) return 'loop';
+      if (/^\/graph\b/i.test(t)) return 'graph';
+      if (/^\/(goal|goals|jobs|inspect|pause|resume|stop)\b/i.test(t)) return 'goal';
+      if (!t || isLikelyShell(t)) return 'shell';
+      return 'ai';
+    }
+
+    function updateRouteBadge() {
+      const kind = detectIntentBadge(cmdInput.value, modeSelect.value);
+      const meta = modeBadgeMeta(kind);
+      routeBadge.className = `mode-pill ${meta.cls}`;
+      routeBadge.textContent = meta.label;
+    }
+
+    cmdInput.addEventListener('input', updateRouteBadge);
+    modeSelect.addEventListener('change', updateRouteBadge);
+    updateRouteBadge();
+
+    function parseJsonSafe(raw) {
+      if (typeof raw !== 'string') return raw;
+      const trimmed = raw.trim();
+      if (!trimmed) return null;
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        const start = trimmed.indexOf('{');
+        const arrStart = trimmed.indexOf('[');
+        const idx = start === -1 ? arrStart : (arrStart === -1 ? start : Math.min(start, arrStart));
+        if (idx >= 0) {
+          try { return JSON.parse(trimmed.slice(idx)); } catch {}
+        }
+        return null;
+      }
+    }
+
+    function resizeActivePty() {
+      if (!invoke || !activeId) return;
+      const cols = Math.max(40, Math.floor(outputEl.clientWidth / 8));
+      const rows = Math.max(12, Math.floor(outputEl.clientHeight / 19));
+      try { invoke('pty_resize', { sessionId: activeId, cols, rows }); } catch {}
+    }
+
+    function setDrawerOpen(open) {
+      jobsDrawerEl.classList.toggle('open', open);
+      resizeActivePty();
+      if (open) {
+        void refreshWorkflowJobs();
+      }
+    }
+
+    function renderWorkflowJobs() {
+      const filtered = workflowModeFilter === 'all'
+        ? workflowJobs
+        : workflowJobs.filter((j) => String(j.mode || '').toLowerCase() === workflowModeFilter);
+      jobsDrawerBtn.textContent = `Workflows (${workflowJobs.length})`;
+      const runningCount = workflowJobs.filter((j) => j.status === 'running').length;
+      if (runningCount > 0) {
+        activeWorkflowPill.textContent = `${runningCount} active workflow${runningCount === 1 ? '' : 's'}`;
+      } else if (workflowJobs.length > 0) {
+        const top = workflowJobs[0];
+        activeWorkflowPill.textContent = `Latest: ${top.runId} [${String(top.mode || 'goal').toUpperCase()} · ${String(top.status || '').toUpperCase()}]`;
+      } else {
+        activeWorkflowPill.textContent = 'No active workflow';
+      }
+
+      jobsListEl.innerHTML = '';
+      if (filtered.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'color:var(--muted);font-size:12px;padding:10px;border:1px dashed var(--border);border-radius:8px;';
+        empty.textContent = workflowJobs.length === 0
+          ? 'No Loop, Graph, or Goal workflows yet. Launch one below or type /loop, /graph, /goal.'
+          : `No ${workflowModeFilter.toUpperCase()} workflows found.`;
+        jobsListEl.appendChild(empty);
+        renderJobInspector();
+        return;
+      }
+
+      for (const job of filtered) {
+        const card = document.createElement('div');
+        card.className = 'job-card' + (job.runId === selectedJobId ? ' selected' : '');
+        card.onclick = () => { void inspectWorkflowJob(job.runId); };
+
+        const top = document.createElement('div');
+        top.className = 'job-card-top';
+        const left = document.createElement('div');
+        left.style.cssText = 'display:flex;align-items:center;gap:6px;';
+        left.appendChild(makeModePill(job.mode));
+        const idSpan = document.createElement('span');
+        idSpan.style.cssText = 'font-size:11.5px;font-weight:700;color:var(--text);';
+        idSpan.textContent = job.runId;
+        left.appendChild(idSpan);
+        top.appendChild(left);
+        top.appendChild(makeStatusPill(job.status));
+        card.appendChild(top);
+
+        const promptEl = document.createElement('div');
+        promptEl.className = 'job-prompt';
+        promptEl.textContent = job.prompt || job.graphId || job.runId;
+        card.appendChild(promptEl);
+
+        const prog = job.progress || {};
+        const total = Number(prog.total || 0);
+        const done = Number(prog.completed || 0);
+        const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+
+        const track = document.createElement('div');
+        track.className = 'progress-track';
+        const fill = document.createElement('div');
+        fill.className = 'progress-fill';
+        fill.style.width = `${pct}%`;
+        track.appendChild(fill);
+        card.appendChild(track);
+
+        const meta = document.createElement('div');
+        meta.className = 'job-meta';
+        const cursorText = prog.cursor !== undefined ? ` · cursor ${prog.cursor}/${total}` : '';
+        const spanProg = document.createElement('span');
+        spanProg.textContent = `${done}/${total} targets${cursorText}`;
+        const spanOrigin = document.createElement('span');
+        spanOrigin.textContent = `origin: ${job.originInterface || 'cli'}`;
+        meta.appendChild(spanProg);
+        meta.appendChild(spanOrigin);
+        card.appendChild(meta);
+
+        const actions = document.createElement('div');
+        actions.className = 'job-actions';
+        const inspectBtn = document.createElement('button');
+        inspectBtn.type = 'button';
+        inspectBtn.textContent = 'Inspect';
+        inspectBtn.onclick = (ev) => { ev.stopPropagation(); void inspectWorkflowJob(job.runId); };
+        actions.appendChild(inspectBtn);
+
+        if (job.status === 'running') {
+          const pauseBtn = document.createElement('button');
+          pauseBtn.type = 'button';
+          pauseBtn.className = 'warn-btn';
+          pauseBtn.textContent = 'Pause';
+          pauseBtn.onclick = (ev) => { ev.stopPropagation(); void controlWorkflowJob('pause', job.runId); };
+          actions.appendChild(pauseBtn);
+        }
+        if (job.status === 'paused' || job.status === 'idle') {
+          const resumeBtn = document.createElement('button');
+          resumeBtn.type = 'button';
+          resumeBtn.className = 'ok-btn';
+          resumeBtn.textContent = 'Resume';
+          resumeBtn.onclick = (ev) => { ev.stopPropagation(); void controlWorkflowJob('resume', job.runId); };
+          actions.appendChild(resumeBtn);
+        }
+        if (job.status === 'running' || job.status === 'paused' || job.status === 'pausing') {
+          const stopBtn = document.createElement('button');
+          stopBtn.type = 'button';
+          stopBtn.className = 'danger-btn';
+          stopBtn.textContent = 'Stop';
+          stopBtn.onclick = (ev) => { ev.stopPropagation(); void controlWorkflowJob('stop', job.runId); };
+          actions.appendChild(stopBtn);
+        }
+        card.appendChild(actions);
+        jobsListEl.appendChild(card);
+      }
+
+      renderJobInspector();
+    }
+
+    function renderJobInspector() {
+      jobInspectorEl.innerHTML = '';
+      if (!inspectedJob || !inspectedJob.run) return;
+      const box = document.createElement('div');
+      box.className = 'inspector-box';
+      const { summary, run, plan, targets = [], evidence = [] } = inspectedJob;
+
+      const hdr = document.createElement('div');
+      hdr.className = 'job-card-top';
+      const titleWrap = document.createElement('div');
+      titleWrap.style.cssText = 'display:flex;align-items:center;gap:6px;';
+      titleWrap.appendChild(makeModePill(plan?.mode || summary?.mode || 'goal'));
+      const title = document.createElement('span');
+      title.className = 'inspector-section-title';
+      title.textContent = `Inspect ${run.runId}`;
+      titleWrap.appendChild(title);
+      hdr.appendChild(titleWrap);
+      hdr.appendChild(makeStatusPill(run.status));
+      box.appendChild(hdr);
+
+      if (plan?.explanation?.reasons?.length) {
+        const ratTitle = document.createElement('div');
+        ratTitle.className = 'inspector-section-title';
+        ratTitle.textContent = 'Goal Mode Selection Rationale';
+        box.appendChild(ratTitle);
+        for (const r of plan.explanation.reasons.slice(0, 3)) {
+          const p = document.createElement('div');
+          p.style.color = 'var(--muted)';
+          p.textContent = `• ${r}`;
+          box.appendChild(p);
+        }
+      }
+
+      const loopSpec = plan?.loop || plan?.nestedLoops?.[0]?.loop;
+      if (loopSpec && Array.isArray(loopSpec.items)) {
+        const total = loopSpec.items.length;
+        const doneCount = loopSpec.items.filter((it) => run.targets?.[it.targetId]?.status === 'completed').length;
+        const cursor = summary?.progress?.cursor ?? loopSpec.cursor ?? doneCount;
+        const lTitle = document.createElement('div');
+        lTitle.className = 'inspector-section-title';
+        lTitle.textContent = `Loop Cursor Progress (${cursor}/${total})`;
+        box.appendChild(lTitle);
+
+        const track = document.createElement('div');
+        track.className = 'progress-track';
+        const fill = document.createElement('div');
+        fill.className = 'progress-fill';
+        fill.style.width = `${total > 0 ? Math.min(100, Math.round((cursor / total) * 100)) : 0}%`;
+        track.appendChild(fill);
+        box.appendChild(track);
+
+        const pred = document.createElement('div');
+        pred.style.color = 'var(--muted)';
+        pred.textContent = `Until: ${loopSpec.completionPredicate || 'all items verified'}`;
+        box.appendChild(pred);
+      }
+
+      if (plan?.criticalPath?.targets?.length) {
+        const cpTitle = document.createElement('div');
+        cpTitle.className = 'inspector-section-title';
+        cpTitle.textContent = `Graph DAG Critical Path (depth ${plan.criticalPath.depth})`;
+        box.appendChild(cpTitle);
+        const cpLine = document.createElement('div');
+        cpLine.style.color = '#d8b4fe';
+        cpLine.textContent = plan.criticalPath.targets.join(' → ');
+        box.appendChild(cpLine);
+      }
+
+      const targetMap = new Map(targets.map((t) => [t.id, t]));
+      const entries = Object.values(run.targets || {});
+      if (entries.length > 0) {
+        const tTitle = document.createElement('div');
+        tTitle.className = 'inspector-section-title';
+        tTitle.textContent = `Targets (${entries.length}) · Evidence (${evidence.length})`;
+        box.appendChild(tTitle);
+        for (const entry of entries.slice(0, 12)) {
+          const def = targetMap.get(entry.targetId);
+          const row = document.createElement('div');
+          row.className = 'target-row';
+          const info = document.createElement('div');
+          const nameLine = document.createElement('div');
+          nameLine.style.color = 'var(--text)';
+          nameLine.textContent = `${entry.targetId}: ${def?.title || entry.targetId}`;
+          info.appendChild(nameLine);
+          if (def?.dependsOn?.length) {
+            const depLine = document.createElement('div');
+            depLine.style.cssText = 'font-size:10.5px;color:var(--muted);';
+            depLine.textContent = `deps: ${def.dependsOn.join(', ')}`;
+            info.appendChild(depLine);
+          }
+          row.appendChild(info);
+          row.appendChild(makeStatusPill(entry.status));
+          box.appendChild(row);
+        }
+      }
+
+      jobInspectorEl.appendChild(box);
+    }
+
+    async function refreshWorkflowJobs() {
+      if (!invoke) return;
+      try {
+        const raw = await invoke('list_wazir_jobs', { status: null, mode: null, cwd: null });
+        const parsed = parseJsonSafe(raw);
+        workflowJobs = Array.isArray(parsed)
+          ? parsed
+          : (parsed?.jobs || parsed?.runs || []);
+        if (selectedJobId && workflowJobs.some((j) => j.runId === selectedJobId)) {
+          await inspectWorkflowJob(selectedJobId, true);
+        } else {
+          renderWorkflowJobs();
+        }
+      } catch {
+        // Non-fatal while CLI jobs index is empty or unavailable
+      }
+      scheduleJobsPolling();
+    }
+
+    function scheduleJobsPolling() {
+      if (jobsPollTimer) {
+        clearInterval(jobsPollTimer);
+        jobsPollTimer = null;
+      }
+      const hasActive = workflowJobs.some((j) => j.status === 'running' || j.status === 'pausing');
+      if (jobsDrawerEl.classList.contains('open') && hasActive) {
+        jobsPollTimer = setInterval(() => {
+          void refreshWorkflowJobs();
+        }, 2500);
+      }
+    }
+
+    async function inspectWorkflowJob(runId, silent = false) {
+      selectedJobId = runId;
+      if (!invoke) {
+        renderWorkflowJobs();
+        return;
+      }
+      try {
+        const raw = await invoke('inspect_wazir_job', { runId, cwd: null });
+        const parsed = parseJsonSafe(raw);
+        inspectedJob = parsed?.inspection || parsed || null;
+        setDrawerOpen(true);
+        renderWorkflowJobs();
+        if (!silent) {
+          const active = tabs.find((t) => t.id === activeId);
+          if (active && inspectedJob?.run) {
+            const badge = modeBadgeMeta(inspectedJob.plan?.mode || inspectedJob.summary?.mode || 'goal').label;
+            active.buffer += `\n${badge} Inspect ${inspectedJob.run.runId}: status=${inspectedJob.run.status}, targets=${Object.keys(inspectedJob.run.targets || {}).length}, evidence=${(inspectedJob.evidence || []).length}\n`;
+            renderOutput();
+          }
+        }
+      } catch (err) {
+        if (!silent) {
+          const active = tabs.find((t) => t.id === activeId);
+          if (active) {
+            active.buffer += `[workflow inspect error] ${err}\n`;
+            renderOutput();
+          }
+        }
+      }
+    }
+
+    async function controlWorkflowJob(action, runId) {
+      const active = tabs.find((t) => t.id === activeId);
+      if (!invoke) {
+        if (active) {
+          active.buffer += `[${action} ${runId}] unavailable in browser preview\n`;
+          renderOutput();
+        }
+        return;
+      }
+      try {
+        const raw = await invoke('control_wazir_job', { action, runId, cwd: null });
+        const parsed = parseJsonSafe(raw);
+        const status = parsed?.run?.status || parsed?.status || action;
+        if (active) {
+          active.buffer += `[workflow] ${action.toUpperCase()} ${runId} -> ${status}\n`;
+          renderOutput();
+        }
+        await refreshWorkflowJobs();
+        await inspectWorkflowJob(runId, true);
+      } catch (err) {
+        if (active) {
+          active.buffer += `[workflow ${action} error] ${err}\n`;
+          renderOutput();
+        }
+      }
+    }
+
+    async function dispatchWorkflow(mode, promptText) {
+      const active = tabs.find((t) => t.id === activeId);
+      const badge = modeBadgeMeta(mode).label;
+      const dryRun = Boolean(dryRunToggle.checked);
+      if (active) {
+        active.buffer += `\n${badge} Dispatching ${dryRun ? '(dry-run) ' : ''}workflow: ${promptText}\n`;
+        renderOutput();
+      }
+      if (!invoke) {
+        if (active) {
+          active.buffer += `${badge} [Desktop IPC unavailable in browser preview]\n`;
+          renderOutput();
+        }
+        return;
+      }
+      try {
+        const raw = await invoke('run_wazir_workflow', {
+          mode,
+          prompt: promptText,
+          cwd: null,
+          dryRun,
+          maxIterations: null,
+          maxConcurrency: null,
+          overrideMode: null,
+        });
+        const parsed = parseJsonSafe(raw);
+        const runId = parsed?.run?.runId || parsed?.summary?.runId || parsed?.runId;
+        const resolvedMode = parsed?.plan?.mode || parsed?.summary?.mode || mode;
+        const resolvedBadge = modeBadgeMeta(resolvedMode).label;
+        const status = parsed?.run?.status || parsed?.summary?.status || 'done';
+        if (active) {
+          if (runId) {
+            active.buffer += `${resolvedBadge} Run ${runId} finished with status=${status}\n`;
+          } else {
+            active.buffer += `${raw}\n`;
+          }
+          renderOutput();
+        }
+        await refreshWorkflowJobs();
+        if (runId) {
+          await inspectWorkflowJob(runId, true);
+        }
+      } catch (err) {
+        if (active) {
+          active.buffer += `${badge} error: ${err}\n`;
+          renderOutput();
+        }
+      }
     }
 
     function renderTabs() {
@@ -188,8 +748,36 @@
       const raw = cmdInput.value.trim();
       if (!raw || !activeId) return;
       cmdInput.value = '';
+      updateRouteBadge();
       const active = tabs.find(t => t.id === activeId);
       const mode = modeSelect.value;
+
+      // Slash workflow commands always route through shared Wazir workflow IPC
+      if (/^\/jobs\b/i.test(raw)) {
+        setDrawerOpen(true);
+        await refreshWorkflowJobs();
+        return;
+      }
+      if (/^\/inspect\s+/i.test(raw)) {
+        const id = raw.replace(/^\/inspect\s+/i, '').trim();
+        if (id) await inspectWorkflowJob(id);
+        return;
+      }
+      const ctrlMatch = raw.match(/^\/(pause|resume|stop)\s+(\S+)/i);
+      if (ctrlMatch) {
+        await controlWorkflowJob(ctrlMatch[1].toLowerCase(), ctrlMatch[2]);
+        return;
+      }
+      if (/^\/(loop|graph|goal)\s+/i.test(raw)) {
+        const [, wfMode, rest] = raw.match(/^\/(loop|graph|goal)\s+([\s\S]+)$/i);
+        await dispatchWorkflow(wfMode.toLowerCase(), rest.trim());
+        return;
+      }
+      if (mode === 'loop' || mode === 'graph' || mode === 'goal') {
+        await dispatchWorkflow(mode, raw);
+        return;
+      }
+
       const runAsShell = mode === 'shell' || (mode === 'auto' && isLikelyShell(raw));
       const clean = raw.replace(/^[!?]\s*/, '');
 
@@ -201,7 +789,7 @@
           renderOutput();
         }
       } else {
-        active.buffer += `\n[wazir-ai] Dispatching governed task: ${clean}\n`;
+        active.buffer += `\n[AI] Dispatching governed task: ${clean}\n`;
         renderOutput();
         if (invoke) {
           try {
@@ -214,6 +802,34 @@
         }
       }
     });
+
+    jobsDrawerBtn.onclick = () => {
+      setDrawerOpen(!jobsDrawerEl.classList.contains('open'));
+    };
+    document.getElementById('close-drawer-btn').onclick = () => setDrawerOpen(false);
+    document.getElementById('refresh-jobs-btn').onclick = () => { void refreshWorkflowJobs(); };
+    document.querySelectorAll('.filter-btn').forEach((btn) => {
+      btn.onclick = () => {
+        workflowModeFilter = btn.dataset.mode || 'all';
+        document.querySelectorAll('.filter-btn').forEach((b) => b.classList.toggle('active-pill', b === btn));
+        renderWorkflowJobs();
+      };
+    });
+    function triggerLauncher(wfMode) {
+      const promptText = cmdInput.value.trim();
+      if (promptText) {
+        cmdInput.value = '';
+        updateRouteBadge();
+        void dispatchWorkflow(wfMode, promptText);
+      } else {
+        modeSelect.value = wfMode;
+        updateRouteBadge();
+        cmdInput.focus();
+      }
+    }
+    document.getElementById('launch-loop-btn').onclick = () => triggerLauncher('loop');
+    document.getElementById('launch-graph-btn').onclick = () => triggerLauncher('graph');
+    document.getElementById('launch-goal-btn').onclick = () => triggerLauncher('goal');
 
     document.getElementById('ctrlc-btn').onclick = async () => {
       if (invoke && activeId) await invoke('pty_write', { sessionId: activeId, data: '\x03' });
@@ -245,10 +861,7 @@
       }
     });
     window.addEventListener('resize', async () => {
-      if (!invoke || !activeId) return;
-      const cols = Math.max(40, Math.floor(outputEl.clientWidth / 8));
-      const rows = Math.max(12, Math.floor(outputEl.clientHeight / 19));
-      try { await invoke('pty_resize', { sessionId: activeId, cols, rows }); } catch {}
+      resizeActivePty();
     });
 
     document.getElementById('new-tab-btn').onclick = createTab;
@@ -307,6 +920,7 @@
 
     initConsent();
     createTab();
+    void refreshWorkflowJobs();
   </script>
 </body>
 </html>

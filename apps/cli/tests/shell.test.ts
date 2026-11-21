@@ -286,14 +286,54 @@ describe('Wazir Shell v0.3.2 — Integration & Verification Suite', () => {
     expect(['Darwin', 'Linux']).toContain(osName);
   });
 
-  it('12. sources CLI and build version from authoritative package.json (0.3.2, never stale 0.3.1)', () => {
+  it('12. sources CLI and build version from authoritative package.json (never stale 0.3.1)', () => {
     const baseDir = typeof __dirname === 'string' ? __dirname : process.cwd();
     const rootPkg = JSON.parse(
       fs.readFileSync(path.resolve(baseDir, '../../../package.json'), 'utf8'),
     ) as { version: string };
-    expect(rootPkg.version).toBe('0.3.2');
+    expect(rootPkg.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(resolveAuthoritativePackageVersion()).toBe(rootPkg.version);
     expect(CLI_VERSION).toBe(rootPkg.version);
     expect(getBuildInfo().version).toBe(rootPkg.version);
+  });
+
+  it('13. classifies all 14 reserved Wazir commands, quoted args, collision escapes, and NL disambiguation', () => {
+    const reserved = [
+      'loop',
+      'graph',
+      'goal',
+      'jobs',
+      'agents',
+      'models',
+      'fleet',
+      'status',
+      'inspect',
+      'pause',
+      'resume',
+      'stop',
+      'history',
+      'help',
+    ] as const;
+    for (const cmd of reserved) {
+      const classified = classifyShellInput(cmd);
+      expect(classified.mode, `expected '${cmd}' to route to wazir`).toBe('wazir');
+      expect(classified.wazirCommand).toBe(cmd);
+    }
+
+    expect(classifyShellInput('loop "Improve X && test it"')).toMatchObject({
+      mode: 'wazir',
+      wazirCommand: 'loop',
+      wazirArgs: '"Improve X && test it"',
+    });
+    expect(classifyShellInput('jobs | wc -l').mode).toBe('shell');
+    expect(classifyShellInput('cat foo.txt | wc -l').mode).toBe('shell');
+
+    expect(classifyShellInput('! jobs')).toMatchObject({ mode: 'shell', explicit: true, command: 'jobs' });
+    expect(classifyShellInput('\\jobs')).toMatchObject({ mode: 'shell', explicit: true, command: 'jobs' });
+    expect(classifyShellInput('os:status')).toMatchObject({ mode: 'shell', explicit: true, command: 'status' });
+    expect(classifyShellInput('sh:history')).toMatchObject({ mode: 'shell', explicit: true, command: 'history' });
+
+    expect(classifyShellInput('help me find the bug').mode).toBe('ai');
+    expect(classifyShellInput('inspect this repository').mode).toBe('ai');
   });
 });

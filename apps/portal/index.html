@@ -56,8 +56,10 @@
         </div>
         <pre class="code-block">wa:Wazir$ git status -s
  M apps/portal/index.html
+wa:Wazir$ loop "Run unit tests and verify zero errors" --max-iterations 3
+[wazir-workflow] loop-1 -> Iteration 1/3 -> Verified (41/41 tests pass)
 wa:Wazir$ find the startup bottleneck in Wazir
-[wazir-ai] Planned -> Routed to local (qwen3-coder:30b) -> Verified (41/41 tests pass)</pre>
+[wazir-ai] Planned -> Routed to local (qwen3-coder:30b) -> Verified</pre>
       </div>
     </section>
 
@@ -268,7 +270,7 @@ wa:Wazir$ find the startup bottleneck in Wazir
 
     // 9 Interactive Components (Section 8.3)
     const COMPONENTS = [
-      { id:'shell', name:'Wazir Shell', status:'Operational · v0.3.2', purpose:'Universal AI-native terminal combining native PTY shell execution with governed AI tasks.', caps:'Persistent cwd/env, pipes, Ctrl+C, ! / ? / auto routing, offline fallback', deps:'Tauri 2, portable-pty, @wazir/core', src:'apps/shell/, apps/cli/src/commands/shellCommand.ts', install:'Download Wazir Shell.app or run wa shell', cfg:'wa shell / Wazir Shell.app', interacts:'Sends AI requests to Wazir Core; deep-links active jobs into Mission Control.' },
+      { id:'shell', name:'Wazir Shell', status:'Operational · v0.3.2', purpose:'Universal AI-native terminal combining native PTY shell execution, 14 reserved workflow commands (loop, graph, goal, jobs, agents, models, fleet, status, inspect, pause, resume, stop, history, help), and governed AI tasks.', caps:'Persistent cwd/env, pipes, Ctrl+C, ! / ? / auto routing, optional tool discovery (fzf, zoxide, rg, bat, atuin, lazygit), offline fallback', deps:'Tauri 2, portable-pty, @wazir/core', src:'apps/shell/, apps/cli/src/commands/shellCommand.ts', install:'Download Wazir Shell.app or run wa shell', cfg:'wa shell / Wazir Shell.app', interacts:'Sends AI & workflow requests to Wazir Core; deep-links active jobs into Mission Control.' },
       { id:'mc', name:'Mission Control', status:'Operational · v0.3.2', purpose:'Graphical machine and agent orchestration operations console.', caps:'Interactive machine drill-down, 10-state execution graph, approvals inbox, execution replay', deps:'Tauri 2, @wazir/web, @wazir/api', src:'apps/desktop/, apps/web/public/mission-control.html', install:'Download Wazir Mission Control.app', cfg:'npm run desktop:dev / :4801/mission-control.html', interacts:'Streams real-time SSE job state from Wazir Core and worker telemetry from Fleet Registry.' },
       { id:'core', name:'Wazir Core', status:'Operational · v0.3.2', purpose:'Task planning, policy enforcement, persistence, checkpoints, and verification orchestration.', caps:'JobOrchestrator, durable checkpoints, lease fencing, PolicyEngine, ExecutionRecovery', deps:'Node.js >= 22.13, SQLite / Postgres', src:'packages/core/src/services/, packages/policies/', install:'Included in @wazir/core & wa bundle', cfg:'~/.wazir/config.json', interacts:'Coordinates Planner, Model Router, Worker dispatch, and Verification Engine.' },
       { id:'router', name:'Model Router', status:'Operational · 90%+ Local Target', purpose:'Capability-aware model selection across local MLX, Ollama, LM Studio, and authorized providers.', caps:'Local-first Qwen preference, hardware capability matching, backpressure & fallback', deps:'@wazir/models, @wazir/scheduler', src:'packages/models/, packages/core/src/services/scheduler.ts', install:'Included in Wazir Core', cfg:'fleetHosts & model preferences in ~/.wazir/config.json', interacts:'Selects optimal local or remote model endpoint for Agent Runtime.' },

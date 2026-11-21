@@ -617,8 +617,9 @@ class GoalLedgerStoreImpl implements DurableGoalLedgerStore {
       for (const field of ['runId', 'targetId', 'attempt', 'startedAt'] as const) {
         if (current[field] !== next[field]) throw new GoalStudioFailure('VALIDATION', `attempt '${attempt.id}' may not change ${field}`);
       }
-      // A finished attempt is history: it may be re-saved identically, never rewritten.
-      if (current.outcome !== undefined && (next.outcome !== current.outcome || next.endedAt !== current.endedAt)) {
+      // A finished terminal attempt is history: it may be re-saved identically, never rewritten.
+      // An awaiting_approval attempt is suspended and completes once human approval resolves.
+      if (current.outcome !== undefined && current.outcome !== 'awaiting_approval' && (next.outcome !== current.outcome || next.endedAt !== current.endedAt)) {
         throw new GoalStudioFailure('LEDGER_CONFLICT', `attempt '${attempt.id}' already finished as '${current.outcome}'`, {
           details: { attemptId: attempt.id, outcome: current.outcome },
         });

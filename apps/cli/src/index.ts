@@ -2918,7 +2918,14 @@ async function handleRootConversationOrPrompt(rawArgs: string[]): Promise<void> 
     return;
   }
 
-  // Bare `wa` / `wazir` with no positional prompt:
+  // Bare `wazir` launches interactive Wazir Shell (or batch shell on piped stdin); bare `wa` launches interactive TUI:
+  if (invokedExecutableName === 'wazir' && !opts.tui && !opts.dashboard && !opts.json) {
+    const { launchInteractiveWazirShell } = await import('./commands/shellCommand.js');
+    await launchInteractiveWazirShell({ version: CLI_VERSION, batch: !process.stdin.isTTY });
+    return;
+  }
+
+  // Bare `wa` with no positional prompt:
   if (isInteractiveTty) {
     await launchInteractiveTui(opts, 'conversation');
     return;
