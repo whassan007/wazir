@@ -385,7 +385,7 @@ function isEmbeddingCandidate(candidate: FastModelCandidate): boolean {
 }
 
 function isReasoningModelId(id: string): boolean {
-  return /qwen3|deepseek-r1|qwq|reasoner|-think/i.test(id);
+  return /qwen3|deepseek-r1|qwq|nemotron|reasoner|-think/i.test(id);
 }
 
 function extractParametersString(id: string): string | undefined {
@@ -1161,6 +1161,9 @@ async function executeStreamingRequest(
         stream_options: { include_usage: true },
         temperature: opts.temperature,
         max_tokens: opts.maxTokens,
+        ...(shouldDisableThinking && entry.runtimeType === 'lmstudio'
+          ? { reasoning_effort: 'none' }
+          : {}),
       });
 
   const reqStart = performance.now();

@@ -394,4 +394,77 @@ describe('FastOrchestrator 100+ Regression & 1000-Request Latency Benchmark Suit
     expect(clean).toMatch(/Wazir v\d+\.\d+\.\d+/);
     expect(clean).toContain('PTY_NATIVE_OK');
   }, 20_000);
+
+  // Categories 10-16: Failures, cancellation, concurrency/interleaving, malformed/unsafe inputs & cross-platform compat
+  it('handles provider/tool failures, cancellations, malformed/unsafe inputs, concurrency, and POSIX portability without silent drops', async () => {
+    const isolatedHome = path.join(tmpDir, 'iso-home');
+    fs.mkdirSync(isolatedHome, { recursive: true });
+    const state = createInitialShellState({
+      initialCwd: tmpDir,
+      env: { ...process.env, WAZIR_HOME: isolatedHome, WAZIR_SKIP_RUNTIME_DISCOVERY: '1' },
+      debug: false,
+    });
+
+    // Unavailable / failing provider returns non-zero & visible error
+    const failAi: ShellAiHandler = async () => {
+      console.error('[wazir-ai] Simulated provider outage');
+      return 1;
+    };
+    capturedErr = [];
+    expect(await executeShellLine('explain chmod 755', state, failAi)).toBe(1);
+    expect(capturedErr.join('\n')).toContain('Simulated provider outage');
+
+    // Unavailable offline local model returns non-zero & visible message
+    capturedOut = [];
+    expect(await executeShellLine('what is TCP', state, undefined)).toBe(1);
+    expect(capturedOut.join('\n')).toContain('AI execution unavailable offline');
+
+    // Tier 1 tool failure propagates exact nonzero exit code
+    expect(await executeShellLine('! exit 7', state, undefined, { shellExecutable: '/bin/sh' })).toBe(7);
+
+    // Cancellation via AbortController returns 130 cleanly
+    const abortCtrl = new AbortController();
+    setTimeout(() => abortCtrl.abort(), 80);
+    expect(await executeShellLine('! sleep 5', state, undefined, { signal: abortCtrl.signal, shellExecutable: '/bin/sh' })).toBe(130);
+
+    // Unsafe / destructive AI confirmation rejection returns 130 without invoking AI
+    let destructiveInvoked = false;
+    capturedErr = [];
+    expect(
+      await executeShellLine(
+        '? rm -rf /tmp/nonexistent-unsafe',
+        state,
+        async () => {
+          destructiveInvoked = true;
+          return 0;
+        },
+        { confirmDestructiveAi: async () => false },
+      ),
+    ).toBe(130);
+    expect(destructiveInvoked).toBe(false);
+    expect(capturedErr.join('\n')).toContain('Rejected destructive AI request');
+
+    // Ambiguous / malformed input exits cleanly with visible guidance and zero crash
+    capturedErr = [];
+    expect(await executeShellLine('xyzzy_malformed_token_999', state)).toBe(2);
+    expect(capturedErr.join('\n')).toContain('Ambiguous input');
+
+    // Concurrent interleaved sessions preserve isolated cwd/state and drop 0 responses
+    const dirA = path.join(tmpDir, 'dir-a');
+    const dirB = path.join(tmpDir, 'dir-b');
+    fs.mkdirSync(dirA);
+    fs.mkdirSync(dirB);
+    const stateA = createInitialShellState({ initialCwd: dirA, env: { ...process.env, WAZIR_HOME: isolatedHome } });
+    const stateB = createInitialShellState({ initialCwd: dirB, env: { ...process.env, WAZIR_HOME: isolatedHome } });
+    const concurrentCodes = await Promise.all([
+      executeShellLine('pwd', stateA),
+      executeShellLine('pwd', stateB),
+      executeShellLine('2 + 2', stateA),
+      executeShellLine('version', stateB),
+      executeShellLine('what time is it today', stateA),
+    ]);
+    expect(concurrentCodes).toEqual([0, 0, 0, 0, 0]);
+    expect(stateA.cwd).toBe(dirA);
+    expect(stateB.cwd).toBe(dirB);
+  }, 15_000);
 });

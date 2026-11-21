@@ -88,14 +88,30 @@ async function main() {
     let tier2Result;
     try {
       const bench = await benchmarkFastLocalModels({ env: process.env, timeoutMs: 2000, forceRefresh: true });
-      let warmStream;
+      const warmPrompts = [
+        'what is TCP in one concise sentence',
+        'explain chmod 755 in one concise sentence',
+        'what does HTTP 429 mean in one concise sentence',
+        'what is a Python decorator in one concise sentence',
+        'what is UDP in one concise sentence',
+      ];
+      const warmTtftSamples = [];
+      const warmTpsSamples = [];
+      let lastWarmStream;
       if (bench.selected) {
-        warmStream = await streamFastLocalCompletion('what is TCP in one concise sentence', {
-          sessionModel: bench.selected.candidate.id,
-          env: process.env,
-          maxTokens: 64,
-          timeoutMs: 12_000,
-        });
+        for (const prompt of warmPrompts) {
+          const res = await streamFastLocalCompletion(prompt, {
+            sessionModel: bench.selected.candidate.id,
+            env: process.env,
+            maxTokens: 48,
+            timeoutMs: 12_000,
+          });
+          lastWarmStream = res;
+          if (res.status === 'success') {
+            if (typeof res.firstTokenMs === 'number') warmTtftSamples.push(res.firstTokenMs);
+            if (typeof res.tokenThroughputTps === 'number') warmTpsSamples.push(res.tokenThroughputTps);
+          }
+        }
       }
       tier2Result = {
         discoveredCount: bench.entries.length,
@@ -104,10 +120,10 @@ async function main() {
         selectedRuntime: bench.selected?.runtimeType ?? null,
         coldBenchTtftMs: bench.selected?.candidate.measuredTtftMs ?? null,
         coldBenchTps: bench.selected?.candidate.measuredTps ?? null,
-        warmStreamStatus: warmStream?.status ?? null,
-        warmTtftMs: warmStream?.firstTokenMs ?? null,
-        warmTps: warmStream?.tokenThroughputTps ?? null,
-        warmOutput: warmStream?.output?.slice(0, 120) ?? null,
+        warmStreamStatus: lastWarmStream?.status ?? null,
+        warmTtftStatsMs: computeLatencyPercentiles(warmTtftSamples),
+        warmTpsStats: computeLatencyPercentiles(warmTpsSamples),
+        warmOutput: lastWarmStream?.output?.slice(0, 120) ?? null,
         errors: bench.errors,
       };
     } catch (err) {
