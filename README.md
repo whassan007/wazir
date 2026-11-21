@@ -2,9 +2,21 @@
   <img src="assets/brand/logo.jpeg" alt="Wazir — a local AI fleet counselor" width="480">
 </p>
 
-# Wazir Meta-Harness
+# Wazir AI OS
 
-Wazir is a model- and runtime-agnostic meta-harness. It schedules AI agents, models, tools and compute to execute tasks across local and distributed environments. One `wa` CLI routes work to local runtimes (Ollama, LM Studio), hosted providers (Anthropic, OpenAI, Google, NVIDIA) and external coding harnesses (Claude Code, Codex, Qwen Code, OpenCode). It places each task on the best computer in your fleet and verifies the result against physical evidence rather than the model's own claim. Every decision is recorded so you can see what ran, where, on which model, and why.
+**One intelligent shell. Every machine. Verified execution.**
+
+Wazir AI OS is a cross-platform, AI-native execution environment and model-agnostic meta-harness. It unifies traditional operating-system commands and natural-language AI requests in one universal terminal (`Wazir Shell` / `wa shell`), schedules work across local runtimes (Ollama, MLX, LM Studio) and distributed workers (macOS, Linux / NVIDIA DGX Spark, Windows), monitors every job in **Wazir Mission Control**, and verifies results against physical evidence rather than model self-reports.
+
+- **Public Portal & Downloads:** [wazir-portal.pages.dev](https://wazir-portal.pages.dev) ([Download Page](https://wazir-portal.pages.dev/download)) · Target domain: `https://wazir.wael.bot`
+- **Core Components:**
+  1. **Wazir Shell** (`apps/shell/`, `wa shell`) — Native Tauri 2 + `portable-pty` terminal & CLI with deterministic `!` shell / `?` AI / auto routing (`shellClassifier.ts`) and offline resilience.
+  2. **Wazir Mission Control** (`apps/desktop/`, `apps/web/public/mission-control.html`) — Graphical operations console with machine drill-down, 10-state execution graph, replay, and approvals inbox.
+  3. **Wazir Core** (`packages/core/`, `packages/agents/`, `packages/policies/`, `packages/scheduler/`, `packages/models/`) — Planning, policy enforcement, local-first Qwen routing, checkpoints, and `VerificationEngine`.
+  4. **Wazir Workers** (`apps/worker/`, `apps/api/`) — Distributed execution services with SSE task streams, heartbeats, and lease-fenced execution claims.
+  5. **Wazir Mobile** (`apps/android/`, `scripts/install-termux.sh`) — Zero-root GrapheneOS/Android Jetpack Compose companion (`ai.wazir.mobile`) and Termux ARM64 CLI integration.
+  6. **Wazir Diagnostics** (`packages/observability/`, `apps/api/src/diagnosticsRoutes.ts`) — Affirmative-consent, redacted diagnostic telemetry, crash fingerprinting, and bounded offline queue.
+  7. **Wazir Portal** (`apps/portal/`, `apps/api/src/publicRoutes.ts`) — Editorial product website, verified release manifest, and sanitized public demo topology.
 
 ## Architecture
 
@@ -399,12 +411,15 @@ The launchd worker is headless and distinct from the GUI `Wazir.app` produced by
 ```
 wazir/
 ├── apps/
-│   ├── cli/          # `wa` — commands, engine wiring, conversation shell and Mission Control (src/tui/)
-│   ├── api/          # REST control plane — inventory, SSE dispatch, checkpoint transport, Goal Studio routes
-│   ├── web/          # Web dashboard and Goal Studio UI
+│   ├── cli/          # `wa` — commands (`wa shell`, `wa exec`, `wa fleet`, `wa about`, `wa license`, `wa diagnostics`) and TUI
+│   ├── shell/        # Wazir Shell — native Tauri 2 + portable-pty universal terminal app
+│   ├── desktop/      # Wazir Mission Control — native Tauri 2 fleet & execution console
+│   ├── portal/       # Public product & download portal (deployed to Cloudflare Pages)
+│   ├── api/          # REST control plane — inventory, SSE dispatch, diagnostics, public demo & Goal Studio routes
+│   ├── web/          # Web dashboard, Mission Control UI, and Goal Studio UI
 │   ├── worker/       # Standalone worker daemon
-│   ├── desktop/      # Tauri desktop app
-│   └── mobile/       # Wazir Mobile companion (android/, ios/)
+│   ├── android/      # Wazir Mobile — GrapheneOS/Android Jetpack Compose companion (ai.wazir.mobile)
+│   └── mobile/       # Cross-platform mobile scaffolding
 │
 ├── packages/
 │   ├── core/         # Domain types, Scheduler, outcome router, PolicyEngine, ExecutionEngine,
@@ -422,7 +437,7 @@ wazir/
 │   ├── database/     # PostgresStore + reference SQL schema
 │   ├── registry/     # Durable repository helpers over a KeyValueStore
 │   ├── evaluation/   # Post-execution evaluation and router benchmarks
-│   ├── observability/# Structured logging & metrics
+│   ├── observability/# Consent-gated diagnostics, redaction, fingerprinting, structured logging & metrics
 │   ├── memory/       # Session/conversation store
 │   └── shared/       # KeyValueStore implementations (JSON file / in-memory), utils
 │
@@ -457,11 +472,20 @@ Wazir runs natively on Linux, macOS and Windows with no emulation layer.
 
 ### Documentation & Guides
 
+- [Wazir AI OS Architecture](docs/architecture/wazir-ai-os.md)
+- [Wazir Shell Architecture](docs/architecture/shell-architecture.md)
+- [Wazir Mission Control](docs/architecture/mission-control.md)
+- [Distributed Execution & Lease Fencing](docs/architecture/distributed-execution.md)
 - [Distributed Fleet Setup Guide](docs/fleet-setup.md)
 - [Linux ARM64 NVIDIA DGX Spark Worker Guide](docs/dgx-spark-worker.md)
 - [Windows Worker Setup Guide](docs/windows-worker.md)
 - [macOS Worker Setup Guide](docs/macos-worker.md)
+- [GrapheneOS Companion & Termux Integration](docs/mobile/grapheneos-and-termux.md)
 - [Goal Studio Guide](docs/goal-studio/README.md)
+- [Threat Model](docs/security/threat-model.md)
+- [Telemetry & Diagnostics Privacy Policy](docs/security/telemetry-and-privacy.md)
+- [Licensing & Compatibility Audit](docs/legal/licensing-audit.md)
+- [Deployment & Rollback Operations](docs/operations/deployment.md)
 - [NVIDIA Provider](docs/nvidia-provider.md)
 - [Tool Sandbox](docs/sandbox.md)
 - [Auto-Updates](docs/auto-updates.md)
@@ -497,6 +521,8 @@ Logo and full corporate visual identity guidelines (typography, color palette, v
 
 ---
 
-## License
+## License & Attribution
 
-AGPL-3.0 — see [LICENSE](./LICENSE). If you run a modified version of Wazir as a network service, the AGPL requires you to make your modified source available to users of that service.
+- **Existing Core, CLI, API, Desktop & Mobile:** Licensed under **AGPL-3.0-only** — see [LICENSE](./LICENSE). If you run a modified version of Wazir as a network service, the AGPL requires you to make your modified source available to users of that service.
+- **Selective Qwen Code Transplant:** Portions of `packages/agents/src/qwenCore/*` and `packages/tools/src/*` are selectively adapted from `QwenLM/qwen-code` (`Apache-2.0`).
+- **Commercial Authorization & Credits:** See [NOTICE](./NOTICE), [AUTHORS](./AUTHORS), [CONTRIBUTORS](./CONTRIBUTORS), [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md), [LICENSE-COMMERCIAL.md](./LICENSE-COMMERCIAL.md), and [docs/legal/licensing-audit.md](./docs/legal/licensing-audit.md).
