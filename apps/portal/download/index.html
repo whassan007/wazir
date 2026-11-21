@@ -39,7 +39,7 @@
       <p class="lead">One intelligent shell. Every machine.</p>
       <p class="sub">Run commands, delegate work to AI, and manage execution across your computers. Locally, securely, and with verifiable results.</p>
       <div class="hero-actions">
-        <a id="hero-primary-btn" class="btn primary" href="/releases/Wazir-Shell-0.4.0-macos-arm64.tar.gz" download>
+        <a id="hero-primary-btn" class="btn primary" href="/releases/Wazir-Shell-0.4.1-macos-arm64.tar.gz" download>
           Download for macOS
         </a>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
@@ -67,7 +67,7 @@
             <img src="/logo-emblem.svg" alt="Wazir Desktop icon" width="36" height="36" />
             <div>
               <h3 id="card-desktop-title" style="margin:0;">Wazir Desktop</h3>
-              <span class="muted" style="font-size:13px;">macOS &amp; Linux · v<span class="manifest-version">0.4.0</span></span>
+              <span class="muted" style="font-size:13px;">macOS &amp; Linux · v<span class="manifest-version">0.4.1</span></span>
             </div>
           </div>
 
@@ -116,8 +116,8 @@
           <p class="muted" style="margin-top:0;">Start a task anywhere. Let your machines do the work.</p>
 
           <div id="mobile-downloads" style="display:grid;gap:10px;margin-bottom:18px;">
-            <a class="btn primary" href="/releases/wazir-mobile-0.4.0-android-debug.apk" download>
-              Download GrapheneOS / Android APK (v0.4.0)
+            <a class="btn primary" href="/releases/wazir-mobile-0.4.1-android-debug.apk" download>
+              Download GrapheneOS / Android APK (v0.4.1)
             </a>
             <a class="btn" href="#terminal-install" onclick="selectTermPlatform('termux')">
               Install Termux ARM64 CLI
@@ -275,7 +275,7 @@
 
       <div class="card" style="overflow-x:auto;margin-bottom:20px;">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
-          <strong>Release v<span class="manifest-version">0.4.0</span></strong>
+          <strong>Release v<span class="manifest-version">0.4.1</span></strong>
           <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:13px;">
             <a href="/releases/SHA256SUMS.txt">SHA256SUMS.txt</a>
             <a href="/release-manifest.json">release-manifest.json</a>
@@ -305,7 +305,7 @@
 sudo dpkg -i wazir_&lt;version&gt;_all.deb
 
 # Source build pin / rollback:
-git checkout v0.3.2 &amp;&amp; npm install &amp;&amp; npm run build</pre>
+git checkout v0.4.0 &amp;&amp; npm install &amp;&amp; npm run build</pre>
         </div>
         <div class="card">
           <h3>Installer troubleshooting</h3>
@@ -396,10 +396,10 @@ git checkout v0.3.2 &amp;&amp; npm install &amp;&amp; npm run build</pre>
       : 'https://wazir.wael.bot';
 
     const HERO_PLATFORMS = {
-      macos: { label: 'Download for macOS', href: '/releases/Wazir-Shell-0.4.0-macos-arm64.tar.gz' },
-      'linux-deb': { label: 'Download for Linux (.deb)', href: '/releases/wazir_0.4.0_all.deb' },
-      'linux-tar': { label: 'Download Universal CLI (.tar.gz)', href: '/releases/wazir-cli-0.4.0-any.tar.gz' },
-      android: { label: 'Download for Android / GrapheneOS', href: '/releases/wazir-mobile-0.4.0-android-debug.apk' },
+      macos: { label: 'Download for macOS', href: '/releases/Wazir-Shell-0.4.1-macos-arm64.tar.gz' },
+      'linux-deb': { label: 'Download for Linux (.deb)', href: '/releases/wazir_0.4.1_all.deb' },
+      'linux-tar': { label: 'Download Universal CLI (.tar.gz)', href: '/releases/wazir-cli-0.4.1-any.tar.gz' },
+      android: { label: 'Download for Android / GrapheneOS', href: '/releases/wazir-mobile-0.4.1-android-debug.apk' },
     };
 
     function applyHeroPlatform(key) {
@@ -456,15 +456,15 @@ git checkout v0.3.2 &amp;&amp; npm install &amp;&amp; npm run build</pre>
       const box = document.getElementById('desktop-downloads');
       if (arch === 'arm64') {
         box.innerHTML = `
-          <a class="btn primary" href="/releases/Wazir-Shell-0.4.0-macos-arm64.tar.gz" download>Download Wazir Shell (macOS ARM64)</a>
-          <a class="btn" href="/releases/Wazir-Mission-Control-0.4.0-macos-arm64.tar.gz" download>Download Mission Control (macOS ARM64)</a>
-          <a class="btn" href="/releases/wazir_0.4.0_all.deb" download>Download Linux .deb (ARM64 / x64)</a>
+          <a class="btn primary" href="/releases/Wazir-Shell-0.4.1-macos-arm64.tar.gz" download>Download Wazir Shell (macOS ARM64)</a>
+          <a class="btn" href="/releases/Wazir-Mission-Control-0.4.1-macos-arm64.tar.gz" download>Download Mission Control (macOS ARM64)</a>
+          <a class="btn" href="/releases/wazir_0.4.1_all.deb" download>Download Linux .deb (ARM64 / x64)</a>
         `;
       } else {
         box.innerHTML = `
-          <a class="btn primary" href="/releases/wazir_0.4.0_all.deb" download>Download Linux .deb (x86_64)</a>
-          <a class="btn" href="/releases/wazir-cli-0.4.0-any.tar.gz" download>Download Universal CLI Bundle</a>
-          <a class="btn" href="/releases/wazir-0.4.0.tar.gz" download>Download Linux Source &amp; RPM Spec</a>
+          <a class="btn primary" href="/releases/wazir_0.4.1_all.deb" download>Download Linux .deb (x86_64)</a>
+          <a class="btn" href="/releases/wazir-cli-0.4.1-any.tar.gz" download>Download Universal CLI Bundle</a>
+          <a class="btn" href="/releases/wazir-0.4.1.tar.gz" download>Download Linux Source &amp; RPM Spec</a>
         `;
       }
     }
@@ -489,15 +489,15 @@ git checkout v0.3.2 &amp;&amp; npm install &amp;&amp; npm run build</pre>
     // Terminal install tabs
     const TERM_PLATS = {
       macos: {
-        cmd: `curl -LO ${ORIGIN}/releases/wazir-cli-0.4.0-any.tar.gz\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nshasum -a 256 -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-cli-0.4.0-any.tar.gz\nnode bin/wa.js about`,
+        cmd: `curl -LO ${ORIGIN}/releases/wazir-cli-0.4.1-any.tar.gz\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nshasum -a 256 -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-cli-0.4.1-any.tar.gz\nnode bin/wa.js about`,
         arch: 'arm64 (Apple Silicon)', dest: './bin/wa.js or /usr/local/bin/wa', verify: 'wa about && wa doctor', upgrade: 'Re-download & verify new tarball', uninstall: 'rm -rf ~/.wazir bin/wa.js'
       },
       debian: {
-        cmd: `curl -LO ${ORIGIN}/releases/wazir_0.4.0_all.deb\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\nsudo dpkg -i wazir_0.4.0_all.deb`,
+        cmd: `curl -LO ${ORIGIN}/releases/wazir_0.4.1_all.deb\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\nsudo dpkg -i wazir_0.4.1_all.deb`,
         arch: 'x86_64, arm64', dest: '/usr/bin/wa & systemd units', verify: 'wa about && wa doctor', upgrade: 'sudo dpkg -i wazir_<ver>_all.deb', uninstall: 'sudo apt remove wazir'
       },
       fedora: {
-        cmd: `curl -LO ${ORIGIN}/releases/wazir-0.4.0.tar.gz\ntar -xzf wazir-0.4.0.tar.gz\nrpmbuild -tb wazir-0.4.0.tar.gz`,
+        cmd: `curl -LO ${ORIGIN}/releases/wazir-0.4.1.tar.gz\ntar -xzf wazir-0.4.1.tar.gz\nrpmbuild -tb wazir-0.4.1.tar.gz`,
         arch: 'x86_64, arm64', dest: '/usr/bin/wa', verify: 'wa about', upgrade: 'sudo dnf upgrade wazir', uninstall: 'sudo dnf remove wazir'
       },
       linux: {
@@ -518,7 +518,7 @@ git checkout v0.3.2 &amp;&amp; npm install &amp;&amp; npm run build</pre>
       currentTermCmd = d.cmd;
       document.getElementById('term-cmd').textContent = d.cmd;
       document.getElementById('term-meta').innerHTML = `
-        <div><strong>Version:</strong> v0.4.0</div>
+        <div><strong>Version:</strong> v0.4.1</div>
         <div><strong>Arch:</strong> ${d.arch}</div>
         <div><strong>Destination:</strong> <code>${d.dest}</code></div>
         <div><strong>Verify:</strong> <code>${d.verify}</code></div>

@@ -124,4 +124,38 @@ describe('SqliteMemoryStore (Adapted from Qwen-Live-Harness)', () => {
     expect(memory.getSqliteStore()).toBe(sqlite);
     sqlite.close();
   });
+
+  it('installs an idempotent emitWarning filter that suppresses only SQLite ExperimentalWarning', () => {
+    const previousEmitWarning = process.emitWarning;
+    const forwarded: unknown[][] = [];
+    const spyEmitWarning = ((...args: unknown[]) => {
+      forwarded.push(args);
+    }) as typeof process.emitWarning;
+    process.emitWarning = spyEmitWarning;
+
+    try {
+      const store1 = new SqliteMemoryStore();
+      const wrappedOnce = process.emitWarning;
+      expect(wrappedOnce).not.toBe(spyEmitWarning);
+
+      const store2 = new SqliteMemoryStore();
+      expect(process.emitWarning).toBe(wrappedOnce);
+
+      process.emitWarning('SQLite is an experimental feature and might change at any time', 'ExperimentalWarning');
+      process.emitWarning(new Error('SQLite is an experimental feature'));
+      expect(forwarded).toHaveLength(0);
+
+      process.emitWarning('Custom experimental feature', 'ExperimentalWarning');
+      process.emitWarning('Standard deprecation warning', 'DeprecationWarning');
+      expect(forwarded).toEqual([
+        ['Custom experimental feature', 'ExperimentalWarning'],
+        ['Standard deprecation warning', 'DeprecationWarning'],
+      ]);
+
+      store1.close();
+      store2.close();
+    } finally {
+      process.emitWarning = previousEmitWarning;
+    }
+  });
 });

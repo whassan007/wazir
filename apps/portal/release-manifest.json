@@ -1,75 +1,75 @@
 {
   "name": "Wazir AI OS",
-  "version": "0.4.0",
-  "releasedAt": "2026-11-21T18:58:13.259Z",
+  "version": "0.4.1",
+  "releasedAt": "2026-11-21T22:40:35.977Z",
   "repository": "https://github.com/whassan007/wazir",
   "checksumsUrl": "/releases/SHA256SUMS.txt",
   "artifacts": [
     {
-      "filename": "Wazir-Shell-0.4.0-macos-arm64.tar.gz",
+      "filename": "Wazir-Shell-0.4.1-macos-arm64.tar.gz",
       "platform": "macOS Apple Silicon (Wazir Shell.app)",
       "arch": "arm64",
-      "sizeBytes": 4209769,
-      "sizeHuman": "4.01 MB",
-      "sha256": "0263f419e1f46708dae3a2c02f0cd3343fa62976203a35fcaa5d2c3aca9c3ef0",
+      "sizeBytes": 5390970,
+      "sizeHuman": "5.14 MB",
+      "sha256": "c867be75c28c6bb5bd14297c0dd77cafc84345fca3698a9bd3109e8d6c8e0007",
       "signing": "Unsigned development build (Apple Developer ID not configured)",
       "license": "AGPL-3.0-only",
-      "url": "/releases/Wazir-Shell-0.4.0-macos-arm64.tar.gz"
+      "url": "/releases/Wazir-Shell-0.4.1-macos-arm64.tar.gz"
     },
     {
-      "filename": "Wazir-Mission-Control-0.4.0-macos-arm64.tar.gz",
+      "filename": "Wazir-Mission-Control-0.4.1-macos-arm64.tar.gz",
       "platform": "macOS Apple Silicon (Mission Control.app)",
       "arch": "arm64",
-      "sizeBytes": 5344798,
-      "sizeHuman": "5.10 MB",
-      "sha256": "77065b0e9d00989b293377ba34dc781151c51b7b8c1d3749a39a33894074e07e",
+      "sizeBytes": 5282103,
+      "sizeHuman": "5.04 MB",
+      "sha256": "0f3d1d4d430ca9c88db59459f6ea2a9a173701edec62608b7281a5b4e22d1adf",
       "signing": "Unsigned development build (Apple Developer ID not configured)",
       "license": "AGPL-3.0-only",
-      "url": "/releases/Wazir-Mission-Control-0.4.0-macos-arm64.tar.gz"
+      "url": "/releases/Wazir-Mission-Control-0.4.1-macos-arm64.tar.gz"
     },
     {
-      "filename": "wazir-cli-0.4.0-any.tar.gz",
+      "filename": "wazir-cli-0.4.1-any.tar.gz",
       "platform": "Universal CLI (macOS / Linux / Termux ARM64)",
       "arch": "x86_64 / arm64",
-      "sizeBytes": 3719757,
-      "sizeHuman": "3.55 MB",
-      "sha256": "c2c467e0677c5bf093d8b11a632148a185bedfcaec8475220c99e338b4d7da32",
+      "sizeBytes": 3751474,
+      "sizeHuman": "3.58 MB",
+      "sha256": "c9f4a763df4a7ae85b54047459bfac0244ea95afdb351c71444cbf2ce397fb03",
       "signing": "SHA-256 verified bundle",
       "license": "AGPL-3.0-only",
-      "url": "/releases/wazir-cli-0.4.0-any.tar.gz"
+      "url": "/releases/wazir-cli-0.4.1-any.tar.gz"
     },
     {
-      "filename": "wazir_0.4.0_all.deb",
+      "filename": "wazir_0.4.1_all.deb",
       "platform": "Debian / Ubuntu (.deb)",
       "arch": "all (x86_64 / arm64)",
-      "sizeBytes": 2678190,
-      "sizeHuman": "2.55 MB",
-      "sha256": "7b05f13aeba1edb9e44213327f546c171191be8476b70b4172b2b6cd7e80c02c",
+      "sizeBytes": 2702612,
+      "sizeHuman": "2.58 MB",
+      "sha256": "02607e8ff347d29611bd5af6d8288de56ae1371f006e2bdce9e7b0c96aa385ff",
       "signing": "SHA-256 verified (built on Ubuntu 24.04 aarch64)",
       "license": "AGPL-3.0-only",
-      "url": "/releases/wazir_0.4.0_all.deb"
+      "url": "/releases/wazir_0.4.1_all.deb"
     },
     {
-      "filename": "wazir-0.4.0.tar.gz",
+      "filename": "wazir-0.4.1.tar.gz",
       "platform": "Linux Source Tarball & RPM Spec",
       "arch": "x86_64 / arm64",
-      "sizeBytes": 18390326,
-      "sizeHuman": "17.54 MB",
-      "sha256": "c1bdd2c6df94f881ad89dbafe7a7778386252f35393fdea5fa79929fafb0a0a6",
+      "sizeBytes": 3766994,
+      "sizeHuman": "3.59 MB",
+      "sha256": "426cc7aeeb07e2e2bd9142653c2fabd08da41a429522e027caee2a4d8a0beb42",
       "signing": "SHA-256 verified",
       "license": "AGPL-3.0-only",
-      "url": "/releases/wazir-0.4.0.tar.gz"
+      "url": "/releases/wazir-0.4.1.tar.gz"
     },
     {
-      "filename": "wazir-mobile-0.4.0-android-debug.apk",
+      "filename": "wazir-mobile-0.4.1-android-debug.apk",
       "platform": "GrapheneOS / Android Companion (APK)",
       "arch": "arm64-v8a / universal",
       "sizeBytes": 22517141,
       "sizeHuman": "21.47 MB",
-      "sha256": "c1f9d3f3eb5a53073f1a8523a739f70ede26c01cb21a97d74ecb0d6897961339",
+      "sha256": "7c36492117c9284733eb595a125a89eff23a92662415d5cd8253dc48b25e87b1",
       "signing": "Debug key (unsigned release)",
       "license": "AGPL-3.0-only",
-      "url": "/releases/wazir-mobile-0.4.0-android-debug.apk"
+      "url": "/releases/wazir-mobile-0.4.1-android-debug.apk"
     }
   ]
 }

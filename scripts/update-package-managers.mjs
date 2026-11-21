@@ -59,27 +59,25 @@ const hashes = {
   'windows-x64': '0000000000000000000000000000000000000000000000000000000000000000',
 };
 
-if (!sumsPath || !existsSync(sumsPath)) {
-  const existingFormulaPath = path.resolve(rootDir, 'Formula/wazir.rb');
-  if (existsSync(existingFormulaPath)) {
-    const existingFormula = readFileSync(existingFormulaPath, 'utf8');
-    for (const target of ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']) {
-      const m = new RegExp(`${target}\\.tar\\.gz"[\\s\\S]*?sha256 "([a-f0-9]{64})"`, 'i').exec(existingFormula);
-      if (m) hashes[target] = m[1];
+const existingFormulaPath = path.resolve(rootDir, 'Formula/wazir.rb');
+if (existsSync(existingFormulaPath)) {
+  const existingFormula = readFileSync(existingFormulaPath, 'utf8');
+  for (const target of ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']) {
+    const m = new RegExp(`${target}\\.tar\\.gz"[\\s\\S]*?sha256 "([a-f0-9]{64})"`, 'i').exec(existingFormula);
+    if (m) hashes[target] = m[1];
+  }
+}
+const existingScoopPath = path.resolve(rootDir, 'bucket/wazir.json');
+if (existsSync(existingScoopPath)) {
+  try {
+    const existingScoop = JSON.parse(readFileSync(existingScoopPath, 'utf8'));
+    if (/^[a-f0-9]{64}$/i.test(existingScoop.architecture?.['64bit']?.hash ?? '')) {
+      hashes['windows-x64'] = existingScoop.architecture['64bit'].hash;
     }
-  }
-  const existingScoopPath = path.resolve(rootDir, 'bucket/wazir.json');
-  if (existsSync(existingScoopPath)) {
-    try {
-      const existingScoop = JSON.parse(readFileSync(existingScoopPath, 'utf8'));
-      if (/^[a-f0-9]{64}$/i.test(existingScoop.architecture?.['64bit']?.hash ?? '')) {
-        hashes['windows-x64'] = existingScoop.architecture['64bit'].hash;
-      }
-      if (/^[a-f0-9]{64}$/i.test(existingScoop.architecture?.arm64?.hash ?? '')) {
-        hashes['windows-arm64'] = existingScoop.architecture.arm64.hash;
-      }
-    } catch { /* ignore */ }
-  }
+    if (/^[a-f0-9]{64}$/i.test(existingScoop.architecture?.arm64?.hash ?? '')) {
+      hashes['windows-arm64'] = existingScoop.architecture.arm64.hash;
+    }
+  } catch { /* ignore */ }
 }
 
 if (sumsPath && existsSync(sumsPath)) {

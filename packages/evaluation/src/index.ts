@@ -7,6 +7,7 @@ import type {
   EvaluationResult,
   EvidenceType,
   ExecutionRecord,
+  ToolCallRecord,
   VerificationEvidence,
 } from '@wazir/core';
 
@@ -171,6 +172,177 @@ function deriveEventRevisions(events: ExecutionRecord['events']): {
   return { currentRevision: revision, checkRevision };
 }
 
+const CHECK_TOOL_NAMES = new Set(['test', 'build', 'lint', 'typecheck']);
+const HARD_POLICY_DENIAL_RULES = new Set([
+  'shell-dangerous-deny',
+  'network-default-deny',
+  'filesystem-outside-deny',
+  'git-push-deny',
+  'isolation-unavailable',
+  'unknown-tool',
+  'mcp-explicit-approval',
+  'spec-write-fence-deny',
+  'spec-approval-human-only-deny',
+]);
+
+function toTimestampMs(value: Date | string | number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+function isHardPolicyDenial(call: ToolCallRecord): boolean {
+  if (call.policyEffect !== 'deny') return false;
+  const rule = call.policyRule;
+  if (typeof rule !== 'string' || !rule) return false;
+  if (HARD_POLICY_DENIAL_RULES.has(rule)) return true;
+  return /(?:^|-)deny$/i.test(rule) && !rule.includes('ask');
+}
+
+function isCheckPassed(check: CheckRunRecord): boolean {
+  return 'ok' in check ? check.ok : Boolean((check as { passed?: boolean }).passed);
+}
+
+/**
+ * Returns the latest timestamp (ms) of a passing verification check at `currentRevision`
+ * within the current attempt (`>= resumedAt`), or `undefined` when checks carry no timestamps.
+ */
+function getLatestPassingCurrentCheckAt(params: {
+  currentRevision: number;
+  currentEvidence: readonly VerificationEvidence[];
+  events: ExecutionRecord['events'] | undefined;
+  toolCalls: readonly ToolCallRecord[] | undefined;
+  eventDerived: boolean;
+  resumedAt: number;
+}): number | undefined {
+  let latest: number | undefined;
+  const updateLatest = (ts: number | undefined): void => {
+    if (ts !== undefined && ts >= params.resumedAt && (latest === undefined || ts > latest)) {
+      latest = ts;
+    }
+  };
+
+  for (const ev of params.currentEvidence) {
+    if (evidencePassed(ev)) {
+      updateLatest(toTimestampMs(ev.completedAt));
+    }
+  }
+
+  const sortedEvents = [...(params.events ?? [])].sort(
+    (a, b) => (toTimestampMs(a.timestamp) ?? 0) - (toTimestampMs(b.timestamp) ?? 0),
+  );
+  let lastMutationAt = -Infinity;
+  for (const event of sortedEvents) {
+    const eventType = event.eventType ?? event.type;
+    if (
+      eventType === 'files.changed' ||
+      eventType === 'workspace.mutated' ||
+      eventType === 'workspace.revision_changed' ||
+      eventType === 'workspace.revision.changed'
+    ) {
+      const eventAt = toTimestampMs(event.timestamp);
+      if (eventAt !== undefined && eventAt >= params.resumedAt && eventAt > lastMutationAt) {
+        lastMutationAt = eventAt;
+      }
+    }
+  }
+
+  let eventRev = 0;
+  for (const event of sortedEvents) {
+    const eventType = event.eventType ?? event.type;
+    const eventAt = toTimestampMs(event.timestamp);
+    if (eventType === 'files.changed') {
+      eventRev += 1;
+      continue;
+    }
+    const data = event.data as { ok?: unknown; workspaceRevision?: unknown } | undefined;
+    if (eventType === 'check.completed') {
+      const revMatches = typeof data?.workspaceRevision === 'number'
+        ? data.workspaceRevision === params.currentRevision
+        : params.eventDerived
+          ? eventRev === params.currentRevision
+          : (eventAt === undefined || eventAt >= lastMutationAt);
+      if (data?.ok !== false && revMatches) {
+        updateLatest(eventAt);
+      }
+    } else if (eventType === 'build.completed' || eventType === 'test.completed') {
+      const revMatches = typeof data?.workspaceRevision === 'number'
+        ? data.workspaceRevision === params.currentRevision
+        : (eventAt === undefined || eventAt >= lastMutationAt);
+      if (data?.ok === true && revMatches) {
+        updateLatest(eventAt);
+      }
+    }
+  }
+
+  for (const call of params.toolCalls ?? []) {
+    if (!CHECK_TOOL_NAMES.has(call.tool) || !call.ok) continue;
+    const callAt = toTimestampMs(call.at);
+    if (callAt !== undefined && callAt >= lastMutationAt) {
+      updateLatest(callAt);
+    }
+  }
+
+  return latest;
+}
+
+/**
+ * Evaluates whether any `shell` command in the current attempt ended in an unresolved
+ * failure or policy denial. An earlier exploratory failure or non-dangerous ask-escalation
+ * denial (such as invoking `node --test` directly before switching to the `test` tool)
+ * is resolved once verification checks pass on the current revision.
+ */
+function hasUnresolvedShellFailure(params: {
+  record: Pick<ExecutionRecord, 'checks'> & Partial<Pick<ExecutionRecord, 'events' | 'workspaceState' | 'toolCalls'>>;
+  checks: readonly CheckRunRecord[];
+  evidenceList: readonly VerificationEvidence[];
+  currentRevision: number;
+  eventDerived: boolean;
+}): boolean {
+  const resumed = [...(params.record.events ?? [])].reverse().find(e => (e.eventType ?? e.type) === 'execution.resumed');
+  const resumedAt = resumed ? (toTimestampMs(resumed.timestamp) ?? -Infinity) : -Infinity;
+
+  const isRevisionTracked = Boolean(params.record.workspaceState && params.record.workspaceState.revision > 0) || params.eventDerived;
+  const currentEvidence = params.evidenceList.filter((e) => (e.workspaceRevision ?? e.revision) === params.currentRevision);
+  const allCurrentChecksPassed =
+    params.checks.length > 0 &&
+    (isRevisionTracked
+      ? currentEvidence.length > 0 && currentEvidence.every(evidencePassed)
+      : params.checks.every(isCheckPassed) && (currentEvidence.length === 0 || currentEvidence.every(evidencePassed)));
+
+  const latestPassingCurrentCheckAt = allCurrentChecksPassed
+    ? getLatestPassingCurrentCheckAt({
+        currentRevision: params.currentRevision,
+        currentEvidence,
+        events: params.record.events,
+        toolCalls: params.record.toolCalls,
+        eventDerived: params.eventDerived,
+        resumedAt,
+      })
+    : undefined;
+
+  const shellOutcomes = new Map<string, { ok: boolean; call: ToolCallRecord; atMs: number | undefined }>();
+  for (const call of params.record.toolCalls ?? []) {
+    const callAtMs = toTimestampMs(call.at);
+    if (call.tool !== 'shell' || (callAtMs !== undefined && callAtMs < resumedAt)) continue;
+    const input = call.input as { command?: unknown; cwd?: unknown } | undefined;
+    if (typeof input?.command !== 'string') continue;
+    if (params.checks.some(check => check.command === input.command)) continue;
+    shellOutcomes.set(JSON.stringify([input.command, input.cwd ?? '']), {
+      ok: call.ok,
+      call,
+      atMs: callAtMs,
+    });
+  }
+
+  return [...shellOutcomes.values()].some((outcome) => {
+    if (outcome.ok) return false;
+    if (!allCurrentChecksPassed || isHardPolicyDenial(outcome.call)) return true;
+    if (latestPassingCurrentCheckAt === undefined) return false;
+    return outcome.atMs === undefined || outcome.atMs > latestPassingCurrentCheckAt;
+  });
+}
+
 /**
  * Errors belonging to the attempt being evaluated. A resumed execution keeps earlier
  * attempts' errors as history; its `execution.resumed` event records how many existed
@@ -243,18 +415,17 @@ export function evaluateExecution(
 
   // Ordinary shell failures are not necessarily build/test checks. A model's
   // done message cannot erase them. A successful retry of the same command can;
-  // revision-aware checks retain their existing recovery rules below.
-  const resumed = [...(record.events ?? [])].reverse().find(e => (e.eventType ?? e.type) === 'execution.resumed');
-  const resumedAt = resumed ? new Date(resumed.timestamp).getTime() : -Infinity;
-  const shellOutcomes = new Map<string, boolean>();
-  for (const call of record.toolCalls ?? []) {
-    if (call.tool !== 'shell' || new Date(call.at).getTime() < resumedAt) continue;
-    const input = call.input as { command?: unknown; cwd?: unknown } | undefined;
-    if (typeof input?.command !== 'string') continue;
-    if (checks.some(check => check.command === input.command)) continue;
-    shellOutcomes.set(JSON.stringify([input.command, input.cwd ?? '']), call.ok);
-  }
-  if ([...shellOutcomes.values()].some(ok => !ok)) {
+  // an earlier exploratory shell failure or non-dangerous ask-escalation denial
+  // (e.g. trying `node --test` directly before running the dedicated `test` tool)
+  // is also resolved once verification checks pass on the current revision.
+  // Revision-aware checks retain their existing recovery rules below.
+  if (hasUnresolvedShellFailure({
+    record,
+    checks,
+    evidenceList,
+    currentRevision,
+    eventDerived: Boolean(eventDerived),
+  })) {
     success = false;
     reasons.push('unresolved shell command failure or policy denial');
   }

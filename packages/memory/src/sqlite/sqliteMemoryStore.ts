@@ -8,6 +8,36 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+const SQLITE_WARNING_FILTER_INSTALLED = Symbol.for('wazir.sqliteExperimentalWarningFilter');
+const SQLITE_EXPERIMENTAL_WARNING_RE = /SQLite is an experimental feature/i;
+
+function installSqliteWarningFilter(): void {
+  const current = process.emitWarning as typeof process.emitWarning & {
+    [SQLITE_WARNING_FILTER_INSTALLED]?: boolean;
+  };
+  if (current[SQLITE_WARNING_FILTER_INSTALLED]) return;
+
+  const originalEmitWarning = current;
+  const filteredEmitWarning = function (
+    this: unknown,
+    warning: string | Error,
+    ...args: unknown[]
+  ): void {
+    const message = typeof warning === 'string'
+      ? warning
+      : warning && typeof warning === 'object' && 'message' in warning
+        ? String((warning as { message?: unknown }).message ?? '')
+        : String(warning);
+    if (SQLITE_EXPERIMENTAL_WARNING_RE.test(message)) {
+      return;
+    }
+    (originalEmitWarning as (...a: unknown[]) => void).apply(this, [warning, ...args]);
+  } as typeof process.emitWarning & { [SQLITE_WARNING_FILTER_INSTALLED]?: boolean };
+
+  filteredEmitWarning[SQLITE_WARNING_FILTER_INSTALLED] = true;
+  process.emitWarning = filteredEmitWarning;
+}
+
 export interface DialogueSegment {
   id?: number;
   libraryId: string;
@@ -42,7 +72,8 @@ export class SqliteMemoryStore {
 
   constructor(options: MemoryStoreOptions = {}) {
     // Do not load node:sqlite just because this module was included in the CLI bundle.
-    // The experimental warning should appear when SQLite-backed memory is actually used.
+    // Filter only Node's SQLite ExperimentalWarning right before loading node:sqlite.
+    installSqliteWarningFilter();
     const nodeSqlite = (process as any).getBuiltinModule?.('node:sqlite') ?? (typeof require !== 'undefined' ? require('node:sqlite') : undefined);
     const DatabaseSync = nodeSqlite?.DatabaseSync;
     if (!DatabaseSync) throw new Error('node:sqlite is required for SQLite-backed memory');

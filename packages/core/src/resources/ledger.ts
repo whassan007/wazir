@@ -4,6 +4,36 @@ import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 
 import type { AccountHealth, LimitUnit, UsageMeasurement, WorkloadClass } from './types.js';
 
+const SQLITE_WARNING_FILTER_INSTALLED = Symbol.for('wazir.sqliteExperimentalWarningFilter');
+const SQLITE_EXPERIMENTAL_WARNING_RE = /SQLite is an experimental feature/i;
+
+function installSqliteWarningFilter(): void {
+  const current = process.emitWarning as typeof process.emitWarning & {
+    [SQLITE_WARNING_FILTER_INSTALLED]?: boolean;
+  };
+  if (current[SQLITE_WARNING_FILTER_INSTALLED]) return;
+
+  const originalEmitWarning = current;
+  const filteredEmitWarning = function (
+    this: unknown,
+    warning: string | Error,
+    ...args: unknown[]
+  ): void {
+    const message = typeof warning === 'string'
+      ? warning
+      : warning && typeof warning === 'object' && 'message' in warning
+        ? String((warning as { message?: unknown }).message ?? '')
+        : String(warning);
+    if (SQLITE_EXPERIMENTAL_WARNING_RE.test(message)) {
+      return;
+    }
+    (originalEmitWarning as (...a: unknown[]) => void).apply(this, [warning, ...args]);
+  } as typeof process.emitWarning & { [SQLITE_WARNING_FILTER_INSTALLED]?: boolean };
+
+  filteredEmitWarning[SQLITE_WARNING_FILTER_INSTALLED] = true;
+  process.emitWarning = filteredEmitWarning;
+}
+
 /** One row of attributable usage. Exactly one per request id (idempotent reconciliation). */
 export interface UsageRow {
   requestId: string;
@@ -111,6 +141,7 @@ export class ResourceLedger {
     if (this.closed) throw new Error('ResourceLedger is closed');
     if (!this.database) {
       if (this.file !== ':memory:') mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
+      installSqliteWarningFilter();
       const sqlite = process.getBuiltinModule('node:sqlite') as typeof import('node:sqlite');
       const database = new sqlite.DatabaseSync(this.file);
       // Set the wait policy before journal_mode/schema changes, since those can

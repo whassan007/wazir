@@ -40,9 +40,9 @@ with sync_playwright() as p:
             if name == "download" and label == "desktop":
                 # Test hero OS selector
                 page.select_option("#hero-os-select", "linux-deb")
-                assert "wazir_0.4.0_all.deb" in (page.locator("#hero-primary-btn").get_attribute("href") or "")
+                assert "wazir_0.4.1_all.deb" in (page.locator("#hero-primary-btn").get_attribute("href") or "")
                 page.select_option("#hero-os-select", "macos")
-                assert "Wazir-Shell-0.4.0-macos-arm64.tar.gz" in (page.locator("#hero-primary-btn").get_attribute("href") or "")
+                assert "Wazir-Shell-0.4.1-macos-arm64.tar.gz" in (page.locator("#hero-primary-btn").get_attribute("href") or "")
 
                 # Test arch selector
                 page.select_option("#desktop-arch", "x64")

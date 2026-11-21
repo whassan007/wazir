@@ -391,3 +391,4 @@ export type {
 } from './workloadDistributor.js';
 export * from './harnessAssembler.js';
 export * from './shellClassifier.js';
+export * from './fastOrchestrator.js';

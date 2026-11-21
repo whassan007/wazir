@@ -109,28 +109,45 @@ export function getAllManifestDeclarations(repo = repoRoot) {
     });
   }
 
-  // 8. Desktop Tauri Cargo.toml
-  const cargoPath = path.join(repo, 'apps/desktop/src-tauri/Cargo.toml');
-  if (existsSync(cargoPath)) {
-    const content = readFileSync(cargoPath, 'utf8');
-    const m = content.match(/^version\s*=\s*"([^"]+)"/m);
-    declarations.push({
-      file: 'apps/desktop/src-tauri/Cargo.toml',
-      format: 'toml',
-      declaredVersion: m ? m[1] : null,
-      field: 'version',
-    });
+  // 8. Tauri Cargo.toml files (desktop + shell)
+  for (const cargoRel of ['apps/desktop/src-tauri/Cargo.toml', 'apps/shell/src-tauri/Cargo.toml']) {
+    const cargoPath = path.join(repo, cargoRel);
+    if (existsSync(cargoPath)) {
+      const content = readFileSync(cargoPath, 'utf8');
+      const m = content.match(/^version\s*=\s*"([^"]+)"/m);
+      declarations.push({
+        file: cargoRel,
+        format: 'toml',
+        declaredVersion: m ? m[1] : null,
+        field: 'version',
+      });
+    }
   }
 
-  // 9. Desktop tauri.conf.json
-  const tauriPath = path.join(repo, 'apps/desktop/src-tauri/tauri.conf.json');
-  if (existsSync(tauriPath)) {
-    const tauri = JSON.parse(readFileSync(tauriPath, 'utf8'));
+  // 9. Tauri tauri.conf.json files (desktop + shell)
+  for (const tauriRel of ['apps/desktop/src-tauri/tauri.conf.json', 'apps/shell/src-tauri/tauri.conf.json']) {
+    const tauriPath = path.join(repo, tauriRel);
+    if (existsSync(tauriPath)) {
+      const tauri = JSON.parse(readFileSync(tauriPath, 'utf8'));
+      declarations.push({
+        file: tauriRel,
+        format: 'json',
+        declaredVersion: tauri.version,
+        field: 'version',
+      });
+    }
+  }
+
+  // 10. CLI version fallback constant
+  const cliVerPath = path.join(repo, 'apps/cli/src/version.ts');
+  if (existsSync(cliVerPath)) {
+    const content = readFileSync(cliVerPath, 'utf8');
+    const m = content.match(/export function resolveAuthoritativePackageVersion[\s\S]*?return '([^']+)';/);
     declarations.push({
-      file: 'apps/desktop/src-tauri/tauri.conf.json',
-      format: 'json',
-      declaredVersion: tauri.version,
-      field: 'version',
+      file: 'apps/cli/src/version.ts',
+      format: 'ts-fallback',
+      declaredVersion: m ? m[1] : null,
+      field: 'fallbackVersion',
     });
   }
 
@@ -219,7 +236,7 @@ export function syncAllVersions(targetVersion, repo = repoRoot) {
     const fullPath = path.join(repo, hbRel);
     if (existsSync(fullPath)) {
       const content = readFileSync(fullPath, 'utf8');
-      let updated = content.replace(/version\s*"[^"]+"/g, `version "${targetVersion}"`);
+      let updated = content.replace(/^(\s*version\s*)"[^"]+"/gm, `$1"${targetVersion}"`);
       updated = updated.replace(/\/v[0-9\.]+\/wazir-v[0-9\.]+/g, `/v${targetVersion}/wazir-v${targetVersion}`);
       if (updated !== content) {
         writeFileSync(fullPath, updated, 'utf8');
@@ -266,26 +283,44 @@ export function syncAllVersions(targetVersion, repo = repoRoot) {
     }
   }
 
-  // 7. apps/desktop/src-tauri/Cargo.toml
-  const cargoPath = path.join(repo, 'apps/desktop/src-tauri/Cargo.toml');
-  if (existsSync(cargoPath)) {
-    const content = readFileSync(cargoPath, 'utf8');
-    const updated = content.replace(/^version\s*=\s*"[^"]+"/m, `version = "${targetVersion}"`);
-    if (updated !== content) {
-      writeFileSync(cargoPath, updated, 'utf8');
-      recordUpdate('apps/desktop/src-tauri/Cargo.toml');
+  // 7. Tauri Cargo.toml files (desktop + shell)
+  for (const cargoRel of ['apps/desktop/src-tauri/Cargo.toml', 'apps/shell/src-tauri/Cargo.toml']) {
+    const cargoPath = path.join(repo, cargoRel);
+    if (existsSync(cargoPath)) {
+      const content = readFileSync(cargoPath, 'utf8');
+      const updated = content.replace(/^version\s*=\s*"[^"]+"/m, `version = "${targetVersion}"`);
+      if (updated !== content) {
+        writeFileSync(cargoPath, updated, 'utf8');
+        recordUpdate(cargoRel);
+      }
     }
   }
 
-  // 8. apps/desktop/src-tauri/tauri.conf.json
-  const tauriPath = path.join(repo, 'apps/desktop/src-tauri/tauri.conf.json');
-  if (existsSync(tauriPath)) {
-    const content = readFileSync(tauriPath, 'utf8');
-    const json = JSON.parse(content);
-    if (json.version !== targetVersion) {
-      json.version = targetVersion;
-      writeFileSync(tauriPath, JSON.stringify(json, null, 2) + '\n', 'utf8');
-      recordUpdate('apps/desktop/src-tauri/tauri.conf.json');
+  // 8. Tauri tauri.conf.json files (desktop + shell)
+  for (const tauriRel of ['apps/desktop/src-tauri/tauri.conf.json', 'apps/shell/src-tauri/tauri.conf.json']) {
+    const tauriPath = path.join(repo, tauriRel);
+    if (existsSync(tauriPath)) {
+      const content = readFileSync(tauriPath, 'utf8');
+      const json = JSON.parse(content);
+      if (json.version !== targetVersion) {
+        json.version = targetVersion;
+        writeFileSync(tauriPath, JSON.stringify(json, null, 2) + '\n', 'utf8');
+        recordUpdate(tauriRel);
+      }
+    }
+  }
+
+  // 9. CLI version fallback constant
+  const cliVerPath = path.join(repo, 'apps/cli/src/version.ts');
+  if (existsSync(cliVerPath)) {
+    const content = readFileSync(cliVerPath, 'utf8');
+    const updated = content.replace(
+      /(export function resolveAuthoritativePackageVersion[\s\S]*?)return '[^']+';/,
+      `$1return '${targetVersion}';`,
+    );
+    if (updated !== content) {
+      writeFileSync(cliVerPath, updated, 'utf8');
+      recordUpdate('apps/cli/src/version.ts');
     }
   }
 

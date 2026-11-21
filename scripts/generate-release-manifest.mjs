@@ -59,7 +59,7 @@ for (const c of candidates) {
   const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
   const basename = path.basename(full);
   const sizeHuman = `${(buf.length / (1024 * 1024)).toFixed(2)} MB`;
-  shaLines.push(`${sha256}  ${c.file}`);
+  shaLines.push(`${sha256}  ${basename}`);
   // Copy artifacts <= 24MB into portal/releases (Cloudflare Pages 25MB per-file limit)
   let url = `https://github.com/whassan007/wazir/releases/tag/v${version}`;
   if (buf.length <= 24 * 1024 * 1024) {
@@ -87,6 +87,7 @@ const manifest = {
   version,
   releasedAt: new Date().toISOString(),
   repository: 'https://github.com/whassan007/wazir',
+  checksumsUrl: '/releases/SHA256SUMS.txt',
   artifacts,
 };
 fs.writeFileSync(path.join(DIST, 'release-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);

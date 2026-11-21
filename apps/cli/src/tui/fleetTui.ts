@@ -1,5 +1,7 @@
 import readline from 'node:readline';
 import { missionHeader, classifyModelReadiness } from './missionControl.js';
+import { admissibleHardwareComputers } from './admissibleHardwareComputers.js';
+import { answerLocalUtilityQuestion } from './localUtilityAnswers.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { withScopedRejectionHandler } from '../crashHandler.js';
@@ -5028,6 +5030,24 @@ export class FleetTui {
       return;
     }
 
+    // Local deterministic shell questions must not cold-start a coding agent.
+    // Keep the answer in the normal transcript and block lifecycle.
+    const localAnswer = answerLocalUtilityQuestion(prompt);
+    if (localAnswer !== undefined && this.presentationMode === 'conversation') {
+      this.statusMessage = 'Answered locally';
+      this.conversation.recordUserMessage(prompt);
+      this.conversation.recordAssistantMessage(localAnswer);
+      this.conversationRenderer.append(localAnswer);
+      void this.conversation.persist(this.engine);
+      if (this.currentBlockTracker) {
+        await this.currentBlockTracker.finish('success', { exitCode: 0, stdout: localAnswer }).catch(() => {});
+        this.currentBlockTracker = undefined;
+        await this.refreshRecentBlocks();
+      }
+      this.draw();
+      return;
+    }
+
     // Part 1.1: Route infrastructure, scheduling, verification, and optimization prompts
     // through the exact same shared MetaHarnessService state as the CLI.
     if (!prompt.startsWith('/')) {
@@ -5142,11 +5162,20 @@ export class FleetTui {
         const hardwareComputerIds = (this.engine.computers?.list?.() ?? [])
           .filter((c) => c.status === 'online')
           .map((c) => c.id);
-        const localAvailable = localModels.length > 0 && hasSchedulable;
+        // Weighted allocation is a preference, never proof that a host can run
+        // the task. Filter through the same scheduler admission checks used by
+        // the orchestrator, including resident models and current free memory.
+        const feasibleHardwareComputerIds = admissibleHardwareComputers(
+          this.engine.scheduler,
+          hardwareComputerIds,
+          prompt,
+          routingMode,
+        );
+        const localAvailable = localModels.length > 0 && feasibleHardwareComputerIds.length > 0;
         if (Boolean(this.conversation.distributionSpec) || externalAgentNames.length > 0 || hardwareComputerIds.length > 1) {
           const picked = this.engine.workloadDistributor.next({
             hasLocalHardware: localAvailable,
-            hardwareComputerIds,
+            hardwareComputerIds: feasibleHardwareComputerIds,
             externalAgents: externalAgentNames,
             routingMode,
           });
@@ -5271,35 +5300,11 @@ export class FleetTui {
     this.unsubscribeJobEvents?.();
     this.unsubscribeJobEvents = undefined;
     try {
-      if (this.engine.lifecycle?.ensureModelReadyForTask && jobTasks.length > 0) {
-        const rawTask = jobTasks[0].task;
-        const firstTask = {
-          ...rawTask,
-          id: rawTask.id ?? 'preview-task',
-          requirements: rawTask.requirements ?? {
-            capabilities: rawTask.requirements?.capabilities ?? [],
-          },
-        };
-        const decision = this.engine.scheduler.plan({ task: firstTask as any });
-        if (decision?.modelId) {
-          if (this.presentationMode === 'conversation') {
-            this.conversationRenderer.append(`Selected: ${decision.modelId}`);
-          }
-          await this.engine.lifecycle.ensureModelReadyForTask({
-            modelId: decision.modelId,
-            computerId: decision.computerId,
-            requiredContextTokens: (decision as any).allocatedContextTokens,
-            onProgress: (statusMsg: string) => {
-              this.statusMessage = statusMsg;
-              if (this.presentationMode === 'conversation') {
-                this.conversationRenderer.append(statusMsg);
-              }
-              this.draw();
-            },
-          });
-        }
-      }
-
+      // Do not select/load an unrelated preview model before assigning the job.
+      // JobOrchestrator.assignTask performs the authoritative scheduling once;
+      // fleetRunner activates *that assignment's* model and runtime. The former
+      // preview pass could ready DGX Qwen and then route execution to a cold,
+      // memory-ineligible MLX model on the Mac.
       const job = await this.engine.orchestrator.createJob({
         title: prompt.slice(0, 60),
         concurrencyLimit: this.concurrencyLimit,

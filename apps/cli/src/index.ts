@@ -7,17 +7,35 @@ import path from 'node:path';
 /** Injected by scripts/bundle.mjs from package.json (the canonical version); the literal is for unbundled dev runs. */
 declare const __WAZIR_VERSION__: string | undefined;
 import chalk from 'chalk';
-import { registerMCPCommands, wasMCPRuntimeUsed } from './mcp.js';
-import { registerWebCommands } from './web.js';
-import { registerMobileCommands } from './mobile.js';
-import { registerGoalCommands } from './commands/goalCommands.js';
-import { registerWorkflowCommands } from './commands/workflowCommands.js';
 import { closeMCPRegistries, parseWorkloadDistribution, type RoutingMode } from '@wazir/core';
 import { installGlobalCrashHandlers } from './crashHandler.js';
-import { createHandoffCommand } from './handoff.js';
-import { registerShellAndMetaCommands } from './commands/shellCommand.js';
 import { resolveAuthoritativePackageVersion } from './version.js';
 import { globalStartupProfiler } from './startupProfiler.js';
+
+let mcpRuntimeChecker: (() => boolean) | undefined;
+let deferredCommandsRegistered = false;
+
+async function ensureDeferredCommandsRegistered(): Promise<void> {
+  if (deferredCommandsRegistered) return;
+  deferredCommandsRegistered = true;
+  const [mcpMod, webMod, mobileMod, goalMod, workflowMod, handoffMod, shellMod] = await Promise.all([
+    import('./mcp.js'),
+    import('./web.js'),
+    import('./mobile.js'),
+    import('./commands/goalCommands.js'),
+    import('./commands/workflowCommands.js'),
+    import('./handoff.js'),
+    import('./commands/shellCommand.js'),
+  ]);
+  mcpRuntimeChecker = mcpMod.wasMCPRuntimeUsed;
+  mcpMod.registerMCPCommands(program);
+  webMod.registerWebCommands(program);
+  mobileMod.registerMobileCommands(program);
+  goalMod.registerGoalCommands(program);
+  shellMod.registerShellAndMetaCommands(program, CLI_VERSION);
+  program.addCommand(handoffMod.createHandoffCommand());
+  workflowMod.registerWorkflowCommands(program);
+}
 
 globalStartupProfiler.mark('cli.entry');
 
@@ -27,7 +45,7 @@ globalStartupProfiler.mark('cli.entry');
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : resolveAuthoritativePackageVersion();
+export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.4.1';
 
 /**
  * Zero-overhead fast path for version flags (`--version`, `-V`, `version`, `version --json`).
@@ -184,12 +202,6 @@ program
       `  ${invokedExecutableName} fleet                   Open the multi-agent fleet dashboard`,
     ].join('\n'),
   );
-
-registerMCPCommands(program);
-registerWebCommands(program);
-registerMobileCommands(program);
-registerGoalCommands(program);
-registerShellAndMetaCommands(program, CLI_VERSION);
 
 program
   .command('banner')
@@ -358,7 +370,7 @@ updateCmd.command('config').description('Show or change persistent update config
 program.addCommand(updateCmd);
 
 program.hook('postAction', async () => {
-  if (wasMCPRuntimeUsed()) {
+  if (mcpRuntimeChecker?.()) {
     const { closeMCPRegistries } = await import('@wazir/core');
     await closeMCPRegistries();
   }
@@ -2815,8 +2827,6 @@ serviceCmd
   });
 
 program.addCommand(serviceCmd);
-program.addCommand(createHandoffCommand());
-registerWorkflowCommands(program);
 
 globalStartupProfiler.mark('cli.commands_registered');
 
@@ -2981,10 +2991,61 @@ async function handleRootConversationOrPrompt(rawArgs: string[]): Promise<void> 
   process.exit(2);
 }
 
+async function tryDispatchFastSubcommand(rawArgs: string[]): Promise<boolean> {
+  if (rawArgs.length === 0 && invokedExecutableName === 'wazir' && !process.env.WAZIR_FORCE_TUI) {
+    const { launchInteractiveWazirShell } = await import('./commands/shellCommand.js');
+    await launchInteractiveWazirShell({ version: CLI_VERSION, batch: !process.stdin.isTTY });
+    return true;
+  }
+
+  const first = rawArgs[0];
+  if (!first || rawArgs.includes('-h') || rawArgs.includes('--help')) {
+    return false;
+  }
+
+  if (first === 'route') {
+    const { runFastRouteCli } = await import('./commands/shellCommand.js');
+    const json = rawArgs.includes('--json') || rawArgs.includes('-j');
+    const promptParts = rawArgs.slice(1).filter((arg) => arg !== '--json' && arg !== '-j');
+    process.exitCode = await runFastRouteCli(promptParts, { json });
+    return true;
+  }
+
+  if (first === 'latency') {
+    const { runFastLatencyCli } = await import('./commands/shellCommand.js');
+    const json = rawArgs.includes('--json') || rawArgs.includes('-j');
+    const reset = rawArgs.includes('--reset');
+    process.exitCode = await runFastLatencyCli({ json, reset });
+    return true;
+  }
+
+  if (first === 'debug') {
+    const { runFastDebugCli } = await import('./commands/shellCommand.js');
+    process.exitCode = await runFastDebugCli(rawArgs[1] ?? 'status');
+    return true;
+  }
+
+  if (first === 'shell') {
+    const { registerShellAndMetaCommands } = await import('./commands/shellCommand.js');
+    const fastProgram = new Command().name(invokedExecutableName);
+    registerShellAndMetaCommands(fastProgram, CLI_VERSION);
+    await fastProgram.parseAsync([process.argv[0] ?? 'node', process.argv[1] ?? 'wa', ...rawArgs]);
+    return true;
+  }
+
+  return false;
+}
+
 if (isDirectCliEntrypoint) {
   globalStartupProfiler.mark('cli.parse');
   void (async () => {
     const rawArgs = process.argv.slice(2);
+    if (await tryDispatchFastSubcommand(rawArgs)) {
+      globalStartupProfiler.mark('cli.fast_subcommand');
+      globalStartupProfiler.emitIfEnabled();
+      return;
+    }
+    await ensureDeferredCommandsRegistered();
     const knownSubcommands = collectKnownSubcommands();
     if (shouldDispatchSubcommandOrMeta(rawArgs, knownSubcommands)) {
       await program.parseAsync(process.argv);

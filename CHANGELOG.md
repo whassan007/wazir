@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.1 — 2026-11-21
+
+**Release**: `v0.4.1`
+**Theme**: Wazir Shell End-to-End Validation & Repair, Interactive Fast-Path & Admission Hardening, and Multi-Platform Installer/Release Parity
+
+- **Wazir Shell E2E Validation & Repairs (`@wazir/cli`, `@wazir/core`, `@wazir/agents`, `DEF-001`–`DEF-010`)**:
+  - Wired `createShellAiHandler` and `attachShellPermissionPolicy` into interactive and `-c` Wazir Shell sessions with `--model` / `--permissions` flags, `/model` and `/permissions` directives, `engine.lifecycle.list()` loaded-model fallback on `MODEL_ADMISSION_DENIED`, explicit missing-model/offline failures, and safe workspace test allowance under `--permissions auto`.
+  - Fixed per-line `readline` raw-mode handoff (`rl.close()` + `setRawMode(false)` before spawning interactive child processes) and BFS `pgrep -P` descendant process-tree termination on `SIGINT`/`Ctrl+C` across macOS (`zsh`) and Linux (`bash`), verified via `node-pty` and Python `pty` (`36 / 36` E2E checks passing in `tests/shell-validation/`).
+  - Updated `shellClassifier.ts` natural-language disambiguation (`find broken tests` vs. `find . -name '*.ts'`), `planner.ts` read-only `isCheckOrInspect` detection, `legacyCodingAgent.ts` OS inspection tool retention, `qwenCore/systemPrompt.ts` dedicated verification-tool guidance, `xmlToolFallback.ts` / `turn.ts` bare `<function=...>...</function></tool_call>` parsing, `completeShellInput` cwd/builtin TAB completion, and `$VAR`/`${VAR}` expansion in shell builtins.
+- **Interactive TUI Admission, Fast-Path & Lazy Startup (`@wazir/cli`, `@wazir/core`, `@wazir/memory`)**:
+  - Added `admissibleHardwareComputers` to filter online fleet hardware hosts through scheduler admission checks (preventing cold-model misplacement onto low-memory nodes), `answerLocalUtilityQuestion` for zero-latency deterministic local TUI answers, `FastOrchestrator`, and an idempotent `node:sqlite` experimental-warning filter in `SqliteMemoryStore`.
+- **Release Tooling & Cross-Platform Installers (`scripts/`, `apps/portal/`, `packaging/`)**:
+  - Fixed `scripts/version-manager.mjs` Homebrew `test do` regex and included `apps/shell/src-tauri` and `apps/cli/src/version.ts` in 40-target version parity sync/check; updated `scripts/update-package-managers.mjs` and `scripts/generate-release-manifest.mjs` for clean `SHA256SUMS.txt` and `release-manifest.json` generation.
+
 ## v0.4.0 — 2026-11-21
 
 **Release**: `v0.4.0`

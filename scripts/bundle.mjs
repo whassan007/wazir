@@ -10,8 +10,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = resolve(__dirname, '..');
 
+const version = process.env.WAZIR_BUILD_VERSION || JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8')).version;
+
 // Runs before any bundled module: fail with a clear message on an unsupported runtime
-// instead of a stack trace from deep inside the ledger.
+// instead of a stack trace from deep inside the ledger, and fast-path version queries.
 const RUNTIME_GUARD = `
 (() => {
   const [maj, min] = process.versions.node.split('.').map(Number);
@@ -20,15 +22,17 @@ const RUNTIME_GUARD = `
     process.exit(1);
   }
   const argv = process.argv.slice(2);
-  if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-V')) {
-    process.stdout.write(${JSON.stringify(process.env.WAZIR_BUILD_VERSION || JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8')).version)} + '\\n');
+  if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-V' || argv[0] === 'version')) {
+    process.stdout.write(${JSON.stringify(version)} + '\\n');
+    process.exit(0);
+  }
+  if (argv.length === 2 && argv[0] === 'version' && (argv[1] === '--json' || argv[1] === '-j')) {
+    process.stdout.write(${JSON.stringify(JSON.stringify({ version }))} + '\\n');
     process.exit(0);
   }
 })();`;
 
 const pkg = JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8'));
-// One canonical version: package.json. WAZIR_BUILD_VERSION overrides it for upgrade tests only.
-const version = process.env.WAZIR_BUILD_VERSION || pkg.version;
 let commit = process.env.WAZIR_BUILD_COMMIT || '';
 if (!commit) {
   try {

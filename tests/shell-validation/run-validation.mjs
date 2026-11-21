@@ -317,11 +317,11 @@ await runCase('S07', 'Native Shell', 'Interactive Ctrl+C cancellation on sleep 1
   const ptyRes = await runPtySession(
     [CLI_DIST, 'shell', '--no-ai'],
     async (proc, _raw, clean) => {
-      await waitForMatch(clean, /wazir:.*\$/);
+      await waitForMatch(clean, /(?:wa|wazir):.*\$/);
       proc.write(`! python3 -c "import time; time.sleep(10)" # ${marker}\r`);
       await sleep(350);
       proc.write('\x03'); // Ctrl+C
-      await waitForMatch(() => clean(), /wazir:.*\$.*wazir:.*\$/s, 5000);
+      await waitForMatch(() => clean(), /(?:wa|wazir):.*\$.*(?:wa|wazir):.*\$/s, 5000);
       proc.write('! echo AFTER_SIGINT_ALIVE\r');
       await waitForMatch(() => clean(), /AFTER_SIGINT_ALIVE/);
       proc.write('exit 0\r');
@@ -412,7 +412,7 @@ await runCase('S14', 'Native Shell', 'Tab completion and persistent history file
   const ptyRes = await runPtySession(
     [CLI_DIST, 'shell', '--no-ai'],
     async (proc, _raw, clean) => {
-      await waitForMatch(clean, /wazir:.*\$/);
+      await waitForMatch(clean, /(?:wa|wazir):.*\$/);
       proc.write('/per\t');
       await waitForMatch(() => clean(), /\/permissions /);
       proc.write('\x15'); // Ctrl+U clear line
@@ -442,12 +442,12 @@ await runCase('S15', 'Native Shell', 'Interactive CLI program via PTY (readline 
   const ptyRes = await runPtySession(
     [CLI_DIST, 'shell', '--no-ai'],
     async (proc, _raw, clean) => {
-      await waitForMatch(clean, /wazir:.*\$/);
+      await waitForMatch(clean, /(?:wa|wazir):.*\$/);
       proc.write('! node ask.cjs\r');
       await waitForMatch(() => clean(), /\nENTER_NAME:/);
       proc.write('WAZIR_USER\r');
       await waitForMatch(() => clean(), /GREET:WAZIR_USER/);
-      await waitForMatch(() => clean(), /GREET:WAZIR_USER[\s\S]*wazir:.*\$/);
+      await waitForMatch(() => clean(), /GREET:WAZIR_USER[\s\S]*(?:wa|wazir):.*\$/);
       proc.write('exit 0\r');
     },
     { cwd: dir },
@@ -469,8 +469,9 @@ console.log(`Selected fleet models: primary=${MODEL_PRIMARY}, secondary=${MODEL_
 
 await runCase('A01', 'AI Execution', 'Basic OS question (? What operating system am I running?)', '? What operating system am I running?', 'Accurate OS answer with zero workspace source file mutations', async () => {
   const dir = fs.mkdtempSync(path.join(tmpRoot, 'a01-'));
-  const res = await runSpawnCapture('node', [CLI_DIST, 'shell', '--model', MODEL_PRIMARY, '-c', '? What operating system am I running?'], {
+  const res = await runSpawnCapture('node', [CLI_DIST, 'shell', '--debug', '--model', MODEL_PRIMARY, '-c', '? What operating system am I running?'], {
     cwd: dir,
+    env: { ...process.env, WAZIR_SHELL_DEBUG: '1' },
     timeoutMs: 120_000,
   });
   const combined = `${res.stdout}\n${res.stderr}`;
@@ -639,13 +640,13 @@ await runCase('A05', 'AI Execution', 'Model routing across two distinct models (
   const dir1 = fs.mkdtempSync(path.join(tmpRoot, 'a05-m1-'));
   const dir2 = fs.mkdtempSync(path.join(tmpRoot, 'a05-m2-'));
   const prompt = '? Reply with the exact result of 12 + 30.';
-  const r1 = await runSpawnCapture('node', [CLI_DIST, 'shell', '--model', MODEL_PRIMARY, '-c', prompt], { cwd: dir1, timeoutMs: 120_000 });
+  const r1 = await runSpawnCapture('node', [CLI_DIST, 'shell', '--debug', '--model', MODEL_PRIMARY, '-c', prompt], { cwd: dir1, env: { ...process.env, WAZIR_SHELL_DEBUG: '1' }, timeoutMs: 120_000 });
   assert.equal(r1.code, 0, `Model 1 failed:\n${r1.stdout}\n${r1.stderr}`);
   assert.match(r1.stdout, /42/);
   const m1Prov = r1.stdout.match(/\[wazir-ai\] model=[^\n]+/)?.[0] ?? '';
   assert(m1Prov.includes(`model=${MODEL_PRIMARY}`), `Expected ${MODEL_PRIMARY} in ${m1Prov}`);
 
-  const r2 = await runSpawnCapture('node', [CLI_DIST, 'shell', '--model', MODEL_SECONDARY, '-c', prompt], { cwd: dir2, timeoutMs: 150_000 });
+  const r2 = await runSpawnCapture('node', [CLI_DIST, 'shell', '--debug', '--model', MODEL_SECONDARY, '-c', prompt], { cwd: dir2, env: { ...process.env, WAZIR_SHELL_DEBUG: '1' }, timeoutMs: 150_000 });
   assert.equal(r2.code, 0, `Model 2 (${MODEL_SECONDARY}) failed:\n${r2.stdout}\n${r2.stderr}`);
   assert.match(r2.stdout, /42/);
   const m2Prov = r2.stdout.match(/\[wazir-ai\] model=[^\n]+/)?.[0] ?? '';
@@ -704,9 +705,9 @@ await runCase('M01', 'Mixed-Mode', 'Single session mixing native shell and live 
     '! echo NATIVE_EXECUTION_STILL_WORKS',
     'exit 0',
   ].join('\n') + '\n';
-  const res = await runSpawnCapture('node', [CLI_DIST, 'shell', '--model', MODEL_PRIMARY], {
+  const res = await runSpawnCapture('node', [CLI_DIST, 'shell', '--debug', '--model', MODEL_PRIMARY], {
     cwd: REPO_ROOT,
-    env: { ...process.env },
+    env: { ...process.env, WAZIR_SHELL_DEBUG: '1' },
     stdin: cmds,
     timeoutMs: 180_000,
   });
@@ -921,7 +922,7 @@ await runCase('COMPAT-MAC-01', 'macOS Compat', 'macOS arm64 zsh UTF-8 PTY resize
   const ptyRes = await runPtySession(
     [CLI_DIST, 'shell', '--no-ai'],
     async (proc, _raw, clean) => {
-      await waitForMatch(clean, /wazir:.*\$/);
+      await waitForMatch(clean, /(?:wa|wazir):.*\$/);
       proc.resize(132, 42);
       proc.write('! uname -m && echo "UTF8:مرحبا-وزير"\r');
       await waitForMatch(() => clean(), /arm64/);
@@ -998,19 +999,19 @@ def read_until(pat, timeout=8.0, min_count=1):
             if buf.count(pat) >= min_count: return True
     raise RuntimeError(f"Timeout waiting for {pat!r} x{min_count}. Buffer: {buf.decode(errors='replace')}")
 
-read_until(b'wazir:', min_count=1)
+read_until(b':', min_count=1)
 os.write(master, b'! sleep 10\\n')
 time.sleep(0.35)
 os.write(master, b'\\x03')
-read_until(b'wazir:', min_count=2)
+read_until(b'$ ', min_count=2)
 os.write(master, b'! echo LINUX_PTY_AFTER_SIGINT\\n')
 read_until(b'LINUX_PTY_AFTER_SIGINT', min_count=2)
-read_until(b'wazir:', min_count=3)
+read_until(b'$ ', min_count=3)
 os.write(master, b'! node ask.cjs\\n')
 read_until(b'LIN_Q:', min_count=1)
 os.write(master, b'DGX_OK\\n')
 read_until(b'LIN_A:DGX_OK', min_count=1)
-read_until(b'wazir:', min_count=4)
+read_until(b'$ ', min_count=4)
 os.write(master, b'exit 0\\n')
 rc = p.wait(timeout=5)
 os.close(master)
